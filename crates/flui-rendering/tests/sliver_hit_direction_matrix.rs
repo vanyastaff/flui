@@ -3,6 +3,7 @@
 //! Exercises 4 axis directions × 2 growth directions through a Box host that
 //! lays out a band sliver with explicit [`SliverConstraints`].
 
+use flui_foundation::{Leaf, Variable};
 use flui_objects::RenderViewport;
 use flui_rendering::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
@@ -13,7 +14,6 @@ use flui_rendering::{
     traits::{RenderBox, RenderSliver},
     view::ScrollableViewportOffset,
 };
-use flui_tree::{Leaf, Variable};
 use flui_types::{Offset, Size, geometry::px, layout::AxisDirection};
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject, laid_out_tight_100x100 as laid_out};

@@ -1,7 +1,7 @@
 //! Element arity system for compile-time child count constraints.
 //!
 //! This module provides a type-safe way to express element child constraints
-//! at compile time using the arity system from `flui-tree`.
+//! at compile time using the arity markers from `flui_foundation::arity`.
 //!
 //! # Arity Types
 //!
@@ -21,8 +21,8 @@
 //! }
 //! ```
 
-// Re-export arity types from flui-tree for consistency with RenderObject system
-pub use flui_tree::{Arity, Leaf, Optional, Single, Variable};
+// Re-export the arity markers the render-object protocol uses, so both sides name one type
+pub use flui_foundation::{Arity, Leaf, Optional, Single, Variable};
 
 /// Element-specific arity marker trait.
 ///
@@ -32,7 +32,7 @@ pub use flui_tree::{Arity, Leaf, Optional, Single, Variable};
 /// is now the single element graph, so there is no per-element storage to
 /// associate. The trait remains as the compile-time child-count constraint
 /// (`Leaf` = 0, `Single` = 1, `Optional` = 0..=1, `Variable` = N) layered
-/// over `flui_tree::Arity`; it simply no longer carries storage.
+/// over `flui_foundation::Arity`; it simply no longer carries storage.
 ///
 /// This mirrors `RenderObject` arity in `flui_rendering`, providing
 /// compile-time guarantees about child count while letting generic code

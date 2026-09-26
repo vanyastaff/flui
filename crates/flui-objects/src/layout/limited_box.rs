@@ -15,7 +15,7 @@
 //! `Pixels` boundary prevents the rest of the codebase from accidentally
 //! treating an infinite cap as a meaningful upper bound.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Offset, Pixels, Size};
 
 use flui_rendering::{

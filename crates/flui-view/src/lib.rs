@@ -189,7 +189,7 @@ pub use element::{
     LayoutChangedNotification, NotifiableElement, Notification, ScrollNotification,
     SizeChangedNotification,
 };
-// Slot types for multi-child elements (re-exported from flui-tree, canonical home)
+// Slot types for multi-child elements (re-exported from flui-foundation)
 pub use element::{ElementSlot, IndexedSlot};
 // Render-tree root element marker trait
 pub use element::RenderTreeRootElement;

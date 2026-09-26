@@ -30,7 +30,7 @@
 //! }
 //! ```
 
-use flui_tree::Arity;
+use flui_foundation::Arity;
 use flui_types::{Pixels, Size, geometry::Offset};
 
 use crate::{
@@ -560,8 +560,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::Leaf;
     use flui_foundation::RenderId;
-    use flui_tree::Leaf;
     use flui_types::geometry::px;
 
     use super::*;

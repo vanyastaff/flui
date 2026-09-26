@@ -2,7 +2,7 @@
 //!
 //! Flutter parity: `shifted_box.dart` `RenderBaseline`.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Offset, Pixels, Size};
 
 use flui_rendering::{

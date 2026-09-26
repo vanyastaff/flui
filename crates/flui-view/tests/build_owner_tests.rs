@@ -622,11 +622,15 @@ fn test_reassemble_marks_all_live_elements_dirty() {
 // Memory Layout Tests
 // ============================================================================
 
+// Pinned on 64-bit targets only: every figure below is a pointer-width count.
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn test_build_owner_memory_size() {
     let size = std::mem::size_of::<BuildOwner>();
     // A bloat tripwire, not a hard constraint: one `BuildOwner` exists per
-    // presentation, so this is measured in handfuls per process.
+    // presentation, so this is measured in handfuls per process. The size is
+    // pinned exactly, per configuration, so a field that grows the owner
+    // fails here and its cost gets written down below.
     //
     // It moved from 512 when the owner took on the duplicate-`GlobalKey`
     // machinery, for a measured +32 bytes: the diagnostic drain (a `Vec`, 24)
@@ -676,9 +680,21 @@ fn test_build_owner_memory_size() {
     // 688 -> 696 for ADR-0074's per-frame rebuild telemetry
     // (`frame_builds: Box<FrameBuildCounts>`, one pointer; the sixteen
     // counters live behind it precisely so this struct does not pay for a
-    // table). Under the `signals` feature the realm's `reactive: Reactive`
-    // (a `u32` graph id plus an `Rc`: 16 bytes, measured 712 by the CI
-    // feature run) sits beside it, so the budget below leaves room for both
-    // configurations.
-    assert!(size < 720, "BuildOwner is too large: {size} bytes");
+    // table). The realm's `reactive: Reactive` (a `u32` graph id plus an
+    // `Rc`: 16 bytes) sits beside it, always compiled now that signals are.
+    //
+    // The one configuration input is `debug_assertions`: the fields add up to
+    // 697 bytes in every build, and a debug build adds the re-entrancy guards
+    // `building: bool` and `scope_depth: usize` (9), so 712 with debug
+    // assertions and 704 without, each rounded up to the 8-byte alignment.
+    // No cargo feature changes the layout: the workspace build enables
+    // `test-utils` and `runtime-internals` on this crate beyond what
+    // `-p flui-view` does, and neither gates a field of `BuildOwner` or of a
+    // type it holds inline; `-p flui-view` and the whole-workspace lane both
+    // measure 712.
+    let expected = if cfg!(debug_assertions) { 712 } else { 704 };
+    assert_eq!(
+        size, expected,
+        "BuildOwner is {size} bytes, not {expected}: account for the change in this comment"
+    );
 }

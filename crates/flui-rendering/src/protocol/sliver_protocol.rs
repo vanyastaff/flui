@@ -6,8 +6,8 @@
 //! - [`SliverHitTest`]: Hit test capability (MainAxisPosition →
 //!   SliverHitTestResult)
 
+use flui_foundation::Arity;
 use flui_foundation::RenderId;
-use flui_tree::Arity;
 use flui_types::{
     Size,
     geometry::{Matrix4, Offset, Rect},
@@ -97,7 +97,8 @@ impl Protocol for SliverProtocol {
         constraints: SliverConstraints,
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
-        let mut typed = SliverLayoutCtx::<flui_tree::Leaf, SliverParentData>::new(constraints);
+        let mut typed =
+            SliverLayoutCtx::<flui_foundation::Leaf, SliverParentData>::new(constraints);
         // Protocol-layout-erasure — sanctioned erased layout-context boundary
         let erased: &mut dyn SliverLayoutCtxErased = &mut typed;
         f(erased)
@@ -1224,7 +1225,7 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
 
 #[cfg(test)]
 mod tests {
-    use flui_tree::Leaf;
+    use flui_foundation::Leaf;
     use flui_types::geometry::px;
 
     use super::*;

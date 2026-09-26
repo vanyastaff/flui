@@ -47,8 +47,8 @@
 
 use std::fmt;
 
+use flui_foundation::Single;
 use flui_painting::{Canvas, Paint};
-use flui_tree::Single;
 use flui_types::{
     Color, Offset, Pixels, Point, Rect, Size,
     geometry::RRect,

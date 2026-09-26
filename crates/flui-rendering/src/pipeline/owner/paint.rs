@@ -1645,9 +1645,9 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::{Exact, Leaf};
     use flui_interaction::InteractionLane;
     use flui_layer::LayerLink;
-    use flui_tree::{Exact, Leaf};
     use flui_types::{
         Point, Rect, Size,
         geometry::px,

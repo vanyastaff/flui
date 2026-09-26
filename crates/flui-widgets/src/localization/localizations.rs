@@ -281,8 +281,8 @@ impl Localizations {
                 .iter()
                 .any(|d| d.0.resource_type_id() == TypeId::of::<BoxedWidgetsLocalizations>()),
             "BUG: Localizations::new requires at least one delegate producing \
-             BoxedWidgetsLocalizations (add DefaultWidgetsLocalizationsDelegate, or the \
-             flui-localizations GlobalWidgetsLocalizations delegate)"
+             BoxedWidgetsLocalizations (add DefaultWidgetsLocalizationsDelegate or \
+             GlobalWidgetsLocalizationsDelegate)"
         );
         Self {
             locale,

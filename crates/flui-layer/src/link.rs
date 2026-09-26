@@ -13,7 +13,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::LayerId;
-use flui_tree::TreeNav;
 use flui_types::geometry::{Offset, Pixels};
 
 use crate::LayerTree;

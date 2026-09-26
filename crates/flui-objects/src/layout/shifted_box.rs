@@ -28,7 +28,7 @@
 //! }
 //! ```
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Alignment, Offset, Size};
 
 use flui_rendering::{

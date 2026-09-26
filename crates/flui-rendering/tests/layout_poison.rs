@@ -23,6 +23,7 @@ use std::sync::{
 };
 
 use flui_foundation::RenderId;
+use flui_foundation::{Leaf, Single};
 use flui_objects::RenderPadding;
 use flui_rendering::{
     constraints::{BoxConstraints, SliverGeometry},
@@ -34,7 +35,6 @@ use flui_rendering::{
     testing::{FrameRun, Probe, RenderTester, box_node, sliver_node},
     traits::{HitTestOutcome, RenderBox, RenderObject, RenderSliver},
 };
-use flui_tree::{Leaf, Single};
 use flui_types::{Matrix4, Size, geometry::px};
 
 // ============================================================================

@@ -8,7 +8,7 @@
 //! the parent's space this object claims when an axis is unconstrained.  See
 //! [`positioned_box_size`].
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Alignment, Pixels, Size};
 
 use crate::layout::shifted_box::AligningShiftedBox;

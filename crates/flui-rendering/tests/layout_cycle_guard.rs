@@ -156,13 +156,13 @@ fn callback_reentry_poisons_structural_cycle() {
 #[test]
 fn drop_guard_clears_id_on_perform_layout_panic() {
     use flui_foundation::Diagnosticable;
+    use flui_foundation::Single;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext},
         hit_testing::HitTestBehavior,
         parent_data::BoxParentData,
         traits::RenderBox,
     };
-    use flui_tree::Single;
     /// Single-arity user widget that panics on the FIRST perform_layout
     /// call and succeeds on subsequent calls (state-tracked panic).
     #[derive(Debug, Default)]

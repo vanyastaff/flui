@@ -482,13 +482,13 @@ impl<T: Marker> From<Index> for Id<T> {
 }
 
 // =========================================================================
-// TreeId trait — minimal bound for flui-tree generics
+// TreeId trait — minimal bound for tree-structure generics
 // =========================================================================
 
 /// Minimal bound for ID types usable in tree structure generics
-/// (`Slot<I>`, `IndexedSlot<I>`, `TreeRead<I>`, etc.).
+/// (such as [`IndexedSlot<I>`](crate::IndexedSlot)).
 ///
-/// This trait bundles the properties the tree generic machinery actually needs:
+/// This trait bundles the properties tree generics actually need:
 /// `Copy`, `Eq`, `Hash`, `Debug`, `Display`, and thread-safety. It does **not**
 /// expose `get() -> Index` — exposing the raw slab index would strip the
 /// generation from generational IDs such as `ElementId`, making staleness
@@ -499,8 +499,7 @@ impl<T: Marker> From<Index> for Id<T> {
 /// (`ViewId`, `RenderId`, `LayerId`, `SemanticsId`, …).
 ///
 /// `ElementId` implements `TreeId` but **not** `Identifier`, so it can be
-/// used as the `I` type parameter in `IndexedSlot<I>`, `TreeRead<I>`, etc.
-/// without accidentally exposing an index-only accessor.
+/// used as the `I` type parameter in `IndexedSlot<I>` without accidentally exposing an index-only accessor.
 ///
 /// # Example
 ///
@@ -548,7 +547,7 @@ impl<T: Identifier> TreeId for T {
 }
 
 // =========================================================================
-// Identifier trait alias (for backwards compatibility with flui-tree)
+// Identifier trait — index-based ids (the non-generational family)
 // =========================================================================
 
 /// Trait alias for index-based ID types usable in tree structures.

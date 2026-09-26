@@ -17,9 +17,9 @@ are defined in [Beta release criteria](docs/BETA.md).
 
 ## Status
 
-- ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`, `flui-log`, `flui-tree`, `flui-platform`
+- ✅ Foundation: `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`, `flui-log`, `flui-platform`
 - ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-hot-reload`
-- ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-localizations`, `flui-material`, `flui-cupertino`, `flui-testing`, `flui-animation`, `flui-assets`, `flui-app` (migration)
+- ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-material`, `flui-cupertino`, `flui-testing`, `flui-animation`, `flui-assets`, `flui-app` (migration)
 - ✅ DX/tooling: `flui-devtools` (partial), `flui-cli` (with the per-target build pipeline in `crates/flui-cli/src/build/`)
 
 See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate status.
@@ -63,7 +63,7 @@ flui = { path = "…", default-features = false }
 |---|---|---|
 | `material` | **on** | `flui::material` and the Material half of `flui::prelude` |
 | `cupertino` | off | `flui::cupertino` |
-| `localizations` | off | `flui::localizations` — global (multi-language) resources |
+| `localizations` | off | nothing: deprecated and empty; the global widgets localizations are in `flui::widgets` |
 | `hot-reload` | off | desktop/Android development reload machinery; absent from an ordinary production graph |
 | `a11y` | off | native accessibility: the AccessKit adapters that hand the semantics tree to VoiceOver / Narrator / Orca (off by default because the Linux adapter carries a D-Bus stack) |
 

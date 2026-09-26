@@ -6,7 +6,7 @@
 use std::{any::Any, fmt::Debug, sync::Arc};
 
 use flui_foundation::Listenable;
-use flui_tree::Variable;
+use flui_foundation::Variable;
 use flui_types::{Matrix4, Size};
 
 use crate::{constraints::BoxConstraints, context::PaintCx};

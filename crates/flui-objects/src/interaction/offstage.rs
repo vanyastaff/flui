@@ -42,7 +42,7 @@
 //!   so the change-flag pipeline-discipline applies uniformly.
 //! * The setter returns the exact pipeline impact.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Offset, Size};
 
 use flui_rendering::{

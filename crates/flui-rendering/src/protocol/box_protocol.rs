@@ -5,8 +5,8 @@
 //! - [`BoxLayout`]: Layout capability (BoxConstraints → Size)
 //! - [`BoxHitTest`]: Hit test capability (Offset → BoxHitTestResult)
 
+use flui_foundation::Arity;
 use flui_foundation::RenderId;
-use flui_tree::Arity;
 use flui_types::{
     Size,
     geometry::{Matrix4, Offset, Point, Rect},
@@ -206,7 +206,7 @@ impl Protocol for BoxProtocol {
         constraints: BoxConstraints,
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
-        let mut typed = BoxLayoutCtx::<flui_tree::Leaf, BoxParentData>::new(constraints);
+        let mut typed = BoxLayoutCtx::<flui_foundation::Leaf, BoxParentData>::new(constraints);
         // Protocol-layout-erasure — sanctioned erased layout-context boundary
         let erased: &mut dyn BoxLayoutCtxErased = &mut typed;
         f(erased)
@@ -1708,7 +1708,7 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
 
 #[cfg(test)]
 mod tests {
-    use flui_tree::Leaf;
+    use flui_foundation::Leaf;
     use flui_types::geometry::px;
 
     use super::*;

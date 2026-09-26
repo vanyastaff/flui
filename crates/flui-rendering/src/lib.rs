@@ -146,8 +146,8 @@ pub mod prelude {
     pub use crate::hit_testing::{CursorIcon, MouseTrackerAnnotation};
     // Protocol adapters for RenderBox -> RenderObject<BoxProtocol> bridging
     pub use crate::protocol::IntoRenderObject;
-    // Arity types (canonical home: flui_tree)
-    pub use flui_tree::{Arity, Leaf, Optional, Single, Variable};
+    // Arity types (canonical home: flui_foundation::arity)
+    pub use flui_foundation::{Arity, Leaf, Optional, Single, Variable};
     // Tree types
     pub use crate::storage::{RenderNode, RenderTree};
     pub use crate::{

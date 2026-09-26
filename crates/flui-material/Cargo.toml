@@ -87,5 +87,5 @@ tier-kind = "official"
 order = 1
 # ADR-0028: no other crate depends on a design system in any form, and the
 # two design systems do not depend on each other.
-allowed-dependents = ["flui-localizations", "flui-app", "flui"]
-allowed-dev-dependents = ["flui-localizations", "flui-app", "flui"]
+allowed-dependents = ["flui-app", "flui"]
+allowed-dev-dependents = ["flui-app", "flui"]

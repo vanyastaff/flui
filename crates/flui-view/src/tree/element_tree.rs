@@ -2988,14 +2988,14 @@ mod tests {
     where
         P: flui_rendering::ParentData + Default + 'static,
     {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = P;
 
         fn perform_layout(
             &mut self,
             _ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 Self::ParentData,
             >,
         ) -> flui_types::geometry::Size {
@@ -3308,14 +3308,14 @@ mod tests {
     impl flui_foundation::Diagnosticable for AttachOrderBox {}
 
     impl flui_rendering::traits::RenderBox for AttachOrderBox {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             _ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 Self::ParentData,
             >,
         ) -> flui_types::geometry::Size {

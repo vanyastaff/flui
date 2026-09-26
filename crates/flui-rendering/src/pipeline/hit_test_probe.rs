@@ -108,7 +108,7 @@ mod tests {
     impl flui_foundation::Diagnosticable for HittableLeaf {}
 
     impl RenderBox for HittableLeaf {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = BoxParentData;
 
         fn perform_layout(
@@ -131,7 +131,7 @@ mod tests {
     impl flui_foundation::Diagnosticable for TaggedLeaf {}
 
     impl RenderBox for TaggedLeaf {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = BoxParentData;
 
         fn perform_layout(

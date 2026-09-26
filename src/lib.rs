@@ -30,14 +30,15 @@
 //! # Choosing a catalog
 //!
 //! The base surface — [`widgets`], [`view`], [`animation`], [`run_app`], and
-//! the non-Material half of [`prelude`] — needs no feature at all. The design
-//! systems and the global localization implementations are feature-selected:
+//! the non-Material half of [`prelude`] — needs no feature at all; that
+//! includes the global widgets localizations in [`widgets`]. The design
+//! systems are feature-selected:
 //!
 //! | Feature | Default | Enables |
 //! |---|---|---|
 //! | `material` | **on** | `flui::material` and the Material half of [`prelude`] |
 //! | `cupertino` | off | `flui::cupertino` |
-//! | `localizations` | off | `flui::localizations` |
+//! | `localizations` | off | nothing; deprecated, kept so existing feature lists resolve |
 //! | `hot-reload` | off | desktop/Android development reload machinery inside [`app`] |
 //!
 //! `default = ["material"]` keeps the documented Material-first quick start
@@ -99,7 +100,6 @@ fn main() {
 //! | [`animation`] | `flui-animation` | — | curves, tweens, tickers |
 //! | `material` | `flui-material` | `material` | Material Design theming + widget catalog |
 //! | `cupertino` | `flui-cupertino` | `cupertino` | iOS-style theming + widget catalog |
-//! | `localizations` | `flui-localizations` | `localizations` | global (multi-language) localized resources |
 //! | [`app`] | `flui-app` | — | `run_app` + bindings |
 //!
 //! [`painting`], [`rendering`], and [`interaction`] expose selected authoring
@@ -110,9 +110,7 @@ fn main() {
 //! design-system decoupling contract — `material --> widgets`,
 //! `cupertino --> widgets`, never the reverse), which is why `flui` is on
 //! that ADR's allowlist of crates permitted to depend on both: the facade is
-//! the app-level aggregation point, not a core crate. `flui::localizations`
-//! sits above both, implementing the catalogs' delegate contracts; the
-//! catalogs never depend back on it.
+//! the app-level aggregation point, not a core crate.
 
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
@@ -136,11 +134,6 @@ pub use flui_geometry as geometry;
 /// Development hot-reload support. Requires the `hot-reload` feature.
 #[cfg(feature = "hot-reload")]
 pub use flui_hot_reload as hot_reload;
-/// Global (multi-language) implementations of the catalogs' localization
-/// contracts (`flui-localizations`) — FLUI's analog of Flutter's
-/// `flutter_localizations`. Requires the `localizations` feature.
-#[cfg(feature = "localizations")]
-pub use flui_localizations as localizations;
 /// Derive structured diagnostic properties without a direct implementation-crate dependency.
 pub use flui_macros::Diagnosticable;
 /// The Material Design system (`flui-material`). Requires the `material`
