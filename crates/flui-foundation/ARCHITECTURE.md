@@ -644,6 +644,38 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 
 ---
 
+## The signal read contract (`read_scope`)
+
+Signals have no Flutter counterpart. `flui_foundation::read_scope` holds the *read side* of the
+realm's reactive graph (ADR-0085 §2); the graph itself — slot arena, reader registry, writes,
+the build-time guard — lives in `flui-view`, and so does every type that names a reader.
+
+**What it holds.** The handles (`SignalSlot`, `Signal<T>`, `SignalSender<T>`), the error type
+(`SignalError`, with `Display`/`Error` written by hand because foundation takes no
+`thiserror`), the read-only graph face (`ReadGraph`: `graph_id` and `read_erased`), the
+subscription sink (`ReaderSink::subscribe(slot)`), and what a context hands a read
+(`ReadScope::scope() -> ScopeRef`). `Signal::get`/`with`/`try_*` take any
+`&S where S: ReadScope + ?Sized`; `&S` and `Box<S>` are scopes, so deref shapes keep working.
+
+**What it may not name.** No write, create or release method, no driver hook, and no reader
+identity: an `ElementId` appears only in the two build-phase `SignalError` variants, and
+`Reader`-like types stay in `flui-view`. `ScopeRef` has private fields and no accessors, so a
+scope can be passed to a read and nothing else; a sink is bound to its reader by whoever minted
+it, and the sinks that subscribe real elements are private to `flui-view`. A scope built outside
+`flui-view` therefore reads but cannot subscribe anyone.
+
+**Invariants a test pins.** A handle forged with the wrong `T` (`Signal::from_slot` and
+`SignalSlot::new` are public but `#[doc(hidden)]`, for `flui-view`) is
+`SignalError::TypeMismatch`, never a panic; a `ReadGraph` that returns `Ok` without calling the
+reader is refused as `Released`; a refused read subscribes nobody. `Signal<T>` is
+`!Send + !Sync` (realm-affine); `SignalSender<T>` is `Send + Sync` and carries only the slot.
+
+**Why here.** An item added to this module re-checks every crate above foundation, so the module
+stays small and changes rarely; the graph, which changes often, stays in `flui-view` (ADR-0085 §6
+records the measured re-check sets).
+
+---
+
 ## Architecture Decision Summary
 
 | Decision | Flutter | FLUI |
@@ -688,6 +720,6 @@ Latent question worth tracking — not a violation:
 Items below are concrete cleanups visible from `flui-foundation` outward. Each is sized for an `/aif-implement` dispatch without out-of-band clarification.
 
 - **`Notifier` re-entrancy semantics — DONE.** Both `ChangeNotifier::notify_listeners` and `Notifier::notify` now document the round-N-vs-round-N+1 behaviour (snapshot-then-fire, mid-notify removals skipped, post-snapshot additions deferred to the next round, `catch_unwind` isolation).
-- **State-notification surface decided** — `Notifier`/`ChangeNotifier` in this crate is the state-notification mechanism. The signals crate that the summary table once pointed at (`flui-reactivity`) was removed 2026-07-28 (zero consumers; contract C1 locks the catalog to the setState/Inherited model), so there is no pending split to resolve.
+- **State-notification surface decided** — `Notifier`/`ChangeNotifier` in this crate is the listener-notification mechanism. The signals crate that the summary table once pointed at (`flui-reactivity`) was removed 2026-07-28. Realm-scoped signals (ADR-0074) are not a crate: their read contract is this crate's `read_scope` module and their graph lives in `flui-view` (ADR-0085). The `Arc<Mutex<…>>` notifier stays for `Send + Sync` users until the UI callback surface loses `Send` (ADR-0091 §1), when a `Listenable` adapter over a signal replaces it.
 
 ---

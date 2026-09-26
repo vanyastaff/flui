@@ -48,7 +48,7 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   require a safety target (`window` or `pid`) and refuse unless it is in front and holds the
   point or the keyboard focus. Windows first (UI Automation); window listing and capture
   build on macOS; Linux not yet.
-- **Realm-scoped signals** (`flui-view` feature `signals`, ADR-0074): `Signal<T>` handles
+- **Realm-scoped signals** (`flui-view`, ADR-0074; always compiled, see Changed): `Signal<T>` handles
   (`Copy`, realm-affine, carrying graph id + slot + generation) owned by the realm's
   `Reactive` graph. Reading a signal in `build` registers the element as a reader (the
   same seam as `depend_on`); writing schedules exactly the readers with
@@ -59,9 +59,8 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   (`scripts/check-signal-write-scope.sh`, advisory; its accepted fixture is compiled code).
   Read/write closures never hold the graph borrowed (`SignalError::Reentrant` instead of a
   `RefCell` panic); stale handles are `SignalError::Released` through `try_get`/`try_with`.
-  `HeadlessBinding::reactive()`, `UiCommand::SignalWrite` + `SignalSender` (feature
-  `signals` on `flui-testing`/`flui-app`); facade feature `signals`; the feature's tests run
-  in CI. FOUNDATIONS C1 amended. Derived values and effects are deferred to ADR-0075
+  `HeadlessBinding::reactive()`, `UiCommand::SignalWrite` + `SignalSender`. FOUNDATIONS C1
+  amended. Derived values and effects are deferred to ADR-0075
   (Proposed).
 - **Field-granular inherited dependencies** (issue #1090, ADR-0008 §2): `FieldMask<D>`
   (typed by the provider data; a mismatched selector does not compile) and the untyped
@@ -149,6 +148,22 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   longer public: a window is opened through `WindowsPlatform::open_window`, the owner-thread
   gate, which hands it the platform's handler set.
 
+- **Signals are always on, and read through `ReadScope`** (ADR-0085 §2, §5; breaking):
+  - The `signals` feature is gone from `flui` (downstream manifests that enable `flui/signals`
+    must drop it). `flui-view`, `flui-widgets`, `flui-app` and `flui-testing` keep an empty
+    `signals` feature that is accepted and ignored until CI stops naming it.
+  - `Signal`, `SignalSlot`, `SignalSender` and `SignalError` now live in
+    `flui_foundation::read_scope`, next to `ReadScope`, `ScopeRef`, `ReadGraph` and
+    `ReaderSink`; the `flui_view::…` paths are unchanged.
+  - Reads (`get`, `with`, `try_get`, `try_with`) take any `&S` where `S: ReadScope + ?Sized`.
+    `BuildContext: ReadScope`, so `sig.get(cx)` keeps compiling, and a generic
+    `C: BuildContext + ?Sized` or a `&dyn ReadScope` now works too. `peek` takes
+    `&dyn ReadGraph` (a `&Reactive` coerces). `BuildContext::signal_read` is removed.
+  - Writes (`set`, `update`, `set_if_changed`) are the sealed `SignalWriteExt` trait, in
+    `flui_view::prelude`; without the prelude, `use flui_view::SignalWriteExt`.
+  - `SignalError::TypeMismatch` is new: a handle of the wrong `T` is a typed error instead of
+    a `BUG:` panic. `SignalError` no longer derives through `thiserror`; its `Display` text is
+    unchanged.
 - **`flui_widgets::TextField` renamed to `RawTextField`** (and
   `TextFieldState` to `RawTextFieldState`) — a breaking rename, sanctioned
   pre-1.0. `flui::prelude`'s `TextField` now names `flui_material::TextField`

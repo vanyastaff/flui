@@ -1,8 +1,11 @@
 # ADR-0085: The reactive graph is realm-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation`
 
-- **Status:** Proposed
+- **Status:** Proposed. §1, §2 and §5 ship ahead of acceptance, as ADR-0074's `Amended-by`
+  line records; §3, §4 and §6 steps 2–3 are not implemented.
 - **Date:** 2026-09-25
-- **Revised:** 2026-09-26 (prototype of the read contract; see Context)
+- **Revised:** 2026-09-26 (prototype of the read contract; see Context. Then §2 and §5 shipped,
+  with the drivers, `RebuildSink`, `ScopeRef::detached` and `SignalError::NoGraph` moved to §6
+  step 2 and `SignalWriteExt` sealed)
 - **Amends (on acceptance):** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 ("`Reactive` … lives beside
   `BuildOwner`", "reachable as `cx.reactive()`"), §5.2 (reads take `&dyn BuildContext`; now any
   `&S` where `S: ReadScope`), and the `signals` feature named in its Status line
@@ -184,7 +187,7 @@ pub enum SignalError {
     WrittenDuringBuild { element: ElementId },
     CreatedDuringBuild { element: ElementId },
     Reentrant { index: u32 },
-    NoGraph,
+    // `NoGraph` (a scope with no graph) comes with `ScopeRef::detached`, in §6 step 2
 } // `Display` and `Error` by hand: foundation takes no `thiserror`
 
 /// Pure reads: no subscribe, write, create or release.
@@ -199,10 +202,10 @@ pub trait ReaderSink {
 }
 
 #[derive(Clone, Copy)]
-pub struct ScopeRef<'a> { /* graph: Option<&'a dyn ReadGraph>, sink: Option<&'a dyn ReaderSink>; no accessors */ }
+pub struct ScopeRef<'a> { /* graph: &'a dyn ReadGraph, sink: Option<&'a dyn ReaderSink>; no accessors */ }
 impl<'a> ScopeRef<'a> {
     pub fn new(graph: &'a dyn ReadGraph, sink: Option<&'a dyn ReaderSink>) -> Self;
-    pub const fn detached() -> Self;
+    // `detached()` (no graph) lands in §6 step 2, with its first production caller
 }
 
 pub trait ReadScope { fn scope(&self) -> ScopeRef<'_>; }
@@ -230,18 +233,21 @@ pub struct SignalSender<T: 'static>; // Send + Sync; attach() -> Signal<T>; slot
   blanket impls already repair what `&dyn ReadScope` would reject (Context).
 - **`BuildContext: ReadScope` stays a supertrait**, so `count.get(cx)` keeps its spelling.
 - **Subscription is not a method of the graph.** `Reactive` implements `ReadGraph`, which is
-  enough for `peek`, and never `ReaderSink`. Sinks are private types in `flui-view`, minted by
-  the drivers of §3: `ElementDriver` for `BuildCtx` during `build`, `RenderDriver` for layout
-  and paint. A `ScopeRef` built outside `flui-view` can subscribe only through a sink its
-  builder was given, so a forged scope reads and cannot subscribe anyone on a real graph.
+  enough for `peek`, and never `ReaderSink`. Sinks are private types in `flui-view`. Today the
+  one sink is `ElementReads` (a graph plus one `ElementId`), minted by `make_build_ctx` for the
+  element about to build and by `ElementBuildContext` for its own element; from §6 step 2 the
+  drivers of §3 mint them (`ElementDriver` for `BuildCtx` during `build`, `RenderDriver` for
+  layout and paint). A `ScopeRef` built outside `flui-view` can subscribe only through a sink
+  its builder was given, so a forged scope reads and cannot subscribe anyone on a real graph.
 - **A handle of the wrong `T` is a typed error.** `try_with`/`try_get` return
   `SignalError::TypeMismatch`; `with`/`get` panic with a documented `# Panics` message, not a
   `BUG:` one. The two constructors are `#[doc(hidden)]` because `flui-view` needs them across the
   crate boundary. The graph's "a live slot holds a value of another type" `expect`s go away.
-- **Writes are an extension trait**, `pub trait SignalWriteExt<T: 'static>: Copy` in
+- **Writes are an extension trait**, `pub trait SignalWriteExt<T: 'static>: Copy + Sealed` in
   `flui_view::prelude`, with `set(self, r: &Reactive, value: T)`, `update` and `set_if_changed`,
-  the signatures of today (`mod.rs:774`, `:783`, `:793`). It lasts until ADR-0086 replaces
-  `&Reactive`.
+  the signatures of today (`mod.rs:774`, `:783`, `:793`). It is sealed so that `Signal<T>` is
+  its only implementor: a second implementor would be a second write path this record does not
+  describe. It lasts until ADR-0086 replaces `&Reactive`.
 - `ReadScope` can register a read against the current subscriber and identify its graph
   (`fn scope(&self) -> ScopeRef<'_>`). It cannot return a `Reactive`, cannot write, and cannot
   create a slot.
@@ -310,16 +316,41 @@ Removing the feature puts `begin_element_build`/`end_element_build` on every bui
 `release_element` on every unmount of a default build. The change that removes it measures that
 cost: `signals_rebuilds` and the idle frame with default features, main against the change.
 
+**Measured (2026-09-26, shared Windows host, `CARGO_BUILD_JOBS=8`, one bench binary per side
+built once and run alternately).** Main (`b9b4c8f40`) against the feature removal alone and
+against the whole change, on variant A of `signals_rebuilds`'s five scenarios compiled as a
+feature-free copy (A never reads a signal, so only the always-on hooks differ). Median of five
+runs, range in brackets:
+
+| scenario (variant A) | main | feature removed | whole change |
+|---|---|---|---|
+| list 10k: one row changes | 14.2 ms [12.1–16.2] | 15.0 ms [14.1–16.5] | 17.1 ms [12.1–21.0] |
+| list 10k: append one row | 15.4 ms [12.6–18.0] | 16.2 ms [14.8–17.4] | 17.7 ms [15.0–21.2] |
+| form 20: keystroke | 49.8 µs [42.9–62.3] | 49.9 µs [48.1–51.9] | 53.8 µs [50.1–67.2] |
+| setting read by 3x200 cells | 861 µs [733–1112] | 896 µs [810–1013] | 1125 µs [923–1192] |
+| idle frame (control) | 18.2 µs [16.1–25.2] | 18.4 µs [16.2–26.2] | 18.9 µs [18.7–21.2] |
+
+Every row's ranges overlap across the three builds, and main's own range spans up to 1.5x, so no
+cost is claimed. The setting row is the one to re-measure on a quiet host: its whole-change median
+sits above the other two ranges' medians by about a quarter. The rebuild counts of all five
+scenarios are identical in the three builds. `signals_rebuilds` itself (main with
+`--features signals` against the change, three runs each) prints identical count tables; its
+timings moved up to 3.6x between runs of the same binary, so they are not reported.
+
 ### 6. The graph stays in `flui-view`; there is no `flui-reactive` crate
 
 The ordering is three steps, each shippable alone, all in `flui-view` plus the contract in
 `flui-foundation`:
 
-1. **The contract and the seam.** `flui_foundation::read_scope` (§2), `SignalWriteExt`, the two
-   drivers and their sinks (§3), `RebuildSink` in place of `ExternalBuildScheduler`, and §5. The
-   accessors §1 relies on stay: `SignalSlot::graph`, and `SignalSender::slot` once the §1 routing
-   fix has added it.
-2. **Phase readers.** §4, with the phase guards and the write-side marking.
+1. **The contract.** `flui_foundation::read_scope` (§2), `SignalWriteExt`, the private element
+   sink minted by `make_build_ctx`, and §5. The accessors §1 relies on stay:
+   `SignalSlot::graph` and `SignalSender::slot`. (Shipped.)
+2. **Phase readers and the seam.** §4, with the phase guards and the write-side marking; the two
+   drivers of §3, which take over minting the sinks; `RebuildSink` in place of
+   `ExternalBuildScheduler`; `ScopeRef::detached` and `SignalError::NoGraph`. These moved here
+   from step 1 because none of them had a production caller before this step: `RenderDriver`
+   has none until a render reader exists, `ElementDriver` would only restate the `pub(crate)`
+   visibility of today's hooks, and `RebuildSink` changes no behaviour.
 3. **The first render-phase subscriber.** A render-object field read in `paint` through
    `PaintCx: ReadScope`, with the scope minted by `RenderDriver`, written outside the frame
    phases, with a test that fails without the change and observes the repaint itself, not the
@@ -430,7 +461,7 @@ foundation contract stays, because production element reads use it.
 
 ## Verification
 
-Only the first exists.
+What exists:
 
 - §1: `a_write_to_a_secondary_presentations_signal_rebuilds_its_reader` in
   `crates/flui-app/src/app/ui_realm/tests/signal_write_routing.rs` writes, through
@@ -439,16 +470,39 @@ Only the first exists.
   primary-only routing. Its siblings pin the dropped-and-counted case for a closed presentation
   and for a foreign graph, and the owning presentation's frame request.
 
-The rest is planned. The prototype on `spike/readscope` showed the items marked (prototype); none is merged.
+- §2, in `crates/flui-view/tests/signal_reads.rs` (the `view_it` binary; `cargo xtask test`
+  also runs the file with `--release`, so the half of the build path gated on
+  `debug_assertions` is covered):
+  - `signal_reads_accept_every_context_shape`: `sig.get(cx)` for `&dyn BuildContext`,
+    `&&dyn BuildContext`, `&Box<dyn BuildContext>`, generic `C: BuildContext` with and without
+    `?Sized`, `&dyn ReadScope`, `&dyn LifecycleContext` and a closure. It does not compile on
+    main: `ReadScope` does not exist there, and the generic `?Sized` shape cannot coerce to
+    `&dyn BuildContext`.
+  - `a_read_in_build_subscribes_through_the_production_context`: a real mount, so the build
+    goes through `make_build_ctx` and `BuildCtx`; a write rebuilds the reader and not its
+    parent, the frame report shows one `SignalChange` rebuild, and the reader stays
+    subscribed. With `BuildCtx::scope` passing no sink it fails on the reader set.
+  - `a_signal_handle_of_the_wrong_type_is_a_typed_error`: `try_get`, `peek` and `set` through
+    a handle of the wrong `T` all return `SignalError::TypeMismatch` and leave the slot intact.
+    Main panics with `BUG:` there.
+  - `Signal<T>` is `!Send + !Sync` and `SignalSender<T>` is `Send + Sync` (`static_assertions`).
+- §2, trybuild (`crates/flui-view/tests/trybuild_ui.rs`): `scope_ref_exposes_no_graph.rs`
+  (neither `.graph`, `.graph()` nor `.sink` compiles on a `ScopeRef`), and
+  `build_context_is_sealed.rs`, which implements `ReadScope` for `Mine` so the snapshot holds
+  only the E0046 list and the seal error, not a list of `ReadScope` implementors.
+- §2, the sink pair: `Reactive` is not a `ReaderSink` and the element sink is, pinned by
+  `static_assertions` in `reactive/mod.rs`'s tests. The positive half cannot be written outside
+  `flui-view` (the sink is private), so it is not a trybuild pair.
+- §2, `crates/flui-foundation/src/read_scope.rs` unit tests: every `SignalError` `Display` text;
+  `TypeMismatch` through a test `ReadGraph`; a refused read subscribes nobody; a graph that
+  returns `Ok` without calling the reader is refused as `Released`; reads through `&S`, `&&S`,
+  `Box<S>` and `&dyn ReadScope`.
+- §5: the default-build numbers are recorded under §5.
+
+Planned:
 
 | Item | What it asserts | Why it fails today |
 |---|---|---|
-| `signal_reads_accept_every_context_shape` (a compiled `flui-view` test) (prototype) | `sig.get(cx)` compiles for `&dyn BuildContext`, `&&dyn BuildContext`, `&Box<dyn BuildContext>`, a generic `C: BuildContext + ?Sized`, `&dyn ReadScope` and `&dyn LifecycleContext` | `ReadScope` does not exist; the generic `?Sized` shape cannot coerce to `&dyn BuildContext` |
-| `a_read_in_build_subscribes_through_the_production_context` (through a `flui-testing` mount, so `BuildCtx`; also run with `--release`) | A write rebuilds exactly the reader | Passes on main; it guards the production path the prototype's `ElementBuildContext` tests missed, and the release run guards the half gated on `debug_assertions` |
-| `a_signal_handle_of_the_wrong_type_is_a_typed_error` | `try_get` returns `Err(SignalError::TypeMismatch { .. })` | No such variant; the prototype panics with `BUG:` |
-| `compile_fail` pair: `Reactive` is not a `ReaderSink`; a driver-minted sink is | The graph handle cannot subscribe; the compiling twin proves the `compile_fail` fails for the right reason | `ReaderSink` does not exist, so the twin is mandatory |
-| `compile_fail`: `ScopeRef` exposes no graph; no driver is `Clone`; `ReadScope` reaches no driver hook | The read side cannot write, create or drive | No drivers, no `ScopeRef` |
-| Trybuild `build_context_is_sealed.rs` implements `ReadScope` for `Mine` | The snapshot holds only the seal error, not a list of implementors | Today's snapshot lists implementors |
+| `compile_fail`: no driver is `Clone`; `ReadScope` reaches no driver hook (step 2) | The read side cannot drive | No drivers |
 | One test per phase guard (step 2); the first render subscriber's repaint test (step 3) | A write during layout or paint is refused or deferred as §4 specifies; a write outside the frame repaints the render object and nothing else, observed through the pipeline's paint record, and fails with the subscription removed | No phase readers |
-| Default-build `signals_rebuilds` and idle-frame numbers | Recorded in the change for §5 | Unmeasured |
-| `cargo tree -p flui-view -e features` | No `signals` feature after §5 | The feature exists |
+| `cargo tree -p flui-view -e features` | No `signals` feature after §5 | Open: `flui-view`, `flui-testing`, `flui-widgets` and `flui-app` keep an empty, ignored `signals` feature because CI's `test-features` job still passes it by name; the step and the four shims go together |

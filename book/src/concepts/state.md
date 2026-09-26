@@ -42,7 +42,9 @@ outside the `View`/`Element` tree, or shared across more than one subtree withou
 
 ## What's not here
 
-This book does not describe a reactive "signals" system: there is no such primitive in `crates/`
-today. Planned: realm-scoped signals — see [PR #1242](https://github.com/vanyastaff/flui/pull/1242)
-(ADR-0074, status: draft) — but until that lands, the three mechanisms above are the whole state
-story.
+This book does not yet describe realm-scoped signals. They exist: `flui_view::Signal<T>`
+(ADR-0074, placed by ADR-0085) is a `Copy` handle to a value in the realm's reactive graph.
+Reading it in `build` (`sig.get(cx)`) subscribes the element, and writing it outside `build`
+(`sig.set(&graph, v)`, from `SignalWriteExt` in the prelude) rebuilds exactly the elements that
+read it. The three mechanisms above remain the canonical state story; a chapter on signals is
+still to be written.
