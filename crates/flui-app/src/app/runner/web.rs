@@ -69,7 +69,7 @@ where
         // 1. Open window (creates canvas). `Ready` is guaranteed inside
         // `on_ready` (ADR-0039 §1).
         let options: WindowOptions = (&config).into();
-        let window = match owner_platform_installed(|owner| owner.open_window(options))
+        let host = match owner_platform_installed(|owner| owner.open_window(options))
             .and_then(flui_platform::WindowOpen::try_ready)
         {
             Ok(window) => window,
@@ -78,6 +78,8 @@ where
                 return Err(anyhow::Error::from(error).context("Failed to create canvas window"));
             }
         };
+        let presentation_window = super::presentation_window(host);
+        let window = Arc::clone(presentation_window.window());
 
         // 2. Shared renderer slot — starts as None, filled async once the WebGPU
         //    adapter is available. `Option` lets the frame callback skip frames that
@@ -115,7 +117,7 @@ where
         let wake = runtime_wake_callback();
         let ui_realm = match crate::app::ui_realm::UiRealm::new(
             Arc::clone(&wake),
-            Arc::clone(&window),
+            presentation_window,
             scale_factor,
             runtime_needs_redraw_handle(),
         ) {

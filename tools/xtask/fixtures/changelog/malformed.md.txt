@@ -1,0 +1,45 @@
+Text before any section. <!-- expect: preamble -->
+
+### Added
+
+- A bullet with a [relative link](docs/testing.md). <!-- expect: link -->
+- A bullet with an [anchor-only link](#added). <!-- expect: link -->
+- A bullet with a [root-relative link](/docs/testing.md), <https://example.com> and
+  <someone@example.com>, all fine.
+- A bullet with a [reference] link.
+
+[reference]: /docs/testing.md "a reference definition" <!-- expect: link -->
+
+### Bogus <!-- expect: unknown-section -->
+
+- A bullet under a section nobody knows.
+
+### Changed
+
+1. An ordered list. <!-- expect: not-a-list -->
+
+### Fixed
+
+A paragraph before the list. <!-- expect: not-a-list -->
+
+- The list after it, which alone would be fine.
+
+### Removed <!-- expect: empty-section -->
+
+### Added <!-- expect: duplicate-section -->
+
+- The same section a second time.
+
+### Security
+
+- A list first.
+
+#### A deeper heading <!-- expect: not-a-list -->
+
+```text <!-- expect: not-a-list -->
+a fence at section level
+```
+
+### Deprecated
+
+* A bullet with `*` for its marker. <!-- expect: list-marker -->

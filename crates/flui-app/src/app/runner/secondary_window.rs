@@ -237,7 +237,7 @@ struct SecondaryWindowInstallConfig {
 ))]
 struct PendingCompletion {
     config: SecondaryWindowInstallConfig,
-    window: Arc<dyn flui_platform::traits::PlatformWindow>,
+    window: Arc<dyn flui_platform::traits::HostWindow>,
     /// The install continuation. `None` runs the bare-shell
     /// [`finish_open_secondary_window`]; `Some` runs the closure, which
     /// captures everything the content-install path owns (root widget,
@@ -275,7 +275,7 @@ pub(super) type OpenedWindow = (
 type SecondaryWindowInstall = Box<
     dyn FnOnce(
         SecondaryWindowInstallConfig,
-        Arc<dyn flui_platform::traits::PlatformWindow>,
+        Arc<dyn flui_platform::traits::HostWindow>,
     ) -> Result<
         (
             RealmDispatcher,
@@ -822,7 +822,7 @@ where
                                     owner_thread: std::thread::current().id(),
                                     address: rendered.address,
                                 },
-                                window,
+                                window as Arc<dyn flui_platform::traits::PlatformWindow>,
                             )
                         })
                     })),
@@ -906,7 +906,7 @@ fn spawn_pending_secondary_window_completion(
 ))]
 fn finish_open_secondary_window(
     config: SecondaryWindowInstallConfig,
-    window: Arc<dyn flui_platform::traits::PlatformWindow>,
+    host: Arc<dyn flui_platform::traits::HostWindow>,
 ) -> Result<
     (
         RealmDispatcher,
@@ -914,6 +914,7 @@ fn finish_open_secondary_window(
     ),
     AppWindowError,
 > {
+    let window: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::clone(&host) as _;
     struct Uninstalled(Option<Arc<dyn flui_platform::PlatformWindow>>);
     impl Drop for Uninstalled {
         fn drop(&mut self) {
@@ -962,14 +963,18 @@ fn finish_open_secondary_window(
                     reason: "WindowPolicy::SharedRealm requires an already-hosted realm to share \
                              with; none is installed on this thread",
                 })?;
-            install_presentation_alongside(shared_with, &window).map_err(mount_error)?
+            install_presentation_alongside(
+                shared_with,
+                super::presentation_window(Arc::clone(&host)),
+            )
+            .map_err(mount_error)?
         }
         WindowPolicy::SeparateRealms => {
             let scale_factor = window.scale_factor() as f32;
             let wake = runtime_wake_callback();
             let ui_realm = crate::app::ui_realm::UiRealm::new(
                 Arc::clone(&wake),
-                Arc::clone(&window),
+                super::presentation_window(Arc::clone(&host)),
                 scale_factor,
                 runtime_needs_redraw_handle(),
             )
@@ -1346,7 +1351,7 @@ mod quit_notification_tests {
                     shared.set_exit_policy_hook(Box::new(|| true));
                     let closed = Arc::new(AtomicUsize::new(0));
                     let observed = Arc::clone(&closed);
-                    let window = crate::app::window_test_support::headless_test_window();
+                    let window = crate::app::window_test_support::headless_test_host_window();
                     window.on_close(Box::new(move || {
                         APP_RUNTIME.with(|slot| {
                             assert!(
@@ -1480,7 +1485,7 @@ mod quit_notification_tests {
                     crate::app::ui_realm::UiRealm::for_test(),
                     &crate::app::window_test_support::headless_test_window(),
                 );
-                let window = crate::app::window_test_support::headless_test_window();
+                let window = crate::app::window_test_support::headless_test_host_window();
                 let closed = Arc::new(AtomicUsize::new(0));
                 let observed = Arc::clone(&closed);
                 window.on_close(Box::new(move || {

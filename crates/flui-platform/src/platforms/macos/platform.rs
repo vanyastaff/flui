@@ -228,7 +228,7 @@ impl Platform for MacOSPlatform {
     fn open_window(
         &self,
         options: WindowOptions,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
+    ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
         self.affinity
             .debug_assert_owner("MacOSPlatform::open_window");
         debug_assert_appkit_main_thread("MacOSPlatform::open_window");

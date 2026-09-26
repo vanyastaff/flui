@@ -147,7 +147,7 @@ mod appkit_frame_pump_probe {
         // callback is stored by the window's callback registry).
         let frames = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&frames);
-        let window_ref: Weak<dyn flui_platform::PlatformWindow> = Arc::downgrade(&window);
+        let window_ref: Weak<dyn flui_platform::HostWindow> = Arc::downgrade(&window);
         window.on_request_frame(Box::new(move || {
             counter.fetch_add(1, Ordering::SeqCst);
             if let Some(window) = window_ref.upgrade() {
