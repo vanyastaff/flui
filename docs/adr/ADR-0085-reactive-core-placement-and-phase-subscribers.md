@@ -55,22 +55,20 @@ exposed by `pub fn reactive` (`:972-974`). ADR-0043 gives every presentation its
 `BuildOwner`, so a realm with two windows has two graphs, each with its own process-unique id
 (`static NEXT_GRAPH_ID`, `mod.rs:72`).
 
-The cross-thread write path picks one of them without looking at the slot.
-`UiCommand::SignalWrite` (`crates/flui-app/src/app/ui_realm/commands.rs:449-455`) takes the
-graph from `self.widgets()`, which is `self.presentations.primary().widgets()`
-(`crates/flui-app/src/app/ui_realm/presentations.rs:353-358`); that accessor is also compiled
-out on Android, iOS and wasm (`presentations.rs:353-356`). The slot knows which graph minted it
-(`SignalSlot::graph`, `mod.rs:78-82`), and the graph already refuses a foreign slot
-(`SignalError::ForeignGraph`, `mod.rs:267-273`).
+Until §1 shipped, the cross-thread write path picked one of them without looking at the slot:
+`UiCommand::SignalWrite` took the graph from `self.widgets()`, which is
+`self.presentations.primary().widgets()`, an accessor that is also compiled out on Android, iOS
+and wasm. The slot knows which graph minted it (`SignalSlot::graph`), and the graph already
+refuses a foreign slot (`SignalError::ForeignGraph`).
 
-**Failure scenario.** A view in a secondary window creates a signal in `init_state`; its slot
-carries window B's graph id. A worker detaches it (`SignalSender`, `mod.rs:810`), and the write
-arrives as `UiCommand::SignalWrite`. The command re-attaches the sender against the primary
-window's graph, `set` returns `ForeignGraph`, and window B's readers never rebuild. This is a
-conformance defect against ADR-0074, fixed by §1. It was latent: `send_signal_write` has no
-production caller (it carries `expect(dead_code, reason = "cross-thread signal write sender is
-wired before public runtime vending")`), and no test opened two presentations and wrote through
-the command.
+**Failure scenario (before §1).** A view in a secondary window creates a signal in
+`init_state`; its slot carries window B's graph id. A worker detaches it (`SignalSender`), and
+the write arrives as `UiCommand::SignalWrite`. The command re-attached the sender against the
+primary window's graph, `set` returned `ForeignGraph`, and window B's readers never rebuilt.
+This was a conformance defect against ADR-0074, fixed by §1. It was latent: `send_signal_write`
+has no production caller (it carries `expect(dead_code, reason = "cross-thread signal write
+sender is wired before public runtime vending")`), and no test opened two presentations and
+wrote through the command.
 
 ### The feature gate
 

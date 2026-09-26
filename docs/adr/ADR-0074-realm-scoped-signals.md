@@ -6,8 +6,8 @@
 - **Date:** 2026-09-22
 - **Supersedes:** the signals clause of FOUNDATIONS C1 (now §7's wording) and ADR-0008's
   "signals-as-default are rejected" (ADR-0008 has since been retired).
-- **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md) — its
-  §1 routes a cross-thread write by the slot's graph and replaces §5.8's `SignalWrite` command
+- **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
+  (Proposed; its §1 ships ahead of acceptance) — its §1 routes a cross-thread write by the slot's graph and replaces §5.8's `SignalWrite` command
   shape; the write signature is ADR-0086's.
 
 Two limits are part of the decision: a value read by hundreds of cells is an `InheritedView` +
