@@ -42,6 +42,7 @@ use cargo_metadata::{Metadata, TargetKind};
 use serde_json::Value as Json;
 
 use crate::util;
+use crate::workspace::relative;
 
 mod allowlist;
 mod fixture;
@@ -150,32 +151,6 @@ fn crates(root: &Path, metadata: &Metadata) -> anyhow::Result<Vec<Krate>> {
     }
     crates.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(crates)
-}
-
-/// `path` relative to `root`, `/`-separated.
-fn relative(root: &Path, path: &Path) -> anyhow::Result<String> {
-    let normalize = |path: &Path| -> PathBuf {
-        let mut out = PathBuf::new();
-        for component in path.components() {
-            match component {
-                std::path::Component::CurDir => {}
-                std::path::Component::ParentDir => {
-                    out.pop();
-                }
-                other => out.push(other),
-            }
-        }
-        out
-    };
-    let path = normalize(path);
-    let rel = path
-        .strip_prefix(normalize(root))
-        .with_context(|| format!("{} is outside the repository", path.display()))?;
-    Ok(rel
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/"))
 }
 
 /// The `ADR-NNNN` numbers with a file under `docs/adr`.
