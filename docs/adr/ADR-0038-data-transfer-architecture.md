@@ -251,7 +251,11 @@ Built: the vocabulary, `OfferTable`, the request/completer pair,
 `DataTransferSource` and `NullDataTransferSource`; `Platform::data_transfer()`
 on every backend; `PlatformInput::DragDrop`; the winit file-drop source; realm
 dispatch that logs and drops DnD events. The transport's state machines are
-tested in `crates/flui-app/tests/data_transfer_transport.rs`.
+tested in `crates/flui-app/tests/data_transfer_transport.rs`. A plain-text
+`ClipboardHandle` (`flui-interaction`) over the synchronous `Clipboard`
+substrate reaches widgets through `LifecycleContext::clipboard_handle`; its
+read is callback-shaped, so callers do not change when the §6 transport makes
+it asynchronous. `EditableText`'s copy, cut and paste use it.
 
 Not yet built: the clipboard half of the winit source (`clipboard_offer()`
 returns `None`) and its worker/UI-thread modes (§6); the realm owner, handle

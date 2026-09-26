@@ -35,6 +35,13 @@ into the `Overlay` and `Dismissible` slides its child with a `Stack`, a
 a cycle, so they can become a node of their own only after they move together
 into one module.
 
+`form` sits in the top widget layer beside `icon` and `app`: a text form
+field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
+the error line's `Column` and `Semantics`, and nothing below names a form.
+The clipboard intents live in `interaction`, not `text`, so the
+`DefaultFocusTraversal` that `FocusRoot` builds can bind them without naming
+the text module that answers them.
+
 A new module takes a place in `layers`; a move that changes the direction
 edits `layers` in the same change, which is where it is reviewed. An edge the
 layers refuse and that cannot move yet goes into `exceptions` with the ADR
@@ -1663,3 +1670,146 @@ for the last one: skip wrapping `install_pointer_handlers`'s return value
 in `wrap_double_tap_word_select` — the selection stays collapsed after
 the second tap.
 
+
+### 21. A form field validates at the event, not in `build`
+
+**Oracle:** `FormFieldState.build` and `FormState.build` (`widgets/form.dart`,
+tag `3.44.0`) run the autovalidate switch on every build.
+
+**Choice:** FLUI's `build(&self)` cannot mutate, so the same switch runs at the
+moments that would schedule Flutter's build: `did_change` (a user edit),
+`init_state` (mount), `did_update_view` (reconfiguration), a field joining an
+`Always` form, the field's focus wrapper losing focus, and the form's
+`validate()`/`reset()`. A field whose shown error changed schedules its own
+rebuild through the `RebuildHandle` it took in `init_state`. A form `reset()`
+defers the form-level autovalidation to the end of its loop, as Flutter's
+single rebuild after `reset` does. Flutter wraps a field in its unfocus
+`Focus` only when a mode asks for it; FLUI always wraps (not focusable,
+skipped by traversal, no semantics) and checks the modes at focus loss, so a
+mode change never remounts the field's content
+(`tab_and_shift_tab_move_focus_between_form_fields_in_order`,
+`on_unfocus_validates_when_tab_leaves_the_field`).
+
+**Tests** (`tests/form.rs`): `validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it`,
+`on_user_interaction_validates_only_after_the_first_edit`,
+`form_level_on_user_interaction_validates_every_field_after_any_edit`,
+`on_user_interaction_if_error_revalidates_only_while_an_error_is_shown`,
+`always_validates_at_mount_and_on_every_change`. Frames are driven with
+`tick`, which does not dirty the root, so a field that stored its error
+without scheduling a rebuild fails the first one.
+
+### 22. `FormHandle` and `FormFieldHandle` replace `GlobalKey<FormState>`
+
+**Oracle:** Flutter reaches `FormState`/`FormFieldState` through a
+`GlobalKey` or `Form.of(context)`.
+
+**Choice:** The caller creates a `FormHandle`/`FormFieldHandle` and passes it
+to the widget (`Form::handle`, `FormField::handle`), or reads `Form::of`. A
+handle is a cheap `Rc` clone that owns the state, so it outlives the build
+that created it and needs no key registry. A field handle is bound to the
+first `FormField` it is given for that field's mounted lifetime; a different
+handle on a later rebuild is ignored. **Tests:** every `tests/form.rs` case
+drives the form through a handle.
+
+### 23. A field registers with its form in lifecycle hooks
+
+**Oracle:** `FormFieldState.build` calls `Form.maybeOf(context)?._register(this)`
+and `deactivate` unregisters.
+
+**Choice:** `init_state` registers, `did_change_dependencies` moves the
+registration when the enclosing form changed, and `dispose` unregisters.
+Registration order is kept, as Flutter's insertion-ordered set keeps it; the
+form holds each field strongly and each field holds the form weakly, so a
+`FormHandle` captured in a field callback is a cycle only until that field's
+`dispose`. **Tests:** `save_calls_on_saved_with_each_fields_value_in_registration_order`,
+`a_disposed_field_no_longer_takes_part_in_validate`.
+
+### 24. A text field's error line is a live region instead of an announcement
+
+**Oracle:** `FormState.validate` announces the first error through
+`SemanticsService.announce`.
+
+**Choice:** FLUI has no widget-facing announce API, so `RawTextFormField`'s
+error line is a `Semantics(live_region: true)` container, which assistive
+technology reads when it appears. **Test:**
+`form_reports_the_form_role_and_the_error_line_is_a_live_region`.
+
+### 25. `Form` carries the form semantics role
+
+**Oracle:** Flutter's `Form` adds no semantics node.
+
+**Choice:** `Form` is a semantics container with `SemanticsRole::Form`
+(AccessKit `Role::Form`), so a screen reader can name the group. **Test:**
+`form_reports_the_form_role_and_the_error_line_is_a_live_region`.
+
+### 26. Clipboard bindings come from `DefaultFocusTraversal`
+
+**Oracle:** `WidgetsApp` installs `DefaultTextEditingShortcuts`, which binds
+`CopySelectionTextIntent` and `PasteTextIntent` to Ctrl/Cmd+C, X and V.
+
+**Choice:** `DefaultFocusTraversal`, which every `FocusRoot` builds, binds the
+three chords (Cmd on macOS and iOS, Control elsewhere — a pure table resolved
+once per state from `TargetPlatform::current()`). The chord resolves at the
+primary focus like the traversal keys: an `EditableText` answers it on its own
+node, and with no text field focused nothing does, so the chord keeps
+bubbling. **Tests:** `interaction::shortcuts::tests::clipboard_activators_map_every_platform`,
+`tests/editable_text_clipboard.rs`
+(`copy_then_paste_round_trips_text_in_an_editable_text`,
+`ctrl_c_with_no_text_field_focused_still_reaches_an_app_callback_shortcut`).
+
+### 27. `EditableText`'s clipboard actions win over ancestor bindings
+
+**Oracle:** Flutter's `EditableText` wraps its default actions in
+`Action.overridable`, so an ancestor `Actions` can replace them.
+
+**Choice:** `EditableText` layers its actions over the chain at its position
+and records the result on its node, so they are the nearest declaration of
+the two intent types and an ancestor mapping never replaces them. There is no
+`_makeOverridable`. **Test:** `copy_then_paste_round_trips_text_in_an_editable_text`
+(the root `Actions` above declares no clipboard mapping, and the field's own
+answers).
+
+### 28. Paste drops `\r` as well as `\n`
+
+**Oracle:** the single-line field's `FilteringTextInputFormatter.singleLineFormatter`
+is `FilteringTextInputFormatter.deny('\n')` (`services/text_formatter.dart`,
+tag `3.44.0`, checked against the published source), so a Windows `\r\n`
+leaves a `\r` behind.
+
+**Choice:** a paste into FLUI's single-line field removes both, since a stray
+carriage return is never text the user meant. **Test:**
+`paste_replaces_the_selection_and_drops_line_breaks`.
+
+### 29. `RawTextFormField`, not `TextFormField`
+
+**Choice:** the theme-free form field is named `RawTextFormField` for the
+facade-additivity reason `RawTextField` is: with the `material` feature on,
+`flui::prelude::TextFormField` means exactly the Material type, and enabling a
+feature never changes what an existing name resolves to.
+`flui_material::TextFormField` is the Flutter-parity type.
+
+### 30. `SingleActivator` compares ASCII letters without case
+
+**Oracle:** `SingleActivator(LogicalKeyboardKey.keyC, control: true)` names a
+key, which has no case.
+
+**Choice:** FLUI's `Key::Character` carries what the key produced, so Caps
+Lock turns Ctrl+C into a `"C"` event. A single ASCII letter trigger therefore
+matches either case; the exact Shift comparison still tells Ctrl+Shift+C
+apart. **Test:** `interaction::shortcuts::tests::a_character_activator_matches_regardless_of_caps_lock`.
+
+### 31. `EditableText::on_changed` reports only the user's edits, and a text form field reads its controller
+
+**Oracle:** Flutter's `TextFormField` listens to its controller and calls
+`didChange` on any text change it did not make itself, so a caller's
+`controller.text = …` counts as the user's interaction.
+
+**Choice:** controller listeners are `Send + Sync` in FLUI and cannot reach
+owner-thread form state, so a text form field takes the user's edits from
+`EditableText::on_changed` (typing, deletion, IME commit, cut, paste — not
+`set_text`, and not the edit an `on_submitted` callback makes), and reads the
+controller's text before it validates or saves. A caller's own controller
+edit is therefore validated and saved but does not mark the field interacted,
+and a reset's write-back needs no equality guard. **Tests:**
+`tests/editable_text.rs::on_changed_reports_user_edits_but_not_the_callers_own`,
+`reset_restores_initial_values_and_clears_errors_and_interaction`.

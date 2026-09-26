@@ -49,9 +49,13 @@ The platform side already has more than the widget side can reach:
   consumer, as a lifecycle capability".
 - **Clipboard.** `Platform::clipboard()` is a required method
   (`crates/flui-platform/src/traits/platform.rs:423`), resolved once per loop into `AppRuntime`
-  (ADR-0038 §9), and the accessor that would hand it out is dead code: "no production caller yet
-  -- a Clipboard capability through BuildContext is future wiring"
-  (`crates/flui-app/src/app/runtime.rs:1631-1641`).
+  (ADR-0038 §9). When this ADR was written the accessor that would hand it out was dead code.
+  It now has a caller: every realm takes the platform clipboard at construction
+  (`runner::host::runtime_clipboard`) and installs a `ClipboardHandle` in each presentation's
+  build owner, reached through `LifecycleContext::clipboard_handle`. That closed method is the
+  interim route; it is replaced by `cx.capability::<Clipboard>()` when this seam lands, and
+  `ClipboardHandle` stays the capability's handle, so only the acquisition line in
+  `EditableText` changes.
 - **Data transfer.** ADR-0038 §7 names `DataTransferHandle` "a lifecycle capability on
   `LifecycleContext`"; no such method exists in the list above.
 
@@ -406,9 +410,10 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
   capability (a new handle)" row in "Extending FLUI" changes in the implementing change to: an
   interface crate on `flui-platform-api`, a provider per target, registration through a plugin,
   a headless fake, and a test that fails without it.
-- The dead clipboard accessor (`runtime.rs:1631-1641`) and the haptics forwarders
+- The interim `LifecycleContext::clipboard_handle` gives way to the built-in clipboard
+  provider, which hands out the same `ClipboardHandle`. The haptics forwarders
   (`presentation.rs:893`, `frame_clock.rs:508`) get production callers or are deleted in favour
-  of the built-in clipboard provider and the haptics plugin.
+  of the haptics plugin.
 - **Breaks.** `PlatformWindow::text_input()` returns `Arc<dyn PlatformTextInput>` with no
   default. `accessibility()` moves to the backend extension trait (ADR-0082 §3) and returns
   `Arc<dyn PlatformAccessibility>` with no default. Every backend, including third-party ones,
