@@ -4,7 +4,8 @@
 //! Every `static` (at any depth, `static mut` included), every entry of a
 //! `thread_local!`, and every `static` in the tokens of a macro invocation or
 //! a `macro_rules!` body, in the library, proc-macro and bin targets of each
-//! crate under `crates/` and the facade (not `tier-kind = "tool"`), is a
+//! crate under `crates/` or `packages/` and the facade (not
+//! `tier-kind = "tool"`), is a
 //! global. Items under a cfg that is false whatever the build (`test`) are
 //! left out; every other cfg is scanned, so the result does not depend on the
 //! host. Two shapes are exempt:
@@ -110,15 +111,24 @@ struct Krate {
     targets: Vec<Target>,
 }
 
-/// The crates under `crates/` and the facade, less applications, with their
-/// library, proc-macro and bin targets.
+/// Whether the gate scans a member: a crate under `crates/` or `packages/`
+/// (the official packages, ADR-0088) or the facade, and not an application
+/// (`tier-kind = "tool"`).
+fn scanned(manifest: &str, flui: &Json) -> bool {
+    let in_scope = manifest == "Cargo.toml"
+        || manifest.starts_with("crates/")
+        || manifest.starts_with("packages/");
+    in_scope && flui["tier-kind"].as_str() != Some("tool")
+}
+
+/// The crates [`scanned`] admits, with their library, proc-macro and bin
+/// targets.
 fn crates(root: &Path, metadata: &Metadata) -> anyhow::Result<Vec<Krate>> {
     let mut crates = Vec::new();
     for package in metadata.workspace_packages() {
         let manifest = relative(root, package.manifest_path.as_std_path())?;
         let flui = package.metadata["flui"].clone();
-        let in_scope = manifest == "Cargo.toml" || manifest.starts_with("crates/");
-        if !in_scope || flui["tier-kind"].as_str() == Some("tool") {
+        if !scanned(&manifest, &flui) {
             continue;
         }
         let mut targets = Vec::new();

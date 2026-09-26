@@ -45,6 +45,8 @@ pub(super) const DOCS_ONLY: &[&str] = &[
     ".editorconfig",
     "crates/*/ARCHITECTURE.md",
     "crates/*/CHANGELOG.md",
+    "packages/*/ARCHITECTURE.md",
+    "packages/*/CHANGELOG.md",
     "changelog.d/**", // changelog fragments; `changelog --check` in `checks` judges them
 ];
 
@@ -763,6 +765,8 @@ pub(super) mod tests {
             ".github/PULL_REQUEST_TEMPLATE.md",
             "crates/flui-view/ARCHITECTURE.md",
             "crates/flui-view/CHANGELOG.md",
+            "packages/flui-material/ARCHITECTURE.md",
+            "packages/flui-material/CHANGELOG.md",
             "changelog.d/tools-changelog-fragments.md",
             "changelog.d/README.md",
         ] {
@@ -775,6 +779,7 @@ pub(super) mod tests {
         // crate READMEs are include_str!()'d into doctests; a nested .md is not a root .md
         for path in [
             "crates/flui-animation/README.md",
+            "packages/flui-material/README.md",
             "crates/flui-cli/templates/platforms/ios/README.md",
             ".github/workflows/ci.yml",
             "src/lib.rs",

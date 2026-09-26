@@ -1,6 +1,7 @@
 //! `cargo xtask workspace`: the shape of the workspace.
 //!
-//! - **Tiers** (ADR-0081). Each crate under `crates/` and the facade declare
+//! - **Tiers** (ADR-0081). Each crate under `crates/` or `packages/` (the
+//!   official packages, ADR-0088) and the facade declare
 //!   `[package.metadata.flui] tier`, `tier-kind` and `order`; the tier names
 //!   live in the root manifest's `[workspace.metadata.flui] tiers`, bottom to
 //!   top. A normal or build dependency on another workspace package points to a
@@ -15,7 +16,7 @@
 //!   must cite an ADR with a file under `docs/adr`; what they mean over the
 //!   resolved graph is `cargo xtask reach` ([`mod@reach`]).
 //! - **Layers** (ADR-0041), checked beside the tiers until the `layer` key is
-//!   removed. Each crate under `crates/` and the facade declare
+//!   removed. Each crate under `crates/` or `packages/` and the facade declare
 //!   `[package.metadata.flui] layer`; the names live in the root manifest's
 //!   `[workspace.metadata.flui] layers`. A normal or build dependency on another
 //!   workspace package points to the same layer or lower, never higher, and never
@@ -246,10 +247,12 @@ impl Member {
         &self.name
     }
 
-    /// Crates under `crates/` and the root facade carry a layer, a tier and
-    /// an order.
+    /// Crates under `crates/` or `packages/` and the root facade carry a
+    /// layer, a tier and an order.
     fn must_have_layer(&self) -> bool {
-        self.rel == "Cargo.toml" || self.rel.starts_with("crates/")
+        self.rel == "Cargo.toml"
+            || self.rel.starts_with("crates/")
+            || self.rel.starts_with("packages/")
     }
 
     fn is_example_or_tool(&self) -> bool {
@@ -498,8 +501,8 @@ fn check_layers(
     for member in members.iter() {
         match member.layer {
             None if member.must_have_layer() => findings.push(format!(
-                "{} has no `[package.metadata.flui] layer`; every crate under crates/ declares \
-                 one",
+                "{} has no `[package.metadata.flui] layer`; every crate under crates/ or \
+                 packages/ declares one",
                 member.rel
             )),
             Some(layer) if layer >= names.len() => findings.push(format!(
