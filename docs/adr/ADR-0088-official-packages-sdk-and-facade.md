@@ -174,8 +174,8 @@ with E0308. The same guard protects facade-plus-sdk and facade-plus-Material pai
 The guard is on `flui-foundation` and not on `flui-sdk` because the facade does not depend on the
 SDK: with `links` on the SDK alone, an application on `flui` train 2 and a package on `flui-sdk`
 train 1 would hold one SDK and two copies of every internal crate, and fail with E0308 as before.
-`flui-foundation` is a normal dependency of the SDK, the facade, `flui-platform-api` and every
-crate from tier S up. `cargo xtask workspace` requires the key on `flui-foundation` and refuses
+`flui-foundation` is in the normal dependency closure of the SDK, the facade, `flui-platform-api`
+and every crate from tier S up except `flui-log`, `flui-assets` and the `flui-cli` tool. `cargo xtask workspace` requires the key on `flui-foundation` and refuses
 it on any other member.
 
 The cost is recorded, not hidden: a minor `flui` upgrade in an application waits for its
@@ -274,7 +274,7 @@ them.
 - **The guard also ties platform plugins to the train.** `flui-platform-api` depends on
   `flui-foundation` (ADR-0082), so a plugin built on one train and an application on another
   now fail in the resolver instead of with E0308.
-- **The guard does not cover a lone duplicate below it.** Two copies of `flui-geometry`,
+- **The guard does not cover a lone duplicate outside its closure.** Two copies of `flui-geometry`,
   `flui-types`, `flui-macros`, `flui-protocol`, `flui-log` or `flui-assets` with one
   `flui-foundation` are not refused; only a crate that depends on those internal crates directly,
   which is not supported for third parties, can produce that graph.

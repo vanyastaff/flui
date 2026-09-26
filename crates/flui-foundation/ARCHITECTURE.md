@@ -690,8 +690,9 @@ cannot meet in one build: an application on one train and a package on another r
 train or fail in the resolver, never later with a type mismatch (ADR-0088 §5).
 
 The guard sits here, not on `flui-sdk`, because this is the crate every train shares: the facade,
-`flui-sdk`, `flui-platform-api` and every crate above them depend on it normally, while the facade
-does not depend on the SDK. A guard on the SDK alone would not separate an application on one
+`flui-sdk`, `flui-platform-api` and every crate above them except `flui-log`, `flui-assets` and
+the `flui-cli` tool have it in their normal dependency closure, while the facade does not depend
+on the SDK. A guard on the SDK alone would not separate an application on one
 `flui` train from a package on another `flui-sdk` train.
 
 Invariants, checked by `cargo xtask workspace`: this crate declares the guard and no other member
