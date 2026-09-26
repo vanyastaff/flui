@@ -38,6 +38,8 @@ fn ui_tests() {
     // The sealed-trait snapshot lists every missing `BuildContext` method
     // (E0046), so adding a method to the trait means regenerating it.
     t.compile_fail("tests/ui/build_context_is_sealed.rs");
+    // ADR-0085 §2: a read scope yields neither its graph nor its sink.
+    t.compile_fail("tests/ui/scope_ref_exposes_no_graph.rs");
     t.compile_fail("tests/ui/depend_on_inherited_fields_needs_token.rs");
     t.compile_fail("tests/ui/inherited_access_mutation_needs_token.rs");
 }
