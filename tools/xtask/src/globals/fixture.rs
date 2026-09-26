@@ -82,9 +82,12 @@ some_macro! {
     static HIDDEN: std::cell::Cell<u8> = std::cell::Cell::new(0);
 }
 
-// silent: `'static` is a lifetime
+// silent: `'static` is a lifetime, even when a name and `:` follow it
 other_macro! {
     fn name() -> &'static str { "flui" }
+}
+macro_rules! borrowed_type {
+    (&'static $t:ty) => {};
 }
 "#;
 
