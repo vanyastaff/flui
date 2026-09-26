@@ -203,6 +203,13 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
   `flui_semantics::prelude` no longer re-exports `TreeNav`/`TreeRead`.
 
+  The `TreeNav` walks (`ancestors`, `descendants`, `siblings`, `child_count`, `has_children`,
+  `lowest_common_ancestor`, …) are no longer public on `LayerTree`, `RenderTree` or
+  `SemanticsTree`, and have no public replacement. Each tree keeps its public `get`, `parent`,
+  `children`, `contains`, `len` and `iter` (`RenderTree` also `depth`), which a caller can
+  walk; `LayerTree`'s `ancestors`/`lowest_common_ancestor` and `SemanticsTree`'s ancestry check
+  are crate-private.
+
   The facade's `localizations` feature is empty and deprecated; it is removed once nothing
   names it.
 - **`flui_widgets::TextField` renamed to `RawTextField`** (and

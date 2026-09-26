@@ -419,7 +419,7 @@ step that needs the result, not a step that edits the workflow.
 | 11 | a Windows job | `cargo xtask dylib-exports` | H1-DL2 | only if ADR-0096 is accepted |
 | 12 | `.github/workflows/ci.yml:638-643` | re-add `windows-latest` to the test matrix, which was dropped "temporarily" | not required by any step | the owner made it an input to the CI redesign; a heavy lane, not during active work |
 | 13 | where the build-footprint levers apply | the levers W0-14 keeps (for example nextest archives, sccache, split debug info, one shared target) | W1-A0 | only with a measured gain |
-| 14 | `.github/workflows/weekly.yml:98` | drop `flui/localizations` from the `--features` list; the facade's `localizations` feature is empty since `flui-localizations` was deleted, and it is removed once nothing names it | W3-A7 | then delete `localizations = []` from the root `Cargo.toml` |
+| 14 | `.github/workflows/weekly.yml:98`; comments at `.github/workflows/ci.yml:670,692,750,873-874` | drop `flui/localizations` from the `--features` list; the facade's `localizations` feature is empty since `flui-localizations` was deleted, and it is removed once nothing names it. In the same edit, correct the `ci.yml` comments: they still count 28 crates (now 26) and say `TEST_SCOPE` turns `flui/localizations` on and that the smoke test has localizations assertions | W3-A7 | then delete `localizations = []` from the root `Cargo.toml` |
 
 Every new job: actions pinned to a full SHA, `--locked` on every cargo call, caches saved only on
 `main`, name equal to key.
