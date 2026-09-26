@@ -159,6 +159,8 @@ pub(super) struct Def {
     pub(super) counter_init: bool,
     /// Every enclosing `#[cfg(…)]` predicate, joined with ` & `.
     pub(super) cfg: String,
+    /// Those predicates are false in every build without `debug_assertions`.
+    pub(super) debug_only: bool,
     /// For a non-`mut` atomic `static`: how it is used in its visibility
     /// scope.
     pub(super) uses: Option<Uses>,
@@ -213,10 +215,26 @@ impl Truth {
 /// Evaluates the predicate inside `cfg(…)`.
 pub(super) fn eval_cfg(tokens: TokenStream) -> Truth {
     let trees: Vec<TokenTree> = tokens.into_iter().collect();
-    eval_predicate(&trees)
+    eval_predicate(&trees, Truth::Unknown)
 }
 
-fn eval_predicate(trees: &[TokenTree]) -> Truth {
+/// Whether the conjunction of the cfg predicates `cfgs` is false in every
+/// build without `debug_assertions`: the item exists only in debug builds.
+fn debug_only<'a>(cfgs: impl IntoIterator<Item = &'a String>) -> bool {
+    cfgs.into_iter()
+        .map(|text| {
+            text.parse::<TokenStream>()
+                .map_or(Truth::Unknown, |tokens| {
+                    let trees: Vec<TokenTree> = tokens.into_iter().collect();
+                    eval_predicate(&trees, Truth::False)
+                })
+        })
+        .fold(Truth::True, Truth::and)
+        == Truth::False
+}
+
+/// `debug` is the value `debug_assertions` takes.
+fn eval_predicate(trees: &[TokenTree], debug: Truth) -> Truth {
     let Some(TokenTree::Ident(name)) = trees.first() else {
         return Truth::Unknown;
     };
@@ -225,7 +243,7 @@ fn eval_predicate(trees: &[TokenTree]) -> Truth {
         Some(TokenTree::Group(group)) => {
             let args: Vec<Truth> = split_commas(group.stream())
                 .iter()
-                .map(|arg| eval_predicate(arg))
+                .map(|arg| eval_predicate(arg, debug))
                 .collect();
             match name.as_str() {
                 "all" => args.into_iter().fold(Truth::True, Truth::and),
@@ -235,6 +253,7 @@ fn eval_predicate(trees: &[TokenTree]) -> Truth {
             }
         }
         None if name == "test" => Truth::False,
+        None if name == "debug_assertions" => debug,
         _ => Truth::Unknown,
     }
 }
@@ -663,6 +682,7 @@ pub(super) fn scan_target(source: &dyn Source, target: &Target) -> anyhow::Resul
                 ty: raw.ty,
                 counter_init: raw.counter_init,
                 cfg: raw.cfg,
+                debug_only: raw.debug_only,
                 uses,
             }
         })
@@ -677,15 +697,18 @@ pub(super) fn scan_target(source: &dyn Source, target: &Target) -> anyhow::Resul
 fn walk(source: &dyn Source, target: &Target) -> anyhow::Result<Vec<Parsed>> {
     let mut files: Vec<Parsed> = Vec::new();
     let mut queue = vec![(target.src.clone(), Vec::new(), Vec::new(), FileKind::ModRs)];
-    while let Some((rel, module, cfgs, kind)) = queue.pop() {
+    while let Some((rel, module, mut cfgs, kind)) = queue.pop() {
         let text = source
             .read(&rel)
             .with_context(|| format!("{rel}: the module walk reached it, but it cannot be read"))?;
         let ast = syn::parse_file(&text)
             .map_err(|error| anyhow!("{rel}: syn cannot parse it: {error}"))?;
-        if cfg_of(&ast.attrs).0 == Truth::False {
+        // the file's own `#![cfg(…)]` holds for its items and child modules
+        let (truth, inner) = cfg_of(&ast.attrs);
+        if truth == Truth::False {
             continue;
         }
+        cfgs.extend(inner);
         let mut decls = Decls::default();
         decls.visit_file(&ast);
         let parsed = Parsed {
@@ -841,6 +864,7 @@ struct Raw<'ast> {
     ty: TypeInfo,
     counter_init: bool,
     cfg: String,
+    debug_only: bool,
     /// The body of the innermost enclosing fn, for a static defined in one.
     fn_body: Option<&'ast Block>,
 }
@@ -922,13 +946,9 @@ impl<'ast> Collector<'ast> {
                         if local.truth == Truth::False {
                             continue;
                         }
-                        let cfg = self
-                            .cfgs
-                            .iter()
-                            .cloned()
-                            .chain(local.cfgs)
-                            .collect::<Vec<_>>()
-                            .join(" & ");
+                        let cfgs: Vec<String> =
+                            self.cfgs.iter().cloned().chain(local.cfgs).collect();
+                        let (cfg, debug_only) = (cfgs.join(" & "), debug_only(&cfgs));
                         self.record(Raw {
                             item: self.key(&local.name),
                             name: local.name,
@@ -938,6 +958,7 @@ impl<'ast> Collector<'ast> {
                             ty: local.ty,
                             counter_init: false,
                             cfg,
+                            debug_only,
                             fn_body: None,
                         });
                     }
@@ -963,6 +984,7 @@ impl<'ast> Collector<'ast> {
                 ty,
                 counter_init: false,
                 cfg: self.cfgs.join(" & "),
+                debug_only: debug_only(&self.cfgs),
                 fn_body: None,
             });
         }
@@ -1077,6 +1099,7 @@ impl<'ast> Visit<'ast> for Collector<'ast> {
             ty: TypeInfo::of(&item.ty),
             counter_init: counter_init(&item.expr),
             cfg: self.cfgs.join(" & "),
+            debug_only: debug_only(&self.cfgs),
             fn_body: self.fns.last().copied(),
         });
         visit::visit_item_static(self, item);

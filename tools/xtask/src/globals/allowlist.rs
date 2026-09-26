@@ -290,9 +290,9 @@ pub(super) fn class_problem(class: Class, defs: &[Def]) -> Option<String> {
                 .outer
                 .as_deref()
                 .is_some_and(|outer| outer == "Once" || outer == "AtomicBool");
-            (!flag && !def.cfg.contains("debug_assertions")).then(|| {
-                "a diagnostic is a `Once` or `AtomicBool` flag, or sits under a \
-                 `debug_assertions` cfg"
+            (!flag && !def.debug_only).then(|| {
+                "a diagnostic is a `Once` or `AtomicBool` flag, or sits under a cfg \
+                 that is false without `debug_assertions`"
                     .to_owned()
             })
         }
