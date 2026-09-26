@@ -2,8 +2,10 @@
 
 The frame runtime of FLUI: the per-presentation machinery a UI realm drives
 between the widget tree and a host. **Internal** — it is not an embedder API
-and its surface changes with the framework. Applications depend on `flui`, and
-hosts on `flui-app`.
+and its surface changes with the framework, except the execution
+host-injection seam (`HostExecutors` and its companions): `flui-app` and the
+`flui` facade re-export it, so it carries the Stable promise (ADR-0089 §1).
+Applications depend on `flui`, and hosts on `flui-app`.
 
 ## What is in it
 

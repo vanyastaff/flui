@@ -17,16 +17,26 @@ lists them and what each waits on.
   host type (the frame sink, the platform window) crosses as a trait this
   crate defines or one from `flui-platform-api`.
 - **Internal, and only the host depends on it.** Tier K,
-  `tier-kind = "internal"`: nothing here is an embedder API (ADR-0027 §9).
+  `tier-kind = "internal"`: nothing here is an embedder API (ADR-0027 §9)
+  except the `execution` host-injection seam below.
   `allowed-dependents = ["flui-app"]` makes `flui-app` the only crate allowed a
   normal edge, checked by `cargo xtask workspace` (and pinned by its
   `the_runtime_admits_only_the_host_as_a_normal_dependent`). That rule is what
   keeps ADR-0047's "no library crate can reach the pools" true now that
   `ExecutionServices` is `pub`; ADR-0083 §4 adds `flui-testing` when the test
-  driver runs the real frame. Dev edges are not restricted. `flui-app`
-  re-exports the host-injection seam (`HostExecutors` and its companions) at
-  its old `flui_app::…` paths; the facade re-exports nothing from this crate
-  directly.
+  driver runs the real frame. Dev edges are not restricted.
+- **The execution host-injection seam carries the Stable promise.**
+  `HostExecutors`, `HostComputePool`, `HostIoPool`, `ComputeJob`, `IoFuture`,
+  `SpawnError` and `DeterministicExecutors` are defined in `execution` but
+  re-exported as `flui_app::…` and, through the facade's
+  `pub use flui_app as app`, as `flui::app::…`; `AppConfig::with_executors`
+  takes `HostExecutors`. The promise follows the item, not its crate's
+  `tier-kind` (ADR-0089 §1), so a change to any of these signatures is a
+  breaking change of `flui` (`SpawnError` is `#[non_exhaustive]`, so a new
+  variant is not).
+  The rest of `execution` (`ExecutionServices`, `AdmissionLimits`) is reached
+  only by `flui-app` and carries no promise. `execution_public_paths` in
+  `flui-app` pins the re-exported paths.
 - **Per presentation or per host loop, never per process.** Every type here is
   owned by one presentation (`HeldPointerQueue`, `SemanticsHost`,
   `PerformanceStats`, the commit epoch) or, for `ExecutionServices`, by one
