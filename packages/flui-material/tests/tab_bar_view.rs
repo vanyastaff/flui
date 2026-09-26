@@ -257,7 +257,7 @@ fn an_inactive_tabs_animation_is_muted_by_ticker_mode() {
 /// `TabController` it was subscribed to — a controller that outlives the
 /// view must not keep firing a dead `Rc` closure against an unmounted
 /// element's `RebuildHandle`. Same "count seam" pattern as
-/// `crates/flui-material/tests/tabs.rs`'s
+/// `packages/flui-material/tests/tabs.rs`'s
 /// `unmounting_a_tab_bar_removes_its_listener_from_the_controller`, now
 /// proven for `TabBarView`'s own `dispose`.
 #[test]
@@ -301,7 +301,7 @@ fn unmounting_a_tab_bar_view_removes_its_listener_from_the_controller() {
 /// `DefaultTabController` ancestor panics loudly (Flutter parity:
 /// `_updateTabController`'s `FlutterError`) instead of silently rendering
 /// with no active tab — same documented panic-boundary mechanism as
-/// `crates/flui-material/tests/tabs.rs`'s
+/// `packages/flui-material/tests/tabs.rs`'s
 /// `a_tab_bar_with_no_controller_and_no_default_tab_controller_ancestor_builds_an_error`
 /// and `flui-cupertino/tests/tab_scaffold.rs`'s
 /// `out_of_range_controller_index_builds_an_error_instead_of_silently_hiding_every_tab`.
@@ -374,7 +374,7 @@ fn is_offstage(laid: &common::LaidOut, id: flui_sdk::foundation::RenderId) -> bo
 /// proved nothing about the fallback path. This version drives the switch
 /// the only way that actually exercises `DefaultTabController::maybe_of`:
 /// a real pointer tap on the co-mounted `TabBar`, mirroring
-/// `crates/flui-material/tests/tabs.rs`'s
+/// `packages/flui-material/tests/tabs.rs`'s
 /// `default_tab_controller_is_reachable_by_a_descendant_tab_bar_and_drives_its_indicator`.
 /// Both widgets resolving to the SAME ancestor-owned `TabController` is
 /// exactly what makes the tap on one observable through the other's

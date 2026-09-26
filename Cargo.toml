@@ -34,12 +34,15 @@ members = [
     "crates/flui-sdk",           # Package-author surface: what official and third-party packages build on (ADR-0088)
     "crates/flui-localizations", # Global (multi-language) localized resources (ACTIVE — Catalog.1 slice)
     "crates/flui-testing",       # Test-support: headless deterministic frame driver (pump_frame) (ACTIVE)
-    "crates/flui-material",      # Material Design theming foundation — ColorScheme/TextTheme/ThemeData/Theme (ACTIVE — Catalog.1 slice)
     "crates/flui-cupertino",     # iOS-style theming foundation — CupertinoDynamicColor/CupertinoTextTheme/CupertinoTheme/CupertinoButton (ACTIVE — Catalog.1 slice)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app",    # Application framework (ACTIVE - Migration)
     "crates/flui-assets", # Asset loading/caching (ACTIVE — wired into Image per Cross.A)
+
+    # === Official packages (ADR-0088) ===
+    # Built on `flui-sdk` alone, as a third-party package would be.
+    "packages/flui-material", # Material Design: ColorScheme/TextTheme/ThemeData/Theme and the M3 widget catalog
 
     # === Examples (platform-specific) ===
     # NOTE: Android examples are excluded from workspace.members because they
@@ -88,9 +91,9 @@ members = [
 # feature.
 
 [workspace.metadata.flui]
-# Crate tiers, bottom to top (ADR-0081). Each crate under crates/ and the facade
-# set `[package.metadata.flui] tier`, `tier-kind` and `order` (unique within the
-# tier); examples and tools set only `tier-kind = "tool"`. A normal or build
+# Crate tiers, bottom to top (ADR-0081). Each crate under crates/ or packages/
+# and the facade set `[package.metadata.flui] tier`, `tier-kind` and `order`
+# (unique within the tier); examples and tools set only `tier-kind = "tool"`. A normal or build
 # dependency points to a lower tier, or to a smaller `order` in the same tier,
 # unless the dependent lists it in `edge-exceptions` with the ADR that removes
 # it; nothing with a tier depends on a `tool`. Dev-dependencies are free.
@@ -648,7 +651,7 @@ flui-painting = { path = "crates/flui-painting", version = "=0.2.0-dev" }
 flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev" }
 flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
 flui-testing = { workspace = true, optional = true }
-flui-material = { path = "crates/flui-material", version = "=0.2.0-dev", optional = true }
+flui-material = { path = "packages/flui-material", version = "=0.2.0-dev", optional = true }
 flui-cupertino = { path = "crates/flui-cupertino", version = "=0.2.0-dev", optional = true }
 flui-localizations = { path = "crates/flui-localizations", version = "=0.2.0-dev", optional = true }
 

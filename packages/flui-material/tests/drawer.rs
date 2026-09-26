@@ -10,7 +10,7 @@
 //! Pure value/status math (fling threshold, direction factor, the three
 //! `on_drawer_changed` firing paths) is ALSO covered at the
 //! `DrawerControllerCore` unit level in
-//! `crates/flui-material/src/drawer.rs`'s own test module — deterministic
+//! `packages/flui-material/src/drawer.rs`'s own test module — deterministic
 //! there (no real-clock-dependent velocity simulation needed); this file
 //! additionally covers what only a real mounted tree can prove: geometry,
 //! hit-testing, the `GlobalKey` bridge, and `Scaffold`'s own relay of the
@@ -37,7 +37,7 @@
 //! # Harness limitation: no pointer capture
 //!
 //! `LaidOut::dispatch_pointer_move` re-hit-tests at the NEW position on every
-//! call (`crates/flui-material/tests/common/mod.rs`'s own doc: "no pointer
+//! call (`packages/flui-material/tests/common/mod.rs`'s own doc: "no pointer
 //! capture") — a real windowing backend instead keeps routing every
 //! subsequent move/up to whoever captured the down, regardless of where the
 //! pointer physically is now. The default closed-state edge strip is only
@@ -142,7 +142,7 @@ fn find_panel(laid: &common::LaidOut, configured_width: f32) -> RenderId {
 /// A tappable body marker filling the whole scaffold body area: increments
 /// `taps` on a primary tap. `Scaffold`'s body slot is loosely constrained
 /// (a body may legally be smaller than the available area — see
-/// `crates/flui-material/src/scaffold.rs`'s module docs), so an explicit
+/// `packages/flui-material/src/scaffold.rs`'s module docs), so an explicit
 /// `SizedBox` is what actually makes it cover every test coordinate below,
 /// not `ColoredBox` alone (which would collapse to zero size under loose
 /// constraints).
@@ -240,7 +240,7 @@ fn closed_drawer_mounts_only_the_edge_strip_and_the_body_stays_tappable_through_
 /// Flutter parity: `_move` positions the panel via the inner `Align`'s
 /// `centerEnd` alignment inside a box `value * width` wide — the panel's
 /// absolute x-offset resolves to `(value - 1) * width` (see
-/// `crates/flui-material/src/drawer.rs`'s module docs' named-divergence note
+/// `packages/flui-material/src/drawer.rs`'s module docs' named-divergence note
 /// for why `width` is the *configured*, not measured, panel width here).
 ///
 /// Red-check: swap `_directionFactor`'s sign (make `Start` `-1.0`) — the

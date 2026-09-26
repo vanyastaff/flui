@@ -1005,7 +1005,7 @@ pub(super) mod tests {
 
     #[test]
     fn crate_change_pulls_in_its_dependents() {
-        let s = scope(&["crates/flui-material/src/lib.rs"]);
+        let s = scope(&["packages/flui-material/src/lib.rs"]);
         assert_eq!(s.mode, Mode::Packages);
         assert!(s.packages.contains(&"flui".to_owned())); // the facade depends on it
         assert!(!s.packages.contains(&"flui-types".to_owned())); // a dependency, not a dependent
@@ -1046,7 +1046,7 @@ pub(super) mod tests {
     #[test]
     fn a_changed_manifest_is_reported() {
         assert_eq!(
-            scope(&["crates/flui-material/Cargo.toml"]).manifests,
+            scope(&["packages/flui-material/Cargo.toml"]).manifests,
             ["flui-material"]
         );
     }

@@ -58,7 +58,7 @@ composition this precedence is measured to affect is the reference's own:
 `MergeSemantics` over a `ListTile` carrying a `Radio`, which is what
 `RadioListTile` builds (`material/radio_list_tile.dart`, tag `3.44.0`, wraps its
 tile in `MergeSemantics` so the whole tile is "a single interactive entity").
-Measured through `crates/flui-material/tests/list_tile.rs`'s fixture, that tree
+Measured through `packages/flui-material/tests/list_tile.rs`'s fixture, that tree
 exports one merged node, and it resolves `Button` under the old order and
 `RadioButton` under this one.
 
@@ -69,7 +69,7 @@ own. Both `ListTile` and `Radio` set `HasEnabledState` unconditionally
 (`ListTile::build` publishes `.button(on_tap.is_some()).selected(..).enabled(..)`,
 `Radio::build` publishes `.enabled(interactive)`), so the two configurations
 conflict and a `Radio` inside a real `ListTile` does **not** merge into the
-tile's node. Measured through `crates/flui-material/tests/list_tile.rs`'s own
+tile's node. Measured through `packages/flui-material/tests/list_tile.rs`'s own
 `MediaQuery`-wrapped fixture, that composition exports
 `[GenericContainer, Button, RadioButton]`: because the two do **not** merge, the
 radio keeps a node of its own, and that node **announces as a radio**. A `Radio`
@@ -90,7 +90,7 @@ It was produced by mounting a `ListTile` with no ambient `MediaQuery`:
 when no ancestor provides one, and the widget-layer harness installs none. The
 panic is contained, the test still **passes**, the tile degrades, and the `Radio`
 below `SafeArea` never mounts — so the roles that came back belonged to the live
-tile and to nothing else. `crates/flui-material/tests/list_tile.rs` mounts every
+tile and to nothing else. `packages/flui-material/tests/list_tile.rs` mounts every
 tile under a default `MediaQueryData` for exactly this reason, and
 `a_radio_inside_a_list_tile_announces_as_a_radio_button` is the test whose
 absence let the wrong figure stand: it reddens to
@@ -137,7 +137,7 @@ no semantics — a deferral already recorded in
 `crates/flui-objects/src/text/paragraph.rs`'s module doc, so the tile's `title`
 cannot label it the way the reference's is labelled `'Title'`) and **no tap
 action** (Flutter's `InkResponse` publishes `Semantics(onTap: ..)` itself;
-FLUI's does not — see `crates/flui-material/ARCHITECTURE.md`). Role matches;
+FLUI's does not — see `packages/flui-material/ARCHITECTURE.md`). Role matches;
 label and action are the recorded gaps.
 
 **Consequences, named rather than left to be discovered:**
@@ -170,14 +170,14 @@ label and action are the recorded gaps.
   `is_link_and_is_text_field_lose_to_is_button_as_they_always_have` pins the
   *other* half of the cascade — the two arms this reorder deliberately left below
   `IsButton` (see mapping decision 2).
-- `crates/flui-material/tests/radio.rs` —
+- `packages/flui-material/tests/radio.rs` —
   `a_mounted_radio_announces_as_a_radio_button` and
   `a_mounted_radio_does_not_announce_as_a_checkbox` pin the direct case;
   `a_radio_nested_under_an_annotated_ancestor_still_announces_as_a_radio_button`
   mounts the absorbed composition end-to-end and reddens when the cascade is
   reverted; `a_radio_without_a_tap_handler_still_announces_as_a_radio_button` pins
   that interactivity and kind are independent.
-- `crates/flui-material/tests/list_tile.rs` —
+- `packages/flui-material/tests/list_tile.rs` —
   `a_radio_inside_a_list_tile_announces_as_a_radio_button` pins the composition a
   user actually writes, through this family's `MediaQuery`-wrapped `themed`
   fixture. It asserts **both** roles the composition exports (`Button` from the
@@ -187,7 +187,7 @@ label and action are the recorded gaps.
   precedence: the tile composition exports the same roles with the cascade
   reverted, so mounting it here would pin the wrong layer — which is exactly the
   wrong figure its absence let stand.
-- `crates/flui-material/tests/checkbox.rs` keeps the other arm honest: a
+- `packages/flui-material/tests/checkbox.rs` keeps the other arm honest: a
   checkbox is a `CheckBox` and not a `RadioButton`, so the group flag is what
   distinguishes them rather than checked state alone. Both of its tests pass
   before *and* after the reorder, since a checkbox carries neither `IsButton` nor

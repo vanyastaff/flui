@@ -39,4 +39,4 @@ assert!(GlobalWidgetsLocalizations::is_rtl_language(ar.language()));
 ## See also
 
 - [`flui-widgets`](../flui-widgets) — owns the `LocalizationsDelegate`/`WidgetsLocalizations` contracts this crate implements
-- [`flui-material`](../flui-material), [`flui-cupertino`](../flui-cupertino) — the catalogs whose own localization implementations (when they land) will be independent of this crate, per its module docs
+- [`flui-material`](../../packages/flui-material), [`flui-cupertino`](../flui-cupertino) — the catalogs whose own localization implementations (when they land) will be independent of this crate, per its module docs

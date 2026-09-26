@@ -46,7 +46,7 @@ fn themed(theme: ThemeData, child: impl flui_sdk::view::prelude::IntoView) -> Th
 /// particular child) accumulate dead listeners forever.
 ///
 /// Same "count seam" pattern as
-/// `crates/flui-material/tests/text_field.rs`'s
+/// `packages/flui-material/tests/text_field.rs`'s
 /// `unmounting_removes_the_focus_listener_from_the_process_wide_manager`:
 /// the `TabBar` is a `Column` CHILD here, not the mounted root, so removing
 /// it from the children list goes through ordinary list reconciliation

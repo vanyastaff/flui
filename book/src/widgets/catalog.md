@@ -24,8 +24,9 @@ group in isolation.
   the app-level `container`/`app` scaffolding.
   [`crates/flui-widgets/src/`](https://github.com/vanyastaff/flui/tree/main/crates/flui-widgets/src)
 - **`flui-material`** — Material Design widgets (buttons, app bar, scaffold, cards, dialogs,
-  navigation, form controls) built on `flui-widgets` plus `ColorScheme`/`ThemeData`.
-  [`crates/flui-material/src/`](https://github.com/vanyastaff/flui/tree/main/crates/flui-material/src)
+  navigation, form controls) built on `flui-widgets` plus `ColorScheme`/`ThemeData`, an
+  official package on `flui-sdk`.
+  [`packages/flui-material/src/`](https://github.com/vanyastaff/flui/tree/main/packages/flui-material/src)
 - **`flui-cupertino`** — iOS-style widgets (buttons, nav bar, page/tab scaffold, theming) built on
   `flui-widgets` plus `CupertinoTheme`.
   [`crates/flui-cupertino/src/`](https://github.com/vanyastaff/flui/tree/main/crates/flui-cupertino/src)

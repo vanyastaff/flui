@@ -463,7 +463,7 @@ pinning test can read them:
 | `lane_args::whole_workspace_pr_takes_the_wide_lane` | a PR changing `tools/xtask/src/change_scope/classify.rs` gets `lane=wide` | today `heavy=false mode=full` |
 | `lane_args::heavy_triggers_on_a_pr_take_the_wide_lane_not_full` | `Cargo.lock`, `.github/workflows/ci.yml`, `deny.toml` on a PR → `wide`; the same with `--full-ci-label true` → `extended` | there is no `wide`: the result is `heavy=true` |
 | `lane_args::events_pick_their_lane` | `push` → `full`, `schedule` → `extended`, `workflow_dispatch` → `extended`, `merge_group` → `full`, `pull_request` with `--full-ci-label true` → `extended` | `--event` does not exist |
-| `lane_args::fast_lane_builds_the_test_scope_and_filters` | `crates/flui-material/src/lib.rs` → `test_args` equals `TEST_SCOPE` plus `-E 'package(flui) \| package(flui-material) \| package(flui-web-counter)'` | `test_args` is `-p flui -p flui-material ...` |
+| `lane_args::fast_lane_builds_the_test_scope_and_filters` | `packages/flui-material/src/lib.rs` → `test_args` equals `TEST_SCOPE` plus `-E 'package(flui) \| package(flui-material) \| package(flui-web-counter)'` | `test_args` is `-p flui -p flui-material ...` |
 | `lane_args::platform_only_scope_has_no_test_args` | `crates/flui-platform/src/lib.rs` with a scope of only `flui-platform` (dependents stubbed out of the graph) → `test_args` is empty, with no `-E` | passes today; pins the empty case so the filterset change cannot emit `-E ''` |
 | `aggregator::wide_lane_skips_platform_jobs` | lane `wide` with `gpu-test` skipped is green; with `clippy` skipped is red | no `wide` lane |
 | `aggregator::extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red` | lane `full` may skip `macos-ci`; lane `extended` may not | no `extended` lane |

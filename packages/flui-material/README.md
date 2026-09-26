@@ -42,6 +42,7 @@ let _themed = Theme::new(ThemeData::dark(), SizedBox::shrink());
 
 ## See also
 
-- [`flui-cupertino`](../flui-cupertino) — the iOS-style theming counterpart
-- [`flui-widgets`](../flui-widgets) — the design-neutral widget catalog this crate themes
+- [`flui-cupertino`](../../crates/flui-cupertino) — the iOS-style theming counterpart
+- [`flui-widgets`](../../crates/flui-widgets) — the design-neutral widget catalog this crate themes
+- [`flui-sdk`](../../crates/flui-sdk) — the package-author surface this crate builds on
 - [`docs/adr/ADR-0042-theming-ownership.md`](../../docs/adr/ADR-0042-theming-ownership.md) — why theming lives in the catalog crates, not the facade

@@ -55,7 +55,7 @@
 //! re-derivation (see `tests`, not a function the paint path itself calls),
 //! and the *vertical* position (the band sits at the bar's bottom edge, not
 //! its top) is pinned end to end, against the real mounted render tree, by
-//! `crates/flui-material/tests/tabs.rs`'s
+//! `packages/flui-material/tests/tabs.rs`'s
 //! `indicator_band_sits_at_the_bar_bottom_beneath_the_divider_and_paints_over_it`
 //! — the horizontal-only unit test cannot see a regression that reverses
 //! the `Column`'s child order, so the vertical claim needs its own,

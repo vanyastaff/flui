@@ -8,7 +8,7 @@
 //! Pure queue/state-machine mechanics (FIFO drain, the wedge pin, reason
 //! once-only, `clearSnackBars` semantics) are covered synchronously at the
 //! `MessengerCore` unit level in
-//! `crates/flui-material/src/scaffold_messenger.rs`'s own test module — this
+//! `packages/flui-material/src/scaffold_messenger.rs`'s own test module — this
 //! file additionally covers what only a real mounted tree proves: the
 //! `Scaffold` slot mounting/unmounting on a real clock, the FAB-lift layout
 //! interaction, real pointer dispatch through `SnackBarAction`, and

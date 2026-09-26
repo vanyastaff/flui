@@ -196,7 +196,7 @@ engine's `lib/ui`, outside `.flutter`; its body was read from a local SDK at
 framework `3.44.8` / engine `0cd6107`, not the pinned tag — provenance stated
 because it is the one link that cannot be checked at `3.44.0`.) The precedence
 itself is flui-semantics' decision and is recorded in full in
-[`crates/flui-semantics/ARCHITECTURE.md`](../flui-semantics/ARCHITECTURE.md).
+[`crates/flui-semantics/ARCHITECTURE.md`](../../crates/flui-semantics/ARCHITECTURE.md).
 
 **What is still not wired, named rather than implied.** The oracle's
 `selected` and `hint` fields are `TargetPlatform`-conditional

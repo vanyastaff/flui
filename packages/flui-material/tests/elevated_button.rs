@@ -99,7 +99,7 @@ fn a_button_with_no_press_handler_is_disabled_and_a_tap_dispatch_is_a_no_op() {
 }
 
 /// Mutation-honest coverage for `ButtonStyleButtonCoreState::init_state`'s
-/// `WidgetState::Disabled` sync (`crates/flui-material/src/button_style_button.rs`)
+/// `WidgetState::Disabled` sync (`packages/flui-material/src/button_style_button.rs`)
 /// — driven through the REAL `create_state`/`init_state` lifecycle of a
 /// mounted `ElevatedButton`, not a hand-constructed `WidgetStates` value.
 /// Deleting that sync line leaves every unit test in `elevated_button.rs`
@@ -273,7 +273,7 @@ fn widget_level_style_wins_over_the_elevated_button_theme() {
 //
 // Red before `ButtonStyleButtonCore::build` wrapped its composition in
 // `Semantics(container: true, button: true, enabled: ..)`
-// (`crates/flui-material/src/button_style_button.rs`): with no boundary
+// (`packages/flui-material/src/button_style_button.rs`): with no boundary
 // under `ElevatedButton`, `RenderParagraph`'s label (once it started
 // publishing one) had nowhere non-root to merge into and `find_by_label`
 // failed with `A11yQueryError::NotFound`. `ElevatedButton` again stands in

@@ -13,7 +13,7 @@ deliberately changed.
 | `setState(() => ...)` | `Element::set_state`/`set_state_scheduled`, usually reached through `StateCell<T>`/`StateHandle<T>` | `crates/flui-view/src/element/unified.rs`, `crates/flui-view/src/state_cell.rs` |
 | `InheritedWidget` | `InheritedView` | `crates/flui-view/src/view/inherited.rs` |
 | `Navigator` | `Navigator` / `NavigatorHandle` / `NavigatorState` | `crates/flui-widgets/src/navigator/navigator.rs` |
-| `MaterialApp` | No single equivalent — `run_app()` plus `Theme`/`ThemeData` wrapping the root view | `run_app`: facade `src/lib.rs`, impl in `crates/flui-app`; `Theme`/`ThemeData`: `crates/flui-material/src/theme*.rs` |
+| `MaterialApp` | No single equivalent — `run_app()` plus `Theme`/`ThemeData` wrapping the root view | `run_app`: facade `src/lib.rs`, impl in `crates/flui-app`; `Theme`/`ThemeData`: `packages/flui-material/src/theme*.rs` |
 
 ## Notes on the divergences
 

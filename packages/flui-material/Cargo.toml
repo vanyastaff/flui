@@ -34,11 +34,15 @@ tracing = { workspace = true }
 # `flui_widgets::testing`; the dev-dependency turns on the feature that compiles
 # it (and, through it, `flui-rendering`'s and `flui-objects`' `testing`), so
 # the normal build never links the test driver.
-flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev", features = ["testing"] }
+flui-widgets = { path = "../../crates/flui-widgets", version = "=0.2.0-dev", features = [
+    "testing",
+] }
 flui-testing = { workspace = true }
 # Key events (`events`, `testing::input::KeyEventBuilder`) and `FocusManager`,
 # which a few tests construct directly (`ink_well.rs`, `text_field.rs`).
-flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
+flui-interaction = { path = "../../crates/flui-interaction", version = "=0.2.0-dev", features = [
+    "testing",
+] }
 
 [lints]
 workspace = true

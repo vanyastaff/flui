@@ -196,7 +196,7 @@ fn a_checkbox_still_announces_as_a_checkbox() {
     // checkables. A checkbox carries neither `IsButton` nor the group flag, so
     // it resolves to `CheckBox` under either arm order of the role cascade —
     // this passes before and after that reorder and is therefore a leak guard,
-    // not evidence for the reorder itself (see `crates/flui-material/ARCHITECTURE.md`).
+    // not evidence for the reorder itself (see `packages/flui-material/ARCHITECTURE.md`).
     let roles = announced_roles(Checkbox::new(false), "unchecked");
     assert!(
         roles.contains(&Role::CheckBox),

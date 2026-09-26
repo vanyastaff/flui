@@ -39,7 +39,7 @@
 //! This test was independently red-checked against the production paths it
 //! depends on, each perturbation restored byte-identically afterward:
 //!
-//! - Forcing `Theme::update_should_notify` (`crates/flui-material/src/theme.rs`)
+//! - Forcing `Theme::update_should_notify` (`packages/flui-material/src/theme.rs`)
 //!   to always return `false` fails the *dependent* assertion below
 //!   (`left: 1, right: 2` on leaf 0) — proving the dependents' counters
 //!   genuinely move on a real pass and this is not a vacuously-passing test

@@ -72,11 +72,11 @@
 //!   resolves the fixed M3 baseline token tables; `ThemeData` carries no
 //!   component-theme overrides yet.
 //! - **`Drawer`** — no `Scaffold::drawer` is configured in this demo tree
-//!   (`crates/flui-material/tests/drawer.rs` covers that widget directly).
+//!   (`packages/flui-material/tests/drawer.rs` covers that widget directly).
 //! - **`SnackBar` action/multi-scaffold fan-out** — the "Item added"
 //!   snack bar carries no action button, and this demo has only one
 //!   `Scaffold` registered with its `ScaffoldMessenger` (both covered
-//!   directly by `crates/flui-material/tests/snack_bar.rs`).
+//!   directly by `packages/flui-material/tests/snack_bar.rs`).
 //!
 //! The Cupertino half of the Catalog.1 exit criterion is untouched by this
 //! app.
