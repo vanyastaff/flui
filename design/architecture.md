@@ -468,10 +468,13 @@ App (flui-app runners) ── one OS-trampoline host cell (P3's named exception)
   Linux are an H2 spike behind an `OwnerExecutor` trait.
 - **The host narrows TLS to one cell; it does not remove it.** While platform callbacks require
   `Send` (for example `set_exit_policy_hook(&self, hook: Box<dyn Fn() -> bool + Send>)`,
-  `crates/flui-platform/src/traits/platform.rs:319`), the `!Send` realm lives in owner TLS; the
+  `crates/flui-platform/src/traits/platform.rs:158`), the `!Send` realm lives in owner TLS; the
   host module says so itself (`host.rs:32-36`). Removing `Send` from those callbacks is per-backend
   work after the contract crate exists
-  ([ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md)). The AppKit and Win32
+  ([ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) §4). Win32 has done step one:
+  its callbacks live in owner-thread-only state and an off-owner registration is refused, with
+  every signature still `+ Send`. The bound drops only after every backend, headless included, has
+  done the same and registration goes through owner-proof types. The AppKit and Win32
   trampolines keep reaching one cell for good; that is the recorded exception class
   ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)).
 - **No parallel layout inside a realm**, and that is written down. What rules it out today is
