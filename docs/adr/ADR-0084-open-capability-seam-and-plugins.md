@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-25
+- **Revised:** 2026-09-26 (prototype of the seam; see Context)
 - **Supersedes in part (on acceptance):** [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md)
   §1, the sentence "A new capability is a method on `LifecycleContext`, never on
   `BuildContext`" (for platform capabilities; the build/lifecycle split and the sealing stand)
@@ -11,12 +12,15 @@
   (`DataTransferHandle` is reached through the registry, not a `LifecycleContext` method)
 - **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) ("Platform-adaptive
   behavior is a capability seam, not a branch"),
+  [ADR-0037](ADR-0037-presentation-ownership-domains.md),
   [ADR-0039](ADR-0039-event-loop-affinity-capability.md) §6,
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
-  [ADR-0082](ADR-0082-platform-api-contract-crate.md),
+  [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§3: `accessibility()` leaves
+  `PlatformWindow`),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
   [ADR-0086](ADR-0086-signal-writes-through-event-context.md),
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md),
+  [ADR-0090](ADR-0090-ime-pull-text-store-contract.md),
   [ADR-0095](ADR-0095-agent-protocol-schema-crate.md)
 - **Refs:** decision D3 of the
   [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md);
@@ -63,6 +67,44 @@ Three constraints shape any fix:
   implementation (flutter#80374, cited in the review's
   [ecosystem design](../research/2026-09-25-architecture-review/designs/ecosystem_evolution_first.md)).
 
+### What a prototype showed (2026-09-26)
+
+Branch `spike/capability_seam`, commits `d80215406` and `e2c96d35a`, not merged. The seam and
+the registry stood in `crates/flui-view/src/capability/` in place of `flui-platform-api` and
+`flui-runtime`.
+
+- **Shown.**
+  - `capability_erased` on the sealed trait plus the blanket `LifecycleContextExt` compiled.
+    `cargo check --workspace --all-targets --all-features` is green, and the 136 sites are
+    untouched (a grep counts 138; the extra 2 are doc lines).
+  - Only `ElementBuildContext` and `BuildCtx` implement the method.
+  - A `compile_fail,E0599` doctest covers `cx.capability::<Clipboard>()` on
+    `&dyn BuildContext`.
+  - A crate outside the workspace registered a capability and received it in `init_state`;
+    without its plugin it got `NotRegistered`.
+  - 3 of 5 external tests fail when `BuildCtx::capability_erased` ignores the scope.
+- **Narrower than the success metric.**
+  - The fixture depended on `flui-view`, `flui-platform` and `flui-types`, not on
+    `flui-platform-api` and `flui-sdk`.
+  - Its provider wrapped the in-tree `PlatformWindow::haptics()` and `FakeHaptics`.
+  - The tests built the registry by hand. The runner path (`main_window.rs` and the
+    `presentation.rs` wiring) and the conflict-at-run path were **not exercised**.
+- **Corrected by this revision.**
+  - The prototype shared one registry per application through an owner-thread cell
+    (`runner/host.rs`). Android, iOS and web realms got an empty one, where even the clipboard
+    answers `NotRegistered`.
+  - It registered `Cursor`, `TextInput` and `Accessibility` as widget capabilities, against §5.
+  - It removed the defaults of `text_input()` and `accessibility()` but kept `Option`.
+  - It did not edit macOS. `MacOSWindow::accessibility` exists only under `a11y`
+    (`crates/flui-platform/src/platforms/macos/window.rs:926-927`), and `a11y` is off by default
+    (`crates/flui-platform/Cargo.toml:300,310`), so a default macOS build fails with E0046. It
+    was never compiled for macOS.
+  - There are three `cfg`-gated `accessibility` overrides, not two: Windows
+    (`windows/window.rs:707-708`), winit (`winit/window.rs:324-325`) and macOS. Their `None`
+    without `a11y` was intended behaviour.
+  - `build()` walked a `HashMap`, so which of several conflicts it reported varied between runs.
+  - Its `flui-view → flui-platform` edge is not carried forward; ADR-0082 §2 forbids it.
+
 ## Decision
 
 ### 1. Two kinds of capability
@@ -90,15 +132,34 @@ pub trait PlatformCapability: 'static {
 }
 
 pub trait CapabilityProvider<C: PlatformCapability>: 'static {
-    fn provide(&self, window: &dyn PlatformWindow) -> Result<C::Handle, Unsupported>;
+    fn provide(&self, window: &Arc<dyn PlatformWindow>) -> Result<C::Handle, Unsupported>;
 }
+impl<C: PlatformCapability, F> CapabilityProvider<C> for F
+where
+    F: Fn(&Arc<dyn PlatformWindow>) -> Result<C::Handle, Unsupported> + 'static,
+{ /* .. */ }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("platform capability `{capability}` is unavailable: {reason}")]
 #[non_exhaustive]
 pub struct Unsupported { pub capability: &'static str, pub reason: UnsupportedReason }
+impl Unsupported {
+    pub const fn of<C: PlatformCapability>(reason: UnsupportedReason) -> Self;
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum UnsupportedReason { NotRegistered, NotOnThisPlatform, NoWindow }
 ```
+
+- The provider takes `&Arc<dyn PlatformWindow>` so that a handle can keep a `Weak` to its
+  window; a `&dyn PlatformWindow` cannot give one.
+- `Unsupported::of::<C>` is the constructor other crates use, because the struct is
+  `#[non_exhaustive]`.
+- The provider names `PlatformWindow`, so the seam lands in `flui-platform-api` no earlier than
+  `PlatformWindow` does (ADR-0082 §3).
+- The class of §5 is deliberately not encoded on `PlatformCapability`, so a move between classes
+  stays a change to the provider only.
 
 In `flui-view`, one hidden, object-safe method on the sealed trait and a blanket extension:
 
@@ -130,32 +191,88 @@ and they forward to the realm. `LifecycleContextExt` is in the prelude. Because 
 on `LifecycleContext`, `cx.capability::<Haptics>()` inside `build` is still a compile error, the
 same `E0599` ADR-0078 relies on. The 136 `&dyn LifecycleContext` sites are untouched.
 
-### 3. The registry is per realm, filled once
+### 3. The registry is per realm, a parameter of realm construction
 
-`flui-runtime` (ADR-0083) owns a `CapabilityRegistry` per realm: a map from `TypeId` to an
-erased provider. A lookup resolves the provider against the presentation's window, caches the
-handle per presentation, and returns `Unsupported { reason: NotRegistered }` when no provider
-exists. The registry is filled before the first realm is created and never changes afterwards;
-there is no registration at run time and no process-global table (ADR-0097).
+- **The provider table is built once per `Application::run`.** `Application::run` validates the
+  plugins and overrides **before the platform starts**; a conflict returns
+  `Err(AppRunError::CapabilityConflict(c))` and opens no window. The built-in providers for
+  clipboard and data transfer capture the platform's services, so they join the table once the
+  platform exists. That step cannot conflict: the built-in key set is fixed and was part of the
+  validation.
+- **Each realm receives its own `CapabilityRegistry` as a parameter of its construction.** Today
+  that is a field of `RealmServices` (`crates/flui-app/src/app/runtime.rs:162`); after ADR-0083
+  it is the runtime's realm constructor. The registries share the validated table by `Rc` on the
+  owner thread (ADR-0091); handles are cached per presentation; a provider keeps no per-realm
+  state. No realm constructor exists without the parameter, so no realm starts with a silently
+  empty registry. The table is never a thread-local or a static (ADR-0097), which rules out the
+  prototype's owner-thread cell. The table never changes after validation; there is no
+  registration at run time.
+- **Lookup order.** `NotRegistered` (the table has no provider), then `NoWindow` (the
+  presentation's window is gone, and its cache with it), then the provider, which returns a
+  handle or its own `NotOnThisPlatform`.
+- **A `BuildOwner` with no installed scope answers `NotRegistered` for everything.** That is a
+  unit test that mounts without a realm. The guarantee for core capabilities is a property of
+  realm construction, and `flui-testing`'s driver builds its realms through it.
 
 ### 4. Registration is explicit, one line per plugin
 
-A plugin implements a `Plugin` trait whose `install` receives a registrar
-(`registrar.capability::<C>(provider)`); `Plugin` and the registrar are defined in
-`flui-runtime` and published to package authors through `flui-sdk` (ADR-0088). An application
-lists its plugins on the application builder —
+```rust
+// flui-runtime, re-exported by flui-sdk
+pub trait Plugin: 'static {
+    fn name(&self) -> &'static str;
+    fn install(&self, registrar: &mut CapabilityRegistrar<'_>);
+}
+impl CapabilityRegistrar<'_> {
+    pub fn capability<C: PlatformCapability>(&mut self, provider: impl CapabilityProvider<C>) -> &mut Self;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProviderOrigin { BuiltIn, Plugin(&'static str), Application }
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+#[error("platform capability `{capability}` is registered by both {first} and {second}")]
+pub struct CapabilityConflict {
+    pub capability: &'static str,
+    pub first: ProviderOrigin,
+    pub second: ProviderOrigin,
+}
+
+// flui-app
+impl<V, F> Application<V, F> {
+    /// Collected, and installed in call order.
+    pub fn plugin(self, plugin: impl Plugin) -> Self;
+    /// An application override.
+    pub fn capability<C: PlatformCapability>(self, provider: impl CapabilityProvider<C>) -> Self;
+}
+// and a new variant of the existing `#[non_exhaustive]` `AppRunError`:
+AppRunError::CapabilityConflict(CapabilityConflict)
+```
+
+`Plugin` and the registrar are defined in `flui-runtime` and published to package authors
+through `flui-sdk` (ADR-0088). An application lists its plugins on the application builder —
 `Application::new(factory).plugin(flui_haptics::Plugin)`, a new method beside today's
-`with_config` and `on_ready` on `Application` (`crates/flui-app/src/app/application.rs:53,67`)
-— and installs them in call order. The registrar registers capabilities only; other runtime
-hooks, such as ADR-0094's reload hook, have their own builder method. A plugin chooses its default provider per target with
+`with_config` and `on_ready` on `Application` (`crates/flui-app/src/app/application.rs:53,67`).
+The registrar registers capabilities only; other runtime hooks, such as ADR-0094's reload hook,
+have their own builder method. A plugin chooses its default provider per target with
 `[target.'cfg(..)'.dependencies]` in its own manifest.
 
 Precedence:
 
-1. an application override, `Application::capability::<C>(provider)`, wins regardless of call order;
-2. otherwise the one plugin that registered `C`;
-3. two plugins registering the same `C` without an application override is a bootstrap error
-   (`BootstrapError`) that names both, not a silent last-writer-wins.
+1. An application override wins over plugins and built-ins, whatever the call order. A later
+   override of the same `C` replaces an earlier one.
+2. Otherwise the built-in provider, for clipboard and data transfer.
+3. Otherwise the one plugin that registered `C`.
+
+Without an override, each of these is a conflict, not a silent last-writer-wins:
+
+- two plugins registering `C`;
+- a plugin registering a `C` that has a built-in provider;
+- one plugin registering `C` twice.
+
+The table keeps installation order, and the first conflict in that order is the one
+`Application::run` reports, so the report is the same on every run.
 
 No `inventory` or `linkme`.
 
@@ -175,19 +292,39 @@ that rule. The class holds:
   already required;
 - **text input and IME**: `PlatformWindow::text_input()`, today a defaulted method returning
   `None` (`window.rs:333`), becomes required;
-- **accessibility**: `PlatformWindow::accessibility()`, today defaulted to `None` (`window.rs:352`),
-  becomes required;
+- **accessibility**: the backend-side window extension trait's `accessibility()` (ADR-0082 §3
+  moves it off `PlatformWindow`), today `PlatformWindow::accessibility()` defaulting to `None`
+  (`window.rs:352`), becomes required;
 - **window chrome basics**: title, size, close request and decorations; the exact method list is
   fixed when the traits move into `flui-platform-api` (ADR-0082).
 
-A backend that cannot serve a core capability yet implements the method explicitly with an inert
-object and names the gap in its evidence record (the web backend for text input and accessibility
-until H1): the gap becomes a line in that backend, not a trait default nobody sees. The runtime
-registers built-in providers for the core capabilities a widget acquires directly (clipboard, data
-transfer) before any plugin runs; an application may override them (§4). The core capabilities
-the framework consumes itself keep their framework route and are not duplicated as widget
-capabilities: text input through the presentation's IME route (`text_input_handle`, ADR-0037 §5),
-accessibility through the semantics host, the cursor through mouse regions.
+Core methods return an object, not an `Option`:
+
+```rust
+fn text_input(&self) -> Arc<dyn PlatformTextInput>;       // PlatformWindow
+fn accessibility(&self) -> Arc<dyn PlatformAccessibility>; // the backend extension trait
+```
+
+`InertTextInput` is defined beside `PlatformTextInput`, and `InertAccessibility` beside
+`PlatformAccessibility`; both accept every call, report nothing and never panic. A backend or a
+build without the service returns the inert object and names the gap in its evidence record: the
+gap becomes a line in that backend, not a trait default nobody sees. Today that covers the builds
+of Windows, winit and macOS without `a11y`, and text input on Win32, Android, iOS and web, none of
+which overrides `text_input` (only headless, macOS and winit do).
+
+The runtime registers built-in widget providers for clipboard and data transfer only. There are
+no `Cursor`, `TextInput` or `Accessibility` capability types. Being core-required is a backend
+obligation; it does not make the service widget-reachable. The framework consumes those three
+itself, each through one route:
+
+- the presentation owns one IME route (`TextInputOwner` through `text_input_handle`, ADR-0037 §5,
+  and ADR-0090's pull contract), and a second route would open sessions behind it;
+- the semantics host owns the window's one accessibility tree;
+- mouse regions resolve the cursor per pointer from hit-testing, and a widget calling
+  `set_cursor` would fight them.
+
+Making any of them widget-reachable later is an ADR that amends this section. An application may
+override the clipboard and data-transfer providers (§4).
 
 **Optional.** Plugin capabilities registered through the registry (§3, §4); a widget handles a
 typed `Unsupported`. Haptics, camera, geolocation, notifications, share sheets and file dialogs
@@ -196,8 +333,9 @@ start here. Haptics ships as the first plugin, over the existing `PlatformWindow
 which is ADR-0031's degradation contract made visible: a caller may ignore the error and get
 Flutter's silent no-op.
 
-`UnsupportedReason::NotRegistered` can arise only for an optional capability the application did
-not install, never for a core one; a core capability can return only `NoWindow`.
+Under a realm, a lookup of clipboard or data transfer returns a handle or `NoWindow`, never
+`NotRegistered`. `NotRegistered` arises only for an optional capability the application did not
+install, or under a bare owner (§3).
 
 **Which class a capability belongs to.** A capability is core-required when both hold:
 
@@ -242,6 +380,13 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
   third-party capability could not exist without a change to `flui-platform-api`.
 - **Two doors: backend methods for core capabilities, the registry for optional ones.** A move
   between classes would change every call site; with one door it changes only the provider.
+- **A registry per application shared through an owner-thread cell** (the prototype). Rejected:
+  a realm built on any path that does not fill the cell gets an empty registry silently, as the
+  prototype's Android, iOS and web realms did.
+- **Register cursor, text input and accessibility as widget capabilities** (the prototype).
+  Rejected: each would be a second route beside the framework's own (§5).
+- **A class marker on `PlatformCapability`.** Rejected: moving a capability between classes
+  would change its type, and with it every call site.
 
 ## Consequences
 
@@ -252,38 +397,38 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
 - The dead clipboard accessor (`runtime.rs:1631-1641`) and the haptics forwarders
   (`presentation.rs:893`, `frame_clock.rs:508`) get production callers or are deleted in favour
   of the built-in clipboard provider and the haptics plugin.
-- **Breaks.** `PlatformWindow::text_input()` and `accessibility()` lose their `None` defaults, so
-  every backend, including third-party ones, implements them. The web backend's implementations
-  are inert until H1 and say so in its evidence record.
+- **Breaks.** `PlatformWindow::text_input()` returns `Arc<dyn PlatformTextInput>` with no
+  default. `accessibility()` moves to the backend extension trait (ADR-0082 §3) and returns
+  `Arc<dyn PlatformAccessibility>` with no default. Every backend, including third-party ones,
+  implements both. Every `cfg(feature = "a11y")` override gets an inert twin for builds without
+  `a11y`, macOS included. The `Option` branches in `flui-app` (`presentation.rs:357`, `:1384` and
+  their siblings) go away.
+- `AppRunError` gains `CapabilityConflict`. It is `#[non_exhaustive]`
+  (`crates/flui-app/src/app/application.rs:22`), so this is not a break.
 - AGENTS.md's "Platform capability" row states the classification rule of §5, so a contributor
   adding a capability knows which class to put it in.
 - ADR-0038 §7's `DataTransferHandle` is acquired as `cx.capability::<DataTransfer>()`.
 - Registered capabilities are data the realm can list; ADR-0095's protocol can expose that list
   to tools and agents.
 - The seam depends on ADR-0082 (for `flui-platform-api`) and ADR-0083 (for the realm's
-  registry). Until both land, a prototype can live in `flui-view` and `flui-app`, with the types
-  moving in the same change as those crates.
+  registry).
 - The runtime's handle cache is per presentation; a presentation that closes drops its handles,
   so a widget that outlives its window sees `Unsupported { reason: NoWindow }` on its next
   acquisition in `did_change_dependencies`.
 
 ## Verification
 
-None of these exist yet.
+(prototype) marks what `spike/capability_seam` showed; none is merged.
 
-- A `compile_fail` doctest: `cx.capability::<C>()` on `&dyn BuildContext` does not compile.
-- `cargo check --workspace --all-targets` stays green with the hidden method added, proving the
-  136 `&dyn LifecycleContext` sites are unaffected.
-- An out-of-workspace fixture crate (depending only on `flui-platform-api` and `flui-sdk`)
-  declares a capability, registers a provider through a plugin, and a test in `flui-testing`
-  acquires it in `init_state`; the same test without the plugin receives
-  `Unsupported { reason: NotRegistered }`.
-- A test that two plugins registering one capability fail bootstrap, and that an application
-  override resolves the conflict.
-- A headless test that acquires haptics, with the haptics plugin installed, on a window without
-  haptics and receives `NotOnThisPlatform`; one on `MockWindow` with `FakeHaptics` that observes
-  the call; and one without the plugin that receives `NotRegistered`.
-- A `compile_fail` doctest: a `PlatformWindow` implementation without `text_input` or
-  `accessibility` does not compile.
-- A headless test that acquires the clipboard with no plugin installed and gets a handle, never
-  `NotRegistered`.
+| Test | What it asserts | Why it fails today |
+|---|---|---|
+| `compile_fail,E0599`: `cx.capability::<C>()` on `&dyn BuildContext`, plus a compiling twin on `&dyn LifecycleContext` (prototype) | The build/lifecycle split holds | No seam |
+| `cargo check --workspace --all-targets --all-features` (prototype) | The 136 `&dyn LifecycleContext` sites are unaffected | — |
+| An out-of-workspace fixture on **`flui-platform-api` and `flui-sdk` only**: `a_plugin_capability_reaches_init_state`, `without_the_plugin_the_capability_is_not_registered` | A third-party capability is declared, registered through a plugin and acquired in `init_state`; without the plugin it is `NotRegistered`. Still outstanding: the prototype used stand-ins | The crates do not exist |
+| `a_capability_conflict_fails_run_before_any_window_opens` (`flui-app`, headless runner) | `Application::run` returns `Err(AppRunError::CapabilityConflict(..))` with `first: Plugin(a)`, `second: Plugin(b)`, and zero windows opened | No plugin API; the prototype's quit path was never run |
+| `a_plugin_over_a_built_in_is_a_conflict`, `an_application_override_resolves_a_conflict`, `a_later_override_replaces_an_earlier_one`, `conflicts_are_reported_in_installation_order` | The rules of §4; the last one is deterministic across runs | No registry |
+| `every_realm_the_runner_builds_resolves_the_clipboard` (through `Application` and the runner, main and secondary windows) | An `Ok` handle, never `NotRegistered` | No seam; the prototype's runner path was untested |
+| `not_registered_is_reported_before_no_window`, `a_closed_window_answers_no_window` | The lookup order of §3 | No seam |
+| Haptics: `NotOnThisPlatform` on a window without haptics; `FakeHaptics` on `MockWindow` observes the call; `NotRegistered` without the plugin | ADR-0031's degradation contract | No seam |
+| `compile_fail` with a compiling twin: a `PlatformWindow` without `text_input`, and a backend extension impl without `accessibility`, do not compile | The core obligation of §5 | The defaults exist |
+| `cargo xtask cross-typecheck` for macOS with default features **and** with `a11y`, shown in the PR | The inert macOS path compiles | The prototype broke it (E0046) |
