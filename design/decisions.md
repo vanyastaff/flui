@@ -628,6 +628,12 @@ preconditions as met, with the evidence ([A12](#a12-the-signals-feature-is-remov
 and animation code name `Signal<T>`, the move to `flui-reactive` is withdrawn; the graph stays in
 `flui-view`, and ADR-0085 §6 records the reasoning and the trigger for reopening it.
 
+**Changed by the implementation of step 1 (2026-09-26).** Step 1 shipped the contract,
+`BuildContext: ReadScope`, the sealed `SignalWriteExt`, `TypeMismatch` and the feature removal.
+The two drivers, `RebuildSink`, `ScopeRef::detached` and `SignalError::NoGraph` moved to step 2a,
+because in step 1 no production caller would reach them; until then `make_build_ctx` mints the
+element sink. ADR-0085 §2 and §6 say the same.
+
 ### O6. The facade has no default design system
 
 **Context.** The facade has `default = ["material"]` (`Cargo.toml:598`) and a `material` feature

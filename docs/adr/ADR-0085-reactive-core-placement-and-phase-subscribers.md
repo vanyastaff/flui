@@ -331,8 +331,13 @@ runs, range in brackets:
 | idle frame (control) | 18.2 µs [16.1–25.2] | 18.4 µs [16.2–26.2] | 18.9 µs [18.7–21.2] |
 
 Every row's ranges overlap across the three builds, and main's own range spans up to 1.5x, so no
-cost is claimed. The setting row is the one to re-measure on a quiet host: its whole-change median
-sits above the other two ranges' medians by about a quarter. The rebuild counts of all five
+cost is established either way. The direction is not neutral, though: all four build-path rows
+have a higher median on the whole change than on main (+20%, +15%, +8% and +31%, in table
+order) while the idle control is flat, so the data is consistent with a small per-build cost.
+The setting row is the one to re-measure on a quiet host, and the follow-up stays open until
+that run: make `begin_element_build` and `release_element` skip their map lookups when the graph's
+`element_reads` and `owned_by_element` maps are both empty (the build guard is still set), so
+a build in a tree that reads no signal pays a branch rather than a hash lookup. The rebuild counts of all five
 scenarios are identical in the three builds. `signals_rebuilds` itself (main with
 `--features signals` against the change, three runs each) prints identical count tables; its
 timings moved up to 3.6x between runs of the same binary, so they are not reported.
@@ -440,9 +445,17 @@ foundation contract stays, because production element reads use it.
   change, not here.
 - `PaintCx` becomes `!Send`/`!Sync` once it holds a scope. Nothing requires `Send` of it today;
   the frame path is owner-thread (ADR-0091).
-- The contract enters the facade's Stable closure: `flui` and `flui-view` re-export `Signal`,
-  `ReadScope` and `SignalError`, so ADR-0081's closure measure counts them. It is the first
-  `flui-foundation` module whose items the facade promises.
+- The contract enters the facade's Stable closure (the promise follows the item,
+  [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) §1): `flui::view` re-exports
+  `Signal`, `SignalSlot`, `SignalSender`, `SignalError`, `ReadScope`, `ScopeRef`, `ReadGraph`
+  and `ReaderSink` from `flui_view`'s root, and `BuildContext: ReadScope` would pull them in
+  anyway (`ReadScope::scope` returns `ScopeRef`, whose public `ScopeRef::new` names `ReadGraph`
+  and `ReaderSink`). So `ScopeRef::new`, `ReaderSink::subscribe` and the `#[doc(hidden)]`
+  constructors `SignalSlot::new` and `Signal::from_slot` carry the promise too, although no
+  application needs them: they are public only because `flui-view` calls them across the crate
+  boundary. Changing any of them in step 2 or 3 (for example a sink that carries a `Reader`) is
+  a breaking change of `flui` and goes in the CHANGELOG. It is the first `flui-foundation`
+  module whose items the facade promises.
 - `flui-foundation` stays free of `thiserror`: `SignalError` implements `Display` and `Error` by
   hand.
 - `crates/flui-view/Cargo.toml:118-123` and `Cargo.toml:642-645` are rewritten in the change that
@@ -481,8 +494,13 @@ What exists:
     `&dyn BuildContext`.
   - `a_read_in_build_subscribes_through_the_production_context`: a real mount, so the build
     goes through `make_build_ctx` and `BuildCtx`; a write rebuilds the reader and not its
-    parent, the frame report shows one `SignalChange` rebuild, and the reader stays
-    subscribed. With `BuildCtx::scope` passing no sink it fails on the reader set.
+    parent, and the reader stays subscribed. The frame report shows two builds: one
+    `SignalChange` (the reader) and one `ParentUpdate` (the leaf under it, updated by the
+    reader's rebuild, as for any rebuild). That second build is expected, not a second
+    subscriber. With `BuildCtx::scope` passing no sink it fails on the reader set.
+  - `a_write_through_the_wrong_type_rebuilds_no_reader`: a mounted reader, then a write
+    through a handle of the wrong `T`: `TypeMismatch`, and the next frame rebuilds nothing
+    for `SignalChange`. It fails if the write marks readers before the type check.
   - `a_signal_handle_of_the_wrong_type_is_a_typed_error`: `try_get`, `peek` and `set` through
     a handle of the wrong `T` all return `SignalError::TypeMismatch` and leave the slot intact.
     Main panics with `BUG:` there.

@@ -674,6 +674,11 @@ reader is refused as `Released`; a refused read subscribes nobody. `Signal<T>` i
 stays small and changes rarely; the graph, which changes often, stays in `flui-view` (ADR-0085 §6
 records the measured re-check sets).
 
+**Every public item here is promised by the facade.** `flui::view` re-exports the module's items
+and `BuildContext: ReadScope` reaches all of them (`ScopeRef::new` names `ReadGraph` and
+`ReaderSink`), so a change to any public signature, the `#[doc(hidden)]` constructors included,
+is a breaking change of `flui` (ADR-0085 Consequences, ADR-0089 §1).
+
 ---
 
 ## Architecture Decision Summary
