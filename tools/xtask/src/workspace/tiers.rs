@@ -1,8 +1,9 @@
 //! The tier rule (ADR-0081 §1), the `tier-kind` declarations and the kind
 //! rule (§3, with ADR-0088 §2), and the train guard (ADR-0088 §5).
 //!
-//! The kind rule: only applications and official packages name an official
-//! package, in any dependency kind; an official package's normal and build
+//! The kind rule: only applications name an official package, in any
+//! dependency kind, and an official package names another only through a
+//! declared `edge-exceptions` entry; an official package's normal and build
 //! dependencies are [`SDK_SURFACE`]; a member under `packages/` is an
 //! official package with no `edge-exceptions`. A refused edge is admitted by
 //! the dependent's `edge-exceptions`, as for the tier rule, and an entry that
@@ -106,6 +107,10 @@ pub(super) enum Finding {
     /// An official package has a normal or build dependency outside
     /// [`SDK_SURFACE`] that no `edge-exceptions` entry admits (ADR-0088 §2).
     OffSdk { from: String, to: String },
+    /// An official package depends on another official package, in a
+    /// dependency of any kind, and no `edge-exceptions` entry declares it
+    /// (ADR-0081 §3, ADR-0028).
+    OfficialOnOfficial { from: String, to: String },
     /// A member under `packages/` whose kind is not `official`.
     PackageNotOfficial {
         name: String,
@@ -165,6 +170,9 @@ impl Finding {
             Self::OnTool { from, to } => (from.clone(), to.clone(), "on tool"),
             Self::NamesOfficial { from, to } => (from.clone(), to.clone(), "names official"),
             Self::OffSdk { from, to } => (from.clone(), to.clone(), "off sdk"),
+            Self::OfficialOnOfficial { from, to } => {
+                (from.clone(), to.clone(), "official on official")
+            }
             Self::PackageNotOfficial { name, kind, .. } => {
                 (name.clone(), kind.clone(), "package not official")
             }
@@ -240,6 +248,12 @@ impl fmt::Display for Finding {
                  dependencies are {} only (ADR-0088 §2); list it in `edge-exceptions` with the \
                  ADR that removes the edge",
                 SDK_SURFACE.join(", ")
+            ),
+            Self::OfficialOnOfficial { from, to } => write!(
+                f,
+                "{from} and {to} are both official packages and {from} depends on {to}: an \
+                 edge between official packages, in any dependency kind, is declared in the \
+                 dependent's `edge-exceptions` with its ADR (ADR-0081 §3, ADR-0028)"
             ),
             Self::PackageNotOfficial { rel, kind, .. } => write!(
                 f,
@@ -467,6 +481,9 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
 /// - **names official**: a member that is neither `official` nor `tool`, nor
 ///   under `examples/` or `tools/`, depends on an `official` package in any
 ///   kind (normal, build or dev; an optional dependency is a normal one);
+/// - **official on official**: an `official` package depends on another
+///   `official` package in any kind, dev included (ADR-0028: the design
+///   systems do not depend on each other in any form);
 /// - **off the SDK**: an `official` package has a normal or build dependency
 ///   on a member outside [`SDK_SURFACE`].
 fn kind_refusals(members: &Members) -> Vec<(&str, &str, Finding)> {
@@ -483,13 +500,18 @@ fn kind_refusals(members: &Members) -> Vec<(&str, &str, Finding)> {
             };
             let edge = (member.name(), to.name());
             let (from, target) = (edge.0.to_owned(), edge.1.to_owned());
-            if official {
+            let to_official = to.tier_kind.as_deref() == Some(OFFICIAL);
+            if official && to_official {
+                refusals
+                    .entry(edge)
+                    .or_insert(Finding::OfficialOnOfficial { from, to: target });
+            } else if official {
                 if dep.kind != DependencyKind::Development && !SDK_SURFACE.contains(&to.name()) {
                     refusals
                         .entry(edge)
                         .or_insert(Finding::OffSdk { from, to: target });
                 }
-            } else if to.tier_kind.as_deref() == Some(OFFICIAL) {
+            } else if to_official {
                 refusals
                     .entry(edge)
                     .or_insert(Finding::NamesOfficial { from, to: target });
@@ -681,8 +703,8 @@ fn self_test_members() -> Members {
         node(&sdk_rel, &sdk, &[]),
         // planted: an official package's normal edge off the SDK
         node(&pkg_rel, &pkg, &[("h1", Normal)]),
-        // silent: an official package's dev edges may point anywhere, other
-        // official packages included
+        // silent: an official package's dev edge off the SDK; planted: its
+        // dev edge to another official package
         node(&pkg2_rel, &pkg2, &[("h1", Dev), ("pkg1", Dev)]),
         // silent: a package on the SDK; planted: its edge off it
         node(&pkg3_rel, &pkg3, &[("flui-sdk", Normal), ("v1", Normal)]),
@@ -703,8 +725,9 @@ fn self_test_members() -> Members {
 }
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 16] = [
+const EXPECTED: [(&str, &str, &str); 17] = [
     ("h2", "pkg1", "names official"),
+    ("pkg2", "pkg1", "official on official"),
     ("h-pkg", "pkg2", "names official"),
     ("k-dev", "pkg1", "names official"),
     ("pkg1", "h1", "off sdk"),
