@@ -6,8 +6,9 @@
 //! rustc does (`x.rs` or `x/mod.rs`, the non-mod-rs directory rule, inline
 //! modules, `#[path]`). A `mod` whose cfg is false is not followed, so test
 //! files mounted under `#[cfg(test)]` are never read. Everything else fails
-//! closed: a declaration that resolves to no file, or a file syn cannot parse,
-//! is an error.
+//! closed: a declaration that resolves to no file, a file syn cannot parse, a
+//! `mod x;` inside a fn, impl or block body, and an `include!` of anything but
+//! `concat!(env!("OUT_DIR"), …)` are errors.
 
 use std::collections::BTreeSet;
 
@@ -532,6 +533,28 @@ pub(super) fn macro_statics(tokens: TokenStream) -> Vec<(String, TypeInfo)> {
     found
 }
 
+/// Whether `include!`'s argument is `concat!(env!("OUT_DIR"), …)`: build-script
+/// output, which the scan does not claim to cover (ADR-0097, "Limits").
+fn includes_out_dir(tokens: TokenStream) -> bool {
+    let trees: Vec<TokenTree> = tokens.into_iter().collect();
+    let [
+        TokenTree::Ident(concat),
+        TokenTree::Punct(bang),
+        TokenTree::Group(args),
+    ] = &trees[..]
+    else {
+        return false;
+    };
+    if concat != "concat" || bang.as_char() != '!' {
+        return false;
+    }
+    let args: Vec<TokenTree> = args.stream().into_iter().take(3).collect();
+    matches!(&args[..], [TokenTree::Ident(env), TokenTree::Punct(bang), TokenTree::Group(name)]
+        if env == "env"
+            && bang.as_char() == '!'
+            && name.stream().to_string() == "\"OUT_DIR\"")
+}
+
 fn scan_macro_tokens(tokens: TokenStream, found: &mut Vec<(String, TypeInfo)>) {
     let trees: Vec<TokenTree> = tokens.into_iter().collect();
     for (at, tree) in trees.iter().enumerate() {
@@ -828,6 +851,9 @@ struct Collector<'ast> {
     path: Vec<String>,
     cfgs: Vec<String>,
     fns: Vec<&'ast Block>,
+    /// Whether the items being visited are module items (of the file or of
+    /// an inline module in it), the only place the walk follows `mod x;`.
+    module_level: bool,
     raws: Vec<Raw<'ast>>,
     errors: Vec<String>,
 }
@@ -843,6 +869,7 @@ impl<'ast> Collector<'ast> {
                 .collect(),
             cfgs: parsed.cfgs.clone(),
             fns: Vec::new(),
+            module_level: true,
             raws: Vec::new(),
             errors: Vec::new(),
         }
@@ -878,6 +905,16 @@ impl<'ast> Collector<'ast> {
     }
 
     fn scan_macro(&mut self, name: &str, tokens: &TokenStream) {
+        if name == "include" {
+            if !includes_out_dir(tokens.clone()) {
+                self.errors.push(format!(
+                    "`include!` of `{tokens}` in `{}` names a file the walk does not read; \
+                     mount it with `mod` instead",
+                    self.path.join("::")
+                ));
+            }
+            return;
+        }
         if name == "thread_local" {
             match thread_local_entries(tokens.clone()) {
                 Ok(entries) => {
@@ -950,7 +987,12 @@ impl<'ast> Visit<'ast> for Collector<'ast> {
         let Some(pushed) = self.enter(item_attrs(item)) else {
             return;
         };
+        let module_level = self.module_level;
+        if !matches!(item, Item::Mod(_)) {
+            self.module_level = false;
+        }
         visit::visit_item(self, item);
+        self.module_level = module_level;
         self.leave(pushed);
     }
 
@@ -962,6 +1004,13 @@ impl<'ast> Visit<'ast> for Collector<'ast> {
                 self.visit_item(item);
             }
             self.path.pop();
+        } else if !self.module_level {
+            self.errors.push(format!(
+                "`mod {};` in `{}` is not at module level, and the walk does not follow it; \
+                 declare it at module level",
+                module.ident,
+                self.path.join("::")
+            ));
         }
     }
 
