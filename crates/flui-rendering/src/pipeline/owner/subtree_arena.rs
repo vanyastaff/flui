@@ -203,6 +203,14 @@ pub(super) struct SubtreeArena<'tree> {
     ///
     /// Same `Mutex` discipline and post-walk drain as the sinks above.
     laid_out: Mutex<Vec<flui_foundation::RenderId>>,
+    /// How many nodes this walk actually laid out, boundary or not.
+    ///
+    /// Bumped at the same record sites as [`Self::laid_out`], so a node the
+    /// short-circuit served from its cache is not counted. A plain `Cell`: the
+    /// arena is `!Send + !Sync`, and this is one integer add per laid-out node
+    /// rather than the vector push `laid_out` avoids for non-boundaries.
+    /// Drained into `PipelineCounters::nodes_laid_out` after the walk.
+    laid_out_count: std::cell::Cell<u64>,
     /// Read-only view of the owner's layout-poison table for the whole
     /// walk.  Consulted at the top of each recursion level: a node
     /// poisoned under the *same* constraints it is now offered is
@@ -299,6 +307,7 @@ impl<'tree> SubtreeArena<'tree> {
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
             laid_out: Mutex::new(Vec::new()),
+            laid_out_count: std::cell::Cell::new(0),
             layout_poison,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
@@ -378,6 +387,17 @@ impl<'tree> SubtreeArena<'tree> {
     /// Drains the ids this walk actually laid out — see [`Self::laid_out`].
     pub(super) fn take_laid_out(&self) -> Vec<flui_foundation::RenderId> {
         std::mem::take(&mut *self.laid_out.lock())
+    }
+
+    /// Drains how many nodes this walk laid out — see [`Self::laid_out_count`].
+    pub(super) fn take_laid_out_count(&self) -> u64 {
+        self.laid_out_count.replace(0)
+    }
+
+    /// Counts one node past the short-circuit, i.e. actually laid out.
+    #[inline]
+    fn note_laid_out(&self) {
+        self.laid_out_count.set(self.laid_out_count.get() + 1);
     }
 
     /// Records a descendant layout failure swallowed at a layout-child
@@ -1005,6 +1025,7 @@ unsafe fn layout_subtree_borrowed_impl(
     // alike. An error later in the walk leaves the id recorded, which
     // over-queues that one node — the safe direction, and bounded to nodes
     // that genuinely entered layout.
+    arena.note_laid_out();
     if is_repaint_boundary {
         arena.laid_out.lock().push(id);
     }
@@ -1791,6 +1812,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
     // the mark the viewport contributes walks UPWARD — it can never reach a
     // boundary below it. Without this, retained painting would reuse stale
     // sliver content.
+    arena.note_laid_out();
     if is_repaint_boundary {
         arena.laid_out.lock().push(id);
     }
@@ -2262,6 +2284,7 @@ mod tests {
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
             laid_out: Mutex::new(Vec::new()),
+            laid_out_count: std::cell::Cell::new(0),
             layout_poison: &poison,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
@@ -2302,6 +2325,7 @@ mod tests {
             pending_child_requests: Mutex::new(Vec::new()),
             pending_retain_bands: Mutex::new(Vec::new()),
             laid_out: Mutex::new(Vec::new()),
+            laid_out_count: std::cell::Cell::new(0),
             layout_poison: &poison,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),

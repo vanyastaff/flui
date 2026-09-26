@@ -143,7 +143,8 @@ impl PipelineOwner<Semantics> {
                     };
                     rebuild_semantics_owner(owner, built);
                 }
-                owner.flush();
+                let published = owner.flush();
+                self.counters.semantics_nodes_updated += published as u64;
             } else if pending_count > 0 {
                 // This matches Flutter's early return when `_semanticsOwner`
                 // is absent. Keep the warning so enabled-without-owner wiring
