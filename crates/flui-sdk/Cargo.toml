@@ -3,8 +3,8 @@ publish = ["crates-io"]
 name = "flui-sdk"
 # Its own `0.N`, bumped on every train and published in the same run, not the
 # workspace version: the SDK is Evolving and breaks without a `flui` major
-# (ADR-0088 §4). `cargo xtask workspace` refuses an evolving crate that
-# inherits the version or leaves major 0.
+# (ADR-0081 §3, ADR-0088 §4). `cargo xtask workspace` refuses an evolving
+# crate that inherits the version or leaves major 0.
 version = "0.1.0-dev"
 edition.workspace = true
 rust-version.workspace = true

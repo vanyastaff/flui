@@ -38,7 +38,7 @@
 //!   top-level modules).
 //! - **Manifests.** Crates inherit the shared `[workspace.package]` keys and the
 //!   workspace lints, except that a `tier-kind = "evolving"` crate sets its own
-//!   `0.N` version (ADR-0088 §4); examples and tools are `publish = false`.
+//!   `0.N` version (ADR-0081 §3, ADR-0088 §4); examples and tools are `publish = false`.
 //! - **Train guard** (ADR-0088 §5). `flui-foundation` declares
 //!   `links = "flui_train"`, and no other member does.
 //! - **Unreachable tests.** Under `autotests = false` a new `tests/*.rs` file is
@@ -650,7 +650,7 @@ fn check_manifests(
 const EVOLVING: &str = "evolving";
 
 /// An evolving crate carries its own `0.N` version, bumped on every train
-/// (ADR-0088 §4): inheriting the workspace version would tie its semver to
+/// (ADR-0081 §3, ADR-0088 §4): inheriting the workspace version would tie its semver to
 /// the Stable facade's, and a major above 0 would promise what an evolving
 /// surface does not.
 fn check_evolving_version(rel: &str, version: Option<&Toml>, findings: &mut Vec<String>) {
@@ -658,13 +658,13 @@ fn check_evolving_version(rel: &str, version: Option<&Toml>, findings: &mut Vec<
         Some(Toml::String(version)) => {
             if version.split('.').next() != Some("0") {
                 findings.push(format!(
-                    "{rel} is evolving: its version is `0.N` (ADR-0088 §4), not `{version}`"
+                    "{rel} is evolving: its version is `0.N` (ADR-0081 §3, ADR-0088 §4), not `{version}`"
                 ));
             }
         }
         _ => findings.push(format!(
             "{rel} is evolving: it sets its own `version = \"0.N…\"` instead of inheriting the \
-             workspace version (ADR-0088 §4)"
+             workspace version (ADR-0081 §3, ADR-0088 §4)"
         )),
     }
 }

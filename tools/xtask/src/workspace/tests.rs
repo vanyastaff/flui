@@ -345,7 +345,8 @@ fn an_evolving_crate_sets_its_own_zero_major_version() {
     );
     assert_one(
         &fixture.findings(),
-        "crates/a/Cargo.toml is evolving: its version is `0.N` (ADR-0088 §4), not `1.0.0`",
+        "crates/a/Cargo.toml is evolving: its version is `0.N` (ADR-0081 §3, ADR-0088 §4), not \
+         `1.0.0`",
     );
     fixture.edit(
         "crates/a/Cargo.toml",
