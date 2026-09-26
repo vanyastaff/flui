@@ -40,7 +40,7 @@ use crate::interaction::GestureDetector;
 use crate::layout::Padding;
 use crate::paint::DecoratedBox;
 use crate::text::controller::TextEditingController;
-use crate::text::editable_text::{EditableText, SubmitCallback};
+use crate::text::editable_text::{EditableText, SubmitCallback, TextChanged};
 
 // ============================================================================
 // RawTextField
@@ -57,7 +57,6 @@ use crate::text::editable_text::{EditableText, SubmitCallback};
 /// Everything deferred in [`EditableText`] applies here too:
 /// - IME / composing region
 /// - Text selection by drag + selection rendering
-/// - Clipboard (copy / paste / cut)
 /// - Multi-line support
 /// - Input formatters
 /// - Scroll when text overflows the visible width
@@ -78,6 +77,10 @@ pub struct RawTextField {
     content_padding: EdgeInsets,
     /// Forwarded to [`EditableText::obscure_text`] — a password field.
     obscure_text: bool,
+    /// Forwarded to [`EditableText::enabled`].
+    enabled: bool,
+    /// Forwarded to [`EditableText::on_changed`].
+    on_changed: Option<TextChanged>,
     /// Forwarded to [`EditableText::on_submitted`] — see
     /// [`Self::on_submitted`].
     on_submitted: Option<SubmitCallback>,
@@ -95,6 +98,8 @@ impl std::fmt::Debug for RawTextField {
             .field("caret_color", &self.caret_color)
             .field("content_padding", &self.content_padding)
             .field("obscure_text", &self.obscure_text)
+            .field("enabled", &self.enabled)
+            .field("on_changed", &self.on_changed.is_some())
             .field("on_submitted", &self.on_submitted.is_some())
             .finish()
     }
@@ -111,6 +116,8 @@ impl RawTextField {
             caret_color: Color::BLACK,
             content_padding: EdgeInsets::symmetric(px(8.0), px(12.0)),
             obscure_text: false,
+            enabled: true,
+            on_changed: None,
             on_submitted: None,
         }
     }
@@ -144,6 +151,22 @@ impl RawTextField {
     #[must_use]
     pub fn obscure_text(mut self, obscure: bool) -> Self {
         self.obscure_text = obscure;
+        self
+    }
+
+    /// Whether the field accepts focus and input (default `true`). Forwards
+    /// to [`EditableText::enabled`].
+    #[must_use]
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Call `callback` with the new text after each user edit. Forwards to
+    /// [`EditableText::on_changed`].
+    #[must_use]
+    pub fn on_changed(mut self, callback: impl Fn(&str) + 'static) -> Self {
+        self.on_changed = Some(Rc::new(callback));
         self
     }
 
@@ -206,9 +229,13 @@ impl ViewState<RawTextField> for RawTextFieldState {
         let mut editable = EditableText::new(view.controller.clone(), Rc::clone(&self.focus_node))
             .caret_height(view.caret_height)
             .caret_color(view.caret_color)
-            .obscure_text(view.obscure_text);
+            .obscure_text(view.obscure_text)
+            .enabled(view.enabled);
         if let Some(on_submitted) = view.on_submitted.clone() {
             editable = editable.on_submitted(move |text| on_submitted(text));
+        }
+        if let Some(on_changed) = view.on_changed.clone() {
+            editable = editable.on_changed(move |text| on_changed(text));
         }
 
         let padded = Padding::new(view.content_padding).child(editable);

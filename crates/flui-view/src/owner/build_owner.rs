@@ -613,6 +613,10 @@ pub struct BuildOwner {
     /// attach an IME client.
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
 
+    /// The presentation's plain-text clipboard. `None` only on a bare owner;
+    /// a realm installs one over its platform's clipboard.
+    pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
+
     /// The binding's owner-local interaction dispatch capability (ADR-0027).
     ///
     /// `None` means the owner was built detached from a runtime interaction lane;
@@ -751,6 +755,7 @@ impl BuildOwner {
             post_frame_handle: None,
             local_post_frame_handle: None,
             text_input_handle: None,
+            clipboard_handle: None,
             interaction_dispatch: None,
             hit_test_handle: None,
             owner_tag: OwnerTag::fresh(),
@@ -828,6 +833,15 @@ impl BuildOwner {
     /// honestly rather than accepting attaches nobody delivers events to.
     pub fn set_text_input_handle(&mut self, handle: flui_interaction::TextInputHandle) {
         self.text_input_handle = Some(handle);
+    }
+
+    /// Install the presentation's plain-text clipboard.
+    ///
+    /// Called during presentation construction with a handle over the
+    /// realm's platform clipboard, so `LifecycleContext::clipboard_handle`
+    /// answers `Some` under every realm.
+    pub fn set_clipboard_handle(&mut self, handle: flui_interaction::ClipboardHandle) {
+        self.clipboard_handle = Some(handle);
     }
 
     /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
@@ -951,6 +965,12 @@ impl BuildOwner {
     #[must_use]
     pub fn text_input_handle(&self) -> Option<&flui_interaction::TextInputHandle> {
         self.text_input_handle.as_ref()
+    }
+
+    /// The presentation's plain-text clipboard, if one was installed.
+    #[must_use]
+    pub fn clipboard_handle(&self) -> Option<&flui_interaction::ClipboardHandle> {
+        self.clipboard_handle.as_ref()
     }
 
     /// Set the callback for when a build is scheduled.
@@ -1243,6 +1263,7 @@ impl BuildOwner {
             post_frame_handle: &self.post_frame_handle,
             local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
+            clipboard_handle: &self.clipboard_handle,
             interaction_dispatch: &self.interaction_dispatch,
             hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,
@@ -1771,6 +1792,7 @@ impl BuildOwner {
                     post_frame_handle: &self.post_frame_handle,
                     local_post_frame_handle: &self.local_post_frame_handle,
                     text_input_handle: &self.text_input_handle,
+                    clipboard_handle: &self.clipboard_handle,
                     interaction_dispatch: &self.interaction_dispatch,
                     hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
@@ -1984,6 +2006,7 @@ impl BuildOwner {
                     post_frame_handle: &self.post_frame_handle,
                     local_post_frame_handle: &self.local_post_frame_handle,
                     text_input_handle: &self.text_input_handle,
+                    clipboard_handle: &self.clipboard_handle,
                     interaction_dispatch: &self.interaction_dispatch,
                     hit_test_handle: &self.hit_test_handle,
                     global_key_scope: &mut self.global_key_scope,
@@ -2419,6 +2442,7 @@ impl BuildOwner {
                 post_frame_handle: &self.post_frame_handle,
                 local_post_frame_handle: &self.local_post_frame_handle,
                 text_input_handle: &self.text_input_handle,
+                clipboard_handle: &self.clipboard_handle,
                 interaction_dispatch: &self.interaction_dispatch,
                 hit_test_handle: &self.hit_test_handle,
                 global_key_scope: &mut self.global_key_scope,
@@ -2628,6 +2652,7 @@ impl BuildOwner {
             post_frame_handle: &self.post_frame_handle,
             local_post_frame_handle: &self.local_post_frame_handle,
             text_input_handle: &self.text_input_handle,
+            clipboard_handle: &self.clipboard_handle,
             interaction_dispatch: &self.interaction_dispatch,
             hit_test_handle: &self.hit_test_handle,
             global_key_scope: &mut self.global_key_scope,

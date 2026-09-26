@@ -542,9 +542,6 @@ where
             runtime.reopen_lifecycles();
             runtime.ensure_execution();
         });
-        let clipboard = with_owner_platform(|owner| owner.shared().clipboard())
-            .expect("BUG: owner installed above");
-        APP_RUNTIME.with(|slot| slot.borrow().set_platform_clipboard(clipboard));
         install_exit_policy_hook(config.exit_policy);
         install_platform_quit_hook();
         let reopen = Arc::downgrade(&ingress);
@@ -1117,6 +1114,7 @@ mod tests {
                             presentation,
                             1.0,
                             Arc::new(AtomicBool::new(false)),
+                            crate::app::presentation::test_clipboard(),
                         )
                         .expect("realm");
                         realm.enter(|realm| realm.update_host_lifecycle(host));
@@ -1200,6 +1198,7 @@ mod tests {
                                 presentation,
                                 1.0,
                                 Arc::new(AtomicBool::new(false)),
+                                crate::app::presentation::test_clipboard(),
                             )
                             .expect("realm");
                             realm.enter(|realm| realm.update_host_lifecycle(host));
