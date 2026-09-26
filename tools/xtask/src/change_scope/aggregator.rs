@@ -516,6 +516,39 @@ mod tests {
         }
     }
 
+    /// The jobs outside the lane lists: each one's `if:` must be the
+    /// condition [`planned_runs`] runs it under, not just some known one.
+    #[test]
+    fn jobs_outside_the_lane_lists_have_their_own_condition() {
+        let w = workflow();
+        let expected: BTreeMap<&str, &str> = [
+            ("deps", "needs.plan.outputs.lane != 'docs'"),
+            ("fast-lane", "needs.plan.outputs.lane == 'fast'"),
+            (
+                "fast-lane-ios",
+                "needs.plan.outputs.lane == 'fast' && needs.plan.outputs.cross_ios == 'true'",
+            ),
+            (
+                "standalone",
+                "needs.plan.outputs.lane == 'tooling' && needs.plan.outputs.standalone != ''",
+            ),
+        ]
+        .into();
+        let actual: BTreeMap<&str, &str> = w
+            .jobs
+            .iter()
+            .filter(|j| w.gated.contains(&j.name))
+            .filter(|j| !["checks", "plan"].contains(&j.name.as_str()))
+            .filter(|j| {
+                !w.lanes.wide.contains(&j.name)
+                    && !w.lanes.full.contains(&j.name)
+                    && !w.lanes.extended.contains(&j.name)
+            })
+            .map(|j| (j.name.as_str(), j.condition.as_deref().unwrap_or("")))
+            .collect();
+        assert_eq!(actual, expected);
+    }
+
     #[test]
     fn the_aggregator_needs_every_gated_job() {
         let w = workflow();
