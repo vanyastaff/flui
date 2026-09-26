@@ -40,7 +40,7 @@ use crate::{
     error::PlatformError,
     platforms::winit::control::control_lane,
     traits::{
-        Platform, PlatformWindow, ProxySendError, WindowEvent, WindowId, WindowOptions,
+        HostWindow, Platform, ProxySendError, WindowEvent, WindowId, WindowOptions,
         owner::ProxyTransport,
     },
 };
@@ -563,7 +563,7 @@ fn close_requested_drops_window_callbacks_and_self_close_exits_the_loop() {
     // The worker parks its window Arc here; the main thread drops it
     // only AFTER the assertions, so the drop flag being set cannot be
     // this Arc's own (post-loop) drop doing the clearing.
-    let kept_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>> = Arc::new(Mutex::new(None));
+    let kept_window: Arc<Mutex<Option<Arc<dyn HostWindow>>>> = Arc::new(Mutex::new(None));
     let global_close_events = record_global_close_events(&platform);
 
     let platform_for_worker = Arc::clone(&platform);
@@ -796,7 +796,7 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
     let callback_dropped = Arc::new(AtomicBool::new(false));
     let close_thread: Arc<Mutex<Option<thread::ThreadId>>> = Arc::new(Mutex::new(None));
     // Parked here so the drop flag cannot be this Arc's own drop.
-    let kept_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>> = Arc::new(Mutex::new(None));
+    let kept_window: Arc<Mutex<Option<Arc<dyn HostWindow>>>> = Arc::new(Mutex::new(None));
     let global_close_events = record_global_close_events(&platform);
 
     let platform_for_worker = Arc::clone(&platform);
@@ -940,7 +940,7 @@ fn frame_callback_owner_is_released_by_complete_window_close() {
     /// Owns a clone of the window `Arc`, the same shape the renderer's
     /// pre-present hook captures in production, and records when it drops.
     struct RendererProbe {
-        _window: Arc<dyn PlatformWindow>,
+        _window: Arc<dyn HostWindow>,
         dropped: Arc<AtomicBool>,
     }
 
@@ -967,8 +967,8 @@ fn frame_callback_owner_is_released_by_complete_window_close() {
     // ref drops, separately from the probe's clone (released by
     // `callbacks().clear()`) and the platform's own tracking entry
     // (released by `complete_window_close`'s `state.windows.remove`).
-    let kept_window: Arc<Mutex<Option<Arc<dyn PlatformWindow>>>> = Arc::new(Mutex::new(None));
-    let weak_window: Arc<Mutex<Option<Weak<dyn PlatformWindow>>>> = Arc::new(Mutex::new(None));
+    let kept_window: Arc<Mutex<Option<Arc<dyn HostWindow>>>> = Arc::new(Mutex::new(None));
+    let weak_window: Arc<Mutex<Option<Weak<dyn HostWindow>>>> = Arc::new(Mutex::new(None));
 
     let platform_for_worker = Arc::clone(&platform);
     let control_for_worker = control;
@@ -1093,7 +1093,7 @@ fn quit_with_open_window_releases_frame_callback_owner() {
     /// into a shared sequence so the test can order it against the point
     /// `Platform::run` would return.
     struct RendererProbe {
-        _window: Arc<dyn PlatformWindow>,
+        _window: Arc<dyn HostWindow>,
         sequence: Arc<Mutex<Vec<&'static str>>>,
     }
 

@@ -4,16 +4,40 @@ Per-crate ledger for architecture decisions that span more than one module in
 this crate. Partial: this file exists for the `## Mapping
 decisions` entries below; a full crate architecture writeup is deferred.
 
-The contracts this crate's backends implement — `PlatformTextInput`,
-`PlatformHaptics`, `PlatformDisplay`, `Clipboard`, the `data_transfer`
-transport and the window and input vocabulary — live in `flui-platform-api`
-(ADR-0082) and are re-exported here at their old paths (`flui_platform::X`,
-`flui_platform::traits::X`, `flui_platform::data_transfer`), so a backend or
-`flui-app` names them as before. What stays here is what names an OS stack,
-AccessKit or tokio: `Platform`, `PlatformWindow`, the owner-thread capability,
-`PlatformAccessibility` and every backend. Only `flui-app` may depend on this
-crate (`allowed-dependents`); a crate that needs a capability trait depends on
-`flui-platform-api` instead.
+The contracts this crate's backends implement — `PlatformWindow`,
+`PlatformTextInput`, `PlatformHaptics`, `PlatformDisplay`, `Clipboard`, the
+`data_transfer` transport and the window and input vocabulary — live in
+`flui-platform-api` (ADR-0082) and are re-exported here at their old paths
+(`flui_platform::X`, `flui_platform::traits::X`, `flui_platform::data_transfer`),
+so a backend or `flui-app` names them as before. What stays here is what names
+an OS stack, AccessKit or tokio: `Platform`, the owner-thread capability,
+`PlatformAccessibility`, `HostWindow` and every backend. Only `flui-app` may
+depend on this crate (`allowed-dependents`); a crate that needs a capability
+trait depends on `flui-platform-api` instead.
+
+## Invariants
+
+- **A window leaves a backend as an `Arc<dyn HostWindow>`.**
+  `HostWindow: PlatformWindow` adds the one AccessKit-speaking accessor,
+  `accessibility()`. `Platform::open_window`, `WindowOpen::Ready` and
+  `PendingWindow` return it; every backend window implements it next to its
+  `PlatformWindow` impl, and its accessibility bridge is fixed when the window
+  is built, so a runner may read it once. `dyn HostWindow` has its own
+  `HasWindowHandle`/`HasDisplayHandle` impls: without them an `open_window`
+  result would not be a `flui_engine::WindowTarget` until upcast.
+- **The macOS backend enforces the window thread-affinity default
+  mechanically.** `PlatformWindow`'s rule is that a method driving a window runs
+  on the thread that owns the platform event loop. Every window-driving
+  `PlatformWindow`/`WindowTrait`/`MacOSWindowExtTrait` body on `MacOSWindow`
+  re-enters the owner lane through `route_on_owner`, so a call from any thread
+  is marshaled onto the window's owner lane before any AppKit message is sent.
+  Two carve-outs: the class-E raw-handle accessors
+  (`raw_window_handle`/`window_handle`, and `display_handle` which carries no
+  pointer) take their NSView outside the routing — `!Send` outputs whose
+  enforcement is upstream (raw-window-metal's main-thread hard panic plus
+  `debug_assert_appkit_main_thread`-guarded platform entries, ADR-0039); and
+  the `enable_tiling`/`disable_tiling`/`is_tiling_enabled` trio never routes
+  (recorded for observability only until the native API is adopted).
 
 ---
 

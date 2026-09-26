@@ -229,7 +229,7 @@ mod appkit_ime_probe {
         // A VISIBLE window, ordered front: AppKit routes a key event into the
         // input context of a key window, and a window that is never ordered
         // front never becomes one.
-        let window = match owner.open_window(WindowOptions {
+        let window: Arc<dyn PlatformWindow> = match owner.open_window(WindowOptions {
             title: TITLE.to_string(),
             size: Size::new(px(480.0), px(320.0)),
             resizable: false,

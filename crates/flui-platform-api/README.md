@@ -10,16 +10,17 @@ and data-transfer vocabulary, with no OS backend behind them.
   (`data_transfer::DataTransferSource`, ADR-0038).
 - Input vocabulary: `PlatformInput`, `DispatchEventResult`, `DragDropEvent`,
   the pointer and keyboard types, and the pixel conversion helpers.
-- Window vocabulary: `WindowId`, `WindowOptions`, `WindowReveal`, `WindowMode`,
-  `WindowEvent`, `WindowExecutionState` and the errors window operations return.
+- The per-window contract `PlatformWindow` and the window vocabulary:
+  `WindowId`, `WindowOptions`, `WindowReveal`, `WindowMode`, `WindowEvent`,
+  `WindowExecutionState`, `CursorIcon` and the errors window operations return.
 
 ## What is not
 
 No OS, winit, AccessKit or tokio type appears here, and the crate has no
-`unsafe`. The OS backends, the host-facing `Platform` trait and the per-window
-`PlatformWindow` contract live in `flui-platform`, which re-exports everything
-in this crate at its old paths. Only composition roots (`flui-app`) depend on
-`flui-platform`.
+`unsafe`. The OS backends, the host-facing `Platform` trait and `HostWindow`
+(a `PlatformWindow` plus its AccessKit accessibility bridge) live in
+`flui-platform`, which re-exports everything in this crate at its old paths.
+Only composition roots (`flui-app`) depend on `flui-platform`.
 
 ## Who depends on this
 

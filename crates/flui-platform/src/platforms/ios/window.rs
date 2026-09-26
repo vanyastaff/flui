@@ -747,6 +747,8 @@ impl std::fmt::Debug for IOSWindow {
     }
 }
 
+impl crate::traits::HostWindow for IOSWindow {}
+
 impl PlatformWindow for IOSWindow {
     fn close(&self) {
         super::platform::request_close(self.id);

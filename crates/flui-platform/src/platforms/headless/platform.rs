@@ -26,7 +26,7 @@ use crate::{
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
         Clipboard, ClipboardItem, CursorError, DesktopCapabilities, DispatchEventResult,
-        OpenWindowError, OwnerPlatform, PendingWindow, Platform, PlatformCapabilities,
+        HostWindow, OpenWindowError, OwnerPlatform, PendingWindow, Platform, PlatformCapabilities,
         PlatformDisplay, PlatformExecutor, PlatformHaptics, PlatformInput, PlatformReadyCallback,
         PlatformTextInput, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
         WindowBounds, WindowEvent, WindowId, WindowOpen, WindowOptions,
@@ -38,7 +38,7 @@ use crate::{
 /// mirrors the winit backend's own private `OpenWindowResult` alias
 /// (`platforms/winit/control.rs`) so both backends complete a
 /// [`ClaimSlot`]/[`PendingWindow`] pair with an identical shape.
-type OpenWindowResult = Result<Arc<dyn PlatformWindow>, OpenWindowError>;
+type OpenWindowResult = Result<Arc<dyn HostWindow>, OpenWindowError>;
 
 /// Process-wide identity source for mock windows.
 ///
@@ -304,10 +304,7 @@ impl Platform for HeadlessPlatform {
         self.with_state(|state| state.exit_reevaluation_requested = true);
     }
 
-    fn open_window(
-        &self,
-        options: WindowOptions,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
+    fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         tracing::info!(?options, "Creating mock window");
 
         let platform_state = Arc::downgrade(&self.state);
@@ -410,7 +407,7 @@ fn create_mock_window(
     state: &mut HeadlessState,
     platform_state: Weak<Mutex<HeadlessState>>,
     options: WindowOptions,
-) -> Arc<dyn PlatformWindow> {
+) -> Arc<dyn HostWindow> {
     let window_id = next_headless_window_id();
     let window = MockWindow::new(window_id, options, platform_state);
 
@@ -421,7 +418,7 @@ fn create_mock_window(
         .handlers
         .invoke_window_event(WindowEvent::Created(window_id));
 
-    Arc::new(window) as Arc<dyn PlatformWindow>
+    Arc::new(window) as Arc<dyn HostWindow>
 }
 
 /// [`OwnerHooks`] for the headless backend's deferred-open test mode
@@ -663,7 +660,7 @@ impl HeadlessDeferredWindowOpens {
     /// that nothing else in the framework hands that handle back once a
     /// request defers), or `None` if there was nothing pending (the platform
     /// was dropped, or every request so far has already been resolved).
-    pub fn resolve_next(&self) -> Option<Arc<dyn PlatformWindow>> {
+    pub fn resolve_next(&self) -> Option<Arc<dyn HostWindow>> {
         let platform_state = self.state.upgrade()?;
 
         // Pop the request and build its window under one lock acquisition,
@@ -1142,7 +1139,7 @@ impl Drop for WindowEventLease<'_> {
     }
 }
 
-impl crate::traits::PlatformWindow for MockWindow {
+impl PlatformWindow for MockWindow {
     fn id(&self) -> WindowId {
         self.id
     }
@@ -1251,10 +1248,6 @@ impl crate::traits::PlatformWindow for MockWindow {
         Some(Arc::clone(&self.text_input) as Arc<dyn PlatformTextInput>)
     }
 
-    fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
-        Some(Arc::clone(&self.accessibility) as Arc<dyn crate::traits::PlatformAccessibility>)
-    }
-
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
         Some(Arc::clone(&self.haptics) as Arc<dyn PlatformHaptics>)
     }
@@ -1337,8 +1330,14 @@ impl crate::traits::PlatformWindow for MockWindow {
     }
 }
 
+impl HostWindow for MockWindow {
+    fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
+        Some(Arc::clone(&self.accessibility) as Arc<dyn crate::traits::PlatformAccessibility>)
+    }
+}
+
 /// Recording fake for [`PlatformAccessibility`](crate::traits::PlatformAccessibility),
-/// backing the headless backend's [`PlatformWindow::accessibility`].
+/// backing the headless backend's [`HostWindow::accessibility`].
 ///
 /// Records every published tree so a test can assert what an assistive
 /// technology would actually have been told — the roles, labels and ids — not

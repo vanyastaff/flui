@@ -85,8 +85,8 @@ pub use window_ext::*;
 use crate::data_transfer::{DataTransferSource, NullDataTransferSource};
 use crate::error::PlatformError;
 use crate::traits::{
-    Clipboard, OpenWindowError, Platform, PlatformCapabilities, PlatformDisplay, PlatformExecutor,
-    PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
+    Clipboard, HostWindow, OpenWindowError, Platform, PlatformCapabilities, PlatformDisplay,
+    PlatformExecutor, PlatformReadyCallback, WindowEvent, WindowId, WindowOptions,
 };
 
 /// Linux platform implementation (stub)
@@ -206,10 +206,7 @@ impl Platform for LinuxPlatform {
         clippy::unimplemented,
         reason = "documented Linux platform stub (AGENTS.md platform-init exception); tracked in the module's own Implementation Roadmap, not a silent gap"
     )]
-    fn open_window(
-        &self,
-        _options: WindowOptions,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
+    fn open_window(&self, _options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         unimplemented!("Linux window creation (Wayland/X11) not implemented")
     }
 

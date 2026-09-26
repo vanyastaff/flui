@@ -1,0 +1,8 @@
+### Added
+
+- **From a**: first, by file name.
+  A continuation line of the same bullet.
+
+### Removed
+
+- **Removed in a**: a section the changelog lacks, created before Fixed.

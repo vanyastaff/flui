@@ -4,7 +4,8 @@
 //! (`docs/FOUNDATIONS.md`); its haptics residue becomes a capability trait
 //! here, following the identical template `PlatformTextInput`'s module doc
 //! promised: [`PlatformHaptics`] is reached through
-//! `flui_platform::PlatformWindow::haptics` — a fallible accessor returning `Option<Arc<dyn _>>`, not a method bolted
+//! [`PlatformWindow::haptics`](crate::PlatformWindow::haptics) — a fallible accessor returning
+//! `Option<Arc<dyn _>>`, not a method bolted
 //! directly onto `PlatformWindow` with a panicking/no-op default. A backend
 //! with no haptic hardware (desktop winit; a minimal future embedder)
 //! returns `None` from the accessor instead of every `PlatformWindow`
@@ -28,7 +29,7 @@
 //!
 //! # Per-window, not device-global
 //!
-//! `PlatformHaptics` is reached from `flui_platform::PlatformWindow`, not
+//! `PlatformHaptics` is reached from [`PlatformWindow`](crate::PlatformWindow), not
 //! from `flui_platform::Platform` as a device-global capability, for three
 //! reasons:
 //!

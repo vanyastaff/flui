@@ -1,7 +1,7 @@
 //! Session ownership shared by UIKit's adapter and host lifecycle tests.
 use super::realm_dispatch::{RealmDispatcher, close_this_window};
 use crate::app::hot_reload::WorkerWatcherGuard;
-use flui_platform::PlatformWindow;
+use flui_platform::HostWindow;
 use std::{collections::HashMap, hash::Hash, sync::Arc};
 
 pub(super) fn contain(body: impl FnOnce()) {
@@ -10,7 +10,7 @@ pub(super) fn contain(body: impl FnOnce()) {
     }
 }
 
-type SessionInstaller = Box<dyn FnMut(Arc<dyn PlatformWindow>) -> anyhow::Result<RealmDispatcher>>;
+type SessionInstaller = Box<dyn FnMut(Arc<dyn HostWindow>) -> anyhow::Result<RealmDispatcher>>;
 
 pub(in crate::app) struct SessionController<K: Eq + Hash> {
     installer: Option<SessionInstaller>,
@@ -19,7 +19,7 @@ pub(in crate::app) struct SessionController<K: Eq + Hash> {
 }
 impl<K: Eq + Hash> SessionController<K> {
     pub(super) fn new(
-        installer: impl FnMut(Arc<dyn PlatformWindow>) -> anyhow::Result<RealmDispatcher> + 'static,
+        installer: impl FnMut(Arc<dyn HostWindow>) -> anyhow::Result<RealmDispatcher> + 'static,
         watcher: Option<WorkerWatcherGuard>,
     ) -> Self {
         Self {
@@ -32,7 +32,7 @@ impl<K: Eq + Hash> SessionController<K> {
     pub(super) fn connect(
         &mut self,
         key: K,
-        window: Arc<dyn PlatformWindow>,
+        window: Arc<dyn HostWindow>,
         reconnect: bool,
     ) -> anyhow::Result<RealmDispatcher> {
         if reconnect {
@@ -188,6 +188,7 @@ mod tests {
                         flui_types::geometry::px(80.0),
                     ),
                 ));
+                let window: Arc<dyn flui_platform::PlatformWindow> = window;
                 Ok(install_realm_alongside(realm, &window)?)
             },
             None,

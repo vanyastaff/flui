@@ -9,8 +9,8 @@ use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
-    change_scope, docs_links, file_length, fonts, globals, markers, module_dag, perf, toolchain,
-    wgsl, workspace,
+    change_scope, changelog, docs_links, file_length, fonts, globals, markers, module_dag, perf,
+    toolchain, wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -100,7 +100,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 19] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 21] {
     [
         (
             if strict {
@@ -146,6 +146,12 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 19] {
         }),
         ("markers", |args| markers::markers(&parsed(args)?)),
         ("perf --self-test", |args| perf::perf(&parsed(args)?)),
+        ("changelog --self-test", |args| {
+            changelog::changelog(&parsed(args)?)
+        }),
+        ("changelog --check", |args| {
+            changelog::changelog(&parsed(args)?)
+        }),
     ]
 }
 
@@ -197,6 +203,8 @@ mod tests {
                 "markers --self-test",
                 "markers",
                 "perf --self-test",
+                "changelog --self-test",
+                "changelog --check",
             ]
         );
         assert_eq!(lines(true)[0], "docs-links --strict");

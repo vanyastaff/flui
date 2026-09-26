@@ -241,6 +241,8 @@ impl WebWindow {
     }
 }
 
+impl crate::traits::HostWindow for WebWindow {}
+
 impl PlatformWindow for WebWindow {
     fn id(&self) -> WindowId {
         self.id
