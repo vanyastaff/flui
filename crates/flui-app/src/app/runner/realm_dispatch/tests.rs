@@ -710,7 +710,7 @@ fn quit_notification_observer_reentry_is_once_and_observer_panic_does_not_skip_s
 /// leave the slot filled) and the second loop's assertions fail.
 #[test]
 fn install_resolves_execution_services_and_teardown_shuts_them_down() {
-    use crate::app::execution::DeterministicExecutors;
+    use flui_runtime::execution::DeterministicExecutors;
 
     APP_RUNTIME.with(|slot| {
         assert!(
@@ -829,6 +829,36 @@ fn teardown_gives_services_their_flush_window_before_the_pools_close() {
     });
 }
 
+/// A one-shot gate a test service parks on until the test releases it.
+///
+/// The flag and the parked waker live under one lock so that "check the
+/// flag, park the waker" on the service side and "set the flag, take the
+/// waker" on the test side cannot interleave: whichever runs second sees
+/// the other's write, so no wakeup is lost.
+#[derive(Default)]
+struct ReleaseGate {
+    released: bool,
+    parked: Option<std::task::Waker>,
+}
+
+impl ReleaseGate {
+    fn poll(&mut self, context: &std::task::Context<'_>) -> std::task::Poll<()> {
+        if self.released {
+            std::task::Poll::Ready(())
+        } else {
+            self.parked = Some(context.waker().clone());
+            std::task::Poll::Pending
+        }
+    }
+
+    /// Opens the gate and hands back the waker to wake, if the service
+    /// has parked; the caller wakes it after releasing the lock.
+    fn release(&mut self) -> Option<std::task::Waker> {
+        self.released = true;
+        self.parked.take()
+    }
+}
+
 /// The messenger scenario end to end (issue #558): the last window's
 /// close is VETOED by a running keep-alive service — and when that
 /// service later completes on a worker-pool thread, its completion
@@ -846,8 +876,6 @@ fn teardown_gives_services_their_flush_window_before_the_pools_close() {
 /// forever, which is exactly the production bug this pins.
 #[test]
 fn keep_alive_completion_reopens_the_exit_question_after_the_last_window_closed() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     let _clear_guard = OwnerHostClearGuard::arm();
     let platform = flui_platform::HeadlessPlatform::new();
     let reevaluation = platform.exit_reevaluation();
@@ -898,33 +926,23 @@ fn keep_alive_completion_reopens_the_exit_question_after_the_last_window_closed(
         .expect("set inside on_ready above");
 
     // The messenger's background service: parked on the REAL IO pool
-    // until the test releases it, then completes.
-    let release = Arc::new(AtomicBool::new(false));
-    let waker_slot: Arc<parking_lot::Mutex<Option<std::task::Waker>>> =
-        Arc::new(parking_lot::Mutex::new(None));
+    // until the test releases it, then completes. The release flag and the
+    // parked waker share one lock: checked and parked apart, the service
+    // could read "not released", the test then release and find no waker,
+    // and the service park a waker nothing ever wakes.
+    let gate = Arc::new(parking_lot::Mutex::new(ReleaseGate::default()));
     {
         use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
-        let release_in_service = Arc::clone(&release);
-        let waker_in_service = Arc::clone(&waker_slot);
+        let gate_in_service = Arc::clone(&gate);
         APP_RUNTIME.with(|slot| {
             slot.borrow_mut()
                 .start_service(&ServiceDefinition::new(
                     "messenger-sync",
                     ServiceLifetime::KeepsAppAlive,
                     move |_context| {
-                        let release = Arc::clone(&release_in_service);
-                        let waker_slot = Arc::clone(&waker_in_service);
+                        let gate = Arc::clone(&gate_in_service);
                         Box::pin(async move {
-                            std::future::poll_fn(move |context| {
-                                if release.load(Ordering::Acquire) {
-                                    std::task::Poll::Ready(())
-                                } else {
-                                    let waker = context.waker().clone();
-                                    let _prev = waker_slot.lock().replace(waker);
-                                    std::task::Poll::Pending
-                                }
-                            })
-                            .await;
+                            std::future::poll_fn(move |context| gate.lock().poll(context)).await;
                         })
                     },
                 ))
@@ -960,9 +978,8 @@ fn keep_alive_completion_reopens_the_exit_question_after_the_last_window_closed(
     // The service completes on its worker thread; its completion must
     // request the platform's exit re-evaluation. Bounded wait: this is
     // the only path that can ever end this app now.
-    release.store(true, Ordering::Release);
-    let taken = waker_slot.lock().take();
-    if let Some(waker) = taken {
+    let parked = gate.lock().release();
+    if let Some(waker) = parked {
         waker.wake();
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

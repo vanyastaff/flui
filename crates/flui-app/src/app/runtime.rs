@@ -58,15 +58,15 @@ use flui_semantics::AccessibilityFeatures;
 use parking_lot::{Mutex, RwLock};
 
 #[cfg(not(target_arch = "wasm32"))]
-use super::execution::SpawnError;
-use super::execution::{ExecutionServices, HostExecutors};
-#[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::{
     ServiceDefinition, ServiceRegistry, ServiceShutdownReport, ServiceStartError,
 };
 use super::runner::{RealmTask, SurfaceApplier};
 use super::ui_realm::UiRealm;
 use super::window_registry::{RegistryError, WindowRegistry};
+#[cfg(not(target_arch = "wasm32"))]
+use flui_runtime::execution::SpawnError;
+use flui_runtime::execution::{ExecutionServices, HostExecutors};
 
 /// Process-level engine services, each resolved **once** per owner thread in
 /// [`SharedEngineServices::resolve`] — never re-resolved on every access, and
@@ -2109,7 +2109,7 @@ mod identity_tests {
 #[cfg(test)]
 mod execution_wiring_tests {
     use super::*;
-    use crate::app::execution::DeterministicExecutors;
+    use flui_runtime::execution::DeterministicExecutors;
 
     #[test]
     fn ensure_execution_defaults_to_owned_pools() {
@@ -2228,8 +2228,8 @@ mod service_lifecycle_wiring_tests {
     use std::sync::atomic::AtomicBool;
 
     use super::*;
-    use crate::app::execution::DeterministicExecutors;
     use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
+    use flui_runtime::execution::DeterministicExecutors;
 
     /// The editor/messenger acceptance split at the runtime seam: with no
     /// realms hosted, `should_exit(OnLastWindowClosed)` says exit — unless

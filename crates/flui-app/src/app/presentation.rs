@@ -16,8 +16,6 @@ use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer};
-
-use super::performance_stats::PerformanceStats;
 // The one backend-side trait the realm core still names: the accessibility
 // bridge speaks AccessKit, so it stays in `flui-platform` (ADR-0082 §2).
 use flui_platform::traits::PlatformAccessibility;
@@ -30,6 +28,7 @@ use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_runtime::epoch::{FrameCommitState, TreeRevision};
 use flui_runtime::held_input::HeldPointerQueue;
+use flui_runtime::performance_stats::PerformanceStats;
 use flui_runtime::semantics_host::SemanticsHost;
 use flui_scheduler::{
     AsyncDriver, FrameClock, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler,

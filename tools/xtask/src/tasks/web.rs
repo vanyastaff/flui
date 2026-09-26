@@ -120,7 +120,7 @@ fn test_crates() -> anyhow::Result<Vec<String>> {
 /// Which of a crate's test targets run on wasm32.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
-    /// The lib test: the only way to reach a `pub(crate)` seam (flui-app's
+    /// The lib test: the only way to reach a private seam (flui-runtime's
     /// `Backend::Sequential`, for one).
     Lib,
     /// `tests/wasm32.rs`, which sees only the public API.

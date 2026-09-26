@@ -228,7 +228,7 @@ first, and `RasterOwner` stays in `flui-engine` through H0.
 ### D6. Retained layer identity drives damage
 
 **Context.** Every frame is a full repaint: the lane always sends `DamageRegion::Full`
-(`crates/flui-app/src/app/raster_lane.rs:354`), and `Full` is the only variant
+(`crates/flui-app/src/app/raster_lane.rs:291`), and `Full` is the only variant
 (`crates/flui-layer/src/scene_snapshot.rs:18-21`). Partial repaint is a B2 exit item.
 
 **Decision.** Each repaint boundary is an `Arc` subtree keyed by `RenderId`; a differ over

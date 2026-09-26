@@ -205,6 +205,9 @@ tokio = { version = "1.43" }
 # tokio-util default from arriving silently. In particular no `rt`
 # (`TaskTracker`) until the task/service lifecycle work (#558) needs it.
 tokio-util = { version = "0.7", default-features = false }
+# wasm32 `spawn_local` on the browser's microtask queue: the web runner's frame
+# loop and the execution services' sequential IO lane.
+wasm-bindgen-futures = "0.4"
 
 # SYNCHRONIZATION - Used by multiple crates
 parking_lot = "0.12"

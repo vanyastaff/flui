@@ -1920,12 +1920,10 @@ dependencies = [
  "raw-window-handle",
  "static_assertions",
  "thiserror 2.0.20",
- "tokio",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen-futures",
- "wasm-bindgen-test",
  "web-time",
 ]
 
@@ -2359,12 +2357,20 @@ version = "0.2.0-dev"
 dependencies = [
  "flui-foundation",
  "flui-interaction",
+ "flui-layer",
+ "flui-scheduler",
  "flui-semantics",
  "flui-testing",
  "flui-types",
  "parking_lot",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-time",
 ]
 
 [[package]]
