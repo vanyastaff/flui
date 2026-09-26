@@ -319,7 +319,12 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
 ///   expandable node, and `apply_actions` advertises only the one its expanded
 ///   state allows. The adapter that emits them refuses a transition to the
 ///   state the node already has (accesskit_windows 0.35.0, `node.rs`
-///   `ExpandCollapse` provider); no other shipped adapter emits them.
+///   `ExpandCollapse` provider); no other shipped adapter emits them. That
+///   check reads the adapter's copy of the tree, which lags until the next
+///   published update, so two `Expand`s before the next frame both pass it and
+///   both toggle; the routed `Tap` carries no direction for FLUI to check.
+///   Discrete `Expand`/`Collapse` actions at Flutter's bits would close this
+///   (`crates/flui-semantics/ARCHITECTURE.md`, mapping decision 5).
 ///
 /// `SetValue` lands on [`SemanticsAction::SetText`] whatever its payload: a
 /// numeric value (UI Automation's `RangeValue.SetValue`) arrives without its

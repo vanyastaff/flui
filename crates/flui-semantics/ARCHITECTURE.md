@@ -334,8 +334,17 @@ advertises `Expand` while collapsed and `Collapse` while expanded, never both.
 could be neither invoked nor expanded by an agent or a screen reader. FLUI toggles an
 expandable node through its tap handler, and the adapter refuses a transition to the state
 the node already has (accesskit_windows 0.35.0 `node.rs`, the `ExpandCollapse` provider), so
-routing both to `Tap` toggles in the requested direction. No other shipped adapter
-(`accesskit_macos` 0.27, `accesskit_atspi_common` 0.20) emits them.
+routing both to `Tap` toggles in the requested direction while the adapter's copy of the tree
+is current. No other shipped adapter (`accesskit_macos` 0.27, `accesskit_atspi_common` 0.20)
+emits them.
+
+**Known gap.** The adapter checks the expanded state in its own copy of the tree, which
+changes only when FLUI publishes the next tree update, and the request is queued to the realm
+without waiting for a frame. Two `Expand` requests before the next frame, or an `Expand`
+right after a pointer tap that has not been published yet, each pass that check and each run
+the tap handler, so the node can end collapsed after an expand. Nothing FLUI-side checks the
+direction: the request reaching the realm is a plain `Tap`. The discrete actions below would
+close this, because the handler would receive the requested direction instead of a toggle.
 
 **Divergence.** Flutter's `dart:ui` has discrete `SemanticsAction.expand` (`1 << 24`) and
 `collapse` (`1 << 25`) (`engine/src/flutter/lib/ui/semantics.dart`, checked on 2026-09-26).
