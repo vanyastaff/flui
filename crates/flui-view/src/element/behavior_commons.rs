@@ -321,10 +321,10 @@ pub(crate) fn remove_render_object_from_tree<V, A>(
     if let Some(render_id) = render_id
         && let Some(pipeline_owner) = core.pipeline_owner()
     {
-        // `TreeWrite::remove` cascades by default; the non-cascading
-        // primitive is `RenderTree::remove_shallow`. Element unmount wants
-        // the cascade — when a parent element unmounts, all descendant
-        // render objects must come down with it.
+        // `remove_render_object` cascades; the non-cascading primitive is
+        // `RenderTree::remove_shallow`. Element unmount wants the cascade —
+        // when a parent element unmounts, all descendant render objects must
+        // come down with it.
 
         // Dispose protocol: evict dirty entries, then free the slots.
         pipeline_owner.with_mut(|owner| owner.remove_render_object(render_id));

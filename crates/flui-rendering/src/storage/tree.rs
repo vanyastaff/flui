@@ -1,13 +1,9 @@
 //! RenderTree - Slab-based render object storage.
 //!
 //! This module provides efficient storage and tree operations for render
-//! objects. Implements `flui-tree` traits for unified tree interface.
+//! objects.
 
 use flui_foundation::RenderId;
-use flui_tree::{
-    iter::{AllSiblings, Ancestors, DescendantsWithDepth},
-    traits::{TreeNav, TreeRead, TreeWrite},
-};
 use slab::Slab;
 
 use super::node::RenderNode;
@@ -366,14 +362,19 @@ impl RenderTree {
         collect_disjoint_mut(&mut self.nodes, &indices)
     }
 
+    /// Inserts `node` without a parent and returns its id; the caller links it and
+    /// sets the root.
+    pub fn insert(&mut self, node: RenderNode) -> RenderId {
+        let slab_index = self.nodes.insert(node);
+        self.mint(slab_index)
+    }
+
     /// Inserts a Box protocol render object into the tree (no parent).
     ///
     /// Returns the RenderId of the inserted node.
     ///
     pub fn insert_box(&mut self, render_object: Box<dyn RenderObject<BoxProtocol>>) -> RenderId {
-        let node = RenderNode::new_box(render_object);
-        let slab_index = self.nodes.insert(node);
-        self.mint(slab_index)
+        self.insert(RenderNode::new_box(render_object))
     }
 
     /// Inserts a Sliver protocol render object into the tree (no parent).
@@ -381,9 +382,7 @@ impl RenderTree {
         &mut self,
         render_object: Box<dyn RenderObject<SliverProtocol>>,
     ) -> RenderId {
-        let node = RenderNode::new_sliver(render_object);
-        let slab_index = self.nodes.insert(node);
-        self.mint(slab_index)
+        self.insert(RenderNode::new_sliver(render_object))
     }
 
     /// Inserts a Box protocol render object as a child of the given parent.
@@ -559,9 +558,6 @@ impl RenderTree {
     /// Returns the removed node, or None if it didn't exist. Descendants
     /// are orphaned in the slab; use [`Self::remove_recursive`] for full
     /// cascade.
-    ///
-    /// This is the [`TreeWrite::remove_shallow`] primitive the trait builds
-    /// its cascade-by-default `remove` on top of.
     pub fn remove_shallow(&mut self, id: RenderId) -> Option<RenderNode> {
         // Update root if removing root
         if self.root == Some(id) {
@@ -586,11 +582,8 @@ impl RenderTree {
 
     /// Removes a node and all its descendants recursively.
     ///
-    /// Returns the number of nodes removed. Equivalent to
-    /// [`TreeWrite::remove`] (which now cascades by default), except it
-    /// returns a count instead of the removed root node. Prefer
-    /// `TreeWrite::remove` for new code; this inherent method stays for
-    /// in-crate callers that want the count.
+    /// Returns the number of nodes removed; children are removed before
+    /// their parent.
     pub fn remove_recursive(&mut self, id: RenderId) -> usize {
         // Iterative: collect the subtree up front (explicit-stack
         // pre-order with cycle protection), then remove in REVERSE
@@ -947,128 +940,6 @@ impl RenderTree {
 // See `crates/flui-rendering/ARCHITECTURE.md` for the rationale.
 
 // ============================================================================
-// flui-tree Trait Implementations
-// ============================================================================
-
-impl TreeRead<RenderId> for RenderTree {
-    type Node = RenderNode;
-
-    const DEFAULT_CAPACITY: usize = 64;
-    const INLINE_THRESHOLD: usize = 16;
-
-    #[inline]
-    fn get(&self, id: RenderId) -> Option<&Self::Node> {
-        RenderTree::get(self, id)
-    }
-
-    #[inline]
-    fn contains(&self, id: RenderId) -> bool {
-        RenderTree::contains(self, id)
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        RenderTree::len(self)
-    }
-
-    #[inline]
-    fn node_ids(&self) -> impl Iterator<Item = RenderId> + '_ {
-        self.nodes.iter().map(|(idx, _)| self.id_at(idx))
-    }
-}
-
-impl TreeWrite<RenderId> for RenderTree {
-    #[inline]
-    fn get_mut(&mut self, id: RenderId) -> Option<&mut Self::Node> {
-        RenderTree::get_mut(self, id)
-    }
-
-    fn insert(&mut self, node: Self::Node) -> RenderId {
-        let slab_index = self.nodes.insert(node);
-        self.mint(slab_index)
-    }
-
-    fn remove_shallow(&mut self, id: RenderId) -> Option<Self::Node> {
-        // The trait's `remove` default impl cascades post-order via this
-        // primitive. `remove_shallow` itself keeps the original
-        // non-cascading behavior for reparenting workflows (re-attach the
-        // descendants under a new parent immediately).
-
-        // Update root if removing root
-        if self.root == Some(id) {
-            self.root = None;
-        }
-
-        // Get parent and remove from parent's children
-        if let Some(parent_id) = self.get(id).and_then(super::node::RenderNode::parent)
-            && let Some(parent) = RenderTree::get_mut(self, parent_id)
-        {
-            parent.remove_child(id);
-        }
-
-        let index = self.resolve(id)?;
-        let removed = self.nodes.try_remove(index);
-        if removed.is_some() {
-            self.bump_generation(index);
-        }
-        removed
-    }
-
-    #[inline]
-    fn clear(&mut self) {
-        RenderTree::clear(self);
-    }
-
-    #[inline]
-    fn reserve(&mut self, additional: usize) {
-        RenderTree::reserve(self, additional);
-    }
-}
-
-impl TreeNav<RenderId> for RenderTree {
-    const MAX_DEPTH: usize = 64;
-    const AVG_CHILDREN: usize = 4;
-
-    #[inline]
-    fn parent(&self, id: RenderId) -> Option<RenderId> {
-        RenderTree::parent(self, id)
-    }
-
-    #[inline]
-    fn children(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
-        self.get(id)
-            .map(|node| node.children().iter().copied())
-            .into_iter()
-            .flatten()
-    }
-
-    #[inline]
-    fn ancestors(&self, start: RenderId) -> impl Iterator<Item = RenderId> + '_ {
-        Ancestors::new(self, start)
-    }
-
-    #[inline]
-    fn descendants(&self, root: RenderId) -> impl Iterator<Item = (RenderId, usize)> + '_ {
-        DescendantsWithDepth::new(self, root)
-    }
-
-    #[inline]
-    fn siblings(&self, id: RenderId) -> impl Iterator<Item = RenderId> + '_ {
-        AllSiblings::new(self, id)
-    }
-
-    #[inline]
-    fn child_count(&self, id: RenderId) -> usize {
-        self.get(id).map_or(0, |node| node.children().len())
-    }
-
-    #[inline]
-    fn has_children(&self, id: RenderId) -> bool {
-        self.get(id).is_some_and(|node| !node.children().is_empty())
-    }
-}
-
-// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1105,6 +976,18 @@ mod tests {
 
     fn make_leaf() -> Box<dyn RenderObject<BoxProtocol>> {
         Box::new(LeafStub)
+    }
+
+    #[test]
+    fn insert_mints_a_live_parentless_id() {
+        let mut tree = RenderTree::new();
+        let id = tree.insert(RenderNode::new_box(make_leaf()));
+
+        assert!(tree.contains(id));
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree.parent(id), None);
+        assert_eq!(tree.root(), None, "insert leaves the root to the caller");
+        assert!(tree.get(id).is_some_and(|node| node.children().is_empty()));
     }
 
     /// D2 — ABA regression: after a slot is freed and reused, the OLD id
