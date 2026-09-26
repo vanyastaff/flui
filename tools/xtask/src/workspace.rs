@@ -29,7 +29,8 @@
 //!   dependents are frozen until then. Examples and tools are applications and
 //!   may depend on anything.
 //! - **wasm32.** `wasm = false` marks a package that cannot build for wasm32;
-//!   wasm-check and the fast lane leave it out. Any other key in
+//!   wasm-check and the fast lane leave it out. `globals` is ADR-0097's
+//!   allowlist, which `cargo xtask globals` reads and checks. Any other key in
 //!   `[package.metadata.flui]`, or a mistyped value, is an error rather than a
 //!   silently ignored setting.
 //! - **Manifests.** Crates inherit the shared `[workspace.package]` keys and the
@@ -117,7 +118,7 @@ fn check(root: &Path, metadata: &Metadata) -> anyhow::Result<(Vec<String>, Strin
 }
 
 /// The keys a member's `[package.metadata.flui]` may set.
-const FLUI_KEYS: [&str; 10] = [
+const FLUI_KEYS: [&str; 11] = [
     "tier",
     "tier-kind",
     "order",
@@ -128,6 +129,7 @@ const FLUI_KEYS: [&str; 10] = [
     "allowed-dependents",
     "allowed-dev-dependents",
     "wasm",
+    "globals",
 ];
 
 /// A workspace package as the checks see it, before its

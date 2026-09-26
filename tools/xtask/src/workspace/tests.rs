@@ -904,3 +904,17 @@ fn the_tiers_match_the_adr_0081_table() {
     .into();
     assert_eq!(exceptions, seeded);
 }
+
+#[test]
+fn globals_is_an_accepted_manifest_key() {
+    // `cargo xtask globals` validates the entries; `workspace` only accepts
+    // the key.
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "layer = 0",
+        "layer = 0
+globals = [{ item = \"X\", exit = \"ADR-0001\", reason = \"a test\" }]",
+    );
+    assert_eq!(fixture.findings(), Vec::<String>::new());
+}
