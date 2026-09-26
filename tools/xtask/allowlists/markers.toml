@@ -77,7 +77,7 @@ count = 2
 [[allow]]
 path = "crates/flui-engine/src/deterministic_replay_tests.rs"
 class = "slice"
-count = 3
+count = 4
 
 [[allow]]
 path = "crates/flui-engine/src/instancing.rs"

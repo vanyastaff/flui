@@ -18,6 +18,24 @@ pub fn raw() -> &'static str {
 // tracker H4 in a code comment. expect: tracker-h
 fn test_t064_x() {} // expect: spec-task
 
+/// rustdoc removes the smallest indent before reading Markdown:
+///
+///    Slice 2 is a paragraph, not an indented code block. expect: slice
+pub fn indented() {}
+
+/** The same holds for a block doc comment.
+
+    Slice 3 after a blank line. expect: slice
+*/
+pub fn indented_block() {}
+
+/**
+ * And for one whose lines start with a star:
+ *
+ *    Wave 4 in a starred block. expect: wave
+ */
+pub fn starred() {}
+
 // Silent from here on: code, quotation and domain words.
 pub enum Phase {
     A,
