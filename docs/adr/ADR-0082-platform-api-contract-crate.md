@@ -1,6 +1,9 @@
 # ADR-0082: `flui-platform-api` is the contract crate; OS backends stay in `flui-platform`
 
-- **Status:** Proposed
+- **Status:** Accepted in part (2026-09-26): §1 for the items §3's first change moves; §2's rule
+  that only composition roots depend on `flui-platform` (its `allowed-dependents`); §3's first
+  change. `PlatformWindow`'s move with a host-side window subtrait for `accessibility()` and the
+  removal of `as_winit` (§3, second change), §4 and §5 remain Proposed.
 - **Date:** 2026-09-25
 - **Amends (on acceptance):** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,
   [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §1–§3,
@@ -109,20 +112,48 @@ the `OwnerPlatform` its `run()` hands to `on_ready`. This record does not open t
 it stays with #560. Keeping `Platform` out of the Stable crate is what keeps `Task`,
 `BackgroundExecutor` and `prompt_for_paths` (ADR-0039 §2) out of the Stable surface.
 
-### 3. First change: move the traits, re-export them
+### 3. Move the contracts in two changes, re-exporting them
 
-The first change is mechanical. The listed items move to `flui-platform-api` unchanged apart
-from dropping `as_winit` and `accessibility()` from `PlatformWindow`; `accessibility()` becomes
-a method of a backend-side extension trait in `flui-platform` that the runner uses.
-`flui-platform` re-exports every moved item at its old path, so no caller outside the three
-edges changes. `flui-interaction` and the widget harness switch to `flui-platform-api`.
+**First change (accepted).** Every item §1 lists except `PlatformWindow` and the ADR-0084 seam
+moves to `flui-platform-api` with its signature unchanged: `PlatformTextInput`,
+`PlatformHaptics`, `PlatformDisplay`/`DisplayId`, `Clipboard`/`ClipboardItem`, the whole
+`data_transfer` module, the input vocabulary (`PlatformInput`, `DispatchEventResult`,
+`DragDropEvent`, the re-exported `ui-events` pointer and keyboard types, the pixel conversion
+helpers) and the window vocabulary (`WindowId` with its inherent impl, `WindowOptions`,
+`WindowReveal`, `WindowMode`, `WindowEvent`, `WindowExecutionState`, `WindowShowError`,
+`WindowAppearance`, `WindowBackgroundAppearance`, `WindowBounds`, `CursorError`).
+`flui-platform` re-exports every moved item at its old path, so no caller outside the two
+edges changes; `flui-interaction` and the widget harness switch to `flui-platform-api`.
+`BasicVelocityTracker`, `TimestampProvider` and `SystemTimestamp` stay in `flui-platform` until
+§5 deletes them.
 
-Acceptance: `cargo xtask reach` (ADR-0081 §2) is green for tier K under every facade feature
-set, which states that `winit` is absent from `flui-interaction`'s normal closure and
-`flui-platform` from `flui-widgets`' with all features. These are reach facts rather than
-`cargo tree -i` probes, because `cargo tree -i` errors on an absent package instead of printing
-nothing. This change is what turns the K reach fact
-green; B0 depends on it.
+`PlatformWindow` waits because moving it changes no reach: no crate below `flui-app` names it.
+Its move is not mechanical either: taking `accessibility()` off the trait needs a host-side
+subtrait returned by `Platform::open_window`, `WindowOpen::Ready` and `PendingWindow`, touching
+about fifty `dyn PlatformWindow` sites in `flui-app` across four backends, two of which CI only
+type-checks.
+
+**Second change (proposed).** `PlatformWindow` moves without `as_winit` (nothing calls it) and
+without `accessibility()`, which becomes a method of a backend-side extension trait in
+`flui-platform` that the runner uses.
+
+Acceptance of the first change, until `cargo xtask reach` (ADR-0081 §2) exists to state it as
+a reach fact:
+
+- `flui-platform`'s manifest lists `allowed-dependents = ["flui-app"]`, and
+  `cargo xtask workspace` reports no finding (it reported
+  `flui-interaction depends on flui-platform` and `flui-widgets depends on flui-platform` before
+  the change). Layers already forbid an upward edge to `flui-app` and any edge to an example or
+  tool, so this direct-edge rule means nothing layered below `flui-app` reaches `flui-platform`
+  through a chain of workspace crates.
+- `cargo tree --locked --target all -e normal` for `flui-interaction`,
+  `flui-widgets --features testing` and `flui-platform-api` names none of `flui-platform`,
+  `winit`, `windows`, `objc2-app-kit`, `android-activity`, `ndk` or `tokio`. That is a grep over
+  the full tree rather than a `cargo tree -i` probe, because `-i` errors on an absent package
+  instead of printing nothing.
+
+The contract crate sits at `layer = 1` as the stand-in for tier C until the tier keys of
+ADR-0081 land.
 
 ### 4. Second change: registered callbacks lose `Send`, one backend at a time
 
@@ -183,8 +214,9 @@ goes with ADR-0047's consolidation, not here.
 ## Consequences
 
 - `flui-interaction` and `flui-widgets` stop linking OS crates; `cargo xtask reach` can gate it.
-  How many crates an OS-backend edit rebuilds after the split has not been measured; it should be
-  measured with `cargo build --timings` on the first change, not asserted.
+  An OS-backend edit no longer rebuilds them: measured on the first change by building
+  `flui-widgets --features testing`, touching `crates/flui-platform/src/platforms/windows/window.rs`
+  and rebuilding with `-v`, which compiled nothing.
 - `flui-platform` sits in tier H with `flui-app`. Its layer-2 position in ADR-0041's table, and
   ADR-0041's `interaction -> platform` edge note, are obsolete.
 - ADR-0030 §2, ADR-0031 §1–§3 and ADR-0038 §4 describe traits that now live in
@@ -199,7 +231,9 @@ goes with ADR-0047's consolidation, not here.
 
 ## Verification
 
-None of these exist yet.
+The first change is held by `flui-platform`'s `allowed-dependents` (`cargo xtask workspace`) and
+by the `flui_platform_api` crate doctest, which implements `PlatformTextInput` and
+`PlatformHaptics` with no `flui-platform` in scope. None of the following exist yet.
 
 - `cargo xtask reach` (ADR-0081) with `flui-platform`, `winit`, `windows`, `objc2-app-kit`,
   `objc2-ui-kit`, `android-activity` and `ndk` forbidden for tier K; red before the first change,

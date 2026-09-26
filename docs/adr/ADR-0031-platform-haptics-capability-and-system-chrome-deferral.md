@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-17
+- **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§1–§3: `PlatformHaptics`
+  now lives in `flui-platform-api`, re-exported at its old `flui-platform` path; its contract is
+  unchanged)
 
 ## Context
 

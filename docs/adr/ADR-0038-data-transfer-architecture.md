@@ -3,6 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-07-28
 - **Absorbs:** ADR-0034
+- **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: the transport and its
+  vocabulary live in `flui-platform-api`, re-exported at `flui_platform::data_transfer`; §9: the
+  `Clipboard` trait moves there too, while the required `Platform::clipboard()` stays on
+  `Platform` in `flui-platform`)
 
 ## Context
 

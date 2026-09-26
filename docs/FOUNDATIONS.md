@@ -141,7 +141,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 - **Create the design-system crates.** `flui-material` and `flui-cupertino` are terminal catalog crates built on top of `flui-widgets`.
 - **Create `flui-localizations`.** The global-translation crate is the *implementation* package sitting above both design-system siblings, not a shared ancestor beneath them: it implements the contracts its dependencies define — `flui-widgets`' `Localizations`/`WidgetsLocalizations` mechanism today, Material's and Cupertino's next — rather than defining a parallel one. See the 2026-07-16 and 2026-08-01 amendments below the target graph; the reverse direction would point up a layer, which CI rejects.
 
-**No `flui-physics`** — Flutter's `physics` package is already ported into `flui-types/src/physics/`; this overrides the port-phasing research's proposal of a separate crate (~1k LOC of simulation math folded into `flui-types` is the correct shape — a standalone crate would be shallow). **No `flui-services`** — Flutter's `services` is deliberately dissolved; its residue (IME/text-input, system chrome, haptics) becomes capability traits on `flui-platform` (`PlatformTextInput`, `PlatformSystemChrome`, `PlatformHaptics`).
+**No `flui-physics`** — Flutter's `physics` package is already ported into `flui-types/src/physics/`; this overrides the port-phasing research's proposal of a separate crate (~1k LOC of simulation math folded into `flui-types` is the correct shape — a standalone crate would be shallow). **No `flui-services`** — Flutter's `services` is deliberately dissolved; its residue (IME/text-input, system chrome, haptics) becomes capability traits on `flui-platform-api` (`PlatformTextInput`, `PlatformHaptics`, and `PlatformSystemChrome` once it exists), implemented by the backends in `flui-platform` ([ADR-0082](adr/ADR-0082-platform-api-contract-crate.md)).
 
 **Target — current libraries plus the remaining catalog/l10n crates and the `flui` facade**:
 
@@ -150,7 +150,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 | Layer | Crates |
 |---|---|
 | L0 — Foundation | `flui-geometry`, `flui-types` |
-| L1 — Framework primitives | `flui-foundation`, `flui-macros` |
+| L1 — Framework primitives | `flui-foundation`, `flui-macros`, `flui-platform-api` |
 | L2 — Substrate | `flui-tree`, `flui-platform`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-assets` |
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
 | L4 — Render machine + render catalog | `flui-engine`, `flui-rendering`, `flui-objects` |
@@ -168,7 +168,8 @@ graph TD
     foundation[flui-foundation]
     macros[flui-macros]
     tree[flui-tree]
-    platform[flui-platform +services-caps]
+    platformapi[flui-platform-api +services-caps]
+    platform[flui-platform backends]
     scheduler[flui-scheduler]
     painting[flui-painting]
     interaction[flui-interaction]
@@ -194,11 +195,13 @@ graph TD
     types --> geometry
     foundation -.-> types
     tree --> foundation
-    platform --> types
+    platformapi --> types
+    platformapi --> foundation
+    platform --> platformapi
     scheduler --> foundation
     painting --> foundation
     interaction --> foundation
-    interaction --> platform
+    interaction --> platformapi
     assets --> types
     semantics --> tree
     layer --> painting
@@ -233,6 +236,7 @@ graph TD
     l10n -.-> material
     l10n -.-> cupertino
     app --> engine
+    app --> platform
     app --> view
     app --> widgets
     app --> hotreload
@@ -251,7 +255,7 @@ Dashed edges are **not present in `Cargo.toml` today**. `foundation -.-> types` 
 
 `l10n --> widgets` (added 2026-07-16): the target graph originally drew `l10n --> types` only — `flui-localizations` depending exclusively on the foundation value types, with no concrete consumer yet. Landing the Catalog.1 theming + localizations substrate gave it one: `flui-widgets` now owns the mechanism (`Localizations`, `LocalizationsDelegate`, the `WidgetsLocalizations` trait, `Directionality`) per Flutter's own layering (`widgets/localizations.dart` lives in the `widgets` package, and `flutter_localizations` depends on `widgets`, not the reverse), and `flui-localizations::GlobalWidgetsLocalizations` is a `WidgetsLocalizations` implementor — it must depend on the crate that defines the trait. It does not create a cycle because nothing in `widgets`, `objects`, `view`, `animation`, or `assets` depends on `l10n`. *(Superseded in part on 2026-08-01: this note originally placed `l10n` in L6 as a sibling of `widgets` and preserved the target graph's `material`/`cupertino --> l10n` direction. Both are corrected below — the direction was backwards, and the fix moves `l10n` above the design systems, which turns this into an ordinary downward edge needing no sibling exemption.)*
 
-`interaction --> platform` (added 2026-07-23; [ADR-0037](adr/ADR-0037-presentation-ownership-domains.md)): `flui-platform` owns the OS-facing `PlatformTextInput` capability and its platform effect; `flui-interaction` owns the owner-local `TextInputOwner`, including client, token, and event-session state, so it names and stores the injected capability directly. Private `flui-app::PresentationState` composes that interaction owner for exactly one presentation. `flui-platform` never depends on `flui-interaction`, so this L2 sibling edge is acyclic and directionally correct: interaction policy depends on the lower-level platform capability contract, never the reverse.
+`interaction --> platformapi` (added 2026-07-23 as `interaction --> platform` by [ADR-0037](adr/ADR-0037-presentation-ownership-domains.md); retargeted 2026-09-26 by [ADR-0082](adr/ADR-0082-platform-api-contract-crate.md)): `flui-platform-api` defines the OS-facing `PlatformTextInput` capability and the backends in `flui-platform` implement its platform effect; `flui-interaction` owns the owner-local `TextInputOwner`, including client, token, and event-session state, so it names and stores the injected capability directly. Private `flui-app::PresentationState` composes that interaction owner for exactly one presentation, passing it the window's `text_input()`. Naming the contract crate rather than `flui-platform` keeps every OS backend, winit and tokio out of `flui-interaction` and everything above it; `flui-platform`'s `allowed-dependents` lets only `flui-app` depend on the backends.
 
 No new edge, but a new guarantee (added 2026-07-16): the `L7 --> L6` direction every `material -->`/`cupertino -->` edge above already draws (design systems depend on the widget catalog, never the reverse) is now a CI-enforced contract, not just a diagram — [ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md) (design-system decoupling contract), guarded by the workspace layer check (`cargo xtask workspace`). Any crate below L7 that adds a normal or build dependency on `flui-material`/`flui-cupertino` fails CI immediately.
 
