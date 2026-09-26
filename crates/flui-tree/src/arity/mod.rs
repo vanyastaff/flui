@@ -38,12 +38,11 @@
 // ============================================================================
 
 mod error;
-mod traits;
-mod types;
 
 // ============================================================================
 // RE-EXPORTS
 // ============================================================================
 pub use error::ArityError;
-pub use traits::Arity;
-pub use types::{AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable};
+pub use flui_foundation::arity::{
+    Arity, AtLeast, Exact, Leaf, Never, Optional, Range, Single, Variable,
+};
