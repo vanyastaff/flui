@@ -3,8 +3,9 @@
 //! Rust is read as tokens ([`super::tokens`]): comments and string literals
 //! are prose, identifiers are matched only by the identifier patterns, and
 //! every other token is ignored, so `Phase::B` or a `W400` constant in code is
-//! never a marker. Doc comments are Markdown (rustdoc renders them so), which makes
-//! an inline code span quotation. A Markdown file is read through a CommonMark
+//! never a marker. Doc comments are Markdown once their common indent is
+//! removed (rustdoc renders them so), which makes an inline code span
+//! quotation. A Markdown file is read through a CommonMark
 //! parser: text and HTML are prose; code spans, code blocks, autolinks and
 //! link destinations are not. Any other file (TOML, YAML, WGSL) is prose whole.
 //!
@@ -86,34 +87,24 @@ pub(super) fn chunks(text: &str, kind: Kind) -> Vec<Chunk> {
 
 fn rust(src: &str) -> Vec<Chunk> {
     let mut chunks = Vec::new();
-    // consecutive `///` (or `//!`) lines: their content joined, each line one piece
-    let mut doc: Option<(DocStyle, Chunk)> = None;
+    // consecutive `///` (or `//!`) lines: the content of each line
+    let mut doc: Option<(DocStyle, Vec<Range<usize>>)> = None;
     for (token, range) in tokens(src) {
         let doc_line = match token {
             Token::LineComment(Some(style)) => Some(style),
             _ => None,
         };
         let continues = doc_line.is_some() && doc.as_ref().map(|d| d.0) == doc_line;
-        if !continues && let Some((_, joined)) = doc.take() {
-            chunks.extend(doc_chunks(&joined));
+        if !continues && let Some((_, lines)) = doc.take() {
+            chunks.extend(doc_chunks(&unindented(src, &lines)));
         }
         match token {
             Token::LineComment(Some(style)) => {
                 // `///` or `//!`: the content starts after three bytes
                 let content = range.start + 3..range.end;
-                let (_, joined) = doc.get_or_insert_with(|| {
-                    (
-                        style,
-                        Chunk {
-                            text: String::new(),
-                            pieces: Vec::new(),
-                            reading: Reading::Prose,
-                        },
-                    )
-                });
-                joined.pieces.push((joined.text.len(), content.start));
-                joined.text.push_str(&src[content]);
-                joined.text.push('\n');
+                doc.get_or_insert_with(|| (style, Vec::new()))
+                    .1
+                    .push(content);
             }
             Token::BlockComment(Some(_)) => {
                 let end = if src[range.clone()].ends_with("*/") {
@@ -122,7 +113,7 @@ fn rust(src: &str) -> Vec<Chunk> {
                     range.end
                 };
                 let content = (range.start + 3).min(end)..end;
-                chunks.extend(doc_chunks(&Chunk::slice(src, content, Reading::Prose)));
+                chunks.extend(doc_chunks(&unindented(src, &block_lines(src, content))));
             }
             Token::LineComment(None) | Token::BlockComment(None) | Token::Str => {
                 chunks.push(Chunk::slice(src, range, Reading::Prose));
@@ -130,10 +121,76 @@ fn rust(src: &str) -> Vec<Chunk> {
             Token::Ident => chunks.push(Chunk::slice(src, range, Reading::Ident)),
         }
     }
-    if let Some((_, joined)) = doc {
-        chunks.extend(doc_chunks(&joined));
+    if let Some((_, lines)) = doc {
+        chunks.extend(doc_chunks(&unindented(src, &lines)));
     }
     chunks
+}
+
+/// The lines of a `/** */` body, each without the `*` that starts every line
+/// after the first when all of them have one (rustc's doc-string trim).
+fn block_lines(src: &str, content: Range<usize>) -> Vec<Range<usize>> {
+    let mut lines = Vec::new();
+    let mut start = content.start;
+    for line in src[content.clone()].split('\n') {
+        lines.push(start..start + line.len());
+        start += line.len() + 1;
+    }
+    let starred = |line: &Range<usize>| {
+        let text = &src[line.clone()];
+        let body = text.trim_start_matches([' ', '\t']);
+        body.starts_with('*')
+            .then(|| line.start + text.len() - body.len() + 1)
+    };
+    let rest = lines.get(1..).unwrap_or_default();
+    let blank = |line: &Range<usize>| src[line.clone()].trim().is_empty();
+    if rest.iter().any(|line| !blank(line))
+        && rest
+            .iter()
+            .all(|line| blank(line) || starred(line).is_some())
+    {
+        for line in lines.iter_mut().skip(1) {
+            if let Some(after) = starred(line) {
+                line.start = after;
+            }
+        }
+    }
+    lines
+}
+
+/// Doc lines joined as rustdoc reads them: the smallest indent of the
+/// non-blank lines is removed from each, so a paragraph written `///    text`
+/// beside `/// text` is prose, not an indented code block. Each line is one piece.
+fn unindented(src: &str, lines: &[Range<usize>]) -> Chunk {
+    let blank = |line: &Range<usize>| src[line.clone()].trim().is_empty();
+    let indent = lines
+        .iter()
+        .filter(|line| !blank(line))
+        .map(|line| {
+            src[line.clone()]
+                .bytes()
+                .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                .count()
+        })
+        .min()
+        .unwrap_or(0);
+    let mut joined = Chunk {
+        text: String::new(),
+        pieces: Vec::new(),
+        reading: Reading::Prose,
+    };
+    for line in lines {
+        // a blank line is dropped whole; every other one has `indent` ASCII bytes to lose
+        let start = if blank(line) {
+            line.end
+        } else {
+            line.start + indent
+        };
+        joined.pieces.push((joined.text.len(), start));
+        joined.text.push_str(&src[start..line.end]);
+        joined.text.push('\n');
+    }
+    joined
 }
 
 /// A doc comment's text read as Markdown, mapped back through its pieces.
