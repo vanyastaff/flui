@@ -11,9 +11,12 @@ description = "Repository automation for FLUI: CI gates, change scoping, device 
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
+# `cargo xtask file-length`: line spans of test-only items.
+proc-macro2 = { workspace = true, features = ["span-locations"] }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+syn = { workspace = true, features = ["full", "visit"] }
 toml = { workspace = true }
 walkdir = { workspace = true }
 

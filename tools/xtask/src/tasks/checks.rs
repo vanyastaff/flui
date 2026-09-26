@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
-use crate::{change_scope, docs_links, fonts, toolchain, wgsl, workspace};
+use crate::{change_scope, docs_links, file_length, fonts, toolchain, wgsl, workspace};
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
 #[derive(Debug, Clone, Copy)]
@@ -97,7 +97,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 10] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 12] {
     [
         (
             if strict {
@@ -123,6 +123,12 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 10] {
         // offline, no archive built
         ("font-assets --package-list", |args| {
             fonts::font_assets(&parsed(args)?)
+        }),
+        ("file-length --self-test", |args| {
+            file_length::file_length(&parsed(args)?)
+        }),
+        ("file-length", |args| {
+            file_length::file_length(&parsed(args)?)
         }),
     ]
 }
@@ -166,6 +172,8 @@ mod tests {
                 "wgsl",
                 "paths-filter",
                 "font-assets --package-list",
+                "file-length --self-test",
+                "file-length",
             ]
         );
         assert_eq!(lines(true)[0], "docs-links --strict");
