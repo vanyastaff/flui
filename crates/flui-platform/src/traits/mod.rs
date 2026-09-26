@@ -31,13 +31,13 @@ pub use flui_platform_api::{
 // The accessibility capability lives with the semantics tree it publishes
 // (ADR-0082 §2); re-exported here at its old path for the backends and the
 // composition root.
-pub use flui_semantics::platform::{
-    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
-};
 pub use capabilities::{
     DesktopCapabilities, MobileCapabilities, PlatformCapabilities, WebCapabilities,
 };
 pub use embedder::PlatformEmbedder;
+pub use flui_semantics::platform::{
+    AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
+};
 pub use host_window::HostWindow;
 // Re-export keyboard-types for convenience
 pub use keyboard_types::NamedKey;
