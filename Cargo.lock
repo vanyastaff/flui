@@ -2425,17 +2425,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-tree"
-version = "0.2.0-dev"
-dependencies = [
- "bon",
- "flui-foundation",
- "smallvec",
- "thiserror 2.0.20",
- "tracing",
-]
-
-[[package]]
 name = "flui-types"
 version = "0.2.0-dev"
 dependencies = [

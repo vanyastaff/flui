@@ -11,7 +11,6 @@ members = [
     "crates/flui-foundation",   # Foundation types and utilities (ACTIVE)
     "crates/flui-macros",       # Proc-macros (view, diagnostics, and animation derives)
     "crates/flui-log",          # Composition-only cross-platform tracing backend (ACTIVE)
-    "crates/flui-tree",         # Tree abstractions (ACTIVE)
     "crates/flui-platform-api", # Platform contracts: capability traits, window/input vocabulary
     "crates/flui-protocol",     # Semantics and agent-protocol vocabulary (contract crate)
     "crates/flui-platform",     # Platform abstraction (ACTIVE)
@@ -93,7 +92,7 @@ members = [
 # unless the dependent lists it in `edge-exceptions` with the ADR that removes
 # it; nothing with a tier depends on a `tool`. Dev-dependencies are free.
 tiers = [
-    "V",   # values: geometry, types, macros, foundation; tree until it is deleted
+    "V",   # values: geometry, types, macros, foundation
     "C",   # contracts: flui-platform-api, flui-protocol
     "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
     "R",   # render machine: layer, rendering, objects, engine
