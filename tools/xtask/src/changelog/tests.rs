@@ -512,3 +512,18 @@ fn a_fragment_directory_that_cannot_be_listed_is_an_error() {
     let error = entries(&file).expect_err("not a directory");
     assert!(error.to_string().contains("listing"), "{error:#}");
 }
+
+#[test]
+fn bullets_join_a_section_heading_however_it_is_followed() {
+    let new = || [fragment("changelog.d/x.md", "### Added\n\n- new\n")];
+    // a bullet directly under the heading
+    assert_eq!(
+        assemble("## [Unreleased]\n\n### Added\n- old\n", &new()).expect("valid"),
+        "## [Unreleased]\n\n### Added\n\n- new\n\n- old\n"
+    );
+    // the heading ends the file, with no newline after it
+    assert_eq!(
+        assemble("## [Unreleased]\n\n### Added", &new()).expect("valid"),
+        "## [Unreleased]\n\n### Added\n\n- new\n"
+    );
+}
