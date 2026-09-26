@@ -638,8 +638,13 @@ fn self_test_fixture() -> Fixture {
         .member("s-gone", "S", &exception("gone"))
         .member("s-idle", "S", &exception("harmless"))
         .member("v1", "V", &json!(null))
-        .member("r1", "R", &json!({ "reach-forbid": ["wgpu"] }))
-        .member("r-engine", "R", &json!(null))
+        .member("r1", "R", &json!({ "reach-forbid": ["tokio"] }))
+        .member("r-layer", "R", &json!(null))
+        .member(
+            "r-engine",
+            "R",
+            &json!({ "reach-exceptions": [{ "to": "wgpu", "grant": "ADR-0081", "reason": "self-test" }] }),
+        )
         .member("pkg1", "pkg", &json!(null))
         .external("winit")
         .external("tokio")
@@ -659,6 +664,7 @@ fn self_test_fixture() -> Fixture {
         .dep("flui", "s-idle", Dep::normal())
         .dep("flui", "v1", Dep::normal())
         .dep("flui", "r1", Dep::normal())
+        .dep("flui", "r-layer", Dep::normal())
         .dep("flui", "r-engine", Dep::normal())
         .dep("flui", "pkg1", Dep::normal())
         // planted: K -> winit
@@ -679,9 +685,11 @@ fn self_test_fixture() -> Fixture {
         .dep("s-idle", "harmless", Dep::normal())
         // planted: V -> tokio
         .dep("v1", "tokio", Dep::normal())
-        // planted: R admits wgpu, but r1's `reach-forbid` adds it back
-        .dep("r1", "wgpu", Dep::normal())
-        // silent: R reaches wgpu
+        // planted: R admits tokio, but r1's `reach-forbid` adds it
+        .dep("r1", "tokio", Dep::normal())
+        // planted: an R crate without the grant reaches wgpu
+        .dep("r-layer", "wgpu", Dep::normal())
+        // silent: r-engine's grant admits wgpu
         .dep("r-engine", "wgpu", Dep::normal())
         // planted: pkg -> a windows crate; silent: pkg -> generic FFI
         .dep("pkg1", "windows-core", Dep::normal())
@@ -689,7 +697,7 @@ fn self_test_fixture() -> Fixture {
 }
 
 /// The finding each planted violation must produce, and no other.
-const EXPECTED: [(&str, &str, &str); 10] = [
+const EXPECTED: [(&str, &str, &str); 11] = [
     (
         "k-direct",
         "flui-platform",
@@ -711,7 +719,12 @@ const EXPECTED: [(&str, &str, &str); 10] = [
         "reaches under `flui --no-default-features --features harness`",
     ),
     ("v1", "tokio", "reaches under `flui --no-default-features`"),
-    ("r1", "wgpu", "reaches under `flui --no-default-features`"),
+    ("r1", "tokio", "reaches under `flui --no-default-features`"),
+    (
+        "r-layer",
+        "wgpu",
+        "reaches under `flui --no-default-features`",
+    ),
     (
         "pkg1",
         "windows-core",

@@ -378,17 +378,17 @@ fn an_exact_forbid_entry_naming_a_generic_ffi_crate_is_an_error() {
 }
 
 #[test]
-fn the_r_tier_admits_wgpu_and_the_v_tier_refuses_tokio() {
+fn the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio() {
     let rules = rules(json!({
         "tier": {
             "K": { "forbid": ["winit", "wgpu"] },
             "S": { "extends": "K" },
             "V": { "extends": "S", "forbid": ["tokio"] },
-            "R": { "extends": "K", "except": ["wgpu"] },
+            "R": { "extends": "K" },
         },
     }))
     .expect("rules parse");
-    assert!(!rules.forbidden("R", &[], "wgpu"));
+    assert!(rules.forbidden("R", &[], "wgpu"));
     assert!(rules.forbidden("R", &[], "winit"));
     assert!(rules.forbidden("K", &[], "wgpu"));
     assert!(rules.forbidden("V", &[], "tokio"));
@@ -412,8 +412,9 @@ fn an_extends_cycle_or_unknown_tier_is_an_error() {
             "has no `reach.tier` table",
         ),
         (
-            json!({ "tier": { "K": { "forbid": ["x"] }, "R": { "extends": "K", "except": ["y"] } } }),
-            "does not inherit",
+            // a tier drops no inherited name; a crate's `grant` admits one
+            json!({ "tier": { "K": { "forbid": ["x"] }, "R": { "extends": "K", "except": ["x"] } } }),
+            "unknown key `except`",
         ),
         (
             json!({ "tier": { "K": { "forbids": ["x"] } } }),
@@ -430,11 +431,11 @@ fn an_extends_cycle_or_unknown_tier_is_an_error() {
 #[test]
 fn reach_forbid_adds_to_the_tier_set() {
     let fixture = base()
-        .member("r", "R", &json!({ "reach-forbid": ["wgpu"] }))
+        .member("r", "R", &json!({ "reach-forbid": ["tokio"] }))
         .member("r2", "R", &json!(null))
-        .external("wgpu")
-        .dep("r", "wgpu", Dep::normal())
-        .dep("r2", "wgpu", Dep::normal());
+        .external("tokio")
+        .dep("r", "tokio", Dep::normal())
+        .dep("r2", "tokio", Dep::normal());
     let found = findings(&fixture);
     assert_eq!(found.len(), 1, "{found:#?}");
     assert!(
@@ -444,6 +445,21 @@ fn reach_forbid_adds_to_the_tier_set() {
         "{}",
         found[0]
     );
+}
+
+#[test]
+fn only_a_grant_lets_an_r_crate_reach_wgpu() {
+    // wgpu without its DX12 backend brings no `windows`: the name itself
+    // must be forbidden to every R crate but the one holding the grant
+    let grant =
+        json!({ "reach-exceptions": [{ "to": "wgpu", "grant": "ADR-0081", "reason": "test" }] });
+    let fixture = base()
+        .member("r-engine", "R", &grant)
+        .member("r-layer", "R", &json!(null))
+        .external("wgpu")
+        .dep("r-engine", "wgpu", Dep::normal())
+        .dep("r-layer", "wgpu", Dep::normal());
+    assert_eq!(reaches(&fixture), [pair("r-layer", "wgpu")]);
 }
 
 /// `k -> s -> flui-platform -> winit`, with `s` declaring `exception`.
@@ -709,12 +725,12 @@ fn the_forbid_sets_match_the_adr_0081_table() {
     let set = |names: &[&str]| -> BTreeSet<String> {
         names.iter().map(|&name| name.to_owned()).collect()
     };
-    let without_wgpu: Vec<&str> = k.into_iter().filter(|&name| name != "wgpu").collect();
+    // R keeps `wgpu`: only flui-engine's grant admits it
     let expected = [
         ("V", set(&[&k[..], &["tokio"]].concat())),
         ("C", set(&k)),
         ("S", set(&k)),
-        ("R", set(&without_wgpu)),
+        ("R", set(&k)),
         ("K", set(&k)),
         ("H", set(&[])),
         ("pkg", set(&[&k[..], &os[..]].concat())),

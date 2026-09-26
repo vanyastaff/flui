@@ -140,7 +140,7 @@ impl Fixture {
                 "S": { "extends": "K" },
                 "C": { "extends": "S" },
                 "V": { "extends": "S", "forbid": ["tokio"] },
-                "R": { "extends": "K", "except": ["wgpu"] },
+                "R": { "extends": "K" },
                 "pkg": { "extends": "K", "forbid": ["windows-*", "windows_*"] },
             }
         }))

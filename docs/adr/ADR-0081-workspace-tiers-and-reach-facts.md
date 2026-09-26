@@ -129,7 +129,7 @@ smaller `order`; moving the harness above the runtime removes that edge first.
 | **V** values | `flui-geometry`, `flui-types`, `flui-macros`, `flui-foundation` (`flui-reactive` if [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md) extracts it) | everything in S's set, plus `tokio` |
 | **C** contracts | `flui-platform-api` ([ADR-0082](ADR-0082-platform-api-contract-crate.md)), `flui-protocol` ([ADR-0095](ADR-0095-agent-protocol-schema-crate.md)) | S's set |
 | **S** substrate | `flui-log`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-semantics`, `flui-animation`, `flui-assets` | K's set |
-| **R** render machine | `flui-layer`, `flui-rendering`, `flui-objects`, `flui-engine` (and a CPU backend, [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)) | K's set minus `wgpu`, which only `flui-engine` may reach |
+| **R** render machine | `flui-layer`, `flui-rendering`, `flui-objects`, `flui-engine` (and a CPU backend, [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md)) | K's set; `wgpu` stays in it, and only `flui-engine`'s `grant` (§2) admits it |
 | **K** spine and runtime | `flui-view`, `flui-widgets`, `flui-runtime` ([ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md)), `flui-testing`, `flui-sdk` ([ADR-0088](ADR-0088-official-packages-sdk-and-facade.md)) | `flui-platform`, `winit`, `android-activity`, `ndk`, `windows`, `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine`, `flui-app` |
 | **H** hosts | `flui-platform` (OS backends), `flui-app` (runners), `flui-cli`, the `flui` facade | none |
 | **pkg** official packages | `flui-material`, `flui-cupertino`, `flui-devtools`, `flui-hot-reload`, later packages | K's set, plus any other OS crate, with named exceptions |
@@ -144,7 +144,9 @@ about a windowing backend. A package that must reach a forbidden crate lists it 
 (`crates/flui-hot-reload/Cargo.toml:47`) is one entry, with
 [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) as its exit. "Only `flui-engine` may reach
 `wgpu`" is the one standing permission: `flui-engine` holds a `grant` from this record for
-`wgpu`, which also covers the `windows` crate `wgpu-hal` brings for DX12.
+`wgpu`, which also covers the `windows` crate `wgpu-hal` brings for DX12. The grant is the only
+way in: R's set keeps `wgpu`, so any other R crate that reaches it is reported, with or without
+the DX12 backend that would bring `windows`.
 
 `flui-tree` and `flui-localizations` are deleted; the owner confirmed both deletions on
 2026-09-25. `flui-tree`'s tree traits have no generic consumer: its arity, slot and depth markers
@@ -181,8 +183,9 @@ the build's activated edges must contain no package whose name matches its tier'
 A pattern is a package name or a glob with `*` as its only wildcard; matching is on package
 names, not `cargo tree -i`, which fails on an absent package and on ambiguous specs
 (`objc2-app-kit` is already ambiguous in this graph). The sets live in the root manifest's
-`[workspace.metadata.flui.reach]`: a tier's set is the set of the tier it `extends`, less its
-`except`, plus its `forbid`, as in the table of §1. A `generic-ffi` allowlist, each entry with a
+`[workspace.metadata.flui.reach]`: a tier's set is the set of the tier it `extends` plus its
+`forbid`, as in the table of §1. A tier never drops an inherited name; a single crate that may
+reach one holds a `grant` for it instead. A `generic-ffi` allowlist, each entry with a
 reason, names the crates no pattern matches (`jni`, `windows-sys` and its import libraries, bare
 `objc2`, `core-foundation` and their bindings); a pattern that names one exactly is a
 configuration error. `pkg`'s "any other OS crate" is the globs `windows-*`, `objc2-*`,
@@ -191,8 +194,8 @@ configuration error. `pkg`'s "any other OS crate" is the globs `windows-*`, `obj
 
 A package may add names to its tier's forbidden set with `reach-forbid` in its own
 `[package.metadata.flui]`, and may never remove one except through `reach-exceptions`. This is
-how a single crate states a fact its tier cannot, such as "`wgpu` is absent from `flui-layer`"
-(ADR-0087) or "`tokio` and `accesskit` are absent from `flui-platform-api`" (ADR-0082).
+how a single crate states a fact its tier cannot, such as "`tokio` and `accesskit` are absent
+from `flui-platform-api`" (ADR-0082).
 
 `reach-exceptions` on a package E is an array of
 `{ to = "<package>", exit | grant = "ADR-NNNN", reason = "<text>" }`, exactly one of `exit` and
@@ -372,11 +375,12 @@ For the accepted part:
   ``flui-view (tier K) reaches winit under `flui --no-default-features`: flui-view -> flui-interaction -> flui-platform -> winit``.
 - `cargo xtask reach --self-test` runs the check over a built-in workspace that plants a K crate
   depending on `winit`, a K crate reaching `winit` only under a facade feature, a V crate reaching
-  `tokio`, an R crate whose `reach-forbid` adds `wgpu`, a `pkg` crate reaching `windows-core`, a
+  `tokio`, an R crate whose `reach-forbid` adds `tokio`, an R crate without the grant reaching
+  `wgpu`, a `pkg` crate reaching `windows-core`, a
   direct K → `flui-platform` edge beside an exception that excuses another path to it, an
   exception whose edge is gone, one that excuses nothing, and a failing fact; it stays silent on a
-  dev edge to `winit`, a host reaching `winit`, a `pkg` crate reaching `windows-sys` and an excused
-  path, and fails unless exactly the planted findings are reported. `cargo xtask checks` runs it,
+  dev edge to `winit`, a host reaching `winit`, a `pkg` crate reaching `windows-sys`, an R crate
+  reaching `wgpu` through its grant and an excused path, and fails unless exactly the planted findings are reported. `cargo xtask checks` runs it,
   then `reach`, after `workspace`; the pinned list test in `tools/xtask/src/tasks/checks.rs` names
   both.
 - `cargo nextest run -p xtask reach`: `a_k_crate_that_reaches_winit_is_reported`,
@@ -388,7 +392,7 @@ For the accepted part:
   `features_combine_within_one_root_and_not_across_roots`,
   `selection_parses_every_facade_combo`, `a_generic_ffi_crate_matches_no_glob`,
   `an_exact_forbid_entry_naming_a_generic_ffi_crate_is_an_error`,
-  `the_r_tier_admits_wgpu_and_the_v_tier_refuses_tokio`,
+  `the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio`, `only_a_grant_lets_an_r_crate_reach_wgpu`,
   `an_extends_cycle_or_unknown_tier_is_an_error`, `reach_forbid_adds_to_the_tier_set`,
   `a_reach_exception_excuses_only_paths_through_its_crate`,
   `a_reach_exception_whose_edge_is_gone_is_stale`, `a_reach_exception_that_excuses_nothing_is_stale`,
