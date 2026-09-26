@@ -1135,7 +1135,7 @@ does not cover each gate they add.
 | Tier direction and in-tier order | `cargo xtask workspace` (tiers) | 11 numbered layers |
 | Transitive absence | `cargo xtask reach` over `cargo metadata`, all facade feature combinations | implemented, green with three seeded `reach-exceptions`, none for `flui-platform` |
 | Core names no official crate | `cargo xtask workspace` | facade `material` and `hot-reload` features |
-| No new process global | `cargo xtask globals`: syn scan of every `static` (atomics included), `thread_local!` entry and `static` in FLUI's own macro tokens, `#[cfg(test)]` excluded | gated: 54 entries in 14 manifests, 17 exempt counters |
+| No new process global | `cargo xtask globals`: syn scan of every `static` (atomics included), `thread_local!` entry and `static` in FLUI's own macro tokens, `#[cfg(test)]` excluded | gated; `cargo xtask globals` prints the counts |
 | Module direction inside flui-widgets | `cargo xtask module-dag -p flui-widgets` | promised, absent |
 | No upstream type in Stable signatures | `cargo xtask api-closure` over rustdoc JSON, proven first against a planted `pub fn f() -> accesskit::Role` | re-exports of wgpu, accesskit, android-activity |
 | UI state is `!Send` | `assert_not_impl_any!`; clippy `disallowed_types` (`Mutex`, `RwLock`, `DashMap`) in frame-path crates, allowlist for mailboxes | `Send + Sync` bounds on UI traits |

@@ -1,7 +1,9 @@
 # ADR-0097: Process-global state is gated: one trampoline cell, everything else realm-owned
 
 - **Status:** Accepted in part (2026-09-26): §1–§4, the gate (`cargo xtask globals`) and its
-  seeded allowlist; removing each global remains with its exit ADR.
+  seeded allowlist; removing each global remains with its exit ADR. For the entries whose exit
+  is this ADR (`TIME_DILATION`, the asset `REGISTRY` and `INTERNER`, `ERROR_VIEW_BUILDER`, the
+  decoded-image `CACHE`), that removal is the part of this ADR still Proposed.
 - **Date:** 2026-09-25
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
   thread-local `AppRuntime` slot is the sanctioned transitional form" becomes a named,
@@ -132,8 +134,9 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
   - `process` — mirrors a resource the process has once: an OS registration, the system
     clipboard, a GCD queue, tracing's global dispatcher. Nothing structural is checked; the
     reason names the resource.
-  - `diagnostic` — a `Once` or `AtomicBool` flag, or an item under a `debug_assertions` cfg,
-    that no behavior reads.
+  - `diagnostic` — a `Once` or `AtomicBool` flag, or an item whose cfg is false in every build
+    without `debug_assertions` (so not `not(debug_assertions)`, nor
+    `any(debug_assertions, …)`), that no behavior reads.
 
 ### 3. The allowlist lives in the manifests, is seeded by the scan, and only shrinks
 
@@ -155,10 +158,11 @@ findings like any other: `TIME_DILATION` is configuration, not an identifier.
 `globals --self-test` runs the rules over in-memory crates (`tools/xtask/src/globals/fixture.rs`)
 that plant an interior-mutable `static`, a `thread_local!` with no entry, an atomic that is
 `store`d, a `pub` counter, a counter borrowed as `&NAME`, a static under
-`cfg(any(test, feature = …))`, statics inside a `macro_rules!` body and an unknown macro, a
-second host trampoline, trampolines outside the host and the backends, a stale entry and an
-entry for an exempt counter, beside silent cases (a private `fetch_add` counter, a `&str`, items
-and a whole module under `#[cfg(test)]`, a `'static` lifetime in macro tokens), and fails unless
+`cfg(any(test, feature = …))`, statics inside a `macro_rules!` body, an unknown macro and a
+`quote!` body (`static #name`), a second host trampoline, trampolines outside the host and the
+backends, a stale entry and an entry for an exempt counter, beside silent cases (a private
+`fetch_add` counter, a `&str`, items and a whole module under `#[cfg(test)]`, a `'static`
+lifetime in macro tokens, `(&'static $t:ty)` included), and fails unless
 exactly the planted findings come back. Both `globals --self-test` and `globals` join the
 in-process list of `cargo xtask checks`, and the test that pins that list
 (`the_in_process_checks_include_the_link_check_under_strict` in `checks.rs`) names them.
@@ -180,7 +184,8 @@ runs on the pinned stable toolchain, which dylint does not.
   (`crates/flui-engine/src/renderer.rs`) choose process-wide behavior without any static.
 - Build-script output pulled in through `include!(concat!(env!("OUT_DIR"), …))`, as the six
   `crates/flui-engine/src/*/generated.rs` files do: the scan reads the source tree, not
-  `OUT_DIR`.
+  `OUT_DIR`. Any other `include!`, and a `mod x;` inside a fn, impl or block body, is an error
+  rather than a file the scan never reads.
 - Expansions of dependency macros and proc-macros. FLUI's own `macro_rules!` and `quote!`
   bodies are token-scanned; `once_cell` is refused in workspace manifests by `deny.toml`'s
   std-replacements check.
