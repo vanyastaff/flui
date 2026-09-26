@@ -12,7 +12,8 @@
 //!
 //! Files are the ones git knows (tracked, or untracked and not ignored) with
 //! a `.rs`, `.md`, `.toml`, `.yml`, `.yaml` or `.wgsl` extension, outside the
-//! archival roots ([`crate::docs_links::ARCHIVAL_ROOTS`]). Markers recorded
+//! archival roots ([`crate::docs_links::ARCHIVAL_ROOTS`]), which must be the
+//! list AGENTS.md states (the scan fails otherwise). Markers recorded
 //! before the gate sit in [`ALLOWLIST`] as exact counts per file and class;
 //! the file names one reason and one exit for all of them. A count above the
 //! tree ("grew"), below it ("lower it"), a class with no markers left, a path
@@ -92,10 +93,15 @@ pub(crate) fn markers(args: &MarkersArgs) -> anyhow::Result<ExitCode> {
     for finding in &findings {
         println!("{finding}");
     }
-    if !findings.is_empty() {
+    // AGENTS.md is docs-only to the lanes, so its list is checked here, where every PR runs
+    let drift = archival_drift(&crate::util::read("AGENTS.md")?);
+    if let Err(why) = &drift {
+        println!("AGENTS.md: {why}");
+    }
+    if !findings.is_empty() || drift.is_err() {
         eprintln!(
             "markers: {} finding(s); allowlist {ALLOWLIST}",
-            findings.len()
+            findings.len() + usize::from(drift.is_err())
         );
         return Ok(ExitCode::FAILURE);
     }
@@ -106,6 +112,44 @@ pub(crate) fn markers(args: &MarkersArgs) -> anyhow::Result<ExitCode> {
         allow.allow.len()
     );
     Ok(ExitCode::SUCCESS)
+}
+
+/// Whether the archival roots AGENTS.md names (`agents`, its text) are
+/// exactly [`ARCHIVAL_ROOTS`], the ones the scan skips.
+fn archival_drift(agents: &str) -> Result<(), String> {
+    let flat = agents.split_whitespace().collect::<Vec<_>>().join(" ");
+    let list = flat
+        .split_once("Archival roots are exempt (")
+        .and_then(|(_, rest)| rest.split_once(")."))
+        .map(|(list, _)| list)
+        .ok_or("no \"Archival roots are exempt (…).\" list")?;
+    let mut listed = BTreeSet::new();
+    for item in list.split('`').skip(1).step_by(2) {
+        match item.split_once('{') {
+            Some((prefix, braced)) => {
+                for name in braced.trim_end_matches('}').split(',') {
+                    listed.insert(format!("{prefix}{}/", name.trim()));
+                }
+            }
+            None => {
+                listed.insert(format!("{item}/"));
+            }
+        }
+    }
+    let roots: BTreeSet<String> = ARCHIVAL_ROOTS
+        .iter()
+        .map(|root| (*root).to_owned())
+        .collect();
+    if listed == roots {
+        return Ok(());
+    }
+    let only_listed: Vec<&String> = listed.difference(&roots).collect();
+    let only_skipped: Vec<&String> = roots.difference(&listed).collect();
+    Err(format!(
+        "the archival roots it lists differ from the ones the scan skips \
+         (listed only: {only_listed:?}; skipped only: {only_skipped:?}); \
+         change both, `ARCHIVAL_ROOTS` in tools/xtask/src/docs_links.rs"
+    ))
 }
 
 /// The files git knows that the scan reads, repository-relative.
