@@ -40,6 +40,6 @@ fn focus_text_field(input: &Arc<dyn PlatformTextInput>) {
 }
 ```
 
-Inside the workspace, `flui-interaction` (the owner-local text-input state) and
-the `flui-widgets` test harness depend on it. See
+Inside the workspace, framework crates that name a capability depend on this
+crate; only composition roots depend on `flui-platform`. See
 [ADR-0082](../../docs/adr/ADR-0082-platform-api-contract-crate.md).

@@ -89,9 +89,8 @@ lru = { workspace = true, optional = true }
 flui-testing = { workspace = true, optional = true }
 # The element-level harness (`testing::harness`) records the IME calls a
 # mounted `EditableText` makes through a `PlatformTextInput` it supplies.
-# Activated only by the `testing` feature, like `flui-testing` above; the
-# production graph never links it (flui-interaction already depends on it).
-# The contract crate, so the harness links no OS backend (ADR-0082).
+# Activated only by the `testing` feature, like `flui-testing` above. It is
+# the contract crate, so the harness links no OS backend (ADR-0082).
 flui-platform-api = { workspace = true, optional = true }
 
 [dev-dependencies]

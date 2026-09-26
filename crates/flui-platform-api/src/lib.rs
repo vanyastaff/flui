@@ -13,10 +13,10 @@
 //!   operations return).
 //!
 //! No OS, winit, AccessKit or tokio type may appear here (ADR-0082 §1). That
-//! is the point of the crate: naming a contract must not link a backend, so
-//! `flui-interaction` and the widget test harness depend on this crate and
-//! stay free of every OS stack, and a plugin that implements one capability
-//! builds without `flui-platform`.
+//! is the point of the crate: naming a contract must not link a backend, so a
+//! framework crate or plugin that names or implements a capability depends on
+//! this crate, stays free of every OS stack and builds without
+//! `flui-platform`.
 //!
 //! The per-window contract `PlatformWindow`, the host-facing `Platform`
 //! trait, the owner-thread capability and every OS backend live in

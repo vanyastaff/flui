@@ -19,7 +19,7 @@ use flui_types::geometry::{Bounds, Pixels};
 
 /// Platform capability for IME-driven text input on one window.
 ///
-/// # Scope (V1 / PR1)
+/// # Scope
 ///
 /// This trait only carries the platform *composition* controls
 /// (enable/disable IME, place the candidate window). It does not model a
