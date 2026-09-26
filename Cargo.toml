@@ -409,6 +409,10 @@ bitflags = "2.10"
 # movement and deletion step by user-perceived character, as Flutter's
 # `characters` package does. Already in the graph through cosmic-text.
 unicode-segmentation = "1.12"
+# Percent-encoding of route path segments (`flui_widgets::RoutePath`): the
+# servo/rust-url implementation of the URL path-segment set. Already in the
+# graph through `url`.
+percent-encoding = "2"
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 static_assertions = "1.1"

@@ -48,6 +48,9 @@ bitflags = { workspace = true }
 # (Flutter's `characters`/`CharacterRange` unit), and the obscuring mask
 # counts the same unit so the two stay in step.
 unicode-segmentation = { workspace = true }
+# `RoutePath` percent-encodes each segment it joins and decodes each segment it
+# yields, with the URL path-segment set.
+percent-encoding = { workspace = true }
 # Gesture recognizers + arena that `GestureDetector` drives.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 # Styling + typography + layout value types (Alignment, Color, BoxDecoration,
@@ -266,6 +269,9 @@ layers = [
         "text",
         "scroll",
         "navigator",
+    ],
+    [
+        "router",
     ],
     [
         "icon",

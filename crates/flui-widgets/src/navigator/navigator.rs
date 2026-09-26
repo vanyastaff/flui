@@ -30,7 +30,10 @@
 //!
 //! # Not implemented, and not claimed
 //!
-//! No Navigator 2.0/page-list API, restoration, `PopScope`,
+//! No Navigator 2.0/page-list API here: the typed `Router` in `crate::router`
+//! (ADR-0093) drives this navigator as its page stack, through the doors in
+//! `addressing.rs`, which also make its facade refuse unaddressable pages. No
+//! restoration, `PopScope`,
 //! `LocalHistoryRoute`, `HeroControllerScope`, `NavigationNotification`,
 //! pointer-cancelling wrapper, or per-route focus scope that Flutter's `build` adds
 //! (`:5946-5998`). `TransitionRoute` / `ModalRoute` stay implementation details
@@ -85,6 +88,13 @@ use super::route::{
 use super::subtree::RouteSubtree;
 use crate::animated::VsyncScope;
 use crate::{Overlay, OverlayEntry, OverlayHandle};
+
+// A child module, so the admission rules and the `Router`'s doors can reach
+// `NavigatorShared` without widening it.
+#[path = "addressing.rs"]
+mod addressing;
+#[cfg(test)]
+pub(crate) use addressing::Unaddressable;
 
 static NEXT_NAVIGATOR_COMMAND_TARGET_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -233,6 +243,10 @@ struct NavigatorShared {
     /// so a route pushed pre-mount registers its continuation while this slot
     /// is still `None`, and only a later mount fills it.
     settle_wake: Arc<Mutex<Option<RebuildHandle>>>,
+
+    /// `Some(route type)` when a `Router` drives this navigator; fixed at
+    /// construction. See `addressing.rs` for what it refuses.
+    addressing: Option<&'static str>,
 }
 
 impl NavigatorShared {
@@ -878,6 +892,10 @@ impl NavigatorHandle {
     /// [`Navigator::new`], and keep a clone.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_addressing(None)
+    }
+
+    fn with_addressing(addressing: Option<&'static str>) -> Self {
         let shared = Arc::new(NavigatorShared {
             history: Mutex::new(RouteHistory::new()),
             overlay: OverlayHandle::new(),
@@ -899,6 +917,7 @@ impl NavigatorHandle {
             user_gestures_in_progress: Arc::new(AtomicU32::new(0)),
             user_gesture_in_progress_notifier: ChangeNotifier::new(),
             settle_wake: Arc::new(Mutex::new(None)),
+            addressing,
         });
         let command_target = register_command_target(&shared);
         Self {
@@ -1107,15 +1126,34 @@ impl NavigatorHandle {
     /// Seed before handing the handle to [`Navigator::new`]. A deep link's
     /// synthesized back-stack is several `seed_initial` calls.
     pub fn seed_initial<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
+        if !self.admits(&route) {
+            return self.refuse("seed_initial", route);
+        }
+        self.seed_reporting_id(route).1
+    }
+
+    /// [`seed_initial`](Self::seed_initial) past the admission check, handing
+    /// back the id it minted.
+    fn seed_reporting_id<R: NavigatorRoute>(&self, route: R) -> (RouteId, RouteResult<R::Output>) {
+        let id = self.prepare(&route);
+        (
+            id,
+            self.shared.history.lock().seed_initial_with_id(id, route),
+        )
+    }
+
+    /// Mint `route`'s id, fill its binding slot and insert its overlay entry —
+    /// everything a route needs before it enters the history.
+    fn prepare<R: NavigatorRoute>(&self, route: &R) -> RouteId {
         let id = RouteId::next();
-        self.bind(&route, id);
+        self.bind(route, id);
         let builder = route.content_builder();
         self.shared
             .registries
             .entries
             .lock()
             .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
-        self.shared.history.lock().seed_initial_with_id(id, route)
+        id
     }
 
     /// Fill the route's [`RouteBindingSlot`], if it has one, before `install()`.
@@ -1156,7 +1194,19 @@ impl NavigatorHandle {
     /// run inside `push_with_id`, and both reach for that entry — Flutter has the
     /// same order, since `OverlayRoute.install` creates the entries and *then*
     /// calls `super.install()` (`routes.dart:69-71`).
+    ///
+    /// # Under a `Router`
+    ///
+    /// A navigator a [`Router`](crate::Router) drives admits only pageless
+    /// popups here (`PopupRoute`); any other route has no path and is refused
+    /// (ADR-0093 §4): it is disposed unpushed, the returned result is already
+    /// complete with `None`, the refusal is logged, and a debug build panics.
+    /// The same holds for `seed_initial`, `push_replacement[_with]` and
+    /// `push_and_remove_until`.
     pub fn push<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
+        if !self.admits(&route) {
+            return self.refuse("push", route);
+        }
         self.push_reporting_id(route).1
     }
 
@@ -1181,6 +1231,9 @@ impl NavigatorHandle {
     /// `did_replace`, never `did_remove`, and the replaced route's future resolves
     /// with `None`.
     pub fn push_replacement<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
+        if !self.admits(&route) {
+            return self.refuse("push_replacement", route);
+        }
         self.push_replacement_erased(route, None)
     }
 
@@ -1193,6 +1246,11 @@ impl NavigatorHandle {
         route: R,
         result: T,
     ) -> RouteResult<R::Output> {
+        if !self.admits(&route) {
+            // The caller's value reached no route; dropped here, with no lock held.
+            drop(result);
+            return self.refuse("push_replacement_with", route);
+        }
         self.push_replacement_erased(route, Some(AnyResult::new(result)))
     }
 
@@ -1250,6 +1308,9 @@ impl NavigatorHandle {
         route: R,
         keep: impl FnMut(RouteId) -> bool,
     ) -> RouteResult<R::Output> {
+        if !self.admits(&route) {
+            return self.refuse("push_and_remove_until", route);
+        }
         self.push_and_remove_until_reporting_id(route, keep).1
     }
 
@@ -1291,15 +1352,7 @@ impl NavigatorHandle {
         route: R,
         commit: impl FnOnce(&mut RouteHistory, RouteId, R) -> O,
     ) -> (RouteId, O) {
-        let id = RouteId::next();
-        self.bind(&route, id);
-
-        let builder = route.content_builder();
-        self.shared
-            .registries
-            .entries
-            .lock()
-            .insert(id, OverlayEntry::new(move |ctx| builder(ctx)));
+        let id = self.prepare(&route);
 
         let (result, outcome, undelivered) = {
             let mut history = self.shared.history.lock();
@@ -1318,10 +1371,22 @@ impl NavigatorHandle {
     }
 
     fn pop_erased(&self, result: Option<AnyResult>) -> bool {
+        if self.keeps_last_route() {
+            report_undelivered(
+                "pop",
+                Vec::from_iter(result.map(UndeliveredResult::no_target)),
+            );
+            return false;
+        }
         self.shared.mutate("pop", |history| history.pop(result))
     }
 
     fn remove_route_erased(&self, id: RouteId, result: Option<AnyResult>) -> bool {
+        if self.keeps_last_route() && self.current() == Some(id) {
+            let undelivered = Vec::from_iter(result.map(UndeliveredResult::no_target));
+            report_undelivered("remove_route", undelivered);
+            return false;
+        }
         self.shared
             .mutate("remove_route", |history| history.remove_route(id, result))
     }
@@ -1332,6 +1397,11 @@ impl NavigatorHandle {
     /// The popped route's future resolves with its `current_result()` fallback, or
     /// `None`. Returns whether a present route was found. A route that refuses
     /// (`Route::did_pop` → `false`) stays, and this still returns `true`.
+    ///
+    /// Under a [`Router`](crate::Router) the last route is never popped: this
+    /// (and [`pop_with`](Self::pop_with), and `remove_route` of the last
+    /// route) returns `false` and changes nothing, because a Router always has
+    /// a location.
     pub fn pop(&self) -> bool {
         self.pop_erased(None)
     }
@@ -1918,12 +1988,19 @@ impl NavigatorHandle {
     /// nor the unknown-route fallback produced a route.
     fn resolve_named(&self, settings: &RouteSettings) -> Result<GeneratedRoute, NamedRouteError> {
         let request = RouteRequest::new(settings);
-        self.shared
-            .named_routes
-            .resolve(&request)
-            .ok_or_else(|| NamedRouteError::Unresolved {
+        let generated = self.shared.named_routes.resolve(&request).ok_or_else(|| {
+            NamedRouteError::Unresolved {
                 name: requested_name(settings),
-            })
+            }
+        })?;
+        // Checked before anything is dismissed or pushed; the refused route is
+        // disposed when `generated` drops.
+        if !self.admits_generated(&generated) {
+            return Err(NamedRouteError::NotAddressable {
+                name: requested_name(settings),
+            });
+        }
+        Ok(generated)
     }
 
     /// Resolve `request` and [`push`](Self::push) the route it names — Flutter's

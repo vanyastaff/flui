@@ -144,6 +144,8 @@ mod rich_text;
 mod rotated_box_layer_update;
 #[path = "rotation_transition.rs"]
 mod rotation_transition;
+#[path = "router.rs"]
+mod router;
 #[path = "routes.rs"]
 mod routes;
 #[path = "safe_area.rs"]

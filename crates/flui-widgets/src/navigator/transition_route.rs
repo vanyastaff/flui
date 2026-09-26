@@ -257,6 +257,8 @@ impl<T> TransitionRoute<T> {
         duration: Duration,
         builder: impl Fn(&dyn flui_view::BuildContext) -> flui_view::BoxedView + 'static,
     ) -> Self {
+        let binding = RouteBindingSlot::new();
+        binding.set_group(TransitionGroup::Default);
         Self {
             settings: RouteSettings::default(),
             builder: Rc::new(builder),
@@ -268,7 +270,7 @@ impl<T> TransitionRoute<T> {
             group: TransitionGroup::Default,
             inner: Arc::new(TransitionInner {
                 controller: Mutex::new(None),
-                binding: RouteBindingSlot::new(),
+                binding,
                 pending_statuses: Arc::new(Mutex::new(Vec::new())),
                 status_wake: Mutex::new(None),
                 secondary: Arc::new(ProxyAnimation::new(always_dismissed())),
@@ -334,6 +336,7 @@ impl<T> TransitionRoute<T> {
     /// `PageRoute`s (`pages.dart:58-61`).
     pub(crate) fn group(mut self, group: TransitionGroup) -> Self {
         self.group = group;
+        self.inner.binding.set_group(group);
         self
     }
 

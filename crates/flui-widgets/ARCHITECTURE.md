@@ -35,6 +35,10 @@ into the `Overlay` and `Dismissible` slides its child with a `Stack`, a
 a cycle, so they can become a node of their own only after they move together
 into one module.
 
+`router` sits in a layer of its own above `navigator` and below `app`: the
+`Router` builds a `Navigator` and places its pages on it (and wraps each page
+in `Semantics`), and `WidgetsApp` is where an app will build on the `Router`.
+
 A new module takes a place in `layers`; a move that changes the direction
 edits `layers` in the same change, which is where it is reviewed. An edge the
 layers refuse and that cannot move yet goes into `exceptions` with the ADR
@@ -1662,4 +1666,88 @@ selects the word, not just that the underlying callback fires. Red-check
 for the last one: skip wrapping `install_pointer_handlers`'s return value
 in `wrap_double_tap_word_select` — the selection stays collapsed after
 the second tap.
+
+### 21. The `Router` is derived from the route type, and its handle is lifecycle-only
+
+**Oracle:** Flutter's `Router` takes a hand-written `RouteInformationParser`
+and `RouterDelegate` (`widgets/router.dart`), and `Navigator.of(context)` is
+callable from `build`.
+
+**Choice:** `Router<R>` (`src/router/`, ADR-0093) needs only `R: Routable` —
+`to_path`, `from_path`, and a provided `back_stack` — and keeps its stack
+of `R` itself; the parser and delegate are the route type. The page per value
+is a `PageRoute<()>` named with the value's path, on a `Navigator` the router
+builds, so transitions, heroes and `PopScope` are unchanged.
+`Router::<R>::handle` takes `&dyn LifecycleContext` (ADR-0078), so a handle
+is acquired in `init_state`/`did_change_dependencies` and resolves the
+**nearest** `Router<R>`, which is `Navigator.of`'s contract.
+
+**Pinned by:** `nested_router_handle_targets_the_nearest_router`,
+`router_handle_without_a_router_is_no_router`, the `compile_fail` doctest on
+`Router::handle`, and `route_path_round_trips_a_hand_written_routable`.
+
+### 22. A Router's navigator refuses pages pushed through its facade, and admits pageless popups
+
+**Oracle:** Flutter's `Navigator` under a `Router` accepts pageless routes
+(`Navigator.push`, `showDialog`) beside its pages; a pageless route is not in
+the URL and is removed silently with the page below it.
+
+**Choice:** every page on a Router's stack has a path (ADR-0093 §2). The
+navigator a Router builds is *addressed*: its public doors (`push`,
+`push_replacement[_with]`, `push_and_remove_until`, `seed_initial`) admit only
+routes whose binding slot a framework `TransitionRoute` marked
+`TransitionGroup::Default` — `PopupRoute` — and refuse `PageRoute`,
+`SimpleRoute` and every third-party route. The typed doors cannot return a
+`Result` without a public signature change, so a refusal disposes the route
+unpushed, returns a `RouteResult` already complete with `None`, logs
+`tracing::error!` with the `RouterError::NotAddressable` text, and fails a
+`debug_assert!`. The named doors answer `NamedRouteError::NotAddressable`
+before anything is dismissed or pushed. Popups stay admitted, because
+`show_dialog` pushes a `PopupRoute` on the root navigator, until dialogs move
+to overlay entries (ADR-0093 step 7). Every pop the navigator makes — the
+facade's, a back gesture's, a barrier's — reaches the Router's stack through
+an internal `NavigatorObserver`, so the location follows it.
+
+**Pinned by:** `pushing_a_page_route_under_a_router_is_not_addressable`,
+`popup_routes_are_admitted_and_leave_the_location_alone`,
+`facade_pop_updates_the_router_location`.
+
+### 23. A Router never pops its last page
+
+**Oracle:** Flutter's `Navigator.pop` on a one-route navigator removes that
+route and leaves the navigator empty.
+
+**Choice:** a Router always has a location. `RouterHandle::pop` answers
+`Ok(false)` on a lone page, and the facade's `pop`, `pop_with` and
+`remove_route` of the last route answer `false`, all with the stack
+unchanged. `maybe_pop` already bubbles on a lone route, as in Flutter.
+
+**Pinned by:** `router_never_pops_its_last_page`.
+
+### 24. `go` reconciles by common prefix, as Flutter's page-list diff does
+
+**Oracle:** `NavigatorState._updatePages` (a new page list keeps the matching
+bottom entries, removes the rest, adds the new pages beneath the new top
+without a transition and pushes the new top), and
+`Navigator.defaultGenerateInitialRoutes` (`'Initial route can have gaps'`,
+`'The full initial route has to be matched'`), from Flutter 3.44 as
+remembered — not checked against a local clone of that tag.
+
+**Choice:** `RouterHandle::go(location)` derives the new stack with
+`Routable::back_stack` — every prefix of the path that parses, the full path
+required — and keeps the longest common prefix with the current stack
+(compared with `PartialEq`). A new stack that is a prefix of the current one
+pops back to it with exit transitions; otherwise the pages above the common
+prefix are removed and the new pages are placed in one flush, the ones
+beneath the new top entering quietly (`RouteLifecycle::Add`) and only the new
+top running its entrance. The pages that stay keep their state; a page above
+the divergence point is rebuilt. **Divergence:** where Flutter falls back to
+the default route when the full initial route does not match, `go` and
+`Router::from_location` report `RouteParseError::NoMatch` and change nothing.
+
+**Pinned by:** `go_reconciles_only_the_diverging_tail`,
+`go_adds_the_new_back_stack_beneath_the_new_top`,
+`router_opens_at_a_location_with_its_back_stack`,
+`go_with_an_unknown_location_leaves_the_stack_alone`, and
+`back_stack_is_the_matching_prefix_chain`.
 

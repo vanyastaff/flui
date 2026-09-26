@@ -120,6 +120,8 @@ pub mod navigator;
 mod overlay;
 pub mod paint;
 pub mod physical_model;
+// The typed `Router` (ADR-0093); its items are re-exported from the crate root.
+pub mod router;
 pub mod scroll;
 pub mod semantics;
 pub mod stack;
@@ -227,6 +229,9 @@ pub use navigator::{
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use physical_model::{PhysicalModel, PhysicalShape};
+pub use router::{
+    Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
+};
 pub use scroll::{
     BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView, ListView,
     OverScrollHeaderStretchConfiguration, PageController, PageScrollPhysics, PageView,
@@ -343,17 +348,17 @@ pub mod prelude {
         OverlayEntry, OverlayEntryId, OverlayHandle, Padding, PageController, PageRoute,
         PageScrollPhysics, PageView, PhysicalModel, PhysicalShape, PopScope, PopupRoute,
         Positioned, PreferredSize, PreferredSizeView, PreviousFocusAction, PreviousFocusIntent,
-        RawTextField, RawTextFieldState, RepaintBoundary, RichText, RotatedBox, Row, SafeArea,
-        ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport,
-        SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox,
-        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, StreamBuilder, SubmitCallback, Table, TableCell,
-        TableRow, Text, TextEditingController, TickerMode, Transform, UnconstrainedBox,
-        ValueListenableBuilder, Viewport, Visibility, VisibilityGate, WidgetState,
-        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
-        WidgetsApp, WidgetsLocalizations, Wrap,
+        RawTextField, RawTextFieldState, RepaintBoundary, RichText, RotatedBox, Routable,
+        RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, Scrollable, Scrollbar,
+        Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute, SingleActivator,
+        SingleChildScrollView, SizedBox, SizedOverflowBox, SliverChildBuilderDelegate,
+        SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
+        SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
+        SliverOffstage, SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack,
+        StreamBuilder, SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController,
+        TickerMode, Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility,
+        VisibilityGate, WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
+        WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
     };
 
     // Common configuration value types, so an app author needs only this import.

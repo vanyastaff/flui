@@ -61,10 +61,12 @@
 //! a turbofish today; the shape is described here only because it is the
 //! rejected one.)
 //!
-//! Deferred **by decision**, inside the feature that just landed: Flutter's
+//! Deferred **by decision** for named routes: Flutter's
 //! `Navigator.initialRoute` / `Navigator.defaultRouteName` /
 //! `Navigator.defaultGenerateInitialRoutes` — the initial-route back-stack
-//! synthesis. ADR-0024 defers it.
+//! synthesis. ADR-0024 defers it; the typed `Router` has it instead, as
+//! `Routable::back_stack` (ADR-0093), which is where it will stay once the
+//! named doors are removed.
 //!
 //! The reason first given for the deferral — "no consumer until deep links
 //! exist" — is **false**, and is corrected in ADR-0024. Read
@@ -124,6 +126,10 @@ pub use navigator::{
     Navigator, NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome,
     NavigatorCommandTarget, NavigatorHandle, NavigatorState,
 };
+// The refusal a `Router`'s navigator reports; a `router` test pins that
+// `RouterError::NotAddressable` prints the same text.
+#[cfg(test)]
+pub(crate) use navigator::Unaddressable;
 pub use observer::NavigatorObserver;
 pub use overlay_route::{
     NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
