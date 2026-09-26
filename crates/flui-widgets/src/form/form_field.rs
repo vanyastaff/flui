@@ -313,8 +313,13 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
 
     /// Set the value without marking interaction, validating or rebuilding
     /// — Flutter's `FormFieldState.setValue`.
+    ///
+    /// A text form field's value is its controller's text, so there this
+    /// writes the text into the controller too; Flutter's `setValue` leaves
+    /// the controller alone and the two disagree until the next edit.
     pub fn set_value(&self, value: T) {
-        *self.inner.value.borrow_mut() = Some(value);
+        *self.inner.value.borrow_mut() = Some(value.clone());
+        self.inner.push_to_sink(&value);
     }
 
     /// Validate, show the result, and report whether it passed — Flutter's

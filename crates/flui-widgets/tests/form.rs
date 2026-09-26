@@ -496,6 +496,40 @@ fn dropping_the_callers_controller_moves_the_text_into_a_field_owned_one() {
     assert_eq!(field.value(), "abc");
 }
 
+/// `set_value` on a text form field is its value from then on — `value()`,
+/// the validator and `on_saved` all see it — because it reaches the
+/// controller the field reads; it neither marks interaction nor validates.
+///
+/// Fails if `set_value` only stored the value: the next read adopts the
+/// controller's text and the set value is lost.
+#[test]
+fn set_value_on_a_text_form_field_is_seen_by_value_validate_and_save() {
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    let saved = Rc::new(RefCell::new(None));
+    let sink = Rc::clone(&saved);
+    let controller = TextEditingController::with_text("");
+    let _laid = mount(
+        Form::new(
+            RawTextFormField::new(controller.clone())
+                .validator(required("Required"))
+                .on_saved(move |value| *sink.borrow_mut() = Some(value.clone()))
+                .handle(field.clone()),
+        )
+        .handle(form.clone()),
+    );
+
+    field.set_value("set".to_owned());
+
+    assert_eq!(field.value(), "set");
+    assert_eq!(controller.text(), "set");
+    assert!(!field.has_interacted_by_user());
+    assert_eq!(field.error_text(), None, "set_value does not validate");
+    assert!(form.validate());
+    form.save();
+    assert_eq!(saved.borrow().as_deref(), Some("set"));
+}
+
 /// The form is a semantics node with the form role, and the error line is
 /// a live region so an appearing error is announced.
 #[test]

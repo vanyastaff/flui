@@ -1816,6 +1816,10 @@ owner-thread form state, so a text form field takes the user's edits from
 `set_text`, and not the edit an `on_submitted` callback makes), and reads the
 controller's text before it validates or saves. A caller's own controller
 edit is therefore validated and saved but does not mark the field interacted,
-and a reset's write-back needs no equality guard. **Tests:**
+and a reset's write-back needs no equality guard. Because the controller is
+the value, `FormFieldHandle::set_value` on a text form field writes the text
+into the controller too; Flutter's `setValue` stores `_value` alone, and the
+field's value and its controller disagree until the next edit. **Tests:**
 `tests/editable_text.rs::on_changed_reports_user_edits_but_not_the_callers_own`,
-`reset_restores_initial_values_and_clears_errors_and_interaction`.
+`reset_restores_initial_values_and_clears_errors_and_interaction`,
+`set_value_on_a_text_form_field_is_seen_by_value_validate_and_save`.
