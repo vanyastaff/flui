@@ -32,7 +32,7 @@ an audit of the existing ADRs against the seventeen planned ones, and a pass ove
 | 6 | Enable ja-JP on the development host | The owner enables it before IME work | same | plan |
 | 7 | crates.io names | Check before creating each crate; no reservation now | same | plan |
 | 8 | Deadline of the `!Send` flip | Before the first crates.io publication, with the callback signature change | **changed** | ADR-0091 §1, ADR-0086 |
-| 9 | `LayoutCallbackScope` against ADR-0017 | Three-day spike first; ADR-0017 stays until then | same | plan |
+| 9 | `LayoutCallbackScope` against ADR-0017 | Three-day spike first; ADR-0017 stays until then. The spike ran on 2026-09-26: one pass for plain lazy rows only, unsound and unbounded, so ADR-0017 stays | same | ADR-0017 (Revisited) |
 | 10 | Deleting `flui-tree` and `flui-localizations` | Delete both | same | ADR-0081 |
 | 11 | Clipboard: required backend method or registry capability | A capability model: core-required backend methods and optional plugins behind one door | **generalised** | ADR-0084 §5 |
 | 12 | New gates against the `cf46dfe20` deletions | Amend ADR-0078 explicitly in the first gate's change | same | plan |
@@ -153,6 +153,11 @@ says build never runs during layout.
 - **Decision:** a three-day spike first, then a decision. ADR-0017 stays in force until then; if
   the spike converges in one pass without a double `RefCell` borrow, a separate ADR supersedes
   ADR-0017 §3.
+- **Outcome (2026-09-26):** the spike reached one pass for plain lazy rows, but only with two
+  extra invalidation rules; `LayoutBuilder` rows regressed, the double borrow is avoided only on
+  the routed paths, the band pass budget is lost and the scope is unsound from safe code. ADR-0017
+  stays; its "Revisited" section records the four conditions a follow-up spike must show, and
+  the two invalidation rules as a separable candidate change.
 
 ### 10. Deleting `flui-tree` and `flui-localizations`
 
@@ -301,13 +306,13 @@ Two unrun hypotheses: the old image is unloaded before the realm drops its views
 
 | Claim | Check | ADR |
 |---|---|---|
-| Subsecond works on Windows and Android, and patches reach code through `Box<dyn ElementBase>` vtables created before the patch | one-week spike | ADR-0094 |
+| Subsecond works on Windows and Android, and patches reach code through `Box<dyn ElementBase>` vtables created before the patch | Windows run 2026-09-26: fails with stock dx; with a dx fix, logic edits keep state; macOS and Android not run | ADR-0094 |
 | rustdoc-JSON, cargo-public-api and cargo-semver-checks need nightly | run each on the pinned toolchain | ADR-0089, ADR-0081 |
 | The size N of the Stable closure | cargo-public-api spike before it is promised | ADR-0081 |
 | Mismatched `=` pins through a real registry give a resolver error, not E0308 | registry test (only a directory-source probe ran) | ADR-0088 |
 | "A plugin depends on about 30 crates", "a Win32 edit rebuilds 3 crates" | `cargo tree` and `cargo build --timings` | ADR-0082 |
 | Stale pixels with a swapchain scissor; blit cost of a retained target on tile GPUs | readback on dx12 and vulkan; mobile measurement | ADR-0087 |
-| Parley glyphs rasterize into the ADR-0067 atlas with a stable key | ADR-0077's precondition 1 prototype | ADR-0092 |
+| Parley glyphs rasterize into the ADR-0067 atlas with a stable key | Met 2026-09-26 (ADR-0092 Context) | ADR-0092 |
 | vello_cpu is bit-deterministic across CPUs with pinned SIMD | conformance scenes on three OSes | ADR-0087 |
 | Static ID counters reach semantics snapshots or the protocol | scan and snapshot test | ADR-0095, ADR-0097 |
 | `KEYEVENTF_UNICODE` bypasses the IME; `windows-a11y` passes on hosted `windows-latest` | a hosted trial run, scheduled by the CI redesign | ADR-0090 |

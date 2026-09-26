@@ -443,8 +443,9 @@ packages, same run).
   borrowed during layout. A Flutter-style `invokeLayoutCallback` scope would let a lazy band
   converge in one pass, but it contradicts ADR-0017 §3 ("build never runs during layout") and the
   ADR-0003 fixpoint. It enters the frame order only through its own ADR that supersedes those,
-  after a spike; see [open questions](open-questions.md). The budget is written as "passes ≤ N,
-  target 1".
+  after a spike; see [open questions](open-questions.md). A 2026-09-26 spike reached one pass for
+  plain lazy rows but not soundly; ADR-0017 stays (its "Revisited" section). The budget is written
+  as "passes ≤ N, target 1".
 - **Layer identity is retained:** every repaint boundary is an `Arc` subtree keyed by `RenderId`.
   `LayerNode` already carries `render_id: Option<RenderId>` (`crates/flui-layer/src/tree/layer_tree.rs:38`);
   grafting is O(1) and damage becomes a pointer diff.
@@ -688,8 +689,9 @@ acceptance, ADR-0016 and ADR-0059; decision D12.
 - ICU4X is the one Unicode source. The system font scan is asynchronous: bundled fonts are
   available in the first frame, system fonts arrive as a realm event.
 - One shaper on every platform; only rasterisation and hinting may vary.
-- ADR-0077's precondition stays a gate: a Parley glyph accepted by the existing atlas with a stable
-  key. `flui-text` is not created before a post-Parley measurement.
+- ADR-0077's precondition is a gate: a Parley glyph accepted by the existing atlas with a stable
+  key. The gate is met (swash rasterizes; 2026-09-26); ADR-0092 stays Proposed until the migration
+  lands. `flui-text` is not created before a post-Parley measurement.
 
 ### 10.3 GPU
 
@@ -1181,12 +1183,15 @@ records the criterion; the
 ### 16.1 Hot reload
 
 [ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md); decision D15. Hot reload goes
-through Subsecond behind a `DevReloadHook` the runtime exposes: a logic edit keeps state, an edit
-to a `ViewState` type restarts the realm. That needs a state-layout fingerprint to detect such an
-edit. Core names no reload package: the `flui-app → flui-hot-reload` edge and the facade's
+through Subsecond behind a `DevReloadHook` the runtime exposes. The hook is called at the element
+seam, for each framework call into a user `View` or `ViewState` method, not once per frame: a
+patch reaches only calls the hook wraps. A logic edit keeps state; an edit to a `View` or
+`ViewState` type restarts the realm, detected by a derive-generated structural hash over both.
+Core names no reload package: the `flui-app → flui-hot-reload` edge and the facade's
 `hot-reload` feature go. The dlopen path, its three-crate template and `--scene` are deleted only
-after a Subsecond spike on Windows, macOS and Android, and only after the globals it depends on
-(`REQUEST_REBUILD`, `REGISTRY_STACK`) are gone. Windows builds keep MSVC's PDBs
+after a Subsecond spike passes on Windows, macOS and Android, and only after the globals it
+depends on (`REQUEST_REBUILD`, `REGISTRY_STACK`) are gone. The Windows spike failed on
+2026-09-26, so the dlopen path stays until a later spike passes. Windows builds keep MSVC's PDBs
 (`.cargo/config.toml:19-21`), which Subsecond reads.
 
 ### 16.2 Dynamic linking
