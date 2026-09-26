@@ -840,8 +840,8 @@ jobs:
       # flui-assets and flui-widgets both default to `default = []`, so the
       # workspace-default run above never compiles their `images`/`network`
       # decode-and-cache paths or the Image widget's own file-decode test —
-      # exactly the gap that let the Business.1 flui-assets↔Image
-      # verification tests go CI-dead once. Explicit feature-gated run, same
+      # exactly the gap that once let the flui-assets↔Image
+      # verification tests go CI-dead. Explicit feature-gated run, same
       # precedent as `cargo clippy -p flui-engine --features
       # testing` above.
       #

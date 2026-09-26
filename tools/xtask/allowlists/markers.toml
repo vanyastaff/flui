@@ -265,11 +265,6 @@ class = "spec-task"
 count = 5
 
 [[allow]]
-path = "crates/flui-platform/src/traits/text_input.rs"
-class = "pr-label"
-count = 1
-
-[[allow]]
 path = "crates/flui-platform/src/traits/window.rs"
 class = "spec-task"
 count = 2
