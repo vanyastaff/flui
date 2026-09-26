@@ -432,6 +432,70 @@ fn a_disposed_field_no_longer_takes_part_in_validate() {
     assert!(form.validate(), "the removed field no longer takes part");
 }
 
+/// A mounted field rebuilt with a different handle moves onto it: the new
+/// handle reads the field's value and interaction, its error is the one the
+/// form's `validate()` shows, and the old handle no longer reaches the field.
+///
+/// Fails if the new handle is ignored: `value()` panics on a handle whose
+/// field never mounted, and `validate()` reports its error to the old one.
+#[test]
+fn a_new_handle_on_rebuild_takes_the_mounted_field_over() {
+    let form = FormHandle::new();
+    let first = FormFieldHandle::new();
+    let second = FormFieldHandle::new();
+    let node = FocusNode::with_debug_label("rehandled");
+    let tree = |handle: &FormFieldHandle<String>| {
+        Form::new(
+            RawTextFormField::with_initial_value("")
+                .validator(|value: &String| at_least_three(value))
+                .focus_node(Rc::clone(&node))
+                .handle(handle.clone()),
+        )
+        .handle(form.clone())
+    };
+    let mut laid = mount(tree(&first));
+    node.request_focus();
+    type_text(&laid, "ab");
+    assert_eq!(first.value(), "ab", "precondition");
+
+    laid.pump_widget(tree(&second));
+
+    assert_eq!(second.value(), "ab");
+    assert!(second.has_interacted_by_user());
+    assert!(!form.validate());
+    assert_eq!(second.error_text().as_deref(), Some("Too short"));
+    assert_eq!(first.error_text(), None, "the old handle is detached");
+    laid.tick();
+    assert!(laid.find_text("Too short").is_some(), "the field rebuilt");
+
+    type_text(&laid, "c");
+    assert_eq!(second.value(), "abc");
+    assert_eq!(first.value(), "ab", "the old handle keeps its last value");
+}
+
+/// A field rebuilt without the caller's controller keeps its text in a
+/// controller it owns — Flutter's `_createLocalController(oldWidget.controller!.value)`
+/// — so the caller's controller no longer feeds the field.
+///
+/// Fails if the field kept reading the caller's controller: its value would
+/// follow the caller's later edit.
+#[test]
+fn dropping_the_callers_controller_moves_the_text_into_a_field_owned_one() {
+    let field = FormFieldHandle::new();
+    let controller = TextEditingController::with_text("abc");
+    let mut laid = mount(Form::new(
+        RawTextFormField::new(controller.clone()).handle(field.clone()),
+    ));
+    assert_eq!(field.value(), "abc", "precondition");
+
+    laid.pump_widget(Form::new(
+        RawTextFormField::with_initial_value("ignored").handle(field.clone()),
+    ));
+    controller.set_text("zzz".to_owned());
+
+    assert_eq!(field.value(), "abc");
+}
+
 /// The form is a semantics node with the form role, and the error line is
 /// a live region so an appearing error is announced.
 #[test]

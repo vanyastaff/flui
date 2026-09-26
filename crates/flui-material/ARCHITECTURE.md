@@ -260,8 +260,8 @@ keeps it. The user's
 edits come from `TextField::on_changed` rather than a controller listener,
 because FLUI's controller listeners are `Send + Sync` and cannot reach the
 owner-thread field state; the controller is read before the field validates or
-saves (`flui_widgets::__private::bind_text_controller`, shared with
-`RawTextFormField`), so a caller's own controller edit is still validated and
+saves (`flui_widgets::__private::TextFormFieldCore`, shared with
+`RawTextFormField`; this type supplies only the Material input), so a caller's own controller edit is still validated and
 saved but does not count as the user's interaction — see `flui-widgets`
 mapping decision 31. `initialValue` and `controller` are two constructors
 (`new`, `with_initial_value`) rather than an assert.

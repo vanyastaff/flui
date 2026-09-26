@@ -224,9 +224,12 @@ impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
 /// by a handle the caller creates and passes to [`FormField::handle`], and
 /// handed to the field's builder.
 ///
-/// Cheap to clone; every clone names the same field. Bound to the first
-/// [`FormField`] it is given for that field's mounted lifetime. Owner-thread
-/// only.
+/// Cheap to clone; every clone names the same field. Owner-thread only.
+///
+/// A mounted field given a different handle on a later rebuild moves onto
+/// it: the new handle takes the field's value, error, interaction and place
+/// in the form, and the old one is detached — it keeps its last value but no
+/// longer reaches the field.
 pub struct FormFieldHandle<T> {
     inner: Rc<FieldInner<T>>,
 }
@@ -334,6 +337,11 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
         *self.inner.value_source.borrow_mut() = Some(source);
     }
 
+    /// Whether `self` and `other` name the same field.
+    pub(crate) fn same_field(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
     fn as_entry(&self) -> Rc<dyn FormFieldEntry> {
         Rc::clone(&self.inner) as Rc<dyn FormFieldEntry>
     }
@@ -351,12 +359,12 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
 pub struct FormField<T> {
     initial_value: T,
     builder: FormFieldBuilder<T>,
-    validator: Option<FormFieldValidator<T>>,
-    on_saved: Option<FormFieldSetter<T>>,
-    on_reset: Option<Rc<dyn Fn()>>,
+    pub(super) validator: Option<FormFieldValidator<T>>,
+    pub(super) on_saved: Option<FormFieldSetter<T>>,
+    pub(super) on_reset: Option<Rc<dyn Fn()>>,
     enabled: bool,
     autovalidate_mode: AutovalidateMode,
-    force_error_text: Option<String>,
+    pub(super) force_error_text: Option<String>,
     handle: Option<FormFieldHandle<T>>,
 }
 
@@ -451,7 +459,8 @@ impl<T: Clone + 'static> FormField<T> {
         self
     }
 
-    /// Drive the field through `handle`.
+    /// Drive the field through `handle`. A different handle on a later
+    /// rebuild takes the mounted field over (see [`FormFieldHandle`]).
     #[must_use]
     pub fn handle(mut self, handle: FormFieldHandle<T>) -> Self {
         self.handle = Some(handle);
@@ -493,6 +502,34 @@ impl<T: Clone + 'static> FormFieldState<T> {
             .borrow_mut()
             .clone_from(&view.force_error_text);
         *inner.initial.borrow_mut() = Some(view.initial_value.clone());
+    }
+
+    /// Move the mounted field onto `handle`: the field's state moves across,
+    /// the new handle takes the old one's place in the form, and the old
+    /// handle is detached — it keeps its last value, error and interaction
+    /// but no longer rebuilds the field, writes its controller or belongs to
+    /// the form.
+    fn adopt(&mut self, handle: FormFieldHandle<T>) {
+        let old = std::mem::replace(&mut self.handle, handle);
+        let (from, to) = (&old.inner, &self.handle.inner);
+        to.value.borrow_mut().clone_from(&from.value.borrow());
+        to.error.borrow_mut().clone_from(&from.error.borrow());
+        to.interacted.set(from.interacted.get());
+        *to.rebuild.borrow_mut() = from.rebuild.borrow_mut().take();
+        // A text field binds its controller to the new handle itself; a
+        // plain field's value binding, if any, moves across.
+        let sink = from.value_sink.borrow_mut().take();
+        if to.value_sink.borrow().is_none() {
+            *to.value_sink.borrow_mut() = sink;
+        }
+        let source = from.value_source.borrow_mut().take();
+        if to.value_source.borrow().is_none() {
+            *to.value_source.borrow_mut() = source;
+        }
+        *to.form.borrow_mut() = std::mem::take(&mut *from.form.borrow_mut());
+        if let Some(form) = &self.form {
+            form.replace(&old.as_entry(), self.handle.as_entry());
+        }
     }
 
     /// Move this field's registration to the form enclosing it now.
@@ -555,6 +592,11 @@ impl<T: Clone + 'static> ViewState<FormField<T>> for FormFieldState<T> {
     }
 
     fn did_update_view(&mut self, old_view: &FormField<T>, new_view: &FormField<T>) {
+        if let Some(handle) = &new_view.handle
+            && !handle.same_field(&self.handle)
+        {
+            self.adopt(handle.clone());
+        }
         self.configure(new_view);
         if old_view.force_error_text != new_view.force_error_text {
             // A forced error shows as given; withdrawing it re-runs the

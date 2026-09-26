@@ -1706,10 +1706,16 @@ without scheduling a rebuild fails the first one.
 **Choice:** The caller creates a `FormHandle`/`FormFieldHandle` and passes it
 to the widget (`Form::handle`, `FormField::handle`), or reads `Form::of`. A
 handle is a cheap `Rc` clone that owns the state, so it outlives the build
-that created it and needs no key registry. A field handle is bound to the
-first `FormField` it is given for that field's mounted lifetime; a different
-handle on a later rebuild is ignored. **Tests:** every `tests/form.rs` case
-drives the form through a handle.
+that created it and needs no key registry. A mounted field rebuilt with a
+different handle moves onto it: the new handle takes the field's value,
+error, interaction and registration slot, and the old handle is detached.
+Flutter would remount a field whose `GlobalKey` changed and lose its state;
+a handle is not the element's identity here, so the element and its state
+stay. A text form field rebuilt without the caller's controller moves its
+text into a controller it owns, as Flutter's `_createLocalController` does.
+**Tests:** every `tests/form.rs` case drives the form through a handle;
+`a_new_handle_on_rebuild_takes_the_mounted_field_over`,
+`dropping_the_callers_controller_moves_the_text_into_a_field_owned_one`.
 
 ### 23. A field registers with its form in lifecycle hooks
 

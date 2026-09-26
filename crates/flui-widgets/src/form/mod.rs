@@ -30,6 +30,7 @@
 
 mod form_field;
 mod raw_text_form_field;
+pub(crate) mod text_form_field_core;
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -43,8 +44,6 @@ pub use form_field::{
     FormField, FormFieldBuilder, FormFieldHandle, FormFieldSetter, FormFieldState,
     FormFieldValidator,
 };
-#[doc(hidden)]
-pub use raw_text_form_field::bind_text_controller;
 pub use raw_text_form_field::{RawTextFormField, RawTextFormFieldState};
 
 use crate::semantics::Semantics;
@@ -175,6 +174,19 @@ impl FormHandle {
 
     pub(crate) fn register(&self, field: Rc<dyn FormFieldEntry>) {
         self.inner.fields.borrow_mut().push(field);
+    }
+
+    /// Put `new` in `old`'s place, keeping the registration order; `new`
+    /// joins at the end when `old` is not registered.
+    pub(crate) fn replace(&self, old: &Rc<dyn FormFieldEntry>, new: Rc<dyn FormFieldEntry>) {
+        let mut fields = self.inner.fields.borrow_mut();
+        match fields
+            .iter_mut()
+            .find(|registered| Rc::ptr_eq(registered, old))
+        {
+            Some(slot) => *slot = new,
+            None => fields.push(new),
+        }
     }
 
     pub(crate) fn unregister(&self, field: &Rc<dyn FormFieldEntry>) {
