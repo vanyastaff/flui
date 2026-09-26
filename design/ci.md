@@ -468,6 +468,8 @@ pinning test can read them:
 | `aggregator::wide_lane_skips_platform_jobs` | lane `wide` with `gpu-test` skipped is green; with `clippy` skipped is red | no `wide` lane |
 | `aggregator::extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red` | lane `full` may skip `macos-ci`; lane `extended` may not | no `extended` lane |
 | `aggregator::lane_lists_match_the_job_conditions` | `WIDE_JOBS`, `FULL_JOBS`, `EXTENDED_JOBS` equal the jobs whose `if:` has each literal form | replaces `heavy_jobs_list_matches_the_jobs_gated_on_heavy` (`aggregator.rs:375`) |
+| `aggregator::a_narrow_lane_on_main_or_nightly_is_red` | `push`/`merge_group` on `fast` or `wide`, and `schedule`/`workflow_dispatch` on `full`, are red even when every job the lane skips did skip: `ci-verify` checks the lane against the event outside `Lane::decide` | the old shell set `heavy` from the event itself |
+| `aggregator::jobs_outside_the_lane_lists_have_their_own_condition` | `deps`, `fast-lane`, `fast-lane-ios` and `standalone` each carry the exact `if:` the aggregator assumes for it, so swapping two passes no test | only membership in a known set was checked |
 
 The existing tests that pin `heavy` (`classify.rs:733-760`, `aggregator.rs:394-547`) are
 rewritten against `lane` in the same PR; none is deleted without a replacement asserting the same
