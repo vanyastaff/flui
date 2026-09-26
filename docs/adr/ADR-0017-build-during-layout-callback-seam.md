@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-08
+- **Revised:** 2026-09-26 (a LayoutCallbackScope spike; the decision stands)
 - **Related:** ADR-0003 (lazy slivers use the same fixpoint)
 
 ## Context
@@ -154,6 +155,8 @@ Paint and hit-test additionally skip any child a pass did not place (the `placed
 flui-rendering `ARCHITECTURE.md`), which makes the stale-offset hazard structural for every
 multi-child object; the eviction remains what keeps out-of-band residents out of the tree.
 
+The R1/R2 invalidation rules in "Revisited" below are a candidate amendment to this section.
+
 ## Parity findings
 
 Checked against Flutter master `3.33.0-0.0.pre-6280-g88e87cd963f`
@@ -180,6 +183,113 @@ must be a pure function of `(ctx, constraints)`, which Flutter also requires. Pi
 (`crates/flui-widgets/tests/layout_builder.rs`). Closing it would need `build_into_views` to defer to
 the fixpoint and retain the previous child view meanwhile — element state for no observable gain.
 
+## Revisited: a LayoutCallbackScope spike (2026-09-26)
+
+The decision above stands. This section records a spike of the rejected mid-pass alternative and
+what a superseding record would need.
+
+**What was built.** Branch `spike/layout-callback`, commits `f7e89e8f6` and `92a47723e`
+(24 files, +1116/−63), not merged:
+
+- `Slab<Box<RenderNode>>` in `storage/tree.rs`, so a node's address does not move when the tree
+  grows mid-walk.
+- `LayoutChildBuilder` and `LayoutChildBuild`, plus
+  `PipelineOwner<Layout>::run_layout_with_child_builder`.
+- `LayoutCallbackScope`, with a side map in `subtree_arena.rs` that holds the only new `unsafe`.
+- `ChildLayout::Built`, used by the fixed-extent list, the variable list and the grid.
+- `BuildOwner::build_child_in_layout`.
+- 5 `PipelineCell` sites routed through the scope.
+
+**Results.** `layout_passes` from `FrameReport`, reproduced by the reviewer. Configurations:
+A = callback on with both rules, D = callback on with both rules below off, B = callback off
+with the rules, C = `main`.
+
+| Scenario | A | D | B | C |
+|---|---|---|---|---|
+| Fixed extent: mount / scroll / jump | 1/1/1 | 1/2/2 | 2/2/2 | 2/2/2 |
+| Fixed extent: 30 small scrolls | 30 | 41 | 40 | 42 |
+| Variable extent: mount / scroll / jump | 1/1/1 | 1/2/2 | 2/2/2 | 2/2/2 |
+| Variable extent: 30 small scrolls | 30 | 41 | 41 | 52 |
+| Heterogeneous: mount / scroll / jump | 1/1/1 | 1/2/2 | 2/1/3 | 2/2/3 |
+| Heterogeneous: 30 small scrolls | 30 | 36 | 34 | 40 |
+
+- In the over-estimated-extent rows only the mount figure is valid (1 against 3): after the jump
+  the viewport sits at the content's end, and the oracle skips `pixels != 0`.
+- `list_10k_scroll_one_screen`: A gives 1 pass, 1 layout root and 129 nodes laid out; `main`
+  gives 2, 128 and 132. `perf.rs` does not gate these values.
+- Builds, frames and paints are identical across configurations, and idle frames are 0.
+
+The callback alone reaches one pass only at mount. Scroll and jump need the callback plus the two
+invalidation rules.
+
+**Why §3 is not superseded.**
+
+1. **No double borrow is not structural.** 5 of the 55 `.with_mut(` sites in
+   `crates/flui-view/src` (at the spike's head) are routed. `build_child_in_layout` reaches
+   `build_scope_impl`, which drains the global dirty heap, so any unrouted path can panic inside
+   layout. A `LayoutBuilder` row hit `BUG: PipelineCell::with_mut called reentrantly`.
+2. **`LayoutBuilder` rows regress against `main`.**
+
+   | Frame | `main` | Callback on |
+   |---|---|---|
+   | Mount | 5 passes, 355 nodes laid out | 3 passes, 60,010 nodes laid out |
+   | Jump 5000 rows | 9 passes, 831 nodes, 2,144 builds | 5 passes, 30,170 nodes, 25,270 builds |
+
+   Both leave row 5000 unattached. This is the stand-in hazard of
+   [ADR-0054](ADR-0054-the-viewport-commits-one-result.md).
+3. **The §8 budget is lost.** `MAX_LAZY_BAND_PASSES`
+   (`crates/flui-view/src/owner/layout_builder.rs:74`) no longer bounds in-callback work, and
+   `lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame`
+   (`crates/flui-widgets/tests/lazy_list.rs:899`) fails. The suite ran 4964 of 4965 passing at the
+   spike's head.
+4. **The scope is unsound from safe code.** `with_created_node_mut(a, |n| scope.adopt(a, b))`, or
+   a nested `with_created_node_mut(a, …)`, aliases `&mut`. The scope has no unit tests and was not
+   run under miri.
+5. **Also open.**
+   - The render-children reorder is skipped inside the callback. Hypothesis: paint and semantics
+     order is wrong until the next drain.
+   - There is no backward-scroll scenario.
+   - The spike's `env::var_os` reads in `mark_needs_layout` taint any timing comparison. The
+     boxed-node bench showed no visible cost but was not re-run.
+
+**Conditions for a follow-up spike.** A record superseding §3 needs a spike that shows all four:
+
+1. `LayoutBuilder` on the same callback (the box-protocol side), with its rows at or below
+   `main`'s work and row 5000 attached.
+2. The in-callback build drains only the new child's subtree, and element-side render access
+   goes through a scope or attach handle as a type, so no `PipelineCell` access is reachable
+   inside a callback.
+3. A replacement for the band pass budget: a per-frame bound on in-callback builds.
+4. Miri clean on `subtree_arena`, with the `with_created_node_mut`/`adopt` aliasing closed and
+   unit tests for use after return and for the adopt restrictions.
+
+Stable node storage (boxed or chunked) is a prerequisite the spike already showed.
+
+**A separable candidate change.** Two invalidation rules, measured alone as B against C:
+
+- **R1.** A service pass that only evicted children the band-emitting pass did not place does not
+  re-dirty the sliver's layout; it marks paint, compositing bits and semantics instead.
+- **R2.** A layout mark on a child its sliver parent did not place in its last pass stops there.
+  The spike checks this in its scheduler (`scheduler.rs:240` on the branch) through
+  `as_sliver()`, so it applies to every sliver parent.
+
+Without the callback they bring variable-extent small scrolls from 52 to 41 passes,
+heterogeneous small scrolls from 40 to 34, and the heterogeneous scroll from 2 to 1.
+
+- R2 diverges from Flutter's `markNeedsLayout`, which always walks to the relayout boundary. R1
+  has no Flutter counterpart, because Flutter collects garbage inside layout.
+- The change lands on its own. It amends §8 explicitly and keeps the budget-trip path,
+  `service_child_requests_evict_only` (`crates/flui-view/src/owner/build_owner.rs:2288`),
+  marking layout, because that path evicts children the last pass did place.
+- R2 becomes a per-render-object opt-in, not an `as_sliver()` check.
+- It needs `## Mapping decisions` entries in
+  [`crates/flui-rendering/ARCHITECTURE.md`](../../crates/flui-rendering/ARCHITECTURE.md#mapping-decisions)
+  for R2 and [`crates/flui-view/ARCHITECTURE.md`](../../crates/flui-view/ARCHITECTURE.md#mapping-decisions)
+  for R1, tests that fail without each rule, and an updated
+  `crates/flui-widgets/perf/baseline.toml`.
+
+Until then R1 and R2 are candidates only.
+
 ## Consequences
 
 - Flutter-observable semantics with no `flui-rendering` change: no new `LayoutContextApi`
@@ -195,7 +305,8 @@ the fixpoint and retain the previous child view meanwhile — element state for 
 - **True mid-pass `invokeLayoutCallback`.** Needs the `SubtreeArena` to allocate and splice nodes
   while it holds `&mut RenderTree`, and the element layer to reach the `PipelineOwner` without the
   frame driver's non-reentrant lock — a render-machine redesign whose only gain is pass count. It
-  could be adopted later without changing the public `LayoutBuilder` API.
+  could be adopted later without changing the public `LayoutBuilder` API. Built and measured in
+  the 2026-09-26 spike ("Revisited"): one pass for plain lazy rows, not yet sound or bounded.
 - **Ship the one-frame-late version** (build after the frame). A public semantic we would have to
   unwind: `builder` would run a frame after layout, and a responsive UI would flash its previous
   branch.

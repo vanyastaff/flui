@@ -2,6 +2,7 @@
 
 - **Status:** Proposed
 - **Date:** 2026-09-25
+- **Revised:** 2026-09-26 (Windows spike failed; see Context and §5)
 - **Supersedes (on acceptance, after the spike below passes):** the three-crate dlopen worker
   design described in [`docs/hot-reload.md`](../hot-reload.md),
   [`crates/flui-hot-reload/ARCHITECTURE.md`](../../crates/flui-hot-reload/ARCHITECTURE.md) and
@@ -80,31 +81,103 @@ changed code of the crate that contains `main` is linked as a patch against the 
 needs no project split. Bevy 0.17 ships system hot patching on it. Its behaviour on Windows,
 where it reads symbols from PDBs, and on Android is not verified for FLUI.
 
+### What the spike showed (2026-09-26, Windows 11 x64 only)
+
+The spike ran on branch `spike/subsecond` at `51d223fa5`, with dx and subsecond 0.7.10. It is not
+merged.
+
+- **Stock `dx` cannot patch a FLUI app on Windows x64.** Its missing-symbol stub is
+  `mov rax, imm64; jmp rax`, and RAX carries `__chkstk`'s argument. 14 call sites in the patch DLL
+  probe a huge stack, and the app exits with `0xc000041d`. The 0.8.0-alpha.1 source has the same
+  stub. The one-line fix is `jmp [rip+0]` followed by the address, which `dx`'s non-Windows branch
+  already uses.
+- **With the patched `dx`:**
+  - A logic edit keeps state (a `born` field stays constant, a `ticks` counter keeps counting).
+    The signal and `StateCell` path was not exercised: its `count` stayed 0.
+  - A `State` size change (`extra: [u64; 8]`) is caught by a fingerprint of size, alignment, drop
+    glue and type name, and the root is remounted with fresh state. That was a remount in the
+    same realm, primary presentation only, not a fresh realm.
+- **Statics and thread-locals in the patched crate break.** Every patch gets a zeroed copy of
+  each app-crate `static`. A `thread_local!` in the app crate crashes on first access from patched
+  code (`0xc000041d`, an exception inside a window callback; the mechanism is unknown). Framework
+  statics survived. A framework thread-local read inlined into the patch returned the right
+  value; why is not understood, and it stays unverified. std's `HashMap::new` did not crash; its
+  consistency was not tested. The spike's `dx_tls*` runs are invalid, because their probe flag
+  lived in a zeroed app static; only its `dx_p*` runs count.
+- **Patch reach.** Patches reached elements whose vtables predate them **only for calls wrapped
+  by the hook**: `StatelessView::build`, `ViewState::build`, `init_state` and `create_state`.
+  `ElementBase` methods (`build_into_views`, update, `dispose`, `did_update_view`,
+  `did_change_dependencies`) and user render objects' layout and paint still ran pre-patch code.
+  6 of 33 build calls per pass were redirected.
+- **A frame-level hook would reach nothing** (an inference; not run). A frame-level
+  `call(&mut dyn FnMut())` goes through framework symbols, which have no jump-table entry.
+  Neither that mode nor `HotFn` was run.
+- **Canonicalisation is required.** Subsecond keys its table by the original binary's
+  addresses, so the hook must map every earlier patch address back to its original. Without that
+  mapping, edits after a restart never arrived.
+- **Numbers.**
+  - Edit to patch applied: 1.7–3.8 s end to end.
+  - `dx`'s "Hot-patching took": 1.05–4.53 s.
+  - `apply_patch`: 380–780 ms.
+  - Patch to rebuilt frame (and to remount): under the driver script's 100 ms poll interval;
+    `dx`'s timestamps put both in the same 10 ms tick. Neither is a measurement.
+  - Jump table: 5,548–5,771 entries.
+  - Patch DLL: 816–830 KB plus a 5.9 MB PDB.
+  - A cold fat build of 381.9 s and launch to first frame of 14–58 s were reported and not
+    re-checked.
+- **Not run:** macOS, Android, input after a patch, the pairing with dynamic linking, a
+  same-size `State` change, an edit to a `View` type.
+- **The §5 criteria were not judged under §4**, because framework globals had not come down
+  first. The app-crate failures stand regardless: they come from the app crate, not the
+  framework.
+
 ## Decision
 
 ### 1. The runtime exposes a hook; it names no reload tool
 
 The runtime (`flui-runtime`, ADR-0083; `flui-app` until that crate exists) owns one optional
-hook:
+hook. It is called at the element seam in `flui-view`, once for each framework call into a
+user-implemented `View` or `ViewState` method, not once per frame: a frame-level call goes
+through framework symbols, which a patcher's jump table does not cover (Context). The shape
+is:
 
 ```rust
 pub trait DevReloadHook: 'static {
-    /// Run one unit of framework work (a frame's build pass) through the hook,
-    /// so a code patcher can route it through its jump table.
-    fn call(&self, work: &mut dyn FnMut());
+    /// Run one framework call into user code through the hook, so a code patcher
+    /// can route it through its jump table. `entry` is a trampoline monomorphised
+    /// for the user's type, so it lives in the app crate and has a jump-table entry.
+    fn call(&self, entry: fn(*mut ()), data: *mut ());
     /// What changed since the last poll: nothing, patched code, or a change that
     /// needs a fresh realm.
     fn poll(&mut self) -> ReloadEvent;
 }
 ```
 
+Only the `call(entry, data)` signature was run in the spike. The spike's trait was
+`DevReloadHook: Send + Sync + 'static` with `call` alone, and `poll` was a free function over a
+`PENDING` static. The `poll` method and the `'static`-only bound are this record's decisions: the
+instance lives on its realm and is called on the owner thread, and patch notifications reach it
+through the owner-queued command (§3), so it needs no `Send` or `Sync`. The exact safe wrapper
+over that raw shape is settled in the Subsecond implementation step.
+
+- The first version routes `build`, `init_state`, `create_state`, `did_update_view`,
+  `did_change_dependencies` and `dispose`. The spike did not reach the last three, so they must
+  be shown. User render objects' layout, paint and hit-test are not routed: an edit there
+  restarts, pending a measurement of what routing them would cost on the hot path.
+- Types stay low (ADR-0083 §1): the trait lives in `flui-view`, and the runtime owns the
+  instance and installs it per realm. No `static` holds it; the spike's `HOOK`, `WAKER` and
+  `PENDING` statics and its `DEV_RESTART` thread-local would fail `cargo xtask globals`
+  ([ADR-0097](ADR-0097-no-process-global-state-gate.md)).
 - The hook is installed explicitly on the application builder (`Application`,
-  `crates/flui-app/src/app/application.rs:53`), by the application, never discovered. With no hook, the runtime calls the work directly and pays nothing else.
+  `crates/flui-app/src/app/application.rs:53`), by the application, never discovered. With no
+  hook installed, the element seam calls the user method directly; the only cost is checking
+  the realm's `Option` hook.
 - `ReloadEvent::Patched` becomes an owner-queued hot reload in every realm (ADR-0027 §9), which
   runs the existing reassemble: every element dirty, state kept
-  (`WidgetsBinding::perform_reassemble`, `crates/flui-view/src/binding.rs:1173`).
+  (`WidgetsBinding::perform_reassemble`, `crates/flui-view/src/binding.rs:1192`).
 - `ReloadEvent::RestartRequired` tears the realm down and hosts a fresh one on the same loop
-  (ADR-0039 §6). State is lost; the process and its windows are not.
+  (ADR-0039 §6), in every presentation. State is lost; the process and its windows are not. The
+  spike showed only a root remount in the same realm.
 - The reload tier type belongs to the runtime. `flui_hot_reload::HotReloadTier` leaves
   `flui-app`'s signatures.
 
@@ -121,10 +194,27 @@ crate" rule (ADR-0081 §3, ADR-0088 §2), whose dated exceptions for these edges
 
 The official hot-reload package implements `DevReloadHook` with `subsecond::call` for `call`
 and Subsecond's patch notification for `poll`. `flui run` drives the Subsecond build side
-(the patch linker and the file watcher). A State type edit must surface as
-`RestartRequired`; how the package detects it (Subsecond's own report, or a layout
-fingerprint of the `ViewState` types, which the framework does not have today) is an output of
-the spike, not assumed here.
+(the patch linker and the file watcher), with a `dx` that carries the Windows stub fix (Context)
+until that fix is upstream.
+
+- **Detection.** A type edit surfaces as `RestartRequired` through a derive-generated structural
+  hash over **every retained `View` type and every `ViewState` type**. Size, alignment and name,
+  which the spike fingerprinted, miss same-size edits.
+- **Why a `View` edit must be detected** (a hypothesis; not run). An undetected `View` field
+  change is memory-unsafe: `dispatch_view_update`
+  (`crates/flui-view/src/element/dispatch.rs:75`) discriminates by `TypeId`, which ignores
+  layout, so old code would store a new-layout value into an old-layout slot.
+- **Canonical addresses.** The implementation maps earlier patch addresses back to their
+  originals before calling through the jump table (Context, canonicalisation).
+- **Owner-thread application.** Patches are applied on the owner thread, through the
+  owner-queued command. `dioxus_devtools::connect` runs its callback on a spawned thread
+  (dioxus-devtools `lib.rs:90`), so the spike's patch application raced the UI thread's
+  jump-table reads.
+- **A limitation** (an inference from how the table is keyed; not run): code first introduced by
+  a patch cannot be patched again until a restart.
+- **No globals in reloadable code.** The app crate's reloadable code holds no `static` or
+  `thread_local!`, unless upstream fixes them (Context). Enforcing that needs a lint or a check;
+  which one is open.
 
 ### 4. Globals come down before the spike is judged
 
@@ -141,15 +231,26 @@ when a logic edit keeps state, a State type edit restarts the realm, and nothing
 a remaining static or thread-local. Then, and not before, the following are deleted together:
 the worker/host/types template, the `--scene` scene plugin, the dlopen driver in
 `flui-hot-reload`, the `hot_reload_counter` and `hot_reload_lifecycle_fixture` examples, and
-ADR-0045's Android inline-lane constraint. If the spike fails on a platform, that platform
-keeps no hot reload rather than the dlopen path, and the failure is recorded here.
+ADR-0045's Android inline-lane constraint. A platform where the spike fails keeps the dlopen
+path, with both worker hazards documented in `flui-hot-reload`'s crate docs, until a later spike
+passes on it. Windows failed on 2026-09-26 (Context).
+
+This record is accepted only when all of these hold:
+
+- the `dx` stub fix is upstream, or `flui run` carries it;
+- the rule that reloadable app-crate code holds no `static` or `thread_local!` is enforced, or
+  upstream fixes them;
+- the structural hash (§3) exists;
+- patches are applied on the owner thread (§3);
+- the spike has run on macOS and Android, and re-run on Windows with the patched `dx`.
 
 Until deletion, the two worker hazards in Context are either reproduced on Windows or written
 into `flui-hot-reload`'s crate docs.
 
 ## Alternatives considered
 
-- **Keep the dlopen worker.** Rejected: its safety rests on unchecked unload discipline, it
+- **Keep the dlopen worker.** Rejected as the target; kept as the fallback on any platform the
+  spike has not passed (§5). Its safety rests on unchecked unload discipline, it
   forces a three-crate project, it shapes framework code (`ManuallyDrop` statics, the Android
   inline lane), and it has two undocumented hazards on the worker path.
 - **A facade `hot-reload` feature over a packaged `flui-hot-reload`.** Rejected: the facade
@@ -184,15 +285,21 @@ into `flui-hot-reload`'s crate docs.
 
 ## Verification
 
-None of these exists yet.
+The spike seam exists on `spike/subsecond` (not merged); none of the tests below exists yet.
 
 - **No edge.** The reach gate (ADR-0081) proves `flui-hot-reload` is absent from the normal
   dependency graph of every core crate under every facade feature combination, and
   `cargo xtask workspace` rejects a core manifest that names it even optionally (ADR-0088).
 - **Hook contract, headless.** A test installs a fake `DevReloadHook` that counts `call`s and
-  scripts `poll`: every build pass runs through `call`; `Patched` re-runs `build()` with a
+  scripts `poll`: every framework call into a user `build` runs through `call`; `Patched` re-runs `build()` with a
   stateful counter's value preserved; `RestartRequired` mounts a fresh realm whose counter is
   back at its initial value; with no hook the frame runs unchanged.
+- **Type edits restart.** A same-size `State` change and a `View` field change both yield
+  `RestartRequired`.
+- **Owner thread.** A patch delivered off the owner thread is applied only on the owner thread.
+- **Canonicalisation.** An element mounted after a patch receives the next patch.
+- **Hook coverage.** The hook covers `did_update_view`, `did_change_dependencies` and
+  `dispose`.
 - **Spike acceptance,** recorded in this ADR before it is accepted: logic edit keeps state,
   State type edit restarts the realm, no residual static or thread-local breakage, on Windows,
   macOS and Android.
