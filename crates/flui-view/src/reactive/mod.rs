@@ -154,7 +154,7 @@ pub struct SlotInfo {
 
 impl Reactive {
     /// A graph with no scheduler: writes still update values, but no element
-    /// is scheduled until [`Reactive::set_scheduler`] is called (the
+    /// is scheduled until the crate-private `set_scheduler` is called (the
     /// `BuildOwner` does that at construction and again when its
     /// frame-request callback changes).
     #[must_use]
