@@ -1434,15 +1434,12 @@ impl FragmentComposer {
             // The two are counted apart: a patched layer is new output built
             // this pass, not a reuse, and folding it into `layers_reused`
             // would hide exactly the per-layer cost an animated opacity pays.
-            let layer = match patch_by_index.get(&index) {
-                Some(layer) => {
-                    self.counts.layers_produced += 1;
-                    (*layer).clone()
-                }
-                None => {
-                    self.counts.layers_reused += 1;
-                    node.layer.clone()
-                }
+            let layer = if let Some(layer) = patch_by_index.get(&index) {
+                self.counts.layers_produced += 1;
+                (*layer).clone()
+            } else {
+                self.counts.layers_reused += 1;
+                node.layer.clone()
             };
             let mut layer_node = flui_layer::LayerNode::new(layer);
             if let Some(render_id) = node.render_id {
