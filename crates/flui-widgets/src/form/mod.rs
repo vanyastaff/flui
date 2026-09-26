@@ -99,6 +99,10 @@ pub(crate) struct FormInner {
 /// instead of a `GlobalKey<FormState>`.
 ///
 /// Cheap to clone; every clone names the same form. Owner-thread only.
+///
+/// [`Self::has_interacted_by_user`] reads plain state, not a signal, so a
+/// `build` that calls it does not subscribe; see [`FormFieldHandle`]'s
+/// "Reads are not tracked".
 #[derive(Clone, Default)]
 pub struct FormHandle {
     inner: Rc<FormInner>,

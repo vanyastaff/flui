@@ -230,6 +230,17 @@ impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
 /// it: the new handle takes the field's value, error, interaction and place
 /// in the form, and the old one is detached — it keeps its last value but no
 /// longer reaches the field.
+///
+/// # Reads are not tracked
+///
+/// The getters ([`Self::value`], [`Self::error_text`], [`Self::has_error`],
+/// [`Self::is_valid`], [`Self::has_interacted_by_user`]) read plain state,
+/// not a signal, so a `build` that calls them does not subscribe. The field
+/// rebuilds its own content when its error changes; any other widget that
+/// shows a field's state — a submit button enabled by [`Self::is_valid`] —
+/// is rebuilt by the caller, for example from [`Form::on_changed`]. The
+/// getters are meant for event handlers and the field's own builder.
+/// Flutter's `FormFieldState` is not listenable either.
 pub struct FormFieldHandle<T> {
     inner: Rc<FieldInner<T>>,
 }

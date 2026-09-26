@@ -53,11 +53,14 @@ already written against signals.
 
 ### The callback surface is large and inconsistent
 
-The catalog has 92 public `on_*` setters:
+The catalog has 105 public `on_*` setters:
 
 ```text
-grep -rhoE 'pub fn on_[a-z_]+' crates/flui-widgets/src crates/flui-material/src crates/flui-cupertino/src | wc -l   # 92
+grep -rhoE 'pub fn on_[a-z_]+' crates/flui-widgets/src crates/flui-material/src crates/flui-cupertino/src | wc -l   # 106
 ```
+
+(The one hit that is not a setter is `on_drag_start` in `navigator/back_gesture.rs`, the
+recognizer handler the back gesture calls.)
 
 Most take `impl Fn(..) + 'static`; 23 take `impl Fn(..) + Send + Sync + 'static` (the five
 `Draggable` setters, four `DragTarget` setters, `PageView::on_page_changed` and the fourteen
@@ -181,14 +184,29 @@ classification, with the command above as its census:
 | widgets `scroll/refresh_indicator.rs` | `on_refresh` | event | no | not yet audited |
 | widgets `semantics/mod.rs` | 14: `on_tap`, `on_long_press`, `on_scroll_{left,right,up,down}`, `on_increase`, `on_decrease`, `on_show_on_screen`, `on_focus`, `on_blur`, `on_set_text`, `on_scroll_to_offset`, `on_action` | event | yes | assistive-technology action dispatch |
 | widgets `text/editable_text.rs`, `text/text_field.rs` | `on_submitted` ×2 | event | no | not yet audited |
+| widgets `text/editable_text.rs`, `text/text_field.rs` | `on_changed` ×2 | event | no | the field's key handler, IME commit and clipboard actions, after a user edit |
+| widgets `navigator/local_history.rs` | `on_remove` | event | no | not yet audited |
+| widgets `form/mod.rs` | `Form::on_changed` | event | no | a handle method the caller invokes: `FormFieldHandle::did_change`/`reset`, `FormHandle::reset` |
+| widgets `form/form_field.rs`, `form/raw_text_form_field.rs` | `on_saved` ×2, `on_reset` ×2, `on_submitted` | event | no | `on_saved` from `FormHandle::save`, `on_reset` from `FormHandle::reset`/`FormFieldHandle::reset`; `on_submitted` as `EditableText`'s |
+| material `text_field.rs`, `text_form_field.rs` | `on_changed`, `on_saved`, `on_reset`, `on_submitted` | event | no | as the widgets rows above |
 | material (19 files) | 25: `on_pressed` ×7, `on_tap` ×4, `on_changed` ×3, `on_deleted` ×2, `on_selected`, `on_select_changed`, `on_select_all`, `on_open_changed`, `on_destination_selected`, `on_drawer_changed`, `on_end_drawer_changed`, `on_closed`, `on_submitted` | event | no | not yet audited |
 | cupertino (2 files) | `on_tap`, `on_pressed`, `on_long_press` | event | no | not yet audited |
 
-Totals: 87 event, 5 query, 92 in all. `on_key_event` is the one event callback that returns a
+Totals: 100 event, 5 query, 105 in all. `on_key_event` is the one event callback that returns a
 value: it runs at key dispatch after routing, and keyboard shortcuts are a primary write path, so
 it receives `cx` and keeps its `KeyEventResult`. The "dispatch site" column must be complete —
 every row audited for a call from `build`, a listener or a post-frame callback — before any
 setter signature changes.
+
+The form's callbacks are the one family dispatched from methods the application calls rather
+than from the framework: `on_saved` runs inside `FormHandle::save`, `on_reset` inside
+`FormHandle::reset` and `FormFieldHandle::reset`, and `Form::on_changed` inside those and
+`FormFieldHandle::did_change`. In step 4 of §8 those handle methods take the caller's
+`&mut EventCx<'_>` and pass it to the callbacks they run — `FormHandle::save(&self, cx: &mut
+EventCx<'_>)` — and a text form field's input forwards the `cx` its own `on_changed` receives into
+`did_change`; `flui migrate` rewrites the handle calls with the setters. The three `validator`
+setters (`FormField`, `RawTextFormField`, the Material `TextFormField`; not `on_*`, so outside
+the count) return a decision and are queries: they get no writer.
 
 ### 7. `StateCell` and `RebuildHandle` stay run-time capabilities
 
@@ -247,7 +265,7 @@ amending this record.
 - ADR-0074 §5.1's signatures, §5.2's enforcement statement and §5.8's command path are replaced
   as stated in the header; its semantics stand. ADR-0078 §1 gains `writer_source` in its method
   list.
-- **Breaks.** Every event setter in §6 changes its closure signature (87 setters; the panel
+- **Breaks.** Every event setter in §6 changes its closure signature (100 setters; the panel
   counted about 432 call sites, an upper-bound grep). `Signal::set/update/set_if_changed`
   change their first parameter. `BuildContext::reactive()` and `BuildOwner::reactive()` are
   removed. Custom recognizers and query callbacks do not change.
