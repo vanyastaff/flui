@@ -39,10 +39,9 @@ pub mod kind;
 pub mod unified;
 
 use flui_foundation::ElementId;
-// Slot types live in flui-tree (canonical home per `flui-tree-unified-interface-intent`
-// memory + the "behavior loyal, structure Rust-native" rule). flui-view re-exports
-// the bare `IndexedSlot` and aliases `ElementSlot` to its `ElementId` instantiation.
-pub use flui_tree::IndexedSlot;
+// `IndexedSlot` lives in flui-foundation. flui-view re-exports it and aliases
+// `ElementSlot` to its `ElementId` instantiation.
+pub use flui_foundation::IndexedSlot;
 
 // Re-export commonly used arity and generic types
 pub use arity::{ElementArity, Leaf, Optional, Single, Variable};
@@ -86,7 +85,7 @@ pub use unified::Element;
 
 /// Slot describing a child element's position in its parent's children list.
 ///
-/// Type alias for `flui_tree::IndexedSlot<ElementId>`. The slot tracks the
+/// Type alias for `flui_foundation::IndexedSlot<ElementId>`. The slot tracks the
 /// child's 0-based index plus an optional previous-sibling `ElementId` (the
 /// payload semantics view-local code used to spell `IndexedSlot<Option<ElementId>>`).
 ///

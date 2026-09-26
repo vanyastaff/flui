@@ -1,6 +1,6 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
-use flui_tree::Arity;
+use flui_foundation::Arity;
 use flui_types::Size;
 
 use crate::{

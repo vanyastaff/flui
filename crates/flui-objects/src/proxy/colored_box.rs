@@ -1,7 +1,7 @@
 //! RenderColoredBox - a simple colored rectangle.
 
+use flui_foundation::Leaf;
 use flui_painting::Paint;
-use flui_tree::Leaf;
 use flui_types::{Color, Point, Rect, Size, geometry::px};
 
 use flui_rendering::{

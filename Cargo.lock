@@ -1848,7 +1848,6 @@ dependencies = [
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
- "flui-localizations",
  "flui-macros",
  "flui-material",
  "flui-objects",
@@ -1856,7 +1855,6 @@ dependencies = [
  "flui-platform",
  "flui-rendering",
  "flui-testing",
- "flui-tree",
  "flui-types",
  "flui-view",
  "flui-widgets",
@@ -2149,7 +2147,6 @@ dependencies = [
  "bitflags 2.13.2",
  "flui-foundation",
  "flui-painting",
- "flui-tree",
  "flui-types",
  "static_assertions",
  "tracing",
@@ -2161,14 +2158,6 @@ version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "x11rb 0.14.0",
-]
-
-[[package]]
-name = "flui-localizations"
-version = "0.2.0-dev"
-dependencies = [
- "flui-types",
- "flui-widgets",
 ]
 
 [[package]]
@@ -2225,7 +2214,6 @@ dependencies = [
  "flui-objects",
  "flui-painting",
  "flui-rendering",
- "flui-tree",
  "flui-types",
  "insta",
  "parking_lot",
@@ -2349,7 +2337,6 @@ dependencies = [
  "flui-rendering",
  "flui-scheduler",
  "flui-semantics",
- "flui-tree",
  "flui-types",
  "parking_lot",
  "proptest",
@@ -2438,7 +2425,6 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-protocol",
- "flui-tree",
  "flui-types",
  "parking_lot",
  "rustc-hash 2.1.3",
@@ -2473,17 +2459,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flui-tree"
-version = "0.2.0-dev"
-dependencies = [
- "bon",
- "flui-foundation",
- "smallvec",
- "thiserror 2.0.20",
- "tracing",
-]
-
-[[package]]
 name = "flui-types"
 version = "0.2.0-dev"
 dependencies = [
@@ -2513,7 +2488,6 @@ dependencies = [
  "flui-rendering",
  "flui-scheduler",
  "flui-testing",
- "flui-tree",
  "flui-types",
  "futures-core",
  "parking_lot",

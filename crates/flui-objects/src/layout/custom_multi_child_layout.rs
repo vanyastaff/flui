@@ -10,7 +10,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use flui_tree::Variable;
+use flui_foundation::Variable;
 use flui_types::{Offset, Pixels, Size};
 
 use flui_rendering::{

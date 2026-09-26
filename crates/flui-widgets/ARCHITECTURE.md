@@ -1663,3 +1663,39 @@ for the last one: skip wrapping `install_pointer_handlers`'s return value
 in `wrap_double_tap_word_select` — the selection stays collapsed after
 the second tap.
 
+### 21. Global widgets localizations live in the catalog, not in a separate `flutter_localizations` package
+
+**Oracle:** `package:flutter_localizations`
+(`lib/src/widgets_localizations.dart`,
+`lib/src/l10n/generated_widgets_localizations.dart`, tag `3.44.0`) is a
+package of its own beside the widgets library. It holds
+`GlobalWidgetsLocalizations`, its delegate, and one generated class per
+supported language.
+
+**Choice:** `GlobalWidgetsLocalizations`, `GlobalWidgetsLocalizationsDelegate`
+and `RTL_LANGUAGES` live in `flui_widgets::localization`, next to the
+`WidgetsLocalizations` contract they implement.
+
+**Why the oracle's shape does not transcribe.** Flutter's split carries
+about 80 languages of translated strings. This port has none: every string
+forwards to `DefaultWidgetsLocalizations`, and the only behavior is the RTL
+language table and the delegate. A separate crate held that one table in a
+layer of its own, which ADR-0081 deleted; the table moved down into the
+crate whose contract it implements.
+
+**Consequences:**
+
+- The delegate's `is_supported` is always `true`. Flutter's delegate gates
+  on `kWidgetsSupportedLanguages`, a proxy for "this locale has translated
+  strings"; with no translations for any locale that gate would only
+  produce false negatives.
+- Translated string catalogs, when they arrive, are a separate decision
+  about where FLUI sources translations; they do not reopen a crate here.
+
+**Tests:**
+`flui-widgets::tests::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl`
+mounts `Localizations` with the global delegate for `ar` and reads
+`Directionality::of` from inside the subtree; the unit tests in
+`localization/global_widgets_localizations.rs` pin the table, the `iw`
+alias, and `is_supported`.
+

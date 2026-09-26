@@ -44,14 +44,14 @@ struct PoisonedDescriptor {
 impl flui_foundation::Diagnosticable for PoisonedDescriptor {}
 
 impl flui_rendering::traits::RenderBox for PoisonedDescriptor {
-    type Arity = flui_tree::Single;
+    type Arity = flui_foundation::Single;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<
             '_,
-            flui_tree::Single,
+            flui_foundation::Single,
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> Size {
@@ -69,7 +69,7 @@ impl flui_rendering::traits::RenderBox for PoisonedDescriptor {
         &self,
         _ctx: &mut flui_rendering::context::BoxHitTestContext<
             '_,
-            flui_tree::Single,
+            flui_foundation::Single,
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> bool {
@@ -347,14 +347,14 @@ fn a_panicking_path_clipper_poisons_the_frame_on_both_arms() {
     impl flui_foundation::Diagnosticable for PathClipDescriptor {}
 
     impl flui_rendering::traits::RenderBox for PathClipDescriptor {
-        type Arity = flui_tree::Single;
+        type Arity = flui_foundation::Single;
         type ParentData = flui_rendering::parent_data::BoxParentData;
 
         fn perform_layout(
             &mut self,
             ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Single,
+                flui_foundation::Single,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
@@ -372,7 +372,7 @@ fn a_panicking_path_clipper_poisons_the_frame_on_both_arms() {
             &self,
             _ctx: &mut flui_rendering::context::BoxHitTestContext<
                 '_,
-                flui_tree::Single,
+                flui_foundation::Single,
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> bool {

@@ -1,6 +1,6 @@
 //! Minimal leaf sliver used as a trait-method probe in unit tests.
 
-use flui_tree::Leaf;
+use flui_foundation::Leaf;
 
 use crate::{
     constraints::SliverGeometry,

@@ -5,6 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use flui_foundation::Leaf;
 use flui_objects::RenderViewport;
 use flui_rendering::{
     constraints::{GrowthDirection, SliverGeometry},
@@ -15,7 +16,6 @@ use flui_rendering::{
     traits::RenderSliver,
     view::{ScrollableViewportOffset, SliverPaintOrder, ViewportOffset},
 };
-use flui_tree::Leaf;
 use flui_types::{Offset, Size, geometry::px, layout::AxisDirection};
 
 use crate::common::{BoxedSliverObject, laid_out_tight_100x100 as laid_out};

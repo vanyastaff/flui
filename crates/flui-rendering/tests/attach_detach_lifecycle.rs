@@ -12,10 +12,10 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use flui_foundation::Leaf;
 use flui_rendering::pipeline::{PipelineOwner, RenderInvalidationHandle};
 use flui_rendering::prelude::*;
 use flui_rendering::traits::RenderSliver;
-use flui_tree::Leaf;
 use flui_types::geometry::px;
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject};

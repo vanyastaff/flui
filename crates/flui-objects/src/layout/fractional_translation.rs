@@ -22,7 +22,7 @@
 //! `RenderState`). The intent collapses into the type system instead of
 //! the docstring.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::geometry::Lerp;
 use flui_types::{Matrix4, Offset, Size, geometry::px};
 

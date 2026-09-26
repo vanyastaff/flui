@@ -17,6 +17,9 @@
   and `flui-platform` allows only `flui-app` as a dependent; its §2 amendment of 2026-09-26
   moves `flui-platform` from L2 to L3, because its accessibility bridge implements
   `PlatformAccessibility`, which now lives in `flui-semantics`)
+- **Amended by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (2026-09-26) —
+  `flui-tree` (L2) and `flui-localizations` are deleted, so L8 is empty and "Localization direction is locked" has
+  nothing left to govern. The layer table below is a dated reading and stays as written.
 - **Related:** ADR-0028 (the design-system rule this generalizes), ADR-0037 (the
   `interaction -> platform` same-layer edge)
 

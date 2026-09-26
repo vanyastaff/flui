@@ -9,8 +9,8 @@ use flui_types::platform::Locale;
 use flui_types::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_widgets::localization::{
-    BoxedLocalizationsDelegate, DefaultWidgetsLocalizationsDelegate, Localizations,
-    LocalizationsDelegate,
+    BoxedLocalizationsDelegate, DefaultWidgetsLocalizationsDelegate, Directionality,
+    GlobalWidgetsLocalizationsDelegate, Localizations, LocalizationsDelegate,
 };
 use flui_widgets::{BoxedWidgetsLocalizations, SizedBox};
 
@@ -155,5 +155,28 @@ fn boxed_widgets_localizations_of_resolves_the_default_ltr_resource() {
     assert_eq!(
         captured.lock().expect("test mutex poisoned").clone(),
         Some(TextDirection::Ltr)
+    );
+}
+
+/// The global delegate is what makes a right-to-left locale's subtree
+/// right-to-left: `Localizations` wraps its child in the `Directionality`
+/// its widgets resource names, and `GlobalWidgetsLocalizationsDelegate`
+/// resolves `ar` to RTL where the default delegate is always LTR.
+#[test]
+fn the_global_delegate_makes_an_rtl_locale_subtree_rtl() {
+    let (probe, captured) = capture(Directionality::of);
+    let _harness = mount(
+        Localizations::new(
+            Locale::new("ar", None::<&str>),
+            vec![BoxedLocalizationsDelegate::new(
+                GlobalWidgetsLocalizationsDelegate,
+            )],
+            probe,
+        )
+        .boxed(),
+    );
+    assert_eq!(
+        captured.lock().expect("test mutex poisoned").clone(),
+        Some(TextDirection::Rtl)
     );
 }

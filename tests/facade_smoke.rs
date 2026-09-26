@@ -84,26 +84,17 @@ fn cupertino_module_resolves_through_the_facade() {
     );
 }
 
-/// The documented global-localizations entry point: `flui::localizations`
-/// resolves a delegate that `flui::widgets`' `Localizations` accepts, so a
-/// consumer never has to name `flui-localizations` as a separate dependency.
-#[cfg(feature = "localizations")]
+/// The global widgets localizations are part of the base widget surface: they
+/// resolve through `flui::widgets` with no feature, and the delegate is the
+/// global one (Arabic resolves right-to-left), not the always-LTR default.
 #[test]
-fn localizations_module_resolves_through_the_facade() {
-    use flui::localizations::{BoxedLocalizationsDelegate, GlobalWidgetsLocalizationsDelegate};
+fn global_widgets_localizations_resolve_through_flui_widgets() {
     use flui::types::platform::Locale;
-    use flui::widgets::{Localizations, SizedBox};
+    use flui::types::typography::TextDirection;
+    use flui::widgets::{GlobalWidgetsLocalizationsDelegate, LocalizationsDelegate};
 
-    let delegates = vec![BoxedLocalizationsDelegate::new(
-        GlobalWidgetsLocalizationsDelegate,
-    )];
-    // Arabic is in `RTL_LANGUAGES`, so this is also a live check that the
-    // re-exported delegate is the global one and not a stub.
-    let _localized = Localizations::new(
-        Locale::new("ar", None::<&str>),
-        delegates,
-        SizedBox::shrink(),
-    );
+    let resources = GlobalWidgetsLocalizationsDelegate.load(&Locale::new("ar", None::<&str>));
+    assert_eq!(resources.text_direction(), TextDirection::Rtl);
 }
 
 /// The Material half of [`flui::prelude`] appears only with the `material`

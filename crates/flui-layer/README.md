@@ -126,8 +126,8 @@ on it via a git tag or path — see the [flui facade's README](../../README.md).
 ## Design
 
 1. **Canonical IDs** — `LayerId` from `flui-foundation`, 1-based over a 0-based `Vec`
-2. **Tree traits** — `TreeRead<LayerId>` + `TreeNav<LayerId>` from `flui-tree`, so the generic
-   walkers (`ancestors`, `descendants`, `lowest_common_ancestor`) run over the compositor tree
+2. **Inherent walks** — `LayerTree` answers `ancestors`, `lowest_common_ancestor` and (for the
+   `testing` walkers) `descendants` itself; no generic tree trait sits in between
 3. **Separation** — layer types here, GPU lowering in `flui-engine`
 4. **Single owner, value-moved** — built on the paint side, frozen into a `Scene`, rendered on the
    raster side; no lock, no `Arc`

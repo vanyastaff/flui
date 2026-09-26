@@ -7,6 +7,8 @@
   name the ADR that grants it for good ([ADR-0097](ADR-0097-no-process-global-state-gate.md)).
   2026-09-26 — §4 admits a pattern over prose tokens for a rule about prose
   (`cargo xtask markers`), and an allowlist exit may be a migration-plan step.
+- **Amended:** 2026-09-26 — `flui-tree` is deleted (ADR-0081), so the printing lint row names
+  `flui-foundation` and `flui-macros`.
 - **Supersedes:** the capability-acquisition clauses of ADR-0018, ADR-0021, ADR-0030 and
   ADR-0037 (the rule stays, its enforcement moves into the type system); the port methodology
   (`docs/PORT.md`) and its grep gates (`scripts/port-check.sh`,
@@ -76,7 +78,7 @@ method on `LifecycleContext`, never on `BuildContext`.
 | Signal written or created during `build` | the run-time guard (`SignalError::WrittenDuringBuild` / `CreatedDuringBuild`, ADR-0074) was already authoritative; the advisory scanner is gone |
 | A lock guard alive through an `if let`/`match` arm | `clippy::significant_drop_in_scrutinee`, workspace-wide; the 33 existing sites bind the value with `let` first |
 | `todo!`/`unimplemented!`/`dbg!` in production | clippy `todo`/`unimplemented`/`dbg_macro` (already on) |
-| Printing from the foundation crates | clippy `print_stdout`/`print_stderr` in `flui-foundation`, `flui-tree`, `flui-macros` |
+| Printing from the foundation crates | clippy `print_stdout`/`print_stderr` in `flui-foundation`, `flui-macros` |
 | `From<f32>` on a unit wrapper | `compile_fail` doctests in `flui-geometry` (already present) |
 | `async fn` on the frame path | the trait signatures are synchronous; an `async` impl does not match them |
 | Two ADRs sharing a number; a normal or build edge against the tier order (ADR-0081) | `cargo xtask workspace` |
