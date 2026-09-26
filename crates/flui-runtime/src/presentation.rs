@@ -185,7 +185,7 @@ pub(crate) fn test_platform_window_with_accessibility(
 
 /// Lifecycle of the owner-thread half of a presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PresentationLifecycle {
+pub(crate) enum PresentationLifecycle {
     /// Identity exists, but no render surface is attached yet.
     ///
     /// Constructor-internal and production-unreachable once construction
@@ -802,7 +802,7 @@ impl PresentationState {
 
     /// Where this presentation is in its owner-thread lifecycle.
     #[must_use]
-    pub fn lifecycle(&self) -> PresentationLifecycle {
+    pub(crate) fn lifecycle(&self) -> PresentationLifecycle {
         self.lifecycle.get()
     }
 

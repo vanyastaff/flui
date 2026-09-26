@@ -160,13 +160,22 @@ impl UiRealm {
 
     /// Begin closing presentation `id` alone: it is told it is detached and
     /// drops its held input.
-    pub fn stop_presentation(&self, id: PresentationId) {
+    pub(crate) fn stop_presentation(&self, id: PresentationId) {
         if let Some(presentation) = self.presentations.get(id) {
             presentation.closing_requested.set(true);
             presentation.widgets().lifecycle_source().begin_close();
             presentation.held_pointer_input().borrow_mut().clear();
             self.reconcile_lifecycle(Vec::new());
         }
+    }
+
+    /// Begin closing presentation `id` without removing it from the realm,
+    /// so a test can observe what a closing presentation still accepts.
+    /// Production closes through [`Self::close_presentation_entered`], which
+    /// stops and removes it in one step.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn stop_presentation_for_test(&self, id: PresentationId) {
+        self.stop_presentation(id);
     }
 
     fn execution_lifecycle(

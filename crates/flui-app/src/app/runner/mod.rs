@@ -338,9 +338,7 @@ mod tests {
             .expect("root mounted");
 
         fake.set_active(true);
-        realm.enter(|_| {
-            let _ = realm.draw_frame_entered(constraints);
-        });
+        let _ = realm.draw_frame(constraints);
 
         assert!(
             fake.published_count() >= 1,

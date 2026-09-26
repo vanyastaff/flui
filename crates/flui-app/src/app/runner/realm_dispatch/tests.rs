@@ -286,7 +286,7 @@ fn window_execution_is_local_reversible_and_cannot_override_host_or_terminal_sto
                     AppLifecycleState::Paused
                 );
                 assert!(!realm.scheduler().frames_enabled());
-                realm.stop_presentation(a.address.presentation_id);
+                realm.stop_presentation_for_test(a.address.presentation_id);
                 realm.update_window_execution(a.address.presentation_id, Running);
                 realm.update_window_focus(a.address.presentation_id, true);
                 assert_eq!(

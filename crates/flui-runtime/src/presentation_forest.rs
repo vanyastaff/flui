@@ -21,7 +21,7 @@ use flui_foundation::PresentationId;
 use super::presentation::PresentationState;
 
 /// The insertion-ordered set of presentations one `UiRealm` owns.
-pub struct PresentationForest {
+pub(crate) struct PresentationForest {
     presentations: Vec<PresentationState>,
 }
 

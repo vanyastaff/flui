@@ -34,7 +34,7 @@ impl UiRealm {
     /// `Vsync` is `Arc`-backed; cloning is two atomic increments — cheap. App
     /// code constructs a `VsyncScope` from this clone so every
     /// implicitly-animated widget below registers its controller here. The
-    /// production frame driver ([`Self::draw_frame_entered`]) ticks EVERY
+    /// production frame driver (`Self::draw_frame_entered`) ticks EVERY
     /// presentation's own registry once per frame (before that
     /// presentation's build phase) and keeps the frame loop alive until the
     /// last running controller, on any presentation, completes.

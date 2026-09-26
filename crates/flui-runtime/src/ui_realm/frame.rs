@@ -71,7 +71,7 @@ impl UiRealm {
     /// presentations requires per-presentation constraints, sinks, and
     /// submit routing under issue #559; callers must not treat the current
     /// last-outcome tuple as last-scene-wins behavior.
-    pub fn draw_frame_entered(
+    pub(crate) fn draw_frame_entered(
         &self,
         constraints: BoxConstraints,
     ) -> (PresentationId, FramePaintOutcome, bool) {
@@ -447,7 +447,7 @@ impl UiRealm {
     ///
     /// Step by step: settle any lone arena member queued by an earlier event
     /// whose owner boundary could not finish (e.g. after a panic); flush
-    /// coalesced pointer moves; draw the frame ([`Self::draw_frame_entered`]);
+    /// coalesced pointer moves; draw the frame (`Self::draw_frame_entered`);
     /// classify its result and, when the actual producer is not deferred,
     /// submit a non-empty painted scene and commit an accepted verdict;
     /// re-hit-test stationary pointing devices against the primary tree only

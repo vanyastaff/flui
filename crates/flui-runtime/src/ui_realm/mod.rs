@@ -253,7 +253,7 @@ impl std::fmt::Debug for UiRealm {
 /// [`UiRealm::render_frame`]'s retry gate). Moved here from the retired
 /// `AppBinding`.
 #[derive(Debug)]
-pub enum FramePaintOutcome {
+pub(crate) enum FramePaintOutcome {
     /// A fresh layer tree was painted and turned into a `Scene`. Holds
     /// `Scene` by value, not `Arc<Scene>`: the sole reader (the frame
     /// transaction immediately below) MOVES it into the submit sink —

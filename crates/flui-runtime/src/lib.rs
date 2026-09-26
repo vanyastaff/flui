@@ -14,8 +14,8 @@
 //! - [`ui_realm`]: `UiRealm`, the owner-affine realm — the presentations it
 //!   hosts, their frame transaction, input routing, lifecycle and command
 //!   inbox;
-//! - [`presentation`]: one presentation's owner-thread state, and
-//!   [`presentation_forest`], the mount-ordered set a realm hosts;
+//! - [`presentation`]: one presentation's owner-thread state (a realm keeps
+//!   its presentations in a private, mount-ordered forest);
 //! - [`lifecycle_state`]: the per-presentation application lifecycle
 //!   derivation;
 //! - [`frame_failure`]: what a contained frame failure reports and how the
@@ -51,7 +51,7 @@ pub mod lifecycle_state;
 pub mod media_query_root;
 pub mod performance_stats;
 pub mod presentation;
-pub mod presentation_forest;
+mod presentation_forest;
 mod realm_services;
 #[cfg(feature = "hot-reload")]
 pub mod reload;
