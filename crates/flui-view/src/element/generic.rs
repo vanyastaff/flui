@@ -73,8 +73,10 @@ struct CoreState {
     /// Current lifecycle state (Initial, Active, Inactive, or Defunct).
     lifecycle: Lifecycle,
 
-    /// Sibling slot index stamped at mount — NOT the tree depth; see
-    /// [`ElementCore::mount`].
+    /// Depth in the element tree (root = 0), stamped by
+    /// [`ElementTree`](crate::tree::ElementTree) through
+    /// [`ElementBase::set_depth`](crate::view::ElementBase::set_depth)
+    /// whenever the node's depth is set, before `mount` and on every move.
     depth: usize,
 
     /// Whether this element needs to rebuild.
@@ -134,10 +136,13 @@ impl CoreState {
         }
     }
 
+    fn set_depth(&mut self, depth: usize) {
+        self.depth = depth;
+    }
+
     fn mount(
         &mut self,
         parent: Option<ElementId>,
-        slot: usize,
         owner: &mut crate::ElementOwner<'_>,
         view_type: TypeId,
     ) {
@@ -148,7 +153,6 @@ impl CoreState {
             self.lifecycle
         );
         self.lifecycle = Lifecycle::Active;
-        self.depth = slot;
         self.element_parent = parent;
         self.dirty.store(true, Ordering::Relaxed);
 
@@ -401,21 +405,30 @@ where
     // Lifecycle Methods (eliminates ~40 lines of boilerplate per element)
     // ========================================================================
 
+    /// Record this element's depth in the element tree (root = 0).
+    ///
+    /// Called by [`crate::tree::ElementTree`] through
+    /// [`crate::view::ElementBase::set_depth`] whenever it sets the node's
+    /// depth: before `mount`, and again when a GlobalKey retake or a reparent
+    /// moves the subtree. Flutter sets `Element._depth` in `mount` and repairs
+    /// it in `_updateDepth`; here the tree owns the value and stamps it.
+    #[inline]
+    pub(crate) fn set_depth(&mut self, depth: usize) {
+        self.state.set_depth(depth);
+    }
+
     /// Mount this element into the tree.
     ///
-    /// Sets lifecycle to Active and stores the sibling `slot`. NOTE: the stored
-    /// `depth` field is this slot index, NOT the element's tree depth
-    /// (`parent_depth + 1`, which lives on [`ElementNode`](crate::tree::ElementNode)).
-    /// It must therefore NOT be used as a dirty-heap ordering key — external
-    /// rebuild scheduling looks the real tree depth up from the node at drain
-    /// time instead (see `BuildOwner::build_scope`).
-    /// Delegates child mounting to the storage implementation.
+    /// Sets lifecycle to Active and records the parent. The depth is not
+    /// derived here: the tree stamps it through [`Self::set_depth`] before
+    /// mount. Child reconciliation stays centralized in
+    /// `BuildOwner::build_scope`.
     ///
     /// # Arguments
     ///
     /// * `parent` - The parent ElementId (if any)
-    /// * `slot` - The element's sibling slot index (NOT its tree depth)
-    /// * `_owner` - Split-borrow handle into the BuildOwner. Kept on the
+    /// * `_slot` - The element's sibling slot index; not stored
+    /// * `owner` - Split-borrow handle into the BuildOwner. Kept on the
     ///   signature so behavior `on_mount` hooks can register global keys,
     ///   child managers, listeners, or other owner-backed resources while
     ///   child reconciliation remains centralized in `BuildOwner::build_scope`.
@@ -423,10 +436,10 @@ where
     pub fn mount(
         &mut self,
         parent: Option<ElementId>,
-        slot: usize,
+        _slot: usize,
         owner: &mut crate::ElementOwner<'_>,
     ) {
-        self.state.mount(parent, slot, owner, TypeId::of::<V>());
+        self.state.mount(parent, owner, TypeId::of::<V>());
     }
 
     /// Unmount this element (permanently removed).
@@ -594,7 +607,8 @@ where
         self.state.lifecycle
     }
 
-    /// Get the depth in the element tree.
+    /// Get the depth in the element tree (root = 0), as last stamped by
+    /// [`Self::set_depth`].
     pub fn depth(&self) -> usize {
         self.state.depth
     }
@@ -745,7 +759,13 @@ mod tests {
         core.mount(None, 5, &mut owner);
 
         assert_eq!(core.lifecycle(), Lifecycle::Active);
-        assert_eq!(core.depth(), 5);
+        assert_eq!(
+            core.depth(),
+            0,
+            "the sibling slot handed to mount is not the depth"
+        );
+        core.set_depth(3);
+        assert_eq!(core.depth(), 3);
     }
 
     #[test]

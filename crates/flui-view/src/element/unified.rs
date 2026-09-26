@@ -173,6 +173,10 @@ where
         self.core.depth()
     }
 
+    fn set_depth(&mut self, depth: usize) {
+        self.core.set_depth(depth);
+    }
+
     fn mark_needs_build(&mut self) {
         self.core.mark_dirty();
     }

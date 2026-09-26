@@ -73,8 +73,9 @@ pub struct ElementNode {
     pub(crate) kind: Option<ElementKind>,
     /// Parent Element ID (None for root).
     pub(crate) parent: Option<ElementId>,
-    /// Depth in the tree (root = 0).
-    pub(crate) depth: usize,
+    /// Depth in the tree (root = 0). Private so every write goes through
+    /// [`Self::set_depth`], which also stamps the element.
+    depth: usize,
     /// Slot index within parent's children.
     pub(crate) slot: usize,
     /// Cloned `View::key()` for the view this element currently holds,
@@ -190,11 +191,10 @@ impl ElementNode {
     /// after `ElementNode::new` so the field is populated before
     /// the element is returned.
     pub fn new(kind: ElementKind, parent: Option<ElementId>, slot: usize) -> Self {
-        let depth = usize::from(parent.is_some()); // Will be updated by tree
-        Self {
+        let mut node = Self {
             kind: Some(kind),
             parent,
-            depth,
+            depth: 0,
             slot,
             key: None,
             registered_global_key: None,
@@ -203,6 +203,25 @@ impl ElementNode {
             // map (insert / mount_root_*), mirroring how `key`/`depth` are
             // finalised by the caller right after construction.
             inherited: Arc::new(HashMap::new()),
+        };
+        // Provisional; the tree stamps the real depth before mount.
+        node.set_depth(usize::from(parent.is_some()));
+        node
+    }
+
+    /// Set this node's depth in the tree and stamp it onto its element, so
+    /// [`ElementBase::depth`] and [`Self::depth`] never disagree.
+    ///
+    /// The only writer of the depth. A node is only `&`-borrowed while its
+    /// element is extracted for a build, so a write never meets that hole.
+    pub(crate) fn set_depth(&mut self, depth: usize) {
+        self.depth = depth;
+        debug_assert!(
+            self.kind.is_some(),
+            "BUG: ElementNode::set_depth during the build_scope take/put window"
+        );
+        if let Some(kind) = self.kind.as_mut() {
+            kind.set_depth(depth);
         }
     }
 
@@ -1016,7 +1035,7 @@ impl ElementTree {
             element.element_mut().set_sliver_slot(child_sliver_slot);
 
             let mut node = ElementNode::new(element, Some(parent), slot);
-            node.depth = parent_depth + 1;
+            node.set_depth(parent_depth + 1);
             // FR-022.
             node.set_key(view.key().map(ViewKey::clone_key));
 
@@ -1647,7 +1666,7 @@ impl ElementTree {
             };
             let node = self.get_mut(id).expect("id resolved at loop top");
             node.inherited = scope;
-            node.depth = depth;
+            node.set_depth(depth);
             node.element_mut().set_parent_render_id(parent_render_id);
             node.element_mut().set_sliver_slot(sliver_slot);
             stack.extend_from_slice(&node.child_ids);
@@ -2576,7 +2595,7 @@ fn retake_inactive_global_key(
         let node = tree.get_mut(candidate_id)?;
         node.parent = Some(new_parent);
         node.slot = new_slot;
-        node.depth = parent_depth + 1;
+        node.set_depth(parent_depth + 1);
         node.element_mut()
             .set_parent_render_id(child_parent_render_id);
         node.element_mut().set_sliver_slot(child_sliver_slot);
@@ -2786,7 +2805,7 @@ fn retake_active_global_key(
         let node = tree.get_mut(candidate_id)?;
         node.parent = Some(new_parent);
         node.slot = new_slot;
-        node.depth = parent_depth + 1;
+        node.set_depth(parent_depth + 1);
         node.element_mut()
             .set_parent_render_id(child_parent_render_id);
         node.element_mut().set_sliver_slot(child_sliver_slot);
@@ -2900,6 +2919,8 @@ mod tests {
     #[cfg(test)]
     #[path = "../activation_recovery_tests.rs"]
     mod activation_recovery_tests;
+    #[path = "../element_depth_tests.rs"]
+    mod element_depth_tests;
     #[path = "../orphaned_render_mount_tests.rs"]
     mod orphaned_render_mount_tests;
     #[path = "replace_child_with_tests.rs"]

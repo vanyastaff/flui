@@ -276,7 +276,9 @@ impl BuildOwner {
         });
 
         for element in scheduled.keys() {
-            let depth = tree.get(*element).map_or(0, |node| node.depth);
+            let depth = tree
+                .get(*element)
+                .map_or(0, crate::tree::ElementNode::depth);
             tree.mark_needs_build(*element);
             self.schedule_build_for(*element, depth, super::RebuildReason::LayoutChange);
         }
@@ -330,7 +332,8 @@ impl BuildOwner {
             self.collapse_empty_build_scope_queues();
             return any_rebuilt;
         }
-        ready_scopes.sort_by_key(|scope| tree.get(*scope).map_or(0, |node| node.depth));
+        ready_scopes
+            .sort_by_key(|scope| tree.get(*scope).map_or(0, crate::tree::ElementNode::depth));
 
         tracing::debug!(
             fresh_constraints = scheduled.len(),
@@ -947,7 +950,7 @@ mod tests {
 
         for descendant in &descendants {
             tree.mark_needs_build(*descendant);
-            let depth = tree.get(*descendant).expect("live descendant").depth;
+            let depth = tree.get(*descendant).expect("live descendant").depth();
             owner.schedule_build_for(*descendant, depth, RebuildReason::StateChange);
         }
         owner.build_scope(&mut tree);

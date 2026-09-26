@@ -172,6 +172,10 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         self.depth
     }
 
+    fn set_depth(&mut self, depth: usize) {
+        self.depth = depth;
+    }
+
     fn mount(
         &mut self,
         parent: Option<ElementId>,

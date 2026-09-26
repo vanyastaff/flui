@@ -235,7 +235,17 @@ pub trait ElementBase: Downcast + 'static {
     }
 
     /// Get the depth in the element tree (root = 0).
+    ///
+    /// The value last passed to [`Self::set_depth`].
     fn depth(&self) -> usize;
+
+    /// Record this element's depth in the element tree (root = 0).
+    ///
+    /// Called by [`crate::tree::ElementTree`] only: before `mount`, and
+    /// again whenever a GlobalKey retake or a reparent moves the subtree.
+    /// There is no default, so every element that reports a depth also
+    /// stores the one the tree hands it.
+    fn set_depth(&mut self, depth: usize);
 
     /// Inform this element of its own `ElementId` in the surrounding
     /// `ElementTree`.

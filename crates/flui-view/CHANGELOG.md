@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolve to `None` and log a warning. Keys held by other presentations of the
   realm still resolve during that frame. See `ARCHITECTURE.md`'s
   `## Mapping decisions` for the Flutter divergence.
+- **`ElementBase::depth` is the element's depth in the tree (root = 0).** It
+  used to return the sibling slot the element was mounted into. The tree now
+  stamps the depth through a new required `ElementBase::set_depth` before
+  `mount` and again when a GlobalKey retake or reparent moves the subtree, as
+  Flutter's `Element._depth` is set in `mount` and repaired in `_updateDepth`.
+  Hand-written `ElementBase` impls must add `set_depth`.
 
 ### Changed
 

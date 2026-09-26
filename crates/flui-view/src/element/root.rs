@@ -149,6 +149,10 @@ impl crate::view::ElementBase for RootElementImpl {
         self.depth
     }
 
+    fn set_depth(&mut self, depth: usize) {
+        self.depth = depth;
+    }
+
     fn lifecycle(&self) -> crate::element::Lifecycle {
         self.lifecycle
     }

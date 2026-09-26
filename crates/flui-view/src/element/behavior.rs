@@ -103,16 +103,12 @@ where
         .self_id()
         .expect("component build requires ElementCore::self_id stamped by ElementTree insertion");
 
-    // The live context carries the element's AUTHORITATIVE tree depth
-    // (`parent_depth + 1`, from its node), not `ElementCore::depth` — the
-    // sibling SLOT index. `BuildContext::depth` is documented as the tree
-    // depth, and `depend_on` records a dependent at this depth while
-    // `mark_needs_build` schedules a rebuild at it; using the slot would
-    // mis-order a nested dependent / rebuild in the dirty heap (the same
-    // class of bug `rekey_dirty_depths` corrects for the `setState` path).
-    // Falling back to the slot only keeps release builds whole if the tree
-    // node vanished despite the stamped id; the preceding `expect`s catch the
-    // intended invariants.
+    // The live context carries the element's tree depth read from its node,
+    // the authority the tree stamps onto `ElementCore::depth` too.
+    // `depend_on` records a dependent at this depth and `mark_needs_build`
+    // schedules a rebuild at it. Falling back to the element's own copy only
+    // keeps release builds whole if the tree node vanished despite the
+    // stamped id; the preceding `expect`s catch the intended invariants.
     let tree_depth = match handle.tree.get(element_id) {
         Some(node) => node.depth(),
         None => core.depth(),
