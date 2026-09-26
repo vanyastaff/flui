@@ -258,12 +258,15 @@ struct FrameBuildCounts {
     /// iteration order for the report.
     seen: Option<RebuildReasons>,
     counts: [usize; RebuildReason::COUNT],
+    /// Every completed build this frame, re-entries included.
+    builds_run: usize,
 }
 
 impl FrameBuildCounts {
     fn clear(&mut self) {
         self.seen = None;
         self.counts = [0; RebuildReason::COUNT];
+        self.builds_run = 0;
     }
 
     fn record(&mut self, reason: RebuildReason) {
@@ -297,9 +300,16 @@ impl FrameBuildCounts {
 
 /// Per-frame rebuild telemetry, see [`BuildOwner::last_frame_build_report`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct FrameBuildReport {
     /// Distinct elements rebuilt by the last `build_scope`.
     pub elements_built: usize,
+    /// Every build run this frame, re-entries included.
+    ///
+    /// Equal to [`elements_built`](Self::elements_built) unless an element
+    /// built more than once in the frame — a self-rescheduling build or an
+    /// A↔B ping-pong, which the distinct count cannot show.
+    pub builds_run: usize,
     /// Rebuilt-element count per cause, in stable diagnostic-name order.
     pub by_reason: Vec<(RebuildReason, usize)>,
 }
@@ -1322,6 +1332,7 @@ impl BuildOwner {
     pub fn last_frame_build_report(&self) -> FrameBuildReport {
         FrameBuildReport {
             elements_built: self.built_this_frame.len(),
+            builds_run: self.frame_builds.builds_run,
             by_reason: self.frame_builds.by_reason(),
         }
     }
@@ -1867,6 +1878,7 @@ impl BuildOwner {
             // rescheduling itself, a child notifying it back, or one half of
             // an A↔B ping-pong — see `Self::absorb_mid_drain_inbox`.
             self.built_this_frame.insert(id);
+            self.frame_builds.builds_run += 1;
             for reason in reasons.iter() {
                 self.frame_builds.record(reason);
             }
@@ -5681,6 +5693,61 @@ mod tests {
         );
         assert_eq!(owner.pending_external_builds(), 0);
         assert!(!owner.has_dirty_elements());
+    }
+
+    /// `elements_built` counts distinct elements, so an element that builds
+    /// twice in one frame — here one that reschedules itself exactly once from
+    /// its own build — shows up only in `builds_run`.
+    #[test]
+    fn a_re_entered_element_counts_once_in_elements_built_and_twice_in_builds_run() {
+        let mut owner = BuildOwner::new();
+        let mut tree = ElementTree::new();
+        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        settle_initial_builds(&mut tree, &mut owner);
+
+        let build_calls = Arc::new(AtomicUsize::new(0));
+        let should_run = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let id = insert_and_settle(
+            &mut tree,
+            &mut owner,
+            root,
+            0,
+            &MidDrainCountedRescheduler {
+                build_calls: Arc::clone(&build_calls),
+                should_run: Arc::clone(&should_run),
+                reschedules_left: Arc::new(AtomicUsize::new(1)),
+                handle_slot: Arc::new(Mutex::new(None)),
+            },
+        );
+        let before = build_calls.load(Ordering::Relaxed);
+
+        should_run.store(true, Ordering::Relaxed);
+        let depth = tree.get(id).expect("rescheduler").depth;
+        tree.mark_needs_build(id);
+        owner.schedule_build_for(id, depth, RebuildReason::StateChange);
+        owner.build_scope(&mut tree);
+        should_run.store(false, Ordering::Relaxed);
+
+        assert_eq!(
+            build_calls.load(Ordering::Relaxed) - before,
+            2,
+            "sanity: the kick-off build plus exactly one re-entry"
+        );
+        let report = owner.last_frame_build_report();
+        assert!(
+            report.elements_built >= 1,
+            "the rescheduler is among the distinct elements built: {report:?}"
+        );
+        assert_eq!(
+            report.builds_run,
+            report.elements_built + 1,
+            "the one re-entry is the only build the distinct count does not show: {report:?}"
+        );
+        assert_eq!(
+            report.count(RebuildReason::StateChange),
+            2,
+            "each of the two builds carried StateChange: {report:?}"
+        );
     }
 
     /// Pins the end state, not the mechanism: `Self::absorb_mid_drain_inbox`
