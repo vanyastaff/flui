@@ -904,8 +904,8 @@ fn pop_announces_did_pop_next_not_a_redundant_did_change_next() {
 ///
 /// This drives `settle`, the test-side twin of `NavigatorShared::apply` — so it
 /// pins the *rule*, and would stay green if production's `apply` reordered.
-/// `hero_seam_tests::observers_are_notified_before_a_dying_routes_overlay_entry_is_torn_down`
-/// pins `apply` itself.
+/// `observers_are_notified_before_a_dying_routes_overlay_entry_is_torn_down`
+/// (`crates/flui-widgets/tests/hero_seam.rs`) pins `apply` itself.
 #[test]
 fn flush_disposes_removed_routes_after_notifications() {
     let order: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));

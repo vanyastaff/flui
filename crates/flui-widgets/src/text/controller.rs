@@ -294,10 +294,9 @@ impl TextEditingController {
     /// Asserting the visible text instead would pass just as well against a
     /// field that had accumulated a listener per rebuild.
     ///
-    /// `cfg(test)`, because that is the whole of its purpose: a shipped build
-    /// has no caller, and leaving it compiled would be a public-ish accessor
-    /// existing for a reason the code does not show.
-    #[cfg(test)]
+    /// A shipped build has no caller: the integration tests read it through
+    /// `crate::__test_access::TextEditingControllerProbe` (ADR-0083 §4), and it
+    /// leaves with that module.
     #[must_use]
     pub(crate) fn listener_count(&self) -> usize {
         self.notifier.len()

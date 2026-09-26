@@ -319,9 +319,20 @@ fn inflate_shuttle(
 }
 
 /// One hero in flight.
+///
+/// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
+/// module is private, so nothing else names it.
 #[derive(Clone)]
-pub(crate) struct HeroFlight {
+pub struct HeroFlight {
     inner: Arc<FlightInner>,
+}
+
+impl std::fmt::Debug for HeroFlight {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeroFlight")
+            .field("tag", &self.inner.tag)
+            .finish_non_exhaustive()
+    }
 }
 
 impl HeroFlight {
@@ -330,38 +341,39 @@ impl HeroFlight {
     }
 
     /// The overlay entry this flight presents its shuttle in, while it has one.
-    #[cfg(test)]
-    pub(crate) fn entry_id(&self) -> Option<crate::OverlayEntryId> {
+    #[must_use]
+    pub fn entry_id(&self) -> Option<crate::OverlayEntryId> {
         self.inner.entry.lock().as_ref().map(OverlayEntry::id)
     }
 
     /// The tween's current evaluation — where the shuttle is.
-    #[cfg(test)]
-    pub(crate) fn shuttle_rect(&self) -> Rect {
+    #[must_use]
+    pub fn shuttle_rect(&self) -> Rect {
         self.inner.current_rect()
     }
 
     /// The tween's destination, re-aimed by every tick.
-    #[cfg(test)]
-    pub(crate) fn target_rect(&self) -> Rect {
+    #[must_use]
+    pub fn target_rect(&self) -> Rect {
         self.inner.rect.lock().end
     }
 
     /// The tween's origin. Re-aiming the destination must never move it
     /// (`heroes.dart:685` preserves `begin`).
-    #[cfg(test)]
-    pub(crate) fn begin_rect(&self) -> Rect {
+    #[must_use]
+    pub fn begin_rect(&self) -> Rect {
         self.inner.rect.lock().begin
     }
 
-    #[cfg(test)]
-    pub(crate) fn opacity(&self) -> f32 {
+    /// The shuttle's current opacity.
+    #[must_use]
+    pub fn opacity(&self) -> f32 {
         *self.inner.opacity.lock()
     }
 
     /// Which way the flight currently runs — a divert can flip it.
-    #[cfg(test)]
-    pub(crate) fn direction(&self) -> FlightDirection {
+    #[must_use]
+    pub fn direction(&self) -> FlightDirection {
         self.inner.state.lock().direction
     }
 
@@ -676,8 +688,10 @@ pub(crate) struct FlightPlan {
 /// [`drain_retired`](Self::drain_retired) is still called at the head of every
 /// measurement pass, as a backstop for the case where no post-frame capability was
 /// captured (an unmounted navigator, which is being torn down anyway).
+///
+/// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4).
 #[derive(Default)]
-pub(crate) struct FlightManager {
+pub struct FlightManager {
     flights: Mutex<HashMap<HeroTag, HeroFlight>>,
     retired: Mutex<Vec<HeroFlight>>,
     /// The binding's post-frame capability, captured from the controller. A finished
@@ -687,9 +701,19 @@ pub(crate) struct FlightManager {
     post_frame: Mutex<Option<LocalPostFrameHandle>>,
     /// One drain per frame: set when a drain is scheduled, cleared when it runs.
     drain_scheduled: AtomicBool,
-    /// How many drains this manager has actually scheduled — for the coalescing test.
-    #[cfg(test)]
+    /// How many drains this manager has actually scheduled — for the coalescing
+    /// test. Compiled into every build so the manager has one layout whether or
+    /// not the integration tests link it (ADR-0083 §4).
     drains_scheduled: std::sync::atomic::AtomicUsize,
+}
+
+impl std::fmt::Debug for FlightManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlightManager")
+            .field("in_flight", &self.flights.lock().len())
+            .field("retired", &self.retired.lock().len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl FlightManager {
@@ -709,15 +733,15 @@ impl FlightManager {
     }
 
     /// How many flights are parked awaiting a safe drop.
-    #[cfg(test)]
-    pub(crate) fn retired_count(&self) -> usize {
+    #[must_use]
+    pub fn retired_count(&self) -> usize {
         self.retired.lock().len()
     }
 
     /// How many end-of-frame drains have been scheduled — coalescing must keep this at
     /// one per frame no matter how many flights land.
-    #[cfg(test)]
-    pub(crate) fn drains_scheduled(&self) -> usize {
+    #[must_use]
+    pub fn drains_scheduled(&self) -> usize {
         self.drains_scheduled.load(Ordering::SeqCst)
     }
 
@@ -749,20 +773,23 @@ impl FlightManager {
                 "retired hero flights remain queued because the owner-local post-frame lane is inactive"
             );
         } else {
-            #[cfg(test)]
             self.drains_scheduled.fetch_add(1, Ordering::SeqCst);
         }
     }
 
     /// How many flights are in the air.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
+    #[must_use]
+    #[expect(
+        clippy::len_without_is_empty,
+        reason = "a test-facing count; nothing asks whether the manager is empty"
+    )]
+    pub fn len(&self) -> usize {
         self.flights.lock().len()
     }
 
     /// The flight for `tag`, if any.
-    #[cfg(test)]
-    pub(crate) fn get(&self, tag: &HeroTag) -> Option<HeroFlight> {
+    #[must_use]
+    pub fn get(&self, tag: &HeroTag) -> Option<HeroFlight> {
         self.flights.lock().get(tag).cloned()
     }
 

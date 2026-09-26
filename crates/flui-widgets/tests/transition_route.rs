@@ -1,4 +1,6 @@
-//! Tests for the private `TransitionRoute`.
+//! Tests for the private `TransitionRoute`, reached through the temporary
+//! `flui_widgets::__test_access` path (ADR-0083 §4). Its export boundary keeps
+//! a unit test in `src/navigator/transition_route_tests.rs`.
 //!
 //! # Parity oracles
 //!
@@ -23,12 +25,14 @@ use flui_animation::{Animation, AnimationStatus, Curve, Curves, Vsync};
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::lifecycle::RouteLifecycle;
-use super::navigator::{Navigator, NavigatorHandle};
-use super::transition_route::{TransitionHandle, TransitionRoute};
-use crate::SizedBox;
-use crate::animated::VsyncScope;
-use crate::testing::harness::{Harness, mount};
+use flui_widgets::__test_access::{
+    NavigatorProbe as _, OverlayProbe as _, RouteLifecycle, TransitionHandle, TransitionRoute,
+};
+use flui_widgets::SizedBox;
+use flui_widgets::animated::VsyncScope;
+use flui_widgets::navigator::{Navigator, NavigatorHandle, SimpleRoute};
+
+use crate::common::harness::{Harness, mount};
 
 // ============================================================================
 // HELPERS
@@ -59,7 +63,7 @@ fn transition_with_duration(
 /// A navigator seeded with a plain first route.
 fn navigator() -> (NavigatorHandle, Harness) {
     let handle = NavigatorHandle::new();
-    handle.seed_initial(super::overlay_route::SimpleRoute::<i32>::new(|_ctx| {
+    handle.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
     let harness = mount(Navigator::new(handle.clone()));
@@ -132,7 +136,7 @@ fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
 /// run rather than completing it (`set_value_cancels_the_active_run`,
 /// flui-animation) — so this exercises the `Err(TickerCanceled)` arm of the
 /// continuation, not natural completion; `pushed_page_route_settles_…`
-/// (`navigator_tests.rs`), which pumps a real `Vsync` to the end of a real
+/// (`navigator.rs`), which pumps a real `Vsync` to the end of a real
 /// transition, is the `Ok(())` pin. Complete-or-cancel settles the entry the
 /// same way either arm, so that difference is not what this test is about.
 ///
@@ -146,9 +150,9 @@ fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
 /// `NavigatorShared::apply` would be observably identical here — the
 /// placement rule is pinned instead by
 /// `an_already_resolved_push_future_still_needs_one_pump_to_settle`
-/// (`navigator_tests.rs`) and
+/// (`navigator.rs`) and
 /// `a_zero_duration_push_still_needs_an_explicit_command_to_settle`
-/// (`tests.rs`), both of which hand out an *already-resolved* future.
+/// (`src/navigator/tests.rs`), both of which hand out an *already-resolved* future.
 ///
 /// Red-check: delete `self.shared.pump_route_commands();` from
 /// `NavigatorState::build` — the entry never leaves `Pushing`, since nothing
@@ -207,12 +211,12 @@ fn push_completion_settles_at_the_next_pump() {
 fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping() {
     let vsync = Vsync::new();
     let navigator_handle = NavigatorHandle::new();
-    navigator_handle.seed_initial(super::overlay_route::SimpleRoute::<i32>::new(|_ctx| {
+    navigator_handle.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
-    let mut laid = crate::testing::lay_out_animated(
+    let mut laid = crate::common::lay_out_animated(
         VsyncScope::new(vsync.clone(), Navigator::new(navigator_handle.clone())),
-        crate::testing::tight(200.0, 200.0),
+        crate::common::tight(200.0, 200.0),
         vsync,
     );
 
@@ -386,7 +390,7 @@ fn an_already_dismissed_controller_finalizes_synchronously_without_double_finali
 /// future is already resolved) only queues a command, which nothing drains
 /// until the next pump
 /// (`an_already_resolved_push_future_still_needs_one_pump_to_settle`,
-/// `navigator_tests.rs`).
+/// `navigator.rs`).
 ///
 /// **Pop** settles the ROUTE too, with no pump at all: `did_pop` calls
 /// `reverse()`, which snaps to `Dismissed` at the call; `handle_pop`
@@ -521,7 +525,7 @@ fn dismissed_while_still_active_does_not_finalize() {
 fn dispose_unregisters_the_controller_from_the_navigators_clock() {
     let vsync = Vsync::new();
     let navigator_handle = NavigatorHandle::new();
-    navigator_handle.seed_initial(super::overlay_route::SimpleRoute::<i32>::new(|_ctx| {
+    navigator_handle.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
 
@@ -657,7 +661,7 @@ fn a_plain_route_above_leaves_the_secondary_at_always_dismissed() {
     complete(&lower_animation);
     harness.tick();
 
-    navigator_handle.push(super::overlay_route::SimpleRoute::<i32>::new(|_ctx| {
+    navigator_handle.push(SimpleRoute::<i32>::new(|_ctx| {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }));
     harness.tick();
@@ -894,34 +898,6 @@ fn secondary_keeps_tracking_the_exiting_route_while_it_reverses() {
         "the lower route animates back as the upper one reverses: {}",
         secondary.value()
     );
-}
-
-// ============================================================================
-// PRIVACY
-// ============================================================================
-
-/// `TransitionRoute` and `ModalRoute` stay private after the sign-off gate:
-/// Rust has no subclassing, so exporting them as extensible bases needs a trait
-/// design that is deliberately deferred. Only `PageRoute` / `PopupRoute`
-/// came out.
-///
-/// Red-check: add `pub use transition_route::TransitionRoute;` to
-/// `navigator/mod.rs`.
-#[test]
-fn transition_route_is_not_exported() {
-    const LIB: &str = include_str!("../lib.rs");
-    const NAV_MOD: &str = include_str!("mod.rs");
-
-    const INTERNAL: [&str; 5] = [
-        "TransitionRoute",
-        "TransitionHandle",
-        "TransitionPeer",
-        "TransitionGroup",
-        "ModalRoute",
-    ];
-
-    super::export_guard::assert_not_exported("lib.rs", LIB, &INTERNAL);
-    super::export_guard::assert_not_exported("navigator/mod.rs", NAV_MOD, &INTERNAL);
 }
 
 /// The secondary proxy is shared, and the route drives it from a status listener,

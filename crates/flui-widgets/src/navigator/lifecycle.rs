@@ -49,9 +49,8 @@
 /// exported, pending their own sign-off. The state is kept because the flush's
 /// arms and the range predicates are transcribed from Flutter's declaration
 /// order, and deleting a variant would silently shift four predicates.
-#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) enum RouteLifecycle {
+pub enum RouteLifecycle {
     /// Will call `install` + `did_add`. Entered from an initial-route seed.
     Add,
     /// Awaiting the top-most push to settle before it may quietly appear.

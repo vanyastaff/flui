@@ -43,11 +43,11 @@ use flui_types::Size;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
-use super::navigator::{Navigator, NavigatorHandle};
-use super::overlay_route::{RouteAnimation, SimpleRoute};
-use super::page_route::PageRoute;
-use crate::SizedBox;
-use crate::testing::harness::mount;
+use flui_widgets::__test_access::PageRouteProbe as _;
+use flui_widgets::SizedBox;
+use flui_widgets::navigator::{Navigator, NavigatorHandle, PageRoute, RouteAnimation, SimpleRoute};
+
+use crate::common::harness::mount;
 
 fn leaf(_ctx: &dyn BuildContext, _a: &RouteAnimation, _s: &RouteAnimation) -> BoxedView {
     SizedBox::new(30.0, 18.0).into_view().boxed()

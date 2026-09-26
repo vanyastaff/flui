@@ -84,16 +84,18 @@
 //! `restorablePushNamed` (restoration is unbuilt) and `replaceNamed` (`replace`
 //! itself is private) are absent for their own reasons.
 
-mod back_gesture;
-mod binding;
-mod hero;
-mod hero_controller;
+// `pub(crate)` only so `crate::__test_access` can re-export the items the
+// integration tests still reach (ADR-0083 §4); nothing here is public.
+pub(crate) mod back_gesture;
+pub(crate) mod binding;
+pub(crate) mod hero;
+pub(crate) mod hero_controller;
 mod hero_controller_scope;
-mod hero_flight;
+pub(crate) mod hero_flight;
 mod history;
-mod lifecycle;
-mod local_history;
-mod modal_route;
+pub(crate) mod lifecycle;
+pub(crate) mod local_history;
+pub(crate) mod modal_route;
 mod named_route;
 #[expect(clippy::module_inception)]
 mod navigator;
@@ -103,8 +105,8 @@ mod page_route;
 mod pop_scope;
 mod result;
 mod route;
-mod subtree;
-mod transition_route;
+pub(crate) mod subtree;
+pub(crate) mod transition_route;
 
 pub use binding::RouteBindingSlot;
 // `PushCompletion::Animating` carries one of these (ADR-0064): a third-party
@@ -131,28 +133,16 @@ pub use pop_scope::{PopInvokedCallback, PopScope};
 pub use result::RouteResult;
 pub use route::{PushCompletion, Route, RouteArguments, RouteId, RouteSettings};
 
+// The harness-driven navigator suites live in `crates/flui-widgets/tests/`
+// (ADR-0083 §4); these are the unit tests that need no mounted tree.
 #[cfg(test)]
-mod export_guard;
+pub(crate) mod export_guard;
 #[cfg(test)]
 mod hero_controller_tests;
-#[cfg(test)]
-mod hero_flight_tests;
-#[cfg(test)]
-mod hero_gesture_tests;
-#[cfg(test)]
-mod hero_seam_tests;
-#[cfg(test)]
-mod hero_tests;
 #[cfg(test)]
 mod modal_route_tests;
 #[cfg(test)]
 mod navigator_tests;
-#[cfg(test)]
-mod offstage_measurement_tests;
-#[cfg(test)]
-mod offstage_proxy_tests;
-#[cfg(test)]
-mod page_route_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

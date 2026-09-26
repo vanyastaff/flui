@@ -73,6 +73,10 @@ mod support;
 // guarantee, workspace-only.
 #[doc(hidden)]
 pub mod __private;
+// Temporary access to private items for this crate's own integration tests
+// (ADR-0083 §4): no semver guarantee, `crates/flui-widgets/tests` only.
+#[doc(hidden)]
+pub mod __test_access;
 mod anchored_box;
 
 pub mod animated;
@@ -87,13 +91,17 @@ pub mod interaction;
 pub mod layout;
 pub mod localization;
 // Canonical headless mount/layout/pointer harness (`testing::LaidOut`).
-// Compiled for this crate's own tests (`cfg(test)`, where the dev-dependency
-// on `flui-testing` supplies the frame driver) or when a consumer enables the
-// `testing` feature (which activates the optional `flui-testing` dependency)
-// — never in production builds. `flui-material` and `flui-cupertino`
-// integration tests re-export it instead of carrying drifted copies. See
+// Compiled only when a consumer enables the `testing` feature (which
+// activates the optional `flui-testing` dependency) — never in production
+// builds. The integration tests in `tests/` and those of `flui-material` and
+// `flui-cupertino` re-export it instead of carrying drifted copies. See
 // [`testing`] for the module overview.
-#[cfg(any(test, feature = "testing"))]
+//
+// `not(test)` keeps it out of this crate's own unit-test build even though
+// the self dev-dependency turns the feature on there (ADR-0083 §4): a unit
+// test under `src/` that reaches for the harness fails to compile, and a
+// test that needs it lives in `tests/`.
+#[cfg(all(feature = "testing", not(test)))]
 pub mod testing;
 
 /// `Navigator` and routing — see `docs/adr/ADR-0019-navigator-routing-seam.md`. The

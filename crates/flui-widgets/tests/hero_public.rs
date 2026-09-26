@@ -8,8 +8,8 @@
 //! (`LaidOut::pipeline_owner`) for the shuttle's `RenderIgnorePointer`
 //! (`heroes.dart:594`), across the whole transition rather than at one fragile frame.
 //! `max == 1` means a single shuttle flew and never stacked; `end == 0` means it
-//! landed. Entry-count and internal-state assertions stay crate-internal
-//! (`navigator::hero_flight_tests`).
+//! landed. Entry-count and internal-state assertions go through the temporary
+//! test-access path instead (`hero_flight.rs`, ADR-0083 §4).
 //!
 //! # Parity oracles
 //!
@@ -282,8 +282,8 @@ fn a_destination_lost_mid_flight_does_not_panic_or_leak() {
 }
 
 /// A same-tag push while a flight is airborne **diverts** it — one shuttle at a time,
-/// never two. (Entry preservation is pinned crate-internally in
-/// `hero_flight_tests::a_same_tag_divert_keeps_one_active_flight_and_one_overlay_entry`;
+/// never two. (Entry preservation is pinned through the test-access path in
+/// `hero_flight::a_same_tag_divert_keeps_one_active_flight_and_one_overlay_entry`;
 /// the public signal is the shuttle count staying at one throughout.)
 ///
 /// Red-check: in `FlightManager::start`, end-and-restart instead of diverting — a

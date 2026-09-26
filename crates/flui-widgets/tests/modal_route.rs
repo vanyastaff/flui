@@ -1,4 +1,6 @@
-//! Tests for the private [`ModalRoute`].
+//! Tests for the private [`ModalRoute`], reached through the temporary
+//! `flui_widgets::__test_access` path (ADR-0083 §4). Its export boundary and
+//! handle keep unit tests in `src/navigator/modal_route_tests.rs`.
 //!
 //! # Parity oracles
 //!
@@ -28,12 +30,13 @@ use flui_interaction::routing::FocusNode;
 use flui_types::Color;
 use flui_view::prelude::*;
 
-use super::modal_route::{ModalHandle, ModalRoute};
-use super::navigator::{Navigator, NavigatorHandle};
-use super::overlay_route::SimpleRoute;
-use super::route::RouteId;
-use crate::testing::harness::{Harness, mount};
-use crate::{Column, Focus, SizedBox};
+use flui_widgets::__test_access::{
+    ModalHandle, ModalRoute, NavigatorProbe as _, OverlayEntryProbe as _, TransitionHandle,
+};
+use flui_widgets::navigator::{Navigator, NavigatorHandle, RouteId, SimpleRoute};
+use flui_widgets::{Column, Focus, SizedBox};
+
+use crate::common::harness::{Harness, mount};
 
 const FRAME: Duration = Duration::from_millis(300);
 
@@ -131,10 +134,7 @@ fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
 /// queued by the animation listener and drained from owner-local `ModalScope`
 /// build. The resulting `OverlayEntry.opaque` write schedules the overlay
 /// rebuild that applies occlusion on the following tick.
-fn complete_entrance(
-    transition: &super::transition_route::TransitionHandle,
-    harness: &mut Harness,
-) {
+fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
     let controller = transition
         .controller()
         .expect("install must have created the controller");
@@ -434,7 +434,7 @@ fn modal_setting_offstage_to_the_same_value_is_a_noop() {
 // offstage / barrier — the render objects a modal builds
 // ============================================================================
 
-/// The page is always wrapped in an [`Offstage`](crate::Offstage), so a
+/// The page is always wrapped in an [`Offstage`](flui_widgets::Offstage), so a
 /// `set_offstage(true)` route keeps its real geometry: `RenderOffstage` is still
 /// in the render tree, laid out, and its child with it. What `RenderOffstage`
 /// then suppresses — paint, hit-test, semantics — is pinned by
@@ -525,47 +525,4 @@ fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gesture_detector(
         names.iter().any(|name| name.ends_with("RenderListener")),
         "a dismissible barrier listens for the dismiss tap: {names:?}"
     );
-}
-
-// ============================================================================
-// Privacy
-// ============================================================================
-
-/// `ModalRoute` and `ModalHandle` stay private: they are the
-/// implementation `PageRoute` / `PopupRoute` are built on, and exporting them as
-/// extensible bases is a separate sign-off.
-///
-/// Red-check: add `pub use modal_route::ModalRoute;` to `navigator/mod.rs`.
-#[test]
-fn modal_route_is_not_exported() {
-    super::export_guard::assert_not_exported(
-        "lib.rs",
-        include_str!("../lib.rs"),
-        &["ModalRoute", "ModalHandle", "ModalScope"],
-    );
-    super::export_guard::assert_not_exported(
-        "navigator/mod.rs",
-        include_str!("mod.rs"),
-        &["ModalRoute", "ModalHandle", "ModalScope"],
-    );
-}
-
-/// [`ModalHandle`] is an owned capability: every clone names the
-/// same route, so a handle taken before `push_bound` still drives it afterwards.
-#[test]
-fn modal_handle_is_cloneable_and_shares_state() {
-    let route: ModalRoute<i32> = ModalRoute::new(
-        FRAME,
-        Rc::new(|_ctx: &dyn BuildContext, _a: &_, _s: &_| {
-            SizedBox::new(10.0, 10.0).into_view().boxed()
-        }),
-    );
-    let a = route.handle();
-    let b: ModalHandle = a.clone();
-
-    assert!(!a.offstage());
-    // Unpushed: no binding, so `changed_internal_state` is inert; the flag flips
-    // anyway, which is what makes a pre-push `set_offstage` legal.
-    b.set_offstage(true);
-    assert!(a.offstage(), "both handles name the same route");
 }

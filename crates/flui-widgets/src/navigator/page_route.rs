@@ -330,18 +330,17 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
 impl<T: Send + Clone + 'static> PageRoute<T> {
     /// The modal handle, whose `set_offstage` is the seam `HeroController` drives
     /// to measure a route's final hero geometry (`heroes.dart:967`). Test-facing
-    /// until `HeroController` gives it a production caller.
-    #[cfg(test)]
+    /// until `HeroController` gives it a production caller; read through
+    /// `crate::__test_access::RouteProbe`.
     pub(crate) fn modal_handle(&self) -> super::modal_route::ModalHandle {
         self.modal.handle()
     }
 
     /// The animation handle, for driving a transition by hand. Test-facing: a
-    /// unit test drives the transition with `set_value` through this handle
+    /// test drives the transition with `set_value` through this handle
     /// rather than awaiting the `TickerFuture` `did_push` returns; the real
     /// awaited-clock coverage lives in `tests/routes.rs`, which drives a real
-    /// `Vsync` instead.
-    #[cfg(test)]
+    /// `Vsync` instead. Read through `crate::__test_access::RouteProbe`.
     pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.modal.transition_handle()
     }
@@ -467,7 +466,6 @@ impl<T: Send + Clone + 'static> PopupRoute<T> {
 
 impl<T: Send + Clone + 'static> PopupRoute<T> {
     /// See [`PageRoute::transition_handle`].
-    #[cfg(test)]
     pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.modal.transition_handle()
     }

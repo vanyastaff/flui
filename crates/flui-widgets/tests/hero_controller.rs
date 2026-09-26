@@ -5,7 +5,9 @@
 //! `LocalPostFrameHandle`, notification outside the history lock, and the
 //! offstage animation proxies — **compose** into a destination rect.
 //!
-//! They do not prove the flight overlay itself; `hero_flight_tests` owns that layer.
+//! They do not prove the flight overlay itself; `hero_flight.rs` owns that layer.
+//! The private flight-validity predicate keeps a unit test in
+//! `src/navigator/hero_controller_tests.rs`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,14 +18,16 @@ use flui_view::prelude::*;
 
 use flui_foundation::ValueKey;
 
-use super::hero::{Hero, HeroTag};
-use super::hero_controller::{FlightDirection, HeroController};
-use super::navigator::{Navigator, NavigatorHandle};
-use super::observer::NavigatorObserver;
-use super::overlay_route::SimpleRoute;
-use super::page_route::{PageRoute, PopupRoute};
-use crate::testing::harness::{Harness, PostFrameCapability, mount, mount_with_capabilities};
-use crate::{Center, SizedBox};
+use flui_widgets::__test_access::{
+    HeroControllerProbe as _, HeroTag, NavigatorProbe as _, PageRouteProbe as _, RouteProbe as _,
+};
+use flui_widgets::navigator::{
+    FlightDirection, Hero, HeroController, Navigator, NavigatorHandle, NavigatorObserver,
+    PageRoute, PopupRoute, SimpleRoute,
+};
+use flui_widgets::{Center, SizedBox};
+
+use crate::common::harness::{Harness, PostFrameCapability, mount, mount_with_capabilities};
 
 /// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page fills
 /// its `Stack(fit: expand)` — so a route's subtree measures the screen.
@@ -68,7 +72,7 @@ impl StatelessView for Root {
         if self.show {
             Navigator::new(self.navigator.clone()).boxed()
         } else {
-            crate::Text::new("gone").boxed()
+            flui_widgets::Text::new("gone").boxed()
         }
     }
 }
@@ -203,7 +207,7 @@ fn a_non_page_route_schedules_nothing() {
 /// Note `mark_entry_needs_build` is *not* on that list. It rebuilds the overlay
 /// **entry** (the `Offstage` wrapper and the barrier), not the scope, so deleting it
 /// leaves this measurement intact — the route is measured correctly while still
-/// being painted. `modal_route_tests::modal_offstage_keeps_the_page_but_drops_the_barrier`
+/// being painted. `modal_route::modal_offstage_keeps_the_page_but_drops_the_barrier`
 /// is what guards it.
 #[test]
 fn the_post_frame_callback_measures_the_offstage_destination_in_the_same_frame() {
@@ -510,7 +514,7 @@ fn without_a_post_frame_capability_the_destination_is_left_onstage() {
             show: true,
         },
         PostFrameCapability::Absent,
-        crate::testing::harness::TextInputCapability::Absent,
+        crate::common::harness::TextInputCapability::Absent,
     );
 
     // The controller attached, so it is not the `navigator == None` path being tested.
@@ -776,8 +780,8 @@ fn controller_ignores_tags_present_on_only_one_route() {
 /// frame, and an unmounted hero has already deregistered. Both are ported because
 /// Flutter's `_boundingBoxFor` asserts `box.hasSize` there and would crash, and both
 /// are pinned where they *are* testable —
-/// `hero_tests::{an_unmounted_hero_measures_to_none, a_hero_bounding_box_is_none_before_layout_commits}`
-/// and `a_non_finite_rect_is_never_flown`.
+/// `hero::{an_unmounted_hero_measures_to_none, a_hero_bounding_box_is_none_before_layout_commits}`
+/// and `a_non_finite_rect_is_never_flown` (a unit test beside the source).
 ///
 /// Red-check: delete `registry.deregister(…)` from `HeroState::dispose`.
 #[test]
@@ -836,33 +840,6 @@ fn controller_skips_a_hero_that_left_its_route_before_the_measuring_frame() {
         "so the tag is unpaired and nothing would fly: {:?}",
         controller.manifests()
     );
-}
-
-/// `_HeroFlightManifest.isValid` (`heroes.dart:530`):
-/// `toHeroLocation.isFinite && (isDiverted || fromHeroLocation.isFinite)`.
-///
-/// Unit-tested directly, because no reachable FLUI configuration produces a non-finite
-/// rect today — every rect comes from `box_size` and `transform_to`. Asserting it
-/// end-to-end would assert nothing. See `is_valid_flight`'s docs.
-///
-/// Red-check: `to_rect.is_finite() || from_rect.is_finite()` in `is_valid_flight`.
-#[test]
-fn a_non_finite_rect_is_never_flown() {
-    use super::hero_controller::is_valid_flight;
-    use flui_geometry::Rect;
-    use flui_types::geometry::px;
-
-    let finite = Rect::from_ltwh(px(0.0), px(0.0), px(10.0), px(10.0));
-    let infinite = Rect::from_ltwh(px(0.0), px(0.0), px(f32::INFINITY), px(10.0));
-    let nan = Rect::from_ltwh(px(f32::NAN), px(0.0), px(10.0), px(10.0));
-
-    assert!(is_valid_flight(finite, finite));
-    assert!(!is_valid_flight(infinite, finite), "an infinite source");
-    assert!(
-        !is_valid_flight(finite, infinite),
-        "an infinite destination"
-    );
-    assert!(!is_valid_flight(nan, finite), "a NaN origin");
 }
 
 /// **A `HeroController` cannot be shared by two mounted navigators** (Flutter's
@@ -982,7 +959,7 @@ fn a_manual_controller_added_after_mount_replaces_the_auto_default() {
 /// Red-check: treat `Some(None)` like `None` in `init_state` (auto-default) — count is 1.
 #[test]
 fn a_scope_none_leaves_no_controller() {
-    use super::hero_controller_scope::HeroControllerScope;
+    use flui_widgets::navigator::HeroControllerScope;
 
     let navigator = seeded_navigator();
     let _harness = mount(HeroControllerScope::none(Navigator::new(navigator.clone())));

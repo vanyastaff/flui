@@ -153,8 +153,8 @@ impl<T> SimpleRoute<T> {
     /// Make `did_pop` refuse, modelling `LocalHistoryRoute`.
     ///
     /// Test-only: a real refusing route implements [`Route::did_pop`] itself, and
-    /// `LocalHistoryRoute` is deferred. Not part of the signed-off public surface.
-    #[cfg(test)]
+    /// `LocalHistoryRoute` is deferred. Not part of the signed-off public surface;
+    /// reached through `crate::__test_access::SimpleRouteProbe`.
     pub(crate) fn refusing_pop(mut self) -> Self {
         self.consents_to_pop = false;
         self
@@ -163,7 +163,6 @@ impl<T> SimpleRoute<T> {
     /// Make `will_handle_pop_internally` true, modelling `LocalHistoryRoute`.
     ///
     /// Test-only, for the same reason as [`SimpleRoute::refusing_pop`].
-    #[cfg(test)]
     pub(crate) fn handling_pop_internally(mut self) -> Self {
         self.handles_pop_internally = true;
         self

@@ -66,11 +66,10 @@
 // `TransitionRoute` is private and reached only through `ModalRoute` and,
 // above it, the public `PageRoute` / `PopupRoute`. Exporting those removed
 // this file's `#![allow(dead_code)]`: everything left is either reachable from a
-// public route or `#[cfg(test)]`.
+// public route or re-exported to the integration tests by `crate::__test_access`
+// (ADR-0083 §4).
 
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 use std::{fmt, marker::PhantomData};
 use std::{rc::Rc, sync::Arc};
@@ -170,8 +169,8 @@ struct TransitionInner {
     /// How many times the status listener raised `finalize()`. Test-facing: the
     /// `_popFinalized` guard is what keeps this at one, and nothing else observes
     /// it — FLUI's `finalize` command is idempotent, where Flutter's
-    /// `finalizeRoute` asserts.
-    #[cfg(test)]
+    /// `finalizeRoute` asserts. Compiled into every build so the route has one
+    /// layout whether or not the integration tests link it (ADR-0083 §4).
     finalize_calls: AtomicUsize,
 }
 
@@ -211,7 +210,6 @@ impl TransitionInner {
             AnimationStatus::Dismissed
                 if !self.is_active() && !self.pop_finalized.swap(true, Ordering::AcqRel) =>
             {
-                #[cfg(test)]
                 self.finalize_calls.fetch_add(1, Ordering::Relaxed);
                 binding.finalize();
             }
@@ -233,7 +231,7 @@ impl TransitionInner {
 ///
 /// Private: `TransitionRoute` is not exported, and `transition_route_is_not_exported`
 /// keeps it that way until its parity + sign-off gate.
-pub(crate) struct TransitionRoute<T> {
+pub struct TransitionRoute<T> {
     settings: RouteSettings,
     builder: RouteContentBuilder,
     duration: Duration,
@@ -255,7 +253,7 @@ pub(crate) struct TransitionRoute<T> {
 
 impl<T> TransitionRoute<T> {
     /// A route showing `builder`, entering and leaving over `duration`.
-    pub(crate) fn new(
+    pub fn new(
         duration: Duration,
         builder: impl Fn(&dyn flui_view::BuildContext) -> flui_view::BoxedView + 'static,
     ) -> Self {
@@ -281,14 +279,15 @@ impl<T> TransitionRoute<T> {
                 vsync_registration: Mutex::new(None),
                 will_dispose_controller: true,
                 completed: Arc::new(CompletedSignal::default()),
-                #[cfg(test)]
                 finalize_calls: AtomicUsize::new(0),
             }),
             _output: PhantomData,
         }
     }
 
-    pub(crate) fn named(mut self, name: impl Into<String>) -> Self {
+    /// Name the route (its `RouteSettings::name`).
+    #[must_use]
+    pub fn named(mut self, name: impl Into<String>) -> Self {
         self.settings = RouteSettings::named(name);
         self
     }
@@ -314,16 +313,16 @@ impl<T> TransitionRoute<T> {
 
     /// `canTransitionTo` (`routes.dart:536`), default `true`. No public route sets
     /// it: `PageRoute`'s family restriction is a [`TransitionGroup`], not a bool.
-    #[cfg(test)]
-    pub(crate) fn can_transition_to(mut self, allow: bool) -> Self {
+    #[must_use]
+    pub fn can_transition_to(mut self, allow: bool) -> Self {
         self.can_transition_to = allow;
         self
     }
 
     /// `canTransitionFrom` (`routes.dart:561`), default `true`. See
     /// [`can_transition_to`](Self::can_transition_to).
-    #[cfg(test)]
-    pub(crate) fn can_transition_from(mut self, allow: bool) -> Self {
+    #[must_use]
+    pub fn can_transition_from(mut self, allow: bool) -> Self {
         self.can_transition_from = allow;
         self
     }
@@ -351,7 +350,8 @@ impl<T> TransitionRoute<T> {
     /// the transition by hand through this handle (`set_value`) rather than
     /// awaiting the `TickerFuture` `did_push` returns, since driving real
     /// elapsed time through a `Vsync` is what `tests/routes.rs` is for.
-    pub(crate) fn handle(&self) -> TransitionHandle {
+    #[must_use]
+    pub fn handle(&self) -> TransitionHandle {
         TransitionHandle {
             inner: Arc::clone(&self.inner),
         }
@@ -489,14 +489,21 @@ impl<T> TransitionRoute<T> {
 
 /// A cloneable view of a [`TransitionRoute`]'s animation state.
 #[derive(Clone)]
-pub(crate) struct TransitionHandle {
+pub struct TransitionHandle {
     inner: Arc<TransitionInner>,
+}
+
+impl fmt::Debug for TransitionHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TransitionHandle").finish_non_exhaustive()
+    }
 }
 
 impl TransitionHandle {
     /// The controller driving the route's **primary** animation, once `install`
     /// has created it.
-    pub(crate) fn controller(&self) -> Option<AnimationController> {
+    #[must_use]
+    pub fn controller(&self) -> Option<AnimationController> {
         self.inner.controller.lock().clone()
     }
 
@@ -520,31 +527,32 @@ impl TransitionHandle {
     /// This is owner-local by construction: callers are route/modal build paths
     /// or tests explicitly entering the owner scope. The status listener itself
     /// stores only data so `AnimationController` can stay `Send + Sync`.
-    pub(crate) fn drain_pending_statuses(&self) {
+    pub fn drain_pending_statuses(&self) {
         self.inner.drain_pending_statuses();
     }
 
     /// Flutter's `secondaryAnimation` (`routes.dart:197`). A `ProxyAnimation`
     /// resting at `kAlwaysDismissedAnimation`.
-    pub(crate) fn secondary_animation(&self) -> Arc<ProxyAnimation<f32>> {
+    #[must_use]
+    pub fn secondary_animation(&self) -> Arc<ProxyAnimation<f32>> {
         Arc::clone(&self.inner.secondary)
     }
 
     /// Flutter's `_popFinalized` (`routes.dart:180`).
-    #[cfg(test)]
-    pub(crate) fn is_pop_finalized(&self) -> bool {
+    #[must_use]
+    pub fn is_pop_finalized(&self) -> bool {
         self.inner.pop_finalized.load(Ordering::Acquire)
     }
 
     /// How many times the status listener raised `finalize()`.
-    #[cfg(test)]
-    pub(crate) fn finalize_calls(&self) -> usize {
+    #[must_use]
+    pub fn finalize_calls(&self) -> usize {
         self.inner.finalize_calls.load(Ordering::Relaxed)
     }
 
     /// Whether the secondary proxy currently rests at always-dismissed.
-    #[cfg(test)]
-    pub(crate) fn secondary_is_dismissed(&self) -> bool {
+    #[must_use]
+    pub fn secondary_is_dismissed(&self) -> bool {
         matches!(
             &*self.inner.secondary_parent.lock(),
             SecondaryParent::Dismissed
@@ -552,8 +560,8 @@ impl TransitionHandle {
     }
 
     /// Whether the secondary proxy is mid-hop (an `AnimationSwitch` is installed).
-    #[cfg(test)]
-    pub(crate) fn secondary_is_hopping(&self) -> bool {
+    #[must_use]
+    pub fn secondary_is_hopping(&self) -> bool {
         matches!(
             &*self.inner.secondary_parent.lock(),
             SecondaryParent::Hopping { .. }
@@ -613,7 +621,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
 
         // A real, but permanently detached, ticker -- not `without_ticker`:
         // this controller's `is_animating()` is read by `BackGestureController`
-        // and by tests (`transition_route_tests.rs`), and `is_animating` is
+        // and by tests (`tests/transition_route.rs`), and `is_animating` is
         // intentionally ticker-based (Flutter parity: `Ticker.isActive`),
         // not status-based — a ticker-less controller can never report
         // `is_animating() == true`. The navigator's `Vsync` (registered

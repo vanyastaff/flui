@@ -75,16 +75,15 @@ use crate::__private::AnchoredBox;
 /// Owned data, never a borrow into the trees: the caller that reads this is
 /// outside any tree borrow by construction (it came from a `NavigatorHandle`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RouteSubtree {
+pub struct RouteSubtree {
     /// The route's `subtreeContext` — the element to walk its page subtree from.
-    pub(crate) element_id: ElementId,
+    pub element_id: ElementId,
     /// The root of the route's page **coordinate space**. Measurable only once
     /// layout has committed; see the module docs.
-    pub(crate) render_id: RenderId,
+    pub render_id: RenderId,
 }
 
 /// The element half and the render half of a [`RouteSubtreeCell`], unjoined.
-#[cfg(test)]
 pub(crate) type SubtreeParts = (Option<ElementId>, Option<RenderId>);
 
 /// The two cells a mounted [`RouteSubtreeAnchor`] publishes into.
@@ -128,7 +127,6 @@ impl RouteSubtreeCell {
     /// `AND`, so it cannot tell which half a bug left behind — a test that only
     /// checks `resolve() == None` passes when *either* retraction works, and would
     /// stay green with one of them deleted.
-    #[cfg(test)]
     pub(crate) fn parts(&self) -> SubtreeParts {
         (*self.element.lock(), self.anchor.get())
     }

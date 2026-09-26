@@ -45,7 +45,7 @@
 //!   no disposal step of its own; dropping every clone is enough. The one
 //!   behavior from that group FLUI does port — a second `remove()` is inert
 //!   rather than panicking (`overlay.dart`'s `assert` in `remove()`,
-//!   `:226-243`) — is `overlay/tests.rs`'s
+//!   `:226-243`) — is `crates/flui-widgets/tests/overlay.rs`'s
 //!   `removed_entry_cannot_reinsert_or_rebuild_silently`.
 //!
 //! [`Overlay`]: super::Overlay

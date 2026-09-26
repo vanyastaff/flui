@@ -29,7 +29,7 @@
 /// So the unit is the statement: accumulate from the line that opens it to the
 /// one carrying its terminating `;`. Identifiers stay borrowed from `source`
 /// because each line is tokenised where it sits rather than joined.
-fn exported_identifiers(source: &str) -> Vec<&str> {
+pub(crate) fn exported_identifiers(source: &str) -> Vec<&str> {
     let mut exported = Vec::new();
     let mut inside_statement = false;
 

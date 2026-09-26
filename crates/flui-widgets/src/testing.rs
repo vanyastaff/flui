@@ -8,14 +8,15 @@
 //! render-node geometry. No GPU, no window, no `WidgetsBinding` singleton —
 //! so the tests are order-independent and can run in parallel.
 //!
-//! Compiled only for this crate's own tests (`cfg(test)`) or when a consumer
-//! enables the `testing` feature — never in production builds. This module
-//! is the single canonical harness: the per-crate `tests/common/mod.rs` files
-//! are thin re-export shims over it, so mount ordering, pointer-contact
-//! identity, and virtual-clock policy cannot drift apart between crates again.
+//! Compiled only when a consumer enables the `testing` feature — never in
+//! production builds, and never in this crate's own unit-test build
+//! (`cfg(not(test))`, ADR-0083 §4): a test that drives the harness lives in
+//! `crates/flui-widgets/tests/`. This module is the single canonical harness:
+//! the per-crate `tests/common/mod.rs` files are thin re-export shims over it,
+//! so mount ordering, pointer-contact identity, and virtual-clock policy
+//! cannot drift apart between crates again.
 
 pub mod harness;
-pub mod overlay_probe;
 
 use std::any::TypeId;
 use std::cell::Cell;

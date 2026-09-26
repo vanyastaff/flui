@@ -99,11 +99,9 @@
 
 // A `Navigator` now auto-attaches a `HeroController` in production, so the
 // controller and its flight path are live. What stays test-only are the `pub(crate)`
-// introspection accessors (`scheduled_count`, `measurements`, `manifests`) the tests
-// read to assert the measurement pass; their `dead_code` in a non-test build cascades
-// into the `ModalHandle` / `RouteBinding` / `HeroRegistry` seams. The allow keeps a
-// seam from being deleted and re-derived later, out of step with the design.
-#![expect(dead_code)]
+// introspection accessors (`scheduled_count`, `measurements`, `manifests`), which the
+// integration tests read through `crate::__test_access::HeroControllerProbe`
+// (ADR-0083 §4) to assert the measurement pass.
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -168,22 +166,27 @@ impl FlightDirection {
 /// The route-level measurement that precedes manifest collection and flight launch.
 /// Keeping it recorded separately proves the underlying seams still compose into a
 /// destination rect before that data is consumed to match hero pairs.
+///
+/// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
+/// module is private, so nothing else names it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Measurement {
+pub struct Measurement {
     /// `None` when neither route was animating; see [`FlightDirection::classify`].
-    pub(crate) direction: Option<FlightDirection>,
-    pub(crate) from: RouteId,
-    pub(crate) to: RouteId,
+    pub direction: Option<FlightDirection>,
+    /// The route the transition leaves.
+    pub from: RouteId,
+    /// The route the transition reaches.
+    pub to: RouteId,
     /// `to.subtreeContext.findRenderObject()!.size` (`heroes.dart:952`). `None` when
     /// the destination has not laid out — which, after a frame, would be a bug.
-    pub(crate) to_size: Option<Size>,
+    pub to_size: Option<Size>,
     /// `to.subtreeContext.findRenderObject()!.getTransformTo(navigatorRenderObject)`
     /// (`heroes.dart:1029`), taken against the render root rather than the
     /// navigator's own render object — FLUI's `Navigator` is not a render object.
-    pub(crate) to_transform: Option<Matrix4>,
+    pub to_transform: Option<Matrix4>,
     /// What the destination's primary animation read *while it was offstage*. The
     /// whole mechanism is a lie unless this is `1.0` (`routes.dart:1958`).
-    pub(crate) to_animation_while_offstage: f32,
+    pub to_animation_while_offstage: f32,
 }
 
 /// `_HeroFlightManifest.isValid` (`heroes.dart:530`):
@@ -212,20 +215,26 @@ pub(crate) fn is_valid_flight(from_rect: Rect, to_rect: Rect) -> bool {
 /// needs and a measurement does not: no `overlay`, no `createRectTween`, no
 /// `shuttleBuilder`, no `isDiverted`. Both rects are in their own route's coordinate
 /// space, as `fromHeroLocation` / `toHeroLocation` are (`:514`, `:520`).
+///
+/// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
+/// module is private, so nothing else names it.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct HeroFlightManifest {
-    pub(crate) tag: HeroTag,
+pub struct HeroFlightManifest {
+    /// The tag both routes share.
+    pub tag: HeroTag,
     /// `None` when neither route was animating; see [`FlightDirection::classify`].
-    pub(crate) direction: Option<FlightDirection>,
-    pub(crate) from_route: RouteId,
-    pub(crate) to_route: RouteId,
+    pub direction: Option<FlightDirection>,
+    /// The route the hero flies from.
+    pub from_route: RouteId,
+    /// The route the hero flies to.
+    pub to_route: RouteId,
     /// `fromHero`'s bounding box in `fromRoute`'s coordinate space (`:514`).
-    pub(crate) from_rect: Rect,
+    pub from_rect: Rect,
     /// `toHero`'s bounding box in `toRoute`'s coordinate space (`:520`).
-    pub(crate) to_rect: Rect,
+    pub to_rect: Rect,
     /// `manifest.isUserGestureTransition` (`heroes.dart:453`): started by
     /// `didStartUserGesture`, not a programmatic push/pop.
-    pub(crate) is_user_gesture_transition: bool,
+    pub is_user_gesture_transition: bool,
 }
 
 /// Watches a navigator, measures where hero flights land, and launches private flights.

@@ -76,16 +76,27 @@ pub(crate) fn convert_to_logical(value: f32, direction: TextDirection) -> f32 {
 /// Works entirely in logical fractions of the controller's own `0.0..1.0`
 /// range (`0.0` = new page dismissed, `1.0` = new page fully on top), exactly
 /// as the oracle documents itself.
-pub(crate) struct BackGestureController {
+///
+/// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
+/// module is private, so nothing else names it.
+pub struct BackGestureController {
     navigator: NavigatorHandle,
     route: RouteId,
     controller: AnimationController,
 }
 
+impl std::fmt::Debug for BackGestureController {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackGestureController")
+            .field("route", &self.route)
+            .finish_non_exhaustive()
+    }
+}
+
 impl BackGestureController {
     /// Flutter's ctor body: `navigator.didStartUserGesture()` fires
     /// immediately, before the first `drag_update`.
-    pub(crate) fn new(
+    pub fn new(
         navigator: NavigatorHandle,
         route: RouteId,
         controller: AnimationController,
@@ -103,7 +114,7 @@ impl BackGestureController {
     /// `AnimationController::set_value` now stops any active run first (step
     /// 0's Flutter-parity fix) — exactly Flutter's `value -=` setter
     /// semantics, so no separate `stop()` call is needed here.
-    pub(crate) fn drag_update(&self, delta: f32) {
+    pub fn drag_update(&self, delta: f32) {
         self.controller.set_value(self.controller.value() - delta);
     }
 
@@ -114,7 +125,7 @@ impl BackGestureController {
     /// `BackGestureDetectorState`'s per-rebuild poll) — `false` if it settled
     /// inline, in which case the gesture is already fully closed out
     /// (`did_stop_user_gesture` already called).
-    pub(crate) fn drag_end(&self, velocity: f32) -> bool {
+    pub fn drag_end(&self, velocity: f32) -> bool {
         let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::FastEaseInToSlowEaseOut); // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
         let is_current = self.navigator.current() == Some(self.route);
         let animate_forward = if !is_current {
@@ -181,7 +192,10 @@ impl BackGestureController {
 /// `Fn(..) + 'static`, not `Send + Sync` (unlike an `AnimationController`
 /// status listener, which is why the settle wait below is a poll, not a
 /// second status listener; see `poll_settle`'s doc).
-struct BackGestureRuntime {
+///
+/// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
+/// module is private, so nothing else names it.
+pub struct BackGestureRuntime {
     navigator: NavigatorHandle,
     route: RouteId,
     controller: AnimationController,
@@ -205,7 +219,51 @@ struct BackGestureRuntime {
     awaiting_settle: Cell<bool>,
 }
 
+impl std::fmt::Debug for BackGestureRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackGestureRuntime")
+            .field("route", &self.route)
+            .field("awaiting_settle", &self.awaiting_settle.get())
+            .finish_non_exhaustive()
+    }
+}
+
 impl BackGestureRuntime {
+    /// A runtime for `route`, driving `controller`, with no gesture in flight.
+    /// `enabled` is re-evaluated on every pointer-down.
+    pub fn new(
+        navigator: NavigatorHandle,
+        route: RouteId,
+        controller: AnimationController,
+        enabled: Rc<dyn Fn() -> bool>,
+    ) -> Self {
+        Self {
+            navigator,
+            route,
+            controller,
+            enabled,
+            // No `BuildContext` here — refreshed from the ambient
+            // `Directionality` on every `build` instead (see the module
+            // docs and `BackGestureDetectorState::build`).
+            direction: Cell::new(TextDirection::Ltr),
+            gesture: RefCell::new(None),
+            awaiting_settle: Cell::new(false),
+        }
+    }
+
+    /// Whether a drag has started and not yet been released or disposed.
+    #[must_use]
+    pub fn has_gesture(&self) -> bool {
+        self.gesture.borrow().is_some()
+    }
+
+    /// Whether a released drag's settle animation is still owed a
+    /// `did_stop_user_gesture` report.
+    #[must_use]
+    pub fn awaiting_settle(&self) -> bool {
+        self.awaiting_settle.get()
+    }
+
     fn on_pointer_down(
         &self,
         recognizer: &Arc<DragGestureRecognizer>,
@@ -234,7 +292,8 @@ impl BackGestureRuntime {
         );
     }
 
-    fn on_drag_start(&self, _details: DragStartDetails) {
+    /// The recognizer's drag start: begins a gesture unless one is in flight.
+    pub fn on_drag_start(&self, _details: DragStartDetails) {
         if self.gesture.borrow().is_some() {
             return;
         }
@@ -268,7 +327,9 @@ impl BackGestureRuntime {
         self.finish_drag(0.0);
     }
 
-    fn finish_drag(&self, velocity: f32) {
+    /// Release the in-flight gesture at `velocity` (logical screen-widths per
+    /// second); a no-op if none is in flight.
+    pub fn finish_drag(&self, velocity: f32) {
         let Some(gesture) = self.gesture.borrow_mut().take() else {
             return;
         };
@@ -286,7 +347,7 @@ impl BackGestureRuntime {
     /// status listener would need to be `Send + Sync`
     /// (`AnimationController::add_status_listener`'s bound) and could
     /// therefore never touch this owner-affine `NavigatorHandle` directly.
-    fn poll_settle(&self) {
+    pub fn poll_settle(&self) {
         if self.awaiting_settle.get() && !self.controller.is_animating() {
             self.awaiting_settle.set(false);
             self.navigator.did_stop_user_gesture();
@@ -324,7 +385,7 @@ impl BackGestureRuntime {
     /// separately tracked from "is a release animation still owed a stop"
     /// there; this port keeps them as two flags (`gesture`/`awaiting_settle`)
     /// so `poll_settle`'s cheap common case doesn't need a live controller.
-    fn dispose_safety_net(&self) {
+    pub fn dispose_safety_net(&self) {
         let had_live_gesture = self.gesture.borrow_mut().take().is_some();
         let was_awaiting_settle = self.awaiting_settle.replace(false);
         if !had_live_gesture && !was_awaiting_settle {
@@ -437,18 +498,12 @@ impl StatefulView for BackGestureDetector {
 
     fn create_state(&self) -> Self::State {
         BackGestureDetectorState {
-            runtime: Rc::new(BackGestureRuntime {
-                navigator: self.navigator.clone(),
-                route: self.route,
-                controller: self.controller.clone(),
-                enabled: Rc::clone(&self.enabled),
-                // No `BuildContext` here — refreshed from the ambient
-                // `Directionality` on every `build` instead (see the module
-                // docs and `BackGestureDetectorState::build`).
-                direction: Cell::new(TextDirection::Ltr),
-                gesture: RefCell::new(None),
-                awaiting_settle: Cell::new(false),
-            }),
+            runtime: Rc::new(BackGestureRuntime::new(
+                self.navigator.clone(),
+                self.route,
+                self.controller.clone(),
+                Rc::clone(&self.enabled),
+            )),
             recognizer: None,
         }
     }
@@ -553,6 +608,8 @@ impl BackGestureDetectorState {
     }
 }
 
+// The tests that need a mounted navigator live in
+// `crates/flui-widgets/tests/back_gesture.rs`.
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -601,42 +658,6 @@ mod tests {
         owner.build_scope(&mut tree);
     }
 
-    /// A mounted navigator with a pushed [`PageRoute`], and that route's own
-    /// [`AnimationController`] — the same one `pop_paced` reaches through
-    /// `did_pop`. Needed by any test that drives `drag_end`'s pop branch:
-    /// `BackGestureController` must be constructed with the route's *real*
-    /// controller, or the pacing it applies through `pop_paced` lands on a
-    /// route with no relationship to the controller the test observes.
-    fn mounted_with_transition_route() -> (
-        NavigatorHandle,
-        crate::testing::harness::Harness,
-        RouteId,
-        AnimationController,
-    ) {
-        use super::super::page_route::PageRoute;
-        use crate::testing::harness::mount;
-
-        let navigator = NavigatorHandle::new();
-        navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
-            SizedBox::new(1.0, 1.0).into_view().boxed()
-        }));
-        let mut harness = mount(crate::navigator::Navigator::new(navigator.clone()));
-
-        let route = PageRoute::<i32>::new(|_ctx, _primary, _secondary| {
-            SizedBox::new(1.0, 1.0).into_view().boxed()
-        })
-        .transition_duration(Duration::from_millis(300));
-        let transition = route.transition_handle();
-        let _pushed = harness.enter_owner_scope(|| navigator.push(route));
-        harness.tick();
-
-        let top = *navigator.route_ids().last().expect("pushed");
-        let controller = transition
-            .controller()
-            .expect("install() created the controller");
-        (navigator, harness, top, controller)
-    }
-
     #[test]
     fn convert_to_logical_flips_sign_only_for_rtl() {
         assert_eq!(convert_to_logical(0.3, TextDirection::Ltr), 0.3);
@@ -677,87 +698,6 @@ mod tests {
         );
     }
 
-    // ---- release matrix: v = -2.0 / +2.0 / 0 at value 0.49 / 0.51 ----
-
-    #[test]
-    fn release_matrix_fling_and_slow_release() {
-        // Fast negative velocity (screen-widths/s): stay (route animates
-        // forward to 1.0 = new page fully covers again) regardless of value.
-        {
-            let (navigator, _harness, top, c) = mounted_with_transition_route();
-            c.set_value(0.51);
-            let gesture = BackGestureController::new(navigator, top, c.clone());
-            let still_settling = gesture.drag_end(-2.0);
-            assert!(still_settling, "an animated release keeps the run going");
-            assert_eq!(c.status(), flui_animation::AnimationStatus::Forward);
-        }
-        // Fast positive velocity: pop (route animates back to 0.0).
-        {
-            let (navigator, _harness, top, c) = mounted_with_transition_route();
-            c.set_value(0.49);
-            let gesture = BackGestureController::new(navigator, top, c.clone());
-            let still_settling = gesture.drag_end(2.0);
-            assert!(still_settling);
-            assert_eq!(c.status(), flui_animation::AnimationStatus::Reverse);
-        }
-        // No meaningful velocity, value > 0.5: stay.
-        {
-            let (navigator, _harness, top, c) = mounted_with_transition_route();
-            c.set_value(0.51);
-            let gesture = BackGestureController::new(navigator, top, c.clone());
-            let still_settling = gesture.drag_end(0.0);
-            assert!(still_settling);
-            assert_eq!(c.status(), flui_animation::AnimationStatus::Forward);
-        }
-        // No meaningful velocity, value <= 0.5: pop.
-        {
-            let (navigator, _harness, top, c) = mounted_with_transition_route();
-            c.set_value(0.49);
-            let gesture = BackGestureController::new(navigator, top, c.clone());
-            let still_settling = gesture.drag_end(0.0);
-            assert!(still_settling);
-            assert_eq!(c.status(), flui_animation::AnimationStatus::Reverse);
-        }
-    }
-
-    // ---- mid-drag programmatic pop: the pop itself must not be clobbered ----
-
-    /// Flutter's `dragUpdate` has no `is_active`/`is_current` guard at all —
-    /// `controller.value -= delta` runs unconditionally, so a drag_update
-    /// after a programmatic pop still moves the value (this is *not* a
-    /// no-op, and asserting otherwise would pin a divergence). What must
-    /// hold is the other direction: the programmatic pop that landed
-    /// mid-drag stays popped — a later drag_update must not resurrect the
-    /// route or panic reaching into it.
-    #[test]
-    fn mid_drag_programmatic_pop_is_not_undone_by_a_later_drag_update() {
-        let (navigator, mut harness, top, c) = mounted_with_transition_route();
-        c.set_value(1.0);
-        let gesture = BackGestureController::new(navigator.clone(), top, c.clone());
-        gesture.drag_update(0.3); // value 0.7, mid-drag
-
-        // A programmatic pop lands while the finger is still down. The route
-        // stays in `route_ids()` until its (non-zero-duration) exit
-        // transition finishes — `finished_when_popped` — so "the pop took
-        // effect" is checked through `current()`, not stack membership.
-        assert!(harness.enter_owner_scope(|| navigator.pop()));
-        harness.tick();
-        assert_ne!(
-            navigator.current(),
-            Some(top),
-            "the mid-drag pop must actually move `current` off this route"
-        );
-
-        // A further drag_update on the now-stale gesture must not panic or
-        // resurrect the popped route.
-        gesture.drag_update(0.05);
-        assert_ne!(
-            navigator.current(),
-            Some(top),
-            "a stale drag_update after the pop must not undo it"
-        );
-    }
-
     // ---- full swipe to 0.0, then drag back: no Dismissed-finalize thrash ----
 
     #[test]
@@ -776,185 +716,6 @@ mod tests {
         gesture.drag_update(-0.4);
         assert!((c.value() - 0.4).abs() < 1e-6, "value={}", c.value());
         assert_ne!(c.status(), flui_animation::AnimationStatus::Dismissed);
-    }
-
-    // ---- dispose-mid-settle: counter returns to 0 ----
-
-    #[test]
-    fn dispose_mid_gesture_returns_the_counter_to_zero() {
-        let (navigator, mut harness, top, c) = mounted_with_transition_route();
-        let runtime = BackGestureRuntime {
-            navigator: navigator.clone(),
-            route: top,
-            controller: c,
-            enabled: Rc::new(|| true),
-            direction: Cell::new(TextDirection::Ltr),
-            gesture: RefCell::new(None),
-            awaiting_settle: Cell::new(false),
-        };
-        runtime.on_drag_start(DragStartDetails {
-            global_position: flui_types::geometry::Offset::ZERO,
-            local_position: flui_types::geometry::Offset::ZERO,
-            kind: flui_interaction::events::PointerType::Touch,
-            timestamp: std::time::Instant::now(),
-        });
-        assert!(navigator.user_gesture_in_progress());
-
-        // The detector unmounts mid-drag (finger still down) — no drag_end
-        // ever ran. The navigator IS mounted here (unlike an inert
-        // `NavigatorHandle::new()` fixture), so Flutter's own `if (mounted)`
-        // gate in `dispose` is actually exercised, not vacuously satisfied.
-        // `dispose` runs from within the element tree's own owner scope in
-        // production, exactly like `push`/`pop` do — reproduced here so the
-        // local post-frame lane is actually active and the report is
-        // genuinely deferred, not caught by the synchronous fallback.
-        assert!(navigator.is_mounted());
-        harness.enter_owner_scope(|| runtime.dispose_safety_net());
-
-        // `mount()` installs a real owner-local post-frame lane, so the
-        // report is deferred (Flutter's own `addPostFrameCallback`, not a
-        // synchronous call from `dispose`) — a frame tick is what delivers it.
-        assert!(
-            navigator.user_gesture_in_progress(),
-            "the report is deferred to the next frame, not synchronous"
-        );
-        harness.tick();
-        assert!(
-            !navigator.user_gesture_in_progress(),
-            "dispose must return the counter to 0 by the next frame, even \
-             with no drag_end"
-        );
-    }
-
-    /// A one-shot observer that counts `did_stop_user_gesture` calls.
-    #[derive(Default)]
-    struct GestureStopObserver {
-        stops: AtomicUsize,
-    }
-    impl super::super::NavigatorObserver for GestureStopObserver {
-        fn did_stop_user_gesture(&self) {
-            self.stops.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
-    // ---- full settle after release: did_stop fires, counter clears ----
-
-    /// A released drag settled by genuinely ticking the run out (not
-    /// `set_value`) must report `did_stop_user_gesture` to observers exactly
-    /// once and leave `user_gesture_in_progress()` false — Flutter's
-    /// trailing `AnimationStatusListener` in `dragEnd` firing on the run's
-    /// real terminal status.
-    ///
-    /// Red-check: drop `poll_settle`'s call entirely — `awaiting_settle`
-    /// stays `true` forever and this test hangs on the final assertion
-    /// (never becomes `false`).
-    #[test]
-    fn full_settle_after_release_reports_did_stop_and_clears_the_counter() {
-        let (navigator, _harness, top, c) = mounted_with_transition_route();
-        let observer = Arc::new(GestureStopObserver::default());
-        navigator.add_observer(Arc::clone(&observer) as Arc<dyn super::super::NavigatorObserver>);
-
-        c.set_value(0.49); // <= 0.5, no fling: dragEnd's pop branch
-        let runtime = BackGestureRuntime {
-            navigator: navigator.clone(),
-            route: top,
-            controller: c.clone(),
-            enabled: Rc::new(|| true),
-            direction: Cell::new(TextDirection::Ltr),
-            gesture: RefCell::new(Some(BackGestureController::new(
-                navigator.clone(),
-                top,
-                c.clone(),
-            ))),
-            awaiting_settle: Cell::new(false),
-        };
-
-        runtime.finish_drag(0.0);
-        assert!(
-            runtime.awaiting_settle.get(),
-            "the 350ms reverse run is still going"
-        );
-        assert!(navigator.user_gesture_in_progress());
-
-        // Genuinely tick the run out (not `set_value`) — mid-flight polls
-        // must not report early.
-        c.tick_at(0.10);
-        runtime.poll_settle();
-        assert!(
-            navigator.user_gesture_in_progress(),
-            "must not report stopped before the run actually settles"
-        );
-        assert_eq!(observer.stops.load(Ordering::SeqCst), 0);
-
-        c.tick_at(0.35); // >= the 350ms pacing -> settles to Dismissed
-        assert_eq!(c.status(), flui_animation::AnimationStatus::Dismissed);
-        runtime.poll_settle();
-
-        assert!(
-            !navigator.user_gesture_in_progress(),
-            "the counter must clear once the run genuinely settles"
-        );
-        assert_eq!(
-            observer.stops.load(Ordering::SeqCst),
-            1,
-            "did_stop_user_gesture must fire exactly once"
-        );
-    }
-
-    // ---- dispose while awaiting settle (post-release, pre-poll): counter clears ----
-
-    /// `dispose_safety_net` must own the deferred report for a
-    /// gesture that already *released* (so `self.gesture` is `None` —
-    /// `finish_drag` always takes it) but whose settle animation is still
-    /// running when the detector unmounts — e.g. the route was swept away by
-    /// a `push_and_remove_until` mid-settle, or lost the race between the
-    /// pop's own settle and this detector's final rebuild. Checking only
-    /// `self.gesture` (as if a live drag were the only case that owes a
-    /// report) leaks the counter forever.
-    ///
-    /// Red-check: guard `dispose_safety_net` on `self.gesture` alone (drop
-    /// the `awaiting_settle` check) — this test's final assertion fails,
-    /// `user_gesture_in_progress()` stays `true` forever.
-    #[test]
-    fn dispose_while_awaiting_settle_after_release_returns_the_counter_to_zero() {
-        let (navigator, mut harness, top, c) = mounted_with_transition_route();
-        c.set_value(0.49);
-        let runtime = BackGestureRuntime {
-            navigator: navigator.clone(),
-            route: top,
-            controller: c.clone(),
-            enabled: Rc::new(|| true),
-            direction: Cell::new(TextDirection::Ltr),
-            gesture: RefCell::new(Some(BackGestureController::new(
-                navigator.clone(),
-                top,
-                c.clone(),
-            ))),
-            awaiting_settle: Cell::new(false),
-        };
-
-        runtime.finish_drag(0.0);
-        assert!(
-            runtime.gesture.borrow().is_none(),
-            "finish_drag always takes it"
-        );
-        assert!(
-            runtime.awaiting_settle.get(),
-            "the release animation is still running"
-        );
-        assert!(navigator.user_gesture_in_progress());
-
-        // The detector unmounts before the settle run's next poll — no
-        // `poll_settle` call ever ran.
-        assert!(navigator.is_mounted());
-        harness.enter_owner_scope(|| runtime.dispose_safety_net());
-        harness.tick();
-
-        assert!(
-            !navigator.user_gesture_in_progress(),
-            "dispose must clear the counter for a release still awaiting \
-             settle, not only for a still-dragging gesture"
-        );
     }
 
     // ---- second pointer mid-drag ignored ----
