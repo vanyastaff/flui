@@ -1,0 +1,8 @@
+### Security
+
+- **From b**: a section the changelog lacks, created at the end of the region.
+
+### Added
+
+- **From b**: second, by file name, with a [root-relative link](/docs/testing.md).
+  - A nested item.

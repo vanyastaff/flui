@@ -3,7 +3,8 @@
 All notable changes to the FLUI workspace are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-All crates share `[workspace.package].version`, and every internal
+All crates share `[workspace.package].version`, except `flui-sdk`, which is
+Evolving and carries its own `0.N` (ADR-0088), and every internal
 dependency pins that exact version, so a published cohort can never mix
 with a later one. The numbering starts at `0.1.0` where the public history
 does: nothing was published before, and the beta status is stated in the
@@ -11,6 +12,8 @@ README rather than in a pre-release suffix that `flui = "0.1"` would not
 match. Fine-grained phase history lives in
 [`docs/archive/ROADMAP-TRACKER.md`](docs/archive/ROADMAP-TRACKER.md); this file records the
 repo-consumer-visible summary.
+Unreleased entries arrive as fragments under [`changelog.d/`](changelog.d/README.md), merged
+here by `cargo xtask changelog --write` at release time.
 
 ## [Unreleased]
 
@@ -23,21 +26,19 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Added
 
-- **Typed `Router`** (ADR-0093, `flui-widgets`): `Router<R: Routable>` keeps
-  navigation state as a stack of route values whose top, printed through `Routable::to_path`,
-  is the current location, and places one `PageRoute` per value on a `Navigator` it builds,
-  each page scoping (and, with a `semantics_label`, naming) a semantics route. A descendant
-  acquires a `RouterHandle` in `init_state` with `Router::<R>::handle` — the nearest
-  `Router<R>` — and drives it with `push`, `replace`, `pop` and `go(location)`; `go` derives
-  the back-stack from the location's prefix chain (`Routable::back_stack`) and keeps the pages
-  the two stacks share. `RoutePath` is a normalized, percent-encoded location and
-  `RouteParseError` says why a location produced no route. The Router's navigator refuses
-  pages pushed through its facade (a debug assertion and an already-completed result for the
-  typed doors, the new `NamedRouteError::NotAddressable` for the named ones), admits pageless
-  popups such as dialogs through a plain push only, follows every pop it makes, and never pops
-  or removes its last page; `NavigatorHandle::pop_until` stops at a pop that is refused.
-  `#[derive(Routable)]` and `WidgetsApp::router` are later steps; nothing in the framework
-  builds a Router yet.
+- **`flui-sdk`** (ADR-0088): the package-author surface, tier K, evolving, versioned
+  `0.1.0-dev` apart from the workspace. It re-exports `animation`, `foundation`, `types`, `view`
+  and `widgets` whole, the subsets of the facade's `interaction`, `painting` and `rendering`
+  modules that packages use at the same paths, and an Evolving `pipeline` module with
+  `PathClipConfiguration`, `RenderPhysicalShape` and `TranslationFraction`; every item is the
+  facade's own type. Its normal graph reaches no host, engine or GPU crate. Nothing depends on it
+  yet: `flui-material` and `flui-cupertino` move onto it next, and until then it is not for
+  third-party authors.
+- **Train guard** (ADR-0088 §5): `flui-foundation` declares `links = "flui_train"` with a build
+  script that does nothing else, so an application and a package on different FLUI releases fail
+  in Cargo's resolver instead of with a type mismatch (E0308). A crate that depends on
+  `flui-foundation` gains one build-script step in a clean build. `cargo xtask workspace` requires
+  the key there and refuses it elsewhere, and requires an evolving crate's own `0.N` version.
 - **`flui-runtime`** (ADR-0083): the frame runtime as its own crate, tier K, internal, above
   `flui-widgets`. It holds the per-presentation lanes the realm drives that need nothing from
   the realm core: the held-input lane (the bounded pointer input retained while a presentation
@@ -57,7 +58,9 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `flui-widgets` `testing` harness now depend on `flui-platform-api` instead of `flui-platform`,
   so neither links winit, the `windows` crate, `objc2-app-kit`, `android-activity` or tokio any
   more, and only `flui-app` may depend on `flui-platform` (its `allowed-dependents`).
-  `PlatformWindow` and `Platform` stay in `flui-platform`.
+  `PlatformWindow` followed, without `accessibility()` (now on `flui-platform`'s `HostWindow`)
+  and without `as_winit`, together with `CursorIcon`; `cargo xtask reach` forbids the crate
+  `accesskit` and `tokio` on top of its tier's set. `Platform` stays in `flui-platform`.
 - **`flui-protocol`** (ADR-0095, tier C, stable): the vocabulary FLUI shares with tests,
   devtools and agents — `SemanticsRole` and `SemanticsAction`, and the ADR-0080 wire `Role`,
   `ActionName` and `Checked` (`serde`/`schemars` behind features). Every vocabulary enum has
@@ -236,8 +239,18 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `deny.toml`, and are reported without failing other pull requests. The weekly `advisories`
   job (the nightly run covers it daily) and `cargo-machete` job (cargo-shear replaces it) are
   removed.
+- **`flui-platform`: `accessibility()` moved to the new `HostWindow` subtrait** (ADR-0082 §3). A
+  window as a backend hands it out is an `Arc<dyn HostWindow>`: `Platform::open_window`,
+  `WindowOpen::Ready`, `WindowOpen::try_ready`, `PendingWindow` (`wait`, `try_take`, its
+  `Future` output) and `IOSSceneEvent::Connected`'s `window` field carry one, and it upcasts
+  to `Arc<dyn PlatformWindow>`. `PlatformWindow` itself no longer names an AccessKit type. A
+  binding that passed an `open_window` result where `&Arc<dyn PlatformWindow>` is expected
+  needs `let window: Arc<dyn PlatformWindow> = window;` first.
 
 ### Removed
+
+- `PlatformWindow::as_winit` (`flui-platform`, `winit-backend` feature): nothing called it, and
+  the window contract names no winit type (ADR-0082 §1).
 
 - `flui_rendering::slivers`, a public module with no items: the sliver windowing math lives in
   `flui_rendering::virtualization`.

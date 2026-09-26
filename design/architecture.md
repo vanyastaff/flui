@@ -270,8 +270,9 @@ Each passes P8 by naming its second consumer or the seam it buys.
 | `flui-sdk` | K / evolving | Package-author surface without the host; breaks without a `flui` major. | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
 | `flui-engine-cpu` | R / internal, `publish = false` until goldens ship | The second backend of the raster contract: goldens, GPU-free CI, a fallback. | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |
 
-Whether each name is free on crates.io was not checked (the crates.io tool did not connect). The
-owner decided that each name is checked before its crate is created, with nothing reserved ahead
+The owner decided that each name is checked on crates.io before its crate is created, with
+nothing reserved ahead; `flui-runtime` and `flui-sdk` were free on 2026-09-26, when each was
+created, and the other names are unchecked
 ([open questions](open-questions.md#7-cratesio-names)).
 
 ---
@@ -375,7 +376,11 @@ pub mod testing;     // WidgetTester, finders, goldens, conformance kits
 ### 6.2 `flui-sdk`
 
 `flui-sdk` is the package-author surface (owner decision 2,
-[ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)).
+[ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)). It exists, with no
+consumer yet: whole-module re-exports of `animation`, `foundation`, `types`, `view` and `widgets`,
+subsets of the facade's curated `interaction`, `painting` and `rendering` modules at the same
+paths, and three Evolving items in `pipeline`, measured from what Material and Cupertino import
+(`crates/flui-sdk/ARCHITECTURE.md`). The train guard below is on `flui-foundation`.
 
 - Host-free: no `flui-app`, `flui-engine` or `wgpu` in its normal closure. With the facade the
   closure is 191 unique crates; with `flui-material` it is 127 (`cargo tree -p <crate> -e normal
@@ -384,13 +389,15 @@ pub mod testing;     // WidgetTester, finders, goldens, conformance kits
   difference in every build.
 - Two parts. The **Stable closure**: whole-module re-exports at the same paths as the facade
   (`pub use flui_x as x`), no wrappers, so `flui_sdk::m::T` and `flui::m::T` are one type, and a
-  test says so. The **Evolving** part: only the named modules `paint`, `pipeline`, `hooks` and
-  `gpu`; a package's exposure to them is a grep for `flui_sdk::(paint|pipeline|hooks|gpu)`.
+  test says so. The **Evolving** part: only the named modules `pipeline`, `hooks` and `gpu`
+  (Evolving painting items go in `pipeline`, since `painting` is the facade's Stable path); a
+  package's exposure to them is a grep for `flui_sdk::(pipeline|hooks|gpu)::`.
 - `0.N`, bumped on every train, published by the same run as the core, patches included.
 - **One train per graph.** `links = "flui_train"` with a trivial build script sits in one low crate
   every train crate depends on (`flui-foundation`). Without it, an app on `flui = "1"` and a
   package on an older `flui-sdk` resolve two copies of the internals and fail with E0308; with it
-  the resolver picks one train. A registry test proves "old train or resolver error, never E0308".
+  the resolver picks one train. A resolver test in `tools/xtask`
+  (`two_trains_refuse_to_resolve`) proves "one train or resolver error, never E0308".
   The same guard protects facade and Material pairs.
 - **A ceiling.** If the Evolving surface outside the hooks grows past about 30 items at its first
   measurement, the decision is revisited, because the sdk is turning into a second facade.
@@ -443,8 +450,9 @@ packages, same run).
   borrowed during layout. A Flutter-style `invokeLayoutCallback` scope would let a lazy band
   converge in one pass, but it contradicts ADR-0017 §3 ("build never runs during layout") and the
   ADR-0003 fixpoint. It enters the frame order only through its own ADR that supersedes those,
-  after a spike; see [open questions](open-questions.md). The budget is written as "passes ≤ N,
-  target 1".
+  after a spike; see [open questions](open-questions.md). A 2026-09-26 spike reached one pass for
+  plain lazy rows but not soundly; ADR-0017 stays (its "Revisited" section). The budget is written
+  as "passes ≤ N, target 1".
 - **Layer identity is retained:** every repaint boundary is an `Arc` subtree keyed by `RenderId`.
   `LayerNode` already carries `render_id: Option<RenderId>` (`crates/flui-layer/src/tree/layer_tree.rs:38`);
   grafting is O(1) and damage becomes a pointer diff.
@@ -688,8 +696,9 @@ acceptance, ADR-0016 and ADR-0059; decision D12.
 - ICU4X is the one Unicode source. The system font scan is asynchronous: bundled fonts are
   available in the first frame, system fonts arrive as a realm event.
 - One shaper on every platform; only rasterisation and hinting may vary.
-- ADR-0077's precondition stays a gate: a Parley glyph accepted by the existing atlas with a stable
-  key. `flui-text` is not created before a post-Parley measurement.
+- ADR-0077's precondition is a gate: a Parley glyph accepted by the existing atlas with a stable
+  key. The gate is met (swash rasterizes; 2026-09-26); ADR-0092 stays Proposed until the migration
+  lands. `flui-text` is not created before a post-Parley measurement.
 
 ### 10.3 GPU
 
@@ -742,9 +751,10 @@ loop behind a small `NativeLoop` trait; the backend-minting seam; and a backend 
   §5). Core-required capabilities are methods of the backend traits, so a backend without them
   does not compile: clipboard and data transfer, text input and IME, accessibility, cursor, and
   window chrome basics. Today `text_input()` and `accessibility()` default to `None`
-  (`crates/flui-platform/src/traits/window.rs:333,352`). They become required and return an
-  object, not an `Option`: `text_input()` on `PlatformWindow`, `accessibility()` on the backend
-  extension trait that ADR-0082 §3 moves it to. A backend or build that cannot serve one returns
+  (`PlatformWindow::text_input` in `crates/flui-platform-api/src/platform_window.rs`,
+  `HostWindow::accessibility` in `crates/flui-platform/src/traits/host_window.rs`). They become
+  required and return an object, not an `Option`: `text_input()` on `PlatformWindow`,
+  `accessibility()` on `HostWindow`, the backend extension trait ADR-0082 §3 moved it to. A backend or build that cannot serve one returns
   `InertTextInput`/`InertAccessibility` and says so in its evidence record. Only clipboard and
   data transfer are reachable through `cx.capability::<C>()`; text input, accessibility and the
   cursor stay on the framework's own routes. Everything else (haptics, camera, geolocation, notifications, file dialogs) is
@@ -1191,12 +1201,15 @@ records the criterion; the
 ### 16.1 Hot reload
 
 [ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md); decision D15. Hot reload goes
-through Subsecond behind a `DevReloadHook` the runtime exposes: a logic edit keeps state, an edit
-to a `ViewState` type restarts the realm. That needs a state-layout fingerprint to detect such an
-edit. Core names no reload package: the `flui-app → flui-hot-reload` edge and the facade's
+through Subsecond behind a `DevReloadHook` the runtime exposes. The hook is called at the element
+seam, for each framework call into a user `View` or `ViewState` method, not once per frame: a
+patch reaches only calls the hook wraps. A logic edit keeps state; an edit to a `View` or
+`ViewState` type restarts the realm, detected by a derive-generated structural hash over both.
+Core names no reload package: the `flui-app → flui-hot-reload` edge and the facade's
 `hot-reload` feature go. The dlopen path, its three-crate template and `--scene` are deleted only
-after a Subsecond spike on Windows, macOS and Android, and only after the globals it depends on
-(`REQUEST_REBUILD`, `REGISTRY_STACK`) are gone. Windows builds keep MSVC's PDBs
+after a Subsecond spike passes on Windows, macOS and Android, and only after the globals it
+depends on (`REQUEST_REBUILD`, `REGISTRY_STACK`) are gone. The Windows spike failed on
+2026-09-26, so the dlopen path stays until a later spike passes. Windows builds keep MSVC's PDBs
 (`.cargo/config.toml:19-21`), which Subsecond reads.
 
 ### 16.2 Dynamic linking

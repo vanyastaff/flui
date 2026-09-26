@@ -19,7 +19,9 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
-use flui_platform::traits::{PlatformAccessibility, PlatformTextInput, PlatformWindow, WindowId};
+use flui_platform::traits::{
+    HostWindow, PlatformAccessibility, PlatformTextInput, PlatformWindow, WindowId,
+};
 use flui_types::geometry::{DevicePixels, Pixels, Size};
 
 /// Configurable [`PlatformWindow`] double. Construct with [`TestWindow::new`],
@@ -209,10 +211,6 @@ impl PlatformWindow for TestWindow {
         self.text_input.clone()
     }
 
-    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
-        self.accessibility.clone()
-    }
-
     fn set_cursor(
         &self,
         cursor: flui_platform::CursorIcon,
@@ -226,10 +224,23 @@ impl PlatformWindow for TestWindow {
     }
 }
 
+/// So a test can hand a `TestWindow` to the runner as an `open_window`
+/// reply would, bridge and all.
+impl HostWindow for TestWindow {
+    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
+        self.accessibility.clone()
+    }
+}
+
 /// A REAL window from the headless platform, for tests that exercise the
 /// platform's own capabilities (haptics, deferred opens, exit policy) rather
 /// than a state-level double.
 pub(crate) fn headless_test_window() -> Arc<dyn PlatformWindow> {
+    headless_test_host_window()
+}
+
+/// [`headless_test_window`] as the runner receives it from `open_window`.
+pub(crate) fn headless_test_host_window() -> Arc<dyn HostWindow> {
     flui_platform::headless_platform()
         .open_window(flui_platform::traits::WindowOptions::default())
         .expect("headless platform should create a test window")

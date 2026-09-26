@@ -614,7 +614,7 @@ fn all_input_dropped_after_close() {
 fn input_lifecycle_gate_is_exhaustive_and_explicit() {
     use flui_interaction::events::{PointerType, make_down_event};
     use flui_interaction::testing::input::KeyEventBuilder;
-    use flui_platform::traits::DragDropEvent;
+    use flui_platform_api::DragDropEvent;
 
     use super::super::super::presentation::PresentationLifecycle;
 

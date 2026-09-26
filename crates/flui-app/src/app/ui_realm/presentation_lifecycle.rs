@@ -30,7 +30,7 @@ impl UiRealm {
     pub(crate) fn synchronize_window_snapshot(
         &self,
         id: PresentationId,
-        execution: flui_platform::WindowExecutionState,
+        execution: flui_platform_api::WindowExecutionState,
         focused: bool,
         visible: bool,
     ) {
@@ -55,7 +55,7 @@ impl UiRealm {
             }
             self.notify_presentation_focus_gained(id);
         }
-        if !focused || !visible || execution != flui_platform::WindowExecutionState::Running {
+        if !focused || !visible || execution != flui_platform_api::WindowExecutionState::Running {
             cancel.push(id);
         }
         self.set_presentation_hidden(id, !visible);
@@ -65,7 +65,7 @@ impl UiRealm {
     pub(crate) fn update_window_execution(
         &self,
         id: PresentationId,
-        state: flui_platform::WindowExecutionState,
+        state: flui_platform_api::WindowExecutionState,
     ) {
         if self.host_lifecycle.get() == HostLifecycle::Stopping {
             return;
@@ -78,7 +78,7 @@ impl UiRealm {
         }
         let changed = presentation.window_execution.replace(state) != state;
         self.reconcile_lifecycle(
-            if changed && state != flui_platform::WindowExecutionState::Running {
+            if changed && state != flui_platform_api::WindowExecutionState::Running {
                 vec![id]
             } else {
                 Vec::new()
@@ -165,12 +165,12 @@ impl UiRealm {
         if matches!(
             self.host_lifecycle.get(),
             HostLifecycle::Stopping | HostLifecycle::Observed(Detached)
-        ) || execution == flui_platform::WindowExecutionState::Detached
+        ) || execution == flui_platform_api::WindowExecutionState::Detached
         {
             return Detached;
         }
         if self.host_lifecycle.get() == HostLifecycle::Observed(Paused)
-            || execution == flui_platform::WindowExecutionState::Suspended
+            || execution == flui_platform_api::WindowExecutionState::Suspended
         {
             return Paused;
         }
@@ -643,9 +643,11 @@ mod tests {
                 if known_detached { vec![host] } else { vec![] }
             );
         }
+        let window: Arc<dyn flui_platform_api::PlatformWindow> =
+            Arc::new(TestWindow::new().visible(false));
         let realm = UiRealm::new(
             Arc::new(|| {}),
-            Arc::new(TestWindow::new().visible(false)),
+            window,
             1.0,
             Arc::new(AtomicBool::new(false)),
         )
@@ -670,7 +672,8 @@ mod tests {
             (false, true, AppLifecycleState::Hidden),
             (true, false, AppLifecycleState::Inactive),
         ] {
-            let window = Arc::new(TestWindow::new().visible(visible).focused(focused));
+            let window: Arc<dyn flui_platform_api::PlatformWindow> =
+                Arc::new(TestWindow::new().visible(visible).focused(focused));
             let realm = UiRealm::new(
                 Arc::new(|| {}),
                 window,
@@ -789,7 +792,7 @@ mod tests {
         realm.enter(|realm| {
             realm.handle_input_addressed(
                 b,
-                flui_platform::traits::PlatformInput::Pointer(
+                flui_platform_api::PlatformInput::Pointer(
                     flui_interaction::events::make_down_event(
                         flui_types::Offset::new(flui_types::Pixels(1.0), flui_types::Pixels(1.0)),
                         flui_interaction::events::PointerType::Mouse,
@@ -831,7 +834,7 @@ mod tests {
                 seen.borrow_mut().push(state);
             })
             .expect("subscription");
-        realm.update_window_execution(b, flui_platform::WindowExecutionState::Suspended);
+        realm.update_window_execution(b, flui_platform_api::WindowExecutionState::Suspended);
         assert_eq!(
             handle.snapshot().expect("live"),
             Some(AppLifecycleState::Paused)
@@ -915,7 +918,7 @@ mod tests {
         realm.enter(|realm| {
             realm.handle_input_addressed(
                 b,
-                flui_platform::traits::PlatformInput::Pointer(
+                flui_platform_api::PlatformInput::Pointer(
                     flui_interaction::events::make_down_event(
                         flui_types::Offset::new(flui_types::Pixels(1.0), flui_types::Pixels(1.0)),
                         flui_interaction::events::PointerType::Mouse,

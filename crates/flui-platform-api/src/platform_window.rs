@@ -1,25 +1,23 @@
-//! Platform window trait
+//! The per-window contract.
 //!
-//! Provides a thin abstraction over platform windows for testability
-//! and flexibility. Includes per-window callback registration for event
-//! delivery.
+//! A thin abstraction over platform windows for testability and
+//! flexibility, including per-window callback registration for event
+//! delivery. It names no OS, winit or AccessKit type (ADR-0082 §1): the
+//! accessibility bridge is reached through `flui_platform::HostWindow`, a
+//! host-side subtrait only the composition root sees.
 
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
-use flui_platform_api::{
+use crate::{
     CursorError, DispatchEventResult, Modifiers, PlatformDisplay, PlatformHaptics, PlatformInput,
     PlatformTextInput, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowExecutionState, WindowId, WindowShowError,
 };
 
-use super::accessibility::PlatformAccessibility;
-
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-#[cfg(feature = "winit-backend")]
-use winit::window::Window;
 
 /// Trait for platform window abstraction
 ///
@@ -35,7 +33,7 @@ use winit::window::Window;
 ///
 /// Callback storage locks are released before user code is invoked. Nested
 /// notifications share one causal FIFO across event kinds; see
-/// [`crate::WindowCallbacks`] for nested input return semantics.
+/// `flui_platform::WindowCallbacks` for nested input return semantics.
 ///
 /// # Thread affinity
 ///
@@ -54,29 +52,104 @@ use winit::window::Window;
 /// `Platform`'s own `on_*` methods.
 ///
 /// A worker that needs the owner to act reaches it through
-/// [`PlatformProxy`](crate::PlatformProxy), the recorded cross-thread-to-owner
-/// lane (ADR-0039 §3). That lane is **incomplete**, and this section states the
+/// `flui_platform::PlatformProxy`, the recorded cross-thread-to-owner lane
+/// (ADR-0039 §3). That lane is **incomplete**, and this section states the
 /// rule ahead of the mechanism for obeying it: the lane carries `open_window`
 /// and `request_quit` only, and just one backend (winit) supplies a transport
 /// at all — the rest return `ClosedTransport`, answering every request with
-/// [`ProxySendError::Unsupported`](crate::ProxySendError::Unsupported).
+/// `flui_platform::ProxySendError::Unsupported`.
 ///
 /// [`close`](Self::close) is the one method that documents itself out of this
 /// default: it is callable from any thread the native API permits, and states
-/// per backend what the cross-thread route costs (AppKit excepted).
+/// per backend what the cross-thread route costs (AppKit excepted). How each
+/// backend enforces the default is recorded in `flui-platform`'s
+/// `ARCHITECTURE.md`.
 ///
-/// The macOS backend enforces this default mechanically: every window-driving
-/// `PlatformWindow`/`WindowTrait`/`MacOSWindowExtTrait` body on `MacOSWindow`
-/// re-enters the owner lane through `route_on_owner`, so a call from any
-/// thread is marshaled onto the window's owner lane before any AppKit message
-/// is sent. Two carve-outs: the class-E raw-handle accessors
-/// (`raw_window_handle`/`window_handle`, and `display_handle` which carries no
-/// pointer) take their NSView outside the routing — `!Send` outputs whose
-/// enforcement is upstream (raw-window-metal's main-thread hard panic plus
-/// `debug_assert_appkit_main_thread`-guarded platform entries, ADR-0039); and
-/// the `enable_tiling`/`disable_tiling`/`is_tiling_enabled` trio never routes
-/// (recorded for observability only until the native API is adopted).
+/// # A window built from this crate alone
 ///
+/// ```
+/// use std::any::Any;
+///
+/// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
+/// use flui_types::geometry::{DevicePixels, Pixels, Size};
+///
+/// struct Offscreen;
+///
+/// impl PlatformWindow for Offscreen {
+///     fn id(&self) -> WindowId {
+///         WindowId(7)
+///     }
+///     fn physical_size(&self) -> Size<DevicePixels> {
+///         Size::default()
+///     }
+///     fn logical_size(&self) -> Size<Pixels> {
+///         Size::default()
+///     }
+///     fn scale_factor(&self) -> f64 {
+///         1.0
+///     }
+///     fn request_redraw(&self) {}
+///     fn is_focused(&self) -> bool {
+///         false
+///     }
+///     fn is_visible(&self) -> bool {
+///         false
+///     }
+///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
+///         Err(CursorError::Unsupported)
+///     }
+///     fn as_any(&self) -> &dyn Any {
+///         self
+///     }
+/// }
+///
+/// let window: &dyn PlatformWindow = &Offscreen;
+/// assert_eq!(window.id(), WindowId(7));
+/// assert_eq!(window.show(), Err(WindowShowError::Unsupported));
+/// ```
+///
+/// The accessibility bridge is not part of this contract; a window that
+/// tries to supply one here does not compile:
+///
+/// ```compile_fail,E0407
+/// use std::any::Any;
+///
+/// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId};
+/// use flui_types::geometry::{DevicePixels, Pixels, Size};
+///
+/// struct Offscreen;
+///
+/// impl PlatformWindow for Offscreen {
+///     fn id(&self) -> WindowId {
+///         WindowId(7)
+///     }
+///     fn physical_size(&self) -> Size<DevicePixels> {
+///         Size::default()
+///     }
+///     fn logical_size(&self) -> Size<Pixels> {
+///         Size::default()
+///     }
+///     fn scale_factor(&self) -> f64 {
+///         1.0
+///     }
+///     fn request_redraw(&self) {}
+///     fn is_focused(&self) -> bool {
+///         false
+///     }
+///     fn is_visible(&self) -> bool {
+///         false
+///     }
+///     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
+///         Err(CursorError::Unsupported)
+///     }
+///     fn accessibility(&self) -> Option<()> {
+///         None
+///     }
+///     fn as_any(&self) -> &dyn Any {
+///         self
+///     }
+/// }
+/// ```
 pub trait PlatformWindow: Send + Sync {
     /// This window's platform-internal identity.
     ///
@@ -107,7 +180,7 @@ pub trait PlatformWindow: Send + Sync {
     /// as rejected.
     ///
     /// **No supported worker-side route exists yet.** The intended one is a
-    /// redraw verb on [`PlatformProxy`](crate::PlatformProxy), and it is absent
+    /// redraw verb on `flui_platform::PlatformProxy`, and it is absent
     /// on *every* backend, not just the lane-less ones: that lane carries only
     /// `open_window` and `request_quit`. So a worker needing a frame today has
     /// no conforming call available — which is precisely why the two paths
@@ -254,16 +327,6 @@ pub trait PlatformWindow: Send + Sync {
         None
     }
 
-    /// Get this window's accessibility capability, if the backend exposes one.
-    ///
-    /// `None` for a backend with no accessibility integration — which is every
-    /// backend until its per-OS adapter is wired, and permanently for one with
-    /// no such platform API. A composition root that gets `None` simply never
-    /// enables semantics assembly, so the cost is not paid either.
-    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
-        None
-    }
-
     /// Get the window title
     fn get_title(&self) -> String {
         String::new()
@@ -291,7 +354,7 @@ pub trait PlatformWindow: Send + Sync {
     /// surface — or has waited as long as it is willing to for one.
     ///
     /// A backend that defers the physical reveal of a window opened
-    /// [`WindowOptions::visible`](crate::traits::WindowOptions::visible)
+    /// [`WindowOptions::visible`](crate::WindowOptions::visible)
     /// `== true` performs it now, exactly once; a window opened hidden, one
     /// already shown explicitly (`show`/`set_visible(true)`/`activate`),
     /// or a backend that reveals at open, ignores the call. Calling it
@@ -673,20 +736,12 @@ pub trait PlatformWindow: Send + Sync {
 
     // ==================== Utility ====================
 
-    /// Get the underlying winit window (if available)
-    ///
-    /// Returns `None` for non-winit platforms (e.g., headless testing).
-    #[cfg(feature = "winit-backend")]
-    fn as_winit(&self) -> Option<&Arc<Window>> {
-        None
-    }
-
     /// Downcast to concrete type.
     ///
     /// No default body: a panicking default here would only be discovered
     /// the first time some caller downcasts a backend that forgot to
     /// override it — every implementor must supply its own (invariably
-    /// `{ self }`), the same shape [`super::PlatformHaptics::as_any`]
+    /// `{ self }`), the same shape [`PlatformHaptics::as_any`]
     /// already requires.
     fn as_any(&self) -> &dyn Any;
 }
@@ -762,8 +817,11 @@ mod tests {
         }
     }
 
+    /// A window implemented against this crate alone gets every defaulted
+    /// query answered, and `dyn PlatformWindow` is a raw-handle source that
+    /// refuses a handle it does not have.
     #[test]
-    fn test_mock_window() {
+    fn a_contract_only_window_answers_every_defaulted_query() {
         use flui_types::geometry::{device_px, px};
 
         let window = MockWindow {
@@ -782,5 +840,27 @@ mod tests {
         assert!(window.is_focused());
         assert!(window.is_visible());
         assert_eq!(window.show(), Err(WindowShowError::Unsupported));
+        assert!(window.text_input().is_none());
+        assert!(window.haptics().is_none());
+        assert!(window.display().is_none());
+        assert_eq!(window.execution_state(), WindowExecutionState::Running);
+
+        let window: &dyn PlatformWindow = &window;
+        assert!(matches!(
+            HasWindowHandle::window_handle(window),
+            Err(raw_window_handle::HandleError::Unavailable)
+        ));
+        assert!(matches!(
+            HasDisplayHandle::display_handle(window),
+            Err(raw_window_handle::HandleError::Unavailable)
+        ));
+    }
+
+    /// The shared window a renderer holds is a raw-handle target on its own,
+    /// with no other crate in the graph enabling `raw-window-handle/alloc`.
+    #[test]
+    fn arc_dyn_platform_window_is_a_raw_handle_target() {
+        fn assert_bounds<T: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static>() {}
+        assert_bounds::<std::sync::Arc<dyn PlatformWindow>>();
     }
 }

@@ -186,7 +186,7 @@ fn main() {
     };
 
     // Create window before running the event loop (run() takes ownership)
-    let window = platform
+    let window: Arc<dyn PlatformWindow> = platform
         .open_window(options)
         .expect("Failed to open window");
 

@@ -220,6 +220,11 @@ class = "pr-label"
 count = 1
 
 [[allow]]
+path = "crates/flui-platform-api/src/platform_window.rs"
+class = "spec-task"
+count = 2
+
+[[allow]]
 path = "crates/flui-platform/ARCHITECTURE.md"
 class = "tracker-h"
 count = 2
@@ -263,11 +268,6 @@ count = 1
 path = "crates/flui-platform/src/traits/platform.rs"
 class = "spec-task"
 count = 5
-
-[[allow]]
-path = "crates/flui-platform/src/traits/window.rs"
-class = "spec-task"
-count = 2
 
 [[allow]]
 path = "crates/flui-platform/tests/contract.rs"

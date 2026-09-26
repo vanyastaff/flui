@@ -177,8 +177,11 @@ enum Expect {
 /// Hot reload must be absent from an ordinary production graph, not merely
 /// unused by it; the feature must bring it in; and the first-party host, the
 /// executable contract for `flui run`, must enable flui-app's feature (a
-/// direct dependency on flui-hot-reload does not).
-const FACTS: [Fact; 3] = [
+/// direct dependency on flui-hot-reload does not). The train guard,
+/// `flui-foundation`, must be in the SDK's build and in the facade's build
+/// with no features, so a package on one and an application on the other
+/// share it (ADR-0088 §5).
+const FACTS: [Fact; 5] = [
     Fact {
         what: "flui-hot-reload must be absent from flui-app's default graph",
         root: "flui-app",
@@ -199,6 +202,20 @@ const FACTS: [Fact; 3] = [
         selection: "",
         expect: Expect::Enables("flui-app", "hot-reload"),
         failure: "hot-reload-counter-host does not enable flui-app/hot-reload",
+    },
+    Fact {
+        what: "the train guard must be in flui-sdk's build",
+        root: "flui-sdk",
+        selection: "",
+        expect: Expect::Present("flui-foundation"),
+        failure: "flui-foundation is not in flui-sdk's normal dependency graph",
+    },
+    Fact {
+        what: "the train guard must be in the facade's build without features",
+        root: "flui",
+        selection: "--no-default-features",
+        expect: Expect::Present("flui-foundation"),
+        failure: "flui-foundation is not in the facade's normal dependency graph",
     },
 ];
 

@@ -66,6 +66,8 @@ impl AndroidWindow {
     }
 }
 
+impl crate::traits::HostWindow for AndroidWindow {}
+
 impl PlatformWindow for AndroidWindow {
     // Android hosts exactly one `AndroidApp` surface for the process's
     // lifetime (see the struct docs above) — there is no second native
