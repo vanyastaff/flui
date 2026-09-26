@@ -28,10 +28,10 @@ Navigator those two records describe:
 
 - **An imperative stack with many front doors.** `NavigatorHandle` carries 19 mutation entry
   points between `push` (`crates/flui-widgets/src/navigator/navigator.rs:1158`) and
-  `push_named_and_remove_until` (`navigator.rs:2286`): typed pushes, replacements, pops with and
+  `push_named_and_remove_until` (`navigator.rs:2283`): typed pushes, replacements, pops with and
   without results, `pop_until`, and the named-route doors of ADR-0024: seven `*_named*` methods plus
-  `push_keyed`, from `push_named` (`navigator.rs:1956`) to `push_named_and_remove_until`
-  (`navigator.rs:2286`). 43 `pub fn` in `navigator.rs` alone.
+  `push_keyed`, from `push_named` (`navigator.rs:1953`) to `push_named_and_remove_until`
+  (`navigator.rs:2283`). 43 `pub fn` in `navigator.rs` alone.
 - **No addressable state.** A pushed route is a `Box<dyn ErasedRoute>` (ADR-0019 §3); nothing in
   `crates/flui-widgets/src/navigator/` turns the stack into a URL or back. The platform already
   delivers URLs the OS opens — `Platform::on_open_urls`
@@ -39,7 +39,7 @@ Navigator those two records describe:
   registers for them (`grep -rn on_open_urls crates/flui-app/src` is empty). A deep link has
   nowhere to go.
 - **Lookup from `build`.** `NavigatorHandle::maybe_of(ctx: &dyn BuildContext)`
-  (`navigator.rs:1595`) and `maybe_of_root` (`navigator.rs:1608`) resolve the navigator from a
+  (`navigator.rs:1592`) and `maybe_of_root` (`navigator.rs:1605`) resolve the navigator from a
   build context. The handle is owned and takes no second lock (ADR-0019 §2), which is right,
   but a build-time lookup is the pattern ADR-0078 moved every other capability away from.
 - **A thread-local routing table for commands.** Cross-thread navigation goes through
@@ -218,6 +218,6 @@ None of these tests exists yet; each fails on today's code or does not compile a
 - **Multi-window.** In one realm with two presentations, a navigation intent addressed to the
   second presentation changes that presentation's Router and not the primary presentation's.
 - **Flutter lifecycle parity** stays pinned by the existing Navigator tests
-  (`crates/flui-widgets/src/navigator/navigator_tests.rs`,
+  (`crates/flui-widgets/tests/navigator.rs`,
   `crates/flui-widgets/tests/navigator_public.rs`), which must keep passing with the Navigator
   running under a Router.

@@ -27,9 +27,13 @@ Versioning: per `docs/release.md` policy.
   `Overlay`. An `Overlay` rebuilt with another handle moves onto it.
 
 - **`testing::harness`** (the element-level harness, formerly the
-  crate-private `test_harness`) and **`testing::overlay_probe`**, behind the
-  `testing` feature, which now also enables an optional `flui-platform`
-  dependency for the harness's recording `PlatformTextInput`.
+  crate-private `test_harness`), behind the `testing` feature, which now also
+  enables an optional `flui-platform` dependency for the harness's recording
+  `PlatformTextInput`. The harness is no longer compiled into this crate's own
+  unit-test build (ADR-0083 §4): tests that drive it live in `tests/`, and the
+  private state they still read goes through the doc-hidden, temporary
+  `__test_access` module (no semver guarantee, this crate's tests only), which
+  also holds `OverlayProbe`.
 - **`localization::axis_direction_from_axis_reverse_and_directionality`** is
   public (Flutter's `getAxisDirectionFromAxisReverseAndDirectionality`).
 - **`__private`** (doc-hidden): workspace-only seams for the sibling widget

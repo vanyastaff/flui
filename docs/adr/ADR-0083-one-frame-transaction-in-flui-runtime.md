@@ -145,10 +145,20 @@ private `run_pipeline` are deleted; the headless driver calls `Realm::pump` with
 and a headless sink. `pump_presentation`/`pump_all` become thin loops over the same call.
 `flui_widgets::testing` is absorbed into `flui-testing`.
 
-`flui-widgets` stops depending on `flui-testing` (`crates/flui-widgets/Cargo.toml:89` goes). The
-22 in-crate test modules that use `crate::testing` move to `crates/flui-widgets/tests/`, where the
-library links once; a test that needs a private item reaches it through `__runtime` or stays a
-unit test without the harness. That move is its own change and lands first.
+`flui-widgets` stops depending on `flui-testing` (`crates/flui-widgets/Cargo.toml:89` goes). That
+is prepared by its own change, which lands first: the tests in the 22 `src/` files that used
+`crate::testing` and reach the harness move to `crates/flui-widgets/tests/`, where the library
+links once; the tests there that do not reach the harness stay unit tests. The compiler keeps it
+that way: `flui_widgets::testing` is `#[cfg(all(feature = "testing", not(test)))]`, so a unit test
+under `src/` that names it fails to build. A moved test that still reads a private item reaches it
+through `flui_widgets::__test_access`: doc-hidden, always compiled (no visibility feature, one type
+layout), for `crates/flui-widgets/tests` only, and **temporary**. It holds probe traits for
+methods on public types and re-exports of private types raised to `pub` inside private modules;
+a unit test pins its list, with the reason for each entry. It is kept apart from the runtime's
+`__runtime` seam so the two can be removed separately. An entry leaves when its tests assert
+through public API — for the navigator internals, the Router conformance suite of
+[ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) — and the module is deleted when
+empty.
 
 ### 5. The two-consumer condition is met
 
