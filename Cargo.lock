@@ -2373,6 +2373,7 @@ dependencies = [
  "flui-foundation",
  "flui-interaction",
  "flui-layer",
+ "flui-platform-api",
  "flui-scheduler",
  "flui-semantics",
  "flui-testing",

@@ -167,12 +167,10 @@ pub(crate) fn test_platform_window_with_accessibility(
     accessibility: Arc<flui_platform::FakeAccessibility>,
 ) -> PresentationWindow {
     use super::window_test_support::TestWindow;
-    let host: Arc<dyn flui_platform::traits::HostWindow> = Arc::new(
-        TestWindow::new()
-            .focused(true)
-            .with_accessibility(accessibility),
-    );
-    super::runner::presentation_window(host)
+    PresentationWindow::new(
+        Arc::new(TestWindow::new().focused(true)),
+        Some(accessibility),
+    )
 }
 
 /// Lifecycle of the owner-thread half of a presentation.

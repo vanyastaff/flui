@@ -542,11 +542,12 @@ fn closing_the_presentation_withdraws_from_the_platform_bridge() {
 #[test]
 fn a_realm_built_from_a_host_window_publishes_through_its_accessibility() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
-    let host: Arc<dyn flui_platform::traits::HostWindow> = Arc::new(
-        crate::app::window_test_support::TestWindow::new()
-            .focused(true)
-            .with_accessibility(Arc::clone(&fake) as _),
-    );
+    let host: Arc<dyn flui_platform::traits::HostWindow> =
+        Arc::new(crate::app::window_test_support::HostedTestWindow::new(
+            crate::app::window_test_support::TestWindow::new()
+                .focused(true)
+                .with_accessibility(Arc::clone(&fake) as _),
+        ));
     let realm = UiRealm::new(
         noop_wake(),
         crate::app::runner::presentation_window(host),

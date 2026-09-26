@@ -37,3 +37,5 @@ pub mod performance_stats;
 pub mod reload;
 pub mod semantics_host;
 pub mod sink;
+#[cfg(any(test, feature = "test-support"))]
+pub mod testing;

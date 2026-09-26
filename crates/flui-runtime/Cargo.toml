@@ -21,8 +21,9 @@ workspace = true
 [features]
 # Test hooks (`HeldPointerQueue::append`/`len`, the `SemanticsHost` surface
 # that has no production caller yet, and `ExecutionServices::with_limits`/
-# `default_pools_started`) for this crate's own tests and
-# for `flui-app`'s, which enable it on their dev edge. Never on a normal edge.
+# `default_pools_started`), and the `testing` module's `TestWindow` and
+# `ScriptedSink` doubles, for this crate's own tests and for `flui-app`'s,
+# which enable it on their dev edge. Never on a normal edge.
 test-support = []
 # `reload::ReloadTier`, the development reload the realm applies. Names no
 # hot-reload crate; `flui-app`'s `hot-reload` feature turns it on alongside its
@@ -38,6 +39,11 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 # `Assertiveness`/`SemanticsEvent`, what the semantics host delivers.
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
+# `PlatformWindow` and its capability traits, the window contract a
+# presentation drives; no backend (ADR-0082).
+flui-platform-api = { workspace = true }
+# Window sizes and geometry.
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 parking_lot = { workspace = true }
 # `SpawnError`'s messages.
 thiserror = { workspace = true }
@@ -72,8 +78,6 @@ flui-testing = { workspace = true }
 # `frame_lane_makes_progress_while_background_lanes_are_saturated` drives
 # while the execution services' background lanes are full.
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
-# Pointer positions in the held-input tests.
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # Capturing emitted fields is how the semantics host's privacy contract on its
 # announce/event fallbacks is checked.
 tracing-subscriber = { workspace = true }
