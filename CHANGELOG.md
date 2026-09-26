@@ -3,7 +3,8 @@
 All notable changes to the FLUI workspace are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-All crates share `[workspace.package].version`, and every internal
+All crates share `[workspace.package].version`, except `flui-sdk`, which is
+Evolving and carries its own `0.N` (ADR-0088), and every internal
 dependency pins that exact version, so a published cohort can never mix
 with a later one. The numbering starts at `0.1.0` where the public history
 does: nothing was published before, and the beta status is stated in the
@@ -23,6 +24,19 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Added
 
+- **`flui-sdk`** (ADR-0088): the package-author surface, tier K, evolving, versioned
+  `0.1.0-dev` apart from the workspace. It re-exports `animation`, `foundation`, `types`, `view`
+  and `widgets` whole, the subsets of the facade's `interaction`, `painting` and `rendering`
+  modules that packages use at the same paths, and an Evolving `pipeline` module with
+  `PathClipConfiguration`, `RenderPhysicalShape` and `TranslationFraction`; every item is the
+  facade's own type. Its normal graph reaches no host, engine or GPU crate. Nothing depends on it
+  yet: `flui-material` and `flui-cupertino` move onto it next, and until then it is not for
+  third-party authors.
+- **Train guard** (ADR-0088 §5): `flui-foundation` declares `links = "flui_train"` with a build
+  script that does nothing else, so an application and a package on different FLUI releases fail
+  in Cargo's resolver instead of with a type mismatch (E0308). A crate that depends on
+  `flui-foundation` gains one build-script step in a clean build. `cargo xtask workspace` requires
+  the key there and refuses it elsewhere, and requires an evolving crate's own `0.N` version.
 - **`flui-runtime`** (ADR-0083): the frame runtime as its own crate, tier K, internal, above
   `flui-widgets`. It holds the per-presentation lanes the realm drives that need nothing from
   the realm core: the held-input lane (the bounded pointer input retained while a presentation

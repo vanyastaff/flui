@@ -146,9 +146,18 @@ parallel rule is added.
 - The facade neither depends on nor re-exports `flui-sdk`. An experimental facade module, if one
   is ever needed, is gated by `--cfg flui_unstable`, not by a Cargo feature, which feature
   unification would leak.
+- **Curated facade modules.** Where the facade curates a module instead of re-exporting a crate
+  (`interaction`, `painting`, `rendering`), the SDK has the same module at the same path, holding
+  the subset of its items that packages use, as the same items. An item packages use that no
+  facade module exposes goes into an Evolving module.
 - **Surface ceiling.** When `flui-sdk` is created its Evolving surface is measured from rustdoc
   JSON. More than about 30 items beyond the hooks means the sdk is becoming a second facade, and
-  this decision is revisited.
+  this decision is revisited. At creation `pipeline` holds three items (`PathClipConfiguration`,
+  `RenderPhysicalShape`, `TranslationFraction`), counted from source, because the rustdoc JSON
+  tooling is not in place yet; the measurement is in `crates/flui-sdk/ARCHITECTURE.md`.
+- **Version.** The crate's own `version = "0.1.0-dev"`, not the workspace's; `cargo xtask
+  workspace` refuses a `tier-kind = "evolving"` crate that inherits the version or has a major
+  above 0.
 - **Graduation (after H3).** An Evolving item moves into a Stable facade module when it has
   survived N trains unchanged and has a second consumer; `flui-sdk` keeps re-exporting it at the
   old path. `gpu` and the development hooks may stay Evolving indefinitely.
@@ -157,10 +166,17 @@ parallel rule is added.
 
 ### 5. One train per graph
 
-One bottom crate that everything on the train depends on (candidate: `flui-foundation`) declares
+One bottom crate that everything on the train depends on, `flui-foundation`, declares
 `links = "flui_train"` with a trivial build script. Cargo then refuses to put two trains in one
 graph: a mismatched application and package resolve to one train or fail in the resolver, never
 with E0308. The same guard protects facade-plus-sdk and facade-plus-Material pairs.
+
+The guard is on `flui-foundation` and not on `flui-sdk` because the facade does not depend on the
+SDK: with `links` on the SDK alone, an application on `flui` train 2 and a package on `flui-sdk`
+train 1 would hold one SDK and two copies of every internal crate, and fail with E0308 as before.
+`flui-foundation` is a normal dependency of the SDK, the facade, `flui-platform-api` and every
+crate from tier S up. `cargo xtask workspace` requires the key on `flui-foundation` and refuses
+it on any other member.
 
 The cost is recorded, not hidden: a minor `flui` upgrade in an application waits for its
 third-party packages to be re-released on the new train. First-party packages do not lag,
@@ -198,6 +214,22 @@ A package moves to its own repository only when one of these holds, checked at e
 
 A split repository versions in lockstep with the train. OS plugins and the A2UI renderer are the
 first candidates; Material and Cupertino move last.
+
+## Migration
+
+Five moves, each of which leaves `main` green and merges on its own. The
+[migration plan](../plans/2026-09-25-architecture-migration-plan.md) tracks them.
+
+| Move | What changes | Waits on |
+|---|---|---|
+| 1. SDK and guard (in place) | `crates/flui-sdk` is created: tier K, `tier-kind = "evolving"`, `order = 6`, layer 6, `version = "0.1.0-dev"`, with the measured surface of §4 and no consumer yet. `flui-foundation` declares `links = "flui_train"` with a build script that does nothing else (§5). `cargo xtask workspace` requires an evolving crate's own `0.N` version and the guard on `flui-foundation` alone; `cargo xtask reach` states that `flui-foundation` is in the SDK's and the facade's builds | — |
+| 2. Material | `flui-material`'s nine internal normal dependencies become `flui-sdk` (plus `tracing`), its imports move to SDK paths, and it moves to `packages/flui-material` in the same change, with its dev-dependency paths rewritten. Done when no `flui_(widgets\|view\|types\|objects\|rendering\|foundation\|animation\|interaction\|scheduler\|painting)::` path is left in its `src`. Its examples stay with the facade until move 5 | move 1; the `cargo package` parity command of §3 |
+| 3. Cupertino | The same for `flui-cupertino` | move 1; independent of move 2 |
+| 4. Devtools and hot reload | `flui-devtools` moves onto the SDK, which gains `hooks` for the observation seam (ADR-0040), and the observation-seam test moves into it, removing `flui-testing`'s dev edge. `flui-hot-reload` moves together with the `DevReloadHook` of ADR-0094 §2, which deletes the `flui-app` edge and the facade's `hot-reload` feature | move 1; `flui-view`'s `runtime-internals` feature replaced by a hidden module first |
+| 5. Facade | §6: `default = []`, no `material`/`cupertino` features, dependencies, `edge-exceptions`, re-exports or Material prelude half; `flui_material::prelude`; `flui create` adds `flui-material`, with a CLI test that checks the generated project; Material examples move to `packages/flui-material/examples`; `cargo xtask facade-combos` and the documents from the `rg` list of the Consequences are updated; the CI Material example build changes with the owner's sign-off | moves 2 and 3 |
+
+`allowed-dependents` on Material and Cupertino stays until move 5, because the facade still names
+them.
 
 ## Alternatives considered
 
@@ -237,28 +269,52 @@ first candidates; Material and Cupertino move last.
   `rg 'flui::(material|cupertino)|features.*(material|cupertino)'` produces (excluding
   `docs/archive/`). `.github/workflows/ci.yml:924` builds `--features material --example
   sliver_demo`; that line changes, which needs the owner's sign-off and the `full-ci` label.
-- The crates.io availability of the name `flui-sdk` is unchecked; if it is taken, the fallback
-  is `flui-package-sdk`.
+- The name `flui-sdk` is free on crates.io (checked 2026-09-26, when the crate was created); the
+  fallback `flui-package-sdk` is not needed.
+- **The guard also ties platform plugins to the train.** `flui-platform-api` depends on
+  `flui-foundation` (ADR-0082), so a plugin built on one train and an application on another
+  now fail in the resolver instead of with E0308.
+- **The guard does not cover a lone duplicate below it.** Two copies of `flui-geometry`,
+  `flui-types`, `flui-macros`, `flui-protocol`, `flui-log` or `flui-assets` with one
+  `flui-foundation` are not refused; only a crate that depends on those internal crates directly,
+  which is not supported for third parties, can produce that graph.
 - Ordering relative to the other records is in
   [the migration plan](../plans/2026-09-25-architecture-migration-plan.md).
 
 ## Verification
 
-None of these exist yet.
+In place with move 1:
+
+- **One train per graph (§5).** `two_trains_refuse_to_resolve` in `tools/xtask` reads
+  `flui-foundation`'s `links` from this repository's `cargo metadata`, builds an application
+  that depends on an SDK over one copy of `flui-foundation` and a facade over another, and
+  requires `cargo metadata --offline` to fail on the shared `links` value; the same graph
+  without `links` resolves both copies, which is where E0308 came from. It uses path packages
+  rather than a local registry: the resolver's `links` rule is the same for both sources.
+  `cargo xtask workspace` requires the key on `flui-foundation` and refuses it on any other
+  member (its self-test plants a second guard).
+- **Type identity (§4).** `crates/flui-sdk/tests/surface.rs` checks, for each curated item and
+  one type of each whole-module re-export, that `flui_sdk::m::T` is `flui::m::T`; it fails to
+  build on a wrapper or newtype. The same file pins the list of re-exports and names every
+  measured item through its SDK path.
+- **Host-free (§4).** `cargo xtask reach` checks `flui-sdk` at its defaults and with all
+  features against tier K's forbid set, which contains `wgpu`, `flui-engine` and `flui-app`, so
+  no separate absence fact is needed; its facts state that `flui-foundation` is in the SDK's
+  build and in the facade's `--no-default-features` build. After move 2, "`wgpu` is absent from
+  `flui-material`'s closure" follows from the `pkg` tier's forbid set. These are reach facts,
+  not `cargo tree -i` probes, because `cargo tree -i` errors on an absent package instead of
+  printing nothing.
+- **Own version (§4).** `cargo xtask workspace` refuses an evolving crate that inherits the
+  workspace version or has a major above 0.
+
+Not yet in place:
 
 - `cargo xtask workspace` fails, in its own self-test, on a core crate that names an official
   package (normal, optional and dev), and on an official package that names an internal crate
   outside the allowlist.
-- The `cargo package` parity command of §3 passes on every change once `flui-sdk` exists.
+- The `cargo package` parity command of §3 passes on every change.
 - The out-of-tree fixture builds against `flui-sdk` alone.
-- A local-registry test: an application and a package on different trains resolve to one train
-  or fail in the resolver, never with E0308 (§5).
-- A type-identity test: `flui_sdk::m::T` and `flui::m::T` are the same type for each re-exported
-  module.
-- `cargo xtask reach` (ADR-0081 §2) holds the facts "`wgpu` and `flui-app` are absent from
-  `flui-sdk`'s normal closure" and, after the move, "`wgpu` is absent from `flui-material`'s".
-  They are reach facts, not `cargo tree -i` probes, because `cargo tree -i` errors on an absent
-  package instead of printing nothing.
+- The Evolving surface counted from rustdoc JSON instead of from source.
 - A `flui-cli` test generates the counter template and runs `cargo check` on it with
   `flui-material` as a direct dependency.
 - A doctest that `use flui::prelude::*; use flui_material::prelude::*;` resolves without
