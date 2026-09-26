@@ -470,9 +470,10 @@ What exists:
   primary-only routing. Its siblings pin the dropped-and-counted case for a closed presentation
   and for a foreign graph, and the owning presentation's frame request.
 
-- §2, in `crates/flui-view/tests/signal_reads.rs` (the `view_it` binary; `cargo xtask test`
-  also runs the file with `--release`, so the half of the build path gated on
-  `debug_assertions` is covered):
+- §2, in `crates/flui-view/tests/signal_reads.rs` (the `view_it` binary). The production read
+  path (`make_build_ctx`, `BuildCtx::scope`) has no `debug_assertions` branch, so the file runs
+  in the debug profile only; the one debug-gated read branch, `ElementBuildContext::is_building`,
+  belongs to the test seam, which subscribes nobody in release:
   - `signal_reads_accept_every_context_shape`: `sig.get(cx)` for `&dyn BuildContext`,
     `&&dyn BuildContext`, `&Box<dyn BuildContext>`, generic `C: BuildContext` with and without
     `?Sized`, `&dyn ReadScope`, `&dyn LifecycleContext` and a closure. It does not compile on

@@ -267,29 +267,15 @@ fn scoped_nextest(nested_cargo: bool) -> Cmd {
 /// the whole suite.
 fn test_plan(host: Host, fast: bool) -> Vec<Step> {
     let nested = scoped_nextest(true);
-    let release = signal_reads_release();
     let mut steps = vec![scoped_nextest(false).into(), platform_suite(host)];
     if fast {
         steps.push(Step::Note(format!(
             "test --fast: SKIPPED the nested-cargo group (trybuild compile_fail suites, flui-cli cli_create::generated_*, flui::facade_consumer; filter in .config/nextest.toml). Run them with: {nested}"
         )));
-        steps.push(Step::Note(format!(
-            "test --fast: SKIPPED the release run of flui-view's signal reads. Run it with: {release}"
-        )));
     } else {
         steps.push(nested.into());
-        steps.push(release.into());
     }
     steps
-}
-
-/// flui-view's signal-read tests again in release: part of the build path is
-/// gated on `debug_assertions`, and a read in `build` must subscribe the
-/// building element either way (ADR-0085 §2).
-fn signal_reads_release() -> Cmd {
-    Cmd::cargo(["nextest", "run", "-p", "flui-view", "--release"])
-        .args(["--locked", "--no-fail-fast", "--test", "view_it"])
-        .args(["-E", "test(/^signal_reads::/)"])
 }
 
 /// Clippy exactly as CI's `clippy` job runs it: the workspace, then
@@ -1048,7 +1034,6 @@ mod tests {
                 format!("$ cargo nextest run {SCOPE} -E 'not group(nested-cargo)'"),
                 "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast".to_owned(),
                 format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo)'"),
-                "$ cargo nextest run -p flui-view --release --locked --no-fail-fast --test view_it -E 'test(/^signal_reads::/)'".to_owned(),
             ]
         );
         assert_eq!(
@@ -1057,8 +1042,7 @@ mod tests {
         );
         assert!(lines(&test_plan(Host::MacOs, false))[1].starts_with("Skipping flui-platform"));
         let fast = lines(&test_plan(Host::Linux, true));
-        assert_eq!(fast.len(), 4);
-        assert!(fast[3].starts_with("test --fast: SKIPPED the release run"));
+        assert_eq!(fast.len(), 3);
         assert!(fast[2].starts_with("test --fast: SKIPPED the nested-cargo group"));
         assert!(
             fast[2].ends_with(&format!(
