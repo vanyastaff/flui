@@ -57,8 +57,35 @@ their tests, measured at `431c8757c` (2026-09-26):
 | `flui_scheduler` | 1 | `LocalPostFrameHandle`, which `flui_view` already re-exports: `view::LocalPostFrameHandle` |
 
 `painting::DrawOp` is added for the packages' paint tests, the only place they name it. Their
-tests under `tests/` also use `flui-testing`, `flui-scheduler` and `flui-interaction`'s
-`testing` feature; those stay dev-dependencies of the packages and are not SDK surface.
+tests under `tests/` also use `flui-widgets`' and `flui-interaction`'s `testing` features and
+`flui-testing`; those stay dev-dependencies of the packages and are not SDK surface.
+
+## Consumers
+
+- **`flui-material`** (`packages/flui-material`) builds on this crate alone: its normal
+  dependencies are `flui-sdk` and `tracing`, and every path in its `src`, doctests and tests goes
+  through `flui_sdk::` (`flui_material_builds_on_the_sdk_alone` in `tools/xtask` pins the
+  manifest). The port needed no new item.
+- **`flui-cupertino`** moves next (ADR-0088 move 3).
+
+An item a package needs that is not here is added by ADR-0088 §4 (at the facade's path when the
+facade has one, otherwise in `pipeline`) with a line in `tests/surface.rs`'s pinned list.
+
+## The derives resolve through the SDK
+
+`flui-macros` looks up `flui-sdk` in the consumer's manifest before the owning crate and the
+facade, and expands to `::flui_sdk::{view,foundation,animation}`, so `#[derive(StatelessView)]`
+and the others work in a package that names no internal crate. The SDK comes first because a
+package may carry the facade or an internal crate as a dev-dependency, which `proc-macro-crate`
+does not tell from a normal one. The one shape this order cannot serve, an owner crate as a
+normal dependency beside `flui-sdk` as a dev-dependency only, has no instance
+(`crates/flui-macros/ARCHITECTURE.md`, "Resolve runtime paths"). The `Diagnosticable` derive
+itself has no SDK path; its expansion still resolves through the SDK.
+
+Because `flui-sdk`'s dev-dependency on the facade reaches `flui-material` through the facade's
+default `material` feature, a unit test inside this crate would see a second copy of
+`flui_sdk` (the one Material links); the surface test is an integration test and is not
+affected.
 
 The count is from source, not from rustdoc JSON; the rustdoc measurement ADR-0088 §4 asks for
 needs the nightly JSON tooling and replaces this table when it lands.

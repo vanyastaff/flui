@@ -32,12 +32,15 @@ members = [
     "crates/flui-runtime",   # Frame runtime: per-presentation lanes a realm drives (ADR-0083)
     "crates/flui-sdk",       # Package-author surface: what official and third-party packages build on (ADR-0088)
     "crates/flui-testing",   # Test-support: headless deterministic frame driver (pump_frame) (ACTIVE)
-    "crates/flui-material",  # Material Design theming foundation — ColorScheme/TextTheme/ThemeData/Theme (ACTIVE — Catalog.1 slice)
     "crates/flui-cupertino", # iOS-style theming foundation — CupertinoDynamicColor/CupertinoTextTheme/CupertinoTheme/CupertinoButton (ACTIVE — Catalog.1 slice)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app",    # Application framework (ACTIVE - Migration)
     "crates/flui-assets", # Asset loading/caching (ACTIVE — wired into Image per Cross.A)
+
+    # === Official packages (ADR-0088) ===
+    # Built on `flui-sdk` alone, as a third-party package would be.
+    "packages/flui-material", # Material Design: ColorScheme/TextTheme/ThemeData/Theme and the M3 widget catalog
 
     # === Examples (platform-specific) ===
     # NOTE: Android examples are excluded from workspace.members because they
@@ -86,12 +89,15 @@ members = [
 # feature.
 
 [workspace.metadata.flui]
-# Crate tiers, bottom to top (ADR-0081). Each crate under crates/ and the facade
-# set `[package.metadata.flui] tier`, `tier-kind` and `order` (unique within the
-# tier); examples and tools set only `tier-kind = "tool"`. A normal or build
+# Crate tiers, bottom to top (ADR-0081). Each crate under crates/ or packages/
+# and the facade set `[package.metadata.flui] tier`, `tier-kind` and `order`
+# (unique within the tier); examples and tools set only `tier-kind = "tool"`. A normal or build
 # dependency points to a lower tier, or to a smaller `order` in the same tier,
 # unless the dependent lists it in `edge-exceptions` with the ADR that removes
-# it; nothing with a tier depends on a `tool`. Dev-dependencies are free.
+# it; nothing with a tier depends on a `tool`. Dev-dependencies are free,
+# except that only applications and official packages name an official package
+# in any kind, and an official package's normal and build dependencies are
+# flui-sdk and the contract crates (ADR-0081 §3, ADR-0088 §2).
 tiers = [
     "V",   # values: geometry, types, macros, foundation
     "C",   # contracts: flui-platform-api, flui-protocol
@@ -279,6 +285,11 @@ flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
 # Sits above flui-widgets, below flui-app, and is only ever a *dev*-dependency of
 # a shipped library: a normal edge would link the test driver into production.
 flui-testing = { path = "crates/flui-testing", version = "=0.2.0-dev" }
+
+# PACKAGE-AUTHOR SURFACE — what an official or third-party package builds on
+# instead of the internal crates (ADR-0088 §4). Its own `0.N` version, not the
+# train's: the SDK is Evolving.
+flui-sdk = { path = "crates/flui-sdk", version = "=0.1.0-dev" }
 
 # PLATFORM CONTRACTS — the capability traits and the window/input vocabulary,
 # with no OS backend (ADR-0082). Framework crates that name a platform
@@ -639,7 +650,7 @@ flui-painting = { path = "crates/flui-painting", version = "=0.2.0-dev" }
 flui-rendering = { path = "crates/flui-rendering", version = "=0.2.0-dev" }
 flui-interaction = { path = "crates/flui-interaction", version = "=0.2.0-dev" }
 flui-testing = { workspace = true, optional = true }
-flui-material = { path = "crates/flui-material", version = "=0.2.0-dev", optional = true }
+flui-material = { path = "packages/flui-material", version = "=0.2.0-dev", optional = true }
 flui-cupertino = { path = "crates/flui-cupertino", version = "=0.2.0-dev", optional = true }
 
 [dev-dependencies]

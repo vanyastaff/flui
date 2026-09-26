@@ -10,7 +10,7 @@
 //! is the point of the test — it is written the way an outside consumer of
 //! the published `flui` crate would have to write it, not the way this
 //! workspace's own internal tests do (compare `tests/material_demo.rs` or
-//! `crates/flui-material/tests/elevated_button.rs`, both of which reach past
+//! `packages/flui-material/tests/elevated_button.rs`, both of which reach past
 //! the facade into `flui_rendering`/`flui_interaction` directly, and both of
 //! which drive taps through a widget-testing convenience
 //! (`flui_widgets::testing::lay_out`'s `dispatch_pointer_down`) rather than
@@ -157,7 +157,7 @@ fn agent_can_mount_inspect_drive_and_assert_the_counter() {
     // --- 2. Inspect structure: dump the render-tree diagnostics and check a
     // known node is really there. `ElevatedButton` composes a Material
     // surface as a `RenderPhysicalShape` (see
-    // `crates/flui-material/tests/elevated_button.rs`, which asserts the
+    // `packages/flui-material/tests/elevated_button.rs`, which asserts the
     // same node by the same name) — a fact about the framework's own
     // composition, not something this test invents.
     let initial_dump = render_dump(&binding);

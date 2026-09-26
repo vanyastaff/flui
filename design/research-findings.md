@@ -32,7 +32,7 @@ entry in [open questions](open-questions.md). Decisions already taken are indexe
 | Claim | Evidence | Status |
 |---|---|---|
 | One import pulls `flui-platform` into `flui-interaction` | `crates/flui-interaction/src/text_input.rs:27` (`use flui_platform::traits::PlatformTextInput;`) | Confirmed |
-| Signals stay opt-in "until the #1090 field-mask registry lands" | The comment is at `Cargo.toml:642-645`. #1090 landed as `588251a1c`, and `depend_on_fields` ships at `crates/flui-material/src/theme.rs:93` | **Stale.** The blocker the manifest names is gone; `crates/flui-view/Cargo.toml:119-123` names the ADR-0074 go/no-go measurement instead |
+| Signals stay opt-in "until the #1090 field-mask registry lands" | The comment is at `Cargo.toml:642-645`. #1090 landed as `588251a1c`, and `depend_on_fields` ships at `packages/flui-material/src/theme.rs:93` | **Stale.** The blocker the manifest names is gone; `crates/flui-view/Cargo.toml:119-123` names the ADR-0074 go/no-go measurement instead |
 | `realm_dispatch.rs` (7,149 lines) is a production smear | `crates/flui-app/src/app/runner/realm_dispatch.rs`: 7,149 lines, but the test module starts at `:1691-1692` and holds 77 `#[test]`s | **Mostly tests.** About 1,690 production lines |
 | Damage is always full | `crates/flui-app/src/app/raster_lane.rs:354`; `DamageRegion` has only `Full` (`crates/flui-layer/src/scene_snapshot.rs:18-20`) | Confirmed |
 | Font state is process-global | `crates/flui-painting/src/text_layout/layout.rs:124` | Confirmed |

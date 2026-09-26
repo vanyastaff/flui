@@ -236,7 +236,7 @@ fn background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme() 
 /// `CupertinoButton(Text("Tap"))` must announce as one button node labelled
 /// with its child's text — the same merge the Material button family gets
 /// from `ButtonStyleButtonCore`'s `Semantics` wrapper
-/// (`crates/flui-material/src/button_style_button.rs`), proven here for
+/// (`packages/flui-material/src/button_style_button.rs`), proven here for
 /// `CupertinoButton`'s own pre-existing `Semantics::new().button(true)` wrap
 /// (`crates/flui-cupertino/src/button.rs`) now that `RenderParagraph`
 /// publishes a label for its child to merge up. Flutter parity:

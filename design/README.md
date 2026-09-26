@@ -16,9 +16,14 @@
   the semantics host and the commit epoch; the realm core has not moved yet. The module-DAG gate
   for flui-widgets is implemented as `cargo xtask module-dag`. The phase counters and
   `cargo xtask perf` with its baseline are implemented, non-blocking
-  ([architecture.md](architecture.md), budgets). ADR-0088, still Proposed, has its first move:
-  `flui-sdk` exists with no consumer yet, and `flui-foundation` carries the train guard
-  `links = "flui_train"`. Nothing else described here is implemented.
+  ([architecture.md](architecture.md), budgets). ADR-0088, still Proposed, has its first two
+  moves: `flui-sdk` exists and `flui-foundation` carries the train guard
+  `links = "flui_train"`; `flui-material` builds on `flui-sdk` alone from
+  `packages/flui-material`, and the FLUI derives resolve through the SDK first. ADR-0081 §3's
+  kind rule (core names no official package in any form; an official package's normal edges
+  are the SDK and the contract crates) is implemented and checked by `cargo xtask workspace`,
+  with the refused edges of today seeded as `edge-exceptions`; it stays Proposed until the owner
+  accepts it. Nothing else described here is implemented.
   The owner answered the open questions on 2026-09-25; the ADRs and this folder carry those
   answers.
 - **Date:** 2026-09-25

@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn fast_lane_builds_the_test_scope_and_filters() {
-        let a = args(&["crates/flui-material/src/lib.rs"]);
+        let a = args(&["packages/flui-material/src/lib.rs"]);
         assert_eq!(a.lane, Lane::Fast);
         assert_eq!(
             a.ci_test_args,
@@ -670,7 +670,7 @@ mod tests {
     #[test]
     fn a_changed_manifest_gets_the_per_feature_pass() {
         assert_eq!(
-            args(&["crates/flui-material/Cargo.toml"]).hack_args,
+            args(&["packages/flui-material/Cargo.toml"]).hack_args,
             "-p flui-material"
         );
     }
@@ -683,7 +683,7 @@ mod tests {
             (true, true, true)
         );
         assert!(!a.test_args.contains("flui-platform")); // its suite runs in the headless leg
-        let a = args(&["crates/flui-material/src/lib.rs"]);
+        let a = args(&["packages/flui-material/src/lib.rs"]);
         assert_eq!(
             (a.cross_platform, a.cross_cli, a.cross_desktop_mcp),
             (false, false, false)
@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn default_on_optional_edges_need_no_per_feature_pass() {
         // `flui` takes flui-material through its default `material` feature
-        assert_eq!(args(&["crates/flui-material/src/lib.rs"]).hack_args, "");
+        assert_eq!(args(&["packages/flui-material/src/lib.rs"]).hack_args, "");
     }
 
     #[test]
@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn doctests_cover_the_scopes_library_packages() {
-        let a = args(&["crates/flui-material/src/lib.rs"]);
+        let a = args(&["packages/flui-material/src/lib.rs"]);
         // flui-sdk is in scope through its dev-dependency on the facade
         assert_eq!(a.doctest_args, "-p flui -p flui-material -p flui-sdk");
         // flui-web-counter is in scope but has no rlib: `cargo test --doc -p` would reject it
@@ -757,7 +757,7 @@ mod tests {
 
     #[test]
     fn rustdoc_covers_the_scope_with_its_testing_features() {
-        let a = args(&["crates/flui-material/src/lib.rs"]);
+        let a = args(&["packages/flui-material/src/lib.rs"]);
         assert!(a.doc_args.starts_with("-p flui -p flui-material"));
         assert!(a.doc_args.contains("--features flui/testing"));
         // a testing feature of a package outside the scope would be rejected by cargo

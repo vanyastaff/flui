@@ -23,7 +23,7 @@ const GENERATOR: &str = "tools/decoy-face/generate.py";
 const RESTRICTED_SHA256: &str = "74d696e666f696e93db685a85c94bfbfcc0796dfcf8a2e2e2c908a54e82949";
 const FONT_SUFFIXES: [&str; 4] = ["ttf", "otf", "woff", "woff2"];
 /// Top-level directories searched for fonts outside the inventory owner.
-const SEARCHED: [&str; 4] = ["crates", "examples", "tools", "assets"];
+const SEARCHED: [&str; 5] = ["crates", "packages", "examples", "tools", "assets"];
 const PRUNED: [&str; 3] = ["target", ".git", ".claude"];
 
 /// Arguments for `cargo xtask font-assets`.

@@ -902,19 +902,32 @@ fn the_design_systems_admit_only_the_adr_0028_dependents() {
     let members = super::Members::load(&util::repo_root(), &metadata).expect("manifests load");
     let by_name = members.by_name();
     let expected: BTreeSet<String> = ["flui-app", "flui"].map(str::to_owned).into();
-    for design_system in ["flui-material", "flui-cupertino"] {
-        let member = by_name[design_system];
-        assert_eq!(
-            member.allowed_dependents.as_ref(),
-            Some(&expected),
-            "{design_system}"
-        );
-        assert_eq!(
-            member.allowed_dev_dependents.as_ref(),
-            Some(&expected),
-            "{design_system}"
-        );
-    }
+    // Material is under the kind rule instead (ADR-0081 §3); Cupertino keeps
+    // its list until it moves onto flui-sdk.
+    let member = by_name["flui-cupertino"];
+    assert_eq!(member.allowed_dependents.as_ref(), Some(&expected));
+    assert_eq!(member.allowed_dev_dependents.as_ref(), Some(&expected));
+    let material = by_name["flui-material"];
+    assert_eq!(material.allowed_dependents, None);
+    assert_eq!(material.allowed_dev_dependents, None);
+}
+
+/// Material is an official package on the SDK (ADR-0088 move 2): it lives
+/// under `packages/`, and its normal and build dependencies are exactly the
+/// SDK and `tracing`.
+#[test]
+fn flui_material_builds_on_the_sdk_alone() {
+    let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
+    let members = super::Members::load(&util::repo_root(), &metadata).expect("manifests load");
+    let material = members.by_name()["flui-material"];
+    assert_eq!(material.rel, "packages/flui-material/Cargo.toml");
+    let dependencies: BTreeSet<&str> = material
+        .deps
+        .iter()
+        .filter(|dep| dep.kind != cargo_metadata::DependencyKind::Development)
+        .map(|dep| dep.name.as_str())
+        .collect();
+    assert_eq!(dependencies, BTreeSet::from(["flui-sdk", "tracing"]));
 }
 
 /// `(package, tier, tier-kind)`.
@@ -1029,6 +1042,22 @@ fn the_tiers_match_the_adr_0081_table() {
         ("flui", "flui-hot-reload", "ADR-0094"),
         ("flui", "flui-material", "ADR-0088"),
         ("flui", "flui-cupertino", "ADR-0088"),
+        // The kind rule (ADR-0081 §3): a core crate's dev edge to an official
+        // package.
+        ("flui-testing", "flui-devtools", "ADR-0088"),
+        // The official packages not yet on flui-sdk (ADR-0088 §2).
+        ("flui-cupertino", "flui-animation", "ADR-0088"),
+        ("flui-cupertino", "flui-foundation", "ADR-0088"),
+        ("flui-cupertino", "flui-objects", "ADR-0088"),
+        ("flui-cupertino", "flui-types", "ADR-0088"),
+        ("flui-cupertino", "flui-view", "ADR-0088"),
+        ("flui-cupertino", "flui-widgets", "ADR-0088"),
+        ("flui-devtools", "flui-foundation", "ADR-0088"),
+        ("flui-devtools", "flui-scheduler", "ADR-0088"),
+        ("flui-hot-reload", "flui-foundation", "ADR-0094"),
+        ("flui-hot-reload", "flui-layer", "ADR-0094"),
+        ("flui-hot-reload", "flui-rendering", "ADR-0094"),
+        ("flui-hot-reload", "flui-view", "ADR-0094"),
     ]
     .into();
     assert_eq!(exceptions, seeded);

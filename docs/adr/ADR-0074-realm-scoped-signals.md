@@ -230,7 +230,7 @@ same function. Pinned by `a_rebuild_re_derives_the_field_set_so_a_dropped_read_s
   `a_build_that_unwinds_keeps_its_previous_read_set`).
 
 #1090's acceptance tests (`crates/flui-widgets/tests/media_query_fields.rs`,
-`crates/flui-material/tests/theme_fields.rs`) pin: a size-only change rebuilds size readers and
+`packages/flui-material/tests/theme_fields.rs`) pin: a size-only change rebuilds size readers and
 whole-`of` readers, not text-scale readers, and the reverse; an equal provider swap rebuilds
 nobody; a field reader still rebuilds on its own field after an unrelated change.
 

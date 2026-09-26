@@ -263,7 +263,7 @@ impl MountedDemo {
 
     /// Every render node whose short type name (generic parameters stripped)
     /// equals `render_type_name` — duplicated from
-    /// `crates/flui-material/tests/common/mod.rs`'s `LaidOut::find_all_by_render_type`
+    /// `packages/flui-material/tests/common/mod.rs`'s `LaidOut::find_all_by_render_type`
     /// for the same reason every other helper here is (see the module doc).
     /// The item count the home list's render object declares — the list is
     /// lazy, so a row below the window is never built and cannot be found by
@@ -624,7 +624,7 @@ fn adding_an_item_shows_a_snack_bar_that_auto_dismisses() {
     // timer starts only once the entrance controller's own `Completed`
     // status is observed), so a single huge `pump` would not give that
     // freshly-registered controller its fair share of the elapsed time —
-    // matching `crates/flui-material/tests/snack_bar.rs`'s own
+    // matching `packages/flui-material/tests/snack_bar.rs`'s own
     // frame-stepped `pump_ms` helper.
     let frame = Duration::from_millis(16);
     let pump_ms = |demo: &mut MountedDemo, millis: u64| {
@@ -956,7 +956,7 @@ fn the_counters_state_survives_switching_away_and_back() {
     // time — merely unpainted while inactive, not torn down — so a
     // "must not be found while inactive" assertion here would test the
     // wrong thing (`find_text` has no visibility/offstage awareness; that
-    // half of the contract is `crates/flui-material/tests/tab_bar_view.rs`'s
+    // half of the contract is `packages/flui-material/tests/tab_bar_view.rs`'s
     // `default_tab_controller_ancestor_drives_the_active_child_through_offstage`
     // via the `RenderOffstage` diagnostics flag directly). The genuinely
     // observable retention proof at this level is that the count reads 3
@@ -976,7 +976,7 @@ fn the_counters_state_survives_switching_away_and_back() {
 /// The About tab (index 2) is never built until it's actually visited —
 /// `TabBarView`'s lazy-build contract, proven end to end through the real
 /// `TabBar`'s tap dispatch (not just `TabBarView` mounted directly, as
-/// `crates/flui-material/tests/tab_bar_view.rs`'s own
+/// `packages/flui-material/tests/tab_bar_view.rs`'s own
 /// `a_tab_is_not_built_until_it_becomes_active` already covers in
 /// isolation).
 #[test]
@@ -1000,7 +1000,7 @@ fn the_about_tab_is_not_built_until_visited() {
 /// With the `TabBar` mounted as `AppBar.bottom`, the app bar's total height
 /// is `toolbar_height (56) + the TabBar's own preferred height (48, three
 /// plain-text tabs: `TAB_HEIGHT` 46 + `indicator_weight` 2)` — the same
-/// `toolbar_height + bottom_height` math `crates/flui-material/tests/app_bar.rs`
+/// `toolbar_height + bottom_height` math `packages/flui-material/tests/app_bar.rs`
 /// pins in isolation, now proven reachable through the full sample-app tree
 /// (real `Theme`/`MediaQuery` ancestors, a real `Navigator`-pushed route).
 #[test]

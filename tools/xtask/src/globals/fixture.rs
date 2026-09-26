@@ -133,6 +133,19 @@ thread_local! {
 }
 ";
 
+/// An official package under `packages/`: scanned like a crate.
+const PACKAGE_LIB: &str = r"
+thread_local! {
+    // planted: a thread-local with no entry, in a package
+    static PACKAGED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+";
+
+/// An example: an application, outside the gate's scope.
+const EXAMPLE_LIB: &str = r"
+static IN_AN_EXAMPLE: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+";
+
 const THIRD_LIB: &str = r"
 thread_local! {
     // planted: a trampoline in a crate that may not have one
@@ -141,7 +154,8 @@ thread_local! {
 ";
 
 /// The finding each planted violation must produce, and no other.
-pub(super) const EXPECTED: [(&str, &str, &str); 14] = [
+pub(super) const EXPECTED: [(&str, &str, &str); 15] = [
+    ("flui-package", "PACKAGED", super::NEW),
     (HOST, "LOCKED", super::NEW),
     (HOST, "SHARED_ID", super::NEW),
     (HOST, "STORED", super::NEW),
@@ -172,21 +186,33 @@ pub(super) fn crates() -> (Memory, Vec<Krate>) {
         ),
         ("crates/flui-platform/src/shared.rs", PLATFORM_SHARED),
         ("crates/flui-widgets/src/lib.rs", THIRD_LIB),
+        ("packages/flui-package/src/lib.rs", PACKAGE_LIB),
+        ("examples/example/src/lib.rs", EXAMPLE_LIB),
     ]
     .into_iter()
     .map(|(rel, text)| (rel.to_owned(), text.to_owned()))
     .collect();
     let trampoline = |item: &str| json!({ "item": item, "grant": "ADR-0097", "class": "trampoline", "reason": "self-test" });
-    let krate = |name: &str, globals: serde_json::Value| Krate {
+    let member = |dir: &str, name: &str, flui: serde_json::Value| Krate {
         name: name.to_owned(),
-        manifest: format!("crates/{name}/Cargo.toml"),
-        flui: json!({ "globals": globals }),
+        manifest: format!("{dir}/{name}/Cargo.toml"),
+        flui,
         targets: vec![Target {
-            src: format!("crates/{name}/src/lib.rs"),
+            src: format!("{dir}/{name}/src/lib.rs"),
             bin: None,
         }],
     };
-    let crates = vec![
+    let krate = |name: &str, globals: serde_json::Value| {
+        member("crates", name, json!({ "globals": globals }))
+    };
+    let crates: Vec<Krate> = [
+        member(
+            "packages",
+            "flui-package",
+            json!({ "tier-kind": "official" }),
+        ),
+        // Out of scope by its path alone: it declares no `tool` kind.
+        member("examples", "example", json!({})),
         krate(
             HOST,
             json!([
@@ -204,6 +230,9 @@ pub(super) fn crates() -> (Memory, Vec<Krate>) {
             ]),
         ),
         krate("flui-widgets", json!([trampoline("CLAIMED")])),
-    ];
+    ]
+    .into_iter()
+    .filter(|krate| super::scanned(&krate.manifest, &krate.flui))
+    .collect();
     (Memory(files), crates)
 }

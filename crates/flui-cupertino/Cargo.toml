@@ -86,3 +86,13 @@ order = 2
 # two design systems do not depend on each other.
 allowed-dependents = ["flui-app", "flui"]
 allowed-dev-dependents = ["flui-app", "flui"]
+# ADR-0088 §2: an official package's normal dependencies are the SDK and the
+# contract crates. These go when Cupertino moves onto flui-sdk.
+edge-exceptions = [
+    { to = "flui-animation", exit = "ADR-0088", reason = "internal crate until the move onto flui-sdk" },
+    { to = "flui-foundation", exit = "ADR-0088", reason = "internal crate until the move onto flui-sdk" },
+    { to = "flui-objects", exit = "ADR-0088", reason = "internal crate until the move onto flui-sdk" },
+    { to = "flui-types", exit = "ADR-0088", reason = "internal crate until the move onto flui-sdk" },
+    { to = "flui-view", exit = "ADR-0088", reason = "internal crate until the move onto flui-sdk" },
+    { to = "flui-widgets", exit = "ADR-0088", reason = "internal crate until the move onto flui-sdk" },
+]
