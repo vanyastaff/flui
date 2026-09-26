@@ -219,6 +219,11 @@ impl LocalPostFrameHandle {
     /// A self-rescheduling callback (one that queues its successor from
     /// inside its own run) keeps this at `1` after every frame, so a reading
     /// of `0` after a frame is how an owner proves such a loop has stopped.
+    ///
+    /// A test probe, not part of the documented API: no production path reads
+    /// it. It exists so an owner crate's integration tests can observe the
+    /// lane without a test-only global counter.
+    #[doc(hidden)]
     #[must_use]
     pub fn pending_len(&self) -> usize {
         self.lane
