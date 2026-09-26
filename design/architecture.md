@@ -1129,7 +1129,7 @@ does not cover each gate they add.
 | Transitive absence | `cargo xtask reach` over `cargo metadata`, all facade feature combinations | three hot-reload `TREE_FACTS` only |
 | Core names no official crate | `cargo xtask workspace` | facade `material` and `hot-reload` features |
 | No new process global | `cargo xtask globals`: syn scan of every `static` (atomics included) and `thread_local!`, `#[cfg(test)]` excluded | no gate |
-| Module direction inside flui-widgets | `cargo xtask module-dag -p flui-widgets` | implemented: `[package.metadata.flui.modules]` declares eight layers, no exceptions |
+| Module direction inside flui-widgets | `cargo xtask module-dag -p flui-widgets` | implemented (`[package.metadata.flui.modules]` in flui-widgets) |
 | No upstream type in Stable signatures | `cargo xtask api-closure` over rustdoc JSON, proven first against a planted `pub fn f() -> accesskit::Role` | re-exports of wgpu, accesskit, android-activity |
 | UI state is `!Send` | `assert_not_impl_any!`; clippy `disallowed_types` (`Mutex`, `RwLock`, `DashMap`) in frame-path crates, allowlist for mailboxes | `Send + Sync` bounds on UI traits |
 | No lock in a public signature | public-API snapshot filter | — |
