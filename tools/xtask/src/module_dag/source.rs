@@ -771,8 +771,9 @@ impl Scan {
             None => &self.root_uses,
             Some(module) => self.module_uses.get(module).unwrap_or(&empty),
         };
-        // A plain path relayed by the root starts at the root; elsewhere it
-        // names another crate (a relay module holds no items of its own).
+        // A plain path relayed by the root starts at the root. In a relay
+        // module, which holds no items of its own, its first segment is a name
+        // another `use` of the relay binds, or another crate.
         let follow =
             |target: &Target, tail: Vec<String>, seen: &mut BTreeSet<Vec<String>>| match target {
                 Target::Absolute(path) => self.resolve_in(
@@ -781,13 +782,28 @@ impl Scan {
                     transparent,
                     seen,
                 ),
-                Target::Plain(path) if module.is_none() => self.resolve_in(
-                    path.iter().cloned().chain(tail).collect(),
-                    true,
-                    transparent,
-                    seen,
-                ),
-                Target::Plain(_) | Target::External => Resolved::External,
+                Target::Plain(path) => match (module, path.split_first()) {
+                    (None, _) => self.resolve_in(
+                        path.iter().cloned().chain(tail).collect(),
+                        true,
+                        transparent,
+                        seen,
+                    ),
+                    (Some(relay), Some((first, rest))) => {
+                        let key = std::iter::once(relay)
+                            .chain(path)
+                            .chain(&tail)
+                            .cloned()
+                            .collect();
+                        if !seen.insert(key) {
+                            return Resolved::Unattributed("its re-exports form a loop".to_owned());
+                        }
+                        let rest: Vec<String> = rest.iter().cloned().chain(tail).collect();
+                        self.through(Some(relay), first, &rest, true, transparent, seen)
+                    }
+                    (Some(_), None) => Resolved::External,
+                },
+                Target::External => Resolved::External,
             };
         if let Some(target) = table.names.get(name) {
             return follow(target, rest.to_vec(), seen);

@@ -202,6 +202,55 @@ transparent = ["__private"]
 }
 
 #[test]
+fn a_plain_path_in_a_transparent_module_follows_the_relays_own_use() {
+    let found = identities(
+        r#"
+layers = [["layout"], ["interaction"]]
+transparent = ["__private"]
+"#,
+        &[
+            (
+                "lib.rs",
+                "pub mod layout;\npub mod interaction;\npub mod __private;\n",
+            ),
+            (
+                "__private.rs",
+                "use crate::interaction;\n\
+                 pub use interaction::focus::install_rect_provider;\n\
+                 pub use flui_types::Color;\n",
+            ),
+            (
+                "interaction.rs",
+                "pub mod focus { pub fn install_rect_provider() {} }\n",
+            ),
+            (
+                "layout.rs",
+                "use crate::__private::Color;\n\
+                 pub fn f() { crate::__private::install_rect_provider(); }\n",
+            ),
+        ],
+    );
+    // `interaction` is bound by the relay's `use`; `flui_types` is bound by
+    // nothing there, so it is another crate
+    assert_eq!(found, set(&[("layout", "interaction", "refused")]));
+    // a relay whose plain names bind each other ends, as a finding
+    assert_eq!(
+        identities(
+            r#"
+layers = [["layout"]]
+transparent = ["__private"]
+"#,
+            &[
+                ("lib.rs", "pub mod layout;\npub mod __private;\n"),
+                ("__private.rs", "use a as b;\nuse b as a;\npub use a::X;\n"),
+                ("layout.rs", "use crate::__private::X;\n"),
+            ],
+        ),
+        set(&[("layout", "crate::__private::X", "unattributed")])
+    );
+}
+
+#[test]
 fn an_expression_or_type_path_without_a_use_is_an_edge() {
     assert_eq!(
         identities(
