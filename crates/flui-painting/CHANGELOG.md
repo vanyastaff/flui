@@ -20,13 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RegisterFaceError, SwashRasterizer}`. `FontRegistry::register_face` refuses
   a face key already registered over different bytes
   (`RegisterFaceError::Conflict`). A `VariationId` names the registry that
-  minted it; another registry does not resolve it. The swash rasterizer draws bit-identical bitmaps to the
-  cosmic-text path for the same face, glyph, size and bin
-  (`tests/parley_oracle.rs`), refuses a key it cannot draw (unregistered face,
-  unknown variation, a size that is not finite and positive, a skew past
-  `Synthesis::MAX_SKEW_DEGREES`), and emboldens by
-  Skia's fake-bold strength (mapping decision 10). No production caller yet:
-  ADR-0092 §10 step 3 wires it.
+  minted it; another registry does not resolve it. The swash rasterizer draws
+  bit-identical bitmaps to the cosmic-text path for the same face, glyph, size
+  and bin (`tests/parley_oracle.rs`), refuses a key it cannot draw
+  (unregistered face, unknown variation, a size that is not finite and
+  positive, a skew past `Synthesis::MAX_SKEW_DEGREES`), and emboldens by an
+  interpolated stroke width with no checked Flutter reference (mapping
+  decision 10). No production caller yet: ADR-0092 §10 step 3 wires it.
 - `text_layout::font_system_initialized()`, test support only.
 
 ### Changed — `get_word_boundary` uses UAX #29 word segmentation, not an ASCII-whitespace scan

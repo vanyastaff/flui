@@ -397,33 +397,37 @@ committed layout. Locked by `max_lines_does_not_collapse_min_intrinsic_width`,
 `wide_ellipsis_floors_min_intrinsic_width`, and the matching `RenderParagraph` intrinsic
 tests.
 
-### 10. Synthetic bold follows Skia's fake-bold strength
+### 10. Synthetic bold uses an interpolated stroke width
 
 **Rule:** a face with no bold weight is emboldened at raster time when the
-style asks for bold. Flutter's engine does this through Skia's fake bold;
-cosmic-text has no fake bold at all (its swash call sets no `embolden`, only a
-14° skew for `FAKE_ITALIC`), so there is no in-repo oracle.
+style asks for bold. cosmic-text has no fake bold at all (its swash call sets
+no `embolden`, only a 14° skew for `FAKE_ITALIC`), so there is no in-repo
+oracle, and no Flutter reference has been checked for this.
 
-**Choice:** `SwashRasterizer` grows the outline by Skia's stroke width:
-`size × ratio`, the ratio interpolated linearly from 1/24 at 9 px to 1/32 at
-36 px and clamped outside (`SkScalerContext`'s `kStdFakeBoldInterpKeys`
-`{9, 36}` and values `{1/24, 1/32}`, recalled from Skia source and not checked
-against a clone). swash moves each point by its strength on each side, so the
-strength passed is half the width.
+**Choice:** a FLUI choice, not a parity claim. `SwashRasterizer` grows the
+outline by `size × ratio` in total, the ratio interpolated linearly from 1/24
+at 9 px to 1/32 at 36 px and clamped outside. The constants are the
+interpolation `SkScalerContext` uses (`kStdFakeBoldInterpKeys` `{9, 36}`,
+`kStdFakeBoldInterpValues` `{1/24, 1/32}`), recalled from Skia source and not
+checked against a clone. Skia's FreeType backend may embolden in the font host
+instead, with a different strength, so what Flutter draws on Android and Linux
+is not known to match. swash moves each point by its strength on each side,
+so the strength passed is half the width.
 
-**Why:** Skia is what Flutter paints with, so its strength is the observable
-contract a bold-synthesized paragraph should match. The prototype's `size / 24`
-per side doubled Skia's width at large sizes and had no reference.
+**Why:** the growth stays a moderate share of the stem at large sizes, where
+the prototype's `size / 24` per side doubled it, and the curve is small enough
+to replace once a reference is checked.
 
-**Alternatives:** FreeType's `FT_GlyphSlot_Embolden` (about `size / 24` in total at
-every size) — rejected, it is not what Flutter draws; no fake bold, as
-cosmic-text does — rejected, a bold style on a regular-only face would draw
-regular.
+**Alternatives:** FreeType's `FT_GlyphSlot_Embolden` (about `size / 24` in
+total at every size), a candidate once Flutter's per-platform output is
+measured; no fake bold, as cosmic-text does — rejected, a bold style on a
+regular-only face would draw regular.
 
 **Accepted trade-off:** only `parley_text` applies it; the cosmic-text path
 keeps drawing no fake bold until ADR-0092 §10 step 4 moves paragraphs to
-Parley, which revisits the strength against paragraph output. Locked by
-`synthetic_bold_adds_the_skia_strength` (width gain at 9, 20, 36 and 144 px).
+Parley, which checks the strength against Skia's source per platform and
+against paragraph output. Locked by `synthetic_bold_adds_the_interpolated_width`
+(width gain at 9, 20, 36 and 144 px).
 
 
 ---

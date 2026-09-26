@@ -53,10 +53,9 @@ impl std::fmt::Debug for SwashRasterizer {
     }
 }
 
-/// Skia's fake-bold outline growth at `size` px: the stroke width
-/// `SkScalerContext` adds, `size × ratio`, with the ratio interpolated
-/// linearly from 1/24 at 9 px to 1/32 at 36 px and clamped outside
-/// (`kStdFakeBoldInterpKeys`/`kStdFakeBoldInterpValues`). Painting
+/// The fake-bold outline growth at `size` px, in total: `size × ratio`, with
+/// the ratio interpolated linearly from 1/24 at 9 px to 1/32 at 36 px and
+/// clamped outside. A FLUI choice with no checked Flutter reference; painting
 /// ARCHITECTURE, mapping decision 10.
 pub(super) fn fake_bold_width(size: f32) -> f32 {
     const KEYS: [f32; 2] = [9.0, 36.0];
@@ -321,12 +320,12 @@ mod tests {
         }
     }
 
-    /// The outline grows by Skia's fake-bold stroke width: the bitmap widens
-    /// by about that much, and carries more ink. At 144 px the stroke is 4.5 px:
-    /// a strength applied per side without halving would widen it by 9, and
-    /// one taken as the total by 2.25; both fall outside the bound.
+    /// The outline grows by the interpolated fake-bold width: the bitmap
+    /// widens by about that much, and carries more ink. At 144 px the width
+    /// is 4.5 px: a strength applied per side without halving would widen it
+    /// by 9, and one taken as the total by 2.25; both fall outside the bound.
     #[test]
-    fn synthetic_bold_adds_the_skia_strength() {
+    fn synthetic_bold_adds_the_interpolated_width() {
         let mut rasterizer = rasterizer();
         let gid = glyph(&rasterizer, 'H');
         for size in [9.0_f32, 20.0, 36.0, 144.0] {
