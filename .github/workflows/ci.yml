@@ -40,6 +40,8 @@ name: CI
 #   doc-test       — rustdoc examples executed as tests
 #   miri           — UB check on flui-rendering's pipeline owner and
 #                    flui-view's GlobalKey plane (advisory)
+#   macos-ci       — extended lane: `cargo xtask ci` + the iOS runner clippy on macos-latest (advisory)
+#   test-windows   — extended lane: `cargo xtask test` on windows-latest (advisory)
 #   ci             — aggregator: designed to be the one status check branch
 #                    protection would name, if a ruleset required one — as of
 #                    this writing `main` has no required-status-checks rule
@@ -1620,6 +1622,98 @@ jobs:
         run: cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
+  # macos-ci — the full local gate, `cargo xtask ci` (fmt, clippy, rustdoc,
+  # the test suite, doctests), on macos-latest, plus the flui-app / flui iOS
+  # runner clippy (it needs xcrun). The only job that builds and tests the
+  # workspace on macOS, so AppKit-only breakage shows here. Extended lane
+  # only: nightly, dispatch and the `full-ci` label; `cli-macos` covers the
+  # CLI on every main push. ADVISORY (continue-on-error) until three green
+  # runs establish it passes on a hosted runner and in budget.
+  # ─────────────────────────────────────────────────────────────────────────
+  macos-ci:
+    name: macos-ci
+    needs: [checks, plan]
+    if: needs.plan.outputs.lane == 'extended'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable + clippy + rustfmt (+ iOS target)
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy, rustfmt
+          targets: aarch64-apple-ios
+
+      # The action adds the target to `stable`; the committed
+      # rust-toolchain.toml makes the pinned release the active one, and that
+      # install needs the target too.
+      - name: Add the iOS target to the pinned toolchain
+        run: rustup target add aarch64-apple-ios
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          shared-key: macos-ci
+          # The nightly run is on main, so it is what saves the entry.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Per tokio: binary caching breaks on macOS.
+          cache-bin: false
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo xtask ci
+        run: cargo xtask ci
+
+      - name: cargo clippy (ios runner)
+        run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # test-windows — `cargo xtask test` on windows-latest: the workspace suite
+  # on the platform day-to-day development happens on, which the Linux
+  # `test` job cannot stand in for (paths, process spawning, the Win32
+  # backend under the whole suite). Its own job, not a `test` matrix entry:
+  # `test` runs in the wide lane on every workspace-wide PR, and this runs
+  # in the extended lane only. ADVISORY until three green runs.
+  # ─────────────────────────────────────────────────────────────────────────
+  test-windows:
+    name: test-windows
+    needs: [checks, plan]
+    if: needs.plan.outputs.lane == 'extended'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          shared-key: test-windows
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
+        with:
+          tool: cargo-nextest@0.9
+
+      - name: cargo xtask test
+        run: cargo xtask test
+
+  # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern), designed so that a
   # required-status-checks rule would only need to name this ONE check
   # instead of enumerating the graph — no such rule is configured today (see
@@ -1631,7 +1725,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [checks, plan, fast-lane, fast-lane-ios, standalone, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, platform-windows, bench-compile, doc, deps, doc-test, miri]
+    needs: [checks, plan, fast-lane, fast-lane-ios, standalone, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-features, live-smoke, gpu-test, platform-windows, bench-compile, doc, deps, doc-test, miri, macos-ci, test-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -1681,6 +1775,7 @@ jobs:
           FULL_JOBS: >-
             gpu-test platform-windows cli-macos
           EXTENDED_JOBS: >-
+            macos-ci test-windows
           LANE: ${{ needs.plan.outputs.lane }}
           CROSS_IOS: ${{ needs.plan.outputs.cross_ios }}
           STANDALONE: ${{ needs.plan.outputs.standalone }}

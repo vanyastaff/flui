@@ -453,7 +453,9 @@ mod tests {
         assert!(w.lanes.wide.is_disjoint(&w.lanes.full));
         assert!(w.lanes.wide.is_disjoint(&w.lanes.extended));
         assert!(w.lanes.full.is_disjoint(&w.lanes.extended));
-        assert!(!w.lanes.wide.is_empty() && !w.lanes.full.is_empty());
+        assert!(
+            !w.lanes.wide.is_empty() && !w.lanes.full.is_empty() && !w.lanes.extended.is_empty()
+        );
     }
 
     #[test]
@@ -531,6 +533,32 @@ mod tests {
         );
         red(&main, &with(full.clone(), "test", "failure"), "test");
         red(&main, &without(full, "fast-lane"), "fast-lane");
+    }
+
+    #[test]
+    fn extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red() {
+        let w = workflow();
+        assert!(w.lanes.extended.contains("macos-ci"));
+        let main_push = skipping(
+            &not_whole_workspace()
+                .into_iter()
+                .chain(w.lanes.extended.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
+        let push = Run {
+            event: "push",
+            ..run("full")
+        };
+        green(&push, &main_push);
+        let nightly = Run {
+            event: "schedule",
+            ..run("extended")
+        };
+        red(&nightly, &main_push, "macos-ci");
+        red(&nightly, &main_push, "test-windows");
+        green(&nightly, &skipping(&not_whole_workspace()));
+        // an extended job that ran on main disagrees with its `if:`
+        red(&push, &without(main_push, "macos-ci"), "macos-ci");
     }
 
     #[test]

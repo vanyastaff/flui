@@ -949,7 +949,9 @@ merge green and still turn main red: every Windows and macOS job, that is
 GPU readback on WARP (`gpu-test`), flui-platform's Windows suite
 (`platform-windows`), macOS's `flui-cli` suite and the iOS runner clippy
 (`cli-macos`; the iOS clippy also runs in `fast-lane-ios` when `flui-app`
-or `flui` is in scope, but a wide pull request runs no macOS job).
+or `flui` is in scope, but a wide pull request runs no macOS job). Only
+`extended` runs the whole workspace suite on macOS (`macos-ci`) and on
+Windows (`test-windows`), both advisory for now.
 
 Label a change that is likely to break one of these `full-ci`.
 
@@ -984,12 +986,18 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `wasm-check` | `cargo xtask wasm-check`, `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
 | `cli-macos` | `cargo xtask test` (flui-cli's tests) + `cargo xtask cross-typecheck` (its iOS clippy line) | the same commands; they only mean "macOS" on a Mac |
 | `cross-typecheck` | `cargo xtask cross-typecheck` | needs the four targets (`cargo xtask doctor full`) |
+| `macos-ci` | `cargo xtask ci` + `cargo xtask cross-typecheck`'s iOS runner line (on a Mac) | the job runs the same commands on macos-latest; extended lane only, advisory (`continue-on-error`) until three green runs |
+| `test-windows` | `cargo xtask test` (on Windows) | the job runs the same command on windows-latest; extended lane only, advisory until three green runs |
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main or nightly |
 
 The other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
 event-driven, not per-PR gates, and have no local mirror. `full-ci.yml` only turns the `full-ci` label into a
-re-run of the PR's own `ci.yml` run.
+re-run of the PR's own `ci.yml` run. `manual.yml` is started by hand from the
+Actions tab: its `trial` job runs one allowlisted `cargo xtask device` check
+(`windows-a11y` or `windows-input`) on the hosted Windows runner the dispatch
+names, the same command as locally on Windows; the `ci` aggregator does not
+gate it.
 
 The `gpu-test` job additionally runs the full `testing` readback
 suite on a windows-latest runner (WARP software rasterizer) and is

@@ -1,0 +1,61 @@
+name: Manual device check
+
+# One allowlisted `cargo xtask device <command>` on a hosted runner, started
+# by hand from the Actions tab. It exists to try a device check on a hosted
+# runner before any CI lane depends on it (the hosted `windows-a11y` trial:
+# the check prints PASS, FAILED, or CANNOT VERIFY with its pre-check's
+# reason). Not part of ci.yml and not gated by its `ci` aggregator: its
+# result blocks nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: The `cargo xtask device` check to run
+        type: choice
+        options:
+          - windows-a11y
+          - windows-input
+      runner:
+        description: The hosted runner image
+        type: choice
+        options:
+          - windows-latest
+          - windows-2025
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  trial:
+    name: trial
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      # The input reaches the shell through the environment, never through
+      # template expansion into the script, and only a listed check runs.
+      - name: cargo xtask device
+        shell: bash
+        env:
+          COMMAND: ${{ inputs.command }}
+        run: |
+          set -euo pipefail
+          case "$COMMAND" in
+            windows-a11y | windows-input) cargo xtask device "$COMMAND" ;;
+            *)
+              echo "::error::not an allowlisted device check: $COMMAND"
+              exit 1
+              ;;
+          esac
