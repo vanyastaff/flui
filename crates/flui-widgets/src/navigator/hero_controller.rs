@@ -171,7 +171,7 @@ impl FlightDirection {
 /// module is private, so nothing else names it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Measurement {
-    /// `None` when neither route was animating; see [`FlightDirection::classify`].
+    /// `None` when neither route was animating; see `FlightDirection::classify`.
     pub direction: Option<FlightDirection>,
     /// The route the transition leaves.
     pub from: RouteId,
@@ -222,7 +222,7 @@ pub(crate) fn is_valid_flight(from_rect: Rect, to_rect: Rect) -> bool {
 pub struct HeroFlightManifest {
     /// The tag both routes share.
     pub tag: HeroTag,
-    /// `None` when neither route was animating; see [`FlightDirection::classify`].
+    /// `None` when neither route was animating; see `FlightDirection::classify`.
     pub direction: Option<FlightDirection>,
     /// The route the hero flies from.
     pub from_route: RouteId,

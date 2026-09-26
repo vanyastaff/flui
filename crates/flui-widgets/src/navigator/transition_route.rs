@@ -714,7 +714,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
     /// `RouteRecord::did_pop`; only its disposal waits for `dismissed`.
     ///
     /// A gesture-driven pop rides its own pacing in here: `pop_paced` (see
-    /// `navigator.rs`) publishes a one-shot [`PopPacing`](super::binding::PopPacing)
+    /// `navigator.rs`) publishes a one-shot `PopPacing`
     /// for exactly this route immediately before triggering the pop, and this
     /// is where it is consumed — Flutter's
     /// `_CupertinoBackGestureController.dragEnd` calling `_controller.animateBack`

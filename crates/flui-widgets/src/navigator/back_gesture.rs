@@ -183,7 +183,7 @@ impl BackGestureController {
     }
 }
 
-/// Shared, owner-thread state a [`BackGestureDetector`] drives from its
+/// Shared, owner-thread state a `BackGestureDetector` drives from its
 /// recognizer callbacks and polls from `build`.
 ///
 /// A plain struct behind `Rc`, not `Arc`: every field here is owner-affine

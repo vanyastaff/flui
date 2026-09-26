@@ -930,7 +930,7 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
     /// the flush, under the history lock, where a user callback calling back
     /// into the navigator deadlocks. The flush owes the fan-out through
     /// `FlushOutcome::pop_invoked`, and `apply` delivers it via
-    /// [`ModalHandle::notify_pop_invoked`] outside the lock.
+    /// `ModalHandle::notify_pop_invoked` outside the lock.
     fn on_pop_invoked(&mut self, did_pop: bool) {
         self.transition.on_pop_invoked(did_pop);
     }

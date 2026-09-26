@@ -273,7 +273,7 @@ impl HeroRegistry {
     }
 
     /// The handle registered under `tag`, cloned out. Test-facing: production
-    /// matching goes through [`all_heroes`](Self::all_heroes), which also reaches a
+    /// matching goes through `all_heroes`, which also reaches a
     /// nested `Navigator`'s heroes.
     #[must_use]
     pub fn get(&self, tag: &HeroTag) -> Option<HeroHandle> {

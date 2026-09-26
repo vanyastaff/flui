@@ -678,14 +678,14 @@ pub(crate) struct FlightPlan {
 /// proxy, *inside* that callback would free the animation the callback is running
 /// under. Dart's GC makes this a non-question.
 ///
-/// So `finish` never drops: it moves the flight into [`retired`](Self::retired) and
+/// So `finish` never drops: it moves the flight into `retired` and
 /// schedules a drain through the binding's [`LocalPostFrameHandle`]. That runs at
 /// **end-of-frame** — after the status listener has returned and `fan_out_status` has
 /// unwound, but within the same turn — so a single transition cleans up after itself
 /// without waiting for an unrelated hero measurement. The drain is coalesced: many
 /// flights landing in one frame schedule exactly one.
 ///
-/// [`drain_retired`](Self::drain_retired) is still called at the head of every
+/// `drain_retired` is still called at the head of every
 /// measurement pass, as a backstop for the case where no post-frame capability was
 /// captured (an unmounted navigator, which is being torn down anyway).
 ///
