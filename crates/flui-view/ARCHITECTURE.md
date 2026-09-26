@@ -269,14 +269,17 @@ protocol; FLUI's stream is typed and zero-cost when nothing subscribes.
 
 ### A GlobalKey read inside its own presentation's frame resolves to nothing
 
-**Rule.** `GlobalKey::current_element` and `with_current_state` return `None` (and log a warning)
-when called from inside the frame of the binding that hosts the key: from `build`, a lifecycle
-hook, `dispose`, or a layout-builder build, all of which run while `WidgetsBinding` holds its own
-state lock. The registry closures take that lock with a non-blocking recursive read and report
+**Rule.** `GlobalKey::current_element` and `with_current_state` return `None` when called
+from inside the frame of the binding that hosts the key: from `build`, a lifecycle hook,
+`dispose`, or a layout-builder build, all of which run while `WidgetsBinding` holds its own state
+lock. The registry closures take that lock with a non-blocking recursive read and report
 `RegistryBusy` when it is held; the realm composite skips a busy member and keeps trying the
 others, so keys held by other presentations of the realm resolve normally. The binding is
 `!Send` (pinned by a static assertion), so a held lock can only mean re-entry on the owner
-thread. Before this rule such a read blocked on its own thread forever.
+thread. Before this rule such a read blocked on its own thread forever. The skip is logged at
+`debug`, not `warn`: the running presentation is busy for every read in its frame, so a key
+mounted nowhere reports the same skip, and a warning there would fire every frame
+(`unmounted_global_key_read_during_a_frame_does_not_warn`).
 
 **Divergence.** Flutter's `GlobalKey.currentElement`/`currentState` (`framework.dart:3163-3170`)
 return the element during build. FLUI returns nothing for keys of the presentation whose frame is

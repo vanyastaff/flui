@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deadlocking.** `GlobalKey::current_element` and `with_current_state` called
   from a build, lifecycle hook, `dispose` or layout-builder build of the binding
   that hosts the key used to block forever on the binding's own lock; they now
-  resolve to `None` and log a warning. Keys held by other presentations of the
+  resolve to `None`, logging the skipped presentation at `debug`. Keys held by other presentations of the
   realm still resolve during that frame. See `ARCHITECTURE.md`'s
   `## Mapping decisions` for the Flutter divergence.
 - **`ElementBase::depth` is the element's depth in the tree (root = 0).** It

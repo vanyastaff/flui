@@ -110,7 +110,7 @@ impl<T: 'static> GlobalKey<T> {
     ///
     /// Called from inside the frame of the presentation that hosts the key
     /// (from `build`, a lifecycle hook, `dispose`, or a layout-builder build),
-    /// this returns `None`, and logs a warning, instead of the element Flutter
+    /// this returns `None` (logged at `debug`) instead of the element Flutter
     /// would return: that presentation's tree is locked for the frame and is
     /// not read re-entrantly. Keys held by other presentations of the realm
     /// resolve normally.
@@ -120,16 +120,23 @@ impl<T: 'static> GlobalKey<T> {
             None => None,
             Some(Ok(id)) => id,
             Some(Err(crate::key::registry::RegistryBusy)) => {
-                self.warn_read_during_own_frame();
+                self.report_skipped_busy_presentation();
                 None
             }
         }
     }
 
-    fn warn_read_during_own_frame(&self) {
-        tracing::warn!(
+    /// Report a read that found no element but skipped a presentation whose
+    /// frame is running.
+    ///
+    /// `debug`, not `warn`: during a frame the running presentation is always
+    /// busy, so this also fires for a key that is simply not mounted anywhere,
+    /// which is an ordinary miss.
+    fn report_skipped_busy_presentation(&self) {
+        tracing::debug!(
             key = ?self,
-            "GlobalKey read during its own presentation's frame resolves to None"
+            "GlobalKey read skipped the presentation whose frame is running; \
+             the key may be mounted there, and resolves to None"
         );
     }
 
@@ -184,7 +191,7 @@ impl<T: 'static> GlobalKey<T> {
         if let Ok(result) = visited {
             result.flatten()
         } else {
-            self.warn_read_during_own_frame();
+            self.report_skipped_busy_presentation();
             None
         }
     }

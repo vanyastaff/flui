@@ -2122,6 +2122,39 @@ mod tests {
     }
 
     #[test]
+    fn unmounted_global_key_read_during_a_frame_does_not_warn() {
+        let (during, log) = within_deadline(|| {
+            let seen = Seen::default();
+            let binding = WidgetsBinding::new();
+            binding
+                .attach_root_widget(&LookupInBuild {
+                    // Mounted nowhere: the only busy member cannot hold it.
+                    key: crate::GlobalKey::<RegistryState>::new(),
+                    seen: Rc::clone(&seen),
+                })
+                .expect("attach succeeds");
+            let ((), log) = flui_testing::log_capture::capture(|| {
+                binding.with_global_key_registry(|| binding.draw_frame());
+            });
+            (seen.take(), log)
+        });
+        assert_eq!(during, vec![None]);
+        assert_eq!(
+            log.at_level(tracing::Level::WARN)
+                .filter(|record| record.contains("GlobalKey"))
+                .count(),
+            0,
+            "a GlobalKey read that may simply be a miss is not a warning:\n{}",
+            log.render_at_least(tracing::Level::WARN)
+        );
+        assert_eq!(
+            log.count_containing("GlobalKey read skipped the presentation whose frame is running"),
+            1,
+            "the skipped member is still reported, once per read:\n{log}"
+        );
+    }
+
+    #[test]
     fn global_key_lookup_from_dispose_during_detach_returns_instead_of_deadlocking() {
         #[derive(Clone)]
         struct LookupInDispose {
