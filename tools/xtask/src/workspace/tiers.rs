@@ -304,6 +304,9 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
         tier: tiers[tier].clone(),
         order,
     };
+    // Every edge a rule of ADR-0081 refuses; an `edge-exceptions` entry for any
+    // other edge is stale. A further rule (the kind rule of its §3, which also
+    // reads dev and optional edges) adds its refusals here.
     let mut refused: BTreeSet<(&str, &str)> = BTreeSet::new();
     for &(from_name, to_name) in &edges {
         let (from, to) = (by_name[from_name], by_name[to_name]);

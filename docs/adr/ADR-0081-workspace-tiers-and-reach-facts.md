@@ -105,9 +105,10 @@ An edge the rule refuses is legal only while the **dependent** lists it in its
 `[package.metadata.flui] edge-exceptions`, an array of
 `{ to = "<package>", exit = "ADR-NNNN", reason = "<text>" }`: `exit` names the ADR whose change
 removes the edge, and its file must exist under `docs/adr`. An entry for an edge that does not
-exist, or that the rule admits, is itself a finding, so the list only shrinks. The key exempts
-the tier rule only; the layer rule of ADR-0041 is checked beside it, unchanged, until the `layer`
-key is removed in a later change.
+exist, or that no rule of this record refuses, is itself a finding, so the list only shrinks. The
+key exempts the rules of this record only: the tier rule, and the kind rule of §3 once it is
+checked, whose refused edges (dev and optional ones included) then count as well. The layer rule
+of ADR-0041 is checked beside it, unchanged, until the `layer` key is removed in a later change.
 
 `pkg` is ordered after H, so an edge from a host to an official package points up. Such an edge
 is legal only when it is one of the dated exceptions listed under "Core never names official"
