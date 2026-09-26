@@ -939,3 +939,39 @@ globals = [{ item = \"X\", exit = \"ADR-0001\", reason = \"a test\" }]",
     );
     assert_eq!(fixture.findings(), Vec::<String>::new());
 }
+
+/// Cargo reports canonical manifest paths; a root spelled through a symlink
+/// (macOS's `/var` -> `/private/var`) must still own them. Where the host
+/// refuses to create a symlink (Windows without the privilege), the root's
+/// plain spelling against the canonical `\\?\` one is the same mismatch.
+#[test]
+fn a_root_spelled_through_a_symlink_owns_canonical_paths() {
+    let base = std::env::temp_dir().join(format!("xtask-relative-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let real = base.join("real");
+    std::fs::create_dir_all(real.join("crates/a")).expect("create fixture directory");
+    std::fs::write(real.join("crates/a/Cargo.toml"), "").expect("write fixture file");
+    let link = base.join("link");
+    #[cfg(unix)]
+    let linked = std::os::unix::fs::symlink(&real, &link);
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_dir(&real, &link);
+    let root = if linked.is_ok() { link } else { real.clone() };
+    let manifest = real
+        .canonicalize()
+        .expect("canonicalize fixture")
+        .join("crates/a/Cargo.toml");
+    assert!(
+        !manifest.starts_with(&root),
+        "{} and {} must spell the directory differently for this test to mean anything",
+        root.display(),
+        manifest.display()
+    );
+
+    let rel = super::relative(&root, &manifest);
+    let _ = std::fs::remove_dir_all(&base);
+    assert_eq!(
+        rel.expect("the manifest lies under the root"),
+        "crates/a/Cargo.toml"
+    );
+}

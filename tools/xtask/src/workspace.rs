@@ -746,11 +746,26 @@ fn check_unique_adr_numbers(root: &Path, findings: &mut Vec<String>) -> anyhow::
 }
 
 /// `path` relative to `root`, `/`-separated.
+///
+/// Cargo reports canonical manifest paths, so a `root` reached through a
+/// symlink (macOS's `/var` -> `/private/var`, a checkout under a linked
+/// directory) spells the same directory differently; when the lexical prefix
+/// does not match, both sides are compared canonicalized.
 pub(crate) fn relative(root: &Path, path: &Path) -> anyhow::Result<String> {
     let path = normalize(path);
-    let rel = path
-        .strip_prefix(normalize(root))
-        .with_context(|| format!("{} is outside the repository", path.display()))?;
+    let rel = match path.strip_prefix(normalize(root)) {
+        Ok(rel) => rel.to_path_buf(),
+        Err(lexical) => match (path.canonicalize(), root.canonicalize()) {
+            (Ok(canonical), Ok(canonical_root)) => canonical
+                .strip_prefix(&canonical_root)
+                .map(Path::to_path_buf)
+                .with_context(|| format!("{} is outside the repository", path.display()))?,
+            _ => {
+                return Err(anyhow::Error::new(lexical)
+                    .context(format!("{} is outside the repository", path.display())));
+            }
+        },
+    };
     Ok(rel
         .components()
         .map(|component| component.as_os_str().to_string_lossy())
