@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-23
+- **Amended:** 2026-09-26 — scanners over structured data return under four conditions; see
+  §4 ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)).
 - **Supersedes:** the capability-acquisition clauses of ADR-0018, ADR-0021, ADR-0030 and
   ADR-0037 (the rule stays, its enforcement moves into the type system); the port methodology
   (`docs/PORT.md`) and its grep gates (`scripts/port-check.sh`,
@@ -74,7 +76,7 @@ method on `LifecycleContext`, never on `BuildContext`.
 | Printing from the foundation crates | clippy `print_stdout`/`print_stderr` in `flui-foundation`, `flui-tree`, `flui-macros` |
 | `From<f32>` on a unit wrapper | `compile_fail` doctests in `flui-geometry` (already present) |
 | `async fn` on the frame path | the trait signatures are synchronous; an `async` impl does not match them |
-| Two ADRs sharing a number | `cargo xtask workspace` |
+| Two ADRs sharing a number; a normal or build edge against the tier order (ADR-0081) | `cargo xtask workspace` |
 
 ### 3. The rest becomes design guidance, not a gate
 
@@ -84,6 +86,41 @@ and module-confinement rules (`glam` in the GPU backend, `lyon` in the tessellat
 stated in `AGENTS.md` and the owning crate's `ARCHITECTURE.md`, and checked in review. They
 were never reliably checkable by a regular expression, and a false sense of coverage was
 worse than none.
+
+### 4. When a gate may be a scan
+
+The same move removed more than the port scanners. `cf46dfe20` (#1283) deleted
+`docs/runtime-contract.toml` with `scripts/check-runtime-conformance.sh`,
+`docs/panic-policy-allowlist.txt` with `scripts/check-panic-policy.sh`, the advisory
+`publish-dry-run` CI job with `scripts/publish-order.sh`, and
+`scripts/check-workspace-inventory.sh`, whose manifest checks became `cargo xtask workspace`.
+They read text, their allowlists were hand-kept files beside the code, and the rules they
+guarded were either types and clippy lints by then or not worth a gate.
+
+New scanners return anyway, starting with the tier gate of ADR-0081. A scan is admissible
+only when all four hold:
+
+1. **No type or stock lint can state the rule.** A type or a clippy lint is still the first
+   choice (§1, §2).
+2. **It reads structured data** — `cargo metadata`, a `syn` AST, a TOML table — never a
+   regular expression over source text.
+3. **It has a `--self-test`** that runs it over a planted violation and fails unless exactly
+   the planted findings come back, as `wgsl --self-test` and `workspace --self-test` do, and
+   `cargo xtask checks` runs the self-test beside the scan.
+4. **Its allowlist is data, not markers.** It lives in the manifests or a data file, is seeded
+   by the scan's own first run, names the ADR whose change removes each entry, and only
+   shrinks: an entry the scan no longer needs is a finding. No inline comment silences it;
+   inline markers are how the `PORT-CHECK-OK-*` sites reached 396.
+
+The tier gate meets the first condition because nothing else sees the package graph. Types and
+clippy work inside one crate. Cargo rejects only dependency cycles, not direction.
+`disallowed_types` and `disallowed_methods` cannot forbid a dependency. cargo-deny's bans are
+global or per dependent crate and cannot express a partial order (ADR-0041). A custom lint was
+rejected below for its nightly toolchain.
+
+The panic allowlist does not return: `clippy::unwrap_used` states that rule. The publish dry
+run returns only as the `package-check` and `release-check` commands, under these four
+conditions.
 
 ## Consequences
 
