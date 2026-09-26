@@ -694,6 +694,63 @@ fn the_design_systems_admit_only_the_adr_0028_dependents() {
     }
 }
 
+/// The two crates ADR-0081 deletes keep their dependents frozen: each list
+/// names exactly the crates that depend on it now, and never a crate outside
+/// the set it had when the record was accepted. Adding a dependent means
+/// editing this test; dropping an edge means dropping its entry.
+#[test]
+fn the_deleted_crates_admit_only_their_frozen_dependents() {
+    let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
+    let members = super::Members::load(&util::repo_root(), &metadata).expect("manifests load");
+    let by_name = members.by_name();
+    let frozen: [(&str, &[&str]); 2] = [
+        (
+            "flui-tree",
+            &[
+                "flui",
+                "flui-layer",
+                "flui-objects",
+                "flui-rendering",
+                "flui-semantics",
+                "flui-view",
+            ],
+        ),
+        ("flui-localizations", &["flui"]),
+    ];
+    for (target, admitted) in frozen {
+        let admitted: BTreeSet<String> = admitted.iter().map(|&name| name.to_owned()).collect();
+        let member = by_name[target];
+        let listed = member
+            .allowed_dependents
+            .clone()
+            .expect("a deleted crate lists its allowed-dependents");
+        assert!(
+            listed.is_subset(&admitted),
+            "{target}: the frozen list only shrinks, but it also names {:?}",
+            listed.difference(&admitted).collect::<Vec<_>>()
+        );
+        let dependents = |dev: bool| -> BTreeSet<String> {
+            members
+                .iter()
+                .filter(|member| !member.is_example_or_tool())
+                .filter(|member| {
+                    member.repo_deps().any(|dep| {
+                        dep.name == target
+                            && (dep.kind == super::DependencyKind::Development) == dev
+                    })
+                })
+                .map(|member| member.name().to_owned())
+                .collect()
+        };
+        assert_eq!(listed, dependents(false), "{target}: allowed-dependents");
+        assert_eq!(
+            member.allowed_dev_dependents.clone(),
+            Some(dependents(true)),
+            "{target}: allowed-dev-dependents"
+        );
+    }
+}
+
 /// `(package, tier, tier-kind)`.
 type Placement = (String, Option<String>, String);
 

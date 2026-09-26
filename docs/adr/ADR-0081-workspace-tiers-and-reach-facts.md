@@ -150,7 +150,8 @@ fold into `flui-foundation`, and the read, navigation and write traits become in
 `allowed-dev-dependents` keys, under a comment that names this record: `flui-tree` admits the
 six crates that name it today (`flui`, `flui-layer`, `flui-objects`, `flui-rendering`,
 `flui-semantics`, `flui-view`) and no dev-dependent, `flui-localizations` admits only `flui`.
-The lists only shrink. ADR-0041's "Localization direction is locked" paragraph no
+The lists only shrink: a test in `tools/xtask` pins each one to the crates that depend on it now,
+within the set above. ADR-0041's "Localization direction is locked" paragraph no
 longer applies: nothing in the catalog tiers depends on a localization crate.
 
 ### 2. Reach facts are a gate over the resolved graph
