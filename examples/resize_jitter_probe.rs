@@ -213,25 +213,26 @@ mod appkit_resize_jitter_probe {
     /// and immediately before `NSApplication::run`.
     fn setup_and_run(owner: flui_platform::OwnerPlatform, stale: Arc<AtomicUsize>) {
         let (first_w, first_h) = SIZES[0];
-        let window = match owner.open_window(flui_platform::WindowOptions {
-            title: "FLUI resize-jitter probe".to_string(),
-            size: Size::new(px(first_w as f32), px(first_h as f32)),
-            // Resizable, unlike the other AppKit probes: this one exists to
-            // change the window's size, so a non-resizable window would make
-            // the platform refuse the very operation under test.
-            resizable: true,
-            visible: true,
-            decorated: true,
-            min_size: None,
-            max_size: None,
-            ..Default::default()
-        }) {
-            Ok(pending) => match pending.try_ready() {
-                Ok(window) => window,
-                Err(error) => fatal(format!("the window was not ready: {error:?}")),
-            },
-            Err(error) => fatal(format!("open_window was refused: {error:?}")),
-        };
+        let window: Arc<dyn PlatformWindow> =
+            match owner.open_window(flui_platform::WindowOptions {
+                title: "FLUI resize-jitter probe".to_string(),
+                size: Size::new(px(first_w as f32), px(first_h as f32)),
+                // Resizable, unlike the other AppKit probes: this one exists to
+                // change the window's size, so a non-resizable window would make
+                // the platform refuse the very operation under test.
+                resizable: true,
+                visible: true,
+                decorated: true,
+                min_size: None,
+                max_size: None,
+                ..Default::default()
+            }) {
+                Ok(pending) => match pending.try_ready() {
+                    Ok(window) => window,
+                    Err(error) => fatal(format!("the window was not ready: {error:?}")),
+                },
+                Err(error) => fatal(format!("open_window was refused: {error:?}")),
+            };
 
         // `Renderer::new` takes ownership of an owned handle source; going
         // through `Arc<dyn PlatformWindow>` is the caller shape its own doc
