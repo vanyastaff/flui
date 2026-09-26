@@ -849,6 +849,15 @@ fn the_self_test_reports_exactly_the_planted_findings() {
 }
 
 #[test]
+fn the_self_test_counts_a_repeated_finding() {
+    let refused = || ("low".to_owned(), "high".to_owned(), "refused");
+    let (missed, extra) = super::multiset_diff(vec![refused()], vec![refused(), refused()]);
+    assert_eq!((missed, extra), (vec![], vec![refused()]));
+    let (missed, extra) = super::multiset_diff(vec![refused(), refused()], vec![refused()]);
+    assert_eq!((missed, extra), (vec![refused()], vec![]));
+}
+
+#[test]
 fn a_planted_import_in_the_real_widgets_tree_is_refused() {
     let root = util::repo_root();
     let manifest: toml::Table = toml::from_str(
