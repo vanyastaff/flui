@@ -1,10 +1,12 @@
 # FLUI design
 
 - **Status:** Proposed. The ADRs this folder relies on (ADR-0081 to ADR-0097) are `Proposed`,
-  except ADR-0081, accepted in part on 2026-09-26: its tiers, `order`, direction rule,
+  except two accepted in part on 2026-09-26. ADR-0081: its tiers, `order`, direction rule,
   `edge-exceptions` and `tier-kind` declarations are implemented and checked by
-  `cargo xtask workspace`; nothing else described here is implemented. The owner answered the
-  open questions on 2026-09-25; the ADRs and this folder carry those answers.
+  `cargo xtask workspace`. ADR-0082: `flui-platform-api` exists and holds the capability traits
+  and the window and input vocabulary, and only `flui-app` depends on `flui-platform`. Nothing
+  else described here is implemented. The owner answered the open questions on 2026-09-25; the
+  ADRs and this folder carry those answers.
 - **Date:** 2026-09-25
 - **Baseline:** `main` at `cab06137d`
 
@@ -79,7 +81,7 @@ first behaviour it decides; the older ADRs it amends or supersedes get their bac
 | ADR | Decision |
 |---|---|
 | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) | Workspace tiers, reach facts, stability kinds, feature policy and the B0 exit |
-| [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` |
+| [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` (accepted in part: the first move; `PlatformWindow`, `Send` removal and deletions remain proposed) |
 | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) | One frame transaction lives in `flui-runtime` above `flui-widgets` |
 | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) | Platform capabilities are an open, typed set in two classes (core-required backend methods, optional plugins) behind one door |
 | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) | The reactive graph is realm-owned, read through `ReadScope`, and extracted only with a second consumer |

@@ -4,6 +4,9 @@
 - **Date:** 2026-07-17
 - **Absorbs:** ADR-0032, ADR-0033
 - **Superseded in part by:** ADR-0078 (capability acquisition)
+- **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§2: `PlatformTextInput`
+  now lives in `flui-platform-api`, re-exported at its old `flui-platform` path; its contract is
+  unchanged)
 
 ## Context
 

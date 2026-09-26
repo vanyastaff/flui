@@ -4,8 +4,7 @@
 //! (`docs/FOUNDATIONS.md`); its haptics residue becomes a capability trait
 //! here, following the identical template `PlatformTextInput`'s module doc
 //! promised: [`PlatformHaptics`] is reached through
-//! [`PlatformWindow::haptics`](super::window::PlatformWindow::haptics) — a
-//! fallible accessor returning `Option<Arc<dyn _>>`, not a method bolted
+//! `flui_platform::PlatformWindow::haptics` — a fallible accessor returning `Option<Arc<dyn _>>`, not a method bolted
 //! directly onto `PlatformWindow` with a panicking/no-op default. A backend
 //! with no haptic hardware (desktop winit; a minimal future embedder)
 //! returns `None` from the accessor instead of every `PlatformWindow`
@@ -13,7 +12,7 @@
 //!
 //! # One `perform(enum)` method, not eight discrete methods
 //!
-//! [`PlatformTextInput`](super::text_input::PlatformTextInput) exposes one
+//! [`PlatformTextInput`](crate::PlatformTextInput) exposes one
 //! method per composition control (`set_ime_allowed`,
 //! `set_ime_cursor_area`) because those controls are semantically distinct
 //! operations with different argument shapes. Haptics is different: every
@@ -29,9 +28,9 @@
 //!
 //! # Per-window, not device-global
 //!
-//! `PlatformHaptics` is reached from [`PlatformWindow`](super::window::PlatformWindow),
-//! not from [`Platform`](super::platform::Platform) as a device-global
-//! capability, for three reasons:
+//! `PlatformHaptics` is reached from `flui_platform::PlatformWindow`, not
+//! from `flui_platform::Platform` as a device-global capability, for three
+//! reasons:
 //!
 //! 1. **Template consistency.** `PlatformTextInput`'s own module doc commits
 //!    `PlatformSystemChrome`/`PlatformHaptics` to "the same template" —

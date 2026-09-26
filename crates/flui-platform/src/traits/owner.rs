@@ -38,8 +38,7 @@ use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
     Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformCapabilities, PlatformDisplay,
-    PlatformExecutor, PlatformWindow, WindowEvent, WindowId, WindowOptions,
-    window::WindowAppearance,
+    PlatformExecutor, PlatformWindow, WindowAppearance, WindowEvent, WindowId, WindowOptions,
 };
 use crate::data_transfer::DataTransferSource;
 use crate::error::PlatformError;

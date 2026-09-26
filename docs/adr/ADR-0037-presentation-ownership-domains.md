@@ -5,6 +5,8 @@
 - **Supersedes:** ADR-0030 in part — its original text-input ownership (process-global
   registry, opaque window handle, application IME bridge), since removed from that record
 - **Superseded in part by:** ADR-0078 (capability acquisition)
+- **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the
+  `interaction -> platform` edge becomes `interaction -> platform-api`)
 
 ## Context
 

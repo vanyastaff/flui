@@ -3,8 +3,8 @@
 //! [`PlatformAccessibility`] is reached through
 //! [`PlatformWindow::accessibility`](super::window::PlatformWindow::accessibility),
 //! the same fallible `Option<Arc<dyn _>>` discovery used by
-//! [`PlatformTextInput`](super::text_input::PlatformTextInput) (ADR-0030) and
-//! [`PlatformHaptics`](super::haptics::PlatformHaptics) (ADR-0031). A backend
+//! [`PlatformTextInput`](crate::traits::PlatformTextInput) (ADR-0030) and
+//! [`PlatformHaptics`](crate::traits::PlatformHaptics) (ADR-0031). A backend
 //! with no accessibility integration returns `None` rather than every
 //! `PlatformWindow` implementor inheriting methods it cannot honor.
 //!

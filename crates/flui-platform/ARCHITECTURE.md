@@ -4,6 +4,17 @@ Per-crate ledger for architecture decisions that span more than one module in
 this crate. Partial: this file exists for the `## Mapping
 decisions` entries below; a full crate architecture writeup is deferred.
 
+The contracts this crate's backends implement — `PlatformTextInput`,
+`PlatformHaptics`, `PlatformDisplay`, `Clipboard`, the `data_transfer`
+transport and the window and input vocabulary — live in `flui-platform-api`
+(ADR-0082) and are re-exported here at their old paths (`flui_platform::X`,
+`flui_platform::traits::X`, `flui_platform::data_transfer`), so a backend or
+`flui-app` names them as before. What stays here is what names an OS stack,
+AccessKit or tokio: `Platform`, `PlatformWindow`, the owner-thread capability,
+`PlatformAccessibility` and every backend. Only `flui-app` may depend on this
+crate (`allowed-dependents`); a crate that needs a capability trait depends on
+`flui-platform-api` instead.
+
 ---
 
 ## Mapping decisions

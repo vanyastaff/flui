@@ -2129,7 +2129,7 @@ dependencies = [
  "dpi",
  "flui-foundation",
  "flui-interaction",
- "flui-platform",
+ "flui-platform-api",
  "flui-testing",
  "flui-types",
  "parking_lot",
@@ -2283,6 +2283,7 @@ dependencies = [
  "dispatch2",
  "dpi",
  "flui-foundation",
+ "flui-platform-api",
  "flui-types",
  "keyboard-types",
  "libc",
@@ -2305,6 +2306,17 @@ dependencies = [
  "web-time",
  "windows 0.62.2",
  "winit",
+]
+
+[[package]]
+name = "flui-platform-api"
+version = "0.2.0-dev"
+dependencies = [
+ "flui-foundation",
+ "flui-types",
+ "parking_lot",
+ "thiserror 2.0.20",
+ "ui-events",
 ]
 
 [[package]]
@@ -2501,7 +2513,7 @@ dependencies = [
  "flui-interaction",
  "flui-objects",
  "flui-painting",
- "flui-platform",
+ "flui-platform-api",
  "flui-rendering",
  "flui-scheduler",
  "flui-testing",

@@ -6,13 +6,14 @@
 resolver = "3"
 members = [
     # === Phase 1: Foundation Layer ===
-    "crates/flui-geometry",   # Geometry primitives (split from flui-types)
-    "crates/flui-types",      # Base types with Unit system (ACTIVE)
-    "crates/flui-foundation", # Foundation types and utilities (ACTIVE)
-    "crates/flui-macros",     # Proc-macros (view, diagnostics, and animation derives)
-    "crates/flui-log",        # Composition-only cross-platform tracing backend (ACTIVE)
-    "crates/flui-tree",       # Tree abstractions (ACTIVE)
-    "crates/flui-platform",   # Platform abstraction (ACTIVE)
+    "crates/flui-geometry",     # Geometry primitives (split from flui-types)
+    "crates/flui-types",        # Base types with Unit system (ACTIVE)
+    "crates/flui-foundation",   # Foundation types and utilities (ACTIVE)
+    "crates/flui-macros",       # Proc-macros (view, diagnostics, and animation derives)
+    "crates/flui-log",          # Composition-only cross-platform tracing backend (ACTIVE)
+    "crates/flui-tree",         # Tree abstractions (ACTIVE)
+    "crates/flui-platform-api", # Platform contracts: capability traits, window/input vocabulary
+    "crates/flui-platform",     # Platform abstraction (ACTIVE)
 
     # === Phase 2: Core Framework ===
     "crates/flui-painting",    # Painting primitives (ACTIVE)
@@ -205,6 +206,11 @@ flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
 # Sits above flui-widgets, below flui-app, and is only ever a *dev*-dependency of
 # a shipped library: a normal edge would link the test driver into production.
 flui-testing = { path = "crates/flui-testing", version = "=0.2.0-dev" }
+
+# PLATFORM CONTRACTS — the capability traits and the window/input vocabulary,
+# with no OS backend (ADR-0082). Framework crates that name a platform
+# contract depend on this; only composition roots depend on flui-platform.
+flui-platform-api = { path = "crates/flui-platform-api", version = "=0.2.0-dev" }
 
 # ERROR HANDLING - Used everywhere
 thiserror = "2.0"

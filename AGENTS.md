@@ -42,14 +42,16 @@ now and expensive once consumers exist, so fix a bad shape instead of working ar
 
 ## Codebase map
 
-27 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
+28 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
 declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtask workspace`);
 `docs/crates.md` is the readable version. Bottom to top:
 
 - **Values & primitives** — `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`
-  (View derives).
-- **Substrate** — `flui-tree` (tree traits), `flui-platform` (windows, input, IME, clipboard;
-  every `windows::*`/`objc2::*` type stays inside it), `flui-scheduler` (frame phases),
+  (View derives), `flui-platform-api` (platform contracts: capability traits and window/input
+  vocabulary, no OS code).
+- **Substrate** — `flui-tree` (tree traits), `flui-platform` (the backends behind those
+  contracts: windows, input, IME, clipboard; every `windows::*`/`objc2::*` type stays inside it;
+  only `flui-app` depends on it), `flui-scheduler` (frame phases),
   `flui-painting` (records into a `DisplayList`), `flui-interaction` (event routing, gestures),
   `flui-assets`, `flui-log`.
 - **Compositing** — `flui-layer`, `flui-semantics`, `flui-animation`.
@@ -141,7 +143,7 @@ memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only c
 | No `println!`/`eprintln!` in `flui-foundation`/`flui-tree`/`flui-macros` | clippy `print_stdout`/`print_stderr` |
 | No `From<f32>` for `flui-geometry` unit wrappers | `compile_fail` doctests in `flui-geometry` |
 | No bare `unwrap()` in production; by convention `expect("BUG: <invariant>")` for internal invariants, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | `clippy::unwrap_used`; the conventions are review |
-| Crate layering (a normal or build dependency points to a lower tier, or a smaller `order` in the same tier, unless the dependent lists it in `edge-exceptions` with the ADR that removes it; and, until `layer` is removed, to the same layer or lower — ADR-0081); no framework crate but `flui-app`, `flui-cli` and the facade links `flui-log`; none but `flui-localizations`, `flui-app` and the facade depends on Material or Cupertino, in any form (ADR-0028); manifests inherit the workspace keys and lints; no unreachable test file; unique ADR numbers | `cargo xtask workspace` (`[package.metadata.flui]` in each manifest) |
+| Crate layering (a normal or build dependency points to a lower tier, or a smaller `order` in the same tier, unless the dependent lists it in `edge-exceptions` with the ADR that removes it; and, until `layer` is removed, to the same layer or lower — ADR-0081); no framework crate but `flui-app`, `flui-cli` and the facade links `flui-log`; none but `flui-app` depends on `flui-platform` (ADR-0082); none but `flui-localizations`, `flui-app` and the facade depends on Material or Cupertino, in any form (ADR-0028); manifests inherit the workspace keys and lints; no unreachable test file; unique ADR numbers | `cargo xtask workspace` (`[package.metadata.flui]` in each manifest) |
 | No dependency that no code uses, no test-only dependency in `[dependencies]`, no `[workspace.dependencies]` entry nothing inherits (an optional dependency, or one a feature names, is only warned about); licenses, sources and banned crates per `deny.toml`, including crates std now replaces (`once_cell`, `cfg-if`, …); RustSec advisories | `cargo xtask deps` (cargo-shear, cargo-deny; CI's `deps` job) |
 | Links from the non-archival markdown into the checkout resolve without climbing out of it: files, `#heading` anchors, and this repository's own `main` URLs | `cargo xtask docs-links` (lychee, offline), part of `cargo xtask checks` |
 
@@ -159,7 +161,7 @@ the history.
 |--------|---------------|
 | **Render object** (`RenderBox`/`RenderSliver`) | Implement in `flui-objects` (protocol in `flui-rendering`) → register in `RENDER_OBJECT_TYPES` → `harness_*` tests in `render_object_harness` → note a Flutter divergence in `## Mapping decisions` |
 | **Widget** | `View`/`ViewState` in `flui-widgets` or the facade, backed by a render object → `SemanticsConfiguration` for assistive tech → a test that fails without it |
-| **Platform capability** (a new handle) | Backend in `flui-platform` with no platform types leaking out → a method on `LifecycleContext`, not `BuildContext`, so `build` cannot reach it → a test that fails without it → ADR if it changes a cross-crate contract |
+| **Platform capability** (a new handle) | Trait in `flui-platform-api`, backend in `flui-platform` with no platform types leaking out → a method on `LifecycleContext`, not `BuildContext`, so `build` cannot reach it → a test that fails without it → ADR if it changes a cross-crate contract |
 | **Crate** | A workspace `members` entry and `[package.metadata.flui]` `tier`, `tier-kind`, `order` and `layer = N` (names: root `[workspace.metadata.flui] tiers` and `layers`); `cargo xtask workspace` checks the rest. Why a crate must be a layer: `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
 | **Example using `material`/`cupertino`** | `[[example]] required-features = [...]` (`cargo xtask facade-combos` relies on it) |
 

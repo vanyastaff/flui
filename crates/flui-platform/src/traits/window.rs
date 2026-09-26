@@ -9,102 +9,13 @@ use std::{any::Any, sync::Arc};
 use cursor_icon::CursorIcon;
 use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
 
-use super::{
-    accessibility::PlatformAccessibility,
-    display::PlatformDisplay,
-    haptics::PlatformHaptics,
-    input::{DispatchEventResult, Modifiers, PlatformInput},
-    platform::WindowId,
-    text_input::PlatformTextInput,
+use flui_platform_api::{
+    CursorError, DispatchEventResult, Modifiers, PlatformDisplay, PlatformHaptics, PlatformInput,
+    PlatformTextInput, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowExecutionState, WindowId, WindowShowError,
 };
 
-/// Native execution eligibility, independent of focus, visibility and GPU surface readiness.
-///
-/// `Detached` is a reversible native attachment observation. Terminal window
-/// closure is a separate lifetime event and cannot be reversed with this state.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum WindowExecutionState {
-    /// The platform permits UI execution; this does not guarantee a usable GPU surface.
-    #[default]
-    Running,
-    /// UI execution is suspended, even if stale native focus/visibility remain true.
-    Suspended,
-    /// The native presentation is detached, but may subsequently attach again.
-    Detached,
-}
-
-/// Failure to show an existing window without changing its display mode.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum WindowShowError {
-    /// This backend cannot show and request focus for an existing window.
-    #[error("showing an existing window is unsupported")]
-    Unsupported,
-    /// The native window has closed.
-    #[error("the window is closed")]
-    Closed,
-    /// A native operation failed.
-    #[error("could not show the window: {message}")]
-    Native {
-        /// Native failure description.
-        message: String,
-    },
-}
-
-// ==================== Value Types ====================
-
-/// Window appearance (light/dark theme)
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub enum WindowAppearance {
-    /// Light appearance (default)
-    #[default]
-    Light,
-    /// Dark appearance
-    Dark,
-    /// Vibrant light (macOS-style translucent light)
-    VibrantLight,
-    /// Vibrant dark (macOS-style translucent dark)
-    VibrantDark,
-}
-
-/// Window background appearance (backdrop material)
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub enum WindowBackgroundAppearance {
-    /// Opaque background (default)
-    #[default]
-    Opaque,
-    /// Transparent background
-    Transparent,
-    /// Blurred background
-    Blurred,
-    /// Windows 11 Mica backdrop
-    MicaBackdrop,
-    /// Windows 11 Mica Alt backdrop
-    MicaAltBackdrop,
-}
-
-/// Window bounds state (windowed, maximized, or fullscreen)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum WindowBounds {
-    /// Normal windowed mode with specific bounds
-    Windowed(Bounds<Pixels>),
-    /// Maximized with bounds
-    Maximized(Bounds<Pixels>),
-    /// Fullscreen with bounds
-    Fullscreen(Bounds<Pixels>),
-}
-
-/// Failure to apply a cursor to one exact platform window.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum CursorError {
-    /// The backend has no pointer-cursor facility for this window.
-    #[error("this platform window does not support pointer cursors")]
-    Unsupported,
-    /// The backend rejected a concrete cursor update.
-    #[error("platform cursor update failed: {0}")]
-    Backend(String),
-}
+use super::accessibility::PlatformAccessibility;
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 #[cfg(feature = "winit-backend")]

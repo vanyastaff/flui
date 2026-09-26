@@ -1,0 +1,42 @@
+[package]
+publish = ["crates-io"]
+name = "flui-platform-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Platform contracts for FLUI: capability traits and the window, input and data-transfer vocabulary, with no OS backend"
+documentation = "https://docs.rs/flui-platform-api"
+keywords = ["gui", "platform", "input", "ime", "flui"]
+categories = ["gui"]
+
+# Dev-only files kept out of the published archive:
+exclude = ["/ARCHITECTURE.md"]
+
+[lints]
+workspace = true
+
+[dependencies]
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+# `DataTransferId`, the generational id of the ADR-0038 transport.
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+# The one-shot slot inside `TransferRequest`.
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+# The W3C pointer/keyboard vocabulary `PlatformInput` wraps. Re-exporting its
+# types is ADR-0089 debt: own types replace them before the first release.
+ui-events = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+
+# Layer 1: depends only on `flui-types` (layer 0) and `flui-foundation`
+# (layer 1); its dependents are `flui-interaction`, `flui-platform` and
+# `flui-widgets`. The contracts sit below every backend (ADR-0082 §1).
+[package.metadata.flui]
+layer = 1
+tier = "C"
+tier-kind = "stable"
+order = 1

@@ -28,14 +28,14 @@ decisions add up to is in [architecture.md](architecture.md); what still needs t
   date. "Confirmed" means the decision stands as written; "changed" means the entry and its ADR
   now say what the owner decided.
 
-None of these is an accepted decision, except the part of D8 that ADR-0081 accepted. The panel's answers are recommendations and the owner's
+None of these is an accepted decision, except the part of D8 that ADR-0081 accepted and D1 in part (below). The panel's answers are recommendations and the owner's
 answers settle the open questions; acceptance still happens ADR by ADR.
 
 ## Summary
 
 | # | Decision | Status | ADR |
 |---|---|---|---|
-| D1 | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` | Changed by verification (split into a mechanical move and a per-backend `Send` removal) | [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) |
+| D1 | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` | Changed by verification (split into a mechanical move and a per-backend `Send` removal); **accepted in part** (2026-09-26): the capability traits and window/input vocabulary moved, `PlatformWindow` follows in a second move | [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) |
 | D2 | One frame transaction in `flui-runtime`, above `flui-widgets` | Changed by verification (test modules move; transaction defined by type); owner confirmed it in B0 | [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) |
 | D3 | An open, typed capability set registered by plugins | Verified (seam shape); registration specified by verification; **changed by the owner** (two classes, core-required and optional, behind one door) | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) |
 | D4 | The reactive graph is realm-owned and read through `ReadScope` | Changed by verification and by owner decision O5; owner confirmed removing the `signals` feature | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md), [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) |

@@ -1,67 +1,37 @@
 //! Input event types for cross-platform support
 //!
-//! This module re-exports W3C-compliant event types from `ui-events` crate
-//! and provides platform-specific utilities for event conversion.
+//! This module re-exports W3C-compliant event types from the `ui-events`
+//! crate and provides the conversion helpers backends use to fill them.
 //!
-//! # Design Philosophy (Option A: W3C Events)
+//! # Design
 //!
-//! 1. **W3C Compliant** - Use standard `ui-events` types everywhere
-//! 2. **Platform Agnostic** - Same types work on desktop, mobile, and web
-//! 3. **No Duplication** - Platform converts native events → ui-events
-//! 4. **Type Safe** - Concrete types (no generics in public API)
-//!
-//! # Architecture
+//! 1. **W3C compliant** - standard `ui-events` types everywhere
+//! 2. **Platform agnostic** - the same types work on desktop, mobile, and web
+//! 3. **No duplication** - a backend converts native events into these types
+//! 4. **Concrete** - no generics in the public API
 //!
 //! ```text
 //! OS Events (Win32, Wayland, Cocoa)
 //!     ↓
-//! Platform Layer (converts to logical pixels)
+//! Platform backend (converts to logical pixels)
 //!     ↓
 //! ui-events types (W3C PointerEvent, KeyboardEvent)
 //!     ↓
 //! flui_interaction (gesture recognition)
 //! ```
 //!
-//! # Migration from GPUI-style events
-//!
-//! This file previously contained custom `PointerEvent`, `Velocity`, etc.
-//! Those have been removed to avoid duplication with `ui-events` crate.
-//!
-//! **Before (custom types):**
-//! ```rust,ignore
-//! pub struct PointerEvent {
-//!     pub position: Point<Pixels>,
-//!     pub delta: Point<Pixels>,  // ❌ Wrong! Should be PixelDelta
-//!     // ...
-//! }
-//! ```
-//!
-//! **After (W3C types):**
-//! ```rust,ignore
-//! use ui_events::pointer::PointerEvent;  // ✅ Standard W3C type
-//! ```
-
-// ============================================================================
-// Re-exports from ui-events (W3C compliant)
-// ============================================================================
-
-// ============================================================================
-// Platform-specific utilities
-// ============================================================================
-use std::collections::VecDeque;
-// web-time: std::time re-export on native; performance.now()-backed on
-// wasm32, where std::time::Instant::now() panics — this module is in the
-// wasm-check set and timestamps must be mintable there.
-use web_time::Instant;
+//! The `ui-events` re-exports are ADR-0089 debt: this crate's own types
+//! replace them before its first release.
 
 use flui_foundation::DataTransferId;
 use flui_types::geometry::{Offset, PixelDelta, Pixels, Point};
-/// Re-export keyboard types from keyboard-types crate
-pub use keyboard_types::{Key, Modifiers};
 /// Re-export scroll events
 pub use ui_events::ScrollDelta;
 /// Re-export W3C keyboard event from ui-events
 pub use ui_events::keyboard::KeyboardEvent;
+/// Re-export of the `keyboard-types` key and modifier vocabulary, through
+/// `ui-events` (which re-exports that crate whole).
+pub use ui_events::keyboard::{Key, Modifiers};
 /// Re-export W3C pointer events
 pub use ui_events::pointer::{
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerType, PointerUpdate,
@@ -143,7 +113,7 @@ pub enum PlatformInput {
     Keyboard(KeyboardEvent),
 
     /// IME composition/commit event. See [`flui_types::ImeEvent`] for the
-    /// vocabulary and [`crate::traits::PlatformTextInput`] for the
+    /// vocabulary and [`crate::PlatformTextInput`] for the
     /// window-side capability this pairs with.
     Ime(flui_types::ImeEvent),
 
@@ -289,103 +259,6 @@ pub fn delta_offset_from_coords(dx: f32, dy: f32) -> Offset<PixelDelta> {
     Offset::new(PixelDelta(dx), PixelDelta(dy))
 }
 
-// ============================================================================
-// Velocity tracking (moved from custom implementation)
-// ============================================================================
-
-/// Velocity tracker for gesture recognition
-///
-/// **Note:** This used to be a custom implementation. Now it should use
-/// types from `flui_types::gestures::Velocity`. We keep this minimal
-/// version for platform layer only.
-///
-/// For full velocity tracking, use
-/// `flui_interaction::processing::VelocityTracker`.
-#[derive(Debug, Clone)]
-pub struct BasicVelocityTracker {
-    samples: VecDeque<VelocitySample>,
-    max_samples: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct VelocitySample {
-    timestamp: Instant,
-    position: Offset<Pixels>,
-}
-
-impl BasicVelocityTracker {
-    /// Create a new velocity tracker
-    pub fn new() -> Self {
-        Self {
-            samples: VecDeque::with_capacity(20),
-            max_samples: 20,
-        }
-    }
-
-    /// Add a sample
-    pub fn add_sample(&mut self, timestamp: Instant, position: Offset<Pixels>) {
-        if self.samples.len() >= self.max_samples {
-            self.samples.pop_front(); // O(1) instead of Vec::remove(0) O(n)
-        }
-        self.samples.push_back(VelocitySample {
-            timestamp,
-            position,
-        });
-    }
-
-    /// Calculate velocity (pixels per second)
-    pub fn velocity(&self) -> Option<Offset<Pixels>> {
-        use flui_types::geometry::px;
-
-        if self.samples.len() < 2 {
-            return None;
-        }
-
-        let first = self.samples.front()?;
-        let last = self.samples.back()?;
-
-        let dt = last.timestamp.duration_since(first.timestamp);
-        if dt.as_secs_f32() < 0.001 {
-            return None;
-        }
-
-        let dx = last.position.dx.0 - first.position.dx.0;
-        let dy = last.position.dy.0 - first.position.dy.0;
-        let dt_secs = dt.as_secs_f32();
-
-        Some(Offset::new(px(dx / dt_secs), px(dy / dt_secs)))
-    }
-
-    /// Clear samples
-    pub fn clear(&mut self) {
-        self.samples.clear();
-    }
-}
-
-impl Default for BasicVelocityTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ============================================================================
-// Platform helpers
-// ============================================================================
-
-/// Timestamp provider for platform events
-pub trait TimestampProvider {
-    /// Current instant used to stamp platform input events
-    fn now() -> Instant {
-        Instant::now()
-    }
-}
-
-/// Default timestamp provider using the wasm-safe monotonic clock
-#[derive(Debug)]
-pub struct SystemTimestamp;
-
-impl TimestampProvider for SystemTimestamp {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,24 +286,5 @@ mod tests {
         let delta = delta_offset_from_coords(5.0, -3.0);
         assert_eq!(delta.dx.0, 5.0);
         assert_eq!(delta.dy.0, -3.0);
-    }
-
-    #[test]
-    fn test_velocity_tracker() {
-        let mut tracker = BasicVelocityTracker::new();
-        let t0 = Instant::now();
-
-        tracker.add_sample(t0, offset_from_coords(0.0, 0.0));
-
-        // Simulate 100ms later, moved 50 pixels
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        let t1 = Instant::now();
-        tracker.add_sample(t1, offset_from_coords(50.0, 0.0));
-
-        if let Some(vel) = tracker.velocity() {
-            // Should be ~500 pixels/sec (50px in 0.1s)
-            use flui_types::geometry::px;
-            assert!(vel.dx > px(400.0) && vel.dx < px(600.0));
-        }
     }
 }
