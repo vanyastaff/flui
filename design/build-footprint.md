@@ -26,8 +26,13 @@ directory, never the shared checkout:
 ```powershell
 $env:CARGO_BUILD_JOBS = "8"
 $env:CARGO_TARGET_DIR = "<worktree>\target"      # a fresh directory per lever
-cargo nextest run --workspace --no-run            # the cargo xtask test-equivalent build
+cargo nextest run --workspace --no-run            # every workspace test target, default features
 ```
+
+This is not `cargo xtask test`'s build: that one uses `TEST_SCOPE` (`--exclude flui-platform
+--lib --bins --tests --features flui/cupertino,flui/localizations`), a different package set and
+feature resolution. The duplicate-builds table below measures the difference (+0.35 GB on top of
+this baseline).
 
 The profile is the workspace's own (`Cargo.toml:788-831`): `[profile.dev]` with
 `incremental = true` and `debug = "line-tables-only"`, dependencies at `opt-level = 3` and
@@ -130,7 +135,11 @@ What it means:
 ## Levers
 
 Each lever against the baseline, one at a time, in a fresh target directory where it changes
-the fingerprint.
+the fingerprint. Not every lever the plan lists was measured: sccache and cargo-sweep were not
+run, the shared target directory is rejected on soundness without a run, and test-target
+consolidation is estimated from binary sizes. Peak memory is the whole process tree at 8 jobs,
+not per compiling job. These gaps are listed for the owner as C8 in
+[ci.md §9](ci.md#9-open-points-for-the-owner).
 
 | Lever | How measured | `target/` | Incremental | PDBs | Cold (s, noisy) | Warm workspace edit (s, noisy) | Peak | Verdict |
 |---|---|---:|---:|---:|---:|---:|---:|---|
@@ -138,7 +147,7 @@ the fingerprint.
 | `CARGO_INCREMENTAL=0` | same build, env set | **4.06 GB** | 0 | 1.69 GB | 477.2 | 88.8, 119.0 | 3.7 GB | **kept for one-shot builds** (CI, reviews, agents that build once); rejected as the local default |
 | `debug = false` for workspace crates (`CARGO_PROFILE_DEV_DEBUG=false CARGO_PROFILE_TEST_DEBUG=false`) | same build, env set | 7.32 GB | 4.13 GB | 0.88 GB | 509.1 | 36.4, 31.1 | 4.6 GB | rejected as a default: panics lose file and line; available per run |
 | `split-debuginfo` = `off` / `packed` / `unpacked` | `cargo test --no-run` of a scratch library crate, one target directory each | — | — | identical | — | — | — | **rejected: no effect on MSVC**. Executable 740,864 B and PDB 3,207,168 B for all three values; MSVC always writes a PDB (`debug = false` still wrote 3,035,136 B) |
-| One feature resolution for test builds (`TEST_SCOPE` everywhere, subsets by nextest filterset) | the duplicate-builds table | +0.35 GB once, then +0.15 GB per two edits | — | — | — | 46.3, 31.7 | 2.9-3.2 GB | **kept**: avoids +1.8-3.3 GB and 65-136 s per new package set |
+| One feature resolution for test builds (`TEST_SCOPE`, subsets by nextest filterset) | the duplicate-builds table | +0.35 GB once, then +0.15 GB per two edits | — | — | — | 46.3, 31.7 | 2.9-3.2 GB | **kept for CI's fast lane**, whose cache holds a workspace build: avoids +1.8-3.3 GB and 65-136 s per new package set. Local use waits for the cold comparison (R1) |
 | Consolidating per-file test targets | binary list and sizes | — | — | — | — | — | — | **mostly done already**; see below |
 | nextest archive | `cargo nextest archive --workspace --archive-file ws.tar.zst` on the `CARGO_INCREMENTAL=0` target | archive 114.1 MB, 137 files, 3.7 s to write | | | | | | not a disk lever; rejected for CI in [ci.md](ci.md#4-build-footprint-levers-adopted-in-ci) |
 | sccache | — | | | | | | | **not measured**: not installed on the host, and not installed for this study. `Cargo.toml:800-804` already records that sccache refuses incremental builds and crashed rustc on Windows with incremental on |
@@ -196,9 +205,9 @@ below is the measured incremental share, not a before-and-after.
 
 | # | Recommendation | Files | Effect (measured unless marked) |
 |---|---|---|---|
-| R1 | **One feature resolution for test builds.** `cargo xtask check-changed` and CI's fast lane build `TEST_SCOPE` (`tools/xtask/src/tasks.rs:50-61`) and narrow the run with `-E 'package(a) \| package(b) ...'` over the scope `cargo xtask affected` computes | `tools/xtask/src/change_scope/lane_args.rs:327-345` (`test_args`), `tools/xtask/src/tasks/check_changed.rs:139-145` | avoids +1.8-3.3 GB and 65-136 s for each new package set; warm edits unchanged (28-46 s) |
+| R1 | **One feature resolution for test builds, in CI's fast lane.** It builds `TEST_SCOPE` (`tools/xtask/src/tasks.rs:50-61`) and narrows the run with `-E 'package(a) \| package(b) ...'` over the scope `cargo xtask affected` computes. `cargo xtask check-changed` keeps its scoped build for now: every row of the duplicate-builds table ran after a workspace build, which CI's cache always provides but a fresh worktree does not, and a cold scoped build against a cold `TEST_SCOPE` build (each in an empty target directory) was not measured. It follows only if that comparison favours it | `tools/xtask/src/change_scope/lane_args.rs:327-345` (`test_args`); later, if measured, `tools/xtask/src/tasks/check_changed.rs:139-145` | with a workspace build present: avoids +1.8-3.3 GB and 65-136 s for each new package set; warm edits unchanged (28-46 s). Cold: not measured |
 | R2 | Keep `incremental = true` for local edit loops; set `CARGO_INCREMENTAL=0` for one-shot builds (a review, an agent's one `check-changed` before a PR) | `docs/testing.md` (guidance) | 9.30 → 4.06 GB; a warm edit is about 2x slower without it |
-| R3 | `CARGO_INCREMENTAL=0` on the nested-cargo commands, and `max-threads = 4` for the `nested-cargo` group | `tests/facade_consumer.rs:95-102`, `crates/flui-cli/tests/cli_create.rs` (the four `Command`s at `:122`, `:186` and after), `.config/nextest.toml` | about −7.6 GB per worktree that runs the full suite (incremental share, not re-run); bounded memory |
+| R3 | `CARGO_INCREMENTAL=0` on the nested-cargo commands. A cap on the `nested-cargo` group is **not** proposed without a run: `.config/nextest.toml:41-43` keeps the group at `max-threads = "num-cpus"` because serializing it was measured slower, cold 713.6 s against 563.1 s and warm 25.9 s against 13.7 s (M1, 8 GB, jobs=6). A partial cap such as 4 was not measured either way; it is worth a run only if a memory limit on the shared host is shown to be hit | `tests/facade_consumer.rs:95-102`, `crates/flui-cli/tests/cli_create.rs` (the four `Command`s at `:122`, `:186` and after) | about −7.6 GB per worktree that runs the full suite (incremental share, not re-run) |
 | R4 | Make the three documents agree on one target per checkout | `docs/testing.md:277-291`, AGENTS.md Gotchas | no disk change; removes the instruction that leads to the unsound setup |
 | R5 | Keep `debug = "line-tables-only"`; do not add `split-debuginfo` or `/DEBUG:NONE` | none | `split-debuginfo` has no effect on MSVC; `debug = false` saves 1.98 GB but drops file:line |
 | R6 | Deleting `target/debug/incremental` (or `cargo sweep --maxsize`) is the one clean-up step worth scripting; a worktree's target goes with the worktree after merge (already the rule) | `docs/testing.md` | frees 55-65 % of a used directory |
@@ -211,9 +220,12 @@ What R1 needs as tests (they belong to the CI implementation, together with [ci.
   `-E 'package(flui) | package(flui-material) | package(flui-web-counter)'`. Fails today: the
   value is `-p flui -p flui-material -p flui-web-counter --lib --bins --tests`
   (`lane_args.rs:327-345`).
-- `check_changed::dry_run_builds_the_test_scope`: `cargo xtask check-changed --dry-run` prints
-  one `cargo nextest run --workspace --exclude flui-platform ... -E` line and no `-p`. Fails today
-  on the same value (the expected dry-run text is pinned at `check_changed.rs:348`).
+- `check-changed` reads the same `test_args` (`check_changed.rs:139-145`), so keeping it scoped
+  means the filterset form goes to a value only the fast lane's GitHub output uses, and the
+  existing dry-run expectation (`check_changed.rs:348`) keeps pinning the scoped `-p` line. If
+  the cold comparison later favours `TEST_SCOPE` locally too, that change adds
+  `check_changed::dry_run_builds_the_test_scope`: the dry run prints one
+  `cargo nextest run --workspace --exclude flui-platform ... -E` line and no `-p`.
 
 After R1 lands, the CI implementation re-measures this table's duplicate-builds rows and the CI fast lane's test
 build time.
