@@ -530,15 +530,16 @@ The known entries, each with its exit:
 |---|---|---|
 | `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:46` | Stays: the one named trampoline cell. |
 | `FONT_SYSTEM` | `crates/flui-painting/src/text_layout/layout.rs:124` | Per-realm `FontContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
-| `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43` | Presentation clock property. |
+| `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43` | Presentation clock property ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). |
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | Subsecond runtime hook ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). |
-| `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Realm-owned GlobalKey scope. |
+| `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Realm-owned GlobalKey scope ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) removes its `ManuallyDrop` form). |
 | `NAVIGATOR_COMMAND_TARGETS` | `crates/flui-widgets/src/navigator/navigator.rs:91` | Router handle from `init_state` ([ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md)). |
-| `AssetRegistry::global` | `crates/flui-assets/src/registry/mod.rs:83` | Realm image-cache handle. |
+| `AssetRegistry::global` | `crates/flui-assets/src/registry/mod.rs:83` | Realm image-cache handle ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). |
 
-The list above is not the allowlist. The allowlist is seeded by the scan itself, in the same
-change that adds the gate, and can only shrink
-([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). Regex estimates never seed it.
+The list above is not the allowlist. The allowlist is the `[package.metadata.flui] globals` key
+of each crate manifest, seeded by the scan itself in the change that added the gate; it can only
+shrink ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). Regex estimates never
+seed it.
 
 ---
 
@@ -1134,7 +1135,7 @@ does not cover each gate they add.
 | Tier direction and in-tier order | `cargo xtask workspace` (tiers) | 11 numbered layers |
 | Transitive absence | `cargo xtask reach` over `cargo metadata`, all facade feature combinations | implemented, green with three seeded `reach-exceptions`, none for `flui-platform` |
 | Core names no official crate | `cargo xtask workspace` | facade `material` and `hot-reload` features |
-| No new process global | `cargo xtask globals`: syn scan of every `static` (atomics included) and `thread_local!`, `#[cfg(test)]` excluded | no gate |
+| No new process global | `cargo xtask globals`: syn scan of every `static` (atomics included), `thread_local!` entry and `static` in FLUI's own macro tokens, `#[cfg(test)]` excluded | gated: 54 entries in 14 manifests, 17 exempt counters |
 | Module direction inside flui-widgets | `cargo xtask module-dag -p flui-widgets` | promised, absent |
 | No upstream type in Stable signatures | `cargo xtask api-closure` over rustdoc JSON, proven first against a planted `pub fn f() -> accesskit::Role` | re-exports of wgpu, accesskit, android-activity |
 | UI state is `!Send` | `assert_not_impl_any!`; clippy `disallowed_types` (`Mutex`, `RwLock`, `DashMap`) in frame-path crates, allowlist for mailboxes | `Send + Sync` bounds on UI traits |

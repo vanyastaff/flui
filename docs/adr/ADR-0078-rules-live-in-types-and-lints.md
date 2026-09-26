@@ -3,9 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-09-23
 - **Amended:** 2026-09-26 — scanners over structured data return under four conditions; see
-  §4 ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)). 2026-09-26 — §4 admits a
-  pattern over prose tokens for a rule about prose (`cargo xtask markers`), and an allowlist
-  exit may be a migration-plan step.
+  §4 ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)); an allowlist entry may also
+  name the ADR that grants it for good ([ADR-0097](ADR-0097-no-process-global-state-gate.md)).
+  2026-09-26 — §4 admits a pattern over prose tokens for a rule about prose
+  (`cargo xtask markers`), and an allowlist exit may be a migration-plan step.
 - **Supersedes:** the capability-acquisition clauses of ADR-0018, ADR-0021, ADR-0030 and
   ADR-0037 (the rule stays, its enforcement moves into the type system); the port methodology
   (`docs/PORT.md`) and its grep gates (`scripts/port-check.sh`,
@@ -116,9 +117,10 @@ only when all four hold:
    `cargo xtask checks` runs the self-test beside the scan.
 4. **Its allowlist is data, not markers.** It lives in the manifests or a data file, is seeded
    by the scan's own first run, names the ADR or migration-plan step whose change removes
-   each entry (the gate checks that it exists), and only shrinks: an entry the scan no
-   longer needs is a finding. No inline comment silences it; inline markers are how the
-   `PORT-CHECK-OK-*` sites reached 396.
+   each entry (the gate checks that it exists), or the ADR that grants it for good, and only
+   shrinks: an entry the scan no longer needs is a finding. A permanent grant names its class,
+   which the scan checks as far as the source allows (ADR-0097's `grant`/`class`). No inline
+   comment silences it; inline markers are how the `PORT-CHECK-OK-*` sites reached 396.
 
 `markers` and `file-length` meet the first condition because neither a type nor a stock lint
 reads comments, and no clippy lint counts lines outside `#[cfg(test)]`
