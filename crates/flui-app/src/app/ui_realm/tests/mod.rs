@@ -381,7 +381,7 @@ fn unroutable_platform_action_requests_are_dropped_at_the_listener() {
     fake.set_active(true);
     // An action with no FLUI counterpart, addressed to a live node.
     fake.request_action(accesskit::ActionRequest {
-        action: accesskit::Action::Expand,
+        action: accesskit::Action::ShowTooltip,
         target_tree: accesskit::TreeId::ROOT,
         target_node: accesskit::NodeId(target.as_u64()),
         data: None,

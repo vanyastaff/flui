@@ -689,7 +689,7 @@ mod tests {
         let outcome = invoke_semantics_action(
             &cell,
             ActionRequest {
-                action: Action::Collapse,
+                action: Action::ShowTooltip,
                 target_tree: TreeId::ROOT,
                 target_node: NodeId(1),
                 data: None,
@@ -698,7 +698,7 @@ mod tests {
 
         assert_matches!(
             outcome,
-            Err(InvokeActionError::UnroutablePlatformAction(action)) if action == Action::Collapse,
+            Err(InvokeActionError::UnroutablePlatformAction(action)) if action == Action::ShowTooltip,
             "the drop must be reported against the action that caused it, so the \
              reader knows which platform request went nowhere",
         );
