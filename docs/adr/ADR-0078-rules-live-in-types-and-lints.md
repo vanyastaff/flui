@@ -106,8 +106,11 @@ only when all four hold:
    choice (§1, §2).
 2. **It reads structured data** — `cargo metadata`, a `syn` AST, a TOML table — never a
    regular expression over source text. A rule about prose itself (process markers) matches
-   its patterns only against the comment, doc and string tokens of Rust and the text events
-   of a Markdown parser, and never uses them to decide code structure.
+   its patterns only against the comment, doc and string tokens of Rust, the snake-case
+   pieces of Rust identifiers (by separate, narrower patterns), the text events of a
+   Markdown parser, and TOML, YAML and WGSL files read whole as text, and never uses them
+   to decide code structure. WGSL is the one source language read whole: its shaders carry
+   no string literals, and a comment reader for it would be a second lexer to keep.
 3. **It has a `--self-test`** that runs it over a planted violation and fails unless exactly
    the planted findings come back, as `wgsl --self-test` and `workspace --self-test` do, and
    `cargo xtask checks` runs the self-test beside the scan.
