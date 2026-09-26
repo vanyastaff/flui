@@ -1,8 +1,8 @@
 # CI design
 
-- **Status:** Proposed; needs the owner's sign-off (the open points are in [§9](#9-open-points-for-the-owner)).
-  Nothing here is implemented; the CI step of the
-  [migration plan](../docs/plans/2026-09-25-architecture-migration-plan.md) implements it.
+- **Status:** Accepted 2026-09-26, with the owner's decisions in [§9](#9-open-points-for-the-owner).
+  Implemented except the rows [§7](#7-migration-steps-each-pr-labelled-full-ci) lists as deferred
+  (jobs whose commands do not exist yet, and the levers that need CI runs to measure).
 - **Date:** 2026-09-26
 - **Baseline:** `main` at `c2ba3ae51`; workflows as of that commit; CI runs from 2026-09-23 to
   2026-09-26.
@@ -171,14 +171,15 @@ skips are a function of `lane` alone.
 | Lane | When | Runs |
 |---|---|---|
 | `docs` | every changed file is documentation | `checks` |
-| `tooling` | only files `checks` covers, or only a standalone crate outside the workspace (today `mode=none`) | `checks`, `deps` |
+| `tooling` | only files `checks` covers, or only a standalone crate outside the workspace (today `mode=none`) | `checks`, `plan`, `deps`, and `standalone` (`cargo check` of each changed standalone crate, C7) when one changed |
 | `fast` | an ordinary PR push whose scope is a set of packages | `checks`, `plan`, `deps`, `fast-lane`, `fast-lane-ios` when `cross_ios` |
 | `wide` | an ordinary PR push whose scope is the whole workspace or needs a heavy-only input (today `heavy_required`, or `mode=full`) | every Linux full job, in parallel; no Windows or macOS job |
 | `full` | push to `main`, `merge_group` | every job in the `wide` set, plus the Windows and macOS jobs of today |
-| `extended` | nightly `schedule`, `workflow_dispatch`, a PR labelled `full-ci` | `full`, plus the platform-heavy jobs §9 adds: `macos-ci`, `test-windows`, `windows-a11y`, `protocol-windows` |
+| `extended` | nightly `schedule`, `workflow_dispatch`, a PR labelled `full-ci` | `full`, plus the platform-heavy jobs §9 adds: `macos-ci`, `test-windows` (implemented); `windows-a11y`, `protocol-windows` (deferred, §7) |
 
-A PR labelled `full-ci` gets exactly one lane: `extended` as proposed, or `full` if the owner
-declines C2. That choice is made in one place, §5's `--event` mapping, and nowhere else. A `v*` tag
+A PR labelled `full-ci` gets exactly one lane: `extended` (C2 accepted). That choice is made in one
+place, §5's `--event` mapping (`Lane::decide` in `tools/xtask/src/change_scope/lane_args.rs`),
+and nowhere else. A `v*` tag
 is not a `ci.yml` event (`ci.yml:49-66` has no tag trigger; tags start only `release.yml`), so no
 lane is keyed on it: a release is checked by `release.yml`'s `release-check` job (§3).
 
@@ -223,25 +224,26 @@ platform-sensitive scope should require it.
 | `deps` advisories | ubuntu | a | ✓ | ✓ | ✓ | blocking in `wide` (it already is for a `Cargo.lock` or `deny.toml` change) |
 | `fast-lane` | ubuntu | ✓ | | | | workspace feature resolution, nextest filterset (§4) |
 | `fast-lane-ios` | macos | ✓ if `cross_ios` | | | | — |
+| `standalone` **(new)** | ubuntu | | | | | tooling lane only, when a standalone crate changed: `cargo check --locked --all-targets` of each (C7) |
 | `clippy` | ubuntu | | ✓ | ✓ | ✓ | — |
-| `test` | ubuntu | | ✓ | ✓ | ✓ | nextest over `cargo xtask test`'s scope (§4) |
+| `test` | ubuntu | | ✓ | ✓ | ✓ | `cargo xtask test` after the all-targets build (§4) |
 | `test-features` | ubuntu | | ✓ | ✓ | ✓ | one feature resolution per crate group (§4) |
 | `live-smoke` | ubuntu | | ✓ | ✓ | ✓ | runs `cargo xtask live-smoke` (§9 row 1) |
 | `bench-compile` | ubuntu | | ✓ | ✓ | ✓ | — |
 | `doc`, `doc-test` | ubuntu | | ✓ | ✓ | ✓ | — |
 | `miri` | ubuntu | | a | a | a | — |
-| `feature-matrix` (shards) | ubuntu | | ✓ | ✓ | ✓ | rebalanced shards (§4) |
+| `feature-matrix` (shards) | ubuntu | | ✓ | ✓ | ✓ | shard count unchanged (§4.3 deferred) |
 | `wasm-check` | ubuntu | | ✓ | ✓ | ✓ | — |
 | `cross-typecheck` | ubuntu | | ✓ | ✓ | ✓ | — |
-| `perf` **(new)** | ubuntu | | a | a | a | §9 row 4; blocking at the B1 exit |
-| `package-check` **(new)** | ubuntu | | ✓ | ✓ | ✓ | §9 row 6, if it does not fit in `checks` |
-| `gpu-test` | windows | | (C3) | ✓ | ✓ | runs `cargo xtask gpu-test` (§9 row 2) |
+| `perf` **(deferred)** | ubuntu | | a | a | a | §9 row 4; blocking at the B1 exit; lands with `cargo xtask perf` |
+| `package-check` **(deferred)** | ubuntu | | ✓ | ✓ | ✓ | §9 row 6, if it does not fit in `checks`; lands with its command |
+| `gpu-test` | windows | | | ✓ | ✓ | runs `cargo xtask gpu-test` (§9 row 2); not in `wide` (C3 declined) |
 | `platform-windows` | windows | | | ✓ | ✓ | — |
-| `cli-macos` | macos | | | ✓ | | folded into `macos-ci` in `extended` |
-| `macos-ci` **(new)** | macos | | | | ✓ | §9 row 3: `cargo xtask ci` + the iOS runner clippy |
-| `test-windows` **(new)** | windows | | | | ✓ | §9 row 12: `cargo xtask test` on Windows |
-| `windows-a11y` **(new)** | windows | | | | a | §9 row 5, advisory until three green runs |
-| `protocol-windows` **(new)** | windows | | | | a | §9 row 7, advisory until B3 |
+| `cli-macos` | macos | | | ✓ | ✓ | stays in `extended` while `macos-ci` is advisory |
+| `macos-ci` **(new)** | macos | | | | a | §9 row 3: `cargo xtask ci` + the iOS runner clippy; advisory until three green runs |
+| `test-windows` **(new)** | windows | | | | a | §9 row 12: `cargo xtask test` on Windows; advisory until three green runs |
+| `windows-a11y` **(deferred)** | windows | | | | a | §9 row 5, after the `manual.yml` trial; advisory until three green runs |
+| `protocol-windows` **(deferred)** | windows | | | | a | §9 row 7, advisory until B3; lands with its command |
 | `ci` | ubuntu | ✓ | ✓ | ✓ | ✓ | expected skips from `lane` |
 | `notify-main-red` | ubuntu | | | on `main` | on schedule | — |
 
@@ -249,7 +251,7 @@ Outside `ci.yml`:
 
 | Where | Job | Lane |
 |---|---|---|
-| `release.yml` | `release-check` **(new, with `cargo xtask release-check`)** before `build` | tags `v*` |
+| `release.yml` | `release-check` **(deferred, with `cargo xtask release-check`)** before `build` | tags `v*` |
 | `manual.yml` **(new)** | `trial`: `workflow_dispatch` with a `command` input choosing one of an allowlisted set of `cargo xtask device ...` commands and a `runner` input; not gated by `ci` | on demand (the hosted `windows-a11y` trial) |
 | `weekly.yml` | unchanged; `latest-deps` gets the §4 test scope | weekly |
 | `docs.yml`, `full-ci.yml` | `full-ci.yml` waits for the cancelled run without a five-minute cap and says so when it gives up (§1) | unchanged triggers |
@@ -297,33 +299,49 @@ that keeps file and line in a panic; both stay.
      scope keeps coming from the declared graph (optional and target-specific edges included),
      which nextest's `rdeps()` over the resolved graph would not reproduce.
    - `fast-lane`'s clippy runs `--workspace --all-targets`, the `clippy` job's command, so the
-     check-mode artifacts `test` warms on `main` (`ci.yml:753-755`) serve it.
-   - The cost: a whole-workspace build graph on every fast-lane run instead of the scope's. On a
-     warm cache only the changed crates and their dependents compile either way; what is saved is
-     the rebuild of every shared crate under a second feature set. Measured on the Windows host
-     for a `flui-widgets` edit: the scoped build's first run compiled 88 units in 117 s and added
-     3.3 GB; the `TEST_SCOPE` build then took 34 s and added 0.35 GB; warm edits were 28-46 s
-     either way ([study](build-footprint.md#duplicate-builds)).
-   - Those numbers are all taken **after** a workspace build existed in the same target
-     directory, which is CI's case (`fast-lane` restores `workspace-tests` from `main`). They say
-     nothing about a cold target, where a scoped build compiles fewer crates than `TEST_SCOPE`
-     and may well be faster and smaller. This design therefore applies the filterset to CI's
-     `fast-lane` only; `cargo xtask check-changed` keeps its scoped build until a cold scoped
-     build and a cold `TEST_SCOPE` build have been measured side by side, each in an empty target
-     directory (see C6 and the study's R1).
+     dependencies' check-mode artifacts `test` warms on `main` (`ci.yml:753-755`) serve it.
+   - The cost: a whole-workspace build graph on every fast-lane run instead of the scope's. What
+     is saved is the rebuild of third-party dependencies under a second feature set. Measured on
+     the Windows host for a `flui-widgets` edit: the scoped build's first run compiled 88 units in
+     117 s and added 3.3 GB; the `TEST_SCOPE` build then took 34 s and added 0.35 GB; warm edits
+     were 28-46 s either way ([study](build-footprint.md#duplicate-builds)).
+   - **Those numbers do not transfer to CI.** They were taken after a workspace build existed in
+     the same target directory, workspace crates included. CI's restored cache holds only the
+     dependencies: `Swatinem/rust-cache` (v2.9.2) leaves `cache-workspace-crates` at its default
+     `false` and prunes the workspace crates' artifacts before saving, and a fresh checkout gives
+     every path package new mtimes, so cargo would treat them as dirty anyway. On CI every
+     fast-lane run therefore compiles every workspace crate twice over: clippy in check mode over
+     the workspace, then the whole `TEST_SCOPE` test build (the 4 min 12 s `mode=full` build of
+     §5's table), where the scoped build compiled only the scope and its dependencies. For a leaf
+     crate that is likely a loss; for a crate most of the workspace depends on it is about even.
+     The shape is kept per C6, as a lever under C8: the first fast-lane runs are compared against
+     the scoped runs before it (job duration, per step), and the scoped build comes back if they
+     are slower. A cold local measurement says nothing either way until it is repeated with the
+     dependencies warm and the workspace crates cold, which is CI's actual state.
+     `cargo xtask check-changed` keeps its scoped build (C6 and the study's R1).
 2. **`test-features` in one resolution per crate group.** The five `flui-assets`/`flui-widgets`
    invocations (`ci.yml:845-849`) become one:
    `cargo nextest run -p flui-assets -p flui-widgets --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images`.
    The features are additive (the feature policy's rule 1), so the tests that each run selected
-   still compile; the implementation verifies that the test count equals the sum of today's five runs. The
-   facade step is already covered by `test` once `test` uses `TEST_SCOPE`; the `signals` step goes
-   with the first reactive step (ADR-0085).
-3. **Rebalanced feature-matrix shards.** `--partition k/3` gave 3.3, 6.1 and 21.4 min on
+   still compile. The unified run holds every test ID of the five old runs (`network-images`
+   implies `asset-images`, which implies `images`, and no test in the old runs' targets is gated
+   on one of those features being off), but a test ID is not the configuration it runs under:
+   the old `--features images --test image` run compiled `Image` as the
+   `cfg(not(feature = "asset-images"))` `StatelessView` impl, which is what a consumer of
+   `images` alone builds and which the unified run never compiles. That run therefore stays as a
+   second, small step (`cargo nextest run -p flui-widgets --features images --test image`); the
+   other three old runs fold into the unified one. The `cargo nextest list` comparison was not
+   run locally, so the first wide run's log is the measured check. The facade step is covered by `test` now that `test` runs `cargo xtask test`
+   (`TEST_SCOPE`); the `signals` step goes with the first reactive step (ADR-0085).
+3. **Rebalanced feature-matrix shards (deferred).** `--partition k/3` gave 3.3, 6.1 and 21.4 min on
    36203822844. The implementation measures `k/5` (five shards) and keeps it if the slowest shard drops under
-   10 min; `tools/xtask/src/tasks.rs`'s `feature_matrix_stage` owns the shard count.
+   10 min; `tools/xtask/src/tasks.rs`'s `feature_matrix_stage` owns the shard count. Not adopted
+   yet: the measurement needs CI runs (C8).
 4. **Cache budget.** One cache per feature resolution, not per job: `clippy`, `fast-lane` and
    `test` share `workspace-tests`; `test-features`, the feature-matrix shards and `doc` keep their
-   own.
+   own. Implemented in part: `fast-lane` and `test` share `workspace-tests-v2` (renamed because
+   rust-cache never overwrites an existing key, and the old entry holds the default-feature
+   build); `clippy` keeps its own cache until the size effect below is measured (C8).
    - **Precondition: the warm-clippy step on `main`** (`ci.yml:753-755`, "Warm clippy artifacts
      for fast-lane's cache"). The earlier shared-key attempt failed for a reason the feature
      resolution does not touch (`ci.yml:598-608`): only one job can write a key, and with `test`
@@ -338,6 +356,17 @@ that keeps file and line in a panic; both stay.
      should shrink its entry (about 1.6 GB), and five feature-matrix shards (lever 3) add two entries to
      today's four. The implementation reports the total from `gh cache list` before and after;
      staying under the 10 GB eviction limit is the goal, not a result this design shows.
+   - **What the implementation adds, and holds back.** `workspace-tests-v2` sits beside the old
+     `workspace-tests` (2.27 GB) until that entry goes unused for seven days or the owner deletes
+     it (`gh cache delete`), and it holds two feature resolutions: `test`'s default-feature
+     `cargo build --workspace --all-targets` for the example links, then `TEST_SCOPE`
+     (`flui/cupertino,flui/localizations`, flui-platform excluded). Giving the link build
+     `TEST_SCOPE`'s features would merge them but stop linking the examples under the facade's
+     default features, so it is left for the first wide run to measure how much the second
+     resolution costs. `macos-ci` and `test-windows` restore their caches but do not save them
+     (`save-if: false`) while they are advisory: at 10.98 GB, two new multi-GB entries from the
+     nightly run would evict the `test-features`, feature-matrix and `doc` entries, which only
+     `main` and wide runs restore. They start saving on `main` once `gh cache list` shows room.
 
 Rejected for CI, with the reason in the study: nextest archives (the test run is 1.6-6 min of a
 job whose build is 4.9-9.2 min, so splitting the run saves little and the archive must be
@@ -348,6 +377,36 @@ targets are fresh per run).
 ---
 
 ## 5. Implementation shape
+
+### As implemented
+
+The shape below is the proposal; the implementation follows it with these differences, each for
+the reason given:
+
+- **`HEAVY_JOBS` keeps its name** and lists the `wide` lane's jobs; its pinning test
+  `heavy_jobs_list_matches_the_jobs_gated_on_heavy` stays. `FULL_JOBS` and `EXTENDED_JOBS` join
+  it; no `WIDE_JOBS` exists.
+- **The fast lane's filterset is a new output, `ci_test_args`**, not a new value of `test_args`,
+  which stays scoped because `check-changed` reads it (C6). It is written without spaces,
+  `-E package(a)|package(b)`: the workflow word-splits the value, so the quoted form
+  `-E 'package(a) | package(b)'` would reach nextest as separate words.
+- **The whole-workspace rebuild happens on CI's path only.** `affected` (CI's `plan`) calls
+  `plan_args`, which rebuilds the arguments over the whole workspace for `wide`, `full` and
+  `extended` and keeps the classification's reason; `check-changed` calls `lane_args` and keeps
+  its scoped build even when the lane is `wide`.
+- **A standalone crate is standalone only if no member reaches it.** Besides its own
+  `[workspace]` table, no workspace package may declare a path dependency into its directory
+  (read from `cargo metadata`'s `Dependency.path`), so "outside every member's graph" is
+  checked, not assumed. A deleted standalone crate leaves no manifest to find: its files fall
+  back to unowned, `Mode::Full`, `wide`.
+- **The aggregator's rule is the complement of the jobs a lane runs**: every lane runs
+  `checks` and `plan`; `tooling` adds `deps` (and `standalone` when plan names a crate), `fast`
+  adds `deps`, `fast-lane` (and `fast-lane-ios` under `cross_ios`), `wide` adds `deps` and
+  `HEAVY_JOBS`, `full` adds `FULL_JOBS`, `extended` adds `EXTENDED_JOBS`. Every other declared
+  job must skip, so a job in no list and with no matching `if:` fails every run instead of
+  passing unnoticed. Besides the three literal forms below, the conditions are the fast forms,
+  `needs.plan.outputs.lane == 'tooling' && needs.plan.outputs.standalone != ''` (`standalone`)
+  and `needs.plan.outputs.lane != 'docs'` (`deps`); a test fails on any other.
 
 ### `plan` and `cargo xtask affected`
 
@@ -409,6 +468,8 @@ pinning test can read them:
 | `aggregator::wide_lane_skips_platform_jobs` | lane `wide` with `gpu-test` skipped is green; with `clippy` skipped is red | no `wide` lane |
 | `aggregator::extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red` | lane `full` may skip `macos-ci`; lane `extended` may not | no `extended` lane |
 | `aggregator::lane_lists_match_the_job_conditions` | `WIDE_JOBS`, `FULL_JOBS`, `EXTENDED_JOBS` equal the jobs whose `if:` has each literal form | replaces `heavy_jobs_list_matches_the_jobs_gated_on_heavy` (`aggregator.rs:375`) |
+| `aggregator::a_narrow_lane_on_main_or_nightly_is_red` | `push`/`merge_group` on `fast` or `wide`, and `schedule`/`workflow_dispatch` on `full`, are red even when every job the lane skips did skip: `ci-verify` checks the lane against the event outside `Lane::decide` | the old shell set `heavy` from the event itself |
+| `aggregator::jobs_outside_the_lane_lists_have_their_own_condition` | `deps`, `fast-lane`, `fast-lane-ios` and `standalone` each carry the exact `if:` the aggregator assumes for it, so swapping two passes no test | only membership in a known set was checked |
 
 The existing tests that pin `heavy` (`classify.rs:733-760`, `aggregator.rs:394-547`) are
 rewritten against `lane` in the same PR; none is deleted without a replacement asserting the same
@@ -435,7 +496,7 @@ Estimates, from the measured job durations in §1; the implementation remeasures
 
 | Case | Today | Target |
 |---|---|---|
-| PR touching one leaf crate (e.g. `flui-material`) | fast lane: never observed in `packages` mode; the test build alone was 4 min 12 s on a warm cache in `mode=full` | `fast`: cache restore 1.1 + clippy ~1 + test build of the changed crates and dependents + run of the filtered tests + scoped rustdoc, doctests and cross clippies; target under 10 min wall-clock, about 12 job-minutes |
+| PR touching one leaf crate (e.g. `flui-material`) | fast lane: never observed in `packages` mode; the test build alone was 4 min 12 s on a warm cache in `mode=full` | `fast`: cache restore 1.1 + workspace clippy + the whole `TEST_SCOPE` test build (every workspace crate: the restored cache holds only dependencies, §4.1) + run of the filtered tests + scoped rustdoc, doctests and cross clippies; unmeasured, the first fast-lane runs are the measurement against the scoped build (C8) |
 | PR changing `Cargo.lock`, a workflow or `tools/xtask/src/change_scope/**` | heavy: 14-16.5 min wall-clock, about 90 job-minutes, 21 jobs, 3 of them Windows or macOS | `wide`: the Linux jobs only; long pole `test` or `test-features` (8.8-10.9 min on PR runs) plus `checks`; about 70 job-minutes, 18 jobs, no Windows or macOS runner |
 | Push to `main` | 21-27 min, about 105 job-minutes; long poles `test-features` (up to 24.6) and `feature-matrix (3/3)` (up to 21.4) | `full`: the same jobs; with §4's two long-pole fixes the long pole becomes `test` (9-20 min) |
 | Nightly | 17-19 min | `extended`: adds `macos-ci`, `test-windows`, `windows-a11y`, `protocol-windows`; not on any PR's critical path |
@@ -470,6 +531,27 @@ Rollback: revert the series; the old workflows are in git. The main risk is a jo
 merge path, which the aggregator's completeness rule (`aggregator.rs:6-9`) and
 `lane_lists_match_the_job_conditions` catch.
 
+### What landed, and what was deferred
+
+Steps 1-5 landed as one series of commits on one branch, not five PRs, one commit per step;
+each commit passes `cargo test -p xtask` on its own. The per-step PR runs above were not made:
+this change could not trigger CI runs.
+
+- **Landed:** the lane (`Lane::decide`, `--event`, `--full-ci-label`); the standalone-crate rule
+  with its path-dependency guard and the `standalone` job (C7); `ci_test_args`; every job's `if:`
+  and the aggregator on `lane` with `HEAVY_JOBS`, `FULL_JOBS` and `EXTENDED_JOBS`; `test`,
+  `live-smoke` and `gpu-test` calling xtask; `fast-lane` on the `TEST_SCOPE` build with the
+  filterset and a workspace-wide clippy; `workspace-tests-v2`; the unified `test-features` run;
+  `weekly.yml`'s latest-deps on the test scope; `macos-ci` and `test-windows` (advisory);
+  `manual.yml`; `full-ci.yml`'s 25-minute wait and `gh run rerun` retries.
+- **Deferred, the commands do not exist yet:** `perf`, `package-check`, `release-check`,
+  `protocol-windows`. `windows-a11y` waits for the `manual.yml` trial (§9 row 5).
+- **Deferred, they need CI runs to measure (C8):** the `k/5` feature-matrix shards (§4.3) and
+  sharing `clippy`'s cache (§4.4).
+- **Not run:** the per-lane proof runs of step 2. The first runs of the PR itself (`wide`, since
+  it changes workflows and the lane code) and of the label (`extended`) are the first evidence.
+- **Not in this change:** step 6 (C4) is a repository setting the owner changes.
+
 ---
 
 ## 8. Out of scope
@@ -482,6 +564,21 @@ merge path, which the aggregator's completeness rule (`aggregator.rs:6-9`) and
 ---
 
 ## 9. Open points for the owner
+
+Decided 2026-09-26:
+
+| # | Decision | Reason |
+|---|---|---|
+| C1 | No | Platform-crate PRs merge on `fast` or `wide`; platform coverage runs on `main`, nightly and the label, and a red `main` is fixed forward |
+| C2 | Yes | The label runs `extended` |
+| C3 | No | `gpu-test` runs on `main`, nightly and the label only |
+| C4 | Not in this change | Requiring `ci` is a repository setting the owner changes |
+| C5 | No | `macos-ci` runs nightly and on the label |
+| C6 | Yes, CI's `fast-lane` only | `check-changed` keeps its scoped build |
+| C7 | Standalone crates compile only in the tooling lane, when their files change (the `standalone` job) | — |
+| C8 | Unmeasured levers stay unadopted | Includes the `k/5` shards and sharing the clippy cache |
+
+The proposals as they were put:
 
 - **C1. Platform-sensitive PRs.** Should a PR whose scope contains `flui-platform`, `flui-app`,
   `flui-engine` or `flui-desktop-mcp` be unable to merge green without `full-ci`? Proposed: yes,
@@ -505,7 +602,9 @@ merge path, which the aggregator's completeness rule (`aggregator.rs:6-9`) and
   owner wants `macos-ci` (the B0 exit's "`cargo xtask ci` is green on `macos-latest`") on every
   `main` push, it moves to `full` at about 25-35 min of macOS per push (estimate).
 - **C6. The fast lane's build graph.** Proposed: CI's `fast-lane` builds the whole `TEST_SCOPE`
-  and filters the run (§4.1), because its cache always holds a workspace build. The alternative
+  and filters the run (§4.1), because its cache always holds a workspace build. (That premise
+  holds for the dependencies only: rust-cache does not keep workspace crates, §4.1, so the
+  decision stands as an unmeasured lever until the first fast-lane runs are compared.) The alternative
   keeps `-p <scope>` and accepts the second feature resolution; the study's numbers are the
   trade-off. `cargo xtask check-changed` is not part of this proposal: a fresh worktree starts
   cold, the study measured only the warm case, and the cold comparison comes first.

@@ -1,17 +1,17 @@
 //! Which packages a change touches, and the guards that keep that classification honest.
 //!
-//! `cargo xtask affected` is the ONE computation behind CI's fast lane (the
-//! `plan` job) and `cargo xtask check-changed`, so the two cannot disagree:
+//! `cargo xtask affected` is the ONE computation behind CI's lanes (the `plan`
+//! job) and `cargo xtask check-changed`, so the two cannot disagree:
 //!
 //! ```text
 //! cargo xtask affected                         # vs origin/main, human summary
 //! cargo xtask affected --worktree              # also uncommitted + untracked files
-//! cargo xtask affected --base <sha> --format github >> "$GITHUB_OUTPUT"
+//! cargo xtask affected --event pull_request --full-ci-label false --base <sha> --format github >> "$GITHUB_OUTPUT"
 //! eval "$(cargo xtask affected --worktree --format shell)"
 //! ```
 //!
-//! [`classify`] decides the mode and the packages, [`lane_args`] turns that
-//! into cargo arguments; `paths-filter` guards the docs-only allowlist;
+//! [`classify`] decides the mode and the packages, [`lane_args`] the lane and
+//! the cargo arguments; `paths-filter` guards the docs-only allowlist;
 //! [`aggregator`] is the `ci` job's skip rule.
 
 mod aggregator;
@@ -27,7 +27,7 @@ use anyhow::Context;
 
 use crate::util::repo_root;
 use classify::{Repo, Scope};
-use lane_args::LaneArgs;
+use lane_args::{Event, LaneArgs};
 
 /// How `affected` prints its answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -55,15 +55,23 @@ pub(crate) struct AffectedArgs {
     /// Classify these paths instead of a git diff.
     #[arg(long, num_args = 0..)]
     files: Option<Vec<String>>,
-    /// The whole workspace, no diff (CI's heavy lane).
+    /// The whole workspace, no diff.
     #[arg(long)]
     full: bool,
+    /// The GitHub event (`github.event_name`); without it, a pull request.
+    /// Every event but `pull_request` takes the whole workspace, no diff.
+    #[arg(long, value_enum)]
+    event: Option<Event>,
+    /// Whether the pull request carries the `full-ci` label.
+    #[arg(long, action = clap::ArgAction::Set, default_value_t = false)]
+    full_ci_label: bool,
 }
 
-/// `cargo xtask affected`: print the packages a change touches (CI's fast lane).
+/// `cargo xtask affected`: print the lane and the packages a change touches (CI's `plan`).
 pub(crate) fn affected(args: &AffectedArgs) -> anyhow::Result<ExitCode> {
     let repo = Repo::open(repo_root());
-    let scope = if args.full {
+    let event = args.event.unwrap_or(Event::PullRequest);
+    let scope = if args.full || event != Event::PullRequest {
         Scope::whole_workspace()
     } else {
         let files = match &args.files {
@@ -72,18 +80,23 @@ pub(crate) fn affected(args: &AffectedArgs) -> anyhow::Result<ExitCode> {
         };
         classify::classify(&repo, &files)?
     };
-    let values = lane_args::lane_args(&repo, &scope)?;
+    let values = lane_args::plan_args(&repo, &scope, event, args.full_ci_label)?;
     print!("{}", render(&values, scope.packages.len(), args.format));
     Ok(ExitCode::SUCCESS)
 }
 
 /// The fast lane for this checkout: its change against `base`, uncommitted and
 /// untracked files included, as the `(key, value)` pairs `affected --worktree
-/// --format shell` prints (`cargo xtask check-changed` reads them in-process).
+/// --format shell` prints for a pull request (`cargo xtask check-changed` reads
+/// them in-process). The arguments stay scoped when the lane is `wide`.
 pub(crate) fn worktree_lane(base: &str) -> anyhow::Result<Vec<(&'static str, String)>> {
     let repo = Repo::open(repo_root());
     let scope = classify::classify(&repo, &repo.changed_files(base, true)?)?;
-    Ok(lane_args::lane_args(&repo, &scope)?.fields().into())
+    Ok(
+        lane_args::lane_args(&repo, &scope, Event::PullRequest, false)?
+            .fields()
+            .into(),
+    )
 }
 
 /// The packages that do not build for wasm32 (`[package.metadata.flui]
@@ -124,11 +137,17 @@ fn render(values: &LaneArgs, package_count: usize, format: Format) -> String {
         }
         Format::Human => {
             let heavy = if values.heavy_required {
-                "  [heavy lane required]"
+                "  [wide lane required]"
             } else {
                 ""
             };
-            let _ = writeln!(out, "mode: {}{heavy}  ({})", values.mode, values.reason);
+            let _ = writeln!(
+                out,
+                "lane: {}, mode: {}{heavy}  ({})",
+                values.lane.as_str(),
+                values.mode,
+                values.reason
+            );
             if !values.packages.is_empty() {
                 let _ = writeln!(out, "packages ({package_count}): {}", values.packages);
             }
@@ -170,13 +189,14 @@ pub(crate) fn paths_filter(_args: &PathsFilterArgs) -> anyhow::Result<ExitCode> 
 /// Arguments for `cargo xtask ci-verify`, the `ci` aggregator job's check.
 ///
 /// Its inputs come from the environment the job sets: `NEEDS` (the
-/// `toJSON(needs)` of every gated job), `HEAVY_JOBS`, `HEAVY`, `MODE`,
-/// `CROSS_IOS`, `EVENT`.
+/// `toJSON(needs)` of every gated job), `LANE`, `CROSS_IOS`, `STANDALONE`,
+/// `EVENT`, and the lane lists `HEAVY_JOBS` (the `wide` lane's jobs),
+/// `FULL_JOBS` and `EXTENDED_JOBS`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct CiVerifyArgs {}
 
 /// `cargo xtask ci-verify`: every ci.yml job is gated by the `ci` aggregator,
-/// and exactly the jobs `plan` expects to skip skipped (see [`aggregator`]).
+/// and exactly the jobs `plan`'s lane skips skipped (see [`aggregator`]).
 pub(crate) fn ci_verify(_args: &CiVerifyArgs) -> anyhow::Result<ExitCode> {
     #[derive(serde::Deserialize)]
     struct Need {
@@ -188,21 +208,25 @@ pub(crate) fn ci_verify(_args: &CiVerifyArgs) -> anyhow::Result<ExitCode> {
         serde_json::from_str(&env("NEEDS")?).context("parsing NEEDS")?;
     let needs: BTreeMap<String, String> =
         needs.into_iter().map(|(job, n)| (job, n.result)).collect();
-    let heavy_jobs: BTreeSet<String> = env("HEAVY_JOBS")?
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect();
-    let (mode, event) = (env("MODE")?, env("EVENT")?);
+    let list = |name: &str| -> anyhow::Result<BTreeSet<String>> {
+        Ok(env(name)?.split_whitespace().map(str::to_owned).collect())
+    };
+    let lanes = aggregator::LaneJobs {
+        wide: list("HEAVY_JOBS")?,
+        full: list("FULL_JOBS")?,
+        extended: list("EXTENDED_JOBS")?,
+    };
+    let (lane, event) = (env("LANE")?, env("EVENT")?);
     let plan = aggregator::Plan {
         result: needs.get("plan").map(String::as_str),
-        heavy: env("HEAVY")? == "true",
-        mode: &mode,
+        lane: &lane,
         cross_ios: std::env::var("CROSS_IOS").is_ok_and(|v| v == "true"),
+        standalone: std::env::var("STANDALONE").is_ok_and(|v| !v.trim().is_empty()),
     };
     let ci_yml = classify::read_normalised(&repo_root().join(".github/workflows/ci.yml"))
         .context("reading .github/workflows/ci.yml")?;
     let declared = aggregator::gated_jobs(&aggregator::parse_jobs(&ci_yml)?);
-    let (ok, log) = aggregator::verify(&declared, &needs, &heavy_jobs, &plan, &event);
+    let (ok, log) = aggregator::verify(&declared, &needs, &lanes, &plan, &event);
     print!("{log}");
     Ok(if ok {
         ExitCode::SUCCESS
@@ -217,6 +241,7 @@ mod tests {
 
     fn sample() -> LaneArgs {
         LaneArgs {
+            lane: lane_args::Lane::Fast,
             mode: "packages".to_owned(),
             heavy_required: false,
             reason: "changed: flui-material; plus 2 dependents".to_owned(),
@@ -236,19 +261,22 @@ mod tests {
             doc_args: "-p flui -p flui-material -p flui-web-counter --features flui/testing"
                 .to_owned(),
             doctest_args: "-p flui -p flui-material".to_owned(),
+            standalone: String::new(),
+            ci_test_args: "--workspace -E package(flui)|package(flui-material)".to_owned(),
         }
     }
 
     #[test]
     fn github_format_is_one_line_per_key() {
         let out = render(&sample(), 3, Format::Github);
-        let expected = "mode=packages\nheavy_required=false\nreason=changed: flui-material; plus 2 dependents\n\
+        let expected = "lane=fast\nmode=packages\nheavy_required=false\nreason=changed: flui-material; plus 2 dependents\n\
              packages=flui flui-material flui-web-counter\npkg_args=-p flui -p flui-material -p flui-web-counter\n\
              test_args=-p flui -p flui-material -p flui-web-counter\nfeatures=--features flui/cupertino,flui/localizations\n\
              platform=false\ncross_platform=false\ncross_app=true\ncross_cli=false\ncross_desktop_mcp=false\ncross_ios=true\n\
              wasm_args=-p flui -p flui-material -p flui-web-counter\nwasm_facade=true\nhack_args=\n\
              doc_args=-p flui -p flui-material -p flui-web-counter --features flui/testing\n\
-             doctest_args=-p flui -p flui-material\n";
+             doctest_args=-p flui -p flui-material\nstandalone=\n\
+             ci_test_args=--workspace -E package(flui)|package(flui-material)\n";
         assert_eq!(out, expected);
         let mut multi = sample();
         multi.reason = "a\nb".to_owned();
@@ -259,7 +287,11 @@ mod tests {
     fn shell_format_quotes_like_shlex() {
         let out = render(&sample(), 3, Format::Shell);
         assert!(
-            out.starts_with("MODE=packages\nHEAVY_REQUIRED=false\nREASON='changed: flui-material; plus 2 dependents'\n"),
+            out.starts_with("LANE=fast\nMODE=packages\nHEAVY_REQUIRED=false\nREASON='changed: flui-material; plus 2 dependents'\n"),
+            "{out}"
+        );
+        assert!(
+            out.ends_with("\nCI_TEST_ARGS='--workspace -E package(flui)|package(flui-material)'\n"),
             "{out}"
         );
         assert!(out.contains("\nHACK_ARGS=''\n"), "{out}");
@@ -283,14 +315,15 @@ mod tests {
     fn human_format_summarises() {
         assert_eq!(
             render(&sample(), 3, Format::Human),
-            "mode: packages  (changed: flui-material; plus 2 dependents)\npackages (3): flui flui-material flui-web-counter\n"
+            "lane: fast, mode: packages  (changed: flui-material; plus 2 dependents)\npackages (3): flui flui-material flui-web-counter\n"
         );
         let mut heavy = sample();
+        heavy.lane = lane_args::Lane::Wide;
         heavy.heavy_required = true;
         heavy.packages.clear();
         assert_eq!(
             render(&heavy, 0, Format::Human),
-            "mode: packages  [heavy lane required]  (changed: flui-material; plus 2 dependents)\n"
+            "lane: wide, mode: packages  [wide lane required]  (changed: flui-material; plus 2 dependents)\n"
         );
     }
 
@@ -303,7 +336,7 @@ mod tests {
         let repo = classify::tests::repo();
         let scope = classify::classify(repo, &[payload.to_owned()]).expect("classify");
         let out = render(
-            &lane_args::lane_args(repo, &scope).expect("args"),
+            &lane_args::lane_args(repo, &scope, Event::PullRequest, false).expect("args"),
             scope.packages.len(),
             Format::Shell,
         );

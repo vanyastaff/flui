@@ -40,14 +40,19 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 ///   catalogs join the workspace run through feature unification, instead of a
 ///   second `-p flui --features ...` run that re-resolved features for flui's
 ///   graph alone and so rebuilt every shared crate under a second hash. The
-///   default-feature facade (material only) is then not tested here; CI's
-///   `test` job and `feature-matrix` run it.
+///   default-feature facade (material only) is then not tested here, CI's
+///   `test` job included (it runs this scope); its `cargo build --workspace
+///   --all-targets` compiles it, and `feature-matrix` lints it.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
 ///   Examples still compile in `lint` (`--all-targets`); CI's `test` job and
 ///   `ci-full`'s `cargo build --workspace --all-targets` link them.
 /// - flui-platform is excluded: it runs on its own (see [`platform_suite`]).
-const TEST_SCOPE: [&str; 10] = [
+///
+/// CI's `fast-lane` builds the same scope and narrows the run with a nextest
+/// filterset (`change_scope`'s `ci_test_args`), so it builds what the `test`
+/// job's cache holds.
+pub(crate) const TEST_SCOPE: [&str; 10] = [
     "--workspace",
     "--exclude",
     "flui-platform",
@@ -318,55 +323,37 @@ fn cross_typecheck_plan(host: Host) -> Vec<Step> {
 }
 
 /// CI's `test-features` job: the suites behind features the default run never
-/// enables (flui-assets and flui-widgets default to `default = []`; the facade
-/// is Material-first; the realm-scoped signals are opt-in).
+/// enables (flui-assets and flui-widgets default to `default = []`; the
+/// realm-scoped signals are opt-in). The facade's non-default catalogs are in
+/// [`TEST_SCOPE`].
 fn test_features_plan() -> Vec<Step> {
     let nextest =
         |args: &[&str]| Step::from(Cmd::cargo(["nextest", "run"]).args(args.iter().copied()));
     vec![
-        nextest(&["-p", "flui-assets", "--locked", "--features", "full"]),
+        // one feature resolution for both crates: the features are additive,
+        // so every test a per-feature run would select still compiles
+        nextest(&[
+            "-p",
+            "flui-assets",
+            "-p",
+            "flui-widgets",
+            "--locked",
+            "--no-fail-fast",
+            "--features",
+            "flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images",
+        ]),
+        // not a subset of the run above: without `asset-images`, `Image` is
+        // the `StatelessView` impl a consumer of `images` alone builds, which
+        // no other run compiles with a test
         nextest(&[
             "-p",
             "flui-widgets",
             "--locked",
+            "--no-fail-fast",
             "--features",
             "images",
             "--test",
             "image",
-        ]),
-        nextest(&[
-            "-p",
-            "flui-widgets",
-            "--locked",
-            "--features",
-            "asset-images",
-            "--lib",
-        ]),
-        nextest(&[
-            "-p",
-            "flui-widgets",
-            "--locked",
-            "--features",
-            "asset-images",
-            "--test",
-            "image_async",
-        ]),
-        nextest(&[
-            "-p",
-            "flui-widgets",
-            "--locked",
-            "--features",
-            "network-images",
-            "--test",
-            "image_network",
-        ]),
-        nextest(&[
-            "-p",
-            "flui",
-            "--locked",
-            "--features",
-            "cupertino,localizations",
-            "--no-fail-fast",
         ]),
         nextest(&[
             "-p",
@@ -796,7 +783,7 @@ pub(crate) fn deps_tools() -> impl Iterator<Item = (&'static str, &'static str)>
 /// its advisories, and `cargo shear --locked` (`--format github` under GitHub
 /// Actions). Every step runs; exit 1 if any failed. CI's `deps` job runs
 /// `--only policy` and `--only advisories` as two steps, the second blocking
-/// only in the heavy lane.
+/// only in the `wide`, `full` and `extended` lanes.
 pub(crate) fn deps(args: &DepsArgs) -> anyhow::Result<ExitCode> {
     done(deps::run(args.run.runner(), args.only, args.strict))
 }
@@ -1113,12 +1100,8 @@ mod tests {
         assert_eq!(
             lines(&test_features_plan()),
             [
-                "$ cargo nextest run -p flui-assets --locked --features full",
-                "$ cargo nextest run -p flui-widgets --locked --features images --test image",
-                "$ cargo nextest run -p flui-widgets --locked --features asset-images --lib",
-                "$ cargo nextest run -p flui-widgets --locked --features asset-images --test image_async",
-                "$ cargo nextest run -p flui-widgets --locked --features network-images --test image_network",
-                "$ cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast",
+                "$ cargo nextest run -p flui-assets -p flui-widgets --locked --no-fail-fast --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images",
+                "$ cargo nextest run -p flui-widgets --locked --no-fail-fast --features images --test image",
                 "$ cargo nextest run -p flui-view -p flui-testing -p flui-widgets -p flui-app --features flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals --locked --no-fail-fast",
             ]
         );

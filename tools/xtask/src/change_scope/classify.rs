@@ -3,15 +3,17 @@
 //! The four modes:
 //!
 //! - `docs`: every changed file is documentation ([`DOCS_ONLY`]); nothing compiles.
-//! - `none`: only repository tooling the `checks` job runs itself; nothing compiles.
+//! - `none`: only repository tooling the `checks` job runs itself, or a
+//!   standalone crate (its own `[workspace]`, outside every member's graph);
+//!   nothing in the workspace compiles.
 //! - `packages`: the changed packages plus every workspace package declaring a
 //!   dependency on them (normal, dev, build, optional, target-specific; transitively).
 //! - `full`: something every package depends on changed, or a file nobody here
 //!   can attribute: the whole workspace.
 //!
-//! `heavy_required` is set when a changed file is an input the heavy lane
-//! exercises ([`HEAVY_TRIGGERS`], or an xtask command only a heavy job runs): the PR then runs the heavy lane, not just the whole workspace in the
-//! fast one.
+//! `heavy_required` is set when a changed file is an input only the wide
+//! lane's jobs exercise ([`HEAVY_TRIGGERS`], or an xtask command only such a
+//! job runs): the PR then runs the wide lane.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -21,6 +23,8 @@ use std::sync::OnceLock;
 use anyhow::{Context, bail};
 use regex::Regex;
 use serde::Deserialize;
+
+use super::aggregator::WIDE_CONDITION;
 
 /// Documentation: a change made only of these compiles nothing.
 ///
@@ -43,9 +47,8 @@ pub(super) const DOCS_ONLY: &[&str] = &[
     "crates/*/CHANGELOG.md",
 ];
 
-/// Inputs whose breakage only the heavy lane blocks on (the heavy jobs:
-/// feature-matrix, wasm, cross, gpu, doc, miri; and `deps`' advisories): the
-/// heavy lane runs.
+/// Inputs whose breakage only the wide lane's jobs block on (feature-matrix,
+/// wasm, cross, doc, miri; and `deps`' advisories): the wide lane runs.
 pub(super) const HEAVY_TRIGGERS: &[&str] = &[
     "Cargo.toml", // the root manifest: workspace deps, lints, profiles
     "Cargo.lock",
@@ -54,9 +57,14 @@ pub(super) const HEAVY_TRIGGERS: &[&str] = &[
     "rust-toolchain", // the extensionless form; rustup prefers it over .toml
     ".github/workflows/**",
     // Shaders: clippy only embeds them as strings and no build script parses
-    // them; the first thing that compiles one is a GPU job's shader module.
+    // them, so the fast lane never compiles one (`checks`' `wgsl` step is a
+    // syntactic uniformity check, in every lane). The wide lane adds
+    // live-smoke, whose demo compiles the pipelines it draws with on
+    // lavapipe; gpu-test, which compiles every shader module on WARP, runs
+    // only from the full lane up (merge queue, main), so a shader the demo
+    // does not draw is first compiled there.
     "**/*.wgsl",
-    // The `deps` job's advisories step blocks only in the heavy lane, and an
+    // The `deps` job's advisories step blocks only from the wide lane up, and an
     // edited advisory ignore is exactly what that step judges.
     "deny.toml",
 ];
@@ -80,8 +88,9 @@ pub(super) const FULL_TRIGGERS: &[&str] = &[
 /// itself, and the macOS/iOS device-check drivers, which only run by hand on a
 /// Mac. `tools/xtask/` is not here: it is the `xtask` workspace package, so a
 /// change to it scopes that package (its clippy and unit tests) like any other
-/// crate, and [`heavy_job_inputs`] adds the heavy lane when a heavy job runs
-/// the command it touches.
+/// crate, and [`heavy_job_inputs`] adds the wide lane when a wide-lane job
+/// runs the command it touches. A standalone crate (see [`standalone_root`])
+/// counts as tooling too.
 pub(super) const TOOLING: &[&str] = &[
     "tools/device-checks/**",
     "typos.toml",
@@ -164,9 +173,9 @@ fn kebab_case(variant: &str) -> String {
     out
 }
 
-/// Repo files the heavy jobs run but `checks` does not, read from ci.yml, as
-/// patterns for [`matches()`]: for each `cargo xtask <command>` a job gated on
-/// the heavy lane runs, the module implementing it (from
+/// Repo files the wide lane's jobs run but `checks` does not, read from ci.yml,
+/// as patterns for [`matches()`]: for each `cargo xtask <command>` a job gated
+/// on the wide lane (`if:` [`WIDE_CONDITION`]) runs, the module implementing it (from
 /// the dispatch in `xtask_main`, xtask's `main.rs`) plus the xtask entry point,
 /// helpers and manifest every command runs through. A command the dispatch
 /// does not name makes all of `tools/xtask/` an input. A command a YAML
@@ -184,9 +193,10 @@ pub(super) fn heavy_job_inputs(ci_yml: &str, xtask_main: Option<&str>) -> BTreeS
         })
         .unwrap_or_default();
 
+    let gate = format!("\n    if: {WIDE_CONDITION}\n");
     let mut found = BTreeSet::new();
     for job in jobs(ci_yml) {
-        if !job.contains("if: needs.plan.outputs.heavy == 'true'") {
+        if !job.contains(&gate) {
             continue;
         }
         let lines = job
@@ -519,6 +529,9 @@ pub(super) struct Scope {
     pub(super) seeds: Vec<String>,
     /// Packages whose `Cargo.toml` changed.
     pub(super) manifests: Vec<String>,
+    /// Standalone crate directories a changed file belongs to (see
+    /// [`standalone_root`]), sorted.
+    pub(super) standalone: Vec<String>,
     pub(super) heavy_required: bool,
     pub(super) reason: String,
 }
@@ -530,15 +543,48 @@ impl Scope {
             packages: Vec::new(),
             seeds: Vec::new(),
             manifests: Vec::new(),
+            standalone: Vec::new(),
             heavy_required: false,
             reason,
         }
     }
 
-    /// The heavy lane's scope: the whole workspace, no diff.
+    /// The whole workspace, no diff (the wide, full and extended lanes).
     pub(super) fn whole_workspace() -> Self {
-        Self::new(Mode::Full, "heavy lane: the whole workspace".to_owned())
+        Self::new(Mode::Full, "the whole workspace".to_owned())
     }
+}
+
+/// The standalone crate `file` (repo-relative) belongs to: the nearest
+/// ancestor directory below the repository root whose `Cargo.toml` declares
+/// its own `[workspace]`, provided no workspace package has a path dependency
+/// into it. Such a crate is outside every member's graph, so a change to it
+/// compiles nothing in the workspace. `None` when the nearest such manifest is
+/// reached by a path dependency, or there is none (a deleted crate leaves no
+/// manifest: its files stay unowned).
+fn standalone_root(root: &Path, ws: &Workspace, file: &str) -> Option<String> {
+    let mut dir = file;
+    while let Some((parent, _)) = dir.rsplit_once('/') {
+        dir = parent;
+        let Some(text) = read_normalised(&root.join(dir).join("Cargo.toml")) else {
+            continue;
+        };
+        let has_workspace = text
+            .parse::<toml::Table>()
+            .is_ok_and(|manifest| manifest.contains_key("workspace"));
+        if !has_workspace {
+            continue;
+        }
+        let inside = format!("{dir}/");
+        let reached = ws
+            .packages
+            .values()
+            .flat_map(|p| &p.dependencies)
+            .filter_map(|d| relative(d.path.as_deref()?, root))
+            .any(|path| path == dir || path.starts_with(&inside));
+        return (!reached).then(|| dir.to_owned());
+    }
+    None
 }
 
 fn first_five(files: &[&str]) -> String {
@@ -578,7 +624,10 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         let heavy: Vec<&str> = heavy.into_iter().collect();
         let mut scope = Scope::new(
             Mode::Full,
-            format!("input of the heavy jobs changed: {}", first_five(&heavy)),
+            format!(
+                "input of the wide-lane jobs changed: {}",
+                first_five(&heavy)
+            ),
         );
         scope.heavy_required = true;
         return Ok(scope);
@@ -596,6 +645,7 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
     }
     let ws = repo.workspace()?;
     let (mut seeds, mut manifests, mut unknown) = (BTreeSet::new(), BTreeSet::new(), Vec::new());
+    let mut standalone = BTreeSet::new();
     for f in code {
         if matches_any(f, TOOLING) {
             continue;
@@ -607,7 +657,12 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
                     manifests.insert(pkg.to_owned());
                 }
             }
-            None => unknown.push(f),
+            None => match standalone_root(&repo.root, ws, f) {
+                Some(dir) => {
+                    standalone.insert(dir);
+                }
+                None => unknown.push(f),
+            },
         }
     }
     if !unknown.is_empty() {
@@ -617,11 +672,19 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         );
         return Ok(Scope::new(Mode::Full, reason));
     }
+    let standalone: Vec<String> = standalone.into_iter().collect();
     if seeds.is_empty() {
-        return Ok(Scope::new(
-            Mode::None,
-            "only repository tooling the checks job runs changed".to_owned(),
-        ));
+        let reason = if standalone.is_empty() {
+            "only repository tooling the checks job runs changed".to_owned()
+        } else {
+            format!(
+                "only repository tooling and standalone crates changed: {} (own [workspace])",
+                standalone.join(", ")
+            )
+        };
+        let mut scope = Scope::new(Mode::None, reason);
+        scope.standalone = standalone;
+        return Ok(scope);
     }
     let mut scope = seeds.clone();
     let mut todo: Vec<String> = seeds.iter().cloned().collect();
@@ -643,6 +706,7 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         packages: scope.into_iter().collect(),
         seeds: seed_list,
         manifests: manifests.into_iter().collect(),
+        standalone,
         heavy_required: false,
         reason,
     })
@@ -753,7 +817,10 @@ pub(super) mod tests {
             repo().ci_yml.as_deref().expect("ci.yml"),
             repo().xtask_main.as_deref(),
         );
-        assert!(!inputs.is_empty(), "the heavy jobs run no xtask command?");
+        assert!(
+            !inputs.is_empty(),
+            "the wide lane's jobs run no xtask command?"
+        );
         for path in inputs.iter().filter(|p| !p.contains('*')) {
             assert!(scope(&[path]).heavy_required, "{path}");
         }
@@ -761,14 +828,18 @@ pub(super) mod tests {
 
     #[test]
     fn heavy_job_inputs_from_a_workflow() {
-        let ci = "on: push\njobs:\n  checks:\n    runs-on: x\n    steps:\n      - run: cargo xtask checks\n\
-                  \x20 doc:\n    if: needs.plan.outputs.heavy == 'true'\n    steps:\n\
-                  \x20     # see cargo xtask device ios-sim\n\
-                  \x20     - run: cargo xtask doc-strict --all\n      - run: cargo xtask not-a-command\n";
+        let ci = format!(
+            "on: push\njobs:\n  checks:\n    runs-on: x\n    steps:\n      - run: cargo xtask checks\n\
+             \x20 doc:\n    if: {WIDE_CONDITION}\n    steps:\n\
+             \x20     # see cargo xtask device ios-sim\n\
+             \x20     - run: cargo xtask doc-strict --all\n      - run: cargo xtask not-a-command\n\
+             \x20 platform:\n    if: {}\n    steps:\n      - run: cargo xtask device windows-a11y\n",
+            super::super::aggregator::FULL_CONDITION
+        );
         let main = "match c {\n    Command::Checks(args) => tasks::checks(&args),\n    \
                     Command::DocStrict(args) => doc_strict::doc_strict(&args),\n    \
                     Command::Device(args) => device::device(&args),\n}\n";
-        let inputs = heavy_job_inputs(ci, Some(main));
+        let inputs = heavy_job_inputs(&ci, Some(main));
         let expected = [
             "tools/xtask/**",
             "tools/xtask/Cargo.toml",
@@ -785,8 +856,9 @@ pub(super) mod tests {
             "tools/xtask/src/doc_strict/flags.rs",
             &expected
         ));
-        // a job not gated on the heavy lane contributes nothing, nor does a
-        // command a comment merely mentions
+        // a job not gated on the wide lane (checks, or a platform job only
+        // `full` runs) contributes nothing, nor does a command a comment
+        // merely mentions
         assert!(!inputs.contains("tools/xtask/src/tasks.rs"));
         assert!(!inputs.contains("tools/xtask/src/device.rs"));
         assert_eq!(kebab_case("WasmTestCrates"), "wasm-test-crates");
@@ -794,9 +866,9 @@ pub(super) mod tests {
 
     #[test]
     fn lane_machinery_gets_the_whole_workspace() {
-        // xtask's dispatch and shared helpers run inside heavy jobs too
-        // (feature-matrix, doc, wasm-check call `cargo xtask`), so a change to
-        // them needs the heavy lane as well as the whole workspace.
+        // xtask's dispatch and shared helpers run inside the wide lane's jobs
+        // too (feature-matrix, doc, wasm-check call `cargo xtask`), so a change
+        // to them needs the wide lane as well as the whole workspace.
         for path in ["tools/xtask/src/main.rs", "tools/xtask/src/util.rs"] {
             let s = scope(&[path]);
             assert_eq!((s.mode, s.heavy_required), (Mode::Full, true), "{path}");
@@ -859,6 +931,68 @@ pub(super) mod tests {
             s.reason,
             "no package owns: some-new-dir/thing.txt (conservatively: everything)"
         );
+    }
+
+    #[test]
+    fn a_standalone_crate_is_tooling() {
+        let s = scope(&[
+            "tools/text-spike/Cargo.toml",
+            "tools/text-spike/src/main.rs",
+        ]);
+        assert_eq!(
+            (s.mode, s.standalone.as_slice()),
+            (Mode::None, ["tools/text-spike".to_owned()].as_slice())
+        );
+        assert!(
+            s.reason.contains("tools/text-spike") && s.reason.contains("[workspace]"),
+            "{}",
+            s.reason
+        );
+    }
+
+    #[test]
+    fn a_standalone_crate_beside_a_member_change_is_not_unowned() {
+        let s = scope(&[
+            "tools/text-spike/src/main.rs",
+            "crates/flui-geometry/src/lib.rs",
+        ]);
+        assert_eq!(s.mode, Mode::Packages, "{}", s.reason);
+        assert_eq!(s.standalone, ["tools/text-spike"]);
+        assert!(s.packages.contains(&"flui-geometry".to_owned()));
+    }
+
+    #[test]
+    fn a_crate_a_member_depends_on_is_not_standalone() {
+        let tmp = TempRepo::new();
+        std::fs::create_dir_all(tmp.0.join("sub/src")).expect("mkdir");
+        std::fs::write(
+            tmp.0.join("sub/Cargo.toml"),
+            "[package]\nname = \"sub\"\n\n[workspace]\n",
+        )
+        .expect("write");
+        let member = |path: Option<PathBuf>| -> Package {
+            serde_json::from_value(serde_json::json!({
+                "name": "member",
+                "manifest_path": tmp.0.join("member/Cargo.toml"),
+                "dependencies": [{
+                    "name": "sub", "kind": null, "rename": null, "optional": false, "path": path,
+                }],
+                "targets": [],
+                "features": {},
+            }))
+            .expect("a package")
+        };
+        let apart = Workspace::from_packages(&tmp.0, vec![member(None)]);
+        assert_eq!(
+            standalone_root(&tmp.0, &apart, "sub/src/lib.rs").as_deref(),
+            Some("sub")
+        );
+        let reached = Workspace::from_packages(&tmp.0, vec![member(Some(tmp.0.join("sub")))]);
+        assert_eq!(standalone_root(&tmp.0, &reached, "sub/src/lib.rs"), None);
+        // the repository root's own manifest never makes a file standalone
+        std::fs::write(tmp.0.join("Cargo.toml"), "[workspace]\n").expect("write");
+        assert_eq!(standalone_root(&tmp.0, &apart, "loose.txt"), None);
+        assert_eq!(standalone_root(&tmp.0, &apart, "other/x.rs"), None);
     }
 
     #[test]

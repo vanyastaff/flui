@@ -11,7 +11,7 @@
 //! Every step runs even when an earlier one failed, so one run reports every
 //! problem. CI runs the two [`Part`]s as separate steps so that the
 //! advisories, which change with the RustSec database rather than with the
-//! commit, can block only in the heavy lane.
+//! commit, can block only in the `wide`, `full` and `extended` lanes.
 
 use anyhow::bail;
 
@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn ci_lets_only_the_advisories_pass_outside_the_heavy_lane() {
+    fn ci_lets_only_the_advisories_pass_in_the_fast_and_tooling_lanes() {
         let ci = std::fs::read_to_string(crate::util::repo_root().join(".github/workflows/ci.yml"))
             .expect("ci.yml")
             .replace("\r\n", "\n");
@@ -212,7 +212,7 @@ mod tests {
         assert!(!step("policy").contains("continue-on-error"));
         assert!(
             step("advisories")
-                .contains("continue-on-error: ${{ needs.plan.outputs.heavy != 'true' }}"),
+                .contains("continue-on-error: ${{ needs.plan.outputs.lane == 'fast' || needs.plan.outputs.lane == 'tooling' }}"),
             "{}",
             step("advisories")
         );
