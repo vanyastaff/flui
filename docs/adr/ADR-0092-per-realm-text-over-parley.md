@@ -2,12 +2,15 @@
 
 - **Status:** Proposed — gate 1 (§8) met by a prototype on 2026-09-26 (see Context). A passed
   gate is evidence, not shipped behaviour: the record is accepted section by section as the text
-  migration lands §§1–7, and gates 2–8 bind those changes.
+  migration lands §§1–7, and gates 2–8 bind those changes. The three supersessions below take
+  effect together, when §§1–5 are accepted; a section accepted before then supersedes nothing.
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (rasterization prototype; see Context)
-- **Supersedes (on acceptance):** [ADR-0077](ADR-0077-migrate-to-parley.md) (absorbed: its
-  direction, its preconditions and its "If later Rejected" branch are carried here)
-- **Supersedes (on acceptance):** [ADR-0016](ADR-0016-unified-font-system-registration.md),
+- **Supersedes (when §§1–5 are accepted):** [ADR-0077](ADR-0077-migrate-to-parley.md)
+  (absorbed: its direction, its preconditions and its "If later Rejected" branch are carried
+  here)
+- **Supersedes (when §§1–5 are accepted):**
+  [ADR-0016](ADR-0016-unified-font-system-registration.md),
   [ADR-0059](ADR-0059-flui-stays-on-cosmic-text.md)
 - **Amends (on acceptance):** [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
   (Part 1: the process-wide font doors become a per-realm context; Part 2: the `Paragraph`
@@ -188,13 +191,13 @@ only grows, so each blob stays resident for the rasterizer's life; that residenc
 accepted and measured under gate 6. (fontique's shared source cache holds blobs weakly, so
 without the registry a pruned blob reloads under a new id and its keys change; see Context.)
 
-A `GlyphRasterizer` trait turns a key plus a font reference into the `GlyphImage` ADR-0067's atlas
-already accepts; the atlas takes the rasterizer as a type parameter. `rasterize` returning `None`
-means "not placed", which is how the atlas already treats `slot() == None`, not "draws nothing".
-The rasterizer is **swash, driven directly**, with swash's per-font cache key made once per face:
-`FontRef::from_index` mints a new one per call and would rebuild hinting state per glyph. The
-atlas needs a way to feed new faces to the rasterizer it owns once built; that door is open, with
-§4's blob handle.
+A `GlyphRasterizer` trait turns a key, resolved against its own font registry, into the
+`GlyphImage` ADR-0067's atlas already accepts; the atlas takes the rasterizer as a type
+parameter. `rasterize` returning `None` means "not placed", which is how the atlas already
+treats `slot() == None`, not "draws nothing". The rasterizer is **swash, driven directly**, with
+swash's per-font cache key made once per face: `FontRef::from_index` mints a new one per call
+and would rebuild hinting state per glyph. The atlas needs a way to feed new faces to the
+rasterizer it owns once built; that door is open, with §4's blob handle.
 
 The rasterizer is owned by the raster side and runs outside shaping; the atlas belongs to the
 `GpuContext` and is single-owned on the raster thread
@@ -288,9 +291,10 @@ and only if `cargo build --timings` shows shaping separates cleanly from recordi
   §§2–5 are re-scoped over cosmic-text: per-realm contexts and neutral shaped runs need only
   `&mut` access to a realm's own context, which cosmic-text also allows. The measured Parley
   advantage then stands as an unclaimed opportunity, as ADR-0077 recorded.
-- **Back-links on acceptance.** The accepting change adds `Superseded-by: ADR-0092` to ADR-0077,
-  ADR-0016 and ADR-0059, rewrites the Status lines of ADR-0016 and ADR-0059 (today "to be
-  superseded by ADR-0077", `docs/adr/ADR-0016-unified-font-system-registration.md:3` and
+- **Back-links when §§1–5 are accepted.** The change that accepts the last of §§1–5 adds
+  `Superseded-by: ADR-0092` to ADR-0077, ADR-0016 and ADR-0059, rewrites the Status lines of
+  ADR-0016 and ADR-0059 (today "to be superseded by ADR-0077",
+  `docs/adr/ADR-0016-unified-font-system-registration.md:3` and
   `docs/adr/ADR-0059-flui-stays-on-cosmic-text.md:3`) to name this record, and adds
   "Amended by ADR-0092" to ADR-0065, ADR-0066 and ADR-0067. Until then the older records are
   unchanged.

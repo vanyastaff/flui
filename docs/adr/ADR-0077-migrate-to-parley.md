@@ -2,9 +2,9 @@
 
 - **Status:** Proposed — precondition 1 met 2026-09-26 (recorded in
   [ADR-0092](ADR-0092-per-realm-text-over-parley.md), Context); absorbed by ADR-0092, which
-  supersedes it on acceptance
+  supersedes it when ADR-0092 §§1–5 are accepted
 - **Date:** 2026-09-22
-- **Supersedes (on acceptance):** ADR-0016, ADR-0059
+- **Supersedes (when ADR-0092 §§1–5 are accepted):** ADR-0016, ADR-0059
 
 Backed by a research spike: [`docs/research/text-stack-2026.md`](../research/text-stack-2026.md),
 code in `tools/text-spike/` (standalone crate, not a workspace member). Nothing in `crates/flui-*`
@@ -221,7 +221,7 @@ is settled with the implementation; sharing one mutable database across realms i
   contributor doesn't accidentally reintroduce the single-`Layout` pattern for, say, a
   virtualized-list-of-paragraphs optimization.
 - Precondition 1 is satisfied. This record is not accepted on its own: ADR-0092 carries it and
-  adds `Superseded-by` here on acceptance.
+  adds `Superseded-by` here when its §§1–5 are accepted.
 
 ## If later Rejected
 
