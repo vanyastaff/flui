@@ -213,10 +213,15 @@ fn run(root: &Path, args: &ChangelogArgs) -> anyhow::Result<ExitCode> {
 /// and the text of a `.md` file.
 type Entry = (String, bool, String);
 
-/// The entries of `dir` sorted by name; none when it is missing.
+/// The entries of `dir` sorted by name; none when it is missing. Any other
+/// error listing it is an error: reading it as empty would pass `--check`.
 fn entries(dir: &Path) -> anyhow::Result<Vec<Entry>> {
-    let Ok(read) = std::fs::read_dir(dir) else {
-        return Ok(Vec::new());
+    let read = match std::fs::read_dir(dir) {
+        Ok(read) => read,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("listing {}", dir.display()));
+        }
     };
     let mut entries = Vec::new();
     for entry in read {

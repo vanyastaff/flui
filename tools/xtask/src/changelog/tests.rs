@@ -497,3 +497,17 @@ fn an_invalid_fragment_stops_the_merge() {
     assert_eq!(scratch.changelog(), CHANGELOG_FIXTURE);
     assert_eq!(scratch.fragments(), ["a.md", "b.md"]);
 }
+
+#[test]
+fn a_fragment_directory_that_cannot_be_listed_is_an_error() {
+    let scratch = Scratch::new("unlistable", &[]);
+    assert!(
+        entries(&scratch.0.join("missing"))
+            .expect("missing is empty")
+            .is_empty()
+    );
+    // a file where the directory should be: listing it fails, and is not empty
+    let file = scratch.0.join(CHANGELOG);
+    let error = entries(&file).expect_err("not a directory");
+    assert!(error.to_string().contains("listing"), "{error:#}");
+}
