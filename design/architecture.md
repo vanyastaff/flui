@@ -714,9 +714,9 @@ and menus are overlay entries owned by the page that opened them and never appea
 The route trait and its derive are `Routable` (`flui_widgets::Route` is the Navigator's
 route-lifecycle trait). `Router::<R>::handle(cx: &dyn LifecycleContext)` returns
 `Result<RouterHandle<R>, RouterError>`, and the handle's `push`, `replace`, `pop` and
-`go(location)` take no event context. Step one (the trait, `RoutePath`, `Router` and
-`RouterHandle` in `flui-widgets`, with a hand-written `Routable`) is implemented; the derive and
-the later steps are listed in ADR-0093's implementation series.
+`go(location)` take no event context. The trait, `RoutePath`, `Router` and `RouterHandle` are
+implemented in `flui-widgets`, with a hand-written `Routable`; the derive and the rest are listed
+in ADR-0093's implementation series.
 
 ---
 
@@ -1007,10 +1007,13 @@ fn main() -> App {
 struct HomeState { router: Option<RouterHandle<AppRoute>> }
 impl ViewState<Home> for HomeState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.router = Router::<AppRoute>::handle(cx).ok();   // nearest ancestor Router
+        // Nearest ancestor Router; `Home` is only ever built as one of its pages, so a
+        // `RouterError::NoRouter` here is a bug, reported where it happens.
+        let router = Router::<AppRoute>::handle(cx).expect("BUG: Home is built under its Router");
+        self.router = Some(router);
     }
     fn build(&self, _: &Home, _cx: &dyn BuildContext) -> impl IntoView {
-        let router = self.router.clone().expect("BUG: router handle acquired in init_state");
+        let router = self.router.clone().expect("BUG: init_state runs before build");
         RawButton::new(Text::new("Open"))
             .on_press(move || { let _ = router.push(AppRoute::Note { id: NoteId(1) }); })
     }

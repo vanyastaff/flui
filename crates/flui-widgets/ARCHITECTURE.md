@@ -1767,3 +1767,21 @@ the default route when the full initial route does not match, `go` and
 `go_with_an_unknown_location_leaves_the_stack_alone`, and
 `back_stack_is_the_matching_prefix_chain`.
 
+### 25. Every Router page scopes a semantics route, and a labelled route names it
+
+**Oracle:** Flutter's `ModalRoute` wraps a page in no route-scoping
+`Semantics`: `_ModalScopeState` and `ModalRoute.buildModalScope` in
+`widgets/routes.dart` add only `sortKey` wrappers, `RawDialogRoute.buildPage`
+scopes a dialog's route, and a page's route name comes from inside the page,
+typically `AppBar`'s title (`namesRoute`). Read from the stable branch's
+`routes.dart` on 2026-09-26 through a partial fetch, not a local clone of a
+tagged release; treat the page-side half as recalled.
+
+**Choice — a divergence:** a Router page is an addressable screen, so the
+Router wraps each one in `Semantics::scopes_route(true)
+.explicit_child_nodes(true)`, and adds `names_route(true)` with the label when
+`Routable::semantics_label` returns one. An assistive technology then hears a
+route change on every navigation, with no app bar required.
+
+**Pinned by:** `router_pages_scope_and_name_a_semantics_route`.
+

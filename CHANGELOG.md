@@ -23,7 +23,7 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Added
 
-- **Typed `Router`, step one** (ADR-0093, `flui-widgets`): `Router<R: Routable>` keeps
+- **Typed `Router`** (ADR-0093, `flui-widgets`): `Router<R: Routable>` keeps
   navigation state as a stack of route values whose top, printed through `Routable::to_path`,
   is the current location, and places one `PageRoute` per value on a `Navigator` it builds,
   each page scoping (and, with a `semantics_label`, naming) a semantics route. A descendant
