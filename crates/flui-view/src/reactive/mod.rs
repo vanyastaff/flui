@@ -52,7 +52,9 @@
 //! A used against realm B is [`SignalError::ForeignGraph`], not a silent read
 //! of someone else's slot. A cross-thread write is a realm command executed on
 //! the owner thread (`UiCommand::SignalWrite` in `flui-app`, carrying a
-//! [`SignalSender`]), never a shared cell.
+//! [`SignalSender`]), never a shared cell. The realm routes that command by
+//! [`SignalSlot::graph`] to the presentation whose graph minted the slot
+//! (ADR-0085 §1).
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -79,6 +81,17 @@ pub struct SignalSlot {
     graph: u32,
     index: u32,
     generation: u32,
+}
+
+impl SignalSlot {
+    /// The id of the graph that minted this slot: the [`Reactive::id`] of
+    /// that graph. Graph ids come from a process-wide monotonic counter, so a
+    /// realm uses this to route a cross-thread write to the one graph that can
+    /// accept it (ADR-0085 §1), and to refuse a slot none of its graphs minted.
+    #[must_use]
+    pub const fn graph(self) -> u32 {
+        self.graph
+    }
 }
 
 /// Why a signal operation could not be carried out.
@@ -806,7 +819,9 @@ impl<T: 'static> Signal<T> {
 /// boundary: it carries only the slot, and can do nothing until it is
 /// re-attached on the owner thread (inside a `UiCommand::SignalWrite`
 /// closure, ADR-0074 §5.8), where [`SignalSender::attach`] hands back the
-/// realm-affine [`Signal`].
+/// realm-affine [`Signal`]. The realm runs that closure against the graph
+/// named by [`SignalSlot::graph`] of [`SignalSender::slot`], in whichever of
+/// its presentations minted it (ADR-0085 §1).
 pub struct SignalSender<T: 'static> {
     slot: SignalSlot,
     _t: PhantomData<fn() -> T>,
@@ -835,6 +850,13 @@ impl<T: 'static> SignalSender<T> {
     pub fn attach(self) -> Signal<T> {
         Signal::from_slot(self.slot)
     }
+
+    /// The arena slot behind this handle. Readable on any thread: a realm
+    /// routes the write this sender carries by its [`SignalSlot::graph`].
+    #[must_use]
+    pub fn slot(self) -> SignalSlot {
+        self.slot
+    }
 }
 
 #[cfg(test)]
@@ -858,6 +880,16 @@ mod tests {
         let mut ids: Vec<_> = inbox.lock().keys().copied().collect();
         ids.sort();
         ids
+    }
+
+    #[test]
+    fn slot_graph_names_the_minting_graph() {
+        let r = Reactive::new();
+        let s = r.signal(1u32);
+
+        assert_eq!(s.slot().graph(), r.id());
+        assert_eq!(s.detach().slot(), s.slot());
+        assert_ne!(Reactive::new().id(), r.id());
     }
 
     #[test]
