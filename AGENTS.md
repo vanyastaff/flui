@@ -42,7 +42,7 @@ now and expensive once consumers exist, so fix a bad shape instead of working ar
 
 ## Codebase map
 
-29 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
+30 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
 declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtask workspace`);
 `docs/crates.md` is the readable version. Bottom to top:
 
