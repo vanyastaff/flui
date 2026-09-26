@@ -797,6 +797,12 @@ name = "todo"
 path = "examples/todo.rs"
 required-features = ["material"]
 
+# Same reason again: `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme`.
+[[example]]
+name = "form"
+path = "examples/form.rs"
+required-features = ["material"]
+
 [[example]]
 name = "cupertino_demo"
 path = "examples/cupertino_demo/main.rs"
