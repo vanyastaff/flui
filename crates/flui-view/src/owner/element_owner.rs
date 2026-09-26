@@ -268,6 +268,10 @@ pub struct ElementOwner<'a> {
     /// every `BuildCtx` the same way `post_frame_handle` is.
     pub(crate) text_input_handle: &'a Option<flui_interaction::TextInputHandle>,
 
+    /// The presentation's plain-text clipboard, threaded into every
+    /// `BuildCtx` the same way `text_input_handle` is.
+    pub(crate) clipboard_handle: &'a Option<flui_interaction::ClipboardHandle>,
+
     /// The binding's owner-local interaction dispatch capability (ADR-0027),
     /// threaded into render-object lifecycle contexts.
     pub(crate) interaction_dispatch: &'a Option<flui_interaction::InteractionDispatchHandle>,

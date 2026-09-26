@@ -2495,6 +2495,7 @@ dependencies = [
  "flui-interaction",
  "flui-macros",
  "flui-objects",
+ "flui-platform-api",
  "flui-rendering",
  "flui-scheduler",
  "flui-testing",

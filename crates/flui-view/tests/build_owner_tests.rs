@@ -680,5 +680,11 @@ fn test_build_owner_memory_size() {
     // (a `u32` graph id plus an `Rc`: 16 bytes, measured 712 by the CI
     // feature run) sits beside it, so the budget below leaves room for both
     // configurations.
-    assert!(size < 720, "BuildOwner is too large: {size} bytes");
+    //
+    // 712 -> 728 for the presentation clipboard
+    // (`clipboard_handle: Option<ClipboardHandle>`): one `Arc<dyn Clipboard>`
+    // fat pointer, 16 bytes, `Option`'s niche absorbing the discriminant.
+    // Inline for the reason the hit-test handle is: it is cloned into every
+    // `BuildCtx`.
+    assert!(size < 736, "BuildOwner is too large: {size} bytes");
 }

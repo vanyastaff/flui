@@ -94,6 +94,8 @@ bon = { workspace = true }
 # trybuild drives the `tests/ui/` compile-fail corpus: the column! 17-children
 # case and the `#[diagnostic::on_unimplemented]` messages on the view traits.
 trybuild = { workspace = true }
+# `InMemoryClipboard`, the clipboard the `clipboard_handle` test installs.
+flui-platform-api = { workspace = true }
 
 [[test]]
 name = "view_it"

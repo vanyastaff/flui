@@ -444,6 +444,18 @@ pub trait LifecycleContext: BuildContext {
     /// `did_change_dependencies`), the same rule `post_frame_handle` follows.
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle>;
 
+    /// The presentation's plain-text clipboard.
+    ///
+    /// Every realm installs one over its platform's clipboard when it builds
+    /// the presentation, so this is `None` only on a bare owner (an
+    /// `ElementTree` in a unit test), never under a realm. Acquire it in a
+    /// lifecycle hook (`init_state` / `did_change_dependencies`), the same
+    /// rule `text_input_handle` follows.
+    ///
+    /// ADR-0084: this becomes `cx.capability::<Clipboard>()` once the
+    /// capability registry lands; the handle it returns stays the same.
+    fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle>;
+
     /// The realm's fresh-hit-test capability, if a binding installed an
     /// interaction lane.
     ///
