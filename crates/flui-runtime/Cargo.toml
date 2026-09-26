@@ -39,7 +39,10 @@ tracing = { workspace = true }
 # held-input tests queue.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
 # `log_capture::disarm_interest_cache`, so a sibling test cannot poison the
-# callsites the semantics-host privacy tests capture.
+# callsites the semantics-host privacy tests capture. Once `flui-testing`
+# depends on this crate (ADR-0083 §4) this is a dev-only cycle, as
+# `flui-view`'s and `flui-interaction`'s are; no type crosses it, so the second
+# copy of this crate in the test build never meets the first.
 flui-testing = { workspace = true }
 # Pointer positions in the held-input tests.
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
