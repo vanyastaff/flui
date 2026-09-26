@@ -179,6 +179,18 @@ fn lifetime_static_in_macro_tokens_is_not_an_item() {
 }
 
 #[test]
+fn quote_interpolated_static_in_macro_tokens_is_an_item() {
+    let found: Vec<String> = macro_statics(tokens(
+        "quote! { static #name: ::std::sync::Mutex<u8> = ::std::sync::Mutex::new(0); \
+         static mut #counter: u8 = 0; #[doc = \"x\"] fn f() {} #(#items)* }",
+    ))
+    .into_iter()
+    .map(|(name, _)| name)
+    .collect();
+    assert_eq!(found, ["#name", "#counter"]);
+}
+
+#[test]
 fn module_walk_follows_path_attributes_and_mod_rs_rules() {
     let lock = "static X: std::sync::Mutex<u8> = std::sync::Mutex::new(0);";
     let named = |name: &str| lock.replace('X', name);
