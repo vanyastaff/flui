@@ -1,8 +1,13 @@
 # ADR-0081: Workspace tiers, reach facts and stability kinds
 
 - **Status:** Accepted in part (2026-09-26): §1 (tiers, `order`, the direction rule,
-  `edge-exceptions`), §2 (reach) and the `tier-kind` declarations of §3. The kind rules of §3
-  (core never names official, the forward allowlist), §4 and §5 remain Proposed.
+  `edge-exceptions`) and the `tier-kind` declarations of §3. §2 (reach) is implemented and
+  checked by `cargo xtask reach` but remains Proposed until the owner decides three points it
+  assumes: `pkg`'s OS globs, whose `android-*`/`android_*` make
+  `flui-hot-reload → android_log-sys` a fifth entry; `flui-engine`'s standing `grant` for
+  `wgpu`; and that the ungated graph was red through four edges, not only through
+  `flui-platform`. The kind rules of §3 (core never names official, the forward allowlist), §4
+  and §5 remain Proposed.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md) through the
   accepted §1 (the numbered layer table, "a crate is a layer" as the only reason for a crate, and
@@ -387,6 +392,8 @@ For the accepted part:
   `a_dev_dependency_reaches_nothing`,
   `an_optional_dependency_reaches_only_under_a_feature_that_enables_it`,
   `a_weak_feature_does_not_activate_its_dependency`,
+  `a_strong_feature_enables_the_same_named_feature_whatever_it_lists`,
+  `an_unknown_feature_is_an_error_not_a_pass`,
   `a_dependency_is_matched_by_package_name_not_library_name`,
   `a_target_specific_dependency_counts_on_every_target`, `a_build_dependency_reaches`,
   `features_combine_within_one_root_and_not_across_roots`,
