@@ -855,6 +855,7 @@ fn the_tiers_match_the_adr_0081_table() {
                 "flui-testing",
                 "flui-widgets",
                 "flui-localizations",
+                "flui-runtime",
             ],
         ),
         ("H", "internal", &["flui-platform", "flui-app"]),

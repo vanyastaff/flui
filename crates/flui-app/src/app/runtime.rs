@@ -78,7 +78,7 @@ use super::window_registry::{RegistryError, WindowRegistry};
 /// (see [`RealmServices::construct`]). The retired `SemanticsBinding`
 /// singleton no longer exists at all (its enablement/announce/event state
 /// moved to the per-presentation `SemanticsHost` instead — see
-/// `super::semantics_host` — since that half of the old binding was a
+/// `flui_runtime::semantics_host` — since that half of the old binding was a
 /// per-window platform seam, not process-global state); only the OS-level,
 /// read-mostly accessibility flags stayed process-scoped, and this struct
 /// now owns that value directly. There is no `scheduler` field here any

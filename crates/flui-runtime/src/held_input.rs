@@ -6,7 +6,9 @@ use std::collections::VecDeque;
 use flui_foundation::PresentationId;
 use flui_interaction::{PointerEvent, PointerId};
 
-pub(crate) const HELD_POINTER_CAPACITY: usize = 256;
+/// Most pointer events one presentation retains while it has no committed
+/// tree, counting events handed out for an in-flight replay.
+pub const HELD_POINTER_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MotionClass {
@@ -41,7 +43,7 @@ struct QueueCounters {
 /// are O(n) average and O(n²) worst-case; `n` is always bounded by
 /// [`HELD_POINTER_CAPACITY`], so neither work nor storage can grow with an
 /// uncommitted-frame storm.
-pub(crate) struct HeldPointerQueue {
+pub struct HeldPointerQueue {
     presentation_id: PresentationId,
     events: VecDeque<PointerEvent>,
     replay_in_flight: bool,
@@ -57,8 +59,21 @@ pub(crate) struct HeldPointerQueue {
     counters: QueueCounters,
 }
 
+impl std::fmt::Debug for HeldPointerQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeldPointerQueue")
+            .field("presentation_id", &self.presentation_id)
+            .field("held", &self.total_len())
+            .field("replay_in_flight", &self.replay_in_flight)
+            .finish_non_exhaustive()
+    }
+}
+
 impl HeldPointerQueue {
-    pub(crate) fn new(presentation_id: PresentationId) -> Self {
+    /// An empty queue for the presentation `presentation_id`, which names it
+    /// in traces.
+    #[must_use]
+    pub fn new(presentation_id: PresentationId) -> Self {
         Self {
             presentation_id,
             events: VecDeque::new(),
@@ -77,13 +92,14 @@ impl HeldPointerQueue {
     }
 
     /// Admit one event without ever exposing more than the fixed capacity.
-    #[cfg(test)]
-    pub(crate) fn append(&mut self, event: PointerEvent) {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn append(&mut self, event: PointerEvent) {
         self.append_with_active_contact(event, false);
     }
 
     /// Admit one event whose pointer may already have a live gesture route.
-    pub(crate) fn append_with_active_contact(
+    pub fn append_with_active_contact(
         &mut self,
         event: PointerEvent,
         has_active_contact_sequence: bool,
@@ -178,7 +194,7 @@ impl HeldPointerQueue {
     }
 
     /// Remove hover motion only, retaining every contact epoch intact.
-    pub(crate) fn drop_hovers(&mut self) {
+    pub fn drop_hovers(&mut self) {
         let before = self.events.len();
         self.events
             .retain(|event| Self::motion_class(event) != Some(MotionClass::Hover));
@@ -190,16 +206,24 @@ impl HeldPointerQueue {
         debug_assert!(self.total_len() <= HELD_POINTER_CAPACITY);
     }
 
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
+    /// Events held, counting those handed out for an in-flight replay.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn len(&self) -> usize {
         self.total_len()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    /// Whether no event is held, counting those handed out for an in-flight
+    /// replay.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.total_len() == 0
     }
 
-    pub(crate) fn clear(&mut self) {
+    /// Drop every held event. A replay in flight discards what it has not
+    /// yet dispatched.
+    pub fn clear(&mut self) {
         let dropped = self.total_len();
         self.events.clear();
         self.replay_reserved = 0;
@@ -709,15 +733,27 @@ impl HeldPointerQueue {
 /// reentrantly. Dropping an unfinished batch places its suffix ahead of that
 /// newly queued input and clears the in-flight state.
 #[must_use = "dropping an unconsumed replay batch restores its remaining input"]
-pub(crate) struct HeldPointerReplay<'a> {
+pub struct HeldPointerReplay<'a> {
     queue: &'a RefCell<HeldPointerQueue>,
     remaining: VecDeque<PointerEvent>,
     snapshot_events: usize,
     completed: bool,
 }
 
+impl std::fmt::Debug for HeldPointerReplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeldPointerReplay")
+            .field("remaining", &self.remaining.len())
+            .field("snapshot_events", &self.snapshot_events)
+            .field("completed", &self.completed)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> HeldPointerReplay<'a> {
-    pub(crate) fn begin(queue: &'a RefCell<HeldPointerQueue>) -> Option<Self> {
+    /// Detach every held event into a replay batch, or `None` when a replay
+    /// of this queue is already in flight.
+    pub fn begin(queue: &'a RefCell<HeldPointerQueue>) -> Option<Self> {
         let remaining = {
             let mut queue = queue.borrow_mut();
             if queue.replay_in_flight {
@@ -754,7 +790,9 @@ impl<'a> HeldPointerReplay<'a> {
         })
     }
 
-    pub(crate) fn complete(mut self) {
+    /// Finish a fully dispatched batch. A batch with events left restores
+    /// them to the queue instead, as dropping it would.
+    pub fn complete(mut self) {
         if self.remaining.is_empty() {
             self.complete_inner();
         }

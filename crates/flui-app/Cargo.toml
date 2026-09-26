@@ -115,6 +115,8 @@ flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 # present in flui-app's closure (verified via `cargo tree -p flui-app`); this adds
 # only a direct Cargo edge + re-exports. FOUNDATIONS.md targets app → widgets.
 flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
+# The frame runtime (ADR-0083): the per-presentation lanes the realm drives.
+flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev" }
 
 # Utilities
 tracing.workspace = true
@@ -172,12 +174,13 @@ static_assertions.workspace = true
 # never names accesskit types — they cross it fully type-inferred, through
 # flui-semantics's deliberate named re-exports.
 accesskit.workspace = true
-# Test-only: capturing emitted events is how the privacy contract on
-# `SemanticsHost`'s announce/event fallbacks is checked (moved here from the
-# retired `flui-semantics::SemanticsService`) — an accessibility
-# announcement is read aloud to the user and must never reach a log field
-# verbatim. A *dev* edge only; the shipped crate links no subscriber backend.
+# Test-only: capturing emitted events is how the frame-failure detail and
+# segment-gate tests check what a frame reports to the log. A *dev* edge only;
+# the shipped crate links no subscriber backend.
 tracing-subscriber.workspace = true
+# `HeldPointerQueue::append`/`len` and `SemanticsHost::ensure_semantics`, which
+# this crate's tests use and which exist only under `test-support`.
+flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["test-support"] }
 # Enable flui-interaction's `testing` feature in test builds so tests can
 # construct synthetic pointer events via `events::make_*_event`. Feature
 # unification keeps these helpers out of the release `flui-app` binary.

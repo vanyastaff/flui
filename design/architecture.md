@@ -779,7 +779,7 @@ push-only shape; decision D10, owner decision 8.
   `accesskit_android` and `accesskit_ios` arrive in H1; a `tree_id` per window.
 - Enabling is a realm capability: a ref-counted semantics handle shared by assistive technology,
   agents and devtools. Today that handle has no production caller
-  (`crates/flui-app/src/app/semantics_host.rs:30-40`), so an agent sees the tree only while a
+  (`crates/flui-runtime/src/semantics_host.rs:34-42`), so an agent sees the tree only while a
   screen reader is running.
 - **FLUI owns its vocabulary.** `SemanticsRole` (33 roles plus flags) and `SemanticsAction` become
   `#[non_exhaustive]` and move to `flui-protocol`; names follow AccessKit or ARIA where the concept

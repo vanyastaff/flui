@@ -30,6 +30,7 @@ members = [
     "crates/flui-objects",       # Concrete RenderBox/RenderSliver catalog (ACTIVE)
     "crates/flui-view",          # View/Element tree (ACTIVE)
     "crates/flui-widgets",       # User-facing widget catalog (ACTIVE — Core.1 slice)
+    "crates/flui-runtime",       # Frame runtime: per-presentation lanes a realm drives (ADR-0083)
     "crates/flui-localizations", # Global (multi-language) localized resources (ACTIVE — Catalog.1 slice)
     "crates/flui-testing",       # Test-support: headless deterministic frame driver (pump_frame) (ACTIVE)
     "crates/flui-material",      # Material Design theming foundation — ColorScheme/TextTheme/ThemeData/Theme (ACTIVE — Catalog.1 slice)
@@ -97,7 +98,7 @@ tiers = [
     "C",   # contracts: flui-platform-api, flui-protocol
     "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
     "R",   # render machine: layer, rendering, objects, engine
-    "K",   # spine and runtime: view, testing, widgets; localizations until it is deleted
+    "K",   # spine and runtime: view, testing, widgets, runtime; localizations until it is deleted
     "H",   # hosts: platform backends, app runners, the CLI, the facade
     "pkg", # official packages: material, cupertino, devtools, hot reload
 ]
