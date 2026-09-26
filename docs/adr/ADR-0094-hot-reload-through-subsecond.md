@@ -138,8 +138,8 @@ merged.
 The runtime (`flui-runtime`, ADR-0083; `flui-app` until that crate exists) owns one optional
 hook. It is called at the element seam in `flui-view`, once for each framework call into a
 user-implemented `View` or `ViewState` method, not once per frame: a frame-level call goes
-through framework symbols, which a patcher's jump table does not cover (Context). The spike's
-shape is:
+through framework symbols, which a patcher's jump table does not cover (Context). The shape
+is:
 
 ```rust
 pub trait DevReloadHook: 'static {
@@ -153,7 +153,12 @@ pub trait DevReloadHook: 'static {
 }
 ```
 
-The exact safe wrapper over that raw shape is settled in the Subsecond implementation step.
+Only the `call(entry, data)` signature was run in the spike. The spike's trait was
+`DevReloadHook: Send + Sync + 'static` with `call` alone, and `poll` was a free function over a
+`PENDING` static. The `poll` method and the `'static`-only bound are this record's decisions: the
+instance lives on its realm and is called on the owner thread, and patch notifications reach it
+through the owner-queued command (§3), so it needs no `Send` or `Sync`. The exact safe wrapper
+over that raw shape is settled in the Subsecond implementation step.
 
 - The first version routes `build`, `init_state`, `create_state`, `did_update_view`,
   `did_change_dependencies` and `dispose`. The spike did not reach the last three, so they must
@@ -163,13 +168,13 @@ The exact safe wrapper over that raw shape is settled in the Subsecond implement
   instance and installs it per realm. No `static` holds it; the spike's `HOOK`, `WAKER` and
   `PENDING` statics and its `DEV_RESTART` thread-local would fail `cargo xtask globals`
   ([ADR-0097](ADR-0097-no-process-global-state-gate.md)).
-- The hook maps earlier patch addresses back to their originals before calling through the
-  jump table (Context, canonicalisation).
 - The hook is installed explicitly on the application builder (`Application`,
-  `crates/flui-app/src/app/application.rs:53`), by the application, never discovered. With no hook, the runtime calls the work directly and pays nothing else.
+  `crates/flui-app/src/app/application.rs:53`), by the application, never discovered. With no
+  hook installed, the element seam calls the user method directly; the only cost is checking
+  the realm's `Option` hook.
 - `ReloadEvent::Patched` becomes an owner-queued hot reload in every realm (ADR-0027 §9), which
   runs the existing reassemble: every element dirty, state kept
-  (`WidgetsBinding::perform_reassemble`, `crates/flui-view/src/binding.rs:1173`).
+  (`WidgetsBinding::perform_reassemble`, `crates/flui-view/src/binding.rs:1192`).
 - `ReloadEvent::RestartRequired` tears the realm down and hosts a fresh one on the same loop
   (ADR-0039 §6), in every presentation. State is lost; the process and its windows are not. The
   spike showed only a root remount in the same realm.
@@ -199,6 +204,8 @@ until that fix is upstream.
   change is memory-unsafe: `dispatch_view_update`
   (`crates/flui-view/src/element/dispatch.rs:75`) discriminates by `TypeId`, which ignores
   layout, so old code would store a new-layout value into an old-layout slot.
+- **Canonical addresses.** The implementation maps earlier patch addresses back to their
+  originals before calling through the jump table (Context, canonicalisation).
 - **Owner-thread application.** Patches are applied on the owner thread, through the
   owner-queued command. `dioxus_devtools::connect` runs its callback on a spawned thread
   (dioxus-devtools `lib.rs:90`), so the spike's patch application raced the UI thread's
