@@ -393,6 +393,49 @@ mod tests {
         assert!(missing.is_err());
     }
 
+    /// A failing step fails the task: `steps` stops there with an error naming
+    /// it (a second failure after it would have replaced that error), and
+    /// `every` runs the rest but still fails, naming each failed step. A task
+    /// returns this error from its `run`, which `main` turns into exit 1.
+    #[test]
+    fn a_failing_step_fails_the_task() {
+        let runner = Runner { dry_run: false };
+        let failing = Cmd::cargo(["--no-such-flag-xtask"]);
+        let missing = Cmd::new("flui-xtask-no-such-program");
+        let error = runner
+            .steps(&[
+                Step::Note("before".to_owned()),
+                failing.clone().into(),
+                missing.clone().into(),
+            ])
+            .expect_err("a failing step fails the plan");
+        assert!(
+            error
+                .to_string()
+                .starts_with("`cargo --no-such-flag-xtask` failed"),
+            "{error}"
+        );
+
+        let error = runner
+            .every(&[
+                failing.into(),
+                Cmd::cargo(["--version"]).into(),
+                missing.into(),
+            ])
+            .expect_err("`every` still fails when a step did");
+        let message = error.to_string();
+        assert!(message.starts_with("2 step(s) failed"), "{message}");
+        assert!(message.contains("cargo --no-such-flag-xtask"), "{message}");
+        assert!(message.contains("flui-xtask-no-such-program"), "{message}");
+
+        // a dry run executes nothing, so nothing fails
+        assert!(
+            Runner { dry_run: true }
+                .steps(&[Cmd::cargo(["--no-such-flag-xtask"]).into()])
+                .is_ok()
+        );
+    }
+
     #[test]
     fn merged_output_is_captured_whatever_the_exit() {
         let (ok, out) = Cmd::cargo(["--version"]).merged().expect("runs");
