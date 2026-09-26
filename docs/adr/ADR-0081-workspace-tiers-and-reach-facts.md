@@ -373,8 +373,8 @@ For the accepted part:
   `nothing_depends_on_a_tool_kind_crate`, `an_edge_exception_admits_one_upward_edge`,
   `a_stale_edge_exception_is_reported`, `an_edge_exception_citing_a_missing_adr_is_reported`,
   `the_self_test_reports_exactly_the_planted_findings`, and
-  `the_tiers_match_the_adr_0081_table`, which pins the table above and the six seeded
-  exceptions against the real manifests.
+  `the_tiers_match_the_adr_0081_table`, which pins the table above and the four remaining
+  seeded exceptions against the real manifests.
 - `cargo xtask reach` is green with the three seeded `reach-exceptions` entries of §2; removing
   `flui-engine`'s grant makes it fail with
   ``flui-engine (tier R) reaches wgpu under `flui --no-default-features`: flui-engine -> wgpu``
