@@ -1349,7 +1349,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
-    use flui_runtime::execution::{AdmissionLimits, DeterministicExecutors};
+    use flui_runtime::execution::DeterministicExecutors;
 
     /// Deterministic fixture: services routed to an injected
     /// [`DeterministicExecutors`], so spawned work runs only when the test
@@ -1358,7 +1358,8 @@ mod tests {
         let deterministic = DeterministicExecutors::new();
         let services = Arc::new(ExecutionServices::with_limits(
             Some(deterministic.host_executors()),
-            AdmissionLimits { compute: 8, io: 8 },
+            8,
+            8,
         ));
         (services, deterministic)
     }

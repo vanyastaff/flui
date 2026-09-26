@@ -34,7 +34,7 @@ lists them and what each waits on.
   `tier-kind` (ADR-0089 §1), so a change to any of these signatures is a
   breaking change of `flui` (`SpawnError` is `#[non_exhaustive]`, so a new
   variant is not).
-  The rest of `execution` (`ExecutionServices`, `AdmissionLimits`) is reached
+  The rest of `execution` (`ExecutionServices`) is reached
   only by `flui-app` and carries no promise. `execution_public_paths` in
   `flui-app` pins the re-exported paths.
 - **Per presentation or per host loop, never per process.** Every type here is
@@ -53,7 +53,8 @@ lists them and what each waits on.
   matches every variant from outside the crate).
 - **Test hooks stay behind `test-support`.** Items that exist for tests, or
   that have no production caller yet (`HeldPointerQueue::append`/`len`,
-  `SemanticsHost::ensure_semantics`, `outstanding_handles` and
+  `SemanticsHost::ensure_semantics`, `outstanding_handles`,
+  `ExecutionServices::with_limits`/`owns_default_pools`/`default_pools_started` and
   `platform_semantics_enabled`, the announce/event delivery), compile
   only under `cfg(test)` or the `test-support` feature, which only dev edges
   enable. Wiring one into production removes its gate in the same change.

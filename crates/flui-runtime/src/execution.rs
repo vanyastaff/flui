@@ -35,7 +35,7 @@
 //!
 //! # Admission, cancellation, shutdown
 //!
-//! Both lanes have bounded admission ([`AdmissionLimits`]): a full lane
+//! Both lanes have bounded admission (generous defaults): a full lane
 //! refuses new work with [`SpawnError::Saturated`] instead of queueing
 //! without bound. Shutdown stops admission first (later spawns get
 //! [`SpawnError::ShuttingDown`]), then cancels outstanding work (IO futures
@@ -178,18 +178,15 @@ pub(crate) fn default_compute_worker_count(available_parallelism: usize) -> usiz
 /// (queued + running).
 ///
 /// Defaults are deliberately generous — they are overload backstops, not
-/// throttles. Tests inject small values to exercise refusal.
-///
-/// Production always uses [`Default`]; the type is `pub` only so
-/// `ExecutionServices::with_limits` (behind `test-support`) can take it from
-/// `flui-app`'s tests. It is not re-exported by `flui-app` and carries no
-/// promise.
+/// throttles. Production always uses [`Default`]; tests inject small values
+/// through `ExecutionServices::with_limits` (behind `test-support`) to
+/// exercise refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AdmissionLimits {
+struct AdmissionLimits {
     /// Maximum in-flight compute jobs.
-    pub compute: usize,
+    compute: usize,
     /// Maximum in-flight IO futures.
-    pub io: usize,
+    io: usize,
 }
 
 impl Default for AdmissionLimits {
@@ -399,11 +396,12 @@ impl ExecutionServices {
         Self::build(Some(host), AdmissionLimits::default())
     }
 
-    /// Test seam: custom admission windows (both backends).
+    /// Test seam: custom admission windows (both backends), as the maximum
+    /// in-flight compute jobs and IO futures.
     #[cfg(any(test, feature = "test-support"))]
     #[must_use]
-    pub fn with_limits(host: Option<HostExecutors>, limits: AdmissionLimits) -> Self {
-        Self::build(host, limits)
+    pub fn with_limits(host: Option<HostExecutors>, compute: usize, io: usize) -> Self {
+        Self::build(host, AdmissionLimits { compute, io })
     }
 
     fn build(host: Option<HostExecutors>, limits: AdmissionLimits) -> Self {
@@ -439,6 +437,7 @@ impl ExecutionServices {
     /// (`true` — the lazily-started default pools on native targets,
     /// sequential in-place execution on wasm32) rather than routing it to
     /// host-injected pools (`false`).
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn owns_default_pools(&self) -> bool {
         !matches!(self.backend, Backend::Host(_))
@@ -630,7 +629,10 @@ impl fmt::Debug for ExecutionServices {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExecutionServices")
             .field("accepting", &self.accepting.load(Ordering::Relaxed))
-            .field("owns_default_pools", &self.owns_default_pools())
+            .field(
+                "owns_default_pools",
+                &!matches!(self.backend, Backend::Host(_)),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -915,16 +917,12 @@ mod tests {
     // pools (their worker threads run the work themselves).
 
     fn both_backends(check: impl Fn(&ExecutionServices, &dyn Fn())) {
-        let default_services =
-            ExecutionServices::with_limits(None, AdmissionLimits { compute: 4, io: 4 });
+        let default_services = ExecutionServices::with_limits(None, 4, 4);
         check(&default_services, &|| {});
         default_services.shutdown(Duration::from_secs(5));
 
         let deterministic = DeterministicExecutors::new();
-        let injected = ExecutionServices::with_limits(
-            Some(deterministic.host_executors()),
-            AdmissionLimits { compute: 4, io: 4 },
-        );
+        let injected = ExecutionServices::with_limits(Some(deterministic.host_executors()), 4, 4);
         let driver = deterministic.clone();
         check(&injected, &move || {
             driver.run_until_idle();
@@ -980,10 +978,7 @@ mod tests {
         // Deterministic backend: queued work does not run until driven, so
         // the admission window fills deterministically.
         let deterministic = DeterministicExecutors::new();
-        let services = ExecutionServices::with_limits(
-            Some(deterministic.host_executors()),
-            AdmissionLimits { compute: 2, io: 2 },
-        );
+        let services = ExecutionServices::with_limits(Some(deterministic.host_executors()), 2, 2);
 
         for _ in 0..2 {
             services
@@ -1021,7 +1016,7 @@ mod tests {
     /// on a gate, fill the window, and assert refusal while full.
     #[test]
     fn default_pool_admission_saturates_while_workers_are_parked() {
-        let services = ExecutionServices::with_limits(None, AdmissionLimits { compute: 2, io: 2 });
+        let services = ExecutionServices::with_limits(None, 2, 2);
         let gate = Arc::new(AtomicBool::new(false));
         for _ in 0..2 {
             let gate = Arc::clone(&gate);
@@ -1220,7 +1215,7 @@ mod tests {
     /// sizing half is `compute_pool_sizing_leaves_owner_thread_headroom`.
     #[test]
     fn frame_lane_makes_progress_while_background_lanes_are_saturated() {
-        let services = ExecutionServices::with_limits(None, AdmissionLimits { compute: 2, io: 2 });
+        let services = ExecutionServices::with_limits(None, 2, 2);
         let gate = Arc::new(AtomicBool::new(false));
         for _ in 0..2 {
             let gate = Arc::clone(&gate);
