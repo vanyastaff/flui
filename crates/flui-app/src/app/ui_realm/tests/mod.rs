@@ -95,35 +95,6 @@ fn presentation_and_widget_tree_share_the_exact_focus_owner() {
     );
 }
 
-/// ADR-0074 §5.8: a cross-thread signal write is a realm command — it runs
-/// against the realm's own graph on the owner thread at the next drain.
-#[cfg(feature = "signals")]
-#[test]
-fn a_signal_write_command_reaches_the_realms_graph_at_the_next_drain() {
-    let realm = new_runtime(noop_wake()).expect("runtime");
-    let graph = realm
-        .widgets()
-        .with_build_owner(|owner| owner.reactive().clone());
-    let counter = graph.signal(1u32);
-    let sender = counter.detach(); // the Send form; the Signal itself is realm-affine
-
-    realm
-        .command_sender()
-        .send_signal_write(Box::new(move |r: &flui_view::Reactive| {
-            sender
-                .attach()
-                .update(r, |c| *c += 41)
-                .expect("signal alive");
-        }))
-        .expect("send");
-    assert_eq!(counter.peek(&graph, |c| *c), Ok(1), "nothing runs at send");
-
-    let report = realm.drain_commands();
-
-    assert_eq!(report.invoked, 1);
-    assert_eq!(counter.peek(&graph, |c| *c), Ok(42));
-}
-
 #[test]
 fn recreated_runtime_gets_fresh_realm_id() {
     let first = new_runtime(noop_wake()).expect("first runtime");
@@ -1686,3 +1657,10 @@ mod closing_one_presentation_is_invisible_to_siblings;
 mod frame_failure_containment;
 
 mod frame_clock_segment_gate;
+
+// ========================================================================
+// Cross-thread signal writes run against the graph that minted the slot,
+// in whichever presentation owns it (ADR-0085 §1).
+// ========================================================================
+#[cfg(feature = "signals")]
+mod signal_write_routing;
