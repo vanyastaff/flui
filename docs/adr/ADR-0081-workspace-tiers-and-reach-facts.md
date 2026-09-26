@@ -8,8 +8,11 @@
   `wgpu`; and that the ungated graph was red through three edges, none of them through
   `flui-platform`, where the migration plan expected only `flui-platform` edges. ADR-0082's
   trait move landed first, so the first run on `main` needed no `flui-platform` entry. The
-  kind rules of §3 (core never names official, the forward allowlist), §4
-  and §5 remain Proposed.
+  kind rules of §3 (core never names official, in any dependency kind; an official package's
+  normal and build edges go to `flui-sdk` and the contract crates) are implemented and checked
+  by `cargo xtask workspace`, with today's refused edges seeded as `edge-exceptions` in place of
+  a separate allowlist (ADR-0088 §2), but remain Proposed until the owner accepts them. §4 and
+  §5 remain Proposed.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md) through the
   accepted §1 (the numbered layer table, "a crate is a layer" as the only reason for a crate, and

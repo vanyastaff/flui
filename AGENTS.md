@@ -42,7 +42,8 @@ now and expensive once consumers exist, so fix a bad shape instead of working ar
 
 ## Codebase map
 
-31 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
+30 crates under `crates/`, the official packages under `packages/`, and the `flui` facade
+(`src/`), strictly layered. Each manifest
 declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtask workspace`);
 `docs/crates.md` is the readable version. Bottom to top:
 
@@ -63,8 +64,11 @@ declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtas
   reconciliation, signals), `flui-widgets`, `flui-runtime` (the frame runtime a realm drives,
   moving out of `flui-app` per ADR-0083; no host, platform or GPU edge), `flui-sdk` (the
   Evolving package-author surface, versioned `0.N` apart from the train; ADR-0088), `flui-testing`
-  (deterministic headless frame driver on a virtual clock), `flui-material`, `flui-cupertino`,
+  (deterministic headless frame driver on a virtual clock), `flui-cupertino`,
   `flui-localizations`.
+- **Official packages** (`packages/`, ADR-0088) — `flui-material`, built on `flui-sdk` alone,
+  as a third-party package would be; `flui-cupertino`, `flui-devtools` and `flui-hot-reload` are
+  official packages still under `crates/` until each moves onto the SDK.
 - **Composition roots** — `flui-app` (per-window `UiRealm`s, the run loop), `flui-cli`,
   `flui-devtools`, `flui-hot-reload`, and the facade.
 
@@ -151,7 +155,7 @@ memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only c
 | No `println!`/`eprintln!` in `flui-foundation`/`flui-tree`/`flui-macros` | clippy `print_stdout`/`print_stderr` |
 | No `From<f32>` for `flui-geometry` unit wrappers | `compile_fail` doctests in `flui-geometry` |
 | No bare `unwrap()` in production; by convention `expect("BUG: <invariant>")` for internal invariants, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | `clippy::unwrap_used`; the conventions are review |
-| Crate layering (a normal or build dependency points to a lower tier, or a smaller `order` in the same tier, unless the dependent lists it in `edge-exceptions` with the ADR that removes it; and, until `layer` is removed, to the same layer or lower — ADR-0081); no framework crate but `flui-app`, `flui-cli` and the facade links `flui-log`; none but `flui-app` depends on `flui-platform` (ADR-0082); none but `flui-localizations`, `flui-app` and the facade depends on Material or Cupertino, in any form (ADR-0028); manifests inherit the workspace keys and lints, except that a `tier-kind = "evolving"` crate sets its own `0.N` version; `flui-foundation`, and no other member, declares the train guard `links = "flui_train"` (ADR-0088 §5); no unreachable test file; unique ADR numbers | `cargo xtask workspace` (`[package.metadata.flui]` in each manifest) |
+| Crate layering (a normal or build dependency points to a lower tier, or a smaller `order` in the same tier, unless the dependent lists it in `edge-exceptions` with the ADR that removes it; and, until `layer` is removed, to the same layer or lower — ADR-0081); no framework crate but `flui-app`, `flui-cli` and the facade links `flui-log`; none but `flui-app` depends on `flui-platform` (ADR-0082); only applications and official packages name an official package, in any dependency kind, and an official package's normal and build dependencies are `flui-sdk` and the contract crates, each refused edge needing the dependent's `edge-exceptions` entry; a member under `packages/` is official and lists no exception (the kind rule, ADR-0081 §3, ADR-0088 §2); none but `flui-localizations`, `flui-app` and the facade depends on Cupertino, in any form (ADR-0028); manifests inherit the workspace keys and lints, except that a `tier-kind = "evolving"` crate sets its own `0.N` version; `flui-foundation`, and no other member, declares the train guard `links = "flui_train"` (ADR-0088 §5); no unreachable test file; unique ADR numbers | `cargo xtask workspace` (`[package.metadata.flui]` in each manifest) |
 | No crate reaches what its tier forbids (`[workspace.metadata.flui.reach]`, where H forbids nothing, plus its own `reach-forbid`) in any root build, over normal and build edges on every target, except through a `reach-exceptions` entry that names its ADR and still excuses something; hot reload stays out of `flui-app`'s default graph (ADR-0081 §2) | `cargo xtask reach` |
 | Import direction between a crate's top-level modules (flui-widgets): non-test code names only modules in lower layers, through re-exports too; `#[cfg(test)]` code is exempt; a refused edge needs a dated `exceptions` entry naming the ADR that removes it | `cargo xtask module-dag` (`[package.metadata.flui.modules]`) |
 | No dependency that no code uses, no test-only dependency in `[dependencies]`, no `[workspace.dependencies]` entry nothing inherits (an optional dependency, or one a feature names, is only warned about); licenses, sources and banned crates per `deny.toml`, including crates std now replaces (`once_cell`, `cfg-if`, …); RustSec advisories | `cargo xtask deps` (cargo-shear, cargo-deny; CI's `deps` job) |
@@ -177,6 +181,7 @@ the history.
 | **Widget** | `View`/`ViewState` in `flui-widgets` or the facade, backed by a render object → `SemanticsConfiguration` for assistive tech → a test that fails without it |
 | **Platform capability** (a new handle) | Trait in `flui-platform-api`, backend in `flui-platform` with no platform types leaking out → a method on `LifecycleContext`, not `BuildContext`, so `build` cannot reach it → a test that fails without it → ADR if it changes a cross-crate contract |
 | **Crate** | A workspace `members` entry and `[package.metadata.flui]` `tier`, `tier-kind`, `order` and `layer = N` (names: root `[workspace.metadata.flui] tiers` and `layers`); `cargo xtask workspace` checks the rest. Why a crate must be a layer: `docs/crates.md` "Adding a New Crate", [ADR-0041](docs/adr/ADR-0041-workspace-topology-contract.md) |
+| **Official package** | Under `packages/<name>/`, `tier = "pkg"`, `tier-kind = "official"`, no `edge-exceptions`; its only FLUI normal dependency is `flui-sdk` (plus the contract crates), and its code names the framework as `flui_sdk::…`, the derives included. An item the SDK lacks is added to `flui-sdk` by ADR-0088 §4, with a line in its `tests/surface.rs` pinned list |
 | **Example using `material`/`cupertino`** | `[[example]] required-features = [...]` (`cargo xtask facade-combos` relies on it) |
 
 ## Definition of Done

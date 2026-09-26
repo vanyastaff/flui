@@ -190,8 +190,13 @@ Rules:
   (`Cargo.toml:525-526`), deleted by ADR-0088 §6. `flui-cli`'s dev edge to `flui-hot-reload`
   (`crates/flui-cli/Cargo.toml:114`) needs no exception: `flui-cli` has kind `tool`. Because
   `pkg` is ordered after H, these H → `pkg` edges are also the only exceptions to the direction
-  rule (ADR-0081 §1). The gate generalizes the existing `allowed-dependents`
-  mechanism (`crates/flui-material/Cargo.toml:87-88`) instead of adding a parallel rule.
+  rule (ADR-0081 §1). Implemented: `cargo xtask workspace` refuses these edges (the kind
+  rule, `tools/xtask/src/workspace/tiers.rs`), and the dependent's `edge-exceptions` entry
+  admits each one, the same list the direction rule reads; Material's `allowed-dependents`
+  lists went when it moved onto the SDK, Cupertino's go when it does. The same rule holds an
+  official package's normal and build edges to `flui-sdk` and the contract crates, with
+  Cupertino's, devtools' and hot reload's internal-crate edges seeded as exceptions until each
+  moves.
 - **The crate count is not a goal.** It is a reported fact of the tier table.
 
 **Why the runtime sits above `flui-widgets`.** The realm composes widget-level roots:
@@ -251,7 +256,7 @@ inline test modules are large.
 | flui-widgets | 6, 82.1k | K / internal | **One crate**, module-DAG gate | The 2026-09-23 decision stands. `cargo xtask module-dag -p flui-widgets` enforces import direction between modules. Raw primitives move down from Material; Router and Form arrive; `__private` (`crates/flui-widgets/src/lib.rs:75`) goes. The harness-reaching tests of the 22 `src/` files that used `crate::testing` moved to `tests/`; `__test_access` is temporary ([ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §4). |
 | flui-testing | 6, 3.7k | K / internal (dev) | **Move above the runtime** | Drives the real transaction under a manual clock; absorbs `flui_widgets::testing`; the optional `flui-widgets → flui-testing` edge (`crates/flui-widgets/Cargo.toml:89`) is removed. |
 | flui-hot-reload | 6, 2.9k | pkg / official | **Rewrite over Subsecond** as an official package | The dlopen design carries a documented residual risk; the three-crate template and its examples go only after the Subsecond spike ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). It links the `windows` crate directly today (`crates/flui-hot-reload/Cargo.toml:47`), which the package reach set forbids; the rewrite removes it. |
-| flui-material | 7, 26.9k | pkg / official | Official package on `flui-sdk` | 14 exact internal pins today (`grep -c '=0.2.0-dev' crates/flui-material/Cargo.toml`). Moves to `packages/flui-material` in the same change that ports it to `flui-sdk`; gains `flui_material::prelude`. |
+| flui-material | 7, 26.9k | pkg / official | Official package on `flui-sdk` | Done: `packages/flui-material` builds on `flui-sdk` alone (its normal dependencies are `flui-sdk` and `tracing`, pinned by `flui_material_builds_on_the_sdk_alone` in `tools/xtask/src/workspace/tests.rs`). Still to come: `flui_material::prelude`. |
 | flui-cupertino | 7, 4.3k | pkg / official | Official package on `flui-sdk` | Same; gains focus and keyboard activation from the Raw primitives. |
 | flui-localizations | 8, 0.3k | — | **Delete** (owner-confirmed, recorded in ADR-0081) | 281 lines in a layer of its own. The RTL table moves to `flui_widgets::localization`, strings to the packages, ICU4X to `flui-i18n` (H1). |
 | flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Realm, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the one trampoline cell (`APP_RUNTIME`, `crates/flui-app/src/app/runner/host.rs:25-47`). `realm_dispatch.rs` is 7,149 lines, but production code ends at line 1690 and the rest is one test module (`crates/flui-app/src/app/runner/realm_dispatch.rs:1691-1692`): the file-length gate counts production lines only, so it is within the limit and needs neither a move nor dissolving. |
