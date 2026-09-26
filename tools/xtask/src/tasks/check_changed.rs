@@ -271,7 +271,7 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
     println!("check-changed: {}", lane.reason);
     if lane.heavy_required {
         println!(
-            "check-changed: only CI's heavy jobs check part of this change (see the reason above): the PR will run the heavy lane; locally, consider cargo xtask ci-full"
+            "check-changed: only CI's wide-lane jobs check part of this change (see the reason above): the PR will run the wide lane (every Linux job); locally, consider cargo xtask ci-full"
         );
     }
     runner.run(&Cmd::cargo(["fmt", "--all", "--", "--check"]))?;

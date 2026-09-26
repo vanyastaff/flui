@@ -47,7 +47,11 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 ///   Examples still compile in `lint` (`--all-targets`); CI's `test` job and
 ///   `ci-full`'s `cargo build --workspace --all-targets` link them.
 /// - flui-platform is excluded: it runs on its own (see [`platform_suite`]).
-const TEST_SCOPE: [&str; 10] = [
+///
+/// CI's `fast-lane` builds the same scope and narrows the run with a nextest
+/// filterset (`change_scope`'s `ci_test_args`), so it builds what the `test`
+/// job's cache holds.
+pub(crate) const TEST_SCOPE: [&str; 10] = [
     "--workspace",
     "--exclude",
     "flui-platform",
