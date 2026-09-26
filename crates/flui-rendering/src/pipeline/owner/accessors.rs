@@ -1364,6 +1364,19 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.scheduler.layout_drained_total()
     }
 
+    /// Work totals for every phase since this owner was constructed
+    /// (monotonic). A frame's work is the difference across the frame,
+    /// [`PipelineCounters::since`](crate::pipeline::PipelineCounters::since):
+    /// the owner has no frame-begin hook, because the layout↔build fixpoint
+    /// runs `run_layout` several times before the frame's `run_frame`.
+    #[inline]
+    pub fn counters(&self) -> crate::pipeline::PipelineCounters {
+        crate::pipeline::PipelineCounters {
+            layout_roots: self.scheduler.layout_drained_total(),
+            ..self.counters
+        }
+    }
+
     /// Returns the nodes needing paint.
     ///
     /// These are repaint boundaries that need to be painted in the next

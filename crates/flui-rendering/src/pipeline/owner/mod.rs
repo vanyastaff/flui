@@ -13,6 +13,7 @@ mod actions;
 mod cell;
 mod compositing;
 mod construction;
+mod counters;
 mod diagnostics;
 mod layout;
 mod paint;
@@ -23,6 +24,7 @@ mod relocation;
 mod semantics;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
+pub use counters::PipelineCounters;
 pub use relocation::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
     DetachedRenderSubtrees, ReleaseDetachedRenderSubtreesError,
@@ -274,6 +276,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// nodes.
     pending_retain_bands: Vec<(RenderId, usize, usize)>,
 
+    /// Monotonic work totals since construction, read through
+    /// [`Self::counters`]. `layout_roots` is not stored here: the scheduler
+    /// already counts it and the accessor fills it in.
+    counters: PipelineCounters,
+
     /// Phantom marker for the typestate phase. Always zero-sized.
     /// See `crates/flui-rendering/src/pipeline/phase.rs`.
     _phase: PhantomData<Phase>,
@@ -344,6 +351,7 @@ where
         semantics_error_once_for_test: from.semantics_error_once_for_test,
         pending_child_requests: from.pending_child_requests,
         pending_retain_bands: from.pending_retain_bands,
+        counters: from.counters,
         _phase: PhantomData,
     }
 }
