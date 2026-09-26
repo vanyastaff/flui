@@ -2320,6 +2320,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flui-protocol"
+version = "0.2.0-dev"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "flui-rendering"
 version = "0.2.0-dev"
 dependencies = [

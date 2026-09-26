@@ -802,7 +802,7 @@ fn the_tiers_match_the_adr_0081_table() {
                 "flui-tree",
             ],
         ),
-        ("C", "stable", &["flui-platform-api"]),
+        ("C", "stable", &["flui-platform-api", "flui-protocol"]),
         (
             "S",
             "internal",
