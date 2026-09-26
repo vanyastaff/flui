@@ -19,11 +19,11 @@
 //! not yet draw a visible outline. A pre-existing deferral (`shape.rs`), not
 //! one introduced here.
 
-use flui_types::geometry::px;
-use flui_types::styling::{BorderSide, BorderStyle};
-use flui_types::{EdgeInsets, Size};
-use flui_view::prelude::*;
-use flui_widgets::{WidgetState, WidgetStateProperty};
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::styling::{BorderSide, BorderStyle};
+use flui_sdk::types::{EdgeInsets, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
@@ -38,7 +38,7 @@ use crate::theme::Theme;
 ///
 /// ```rust
 /// use flui_material::OutlinedButton;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _button = OutlinedButton::new(Text::new("Cancel")).on_pressed(|| {});
 /// ```
@@ -118,7 +118,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
             theme.text_theme.label_large.clone(),
         )),
         background_color: Some(WidgetStateProperty::all(Some(
-            flui_types::Color::TRANSPARENT,
+            flui_sdk::types::Color::TRANSPARENT,
         ))),
         foreground_color: Some(WidgetStateProperty::resolve_with(move |states| {
             Some(if states.contains_state(WidgetState::Disabled) {
@@ -161,7 +161,7 @@ fn scaled_padding_1x() -> EdgeInsets {
 
 #[cfg(test)]
 mod tests {
-    use flui_widgets::{WidgetState, WidgetStates};
+    use flui_sdk::widgets::{WidgetState, WidgetStates};
 
     use super::*;
 
@@ -187,7 +187,7 @@ mod tests {
 
         assert_eq!(
             resolve(style.background_color.as_ref(), &none),
-            Some(flui_types::Color::TRANSPARENT)
+            Some(flui_sdk::types::Color::TRANSPARENT)
         );
         assert_eq!(
             resolve(style.foreground_color.as_ref(), &none),

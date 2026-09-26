@@ -11,11 +11,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use common::{LaidOut, loose};
-use flui_foundation::RenderId;
 use flui_material::{
     DataCell, DataColumn, DataRow, DataTable, DataTableThemeData, Theme, ThemeData,
 };
-use flui_widgets::{TableColumnWidth, Text};
+use flui_sdk::foundation::RenderId;
+use flui_sdk::widgets::{TableColumnWidth, Text};
 
 fn text_column(label: &str) -> DataColumn {
     DataColumn::new(Text::new(label.to_string()))

@@ -23,8 +23,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
 use flui_material::{Material, MaterialShape};
-use flui_types::Color;
-use flui_widgets::{ColoredBox, GestureDetector};
+use flui_sdk::types::Color;
+use flui_sdk::widgets::{ColoredBox, GestureDetector};
 
 /// A point near the top-left corner of a 120x40 rect: outside the Stadium's
 /// inscribed corner circle (radius = shortest_side/2 = 20, centered at

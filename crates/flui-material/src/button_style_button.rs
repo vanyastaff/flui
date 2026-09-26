@@ -29,7 +29,7 @@
 //! ?? getProperty(defaultStyle)?.resolve(states)`. [`resolve_property`] is
 //! the direct Rust translation: three tiers, each independently resolved
 //! against the *current* [`WidgetStates`] and coalesced with `Option::or_else`.
-//! This is exactly the shape `flui_widgets::widget_state`'s
+//! This is exactly the shape `flui_sdk::widgets::widget_state`'s
 //! `option_property_coalesce_chain_mirrors_button_style_button` test
 //! demonstrates for a single tier — here extended to three.
 //!
@@ -97,13 +97,13 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_foundation::{Listenable, ListenerId};
-use flui_rendering::constraints::BoxConstraints;
-use flui_types::Color;
-use flui_types::typography::TextStyle;
-use flui_view::RebuildHandle;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::foundation::{Listenable, ListenerId};
+use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::types::Color;
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::view::RebuildHandle;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     ConstrainedBox, DefaultTextStyle, Padding, Semantics, WidgetState, WidgetStateProperty,
     WidgetStates, WidgetStatesController,
 };
@@ -264,7 +264,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
 
         let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(Arc::new(move || {
-            rebuild_for_listener.schedule(flui_view::RebuildReason::StateChange);
+            rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
 
         self.rebuild = Some(rebuild);
@@ -316,7 +316,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             default_style,
             minimum_size
         )
-        .unwrap_or(flui_types::Size::ZERO);
+        .unwrap_or(flui_sdk::types::Size::ZERO);
         let fixed_size = resolve_field!(
             &states,
             widget_style,
@@ -331,7 +331,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             default_style,
             maximum_size
         )
-        .unwrap_or(flui_types::Size::INFINITY);
+        .unwrap_or(flui_sdk::types::Size::INFINITY);
         // `side` is NOT resolved here: `Material`/`MaterialShape` has no
         // border-side painting path yet (see `ButtonStyle::side`'s doc
         // comment), so nothing in this composition would consume it. Each
@@ -422,9 +422,9 @@ fn fold_foreground_into_text_style(
 /// invert `min > max` into a malformed [`BoxConstraints`] instead of
 /// clamping to the envelope's edge, matching the oracle's own behavior.
 fn effective_constraints(
-    minimum: flui_types::Size,
-    maximum: flui_types::Size,
-    fixed: Option<flui_types::Size>,
+    minimum: flui_sdk::types::Size,
+    maximum: flui_sdk::types::Size,
+    fixed: Option<flui_sdk::types::Size>,
 ) -> BoxConstraints {
     let mut constraints =
         BoxConstraints::new(minimum.width, maximum.width, minimum.height, maximum.height);
@@ -468,7 +468,7 @@ fn overlay_color_property(
 
 #[cfg(test)]
 mod tests {
-    use flui_widgets::{WidgetStateConstraint, WidgetStates};
+    use flui_sdk::widgets::{WidgetStateConstraint, WidgetStates};
 
     use super::*;
 
@@ -560,7 +560,7 @@ mod tests {
     #[test]
     fn a_widget_property_that_resolves_none_for_this_state_falls_through_to_default() {
         let widget: WidgetStateProperty<Option<u32>> = WidgetStateProperty::from_map([(
-            WidgetStateConstraint::Is(flui_widgets::WidgetState::Pressed),
+            WidgetStateConstraint::Is(flui_sdk::widgets::WidgetState::Pressed),
             Some(1_u32),
         )]);
         let default = all_property(3_u32);
@@ -592,20 +592,20 @@ mod tests {
     // effective_constraints — min/max envelope + fixed-size clamping
     // ------------------------------------------------------------------
 
-    fn size(width: f32, height: f32) -> flui_types::Size {
-        flui_types::Size::new(
-            flui_types::geometry::px(width),
-            flui_types::geometry::px(height),
+    fn size(width: f32, height: f32) -> flui_sdk::types::Size {
+        flui_sdk::types::Size::new(
+            flui_sdk::types::geometry::px(width),
+            flui_sdk::types::geometry::px(height),
         )
     }
 
     #[test]
     fn no_fixed_size_passes_minimum_and_maximum_through_unpinned() {
         let constraints = effective_constraints(size(64.0, 40.0), size(200.0, 100.0), None);
-        assert_eq!(constraints.min_width, flui_types::geometry::px(64.0));
-        assert_eq!(constraints.max_width, flui_types::geometry::px(200.0));
-        assert_eq!(constraints.min_height, flui_types::geometry::px(40.0));
-        assert_eq!(constraints.max_height, flui_types::geometry::px(100.0));
+        assert_eq!(constraints.min_width, flui_sdk::types::geometry::px(64.0));
+        assert_eq!(constraints.max_width, flui_sdk::types::geometry::px(200.0));
+        assert_eq!(constraints.min_height, flui_sdk::types::geometry::px(40.0));
+        assert_eq!(constraints.max_height, flui_sdk::types::geometry::px(100.0));
     }
 
     /// A `fixed_size` inside `[minimum, maximum]` pins `min == max` at
@@ -614,10 +614,10 @@ mod tests {
     fn fixed_size_inside_the_envelope_pins_min_and_max_to_it() {
         let constraints =
             effective_constraints(size(64.0, 40.0), size(200.0, 100.0), Some(size(90.0, 60.0)));
-        assert_eq!(constraints.min_width, flui_types::geometry::px(90.0));
-        assert_eq!(constraints.max_width, flui_types::geometry::px(90.0));
-        assert_eq!(constraints.min_height, flui_types::geometry::px(60.0));
-        assert_eq!(constraints.max_height, flui_types::geometry::px(60.0));
+        assert_eq!(constraints.min_width, flui_sdk::types::geometry::px(90.0));
+        assert_eq!(constraints.max_width, flui_sdk::types::geometry::px(90.0));
+        assert_eq!(constraints.min_height, flui_sdk::types::geometry::px(60.0));
+        assert_eq!(constraints.max_height, flui_sdk::types::geometry::px(60.0));
     }
 
     /// Mutation-honest — the bug this test would have caught: a
@@ -631,10 +631,10 @@ mod tests {
     fn fixed_size_smaller_than_minimum_is_clamped_up_to_the_minimum() {
         let constraints =
             effective_constraints(size(64.0, 40.0), size(200.0, 100.0), Some(size(10.0, 10.0)));
-        assert_eq!(constraints.min_width, flui_types::geometry::px(64.0));
-        assert_eq!(constraints.max_width, flui_types::geometry::px(64.0));
-        assert_eq!(constraints.min_height, flui_types::geometry::px(40.0));
-        assert_eq!(constraints.max_height, flui_types::geometry::px(40.0));
+        assert_eq!(constraints.min_width, flui_sdk::types::geometry::px(64.0));
+        assert_eq!(constraints.max_width, flui_sdk::types::geometry::px(64.0));
+        assert_eq!(constraints.min_height, flui_sdk::types::geometry::px(40.0));
+        assert_eq!(constraints.max_height, flui_sdk::types::geometry::px(40.0));
     }
 
     /// Symmetric case: a `fixed_size` LARGER than `maximum` clamps down.
@@ -645,10 +645,10 @@ mod tests {
             size(200.0, 100.0),
             Some(size(500.0, 500.0)),
         );
-        assert_eq!(constraints.min_width, flui_types::geometry::px(200.0));
-        assert_eq!(constraints.max_width, flui_types::geometry::px(200.0));
-        assert_eq!(constraints.min_height, flui_types::geometry::px(100.0));
-        assert_eq!(constraints.max_height, flui_types::geometry::px(100.0));
+        assert_eq!(constraints.min_width, flui_sdk::types::geometry::px(200.0));
+        assert_eq!(constraints.max_width, flui_sdk::types::geometry::px(200.0));
+        assert_eq!(constraints.min_height, flui_sdk::types::geometry::px(100.0));
+        assert_eq!(constraints.max_height, flui_sdk::types::geometry::px(100.0));
     }
 
     /// An infinite `fixed_size` axis is ignored on that axis (Flutter
@@ -660,14 +660,14 @@ mod tests {
         let constraints = effective_constraints(
             size(64.0, 40.0),
             size(200.0, 100.0),
-            Some(flui_types::Size::new(
-                flui_types::Pixels::INFINITY,
-                flui_types::geometry::px(60.0),
+            Some(flui_sdk::types::Size::new(
+                flui_sdk::types::Pixels::INFINITY,
+                flui_sdk::types::geometry::px(60.0),
             )),
         );
-        assert_eq!(constraints.min_width, flui_types::geometry::px(64.0));
-        assert_eq!(constraints.max_width, flui_types::geometry::px(200.0));
-        assert_eq!(constraints.min_height, flui_types::geometry::px(60.0));
-        assert_eq!(constraints.max_height, flui_types::geometry::px(60.0));
+        assert_eq!(constraints.min_width, flui_sdk::types::geometry::px(64.0));
+        assert_eq!(constraints.max_width, flui_sdk::types::geometry::px(200.0));
+        assert_eq!(constraints.min_height, flui_sdk::types::geometry::px(60.0));
+        assert_eq!(constraints.max_height, flui_sdk::types::geometry::px(60.0));
     }
 }

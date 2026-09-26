@@ -282,6 +282,11 @@ flui-objects = { path = "crates/flui-objects", version = "=0.2.0-dev" }
 # a shipped library: a normal edge would link the test driver into production.
 flui-testing = { path = "crates/flui-testing", version = "=0.2.0-dev" }
 
+# PACKAGE-AUTHOR SURFACE — what an official or third-party package builds on
+# instead of the internal crates (ADR-0088 §4). Its own `0.N` version, not the
+# train's: the SDK is Evolving.
+flui-sdk = { path = "crates/flui-sdk", version = "=0.1.0-dev" }
+
 # PLATFORM CONTRACTS — the capability traits and the window/input vocabulary,
 # with no OS backend (ADR-0082). Framework crates that name a platform
 # contract depend on this; only composition roots depend on flui-platform.

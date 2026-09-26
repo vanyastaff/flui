@@ -39,10 +39,10 @@ use flui_material::{
     AppBar, AppBarThemeData, ButtonStyle, ColorSchemeOverrides, ElevatedButton,
     ElevatedButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_types::platform::Brightness;
-use flui_types::styling::Color;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::types::styling::Color;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     InheritedTheme, MediaQuery, MediaQueryData, SizedBox, Text, WidgetStateProperty,
 };
 
@@ -144,7 +144,7 @@ fn theme_maybe_of_returns_none_without_ancestor() {
 /// change wins" shared value).
 #[test]
 fn a_themed_subtree_carries_both_the_elevated_button_and_app_bar_theme_simultaneously() {
-    use flui_widgets::Column;
+    use flui_sdk::widgets::Column;
 
     let themed_button_background = Color::from_argb(0xFF11_2233);
     let themed_app_bar_background = Color::from_argb(0xFF44_5566);
@@ -248,7 +248,7 @@ impl StatelessView for WrapHost {
 /// `InheritedTheme::wrap(child)` must yield a widget that provides the
 /// wrapping `Theme`'s data to `child` — the behavior the trait exists for
 /// (a future capture/re-parent mechanism reuses `wrap` to carry a theme
-/// across a subtree boundary; see [`flui_widgets::InheritedTheme`]'s module
+/// across a subtree boundary; see [`flui_sdk::widgets::InheritedTheme`]'s module
 /// docs). The assertion fails if `wrap` drops the data, substitutes a
 /// default, or fails to actually provide `child` with any `Theme` ancestor
 /// at all.

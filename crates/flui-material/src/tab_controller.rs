@@ -32,20 +32,20 @@
 //! observe one field updated and not the other, because on a single
 //! (`!Send`) realm nothing else can run between the `set` and the `notify`.
 //! `Rc<Cell<_>>` is `!Send`/`!Sync`, so `TabController` itself does not (and
-//! cannot) implement [`Listenable`](flui_foundation::Listenable) — that
+//! cannot) implement [`Listenable`](flui_sdk::foundation::Listenable) — that
 //! trait requires `Send + Sync` — which is exactly the point: the compiler
 //! now enforces single-realm use instead of a doc comment promising it.
 //!
 //! The listener registry follows the same logic: [`TabController::add_listener`]
 //! takes a plain `Rc<dyn Fn()>` (this crate's usual owner-local callback
 //! shape — see [`crate::ink_well::InkWell::on_tap`]), not
-//! `flui_foundation::ListenerCallback` (`Arc<dyn Fn() + Send + Sync>`). A
+//! `flui_sdk::foundation::ListenerCallback` (`Arc<dyn Fn() + Send + Sync>`). A
 //! `Send + Sync`-bound callback could never legally capture this
 //! `TabController` (or its `Rc<Cell<_>>` state) to begin with, so reusing
-//! `flui_foundation::ChangeNotifier` here would make the *listener*
+//! `flui_sdk::foundation::ChangeNotifier` here would make the *listener*
 //! unable to read back the very state it was notified about.
 //! [`TabBar`](crate::TabBar) subscribes with a plain closure that schedules
-//! a rebuild via [`flui_view::RebuildHandle`] (itself `Send + Sync`, but
+//! a rebuild via [`flui_sdk::view::RebuildHandle`] (itself `Send + Sync`, but
 //! that is incidental — nothing about the registry requires it).
 //!
 //! # `animate_to` is a documented alias, not an animation
@@ -70,9 +70,9 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_foundation::ListenerId;
-use flui_view::prelude::*;
-use flui_view::{BoxedView, InheritedView, impl_inherited_view};
+use flui_sdk::foundation::ListenerId;
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
 
 /// `(index, previous_index)`, mutated and read as one unit — see the module
 /// docs' "one non-`Send` cell" section for why this is a single `Cell` of a
@@ -85,16 +85,16 @@ struct IndexPair {
 
 /// A [`TabController`] change listener — `Rc`-based, matching this crate's
 /// other owner-local callback types (e.g. [`crate::ink_well::InkWell`]'s
-/// `on_tap`), NOT `flui_foundation::ListenerCallback`
+/// `on_tap`), NOT `flui_sdk::foundation::ListenerCallback`
 /// (`Arc<dyn Fn() + Send + Sync>`). This is deliberate, not an oversight: a
 /// `Send + Sync` callback could never legally capture a `TabController` (or
 /// anything reachable from its `Rc<Cell<_>>` state) in the first place, so a
 /// `TabController`-flavored listener registry needs its own `!Send`
-/// callback type rather than reusing `flui_foundation::ChangeNotifier`'s.
+/// callback type rather than reusing `flui_sdk::foundation::ChangeNotifier`'s.
 type TabChangeListener = Rc<dyn Fn()>;
 
 /// [`TabController`]'s own listener registry — a private, `!Send`
-/// counterpart to `flui_foundation::ChangeNotifier` (see
+/// counterpart to `flui_sdk::foundation::ChangeNotifier` (see
 /// [`TabChangeListener`]'s doc comment for why that type doesn't fit here).
 /// `Rc`-shared so every [`TabController`] clone registers into and notifies
 /// from the same underlying list.
@@ -138,7 +138,7 @@ impl TabListenerRegistry {
     /// the `Rc<dyn Fn()>` handles, not the `Vec`'s backing allocation) so a
     /// listener that adds/removes a listener mid-notify does not conflict
     /// with the in-progress borrow — same reentrancy shape as
-    /// `flui_foundation::ChangeNotifier::notify_listeners`.
+    /// `flui_sdk::foundation::ChangeNotifier::notify_listeners`.
     fn notify(&self) {
         let snapshot: Vec<TabChangeListener> = self
             .listeners
@@ -319,7 +319,7 @@ impl TabController {
     }
 
     /// The number of currently-registered listeners. Mainly a test seam —
-    /// mirrors `flui_foundation::ChangeNotifier::len`'s own reason for
+    /// mirrors `flui_sdk::foundation::ChangeNotifier::len`'s own reason for
     /// existing: proving a consumer's `dispose()` actually unregisters
     /// (rather than leaking) is otherwise unobservable from outside.
     #[must_use]
@@ -431,7 +431,7 @@ impl_inherited_view!(TabControllerScope);
 ///
 /// ```
 /// use flui_material::DefaultTabController;
-/// use flui_widgets::SizedBox;
+/// use flui_sdk::widgets::SizedBox;
 ///
 /// let _root = DefaultTabController::new(3, SizedBox::shrink());
 /// ```
@@ -684,7 +684,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "index 5 is out of range for length 3")]
     fn default_tab_controller_initial_index_rejects_out_of_range() {
-        let _ = DefaultTabController::new(3, flui_widgets::SizedBox::shrink()).initial_index(5);
+        let _ =
+            DefaultTabController::new(3, flui_sdk::widgets::SizedBox::shrink()).initial_index(5);
     }
 
     #[test]
@@ -792,14 +793,15 @@ mod tests {
 
     #[test]
     fn default_tab_controller_new_leaves_initial_index_at_zero() {
-        let root = DefaultTabController::new(3, flui_widgets::SizedBox::shrink());
+        let root = DefaultTabController::new(3, flui_sdk::widgets::SizedBox::shrink());
         assert_eq!(root.length, 3);
         assert_eq!(root.initial_index, 0);
     }
 
     #[test]
     fn default_tab_controller_initial_index_overrides_the_start() {
-        let root = DefaultTabController::new(3, flui_widgets::SizedBox::shrink()).initial_index(2);
+        let root =
+            DefaultTabController::new(3, flui_sdk::widgets::SizedBox::shrink()).initial_index(2);
         assert_eq!(root.initial_index, 2);
     }
 
@@ -809,7 +811,7 @@ mod tests {
         let rendered = format!("{controller:?}");
         assert!(rendered.contains("TabController"));
 
-        let root = DefaultTabController::new(3, flui_widgets::SizedBox::shrink());
+        let root = DefaultTabController::new(3, flui_sdk::widgets::SizedBox::shrink());
         let rendered = format!("{root:?}");
         assert!(rendered.contains("DefaultTabController"));
     }

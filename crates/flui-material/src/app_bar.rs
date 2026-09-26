@@ -18,7 +18,7 @@
 //! itself against `MediaQuery.paddingOf(context).top`, rather than a parent
 //! adding that padding on its behalf. This substrate does the same
 //! unconditionally (no `primary` toggle yet — every `AppBar` behaves as
-//! `primary: true`), via [`flui_widgets::SafeArea`]. A consequence, matching
+//! `primary: true`), via [`flui_sdk::widgets::SafeArea`]. A consequence, matching
 //! the oracle: a standalone `AppBar` (mounted with no `Scaffold` at all, just
 //! a `MediaQuery` ancestor) already reserves the status-bar inset on its own.
 //!
@@ -109,7 +109,7 @@
 //! `BackButton`/`CloseButton` if `parentRoute?.impliesAppBarDismissal ??
 //! false` (`willHandlePopInternally || canPop`, from `ModalRoute`). This
 //! substrate has no `Drawer`/`Scaffold.hasDrawer` and no `ModalRoute`
-//! abstraction (routes are plain [`flui_widgets::Route`]s, not modal-aware
+//! abstraction (routes are plain [`flui_sdk::widgets::Route`]s, not modal-aware
 //! ones), so `resolve_leading` narrows the condition to what those two
 //! substrates leave reachable: no leading set, `automatically_imply_leading`
 //! set, a [`NavigatorHandle`] ancestor
@@ -153,13 +153,13 @@
 //! `AppBarTheme.leadingWidth` override exists yet (named V1 deferral), so
 //! `LEADING_WIDTH` is the only width this slot ever takes.
 
-use flui_rendering::constraints::BoxConstraints;
-use flui_types::geometry::px;
-use flui_types::styling::Color;
-use flui_types::typography::TextStyle;
-use flui_types::{Alignment, Pixels, Size};
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::styling::Color;
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::types::{Alignment, Pixels, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Align, Center, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded,
     Flexible, IconTheme, IconThemeData, MainAxisAlignment, NavigatorHandle, Positioned,
     PreferredSizeView, Row, SafeArea, SizedBox, Stack,
@@ -194,7 +194,7 @@ const LEADING_WIDTH: f32 = DEFAULT_TOOLBAR_HEIGHT;
 ///
 /// ```rust
 /// use flui_material::AppBar;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _bar = AppBar::new().title(Text::new("FLUI")).toolbar_height(64.0);
 /// ```
@@ -646,7 +646,7 @@ mod tests {
     /// — this assertion fails (`56.0` instead of `104.0`).
     #[test]
     fn preferred_size_adds_the_bottom_slots_height_when_set() {
-        use flui_widgets::layout::PreferredSize;
+        use flui_sdk::widgets::layout::PreferredSize;
 
         let bottom_height = 48.0;
         let bar = AppBar::new().bottom(PreferredSize::new(
@@ -737,7 +737,7 @@ mod tests {
     fn resolve_style_theme_title_text_style_is_used_verbatim_not_recolored() {
         let mut theme = ThemeData::light();
         let themed_title_style =
-            flui_types::typography::TextStyle::new().with_color(Color::rgb(3, 3, 3));
+            flui_sdk::types::typography::TextStyle::new().with_color(Color::rgb(3, 3, 3));
         theme.app_bar_theme = Some(crate::theme_data::AppBarThemeData {
             title_text_style: Some(themed_title_style.clone()),
             ..Default::default()
@@ -770,12 +770,12 @@ mod tests {
 
     #[test]
     fn builders_set_the_expected_fields() {
-        use flui_widgets::layout::PreferredSize;
+        use flui_sdk::widgets::layout::PreferredSize;
 
         let bar = AppBar::new()
-            .leading(flui_widgets::SizedBox::shrink())
-            .title(flui_widgets::SizedBox::shrink())
-            .actions(vec![flui_widgets::SizedBox::shrink().boxed()])
+            .leading(flui_sdk::widgets::SizedBox::shrink())
+            .title(flui_sdk::widgets::SizedBox::shrink())
+            .actions(vec![flui_sdk::widgets::SizedBox::shrink().boxed()])
             .background_color(Color::rgb(10, 20, 30))
             .foreground_color(Color::rgb(40, 50, 60))
             .elevation(4.0)
@@ -807,7 +807,7 @@ mod tests {
 
     #[test]
     fn leading_short_circuit_prefers_an_explicit_leading_regardless_of_the_imply_flag() {
-        let leading = flui_widgets::SizedBox::shrink().boxed();
+        let leading = flui_sdk::widgets::SizedBox::shrink().boxed();
         let resolved = leading_short_circuit(Some(&leading), true);
         assert!(
             matches!(resolved, LeadingShortCircuit::Resolved(Some(_))),

@@ -58,10 +58,10 @@ use std::rc::Rc;
 
 use common::{lay_out, loose};
 use flui_material::{Theme, ThemeData};
-use flui_view::element::ElementKind;
-use flui_view::prelude::*;
-use flui_view::{BoxedView, ProxyView, View};
-use flui_widgets::{Column, SizedBox};
+use flui_sdk::view::element::ElementKind;
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{BoxedView, ProxyView, View};
+use flui_sdk::widgets::{Column, SizedBox};
 
 /// Leaves that register a `Theme::of` dependency, spread evenly through the
 /// 1,000-leaf list (every 20th index) rather than clustered at one end —

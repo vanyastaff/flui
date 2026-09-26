@@ -23,16 +23,16 @@ use common::{lay_out, tight};
 use flui_material::{
     ButtonStyle, ElevatedButton, ElevatedButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
 };
+use flui_sdk::widgets::{Text, WidgetStateProperty};
 use flui_testing::a11y::Role;
-use flui_widgets::{Text, WidgetStateProperty};
 
 /// `_ElevatedButtonDefaultsM3`'s formatted `Debug` string for a given
-/// resolved [`Color`](flui_types::Color) — what `RenderPhysicalShape`'s
+/// resolved [`Color`](flui_sdk::types::Color) — what `RenderPhysicalShape`'s
 /// `Diagnosticable::debug_fill_properties` writes into its `"color"`
 /// property (`add_color("color", format!("{:?}", self.color))`,
 /// `crates/flui-objects/src/proxy/physical_model.rs`), so a test can compare
 /// against it without downcasting the render object.
-fn color_property(color: flui_types::Color) -> String {
+fn color_property(color: flui_sdk::types::Color) -> String {
     format!("{color:?}")
 }
 
@@ -196,7 +196,7 @@ fn did_update_view_resyncs_disabled_when_the_press_handler_is_removed() {
 /// `None` at every call site).
 #[test]
 fn elevated_button_theme_slot_reaches_the_mounted_materials_background_color() {
-    let themed_background = flui_types::Color::rgb(11, 22, 33);
+    let themed_background = flui_sdk::types::Color::rgb(11, 22, 33);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         elevated_button_theme: Some(ElevatedButtonThemeData {
             style: Some(ButtonStyle {
@@ -232,8 +232,8 @@ fn elevated_button_theme_slot_reaches_the_mounted_materials_background_color() {
 /// ?? getProperty(themeStyle) ?? …` precedence.
 #[test]
 fn widget_level_style_wins_over_the_elevated_button_theme() {
-    let themed_background = flui_types::Color::rgb(1, 1, 1);
-    let widget_background = flui_types::Color::rgb(9, 9, 9);
+    let themed_background = flui_sdk::types::Color::rgb(1, 1, 1);
+    let widget_background = flui_sdk::types::Color::rgb(9, 9, 9);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         elevated_button_theme: Some(ElevatedButtonThemeData {
             style: Some(ButtonStyle {
@@ -285,7 +285,7 @@ fn widget_level_style_wins_over_the_elevated_button_theme() {
 // covers for a hand-built `Semantics::on_tap` handler is NOT mirrored here:
 // `ButtonStyleButtonCore::on_pressed` is `Rc<dyn Fn()>` (owner-local, per
 // ADR-0027 — see that field's own doc comment), while
-// `flui_widgets::Semantics::on_tap` requires `Fn() + Send + Sync + 'static`
+// `flui_sdk::widgets::Semantics::on_tap` requires `Fn() + Send + Sync + 'static`
 // (see that builder's module doc, "The `Send + Sync` bound on action
 // handlers comes from storage, not from threading"). Routing `on_pressed`
 // through the `Semantics` wrapper's own tap action would need a `Send +

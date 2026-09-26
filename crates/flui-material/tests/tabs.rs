@@ -16,10 +16,10 @@ use flui_material::{
     DefaultTabController, Tab, TabBar, TabBarThemeData, TabController, Theme, ThemeData,
     ThemeDataOverrides,
 };
-use flui_rendering::constraints::BoxConstraints;
-use flui_types::Color;
-use flui_types::geometry::px;
-use flui_view::ErrorView;
+use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::types::Color;
+use flui_sdk::types::geometry::px;
+use flui_sdk::view::ErrorView;
 
 fn two_tabs() -> Vec<Tab> {
     vec![Tab::new().text("One"), Tab::new().text("Two")]
@@ -33,7 +33,7 @@ fn bar_constraints(width: f32, max_height: f32) -> BoxConstraints {
     BoxConstraints::new(px(width), px(width), px(0.0), px(max_height))
 }
 
-fn themed(theme: ThemeData, child: impl flui_view::prelude::IntoView) -> Theme {
+fn themed(theme: ThemeData, child: impl flui_sdk::view::prelude::IntoView) -> Theme {
     Theme::new(theme, child)
 }
 
@@ -60,8 +60,8 @@ fn themed(theme: ThemeData, child: impl flui_view::prelude::IntoView) -> Theme {
 /// this test against that mutation before restoring the real `dispose`.
 #[test]
 fn unmounting_a_tab_bar_removes_its_listener_from_the_controller() {
-    use flui_view::{IntoView, ViewExt};
-    use flui_widgets::Column;
+    use flui_sdk::view::{IntoView, ViewExt};
+    use flui_sdk::widgets::Column;
 
     let controller = TabController::new(2, 0);
 
@@ -88,7 +88,7 @@ fn unmounting_a_tab_bar_removes_its_listener_from_the_controller() {
     // removal, not a root-type swap.
     laid.pump_widget(themed(
         ThemeData::light(),
-        Column::new(Vec::<flui_view::BoxedView>::new()),
+        Column::new(Vec::<flui_sdk::view::BoxedView>::new()),
     ));
 
     let after_removal = controller.listener_count();
@@ -148,7 +148,7 @@ fn tapping_the_already_selected_tab_leaves_the_index_unchanged() {
 }
 
 /// The M3 secondary bar's divider (1dp, `outlineVariant`) reaches the
-/// mounted tree as a full-bar-width [`flui_widgets::DecoratedBox`]-backed
+/// mounted tree as a full-bar-width [`flui_sdk::widgets::DecoratedBox`]-backed
 /// fill, and a `TabBarThemeData.divider_color` override actually changes
 /// what's painted — not just what `resolve_style` computes in isolation
 /// (see `tabs.rs`'s own `resolve_style_theme_override_beats_the_default`
@@ -342,8 +342,8 @@ fn indicator_band_sits_at_the_bar_bottom_beneath_the_divider_and_paints_over_it(
 /// subtree — a small DFS helper for structural paint-order assertions.
 fn subtree_contains(
     laid: &common::LaidOut,
-    root: flui_foundation::RenderId,
-    id: flui_foundation::RenderId,
+    root: flui_sdk::foundation::RenderId,
+    id: flui_sdk::foundation::RenderId,
 ) -> bool {
     if root == id {
         return true;
@@ -418,7 +418,7 @@ fn a_tab_count_mismatched_with_the_controllers_length_builds_an_error() {
 /// with no selection.
 ///
 /// The panic itself happens inside `build()`, which this crate's build-error
-/// boundary (`flui_view::element::behavior_commons::build_or_recover`)
+/// boundary (`flui_sdk::view::element::behavior_commons::build_or_recover`)
 /// catches and substitutes with `ErrorView`; `#[should_panic]` around the
 /// mount call therefore would not observe the original panic. The shared
 /// harness's production focus anchor can retain a render root after that

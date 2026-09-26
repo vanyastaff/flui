@@ -10,7 +10,7 @@ use common::{lay_out, loose};
 use flui_material::{
     Divider, DividerThemeData, Theme, ThemeData, ThemeDataOverrides, VerticalDivider,
 };
-use flui_types::Color;
+use flui_sdk::types::Color;
 
 /// `_DividerDefaultsM3`'s full geometry table reaches the mounted tree: the
 /// filled line is `1.0` thick and inset by `indent`/`end_indent` on the

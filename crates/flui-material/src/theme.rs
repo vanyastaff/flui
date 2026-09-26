@@ -6,9 +6,9 @@
 //! capture/re-parent mechanism (see that trait's module docs) can wrap a
 //! `Theme` the same way it wraps any other ambient theme.
 
-use flui_view::prelude::*;
-use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
-use flui_widgets::InheritedTheme;
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
+use flui_sdk::widgets::InheritedTheme;
 
 use crate::theme_data::ThemeData;
 
@@ -24,7 +24,7 @@ use crate::theme_data::ThemeData;
 ///
 /// ```rust
 /// use flui_material::{Theme, ThemeData};
-/// use flui_widgets::SizedBox;
+/// use flui_sdk::widgets::SizedBox;
 ///
 /// let _themed = Theme::new(ThemeData::dark(), SizedBox::shrink());
 /// ```
@@ -151,7 +151,7 @@ impl InheritedTheme for Theme {
 
 #[cfg(test)]
 mod tests {
-    use flui_widgets::SizedBox;
+    use flui_sdk::widgets::SizedBox;
 
     use super::*;
 

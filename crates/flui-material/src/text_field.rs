@@ -8,7 +8,7 @@
 //! `_TextFieldState.build` composes a raw `widgets.EditableText` and
 //! `InputDecorator` inline (`text_field.dart:1684-1782`), which is exactly
 //! this substrate's own shape: no
-//! [`flui_widgets::RawTextField`](flui_widgets::text::text_field::RawTextField)
+//! [`flui_sdk::widgets::RawTextField`](flui_sdk::widgets::text::text_field::RawTextField)
 //! in the middle — that type is this crate's theme-free sibling for a tree
 //! with no `Theme` ancestor, named `RawTextField` (not `TextField`)
 //! specifically so this Material type gets to be the one thing named
@@ -99,9 +99,9 @@
 //! _requestKeyboard())` composition (`text_field.dart:1797,1811-1820`) makes
 //! the *entire* decorated box (fill, underline, label/hint rows) a valid tap
 //! target, not just the text-content rect. `GestureDetector`'s default
-//! [`flui_widgets::HitTestBehavior::DeferToChild`] is sufficient here
+//! [`flui_sdk::widgets::HitTestBehavior::DeferToChild`] is sufficient here
 //! because `InputDecorator`'s own inner `MouseRegion` defaults to
-//! [`flui_widgets::HitTestBehavior::Opaque`] and spans the full decorated
+//! [`flui_sdk::widgets::HitTestBehavior::Opaque`] and spans the full decorated
 //! rect, so every point within it already resolves a hit for the outer
 //! detector to defer to.
 //!
@@ -125,12 +125,12 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_foundation::ListenerId;
-use flui_foundation::notifier::Listenable;
-use flui_interaction::FocusNode;
-use flui_view::RebuildHandle;
-use flui_view::prelude::*;
-use flui_widgets::{EditableText, GestureDetector, SubmitCallback, TextEditingController};
+use flui_sdk::foundation::ListenerId;
+use flui_sdk::foundation::notifier::Listenable;
+use flui_sdk::interaction::FocusNode;
+use flui_sdk::view::RebuildHandle;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{EditableText, GestureDetector, SubmitCallback, TextEditingController};
 
 use crate::input_decorator::{InputDecoration, InputDecorator};
 use crate::theme::Theme;
@@ -156,7 +156,7 @@ pub struct TextField {
 }
 
 // Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
-// no `Debug` impl. Mirrors `flui_widgets::EditableText`'s own manual impl,
+// no `Debug` impl. Mirrors `flui_sdk::widgets::EditableText`'s own manual impl,
 // which exists for the identical reason.
 impl std::fmt::Debug for TextField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -253,8 +253,8 @@ impl TextField {
 // ============================================================================
 
 impl View for TextField {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
+    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::stateful(self)
     }
 }
 
@@ -302,7 +302,7 @@ impl MaterialTextFieldState {
             .expect("BUG: MaterialTextFieldState must retain its rebuild handle")
             .clone();
         self.focus_listener_id = Some(self.focus_node.add_listener(Rc::new(move || {
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
 }
@@ -318,7 +318,7 @@ impl ViewState<TextField> for MaterialTextFieldState {
         // recomputed fresh in `build`, so a text change must trigger one.
         let rebuild_on_edit = rebuild.clone();
         self.controller_listener_id = Some(self.controller.add_listener(Arc::new(move || {
-            rebuild_on_edit.schedule(flui_view::RebuildReason::StateChange);
+            rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
 
         // The effective node is the single source of focus truth for the
@@ -341,12 +341,12 @@ impl ViewState<TextField> for MaterialTextFieldState {
                 let rebuild_on_edit = rebuild.clone();
                 self.controller_listener_id =
                     Some(self.controller.add_listener(Arc::new(move || {
-                        rebuild_on_edit.schedule(flui_view::RebuildReason::StateChange);
+                        rebuild_on_edit.schedule(flui_sdk::view::RebuildReason::StateChange);
                     })));
                 // `is_empty` feeds the decoration's floating label and is
                 // recomputed in `build`; the replacement has not changed since
                 // it was handed over, so nothing else would ask for that pass.
-                rebuild.schedule(flui_view::RebuildReason::StateChange);
+                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
             }
         }
 

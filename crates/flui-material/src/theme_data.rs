@@ -3,12 +3,12 @@
 //! Flutter parity: `material/theme_data.dart` `ThemeData` (oracle tag
 //! `3.44.0`).
 
-use flui_types::EdgeInsets;
-use flui_types::Pixels;
-use flui_types::platform::Brightness;
-use flui_types::styling::{BorderRadius, BorderSide, BoxDecoration, Color};
-use flui_types::typography::TextStyle;
-use flui_widgets::WidgetStateProperty;
+use flui_sdk::types::EdgeInsets;
+use flui_sdk::types::Pixels;
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::types::styling::{BorderRadius, BorderSide, BoxDecoration, Color};
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::widgets::WidgetStateProperty;
 
 use crate::button_style::ButtonStyle;
 use crate::color_scheme::ColorScheme;
@@ -115,7 +115,7 @@ pub struct TextButtonThemeData {
 /// Overrides [`IconButton`](crate::IconButton)'s default [`ButtonStyle`].
 /// Flutter parity: `IconButtonThemeData` (`material/icon_button_theme.dart`,
 /// oracle tag `3.44.0`) — same named reduction as [`ElevatedButtonThemeData`].
-/// Not to be confused with [`flui_widgets::IconThemeData`], which colors an
+/// Not to be confused with [`flui_sdk::widgets::IconThemeData`], which colors an
 /// `Icon` child, not an `IconButton`'s own resolved `ButtonStyle`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct IconButtonThemeData {
@@ -748,7 +748,7 @@ pub struct DataTableThemeData {
 /// assert_eq!(dark.brightness(), dark.color_scheme.brightness);
 /// ```
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, flui_view::prelude::InheritedData)]
+#[derive(Debug, Clone, PartialEq, flui_sdk::view::prelude::InheritedData)]
 pub struct ThemeData {
     /// The Material 3 color roles this theme provides.
     ///
@@ -1132,7 +1132,7 @@ mod tests {
         assert_eq!(body_medium.font_size, Some(14.0));
         assert_eq!(
             body_medium.font_weight,
-            Some(flui_types::typography::FontWeight::W400)
+            Some(flui_sdk::types::typography::FontWeight::W400)
         );
     }
 
@@ -1193,7 +1193,7 @@ mod tests {
         let base = ThemeData::light();
         let elevated_button_theme = ElevatedButtonThemeData {
             style: Some(ButtonStyle {
-                elevation: Some(flui_widgets::WidgetStateProperty::all(Some(42.0))),
+                elevation: Some(flui_sdk::widgets::WidgetStateProperty::all(Some(42.0))),
                 ..Default::default()
             }),
         };
@@ -1238,7 +1238,7 @@ mod tests {
     /// coverage of the other slots.
     #[test]
     fn copy_with_sets_input_decoration_theme_slot() {
-        use flui_types::geometry::px;
+        use flui_sdk::types::geometry::px;
 
         let base = ThemeData::light();
         let input_decoration_theme = InputDecorationThemeData {
@@ -1261,7 +1261,7 @@ mod tests {
     /// the new `input_decoration_theme` slot specifically.
     #[test]
     fn copy_with_none_preserves_an_already_set_input_decoration_theme_slot() {
-        use flui_types::geometry::px;
+        use flui_sdk::types::geometry::px;
 
         let input_decoration_theme = InputDecorationThemeData {
             content_padding: Some(EdgeInsets::all(px(9.0))),
@@ -1358,9 +1358,9 @@ mod tests {
     fn copy_with_sets_checkbox_theme_slot() {
         let base = ThemeData::light();
         let checkbox_theme = CheckboxThemeData {
-            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
-                1, 2, 3,
-            )))),
+            fill_color: Some(flui_sdk::widgets::WidgetStateProperty::all(Some(
+                Color::rgb(1, 2, 3),
+            ))),
             ..Default::default()
         };
 
@@ -1380,9 +1380,9 @@ mod tests {
     #[test]
     fn copy_with_none_preserves_an_already_set_checkbox_theme_slot() {
         let checkbox_theme = CheckboxThemeData {
-            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
-                1, 2, 3,
-            )))),
+            fill_color: Some(flui_sdk::widgets::WidgetStateProperty::all(Some(
+                Color::rgb(1, 2, 3),
+            ))),
             ..Default::default()
         };
         let base = ThemeData::light().copy_with(ThemeDataOverrides {
@@ -1438,9 +1438,9 @@ mod tests {
     fn copy_with_sets_switch_theme_slot() {
         let base = ThemeData::light();
         let switch_theme = SwitchThemeData {
-            thumb_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
-                4, 5, 6,
-            )))),
+            thumb_color: Some(flui_sdk::widgets::WidgetStateProperty::all(Some(
+                Color::rgb(4, 5, 6),
+            ))),
             ..Default::default()
         };
 
@@ -1460,9 +1460,9 @@ mod tests {
     #[test]
     fn copy_with_none_preserves_an_already_set_switch_theme_slot() {
         let switch_theme = SwitchThemeData {
-            thumb_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
-                4, 5, 6,
-            )))),
+            thumb_color: Some(flui_sdk::widgets::WidgetStateProperty::all(Some(
+                Color::rgb(4, 5, 6),
+            ))),
             ..Default::default()
         };
         let base = ThemeData::light().copy_with(ThemeDataOverrides {
@@ -1480,9 +1480,9 @@ mod tests {
     fn copy_with_sets_radio_theme_slot() {
         let base = ThemeData::light();
         let radio_theme = RadioThemeData {
-            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
-                7, 8, 9,
-            )))),
+            fill_color: Some(flui_sdk::widgets::WidgetStateProperty::all(Some(
+                Color::rgb(7, 8, 9),
+            ))),
             ..Default::default()
         };
 
@@ -1502,9 +1502,9 @@ mod tests {
     #[test]
     fn copy_with_none_preserves_an_already_set_radio_theme_slot() {
         let radio_theme = RadioThemeData {
-            fill_color: Some(flui_widgets::WidgetStateProperty::all(Some(Color::rgb(
-                7, 8, 9,
-            )))),
+            fill_color: Some(flui_sdk::widgets::WidgetStateProperty::all(Some(
+                Color::rgb(7, 8, 9),
+            ))),
             ..Default::default()
         };
         let base = ThemeData::light().copy_with(ThemeDataOverrides {

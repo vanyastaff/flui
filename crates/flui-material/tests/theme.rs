@@ -25,10 +25,10 @@ use crate::common;
 
 use common::{lay_out, loose};
 use flui_material::{ColorSchemeOverrides, Theme, ThemeData, ThemeDataOverrides};
-use flui_types::platform::Brightness;
-use flui_types::styling::Color;
-use flui_view::prelude::*;
-use flui_widgets::SizedBox;
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::types::styling::Color;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::SizedBox;
 
 /// Captures whatever [`Theme::of`] returns during `build()`.
 ///

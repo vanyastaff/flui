@@ -11,8 +11,8 @@
 //! this three-line function; hoisted here once all three needed the
 //! identical shape.
 
-use flui_types::styling::Color;
-use flui_widgets::{WidgetStateProperty, WidgetStates};
+use flui_sdk::types::styling::Color;
+use flui_sdk::widgets::{WidgetStateProperty, WidgetStates};
 
 /// Resolves `property` against `states`, flattening the "no property" and
 /// "property present but resolves to `None`" cases into one `None` —
@@ -29,7 +29,7 @@ pub(crate) fn resolve_state_color(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_widgets::WidgetState;
+    use flui_sdk::widgets::WidgetState;
 
     #[test]
     fn resolve_state_color_is_none_with_no_property() {
@@ -42,7 +42,7 @@ mod tests {
         // resolves to `None` for this state set" — both must collapse to
         // one `None`, not just the trivially-`None` former case.
         let property: WidgetStateProperty<Option<Color>> = WidgetStateProperty::from_map([(
-            flui_widgets::WidgetStateConstraint::Is(WidgetState::Selected),
+            flui_sdk::widgets::WidgetStateConstraint::Is(WidgetState::Selected),
             Some(Color::rgb(1, 2, 3)),
         )]);
         assert_eq!(

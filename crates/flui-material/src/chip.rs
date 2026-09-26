@@ -93,7 +93,7 @@
 //! unpainted. [`Chip`]'s outline is load-bearing (the base chip has no fill
 //! at all — `_ChipDefaultsM3.color` is `null`, i.e. transparent, so the
 //! stroke is the only visible container boundary), so this V1 draws it
-//! directly: a [`flui_widgets::CustomPaint`] wraps the [`Material`] subtree
+//! directly: a [`flui_sdk::widgets::CustomPaint`] wraps the [`Material`] subtree
 //! with a `foreground_painter` that strokes the resolved [`MaterialShape`]
 //! as an inset ring (`Canvas::draw_drrect` between the outer shape and an
 //! inward-inset copy) — the same real-geometry approach this crate's
@@ -139,7 +139,7 @@
 //! artifact safe to snap away. So [`Chip`]/[`FilterChip`] wrap their
 //! composed avatar/label/delete content (never the container fill or
 //! border, which the oracle's `Ink`/`ShapeDecoration` painting never wraps
-//! in this opacity layer either) in one [`flui_widgets::Opacity`] at the
+//! in this opacity layer either) in one [`flui_sdk::widgets::Opacity`] at the
 //! private `DISABLED_CONTENT_ALPHA` when disabled, `1.0` when enabled — a single
 //! group wrap rather than the oracle's three separate `pushOpacity` calls,
 //! which is equivalent here since every one of those three calls uses the
@@ -167,7 +167,7 @@
 //!   substrate consumes it yet.
 //! - **RTL** — the content `Row` always lays out left-to-right; no
 //!   `Directionality` ambient in this substrate yet (the same gap
-//!   [`flui_widgets::Icon`]'s own docs already name).
+//!   [`flui_sdk::widgets::Icon`]'s own docs already name).
 //! - **`focus_node`/`autofocus`** — [`InkWell`] itself has no `autofocus`
 //!   hook yet, matching every other selection-control's own deferred list.
 //! - **`avatarBoxConstraints`/`deleteIconBoxConstraints`** — the avatar
@@ -179,16 +179,16 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::pipeline::Canvas;
-use flui_types::geometry::px;
-use flui_types::painting::{Paint, Path};
-use flui_types::styling::{BorderSide, BorderStyle};
-use flui_types::typography::TextStyle;
-use flui_types::{Color, EdgeInsets, Pixels, Point, Size};
-use flui_view::prelude::*;
-use flui_widgets::icon::IconData;
-use flui_widgets::{
+use flui_sdk::painting::Canvas;
+use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::painting::{Paint, Path};
+use flui_sdk::types::styling::{BorderSide, BorderStyle};
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::types::{Color, EdgeInsets, Pixels, Point, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::icon::IconData;
+use flui_sdk::widgets::{
     ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
     IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, WidgetState,
     WidgetStates,
@@ -392,10 +392,10 @@ fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> Bor
 /// The default container shape: an 8dp rounded rectangle. Flutter parity:
 /// `_ChipDefaultsM3`/`_FilterChipDefaultsM3`'s constructor `shape:`.
 fn chip_default_shape() -> MaterialShape {
-    use flui_types::styling::BorderRadius;
-    MaterialShape::RoundedRect(BorderRadius::all(flui_types::geometry::Radius::circular(
-        px(CORNER_RADIUS),
-    )))
+    use flui_sdk::types::styling::BorderRadius;
+    MaterialShape::RoundedRect(BorderRadius::all(
+        flui_sdk::types::geometry::Radius::circular(px(CORNER_RADIUS)),
+    ))
 }
 
 /// The default container padding: `EdgeInsets.all(8.0)`. Flutter parity:
@@ -442,7 +442,7 @@ type FilterChipSelectCallback = Rc<dyn Fn(bool)>;
 ///
 /// ```rust
 /// use flui_material::Chip;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _info = Chip::new(Text::new("Tag"));
 /// let _pressable = Chip::new(Text::new("Tag")).on_pressed(|| {});
@@ -648,7 +648,7 @@ impl StatelessView for Chip {
 ///
 /// ```rust
 /// use flui_material::FilterChip;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _chip = FilterChip::new(Text::new("Vegetarian"))
 ///     .selected(true)
@@ -1060,7 +1060,7 @@ mod tests {
 
     #[test]
     fn chip_new_leaves_every_override_unset_enabled_and_not_interactive() {
-        let chip = Chip::new(flui_widgets::Text::new("Tag"));
+        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag"));
         assert!(chip.avatar.is_none());
         assert!(chip.on_pressed.is_none());
         assert!(chip.on_deleted.is_none());
@@ -1071,13 +1071,13 @@ mod tests {
 
     #[test]
     fn chip_on_pressed_makes_the_chip_pressable() {
-        let chip = Chip::new(flui_widgets::Text::new("Tag")).on_pressed(|| {});
+        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag")).on_pressed(|| {});
         assert!(chip.is_pressable());
     }
 
     #[test]
     fn chip_disabled_is_never_pressable_even_with_a_handler() {
-        let chip = Chip::new(flui_widgets::Text::new("Tag"))
+        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag"))
             .on_pressed(|| {})
             .enabled(false);
         assert!(!chip.is_pressable());
@@ -1085,13 +1085,13 @@ mod tests {
 
     #[test]
     fn chip_on_deleted_shows_the_delete_button() {
-        let chip = Chip::new(flui_widgets::Text::new("Tag")).on_deleted(|| {});
+        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag")).on_deleted(|| {});
         assert!(chip.has_delete_button());
     }
 
     #[test]
     fn filter_chip_new_is_unselected_and_disabled() {
-        let chip = FilterChip::new(flui_widgets::Text::new("Tag"));
+        let chip = FilterChip::new(flui_sdk::widgets::Text::new("Tag"));
         assert!(!chip.selected);
         assert!(!chip.is_enabled());
         assert!(chip.avatar.is_none());
@@ -1100,7 +1100,7 @@ mod tests {
 
     #[test]
     fn filter_chip_on_selected_makes_it_enabled() {
-        let chip = FilterChip::new(flui_widgets::Text::new("Tag")).on_selected(|_| {});
+        let chip = FilterChip::new(flui_sdk::widgets::Text::new("Tag")).on_selected(|_| {});
         assert!(chip.is_enabled());
     }
 
@@ -1146,7 +1146,7 @@ mod tests {
     #[test]
     fn theme_map_ordered_selected_before_disabled_still_resolves_disabled_for_a_disabled_selected_chip()
      {
-        use flui_widgets::{WidgetStateConstraint, WidgetStateProperty};
+        use flui_sdk::widgets::{WidgetStateConstraint, WidgetStateProperty};
 
         let selected_style = Color::rgb(1, 1, 1);
         let disabled_style = Color::rgb(2, 2, 2);
@@ -1397,7 +1397,7 @@ mod tests {
         let rrect = chip_default_shape().to_rrect(size);
         assert_eq!(
             rrect.top_left,
-            flui_types::geometry::Radius::circular(px(CORNER_RADIUS))
+            flui_sdk::types::geometry::Radius::circular(px(CORNER_RADIUS))
         );
     }
 
@@ -1447,7 +1447,7 @@ mod tests {
 
     #[test]
     fn border_painter_draws_a_ring_for_a_visible_side() {
-        use flui_painting::DrawOp;
+        use flui_sdk::painting::DrawOp;
 
         let painter = ChipBorderPainter {
             side: BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid),
@@ -1476,7 +1476,7 @@ mod tests {
 
     #[test]
     fn checkmark_painter_draws_a_path() {
-        use flui_painting::DrawOp;
+        use flui_sdk::painting::DrawOp;
 
         let painter = ChipCheckmarkPainter {
             color: Color::BLACK,
@@ -1510,7 +1510,7 @@ mod tests {
     /// diverges from every one of them identically.
     #[test]
     fn checkmark_painter_scales_to_75_percent_and_centers_within_the_cell() {
-        use flui_painting::DrawOp;
+        use flui_sdk::painting::DrawOp;
 
         let cell = CHIP_ICON_SIZE;
         let painter = ChipCheckmarkPainter {

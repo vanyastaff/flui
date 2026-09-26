@@ -91,14 +91,14 @@
 
 use std::rc::Rc;
 
-use flui_foundation::Listenable;
-use flui_rendering::pipeline::Canvas;
-use flui_types::geometry::px;
-use flui_types::painting::{Paint, Path};
-use flui_types::styling::{BorderSide, BorderStyle};
-use flui_types::{Color, Pixels, Point, RRect, Rect, Size};
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::foundation::Listenable;
+use flui_sdk::painting::Canvas;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::painting::{Paint, Path};
+use flui_sdk::types::styling::{BorderSide, BorderStyle};
+use flui_sdk::types::{Color, Pixels, Point, RRect, Rect, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
     WidgetStatesController,
 };
@@ -325,7 +325,7 @@ impl Checkbox {
 /// `Hovered`/`Focused`/`Pressed`/`Disabled` are `InkWell`'s to manage.
 pub struct CheckboxState {
     states: WidgetStatesController,
-    states_listener: Option<flui_foundation::ListenerId>,
+    states_listener: Option<flui_sdk::foundation::ListenerId>,
 }
 
 impl std::fmt::Debug for CheckboxState {
@@ -364,7 +364,7 @@ impl ViewState<Checkbox> for CheckboxState {
         // needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
         self.states_listener = Some(self.states.add_listener(std::sync::Arc::new(move || {
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
 
@@ -1107,7 +1107,7 @@ mod tests {
     }
 
     /// Proves the painter is actually invoked (via a real [`Canvas`]/
-    /// [`flui_painting::DrawOp`]) and paints the
+    /// [`flui_sdk::painting::DrawOp`]) and paints the
     /// correct mark per tristate value: a checkmark (`DrawPath`) only for
     /// `Some(true)`, a dash (`DrawLine`) only for `None`, and neither for
     /// `Some(false)` — [`CheckboxPainter::paint`]'s `match self.value`
@@ -1116,7 +1116,7 @@ mod tests {
     /// before being reverted.
     #[test]
     fn draws_the_correct_mark_per_tristate_value() {
-        use flui_painting::DrawOp;
+        use flui_sdk::painting::DrawOp;
 
         let size = Size::new(px(CHECKBOX_TAP_TARGET_SIZE), px(CHECKBOX_TAP_TARGET_SIZE));
 

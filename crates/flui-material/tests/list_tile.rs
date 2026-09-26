@@ -11,12 +11,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, loose, tight};
 use flui_material::{ListTile, ListTileThemeData, Radio, Theme, ThemeData, ThemeDataOverrides};
-use flui_testing::a11y::Role;
-use flui_types::Color;
-use flui_view::IntoView;
-use flui_widgets::{
+use flui_sdk::types::Color;
+use flui_sdk::view::IntoView;
+use flui_sdk::widgets::{
     Icon, IconData, IconTheme, IconThemeData, MediaQuery, MediaQueryData, MergeSemantics, Text,
 };
+use flui_testing::a11y::Role;
 
 /// `ListTile::build` reads `SafeArea`, which panics without an ambient
 /// `MediaQuery` (`tests/app_bar.rs`'s own tests wrap the same way) — every

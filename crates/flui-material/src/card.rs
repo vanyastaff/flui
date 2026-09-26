@@ -47,13 +47,13 @@
 //! - **`shadowColor`/`surfaceTintColor` overrides** — not exposed as builder
 //!   methods, because [`Material`] has nowhere to put them yet.
 
-use flui_types::Color;
-use flui_types::EdgeInsets;
-use flui_types::geometry::{Radius, px};
-use flui_types::painting::Clip;
-use flui_types::styling::BorderRadius;
-use flui_view::prelude::*;
-use flui_widgets::Padding;
+use flui_sdk::types::Color;
+use flui_sdk::types::EdgeInsets;
+use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::painting::Clip;
+use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::Padding;
 
 use crate::material::Material;
 use crate::shape::MaterialShape;
@@ -75,7 +75,7 @@ const DEFAULT_MARGIN: f32 = 4.0;
 ///
 /// ```rust
 /// use flui_material::Card;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _card = Card::new(Text::new("A related panel of content"));
 /// ```
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn new_leaves_every_override_unset() {
-        let card = Card::new(flui_widgets::SizedBox::shrink());
+        let card = Card::new(flui_sdk::widgets::SizedBox::shrink());
         assert!(card.color.is_none());
         assert!(card.elevation.is_none());
         assert!(card.shape.is_none());
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn overrides_are_stored_verbatim() {
-        let card = Card::new(flui_widgets::SizedBox::shrink())
+        let card = Card::new(flui_sdk::widgets::SizedBox::shrink())
             .color(Color::rgb(1, 2, 3))
             .elevation(9.0)
             .shape(MaterialShape::Stadium)

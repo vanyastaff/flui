@@ -122,7 +122,7 @@
 //!   queue and schedule further rebuilds *after* this build's siblings have
 //!   already built against the pre-mutation tree, silently.
 //!   `MessengerCore::pop_and_advance` instead defers the fire through the
-//!   [`flui_scheduler::LocalPostFrameHandle`] acquired in
+//!   [`flui_sdk::view::LocalPostFrameHandle`] acquired in
 //!   [`ScaffoldMessengerState::init_state`] (ADR-0021) — the callback runs
 //!   after this frame's build/layout/paint have committed, its own reentrant
 //!   `show_snack_bar`/etc. call landing squarely in a safe, ordinary
@@ -205,14 +205,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{
+use flui_sdk::animation::{
     Animation, AnimationController, AnimationStatus, UpdateScheduler, Vsync, VsyncRegistration,
 };
-use flui_foundation::ElementId;
-use flui_scheduler::LocalPostFrameHandle;
-use flui_view::prelude::*;
-use flui_view::{RebuildHandle, impl_inherited_view};
-use flui_widgets::animated::VsyncScope;
+use flui_sdk::foundation::ElementId;
+use flui_sdk::view::LocalPostFrameHandle;
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{RebuildHandle, impl_inherited_view};
+use flui_sdk::widgets::animated::VsyncScope;
 
 use crate::snack_bar::SnackBar;
 
@@ -369,7 +369,7 @@ struct MessengerCore {
 impl MessengerCore {
     fn schedule_rebuild_on_scaffolds(&self) {
         for rebuild in self.scaffolds.borrow().values() {
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         }
     }
 
@@ -497,7 +497,7 @@ impl MessengerCore {
         }
         if let Some(rebuild) = self.rebuild.borrow().clone() {
             controller.add_status_listener(Arc::new(move |_status| {
-                rebuild.schedule(flui_view::RebuildReason::AnimationTick);
+                rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }));
         }
         self.last_duration_status.set(AnimationStatus::Dismissed);
@@ -639,7 +639,7 @@ impl ScaffoldMessengerHandle {
         self.shared
             .entry_controller
             .add_status_listener(Arc::new(move |_status| {
-                rebuild_for_listener.schedule(flui_view::RebuildReason::AnimationTick);
+                rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }));
         let _prev = self.shared.rebuild.borrow_mut().replace(rebuild);
         *self.shared.post_frame.borrow_mut() = ctx.local_post_frame_handle();
@@ -681,7 +681,7 @@ impl ScaffoldMessengerHandle {
     /// `:211-223`).
     pub(crate) fn register_scaffold(&self, element_id: ElementId, rebuild: RebuildHandle) {
         if !self.shared.queue.borrow().is_empty() {
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         }
         self.shared
             .scaffolds
@@ -864,7 +864,7 @@ impl_inherited_view!(ScaffoldMessengerScope);
 ///
 /// ```rust
 /// use flui_material::{Scaffold, ScaffoldMessenger};
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _app = ScaffoldMessenger::new(Scaffold::new().body(Text::new("Hello")));
 /// ```
@@ -940,7 +940,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use flui_widgets::Text;
+    use flui_sdk::widgets::Text;
 
     use super::*;
 

@@ -11,7 +11,7 @@
 //! # Wraps the existing render object — no new paint code
 //!
 //! `Material` is a thin configuration object over
-//! [`flui_objects::RenderPhysicalShape`] (`RenderPhysicalModelBase<PathClip>`,
+//! [`flui_sdk::pipeline::RenderPhysicalShape`] (`RenderPhysicalModelBase<PathClip>`,
 //! `crates/flui-objects/src/proxy/physical_model.rs`) — the render object
 //! that already implements clip + `Canvas::draw_shadow` + fill. This mirrors
 //! the oracle directly: `Material.build` constructs a `PhysicalModel` or
@@ -80,11 +80,11 @@
 //! `flui-widgets::animated`'s existing `ImplicitController` machinery)
 //! without changing this type's shape.
 
-use flui_objects::{PathClipConfiguration, RenderPhysicalShape};
-use flui_rendering::protocol::BoxProtocol;
-use flui_types::Color;
-use flui_types::painting::Clip;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_sdk::pipeline::{PathClipConfiguration, RenderPhysicalShape};
+use flui_sdk::rendering::BoxProtocol;
+use flui_sdk::types::Color;
+use flui_sdk::types::painting::Clip;
+use flui_sdk::view::{Child, IntoView, RenderView, impl_render_view};
 
 use crate::shape::MaterialShape;
 
@@ -164,13 +164,13 @@ impl Material {
 
     /// Registers (or re-targets) the owner-lane path clipper that resolves
     /// `self.shape` against the render object's laid-out size each paint —
-    /// the same pattern `flui_widgets::ClipPath` uses for its owner-local
+    /// the same pattern `flui_sdk::widgets::ClipPath` uses for its owner-local
     /// `Fn(Size) -> Path` clipper.
     fn sync_path_clip_target(
         &self,
-        ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_sdk::view::RenderObjectContext<'_>,
         render_object: &mut RenderPhysicalShape,
-    ) -> flui_rendering::RenderUpdateImpact {
+    ) -> flui_sdk::rendering::RenderUpdateImpact {
         let shape = self.shape;
         match render_object.path_clip_target() {
             Some(target) => {
@@ -178,7 +178,7 @@ impl Material {
                     ctx.replace_path_clipper(target, move |size| shape.to_path(size))
                 {
                     tracing::warn!(?error, "Material shape clipper replacement failed");
-                    flui_rendering::RenderUpdateImpact::NONE
+                    flui_sdk::rendering::RenderUpdateImpact::NONE
                 } else {
                     render_object.set_path_clip_target(Some(target))
                 }
@@ -191,7 +191,7 @@ impl Material {
                         "Material mounted without an active interaction lane; \
                          shape clip will not be resolved"
                     );
-                    flui_rendering::RenderUpdateImpact::NONE
+                    flui_sdk::rendering::RenderUpdateImpact::NONE
                 }
             },
         }
@@ -209,7 +209,10 @@ impl RenderView for Material {
     type Protocol = BoxProtocol;
     type RenderObject = RenderPhysicalShape;
 
-    fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
+    fn create_render_object(
+        &self,
+        ctx: &flui_sdk::view::RenderObjectContext<'_>,
+    ) -> Self::RenderObject {
         let mut render_object = RenderPhysicalShape::new(self.color)
             .with_elevation(self.elevation)
             .with_clip_behavior(self.clip_behavior)
@@ -222,9 +225,9 @@ impl RenderView for Material {
 
     fn update_render_object(
         &self,
-        ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_sdk::view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
+    ) -> flui_sdk::rendering::RenderUpdateImpact {
         let mut impact = render_object.set_color(self.color);
         impact |= render_object.set_elevation(self.elevation);
         impact |= render_object.set_clip_behavior(self.clip_behavior);
@@ -239,7 +242,7 @@ impl RenderView for Material {
 
     fn did_unmount_render_object(
         &self,
-        ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &flui_sdk::view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) {
         if let Some(target) = render_object.path_clip_target() {
@@ -252,14 +255,14 @@ impl RenderView for Material {
         }
     }
 
-    flui_view::single_child_view_children!();
+    flui_sdk::view::single_child_view_children!();
 }
 
 impl_render_view!(Material);
 
 #[cfg(test)]
 mod tests {
-    use flui_view::RenderView;
+    use flui_sdk::view::RenderView;
 
     use super::*;
 
@@ -268,7 +271,7 @@ mod tests {
         let render_object = Material::new(Color::rgb(10, 20, 30))
             .elevation(6.0)
             .clip_behavior(Clip::AntiAlias)
-            .create_render_object(&flui_view::RenderObjectContext::detached());
+            .create_render_object(&flui_sdk::view::RenderObjectContext::detached());
 
         assert_eq!(render_object.color(), Color::rgb(10, 20, 30));
         assert_eq!(render_object.elevation(), 6.0);
@@ -278,7 +281,7 @@ mod tests {
     #[test]
     fn create_render_object_defaults_to_flat_unclipped_rectangle() {
         let render_object = Material::new(Color::WHITE)
-            .create_render_object(&flui_view::RenderObjectContext::detached());
+            .create_render_object(&flui_sdk::view::RenderObjectContext::detached());
 
         assert_eq!(render_object.elevation(), 0.0);
         assert_eq!(render_object.clip_behavior(), Clip::None);
@@ -287,15 +290,15 @@ mod tests {
     #[test]
     fn update_render_object_applies_changed_color_and_elevation() {
         let mut render_object = Material::new(Color::BLACK)
-            .create_render_object(&flui_view::RenderObjectContext::detached());
+            .create_render_object(&flui_sdk::view::RenderObjectContext::detached());
 
         let impact = Material::new(Color::WHITE)
             .elevation(3.0)
             .update_render_object(
-                &flui_view::RenderObjectContext::detached(),
+                &flui_sdk::view::RenderObjectContext::detached(),
                 &mut render_object,
             );
-        assert_eq!(impact, flui_rendering::RenderUpdateImpact::PAINT);
+        assert_eq!(impact, flui_sdk::rendering::RenderUpdateImpact::PAINT);
 
         assert_eq!(render_object.color(), Color::WHITE);
         assert_eq!(render_object.elevation(), 3.0);
@@ -303,35 +306,35 @@ mod tests {
 
     #[test]
     fn update_render_object_compares_shape_independently() {
-        let context = flui_view::RenderObjectContext::detached();
+        let context = flui_sdk::view::RenderObjectContext::detached();
         let original = Material::new(Color::WHITE).shape(MaterialShape::Stadium);
         let mut render_object = original.create_render_object(&context);
 
         assert_eq!(
             original.update_render_object(&context, &mut render_object),
-            flui_rendering::RenderUpdateImpact::NONE,
+            flui_sdk::rendering::RenderUpdateImpact::NONE,
         );
         assert_eq!(
             original
                 .clone()
                 .clip_behavior(Clip::AntiAlias)
                 .update_render_object(&context, &mut render_object),
-            flui_rendering::RenderUpdateImpact::PAINT,
+            flui_sdk::rendering::RenderUpdateImpact::PAINT,
         );
         assert_eq!(
             Material::new(Color::WHITE)
                 .shape(MaterialShape::rectangle())
                 .clip_behavior(Clip::AntiAlias)
                 .update_render_object(&context, &mut render_object),
-            flui_rendering::RenderUpdateImpact::PAINT
-                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+            flui_sdk::rendering::RenderUpdateImpact::PAINT
+                | flui_sdk::rendering::RenderUpdateImpact::SEMANTICS,
         );
     }
 
     #[test]
     fn detached_creation_does_not_install_a_path_clipper() {
         let render_object = Material::new(Color::WHITE)
-            .create_render_object(&flui_view::RenderObjectContext::detached());
+            .create_render_object(&flui_sdk::view::RenderObjectContext::detached());
         assert!(!render_object.has_custom_clipper());
     }
 
@@ -340,7 +343,7 @@ mod tests {
         assert!(!Material::new(Color::WHITE).has_children());
         assert!(
             Material::new(Color::WHITE)
-                .child(flui_widgets::SizedBox::shrink())
+                .child(flui_sdk::widgets::SizedBox::shrink())
                 .has_children()
         );
     }
@@ -375,12 +378,14 @@ mod tests {
     /// through the actual registered `PathClipTarget`.
     #[test]
     fn configured_shape_field_is_shape_sensitive_at_the_paint_size() {
-        let painted_size = flui_types::Size::new(
-            flui_types::geometry::px(120.0),
-            flui_types::geometry::px(40.0),
+        let painted_size = flui_sdk::types::Size::new(
+            flui_sdk::types::geometry::px(120.0),
+            flui_sdk::types::geometry::px(40.0),
         );
-        let corner_probe =
-            flui_types::Point::new(flui_types::geometry::px(2.0), flui_types::geometry::px(2.0));
+        let corner_probe = flui_sdk::types::Point::new(
+            flui_sdk::types::geometry::px(2.0),
+            flui_sdk::types::geometry::px(2.0),
+        );
 
         let stadium = Material::new(Color::WHITE).shape(MaterialShape::Stadium);
         let stadium_path = stadium.shape.to_path(painted_size);

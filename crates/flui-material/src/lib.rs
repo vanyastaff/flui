@@ -58,7 +58,7 @@
 //!
 //! ```rust
 //! use flui_material::{Theme, ThemeData};
-//! use flui_widgets::SizedBox;
+//! use flui_sdk::widgets::SizedBox;
 //!
 //! let _themed = Theme::new(ThemeData::dark(), SizedBox::shrink());
 //! ```

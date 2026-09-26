@@ -24,9 +24,9 @@ use common::{lay_out, loose, tight};
 use flui_material::{
     ButtonStyle, IconButton, IconButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_types::Color;
-use flui_view::prelude::*;
-use flui_widgets::{IconTheme, IconThemeData, SizedBox, WidgetState, WidgetStateProperty};
+use flui_sdk::types::Color;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{IconTheme, IconThemeData, SizedBox, WidgetState, WidgetStateProperty};
 
 /// Captures the ambient [`IconThemeData`] its parent publishes at build
 /// time — the same probe shape `tests/scaffold.rs`'s `MediaQueryProbe` uses

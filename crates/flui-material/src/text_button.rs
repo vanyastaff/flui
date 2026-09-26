@@ -20,10 +20,10 @@
 //! tighter by design (no fill or outline to visually separate from
 //! surrounding content).
 
-use flui_types::geometry::px;
-use flui_types::{Color, EdgeInsets, Size};
-use flui_view::prelude::*;
-use flui_widgets::{WidgetState, WidgetStateProperty};
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::{Color, EdgeInsets, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
@@ -38,7 +38,7 @@ use crate::theme::Theme;
 ///
 /// ```rust
 /// use flui_material::TextButton;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _button = TextButton::new(Text::new("Learn more")).on_pressed(|| {});
 /// ```
@@ -152,7 +152,7 @@ fn scaled_padding_1x() -> EdgeInsets {
 
 #[cfg(test)]
 mod tests {
-    use flui_widgets::{WidgetState, WidgetStates};
+    use flui_sdk::widgets::{WidgetState, WidgetStates};
 
     use super::*;
 

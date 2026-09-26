@@ -36,7 +36,7 @@ use flui_material::{Switch, Theme, ThemeData};
 const TAP_TARGET_WIDTH: f32 = 60.0;
 const TAP_TARGET_HEIGHT: f32 = 48.0;
 
-fn constraints() -> flui_rendering::constraints::BoxConstraints {
+fn constraints() -> flui_sdk::rendering::BoxConstraints {
     tight(TAP_TARGET_WIDTH, TAP_TARGET_HEIGHT)
 }
 

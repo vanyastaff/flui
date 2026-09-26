@@ -9,6 +9,9 @@ shell, and the M3 widget catalog built on them — `Scaffold`/`AppBar`, the butt
 `package:flutter/material.dart`'s theming and widget surface (see the crate's own
 [module docs](src/lib.rs) for per-widget Flutter oracle citations).
 
+It is an official package (ADR-0088): its only FLUI dependency is `flui-sdk`, the
+package-author surface, the same one a third-party design system builds on.
+
 ## Enable via the `flui` facade
 
 `flui`'s `material` feature is enabled by default, so most consumers need nothing extra:
@@ -32,7 +35,7 @@ on it via a git tag or path — see the [flui facade's README](../../README.md).
 
 ```rust
 use flui_material::{Theme, ThemeData};
-use flui_widgets::SizedBox;
+use flui_sdk::widgets::SizedBox;
 
 let _themed = Theme::new(ThemeData::dark(), SizedBox::shrink());
 ```

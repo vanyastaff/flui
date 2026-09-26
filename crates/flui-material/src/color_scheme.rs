@@ -25,8 +25,8 @@
 //! populate them, and dropping them would silently fail parity assertions
 //! against `color_scheme_test.dart`.
 
-use flui_types::platform::Brightness;
-use flui_types::styling::Color;
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::types::styling::Color;
 
 /// The full set of Material 3 color roles
 /// (<https://m3.material.io/styles/color/the-color-system/color-roles>).
@@ -346,10 +346,10 @@ impl ColorScheme {
     /// use flui_material::{ColorScheme, ColorSchemeOverrides};
     ///
     /// let scheme = ColorScheme::light().copy_with(ColorSchemeOverrides {
-    ///     primary: Some(flui_types::styling::Color::from_argb(0xFF00_66CC)),
+    ///     primary: Some(flui_sdk::types::styling::Color::from_argb(0xFF00_66CC)),
     ///     ..Default::default()
     /// });
-    /// assert_eq!(scheme.primary, flui_types::styling::Color::from_argb(0xFF00_66CC));
+    /// assert_eq!(scheme.primary, flui_sdk::types::styling::Color::from_argb(0xFF00_66CC));
     /// ```
     #[must_use]
     pub fn copy_with(&self, overrides: ColorSchemeOverrides) -> Self {

@@ -5,8 +5,8 @@
 //! `blackMountainView`/`whiteMountainView` const tables in
 //! `material/typography.dart` (oracle tag `3.44.0`).
 
-use flui_types::styling::Color;
-use flui_types::typography::TextStyle;
+use flui_sdk::types::styling::Color;
+use flui_sdk::types::typography::TextStyle;
 
 /// The 15 Material 3 type-scale roles, each independently overridable.
 ///
@@ -52,10 +52,10 @@ pub struct TextTheme {
 /// `base?.merge(patch) ?? patch` (`TextTheme.merge`, `text_theme.dart`,
 /// oracle tag `3.44.0`).
 ///
-/// `flui_types::TextStyle::merge` already implements "each of `other`'s
+/// `flui_sdk::types::TextStyle::merge` already implements "each of `other`'s
 /// non-`None` fields wins, field-wise, else keep `self`'s" — the same shape
 /// as the oracle's own `TextStyle.merge`, minus Flutter's `inherit` flag
-/// (`flui_types::TextStyle` carries no such flag, so there is nothing for it
+/// (`flui_sdk::types::TextStyle` carries no such flag, so there is nothing for it
 /// to interact with). That is the one documented divergence this module
 /// relies on: FLUI has no build-context-relative "inherit from ambient
 /// DefaultTextStyle" concept baked into `TextStyle` itself, so merging here

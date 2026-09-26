@@ -26,7 +26,7 @@
 //! documented tension between `Send + Sync` data-plane primitives (gesture
 //! recognizers, render objects — ADR-0027) and owner-affine widget-layer
 //! capability handles (an in-flight `Send`-bound-drop migration found this
-//! exact knot at `flui_widgets::NavigatorHandle`, which is `Cloneable, Send +
+//! exact knot at `flui_sdk::widgets::NavigatorHandle`, which is `Cloneable, Send +
 //! Sync` in name only — see that type's own module doc). `DrawerHandle`
 //! sidesteps the knot entirely by never claiming `Send` in the first place.
 //!
@@ -43,10 +43,10 @@
 //! [`Drawer::width`]'s **configured** value directly (default
 //! [`DEFAULT_DRAWER_WIDTH`]), passed down via [`DrawerController::panel_width`]. This is
 //! behaviorally equivalent in the drawer's actual mounting context: the
-//! open panel is wrapped in an [`flui_widgets::Align`] with a `width_factor`,
+//! open panel is wrapped in an [`flui_sdk::widgets::Align`] with a `width_factor`,
 //! which gives its child **loose** (unbounded) width constraints to measure
 //! its natural size — so `Drawer`'s own `BoxConstraints.expand(width:)`
-//! (ported as [`flui_rendering::constraints::BoxConstraints::tighten`])
+//! (ported as [`flui_sdk::rendering::BoxConstraints::tighten`])
 //! renders at exactly its configured width, unclamped. The divergence is
 //! bounded to the case the oracle's own comment calls out — the drawer
 //! genuinely being unmounted, where both approaches already agree on
@@ -58,7 +58,7 @@
 //! `DrawerTheme` (no such theme-extension slot exists yet in this crate — see
 //! `theme_data.rs`'s scope note), the `AppBar` auto-hamburger, `RTL`
 //! (`DrawerAlignment`'s outer/inner `Alignment` mapping is LTR-only —
-//! `flui_widgets::Directionality` is not read, matching `crate::Scaffold`'s
+//! `flui_sdk::widgets::Directionality` is not read, matching `crate::Scaffold`'s
 //! own documented RTL gap), `BlockSemantics`/`ExcludeSemantics`/modal-barrier
 //! semantics labeling, `FocusScope` (no focus trap inside an open drawer
 //! yet), and local-history back-dismissal (`LocalHistoryEntry` — this
@@ -71,19 +71,18 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{
+use flui_sdk::animation::{
     Animation, AnimationController, AnimationStatus, UpdateScheduler, Vsync, VsyncRegistration,
 };
-use flui_foundation::Listenable;
-use flui_rendering::constraints::BoxConstraints;
-use flui_rendering::hit_testing::HitTestBehavior;
-use flui_types::geometry::{Radius, px};
-use flui_types::styling::{BorderRadius, BorderRadiusExt, Color};
-use flui_types::{Alignment, painting::Clip};
-use flui_view::prelude::*;
-use flui_view::{GlobalKey, RebuildHandle, impl_inherited_view};
-use flui_widgets::animated::VsyncScope;
-use flui_widgets::{
+use flui_sdk::foundation::Listenable;
+use flui_sdk::rendering::{BoxConstraints, HitTestBehavior};
+use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::styling::{BorderRadius, BorderRadiusExt, Color};
+use flui_sdk::types::{Alignment, painting::Clip};
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
+use flui_sdk::widgets::animated::VsyncScope;
+use flui_sdk::widgets::{
     Align, ColoredBox, ConstrainedBox, GestureDetector, MediaQuery, SizedBox, Stack,
 };
 
@@ -184,7 +183,7 @@ fn end_rounded_shape(alignment: DrawerAlignment) -> MaterialShape {
 ///
 /// ```rust
 /// use flui_material::Drawer;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _drawer = Drawer::new().child(Text::new("Navigation"));
 /// ```
@@ -741,13 +740,13 @@ impl ViewState<DrawerController> for DrawerControllerState {
         // the panel is visible at a stale, already-open-looking position.
         let rebuild_for_value = rebuild.clone();
         self.core.controller.add_listener(Arc::new(move || {
-            rebuild_for_value.schedule(flui_view::RebuildReason::AnimationTick);
+            rebuild_for_value.schedule(flui_sdk::view::RebuildReason::AnimationTick);
         }));
         let rebuild_for_status = rebuild;
         self.core
             .controller
             .add_status_listener(Arc::new(move |_status| {
-                rebuild_for_status.schedule(flui_view::RebuildReason::AnimationTick);
+                rebuild_for_status.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             }));
     }
 
@@ -811,11 +810,11 @@ impl ViewState<DrawerController> for DrawerControllerState {
 }
 
 impl View for DrawerController {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
+    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::stateful(self)
     }
 
-    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+    fn key(&self) -> Option<&dyn flui_sdk::foundation::ViewKey> {
         Some(&self.key)
     }
 }
@@ -888,7 +887,7 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
     let end_core = Rc::clone(core);
     let cancel_core = Rc::clone(core);
     GestureDetector::new()
-        .on_horizontal_drag_down(move |_details: flui_interaction::DragDownDetails| {
+        .on_horizontal_drag_down(move |_details: flui_sdk::interaction::DragDownDetails| {
             let _ = down_core.controller.stop();
         })
         .on_horizontal_drag_update(move |details| update_core.move_by(details.primary_delta))

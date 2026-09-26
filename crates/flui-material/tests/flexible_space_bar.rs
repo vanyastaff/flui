@@ -13,10 +13,10 @@
 use crate::common;
 use common::{lay_out, tight};
 use flui_material::{FlexibleSpaceBar, SliverAppBar, Theme, ThemeData};
-use flui_view::BoxedView;
-use flui_view::IntoView;
-use flui_view::view::ViewExt;
-use flui_widgets::{
+use flui_sdk::view::BoxedView;
+use flui_sdk::view::IntoView;
+use flui_sdk::view::view::ViewExt;
+use flui_sdk::widgets::{
     ColoredBox, CustomScrollView, MediaQuery, MediaQueryData, SizedBox, SliverToBoxAdapter, Text,
 };
 
@@ -33,7 +33,8 @@ fn bar_at(offset: f32) -> Theme {
         .expanded_height(200.0)
         .pinned(true)
         .flexible_space(
-            FlexibleSpaceBar::new().background(ColoredBox::new(flui_types::Color::rgb(10, 20, 30))),
+            FlexibleSpaceBar::new()
+                .background(ColoredBox::new(flui_sdk::types::Color::rgb(10, 20, 30))),
         );
     Theme::new(
         ThemeData::light(),

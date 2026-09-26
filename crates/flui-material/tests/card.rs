@@ -2,7 +2,7 @@
 //! the full render pipeline (`tests/common/mod.rs`, the same harness
 //! `tests/material.rs`/`tests/elevated_button.rs` use) and probes the
 //! composed [`Material`](flui_material::Material) (`RenderPhysicalShape`)
-//! and [`Padding`](flui_widgets::Padding) (`RenderPadding`) render objects it
+//! and [`Padding`](flui_sdk::widgets::Padding) (`RenderPadding`) render objects it
 //! produces, proving `_CardDefaultsM3` actually reaches paint configuration
 //! rather than just being computed in isolation.
 
@@ -13,13 +13,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
 use flui_material::{Card, CardThemeData, MaterialShape, Theme, ThemeData, ThemeDataOverrides};
-use flui_types::Color;
-use flui_types::geometry::{Radius, px};
-use flui_types::styling::BorderRadius;
-use flui_widgets::{ColoredBox, GestureDetector};
+use flui_sdk::types::Color;
+use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::widgets::{ColoredBox, GestureDetector};
 
 /// `_CardDefaultsM3`'s formatted `Debug` string for a resolved
-/// [`Color`](flui_types::Color) — what `RenderPhysicalShape`'s
+/// [`Color`](flui_sdk::types::Color) — what `RenderPhysicalShape`'s
 /// `Diagnosticable::debug_fill_properties` writes into its `"color"`
 /// property, mirroring `tests/elevated_button.rs`'s identical helper.
 fn color_property(color: Color) -> String {
@@ -222,8 +222,9 @@ fn margin_override_replaces_the_default_inset() {
     let laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            Card::new(ColoredBox::new(Color::rgb(1, 2, 3)))
-                .margin(flui_types::EdgeInsets::all(flui_types::geometry::px(10.0))),
+            Card::new(ColoredBox::new(Color::rgb(1, 2, 3))).margin(
+                flui_sdk::types::EdgeInsets::all(flui_sdk::types::geometry::px(10.0)),
+            ),
         ),
         tight(200.0, 200.0),
     );

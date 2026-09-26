@@ -16,14 +16,14 @@ use common::{lay_out, tight};
 use flui_material::{
     FabThemeData, FloatingActionButton, Scaffold, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_types::EdgeInsets;
-use flui_types::geometry::px;
-use flui_widgets::{MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::types::EdgeInsets;
+use flui_sdk::types::geometry::px;
+use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
 
 /// `_FABDefaultsM3`'s formatted `Debug` string for a given resolved
-/// [`Color`](flui_types::Color) — the same helper `tests/elevated_button.rs`
+/// [`Color`](flui_sdk::types::Color) — the same helper `tests/elevated_button.rs`
 /// uses for `RenderPhysicalShape`'s `"color"` diagnostics property.
-fn color_property(color: flui_types::Color) -> String {
+fn color_property(color: flui_sdk::types::Color) -> String {
     format!("{color:?}")
 }
 
@@ -158,7 +158,7 @@ fn enabled_fab_resolves_the_m3_default_background_and_elevation() {
 /// tier of the elevation state chain.
 #[test]
 fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
-    let themed_background = flui_types::Color::rgb(70, 80, 90);
+    let themed_background = flui_sdk::types::Color::rgb(70, 80, 90);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         floating_action_button_theme: Some(FabThemeData {
             background_color: Some(themed_background),

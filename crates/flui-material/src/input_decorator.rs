@@ -13,7 +13,7 @@
 //!
 //! - **Baseline slot layout** — the oracle's `_RenderDecoration` positions
 //!   the hint, label, and input text at a shared baseline, overlaid at the
-//!   same rect. This substrate composes plain [`flui_widgets::Column`] rows
+//!   same rect. This substrate composes plain [`flui_sdk::widgets::Column`] rows
 //!   instead: at most one of the label/hint rows renders per build (see
 //!   `should_show_hint`), and the input content is its own row below them
 //!   — not overlaid at the input's rect.
@@ -45,16 +45,18 @@
 
 use std::sync::Arc;
 
-use flui_foundation::ListenerId;
-use flui_foundation::notifier::Listenable;
-use flui_types::EdgeInsets;
-use flui_types::Pixels;
-use flui_types::geometry::{Radius, px};
-use flui_types::platform::Brightness;
-use flui_types::styling::{Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_types::typography::TextStyle;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::foundation::ListenerId;
+use flui_sdk::foundation::notifier::Listenable;
+use flui_sdk::types::EdgeInsets;
+use flui_sdk::types::Pixels;
+use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::types::styling::{
+    Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color,
+};
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Column, CrossAxisAlignment, DecoratedBox, MouseRegion, Padding, Text, WidgetState,
     WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
@@ -352,7 +354,7 @@ fn helper_or_error_line(decoration: &InputDecoration) -> Option<(&str, bool)> {
 /// (`input_decorator.dart:1868-1958`, tag `3.44.0`). `enabled`/`error` come
 /// from [`InputDecoration`] itself. `hovered` is the one state this widget
 /// tracks internally, via its own [`MouseRegion`] (the seam is
-/// `flui_widgets::MouseRegion`, not `InkWell`'s press/ripple machinery) —
+/// `flui_sdk::widgets::MouseRegion`, not `InkWell`'s press/ripple machinery) —
 /// a future `TextField` wires `focused`/`is_empty` from its own `FocusNode`/
 /// `TextEditingController`; a standalone consumer passes them explicitly.
 #[derive(Clone, Debug, StatefulView)]
@@ -431,7 +433,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         // hover-controller listener below — never called from `build`.
         let rebuild = ctx.rebuild_handle();
         self.hover_listener = Some(self.hover.add_listener(Arc::new(move || {
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
 
@@ -586,7 +588,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
 
 #[cfg(test)]
 mod tests {
-    use flui_widgets::WidgetState;
+    use flui_sdk::widgets::WidgetState;
 
     use super::*;
 

@@ -24,7 +24,7 @@
 //! `thickness` — since the border's width equals the container's own height,
 //! that border covers the container's entire area, which is paint-equivalent
 //! to filling the container with `color` outright. This substrate does
-//! exactly that: [`Container::decoration`](flui_widgets::Container::decoration)
+//! exactly that: [`Container::decoration`](flui_sdk::widgets::Container::decoration)
 //! with `BoxDecoration::with_color`, which also lets [`Divider::radius`]/
 //! [`DividerThemeData::radius`](crate::theme_data::DividerThemeData::radius)
 //! round the filled rect's corners directly, without inventing a
@@ -41,11 +41,11 @@
 //!   `ListTile`s.
 //! - **`PopupMenuDivider`** — a distinct oracle type, out of this scope.
 
-use flui_types::EdgeInsets;
-use flui_types::geometry::px;
-use flui_types::styling::{BorderRadius, BoxDecoration, Color};
-use flui_view::prelude::*;
-use flui_widgets::{Center, Container, SizedBox};
+use flui_sdk::types::EdgeInsets;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::styling::{BorderRadius, BoxDecoration, Color};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{Center, Container, SizedBox};
 
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
@@ -316,7 +316,10 @@ fn resolve_style(
 /// The line's fill: `color`, optionally rounded to `radius` — see the module
 /// docs' "Composition" section for why a filled rect stands in for the
 /// oracle's full-height bottom border.
-fn decoration(color: Color, radius: Option<BorderRadius>) -> BoxDecoration<flui_types::Pixels> {
+fn decoration(
+    color: Color,
+    radius: Option<BorderRadius>,
+) -> BoxDecoration<flui_sdk::types::Pixels> {
     BoxDecoration::with_color(color).set_border_radius(radius)
 }
 

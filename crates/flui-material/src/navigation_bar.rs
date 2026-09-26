@@ -106,11 +106,11 @@
 //! per-destination wrapper (an outer `Semantics(role: tab, selected: ...)`
 //! from `NavigationBar.build`, an inner `Semantics(enabled: ..., button:
 //! true)` from `_NavigationBarDestinationSemantics`) into one
-//! [`flui_widgets::Semantics`] node carrying every flag at once — the two
+//! [`flui_sdk::widgets::Semantics`] node carrying every flag at once — the two
 //! nodes only exist in the oracle because two different widgets each own
-//! one; [`flui_widgets::Semantics`] can carry `role`/`selected`/`enabled`/
+//! one; [`flui_sdk::widgets::Semantics`] can carry `role`/`selected`/`enabled`/
 //! `button` on a single builder, so nothing is lost by not re-nesting.
-//! [`flui_widgets::MergeSemantics`] still wraps it (Flutter parity:
+//! [`flui_sdk::widgets::MergeSemantics`] still wraps it (Flutter parity:
 //! `MergeSemantics`, `:303`), which is load-bearing if a destination's own
 //! icon/label subtree ever contributes its own semantics nodes (Flutter
 //! parity: folding the label `Text`'s node into the tab node rather than
@@ -136,16 +136,16 @@
 //!   defaults (`StadiumBorder`, `EdgeInsets.only(top: 4)`).
 //! - **Destination `tooltip`** (long-press `Tooltip`) — no long-press
 //!   gesture wired here.
-//! - **`maintainBottomViewPadding`** — [`flui_widgets::SafeArea`] is used
+//! - **`maintainBottomViewPadding`** — [`flui_sdk::widgets::SafeArea`] is used
 //!   with its own defaults; this substrate exposes no override for it yet.
 
 use std::rc::Rc;
 
-use flui_types::Alignment;
-use flui_types::styling::Color;
-use flui_types::typography::TextStyle;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::types::Alignment;
+use flui_sdk::types::styling::Color;
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Column, Expanded, IconTheme, IconThemeData, MainAxisAlignment, MergeSemantics, Padding, Row,
     SafeArea, Semantics, SemanticsRole, SizedBox, Stack, Text, WidgetState, WidgetStateProperty,
     WidgetStates,
@@ -202,8 +202,8 @@ type DestinationSelectedCallback = Rc<dyn Fn(usize)>;
 ///
 /// ```rust
 /// use flui_material::NavigationDestination;
-/// use flui_widgets::Icon;
-/// use flui_widgets::icon::IconData;
+/// use flui_sdk::widgets::Icon;
+/// use flui_sdk::widgets::icon::IconData;
 ///
 /// let _home = NavigationDestination::new(Icon::new(IconData::new(0xE88A)), "Home");
 /// ```
@@ -262,8 +262,8 @@ impl std::fmt::Debug for NavigationDestination {
 ///
 /// ```rust
 /// use flui_material::{NavigationBar, NavigationDestination};
-/// use flui_widgets::Icon;
-/// use flui_widgets::icon::IconData;
+/// use flui_sdk::widgets::Icon;
+/// use flui_sdk::widgets::icon::IconData;
 ///
 /// let _bar = NavigationBar::new(vec![
 ///     NavigationDestination::new(Icon::new(IconData::new(0xE88A)), "Home"),
@@ -641,8 +641,8 @@ mod tests {
         ColorScheme::light()
     }
 
-    fn icon() -> flui_widgets::Icon {
-        flui_widgets::Icon::new(flui_widgets::icon::IconData::new(0xE88A))
+    fn icon() -> flui_sdk::widgets::Icon {
+        flui_sdk::widgets::Icon::new(flui_sdk::widgets::icon::IconData::new(0xE88A))
     }
 
     // ------------------------------------------------------------------
@@ -896,7 +896,7 @@ mod tests {
     /// `disabled_style`.
     #[test]
     fn theme_disabled_and_selected_resolves_the_disabled_entry_not_the_selected_one() {
-        use flui_widgets::WidgetStateConstraint;
+        use flui_sdk::widgets::WidgetStateConstraint;
 
         let selected_style = Color::rgb(1, 1, 1);
         let disabled_style = Color::rgb(2, 2, 2);

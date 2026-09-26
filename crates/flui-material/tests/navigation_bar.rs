@@ -37,10 +37,10 @@ use std::rc::Rc;
 
 use common::{lay_out, size};
 use flui_material::{NavigationBar, NavigationDestination, Theme, ThemeData};
-use flui_rendering::constraints::BoxConstraints;
-use flui_types::geometry::px;
-use flui_widgets::icon::IconData;
-use flui_widgets::{
+use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::types::geometry::px;
+use flui_sdk::widgets::icon::IconData;
+use flui_sdk::widgets::{
     Icon, MediaQuery, MediaQueryData, WidgetState, WidgetStateProperty, WidgetStates,
 };
 
@@ -78,7 +78,7 @@ fn three_destinations() -> Vec<NavigationDestination> {
 /// The `Row`'s render id — disambiguated from the 3 per-destination
 /// `Column`s (both compile to `RenderFlex`) by child count: only the Row
 /// has exactly one child per destination.
-fn row_id(laid: &common::LaidOut, destination_count: usize) -> flui_foundation::RenderId {
+fn row_id(laid: &common::LaidOut, destination_count: usize) -> flui_sdk::foundation::RenderId {
     laid.find_all_by_render_type("RenderFlex")
         .into_iter()
         .find(|&id| laid.children(id).len() == destination_count)
@@ -91,7 +91,7 @@ fn row_id(laid: &common::LaidOut, destination_count: usize) -> flui_foundation::
 fn destination_cells(
     laid: &common::LaidOut,
     destination_count: usize,
-) -> Vec<flui_foundation::RenderId> {
+) -> Vec<flui_sdk::foundation::RenderId> {
     laid.children(row_id(laid, destination_count))
 }
 
@@ -105,12 +105,12 @@ fn destination_cells(
 /// destination is expected to mount exactly one indicator fill.
 fn indicator_in_cell(
     laid: &common::LaidOut,
-    cell: flui_foundation::RenderId,
-) -> flui_foundation::RenderId {
+    cell: flui_sdk::foundation::RenderId,
+) -> flui_sdk::foundation::RenderId {
     fn collect(
         laid: &common::LaidOut,
-        id: flui_foundation::RenderId,
-        out: &mut Vec<flui_foundation::RenderId>,
+        id: flui_sdk::foundation::RenderId,
+        out: &mut Vec<flui_sdk::foundation::RenderId>,
     ) {
         if laid.render_property(id, "color").is_some() {
             out.push(id);
@@ -208,11 +208,11 @@ fn tapping_a_disabled_destination_does_not_fire_the_callback() {
 #[test]
 fn selected_index_change_moves_the_indicator_fill() {
     let colors = ThemeData::light().color_scheme;
-    let color_at = |laid: &common::LaidOut, id: flui_foundation::RenderId| {
+    let color_at = |laid: &common::LaidOut, id: flui_sdk::foundation::RenderId| {
         laid.render_property(id, "color")
             .expect("RenderPhysicalShape reports a \"color\" diagnostics property")
     };
-    let transparent = format!("{:?}", flui_types::styling::Color::TRANSPARENT);
+    let transparent = format!("{:?}", flui_sdk::types::styling::Color::TRANSPARENT);
     let filled = format!("{:?}", colors.secondary_container);
 
     let mut laid = lay_out(
@@ -269,7 +269,7 @@ fn selected_index_change_moves_the_indicator_fill() {
 
 #[test]
 fn theme_indicator_color_beats_the_m3_default() {
-    let overridden = flui_types::styling::Color::rgb(9, 9, 9);
+    let overridden = flui_sdk::types::styling::Color::rgb(9, 9, 9);
     let laid = lay_out(
         themed(
             NavigationBar::new(three_destinations())
@@ -371,7 +371,7 @@ fn a_callback_less_but_enabled_destination_still_paints_the_hover_overlay() {
     // `:606`). A destination-level `InkWell` that only wires `on_tap` when a
     // callback is present would read as non-interactive here and never
     // paint its overlay, even with `overlay_color` configured.
-    let hover_color = flui_types::styling::Color::rgb(9, 9, 9);
+    let hover_color = flui_sdk::types::styling::Color::rgb(9, 9, 9);
     let mut laid = lay_out(
         themed(NavigationBar::new(three_destinations()).overlay_color(
             WidgetStateProperty::resolve_with(move |states: &WidgetStates| {

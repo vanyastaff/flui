@@ -35,13 +35,13 @@ use std::rc::Rc;
 
 use common::{lay_out, size, tight};
 use flui_material::{Radio, Theme, ThemeData};
+use flui_sdk::widgets::Semantics;
 use flui_testing::a11y::Role;
-use flui_widgets::Semantics;
 
 /// The radio's full tap target. Flutter parity: `kMinInteractiveDimension`.
 const TAP_TARGET: f32 = 48.0;
 
-fn constraints() -> flui_rendering::constraints::BoxConstraints {
+fn constraints() -> flui_sdk::rendering::BoxConstraints {
     tight(TAP_TARGET, TAP_TARGET)
 }
 

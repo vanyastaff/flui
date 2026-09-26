@@ -18,7 +18,7 @@
 //! - **Inner `Option<V>` inside the [`WidgetStateProperty`]** — the property
 //!   IS configured, but has nothing to say for the *current* states (that one
 //!   resolution falls through, per [`WidgetStateProperty`]'s own
-//!   `Option`-fallthrough contract — see `flui_widgets::widget_state`'s
+//!   `Option`-fallthrough contract — see `flui_sdk::widgets::widget_state`'s
 //!   module docs, the substrate this button family was built against).
 //!
 //! Both signals fall through identically in
@@ -81,10 +81,10 @@
 //!
 //! [`ButtonStyle::lerp`]: https://api.flutter.dev/flutter/material/ButtonStyle/lerp.html
 
-use flui_types::styling::BorderSide;
-use flui_types::typography::TextStyle;
-use flui_types::{Color, EdgeInsets, Pixels, Size};
-use flui_widgets::WidgetStateProperty;
+use flui_sdk::types::styling::BorderSide;
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::types::{Color, EdgeInsets, Pixels, Size};
+use flui_sdk::widgets::WidgetStateProperty;
 
 use crate::shape::MaterialShape;
 
@@ -97,8 +97,8 @@ use crate::shape::MaterialShape;
 ///
 /// ```rust
 /// use flui_material::ButtonStyle;
-/// use flui_widgets::WidgetStateProperty;
-/// use flui_types::Color;
+/// use flui_sdk::widgets::WidgetStateProperty;
+/// use flui_sdk::types::Color;
 ///
 /// let style = ButtonStyle {
 ///     background_color: Some(WidgetStateProperty::all(Some(Color::rgb(0, 255, 0)))),
@@ -173,7 +173,7 @@ pub struct ButtonStyle {
 
 #[cfg(test)]
 mod tests {
-    use flui_widgets::{WidgetState, WidgetStates};
+    use flui_sdk::widgets::{WidgetState, WidgetStates};
 
     use super::*;
 

@@ -146,14 +146,14 @@
 //!   a dialog pushed onto an unrelated navigator subtree would not see that
 //!   `Theme`, which the oracle's capture step exists specifically to fix.
 
-use flui_rendering::constraints::BoxConstraints;
-use flui_types::geometry::{Radius, px};
-use flui_types::painting::Clip;
-use flui_types::styling::BorderRadius;
-use flui_types::typography::TextStyle;
-use flui_types::{Alignment, Color, EdgeInsets, Pixels};
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::painting::Clip;
+use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::types::{Alignment, Color, EdgeInsets, Pixels};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Flexible, IntrinsicWidth,
     MainAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PopupRoute, RouteResult, Row,
     SizedBox,
@@ -185,7 +185,7 @@ const INSET_PADDING_VERTICAL: f32 = 24.0;
 ///
 /// ```rust
 /// use flui_material::Dialog;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _dialog = Dialog::new(Text::new("Dialog content"));
 /// ```
@@ -374,8 +374,8 @@ const ACTION_SPACING: f32 = 8.0;
 ///
 /// ```rust
 /// use flui_material::AlertDialog;
-/// use flui_view::ViewExt;
-/// use flui_widgets::Text;
+/// use flui_sdk::view::ViewExt;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _dialog = AlertDialog::new()
 ///     .title(Text::new("Delete this?"))
@@ -550,7 +550,7 @@ mod tests {
 
     #[test]
     fn dialog_new_leaves_every_override_unset() {
-        let dialog = Dialog::new(flui_widgets::SizedBox::shrink());
+        let dialog = Dialog::new(flui_sdk::widgets::SizedBox::shrink());
         assert!(dialog.color.is_none());
         assert!(dialog.elevation.is_none());
         assert!(dialog.shape.is_none());
@@ -562,7 +562,7 @@ mod tests {
 
     #[test]
     fn dialog_overrides_are_stored_verbatim() {
-        let dialog = Dialog::new(flui_widgets::SizedBox::shrink())
+        let dialog = Dialog::new(flui_sdk::widgets::SizedBox::shrink())
             .color(Color::rgb(1, 2, 3))
             .elevation(2.0)
             .shape(MaterialShape::Stadium)
@@ -600,9 +600,9 @@ mod tests {
     #[test]
     fn alert_dialog_builders_set_the_expected_slots() {
         let dialog = AlertDialog::new()
-            .title(flui_widgets::Text::new("Title"))
-            .content(flui_widgets::Text::new("Content"))
-            .actions(vec![flui_widgets::Text::new("OK").boxed()]);
+            .title(flui_sdk::widgets::Text::new("Title"))
+            .content(flui_sdk::widgets::Text::new("Content"))
+            .actions(vec![flui_sdk::widgets::Text::new("OK").boxed()]);
 
         assert!(dialog.title.is_some());
         assert!(dialog.content.is_some());

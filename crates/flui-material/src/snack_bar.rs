@@ -51,14 +51,14 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Curve, Curves};
-use flui_foundation::Listenable;
-use flui_types::geometry::px;
-use flui_types::painting::Clip;
-use flui_types::{Alignment, Color, EdgeInsets};
-use flui_view::RebuildHandle;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::animation::{Animation, AnimationController, Curve, Curves};
+use flui_sdk::foundation::Listenable;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::painting::Clip;
+use flui_sdk::types::{Alignment, Color, EdgeInsets};
+use flui_sdk::view::RebuildHandle;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Align, AnimatedBuilder, ClipRect, DefaultTextStyle, Expanded, Padding, Row, SafeArea,
     WidgetStateProperty,
 };
@@ -92,7 +92,7 @@ const HORIZONTAL_PADDING: f32 = 24.0;
 ///
 /// ```rust
 /// use flui_material::SnackBar;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _snack_bar = SnackBar::new(Text::new("Saved")).duration(std::time::Duration::from_secs(2));
 /// ```
@@ -253,7 +253,8 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
             ..ButtonStyle::default()
         };
 
-        let mut button = TextButton::new(flui_widgets::Text::new(view.label.clone())).style(style);
+        let mut button =
+            TextButton::new(flui_sdk::widgets::Text::new(view.label.clone())).style(style);
         if !self.triggered.get() {
             let messenger = ScaffoldMessengerScope::maybe_of(ctx);
             let on_pressed = view.on_pressed.clone();
@@ -268,7 +269,7 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
                 if let Some(messenger) = &messenger {
                     messenger.hide_current_snack_bar_because(SnackBarClosedReason::Action);
                 }
-                rebuild.schedule(flui_view::RebuildReason::StateChange);
+                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
             });
         }
         button
@@ -395,7 +396,7 @@ mod tests {
 
     #[test]
     fn new_snack_bar_defaults_to_the_display_duration_and_no_action() {
-        let snack_bar = SnackBar::new(flui_widgets::Text::new("hi"));
+        let snack_bar = SnackBar::new(flui_sdk::widgets::Text::new("hi"));
         assert_eq!(snack_bar.configured_duration(), DEFAULT_DISPLAY_DURATION);
         assert!(snack_bar.action.is_none());
     }
@@ -403,14 +404,14 @@ mod tests {
     #[test]
     fn duration_builder_overrides_the_default() {
         let snack_bar =
-            SnackBar::new(flui_widgets::Text::new("hi")).duration(Duration::from_secs(2));
+            SnackBar::new(flui_sdk::widgets::Text::new("hi")).duration(Duration::from_secs(2));
         assert_eq!(snack_bar.configured_duration(), Duration::from_secs(2));
     }
 
     #[test]
     fn action_builder_attaches_the_action() {
-        let snack_bar =
-            SnackBar::new(flui_widgets::Text::new("hi")).action(SnackBarAction::new("UNDO", || {}));
+        let snack_bar = SnackBar::new(flui_sdk::widgets::Text::new("hi"))
+            .action(SnackBarAction::new("UNDO", || {}));
         assert!(snack_bar.action.is_some());
     }
 }

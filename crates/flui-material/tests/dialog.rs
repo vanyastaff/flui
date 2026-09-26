@@ -11,11 +11,11 @@ use common::{lay_out, tight};
 use flui_material::{
     AlertDialog, Dialog, DialogThemeData, MaterialShape, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_types::Color;
-use flui_types::geometry::{Radius, px};
-use flui_types::styling::BorderRadius;
-use flui_view::ViewExt;
-use flui_widgets::{ColoredBox, GestureDetector, SizedBox, Text};
+use flui_sdk::types::Color;
+use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::view::ViewExt;
+use flui_sdk::widgets::{ColoredBox, GestureDetector, SizedBox, Text};
 
 /// The corner probe both radius tests share, on the diagonal from the
 /// Material's top-left corner. See
@@ -24,7 +24,7 @@ use flui_widgets::{ColoredBox, GestureDetector, SizedBox, Text};
 const PROBE: f32 = 7.6;
 
 /// `_DialogDefaultsM3`'s formatted `Debug` string for a resolved
-/// [`Color`](flui_types::Color) — the same helper `tests/card.rs`/
+/// [`Color`](flui_sdk::types::Color) — the same helper `tests/card.rs`/
 /// `tests/elevated_button.rs` use for `RenderPhysicalShape`'s `"color"`
 /// diagnostics property.
 fn color_property(color: Color) -> String {

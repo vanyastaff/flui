@@ -13,10 +13,10 @@
 //! default fixedSize"/"No default side" comments), so neither field is
 //! populated here.
 
-use flui_types::geometry::px;
-use flui_types::{EdgeInsets, Size};
-use flui_view::prelude::*;
-use flui_widgets::{WidgetState, WidgetStateProperty};
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::{EdgeInsets, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
@@ -43,7 +43,7 @@ enum FilledButtonVariant {
 ///
 /// ```rust
 /// use flui_material::FilledButton;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _filled = FilledButton::new(Text::new("Confirm")).on_pressed(|| {});
 /// let _tonal = FilledButton::tonal(Text::new("Confirm")).on_pressed(|| {});
@@ -210,7 +210,7 @@ fn scaled_padding_1x() -> EdgeInsets {
 
 #[cfg(test)]
 mod tests {
-    use flui_widgets::{WidgetState, WidgetStates};
+    use flui_sdk::widgets::{WidgetState, WidgetStates};
 
     use super::*;
 
@@ -341,13 +341,13 @@ mod tests {
 
     #[test]
     fn tonal_constructor_selects_the_tonal_variant() {
-        let button = FilledButton::tonal(flui_widgets::SizedBox::shrink());
+        let button = FilledButton::tonal(flui_sdk::widgets::SizedBox::shrink());
         assert_eq!(button.variant, FilledButtonVariant::Tonal);
     }
 
     #[test]
     fn new_constructor_selects_the_filled_variant() {
-        let button = FilledButton::new(flui_widgets::SizedBox::shrink());
+        let button = FilledButton::new(flui_sdk::widgets::SizedBox::shrink());
         assert_eq!(button.variant, FilledButtonVariant::Filled);
     }
 

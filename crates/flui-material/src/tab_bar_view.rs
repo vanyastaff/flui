@@ -48,7 +48,7 @@
 //! subscription is registered the same way `TabBarState` registers its own
 //! (re-resolved every `build`, re-homed on controller-identity change) and
 //! removed in `dispose`: a controller that outlives this view must not keep
-//! a dead `Rc` closure calling [`flui_view::RebuildHandle::schedule`] on an
+//! a dead `Rc` closure calling [`flui_sdk::view::RebuildHandle::schedule`] on an
 //! unmounted element.
 //!
 //! ## Length mismatch
@@ -64,10 +64,10 @@
 
 use std::cell::RefCell;
 
-use flui_foundation::ListenerId;
-use flui_view::prelude::*;
-use flui_view::{BoxedView, RebuildHandle};
-use flui_widgets::{Offstage, SizedBox, Stack, StackFit, TickerMode};
+use flui_sdk::foundation::ListenerId;
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{BoxedView, RebuildHandle};
+use flui_sdk::widgets::{Offstage, SizedBox, Stack, StackFit, TickerMode};
 
 use crate::tab_controller::{DefaultTabController, TabController};
 
@@ -82,8 +82,8 @@ use crate::tab_controller::{DefaultTabController, TabController};
 ///
 /// ```
 /// use flui_material::{DefaultTabController, TabBarView};
-/// use flui_widgets::{SizedBox, Text};
-/// use flui_view::ViewExt;
+/// use flui_sdk::widgets::{SizedBox, Text};
+/// use flui_sdk::view::ViewExt;
 ///
 /// let children = vec![Text::new("One").boxed(), SizedBox::shrink().boxed()];
 /// let view = DefaultTabController::new(children.len(), TabBarView::new(children));
@@ -202,7 +202,7 @@ impl TabBarViewState {
                 .clone()
                 .expect("init_state runs before the first build");
             let id = resolved.add_listener(move || {
-                rebuild.schedule(flui_view::RebuildReason::AnimationTick);
+                rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             });
             *self.listener_id.borrow_mut() = Some(id);
             let _prev = self.controller.borrow_mut().replace(resolved.clone());
@@ -278,21 +278,21 @@ mod tests {
 
     #[test]
     fn new_starts_with_no_explicit_controller() {
-        let view = TabBarView::new(vec![flui_widgets::SizedBox::shrink().boxed()]);
+        let view = TabBarView::new(vec![flui_sdk::widgets::SizedBox::shrink().boxed()]);
         assert!(view.controller.is_none());
     }
 
     #[test]
     fn controller_sets_the_explicit_controller() {
         let controller = TabController::new(1, 0);
-        let view = TabBarView::new(vec![flui_widgets::SizedBox::shrink().boxed()])
+        let view = TabBarView::new(vec![flui_sdk::widgets::SizedBox::shrink().boxed()])
             .controller(controller.clone());
         assert_eq!(view.controller, Some(controller));
     }
 
     #[test]
     fn debug_format_does_not_panic() {
-        let view = TabBarView::new(vec![flui_widgets::SizedBox::shrink().boxed()]);
+        let view = TabBarView::new(vec![flui_sdk::widgets::SizedBox::shrink().boxed()]);
         let rendered = format!("{view:?}");
         assert!(rendered.contains("TabBarView"));
     }

@@ -17,18 +17,18 @@ use std::rc::Rc;
 
 use common::{lay_out, offset, size, tight};
 use flui_material::{AppBar, NavigationBar, NavigationDestination, Scaffold, Theme, ThemeData};
-use flui_types::EdgeInsets;
-use flui_types::geometry::px;
-use flui_view::prelude::*;
-use flui_widgets::icon::IconData;
-use flui_widgets::{Icon, MediaQuery, MediaQueryData, SizedBox, Text};
+use flui_sdk::types::EdgeInsets;
+use flui_sdk::types::geometry::px;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::icon::IconData;
+use flui_sdk::widgets::{Icon, MediaQuery, MediaQueryData, SizedBox, Text};
 
 /// The render-tree node for the scaffold's `CustomMultiChildLayout`.
 ///
 /// The shared harness adds the production focus anchor outside the mounted
 /// view, so this is resolved by render type instead of assuming a fixed depth
 /// below the presentation root.
-fn layout_root(laid: &common::LaidOut) -> flui_foundation::RenderId {
+fn layout_root(laid: &common::LaidOut) -> flui_sdk::foundation::RenderId {
     laid.try_find_by_render_type("RenderCustomMultiChildLayoutBox")
         .expect("Scaffold must mount exactly one CustomMultiChildLayout")
 }

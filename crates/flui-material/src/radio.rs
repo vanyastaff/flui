@@ -105,14 +105,14 @@
 
 use std::rc::Rc;
 
-use flui_foundation::Listenable;
-use flui_rendering::pipeline::Canvas;
-use flui_types::geometry::px;
-use flui_types::painting::Paint;
-use flui_types::styling::Color;
-use flui_types::{Point, Size};
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::foundation::Listenable;
+use flui_sdk::painting::Canvas;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::painting::Paint;
+use flui_sdk::types::styling::Color;
+use flui_sdk::types::{Point, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
     WidgetStatesController,
 };
@@ -246,7 +246,7 @@ impl<T: PartialEq + Clone + 'static> Radio<T> {
 /// `InkWell`'s to manage.
 pub struct RadioState {
     states: WidgetStatesController,
-    states_listener: Option<flui_foundation::ListenerId>,
+    states_listener: Option<flui_sdk::foundation::ListenerId>,
 }
 
 impl std::fmt::Debug for RadioState {
@@ -279,7 +279,7 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         // else needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
         self.states_listener = Some(self.states.add_listener(std::sync::Arc::new(move || {
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
 
@@ -686,7 +686,7 @@ mod tests {
     }
 
     /// Proves the painter is actually invoked (via a real [`Canvas`]/
-    /// [`flui_painting::DrawOp`]) and that the inner
+    /// [`flui_sdk::painting::DrawOp`]) and that the inner
     /// dot is drawn if and only if `selected` — the oracle's own
     /// `!position.isDismissed` guard (`radio.dart` `:870`), which V1's
     /// non-animated `position ∈ {0.0, 1.0}` collapses to exactly this
@@ -695,7 +695,7 @@ mod tests {
     /// the `unselected` half of this test fail before being reverted.
     #[test]
     fn inner_dot_is_present_only_when_selected() {
-        use flui_painting::DrawOp;
+        use flui_sdk::painting::DrawOp;
 
         let size = Size::new(px(RADIO_TAP_TARGET_SIZE), px(RADIO_TAP_TARGET_SIZE));
 

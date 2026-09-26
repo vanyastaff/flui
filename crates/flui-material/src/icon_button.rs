@@ -120,10 +120,10 @@
 //!   `on_long_press`, `states_controller` (external) — no override surface
 //!   yet, matching every other V1 button in this crate.
 
-use flui_types::geometry::px;
-use flui_types::{Color, EdgeInsets, Size};
-use flui_view::prelude::*;
-use flui_widgets::{IconTheme, IconThemeData, WidgetState, WidgetStateProperty, WidgetStates};
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::{Color, EdgeInsets, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{IconTheme, IconThemeData, WidgetState, WidgetStateProperty, WidgetStates};
 
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
@@ -143,7 +143,7 @@ pub const ICON_BUTTON_ICON_SIZE: f32 = 24.0;
 ///
 /// ```rust
 /// use flui_material::IconButton;
-/// use flui_widgets::{Icon, IconData};
+/// use flui_sdk::widgets::{Icon, IconData};
 ///
 /// let _button = IconButton::new(Icon::new(IconData::new(0xE87D))).on_pressed(|| {});
 /// ```
@@ -292,7 +292,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
 
 #[cfg(test)]
 mod tests {
-    use flui_widgets::{WidgetState, WidgetStates};
+    use flui_sdk::widgets::{WidgetState, WidgetStates};
 
     use super::*;
 
@@ -421,9 +421,9 @@ mod tests {
 
     #[test]
     fn is_disabled_when_no_press_handler_is_set() {
-        assert!(!IconButton::new(flui_widgets::SizedBox::shrink()).is_interactive());
+        assert!(!IconButton::new(flui_sdk::widgets::SizedBox::shrink()).is_interactive());
         assert!(
-            IconButton::new(flui_widgets::SizedBox::shrink())
+            IconButton::new(flui_sdk::widgets::SizedBox::shrink())
                 .on_pressed(|| {})
                 .is_interactive()
         );

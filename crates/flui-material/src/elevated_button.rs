@@ -16,11 +16,11 @@
 //! `fixed_size` either (the oracle's own "No default fixedSize" / "No
 //! default side" comments), so neither field is populated here.
 
-use flui_types::Color;
-use flui_types::geometry::px;
-use flui_types::{EdgeInsets, Size};
-use flui_view::prelude::*;
-use flui_widgets::{WidgetState, WidgetStateProperty};
+use flui_sdk::types::Color;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::{EdgeInsets, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
@@ -34,7 +34,7 @@ use crate::theme::Theme;
 ///
 /// ```rust
 /// use flui_material::ElevatedButton;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _button = ElevatedButton::new(Text::new("Save")).on_pressed(|| {});
 /// ```
@@ -178,7 +178,7 @@ pub(crate) fn scaled_padding_1x() -> EdgeInsets {
 /// `None` (no interactive state active) paints no overlay layer at all — see
 /// `crate::ink_well`'s module docs on why `None` is not a fallback color.
 pub(crate) fn pressed_hovered_focused_overlay(
-    states: &flui_widgets::WidgetStates,
+    states: &flui_sdk::widgets::WidgetStates,
     base_color: Color,
 ) -> Option<Color> {
     if states.contains_state(WidgetState::Pressed) {
@@ -194,7 +194,7 @@ pub(crate) fn pressed_hovered_focused_overlay(
 
 #[cfg(test)]
 mod tests {
-    use flui_widgets::{WidgetState, WidgetStates};
+    use flui_sdk::widgets::{WidgetState, WidgetStates};
 
     use super::*;
 
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn is_disabled_when_no_press_handler_is_set() {
         assert!(
-            ElevatedButton::new(flui_widgets::SizedBox::shrink())
+            ElevatedButton::new(flui_sdk::widgets::SizedBox::shrink())
                 .on_pressed
                 .is_none()
         );

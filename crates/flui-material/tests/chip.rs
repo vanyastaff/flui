@@ -33,8 +33,8 @@ use std::rc::Rc;
 use common::{lay_out, loose};
 use flui_material::chip::CHIP_ICON_SIZE;
 use flui_material::{Chip, ChipThemeData, FilterChip, Theme, ThemeData, ThemeDataOverrides};
-use flui_types::Color;
-use flui_widgets::{GestureDetector, HitTestBehavior, Text};
+use flui_sdk::types::Color;
+use flui_sdk::widgets::{GestureDetector, HitTestBehavior, Text};
 
 /// `_ChipDefaultsM3`/`_FilterChipDefaultsM3.padding` (`chip.dart`/
 /// `filter_chip.dart`, oracle tag `3.44.0`, `EdgeInsets.all(8.0)`) — a
@@ -45,7 +45,7 @@ const CONTAINER_PADDING: f32 = 8.0;
 
 /// Every `Chip`/`FilterChip` needs a [`Theme`] ancestor (`Theme::of` panics
 /// without one) — mirrors `tests/checkbox.rs`'s own `themed` helper.
-fn themed(child: impl flui_view::IntoView) -> Theme {
+fn themed(child: impl flui_sdk::view::IntoView) -> Theme {
     Theme::new(ThemeData::light(), child)
 }
 
@@ -62,7 +62,7 @@ fn color_property(color: Color) -> String {
 /// `RenderSemanticsAnnotations` node, which sizes to its `CustomPaint`/
 /// `Material`/content chain in full (mirrors `tests/checkbox.rs`'s own
 /// semantics-node-as-container-size assertion).
-fn container_size(laid: &common::LaidOut) -> flui_types::Size {
+fn container_size(laid: &common::LaidOut) -> flui_sdk::types::Size {
     // The wrapper node is the chip's own; its `GestureDetector`s add
     // action-only annotations beneath it for assistive technology.
     let semantics = laid
@@ -429,10 +429,10 @@ fn theme_side_reaches_the_mounted_border_painter_beating_the_default() {
     let themed_side_color = Color::rgb(44, 55, 66);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         chip_theme: Some(ChipThemeData {
-            side: Some(flui_types::styling::BorderSide::new(
+            side: Some(flui_sdk::types::styling::BorderSide::new(
                 themed_side_color,
-                flui_types::geometry::px(3.0),
-                flui_types::styling::BorderStyle::Solid,
+                flui_sdk::types::geometry::px(3.0),
+                flui_sdk::types::styling::BorderStyle::Solid,
             )),
             ..Default::default()
         }),

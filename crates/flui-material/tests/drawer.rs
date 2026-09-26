@@ -28,7 +28,7 @@
 //! matter how large the budget — a `close()`/`open()` fling then never
 //! progresses past its very first simulated value, and a mount/unmount that
 //! depends on the fling actually *settling* (not just starting) never
-//! happens. [`themed_animated`] wraps `vsync` in [`flui_widgets::VsyncScope`]
+//! happens. [`themed_animated`] wraps `vsync` in [`flui_sdk::widgets::VsyncScope`]
 //! so the tree-side registration and the binding-side pump are the SAME
 //! clock; plain [`themed`] (no `VsyncScope`) is for tests that only need
 //! synchronous effects (a bare `set_value`, or a same-tick status flip) and
@@ -61,12 +61,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, tight};
-use flui_animation::Vsync;
-use flui_foundation::RenderId;
 use flui_material::{Drawer, DrawerHandle, Scaffold, ScaffoldScope, Theme, ThemeData};
-use flui_types::Color;
-use flui_view::prelude::*;
-use flui_widgets::{ColoredBox, GestureDetector, MediaQuery, MediaQueryData, SizedBox, VsyncScope};
+use flui_sdk::animation::Vsync;
+use flui_sdk::foundation::RenderId;
+use flui_sdk::types::Color;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
+    ColoredBox, GestureDetector, MediaQuery, MediaQueryData, SizedBox, VsyncScope,
+};
 
 /// Wraps `scaffold` in the `Theme`/`MediaQuery` ancestors `Scaffold`/
 /// `Drawer`/`Material` all require (`Theme::of`/`MediaQuery::of` panic
@@ -399,7 +401,7 @@ fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
 /// `GlobalKey::with_current_state` resolution is NOT exercised end-to-end
 /// here. `HeadlessBinding` (this crate's test harness) never installs the
 /// owner-thread `GlobalKey` registry — only `UiRealm::enter` (production) or
-/// `flui_view::test_only_set_global_key_registry` (a lower-level hook this
+/// `flui_sdk::view::test_only_set_global_key_registry` (a lower-level hook this
 /// harness doesn't wire up) activate it — so a call through
 /// `ScaffoldScope::of(ctx).open_drawer()` in a headless test silently
 /// resolves to "no element registered" and no-ops (proven safe, not proven

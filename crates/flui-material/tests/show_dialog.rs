@@ -12,11 +12,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{lay_out_animated, tight};
-use flui_animation::Vsync;
 use flui_material::{AlertDialog, Theme, ThemeData, show_dialog};
-use flui_types::Color;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::animation::Vsync;
+use flui_sdk::types::Color;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     ColoredBox, GestureDetector, Navigator, NavigatorHandle, SimpleRoute, Text, VsyncScope,
 };
 

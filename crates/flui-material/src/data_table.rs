@@ -31,7 +31,7 @@
 //!
 //! Flutter's `DataTable` lays out over a custom `Table`/`RenderTable` with
 //! per-column `IntrinsicColumnWidth` sizing. FLUI has the same machinery —
-//! [`flui_widgets::Table`] over [`flui_objects::RenderTable`], including
+//! [`flui_sdk::widgets::Table`] over `RenderTable`, including
 //! [`TableColumnWidth::Intrinsic`] with the oracle's own 4-pass grow/shrink
 //! algorithm (`rendering/table.dart:1070-1236`, ported in
 //! `flui-objects/src/layout/table.rs`). V1 uses the SAME default heuristic
@@ -92,13 +92,13 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use flui_rendering::constraints::BoxConstraints;
-use flui_types::geometry::px;
-use flui_types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_types::typography::TextStyle;
-use flui_types::{Alignment, EdgeInsets, Pixels};
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::types::{Alignment, EdgeInsets, Pixels};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Center, Container, DefaultTextStyle, Padding, Semantics, SemanticsRole, SizedBox, Table,
     TableCell, TableCellVerticalAlignment, TableColumnWidth, TableRow, WidgetState,
     WidgetStateProperty, WidgetStates,
@@ -280,7 +280,7 @@ impl DataRow {
 ///
 /// ```rust
 /// use flui_material::{DataCell, DataColumn, DataRow, DataTable, Theme, ThemeData};
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let table = DataTable::new(
 ///     vec![DataColumn::new(Text::new("Name")), DataColumn::new(Text::new("Age")).numeric(true)],
@@ -1117,11 +1117,11 @@ mod tests {
     use crate::theme_data::DataTableThemeData;
 
     fn text_column(label: &str) -> DataColumn {
-        DataColumn::new(flui_widgets::Text::new(label.to_string()))
+        DataColumn::new(flui_sdk::widgets::Text::new(label.to_string()))
     }
 
     fn text_cell(label: &str) -> DataCell {
-        DataCell::new(flui_widgets::Text::new(label.to_string()))
+        DataCell::new(flui_sdk::widgets::Text::new(label.to_string()))
     }
 
     // ---- M3 default constants, pinned against the oracle -------------------
@@ -1249,7 +1249,7 @@ mod tests {
         // (e.g. only overrides `Selected`) — must fall through to the
         // default, not resolve to `None`.
         let cascade: RowColorProperty = WidgetStateProperty::from_map([(
-            flui_widgets::WidgetStateConstraint::Is(WidgetState::Disabled),
+            flui_sdk::widgets::WidgetStateConstraint::Is(WidgetState::Disabled),
             Some(Color::rgb(9, 9, 9)),
         )]);
         let default = default_row_color(Color::rgb(1, 2, 3));

@@ -13,12 +13,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, tight};
-use flui_animation::Vsync;
-use flui_interaction::FocusNode;
 use flui_material::InkWell;
-use flui_types::Color;
-use flui_widgets::animated::VsyncScope;
-use flui_widgets::{SizedBox, WidgetState, WidgetStatesController};
+use flui_sdk::animation::Vsync;
+use flui_sdk::interaction::FocusNode;
+use flui_sdk::types::Color;
+use flui_sdk::widgets::animated::VsyncScope;
+use flui_sdk::widgets::{SizedBox, WidgetState, WidgetStatesController};
 
 #[test]
 fn hover_updates_widget_states_when_the_pointer_moves_over_the_ink_well() {
@@ -236,7 +236,7 @@ fn overlay_color_resolution_reflects_the_hovered_state() {
     // End-to-end: WidgetStateProperty::resolve is actually consulted from a
     // real mount+dispatch, not bypassed. Uses the Material fill this
     // InkWell wraps around its child once an overlay resolves to `Some`.
-    use flui_widgets::{WidgetStateConstraint, WidgetStateProperty};
+    use flui_sdk::widgets::{WidgetStateConstraint, WidgetStateProperty};
 
     let mut laid = lay_out(
         InkWell::new(SizedBox::new(60.0, 40.0))

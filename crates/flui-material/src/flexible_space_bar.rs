@@ -34,13 +34,13 @@
 //! `titlePadding` overrides, and the M3 `isScrolledUnder` tint. Each is an
 //! additive knob on this same skeleton.
 
-use flui_types::{Alignment, EdgeInsets};
-use flui_view::BuildContextExt as _;
-use flui_view::prelude::StatelessView;
-use flui_view::{
+use flui_sdk::types::{Alignment, EdgeInsets};
+use flui_sdk::view::BuildContextExt as _;
+use flui_sdk::view::prelude::StatelessView;
+use flui_sdk::view::{
     BoxedView, BuildContext, InheritedView, IntoView, View, ViewExt, impl_inherited_view,
 };
-use flui_widgets::{
+use flui_sdk::widgets::{
     Align, DefaultTextStyle, Directionality, Opacity, Padding, Positioned, SizedBox, Stack,
     Transform,
 };
@@ -244,8 +244,9 @@ impl StatelessView for FlexibleSpaceBar {
             // Start/end resolve through the ambient Directionality — a
             // leading-aligned title sits at the RIGHT edge under RTL, and
             // its 72px leading inset moves with it.
-            let rtl = Directionality::maybe_of(ctx)
-                .is_some_and(|direction| direction == flui_types::typography::TextDirection::Rtl);
+            let rtl = Directionality::maybe_of(ctx).is_some_and(|direction| {
+                direction == flui_sdk::types::typography::TextDirection::Rtl
+            });
             let alignment = if self.center_title {
                 Alignment::BOTTOM_CENTER
             } else if rtl {
@@ -294,8 +295,8 @@ impl StatelessView for FlexibleSpaceBar {
 }
 
 /// Local shorthand: `EdgeInsets` is pixel-typed.
-fn px_f(value: f32) -> flui_types::geometry::Pixels {
-    flui_types::geometry::px(value)
+fn px_f(value: f32) -> flui_sdk::types::geometry::Pixels {
+    flui_sdk::types::geometry::px(value)
 }
 
 #[cfg(test)]

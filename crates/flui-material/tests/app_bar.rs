@@ -11,10 +11,10 @@ use crate::common;
 
 use common::{lay_out, loose, tight};
 use flui_material::{AppBar, AppBarThemeData, Theme, ThemeData, ThemeDataOverrides};
-use flui_types::geometry::px;
-use flui_types::{EdgeInsets, Size};
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::{EdgeInsets, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     MediaQuery, MediaQueryData, Navigator, NavigatorHandle, PreferredSize, SimpleRoute, SizedBox,
     Text,
 };
@@ -23,7 +23,7 @@ use flui_widgets::{
 /// `tests/elevated_button.rs`'s `color_property`): the exact `Debug` string
 /// `RenderPhysicalShape` writes into its `"color"` diagnostics property, so a
 /// test can compare against a resolved `Color` without downcasting.
-fn color_property(color: flui_types::Color) -> String {
+fn color_property(color: flui_sdk::types::Color) -> String {
     format!("{color:?}")
 }
 
@@ -110,7 +110,7 @@ fn theme_defaults_apply_surface_background_and_zero_elevation() {
 
 #[test]
 fn background_color_override_replaces_the_theme_default() {
-    let overridden = flui_types::Color::rgb(10, 20, 30);
+    let overridden = flui_sdk::types::Color::rgb(10, 20, 30);
     let laid = lay_out(
         Theme::new(
             ThemeData::light(),
@@ -139,7 +139,7 @@ fn background_color_override_replaces_the_theme_default() {
 /// widget-level `background_color` in the way.
 #[test]
 fn app_bar_theme_slot_reaches_the_mounted_materials_background_color() {
-    let themed_background = flui_types::Color::rgb(44, 55, 66);
+    let themed_background = flui_sdk::types::Color::rgb(44, 55, 66);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         app_bar_theme: Some(AppBarThemeData {
             background_color: Some(themed_background),
@@ -184,8 +184,8 @@ fn app_bar_theme_slot_reaches_the_mounted_materials_background_color() {
 /// `a_larger_font_size_measures_to_a_taller_box` technique).
 #[test]
 fn themed_title_text_style_does_not_leak_into_toolbar_actions() {
-    use flui_types::typography::TextStyle;
-    use flui_widgets::DefaultTextStyle;
+    use flui_sdk::types::typography::TextStyle;
+    use flui_sdk::widgets::DefaultTextStyle;
 
     let themed_font_size = 40.0;
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
@@ -305,7 +305,7 @@ fn explicit_leading_is_pinned_to_the_56px_wide_slot_regardless_of_its_own_size()
 
 // ── Implied leading: a BackButton synthesized when the navigator can pop ──
 //
-// Mounted through a real `Navigator` (`flui_widgets::Navigator`/
+// Mounted through a real `Navigator` (`flui_sdk::widgets::Navigator`/
 // `NavigatorHandle`), not a hand-built `BuildContext` — `resolve_leading`'s
 // navigator-consulting branches only run through `NavigatorHandle::maybe_of`,
 // which needs a live ancestor to find. `app_bar.rs`'s own unit tests cover
@@ -362,7 +362,7 @@ fn implied_leading_is_absent_when_the_navigator_cannot_pop() {
 /// why two mounted routes yield two leading buttons) — any one of them taps
 /// the same underlying `NavigatorHandle`, so the first is as good as any.
 /// Panics with a diagnostic size list if none match at all.
-fn find_leading_icon_button_material(laid: &common::LaidOut) -> flui_foundation::RenderId {
+fn find_leading_icon_button_material(laid: &common::LaidOut) -> flui_sdk::foundation::RenderId {
     let candidates = laid.find_all_by_render_type("RenderPhysicalShape");
     let leading_size = common::size(40.0, 40.0);
     candidates
@@ -447,7 +447,7 @@ fn tapping_the_implied_back_button_pops_the_route() {
 /// A `bottom` slot whose `preferred_size` and actual mounted height always
 /// agree — matching how a real [`flui_material::TabBar`] behaves (its own
 /// `build` returns exactly the height it advertises via
-/// [`flui_widgets::PreferredSizeView::preferred_size`]).
+/// [`flui_sdk::widgets::PreferredSizeView::preferred_size`]).
 fn fixed_height_bottom(height: f32) -> PreferredSize {
     PreferredSize::new(
         Size::new(px(f32::INFINITY), px(height)),
@@ -457,13 +457,13 @@ fn fixed_height_bottom(height: f32) -> PreferredSize {
 
 const BOTTOM_SLOT_HEIGHT: f32 = 48.0;
 
-/// The bottom slot's own mounted [`RenderConstrainedBox`](flui_objects::RenderConstrainedBox)
+/// The bottom slot's own mounted `RenderConstrainedBox`
 /// — the only one in this tree sized to exactly [`BOTTOM_SLOT_HEIGHT`] (the
 /// toolbar's own `SizedBox` is 56px tall or, under a shortfall, shrunk below
 /// it; the outer `SizedBox` wrapping the whole `Column` sums to a different
 /// total again) — so filtering on that exact height disambiguates it without
 /// walking tree structure.
-fn find_bottom_slot_box(laid: &common::LaidOut) -> flui_foundation::RenderId {
+fn find_bottom_slot_box(laid: &common::LaidOut) -> flui_sdk::foundation::RenderId {
     let candidates: Vec<_> = laid
         .find_all_by_render_type("RenderConstrainedBox")
         .into_iter()

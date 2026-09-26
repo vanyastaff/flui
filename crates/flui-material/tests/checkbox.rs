@@ -42,7 +42,7 @@ use flui_testing::a11y::{Role, Toggled};
 /// override yet).
 const TAP_TARGET: f32 = 48.0;
 
-fn constraints() -> flui_rendering::constraints::BoxConstraints {
+fn constraints() -> flui_sdk::rendering::BoxConstraints {
     tight(TAP_TARGET, TAP_TARGET)
 }
 

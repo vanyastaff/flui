@@ -151,7 +151,7 @@
 //! `left` under RTL). `ScaffoldLayoutDelegate` hardcodes the FAB to the
 //! right edge and carries no `text_direction` field at all, so an RTL
 //! subtree gets the LTR position and `should_relayout` cannot react to a
-//! direction change. `flui_widgets::Directionality` exists, but neither
+//! direction change. `flui_sdk::widgets::Directionality` exists, but neither
 //! `Scaffold` nor `ScaffoldLayoutDelegate` reads it (see [`crate::AppBar`]'s
 //! own centerTitle note for the matching directionality gap there); revisit
 //! together.
@@ -160,14 +160,14 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_foundation::ElementId;
-use flui_rendering::constraints::BoxConstraints;
-use flui_types::geometry::px;
-use flui_types::styling::Color;
-use flui_types::{EdgeInsets, Offset, Pixels, Size};
-use flui_view::prelude::*;
-use flui_view::{GlobalKey, RebuildHandle, impl_inherited_view};
-use flui_widgets::{
+use flui_sdk::foundation::ElementId;
+use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::styling::Color;
+use flui_sdk::types::{EdgeInsets, Offset, Pixels, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
+use flui_sdk::widgets::{
     ConstrainedBox, CustomMultiChildLayout, LayoutId, MediaQuery, MultiChildLayoutContext,
     MultiChildLayoutDelegate, PreferredSizeView,
 };
@@ -212,7 +212,7 @@ const FLOATING_ACTION_BUTTON_MARGIN: f32 = 16.0;
 ///
 /// ```rust
 /// use flui_material::{AppBar, Scaffold};
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _page = Scaffold::new()
 ///     .app_bar(AppBar::new().title(Text::new("FLUI")))
@@ -726,7 +726,7 @@ impl ScaffoldState {
             .enable_open_drag_gesture(view.enable_open_drag_gesture)
             .on_open_changed(move |opened| {
                 set_opened(&handle, opened);
-                rebuild.schedule(flui_view::RebuildReason::StateChange);
+                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
                 if let Some(callback) = &on_changed {
                     callback(opened);
                 }
@@ -1026,9 +1026,9 @@ mod tests {
     fn fab_y_grows_the_safe_margin_for_a_nonzero_min_view_padding_bottom() {
         use std::collections::HashMap;
 
-        use flui_types::Offset;
+        use flui_sdk::types::Offset;
 
-        // Mirrors `flui_rendering::delegates::multi_child_layout_delegate`'s
+        // Mirrors `flui-rendering`'s `delegates::multi_child_layout_delegate`'s
         // own in-crate `MockContext` test pattern.
         struct MockContext {
             children: HashMap<String, Size>,

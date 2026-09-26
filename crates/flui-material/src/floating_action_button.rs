@@ -85,15 +85,15 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_foundation::{Listenable, ListenerId};
-use flui_rendering::constraints::BoxConstraints;
-use flui_types::Color;
-use flui_types::Size;
-use flui_types::geometry::{Radius, px};
-use flui_types::styling::BorderRadius;
-use flui_view::RebuildHandle;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::foundation::{Listenable, ListenerId};
+use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::types::Color;
+use flui_sdk::types::Size;
+use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::view::RebuildHandle;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Center, ConstrainedBox, IconTheme, IconThemeData, WidgetState, WidgetStateProperty,
     WidgetStates, WidgetStatesController,
 };
@@ -159,7 +159,7 @@ fn fab_shape() -> MaterialShape {
 ///
 /// ```rust
 /// use flui_material::FloatingActionButton;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _fab = FloatingActionButton::new(Some(|| {}), Text::new("+"));
 /// let _disabled: flui_material::FloatingActionButton =
@@ -173,7 +173,7 @@ pub struct FloatingActionButton {
 
 impl FloatingActionButton {
     /// A regular floating action button around `child` (typically an
-    /// [`Icon`](flui_widgets::Icon)). `on_pressed` being `None` disables the
+    /// [`Icon`](flui_sdk::widgets::Icon)). `on_pressed` being `None` disables the
     /// button — Flutter parity: "If the `onPressed` callback is null, then
     /// the button will be disabled" (see the module docs' elevation-chain
     /// section for why that carries no visual indication here either).
@@ -297,7 +297,7 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
 
         let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(Arc::new(move || {
-            rebuild_for_listener.schedule(flui_view::RebuildReason::StateChange);
+            rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
 
         self.rebuild = Some(rebuild);
@@ -396,13 +396,13 @@ mod tests {
 
     #[test]
     fn new_with_some_handler_is_interactive() {
-        let fab = FloatingActionButton::new(Some(|| {}), flui_widgets::SizedBox::shrink());
+        let fab = FloatingActionButton::new(Some(|| {}), flui_sdk::widgets::SizedBox::shrink());
         assert!(fab.is_interactive());
     }
 
     #[test]
     fn new_with_none_handler_is_not_interactive() {
-        let fab = FloatingActionButton::new(None::<fn()>, flui_widgets::SizedBox::shrink());
+        let fab = FloatingActionButton::new(None::<fn()>, flui_sdk::widgets::SizedBox::shrink());
         assert!(!fab.is_interactive());
     }
 
@@ -410,7 +410,7 @@ mod tests {
     fn debug_reports_whether_the_button_is_enabled_without_the_closure() {
         let debug = format!(
             "{:?}",
-            FloatingActionButton::new(Some(|| {}), flui_widgets::SizedBox::shrink())
+            FloatingActionButton::new(Some(|| {}), flui_sdk::widgets::SizedBox::shrink())
         );
         assert!(debug.contains("enabled: true"));
     }

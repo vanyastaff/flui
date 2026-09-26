@@ -1,9 +1,9 @@
 //! `InputDecorator` widget-level integration coverage — mounts a real
 //! `InputDecorator` through the full render pipeline (`tests/common/mod.rs`,
 //! the same harness `tests/card.rs`/`tests/ink_well.rs` use) and probes the
-//! composed [`flui_widgets::DecoratedBox`] (`RenderDecoratedBox`),
-//! [`flui_widgets::MouseRegion`] (`RenderMouseRegion`), and
-//! [`flui_widgets::Text`] (`RenderParagraph`) render objects it produces.
+//! composed [`flui_sdk::widgets::DecoratedBox`] (`RenderDecoratedBox`),
+//! [`flui_sdk::widgets::MouseRegion`] (`RenderMouseRegion`), and
+//! [`flui_sdk::widgets::Text`] (`RenderParagraph`) render objects it produces.
 //!
 //! # Hover blend is not end-to-end drivable here
 //!
@@ -26,10 +26,10 @@ use common::{lay_out, tight};
 use flui_material::{
     InputDecoration, InputDecorationThemeData, InputDecorator, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_types::Color;
-use flui_types::geometry::px;
-use flui_types::styling::{BorderSide, BorderStyle};
-use flui_widgets::{SizedBox, WidgetStateProperty};
+use flui_sdk::types::Color;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::styling::{BorderSide, BorderStyle};
+use flui_sdk::widgets::{SizedBox, WidgetStateProperty};
 
 /// A small render-object child standing in for a real field's content (e.g.
 /// a future `EditableText`) — `SizedBox` renders as `RenderConstrainedBox`,

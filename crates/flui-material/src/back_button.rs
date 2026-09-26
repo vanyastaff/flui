@@ -1,5 +1,5 @@
 //! [`BackButton`] — an [`IconButton`] with a back-arrow glyph that pops the
-//! nearest [`Navigator`](flui_widgets::Navigator).
+//! nearest [`Navigator`](flui_sdk::widgets::Navigator).
 //!
 //! # Flutter parity
 //!
@@ -10,7 +10,7 @@
 //! `_onPressedCallback` calls `Navigator.maybePop(context)` — this type
 //! composes [`IconButton`] the same way (not by subclassing, since Rust has
 //! no implementation inheritance), wiring
-//! [`NavigatorHandle::maybe_pop`](flui_widgets::NavigatorHandle::maybe_pop)
+//! [`NavigatorHandle::maybe_pop`](flui_sdk::widgets::NavigatorHandle::maybe_pop)
 //! as the default handler and [`BackButton::on_pressed`] as the override that
 //! replaces it — Flutter parity: "The `onPressed` callback can … be used to
 //! pop the platform's navigation stack … instead of Flutter's `Navigator`."
@@ -37,8 +37,8 @@
 //! (platform detection; RTL mirroring), not on anything specific to this
 //! type.
 
-use flui_view::prelude::*;
-use flui_widgets::{Icon, IconData, NavigatorHandle};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{Icon, IconData, NavigatorHandle};
 
 use crate::button_style_button::PressCallback;
 use crate::icon_button::IconButton;
@@ -56,8 +56,8 @@ pub fn back_arrow_icon_data() -> IconData {
 
 /// An [`IconButton`] with a back-arrow glyph. With no [`Self::on_pressed`]
 /// override, tapping it calls
-/// [`NavigatorHandle::maybe_pop`](flui_widgets::NavigatorHandle::maybe_pop)
-/// on the nearest enclosing [`Navigator`](flui_widgets::Navigator) — Flutter
+/// [`NavigatorHandle::maybe_pop`](flui_sdk::widgets::NavigatorHandle::maybe_pop)
+/// on the nearest enclosing [`Navigator`](flui_sdk::widgets::Navigator) — Flutter
 /// parity: `Navigator.maybePop(context)`. With no navigator ancestor at all
 /// (and no override), the button mounts disabled rather than panicking — a
 /// named divergence from the oracle, which unconditionally assumes an
@@ -84,8 +84,8 @@ impl std::fmt::Debug for BackButton {
 
 impl BackButton {
     /// A `BackButton` with no override: tapping it calls
-    /// [`NavigatorHandle::maybe_pop`](flui_widgets::NavigatorHandle::maybe_pop)
-    /// on the nearest [`Navigator`](flui_widgets::Navigator).
+    /// [`NavigatorHandle::maybe_pop`](flui_sdk::widgets::NavigatorHandle::maybe_pop)
+    /// on the nearest [`Navigator`](flui_sdk::widgets::Navigator).
     #[must_use]
     pub fn new() -> Self {
         Self::default()

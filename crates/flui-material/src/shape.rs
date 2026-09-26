@@ -24,7 +24,7 @@
 //! component actually needs an outlined surface (M3's `OutlinedButton`,
 //! not yet built).
 
-use flui_types::{
+use flui_sdk::types::{
     Point, Rect, Size,
     geometry::{RRect, Radius},
     styling::BorderRadius,
@@ -81,18 +81,18 @@ impl MaterialShape {
             ),
             Self::Stadium => {
                 let shortest_side = size.width.get().min(size.height.get());
-                let radius = Radius::circular(flui_types::geometry::px(shortest_side / 2.0));
+                let radius = Radius::circular(flui_sdk::types::geometry::px(shortest_side / 2.0));
                 RRect::from_rect_and_radius(bounds, radius)
             }
         }
     }
 
-    /// [`to_rrect`](Self::to_rrect), converted to a [`flui_types::painting::Path`]
+    /// [`to_rrect`](Self::to_rrect), converted to a [`flui_sdk::types::painting::Path`]
     /// — what [`crate::material::Material`] registers as its owner-lane path
     /// clipper.
     #[must_use]
-    pub fn to_path(self, size: Size) -> flui_types::painting::Path {
-        flui_types::painting::Path::from_rrect(self.to_rrect(size))
+    pub fn to_path(self, size: Size) -> flui_sdk::types::painting::Path {
+        flui_sdk::types::painting::Path::from_rrect(self.to_rrect(size))
     }
 }
 
@@ -105,8 +105,8 @@ impl Default for MaterialShape {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
-    use flui_types::styling::BorderRadiusExt;
+    use flui_sdk::types::geometry::px;
+    use flui_sdk::types::styling::BorderRadiusExt;
 
     use super::*;
 

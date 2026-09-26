@@ -23,16 +23,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{lay_out_animated, tight};
-use flui_animation::Vsync;
-use flui_foundation::RenderId;
 use flui_material::FloatingActionButton;
 use flui_material::{
     Scaffold, ScaffoldMessenger, ScaffoldMessengerHandle, ScaffoldMessengerScope, SnackBar,
     SnackBarAction, Theme, ThemeData,
 };
-use flui_types::Color;
-use flui_view::prelude::*;
-use flui_widgets::{ColoredBox, MediaQuery, MediaQueryData, SizedBox, Text, VsyncScope};
+use flui_sdk::animation::Vsync;
+use flui_sdk::foundation::RenderId;
+use flui_sdk::types::Color;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{ColoredBox, MediaQuery, MediaQueryData, SizedBox, Text, VsyncScope};
 
 /// Wraps `child` in the `Theme`/`MediaQuery` ancestors `Scaffold`/`Material`
 /// require, plus a `VsyncScope` over `vsync` — required for
@@ -102,7 +102,7 @@ fn mount_with_scaffolds(
     scaffolds: Vec<Scaffold>,
 ) -> (common::LaidOut, ScaffoldMessengerHandle) {
     let handle_slot: Rc<RefCell<Option<ScaffoldMessengerHandle>>> = Rc::new(RefCell::new(None));
-    let mut children: Vec<flui_view::BoxedView> = vec![
+    let mut children: Vec<flui_sdk::view::BoxedView> = vec![
         HandleProbe {
             slot: Rc::clone(&handle_slot),
         }
@@ -111,11 +111,11 @@ fn mount_with_scaffolds(
     children.extend(
         scaffolds
             .into_iter()
-            .map(|scaffold| flui_widgets::Expanded::new(scaffold).boxed()),
+            .map(|scaffold| flui_sdk::widgets::Expanded::new(scaffold).boxed()),
     );
     let tree = themed_animated(
         vsync,
-        ScaffoldMessenger::new(flui_widgets::Column::new(children)),
+        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(children)),
     );
     let laid = lay_out_animated(tree, tight(400.0, 1600.0), vsync.clone());
     let handle = handle_slot
@@ -454,11 +454,11 @@ fn unmounting_a_scaffold_unregisters_it_from_the_messenger() {
     let handle_slot: Rc<RefCell<Option<ScaffoldMessengerHandle>>> = Rc::new(RefCell::new(None));
     let tree = themed_animated(
         &vsync,
-        ScaffoldMessenger::new(flui_widgets::Column::new(vec![
+        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![
             ViewExt::boxed(HandleProbe {
                 slot: Rc::clone(&handle_slot),
             }),
-            ViewExt::boxed(flui_widgets::Expanded::new(
+            ViewExt::boxed(flui_sdk::widgets::Expanded::new(
                 Scaffold::new().body(body_marker()),
             )),
         ])),
@@ -479,7 +479,7 @@ fn unmounting_a_scaffold_unregisters_it_from_the_messenger() {
     // but the Scaffold underneath it is torn down.
     let replacement = themed_animated(
         &vsync,
-        ScaffoldMessenger::new(flui_widgets::Column::new(vec![ViewExt::boxed(
+        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![ViewExt::boxed(
             HandleProbe {
                 slot: Rc::clone(&handle_slot),
             },
@@ -525,7 +525,7 @@ fn a_scaffold_mounted_fresh_under_a_new_messenger_registers_with_that_one_not_a_
         Rc::new(RefCell::new(None));
     let tree = themed_animated(
         &vsync,
-        ScaffoldMessenger::new(flui_widgets::Column::new(vec![ViewExt::boxed(
+        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![ViewExt::boxed(
             HandleProbe {
                 slot: Rc::clone(&first_handle_slot),
             },
@@ -549,16 +549,16 @@ fn a_scaffold_mounted_fresh_under_a_new_messenger_registers_with_that_one_not_a_
         Rc::new(RefCell::new(None));
     let replacement = themed_animated(
         &vsync,
-        ScaffoldMessenger::new(flui_widgets::Column::new(vec![
+        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![
             ViewExt::boxed(HandleProbe {
                 slot: Rc::clone(&first_handle_slot),
             }),
-            ViewExt::boxed(flui_widgets::Expanded::new(ScaffoldMessenger::new(
-                flui_widgets::Column::new(vec![
+            ViewExt::boxed(flui_sdk::widgets::Expanded::new(ScaffoldMessenger::new(
+                flui_sdk::widgets::Column::new(vec![
                     ViewExt::boxed(HandleProbe {
                         slot: Rc::clone(&second_handle_slot),
                     }),
-                    ViewExt::boxed(flui_widgets::Expanded::new(
+                    ViewExt::boxed(flui_sdk::widgets::Expanded::new(
                         Scaffold::new().body(body_marker()),
                     )),
                 ]),
@@ -618,11 +618,11 @@ fn mounting_a_scaffold_while_a_snack_bar_is_already_showing_renders_it_immediate
     let handle_slot: Rc<RefCell<Option<ScaffoldMessengerHandle>>> = Rc::new(RefCell::new(None));
     let tree = themed_animated(
         &vsync,
-        ScaffoldMessenger::new(flui_widgets::Column::new(vec![
+        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![
             ViewExt::boxed(HandleProbe {
                 slot: Rc::clone(&handle_slot),
             }),
-            ViewExt::boxed(flui_widgets::Expanded::new(
+            ViewExt::boxed(flui_sdk::widgets::Expanded::new(
                 Scaffold::new().body(body_marker()),
             )),
         ])),
@@ -645,14 +645,14 @@ fn mounting_a_scaffold_while_a_snack_bar_is_already_showing_renders_it_immediate
     // is already showing.
     let replacement = themed_animated(
         &vsync,
-        ScaffoldMessenger::new(flui_widgets::Column::new(vec![
+        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![
             ViewExt::boxed(HandleProbe {
                 slot: Rc::clone(&handle_slot),
             }),
-            ViewExt::boxed(flui_widgets::Expanded::new(
+            ViewExt::boxed(flui_sdk::widgets::Expanded::new(
                 Scaffold::new().body(body_marker()),
             )),
-            ViewExt::boxed(flui_widgets::Expanded::new(
+            ViewExt::boxed(flui_sdk::widgets::Expanded::new(
                 Scaffold::new().body(body_marker()),
             )),
         ])),

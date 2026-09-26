@@ -25,7 +25,7 @@
 //! the black/white color overlays [`crate::ThemeData`]'s defaults compose
 //! this geometry with.
 
-use flui_types::typography::{FontWeight, TextStyle};
+use flui_sdk::types::typography::{FontWeight, TextStyle};
 
 use crate::text_theme::TextTheme;
 

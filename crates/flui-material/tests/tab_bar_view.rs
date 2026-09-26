@@ -16,14 +16,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, tight};
-use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_material::{
     DefaultTabController, Tab, TabBar, TabBarView, TabController, Theme, ThemeData,
 };
-use flui_scheduler::UpdateScheduler;
-use flui_view::ErrorView;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::animation::UpdateScheduler;
+use flui_sdk::animation::{Animation, AnimationController, Vsync, VsyncRegistration};
+use flui_sdk::view::ErrorView;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Column, CrossAxisAlignment, Expanded, MediaQuery, MediaQueryData, SizedBox, VsyncScope,
 };
 
@@ -42,8 +42,8 @@ const FRAME: Duration = Duration::from_millis(300);
 struct Probe(Rc<Cell<u32>>);
 
 impl View for Probe {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
+    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::stateful(self)
     }
 }
 
@@ -357,7 +357,7 @@ fn a_children_count_mismatched_with_the_controllers_length_builds_an_error() {
 /// `Offstage` layer IS offstage, `None` when it's on-stage. `TabBarView`
 /// mounts each tab's `Offstage` layer in `view.children` order (index 0
 /// first), so `laid.children(stack)[index]` is that tab's own layer.
-fn is_offstage(laid: &common::LaidOut, id: flui_foundation::RenderId) -> bool {
+fn is_offstage(laid: &common::LaidOut, id: flui_sdk::foundation::RenderId) -> bool {
     laid.render_property(id, "offstage").is_some()
 }
 

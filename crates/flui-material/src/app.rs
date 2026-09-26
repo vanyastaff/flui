@@ -60,12 +60,12 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_types::Color;
-use flui_types::platform::{Brightness, Locale};
-use flui_types::typography::{FontWeight, TextStyle};
-use flui_view::BoxedView;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::types::Color;
+use flui_sdk::types::platform::{Brightness, Locale};
+use flui_sdk::types::typography::{FontWeight, TextStyle};
+use flui_sdk::view::BoxedView;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     AppBuilder, BoxedLocalizationsDelegate, MediaQuery, NavigatorHandle, NavigatorObserver,
     SizedBox, WidgetsApp,
 };
@@ -143,7 +143,7 @@ fn resolve_theme(
 ) -> ThemeData {
     let platform_brightness = MediaQuery::maybe_of(ctx).map_or_else(
         // Documented divergence (module docs): the oracle throws here.
-        || flui_widgets::MediaQueryData::default().platform_brightness,
+        || flui_sdk::widgets::MediaQueryData::default().platform_brightness,
         |data| data.platform_brightness,
     );
     let use_dark = mode.is_dark() || (mode.is_system() && platform_brightness == Brightness::Dark);

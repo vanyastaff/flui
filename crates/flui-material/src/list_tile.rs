@@ -100,7 +100,7 @@
 //! (matching every other widget in this crate — see `crate::icon_button`'s
 //! module docs). `resolve_content_color` carries the exact same
 //! precedence, collapsed to a direct `if`/`else if`/`else` since there is no
-//! live [`flui_widgets::WidgetStatesController`] backing a stateless
+//! live [`flui_sdk::widgets::WidgetStatesController`] backing a stateless
 //! `ListTile` the way [`crate::ink_well::InkWell`] backs an interactive
 //! surface — `selected`/`enabled` are plain `bool` widget properties, so a
 //! static resolve at `build` time is exact, not an approximation.
@@ -142,13 +142,13 @@
 
 use std::rc::Rc;
 
-use flui_rendering::constraints::BoxConstraints;
-use flui_types::geometry::px;
-use flui_types::styling::Color;
-use flui_types::typography::TextStyle;
-use flui_types::{EdgeInsets, Pixels};
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::styling::Color;
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::types::{EdgeInsets, Pixels};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
     IconThemeData, MainAxisSize, Padding, Row, SafeArea, Semantics, SizedBox,
 };
@@ -202,7 +202,7 @@ fn default_tile_height(is_three_line: bool, has_subtitle: bool, is_dense: bool) 
 ///
 /// ```rust
 /// use flui_material::ListTile;
-/// use flui_widgets::{Icon, IconData, Text};
+/// use flui_sdk::widgets::{Icon, IconData, Text};
 ///
 /// let _tile = ListTile::new()
 ///     .leading(Icon::new(IconData::new(0xE87D)))
@@ -738,7 +738,7 @@ fn build_content_row(view: &ListTile, resolved: &ResolvedListTileStyle) -> Row<V
     let title_view: BoxedView = view
         .title
         .clone()
-        .unwrap_or_else(|| flui_widgets::SizedBox::shrink().boxed());
+        .unwrap_or_else(|| flui_sdk::widgets::SizedBox::shrink().boxed());
     let mut column_children: Vec<BoxedView> =
         vec![DefaultTextStyle::new(resolved.title_style.clone(), title_view).boxed()];
     if let Some(subtitle) = &view.subtitle {
@@ -926,7 +926,7 @@ mod tests {
     #[test]
     fn resolve_style_two_line_tile_uses_the_two_line_height() {
         let theme = ThemeData::light();
-        let tile = ListTile::new().subtitle(flui_widgets::SizedBox::shrink());
+        let tile = ListTile::new().subtitle(flui_sdk::widgets::SizedBox::shrink());
         let resolved = resolve_style(&theme, &tile);
         assert_eq!(resolved.tile_height, 72.0);
     }
@@ -935,7 +935,7 @@ mod tests {
     fn resolve_style_three_line_tile_uses_the_three_line_height() {
         let theme = ThemeData::light();
         let tile = ListTile::new()
-            .subtitle(flui_widgets::SizedBox::shrink())
+            .subtitle(flui_sdk::widgets::SizedBox::shrink())
             .is_three_line(true);
         let resolved = resolve_style(&theme, &tile);
         assert_eq!(resolved.tile_height, 88.0);
@@ -955,7 +955,7 @@ mod tests {
             is_three_line: Some(true),
             ..Default::default()
         });
-        let tile = ListTile::new().subtitle(flui_widgets::SizedBox::shrink());
+        let tile = ListTile::new().subtitle(flui_sdk::widgets::SizedBox::shrink());
 
         let resolved = resolve_style(&theme, &tile);
         assert_eq!(resolved.tile_height, 88.0);
@@ -974,7 +974,7 @@ mod tests {
             ..Default::default()
         });
         let tile = ListTile::new()
-            .subtitle(flui_widgets::SizedBox::shrink())
+            .subtitle(flui_sdk::widgets::SizedBox::shrink())
             .is_three_line(false);
 
         let resolved = resolve_style(&theme, &tile);
@@ -989,7 +989,7 @@ mod tests {
     fn resolve_style_dense_two_line_tile_uses_the_dense_height() {
         let theme = ThemeData::light();
         let tile = ListTile::new()
-            .subtitle(flui_widgets::SizedBox::shrink())
+            .subtitle(flui_sdk::widgets::SizedBox::shrink())
             .dense(true);
         let resolved = resolve_style(&theme, &tile);
         assert_eq!(resolved.tile_height, 64.0);
@@ -1005,7 +1005,7 @@ mod tests {
     fn resolve_style_dense_clamps_title_and_subtitle_font_size() {
         let theme = ThemeData::light();
         let tile = ListTile::new()
-            .subtitle(flui_widgets::SizedBox::shrink())
+            .subtitle(flui_sdk::widgets::SizedBox::shrink())
             .dense(true);
         let resolved = resolve_style(&theme, &tile);
         assert_eq!(resolved.title_style.font_size, Some(13.0));
@@ -1019,7 +1019,7 @@ mod tests {
     #[test]
     fn resolve_style_non_dense_leaves_the_type_scale_font_size_untouched() {
         let theme = ThemeData::light();
-        let tile = ListTile::new().subtitle(flui_widgets::SizedBox::shrink());
+        let tile = ListTile::new().subtitle(flui_sdk::widgets::SizedBox::shrink());
         let resolved = resolve_style(&theme, &tile);
         assert_eq!(resolved.title_style.font_size, Some(16.0));
         assert_eq!(resolved.subtitle_style.font_size, Some(14.0));

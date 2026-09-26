@@ -89,14 +89,14 @@
 
 use std::rc::Rc;
 
-use flui_foundation::Listenable;
-use flui_rendering::pipeline::Canvas;
-use flui_types::geometry::px;
-use flui_types::painting::Paint;
-use flui_types::styling::Color;
-use flui_types::{Pixels, Point, RRect, Rect, Size};
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::foundation::Listenable;
+use flui_sdk::painting::Canvas;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::painting::Paint;
+use flui_sdk::types::styling::Color;
+use flui_sdk::types::{Pixels, Point, RRect, Rect, Size};
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
     WidgetStatesController,
 };
@@ -222,7 +222,7 @@ impl Switch {
 /// `Hovered`/`Focused`/`Pressed`/`Disabled` are `InkWell`'s to manage.
 pub struct SwitchState {
     states: WidgetStatesController,
-    states_listener: Option<flui_foundation::ListenerId>,
+    states_listener: Option<flui_sdk::foundation::ListenerId>,
 }
 
 impl std::fmt::Debug for SwitchState {
@@ -255,7 +255,7 @@ impl ViewState<Switch> for SwitchState {
         // else needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
         self.states_listener = Some(self.states.add_listener(std::sync::Arc::new(move || {
-            rebuild.schedule(flui_view::RebuildReason::StateChange);
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
     }
 
@@ -866,7 +866,7 @@ mod tests {
     /// The thumb's painted circle center per `selected`, computed
     /// independently of `SwitchPainter::paint`'s own arithmetic — proves
     /// the painter is actually invoked (via a real [`Canvas`]/
-    /// [`flui_painting::DrawOp`]) and that the thumb
+    /// [`flui_sdk::painting::DrawOp`]) and that the thumb
     /// really lands on the track's `track_inner_start`/`track_inner_end`
     /// x-coordinate for the given `selected`, not some other value.
     /// Mutation-run: swapping `track_inner_start`/`track_inner_end` in
@@ -874,7 +874,7 @@ mod tests {
     /// being reverted.
     #[test]
     fn thumb_circle_center_lands_on_the_correct_track_end_per_value() {
-        use flui_painting::DrawOp;
+        use flui_sdk::painting::DrawOp;
 
         let size = Size::new(px(SWITCH_TAP_TARGET_WIDTH), px(SWITCH_TAP_TARGET_HEIGHT));
         let track_origin_x = (SWITCH_TAP_TARGET_WIDTH - SWITCH_TRACK_WIDTH) / 2.0;

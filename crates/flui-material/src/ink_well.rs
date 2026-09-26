@@ -17,7 +17,7 @@
 //! the ancestor `Material`'s `_RenderInkFeatures`. **This substrate has no
 //! feature registry** (see `material.rs`'s module doc) — `InkWell` instead
 //! resolves ONE color from `overlay_color` against its current
-//! [`WidgetStates`](flui_widgets::WidgetStates) and paints a single shape-clipped local fill
+//! [`WidgetStates`](flui_sdk::widgets::WidgetStates) and paints a single shape-clipped local fill
 //! (`crate::material::Material` at `elevation: 0`, reused rather than
 //! duplicating clip/fill paint code). Consequences:
 //!
@@ -51,7 +51,7 @@
 //! disabled: [`WidgetState::Disabled`] is asserted in the states set, the
 //! `GestureDetector` built has no `on_tap` closure at all (so it never
 //! resolves any gesture and — Flutter parity — "swallows nothing": its
-//! default [`flui_widgets::HitTestBehavior::DeferToChild`] lets an
+//! default [`flui_sdk::widgets::HitTestBehavior::DeferToChild`] lets an
 //! unclaimed pointer contact fall through to whatever is behind it), hover
 //! stops updating [`WidgetState::Hovered`] (oracle: `handleMouseEnter`
 //! gates `handleHoverChange` on `enabled`), and focus is not
@@ -76,8 +76,8 @@
 //! "hold duration" for [`WidgetState::Pressed`] to ride on. So `InkWell`
 //! applies the oracle's `_activationDuration` mechanism uniformly: on
 //! `on_tap`, `Pressed` is set immediately, then cleared after 100ms via a
-//! one-shot [`flui_animation::AnimationController`] registered on the
-//! ambient [`flui_widgets::animated::VsyncScope`] — "the simplest owner-side
+//! one-shot [`flui_sdk::animation::AnimationController`] registered on the
+//! ambient [`flui_sdk::widgets::animated::VsyncScope`] — "the simplest owner-side
 //! timer available" that is already exercised elsewhere in this workspace
 //! (`flui-widgets::animated`'s `ImplicitController`), rather than inventing
 //! a new timer primitive. Standalone (no `VsyncScope` above this `InkWell`):
@@ -102,16 +102,16 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{
+use flui_sdk::animation::{
     Animation, AnimationController, AnimationStatus, UpdateScheduler, Vsync, VsyncRegistration,
 };
-use flui_foundation::Listenable;
-use flui_interaction::routing::FocusNode;
-use flui_types::Color;
-use flui_view::RebuildHandle;
-use flui_view::prelude::*;
-use flui_widgets::animated::VsyncScope;
-use flui_widgets::{
+use flui_sdk::foundation::Listenable;
+use flui_sdk::interaction::FocusNode;
+use flui_sdk::types::Color;
+use flui_sdk::view::RebuildHandle;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::animated::VsyncScope;
+use flui_sdk::widgets::{
     Actions, ActivateIntent, ButtonActivateIntent, CallbackAction, Focus, GestureDetector,
     MouseRegion, WidgetState, WidgetStateProperty, WidgetStatesController,
 };
@@ -229,7 +229,7 @@ struct PendingDeactivation {
 /// Persistent state behind [`InkWell`] — see [`StatefulView`]/[`ViewState`].
 pub struct InkWellState {
     states: WidgetStatesController,
-    states_listener: Option<flui_foundation::ListenerId>,
+    states_listener: Option<flui_sdk::foundation::ListenerId>,
     /// Refreshed every `build()` so the tap closure (built once, reused
     /// across rebuilds via `GestureDetector`'s own slot-refresh — see
     /// `build`) always calls the *current* handler, matching
@@ -323,7 +323,7 @@ impl ViewState<InkWell> for InkWellState {
         // whose Flutter body is `setState(() {})`.
         let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(Arc::new(move || {
-            rebuild_for_listener.schedule(flui_view::RebuildReason::StateChange);
+            rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
         })));
 
         self.vsync = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone());
@@ -364,7 +364,7 @@ impl ViewState<InkWell> for InkWellState {
                 .clone()
                 .expect("init_state runs before the first did_update_view");
             self.states_listener = Some(self.states.add_listener(Arc::new(move || {
-                rebuild.schedule(flui_view::RebuildReason::StateChange);
+                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
             })));
         } else if new_view.is_interactive() != old_view.is_interactive() {
             // Flutter parity: `didUpdateWidget`'s `if (enabled !=
@@ -501,7 +501,7 @@ fn overlay_content(view: &InkWell, resolved_overlay: Option<Color>) -> BoxedView
         Some(color) => BoxedView(Box::new(
             Material::new(color)
                 .shape(view.shape)
-                .clip_behavior(flui_types::painting::Clip::AntiAlias)
+                .clip_behavior(flui_sdk::types::painting::Clip::AntiAlias)
                 .child(view.child.clone()),
         )),
         None => view.child.clone(),
@@ -544,7 +544,7 @@ fn begin_press_deactivation(
     controller.add_status_listener(Arc::new(move |status| {
         if status == AnimationStatus::Completed {
             states_for_listener.update(WidgetState::Pressed, false);
-            rebuild_for_listener.schedule(flui_view::RebuildReason::AnimationTick);
+            rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::AnimationTick);
         }
     }));
 
@@ -568,9 +568,9 @@ mod tests {
 
     #[test]
     fn is_interactive_reflects_whether_on_tap_is_set() {
-        assert!(!InkWell::new(flui_widgets::SizedBox::shrink()).is_interactive());
+        assert!(!InkWell::new(flui_sdk::widgets::SizedBox::shrink()).is_interactive());
         assert!(
-            InkWell::new(flui_widgets::SizedBox::shrink())
+            InkWell::new(flui_sdk::widgets::SizedBox::shrink())
                 .on_tap(|| {})
                 .is_interactive()
         );
@@ -580,32 +580,32 @@ mod tests {
     fn debug_reports_whether_on_tap_is_set_without_the_closure() {
         let debug = format!(
             "{:?}",
-            InkWell::new(flui_widgets::SizedBox::shrink()).on_tap(|| {})
+            InkWell::new(flui_sdk::widgets::SizedBox::shrink()).on_tap(|| {})
         );
         assert!(debug.contains("on_tap: true"));
     }
 
     #[test]
     fn overlay_content_is_the_bare_child_when_resolution_is_none() {
-        use flui_view::View;
+        use flui_sdk::view::View;
 
         // Mutation-honest: if `overlay_content` stopped checking
         // `resolved_overlay` and always wrapped in `Material`, this test's
         // `None` case would compare a `Material` view-type id instead of
         // `SizedBox`'s and fail.
-        let view = InkWell::new(flui_widgets::SizedBox::shrink());
+        let view = InkWell::new(flui_sdk::widgets::SizedBox::shrink());
         let content = overlay_content(&view, None);
         assert_eq!(
             content.view_type_id(),
-            flui_widgets::SizedBox::shrink().view_type_id()
+            flui_sdk::widgets::SizedBox::shrink().view_type_id()
         );
     }
 
     #[test]
     fn overlay_content_wraps_in_material_when_resolution_is_some() {
-        use flui_view::View;
+        use flui_sdk::view::View;
 
-        let view = InkWell::new(flui_widgets::SizedBox::shrink());
+        let view = InkWell::new(flui_sdk::widgets::SizedBox::shrink());
         let content = overlay_content(&view, Some(Color::rgb(1, 2, 3)));
         assert_eq!(
             content.view_type_id(),

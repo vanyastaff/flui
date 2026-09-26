@@ -33,11 +33,12 @@ use crate::common;
 use std::rc::Rc;
 
 use common::{lay_out, tight};
+use flui_interaction::FocusManager;
 use flui_interaction::events::{Code, Key, KeyState};
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_interaction::{FocusManager, FocusNode};
 use flui_material::{InputDecoration, TextField, Theme, ThemeData};
-use flui_widgets::TextEditingController;
+use flui_sdk::interaction::FocusNode;
+use flui_sdk::widgets::TextEditingController;
 
 /// Dispatch a single printable-character `KeyDown` event through
 /// this harness's manager — the same path a real keyboard event takes.
@@ -274,8 +275,8 @@ fn text_field_enabled_override_wins_over_a_conflicting_decoration_enabled() {
 /// fails.
 #[test]
 fn unmounting_removes_the_listener_from_the_exact_focus_node() {
-    use flui_view::{IntoView, ViewExt};
-    use flui_widgets::Column;
+    use flui_sdk::view::{IntoView, ViewExt};
+    use flui_sdk::widgets::Column;
 
     let controller = TextEditingController::new();
     let focus_node = FocusNode::with_debug_label("unmount-listener");
@@ -304,7 +305,7 @@ fn unmounting_removes_the_listener_from_the_exact_focus_node() {
     // removal, not a root-type swap.
     laid.pump_widget(Theme::new(
         ThemeData::light(),
-        Column::new(Vec::<flui_view::BoxedView>::new()),
+        Column::new(Vec::<flui_sdk::view::BoxedView>::new()),
     ));
 
     let after_removal = focus_node.listener_count();

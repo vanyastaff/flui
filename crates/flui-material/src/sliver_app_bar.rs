@@ -1,5 +1,5 @@
 //! [`SliverAppBar`] — a Material app bar that lives in a
-//! [`CustomScrollView`](flui_widgets::CustomScrollView) and collapses,
+//! [`CustomScrollView`](flui_sdk::widgets::CustomScrollView) and collapses,
 //! pins, or floats as the user scrolls.
 //!
 //! # What this composes, and what it owns
@@ -27,11 +27,13 @@
 //!   available to a delegate as `shrink_offset`; the `FlexibleSpaceBar`
 //!   treatment of it is its own widget.
 
-use flui_types::Color;
-use flui_view::prelude::StatelessView;
-use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
-use flui_widgets::layout::PreferredSizeView;
-use flui_widgets::{MediaQuery, SizedBox, SliverPersistentHeader, SliverPersistentHeaderDelegate};
+use flui_sdk::types::Color;
+use flui_sdk::view::prelude::StatelessView;
+use flui_sdk::view::{BoxedView, BuildContext, IntoView, ViewExt};
+use flui_sdk::widgets::layout::PreferredSizeView;
+use flui_sdk::widgets::{
+    MediaQuery, SizedBox, SliverPersistentHeader, SliverPersistentHeaderDelegate,
+};
 
 use crate::AppBar;
 
@@ -49,7 +51,7 @@ use crate::AppBar;
 ///
 /// ```rust
 /// use flui_material::SliverAppBar;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _bar = SliverAppBar::new()
 ///     .title(Text::new("FLUI"))
@@ -366,13 +368,13 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
         self.max_extent
     }
 
-    fn snap_configuration(&self) -> Option<flui_widgets::FloatingHeaderSnapConfiguration> {
+    fn snap_configuration(&self) -> Option<flui_sdk::widgets::FloatingHeaderSnapConfiguration> {
         // The oracle's own defaults (`FloatingHeaderSnapConfiguration`,
         // `rendering/sliver_persistent_header.dart:488-491`): Curves.ease
         // over 300ms.
         self.snap.then(|| {
-            flui_widgets::FloatingHeaderSnapConfiguration::new(
-                flui_animation::ArcCurve::new(flui_animation::Curves::Ease),
+            flui_sdk::widgets::FloatingHeaderSnapConfiguration::new(
+                flui_sdk::animation::ArcCurve::new(flui_sdk::animation::Curves::Ease),
                 std::time::Duration::from_millis(300),
             )
         })

@@ -91,7 +91,7 @@
 //! - **Icon recoloring** — the oracle wraps tab content in
 //!   `IconTheme.merge` so a bare `Icon` child inherits the resolved
 //!   label/icon color. This crate wraps only in
-//!   [`flui_widgets::DefaultTextStyle`] (text recoloring); a caller-supplied
+//!   [`flui_sdk::widgets::DefaultTextStyle`] (text recoloring); a caller-supplied
 //!   icon keeps whatever color it was given. No test in this unit's
 //!   acceptance list exercises icon color.
 //! - **`labelPadding`/`TabBarThemeData` overrides for it** — fixed at
@@ -125,13 +125,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_foundation::ListenerId;
-use flui_types::styling::Color;
-use flui_types::typography::TextStyle;
-use flui_types::{EdgeInsets, Size, geometry::px};
-use flui_view::prelude::*;
-use flui_view::{BoxedView, RebuildHandle};
-use flui_widgets::{
+use flui_sdk::foundation::ListenerId;
+use flui_sdk::types::styling::Color;
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::types::{EdgeInsets, Size, geometry::px};
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{BoxedView, RebuildHandle};
+use flui_sdk::widgets::{
     Center, Column, Container, CrossAxisAlignment, DefaultTextStyle, Expanded, Padding, Positioned,
     PreferredSizeView, Row, SizedBox, Stack, Text, WidgetState, WidgetStateConstraint,
     WidgetStateProperty,
@@ -574,7 +574,7 @@ impl TabBarState {
                 .clone()
                 .expect("init_state runs before the first build");
             let id = resolved.add_listener(move || {
-                rebuild.schedule(flui_view::RebuildReason::AnimationTick);
+                rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             });
             *self.listener_id.borrow_mut() = Some(id);
             let _prev = self.controller.borrow_mut().replace(resolved.clone());
@@ -751,7 +751,7 @@ fn build_tab_cell(
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Rect;
+    use flui_sdk::types::Rect;
 
     use super::*;
     use crate::theme_data::TabBarThemeData;
@@ -793,13 +793,13 @@ mod tests {
     fn tab_content_height_is_text_and_icon_height_with_both() {
         let tab = Tab::new()
             .text("Home")
-            .icon(flui_widgets::SizedBox::shrink());
+            .icon(flui_sdk::widgets::SizedBox::shrink());
         assert_eq!(tab_content_height(&tab), TEXT_AND_ICON_TAB_HEIGHT);
     }
 
     #[test]
     fn tab_content_height_is_tab_height_for_icon_only() {
-        let tab = Tab::new().icon(flui_widgets::SizedBox::shrink());
+        let tab = Tab::new().icon(flui_sdk::widgets::SizedBox::shrink());
         assert_eq!(tab_content_height(&tab), TAB_HEIGHT);
     }
 
@@ -807,7 +807,7 @@ mod tests {
     fn tab_content_height_override_wins_over_computed_height() {
         let tab = Tab::new()
             .text("Home")
-            .icon(flui_widgets::SizedBox::shrink())
+            .icon(flui_sdk::widgets::SizedBox::shrink())
             .height(20.0);
         assert_eq!(tab_content_height(&tab), 20.0);
     }
@@ -836,7 +836,9 @@ mod tests {
     fn bar_height_is_74_when_a_tab_has_text_and_icon() {
         let tabs = vec![
             Tab::new().text("A"),
-            Tab::new().text("B").icon(flui_widgets::SizedBox::shrink()),
+            Tab::new()
+                .text("B")
+                .icon(flui_sdk::widgets::SizedBox::shrink()),
         ];
         assert_eq!(bar_height(&tabs, 2.0), TEXT_AND_ICON_TAB_HEIGHT + 2.0);
     }
@@ -864,7 +866,9 @@ mod tests {
     fn tab_has_text_and_icon_is_true_with_one_mixed_tab() {
         let tabs = vec![
             Tab::new().text("A"),
-            Tab::new().text("B").icon(flui_widgets::SizedBox::shrink()),
+            Tab::new()
+                .text("B")
+                .icon(flui_sdk::widgets::SizedBox::shrink()),
         ];
         assert!(tab_has_text_and_icon(&tabs));
     }
@@ -955,16 +959,16 @@ mod tests {
 
         let pressed = resolved
             .overlay_color
-            .resolve(&flui_widgets::WidgetStates::from(WidgetState::Pressed));
+            .resolve(&flui_sdk::widgets::WidgetStates::from(WidgetState::Pressed));
         let hovered = resolved
             .overlay_color
-            .resolve(&flui_widgets::WidgetStates::from(WidgetState::Hovered));
+            .resolve(&flui_sdk::widgets::WidgetStates::from(WidgetState::Hovered));
         let focused = resolved
             .overlay_color
-            .resolve(&flui_widgets::WidgetStates::from(WidgetState::Focused));
+            .resolve(&flui_sdk::widgets::WidgetStates::from(WidgetState::Focused));
         let none = resolved
             .overlay_color
-            .resolve(&flui_widgets::WidgetStates::NONE);
+            .resolve(&flui_sdk::widgets::WidgetStates::NONE);
 
         assert_eq!(pressed, Some(on_surface.with_opacity(0.1)));
         assert_eq!(hovered, Some(on_surface.with_opacity(0.08)));
