@@ -370,11 +370,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-tree/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-types/src/lib.rs"
 class = "wave"
 count = 1
