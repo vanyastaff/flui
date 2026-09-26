@@ -623,7 +623,7 @@ decisions 5 and 7.
     bound is removed. Platform hooks write through `SignalSender`.
   - Query callbacks (route generators, drag will-accept, anything returning a verdict) get no
     writer. The ADR classifies all 92 `pub fn on_*` setters (`grep -rhoE 'pub fn on_[a-z_]+'
-    crates/flui-widgets/src crates/flui-material/src crates/flui-cupertino/src | wc -l`).
+    crates/flui-widgets/src packages/flui-material/src crates/flui-cupertino/src | wc -l`).
   - `StateCell` and `RebuildHandle` stay a guarded runtime tier and move to `flui::state::low`.
   - A `callback(|cx| ..)` helper ships with the signature change (closures otherwise hit a
     higher-ranked lifetime error). A rollback trigger to "guard plus realm from the handle" is
