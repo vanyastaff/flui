@@ -1111,8 +1111,8 @@ The forwarding wrappers left over from the previous lock-based API are deleted; 
 | `layout_roots` | the scheduler's `layout_drained_total` | dirty layout entries drained, including ones skipped as already clean |
 | `nodes_laid_out` | `SubtreeArena`'s box and sliver record sites, drained in `layout_dirty_root` | nodes past the clean-child short-circuit; a cache hit and an intrinsic query do not count |
 | `nodes_painted` | `FragmentComposer`, next to `paint_raw` | nodes whose `paint_raw` ran; a grafted boundary is not a paint |
-| `layers_produced` | `FragmentComposer::seal_picture` and `push_layer_node` | layers created fresh this pass |
-| `layers_reused` | `FragmentComposer::graft` | layers cloned from a clean boundary's retained output |
+| `layers_produced` | `FragmentComposer::seal_picture`, `push_layer_node`, and `graft`'s patched indices | layers created fresh this pass, including a layer a composited-layer update patches into a grafted boundary |
+| `layers_reused` | `FragmentComposer::graft`'s unpatched indices | layers cloned unchanged from a clean boundary's retained output |
 | `semantics_nodes_updated` | `run_semantics`, from `SemanticsOwner::flush`'s return | nodes in the delivered accessibility update; 0 when the diff is empty |
 | `frames_produced` | `run_frame` | frames that committed a layer tree |
 
