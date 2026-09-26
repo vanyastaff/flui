@@ -126,10 +126,6 @@ pub use navigator::{
     Navigator, NavigatorCommand, NavigatorCommandError, NavigatorCommandOutcome,
     NavigatorCommandTarget, NavigatorHandle, NavigatorState,
 };
-// The refusal a `Router`'s navigator reports; a `router` test pins that
-// `RouterError::NotAddressable` prints the same text.
-#[cfg(test)]
-pub(crate) use navigator::Unaddressable;
 pub use observer::NavigatorObserver;
 pub use overlay_route::{
     NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,

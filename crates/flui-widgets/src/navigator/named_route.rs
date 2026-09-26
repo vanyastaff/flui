@@ -700,13 +700,19 @@ pub enum NamedRouteError {
         /// `type_name` of the generated route's own `Route::Output`.
         actual: &'static str,
     },
-    /// The navigator is driven by a `Router`, and the generated route is not a
-    /// pageless popup: a page reaches a Router's stack only as a route value
-    /// with a path (ADR-0093 §4). **Nothing was pushed or dismissed.**
+    /// The navigator is driven by a `Router`, and this door may not place the
+    /// route there: a page reaches a Router's stack only as a route value with
+    /// a path (ADR-0093 §4), and a pageless popup only through a plain
+    /// [`push_named`](NavigatorHandle::push_named) — the doors that replace,
+    /// pop or sweep refuse before they resolve anything. **Nothing was pushed
+    /// or dismissed.**
     ///
     /// Transitional: the named-route doors are removed when `WidgetsApp`
     /// builds on the Router, and this variant goes with them.
-    #[error("route {name:?} has no path, and a Router's navigator admits only addressable pages")]
+    #[error(
+        "route {name:?} may not be placed on a Router's navigator by this door: only a \
+         pageless popup, through a plain push"
+    )]
     NotAddressable {
         /// The requested name, or `""` when the request carried none.
         name: String,

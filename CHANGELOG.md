@@ -33,8 +33,9 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   the two stacks share. `RoutePath` is a normalized, percent-encoded location and
   `RouteParseError` says why a location produced no route. The Router's navigator refuses
   pages pushed through its facade (a debug assertion and an already-completed result for the
-  typed doors, the new `NamedRouteError::NotAddressable` for the named ones), keeps admitting
-  pageless popups such as dialogs, follows every pop it makes, and never pops its last page.
+  typed doors, the new `NamedRouteError::NotAddressable` for the named ones), admits pageless
+  popups such as dialogs through a plain push only, follows every pop it makes, and never pops
+  or removes its last page; `NavigatorHandle::pop_until` stops at a pop that is refused.
   `#[derive(Routable)]` and `WidgetsApp::router` are later steps; nothing in the framework
   builds a Router yet.
 - **`flui-runtime`** (ADR-0083): the frame runtime as its own crate, tier K, internal, above

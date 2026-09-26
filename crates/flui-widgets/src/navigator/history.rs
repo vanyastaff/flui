@@ -711,6 +711,23 @@ impl RouteHistory {
         self.entries.iter().map(RouteEntry::id).collect()
     }
 
+    /// The present routes' ids, bottom to top.
+    pub(crate) fn present_ids(&self) -> impl Iterator<Item = RouteId> + '_ {
+        self.entries
+            .iter()
+            .filter(|entry| entry.state.is_present())
+            .map(RouteEntry::id)
+    }
+
+    /// Whether the top present route handles a pop itself (a local-history
+    /// entry), so that popping it removes no route.
+    pub(crate) fn top_handles_pop_internally(&self) -> bool {
+        self.entries
+            .iter()
+            .rfind(|entry| entry.state.is_present())
+            .is_some_and(|entry| entry.route.will_handle_pop_internally())
+    }
+
     /// The state of `id`'s entry, or `None` once disposed and dropped.
     pub(crate) fn state_of(&self, id: RouteId) -> Option<RouteLifecycle> {
         self.entries

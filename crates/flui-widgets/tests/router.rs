@@ -442,7 +442,7 @@ fn pushing_a_page_route_under_a_router_is_not_addressable() {
             .unwrap_or_default();
         assert!(
             message.contains("may enter a Router's stack"),
-            "the assertion carries the NotAddressable text, got {message:?}"
+            "the assertion says why the route was refused, got {message:?}"
         );
     } else {
         let result = pushed.expect("a release build returns");
@@ -635,4 +635,143 @@ fn router_pages_scope_and_name_a_semantics_route() {
         tree.find_by_label("Note page 1").is_err(),
         "the popped page's route is gone"
     );
+}
+
+// ============================================================================
+// The facade cannot take a Router's pages
+// ============================================================================
+
+fn dialog() -> PopupRoute<()> {
+    PopupRoute::<()>::new(|_cx, _a, _s| Text::new("Dialog").into_view().boxed())
+}
+
+/// Whether `call` was refused the way a typed door refuses under a Router: a
+/// debug build asserts, a release build returns.
+fn refused<T>(call: impl FnOnce() -> T) -> bool {
+    catch_unwind(AssertUnwindSafe(call)).is_err() == cfg!(debug_assertions)
+}
+
+#[test]
+fn pop_until_stops_at_a_routers_last_page() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let navigator = home.navigator();
+
+    navigator.pop_until(|_| false);
+    assert_eq!(navigator.route_ids().len(), 1, "the lone page stays");
+
+    let _dialog = navigator.push(dialog());
+    settle(&mut laid);
+    navigator.pop_until(|_| false);
+    settle(&mut laid);
+    assert_eq!(navigator.route_ids().len(), 1, "only the dialog left");
+    assert_eq!(router.location(), RoutePath::root());
+    assert!(laid.find_text("Dialog").is_none());
+}
+
+/// A popup may enter a Router's navigator only through a plain push: every
+/// other door would replace, sweep or seed pages the Router owns.
+#[test]
+fn doors_that_remove_or_seed_refuse_even_a_popup_under_a_router() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let navigator = home.navigator();
+    let before = navigator.route_ids();
+
+    assert!(refused(|| navigator.push_replacement(dialog())));
+    assert!(refused(|| navigator.push_replacement_with(dialog(), 7_u8)));
+    assert!(refused(
+        || navigator.push_and_remove_until(dialog(), |_| false)
+    ));
+    assert!(refused(|| navigator.seed_initial(dialog())));
+
+    navigator.route("/dialog", |_request: &RouteRequest<'_>| Some(dialog()));
+    let not_addressable = Err(NamedRouteError::NotAddressable {
+        name: "/dialog".to_owned(),
+    });
+    assert_eq!(navigator.push_replacement_named("/dialog"), not_addressable);
+    assert_eq!(
+        navigator.push_replacement_named_with("/dialog", 7_u8),
+        not_addressable
+    );
+    assert_eq!(navigator.pop_and_push_named("/dialog"), not_addressable);
+    assert_eq!(
+        navigator.pop_and_push_named_with("/dialog", 7_u8),
+        not_addressable
+    );
+    assert_eq!(
+        navigator.push_named_and_remove_until("/dialog", |_| false),
+        not_addressable
+    );
+
+    settle(&mut laid);
+    assert_eq!(navigator.route_ids(), before, "the page was not touched");
+    assert_eq!(router.location(), RoutePath::root());
+    assert!(laid.find_text("Dialog").is_none());
+
+    assert!(
+        navigator.push_named("/dialog").is_ok(),
+        "a plain named push still admits the popup"
+    );
+    settle(&mut laid);
+    assert!(laid_out_text(&laid, "Dialog"));
+    assert_eq!(router.location(), RoutePath::root());
+}
+
+#[test]
+fn a_routers_last_page_cannot_be_removed_even_under_a_popup() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let navigator = home.navigator();
+    let page = navigator.current().expect("the home page");
+
+    assert!(!navigator.remove_route(page), "the lone page stays");
+    assert!(!navigator.remove_route_with(page, 7_u8));
+
+    let _dialog = navigator.push(dialog());
+    settle(&mut laid);
+    assert!(
+        !navigator.remove_route(page),
+        "a popup above the only page does not make it removable"
+    );
+    settle(&mut laid);
+    assert_eq!(navigator.route_ids().len(), 2);
+    assert_eq!(navigator.route_ids()[0], page);
+    assert_eq!(router.location(), RoutePath::root());
+
+    assert_eq!(router.pop(), Ok(true), "the popup still pops");
+    settle(&mut laid);
+    assert_eq!(navigator.route_ids(), vec![page]);
+}
+
+/// With a popup beneath the only page left, no pop may take that page.
+#[test]
+fn pops_never_take_the_last_page_from_above_a_popup() {
+    let (mut laid, home) = two_screen_app();
+    let router = home.handle();
+    let navigator = home.navigator();
+    let home_page = navigator.current().expect("the home page");
+
+    let _dialog = navigator.push(dialog());
+    router.push(AppRoute::Note { id: 1 }).expect("mounted");
+    settle(&mut laid);
+    assert!(
+        navigator.remove_route(home_page),
+        "a page that is not the last one may be removed"
+    );
+    settle(&mut laid);
+    assert_eq!(router.location().as_str(), "/note/1");
+    let left = navigator.route_ids();
+    assert_eq!(left.len(), 2, "the popup and the note page");
+
+    assert!(!navigator.pop(), "pop refuses the last page");
+    assert!(!navigator.pop_with(7_u8));
+    assert!(!navigator.maybe_pop(), "maybe_pop bubbles");
+    navigator.pop_until(|_| false);
+    assert_eq!(router.pop(), Ok(false));
+    settle(&mut laid);
+
+    assert_eq!(navigator.route_ids(), left);
+    assert_eq!(router.location().as_str(), "/note/1");
+    assert!(laid_out_text(&laid, "Note 1"));
 }

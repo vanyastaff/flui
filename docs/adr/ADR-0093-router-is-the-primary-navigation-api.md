@@ -151,9 +151,11 @@ From acceptance, `Navigator` and `NavigatorHandle` get no new public items.
   it); any other `NavigatorRoute` pushed under a Router is refused, so nothing unaddressable
   enters the stack. The typed facade cannot return a `Result` without a public signature change,
   so a refused push returns an already-completed `RouteResult` (`None`), logs `tracing::error!`
-  with the `RouterError::NotAddressable` text, and fails a `debug_assert!`; the named doors
-  return `NamedRouteError::NotAddressable`. Pageless popups (`PopupRoute`, which `show_dialog`
-  pushes) stay admitted until dialogs move to overlay entries (step 7 below). With no `Router`
+  with the reason, and fails a `debug_assert!`; the named doors return
+  `NamedRouteError::NotAddressable`. Pageless popups (`PopupRoute`, which `show_dialog` pushes)
+  stay admitted through a plain push until dialogs move to overlay entries (step 7 below); the
+  doors that replace, sweep or seed refuse them too, because what they remove belongs to the
+  Router. No pop or removal through the facade takes the Router's last page. With no `Router`
   above, `Navigator` keeps its current behaviour for code that has not moved.
 - The named-route doors and `on_generate_route` (ADR-0024) are removed when the Router
   ships. `RouteKey<T>` (ADR-0024 §3) survives as the way a typed result is attached to a route:

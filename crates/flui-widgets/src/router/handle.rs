@@ -223,33 +223,10 @@ pub enum RouterError {
         /// `type_name` of `R`.
         route_type: &'static str,
     },
-    /// A route that is not an `R` was pushed on a Router's navigator.
-    #[error(
-        "only `{route_type}` values may enter a Router's stack; a route with no path was pushed"
-    )]
-    NotAddressable {
-        /// `type_name` of `R`.
-        route_type: &'static str,
-    },
     /// The Router this handle names has unmounted.
     #[error("the Router this handle names has been disposed")]
     Disposed,
     /// The location did not produce a route.
     #[error(transparent)]
     Parse(#[from] RouteParseError),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::navigator::Unaddressable;
-
-    #[test]
-    fn not_addressable_text_is_the_navigator_refusal_text() {
-        let route_type = "app::AppRoute";
-        assert_eq!(
-            RouterError::NotAddressable { route_type }.to_string(),
-            Unaddressable { route_type }.to_string()
-        );
-    }
 }

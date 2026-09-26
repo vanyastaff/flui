@@ -1692,37 +1692,49 @@ is acquired in `init_state`/`did_change_dependencies` and resolves the
 (`Navigator.push`, `showDialog`) beside its pages; a pageless route is not in
 the URL and is removed silently with the page below it.
 
-**Choice:** every page on a Router's stack has a path (ADR-0093 §2). The
-navigator a Router builds is *addressed*: its public doors (`push`,
-`push_replacement[_with]`, `push_and_remove_until`, `seed_initial`) admit only
-routes whose binding slot a framework `TransitionRoute` marked
-`TransitionGroup::Default` — `PopupRoute` — and refuse `PageRoute`,
-`SimpleRoute` and every third-party route. The typed doors cannot return a
-`Result` without a public signature change, so a refusal disposes the route
-unpushed, returns a `RouteResult` already complete with `None`, logs
-`tracing::error!` with the `RouterError::NotAddressable` text, and fails a
-`debug_assert!`. The named doors answer `NamedRouteError::NotAddressable`
-before anything is dismissed or pushed. Popups stay admitted, because
-`show_dialog` pushes a `PopupRoute` on the root navigator, until dialogs move
-to overlay entries (ADR-0093 step 7). Every pop the navigator makes — the
-facade's, a back gesture's, a barrier's — reaches the Router's stack through
-an internal `NavigatorObserver`, so the location follows it.
+**Choice:** every page on a Router's stack has a path (ADR-0093 §2), and only
+the Router places, replaces or seeds pages. The navigator a Router builds is
+*addressed*. A plain `push` (and `push_named`) admits only routes whose
+binding slot a framework `TransitionRoute` marked `TransitionGroup::Default`
+— `PopupRoute` — and refuses `PageRoute`, `SimpleRoute` and every
+third-party route. The doors that replace, sweep or seed
+(`push_replacement[_with]`, `push_and_remove_until`, `seed_initial`, and the
+named `push_replacement_named[_with]`, `pop_and_push_named[_with]` and
+`push_named_and_remove_until`) refuse every route, a popup included, because
+what they remove or place beneath belongs to the Router, whose stack would
+otherwise name a page that is gone. The typed doors cannot return a `Result`
+without a public signature change, so a refusal disposes the route unpushed,
+returns a `RouteResult` already complete with `None`, logs `tracing::error!`
+with the reason, and fails a `debug_assert!`. The named doors answer
+`NamedRouteError::NotAddressable` before anything is resolved, dismissed or
+pushed. Popups stay admitted, because `show_dialog` pushes a `PopupRoute` on
+the root navigator, until dialogs move to overlay entries (ADR-0093 §4). Every
+pop the navigator makes — the facade's, a back gesture's, a barrier's —
+reaches the Router's stack through an internal `NavigatorObserver`, so the
+location follows it.
 
 **Pinned by:** `pushing_a_page_route_under_a_router_is_not_addressable`,
+`doors_that_remove_or_seed_refuse_even_a_popup_under_a_router`,
 `popup_routes_are_admitted_and_leave_the_location_alone`,
 `facade_pop_updates_the_router_location`.
 
-### 23. A Router never pops its last page
+### 23. A Router never pops or removes its last page
 
 **Oracle:** Flutter's `Navigator.pop` on a one-route navigator removes that
 route and leaves the navigator empty.
 
-**Choice:** a Router always has a location. `RouterHandle::pop` answers
-`Ok(false)` on a lone page, and the facade's `pop`, `pop_with` and
-`remove_route` of the last route answer `false`, all with the stack
-unchanged. `maybe_pop` already bubbles on a lone route, as in Flutter.
+**Choice:** a Router always has a location. The navigator records the pages
+the Router places, and no pop or removal takes the last present one, whether
+it is on top or beneath a popup: `RouterHandle::pop` answers `Ok(false)`, the
+facade's `pop`, `pop_with` and `remove_route[_with]` answer `false`,
+`maybe_pop` bubbles (as a lone route does in Flutter), and `pop_until` stops
+there, all with the stack unchanged. A top page that handles the pop itself
+(a local-history entry) still pops, since that removes no page.
 
-**Pinned by:** `router_never_pops_its_last_page`.
+**Pinned by:** `router_never_pops_its_last_page`,
+`pop_until_stops_at_a_routers_last_page`,
+`a_routers_last_page_cannot_be_removed_even_under_a_popup`,
+`pops_never_take_the_last_page_from_above_a_popup`.
 
 ### 24. `go` reconciles by common prefix, as Flutter's page-list diff does
 
