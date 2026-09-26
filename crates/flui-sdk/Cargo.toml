@@ -1,0 +1,54 @@
+[package]
+publish = ["crates-io"]
+name = "flui-sdk"
+# Its own `0.N`, bumped on every train and published in the same run, not the
+# workspace version: the SDK is Evolving and breaks without a `flui` major
+# (ADR-0081 §3, ADR-0088 §4). `cargo xtask workspace` refuses an evolving
+# crate that inherits the version or leaves major 0.
+version = "0.1.0-dev"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "The package-author surface of FLUI: what an official or third-party package builds on, without the host, engine or GPU stack (evolving)"
+documentation = "https://docs.rs/flui-sdk"
+keywords = ["gui", "ui", "sdk", "flui"]
+categories = ["gui"]
+
+# Dev-only files kept out of the published archive. The surface test needs the
+# facade, a path-only dev-dependency the archive drops, so it cannot build there.
+exclude = ["/ARCHITECTURE.md", "/tests/"]
+
+[lints]
+workspace = true
+
+# Each internal crate is pinned to the train exactly (ADR-0088 §4). The list is
+# what `flui-material` and `flui-cupertino` import outside their tests; see
+# ARCHITECTURE.md for how it was measured.
+[dependencies]
+flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
+flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
+flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
+flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
+flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
+
+[dev-dependencies]
+# `tests/surface.rs` checks that each re-export is the facade's own type.
+# Path-only, so `cargo package` drops it: the published SDK never names the
+# facade.
+flui = { path = "../..", default-features = false }
+
+# Tier K, order 6: above every spine crate it re-exports (`flui-view` 1,
+# `flui-widgets` 3) and below the hosts. Evolving (ADR-0081 §3): its own
+# `0.N` version, and a surface that may break on any train. Layer 6 is the
+# widget catalog's, the highest layer it depends on.
+[package.metadata.flui]
+layer = 6
+tier = "K"
+tier-kind = "evolving"
+order = 6

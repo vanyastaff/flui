@@ -629,9 +629,25 @@ fn hot_reload(optional: bool, feature_brings_it: bool, host_enables: bool) -> Fi
         .dep("hot-reload-counter-host", "flui-app", host)
 }
 
+/// The train-guard facts' packages: `flui-sdk` and the facade each with or
+/// without a normal edge to `flui-foundation`.
+fn train_guard(sdk_has_it: bool, facade_has_it: bool) -> Fixture {
+    let mut fixture =
+        base()
+            .member("flui-foundation", "V", &json!(null))
+            .member("flui-sdk", "K", &json!(null));
+    if sdk_has_it {
+        fixture = fixture.dep("flui-sdk", "flui-foundation", Dep::normal());
+    }
+    if facade_has_it {
+        fixture = fixture.dep("flui", "flui-foundation", Dep::normal());
+    }
+    fixture
+}
+
 #[test]
 fn each_fact_reads_the_build_both_ways() {
-    let [absent, present, enables] = FACTS;
+    let [absent, present, enables, sdk_guard, facade_guard] = FACTS;
     assert!(matches!(absent.expect, Expect::Absent(_)));
     assert!(matches!(present.expect, Expect::Present(_)));
     assert!(matches!(enables.expect, Expect::Enables(..)));
@@ -641,9 +657,18 @@ fn each_fact_reads_the_build_both_ways() {
     };
 
     let good = hot_reload(true, true, true);
-    for fact in &FACTS {
+    for fact in [&absent, &present, &enables] {
         assert!(holds(&good, fact), "{}", fact.what);
     }
+
+    // the train guard: in the SDK's and the facade's builds, or reported
+    let guarded = train_guard(true, true);
+    for fact in [&sdk_guard, &facade_guard] {
+        assert!(matches!(fact.expect, Expect::Present("flui-foundation")));
+        assert!(holds(&guarded, fact), "{}", fact.what);
+    }
+    assert!(!holds(&train_guard(false, true), &sdk_guard));
+    assert!(!holds(&train_guard(true, false), &facade_guard));
     assert!(!holds(&hot_reload(false, true, true), &absent));
     assert!(!holds(&hot_reload(true, false, true), &present));
     assert!(!holds(&hot_reload(true, true, false), &enables));

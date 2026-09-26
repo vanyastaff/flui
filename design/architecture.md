@@ -270,8 +270,9 @@ Each passes P8 by naming its second consumer or the seam it buys.
 | `flui-sdk` | K / evolving | Package-author surface without the host; breaks without a `flui` major. | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
 | `flui-engine-cpu` | R / internal, `publish = false` until goldens ship | The second backend of the raster contract: goldens, GPU-free CI, a fallback. | [ADR-0087](../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) |
 
-Whether each name is free on crates.io was not checked (the crates.io tool did not connect). The
-owner decided that each name is checked before its crate is created, with nothing reserved ahead
+The owner decided that each name is checked on crates.io before its crate is created, with
+nothing reserved ahead; `flui-runtime` and `flui-sdk` were free on 2026-09-26, when each was
+created, and the other names are unchecked
 ([open questions](open-questions.md#7-cratesio-names)).
 
 ---
@@ -375,7 +376,11 @@ pub mod testing;     // WidgetTester, finders, goldens, conformance kits
 ### 6.2 `flui-sdk`
 
 `flui-sdk` is the package-author surface (owner decision 2,
-[ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)).
+[ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)). It exists, with no
+consumer yet: whole-module re-exports of `animation`, `foundation`, `types`, `view` and `widgets`,
+subsets of the facade's curated `interaction`, `painting` and `rendering` modules at the same
+paths, and three Evolving items in `pipeline`, measured from what Material and Cupertino import
+(`crates/flui-sdk/ARCHITECTURE.md`). The train guard below is on `flui-foundation`.
 
 - Host-free: no `flui-app`, `flui-engine` or `wgpu` in its normal closure. With the facade the
   closure is 191 unique crates; with `flui-material` it is 127 (`cargo tree -p <crate> -e normal
@@ -384,13 +389,15 @@ pub mod testing;     // WidgetTester, finders, goldens, conformance kits
   difference in every build.
 - Two parts. The **Stable closure**: whole-module re-exports at the same paths as the facade
   (`pub use flui_x as x`), no wrappers, so `flui_sdk::m::T` and `flui::m::T` are one type, and a
-  test says so. The **Evolving** part: only the named modules `paint`, `pipeline`, `hooks` and
-  `gpu`; a package's exposure to them is a grep for `flui_sdk::(paint|pipeline|hooks|gpu)`.
+  test says so. The **Evolving** part: only the named modules `pipeline`, `hooks` and `gpu`
+  (Evolving painting items go in `pipeline`, since `painting` is the facade's Stable path); a
+  package's exposure to them is a grep for `flui_sdk::(pipeline|hooks|gpu)::`.
 - `0.N`, bumped on every train, published by the same run as the core, patches included.
 - **One train per graph.** `links = "flui_train"` with a trivial build script sits in one low crate
   every train crate depends on (`flui-foundation`). Without it, an app on `flui = "1"` and a
   package on an older `flui-sdk` resolve two copies of the internals and fail with E0308; with it
-  the resolver picks one train. A registry test proves "old train or resolver error, never E0308".
+  the resolver picks one train. A resolver test in `tools/xtask`
+  (`two_trains_refuse_to_resolve`) proves "one train or resolver error, never E0308".
   The same guard protects facade and Material pairs.
 - **A ceiling.** If the Evolving surface outside the hooks grows past about 30 items at its first
   measurement, the decision is revisited, because the sdk is turning into a second facade.
