@@ -11,6 +11,7 @@ mod tasks;
 
 mod bench;
 mod change_scope;
+mod changelog;
 mod doc_strict;
 mod docs_links;
 mod doctor;
@@ -115,6 +116,8 @@ enum Command {
     FileLength(file_length::FileLengthArgs),
     /// Check for process markers outside the archival roots (ADR-0078 §4).
     Markers(markers::MarkersArgs),
+    /// Merge changelog.d fragments into CHANGELOG.md; --check validates them.
+    Changelog(changelog::ChangelogArgs),
     /// List missing tools for `ci` / `ci-full`.
     Doctor(doctor::DoctorArgs),
     /// Collect benchmark results.
@@ -168,6 +171,7 @@ fn main() -> ExitCode {
         Command::FontAssets(args) => fonts::font_assets(&args),
         Command::FileLength(args) => file_length::file_length(&args),
         Command::Markers(args) => markers::markers(&args),
+        Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
         Command::Perf(args) => perf::perf(&args),

@@ -1,0 +1,35 @@
+# Changelog
+
+A planted changelog: the text above the Unreleased region.
+
+## [Unreleased]
+
+The Unreleased preamble, left as it is.
+
+### Added
+
+- **From a**: first, by file name.
+  A continuation line of the same bullet.
+
+- **From b**: second, by file name, with a [root-relative link](/docs/testing.md).
+  - A nested item.
+
+- **Existing addition**: stays below the new bullets.
+
+### Removed
+
+- **Removed in a**: a section the changelog lacks, created before Fixed.
+
+### Fixed
+
+- **Existing fix**: untouched, since no fragment has a Fixed section.
+
+### Security
+
+- **From b**: a section the changelog lacks, created at the end of the region.
+
+## [0.1.0] - 2026-01-01
+
+### Added
+
+- **Released addition**: outside the region, byte for byte.
