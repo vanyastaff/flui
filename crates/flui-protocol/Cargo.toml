@@ -1,0 +1,42 @@
+[package]
+publish = ["crates-io"]
+name = "flui-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "The typed vocabulary FLUI shares with tests, devtools and agents: semantics roles and actions, and the agent-protocol wire names"
+keywords = ["ui", "accessibility", "protocol", "mcp", "flui"]
+categories = ["gui", "accessibility"]
+
+[features]
+default = []
+# Serialize the wire vocabulary (`Role`, `ActionName`, `Checked`) in the
+# spelling ADR-0080 fixed.
+serde = ["dep:serde"]
+# JSON schemas for the wire vocabulary. Implies `serde`, because schemars reads
+# serde's `rename_all` to name the variants.
+schemars = ["dep:schemars", "serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+# No workspace dependency: the vocabulary sits under flui-semantics and the
+# desktop agent server alike.
+[package.metadata.flui]
+layer = 1
+tier = "C"
+tier-kind = "stable"
+order = 2

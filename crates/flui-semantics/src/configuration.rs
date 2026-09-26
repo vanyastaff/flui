@@ -1762,7 +1762,7 @@ mod tests {
 
     #[test]
     fn blocked_effective_action_mask_keeps_only_accessibility_focus_lifecycle() {
-        for &action in SemanticsAction::values() {
+        for &action in SemanticsAction::ALL {
             let mut config = SemanticsConfiguration::new();
             config.add_action(action, Arc::new(|_, _| {}));
             config.set_blocks_user_actions(true);

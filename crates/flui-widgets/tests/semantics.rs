@@ -1277,7 +1277,6 @@ fn exclude_semantics_removes_its_subtree_from_the_a11y_tree() {
 
 use std::assert_matches;
 use std::cell::Cell;
-use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -1364,6 +1363,51 @@ fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() {
         activations.load(Ordering::SeqCst),
         1,
         "the handler must have run exactly once",
+    );
+}
+
+/// A platform expand on a collapsed node runs its tap handler.
+///
+/// An agent's `expand` (UI Automation's `ExpandCollapse.Expand`) arrives as
+/// AccessKit's `Expand`, and AccessKit offers no invoke for a node with an
+/// expanded state, so without this route an expandable FLUI node is a control
+/// assistive technology can see but cannot operate.
+#[test]
+fn a_platform_expand_runs_the_tap_handler_of_a_collapsed_node() {
+    let activations = Arc::new(AtomicU32::new(0));
+    let counted = Arc::clone(&activations);
+
+    let (laid, tree, node_id) = pump_labelled(
+        Semantics::new()
+            .container(true)
+            .label(LABEL)
+            .expanded(false)
+            .on_tap(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+            })
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+
+    let node = tree
+        .find_by_label(LABEL)
+        .expect("node was located a moment ago");
+    assert!(
+        node.supports_action(Action::Expand) && !node.supports_action(Action::Collapse),
+        "a collapsed node with a tap handler must advertise expand and only \
+         expand. Tree was:\n{}",
+        tree.describe()
+    );
+
+    invoke_semantics_action(
+        &laid.pipeline_owner(),
+        request(Action::Expand, node_id, None),
+    )
+    .expect("an expand on a node advertising one must resolve");
+
+    assert_eq!(
+        activations.load(Ordering::SeqCst),
+        1,
+        "the tap handler must have run exactly once",
     );
 }
 
@@ -1741,75 +1785,12 @@ fn an_on_action_handler_round_trips_a_platform_click() {
     );
 }
 
-/// Every FLUI `SemanticsAction` variant, listed once.
+/// Every FLUI `SemanticsAction` variant, once.
 ///
-/// Two different checks make this list mean what it claims, and neither of them
-/// is the array's length — that is a literal, and a literal accepts a duplicate
-/// that quietly drops a variant.
-///
-/// Exhaustiveness is checked where the enum lives, in `flui-semantics`: a
-/// variant added there must be named in a wildcard-free `match`, and the set
-/// comparison that runs over `SemanticsAction::values()` fails for a variant
-/// that reaches `values()` without reaching the sibling list there — so a new
-/// action cannot be published by `values()` without being classified.
-/// What *this* file owes is agreement with that published set, asserted by
-/// [`the_actions_classified_here_are_exactly_the_ones_the_enum_publishes`].
-const FLUI_ACTIONS: [flui_rendering::semantics::SemanticsAction; 24] = [
-    SemanticsAction::Tap,
-    SemanticsAction::LongPress,
-    SemanticsAction::ScrollLeft,
-    SemanticsAction::ScrollRight,
-    SemanticsAction::ScrollUp,
-    SemanticsAction::ScrollDown,
-    SemanticsAction::Increase,
-    SemanticsAction::Decrease,
-    SemanticsAction::ShowOnScreen,
-    SemanticsAction::MoveCursorForwardByCharacter,
-    SemanticsAction::MoveCursorBackwardByCharacter,
-    SemanticsAction::SetSelection,
-    SemanticsAction::Copy,
-    SemanticsAction::Cut,
-    SemanticsAction::Paste,
-    SemanticsAction::DidGainAccessibilityFocus,
-    SemanticsAction::DidLoseAccessibilityFocus,
-    SemanticsAction::CustomAction,
-    SemanticsAction::Dismiss,
-    SemanticsAction::MoveCursorForwardByWord,
-    SemanticsAction::MoveCursorBackwardByWord,
-    SemanticsAction::SetText,
-    SemanticsAction::Focus,
-    SemanticsAction::ScrollToOffset,
-];
-
-/// `FLUI_ACTIONS` classifies exactly the actions the enum publishes.
-///
-/// The drop-set assertion below can only ever see the actions listed here, so a
-/// variant that joined the enum and `SemanticsAction::values()` without joining
-/// this list would go unclassified while every other test in this file stayed
-/// green — the shipped framework would route 25 actions and this file would
-/// reason about 24. Compared as bitmasks rather than as slices: the order an
-/// action is published in is not part of the contract, the set of actions is.
-#[test]
-fn the_actions_classified_here_are_exactly_the_ones_the_enum_publishes() {
-    let classified: BTreeSet<u64> = FLUI_ACTIONS.iter().map(|action| action.value()).collect();
-    let published: BTreeSet<u64> = SemanticsAction::values()
-        .iter()
-        .map(|action| action.value())
-        .collect();
-
-    assert_eq!(
-        classified.len(),
-        FLUI_ACTIONS.len(),
-        "FLUI_ACTIONS lists one action twice under a pinned length, so the \
-         action it displaced is classified nowhere",
-    );
-    assert_eq!(
-        classified, published,
-        "an action the enum publishes is missing from FLUI_ACTIONS, or one it \
-         does not publish is listed: either way the drop-set assertion below is \
-         reasoning about a set that is not the framework's",
-    );
-}
+/// `SemanticsAction::ALL` is generated in `flui-protocol` from the same list
+/// as the enum, so it cannot miss a variant or repeat one; the drop-set
+/// assertion below therefore reasons about every action the framework has.
+const FLUI_ACTIONS: &[SemanticsAction] = SemanticsAction::ALL;
 
 /// Every `accesskit::Action` variant, with FLUI's routing answer, written once.
 ///
@@ -1864,8 +1845,8 @@ platform_actions! {
     Focus => true,
     Blur => true,
     CustomAction => true,
-    Collapse => false,
-    Expand => false,
+    Collapse => true,
+    Expand => true,
     HideTooltip => false,
     ShowTooltip => false,
     ReplaceSelectedText => false,

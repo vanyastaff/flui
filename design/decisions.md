@@ -28,7 +28,7 @@ decisions add up to is in [architecture.md](architecture.md); what still needs t
   date. "Confirmed" means the decision stands as written; "changed" means the entry and its ADR
   now say what the owner decided.
 
-None of these is an accepted decision, except the part of D8 that ADR-0081 accepted and D1 in part (below). The panel's answers are recommendations and the owner's
+None of these is an accepted decision, except the part of D8 that ADR-0081 accepted, D1 in part and D16 in part (below). The panel's answers are recommendations and the owner's
 answers settle the open questions; acceptance still happens ADR by ADR.
 
 ## Summary
@@ -50,7 +50,7 @@ answers settle the open questions; acceptance still happens ADR by ADR.
 | D13 | One raster thread per `GpuContext` (revision of ADR-0045) | Changed by verification | [ADR-0091](../docs/adr/ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) |
 | D14 | Router is the primary navigation API | Changed by verification (handle from `init_state`); **changed by the owner** (every push URL-addressable, dialogs and overlays excluded) | [ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md) |
 | D15 | Hot reload through Subsecond behind a runtime hook | Changed by verification (no facade `hot-reload` feature) | [ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) |
-| D16 | `flui-protocol` is the typed schema shared by tests, devtools and agents | Changed by verification (amends ADR-0080 by settling its in-process transport; does not reverse it) | [ADR-0095](../docs/adr/ADR-0095-agent-protocol-schema-crate.md) |
+| D16 | `flui-protocol` is the typed schema shared by tests, devtools and agents | Changed by verification (amends ADR-0080 by settling its in-process transport; does not reverse it); accepted in part on 2026-09-26 (the crate, the lifted wire vocabulary and the moved semantics enums) | [ADR-0095](../docs/adr/ADR-0095-agent-protocol-schema-crate.md) |
 | D17 | Packages build on `flui-sdk`; the facade names none of them | Changed by owner decision O6 (the reason is semver, not a cycle) | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
 | G | Process-global state is gated; one trampoline cell | Changed by verification (scan every `static`, seed by scan) | [ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md) |
 | L | Dynamic linking for development builds | Studied after the review; measured on Windows; owner deferred it and asked for a build-footprint study | [ADR-0096](../docs/adr/ADR-0096-dev-build-dynamic-linking.md) |

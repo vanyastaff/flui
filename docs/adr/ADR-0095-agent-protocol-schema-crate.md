@@ -1,9 +1,14 @@
 # ADR-0095: flui-protocol is the typed schema shared by tests, devtools and agents
 
-- **Status:** Proposed
+- **Status:** Accepted in part (2026-09-26): §1 as far as the crate itself goes (tier C,
+  `stable`, `serde` and `schemars` behind features, no upstream type), and from §2 the lift
+  of the wire `Role`, `ActionName` and `Checked` out of the desktop server and the move of
+  `SemanticsRole` and `SemanticsAction` into the crate (with ADR-0089 §3's `ALL` rule). Still
+  Proposed: the rest of §1's schema, the `flui-mcp` library, the semantics-to-wire role
+  mapping, `flui-testing`'s query types, and §§3–5.
 - **Date:** 2026-09-25
-- **Amends (on acceptance):** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not decided
-  here" in-process transport; the wire contract is unchanged)
+- **Amends (on acceptance of §3, not yet accepted):** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md)
+  (settles its "Not decided here" in-process transport; the wire contract is unchanged)
 - **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
@@ -12,7 +17,10 @@
 - **Refs:** decision D16 in the [decision index](../../design/decisions.md); the
   [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md)
 
-Nothing in `crates/` or `tools/` changes as part of this ADR.
+The accepted part added `crates/flui-protocol` (tier C, order 2, `stable`), moved
+`SemanticsRole` and `SemanticsAction` into it (`flui-semantics` re-exports them), and made
+`tools/desktop-mcp` take its wire vocabulary from it. Line citations in Context are to
+`d7007f547`, before that change.
 
 ## Context
 
@@ -143,7 +151,24 @@ recorded by one is a valid golden file for the other.
 
 ## Verification
 
-None of these exists yet.
+For the accepted part:
+
+- `cargo nextest run -p flui-protocol --all-features`:
+  `every_role_is_listed_once_and_valued_by_its_index`,
+  `every_action_is_one_distinct_unreserved_bit`, `the_advertised_action_names_are_adr_0080s`,
+  `every_wire_role_serializes_to_its_name`, `every_action_name_serializes_to_its_tool_name`,
+  `the_role_schema_lists_every_wire_name` and `checked_serializes_as_a_flag_or_mixed`. The
+  serde and schemars tests compile only with those features.
+- `cargo nextest run -p flui-semantics`: `every_role_but_none_maps_to_an_accesskit_role` (the
+  pin for the mapping now that `explicit_role` ends in a wildcard) and
+  `every_wire_action_routes_to_a_semantics_action` (every `ActionName` reaches a FLUI action
+  through AccessKit's Windows adapter).
+- `cargo nextest run -p flui-desktop-mcp`: `every_action_name_has_a_uia_pattern`, and the
+  server's reply and schema tests pass unchanged on the lifted types.
+- `cargo xtask workspace` places `flui-protocol` in tier C;
+  `the_tiers_match_the_adr_0081_table` lists it.
+
+Not yet built:
 
 - **Round trip against the wire.** Every reply type in `flui-protocol` serializes to the JSON the
   desktop server emits today; the server's existing reply tests pass unchanged after it switches

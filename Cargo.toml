@@ -13,6 +13,7 @@ members = [
     "crates/flui-log",          # Composition-only cross-platform tracing backend (ACTIVE)
     "crates/flui-tree",         # Tree abstractions (ACTIVE)
     "crates/flui-platform-api", # Platform contracts: capability traits, window/input vocabulary
+    "crates/flui-protocol",     # Semantics and agent-protocol vocabulary (contract crate)
     "crates/flui-platform",     # Platform abstraction (ACTIVE)
 
     # === Phase 2: Core Framework ===
@@ -93,7 +94,7 @@ members = [
 # it; nothing with a tier depends on a `tool`. Dev-dependencies are free.
 tiers = [
     "V",   # values: geometry, types, macros, foundation; tree until it is deleted
-    "C",   # contracts: the platform API and protocol crates, when they exist
+    "C",   # contracts: flui-platform-api, flui-protocol
     "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
     "R",   # render machine: layer, rendering, objects, engine
     "K",   # spine and runtime: view, testing, widgets; localizations until it is deleted
@@ -238,6 +239,9 @@ smallvec = { version = "1.13", features = ["serde", "union", "const_generics"] }
 # SERIALIZATION - Core functionality
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
+# JSON schemas for the agent-protocol vocabulary (flui-protocol's `schemars`
+# feature) and the desktop agent server's tool parameters.
+schemars = "1.0"
 cargo_metadata = "0.23.1"
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
@@ -259,6 +263,10 @@ core-graphics = "0.25"
 # DX TOOLING - flui-cli / flui-devtools
 tempfile = "3" # scratch dirs/files (build staging and tests)
 which = "8"    # locate toolchain executables (build/cli)
+
+# CONTRACTS — the semantics and agent-protocol vocabulary (ADR-0095); shared by
+# flui-semantics and the desktop agent server.
+flui-protocol = { path = "crates/flui-protocol", version = "=0.2.0-dev" }
 
 # WORKSPACE PROC-MACROS
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
