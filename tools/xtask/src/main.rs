@@ -19,6 +19,7 @@ mod fonts;
 mod globals;
 mod markers;
 mod module_dag;
+mod perf;
 mod ratchet;
 mod toolchain;
 mod wasm;
@@ -118,6 +119,8 @@ enum Command {
     Doctor(doctor::DoctorArgs),
     /// Collect benchmark results.
     BenchCollect(bench::BenchCollectArgs),
+    /// Run the counted perf scenarios and compare them with the baseline.
+    Perf(perf::PerfArgs),
 }
 
 fn main() -> ExitCode {
@@ -167,6 +170,7 @@ fn main() -> ExitCode {
         Command::Markers(args) => markers::markers(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
+        Command::Perf(args) => perf::perf(&args),
     };
     match result {
         Ok(code) => code,
