@@ -843,8 +843,8 @@ cargo xtask deps --strict --only policy                       # deps job: cargo-
 cargo xtask deps --strict --only advisories                   # same job: RustSec advisories, blocking in the wide, full and extended lanes
 cargo bench -p flui-rendering --no-run                        # bench-compile job
 cargo xtask doc-strict                                        # doc job
-cargo nextest run --workspace --exclude flui-platform --locked --no-fail-fast
-FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast  # test job's dedicated flui-platform step
+cargo build --workspace --all-targets --locked                # test job: links the examples
+cargo xtask test                                              # same job: nextest over the test scope, then flui-platform under Xvfb (FLUI_HEADLESS=1), then the nested-cargo group
 cargo nextest run -p flui-platform --locked [--all-features] --no-fail-fast                           # platform-windows job (windows-latest), both feature sets
 cargo test --workspace --locked --doc
 cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (continue-on-error); NARROW — every
@@ -895,7 +895,12 @@ runs `checks`, `plan` and the `ci` aggregator:
 
   The scope comes from `cargo xtask affected`; `cargo xtask check-changed`
   uses the same classification and arguments before a PR, and also counts
-  uncommitted work.
+  uncommitted work. One difference: CI's `fast-lane` runs clippy over the
+  whole workspace and builds the tests of `cargo xtask test`'s scope (both
+  what its cache, saved by `test` on main, holds), then runs only the
+  affected packages' tests with a nextest filterset
+  (`-E package(a)|package(b)`); `check-changed` builds only the scope, which
+  is cheaper in a fresh worktree.
 - **Tooling lane**: nothing in the workspace compiles. A standalone crate is
   a directory under the repository whose `Cargo.toml` declares its own
   `[workspace]` and that no workspace crate reaches by a path dependency
@@ -961,14 +966,14 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 |---|---|---|
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected` (`check-changed` runs the same classification) | decides the lane and the affected packages; CI passes `--event`, `--full-ci-label` and the PR's base SHA, `check-changed` diffs against `origin/main` (or `--base`) and adds uncommitted files |
-| `fast-lane` | `cargo xtask check-changed` | same packages and arguments; the cross-target and wasm32 clippy and the per-feature pass for changed manifests run only when their rustup target or cargo-hack is installed (`cargo xtask doctor full`); the flui-platform leg needs `xvfb-run` (Linux) |
+| `fast-lane` | `cargo xtask check-changed` | same packages; CI lints the whole workspace and runs the scope's tests out of the `cargo xtask test` build (see the fast lane above), `check-changed` builds only the scope; the cross-target and wasm32 clippy and the per-feature pass for changed manifests run only when their rustup target or cargo-hack is installed (`cargo xtask doctor full`); the flui-platform leg needs `xvfb-run` (Linux) |
 | `fast-lane-ios` | `cargo xtask check-changed` (on a Mac with the iOS target) | the same iOS runner clippy as `cli-macos`, run in the fast lane when `flui-app` or `flui` is in scope |
 | `standalone` | `cargo check --locked --all-targets --manifest-path <crate>/Cargo.toml` | tooling lane only, for each standalone crate the change touches; warnings are not denied (the crate is outside the workspace lints) |
 | `clippy` | `cargo xtask lint` (in `gate`) | — |
-| `test` | `cargo xtask test` + `cargo build --workspace --all-targets --locked` | `cargo xtask test` does not link examples (the build does); the flui-platform leg needs `xvfb-run` (Linux) |
+| `test` | `cargo build --workspace --all-targets --locked`, then `cargo xtask test` | the same commands: the job runs `cargo xtask test` itself, after the build that links the examples (the facade's default feature set is compiled there, not tested); the flui-platform leg needs `xvfb-run` (Linux) |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
-| `live-smoke` | `cargo xtask live-smoke`, `cargo xtask live-smoke --wayland` | Linux only (Xvfb, weston); `ci-full` runs them on Linux and says it skipped them elsewhere |
-| `gpu-test` | `cargo xtask gpu-test` | CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a local-only mismatch is a host difference to look at, not a CI verdict |
+| `live-smoke` | `cargo xtask live-smoke`, `cargo xtask live-smoke --wayland` | the job runs these two commands; Linux only (Xvfb, lavapipe, weston); `ci-full` runs them on Linux and says it skipped them elsewhere |
+| `gpu-test` | `cargo xtask gpu-test` | the job runs this command, in the full and extended lanes only; CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a local-only mismatch is a host difference to look at, not a CI verdict |
 | `platform-windows` | `cargo xtask test` (on Windows) | `test` runs the all-features pass only; CI adds a default-features pass |
 | `bench-compile` | `cargo xtask bench-compile` | — |
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |

@@ -40,8 +40,9 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 ///   catalogs join the workspace run through feature unification, instead of a
 ///   second `-p flui --features ...` run that re-resolved features for flui's
 ///   graph alone and so rebuilt every shared crate under a second hash. The
-///   default-feature facade (material only) is then not tested here; CI's
-///   `test` job and `feature-matrix` run it.
+///   default-feature facade (material only) is then not tested here, CI's
+///   `test` job included (it runs this scope); its `cargo build --workspace
+///   --all-targets` compiles it, and `feature-matrix` lints it.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
 ///   Examples still compile in `lint` (`--all-targets`); CI's `test` job and
@@ -322,8 +323,9 @@ fn cross_typecheck_plan(host: Host) -> Vec<Step> {
 }
 
 /// CI's `test-features` job: the suites behind features the default run never
-/// enables (flui-assets and flui-widgets default to `default = []`; the facade
-/// is Material-first; the realm-scoped signals are opt-in).
+/// enables (flui-assets and flui-widgets default to `default = []`; the
+/// realm-scoped signals are opt-in). The facade's non-default catalogs are in
+/// [`TEST_SCOPE`].
 fn test_features_plan() -> Vec<Step> {
     let nextest =
         |args: &[&str]| Step::from(Cmd::cargo(["nextest", "run"]).args(args.iter().copied()));
@@ -363,14 +365,6 @@ fn test_features_plan() -> Vec<Step> {
             "network-images",
             "--test",
             "image_network",
-        ]),
-        nextest(&[
-            "-p",
-            "flui",
-            "--locked",
-            "--features",
-            "cupertino,localizations",
-            "--no-fail-fast",
         ]),
         nextest(&[
             "-p",
@@ -1122,7 +1116,6 @@ mod tests {
                 "$ cargo nextest run -p flui-widgets --locked --features asset-images --lib",
                 "$ cargo nextest run -p flui-widgets --locked --features asset-images --test image_async",
                 "$ cargo nextest run -p flui-widgets --locked --features network-images --test image_network",
-                "$ cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast",
                 "$ cargo nextest run -p flui-view -p flui-testing -p flui-widgets -p flui-app --features flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals --locked --no-fail-fast",
             ]
         );

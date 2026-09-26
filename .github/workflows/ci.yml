@@ -313,9 +313,6 @@ jobs:
       doctest_args: ${{ steps.scope.outputs.doctest_args }}
       reason: ${{ steps.scope.outputs.reason }}
       packages: ${{ steps.scope.outputs.packages }}
-      pkg_args: ${{ steps.scope.outputs.pkg_args }}
-      test_args: ${{ steps.scope.outputs.test_args }}
-      features: ${{ steps.scope.outputs.features }}
       platform: ${{ steps.scope.outputs.platform }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -374,9 +371,7 @@ jobs:
     env:
       SCOPE_REASON: ${{ needs.plan.outputs.reason }}
       PACKAGES: ${{ needs.plan.outputs.packages }}
-      PKG_ARGS: ${{ needs.plan.outputs.pkg_args }}
-      TEST_ARGS: ${{ needs.plan.outputs.test_args }}
-      FEATURES: ${{ needs.plan.outputs.features }}
+      CI_TEST_ARGS: ${{ needs.plan.outputs.ci_test_args }}
       PLATFORM: ${{ needs.plan.outputs.platform }}
       WASM_ARGS: ${{ needs.plan.outputs.wasm_args }}
       HACK_ARGS: ${{ needs.plan.outputs.hack_args }}
@@ -398,8 +393,10 @@ jobs:
           cache-on-failure: true
           # Restores the cache the `test` job saves on main (same
           # shared-key): this job never runs on main, so a job-keyed cache
-          # would always be cold.
-          shared-key: workspace-tests
+          # would always be cold. Both build TEST_SCOPE's feature set, and
+          # clippy below the `clippy` job's command, so what is restored is
+          # what is built.
+          shared-key: workspace-tests-v2
           save-if: false
 
       - name: Install cargo-nextest
@@ -413,20 +410,26 @@ jobs:
           echo "packages: ${PACKAGES:-<whole workspace>}"
 
       # Word splitting of the *_ARGS variables is intended: they are cargo
-      # argument lists computed by `cargo xtask affected`.
-      - name: cargo clippy (affected packages)
+      # argument lists computed by `cargo xtask affected` (the filterset in
+      # CI_TEST_ARGS has no spaces for that reason).
+      #
+      # Clippy over the whole workspace, the `clippy` job's command: the
+      # check-mode artifacts `test` warms on main then serve it, and only the
+      # changed crates and their dependents re-check.
+      - name: cargo clippy (workspace)
         run: |
-          # shellcheck disable=SC2086
-          cargo clippy $PKG_ARGS --all-targets --locked -- -D warnings
+          cargo clippy --workspace --all-targets --locked -- -D warnings
           case " $PACKAGES " in
-            *" flui-engine "*|"  ") cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings ;;
+            *" flui-engine "*) cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings ;;
           esac
 
+      # TEST_SCOPE's build (the `test` job's, so the restored cache is warm),
+      # running only the affected packages' tests (`-E package(a)|...`).
       - name: cargo nextest run (affected packages)
-        if: needs.plan.outputs.test_args != ''
+        if: needs.plan.outputs.ci_test_args != ''
         run: |
           # shellcheck disable=SC2086
-          cargo nextest run $TEST_ARGS --locked --no-fail-fast --no-tests=pass $FEATURES
+          cargo nextest run $CI_TEST_ARGS --no-tests=pass
 
       # The `doc` job's rustdoc (`cargo xtask doc-strict`'s flags) over the scope:
       # a broken intra-doc link is the typical casualty of moving code.
@@ -699,7 +702,9 @@ jobs:
         with:
           cache-on-failure: true
           # Shared with `fast-lane`, which restores what this job saves on main.
-          shared-key: workspace-tests
+          # `-v2`: since both build TEST_SCOPE's feature set, the entry must be
+          # re-saved, and rust-cache never overwrites an existing key.
+          shared-key: workspace-tests-v2
           save-if: ${{ github.ref == 'refs/heads/main' }}
           # Per tokio: binary caching breaks on macOS — guard for when macOS
           # joins the matrix.
@@ -724,68 +729,32 @@ jobs:
         if: runner.os == 'Linux'
         run: df -h /
 
-      # Unit and integration targets, fully parallel: nextest gives each test
-      # its own process, so a test that mutates a genuinely process-global
-      # resource needs a lock scoped to its module (AGENTS.md). flui-platform
-      # runs in the dedicated step below, which gives it what this
-      # default-feature run cannot: `--all-features` (its winit backend, the
-      # Linux-runnable implementation, compiles only under `winit-backend`)
-      # and an X11 connection for the tests that construct `WinitPlatform`.
-      # `cargo xtask test` runs the same split locally, with the facade's
-      # non-default catalogs folded in (see its TEST_SCOPE).
-      - name: cargo nextest run (lib + integration)
-        run: >
-          cargo nextest run
-          --workspace
-          --exclude flui-platform
-          --locked
-          --no-fail-fast
-
-      # Re-enters flui-platform's suite: the crate carries 70% of the
-      # workspace's unsafe code and previously had zero executing tests
-      # in CI. Ground truth on ubuntu-latest (verified
-      # locally, 5x stable): `--all-features` is required just to compile
-      # the winit backend; of the 171 tests that then run, 11 fail without
-      # help (three integration-test files call `Platform::open_window`
-      # directly instead of inside `Platform::run`'s `on_ready` callback —
-      # a real ordering requirement of the winit event-loop model, not a
-      # display-server issue) and a further 8 winit-internals unit tests
-      # construct `WinitPlatform::new()` directly and need a working X11
-      # clipboard connection. `FLUI_HEADLESS=1` routes `current_platform()`
-      # to the `HeadlessPlatform` mock and fixes the first 11; Xvfb supplies
-      # the real (if virtual) X11 connection the remaining 8 need. Combined,
-      # all 171 pass, 8 more are legitimately `#[ignore]`d (manual-run
-      # perf benchmarks and unimplemented placeholders) — 5x-verified
-      # stable, no filter needed. The Linux guard keeps these steps off any
-      # Windows/macOS runner that later rejoins the matrix; Windows runs this
-      # crate in the `platform-windows` job instead.
+      # flui-platform's suite runs under Xvfb (see `cargo xtask test`):
+      # `--all-features` compiles its winit backend, `FLUI_HEADLESS=1` routes
+      # `current_platform()` to the headless mock, and the winit-internals
+      # tests that construct `WinitPlatform::new()` need a real (if virtual)
+      # X11 connection. Unconditional install: a preinstalled xvfb-run must
+      # not short-circuit the library install — winit's keyboard layer
+      # dlopens libxkbcommon-x11, which the hosted runners do not ship.
       - name: Ensure Xvfb + xkbcommon are available (flui-platform winit-backend X11 tests)
         if: runner.os == 'Linux'
-        # Unconditional install: a preinstalled xvfb-run must not short-circuit
-        # the library install — winit's keyboard layer dlopens
-        # libxkbcommon-x11, which the hosted runners do not ship.
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0 libxkbcommon0
 
-      - name: cargo nextest run (flui-platform, headless)
-        if: runner.os == 'Linux'
-        env:
-          FLUI_HEADLESS: "1"
-        run: xvfb-run -a cargo nextest run -p flui-platform --all-features --locked --no-fail-fast
+      # The local command, so CI and a local run cannot drift: nextest over
+      # TEST_SCOPE (the workspace but flui-platform, `--lib --bins --tests`,
+      # the facade's cupertino and localizations catalogs on) outside the
+      # nested-cargo group, then flui-platform under Xvfb, then the
+      # nested-cargo group. nextest gives each test its own process, so a
+      # test that mutates a genuinely process-global resource needs a lock
+      # scoped to its module (AGENTS.md). Windows runs flui-platform in the
+      # `platform-windows` job.
+      - name: cargo xtask test
+        run: cargo xtask test
 
-      # Live E2E smoke: a REAL windowed demo binary driven by REAL X11 input
-      # (XTEST fake pointer), asserting on captured pixels and the process's
-      # exit code. This is the only place the band ABOVE synthetic event
-      # dispatch is executed at all: the winit translation layer, the
-      # event-loop wake chain, and window-close teardown each shipped broken
-      # while every synthetic gesture test stayed green. Checks: the window
-      # opens; the screen tracks a held drag mid-gesture (a parked-loop
-      # regression freezes exactly this); the drag scrolled; a WM_DELETE
-      # close exits 0 within a timeout (catches teardown hangs and
-      # post-quit crashes); wheel ticks scroll. X11 input/pixels only — the
-      # Wayland-specific teardown ordering is the next step's job.
-      # fast-lane restores this job's cache (shared-key workspace-tests) and
-      # runs clippy before anything else; without check-mode artifacts in the
-      # cache that clippy starts cold. Main only: it is what saves the cache.
+      # fast-lane restores this job's cache (shared-key workspace-tests-v2)
+      # and runs clippy before anything else; without check-mode artifacts
+      # in the cache that clippy starts cold. Main only: it is what saves
+      # the cache.
       - name: Warm clippy artifacts for fast-lane's cache (main only)
         if: github.ref == 'refs/heads/main'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -884,19 +853,14 @@ jobs:
           cargo nextest run -p flui-widgets --locked --features asset-images --test image_async
           cargo nextest run -p flui-widgets --locked --features network-images --test image_network
 
-      # The facade is Material-first by default, so the workspace run above
-      # never compiles `tests/cupertino_demo.rs` (gated by
-      # `required-features = ["cupertino"]`) or the facade smoke test's
-      # localizations assertions. Same precedent as the block above: a test
-      # behind a non-default feature needs its own explicit run, or it is
-      # CI-dead.
-      - name: cargo nextest run (facade non-default catalogs)
-        run: cargo nextest run -p flui --locked --features cupertino,localizations --no-fail-fast
+      # The facade's non-default catalogs (`tests/cupertino_demo.rs`, the
+      # smoke test's localizations assertions) need no run here: the `test`
+      # job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.
 
       # ADR-0074 realm-scoped signals live behind the non-default `signals`
       # feature on flui-view/flui-testing/flui-widgets/flui-app; the workspace
-      # run above never compiles their tests. Same rule as the two blocks
-      # above: a test behind a non-default feature needs its own run.
+      # run never compiles their tests. Same rule as the block above: a test
+      # behind a non-default feature needs its own run.
       - name: cargo nextest run (realm-scoped signals feature)
         run: >
           cargo nextest run
@@ -904,9 +868,8 @@ jobs:
           --features flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals
           --locked --no-fail-fast
 
-      # The facade run above drives the insta demo-snapshot suite, so this job
-      # needs the same candidate upload `test` has — otherwise a snapshot diff
-      # here is only readable as a log tail.
+      # A snapshot assertion in these suites fails with a `.snap.new` beside
+      # it; upload them as `test` does, or the diff is only a log tail.
       - name: Upload insta snapshot candidates on failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -950,16 +913,24 @@ jobs:
       - name: Ensure Xvfb + xkbcommon are available
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb libxkbcommon-x11-0 libxkbcommon0
 
+      # The hosted runner has no GPU: mesa-vulkan-drivers provides the
+      # lavapipe software Vulkan adapter the demo's wgpu init needs (without
+      # it the app panics before a window ever exists). Weston is installed
+      # explicitly so the Wayland harness's weston-absent SKIP path can never
+      # silently fire here.
+      - name: Install lavapipe and weston
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers weston
+
+      # A REAL windowed demo binary driven by REAL X11 input (XTEST fake
+      # pointer), asserting on captured pixels and the process's exit code:
+      # the only place the band ABOVE synthetic event dispatch is executed at
+      # all. The winit translation layer, the event-loop wake chain, and
+      # window-close teardown each shipped broken while every synthetic
+      # gesture test stayed green. `cargo xtask live-smoke` builds the demo
+      # and the harness and runs it under Xvfb (tools/xtask/src/tasks.rs,
+      # `live_smoke_plan`).
       - name: live-smoke (real window, real input, real teardown)
-        if: runner.os == 'Linux'
-        run: |
-          # The hosted runner has no GPU: mesa-vulkan-drivers provides the
-          # lavapipe software Vulkan adapter the demo's wgpu init needs
-          # (without it the app panics before a window ever exists).
-          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
-          cargo build -p flui --features material --example sliver_demo --locked
-          cargo build -p flui-live-smoke --locked
-          xvfb-run -a -s "-screen 0 1200x800x24" target/debug/flui-live-smoke target/debug/examples/sliver_demo
+        run: cargo xtask live-smoke
 
       # Wayland variant of the live smoke: the ONLY executing coverage of
       # the Wayland close-path teardown ordering, which segfaulted post-quit
@@ -972,15 +943,10 @@ jobs:
       # compositor route (the exact CloseRequested arm a compositor close
       # takes) and two on the programmatic PlatformWindow::close route
       # (FLUI_SELF_CLOSE_ROUTE=programmatic, issue #919); each must exit 0
-      # AND log the route it took.
-      # Weston is installed explicitly so the harness's weston-absent SKIP
-      # path can never silently fire here. Reuses the demo/harness binaries
-      # built by the X11 step above.
+      # AND log the route it took. Reuses the demo and harness binaries the
+      # X11 step built (the same build commands, already fresh).
       - name: live-smoke-wayland (teardown ordering under headless weston)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y --no-install-recommends weston
-          target/debug/flui-live-smoke target/debug/examples/sliver_demo wayland
+        run: cargo xtask live-smoke --wayland
 
   gpu-test:
     name: gpu-test
@@ -1024,41 +990,18 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      # Full testing suite. `--test-threads 1`: each test builds its own
-      # wgpu::Device; WARP serializes command submission through one software
-      # driver, so parallel submission can saturate it. The job-level
-      # `timeout-minutes` is the hung-test backstop.
-      - name: cargo nextest run (flui-engine GPU readback suite, WARP)
-        run: >
-          cargo nextest run
-          -p flui-engine
-          --features testing
-          --lib
-          --locked
-          --no-fail-fast
-          --test-threads 1
-
-      # The composited-layer update path's PIXEL oracle (issue #536). It lives
-      # in the facade, not flui-engine, because it needs BOTH the render
-      # pipeline (to produce the two layer trees) and
-      # `flui_engine::wgpu::HeadlessRenderer` (to rasterize them) — siblings in
-      # layer 4 that only the facade already depends on. The step above runs
-      # `-p flui-engine --lib`, so it cannot reach a facade integration test
-      # however correct that test is; this is the second invocation that does.
-      #
-      # `--no-default-features` keeps Material out: the test uses the render and
-      # engine crates directly and needs no catalog, so the Windows build stays
-      # as small as the assertion allows.
-      - name: cargo nextest run (composited-layer update readback, WARP)
-        run: >
-          cargo nextest run
-          -p flui
-          --no-default-features
-          --features gpu-readback-tests
-          --test composited_layer_update_readback
-          --locked
-          --no-fail-fast
-          --test-threads 1
+      # `cargo xtask gpu-test` (tools/xtask/src/tasks.rs, `gpu_test_plan`),
+      # the job-level env above passed through to both runs:
+      # - flui-engine's full `testing` readback suite;
+      # - the composited-layer update path's PIXEL oracle (issue #536), which
+      #   lives in the facade because it needs both the render pipeline and
+      #   `flui_engine::wgpu::HeadlessRenderer`; `--no-default-features`
+      #   keeps Material out of the Windows build.
+      # `--test-threads 1` on both: each test builds its own wgpu::Device, and
+      # WARP serializes submission through one software driver. The
+      # job-level `timeout-minutes` is the hung-test backstop.
+      - name: cargo xtask gpu-test (readback suites, WARP)
+        run: cargo xtask gpu-test
 
       # On oracle mismatch the harness writes `<test>.png` to
       # $FLUI_READBACK_DUMP_DIR — upload it for post-mortem inspection.
