@@ -282,7 +282,11 @@ fn a_write_through_the_wrong_type_rebuilds_no_reader() {
     binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
     binding.pump_frame(FRAME);
     let reader = reader_id.get().expect("the reader built");
-    assert_eq!(graph.readers_of(sig.slot()), [reader], "the slot has a reader");
+    assert_eq!(
+        graph.readers_of(sig.slot()),
+        [reader],
+        "the slot has a reader"
+    );
     assert_eq!(reader_builds.get(), 1);
 
     let wrong = Signal::<String>::from_slot(sig.slot());
