@@ -1,5 +1,7 @@
 //! [`BackGestureController`] and the edge-anchored swipe-back detector —
-//! the iOS-style drag-to-pop substrate. `pub(crate)` only.
+//! the iOS-style drag-to-pop substrate. Not public API: the module is
+//! `pub(crate)`, nameable outside the crate only through the doc-hidden,
+//! temporary `__test_access` (ADR-0083 §4).
 //!
 //! # Oracle
 //!

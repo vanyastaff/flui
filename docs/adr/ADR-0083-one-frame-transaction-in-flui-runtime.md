@@ -153,8 +153,13 @@ that way: `flui_widgets::testing` is `#[cfg(all(feature = "testing", not(test)))
 under `src/` that names it fails to build. A moved test that still reads a private item reaches it
 through `flui_widgets::__test_access`: doc-hidden, always compiled (no visibility feature, one type
 layout), for `crates/flui-widgets/tests` only, and **temporary**. It holds probe traits for
-methods on public types and re-exports of private types raised to `pub` inside private modules;
-a unit test pins its list, with the reason for each entry. It is kept apart from the runtime's
+methods on public types, re-exports of private types raised to `pub` inside private modules, and
+test types that stand in for a capability that must stay unreachable (a route that finalizes only
+itself, rather than a probe that finalizes through any `RouteBindingSlot`). Not every entry is a
+read: some drive state the navigator normally drives (`pop_paced`, a modal's offstage flag, a
+hero's flight), and a re-exported type brings its `pub` methods along. A unit test pins its whole
+surface — every name and probe method, with the reason for each entry — and refuses a glob, a
+module re-export or any other kind of `pub` item. It is kept apart from the runtime's
 `__runtime` seam so the two can be removed separately. An entry leaves when its tests assert
 through public API — for the navigator internals, the Router conformance suite of
 [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) — and the module is deleted when

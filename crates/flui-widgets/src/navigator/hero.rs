@@ -1,7 +1,8 @@
 //! The `Hero` view, its per-route registry, and the handle a `HeroController` drives.
 //!
 //! `Hero` is public; its registry, handle and tag
-//! storage stay private. A `Hero` registers with its route, can be *told* to show a
+//! storage are not public API (nameable only through the doc-hidden, temporary
+//! `__test_access`, ADR-0083 §4). A `Hero` registers with its route, can be *told* to show a
 //! placeholder, and exposes the signed-off customization hooks:
 //! `create_rect_tween`, `flight_shuttle_builder`, and FLUI's state-preserving
 //! `placeholder`.

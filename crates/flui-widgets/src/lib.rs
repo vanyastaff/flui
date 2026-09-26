@@ -106,7 +106,9 @@ pub mod testing;
 
 /// `Navigator` and routing — see `docs/adr/ADR-0019-navigator-routing-seam.md`. The
 /// route stack, its lifecycle, the flush algorithm and the result channel are
-/// private; the signed-off surface is re-exported from the crate root below.
+/// not public API (some are nameable only through the doc-hidden, temporary
+/// `__test_access`, ADR-0083 §4); the signed-off surface is re-exported from
+/// the crate root below.
 pub mod navigator;
 // `Overlay` / `OverlayEntry`, the first `Navigator` prerequisite. The module
 // stays private: the types (ADR-0076) and the mutation surface

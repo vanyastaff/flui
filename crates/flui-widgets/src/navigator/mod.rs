@@ -44,7 +44,8 @@
 //! captured handle, is **survivable rather than supported**, and carries the
 //! consequences `ARCHITECTURE.md` §5 records.
 //! Still deferred: Navigator 2.0, restoration, `LocalHistoryRoute` (its module
-//! is entirely `pub(crate)` — crate-private until the first consumer), and
+//! is `pub(crate)` and not public API until the first consumer; the doc-hidden,
+//! temporary `__test_access` names its handles for tests, ADR-0083 §4), and
 //! per-route focus scope. `PopScope` is **not** deferred: it shipped
 //! 2026-07-10 and is exported below.
 //!

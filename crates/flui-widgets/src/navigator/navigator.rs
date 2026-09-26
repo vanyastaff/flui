@@ -33,8 +33,9 @@
 //! No Navigator 2.0/page-list API, restoration, `PopScope`,
 //! `LocalHistoryRoute`, `HeroControllerScope`, `NavigationNotification`,
 //! pointer-cancelling wrapper, or per-route focus scope that Flutter's `build` adds
-//! (`:5946-5998`). `TransitionRoute` / `ModalRoute` stay private implementation
-//! details behind public `PageRoute` / `PopupRoute`.
+//! (`:5946-5998`). `TransitionRoute` / `ModalRoute` stay implementation details
+//! behind public `PageRoute` / `PopupRoute`, not public API (nameable only
+//! through the doc-hidden, temporary `__test_access`, ADR-0083 §4).
 //!
 //! Named-route generation *is* here — see the `Named routes` impl block below
 //! and `named_route.rs`. What that feature deliberately leaves out is

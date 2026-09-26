@@ -2,7 +2,8 @@
 //!
 //! [`HeroController`] and
 //! [`FlightDirection`] are public; the manifests, measurement, and flight
-//! machinery below stay `pub(crate)`.
+//! machinery below are not public API — nameable only through the doc-hidden,
+//! temporary `__test_access` (ADR-0083 §4).
 //!
 //! This is the observer that decides *when* a flight starts, *where* its destination
 //! will be, and *which heroes* fly. It records [`HeroFlightManifest`] values for
@@ -68,9 +69,12 @@
 //! `Curves.fastOutSlowIn` default (`heroes.dart:181`). `FlightDirection` is public
 //! for the shuttle builder, and `HeroMode` grounds a subtree.
 //!
-//! The private surface stays private: `HeroTag`, `HeroRegistry`, `HeroScope`,
-//! `HeroHandle`, `HeroFlightManifest`, and the flight machinery are `pub(crate)`, and
-//! `navigator_tests::public_no_internal_route_stack_exports` fails if any is exported.
+//! The private surface stays out of the public API: `HeroTag`, `HeroRegistry`,
+//! `HeroScope`, `HeroHandle`, `HeroFlightManifest`, and the flight machinery live in
+//! crate-private modules, nameable only through the doc-hidden, temporary
+//! `__test_access` (ADR-0083 §4), and
+//! `navigator_tests::public_no_internal_route_stack_exports` fails if any is exported
+//! from `lib.rs` or `navigator/mod.rs`.
 //!
 //! Cross-navigator hero matching is live: [`MeasurementPass::collect_manifests`]
 //! matches against [`ModalHandle::all_heroes`](super::modal_route::ModalHandle::all_heroes),

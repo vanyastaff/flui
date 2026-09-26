@@ -30,8 +30,10 @@
 //! `EntryInner → closure → state → handle → EntryInner` cycle Rust would leak
 //! forever (ADR-0025); the loyal-but-leaking alternative loses.
 
-// The mechanism ships with a crate-private surface: its only in-crate
-// producers are the tests until the public surface lands beside the first
+// The mechanism ships without a public surface: the module is `pub(crate)`,
+// its handles are nameable outside the crate only through the doc-hidden,
+// temporary `__test_access` (ADR-0083 §4), and its only producers are the
+// tests until the public surface lands beside the first
 // Catalog consumer (ADR-0025) — the seam-before-consumer shape
 // `hero_controller.rs` documents. Deleting and re-deriving later is how a
 // seam stops matching the ADR that specified it.
@@ -252,7 +254,7 @@ impl std::fmt::Debug for LocalHistoryRegistry {
 }
 
 // ============================================================================
-// The page-facing handles (crate-private until the first consumer)
+// The page-facing handles (not public API until the first consumer)
 // ============================================================================
 
 /// The capability a page uses to push local-history entries onto its route —
