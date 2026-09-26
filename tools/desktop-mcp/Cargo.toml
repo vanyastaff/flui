@@ -1,7 +1,7 @@
 # Desktop-automation MCP server: lets an agent see, read and drive any desktop
 # application the way a person with a screen reader does. It observes and
 # drives apps strictly from the outside (OS accessibility API, OS input,
-# OS capture), so it has no workspace dependencies.
+# OS capture); it shares its wire vocabulary with FLUI through flui-protocol.
 [package]
 name = "flui-desktop-mcp"
 version.workspace = true
@@ -28,9 +28,11 @@ anyhow = { workspace = true }
 base64 = "0.23"
 # Unicode full case folding for `name_contains` (Straße matches STRASSE).
 caseless = "0.2"
+# The ADR-0080 wire vocabulary: `Role`, `ActionName`, `Checked`.
+flui-protocol = { workspace = true, features = ["serde", "schemars"] }
 image = { workspace = true }
 rmcp = { version = "3.4", features = ["server", "macros", "transport-io"] }
-schemars = "1.0"
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

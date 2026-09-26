@@ -5,15 +5,18 @@
 //! (AX through `objc2-application-services` on macOS, AT-SPI through `atspi`
 //! on Linux); until then [`Unsupported`] answers every call with the reason.
 
+// Only the UI Automation backend reads ARIA roles.
+#[cfg(any(target_os = "windows", test))]
 mod role;
 #[cfg(target_os = "windows")]
 mod uia;
 
 use std::time::Instant;
 
+pub use flui_protocol::{ActionName, Checked, Role};
+#[cfg(target_os = "windows")]
+pub(crate) use role::role_from_aria;
 use serde::Serialize;
-
-pub use role::{ActionName, Checked, Role};
 
 use crate::error::{ToolError, ToolResult};
 use crate::geometry::Rect;
