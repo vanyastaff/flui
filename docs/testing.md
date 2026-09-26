@@ -147,7 +147,9 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
---features flui/cupertino,flui/localizations`, run as the two stages below.
+--features flui/cupertino,flui/localizations,flui-painting/parley`, run as the two stages below.
+`flui-painting/parley` is on so the Parley raster path's oracle test runs until
+ADR-0092 §10 makes that path the default.
 Two choices in it differ from CI on purpose:
 
 - **One feature slice.** The facade's non-default catalogs (`cupertino`,

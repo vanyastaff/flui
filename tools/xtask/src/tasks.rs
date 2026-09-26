@@ -43,6 +43,9 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 ///   default-feature facade (material only) is then not tested here, CI's
 ///   `test` job included (it runs this scope); its `cargo build --workspace
 ///   --all-targets` compiles it, and `feature-matrix` lints it.
+/// - `flui-painting/parley`: the Parley path's raster side, off by default
+///   until ADR-0092 §10 folds it into the default build; on here so its
+///   `parley_oracle` test runs in CI's `test` and `fast-lane` jobs.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
 ///   Examples still compile in `lint` (`--all-targets`); CI's `test` job and
@@ -62,7 +65,7 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
     "--bins",
     "--tests",
     "--features",
-    "flui/cupertino,flui/localizations",
+    "flui/cupertino,flui/localizations,flui-painting/parley",
 ];
 
 /// Options every task takes.
@@ -1010,7 +1013,7 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations";
+    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui/localizations,flui-painting/parley";
 
     #[test]
     fn workflow_lint_runs_each_installed_linter_and_skips_the_rest() {
