@@ -16,6 +16,7 @@ mod docs_links;
 mod doctor;
 mod file_length;
 mod fonts;
+mod markers;
 mod ratchet;
 mod toolchain;
 mod wasm;
@@ -103,6 +104,8 @@ enum Command {
     FontAssets(fonts::FontAssetsArgs),
     /// Check that no .rs file exceeds 3000 production lines (ADR-0081 §5).
     FileLength(file_length::FileLengthArgs),
+    /// Check for process markers outside the archival roots (ADR-0078 §4).
+    Markers(markers::MarkersArgs),
     /// List missing tools for `ci` / `ci-full`.
     Doctor(doctor::DoctorArgs),
     /// Collect benchmark results.
@@ -150,6 +153,7 @@ fn main() -> ExitCode {
         Command::DocsLinks(args) => docs_links::docs_links(&args),
         Command::FontAssets(args) => fonts::font_assets(&args),
         Command::FileLength(args) => file_length::file_length(&args),
+        Command::Markers(args) => markers::markers(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
     };

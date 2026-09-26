@@ -1,0 +1,18 @@
+# Planted markers, read as Markdown
+
+Phase A shipped the prose. <!-- expect: phase-letter -->
+
+The H10 tracker item. <!-- expect: tracker-h -->
+
+### Slice 4 heading <!-- expect: slice -->
+
+Horizon names H2 and B0 are fine in Markdown prose.
+
+```text
+Wave 3 in a fenced block
+```
+
+See [the plan](docs/plans/x-wave5-plan.md) and the record
+docs/research/2026-05-22-cycle4-wave2-design.md for the history.
+
+A code span `Phase B` is quotation, and so is <https://example.com/wave-2>.

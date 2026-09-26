@@ -86,7 +86,7 @@ crate you're changing before changing it.
   manifests).
 - **No internal process-ID markers** (`Cycle N`, `PR #NNN review`, `Phase B`, slice/wave labels)
   in code or docs — state the invariant, not the history that produced it. `ADR-NNNN` citations
-  are fine. Archival roots are exempt (`docs/{audits,brainstorms,ideation,plans,research,superpowers}`,
+  are fine. Archival roots are exempt (`docs/{archive,audits,brainstorms,ideation,plans,research,superpowers}`,
   `.rust-studio/specs`, `specs`, `openspec`).
 - **A new gate** is a `cargo xtask` command *and* a step in a CI job the `ci` aggregator gates,
   usually `checks` (a check folded into `cargo xtask checks` gets both) — a command alone never

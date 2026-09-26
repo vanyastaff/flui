@@ -1,0 +1,465 @@
+# Process markers outside the archival roots, written by `cargo xtask markers --seed`.
+# Counts are exact and only go down: a file whose count of a class grows past its
+# entry, or falls below it, is a finding. `reason` and `exit` apply to every entry.
+reason = "written before the markers gate; each is to be restated as the invariant it stands for"
+exit = "W1-A14"
+
+[[allow]]
+path = "CHANGELOG.md"
+class = "slice"
+count = 4
+
+[[allow]]
+path = "CHANGELOG.md"
+class = "tracker-h"
+count = 1
+
+[[allow]]
+path = "Cargo.toml"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "book/book.toml"
+class = "tracker-h"
+count = 1
+
+[[allow]]
+path = "crates/flui-animation/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-app/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-devtools/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/aa_oracle_tests.rs"
+class = "phase-letter"
+count = 2
+
+[[allow]]
+path = "crates/flui-engine/src/aa_oracle_tests.rs"
+class = "pr-label"
+count = 18
+
+[[allow]]
+path = "crates/flui-engine/src/advanced_blend/mod.rs"
+class = "pr-label"
+count = 3
+
+[[allow]]
+path = "crates/flui-engine/src/batches/paths.rs"
+class = "pr-label"
+count = 4
+
+[[allow]]
+path = "crates/flui-engine/src/batches/shapes.rs"
+class = "phase-letter"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/batches/shapes.rs"
+class = "pr-label"
+count = 11
+
+[[allow]]
+path = "crates/flui-engine/src/command_ir.rs"
+class = "phase-letter"
+count = 2
+
+[[allow]]
+path = "crates/flui-engine/src/deterministic_replay_tests.rs"
+class = "slice"
+count = 3
+
+[[allow]]
+path = "crates/flui-engine/src/instancing.rs"
+class = "pr-label"
+count = 2
+
+[[allow]]
+path = "crates/flui-engine/src/layer_blend_tests.rs"
+class = "pr-label"
+count = 8
+
+[[allow]]
+path = "crates/flui-engine/src/layer_offscreen.rs"
+class = "slice"
+count = 3
+
+[[allow]]
+path = "crates/flui-engine/src/painter/tests.rs"
+class = "phase-letter"
+count = 4
+
+[[allow]]
+path = "crates/flui-engine/src/pipeline_cache.rs"
+class = "phase-letter"
+count = 2
+
+[[allow]]
+path = "crates/flui-engine/src/pipeline_cache.rs"
+class = "pr-label"
+count = 4
+
+[[allow]]
+path = "crates/flui-engine/src/pipeline_cache.rs"
+class = "tracker-h"
+count = 3
+
+[[allow]]
+path = "crates/flui-engine/src/renderer.rs"
+class = "pr-label"
+count = 2
+
+[[allow]]
+path = "crates/flui-engine/src/replay/mod.rs"
+class = "phase-letter"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/replay/mod.rs"
+class = "pr-label"
+count = 3
+
+[[allow]]
+path = "crates/flui-engine/src/shaders/arc_instanced.wgsl"
+class = "pr-label"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/shape_blend_tests.rs"
+class = "pr-label"
+count = 6
+
+[[allow]]
+path = "crates/flui-engine/src/ssaa.rs"
+class = "phase-letter"
+count = 1
+
+[[allow]]
+path = "crates/flui-engine/src/ssaa.rs"
+class = "pr-label"
+count = 4
+
+[[allow]]
+path = "crates/flui-engine/src/ssaa.rs"
+class = "tracker-h"
+count = 3
+
+[[allow]]
+path = "crates/flui-foundation/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-geometry/Cargo.toml"
+class = "pr-label"
+count = 1
+
+[[allow]]
+path = "crates/flui-geometry/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-hot-reload/src/dispatch.rs"
+class = "phase-letter"
+count = 1
+
+[[allow]]
+path = "crates/flui-hot-reload/src/engine.rs"
+class = "phase-letter"
+count = 1
+
+[[allow]]
+path = "crates/flui-hot-reload/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-interaction/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-macros/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-objects/src/layout/stack.rs"
+class = "wave"
+count = 2
+
+[[allow]]
+path = "crates/flui-objects/src/layout/theater.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-objects/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-objects/tests/render_object_harness.rs"
+class = "slice"
+count = 7
+
+[[allow]]
+path = "crates/flui-painting/tests/text_layout_unit.rs"
+class = "pr-label"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/ARCHITECTURE.md"
+class = "tracker-h"
+count = 2
+
+[[allow]]
+path = "crates/flui-platform/examples/event_handling.rs"
+class = "spec-task"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/headless/platform.rs"
+class = "spec-task"
+count = 5
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/windows/platform.rs"
+class = "spec-task"
+count = 21
+
+[[allow]]
+path = "crates/flui-platform/src/platforms/windows/window.rs"
+class = "spec-task"
+count = 2
+
+[[allow]]
+path = "crates/flui-platform/src/traits/owner.rs"
+class = "slice"
+count = 4
+
+[[allow]]
+path = "crates/flui-platform/src/traits/platform.rs"
+class = "slice"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/traits/platform.rs"
+class = "spec-task"
+count = 5
+
+[[allow]]
+path = "crates/flui-platform/src/traits/text_input.rs"
+class = "pr-label"
+count = 1
+
+[[allow]]
+path = "crates/flui-platform/src/traits/window.rs"
+class = "spec-task"
+count = 2
+
+[[allow]]
+path = "crates/flui-platform/tests/contract.rs"
+class = "spec-task"
+count = 5
+
+[[allow]]
+path = "crates/flui-platform/tests/event_contracts.rs"
+class = "spec-task"
+count = 14
+
+[[allow]]
+path = "crates/flui-platform/tests/event_handling.rs"
+class = "spec-task"
+count = 37
+
+[[allow]]
+path = "crates/flui-platform/tests/headless.rs"
+class = "spec-task"
+count = 14
+
+[[allow]]
+path = "crates/flui-platform/tests/performance.rs"
+class = "spec-task"
+count = 3
+
+[[allow]]
+path = "crates/flui-platform/tests/window_lifecycle.rs"
+class = "spec-task"
+count = 24
+
+[[allow]]
+path = "crates/flui-platform/tests/window_modes.rs"
+class = "spec-task"
+count = 26
+
+[[allow]]
+path = "crates/flui-platform/tests/windows_event_conversion.rs"
+class = "spec-task"
+count = 29
+
+[[allow]]
+path = "crates/flui-rendering/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/src/protocol/sliver_protocol.rs"
+class = "tracker-h"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/src/protocol/sliver_protocol.rs"
+class = "wave"
+count = 2
+
+[[allow]]
+path = "crates/flui-rendering/src/storage/node.rs"
+class = "pr-label"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/src/traits/render_sliver.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/tests/cross_protocol_layout.rs"
+class = "wave"
+count = 2
+
+[[allow]]
+path = "crates/flui-rendering/tests/render_viewport.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/tests/sliver_direction_matrix.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/tests/sliver_hit_direction_matrix.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-rendering/tests/sliver_to_box_adapter.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-semantics/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-testing/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-tree/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-types/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-types/src/styling/color.rs"
+class = "pr-label"
+count = 1
+
+[[allow]]
+path = "crates/flui-types/src/styling/color.rs"
+class = "slice"
+count = 1
+
+[[allow]]
+path = "crates/flui-view/src/element/dispatch.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-view/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-view/src/tree/element_tree.rs"
+class = "pr-label"
+count = 1
+
+[[allow]]
+path = "crates/flui-view/tests/derive_bon_stack.rs"
+class = "spec-task"
+count = 2
+
+[[allow]]
+path = "crates/flui-view/tests/error_view_recovery.rs"
+class = "tracker-h"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/src/interaction/focus.rs"
+class = "tracker-h"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/src/lib.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "crates/flui-widgets/tests/navigator_public.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "docs/designs/2026-06-25-pr-k-live-buildcontext-execution-spec.md"
+class = "pr-label"
+count = 3
+
+[[allow]]
+path = "docs/designs/2026-06-28-flutter-parity-hot-reload.md"
+class = "phase-letter"
+count = 4
+
+[[allow]]
+path = "docs/designs/2026-06-30-rasterbackend-seam.md"
+class = "tracker-h"
+count = 1
+
+[[allow]]
+path = "docs/designs/2026-09-18-macos-ios-feature-completeness.md"
+class = "slice"
+count = 1
+
+[[allow]]
+path = "examples/text_app.rs"
+class = "wave"
+count = 1
+
+[[allow]]
+path = "src/lib.rs"
+class = "wave"
+count = 1
