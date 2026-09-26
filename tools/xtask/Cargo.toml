@@ -11,9 +11,16 @@ description = "Repository automation for FLUI: CI gates, change scoping, device 
 anyhow = { workspace = true }
 cargo_metadata = { workspace = true }
 clap = { workspace = true }
+# `cargo xtask file-length`: line spans of test-only items; `cargo xtask globals`
+# parses the workspace's Rust source with syn, and `cargo xtask module-dag` the
+# imports between a crate's top-level modules (`span-locations` gives a finding its line).
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+# `cargo xtask markers`: Markdown read as events, not lines.
+pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+syn = { workspace = true, features = ["full", "parsing", "visit"] }
 toml = { workspace = true }
 walkdir = { workspace = true }
 

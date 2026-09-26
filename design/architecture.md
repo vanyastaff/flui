@@ -254,7 +254,7 @@ inline test modules are large.
 | flui-material | 7, 26.9k | pkg / official | Official package on `flui-sdk` | 14 exact internal pins today (`grep -c '=0.2.0-dev' crates/flui-material/Cargo.toml`). Moves to `packages/flui-material` in the same change that ports it to `flui-sdk`; gains `flui_material::prelude`. |
 | flui-cupertino | 7, 4.3k | pkg / official | Official package on `flui-sdk` | Same; gains focus and keyboard activation from the Raw primitives. |
 | flui-localizations | 8, 0.3k | — | **Delete** (owner-confirmed, recorded in ADR-0081) | 281 lines in a layer of its own. The RTL table moves to `flui_widgets::localization`, strings to the packages, ICU4X to `flui-i18n` (H1). |
-| flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Realm, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the one trampoline cell (`APP_RUNTIME`, `crates/flui-app/src/app/runner/host.rs:25-47`). `realm_dispatch.rs` is 7,149 lines, but production code ends at line 1690 and the rest is one test module (`crates/flui-app/src/app/runner/realm_dispatch.rs:1691-1692`): moving the tests out is the fix, not dissolving the file. |
+| flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Realm, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the one trampoline cell (`APP_RUNTIME`, `crates/flui-app/src/app/runner/host.rs:25-47`). `realm_dispatch.rs` is 7,149 lines, but production code ends at line 1690 and the rest is one test module (`crates/flui-app/src/app/runner/realm_dispatch.rs:1691-1692`): the file-length gate counts production lines only, so it is within the limit and needs neither a move nor dissolving. |
 | flui-cli | 9, 18.6k | H / tool | Keep, own version | `mcp`, `devtools`, `test --golden --accept` with per-test NDJSON, `catalog`; absorbs `tools/web-server`. |
 | flui-devtools | 9, 2.5k | pkg / official | Official package | The in-process protocol server. It does not merge with `flui-protocol`: schema and server stay apart. |
 
@@ -533,15 +533,16 @@ The known entries, each with its exit:
 |---|---|---|
 | `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:46` | Stays: the one named trampoline cell. |
 | `FONT_SYSTEM` | `crates/flui-painting/src/text_layout/layout.rs:124` | Per-realm `FontContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
-| `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43` | Presentation clock property. |
+| `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43` | Presentation clock property ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). |
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | Subsecond runtime hook ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). |
-| `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Realm-owned GlobalKey scope. |
+| `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Realm-owned GlobalKey scope ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) removes its `ManuallyDrop` form). |
 | `NAVIGATOR_COMMAND_TARGETS` | `crates/flui-widgets/src/navigator/navigator.rs:91` | Router handle from `init_state` ([ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md)). |
-| `AssetRegistry::global` | `crates/flui-assets/src/registry/mod.rs:83` | Realm image-cache handle. |
+| `AssetRegistry::global` | `crates/flui-assets/src/registry/mod.rs:83` | Realm image-cache handle ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). |
 
-The list above is not the allowlist. The allowlist is seeded by the scan itself, in the same
-change that adds the gate, and can only shrink
-([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). Regex estimates never seed it.
+The list above is not the allowlist. The allowlist is the `[package.metadata.flui] globals` key
+of each crate manifest, seeded by the scan itself in the change that added the gate; it can only
+shrink ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). Regex estimates never
+seed it.
 
 ---
 
@@ -1106,7 +1107,13 @@ every pull request; wall time is a nightly trend per OS.
 - Phase counters in `PipelineOwner` and `BuildOwner` plus `cargo xtask perf` with the idle and
   10k-list scenarios arrive with the first gates, as a ratchet: current values are recorded and
   may only fall. The runtime extraction and the `!Send` flip are measured against them. `perf
-  --check` does not block at B0 and blocks from exit B1.
+  --check` does not block at B0 and blocks from exit B1. **Shipped, non-blocking:**
+  `PipelineOwner::counters()`, `FrameBuildReport::builds_run`,
+  `HeadlessBinding::last_frame_report()`, the idle, 10k-list scroll, text-change and
+  full-reassemble scenarios in `crates/flui-widgets/tests/perf.rs` with their budgets, and
+  `cargo xtask perf` against `crates/flui-widgets/perf/baseline.toml`; only `perf --self-test`
+  runs in `cargo xtask checks` until the CI `perf` job exists. Idle is measured headlessly as
+  "no frame committed", not through the `FrameClock` demand mask.
 - `bench-collect` stops skipping benches with `required-features`
   (`tools/xtask/src/bench.rs:36`), so ADR-0061's baseline, 2901 µs for a full 64-layer frame
   against 56 µs with damage (`docs/adr/ADR-0061-damage-needs-layer-identity.md:31`), is
@@ -1137,8 +1144,8 @@ does not cover each gate they add.
 | Tier direction and in-tier order | `cargo xtask workspace` (tiers) | 11 numbered layers |
 | Transitive absence | `cargo xtask reach` over `cargo metadata`, all facade feature combinations | implemented, green with three seeded `reach-exceptions`, none for `flui-platform` |
 | Core names no official crate | `cargo xtask workspace` | facade `material` and `hot-reload` features |
-| No new process global | `cargo xtask globals`: syn scan of every `static` (atomics included) and `thread_local!`, `#[cfg(test)]` excluded | no gate |
-| Module direction inside flui-widgets | `cargo xtask module-dag -p flui-widgets` | promised, absent |
+| No new process global | `cargo xtask globals`: syn scan of every `static` (atomics included), `thread_local!` entry and `static` in FLUI's own macro tokens, `#[cfg(test)]` excluded | gated; `cargo xtask globals` prints the counts |
+| Module direction inside flui-widgets | `cargo xtask module-dag -p flui-widgets` | implemented (`[package.metadata.flui.modules]` in flui-widgets) |
 | No upstream type in Stable signatures | `cargo xtask api-closure` over rustdoc JSON, proven first against a planted `pub fn f() -> accesskit::Role` | re-exports of wgpu, accesskit, android-activity |
 | UI state is `!Send` | `assert_not_impl_any!`; clippy `disallowed_types` (`Mutex`, `RwLock`, `DashMap`) in frame-path crates, allowlist for mailboxes | `Send + Sync` bounds on UI traits |
 | No lock in a public signature | public-API snapshot filter | — |

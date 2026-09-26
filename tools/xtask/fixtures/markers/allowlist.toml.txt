@@ -1,0 +1,47 @@
+# The allowlist `cargo xtask markers --self-test` judges the planted files by.
+# Its `exit` values are references and are not scanned; the same step id in
+# a comment is prose: W1-A14 here is reported. expect: wave
+reason = "planted markers"
+exit = "W1-A14"
+
+# exact: one cycle marker in planted.rs
+[[allow]]
+path = "planted.rs"
+class = "cycle"
+count = 1
+
+# planted.rs has two slice markers
+[[allow]]
+path = "planted.rs"
+class = "slice"
+count = 1
+
+# planted.rs has two tracker-h markers
+[[allow]]
+path = "planted.rs"
+class = "tracker-h"
+count = 3
+
+# planted.toml has no cycle marker
+[[allow]]
+path = "planted.toml"
+class = "cycle"
+count = 2
+
+# no such file
+[[allow]]
+path = "gone.rs"
+class = "cycle"
+count = 1
+
+# no such class
+[[allow]]
+path = "planted.md"
+class = "bogus"
+count = 1
+
+# the same file and class twice
+[[allow]]
+path = "planted.rs"
+class = "cycle"
+count = 1

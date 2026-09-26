@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-18
+- **Amended by:** [ADR-0097](ADR-0097-no-process-global-state-gate.md) (execution services stay
+  loop-scoped; any process-global executor state is a `cargo xtask globals` entry that only
+  shrinks)
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime/scheduling topology is a sanctioned leapfrog zone — Flutter is not the reference here); [Runtime Architecture Execution Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) ("Unify worker, I/O, and service execution with host injection"); [Runtime Dependency Adoption Guide](../research/2026-08-01-runtime-dependency-adoption-guide.md) (`tokio-util` adoption, "another async runtime: do not add")
 - **Issue:** [#557](https://github.com/vanyastaff/flui/issues/557) — between singleton retirement (#553) and the task/worker/service lifecycles (#558) / threaded raster lane (#559)
 

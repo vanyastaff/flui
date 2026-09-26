@@ -52,7 +52,7 @@ answers settle the open questions; acceptance still happens ADR by ADR.
 | D15 | Hot reload through Subsecond behind a runtime hook | Changed by verification (no facade `hot-reload` feature) | [ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) |
 | D16 | `flui-protocol` is the typed schema shared by tests, devtools and agents | Changed by verification (amends ADR-0080 by settling its in-process transport; does not reverse it); accepted in part on 2026-09-26 (the crate, the lifted wire vocabulary and the moved semantics enums) | [ADR-0095](../docs/adr/ADR-0095-agent-protocol-schema-crate.md) |
 | D17 | Packages build on `flui-sdk`; the facade names none of them | Changed by owner decision O6 (the reason is semver, not a cycle) | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
-| G | Process-global state is gated; one trampoline cell | Changed by verification (scan every `static`, seed by scan) | [ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md) |
+| G | Process-global state is gated; one trampoline cell | Changed by verification (scan every `static`, seed by scan); **accepted in part** 2026-09-26 (the gate and its seeded allowlist) | [ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md) |
 | L | Dynamic linking for development builds | Studied after the review; measured on Windows; owner deferred it and asked for a build-footprint study | [ADR-0096](../docs/adr/ADR-0096-dev-build-dynamic-linking.md) |
 | O1 | Official packages are members of this workspace | Changed by verification | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md) |
 | O2 | `flui-sdk` is a separate Evolving crate, tied to the release train | Changed by verification | [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md), [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) |
@@ -446,6 +446,13 @@ its list from prose; it now scans every `static` and seeds from the scan. The ga
 scanner after `cf46dfe20` (#1283) deleted the old runtime-contract ratchet on the grounds that the
 rules "are types and clippy lints now (ADR-0078)"; see
 [open-questions.md](open-questions.md#12-new-gates-against-the-cf46dfe20-deletions).
+
+**Accepted in part (2026-09-26).** `cargo xtask globals` and its `--self-test` run in
+`cargo xtask checks`; each crate's `[package.metadata.flui] globals` holds the seeded entries.
+Permanent state is a `grant` under ADR-0097 with a checked `class` (`trampoline`, `counter`,
+`immutable`, `process`, `diagnostic`), which ADR-0078 §4 now admits beside an exit ADR; the
+counter exemption is exact (`fetch_add` only, never `pub`), so the `try_update` ID counters are
+`counter` grants. Removing each debt entry stays with its exit ADR.
 
 ### L. Dynamic linking for development builds
 
@@ -874,8 +881,11 @@ Re-checking the reports against the worktree found these; the ADRs should state 
 form.
 
 - `crates/flui-app/src/app/runner/realm_dispatch.rs` is 7,149 lines, but the test module starts at
-  line 1692 (`mod realm_dispatch_tests`); production code is about 1,690 lines. Moving the tests
-  out satisfies the file-length ratchet; the file does not need to be "dissolved".
+  line 1692 (`mod realm_dispatch_tests`); production code is about 1,690 lines. The file-length
+  gate counts production lines only, so the file is already within the limit and needs no move;
+  it does not need to be "dissolved" either. The one file over the limit is
+  `crates/flui-scheduler/src/scheduler.rs`; its current count is its entry in
+  `tools/xtask/allowlists/file-length.toml`.
 - The pin count is 145 in `crates/*/Cargo.toml` and 172 including the root manifest. Both reports
   are right for their scope; a record must state which scope it counts.
 - The runtime-contract ratchet did not "vanish": `cf46dfe20` (#1283) deleted it on purpose,

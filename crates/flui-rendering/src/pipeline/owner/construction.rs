@@ -63,6 +63,7 @@ impl PipelineOwner<Idle> {
             semantics_error_once_for_test: None,
             pending_child_requests: Vec::new(),
             pending_retain_bands: Vec::new(),
+            counters: super::PipelineCounters::default(),
             _phase: PhantomData,
         }
     }
@@ -139,6 +140,7 @@ impl PipelineOwner<Idle> {
             semantics_error_once_for_test: None,
             pending_child_requests: Vec::new(),
             pending_retain_bands: Vec::new(),
+            counters: super::PipelineCounters::default(),
             _phase: PhantomData,
         }
     }
@@ -235,6 +237,9 @@ impl PipelineOwner<Idle> {
         }
 
         let layer_tree = owner.take_layer_tree();
+        if layer_tree.is_some() {
+            owner.counters.frames_produced += 1;
+        }
         (owner.finish(), Ok(layer_tree))
     }
 }

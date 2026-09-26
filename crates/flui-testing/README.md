@@ -37,6 +37,13 @@ Implemented:
   long press is held and a fling is sampled the way the script says.
 - **Accessibility queries** (`a11y`) — the assembled semantics tree as AccessKit
   nodes, queried by role.
+- **Per-frame work counts** — `HeadlessBinding::last_frame_report()` returns a
+  `FrameReport`: the build owner's report (distinct elements rebuilt, builds
+  run) and the pipeline's phase counters (layout passes and roots, nodes laid
+  out and painted, layers produced and reused, semantics nodes published,
+  frames produced) differenced across the last pump.
+  The counted perf scenarios built on it live with the widget catalog, in
+  `flui-widgets`' `perf` test target (see `cargo xtask perf`).
 
 This crate is the workspace's **test-support** package, not just one driver.
 Fake platform capabilities and golden-image helpers belong here as they land,

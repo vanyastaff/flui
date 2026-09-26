@@ -63,6 +63,8 @@ mod paint_before_layout;
 mod paint_dirty_flag_discipline;
 #[path = "paint_fragment_snapshot.rs"]
 mod paint_fragment_snapshot;
+#[path = "phase_counters.rs"]
+mod phase_counters;
 #[path = "pipeline_scenarios.rs"]
 mod pipeline_scenarios;
 #[path = "render_invalidation_handle.rs"]

@@ -23,7 +23,7 @@ use crate::{
     traits::{PaintClip, PaintEffects, resolve_path_clip},
 };
 
-use super::{PipelineOwner, rebind_phase, subtree_arena::ensure_stack};
+use super::{PipelineOwner, counters::PaintCounts, rebind_phase, subtree_arena::ensure_stack};
 
 // ============================================================================
 // Paint phase: run_paint + helpers
@@ -181,8 +181,12 @@ impl PipelineOwner<PaintPhase> {
                         layer_patches,
                         consumed_updates,
                         visited,
+                        counts,
                     ) = composer.finish();
                     reached = visited;
+                    self.counters.nodes_painted += counts.nodes_painted;
+                    self.counters.layers_produced += counts.layers_produced;
+                    self.counters.layers_reused += counts.layers_reused;
                     tracing::debug!("run_paint: layer tree has {} layers", layer_tree.len());
 
                     // Commit the walk's retention decisions now that its
@@ -705,6 +709,7 @@ impl PipelineOwner<PaintPhase> {
             own_effect_layers(render_node.paint_effects(), origin)
         }))
         .map_err(|_| crate::error::RenderError::poisoned(debug_name, PoisonPhase::Paint))?;
+        composer.note_painted();
         let fragment = recorder.finish();
 
         debug_assert!(
@@ -1156,6 +1161,9 @@ struct FragmentComposer {
     /// entries it exists to catch, silently, since it is also the only
     /// diagnostic on that path.
     visited: FxHashSet<RenderId>,
+    /// Nodes painted and layers created or grafted this pass, folded into the
+    /// owner's `PipelineCounters` by `run_paint` on the commit path only.
+    counts: PaintCounts,
 }
 
 impl FragmentComposer {
@@ -1197,7 +1205,13 @@ impl FragmentComposer {
             layer_patches: Vec::new(),
             consumed_updates: Vec::new(),
             visited: FxHashSet::default(),
+            counts: PaintCounts::default(),
         }
+    }
+
+    /// Counts one render node whose `paint_raw` ran this pass.
+    fn note_painted(&mut self) {
+        self.counts.nodes_painted += 1;
     }
 
     /// Merges a sealed run while keeping its canvas clips local to that run.
@@ -1227,6 +1241,7 @@ impl FragmentComposer {
         let _ = self
             .tree
             .push_child(parent, Layer::from(PictureLayer::new(list)));
+        self.counts.layers_produced += 1;
     }
 
     /// Inserts `layer` under the current stack top, returning its freshly
@@ -1263,6 +1278,7 @@ impl FragmentComposer {
         let parent = self.current_parent();
         let id = self.tree.push_child(parent, node);
         self.stack.push(id);
+        self.counts.layers_produced += 1;
         id
     }
 
@@ -1414,9 +1430,17 @@ impl FragmentComposer {
             // render object's CURRENT properties instead of the captured one;
             // everything else is the cheap `Arc`-sharing clone retention is
             // built on.
-            let layer = patch_by_index
-                .get(&index)
-                .map_or_else(|| node.layer.clone(), |layer| (*layer).clone());
+            //
+            // The two are counted apart: a patched layer is new output built
+            // this pass, not a reuse, and folding it into `layers_reused`
+            // would hide exactly the per-layer cost an animated opacity pays.
+            let layer = if let Some(layer) = patch_by_index.get(&index) {
+                self.counts.layers_produced += 1;
+                (*layer).clone()
+            } else {
+                self.counts.layers_reused += 1;
+                node.layer.clone()
+            };
             let mut layer_node = flui_layer::LayerNode::new(layer);
             if let Some(render_id) = node.render_id {
                 layer_node = layer_node.with_render_id(render_id);
@@ -1449,6 +1473,7 @@ impl FragmentComposer {
         Vec<(RenderId, Vec<(usize, Layer)>)>,
         Vec<RenderId>,
         FxHashSet<RenderId>,
+        PaintCounts,
     ) {
         self.seal_picture();
         debug_assert_eq!(
@@ -1464,6 +1489,7 @@ impl FragmentComposer {
             self.layer_patches,
             self.consumed_updates,
             self.visited,
+            self.counts,
         )
     }
 }
@@ -1769,7 +1795,7 @@ mod tests {
                 &FxHashMap::default(),
             )
             .expect("paint_subtree should succeed");
-        let (layer_tree, follower_correlations, _retained, _patches, _consumed, _visited) =
+        let (layer_tree, follower_correlations, _retained, _patches, _consumed, _visited, _counts) =
             composer.finish();
 
         assert_eq!(

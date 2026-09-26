@@ -1,0 +1,9 @@
+A migration plan in miniature: step ids begin table rows.
+
+| Step | What |
+|---|---|
+| W1-A5 | split a large file |
+| W1-A14 | rewrite the recorded markers |
+| W2-P1 | a platform step |
+
+W3-A1 is mentioned in prose, not in a row, so it is no exit.

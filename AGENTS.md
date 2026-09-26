@@ -88,7 +88,7 @@ crate you're changing before changing it.
   manifests).
 - **No internal process-ID markers** (`Cycle N`, `PR #NNN review`, `Phase B`, slice/wave labels)
   in code or docs — state the invariant, not the history that produced it. `ADR-NNNN` citations
-  are fine. Archival roots are exempt (`docs/{audits,brainstorms,ideation,plans,research,superpowers}`,
+  are fine. Archival roots are exempt (`docs/{archive,audits,brainstorms,ideation,plans,research,superpowers}`,
   `.rust-studio/specs`, `specs`, `openspec`).
 - **A new gate** is a `cargo xtask` command *and* a step in a CI job the `ci` aggregator gates,
   usually `checks` (a check folded into `cargo xtask checks` gets both) — a command alone never
@@ -148,8 +148,12 @@ memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only c
 | No bare `unwrap()` in production; by convention `expect("BUG: <invariant>")` for internal invariants, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | `clippy::unwrap_used`; the conventions are review |
 | Crate layering (a normal or build dependency points to a lower tier, or a smaller `order` in the same tier, unless the dependent lists it in `edge-exceptions` with the ADR that removes it; and, until `layer` is removed, to the same layer or lower — ADR-0081); no framework crate but `flui-app`, `flui-cli` and the facade links `flui-log`; none but `flui-app` depends on `flui-platform` (ADR-0082); none but `flui-localizations`, `flui-app` and the facade depends on Material or Cupertino, in any form (ADR-0028); manifests inherit the workspace keys and lints; no unreachable test file; unique ADR numbers | `cargo xtask workspace` (`[package.metadata.flui]` in each manifest) |
 | No crate reaches what its tier forbids (`[workspace.metadata.flui.reach]`, where H forbids nothing, plus its own `reach-forbid`) in any root build, over normal and build edges on every target, except through a `reach-exceptions` entry that names its ADR and still excuses something; hot reload stays out of `flui-app`'s default graph (ADR-0081 §2) | `cargo xtask reach` |
+| Import direction between a crate's top-level modules (flui-widgets): non-test code names only modules in lower layers, through re-exports too; `#[cfg(test)]` code is exempt; a refused edge needs a dated `exceptions` entry naming the ADR that removes it | `cargo xtask module-dag` (`[package.metadata.flui.modules]`) |
 | No dependency that no code uses, no test-only dependency in `[dependencies]`, no `[workspace.dependencies]` entry nothing inherits (an optional dependency, or one a feature names, is only warned about); licenses, sources and banned crates per `deny.toml`, including crates std now replaces (`once_cell`, `cfg-if`, …); RustSec advisories | `cargo xtask deps` (cargo-shear, cargo-deny; CI's `deps` job) |
+| No new `static` or `thread_local!` outside `#[cfg(test)]` without a `[package.metadata.flui] globals` entry: an `exit` ADR that removes it, or a `grant` under ADR-0097 with a checked `class` (one `trampoline` in the host, one per platform backend); an entry for a removed or exempt global is a finding | `cargo xtask globals` (ADR-0097), part of `cargo xtask checks` |
 | Links from the non-archival markdown into the checkout resolve without climbing out of it: files, `#heading` anchors, and this repository's own `main` URLs | `cargo xtask docs-links` (lychee, offline), part of `cargo xtask checks` |
+| No process markers (`Cycle N`, `Phase B`, wave and slice labels, `PR-N`, spec task ids, `H`-tracker ids) in comments, doc comments, strings, the snake-case pieces of identifiers (`test_t064_x`), Markdown text or TOML/YAML/WGSL files read whole, outside the archival roots | `cargo xtask markers`; allowlist `tools/xtask/allowlists/markers.toml`, exact counts that only shrink |
+| At most 3000 production lines per `.rs` file (test-only modules and items excluded) | `cargo xtask file-length`; allowlist `tools/xtask/allowlists/file-length.toml`, exact counts that only shrink |
 
 ## ADR Policy
 

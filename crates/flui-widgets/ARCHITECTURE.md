@@ -12,6 +12,34 @@ Cross-crate protocol decisions belong in an ADR (`docs/adr/`). What belongs
 here is a decision local to this crate: a widget's internal shape, a callback
 bound, a payload type.
 
+## Module layers
+
+The crate is one crate with a declared import direction between its top-level
+modules. `[package.metadata.flui.modules]` in `Cargo.toml` is the authority:
+`layers` lists the modules bottom to top, and non-test code of a module names
+only modules in lower layers. `cargo xtask module-dag -p flui-widgets` checks
+it, following root re-exports (`crate::SizedBox`) and the `prelude` and
+`__private` relays back to the module that owns each name.
+`cargo xtask module-dag --print-edges` lists the edges it sees.
+
+`#[cfg(test)]` code is exempt, as dev-dependencies are between crates: the
+tests build fixtures from widgets of any layer (`Column` under the overlay
+tests, `SizedBox` under the clip and paint tests).
+
+`interaction` sits above `overlay`, `animated`, `stack` and `clip` because
+`Draggable` and `Dismissible` are composites: `Draggable` inserts its feedback
+into the `Overlay` and `Dismissible` slides its child with a `Stack`, a
+`ClipRect` and a `VsyncScope`, as Flutter's `drag_target.dart` and
+`dismissible.dart` compose the same widgets. The focus widgets (`Focus`,
+`Actions`, `Shortcuts`) live in `interaction` too; they import each other in
+a cycle, so they can become a node of their own only after they move together
+into one module.
+
+A new module takes a place in `layers`; a move that changes the direction
+edits `layers` in the same change, which is where it is reviewed. An edge the
+layers refuse and that cannot move yet goes into `exceptions` with the ADR
+whose change removes it and the date it was added.
+
 ## Mapping decisions
 
 ### 1. `DragTarget` publishes a shared `DragTargetSlot`, not its `State`

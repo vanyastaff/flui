@@ -91,7 +91,7 @@ entry in [open questions](open-questions.md). Decisions already taken are indexe
 | M | The AccessKit action vocabulary drops Expand, Collapse, numeric SetValue and ScrollToPoint, while ADR-0080 advertises expand, collapse and set_value. A pin that checks a mapping exists does not check ADR-0080 coverage | *Map claim* | [interaction_semantics][m-inter] | ADR-0095, with a coverage test |
 | M | `SemanticsHost::announce` (`crates/flui-app/src/app/semantics_host.rs:267`) has no caller outside its tests, so live regions (snackbars, validation errors) never reach the OS | Confirmed by grep | [interaction_semantics][m-inter] | Issue |
 | M | Android `native-activity` may not support soft-keyboard IME, which may need GameActivity (hypothesis). The text-store contract should also follow winit 0.31's IME vocabulary (DeleteSurrounding, purpose and hints) and the coordinated `ui-events-winit` bump | NativeActivity confirmed; the rest unverified | [platform_layer][m-plat], [rendering_text_platform][mk-render] | [ADR-0090](../docs/adr/ADR-0090-ime-pull-text-store-contract.md) |
-| M | `FLUI_HEADLESS` selects the backend through an environment variable, which a static scan for globals cannot see | *Map claim* | [platform_layer][m-plat] | [ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md) allowlist |
+| M | `FLUI_HEADLESS` selects the backend through an environment variable, which a static scan for globals cannot see | *Map claim* | [platform_layer][m-plat] | Recorded as a limit of the gate ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md), "Limits the gate does not claim to cover") |
 | M | The web backend justifies `unsafe impl`s with "SAFETY: WASM is single-threaded" (`crates/flui-platform/src/platforms/web/platform.rs:47`, also `clipboard.rs:24`, `executor.rs:13`). That is unsound once wasm threads are enabled | Confirmed | [platform_layer][m-plat] | Issue; forbid `target_feature = "atomics"` or fix the types |
 | L | `crates/flui-platform/src/lib.rs:296,299` rates Windows "Production 10/10" and Android "Stub 2/10", while `docs/BETA.md` calls Windows experimental | Confirmed | [platform_layer][m-plat] | Doc fix |
 | L | `GestureSettings` does not read the OS double-click time or drag slop | *Map claim* | [interaction_semantics][m-inter] | Issue |
@@ -146,8 +146,9 @@ are cases where the raw research, or the code, disagrees with the reports.
 1. **`realm_dispatch.rs`.** The architecture report and owner decision 4 treat its 7,149
    lines as runtime logic smeared into one file. About 1,690 are production code (section 1).
    [app_runtime_scheduler][m-app] ("mostly tests") is right; [plan_alignment][m-plan]
-   ("production code with no inline tests") is wrong. Moving the tests out fixes the
-   file-length problem without splitting the file.
+   ("production code with no inline tests") is wrong. The file-length gate excludes test-only
+   code, so the file is within the limit as it stands; the one file over it is
+   `crates/flui-scheduler/src/scheduler.rs`.
 2. **Rebuild weight.** Owner decision 5 and the architecture report count engine and widgets
    lines including tests and comments. [engine_painting_text][m-engine] counts about 18.8k
    executable lines in the engine, and the widgets crate carries 14.3k lines in test files

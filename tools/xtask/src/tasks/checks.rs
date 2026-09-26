@@ -8,7 +8,10 @@ use std::process::ExitCode;
 use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
-use crate::{change_scope, docs_links, fonts, toolchain, wgsl, workspace};
+use crate::{
+    change_scope, docs_links, file_length, fonts, globals, markers, module_dag, perf, toolchain,
+    wgsl, workspace,
+};
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
 #[derive(Debug, Clone, Copy)]
@@ -97,7 +100,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 10] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 19] {
     [
         (
             if strict {
@@ -113,9 +116,17 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 10] {
         ("workspace", |args| workspace::workspace(&parsed(args)?)),
         ("reach --self-test", |args| workspace::reach(&parsed(args)?)),
         ("reach", |args| workspace::reach(&parsed(args)?)),
+        ("module-dag --self-test", |args| {
+            module_dag::module_dag(&parsed(args)?)
+        }),
+        ("module-dag", |args| module_dag::module_dag(&parsed(args)?)),
         ("toolchain", |args| toolchain::toolchain(&parsed(args)?)),
         ("wgsl --self-test", |args| wgsl::wgsl(&parsed(args)?)),
         ("wgsl", |args| wgsl::wgsl(&parsed(args)?)),
+        ("globals --self-test", |args| {
+            globals::globals(&parsed(args)?)
+        }),
+        ("globals", |args| globals::globals(&parsed(args)?)),
         ("paths-filter", |args| {
             change_scope::paths_filter(&parsed(args)?)
         }),
@@ -124,6 +135,17 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 10] {
         ("font-assets --package-list", |args| {
             fonts::font_assets(&parsed(args)?)
         }),
+        ("file-length --self-test", |args| {
+            file_length::file_length(&parsed(args)?)
+        }),
+        ("file-length", |args| {
+            file_length::file_length(&parsed(args)?)
+        }),
+        ("markers --self-test", |args| {
+            markers::markers(&parsed(args)?)
+        }),
+        ("markers", |args| markers::markers(&parsed(args)?)),
+        ("perf --self-test", |args| perf::perf(&parsed(args)?)),
     ]
 }
 
@@ -161,11 +183,20 @@ mod tests {
                 "workspace",
                 "reach --self-test",
                 "reach",
+                "module-dag --self-test",
+                "module-dag",
                 "toolchain",
                 "wgsl --self-test",
                 "wgsl",
+                "globals --self-test",
+                "globals",
                 "paths-filter",
                 "font-assets --package-list",
+                "file-length --self-test",
+                "file-length",
+                "markers --self-test",
+                "markers",
+                "perf --self-test",
             ]
         );
         assert_eq!(lines(true)[0], "docs-links --strict");

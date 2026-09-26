@@ -1,0 +1,4 @@
+# Planted markers, read as TOML: the whole file is prose.
+[package]
+name = "planted" # carried over from a step (W0-5). expect: wave
+license = "CC0-1.0"

@@ -372,3 +372,24 @@ order = 1
 # program against a capability trait depend on `flui-platform-api` instead.
 # Examples and tools are applications and are exempt from this list.
 allowed-dependents = ["flui-app"]
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "platforms::android::AndroidPlatform::process_input_events::FIRST_MOTION_SEEN", grant = "ADR-0097", class = "diagnostic", reason = "logs the first motion event at a higher level; no behavior reads it" },
+    { item = "platforms::headless::platform::NEXT_HEADLESS_WINDOW_ID", grant = "ADR-0097", class = "counter", reason = "headless window IDs, advanced by `try_update` so exhaustion is an error" },
+    { item = "platforms::ios::platform::DELEGATE_STATE", grant = "ADR-0097", class = "trampoline", reason = "UIKit delegate methods reach the platform through it; they carry no user-data pointer" },
+    { item = "platforms::macos::display_pass::IN_DISPLAY_PASS", grant = "ADR-0097", class = "process", reason = "marks AppKit's `drawRect:` display pass on the main thread, which the process has once" },
+    { item = "platforms::macos::owner_lane::ON_OWNER_QUEUE", grant = "ADR-0097", class = "process", reason = "marks a block running on the owner GCD queue, which the process has once" },
+    { item = "platforms::macos::owner_lane::owner_queue::Q", grant = "ADR-0097", class = "process", reason = "the owner GCD queue, created once per process" },
+    { item = "platforms::macos::platform::MACOS_CAPABILITIES", grant = "ADR-0097", class = "immutable", reason = "the capability descriptor, a unit value" },
+    { item = "platforms::macos::view::get_or_create_view_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C view class, which the runtime holds once per process" },
+    { item = "platforms::macos::wake_pump::base::BASE", grant = "ADR-0097", class = "immutable", reason = "the wake pump's time base, set once and read for the process's life" },
+    { item = "platforms::macos::window::get_or_create_delegate_class::INIT", grant = "ADR-0097", class = "process", reason = "registers the Objective-C window delegate class, which the runtime holds once per process" },
+    { item = "platforms::windows::clipboard::owner_window::OWNER", grant = "ADR-0097", class = "process", reason = "the message-only window that owns the system clipboard, created once per process" },
+    { item = "platforms::windows::owner_control::REGISTERED", grant = "ADR-0097", class = "process", reason = "the registered Win32 owner-control window class, which Windows holds once per process" },
+    { item = "platforms::windows::platform::REGISTER_WINDOW_CLASS", grant = "ADR-0097", class = "process", reason = "registers the Win32 window class, which Windows holds once per process" },
+    { item = "platforms::windows::platform::WINDOWS_CAPABILITIES", grant = "ADR-0097", class = "immutable", reason = "the capability descriptor, a unit value" },
+    { item = "platforms::winit::platform::ACTIVE_EVENT_LOOP", grant = "ADR-0097", class = "trampoline", reason = "winit's event-loop borrow, reached from its callbacks for same-thread window creation" },
+    { item = "shared::clipboard_lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
+    { item = "shared::clipboard_lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
+    { item = "shared::events::PROCESS_START", grant = "ADR-0097", class = "immutable", reason = "the process start instant, the epoch of event timestamps" },
+]

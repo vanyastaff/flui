@@ -10,6 +10,8 @@ The FLUI workspace contains 28 crates plus the `flui` facade, organized into a s
 
 > **Reach.** `cargo xtask reach` checks what each crate's resolved graph contains, not just its direct edges ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §2): in every root build (the facade under each supported feature combination and each feature alone, every crate at its defaults and with all features), no crate reaches a package its tier forbids in the root `[workspace.metadata.flui.reach]`, or that its own `reach-forbid` adds. A crate that must reach one lists `reach-exceptions = [{ to = "<package>", exit = "ADR-NNNN", reason = "…" }]` (`grant` in place of `exit` for a standing permission): the entry excuses the paths that run through that crate, and an entry that excuses nothing is itself a finding.
 
+> **Process-global state is listed in the manifests too.** Each crate's `[package.metadata.flui] globals` names every `static` and `thread_local!` it keeps outside `#[cfg(test)]`, except immutable data and private `fetch_add`-only ID counters: `{ item = "<path in the crate>", exit = "ADR-NNNN", reason = "…" }` for debt an ADR removes, or `{ item = "…", grant = "ADR-0097", class = "trampoline" | "counter" | "immutable" | "process" | "diagnostic", reason = "…" }` for state that stays. `cargo xtask globals` fails on a global without an entry and on an entry without a global ([ADR-0097](adr/ADR-0097-no-process-global-state-gate.md)); `cargo xtask globals --seed` prints the entries a crate is missing.
+
 ## Tiers
 
 | Tier | Crates, by `order` | `tier-kind` |
@@ -156,7 +158,7 @@ A new crate is a topology change, so it starts with the contract, not the direct
 1. Decide its tier, kind and order, and its layer, from what it depends on: a dependency points to a lower tier or a smaller `order` in the same tier, and to the same layer or lower. The kind states what it promises ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §3).
 2. Add the directory under `crates/<flui-name>/` with a standard layout (`Cargo.toml`, `src/lib.rs`, `src/error.rs`). The manifest inherits the shared `[workspace.package]` keys and the workspace lints, and declares `[package.metadata.flui] tier`, `tier-kind`, `order` (unique in the tier) and `layer = N` (plus `wasm = false`, with the reason beside it, if it cannot build for wasm32).
 3. Add the path to `[workspace.members]` in the root `Cargo.toml`.
-4. Run `cargo xtask workspace`. It fails on a crate without a tier, kind, order or layer, a duplicate order, a dependency against the tier or layer order, a stale `edge-exceptions` entry, a manifest that skips the workspace keys or lints, and a test file an `autotests = false` crate never compiles.
+4. Run `cargo xtask workspace`. It fails on a crate without a tier, kind, order or layer, a duplicate order, a dependency against the tier or layer order, a stale `edge-exceptions` entry, a manifest that skips the workspace keys or lints, and a test file an `autotests = false` crate never compiles. Then run `cargo xtask globals`: a `static` or `thread_local!` the crate keeps needs a `globals` entry, which `cargo xtask globals --seed` prints.
 5. Update this page (`docs/crates.md`) and [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md), the human-readable graph. If the crate changes what an agent should read first, extend the decision tables in [`AGENTS.md`](../AGENTS.md).
 
 ## See Also

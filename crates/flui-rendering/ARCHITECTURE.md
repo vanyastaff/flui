@@ -1099,6 +1099,25 @@ The leaf-only layout method is implemented and exercised through the test harnes
 
 The forwarding wrappers left over from the previous lock-based API are deleted; every call site clears the flags through `entry.state().clear_needs_*()` directly, so the only API surface is `RenderState`.
 
+### Phase counters — SHIPPED
+
+**Files:** [`src/pipeline/owner/counters.rs`](src/pipeline/owner/counters.rs) (`PipelineCounters`), `PipelineOwner::counters` in [`src/pipeline/owner/accessors.rs`](src/pipeline/owner/accessors.rs).
+
+`PipelineOwner::counters()` returns work totals since the owner was constructed. They are monotonic because a frame is not one call on the owner: the layout↔build fixpoint runs `run_layout` several times before the frame's `run_frame`, and the owner has no frame-begin hook. A frame driver reads the counters before and after its frame and takes `after.since(before)`, the same way `layout_roots_total` has always been used. `flui-testing`'s `HeadlessBinding::last_frame_report` is that driver headlessly.
+
+| Counter | Counted where | What it counts |
+|---|---|---|
+| `layout_passes` | `run_layout`, after `take_layout_batch_shallow_first` | non-empty layout batches; a pass with no dirty entry adds nothing |
+| `layout_roots` | the scheduler's `layout_drained_total` | dirty layout entries drained, including ones skipped as already clean |
+| `nodes_laid_out` | `SubtreeArena`'s box and sliver record sites, drained in `layout_dirty_root` | nodes past the clean-child short-circuit; a cache hit and an intrinsic query do not count |
+| `nodes_painted` | `FragmentComposer`, next to `paint_raw` | nodes whose `paint_raw` ran; a grafted boundary is not a paint |
+| `layers_produced` | `FragmentComposer::seal_picture`, `push_layer_node`, and `graft`'s patched indices | layers created fresh this pass, including a layer a composited-layer update patches into a grafted boundary |
+| `layers_reused` | `FragmentComposer::graft`'s unpatched indices | layers cloned unchanged from a clean boundary's retained output |
+| `semantics_nodes_updated` | `run_semantics`, from `SemanticsOwner::flush`'s return | nodes in the delivered accessibility update; 0 when the diff is empty |
+| `frames_produced` | `run_frame` | frames that committed a layer tree |
+
+The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `tests/phase_counters.rs` pins the counting rules on small trees.
+
 ### Criterion frame benchmarks (deferred -- needs workload generator)
 
 **Files:** new `crates/flui-rendering/benches/frame_throughput.rs`.

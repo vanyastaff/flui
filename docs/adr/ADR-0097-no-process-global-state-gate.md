@@ -1,8 +1,11 @@
 # ADR-0097: Process-global state is gated: one trampoline cell, everything else realm-owned
 
-- **Status:** Proposed
+- **Status:** Accepted in part (2026-09-26): §1–§4, the gate (`cargo xtask globals`) and its
+  seeded allowlist; removing each global remains with its exit ADR. For the entries whose exit
+  is this ADR (`TIME_DILATION`, the asset `REGISTRY` and `INTERNER`, `ERROR_VIEW_BUILDER`, the
+  decoded-image `CACHE`), that removal is the part of this ADR still Proposed.
 - **Date:** 2026-09-25
-- **Amends (on acceptance):** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
+- **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
   thread-local `AppRuntime` slot is the sanctioned transitional form" becomes a named,
   permanent exception class: OS-callback trampolines reach exactly one host cell),
   [ADR-0047](ADR-0047-unified-execution-services.md) (execution services stay loop-scoped; any
@@ -19,7 +22,8 @@
 - **Refs:** principle P3 and its gate in the [decision index](../../design/decisions.md); the
   [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md)
 
-Nothing in `crates/` or `tools/` changes as part of this ADR.
+The gate is `tools/xtask/src/globals.rs`; the entries live in the crate manifests. No global is
+removed by this ADR.
 
 ## Context
 
@@ -71,21 +75,42 @@ looks at statics (`tools/xtask/src/tasks/checks.rs:100-123`).
 
 ### 1. `cargo xtask globals` scans every static and thread-local
 
-A new command parses the Rust source of every workspace member's library and binary targets
-with `syn` and reports each `static` item (module-level or inside a function body, `static mut`
-included) and each item inside a `thread_local!` invocation. It skips items under `#[cfg(test)]`,
-and the `tests/`, `benches/` and `examples/` directories, as the other workspace gates exempt
-examples and tools. `Atomic*` statics are findings like any other: `TIME_DILATION` is
-configuration, not an identifier.
+A new command parses the Rust source of the library, proc-macro and bin targets of every crate
+under `crates/` and the facade with `syn`. Applications (`tier-kind = "tool"`: the examples,
+`tools/` and `flui-cli`, whose state belongs to its own process) are not scanned, as the other
+workspace gates exempt them; nor are test, bench, example and build-script targets. The walk
+starts at each target's root and follows `mod x;` as rustc does (`x.rs` or `x/mod.rs`, the
+non-mod-rs directory rule, inline modules, `#[path]`); a declaration that resolves to no file,
+or a file syn cannot parse, fails the gate.
+
+A global is each `static` item at any depth (modules, fn, impl and trait-method bodies, blocks,
+closures, `const` blocks; `static mut` included), each entry of a `thread_local!`, and each
+`static` in the tokens of any other macro invocation or `macro_rules!` body, which catches the
+statics FLUI's own macros emit into their callers (`app_plugin!`). cfg is evaluated three-valued
+with only `test` known false, so an item is skipped only when an enclosing cfg is false whatever
+the build (`#[cfg(test)]`, `all(test, …)`); `any(test, feature = "…")`, `debug_assertions` and
+every platform cfg are scanned, and the result does not depend on the host. `Atomic*` statics are
+findings like any other: `TIME_DILATION` is configuration, not an identifier.
 
 ### 2. Two shapes are exempt; one class is a named exception; everything else is listed
 
-- **Immutable data** is exempt: a `static` whose type is a primitive, a `&'static` reference to
-  immutable data, or an array or slice of those. Anything with a lazy cell, a lock, a `Cell`,
-  a `RefCell` or an atomic is not immutable data.
-- **Monotonic ID counters** are exempt: an `Atomic{U,I}{32,64,size}` static whose every use in
-  its file is `fetch_add`. A counter that is ever `store`d or `load`ed is configuration and is
-  a finding.
+- **Immutable data** is exempt: a non-`mut` `static` (never a thread-local) whose type is a
+  primitive, a shared reference to `str` or to immutable data, an array, slice or tuple of
+  immutable data, or a bare `fn` pointer. Anything with a lazy cell, a lock, a `Cell`, a
+  `RefCell` or an atomic is not immutable data; nor is a type alias or a user type, which the
+  scan cannot see through.
+- **Monotonic ID counters** are exempt: a non-`mut`, non-`pub` (private or `pub(…)`) static of
+  an atomic integer type, initialized with `<type>::new(<integer literal>)`, whose every mention
+  where it is visible (its fn body, its module's files and their descendants, or every file of
+  the target for `pub(…)`) is the declaration, `NAME.fetch_add(<integer literal ≥ 1>, …)` or a
+  `use` path segment without `as`. A counter that is `load`ed, `store`d, borrowed (`&NAME`),
+  named in a macro, or advanced any other way is a finding. The exemption is about isolation,
+  not determinism: an ID that reaches a snapshot is still process-ordered.
+- **The key** of a global is its item path inside the target, from the crate root without
+  `crate::`: fn, impl self-type and trait names are segments, a macro is `name!`, and a bin
+  target's items are prefixed with the bin's name (`text_layout::layout::FONT_SYSTEM`,
+  `registry::AssetRegistry::global::REGISTRY`, `plugin::app_plugin!::__FLUI_APP_STATE`). Line
+  numbers are not part of it; definitions sharing a key under different cfgs are one global.
 - **OS-callback trampolines** are the one named exception class: a thread-local that a function
   invoked by the OS without a user-data pointer (a Win32 window procedure, an AppKit or UIKit
   delegate method, a JNI entry point, winit's event-loop borrow) reads to find its owner. The
@@ -94,28 +119,53 @@ configuration, not an identifier.
   with class `trampoline`, and the gate fails if a crate other than `flui-app` and
   `flui-platform`, or a second cell in the host or in one backend module, claims it. The secondary-window queues
   beside `APP_RUNTIME` are not trampolines; they fold into it or into a realm.
-- **Everything else** is an allowlist entry with a reason and an exit: the ADR or issue whose
+- **Everything else** is an allowlist entry with a reason and either an `exit`, the ADR whose
   change removes it (`FONT_SYSTEM` → ADR-0092; `NAVIGATOR_COMMAND_TARGETS` → ADR-0093;
   `REQUEST_REBUILD` and `REGISTRY_STACK`'s `ManuallyDrop` form → ADR-0094; `TIME_DILATION`
-  → a property of each presentation's frame clock).
+  → this ADR, as a property of each presentation's frame clock), or a permanent
+  `grant = "ADR-0097"` with a `class` the gate checks:
+  - `trampoline` — the one named exception above; it must be a `thread_local!` entry.
+  - `counter` — an atomic integer advanced through a reference (a `try_update` helper behind
+    `&NAME`, which keeps exhaustion an error); no direct `store`, `swap`, `load`, `fetch_sub`,
+    bit-op, `fetch_min`, `compare_exchange*`, `get_mut`, `into_inner` or `as_ptr` on it.
+  - `immutable` — its type names no `Cell`, `RefCell`, `UnsafeCell`, `SyncUnsafeCell`,
+    `OnceCell`, `Mutex`, `RwLock`, `Condvar`, `Once`, `Barrier` or atomic; `OnceLock`,
+    `LazyLock` and `LazyCell` only as the outermost type (a write-once canonical value).
+  - `process` — mirrors a resource the process has once: an OS registration, the system
+    clipboard, a GCD queue, tracing's global dispatcher. Nothing structural is checked; the
+    reason names the resource.
+  - `diagnostic` — a `Once` or `AtomicBool` flag, or an item whose cfg is false in every build
+    without `debug_assertions` (so not `not(debug_assertions)`, nor
+    `any(debug_assertions, …)`), that no behavior reads.
 
 ### 3. The allowlist lives in the manifests, is seeded by the scan, and only shrinks
 
 - Entries go in each crate's `[package.metadata.flui]` as `globals`, following #1283's move of
   rules into the manifests; `globals` joins the keys `cargo xtask workspace` accepts
-  (`tools/xtask/src/workspace.rs:76-82`).
+  (`FLUI_KEYS` in `tools/xtask/src/workspace.rs`). The schema is strict: exactly one of `exit`
+  (an ADR with a file) and `grant`, a class only with a grant, a non-empty reason, no
+  duplicate item, no other key.
 - The PR that adds the gate seeds the allowlist from the scan's own output, in the same PR —
   not from this ADR's table, and not from regex counts.
 - The gate fails on a finding with no entry (a new global) **and** on an entry with no finding
-  (a removed global whose entry was left behind), so the list can only shrink.
+  or for an exempt one (a removed global whose entry was left behind), so the list can only
+  shrink. A moved module changes the key; the report pairs the new global with the stale entry.
+- `cargo xtask globals --seed` prints the skeleton of every unlisted global per crate; it
+  writes nothing, and its empty reasons do not parse until filled in.
 
 ### 4. It reaches the merge path and can fail
 
-`globals --self-test` plants an interior-mutable `static`, a `thread_local!`, an atomic that is
-`store`d, a second trampoline cell, a pure `fetch_add` counter and a stale entry in a scratch
-crate, and asserts the first four and the stale entry are reported and the counter is not. Both
-`globals --self-test` and `globals` join the in-process list of `cargo xtask checks`, and the
-test that pins that list (`checks.rs:149-172`) gains them.
+`globals --self-test` runs the rules over in-memory crates (`tools/xtask/src/globals/fixture.rs`)
+that plant an interior-mutable `static`, a `thread_local!` with no entry, an atomic that is
+`store`d, a `pub` counter, a counter borrowed as `&NAME`, a static under
+`cfg(any(test, feature = …))`, statics inside a `macro_rules!` body, an unknown macro and a
+`quote!` body (`static #name`), a second host trampoline, trampolines outside the host and the
+backends, a stale entry and an entry for an exempt counter, beside silent cases (a private
+`fetch_add` counter, a `&str`, items and a whole module under `#[cfg(test)]`, a `'static`
+lifetime in macro tokens, `(&'static $t:ty)` included), and fails unless
+exactly the planted findings come back. Both `globals --self-test` and `globals` join the
+in-process list of `cargo xtask checks`, and the test that pins that list
+(`the_in_process_checks_include_the_link_check_under_strict` in `checks.rs`) names them.
 
 ### Why a syn scan and not a type or a lint
 
@@ -126,9 +176,24 @@ type that makes an interior-mutable `static` unwritable, and stock clippy has no
 not a text match — a static behind a helper function or a type alias is still an item — and it
 runs on the pinned stable toolchain, which dylint does not.
 
-**Limits the gate does not claim to cover:** statics produced by macro expansion (the scan sees
-source, not expansions; `once_cell` is already refused in workspace manifests by `deny.toml`'s std-replacements check, `deny.toml:120-128`), state
-held in dependencies, and state selected through environment variables such as `FLUI_HEADLESS`.
+**Limits the gate does not claim to cover:**
+
+- Environment-variable selection: `FLUI_HEADLESS` (`crates/flui-platform/src/lib.rs`),
+  `FLUI_SELF_CLOSE_AFTER_MS` and `FLUI_SELF_CLOSE_ROUTE`
+  (`crates/flui-platform/src/platforms/winit/platform.rs`), `FLUI_DX12_NO_DCOMP`
+  (`crates/flui-engine/src/renderer.rs`) choose process-wide behavior without any static.
+- Build-script output pulled in through `include!(concat!(env!("OUT_DIR"), …))`, as the six
+  `crates/flui-engine/src/*/generated.rs` files do: the scan reads the source tree, not
+  `OUT_DIR`. Any other `include!`, and a `mod x;` inside a fn, impl or block body, is an error
+  rather than a file the scan never reads.
+- Expansions of dependency macros and proc-macros. FLUI's own `macro_rules!` and `quote!`
+  bodies are token-scanned; `once_cell` is refused in workspace manifests by `deny.toml`'s
+  std-replacements check.
+- State held in dependencies.
+- `const` items, which are not places; clippy's `declare_interior_mutable_const` covers the
+  interior-mutable ones.
+- Determinism: an exempt counter is isolated from configuration, but an ID that reaches a
+  snapshot is still process-ordered (`design/architecture.md`, "Process-global state").
 
 ## Alternatives considered
 
@@ -158,13 +223,12 @@ held in dependencies, and state selected through environment variables such as `
 
 ## Verification
 
-None of this exists yet: `tools/xtask/src/main.rs` has no `globals` command and
-`tools/xtask/Cargo.toml` does not depend on `syn`.
-
-- `cargo xtask globals --self-test` fails on each planted violation and on the stale entry, and
-  passes the counter (§4).
+- `cargo xtask globals --self-test` reports exactly the planted findings (§4);
+  `cargo test -p xtask globals` pins the self-test both ways and the scan, cfg, counter and
+  allowlist rules.
 - `cargo xtask globals` is green on the seeded allowlist and is part of `cargo xtask checks`,
-  pinned by the checks-list test.
+  pinned by the checks-list test. Adding `static X: std::sync::Mutex<u8> = …;` to any scanned
+  file, or removing a seeded entry, makes it exit 1.
 - Each removal lands with a test that fails with the global back: two realms with different time
   dilation animate at different rates; two realms register different fonts and each shapes only
   with its own; a navigation intent reaches the realm that owns the router.

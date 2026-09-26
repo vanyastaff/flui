@@ -382,6 +382,27 @@ wasm = false",
 }
 
 #[test]
+fn a_modules_table_is_accepted_and_a_non_table_is_an_error() {
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "order = 1",
+        "order = 1\n\n[package.metadata.flui.modules]\nlayers = [[\"*\"]]",
+    );
+    assert_eq!(fixture.findings(), Vec::<String>::new());
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "\n[package.metadata.flui.modules]\nlayers = [[\"*\"]]",
+        "modules = [\"*\"]",
+    );
+    assert!(
+        fixture.error().contains("`modules` must be a table"),
+        "{}",
+        fixture.error()
+    );
+}
+
+#[test]
 fn a_mistyped_or_unknown_flui_key_is_an_error() {
     let fixture = Fixture::new();
     fixture.edit(
@@ -903,4 +924,18 @@ fn the_tiers_match_the_adr_0081_table() {
     ]
     .into();
     assert_eq!(exceptions, seeded);
+}
+
+#[test]
+fn globals_is_an_accepted_manifest_key() {
+    // `cargo xtask globals` validates the entries; `workspace` only accepts
+    // the key.
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "layer = 0",
+        "layer = 0
+globals = [{ item = \"X\", exit = \"ADR-0001\", reason = \"a test\" }]",
+    );
+    assert_eq!(fixture.findings(), Vec::<String>::new());
 }

@@ -100,3 +100,8 @@ tier-kind = "internal"
 order = 7
 # tokio's networking stack (mio) has no wasm32-unknown-unknown support.
 wasm = false
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "registry::AssetRegistry::global::REGISTRY", exit = "ADR-0097", reason = "the process-wide asset registry behind `AssetRegistry::global`; assets become realm-owned" },
+    { item = "types::key::INTERNER", exit = "ADR-0097", reason = "the process-wide asset-key interner, which only grows" },
+]

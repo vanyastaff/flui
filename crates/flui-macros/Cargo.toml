@@ -25,9 +25,9 @@ proc-macro = true
 # promoting them to direct deps of a workspace-owned crate adds zero new
 # lockfile entries.
 proc-macro-crate = "3.5"
-proc-macro2 = "1"
+proc-macro2 = { workspace = true }
 quote = "1"
-syn = { version = "3", features = ["full"] }
+syn = { workspace = true, features = ["full"] }
 
 [features]
 default = []

@@ -3,7 +3,10 @@
 - **Status:** Accepted
 - **Date:** 2026-09-23
 - **Amended:** 2026-09-26 — scanners over structured data return under four conditions; see
-  §4 ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)).
+  §4 ([ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md)); an allowlist entry may also
+  name the ADR that grants it for good ([ADR-0097](ADR-0097-no-process-global-state-gate.md)).
+  2026-09-26 — §4 admits a pattern over prose tokens for a rule about prose
+  (`cargo xtask markers`), and an allowlist exit may be a migration-plan step.
 - **Supersedes:** the capability-acquisition clauses of ADR-0018, ADR-0021, ADR-0030 and
   ADR-0037 (the rule stays, its enforcement moves into the type system); the port methodology
   (`docs/PORT.md`) and its grep gates (`scripts/port-check.sh`,
@@ -103,14 +106,25 @@ only when all four hold:
 1. **No type or stock lint can state the rule.** A type or a clippy lint is still the first
    choice (§1, §2).
 2. **It reads structured data** — `cargo metadata`, a `syn` AST, a TOML table — never a
-   regular expression over source text.
+   regular expression over source text. A rule about prose itself (process markers) matches
+   its patterns only against the comment, doc and string tokens of Rust, the snake-case
+   pieces of Rust identifiers (by separate, narrower patterns), the text events of a
+   Markdown parser, and TOML, YAML and WGSL files read whole as text, and never uses them
+   to decide code structure. WGSL is the one source language read whole: its shaders carry
+   no string literals, and a comment reader for it would be a second lexer to keep.
 3. **It has a `--self-test`** that runs it over a planted violation and fails unless exactly
    the planted findings come back, as `wgsl --self-test` and `workspace --self-test` do, and
    `cargo xtask checks` runs the self-test beside the scan.
 4. **Its allowlist is data, not markers.** It lives in the manifests or a data file, is seeded
-   by the scan's own first run, names the ADR whose change removes each entry, and only
-   shrinks: an entry the scan no longer needs is a finding. No inline comment silences it;
-   inline markers are how the `PORT-CHECK-OK-*` sites reached 396.
+   by the scan's own first run, names the ADR or migration-plan step whose change removes
+   each entry (the gate checks that it exists), or the ADR that grants it for good, and only
+   shrinks: an entry the scan no longer needs is a finding. A permanent grant names its class,
+   which the scan checks as far as the source allows (ADR-0097's `grant`/`class`). No inline
+   comment silences it; inline markers are how the `PORT-CHECK-OK-*` sites reached 396.
+
+`markers` and `file-length` meet the first condition because neither a type nor a stock lint
+reads comments, and no clippy lint counts lines outside `#[cfg(test)]`
+(`clippy::too_many_lines` is per function).
 
 The tier gate meets the first condition because nothing else sees the package graph. Types and
 clippy work inside one crate. Cargo rejects only dependency cycles, not direction.

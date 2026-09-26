@@ -1,0 +1,55 @@
+//! Planted markers for `cargo xtask markers --self-test`, read as a Rust file.
+//! A line that must be reported names its classes after an expect note; every
+//! other line must stay silent. This doc comment is Markdown, so `Phase B` in a
+//! code span is quotation.
+
+// Phase B left this behind. expect: phase-letter
+/// Added by PR-4 for the tracker. expect: pr-label
+pub fn label() -> &'static str {
+    "Cycle 3 string" // expect: cycle
+}
+
+pub fn raw() -> &'static str {
+    r#"Slice 2 raw string"# // expect: slice
+}
+
+/* Wave 2 in a block comment. expect: wave */
+// Follows the W1-A4 step. expect: wave
+// tracker H4 in a code comment. expect: tracker-h
+fn test_t064_x() {} // expect: spec-task
+
+/// rustdoc removes the smallest indent before reading Markdown:
+///
+///    Slice 2 is a paragraph, not an indented code block. expect: slice
+pub fn indented() {}
+
+/** The same holds for a block doc comment.
+
+    Slice 3 after a blank line. expect: slice
+*/
+pub fn indented_block() {}
+
+/**
+ * And for one whose lines start with a star:
+ *
+ *    Wave 4 in a starred block. expect: wave
+ */
+pub fn starred() {}
+
+// Silent from here on: code, quotation and domain words.
+pub enum Phase {
+    A,
+    B,
+}
+pub fn phase() -> Phase {
+    Phase::B
+}
+const W400: u16 = 400;
+// a cycle 0 end in lowercase is domain vocabulary
+// Phase 1: lay out the children, then position them
+// PR #1242 adds it, a history link
+// the keys F1-F12 and the weight W400
+fn nine_slice_advanced() {}
+// run with --slice 1/3 of the suite
+// a plain slice 1 of the work is a label again. expect: slice
+// a heading named H2 in a Rust comment is a tracker id. expect: tracker-h

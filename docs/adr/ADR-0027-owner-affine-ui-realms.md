@@ -5,6 +5,9 @@
 - **Absorbs:** ADR-0027 (engine-wide threading architecture)
 - **Refined by:** ADR-0037 (presentation ownership domains), ADR-0043 (per-presentation trees,
   realm `GlobalKeyScope`), ADR-0045 (the raster lane)
+- **Amended by:** [ADR-0097](ADR-0097-no-process-global-state-gate.md) (the runner's
+  thread-local `AppRuntime` slot is a permanent `trampoline`, the host's only one; every other
+  process-global is listed and gated by `cargo xtask globals`)
 
 Mutable UI state is scoped to an explicit `UiRealm` — a single-owner UI session, structurally
 `!Send + !Sync` — presented through one or more presentations and hosted by one `AppRuntime`.
@@ -285,7 +288,7 @@ reintroducing `Send` on the layout arena's node pointers without a fresh soundne
 ## Open questions
 
 - Owner-affine platform callbacks (event-loop inversion): the runner's thread-local
-  `AppRuntime` slot is the sanctioned transitional form until window callbacks are realm-owned.
+  `AppRuntime` slot is the one host trampoline that OS callbacks reach (ADR-0097).
 - Reentrancy-FIFO bounds and overflow policy for nested-pump event storms (Win32 modal resize).
 - `AppRuntime` teardown versus late platform callbacks — step 0 of §7 verified race-free per
   backend.

@@ -39,6 +39,23 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `ActionName` and `Checked` (`serde`/`schemars` behind features). Every vocabulary enum has
   an `ALL` slice generated from the same list as the enum. `flui-semantics` re-exports the
   semantics enums at their old paths; `tools/desktop-mcp` uses the wire types from here.
+- **`cargo xtask globals`** (ADR-0097): a `syn` scan of every `static`, `thread_local!` entry
+  and `static` in FLUI's own macro tokens outside `#[cfg(test)]`, reconciled against a new
+  `[package.metadata.flui] globals` key in each crate manifest. Debt entries name the ADR that
+  removes them; permanent state is a `grant` under ADR-0097 with a checked class (one
+  `trampoline` in the host and one per platform backend, `counter`, `immutable`, `process`,
+  `diagnostic`). Immutable data and private `fetch_add`-only ID counters are exempt. A global
+  without an entry, or an entry without a global, fails `cargo xtask checks`; `--self-test`
+  runs the rules over planted violations and `--seed` prints a crate's missing entries.
+- **Phase counters and `cargo xtask perf`.** `PipelineOwner::counters()` reports monotonic
+  per-phase work (layout passes and roots, nodes laid out and painted, layers produced and
+  grafted, semantics nodes published, frames produced); `FrameBuildReport` gains `builds_run`
+  (every build, re-entries included) and is `#[non_exhaustive]`; `SemanticsOwner::flush` returns
+  the number of nodes it delivered. `flui-testing` adds `HeadlessBinding::last_frame_report()`
+  (`FrameReport`), and `flui-widgets` a `perf` test target whose idle, 10k-list scroll, text-change and
+  full-reassemble scenarios hold budgets; `cargo xtask perf` compares their counts with
+  `crates/flui-widgets/perf/baseline.toml` (advisory; `--check`, `--bless`, `--self-test`, the
+  last one part of `cargo xtask checks`).
 - **`flui-desktop-mcp`** (`tools/desktop-mcp`, ADR-0080): an MCP server over stdio that lets
   an agent list and capture windows, read the accessibility tree, perform element actions
   and send real input to any desktop application, with a backend-neutral wire contract —

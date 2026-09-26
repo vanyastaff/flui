@@ -60,6 +60,9 @@ impl PipelineOwner<Layout> {
             // to mid_layout_marks; drained back at end of
             // iteration below).
             let dirty_nodes = self.scheduler.take_layout_batch_shallow_first();
+            if !dirty_nodes.is_empty() {
+                self.counters.layout_passes += 1;
+            }
 
             tracing::debug!(
                 "run_layout: sorted order (shallow-first) = {:?}",
@@ -489,7 +492,9 @@ impl PipelineOwner<Layout> {
         let layout_failures = arena.take_layout_failures();
         let layout_successes = arena.take_layout_successes();
         let laid_out = arena.take_laid_out();
+        let laid_out_count = arena.take_laid_out_count();
         drop(arena);
+        self.counters.nodes_laid_out += laid_out_count;
 
         // Flutter marks needs-paint per object at the end of
         // `RenderObject.layout`; this is the same rule, applied once per walk

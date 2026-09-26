@@ -27,8 +27,8 @@ pub use handle::{RenderInvalidationHandle, SendError as DirtySendError};
 pub use notifier::VisualUpdateNotifier;
 pub use owner::{
     AttachRenderSubtreesError, AttachRenderSubtreesFailure, DetachRenderSubtreesError,
-    DetachedRenderSubtrees, PipelineCell, PipelineOwner, ReleaseDetachedRenderSubtreesError,
-    ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
+    DetachedRenderSubtrees, PipelineCell, PipelineCounters, PipelineOwner,
+    ReleaseDetachedRenderSubtreesError, ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
 };
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
 

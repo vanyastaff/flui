@@ -13,7 +13,7 @@ categories = ["gui"]
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
-exclude = ["/ARCHITECTURE.md"]
+exclude = ["/ARCHITECTURE.md", "/perf/"]
 # Root tests/*.rs are consolidated into the single `widgets_it` binary below
 # (one link of the wgpu stack instead of 49) — disable per-file auto-discovery.
 autotests = false
@@ -156,6 +156,14 @@ name = "image_network"
 path = "tests/image_network.rs"
 harness = true
 
+# The counted perf scenarios `cargo xtask perf` runs. A target of its own, not
+# a module of `widgets_it`: it pins the process-global font system and reads
+# `FLUI_PERF_OUT` from the environment.
+[[test]]
+name = "perf"
+path = "tests/perf.rs"
+harness = true
+
 [features]
 default = []
 # ADR-0074 phase-2 prototype: realm-scoped signals in the widget harness and
@@ -209,3 +217,67 @@ layer = 6
 tier = "K"
 tier-kind = "internal"
 order = 3
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "animated::animated_switcher::DEFAULT_LAYOUT_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default layout builder, so an unchanged default compares equal across rebuilds" },
+    { item = "animated::animated_switcher::DEFAULT_TRANSITION_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default transition builder, so an unchanged default compares equal across rebuilds" },
+    { item = "animated::implicitly_animated::default_curve::DEFAULT", grant = "ADR-0097", class = "immutable", reason = "the shared default curve, built once" },
+    { item = "image::decode_cache::CACHE", exit = "ADR-0097", reason = "the process-wide decoded-image cache; it becomes realm-owned" },
+    { item = "navigator::navigator::NAVIGATOR_COMMAND_TARGETS", exit = "ADR-0093", reason = "the owner thread's navigator command routing table" },
+]
+
+[package.metadata.flui.modules]
+# The top-level modules of src/lib.rs, bottom to top (`cargo xtask module-dag`). Production code
+# names a module only in a lower layer; modules in one layer name none of each other. "*" alone in
+# a layer stands for every top-level module not named elsewhere, unchecked among themselves.
+# `#[cfg(test)]` code is exempt, as dev-dependencies are between crates.
+layers = [
+    [
+        "support",
+        "localization",
+        "widget_state",
+        "anchored_box",
+    ],
+    [
+        "layout",
+        "paint",
+        "clip",
+        "semantics",
+        "stack",
+        "wrap",
+        "physical_model",
+        "image",
+        "container",
+        "value_listenable_builder",
+        "async_builders",
+    ],
+    [
+        "flex",
+        "transitions",
+        "overlay",
+    ],
+    [
+        "animated",
+    ],
+    [
+        "interaction",
+    ],
+    [
+        "text",
+        "scroll",
+        "navigator",
+    ],
+    [
+        "icon",
+        "app",
+    ],
+    [
+        "testing",
+        "__test_access",
+    ],
+]
+# Modules of `use` items only: a path through them counts as a path to what they re-export.
+transparent = ["prelude", "__private"]
+# A refused edge, legal until the change in the ADR named by `exit` removes it:
+# { from = "<module>", to = "<module>", exit = "ADR-NNNN", since = "YYYY-MM-DD", reason = "..." }
+exceptions = []
