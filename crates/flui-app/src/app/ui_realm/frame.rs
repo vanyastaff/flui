@@ -471,7 +471,7 @@ impl UiRealm {
             dead_code,
             reason = "the direct-sink entry point is the web runner's production frame path \
                       (wasm32) and the scripted-backend test seam; native production drives \
-                      render_frame_on_lane instead -- see FrameSink's own doc"
+                      render_frame_on_lane instead -- see DirectSink's own doc"
         )
     )]
     pub(crate) fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
@@ -497,7 +497,7 @@ impl UiRealm {
 
     /// The shared frame transaction behind both entry points above. See
     /// [`Self::render_frame_entered`]'s doc for the step-by-step contract.
-    fn render_frame_with_sink<S: crate::app::raster_lane::FrameSink>(&self, sink: &mut S) -> bool {
+    fn render_frame_with_sink<S: flui_runtime::sink::FrameSink>(&self, sink: &mut S) -> bool {
         self.gestures().drain_deferred_arena_resolutions();
         self.gestures().flush_pending_moves();
 
@@ -550,7 +550,7 @@ impl UiRealm {
         // likewise does not use this submit-specific flag.
         let mut retry_needs_repaint = false;
         let mut replay_committed_input = false;
-        use crate::app::raster_lane::SubmitVerdict;
+        use flui_runtime::sink::SubmitVerdict;
         if should_send && let FramePaintOutcome::Painted(scene) = outcome {
             // The frame this scene will become once presented.
             let frame_number = producer.frames_rendered() + 1;

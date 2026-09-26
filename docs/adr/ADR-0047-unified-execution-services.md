@@ -4,7 +4,8 @@
 - **Date:** 2026-08-18
 - **Amended by:** [ADR-0097](ADR-0097-no-process-global-state-gate.md) (execution services stay
   loop-scoped; any process-global executor state is a `cargo xtask globals` entry that only
-  shrinks)
+  shrinks); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (where
+  `ExecutionServices` lives: `flui-runtime`, reachable only by `flui-app`)
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (runtime/scheduling topology is a sanctioned leapfrog zone — Flutter is not the reference here); [Runtime Architecture Execution Plan](../research/2026-08-01-runtime-architecture-execution-plan.md) ("Unify worker, I/O, and service execution with host injection"); [Runtime Dependency Adoption Guide](../research/2026-08-01-runtime-dependency-adoption-guide.md) (`tokio-util` adoption, "another async runtime: do not add")
 - **Issue:** [#557](https://github.com/vanyastaff/flui/issues/557) — between singleton retirement (#553) and the task/worker/service lifecycles (#558) / threaded raster lane (#559)
 
@@ -25,7 +26,7 @@ The runtime architecture study's target is explicit: *"Work is classified by dea
 
 ### One owner, no ambient reach
 
-`AppRuntime` — the loop-scoped composition root — owns exactly one `ExecutionServices` value (`app/execution.rs`, `pub(crate)`). It is resolved at the same known point as `SharedEngineServices` (realm install, `ensure_execution`), shut down at full loop-exit teardown, and reachable only by injection. There is no global accessor, no thread-local, and no way for a library crate to reach the pools. Realms and presentations will receive capability handles from it when #558 defines them; they do not resolve it themselves.
+`AppRuntime` — the loop-scoped composition root — owns exactly one `ExecutionServices` value (`crates/flui-runtime/src/execution.rs`, `pub` in an internal crate whose only allowed normal dependent is `flui-app`, checked by `cargo xtask workspace`). It is resolved at the same known point as `SharedEngineServices` (realm install, `ensure_execution`), shut down at full loop-exit teardown, and reachable only by injection. There is no global accessor and no thread-local; only a host crate (one of `flui-runtime`'s `allowed-dependents`) constructs `ExecutionServices`, and no other workspace crate reaches the pools. Realms and presentations will receive capability handles from it when #558 defines them; they do not resolve it themselves.
 
 ### Work classes are lanes, not a priority enum
 
@@ -65,6 +66,6 @@ Both lanes count in-flight work against a cap; a full lane refuses with `SpawnEr
 ## Consequences
 
 - A managed desktop run now materializes **zero** background worker threads until the first background spawn, instead of `num_cpus` per platform instance at init.
-- Issues #558 (Task/Worker/Service lifecycles, per-task handles, versioned results, owner-lifetime cancellation) and #559 (raster lane) build on these lanes; until they land the spawn lanes have no shipped production caller — an `expect(dead_code)` in `execution.rs` errors the moment one appears, forcing that attribute's removal. A breaking reshape of the seam when those consumers prove it wrong is expected and preferred over shims.
+- Issues #558 (Task/Worker/Service lifecycles, per-task handles, versioned results, owner-lifetime cancellation) and #559 (raster lane) build on these lanes; until they land the spawn lanes have no shipped production caller — an `expect(dead_code)` in `execution.rs` errors the moment one appears, forcing that attribute's removal. (ADR-0049's lifecycle layer became that caller and retired the attribute; since ADR-0083 the services are `pub` in `flui-runtime` and carry no `expect(dead_code)`.) A breaking reshape of the seam when those consumers prove it wrong is expected and preferred over shims.
 - Named residuals: flui-assets' bridged decode path still lazily starts its own single-worker runtime when no handle is injected (1 thread, not full-core; wiring it to the IO lane needs a flui-app → flui-assets edge decision — follow-up under #557); `Priority`/`Task`/`BackgroundExecutor` remain public removal-targets until the follow-up slice.
 - `tokio-util` (default features, `CancellationToken` only) enters the workspace with this — its sanctioned first owning work per the adoption guide.

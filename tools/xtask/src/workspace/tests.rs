@@ -917,6 +917,19 @@ fn the_design_systems_admit_only_the_adr_0028_dependents() {
     }
 }
 
+/// `flui-runtime` holds public execution services that ADR-0047 keeps out of
+/// every library crate's reach, so the host is the one crate allowed a normal
+/// edge to it. Dev edges stay open: tests of other crates may drive it.
+#[test]
+fn the_runtime_admits_only_the_host_as_a_normal_dependent() {
+    let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
+    let members = super::Members::load(&util::repo_root(), &metadata).expect("manifests load");
+    let member = members.by_name()["flui-runtime"];
+    let expected: BTreeSet<String> = ["flui-app"].map(str::to_owned).into();
+    assert_eq!(member.allowed_dependents.as_ref(), Some(&expected));
+    assert_eq!(member.allowed_dev_dependents, None);
+}
+
 /// `(package, tier, tier-kind)`.
 type Placement = (String, Option<String>, String);
 
