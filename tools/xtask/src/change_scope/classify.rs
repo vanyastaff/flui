@@ -57,7 +57,12 @@ pub(super) const HEAVY_TRIGGERS: &[&str] = &[
     "rust-toolchain", // the extensionless form; rustup prefers it over .toml
     ".github/workflows/**",
     // Shaders: clippy only embeds them as strings and no build script parses
-    // them; the first thing that compiles one is a GPU job's shader module.
+    // them, so the fast lane never compiles one (`checks`' `wgsl` step is a
+    // syntactic uniformity check, in every lane). The wide lane adds
+    // live-smoke, whose demo compiles the pipelines it draws with on
+    // lavapipe; gpu-test, which compiles every shader module on WARP, runs
+    // only from the full lane up (merge queue, main), so a shader the demo
+    // does not draw is first compiled there.
     "**/*.wgsl",
     // The `deps` job's advisories step blocks only from the wide lane up, and an
     // edited advisory ignore is exactly what that step judges.
