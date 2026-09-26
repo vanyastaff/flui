@@ -42,12 +42,14 @@ now and expensive once consumers exist, so fix a bad shape instead of working ar
 
 ## Codebase map
 
-27 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
+28 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
 declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtask workspace`);
 `docs/crates.md` is the readable version. Bottom to top:
 
 - **Values & primitives** — `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`
   (View derives).
+- **Contracts** — `flui-protocol` (semantics roles and actions, the agent-protocol wire
+  vocabulary; ADR-0095).
 - **Substrate** — `flui-tree` (tree traits), `flui-platform` (windows, input, IME, clipboard;
   every `windows::*`/`objc2::*` type stays inside it), `flui-scheduler` (frame phases),
   `flui-painting` (records into a `DisplayList`), `flui-interaction` (event routing, gestures),

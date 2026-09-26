@@ -3,7 +3,9 @@
 - **Status:** Proposed. The ADRs this folder relies on (ADR-0081 to ADR-0097) are `Proposed`,
   except ADR-0081, accepted in part on 2026-09-26: its tiers, `order`, direction rule,
   `edge-exceptions` and `tier-kind` declarations are implemented and checked by
-  `cargo xtask workspace`; nothing else described here is implemented. The owner answered the
+  `cargo xtask workspace`; and ADR-0095, accepted in part on 2026-09-26: the `flui-protocol`
+  crate exists and holds `SemanticsRole`, `SemanticsAction` and the ADR-0080 wire vocabulary.
+  Nothing else described here is implemented. The owner answered the
   open questions on 2026-09-25; the ADRs and this folder carry those answers.
 - **Date:** 2026-09-25
 - **Baseline:** `main` at `cab06137d`

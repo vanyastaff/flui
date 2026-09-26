@@ -32,7 +32,7 @@ Layer 3  ── flui-layer, flui-semantics, flui-animation
 Layer 2  ── flui-tree, flui-platform, flui-scheduler, flui-painting,
                 │  flui-interaction, flui-assets
                 │  (interaction → platform, never the reverse)
-Layer 1  ── flui-foundation, flui-macros
+Layer 1  ── flui-foundation, flui-macros, flui-protocol
                 │   (flui-foundation = framework primitives:
                 │    ChangeNotifier, Id system, BindingBase, Key, diagnostics)
 Layer 0  ── flui-geometry, flui-types

@@ -13,7 +13,7 @@ The FLUI workspace contains 28 crates plus the `flui` facade, organized into a s
 | Tier | Crates, by `order` | `tier-kind` |
 |------|--------------------|-------------|
 | V values | `flui-geometry` (1), `flui-types` (2), `flui-macros` (3), `flui-foundation` (4), `flui-tree` (5, deleted by ADR-0081; dependents frozen) | internal |
-| C contracts | none yet (`flui-platform-api`, `flui-protocol`) | — |
+| C contracts | `flui-protocol` (2); `flui-platform-api` planned | stable |
 | S substrate | `flui-log` (1), `flui-scheduler` (2), `flui-painting` (3), `flui-interaction` (4), `flui-semantics` (5), `flui-animation` (6), `flui-assets` (7) | internal |
 | R render machine | `flui-layer` (1), `flui-rendering` (2), `flui-objects` (3), `flui-engine` (4) | internal |
 | K spine and runtime | `flui-view` (1), `flui-testing` (2), `flui-widgets` (3), `flui-localizations` (4, deleted by ADR-0081; dependents frozen) | internal |
@@ -39,6 +39,7 @@ A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members
 |-------|--------|---------|
 | `flui-foundation` | ✅ ACTIVE | Framework primitives: `ChangeNotifier` / `Listenable`, `Id` system, `Key`, the `observe` tree-observer seam (ADR-0040) + `RebuildReason`, the shared structured-field vocabulary in `diagnostics`, error helpers. There is no `BindingBase` — the ambient-singleton machinery it backed was retired workspace-wide. Emits `tracing` events; owns no subscriber. |
 | `flui-macros` | ✅ ACTIVE | Proc-macro crate for framework derives and generated boilerplate |
+| `flui-protocol` | ✅ ACTIVE | The vocabulary shared with tests, devtools and agents ([ADR-0095](adr/ADR-0095-agent-protocol-schema-crate.md)): `SemanticsRole`/`SemanticsAction` (re-exported by `flui-semantics`) and the ADR-0080 wire `Role`/`ActionName`/`Checked` (used by `tools/desktop-mcp`); `serde`/`schemars` behind features. No workspace dependency. |
 
 ## Layer 2 — Substrate
 

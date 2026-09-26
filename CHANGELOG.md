@@ -23,6 +23,11 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Added
 
+- **`flui-protocol`** (ADR-0095, tier C, stable): the vocabulary FLUI shares with tests,
+  devtools and agents — `SemanticsRole` and `SemanticsAction`, and the ADR-0080 wire `Role`,
+  `ActionName` and `Checked` (`serde`/`schemars` behind features). Every vocabulary enum has
+  an `ALL` slice generated from the same list as the enum. `flui-semantics` re-exports the
+  semantics enums at their old paths; `tools/desktop-mcp` uses the wire types from here.
 - **`flui-desktop-mcp`** (`tools/desktop-mcp`, ADR-0080): an MCP server over stdio that lets
   an agent list and capture windows, read the accessibility tree, perform element actions
   and send real input to any desktop application, with a backend-neutral wire contract —
@@ -118,6 +123,9 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Changed
 
+- **`SemanticsRole` and `SemanticsAction` are `#[non_exhaustive]`** (breaking): they moved to
+  `flui-protocol` (still reachable through `flui-semantics`), a `match` over them from another
+  crate needs a wildcard arm, and `values()` is replaced by the `ALL` constant.
 - **`flui_widgets::TextField` renamed to `RawTextField`** (and
   `TextFieldState` to `RawTextFieldState`) — a breaking rename, sanctioned
   pre-1.0. `flui::prelude`'s `TextField` now names `flui_material::TextField`
@@ -177,6 +185,11 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   sender yet (public vending is ADR-0086's), so no application could reach it. A write whose
   presentation has closed is dropped and logged. `SignalSlot::graph` and `SignalSender::slot`
   expose the routing key.
+- **An expandable node can be expanded and collapsed by assistive technology**
+  (`flui-semantics`): AccessKit offers no invoke for a node with an expanded state, and the
+  platform's `Expand`/`Collapse` were dropped, so an agent's or a screen reader's expand did
+  nothing. Both now run the node's tap handler, and the node advertises only the transition
+  its state allows.
 - **`Color::with_opacity` rounds the alpha** (`flui-types`): `0.5` gives 128 and `0.12` gives
   31, the nearest of the 256 steps; it truncated, so a colour built from an opacity could be
   one step more transparent than asked. Flutter's `withOpacity` rounds the same way.
