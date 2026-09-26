@@ -418,6 +418,41 @@ Performance targets defined by the constitution:
 - Frame target: 60 fps on desktop (16 ms frame budget).
 - Hot-path allocations: zero allocations in layout and paint after the initial build.
 
+### Phase counters and the perf baseline
+
+Timings are noisy; counts are not. `PipelineOwner::counters()` reports what the
+pipeline did per phase — layout passes and roots, nodes laid out and painted,
+layers produced and grafted from retained boundaries, semantics nodes
+published, frames produced — as monotonic totals (a frame's work is the
+difference across it; see `crates/flui-rendering/ARCHITECTURE.md`, "Phase
+counters"). `HeadlessBinding::last_frame_report()` pairs that difference with
+`BuildOwner::last_frame_build_report()` (distinct elements rebuilt and builds
+run) for the last pump.
+
+`crates/flui-testing/tests/perf.rs` drives a fixed app — a label over a lazy
+10 000-row list — through an idle 10 s, a one-screen scroll, a one-label change
+and a full reassemble, and asserts budgets on those reports. `cargo xtask perf`
+runs that target with `FLUI_PERF_OUT` set and compares every count with
+`crates/flui-testing/perf/baseline.toml`:
+
+```bash
+cargo nextest run -p flui-testing --test perf   # the budget assertions alone
+cargo xtask perf                                # advisory: prints differences, exits 0
+cargo xtask perf --check                        # any difference fails
+cargo xtask perf --bless                        # rewrite the baseline from this run
+cargo xtask perf --self-test                    # the comparison on planted fixtures (part of `checks`)
+```
+
+The comparison is exact: a count that rose is a regression, and one that fell
+is a finding too, until `--bless` locks the improvement in — otherwise a later
+regression back up to the old value would pass. Commit a re-blessed baseline
+with the change that moved it and say why in the PR. The run writes the merged
+counts to `<target>/perf/current.toml`. The checked-in baseline was blessed on
+Windows. The CI redesign (`design/ci.md`) places an advisory `perf` job in the
+`wide`, `full` and `extended` lanes, blocking at the B1 exit; that job is not in
+the workflows yet, so only `perf --self-test` and the budget assertions are on
+the merge path.
+
 ## Linting
 
 `cargo clippy` is the canonical lint command. The constitution requires `clippy::all` and `clippy::pedantic` at warn level workspace-wide.

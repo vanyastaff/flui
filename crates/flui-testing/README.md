@@ -14,7 +14,8 @@ consumed by path (not published to crates.io). It sits on the framework layer
 beside `flui-widgets` (which takes one sanctioned optional edge into it) and
 below `flui-app`: production apps use `flui-app`'s real event loop; tests use
 this crate's pumped one. The reverse edge — this crate onto the widget catalog
-— is forbidden.
+— is forbidden as a normal dependency; the `perf` test target alone takes it as
+a development edge.
 
 ```rust,ignore
 let mut binding = HeadlessBinding::new();
@@ -37,12 +38,23 @@ Implemented:
   long press is held and a fling is sampled the way the script says.
 - **Accessibility queries** (`a11y`) — the assembled semantics tree as AccessKit
   nodes, queried by role.
+- **Per-frame work counts** — `HeadlessBinding::last_frame_report()` returns a
+  `FrameReport`: the build owner's report (distinct elements rebuilt, builds
+  run) and the pipeline's phase counters (layout passes and roots, nodes laid
+  out and painted, layers produced and reused, semantics nodes published,
+  frames produced) differenced across the last pump.
+- **Counted perf scenarios** (`tests/perf.rs`, its own test target) — a label
+  over a lazy 10 000-row list, driven through idle, scroll, text-change and
+  full-reassemble frames with budget assertions. With `FLUI_PERF_OUT=<dir>` set
+  each scenario writes `<dir>/<scenario>.toml`; `cargo xtask perf` runs them and
+  compares the counts with `perf/baseline.toml`.
 
 This crate is the workspace's **test-support** package, not just one driver.
 Fake platform capabilities and golden-image helpers belong here as they land,
 so a test-only API never has to be smuggled into a shipped crate behind a
 `testing` feature. Where layering forbids the move — `flui_widgets::testing`
-mounts widgets, and this crate may never depend on the widget catalog — the
+mounts widgets, and this crate's library may never depend on the widget
+catalog — the
 harness stays put but is built on the machinery here.
 
 **Dependency rule.** Runtime and framework crates may take a *development*

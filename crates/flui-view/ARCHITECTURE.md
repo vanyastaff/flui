@@ -104,6 +104,14 @@ rebuilds a re-entered element once per re-entry, up to
 build the current drain has not yet reconciled," which is out of scope for
 this change.
 
+The re-entries are visible in `BuildOwner::last_frame_build_report`:
+`elements_built` counts distinct elements (the size of `built_this_frame`),
+so a re-entered element counts once there, while `builds_run` counts every
+completed build, so it counts once per build. The two differ exactly by the
+frame's re-entries (pinned by
+`a_re_entered_element_counts_once_in_elements_built_and_twice_in_builds_run`),
+which is why the perf baseline records both.
+
 **Divergence 3 (`on_build_scheduled` fires mid-drain; Flutter latches its
 frame request through TWO nested guards, one at each level FLUI's
 `schedule` conflates):** at 3.44.0, `BuildOwner.scheduleBuildFor` guards its

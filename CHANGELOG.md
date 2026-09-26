@@ -35,6 +35,15 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   more, and only `flui-app` may depend on `flui-platform` (its `allowed-dependents`).
   `PlatformWindow` and `Platform` stay in `flui-platform`.
 
+- **Phase counters and `cargo xtask perf`.** `PipelineOwner::counters()` reports monotonic
+  per-phase work (layout passes and roots, nodes laid out and painted, layers produced and
+  grafted, semantics nodes published, frames produced); `FrameBuildReport` gains `builds_run`
+  (every build, re-entries included) and is `#[non_exhaustive]`; `SemanticsOwner::flush` returns
+  the number of nodes it delivered. `flui-testing` adds `HeadlessBinding::last_frame_report()`
+  (`FrameReport`) and a `perf` test target whose idle, 10k-list scroll, text-change and
+  full-reassemble scenarios hold budgets; `cargo xtask perf` compares their counts with
+  `crates/flui-testing/perf/baseline.toml` (advisory; `--check`, `--bless`, `--self-test`, the
+  last one part of `cargo xtask checks`).
 - **`flui-desktop-mcp`** (`tools/desktop-mcp`, ADR-0080): an MCP server over stdio that lets
   an agent list and capture windows, read the accessibility tree, perform element actions
   and send real input to any desktop application, with a backend-neutral wire contract —
