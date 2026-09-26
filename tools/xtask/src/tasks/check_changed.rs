@@ -315,7 +315,7 @@ mod tests {
             pkg_args: "-p flui -p flui-material -p flui-web-counter".to_owned(),
             test_args: "-p flui -p flui-material -p flui-web-counter --lib --bins --tests"
                 .to_owned(),
-            features: "--features flui/cupertino,flui/localizations".to_owned(),
+            features: "--features flui/cupertino".to_owned(),
             platform: false,
             cross_platform: false,
             cross_app: true,
@@ -345,7 +345,7 @@ mod tests {
             lines(&plan(&material(), Host::Linux, &all_targets(), true)),
             [
                 "$ cargo clippy -p flui -p flui-material -p flui-web-counter --all-targets --locked -- -D warnings",
-                "$ cargo nextest run -p flui -p flui-material -p flui-web-counter --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino,flui/localizations",
+                "$ cargo nextest run -p flui -p flui-material -p flui-web-counter --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino",
                 "$ RUSTDOCFLAGS='-D warnings' cargo doc -p flui -p flui-material -p flui-web-counter --features flui/testing --no-deps --locked --document-private-items",
                 "$ cargo test -p flui -p flui-material --locked --doc",
                 "$ CC_aarch64_linux_android=clang CFLAGS_aarch64_linux_android=--target=aarch64-linux-android21 AR_aarch64_linux_android=ar cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings",

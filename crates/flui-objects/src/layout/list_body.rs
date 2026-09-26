@@ -2,6 +2,7 @@
 //!
 //! Flutter parity: `rendering/list_body.dart` `RenderListBody`.
 
+use flui_foundation::Variable;
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
@@ -11,7 +12,6 @@ use flui_rendering::{
     parent_data::ListBodyParentData,
     traits::{RenderBox, TextBaseline},
 };
-use flui_tree::Variable;
 use flui_types::{
     Axis, Offset, Pixels, Size,
     geometry::px,

@@ -151,6 +151,7 @@ fn a_boundary_nested_in_a_relayout_subtree_is_queued_for_paint() {
 /// the box path has to test for.
 #[test]
 fn a_sliver_repaint_boundary_that_laid_out_is_queued_for_paint() {
+    use flui_foundation::Leaf;
     use flui_objects::RenderViewport;
     use flui_rendering::{
         constraints::SliverGeometry,
@@ -158,7 +159,6 @@ fn a_sliver_repaint_boundary_that_laid_out_is_queued_for_paint() {
         testing::sliver_node,
         traits::RenderSliver,
     };
-    use flui_tree::Leaf;
     use flui_types::layout::AxisDirection;
 
     /// A sliver that declares itself a repaint boundary and produces a fixed

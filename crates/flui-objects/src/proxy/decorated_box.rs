@@ -8,8 +8,8 @@
 //! geometry (rounded corners exclude the rect's corners), then to the
 //! child.
 
+use flui_foundation::Single;
 use flui_painting::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
-use flui_tree::Single;
 use flui_types::{Offset, Pixels, Point, Rect, Size, styling::BoxDecoration};
 
 use flui_rendering::{

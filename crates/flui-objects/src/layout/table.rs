@@ -48,8 +48,8 @@
 
 use std::collections::HashMap;
 
+use flui_foundation::Variable;
 use flui_painting::{DecorationPaintOptions, paint_box_decoration, paint_table_border};
-use flui_tree::Variable;
 use flui_types::{
     Offset, Pixels, Rect, Size,
     layout::{TableCellVerticalAlignment, TableColumnWidth},

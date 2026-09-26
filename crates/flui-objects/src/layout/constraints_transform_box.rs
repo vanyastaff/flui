@@ -41,7 +41,7 @@
 //! plain queryable flag instead, matching the precedent already established
 //! by [`super::fitted_box::RenderFittedBox::has_visual_overflow`].
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{
     Alignment, Axis, Offset, Pixels, Point, Rect, Size, geometry::px, painting::Clip,
 };

@@ -17,7 +17,7 @@
 //! (IEEE-754: `x * 0.5 == x / 2.0`), so all bounded `harness_center_*` tests
 //! remain green without modification.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Alignment, Size};
 
 use crate::layout::{

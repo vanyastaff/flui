@@ -22,7 +22,7 @@
 //! right-to-left. Both default to unflipped (`Ltr`, `Down`), which is the
 //! behaviour every caller predating this had.
 
-use flui_tree::Variable;
+use flui_foundation::Variable;
 use flui_types::{
     Axis, Offset, Pixels, Point, Rect, Size, geometry::px, layout::VerticalDirection,
     painting::Clip, typography::TextDirection,

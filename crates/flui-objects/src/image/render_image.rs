@@ -5,7 +5,7 @@
 //! and alignment.
 
 use flui_foundation::Diagnosticable;
-use flui_tree::Leaf;
+use flui_foundation::Leaf;
 use flui_types::{Offset, Pixels, Point, Rect, Size, painting::Image};
 
 use flui_rendering::{

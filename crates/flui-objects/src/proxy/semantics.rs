@@ -5,7 +5,7 @@
 //! `rendering/proxy_box.dart`. Layout, paint, and hit-testing are transparent
 //! single-child proxy behavior; only the semantics hooks differ.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 
 use flui_rendering::{
     parent_data::BoxParentData,

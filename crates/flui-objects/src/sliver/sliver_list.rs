@@ -28,8 +28,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use flui_foundation::Variable;
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-use flui_tree::Variable;
 
 use flui_rendering::{
     constraints::SliverGeometry,

@@ -29,11 +29,10 @@ SemanticsNode (this crate)  —  SemanticsTree (slab storage, 1-based SemanticsI
 Platform accessibility API (via flui-platform backends)
 ```
 
-- `SemanticsTree` implements the generic `flui-tree` traits (`TreeRead`,
-  `TreeNav`, `TreeWrite`), so tree walks share the workspace's cycle-guarded
-  iterators.
-- `add_child` enforces cycle rejection at the public API; the `Ancestors`
-  iterator adds defence-in-depth bounding against corrupted parent pointers.
+- `SemanticsTree::remove` cascades to descendants, children before their
+  parent, over an explicit stack; `remove_shallow` removes one node.
+- `add_child` enforces cycle rejection at the public API; `remove` and the
+  ancestor walk add defence-in-depth bounding against corrupted links.
 - Labels/hints use `SmolStr` (O(1) clone), children/actions use `SmallVec`,
   lookups use `FxHashMap`.
 

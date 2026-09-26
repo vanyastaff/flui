@@ -22,6 +22,7 @@
 //! all has size zero and paints nothing regardless, so a single-pass test
 //! passes with the gate removed. (It did — that version was written first.)
 
+use flui_foundation::Variable;
 use flui_objects::RenderColoredBox;
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -30,7 +31,6 @@ use flui_rendering::{
     testing::{Probe, RenderTester, box_node},
     traits::RenderBox,
 };
-use flui_tree::Variable;
 use flui_types::{Offset, Size, geometry::px};
 
 /// Lays out and positions children `0..laid_out`, stacked vertically, and
@@ -455,20 +455,20 @@ fn the_residue_scan_evicts_after_a_failed_pass_cleared_the_flag() {
     struct PaintCounter(Arc<AtomicUsize>);
     impl flui_foundation::Diagnosticable for PaintCounter {}
     impl RenderBox for PaintCounter {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = BoxParentData;
         fn perform_layout(
             &mut self,
-            ctx: &mut BoxLayoutContext<'_, flui_tree::Leaf, BoxParentData>,
+            ctx: &mut BoxLayoutContext<'_, flui_foundation::Leaf, BoxParentData>,
         ) -> Size {
             ctx.constrain(Size::new(px(10.0), px(10.0)))
         }
-        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
         fn hit_test(
             &self,
-            _ctx: &mut BoxHitTestContext<'_, flui_tree::Leaf, BoxParentData>,
+            _ctx: &mut BoxHitTestContext<'_, flui_foundation::Leaf, BoxParentData>,
         ) -> bool {
             false
         }
@@ -478,15 +478,15 @@ fn the_residue_scan_evicts_after_a_failed_pass_cleared_the_flag() {
     struct PoisonOnDemand(Arc<AtomicBool>);
     impl flui_foundation::Diagnosticable for PoisonOnDemand {}
     impl RenderBox for PoisonOnDemand {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = BoxParentData;
         fn perform_layout(
             &mut self,
-            ctx: &mut BoxLayoutContext<'_, flui_tree::Leaf, BoxParentData>,
+            ctx: &mut BoxLayoutContext<'_, flui_foundation::Leaf, BoxParentData>,
         ) -> Size {
             ctx.constrain(Size::new(px(10.0), px(10.0)))
         }
-        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_tree::Leaf>) {
+        fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
             assert!(
                 !self.0.load(Ordering::Relaxed),
                 "PoisonOnDemand: armed, poisoning this paint pass on purpose",
@@ -494,7 +494,7 @@ fn the_residue_scan_evicts_after_a_failed_pass_cleared_the_flag() {
         }
         fn hit_test(
             &self,
-            _ctx: &mut BoxHitTestContext<'_, flui_tree::Leaf, BoxParentData>,
+            _ctx: &mut BoxHitTestContext<'_, flui_foundation::Leaf, BoxParentData>,
         ) -> bool {
             false
         }

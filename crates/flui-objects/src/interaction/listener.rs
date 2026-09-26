@@ -15,7 +15,7 @@
 //! `pointer_target` (advertising the identity) differ from a transparent
 //! proxy.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Offset, Size};
 
 use flui_rendering::{

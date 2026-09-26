@@ -1,5 +1,6 @@
 //! `RenderSliverFillViewport` — direct Box children with viewport-sized extents.
 
+use flui_foundation::Leaf;
 use flui_objects::RenderSliverFillViewport;
 use flui_rendering::{
     constraints::SliverConstraints,
@@ -9,7 +10,6 @@ use flui_rendering::{
     testing::inspect,
     traits::RenderBox,
 };
-use flui_tree::Leaf;
 use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
 
 use crate::common::{
@@ -78,12 +78,12 @@ struct SliverHost {
 impl flui_foundation::Diagnosticable for SliverHost {}
 
 impl RenderBox for SliverHost {
-    type Arity = flui_tree::Variable;
+    type Arity = flui_foundation::Variable;
     type ParentData = BoxParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut BoxLayoutContext<'_, flui_tree::Variable, Self::ParentData>,
+        ctx: &mut BoxLayoutContext<'_, flui_foundation::Variable, Self::ParentData>,
     ) -> Size {
         if ctx.child_count() > 0 {
             let _ = ctx.layout_sliver_child(0, self.constraints);
@@ -93,7 +93,7 @@ impl RenderBox for SliverHost {
 
     fn hit_test(
         &self,
-        ctx: &mut BoxHitTestContext<'_, flui_tree::Variable, Self::ParentData>,
+        ctx: &mut BoxHitTestContext<'_, flui_foundation::Variable, Self::ParentData>,
     ) -> bool {
         ctx.hit_test_child_at_layout_offset(0)
     }

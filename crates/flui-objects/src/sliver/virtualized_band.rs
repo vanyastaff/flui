@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
 
-use flui_tree::Variable;
+use flui_foundation::Variable;
 use flui_types::geometry::px;
 use flui_types::layout::AxisDirection;
 

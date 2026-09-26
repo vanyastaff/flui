@@ -4,6 +4,8 @@
 - **Date:** 2026-07-16
 - **Amended:** 2026-09-23 — enforced through the design systems' own manifests
   (`allowed-dependents`, `allowed-dev-dependents`) instead of a registry.
+- **Amended by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (2026-09-26) —
+  `flui-localizations` is deleted, so the exemption set is `flui-app` and the facade.
 - **Related:** ADR-0041 (the whole-workspace layer policy this rule is one part of)
 
 ## Context
@@ -18,13 +20,11 @@ later `flui-cupertino` cannot exist without dragging Material along.
 ## Decision
 
 **Core never depends on a design system.** No workspace crate other than `flui-material`,
-`flui-cupertino`, `flui-localizations`, `flui-app` and the `flui` facade may declare a
+`flui-cupertino`, `flui-app` and the `flui` facade may declare a
 dependency — normal, dev or build — on `flui-material` or `flui-cupertino`.
-Both design systems list exactly those three in `allowed-dependents` and
+Both design systems list exactly those two in `allowed-dependents` and
 `allowed-dev-dependents` (`[package.metadata.flui]`), which `cargo xtask workspace` enforces;
-examples and tools, being applications, are exempt. The `flui-localizations`
-exception is one-way: ADR-0041 forbids either design system from depending back on it.
-Material and Cupertino do not depend on each other.
+examples and tools, being applications, are exempt. Material and Cupertino do not depend on each other.
 
 **Shared substrate lives below both design systems.** Material and Cupertino share more than
 the interaction mechanism: ink/splash, surface tint, elevation and shadow, and the

@@ -1015,11 +1015,6 @@ pub(super) mod tests {
                 .contains(&"flui".to_owned())
         );
         assert!(
-            scope(&["crates/flui-localizations/src/lib.rs"])
-                .packages
-                .contains(&"flui".to_owned())
-        );
-        assert!(
             scope(&["crates/flui-assets/src/lib.rs"])
                 .packages
                 .contains(&"flui-widgets".to_owned())

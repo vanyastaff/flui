@@ -18,8 +18,8 @@
 use std::sync::Arc;
 
 use flui_foundation::Diagnosticable;
+use flui_foundation::Leaf;
 use flui_painting::{Paint, TextLayout};
-use flui_tree::Leaf;
 use flui_types::typography::{TextDirection, TextStyle};
 use flui_types::{Color, Offset, Point, Rect, Size, geometry::px};
 

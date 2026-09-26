@@ -8,7 +8,7 @@
 //! geometry formulas.
 
 use flui_foundation::Diagnosticable;
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{
     Offset,
     geometry::px,

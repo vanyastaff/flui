@@ -2369,7 +2369,7 @@ mod tests {
     use std::sync::Arc;
 
     use flui_foundation::Diagnosticable;
-    use flui_tree::{Leaf, Single};
+    use flui_foundation::{Leaf, Single};
     use flui_types::{Size, geometry::px};
 
     use crate::{

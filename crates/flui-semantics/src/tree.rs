@@ -1,14 +1,9 @@
 //! SemanticsTree - Slab-based storage for semantics nodes
 //!
 //! This module provides the SemanticsTree struct for managing the accessibility
-//! tree. It implements `TreeRead<SemanticsId>` and `TreeNav<SemanticsId>` from
-//! flui-tree, enabling generic tree algorithms and visitors.
+//! tree: slab storage, parent/child links, and the cascading [`SemanticsTree::remove`].
 
 use flui_foundation::{ElementId, SemanticsId};
-use flui_tree::{
-    TreeNav, TreeRead, TreeWrite,
-    iter::{Ancestors, DescendantsWithDepth},
-};
 use rustc_hash::{FxHashMap, FxHashSet};
 use slab::Slab;
 use smallvec::SmallVec;
@@ -42,7 +37,6 @@ use crate::node::SemanticsNode;
 ///
 /// ```rust
 /// use flui_semantics::{SemanticsNode, SemanticsTree};
-/// use flui_tree::TreeRead;
 ///
 /// let mut tree = SemanticsTree::new();
 ///
@@ -240,21 +234,55 @@ impl SemanticsTree {
         Some(node)
     }
 
-    // NOTE: the inherent `pub fn remove` that used to live here was
-    // deleted in favour of [`flui_tree::TreeWrite::remove`] (the trait's
-    // default cascade impl). The behaviour is identical — post-order
-    // cascade via `children()` walks, parent unlink via
-    // `remove_shallow`, root reset.
-    //
-    // Callers go through the trait method now:
-    //
-    // ```rust
-    // use flui_tree::TreeWrite;
-    // let _ = tree.remove(id);   // cascade
-    // ```
-    //
-    // The inherent `remove_shallow` is the trait primitive and covers
-    // the reparenting opt-out.
+    /// Removes `id` and every descendant, children before their parent
+    /// (each through [`Self::remove_shallow`], so parent links, the root,
+    /// the dirty set and the stable index stay consistent), and returns the
+    /// removed `id` node.
+    ///
+    /// Returns `None` if `id` is not live, or — with a `tracing::warn!` and
+    /// nothing removed — if the pre-walk meets a node twice. That is a
+    /// corrupted cycle: [`Self::add_child`] rejects every link that would
+    /// create one, so only direct node edits through [`Self::get_mut`] can.
+    ///
+    /// The pre-walk keeps its own stack, so a deep subtree costs no Rust
+    /// stack. Use [`Self::remove_shallow`] to remove one node and orphan its
+    /// children instead.
+    pub fn remove(&mut self, id: SemanticsId) -> Option<SemanticsNode> {
+        if !self.contains(id) {
+            return None;
+        }
+
+        // Pre-walk: every descendant lands after its parent in `worklist`.
+        let mut worklist: SmallVec<[SemanticsId; 32]> = SmallVec::new();
+        let mut to_visit: SmallVec<[SemanticsId; 32]> = SmallVec::new();
+        let mut visited: FxHashSet<SemanticsId> = FxHashSet::default();
+        to_visit.push(id);
+        while let Some(current) = to_visit.pop() {
+            if !visited.insert(current) {
+                tracing::warn!(
+                    ?current,
+                    ?id,
+                    "SemanticsTree::remove met a node twice (the tree holds a cycle); \
+                     nothing removed"
+                );
+                return None;
+            }
+            worklist.push(current);
+            if let Some(node) = self.get(current) {
+                to_visit.extend(node.children().iter().copied());
+            }
+        }
+
+        // Drain in reverse: children are removed before their parents.
+        let mut removed_root = None;
+        for node_id in worklist.into_iter().rev() {
+            let removed = self.remove_shallow(node_id);
+            if node_id == id {
+                removed_root = removed;
+            }
+        }
+        removed_root
+    }
 
     /// Removes a single SemanticsNode from the tree **without**
     /// cascading to descendants. Descendants are orphaned in storage
@@ -320,6 +348,17 @@ impl SemanticsTree {
         self.root = None;
         self.dirty.clear();
         self.stable_index.clear();
+    }
+
+    /// Whether `ancestor` is a strict ancestor of `descendant` (a node is not
+    /// its own ancestor).
+    ///
+    /// Walks `descendant`'s parent chain. The walk stops after `len()` steps,
+    /// so a corrupted parent cycle cannot make it loop forever.
+    fn is_ancestor_of(&self, ancestor: SemanticsId, descendant: SemanticsId) -> bool {
+        std::iter::successors(self.parent(descendant), |&id| self.parent(id))
+            .take(self.len())
+            .any(|id| id == ancestor)
     }
 
     // ========== Tree Operations ==========
@@ -637,135 +676,12 @@ impl Default for SemanticsTree {
 }
 
 // ============================================================================
-// TREE READ IMPLEMENTATION
-// ============================================================================
-
-impl TreeRead<SemanticsId> for SemanticsTree {
-    type Node = SemanticsNode;
-
-    const DEFAULT_CAPACITY: usize = 64;
-    const INLINE_THRESHOLD: usize = 16;
-
-    #[inline]
-    fn get(&self, id: SemanticsId) -> Option<&Self::Node> {
-        SemanticsTree::get(self, id)
-    }
-
-    #[inline]
-    fn contains(&self, id: SemanticsId) -> bool {
-        SemanticsTree::contains(self, id)
-    }
-
-    #[inline]
-    fn len(&self) -> usize {
-        SemanticsTree::len(self)
-    }
-
-    #[inline]
-    fn node_ids(&self) -> impl Iterator<Item = SemanticsId> + '_ {
-        self.nodes
-            .iter()
-            .map(|(index, _)| SemanticsId::new(index + 1))
-    }
-}
-
-// ============================================================================
-// TREE NAV IMPLEMENTATION
-// ============================================================================
-
-impl TreeNav<SemanticsId> for SemanticsTree {
-    const MAX_DEPTH: usize = 64; // Accessibility trees can be deeper than layer trees
-    const AVG_CHILDREN: usize = 4;
-
-    #[inline]
-    fn parent(&self, id: SemanticsId) -> Option<SemanticsId> {
-        SemanticsTree::parent(self, id)
-    }
-
-    #[inline]
-    fn children(&self, id: SemanticsId) -> impl Iterator<Item = SemanticsId> + '_ {
-        self.get(id)
-            .map(|node| node.children().iter().copied())
-            .into_iter()
-            .flatten()
-    }
-
-    #[inline]
-    fn ancestors(&self, start: SemanticsId) -> impl Iterator<Item = SemanticsId> + '_ {
-        Ancestors::new(self, start)
-    }
-
-    #[inline]
-    fn descendants(&self, root: SemanticsId) -> impl Iterator<Item = (SemanticsId, usize)> + '_ {
-        DescendantsWithDepth::new(self, root)
-    }
-
-    #[inline]
-    fn siblings(&self, id: SemanticsId) -> impl Iterator<Item = SemanticsId> + '_ {
-        let parent = self.parent(id);
-        parent.into_iter().flat_map(move |p| {
-            self.get(p)
-                .map(|node| node.children().iter().copied())
-                .into_iter()
-                .flatten()
-                .filter(move |&c| c != id)
-        })
-    }
-
-    #[inline]
-    fn child_count(&self, id: SemanticsId) -> usize {
-        self.get(id).map_or(0, |node| node.children().len())
-    }
-
-    #[inline]
-    fn has_children(&self, id: SemanticsId) -> bool {
-        self.get(id).is_some_and(|node| !node.children().is_empty())
-    }
-}
-
-// ============================================================================
-// TREE WRITE IMPLEMENTATION
-// ============================================================================
-//
-// Hoists the cascade-by-default `remove` from the inherent API up to
-// the unified [`TreeWrite`] trait so every tree type shares one removal
-// contract. Callers now write `use flui_tree::TreeWrite; tree.remove(id);`
-// and get cascade automatically. The inherent `SemanticsTree::remove_shallow`
-// is the trait primitive; the trait default `remove` walks descendants and
-// calls `remove_shallow`.
-
-impl TreeWrite<SemanticsId> for SemanticsTree {
-    #[inline]
-    fn get_mut(&mut self, id: SemanticsId) -> Option<&mut Self::Node> {
-        SemanticsTree::get_mut(self, id)
-    }
-
-    #[inline]
-    fn insert(&mut self, node: Self::Node) -> SemanticsId {
-        SemanticsTree::insert(self, node)
-    }
-
-    #[inline]
-    fn remove_shallow(&mut self, id: SemanticsId) -> Option<Self::Node> {
-        SemanticsTree::remove_shallow(self, id)
-    }
-
-    #[inline]
-    fn clear(&mut self) {
-        SemanticsTree::clear(self);
-    }
-}
-
-// ============================================================================
 // TESTS
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    // `tree.remove(id)` resolves through the unified `TreeWrite` trait
-    // now, not an inherent method.
-    use flui_tree::TreeWrite;
 
     #[test]
     fn test_semantics_tree_new() {
@@ -999,15 +915,14 @@ mod tests {
         assert_eq!(dirty[0], id1);
     }
 
-    // ========== TreeRead Trait Tests ==========
+    // ========== Read and navigation ==========
 
     #[test]
     fn test_tree_read_get() {
         let mut tree = SemanticsTree::new();
         let id = tree.insert(SemanticsNode::new());
 
-        let node: Option<&SemanticsNode> = TreeRead::get(&tree, id);
-        assert!(node.is_some());
+        assert!(tree.get(id).is_some());
     }
 
     #[test]
@@ -1015,35 +930,33 @@ mod tests {
         let mut tree = SemanticsTree::new();
         let id = tree.insert(SemanticsNode::new());
 
-        assert!(TreeRead::contains(&tree, id));
-        assert!(!TreeRead::contains(&tree, SemanticsId::new(999)));
+        assert!(tree.contains(id));
+        assert!(!tree.contains(SemanticsId::new(999)));
     }
 
     #[test]
     fn test_tree_read_len() {
         let mut tree = SemanticsTree::new();
-        assert_eq!(TreeRead::<SemanticsId>::len(&tree), 0);
+        assert_eq!(tree.len(), 0);
 
         let _ = tree.insert(SemanticsNode::new());
-        assert_eq!(TreeRead::<SemanticsId>::len(&tree), 1);
+        assert_eq!(tree.len(), 1);
 
         let _ = tree.insert(SemanticsNode::new());
-        assert_eq!(TreeRead::<SemanticsId>::len(&tree), 2);
+        assert_eq!(tree.len(), 2);
     }
 
     #[test]
-    fn test_tree_read_node_ids() {
+    fn test_tree_read_semantics_ids() {
         let mut tree = SemanticsTree::new();
         let id1 = tree.insert(SemanticsNode::new());
         let id2 = tree.insert(SemanticsNode::new());
 
-        let ids: Vec<_> = TreeRead::<SemanticsId>::node_ids(&tree).collect();
+        let ids: Vec<_> = tree.semantics_ids().collect();
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&id1));
         assert!(ids.contains(&id2));
     }
-
-    // ========== TreeNav Trait Tests ==========
 
     #[test]
     fn test_tree_nav_parent() {
@@ -1053,8 +966,8 @@ mod tests {
 
         tree.add_child(parent_id, child_id);
 
-        assert_eq!(TreeNav::parent(&tree, child_id), Some(parent_id));
-        assert_eq!(TreeNav::parent(&tree, parent_id), None);
+        assert_eq!(tree.parent(child_id), Some(parent_id));
+        assert_eq!(tree.parent(parent_id), None);
     }
 
     #[test]
@@ -1067,143 +980,7 @@ mod tests {
         tree.add_child(parent_id, child1_id);
         tree.add_child(parent_id, child2_id);
 
-        let children: Vec<_> = TreeNav::children(&tree, parent_id).collect();
-        assert_eq!(children.len(), 2);
-        assert!(children.contains(&child1_id));
-        assert!(children.contains(&child2_id));
-    }
-
-    #[test]
-    fn test_tree_nav_ancestors() {
-        let mut tree = SemanticsTree::new();
-        let root_id = tree.insert(SemanticsNode::new());
-        let child_id = tree.insert(SemanticsNode::new());
-        let grandchild_id = tree.insert(SemanticsNode::new());
-
-        tree.add_child(root_id, child_id);
-        tree.add_child(child_id, grandchild_id);
-
-        let ancestors: Vec<_> = TreeNav::ancestors(&tree, grandchild_id).collect();
-        assert_eq!(ancestors, vec![grandchild_id, child_id, root_id]);
-    }
-
-    #[test]
-    fn test_tree_nav_descendants() {
-        let mut tree = SemanticsTree::new();
-        let root_id = tree.insert(SemanticsNode::new());
-        let child_id = tree.insert(SemanticsNode::new());
-        let grandchild_id = tree.insert(SemanticsNode::new());
-
-        tree.add_child(root_id, child_id);
-        tree.add_child(child_id, grandchild_id);
-
-        let descendants: Vec<_> = TreeNav::descendants(&tree, root_id).collect();
-        assert_eq!(descendants.len(), 3);
-        assert_eq!(descendants[0], (root_id, 0));
-        assert_eq!(descendants[1], (child_id, 1));
-        assert_eq!(descendants[2], (grandchild_id, 2));
-    }
-
-    #[test]
-    fn test_tree_nav_siblings() {
-        let mut tree = SemanticsTree::new();
-        let parent_id = tree.insert(SemanticsNode::new());
-        let child1_id = tree.insert(SemanticsNode::new());
-        let child2_id = tree.insert(SemanticsNode::new());
-        let child3_id = tree.insert(SemanticsNode::new());
-
-        tree.add_child(parent_id, child1_id);
-        tree.add_child(parent_id, child2_id);
-        tree.add_child(parent_id, child3_id);
-
-        let siblings: Vec<_> = TreeNav::siblings(&tree, child2_id).collect();
-        assert_eq!(siblings.len(), 2);
-        assert!(siblings.contains(&child1_id));
-        assert!(siblings.contains(&child3_id));
-        assert!(!siblings.contains(&child2_id));
-    }
-
-    #[test]
-    fn test_tree_nav_child_count() {
-        let mut tree = SemanticsTree::new();
-        let parent_id = tree.insert(SemanticsNode::new());
-        let child1_id = tree.insert(SemanticsNode::new());
-        let child2_id = tree.insert(SemanticsNode::new());
-
-        assert_eq!(TreeNav::child_count(&tree, parent_id), 0);
-
-        tree.add_child(parent_id, child1_id);
-        assert_eq!(TreeNav::child_count(&tree, parent_id), 1);
-
-        tree.add_child(parent_id, child2_id);
-        assert_eq!(TreeNav::child_count(&tree, parent_id), 2);
-    }
-
-    #[test]
-    fn test_tree_nav_has_children() {
-        let mut tree = SemanticsTree::new();
-        let parent_id = tree.insert(SemanticsNode::new());
-        let child_id = tree.insert(SemanticsNode::new());
-
-        assert!(!TreeNav::has_children(&tree, parent_id));
-
-        tree.add_child(parent_id, child_id);
-        assert!(TreeNav::has_children(&tree, parent_id));
-    }
-
-    #[test]
-    fn test_tree_nav_is_leaf() {
-        let mut tree = SemanticsTree::new();
-        let parent_id = tree.insert(SemanticsNode::new());
-        let child_id = tree.insert(SemanticsNode::new());
-
-        assert!(TreeNav::is_leaf(&tree, parent_id));
-
-        tree.add_child(parent_id, child_id);
-        assert!(!TreeNav::is_leaf(&tree, parent_id));
-        assert!(TreeNav::is_leaf(&tree, child_id));
-    }
-
-    #[test]
-    fn test_tree_nav_is_root() {
-        let mut tree = SemanticsTree::new();
-        let parent_id = tree.insert(SemanticsNode::new());
-        let child_id = tree.insert(SemanticsNode::new());
-
-        tree.add_child(parent_id, child_id);
-
-        assert!(TreeNav::is_root(&tree, parent_id));
-        assert!(!TreeNav::is_root(&tree, child_id));
-    }
-
-    #[test]
-    fn test_tree_nav_find_root() {
-        let mut tree = SemanticsTree::new();
-        let root_id = tree.insert(SemanticsNode::new());
-        let child_id = tree.insert(SemanticsNode::new());
-        let grandchild_id = tree.insert(SemanticsNode::new());
-
-        tree.add_child(root_id, child_id);
-        tree.add_child(child_id, grandchild_id);
-
-        assert_eq!(TreeNav::find_root(&tree, grandchild_id), root_id);
-        assert_eq!(TreeNav::find_root(&tree, child_id), root_id);
-        assert_eq!(TreeNav::find_root(&tree, root_id), root_id);
-    }
-
-    #[test]
-    fn test_tree_nav_depth() {
-        let mut tree = SemanticsTree::new();
-        let root_id = tree.insert(SemanticsNode::new());
-        let child_id = tree.insert(SemanticsNode::new());
-        let grandchild_id = tree.insert(SemanticsNode::new());
-
-        tree.add_child(root_id, child_id);
-        tree.add_child(child_id, grandchild_id);
-
-        assert_eq!(TreeNav::depth(&tree, root_id), 0);
-        assert_eq!(TreeNav::depth(&tree, child_id), 1);
-        assert_eq!(TreeNav::depth(&tree, grandchild_id), 2);
+        assert_eq!(tree.children(parent_id), Some(&[child1_id, child2_id][..]));
     }
 }
 
@@ -1216,9 +993,6 @@ mod slab_hygiene_tests {
     use crate::node::SemanticsNode;
     use crate::tree::SemanticsTree;
     use flui_foundation::SemanticsId;
-    // `tree.remove(id)` now resolves through the unified `TreeWrite`
-    // trait rather than an inherent method.
-    use flui_tree::TreeWrite;
 
     fn empty_node() -> SemanticsNode {
         SemanticsNode::new()
@@ -1283,7 +1057,7 @@ mod slab_hygiene_tests {
         assert!(tree.get(parent).unwrap().children().is_empty());
     }
 
-    // ----- PR #100 followup: cycle rejection -----
+    // ----- cycle rejection -----
 
     #[test]
     fn add_child_rejects_self_link() {
@@ -1382,5 +1156,82 @@ mod slab_hygiene_tests {
         assert!(!tree.contains(mid));
         // Leaf survives (only cascade path drops descendants).
         assert!(tree.contains(leaf));
+    }
+
+    #[test]
+    fn remove_retires_children_before_their_parent() {
+        use flui_foundation::RenderId;
+
+        use crate::identity::AccessibilityNodeId;
+
+        let stable = |n: usize| AccessibilityNodeId::from(RenderId::new(n)).as_u64();
+        let mut tree = SemanticsTree::new();
+        let root = tree.insert(empty_node().with_source_render_id(RenderId::new(1)));
+        let mid = tree.insert(empty_node().with_source_render_id(RenderId::new(2)));
+        let leaf = tree.insert(empty_node().with_source_render_id(RenderId::new(3)));
+        tree.add_child(root, mid);
+        tree.add_child(mid, leaf);
+        let _ = tree.take_removed_accessibility_ids();
+
+        assert!(tree.remove(root).is_some());
+        assert_eq!(
+            tree.take_removed_accessibility_ids(),
+            vec![stable(3), stable(2), stable(1)],
+            "leaf, then mid, then root"
+        );
+    }
+
+    #[test]
+    fn remove_on_a_corrupted_cycle_terminates_and_returns_none() {
+        let mut tree = SemanticsTree::new();
+        let a = tree.insert(empty_node());
+        let b = tree.insert(empty_node());
+        tree.add_child(a, b);
+        // `add_child` refuses the back edge, so corrupt the nodes directly:
+        // b → a closes the cycle a → b → a.
+        tree.get_mut(b).expect("b is live").add_child(a);
+        tree.get_mut(a).expect("a is live").set_parent(Some(b));
+
+        assert!(tree.remove(a).is_none());
+        // Nothing was removed: the pre-walk aborts before the drain.
+        assert!(tree.contains(a));
+        assert!(tree.contains(b));
+    }
+
+    #[test]
+    fn remove_cascade_is_stack_safe_on_a_deep_chain() {
+        const DEPTH: usize = 100_000;
+        let mut tree = SemanticsTree::new();
+        let root = tree.insert(empty_node());
+        let mut tip = root;
+        // Link the nodes directly: `add_child`'s cycle check walks the whole
+        // parent chain, which makes building the chain through it quadratic.
+        for _ in 1..DEPTH {
+            let next = tree.insert(empty_node());
+            tree.get_mut(tip).expect("tip is live").add_child(next);
+            tree.get_mut(next)
+                .expect("next is live")
+                .set_parent(Some(tip));
+            tip = next;
+        }
+        assert_eq!(tree.len(), DEPTH);
+
+        assert!(tree.remove(root).is_some());
+        assert_eq!(tree.len(), 0);
+    }
+
+    #[test]
+    fn is_ancestor_of_is_strict_and_follows_the_parent_chain() {
+        let mut tree = SemanticsTree::new();
+        let root = tree.insert(empty_node());
+        let mid = tree.insert(empty_node());
+        let leaf = tree.insert(empty_node());
+        tree.add_child(root, mid);
+        tree.add_child(mid, leaf);
+
+        assert!(tree.is_ancestor_of(root, leaf));
+        assert!(tree.is_ancestor_of(mid, leaf));
+        assert!(!tree.is_ancestor_of(leaf, root));
+        assert!(!tree.is_ancestor_of(leaf, leaf));
     }
 }

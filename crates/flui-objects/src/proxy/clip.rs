@@ -52,7 +52,7 @@
 
 use std::{borrow::Borrow, fmt, marker::PhantomData, sync::Arc};
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{
     Offset, Pixels, Point, Rect, Size,
     geometry::RRect,

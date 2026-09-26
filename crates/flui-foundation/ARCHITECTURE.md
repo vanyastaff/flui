@@ -445,7 +445,7 @@ if (kFlutterMemoryAllocationsEnabled) {
 
 **Note:** `AbstractNode` is defined but NOT used by `RenderObject`. Flutter's `RenderObject` implements its own parent-child management.
 
-**FLUI:** Use `flui-tree` for tree operations.
+**FLUI:** Each tree (`RenderTree`, `LayerTree`, `SemanticsTree`, the element tree) owns its parent/child links and walks as inherent methods; there is no shared tree trait. This crate holds only the arity markers and `IndexedSlot`.
 
 ---
 
@@ -635,7 +635,7 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 | Flutter Type | Reason |
 |--------------|--------|
 | `Category`, `Summary`, etc. | Dart doc annotations |
-| `AbstractNode` | Use `flui-tree` instead |
+| `AbstractNode` | Each tree owns its links (see §11) |
 | `FlutterMemoryAllocations` | Rust has different memory model |
 | `SynchronousFuture` | Rust async works differently |
 | `PersistentHashMap` | Use `im` crate if needed |

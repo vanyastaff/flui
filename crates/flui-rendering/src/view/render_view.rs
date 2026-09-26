@@ -414,11 +414,11 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         // window gives it (Flutter parity: tight root constraints), and
         // children get that size as tight constraints at the origin.
         let typed_inner = crate::protocol::BoxLayoutCtx::<
-            flui_tree::Variable,
+            flui_foundation::Variable,
             crate::parent_data::BoxParentData,
         >::from_erased(ctx);
         let mut layout_ctx = crate::context::BoxLayoutContext::<
-            flui_tree::Variable,
+            flui_foundation::Variable,
             crate::parent_data::BoxParentData,
         >::new(typed_inner);
 
@@ -456,7 +456,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         // every child subtree in order — `size` is only forwarded to
         // the child-painting context.
         let mut cx =
-            crate::context::PaintCx::<flui_tree::Variable>::new(recorder, child_count, size);
+            crate::context::PaintCx::<flui_foundation::Variable>::new(recorder, child_count, size);
         cx.paint_children();
     }
 
