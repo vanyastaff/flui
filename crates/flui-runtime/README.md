@@ -14,9 +14,9 @@ the Stable promise (ADR-0089 §1). Applications depend on `flui`, and hosts on
   their frame transaction (`render_frame` through any `FrameSink`), input
   routing, lifecycle, and the bounded command inbox other threads reach it
   through.
-- `presentation`, `presentation_forest`: one presentation's owner-thread state
-  (its widget tree, pipeline, gestures, focus, IME, semantics) and the
-  mount-ordered set a realm hosts.
+- `presentation`: one presentation's owner-thread state (its widget tree,
+  pipeline, gestures, focus, IME, semantics). The mount-ordered set a realm
+  hosts is private to the crate.
 - `lifecycle_state`: the application lifecycle a presentation observes.
 - `frame_failure`: what a contained frame failure reports (ADR-0048).
 - `media_query_root`: the `MediaQuery` a realm installs above each root.

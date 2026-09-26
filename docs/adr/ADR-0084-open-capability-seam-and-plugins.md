@@ -406,15 +406,18 @@ the capability keeps its type `C`, so `cx.capability::<C>()` call sites do not c
   capability (a new handle)" row in "Extending FLUI" changes in the implementing change to: an
   interface crate on `flui-platform-api`, a provider per target, registration through a plugin,
   a headless fake, and a test that fails without it.
-- The dead clipboard accessor (`runtime.rs:1631-1641`) and the haptics forwarders
-  (`presentation.rs:893`, `frame_clock.rs:508`) get production callers or are deleted in favour
+- The dead clipboard accessor (`crates/flui-app/src/app/runtime.rs:1581-1590`) and the haptics
+  forwarders (`crates/flui-runtime/src/presentation.rs:970`,
+  `crates/flui-runtime/src/ui_realm/frame_clock.rs:466`) get production callers or are deleted in favour
   of the built-in clipboard provider and the haptics plugin.
 - **Breaks.** `PlatformWindow::text_input()` returns `Arc<dyn PlatformTextInput>` with no
   default. `accessibility()` moves to the backend extension trait (ADR-0082 §3) and returns
   `Arc<dyn PlatformAccessibility>` with no default. Every backend, including third-party ones,
-  implements both. Every `cfg(feature = "a11y")` override gets an inert twin for builds without
-  `a11y`, macOS included. The `Option` branches in `flui-app` (`presentation.rs:357`, `:1384` and
-  their siblings) go away.
+  implements both; since `PlatformAccessibility` now lives in the internal `flui-semantics`
+  (ADR-0082 §2, amended), accepting this clause first re-homes that trait or re-exports it
+  through a contract crate. Every `cfg(feature = "a11y")` override gets an inert twin for builds without
+  `a11y`, macOS included. The `Option` branches over the bridge
+  (`crates/flui-runtime/src/presentation.rs:423`, `:1461` and their siblings) go away.
 - `AppRunError` gains `CapabilityConflict`. It is `#[non_exhaustive]`
   (`crates/flui-app/src/app/application.rs:22`), so this is not a break.
 - AGENTS.md's "Platform capability" row states the classification rule of §5, so a contributor

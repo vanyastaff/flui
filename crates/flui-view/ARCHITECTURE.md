@@ -312,7 +312,7 @@ binding by value (ADR-0083). Pinned by
 `global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking`,
 `global_key_in_a_sibling_binding_resolves_during_this_bindings_frame` and
 `global_key_lookup_from_dispose_during_detach_returns_instead_of_deadlocking` (`binding.rs`), and
-through the realm by `ui_realm/tests/global_key_lookup_during_frame.rs` in `flui-app`.
+through the realm by `ui_realm/tests/global_key_lookup_during_frame.rs` in `flui-runtime`.
 
 ### Not adopted
 

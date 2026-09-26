@@ -14,7 +14,9 @@
   paragraph "No `flui-runtime` without two consumers"; `flui-runtime` exists.
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (L1 gains
   `flui-platform-api`; the `interaction -> platform` edge becomes `interaction -> platform-api`,
-  and `flui-platform` allows only `flui-app` as a dependent)
+  and `flui-platform` allows only `flui-app` as a dependent; its §2 amendment of 2026-09-26
+  moves `flui-platform` from L2 to L3, because its accessibility bridge implements
+  `PlatformAccessibility`, which now lives in `flui-semantics`)
 - **Related:** ADR-0028 (the design-system rule this generalizes), ADR-0037 (the
   `interaction -> platform` same-layer edge)
 
@@ -62,8 +64,8 @@ render machine while staying strictly below `flui-view`.
 |---|---|
 | L0 — Value types | `flui-geometry`, `flui-types` |
 | L1 — Framework primitives | `flui-foundation`, `flui-macros` |
-| L2 — Substrate | `flui-tree`, `flui-platform`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-assets`, `flui-log` |
-| L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
+| L2 — Substrate | `flui-tree`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-assets`, `flui-log` |
+| L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation`, `flui-platform` (L2 until ADR-0082 §2's amendment) |
 | L4 — Render machine + render catalog | `flui-engine`, `flui-rendering`, `flui-objects` |
 | L5 — Framework spine | `flui-view` |
 | L6 — Widget catalog + DX tooling | `flui-widgets`, `flui-testing`, `flui-hot-reload` |

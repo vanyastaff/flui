@@ -54,7 +54,6 @@ These crates compose the rendering and platform substrate largely without knowin
 |-------|--------|---------|
 | `flui-log` | ✅ ACTIVE | Composition-only cross-platform logging backend: desktop `fmt` (optionally hierarchical), Android logcat, Apple unified logging, browser console/performance timeline, behind an explicit subscriber-ownership policy. **No framework crate but `flui-app`, `flui-cli` and the facade may link it** (examples, being applications, may) — framework crates use `tracing` directly, and its manifest's `allowed-dependents` (checked by `cargo xtask workspace`) enforces that mechanically. |
 | `flui-tree` | ✅ ACTIVE | Generic tree abstractions: `TreeRead` / `TreeNav` / `TreeWrite` trio, iterators / slots, arity markers (`Leaf` / `Single` / `Optional` / `Variable`), depth markers. A workspace audit deleted the unused speculative `visitor` / `diff` modules; concrete trees adopt the trio directly. |
-| `flui-platform` | ✅ ACTIVE | Backends (native Win32 / AppKit / Headless + `winit` fallback) and the host-facing `Platform` / `HostWindow` surface; the contracts it implements, `PlatformWindow` among them, live in `flui-platform-api`. Sole home of OS-specific code. **Only `flui-app` may depend on it** (its manifest's `allowed-dependents`, checked by `cargo xtask workspace`; examples and tools are exempt). Loses `BackgroundExecutor`/`PlatformExecutor` when host-injected runtime execution lands. |
 | `flui-scheduler` | ✅ ACTIVE | Frame scheduling, microtasks, task prioritization. Narrows to logical update phases, tickers, callback ordering, and owner-local post-frame behavior; presentation clocks and raster backpressure move to presentation/runtime ownership. |
 | `flui-painting` | ✅ ACTIVE | `Canvas` API, `DisplayList`, paths, paint commands, text recording |
 | `flui-interaction` | ✅ ACTIVE | Hit-testing, gestures, focus, pointer events, owner-local text input |
@@ -67,6 +66,7 @@ These crates compose the rendering and platform substrate largely without knowin
 | `flui-layer` | ✅ ACTIVE | Layer composition tree (compositor input) |
 | `flui-semantics` | ✅ ACTIVE | Accessibility tree (semantics nodes, focus, labels) |
 | `flui-animation` | ✅ ACTIVE | Curves, tweens, controllers, implicit animations (re-enabled for the Core.1 transition widgets) |
+| `flui-platform` | ✅ ACTIVE | Backends (native Win32 / AppKit / Headless + `winit` fallback) and the host-facing `Platform` / `HostWindow` surface; the contracts it implements, `PlatformWindow` among them, live in `flui-platform-api`. Sole home of OS-specific code. **Only `flui-app` may depend on it** (its manifest's `allowed-dependents`, checked by `cargo xtask workspace`; examples and tools are exempt). It sits at layer 3, above the substrate, because its accessibility bridge implements `PlatformAccessibility`, which lives in `flui-semantics` ([ADR-0082](adr/ADR-0082-platform-api-contract-crate.md) §2). Loses `BackgroundExecutor`/`PlatformExecutor` when host-injected runtime execution lands. |
 
 ## Layer 4 — Render machine + render catalog
 
