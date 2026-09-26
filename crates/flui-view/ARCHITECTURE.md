@@ -298,6 +298,13 @@ thread. Before this rule such a read blocked on its own thread forever. The skip
 mounted nowhere reports the same skip, and a warning there would fire every frame
 (`unmounted_global_key_read_during_a_frame_does_not_warn`).
 
+Closing a presentation uses the same composite as every other realm entry, the closing
+presentation included. Its keys resolve until its tree teardown takes the binding lock (a
+lifecycle observer told the presentation is detaching sees them), and resolve to nothing during
+the teardown, where `dispose` runs (`closing_presentations_own_key_resolves_while_it_detaches`
+in the realm tests; `dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter` in
+`flui-app`'s dispatch tests).
+
 **Divergence.** Flutter's `GlobalKey.currentElement`/`currentState` (`framework.dart:3163-3170`)
 return the element during build. FLUI returns nothing for keys of the presentation whose frame is
 running. The exit is to serve those reads from the frame's own tree once the realm owns the

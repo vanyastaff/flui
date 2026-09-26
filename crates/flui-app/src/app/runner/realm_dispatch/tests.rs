@@ -4017,9 +4017,10 @@ fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter() {
             // (1) Resolve a GlobalKey registered in the SIBLING
             // presentation B: only possible if the whole-frame composite
             // is still active for this dispose call, spanning every
-            // OTHER presentation the realm hosts (this presentation
-            // itself, mid-teardown, is deliberately excluded from that
-            // composite -- see `UiRealm::enter_for_close`'s doc).
+            // presentation the realm hosts. This presentation's own
+            // registry, whose binding lock the teardown walk holds,
+            // reports itself busy and is skipped rather than re-entered
+            // (`flui-view`'s `key::registry`, "Re-entrancy").
             self.resolved_sibling_element
                 .set(self.key_in_sibling.current_element());
 

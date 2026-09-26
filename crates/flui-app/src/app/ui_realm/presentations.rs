@@ -314,49 +314,6 @@ impl UiRealm {
         })
     }
 
-    /// [`Self::enter`], but the composite excludes presentation `closing`.
-    ///
-    /// Used ONLY by [`Self::close_presentation_entered`]'s step 2–3 phase.
-    /// `PresentationState::close`'s final step (`detach_root_widget`) holds
-    /// `closing`'s own `WidgetsBindingInner` write lock for the entire
-    /// recursive subtree removal — the exclusive access that walk needs to
-    /// unmount every descendant. `GlobalKeyRegistryComposite`'s lookup tries
-    /// each member in insertion order regardless of which key is being
-    /// resolved (`build_composite`'s `for` loop runs until one member's
-    /// `lookup_element` returns `Some`, trying every earlier member first),
-    /// so if `closing` were composed in, a dispose hook's `GlobalKey::
-    /// current_element()` call — for ANY key, even one belonging to a
-    /// different presentation entirely — would have `closing`'s own lookup
-    /// closure try to re-acquire a read lock on the exact `RwLock` this call
-    /// already holds for writing, on the same thread: an unconditional
-    /// self-deadlock (`parking_lot::RwLock` is not reentrant), not a race.
-    /// Caught by this issue's own red-exploit test
-    /// (`dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter`
-    /// in `runner.rs`, which hung before this exclusion existed).
-    ///
-    /// Excluding `closing` costs nothing real: every OTHER presentation
-    /// still resolves normally, and querying a presentation's OWN GlobalKey
-    /// while that exact presentation's registry is mid-teardown has no
-    /// principled answer anyway — the key is about to be unregistered by
-    /// the same call regardless of what a lookup returns for it right now.
-    ///
-    /// The exclusion is now redundant: a binding's registry no longer blocks
-    /// on its own held lock but reports itself busy, and the composite skips
-    /// a busy member (`flui-view`'s `key::registry`, "Re-entrancy"). Closing
-    /// can therefore go through [`Self::enter`], and this method can be
-    /// deleted along with the comment in `realm_dispatch.rs` that cites it.
-    fn enter_for_close<R>(&self, closing: PresentationId, f: impl FnOnce(&Self) -> R) -> R {
-        self.interaction_lane.enter(|| {
-            let composite = GlobalKeyRegistryComposite::assemble(
-                self.presentations
-                    .iter()
-                    .filter(|presentation| presentation.id() != closing)
-                    .map(PresentationState::widgets),
-            );
-            composite.enter(|| f(self))
-        })
-    }
-
     /// Owner-local widgets binding. Crate-private so callers cannot bypass the
     /// guarded realm entry boundary.
     #[cfg(any(
@@ -602,15 +559,18 @@ impl UiRealm {
     ///    first half.
     /// 3. `detach_root_widget` through this exact presentation's own
     ///    `WidgetsBinding` — [`PresentationState::close`]'s second half —
-    ///    run inside [`Self::enter_for_close`], so a `State::dispose()` a
+    ///    run inside [`Self::enter`], so a `State::dispose()` a
     ///    descendant runs here gets the SAME realm-shared capabilities
     ///    (post-frame/interaction handles, TLS deferral) any other
     ///    frame/lifecycle callback gets, and can resolve a `GlobalKey`
-    ///    living in any OTHER presentation this realm hosts. It cannot
-    ///    resolve one of its OWN keys through the registry mid-teardown —
-    ///    `enter_for_close` deliberately excludes `id` itself from the
-    ///    composite it assembles; see that method's own doc for the
-    ///    self-deadlock excluding it avoids. An install/uninstall request a
+    ///    living in any OTHER presentation this realm hosts. The composite
+    ///    includes `id` itself: until `detach_root_widget` takes its
+    ///    binding's write lock, `id`'s own keys resolve (a lifecycle observer
+    ///    told it is detaching sees them); during the removal walk its
+    ///    registry reports itself busy and the composite skips it
+    ///    (`flui-view`'s `key::registry`, "Re-entrancy"), so a dispose hook
+    ///    resolves `id`'s keys to nothing rather than re-entering the lock
+    ///    the walk holds. An install/uninstall request a
     ///    dispose hook makes here defers through the dispatched-path TLS
     ///    guard described above. Any BUILD SCHEDULING it does still routes
     ///    only within THIS presentation's own tree:
@@ -631,28 +591,25 @@ impl UiRealm {
     ///    own `Drop`, once step 6 drops the last reference to it.
     /// 6. The removed `PresentationState` — and with it its `WidgetsBinding`
     ///    (whose drop triggers step 5), `RenderingFlutterBinding`, and every
-    ///    other owned resource — drops after [`Self::enter_for_close`]
-    ///    returns.
+    ///    other owned resource — drops after [`Self::enter`] returns.
     ///
     /// # Why this is two calls, not one `&mut`-threaded closure
     ///
-    /// [`Self::enter_for_close`] hands its closure `&Self` (shared) — every
-    /// existing caller only ever needed read access to the realm for the
-    /// duration of a frame/lifecycle callback, so it was never shaped to
-    /// also hand out `&mut`. Steps 2–3 only need `&PresentationState`
-    /// (`PresentationState::close` takes `&self`), so they run inside one
-    /// `self.enter_for_close(...)` call. Steps 4–6 (the actual `Vec`
-    /// removal + drop) need `&mut self.presentations`, which happens in a
-    /// SEPARATE, sequential statement after that call returns — not nested
-    /// inside it, so there is no borrow conflict and no need to reshape
-    /// `enter_for_close` itself or give `PresentationForest` interior
-    /// mutability.
+    /// [`Self::enter`] hands its closure `&Self` (shared) — every caller
+    /// only needs read access to the realm for the duration of a
+    /// frame/lifecycle callback, so it does not hand out `&mut`. Steps 2–3
+    /// only need `&PresentationState` (`PresentationState::close` takes
+    /// `&self`), so they run inside one `self.enter(...)` call. Steps 4–6
+    /// (the actual `Vec` removal + drop) need `&mut self.presentations`,
+    /// which happens in a SEPARATE, sequential statement after that call
+    /// returns — not nested inside it, so there is no borrow conflict and
+    /// no need to give `PresentationForest` interior mutability.
     pub(crate) fn close_presentation_entered(&mut self, id: PresentationId) -> bool {
         if self.presentations.get(id).is_none() {
             return false;
         }
         let mut first_panic = catch_unwind(AssertUnwindSafe(|| {
-            self.enter_for_close(id, |realm| {
+            self.enter(|realm| {
                 if realm.focus_coordinator.active() == id
                     && let Some(surviving) = realm.primary_id_excluding(id)
                 {

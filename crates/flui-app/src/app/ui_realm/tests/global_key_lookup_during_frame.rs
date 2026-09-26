@@ -135,6 +135,63 @@ fn drawer_style_state_read_during_the_realm_frame_does_not_deadlock() {
     );
 }
 
+/// Resolves `key` when its presentation is told it is detached, recording
+/// what it saw.
+struct ReadOnDetach {
+    key: flui_view::GlobalKey<ToggleState>,
+    seen: std::sync::Mutex<Vec<Option<bool>>>,
+}
+
+impl flui_view::WidgetsBindingObserver for ReadOnDetach {
+    fn did_change_app_lifecycle_state(&self, state: flui_scheduler::AppLifecycleState) {
+        if state == flui_scheduler::AppLifecycleState::Detached {
+            self.seen
+                .lock()
+                .expect("detach log lock")
+                .push(self.key.with_current_state(ToggleState::is_open));
+        }
+    }
+}
+
+/// Closing a presentation enters the realm with every presentation's registry
+/// composed, the closing one's included: a lifecycle observer told the
+/// presentation is detaching, before its tree is torn down, still resolves a
+/// key that presentation holds. Its registry is not locked yet, so nothing
+/// blocks; the disposal that follows reads it as busy.
+#[test]
+fn closing_presentations_own_key_resolves_while_it_detaches() {
+    let seen = within_deadline(|| {
+        let mut realm = UiRealm::for_test();
+        let closing = realm.presentation_id();
+        let _sibling = realm.install_second_presentation_for_test();
+        let key = flui_view::GlobalKey::<ToggleState>::new();
+        realm
+            .enter(|realm| {
+                realm.attach_root_widget(&Toggle {
+                    key: key.clone(),
+                    initially_open: true,
+                    child: None,
+                })
+            })
+            .expect("the toggle mounts");
+        let _ = realm.enter(|realm| realm.draw_frame_entered(frame_constraints()));
+        let observer = Arc::new(ReadOnDetach {
+            key,
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let observer_handle: Arc<dyn flui_view::WidgetsBindingObserver> = observer.clone();
+        realm.widgets().add_observer(observer_handle);
+
+        assert!(realm.close_presentation_entered(closing));
+        std::mem::take(&mut *observer.seen.lock().expect("detach log lock"))
+    });
+    assert_eq!(
+        seen,
+        vec![Some(true)],
+        "the closing presentation's own key resolves while it detaches"
+    );
+}
+
 #[test]
 fn state_read_across_presentations_during_a_segment_resolves() {
     let during = within_deadline(|| {
