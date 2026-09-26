@@ -22,3 +22,6 @@ console_error_panic_hook = "0.1"
 
 [lints]
 workspace = true
+
+[package.metadata.flui]
+tier-kind = "tool"

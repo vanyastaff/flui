@@ -130,3 +130,7 @@ harness = false
 
 [package.metadata.flui]
 layer = 6
+tier = "K"
+tier-kind = "internal"
+# Below flui-widgets, which names it as an optional dependency.
+order = 2

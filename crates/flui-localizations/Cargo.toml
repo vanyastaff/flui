@@ -32,3 +32,10 @@ workspace = true
 
 [package.metadata.flui]
 layer = 8
+tier = "K"
+tier-kind = "internal"
+order = 4
+# Transitional (ADR-0081 §1): this crate is deleted, so its dependents are
+# frozen until then; the lists only shrink.
+allowed-dependents = ["flui"]
+allowed-dev-dependents = []

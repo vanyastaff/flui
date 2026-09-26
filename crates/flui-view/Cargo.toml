@@ -171,3 +171,6 @@ workspace = true
 
 [package.metadata.flui]
 layer = 5
+tier = "K"
+tier-kind = "internal"
+order = 1

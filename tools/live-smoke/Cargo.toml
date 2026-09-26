@@ -40,3 +40,6 @@ anyhow = "1.0"
 # to `WindowEvent::Occluded(true)`) while wheel input passes straight
 # through to the app beneath, keeping frame demand alive while hidden.
 x11rb = { version = "0.14", features = ["xtest", "shape"] }
+
+[package.metadata.flui]
+tier-kind = "tool"
