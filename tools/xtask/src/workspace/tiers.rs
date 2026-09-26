@@ -8,14 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::LazyLock;
 
 use anyhow::Context;
 use cargo_metadata::DependencyKind;
-use regex::Regex;
 use serde_json::{Value as Json, json};
 
 use super::{Dep, Member, Members, Node};
+use crate::util;
 
 /// The root manifest's `[workspace.metadata.flui] tiers`, bottom to top.
 pub(super) fn names(workspace_metadata: &Json) -> anyhow::Result<Vec<String>> {
@@ -39,9 +38,6 @@ const TOOL: &str = "tool";
 
 /// The keys a crate with a tier declares.
 const TIER_KEYS: [&str; 3] = ["tier", "tier-kind", "order"];
-
-static ADR_NUMBER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^ADR-\d{4}$").expect("BUG: static regex is valid"));
 
 /// One violation of the tier rule or its declarations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,7 +337,7 @@ pub(super) fn check_tiers(members: &Members, tiers: &[String]) -> Vec<Finding> {
                     to: entry.to.clone(),
                 });
             }
-            if !ADR_NUMBER.is_match(&entry.exit) {
+            if !util::is_adr_number(&entry.exit) {
                 findings.push(Finding::BadExit {
                     from: member.name.clone(),
                     to: entry.to.clone(),
@@ -359,23 +355,13 @@ pub(super) fn check_exception_citations(
     members: &Members,
     findings: &mut Vec<String>,
 ) {
-    let files: Vec<String> = std::fs::read_dir(root.join("docs").join("adr"))
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .collect();
+    let files = util::adr_files(root);
     for member in members.iter() {
         for entry in &member.edge_exceptions {
-            if !ADR_NUMBER.is_match(&entry.exit) {
+            if !util::is_adr_number(&entry.exit) {
                 continue; // reported by `check_tiers`
             }
-            let prefix = format!("{}-", entry.exit);
-            let exact = format!("{}.md", entry.exit);
-            if !files
-                .iter()
-                .any(|file| file.starts_with(&prefix) || *file == exact)
-            {
+            if !util::adr_exists(&files, &entry.exit) {
                 findings.push(format!(
                     "{}'s `edge-exceptions` entry for {} names {}, which has no file under \
                      docs/adr",

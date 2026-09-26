@@ -2,8 +2,10 @@
 //! and the workspace metadata.
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::{Context, ensure};
+use regex::Regex;
 
 /// The xtask manifest directory this binary was built from.
 const BUILT_FROM: &str = env!("CARGO_MANIFEST_DIR");
@@ -67,6 +69,33 @@ pub(crate) fn metadata(root: &Path) -> anyhow::Result<cargo_metadata::Metadata> 
         .no_deps()
         .exec()
         .context("running `cargo metadata`")
+}
+
+/// Whether `exit` is spelled `ADR-NNNN`, as an allowlist entry's exit is.
+pub(crate) fn is_adr_number(exit: &str) -> bool {
+    static ADR_NUMBER: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^ADR-\d{4}$").expect("BUG: static regex is valid"));
+    ADR_NUMBER.is_match(exit)
+}
+
+/// The file names under `docs/adr` of the repository at `root`; none when the
+/// directory is missing.
+pub(crate) fn adr_files(root: &Path) -> Vec<String> {
+    std::fs::read_dir(root.join("docs").join("adr"))
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Whether one of `files` (from [`adr_files`]) is the ADR `number`.
+pub(crate) fn adr_exists(files: &[String], number: &str) -> bool {
+    let prefix = format!("{number}-");
+    let exact = format!("{number}.md");
+    files
+        .iter()
+        .any(|file| file.starts_with(&prefix) || *file == exact)
 }
 
 /// A uniquely named directory under the system temp dir, removed on drop.
