@@ -79,6 +79,8 @@ pub struct RawTextField {
     obscure_text: bool,
     /// Forwarded to [`EditableText::enabled`].
     enabled: bool,
+    /// Forwarded to [`EditableText::on_changed`].
+    on_changed: Option<SubmitCallback>,
     /// Forwarded to [`EditableText::on_submitted`] — see
     /// [`Self::on_submitted`].
     on_submitted: Option<SubmitCallback>,
@@ -97,6 +99,7 @@ impl std::fmt::Debug for RawTextField {
             .field("content_padding", &self.content_padding)
             .field("obscure_text", &self.obscure_text)
             .field("enabled", &self.enabled)
+            .field("on_changed", &self.on_changed.is_some())
             .field("on_submitted", &self.on_submitted.is_some())
             .finish()
     }
@@ -114,6 +117,7 @@ impl RawTextField {
             content_padding: EdgeInsets::symmetric(px(8.0), px(12.0)),
             obscure_text: false,
             enabled: true,
+            on_changed: None,
             on_submitted: None,
         }
     }
@@ -155,6 +159,14 @@ impl RawTextField {
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
+        self
+    }
+
+    /// Call `callback` with the new text after each user edit. Forwards to
+    /// [`EditableText::on_changed`].
+    #[must_use]
+    pub fn on_changed(mut self, callback: impl Fn(&str) + 'static) -> Self {
+        self.on_changed = Some(Rc::new(callback));
         self
     }
 
@@ -221,6 +233,9 @@ impl ViewState<RawTextField> for RawTextFieldState {
             .enabled(view.enabled);
         if let Some(on_submitted) = view.on_submitted.clone() {
             editable = editable.on_submitted(move |text| on_submitted(text));
+        }
+        if let Some(on_changed) = view.on_changed.clone() {
+            editable = editable.on_changed(move |text| on_changed(text));
         }
 
         let padded = Padding::new(view.content_padding).child(editable);

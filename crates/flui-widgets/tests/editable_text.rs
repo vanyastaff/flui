@@ -2283,3 +2283,48 @@ fn cursor_area_loop_prefers_the_composing_rect_and_falls_back_to_the_caret_rect_
         "the loop must fall back to the caret rect once composition ends"
     );
 }
+
+/// `on_changed` reports the user's edits and only those: typing, deleting
+/// and an IME commit call it with the new text; a caret move, the caller's
+/// own `set_text`, and the controller edit an `on_submitted` callback makes
+/// do not.
+///
+/// Red-check: drop the `EditObserver` around the key handler — nothing is
+/// recorded for the typed keys.
+#[test]
+fn on_changed_reports_user_edits_but_not_the_callers_own() {
+    use flui_interaction::events::Modifiers;
+
+    let controller = TextEditingController::new();
+    let changes: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&changes);
+    let submit_controller = controller.clone();
+    let focus_node = FocusNode::with_debug_label("on_changed field");
+    let harness = crate::common::harness::mount_with_ime(
+        EditableText::new(controller.clone(), Rc::clone(&focus_node))
+            .on_changed(move |text| sink.borrow_mut().push(text.to_owned()))
+            .on_submitted(move |_| submit_controller.clear()),
+    );
+    harness.enter_owner_scope(|| focus_node.request_focus());
+
+    let keys = harness.focus_manager();
+    keys.dispatch_key_event(&character_key_event('a'));
+    keys.dispatch_key_event(&character_key_event('b'));
+    keys.dispatch_key_event(&named_key_event(NamedKey::Backspace, Modifiers::empty()));
+    dispatch_ime(&harness, &flui_types::ImeEvent::Commit("c".to_string()));
+    assert_eq!(*changes.borrow(), ["a", "ab", "a", "ac"]);
+
+    keys.dispatch_key_event(&named_key_event(NamedKey::ArrowLeft, Modifiers::empty()));
+    controller.set_text("programmatic");
+    keys.dispatch_key_event(&enter_key_event());
+    assert_eq!(
+        controller.text(),
+        "",
+        "the submit callback cleared the field"
+    );
+    assert_eq!(
+        *changes.borrow(),
+        ["a", "ab", "a", "ac"],
+        "a caret move, the caller's set_text and the submit callback's clear are not user edits"
+    );
+}

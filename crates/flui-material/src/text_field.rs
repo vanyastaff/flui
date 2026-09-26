@@ -107,13 +107,9 @@
 //!
 //! # DEFERRED (v1)
 //!
-//! Everything [`EditableText`] itself defers applies here too (IME, drag
-//! selection, clipboard, multi-line, `obscureText`, input formatters,
-//! overflow scrolling) — see its own module docs. Additionally, narrowed at
-//! this layer:
-//! - **`on_changed`** — [`EditableText`] has no change callback yet (only a
-//!   [`Listenable`] seam); a caller observes edits via the
-//!   [`TextEditingController`] itself.
+//! Everything [`EditableText`] itself defers applies here too (multi-line,
+//! input formatters, overflow scrolling) — see its own module docs.
+//! Additionally, narrowed at this layer:
 //! - **Selection colors** — no collapsed-caret-only substrate has a
 //!   selection to color yet (see `TextEditingController`'s own deferral
 //!   list).
@@ -153,6 +149,8 @@ pub struct TextField {
     /// Forwarded to [`EditableText::on_submitted`] — see
     /// [`Self::on_submitted`].
     on_submitted: Option<SubmitCallback>,
+    /// Forwarded to [`EditableText::on_changed`] — see [`Self::on_changed`].
+    on_changed: Option<SubmitCallback>,
 }
 
 // Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
@@ -167,6 +165,7 @@ impl std::fmt::Debug for TextField {
             .field("enabled", &self.enabled)
             .field("obscure_text", &self.obscure_text)
             .field("on_submitted", &self.on_submitted.is_some())
+            .field("on_changed", &self.on_changed.is_some())
             .finish()
     }
 }
@@ -206,6 +205,7 @@ impl TextField {
             enabled: None,
             obscure_text: false,
             on_submitted: None,
+            on_changed: None,
         }
     }
 
@@ -244,6 +244,15 @@ impl TextField {
     #[must_use]
     pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
         self.on_submitted = Some(Rc::new(callback));
+        self
+    }
+
+    /// Call `callback` with the new text after each user edit — Flutter's
+    /// `TextField.onChanged`. Forwards to [`EditableText::on_changed`]; a
+    /// caller's own controller edits do not call it.
+    #[must_use]
+    pub fn on_changed(mut self, callback: impl Fn(&str) + 'static) -> Self {
+        self.on_changed = Some(Rc::new(callback));
         self
     }
 }
@@ -421,6 +430,9 @@ impl ViewState<TextField> for MaterialTextFieldState {
         }
         if let Some(on_submitted) = view.on_submitted.clone() {
             editable = editable.on_submitted(move |text| on_submitted(text));
+        }
+        if let Some(on_changed) = view.on_changed.clone() {
+            editable = editable.on_changed(move |text| on_changed(text));
         }
 
         let focus_node = Rc::clone(&self.focus_node);

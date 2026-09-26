@@ -400,7 +400,13 @@ pub struct EditableText {
     /// Called with the current text when Enter is pressed while this field
     /// has focus — see [`Self::on_submitted`]'s doc.
     pub(super) on_submitted: Option<SubmitCallback>,
+    /// Called with the new text after each edit the user makes — see
+    /// [`Self::on_changed`]'s doc.
+    pub(super) on_changed: Option<TextChanged>,
 }
+
+/// Callback for [`EditableText::on_changed`].
+type TextChanged = Rc<dyn Fn(&str)>;
 
 impl EditableText {
     /// Create an `EditableText` driven by `controller` and `focus_node`.
@@ -420,6 +426,7 @@ impl EditableText {
             obscure_text: false,
             obscuring_character: DEFAULT_OBSCURING_CHARACTER,
             on_submitted: None,
+            on_changed: None,
         }
     }
 
@@ -526,6 +533,20 @@ impl EditableText {
         self.on_submitted = Some(Rc::new(callback));
         self
     }
+
+    /// Call `callback` with the new text after each edit the user makes —
+    /// typing, deleting, an IME commit, a cut or a paste — Flutter's
+    /// `EditableText.onChanged`.
+    ///
+    /// Only user edits: a caller changing the controller itself
+    /// (`set_text`, `clear`) does not call it, which is what keeps a form
+    /// field's reset from counting as the user's input. Runs after the edit,
+    /// with no borrow of the field held.
+    #[must_use]
+    pub fn on_changed(mut self, callback: impl Fn(&str) + 'static) -> Self {
+        self.on_changed = Some(Rc::new(callback));
+        self
+    }
 }
 
 // Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
@@ -546,6 +567,7 @@ impl std::fmt::Debug for EditableText {
             .field("obscure_text", &self.obscure_text)
             .field("obscuring_character", &self.obscuring_character)
             .field("on_submitted", &self.on_submitted.is_some())
+            .field("on_changed", &self.on_changed.is_some())
             .finish()
     }
 }
@@ -667,6 +689,9 @@ pub struct EditableTextState {
     /// closure has no meaningful identity to compare, so it is simply
     /// overwritten every rebuild, which is cheap and always correct.
     on_submitted: Rc<RefCell<Option<SubmitCallback>>>,
+    /// The current [`EditableText::on_changed`] callback, read at edit time
+    /// through a shared cell for the reason `on_submitted` is.
+    on_changed: Rc<RefCell<Option<TextChanged>>>,
     /// The presentation's clipboard, acquired in `init_state`. `None` only
     /// on a bare owner; the clipboard actions are then disabled.
     clipboard: Option<ClipboardHandle>,
@@ -720,6 +745,7 @@ impl StatefulView for EditableText {
             local_post_frame_handle: None,
             cursor_area_alive: Rc::new(RefCell::new(None)),
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
+            on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
             clipboard: None,
             obscure: Rc::new(Cell::new(self.obscure_text)),
             enclosing_action_chain: None,
@@ -928,6 +954,28 @@ impl EditableTextState {
         )
     }
 
+    /// The key handler for `node`: [`build_key_handler`], reporting each
+    /// edit it makes through `on_changed`.
+    fn key_handler(&self, node: &Rc<FocusNode>) -> KeyEventHandler {
+        let handler = build_key_handler(
+            Rc::clone(&self.controller),
+            Rc::clone(node),
+            Rc::clone(&self.on_submitted),
+        );
+        let edits = EditObserver {
+            controller: Rc::clone(&self.controller),
+            on_changed: Rc::clone(&self.on_changed),
+        };
+        Rc::new(move |event| {
+            // Enter only submits; a controller change there is the submit
+            // callback's own programmatic edit, not the user's.
+            if matches!(event.key, Key::Named(NamedKey::Enter)) {
+                return handler(event);
+            }
+            edits.around(|| handler(event))
+        })
+    }
+
     /// This field's clipboard actions layered over the `Actions` chain at
     /// its position, recorded on its focus node — where a `Shortcuts` looks
     /// an intent up while this field holds the primary focus. Depends on the
@@ -953,6 +1001,10 @@ impl EditableTextState {
             focus_node: Rc::clone(&self.observed_focus_node),
             obscure: Rc::clone(&self.obscure),
             clipboard: self.clipboard.clone(),
+            edits: EditObserver {
+                controller: Rc::clone(&self.controller),
+                on_changed: Rc::clone(&self.on_changed),
+            },
         };
         let chain = layered_chain(
             enclosing.clone(),
@@ -970,6 +1022,38 @@ impl EditableTextState {
     }
 }
 
+/// Reports a user edit through [`EditableText::on_changed`]: compares the
+/// text before and after the edit, and calls the callback with no borrow
+/// held when they differ.
+#[derive(Clone)]
+struct EditObserver {
+    controller: Rc<RefCell<TextEditingController>>,
+    on_changed: Rc<RefCell<Option<TextChanged>>>,
+}
+
+impl EditObserver {
+    fn around<R>(&self, edit: impl FnOnce() -> R) -> R {
+        if self.on_changed.borrow().is_none() {
+            return edit();
+        }
+        let before = self.controller.borrow().text();
+        let result = edit();
+        self.report_if_changed(&before);
+        result
+    }
+
+    fn report_if_changed(&self, before: &str) {
+        let after = self.controller.borrow().text();
+        if after == before {
+            return;
+        }
+        let callback = self.on_changed.borrow().clone();
+        if let Some(callback) = callback {
+            callback(&after);
+        }
+    }
+}
+
 /// Copy, cut and paste for one mounted field — see [`EditableText`]'s
 /// `# Clipboard` section for when each is enabled.
 ///
@@ -982,6 +1066,8 @@ struct ClipboardTextAction {
     focus_node: Rc<RefCell<Rc<FocusNode>>>,
     obscure: Rc<Cell<bool>>,
     clipboard: Option<ClipboardHandle>,
+    /// Cut and paste are user edits.
+    edits: EditObserver,
 }
 
 impl ClipboardTextAction {
@@ -1017,7 +1103,7 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
         if *intent == CopySelectionTextIntent::Cut {
             // Replacing the selection with nothing deletes it and leaves the
             // caret at its start.
-            controller.insert_str("");
+            self.edits.around(|| controller.insert_str(""));
         }
         ActionOutcome::Performed
     }
@@ -1033,6 +1119,7 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
             return ActionOutcome::NotPerformed;
         };
         let controller = self.controller();
+        let edits = self.edits.clone();
         // May complete before `read_text` returns: nothing is borrowed here.
         clipboard.read_text(move |text| {
             let Some(text) = text else {
@@ -1045,7 +1132,7 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
                 .filter(|&character| character != '\n' && character != '\r')
                 .collect();
             if !line.is_empty() {
-                controller.insert_str(&line);
+                edits.around(|| controller.insert_str(&line));
             }
         });
         ActionOutcome::Performed
@@ -1072,12 +1159,10 @@ impl ViewState<EditableText> for EditableTextState {
         //    `can_request_focus` (kept in sync with `enabled` in
         //    `did_update_view`) so a stray dispatch to an already-focused
         //    field that has since been disabled is a no-op.
-        self.key_handler_registration =
-            Some(self.focus_node.register_on_key_event(build_key_handler(
-                Rc::clone(&self.controller),
-                Rc::clone(&self.focus_node),
-                Rc::clone(&self.on_submitted),
-            )));
+        self.key_handler_registration = Some(
+            self.focus_node
+                .register_on_key_event(self.key_handler(&self.focus_node)),
+        );
 
         // 2b. The clipboard actions, recorded on the node beside the key
         //     handler: a clipboard chord the handler leaves unconsumed
@@ -1131,6 +1216,10 @@ impl ViewState<EditableText> for EditableTextState {
         self.pipeline_owner.clone_from(&pipeline_owner_for_focus);
         let inner_anchor_for_focus = self.inner_anchor.clone();
         let controller_for_ime = Rc::clone(&self.controller);
+        let edits_for_ime = EditObserver {
+            controller: Rc::clone(&self.controller),
+            on_changed: Rc::clone(&self.on_changed),
+        };
         let ime_token_for_focus = Rc::clone(&self.ime_token);
         let cursor_area_alive_for_focus = Rc::clone(&self.cursor_area_alive);
         let ime_focus_transition: ImeFocusTransition = Rc::new(move |now_focused| {
@@ -1151,9 +1240,10 @@ impl ViewState<EditableText> for EditableTextState {
                     .replace(Rc::clone(&alive));
 
                 let controller_for_callback = Rc::clone(&controller_for_ime);
+                let edits = edits_for_ime.clone();
                 let last_sent_for_ime_event = Rc::clone(&last_sent);
                 let token = match handle.attach(Rc::new(move |event: &ImeEvent| {
-                    apply_ime_event(&controller_for_callback.borrow(), event);
+                    edits.around(|| apply_ime_event(&controller_for_callback.borrow(), event));
                     // The backend may have restarted the IME session
                     // (`Enabled` re-fires on that restart) — clearing
                     // `last_sent` guarantees the new session gets a
@@ -1242,6 +1332,9 @@ impl ViewState<EditableText> for EditableTextState {
         self.on_submitted
             .borrow_mut()
             .clone_from(&new_view.on_submitted);
+        self.on_changed
+            .borrow_mut()
+            .clone_from(&new_view.on_changed);
         self.obscure.set(new_view.obscure_text);
 
         // A parent rebuilding with a DIFFERENT controller retargets the
@@ -1282,11 +1375,7 @@ impl ViewState<EditableText> for EditableTextState {
             let replacement = Rc::clone(&new_view.focus_node);
             replacement.set_can_request_focus(new_view.enabled);
             let replacement_key_handler_registration =
-                replacement.register_on_key_event(build_key_handler(
-                    self.controller.clone(),
-                    Rc::clone(&replacement),
-                    Rc::clone(&self.on_submitted),
-                ));
+                replacement.register_on_key_event(self.key_handler(&replacement));
             let replacement_rect_provider_registration = self
                 .rect_provider
                 .as_ref()
