@@ -169,7 +169,8 @@ fn thread_local_body_parses_const_blocks_expr_initializers_and_per_entry_cfg() {
 fn lifetime_static_in_macro_tokens_is_not_an_item() {
     let found: Vec<String> = macro_statics(tokens(
         "fn f() -> &'static str { \"static X: u8\" } static REAL: u8 = 0; static mut M: u8 = 0; \
-         ($name:ident) => { static $name: u8 = 0; }",
+         ($name:ident) => { static $name: u8 = 0; } \
+         (&'static $t:ty) => {}",
     ))
     .into_iter()
     .map(|(name, _)| name)
@@ -233,6 +234,31 @@ fn module_walk_follows_path_attributes_and_mod_rs_rules() {
             .all(|def| def.item.starts_with("tool::")),
         "a bin target prefixes its keys"
     );
+}
+
+#[test]
+fn same_key_under_the_same_cfg_is_ambiguous() {
+    let lock = "static X: std::sync::Mutex<u8> = std::sync::Mutex::new(0);";
+    let two_impls = format!(
+        "struct Foo<T>(T); impl Foo<u8> {{ fn new() {{ {lock} }} }} \
+         impl Foo<u16> {{ fn new() {{ {lock} }} }}"
+    );
+    let entry = json!([{ "item": "Foo::new::X", "exit": "ADR-0094", "reason": "a test" }]);
+    let files = [("crates/flui-widgets/src/lib.rs", two_impls.as_str())];
+    assert_eq!(
+        problems(&files, &[krate("flui-widgets", &entry)]),
+        [(
+            "flui-widgets".to_owned(),
+            "Foo::new::X".to_owned(),
+            AMBIGUOUS
+        )]
+    );
+    let by_cfg = format!(
+        "struct Foo<T>(T); #[cfg(unix)] impl Foo<u8> {{ fn new() {{ {lock} }} }} \
+         #[cfg(windows)] impl Foo<u8> {{ fn new() {{ {lock} }} }}"
+    );
+    let files = [("crates/flui-widgets/src/lib.rs", by_cfg.as_str())];
+    assert_eq!(problems(&files, &[krate("flui-widgets", &entry)]), []);
 }
 
 #[test]
