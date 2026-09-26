@@ -2352,6 +2352,42 @@ mod tests {
     }
 
     #[test]
+    fn off_owner_quit_leaves_the_owner_turn_callback_to_the_owner() {
+        use super::super::owner_control::WindowsOwnerHooks;
+
+        let platform = Arc::new(WindowsPlatform::new().expect("platform"));
+        let log = Arc::new(ProbeLog::default());
+        let hooks = WindowsOwnerHooks::new(
+            Arc::clone(&platform) as Arc<dyn Platform>,
+            &platform.owner_control,
+        );
+        let probe = Probe::new(&log);
+        hooks
+            .on_wake(Box::new(move || probe.hit()))
+            .expect("register the owner turn");
+        drop(hooks);
+
+        let worker = std::thread::scope(|scope| {
+            let quitting = scope.spawn(|| platform.quit());
+            let worker = quitting.thread().id();
+            // `quit` closes the signal first; off the owner, debug builds
+            // then fail its owner assertion, which is not what this pins.
+            let _ = quitting.join();
+            worker
+        });
+        assert_ne!(
+            log.dropped_on(),
+            Some(worker),
+            "an off-owner quit must not drop the owner-turn callback on its thread"
+        );
+        assert_eq!(log.dropped_on(), None, "the owner has not released it yet");
+
+        drop(platform);
+        assert_eq!(log.runs(), 0);
+        assert_eq!(log.dropped_on(), Some(std::thread::current().id()));
+    }
+
+    #[test]
     fn off_owner_open_window_is_refused() {
         let platform = WindowsPlatform::new().expect("platform");
         let refused = std::thread::scope(|scope| {
