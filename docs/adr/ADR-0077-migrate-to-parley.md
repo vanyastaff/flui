@@ -1,13 +1,15 @@
 # ADR-0077: Migrate from cosmic-text to parley
 
-- **Status:** Proposed
+- **Status:** Proposed — precondition 1 met 2026-09-26 (recorded in
+  [ADR-0092](ADR-0092-per-realm-text-over-parley.md), Context); absorbed by ADR-0092, which
+  supersedes it on acceptance
 - **Date:** 2026-09-22
 - **Supersedes (on acceptance):** ADR-0016, ADR-0059
 
 Backed by a research spike: [`docs/research/text-stack-2026.md`](../research/text-stack-2026.md),
 code in `tools/text-spike/` (standalone crate, not a workspace member). Nothing in `crates/flui-*`
-has changed as part of this ADR; the migration is separate work. Until the rasterization
-precondition below is met, ADR-0016 and ADR-0059 stay in force.
+has changed as part of this ADR; the migration is separate work. Until ADR-0092 is accepted,
+ADR-0016 and ADR-0059 stay in force.
 
 ## Context
 
@@ -148,6 +150,7 @@ gets checked, before the corresponding piece of work is considered satisfied:
    a stable `GlyphKey` across repeated rasterization of the same glyph (a correctness property the
    engine's atlas cache depends on). Until this exists, this ADR supersedes neither ADR-0016 nor
    ADR-0059.
+   **Met 2026-09-26:** swash driven directly, key on blob identity; see ADR-0092 §5 and Context.
 2. **`arabic_mixed` (0.25%) and `emoji_zwj` (3.19%) glyph-count differences.** Pass condition:
    either (a) a test asserting parley's cluster/selection boundaries match FLUI's expected
    grapheme-cluster boundaries for fixed ZWJ and bidi-mixed corpora (family, couple+heart,
@@ -217,10 +220,8 @@ is settled with the implementation; sharing one mutable database across realms i
   constraint fought against it, but is worth stating as an explicit implementation rule so a future
   contributor doesn't accidentally reintroduce the single-`Layout` pattern for, say, a
   virtualized-list-of-paragraphs optimization.
-- Once precondition 1 is satisfied, this ADR is either accepted — its header becomes
-  `Supersedes: ADR-0016, ADR-0059`, and both of those become `Superseded by ADR-0077` — or moved
-  to Rejected with the rasterization findings recorded, if the prototype shows the atlas/cache-key
-  bridge is not viable at acceptable cost.
+- Precondition 1 is satisfied. This record is not accepted on its own: ADR-0092 carries it and
+  adds `Superseded-by` here on acceptance.
 
 ## If later Rejected
 
