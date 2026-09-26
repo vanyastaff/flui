@@ -95,7 +95,9 @@ asks again next use). `SharedFontSystem` implements it with `GlyphKey`, and
 is the engine's default. `parley_text::SwashRasterizer` implements it with
 `ParleyGlyphKey`, the key ADR-0092 §5 names: blob id and face index, glyph
 id, exact size bits, an interned variation instance, a horizontal
-quarter-pixel bin, hinting and synthesis. It drives the same swash scaler
+quarter-pixel bin, hinting and synthesis. A `VariationId` carries the random
+identity of the `FontRegistry` that minted it, so a rasterizer over another
+registry refuses it instead of drawing its own instance at the same index. It drives the same swash scaler
 as the cosmic-text path with the same sources, format and offsets, so for
 the same face bytes, glyph, size and bin the two draw identical bitmaps;
 `tests/parley_oracle.rs` checks that bit for bit on Parley-shaped Latin,

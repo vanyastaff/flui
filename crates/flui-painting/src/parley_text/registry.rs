@@ -1,6 +1,7 @@
 //! The faces and variation instances keys name, held by the raster side.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasher, Hasher, RandomState};
 use std::sync::Arc;
 
 use super::key::{FaceKey, VariationId};
@@ -14,8 +15,11 @@ pub type FontBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
 ///
 /// Append-only: a face registered once stays for the registry's life, so a
 /// key naming it never dangles.
-#[derive(Default)]
 pub struct FontRegistry {
+    /// This registry's identity, stamped on every [`VariationId`] it mints: a
+    /// random 64-bit value, so two registries collide with negligible
+    /// probability and no process-wide counter is needed.
+    identity: u64,
     faces: HashMap<FaceKey, Face>,
     /// Interned coordinate sets; a [`VariationId`] is an index into this.
     variations: Vec<Box<[i16]>>,
@@ -41,6 +45,19 @@ impl Face {
             data: (*self.bytes).as_ref(),
             offset: self.offset,
             key: self.cache_key,
+        }
+    }
+}
+
+impl Default for FontRegistry {
+    fn default() -> Self {
+        Self {
+            // std's randomly keyed hasher over no input: a fresh random value
+            // per registry, from state std already keeps.
+            identity: RandomState::new().build_hasher().finish(),
+            faces: HashMap::new(),
+            variations: Vec::new(),
+            variation_ids: HashMap::new(),
         }
     }
 }
@@ -118,7 +135,7 @@ impl FontRegistry {
         if let Some(id) = self.variation_ids.get(coords) {
             return Some(*id);
         }
-        let id = VariationId::from_index(self.variations.len())
+        let id = VariationId::from_index(self.identity, self.variations.len())
             .expect("BUG: fewer than 2^32 distinct variation instances");
         let coords: Box<[i16]> = coords.into();
         self.variations.push(coords.clone());
@@ -130,6 +147,9 @@ impl FontRegistry {
     /// did not mint.
     #[must_use]
     pub fn variation(&self, id: VariationId) -> Option<&[i16]> {
+        if id.registry() != self.identity {
+            return None;
+        }
         self.variations.get(id.index()).map(|coords| &**coords)
     }
 
@@ -173,6 +193,20 @@ mod tests {
         assert_ne!(bold, other);
         assert_eq!(registry.variation(bold), Some(&[4096i16][..]));
         assert_eq!(registry.variation(other), Some(&[-2048i16][..]));
+    }
+
+    /// Two registries each mint their first instance; neither resolves the
+    /// other's id, even though both sit at index 0.
+    #[test]
+    fn an_id_from_another_registry_does_not_resolve() {
+        let mut a = FontRegistry::new();
+        let mut b = FontRegistry::new();
+        let from_a = a.intern_variation(&[4096]).expect("not the default");
+        let from_b = b.intern_variation(&[-2048]).expect("not the default");
+        assert_ne!(from_a, from_b);
+        assert_eq!(b.variation(from_a), None);
+        assert_eq!(a.variation(from_b), None);
+        assert_eq!(a.variation(from_a), Some(&[4096i16][..]));
     }
 
     #[test]

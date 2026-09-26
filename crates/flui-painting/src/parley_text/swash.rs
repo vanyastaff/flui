@@ -204,11 +204,15 @@ mod tests {
         assert_eq!(rasterizer.rasterize(key), None);
     }
 
-    /// Fails if an unknown id falls back to the default instance.
+    /// Fails if an unknown id falls back to the default instance, or resolves
+    /// to this registry's own instance at the same index.
     #[test]
     fn an_unknown_variation_is_not_placed() {
         let mut rasterizer = rasterizer();
         let gid = glyph(&rasterizer, 'a');
+        // This registry's first instance sits at the index the foreign id
+        // names.
+        assert!(rasterizer.fonts_mut().intern_variation(&[-2048]).is_some());
         // Minted by another registry: unknown to this one.
         let mut elsewhere = super::FontRegistry::new();
         let foreign = elsewhere.intern_variation(&[1234]);

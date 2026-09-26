@@ -19,23 +19,34 @@ pub struct FaceKey {
 /// An interned set of normalized variation coordinates; minted by, and
 /// meaningful only to, the [`FontRegistry`](super::FontRegistry) that
 /// interned it. `None` in a key is the default instance.
+///
+/// The id carries its registry's identity, so another registry does not
+/// resolve it to whichever instance it interned at the same index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct VariationId(NonZeroU32);
+pub struct VariationId {
+    registry: u64,
+    index: NonZeroU32,
+}
 
 impl VariationId {
-    /// The id for the `index`-th interned instance (0-based).
-    pub(super) fn from_index(index: usize) -> Option<Self> {
+    /// The id for the `index`-th instance (0-based) interned by `registry`.
+    pub(super) fn from_index(registry: u64, index: usize) -> Option<Self> {
         u32::try_from(index)
             .ok()
             .and_then(|i| i.checked_add(1))
             .and_then(NonZeroU32::new)
-            .map(Self)
+            .map(|index| Self { registry, index })
+    }
+
+    /// The identity of the registry that minted this id.
+    pub(super) const fn registry(self) -> u64 {
+        self.registry
     }
 
     /// The 0-based index this id was minted from.
     pub(super) fn index(self) -> usize {
         // A `u32` always fits `usize` on the targets this crate builds for.
-        self.0.get() as usize - 1
+        self.index.get() as usize - 1
     }
 }
 
