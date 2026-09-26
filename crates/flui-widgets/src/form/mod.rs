@@ -41,8 +41,7 @@ use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
 
 pub use form_field::{
-    FormField, FormFieldBuilder, FormFieldHandle, FormFieldSetter, FormFieldState,
-    FormFieldValidator,
+    FormField, FormFieldHandle, FormFieldSetter, FormFieldState, FormFieldValidator,
 };
 pub use raw_text_form_field::{RawTextFormField, RawTextFormFieldState};
 

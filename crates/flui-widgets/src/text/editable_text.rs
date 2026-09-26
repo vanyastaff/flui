@@ -406,7 +406,7 @@ pub struct EditableText {
 }
 
 /// Callback for [`EditableText::on_changed`].
-type TextChanged = Rc<dyn Fn(&str)>;
+pub(crate) type TextChanged = Rc<dyn Fn(&str)>;
 
 impl EditableText {
     /// Create an `EditableText` driven by `controller` and `focus_node`.

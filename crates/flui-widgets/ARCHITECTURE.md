@@ -1684,8 +1684,8 @@ moments that would schedule Flutter's build: `did_change` (a user edit),
 rebuild through the `RebuildHandle` it took in `init_state`. A form `reset()`
 defers the form-level autovalidation to the end of its loop, as Flutter's
 single rebuild after `reset` does. Flutter wraps a field in its unfocus
-`Focus` only when a mode asks for it; FLUI always wraps (not focusable,
-skipped by traversal, no semantics) and checks the modes at focus loss, so a
+`Focus` only when a mode asks for it; FLUI always wraps (not focusable, so
+never a traversal stop, and no semantics) and checks the modes at focus loss, so a
 mode change never remounts the field's content
 (`tab_and_shift_tab_move_focus_between_form_fields_in_order`,
 `on_unfocus_validates_when_tab_leaves_the_field`).

@@ -40,7 +40,7 @@ use crate::interaction::GestureDetector;
 use crate::layout::Padding;
 use crate::paint::DecoratedBox;
 use crate::text::controller::TextEditingController;
-use crate::text::editable_text::{EditableText, SubmitCallback};
+use crate::text::editable_text::{EditableText, SubmitCallback, TextChanged};
 
 // ============================================================================
 // RawTextField
@@ -80,7 +80,7 @@ pub struct RawTextField {
     /// Forwarded to [`EditableText::enabled`].
     enabled: bool,
     /// Forwarded to [`EditableText::on_changed`].
-    on_changed: Option<SubmitCallback>,
+    on_changed: Option<TextChanged>,
     /// Forwarded to [`EditableText::on_submitted`] — see
     /// [`Self::on_submitted`].
     on_submitted: Option<SubmitCallback>,

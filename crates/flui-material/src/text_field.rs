@@ -150,8 +150,11 @@ pub struct TextField {
     /// [`Self::on_submitted`].
     on_submitted: Option<SubmitCallback>,
     /// Forwarded to [`EditableText::on_changed`] — see [`Self::on_changed`].
-    on_changed: Option<SubmitCallback>,
+    on_changed: Option<TextChanged>,
 }
+
+/// Callback for [`TextField::on_changed`].
+type TextChanged = Rc<dyn Fn(&str)>;
 
 // Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
 // no `Debug` impl. Mirrors `flui_widgets::EditableText`'s own manual impl,

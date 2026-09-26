@@ -213,6 +213,10 @@ pub use flui_objects::OverflowBoxFit;
 // need only import from `flui_widgets`.
 pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
+pub use form::{
+    AutovalidateMode, Form, FormField, FormFieldHandle, FormFieldSetter, FormFieldState,
+    FormFieldValidator, FormHandle, FormState, RawTextFormField, RawTextFormFieldState,
+};
 pub use navigator::{
     FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope, HeroMode,
     KeyedSettings, NamedRouteError, Navigator, NavigatorCommand, NavigatorCommandError,
@@ -225,11 +229,6 @@ pub use navigator::{
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
 // the crate — `Navigator` and `Draggable`'s feedback layer are its callers.
-pub use form::{
-    AutovalidateMode, Form, FormField, FormFieldBuilder, FormFieldHandle, FormFieldSetter,
-    FormFieldState, FormFieldValidator, FormHandle, FormState, RawTextFormField,
-    RawTextFormFieldState,
-};
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use physical_model::{PhysicalModel, PhysicalShape};

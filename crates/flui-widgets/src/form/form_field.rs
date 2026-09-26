@@ -17,7 +17,7 @@ pub type FormFieldValidator<T> = Rc<dyn Fn(&T) -> Option<String>>;
 pub type FormFieldSetter<T> = Rc<dyn Fn(&T)>;
 /// Builds the field's content from its handle — Flutter's
 /// `FormFieldBuilder<T>`, which receives the `FormFieldState`.
-pub type FormFieldBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &FormFieldHandle<T>) -> BoxedView>;
+type FormFieldBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &FormFieldHandle<T>) -> BoxedView>;
 
 /// The field's state, shared by its handle, its widget state and its form.
 struct FieldInner<T> {
@@ -640,12 +640,11 @@ impl<T: Clone + 'static> ViewState<FormField<T>> for FormFieldState<T> {
         let content = (view.builder)(ctx, &self.handle);
         // Always wrapped, so a mode change never remounts the content; the
         // wrapper validates on focus loss only when the modes ask for it.
-        // Not focusable and skipped by traversal, so Tab moves between the
-        // fields inside, never onto the wrapper.
+        // Not focusable, which also keeps traversal off it, so Tab moves
+        // between the fields inside, never onto the wrapper.
         let inner = Rc::clone(&self.handle.inner);
         Focus::new(content)
             .can_request_focus(false)
-            .skip_traversal(true)
             .include_semantics(false)
             .debug_label("FormField")
             .on_focus_change(move |focused| {
