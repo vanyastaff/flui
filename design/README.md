@@ -10,7 +10,9 @@
   `flui-protocol` crate exists and holds `SemanticsRole`, `SemanticsAction` and the ADR-0080
   wire vocabulary. ADR-0097: `cargo xtask globals` gates process-global state against the
   seeded `globals` entries in each manifest. The module-DAG gate for flui-widgets is
-  implemented as `cargo xtask module-dag`. Nothing else described here is implemented. The
+  implemented as `cargo xtask module-dag`. The phase counters and `cargo xtask perf` with its
+  baseline are implemented, non-blocking ([architecture.md](architecture.md), budgets).
+  Nothing else described here is implemented. The
   owner answered the open questions on 2026-09-25; the ADRs and this folder carry those answers.
 - **Date:** 2026-09-25
 - **Baseline:** `main` at `cab06137d`

@@ -235,7 +235,7 @@ platform-sensitive scope should require it.
 | `feature-matrix` (shards) | ubuntu | | ✓ | ✓ | ✓ | shard count unchanged (§4.3 deferred) |
 | `wasm-check` | ubuntu | | ✓ | ✓ | ✓ | — |
 | `cross-typecheck` | ubuntu | | ✓ | ✓ | ✓ | — |
-| `perf` **(deferred)** | ubuntu | | a | a | a | §9 row 4; blocking at the B1 exit; lands with `cargo xtask perf` |
+| `perf` **(deferred)** | ubuntu | | a | a | a | §9 row 4; blocking at the B1 exit; `cargo xtask perf` exists, the job is not in the workflows yet |
 | `package-check` **(deferred)** | ubuntu | | ✓ | ✓ | ✓ | §9 row 6, if it does not fit in `checks`; lands with its command |
 | `gpu-test` | windows | | | ✓ | ✓ | runs `cargo xtask gpu-test` (§9 row 2); not in `wide` (C3 declined) |
 | `platform-windows` | windows | | | ✓ | ✓ | — |
@@ -544,8 +544,10 @@ this change could not trigger CI runs.
   filterset and a workspace-wide clippy; `workspace-tests-v2`; the unified `test-features` run;
   `weekly.yml`'s latest-deps on the test scope; `macos-ci` and `test-windows` (advisory);
   `manual.yml`; `full-ci.yml`'s 25-minute wait and `gh run rerun` retries.
-- **Deferred, the commands do not exist yet:** `perf`, `package-check`, `release-check`,
-  `protocol-windows`. `windows-a11y` waits for the `manual.yml` trial (§9 row 5).
+- **Deferred, the commands do not exist yet:** `package-check`, `release-check`,
+  `protocol-windows`. `cargo xtask perf` exists now; its advisory job is not added yet, and its
+  baseline was blessed on Windows, so the first ubuntu run is also the first check that the
+  counts match there. `windows-a11y` waits for the `manual.yml` trial (§9 row 5).
 - **Deferred, they need CI runs to measure (C8):** the `k/5` feature-matrix shards (§4.3) and
   sharing `clippy`'s cache (§4.4).
 - **Not run:** the per-lane proof runs of step 2. The first runs of the PR itself (`wide`, since

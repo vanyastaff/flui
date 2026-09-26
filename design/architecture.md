@@ -1104,7 +1104,13 @@ every pull request; wall time is a nightly trend per OS.
 - Phase counters in `PipelineOwner` and `BuildOwner` plus `cargo xtask perf` with the idle and
   10k-list scenarios arrive with the first gates, as a ratchet: current values are recorded and
   may only fall. The runtime extraction and the `!Send` flip are measured against them. `perf
-  --check` does not block at B0 and blocks from exit B1.
+  --check` does not block at B0 and blocks from exit B1. **Shipped, non-blocking:**
+  `PipelineOwner::counters()`, `FrameBuildReport::builds_run`,
+  `HeadlessBinding::last_frame_report()`, the idle, 10k-list scroll, text-change and
+  full-reassemble scenarios in `crates/flui-testing/tests/perf.rs` with their budgets, and
+  `cargo xtask perf` against `crates/flui-testing/perf/baseline.toml`; only `perf --self-test`
+  runs in `cargo xtask checks` until the CI `perf` job exists. Idle is measured headlessly as
+  "no frame committed", not through the `FrameClock` demand mask.
 - `bench-collect` stops skipping benches with `required-features`
   (`tools/xtask/src/bench.rs:36`), so ADR-0061's baseline, 2901 µs for a full 64-layer frame
   against 56 µs with damage (`docs/adr/ADR-0061-damage-needs-layer-identity.md:31`), is

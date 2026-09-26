@@ -48,6 +48,17 @@
 //! runs twice (forward to completion, then reverse) ticks the second run from its
 //! own start instead of snapping to the target on the first frame.
 //!
+//! ### What a frame cost
+//!
+//! [`HeadlessBinding::last_frame_report`] returns a [`FrameReport`] for the last
+//! pump: the build owner's report (distinct elements rebuilt, builds run, the
+//! per-reason split) and the pipeline's phase counters differenced across the
+//! frame. The crate's `perf` test target drives a fixed app through idle,
+//! scroll, text-change and full-reassemble frames, asserts budgets on those
+//! reports, and — when `FLUI_PERF_OUT` names a directory — writes each
+//! scenario's counts there for `cargo xtask perf` to compare with the
+//! checked-in baseline.
+//!
 //! ## Example
 //!
 //! ```
