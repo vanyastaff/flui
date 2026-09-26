@@ -28,8 +28,11 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # The one-shot slot inside `TransferRequest`.
 parking_lot = { workspace = true }
 # `PlatformWindow`'s GPU handles, through `HasWindowHandle`/`HasDisplayHandle`
-# only (ADR-0089).
-raw-window-handle = { workspace = true }
+# only (ADR-0089). `alloc` carries those traits through `Arc`, so the
+# `Arc<dyn PlatformWindow>` a renderer holds is itself a handle source; without
+# it that holds only while something else in the graph (wgpu, winit) turns the
+# feature on.
+raw-window-handle = { workspace = true, features = ["alloc"] }
 thiserror = { workspace = true }
 # The W3C pointer/keyboard vocabulary `PlatformInput` wraps. Re-exporting its
 # types is ADR-0089 debt: own types replace them before the first release.
