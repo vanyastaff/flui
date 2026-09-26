@@ -651,9 +651,13 @@ impl SemanticsOwner {
     /// An unrooted tree publishes nothing and stays dirty, so the first
     /// rooted flush retries (unchanged from the pre-diff behavior; see the
     /// comment inside the private full-publish path).
-    pub fn flush(&mut self) {
+    ///
+    /// Returns how many nodes the delivered update carried — the whole tree
+    /// for a full publish, the changed nodes for an incremental one, and 0
+    /// when nothing was delivered. The pipeline's phase counters sum it.
+    pub fn flush(&mut self) -> usize {
         if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
-            return;
+            return 0;
         }
 
         let needs_full = self.full_publish_pending
@@ -669,9 +673,9 @@ impl SemanticsOwner {
             };
 
         if needs_full {
-            self.publish_full();
+            self.publish_full()
         } else {
-            self.publish_incremental();
+            self.publish_incremental()
         }
     }
 
@@ -685,7 +689,8 @@ impl SemanticsOwner {
     }
 
     /// Publishes the complete rooted tree and resets the mirror to it.
-    fn publish_full(&mut self) {
+    /// Returns the number of nodes delivered (0 when there is no root yet).
+    fn publish_full(&mut self) -> usize {
         // Translate before touching the callback so the borrow of `self.tree`
         // ends first.
         let Some(update) = crate::tree_to_update(&self.tree, None) else {
@@ -701,7 +706,7 @@ impl SemanticsOwner {
             // representation for "no tree" — so it is defined with the
             // adapter lifecycle rather than invented here without one. See
             // the teardown item in the Linux bridge issue.
-            return;
+            return 0;
         };
 
         // Clone-and-release: cloning the `Arc` out of `self.callback`
@@ -712,6 +717,7 @@ impl SemanticsOwner {
             callback(&update);
         }
 
+        let published = update.nodes.len();
         self.published = Some(PublishedState::mirror_of(update));
         self.full_publish_pending = false;
         self.focus_claimants = Self::scan_focus_claimants(&self.tree);
@@ -723,6 +729,7 @@ impl SemanticsOwner {
             self.examined_last_flush = self.tree.len();
         }
         self.tree.mark_all_clean();
+        published
     }
 
     /// Every node currently claiming the focused flag — publishable or not,
@@ -744,7 +751,10 @@ impl SemanticsOwner {
     /// this method walked the whole arena per flush to collect a live-id
     /// set and derive focus; that walk was the last O(tree) cost on the
     /// publish path.)
-    fn publish_incremental(&mut self) {
+    ///
+    /// Returns the number of changed nodes delivered (0 when the diff is
+    /// empty and focus is unchanged, so nothing is delivered).
+    fn publish_incremental(&mut self) -> usize {
         let state = self
             .published
             .as_mut()
@@ -838,7 +848,7 @@ impl SemanticsOwner {
             // a rebuild that reproduced the same tree. The adapter hears
             // nothing; the dirt is simply consumed.
             self.tree.mark_all_clean();
-            return;
+            return 0;
         }
 
         for (id, node) in &changed {
@@ -859,6 +869,7 @@ impl SemanticsOwner {
         }
 
         self.tree.mark_all_clean();
+        update.nodes.len()
     }
 
     /// How many arena entries the last flush inspected — the scaling
@@ -1245,6 +1256,49 @@ mod tests {
             1,
             "one changed node must cost one examination, not an arena sweep"
         );
+    }
+
+    /// The count `flush` returns is the size of the update it delivered: the
+    /// whole tree for a full publish, the changed nodes for an incremental
+    /// one, and zero when nothing is delivered. The callback sees the same
+    /// figure, so the return value cannot drift from what an adapter receives.
+    #[test]
+    fn flush_returns_the_number_of_nodes_it_published() {
+        let delivered = Arc::new(AtomicUsize::new(0));
+        let delivered_clone = Arc::clone(&delivered);
+        let callback: SemanticsUpdateCallback = Arc::new(move |update| {
+            delivered_clone.store(update.nodes.len(), Ordering::SeqCst);
+        });
+        let mut owner = SemanticsOwner::new(callback);
+
+        let root = owner.insert(addressable(1));
+        assert_eq!(owner.flush(), 0, "an unrooted tree delivers nothing");
+
+        let mut children = Vec::new();
+        for index in 2..=5 {
+            let child = owner.insert(addressable(index));
+            owner.add_child(root, child);
+            children.push(child);
+        }
+        owner.set_root(Some(root));
+        assert_eq!(owner.flush(), 5, "the first publish carries the whole tree");
+        assert_eq!(delivered.load(Ordering::SeqCst), 5);
+
+        owner
+            .get_mut(children[2])
+            .expect("child is live")
+            .config_mut()
+            .set_label("changed");
+        assert_eq!(owner.flush(), 1, "one changed node, one node delivered");
+        assert_eq!(delivered.load(Ordering::SeqCst), 1);
+
+        owner.mark_dirty(children[0]);
+        assert_eq!(
+            owner.flush(),
+            0,
+            "a dirty node whose payload is unchanged diffs away to nothing"
+        );
+        assert_eq!(owner.flush(), 0, "a clean tree delivers nothing");
     }
 
     #[test]
