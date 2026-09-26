@@ -2394,7 +2394,6 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-protocol",
- "flui-tree",
  "flui-types",
  "parking_lot",
  "rustc-hash 2.1.3",

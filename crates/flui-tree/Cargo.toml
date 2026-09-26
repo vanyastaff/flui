@@ -51,7 +51,6 @@ allowed-dependents = [
     "flui",
     "flui-objects",
     "flui-rendering",
-    "flui-semantics",
     "flui-view",
 ]
 allowed-dev-dependents = []

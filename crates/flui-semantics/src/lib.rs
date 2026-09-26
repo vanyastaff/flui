@@ -167,9 +167,6 @@ pub use update::{SemanticsNodeData, SemanticsTreeUpdate, SemanticsTreeUpdateBuil
 /// use flui_semantics::prelude::*;
 /// ```
 pub mod prelude {
-    // Core types
-    // Re-export tree traits for convenience
-    pub use flui_tree::{TreeNav, TreeRead};
     // Re-export optimized types
     pub use rustc_hash::{FxHashMap, FxHashSet};
     pub use smallvec::SmallVec;
