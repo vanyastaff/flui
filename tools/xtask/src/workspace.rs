@@ -738,7 +738,7 @@ fn check_unique_adr_numbers(root: &Path, findings: &mut Vec<String>) -> anyhow::
 }
 
 /// `path` relative to `root`, `/`-separated.
-fn relative(root: &Path, path: &Path) -> anyhow::Result<String> {
+pub(crate) fn relative(root: &Path, path: &Path) -> anyhow::Result<String> {
     let path = normalize(path);
     let rel = path
         .strip_prefix(normalize(root))
