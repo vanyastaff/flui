@@ -1,14 +1,18 @@
 # ADR-0074: Realm-scoped signals as the canonical application-state layer
 
-- **Status:** Accepted — for `Signal<T>` and the reader registry, behind `flui-view` feature
-  `signals`. Derived values and effects (`Computed<T>`, `Effect`) are not part of this decision;
-  they are designed in [ADR-0075](ADR-0075-derived-state-and-effects.md).
+- **Status:** Accepted — for `Signal<T>` and the reader registry, always compiled (the `signals`
+  feature was removed by ADR-0085 §5). Derived values and effects (`Computed<T>`, `Effect`) are
+  not part of this decision; they are designed in [ADR-0075](ADR-0075-derived-state-and-effects.md).
 - **Date:** 2026-09-22
 - **Supersedes:** the signals clause of FOUNDATIONS C1 (now §7's wording) and ADR-0008's
   "signals-as-default are rejected" (ADR-0008 has since been retired).
 - **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
-  (Proposed; its §1 ships ahead of acceptance) — its §1 routes a cross-thread write by the slot's graph and replaces §5.8's `SignalWrite` command
-  shape; the write signature is ADR-0086's.
+  (Proposed; its §1, §2 and §5 ship ahead of acceptance) — its §1 routes a cross-thread write by
+  the slot's graph and replaces §5.8's `SignalWrite` command shape; its §2 moves the handles and
+  the read parameter into `flui_foundation::read_scope` (reads take any `&S` where
+  `S: ReadScope + ?Sized`, which `BuildContext` is, instead of `&dyn BuildContext`, and writes
+  go through `SignalWriteExt`); its §5 removes the `signals` feature. The write signature is
+  ADR-0086's.
 
 Two limits are part of the decision: a value read by hundreds of cells is an `InheritedView` +
 field-mask concern, not a per-cell signal (§5.10); structural list changes are
@@ -139,9 +143,11 @@ impl<T> Signal<T> {
 
 ### 5.2 Read-is-subscribe through the existing `BuildContext`
 
-- `ElementBuildContext` knows the building `ElementId`. `Signal::get(cx)` calls
-  `cx.signal_read(slot)`, appending `slot → element` to the reader set — exactly what
-  `depend_on_inherited` does for a provider, with a signal slot in place of a provider node.
+- `ElementBuildContext` knows the building `ElementId`. `Signal::get(cx)` subscribes it,
+  appending `slot → element` to the reader set — exactly what `depend_on_inherited` does for a
+  provider, with a signal slot in place of a provider node. (ADR-0085 §2 routes this through
+  the context's `ReadScope` and a sink bound to the element; the method `cx.signal_read(slot)`
+  it replaced is gone.)
 - Reader sets are **cleared and rebuilt on every build of that element** (Compose's and Solid's
   rule): a build that no longer reads a signal stops depending on it. A build that unwinds
   restores the previous read set. Storage is linear small-vectors per signal and per element
@@ -337,7 +343,8 @@ answered by §5.3: they feed the same heap.
 Prototype scope: `Signal`/`Reactive` in `flui-view` behind `signals`, the reader registry,
 `RebuildReason::SignalChange`, `HeadlessBinding::reactive()`, one `UiCommand::SignalWrite`. No
 catalog changes. The benchmark (`crates/flui-widgets/benches/signals_rebuilds.rs`,
-`cargo bench -p flui-widgets --features signals --bench signals_rebuilds`) runs each scenario as **A** `setState` on the owning state vs **B**
+`cargo bench -p flui-widgets --bench signals_rebuilds`; the prototype ran it with
+`--features signals`, which no longer exists) runs each scenario as **A** `setState` on the owning state vs **B**
 signals, on the same tree.
 
 Acceptance criteria: for "one thing changed" scenarios B rebuilds only the readers (A rebuilds

@@ -186,14 +186,11 @@ where
     // is where "an element is building" is armed for the realm's reactive
     // graph — reads re-derive the reader set, writes and slot creations are
     // refused. Disarmed on both exits (the panic path below included).
-    #[cfg(feature = "signals")]
     let building = core.self_id();
-    #[cfg(feature = "signals")]
     if let Some(id) = building {
         owner.reactive.begin_element_build(id);
     }
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(build));
-    #[cfg(feature = "signals")]
     if let Some(id) = building {
         owner.reactive.end_element_build(id, outcome.is_ok());
     }

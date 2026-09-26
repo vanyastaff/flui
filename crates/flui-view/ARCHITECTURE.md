@@ -258,6 +258,23 @@ masks and every public read depends. There is no blanket `Data: PartialEq` bound
 comes from the opt-in derive. The dependent registry is the same reader registry signals use
 (ADR-0074 §5.5).
 
+### Signal reads subscribe through a private sink
+
+Signals have no Flutter counterpart, so this is a local invariant rather than a divergence.
+
+**Rule.** The reactive graph (`reactive/mod.rs`, one `Reactive` per `BuildOwner`) implements
+`flui_foundation::read_scope::ReadGraph` — pure reads, enough for `Signal::peek` — and never
+`ReaderSink`. `BuildContext` has `ReadScope` as a supertrait, so `sig.get(cx)` resolves through
+the context's scope. The scope pairs the graph with `ElementReads`, a crate-private sink bound
+to one element: `make_build_ctx` mints it for the element about to build (`BuildCtx` always
+subscribes), and `ElementBuildContext` captures one for its own element and subscribes only while
+marked as building. `begin_element_build`/`end_element_build` bracket every build in
+`build_or_recover` and `release_element` runs on every unmount, in every build: there is no
+`signals` feature. Writes are the sealed `SignalWriteExt` trait over `&Reactive` until ADR-0086
+moves them to the event context. The routing test is
+`tests/signal_reads.rs::a_read_in_build_subscribes_through_the_production_context`; the
+`Reactive`/`ElementReads` sink pair is pinned by `static_assertions` in the module's tests.
+
 ### Reconciliation emits typed events on the live path
 
 **Rule.** `reconcile_children_by_id` emits one `ReconcileEvent` per child disposition (`Mount`,

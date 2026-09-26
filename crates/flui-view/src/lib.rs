@@ -93,7 +93,6 @@ pub mod element;
 pub mod key;
 pub mod macros;
 pub mod owner;
-#[cfg(feature = "signals")]
 pub mod reactive;
 pub mod seq;
 pub mod state_cell;
@@ -221,8 +220,10 @@ pub use owner::{
     RebuildHandle, RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
-#[cfg(feature = "signals")]
-pub use reactive::{Reactive, Signal, SignalError, SignalSender, SignalSlot, SlotInfo};
+pub use reactive::{
+    Reactive, ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender,
+    SignalSlot, SignalWriteExt, SlotInfo,
+};
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
@@ -269,6 +270,12 @@ pub mod prelude {
 
     // Logging
     pub use crate::context::{BuildContext, BuildContextExt, LifecycleContext};
+    // Signal writes (`set`/`update`/`set_if_changed`). Reads need no import:
+    // `Signal::get` is inherent and takes the context as a `ReadScope`, so
+    // `ReadScope` is not in the prelude. `cx.scope()` still resolves on any
+    // `BuildContext` without it (a supertrait's methods do); a `ScopeRef` is
+    // opaque, so that reaches nothing but a signal read.
+    pub use crate::reactive::SignalWriteExt;
     pub use crate::{
         binding::{
             AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation,

@@ -387,7 +387,7 @@ cargo bench -p flui-engine
 
 Benchmark results are written under `target/criterion/` as HTML reports.
 
-`cargo bench -p flui-widgets --features signals --bench signals_rebuilds -- --noplot`
+`cargo bench -p flui-widgets --bench signals_rebuilds -- --noplot`
 (`crates/flui-widgets/benches/signals_rebuilds.rs`) runs ADR-0074's go/no-go: `setState` against realm-scoped signals on
 the same widget tree, printing a table of elements rebuilt per `RebuildReason` and
 layout roots per frame before the criterion timings. The counts come from two telemetry

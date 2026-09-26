@@ -1668,5 +1668,4 @@ mod global_key_lookup_during_frame;
 // Cross-thread signal writes run against the graph that minted the slot,
 // in whichever presentation owns it (ADR-0085 §1).
 // ========================================================================
-#[cfg(feature = "signals")]
 mod signal_write_routing;

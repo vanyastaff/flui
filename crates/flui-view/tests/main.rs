@@ -67,6 +67,8 @@ mod production_reconcile_emits;
 mod reconcile_capture;
 #[path = "recovered_panics.rs"]
 mod recovered_panics;
+#[path = "signal_reads.rs"]
+mod signal_reads;
 #[path = "stateless_stateful_tests.rs"]
 mod stateless_stateful_tests;
 #[path = "trybuild_ui.rs"]

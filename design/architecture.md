@@ -323,13 +323,14 @@ owner decided that each name is checked before its crate is created, with nothin
 4. **Backends are chosen by target, not by a user feature.** The Windows and macOS accessibility
    adapters are unconditional target dependencies; Linux AT-SPI is `a11y-linux`, on by default and
    removable.
-5. **Signals are not a feature.** `signals` in `crates/flui-view/Cargo.toml:119-123` and the facade's
-   `Cargo.toml:642-645` is removed in the first reactive step, because a supertrait cannot be
-   gated by `cfg` ([ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md)).
-   The facade comment still says the feature waits for the field-mask registry; that registry has
-   landed (`FieldMask`, `crates/flui-view/src/view/inherited.rs:114`; `depend_on_field`,
-   `crates/flui-view/src/context/build_context.rs:648`), so the remaining precondition is the
-   ADR-0074 go/no-go measurement, which ADR-0085 must state as met or name what is missing.
+5. **Signals are not a feature.** The first reactive step removed the `signals` feature and every
+   `cfg(feature = "signals")`, because a supertrait cannot be gated by `cfg`
+   ([ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) §5, which
+   records the field-mask registry and the ADR-0074 measurement as the met preconditions). The
+   facade has no `signals` feature. `flui-view`, `flui-testing`, `flui-widgets` and `flui-app`
+   keep an empty `signals = []` that is accepted and ignored, only because CI's `test-features`
+   job still names it; that step, the matching step of `cargo xtask test-features` and the four
+   empty features go together.
 6. **The facade has `default = []`**, and its features switch core capabilities only (`testing`,
    `serde`, image loading such as `network-images`, which today is a `flui-widgets` feature). It
    has no `material`, `cupertino`, `devtools` or `hot-reload` feature (owner decision 6). The reason is
@@ -565,21 +566,25 @@ decisions 5 and 7.
 - **Reads go through `ReadScope`.** The read contract (`Signal<T>`, `SignalSlot`, `SignalError`,
   `ReadGraph`, `ReaderSink`, `ScopeRef`, `ReadScope`) lives in `flui_foundation::read_scope`.
   `Signal::get/with/try_*` take `&S where S: ReadScope + ?Sized`, and `BuildContext: ReadScope`,
-  so `count.get(cx)` keeps its spelling. Today `get` takes `&dyn crate::BuildContext`
-  (`mod.rs:752`). `ReadScope` is read-only: it reads and identifies its graph, and it never hands
-  out the owning graph handle. Subscription goes through a `ReaderSink` that only the drivers
-  mint, so a holder of the graph cannot subscribe an arbitrary node. A handle of the wrong type is
-  `SignalError::TypeMismatch`. Writes are the `SignalWriteExt` trait in `flui_view::prelude`
-  until `EventCx` replaces `&Reactive`.
+  so `count.get(cx)` keeps its spelling. `ReadScope` is read-only: it reads and identifies its
+  graph, and it never hands out the owning graph handle. Subscription goes through a
+  `ReaderSink`, and `flui-view`'s sinks are private: today the one sink, `ElementReads`, is
+  minted by `make_build_ctx` for the element about to build (and by the `ElementBuildContext`
+  test seam for its own element), so a holder of the graph cannot subscribe an arbitrary node.
+  A handle of the wrong type is `SignalError::TypeMismatch`. Writes are the `SignalWriteExt`
+  trait in `flui_view::prelude` until `EventCx` replaces `&Reactive`.
 - **The graph stays in `flui-view`, in three steps.**
-  1. The contract in foundation; a one-method `RebuildSink` instead of `ExternalBuildScheduler`;
-     two non-`Clone` drivers the realm mints, an `ElementDriver` for `BuildOwner` and a
-     `RenderDriver` that `PipelineOwner` reaches through a trait `flui-rendering` declares. The
-     `signals` feature goes.
+  1. Shipped: the contract in foundation, `BuildContext: ReadScope`, the sealed
+     `SignalWriteExt`, `TypeMismatch`, and the removal of the `signals` feature (four empty
+     stubs remain, §5 item 5).
   2. Readers generalise from `ElementId` to
      `Element(ElementId) | Layout(RenderId) | Paint(RenderId)`, with phase guards that reject or
      defer writes during layout and paint, like `WrittenDuringBuild`, and writes that mark
-     `Layout`/`Paint` readers.
+     `Layout`/`Paint` readers. The same step brings what step 1 left for its first production
+     caller: a one-method `RebuildSink` instead of `ExternalBuildScheduler`; two non-`Clone`
+     drivers the realm mints, an `ElementDriver` for `BuildOwner` and a `RenderDriver` that
+     `PipelineOwner` reaches through a trait `flui-rendering` declares, which then mint the
+     sinks; and `ScopeRef::detached` with `SignalError::NoGraph`.
   3. The first render subscriber, with no move: a render-object field read in paint through
      `PaintCx: ReadScope` and written outside the frame phases, with a test that shows the
      repaint itself. `ScrollPosition` is not that first consumer, because it is written from

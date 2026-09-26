@@ -7,8 +7,6 @@
 //! - a write inside a callback closure *defined* in `build` runs later, from an event;
 //! - creation and writes in `init_state` / `did_update_view` are outside the frame phases.
 
-#![cfg(feature = "signals")]
-
 use std::cell::Cell;
 use std::rc::Rc;
 

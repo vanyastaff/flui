@@ -12,7 +12,7 @@ use super::exec::{Cmd, Runner};
 /// deliberate: a missing `required-features` on an example or test is exactly
 /// the wiring these builds exist to catch. `cargo xtask reach` resolves the
 /// facade under the same selections.
-pub(crate) const COMBOS: [&str; 15] = [
+pub(crate) const COMBOS: [&str; 13] = [
     "--no-default-features",
     "--no-default-features --features material",
     "--no-default-features --features cupertino",
@@ -24,8 +24,6 @@ pub(crate) const COMBOS: [&str; 15] = [
     "--no-default-features --features hot-reload",
     "--no-default-features --features serde",
     "--no-default-features --features a11y",
-    "--no-default-features --features signals",
-    "--no-default-features --features material,signals",
     "--all-features",
     "",
 ];
@@ -57,7 +55,7 @@ mod tests {
     #[test]
     fn every_combination_is_its_own_flui_clippy() {
         let lines: Vec<String> = clippy_plan().iter().map(ToString::to_string).collect();
-        assert_eq!(lines.len(), 15);
+        assert_eq!(lines.len(), 13);
         assert_eq!(
             lines[0],
             "cargo clippy -p flui --locked --all-targets --no-default-features -- -D warnings"
@@ -67,12 +65,12 @@ mod tests {
             "cargo clippy -p flui --locked --all-targets --no-default-features --features material,cupertino,localizations -- -D warnings"
         );
         assert_eq!(
-            lines[13],
+            lines[11],
             "cargo clippy -p flui --locked --all-targets --all-features -- -D warnings"
         );
         // the defaults: no feature flag at all
         assert_eq!(
-            lines[14],
+            lines[12],
             "cargo clippy -p flui --locked --all-targets -- -D warnings"
         );
         let distinct: std::collections::BTreeSet<&str> = COMBOS.into_iter().collect();

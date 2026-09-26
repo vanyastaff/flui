@@ -370,7 +370,6 @@ impl UiRealm {
     ///
     /// Each binding's read lock is released before this returns, so the
     /// caller runs the write with no lock held.
-    #[cfg(feature = "signals")]
     pub(super) fn signal_graph_for(
         &self,
         slot: flui_view::SignalSlot,
