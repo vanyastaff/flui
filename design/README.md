@@ -6,14 +6,18 @@
   `cargo xtask workspace`. Its reach facts (§2) are implemented and checked by
   `cargo xtask reach` but stay Proposed until the owner decides the three points ADR-0081's
   status names. ADR-0082: `flui-platform-api` exists and holds the capability traits and the
-  window and input vocabulary, and only `flui-app` depends on `flui-platform`. ADR-0095: the
-  `flui-protocol` crate exists and holds `SemanticsRole`, `SemanticsAction` and the ADR-0080
-  wire vocabulary. ADR-0097: `cargo xtask globals` gates process-global state against the
-  seeded `globals` entries in each manifest. The module-DAG gate for flui-widgets is
-  implemented as `cargo xtask module-dag`. The phase counters and `cargo xtask perf` with its
-  baseline are implemented, non-blocking ([architecture.md](architecture.md), budgets).
-  Nothing else described here is implemented. The
-  owner answered the open questions on 2026-09-25; the ADRs and this folder carry those answers.
+  window and input vocabulary, and only `flui-app` depends on `flui-platform`; its `Send`
+  removal is still Proposed, but Win32 has done its first step (owner-only callbacks, off-owner
+  registration refused). ADR-0095: the `flui-protocol` crate exists and holds `SemanticsRole`,
+  `SemanticsAction` and the ADR-0080 wire vocabulary. ADR-0097: `cargo xtask globals` gates
+  process-global state against the seeded `globals` entries in each manifest. ADR-0083:
+  `flui-runtime` exists (tier K, internal, above `flui-widgets`) and holds the held-input lane,
+  the semantics host and the commit epoch; the realm core has not moved yet. The module-DAG gate
+  for flui-widgets is implemented as `cargo xtask module-dag`. The phase counters and
+  `cargo xtask perf` with its baseline are implemented, non-blocking
+  ([architecture.md](architecture.md), budgets). Nothing else described here is implemented.
+  The owner answered the open questions on 2026-09-25; the ADRs and this folder carry those
+  answers.
 - **Date:** 2026-09-25
 - **Baseline:** `main` at `cab06137d`
 
@@ -82,14 +86,15 @@ study and a CI redesign take up the build cost instead.
 
 ## ADRs
 
-All are `Proposed` and dated 2026-09-25. An ADR moves to `Accepted` in the change that ships the
-first behaviour it decides; the older ADRs it amends or supersedes get their back-links then.
+All are dated 2026-09-25 and `Proposed`, except the four the status above names as accepted in
+part. An ADR moves to `Accepted` in the change that ships the first behaviour it decides; the
+older ADRs it amends or supersedes get their back-links then.
 
 | ADR | Decision |
 |---|---|
 | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) | Workspace tiers, reach facts, stability kinds, feature policy and the B0 exit |
-| [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` (accepted in part: the first move; `PlatformWindow`, `Send` removal and deletions remain proposed) |
-| [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) | One frame transaction lives in `flui-runtime` above `flui-widgets` |
+| [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` (accepted in part: the first move; `PlatformWindow`, `Send` removal and deletions remain proposed, and Win32 has done the `Send` removal's first step) |
+| [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) | One frame transaction lives in `flui-runtime` above `flui-widgets` (accepted in part: the crate's placement and its first move) |
 | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) | Platform capabilities are an open, typed set in two classes (core-required backend methods, optional plugins) behind one door |
 | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) | The reactive graph is realm-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation` |
 | [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) | Signal writes go through `EventCx` opened by a `WriterSource` |

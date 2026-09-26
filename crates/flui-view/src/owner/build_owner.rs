@@ -72,10 +72,9 @@ const MAX_MID_DRAIN_ABSORBS: usize = 16;
 /// listener still never needs to touch the owner.
 ///
 /// The inbox carries the element id and every cause accumulated since it was
-/// last absorbed. The dirty-heap ordering key (tree depth) is read
-/// authoritatively from the node at absorb time, not captured here, because
-/// `ElementCore` does not know its own tree depth (its `depth` field is the
-/// sibling slot index, not `parent_depth + 1`).
+/// last absorbed. The dirty-heap ordering key (tree depth) is read from the
+/// node at absorb time, not captured here: a GlobalKey move between the
+/// schedule and the absorb can change it.
 #[derive(Clone)]
 pub(crate) struct ExternalBuildScheduler {
     /// Shared inbox drained by `build_scope`; one accumulated cause set per
@@ -1043,14 +1042,12 @@ impl BuildOwner {
     /// Re-key every queued dirty element to its authoritative TREE depth.
     ///
     /// The dirty heap orders by depth, but `schedule_build_for` is handed a
-    /// depth by its caller — and the `setState` path
-    /// (`ElementCore::schedule_self_build`) plus the live `BuildCtx` both pass
-    /// `ElementCore::depth`, which is the sibling SLOT index, not
-    /// `parent_depth + 1`. Left as-is, a deeply-nested `setState` would sort as
-    /// if it were shallow and a child could rebuild before its parent —
-    /// violating Flutter's shallowest-first contract. Rebuilding the heap keyed
-    /// on each node's real depth (`ElementNode::depth`, the same authority the
-    /// external-inbox drain uses) restores the contract regardless of what
+    /// depth by its caller and trusts it. A caller that passes a stale or
+    /// wrong depth would let a deeply-nested rebuild sort as if it were
+    /// shallow, so a child could rebuild before its parent — violating
+    /// Flutter's shallowest-first contract. Rebuilding the heap keyed on each
+    /// node's current depth (`ElementNode::depth`, the same authority the
+    /// external-inbox drain uses) keeps the contract regardless of what
     /// `schedule_build_for` was told.
     fn rekey_dirty_depths(&mut self, tree: &ElementTree) {
         if self.dirty_elements.is_empty() {
@@ -1061,7 +1058,7 @@ impl BuildOwner {
             .map(|Reverse(dirty)| dirty.id())
             .collect();
         for id in queued {
-            let depth = tree.get(id).map_or(0, |node| node.depth);
+            let depth = tree.get(id).map_or(0, crate::tree::ElementNode::depth);
             self.dirty_elements
                 .push(Reverse(DirtyElement::new(id, depth)));
         }
@@ -1152,7 +1149,9 @@ impl BuildOwner {
             .scratch
             .pop()
         {
-            dirty.depth = tree.get(dirty.id()).map_or(0, |node| node.depth);
+            dirty.depth = tree
+                .get(dirty.id())
+                .map_or(0, crate::tree::ElementNode::depth);
             let scope = Self::nearest_layout_builder_scope(tree, dirty.id(), live_scopes);
             self.defer_dirty_element(scope, dirty);
         }
@@ -1583,16 +1582,15 @@ impl BuildOwner {
         // budget rules.
         let mut capped_leftover = CappedLeftoverGuard::new(Arc::clone(&self.external_inbox));
 
-        // Re-key every element already on the heap to its AUTHORITATIVE tree
-        // depth before draining. `schedule_build_for` trusts the depth its
-        // caller passes, but the `setState` path (`ElementCore::schedule_self_build`)
-        // and the live `BuildCtx` both pass `ElementCore::depth` — the sibling
-        // SLOT index, not `parent_depth + 1`. Trusting it lets a deeply-nested
-        // `setState` sort as if it were shallow, so a child could build before
-        // its parent and violate Flutter's shallowest-first build contract
-        // (`framework.dart` `_dirtyElements.sort(Element._sort)` keys on the
-        // element's real depth). Re-derive each id's depth from its node — the
-        // same authority `absorb_mid_drain_inbox` uses for a freshly-absorbed id.
+        // Re-key every element already on the heap to its current tree depth
+        // before draining. `schedule_build_for` trusts the depth its caller
+        // passes; a stale one (a subtree moved by a GlobalKey after the
+        // schedule) would let a deeply-nested rebuild sort as if it were
+        // shallow, so a child could build before its parent and violate
+        // Flutter's shallowest-first build contract (`framework.dart`
+        // `_dirtyElements.sort(Element._sort)` keys on the element's real
+        // depth). Re-derive each id's depth from its node — the same authority
+        // `absorb_mid_drain_inbox` uses for a freshly-absorbed id.
         self.rekey_dirty_depths(tree);
 
         // Process dirty elements in depth order, extract-then-apply
@@ -2178,7 +2176,7 @@ impl BuildOwner {
                 self.mid_drain_absorbs_left = remaining;
             }
             self.dirty_reasons.insert(id, reasons);
-            let depth = tree.get(id).map_or(0, |node| node.depth);
+            let depth = tree.get(id).map_or(0, crate::tree::ElementNode::depth);
             // Push straight onto the heap: `drain_build_scope`'s pop already
             // re-derives this id's scope and defers non-accepted ids, so
             // classifying scope here too would only duplicate that work.
@@ -3247,9 +3245,9 @@ mod tests {
         let root = tree.mount_root(&view, &mut owner.element_owner_mut());
         let mid = tree.insert(&view, root, 0, &mut owner.element_owner_mut());
         let leaf = tree.insert(&view, mid, 0, &mut owner.element_owner_mut());
-        assert_eq!(tree.get(root).map(|n| n.depth), Some(0));
-        assert_eq!(tree.get(mid).map(|n| n.depth), Some(1));
-        assert_eq!(tree.get(leaf).map(|n| n.depth), Some(2));
+        assert_eq!(tree.get(root).map(crate::tree::ElementNode::depth), Some(0));
+        assert_eq!(tree.get(mid).map(crate::tree::ElementNode::depth), Some(1));
+        assert_eq!(tree.get(leaf).map(crate::tree::ElementNode::depth), Some(2));
 
         // Schedule with INVERTED depths — what a `setState` on each would pass if
         // it trusted the slot index (all three are slot 0 here; we exaggerate to
@@ -3541,7 +3539,7 @@ mod tests {
         let builds_after_mount = build_calls.load(Ordering::Relaxed);
 
         tree.mark_needs_build(moved);
-        let depth = tree.get(moved).expect("live keyed descendant").depth;
+        let depth = tree.get(moved).expect("live keyed descendant").depth();
         owner.schedule_build_for(moved, depth, RebuildReason::StateChange);
         owner.schedule_build_for(moved, depth, RebuildReason::DependencyChange);
         owner.pending_dependency_changes.insert(moved);
@@ -4231,7 +4229,7 @@ mod tests {
         view: &V,
     ) -> ElementId {
         let id = tree.insert(view, parent, slot, &mut owner.element_owner_mut());
-        let depth = tree.get(id).map_or(0, |node| node.depth);
+        let depth = tree.get(id).map_or(0, crate::tree::ElementNode::depth);
         owner.schedule_build_for(id, depth, RebuildReason::InitialMount);
         owner.build_scope(tree);
         // A registered layout-builder scope may have quarantined this fresh
@@ -4823,7 +4821,7 @@ mod tests {
         owner.set_tree_observer(observer.clone());
 
         should_notify.store(true, Ordering::Relaxed);
-        let parent_depth = tree.get(parent).expect("parent").depth;
+        let parent_depth = tree.get(parent).expect("parent").depth();
         tree.mark_needs_build(parent);
         owner.schedule_build_for(parent, parent_depth, RebuildReason::StateChange);
         owner.build_scope(&mut tree);
@@ -4899,7 +4897,7 @@ mod tests {
         owner.set_tree_observer(observer.clone());
 
         should_notify.store(true, Ordering::Relaxed);
-        let parent_depth = tree.get(parent).expect("parent").depth;
+        let parent_depth = tree.get(parent).expect("parent").depth();
         tree.mark_needs_build(parent);
         owner.schedule_build_for(parent, parent_depth, RebuildReason::StateChange);
         owner.build_scope(&mut tree);
@@ -4969,8 +4967,8 @@ mod tests {
         owner.set_tree_observer(observer.clone());
 
         should_notify.store(true, Ordering::Relaxed);
-        let notifier_depth = tree.get(notifier).expect("notifier").depth;
-        let target_depth = tree.get(target).expect("target").depth;
+        let notifier_depth = tree.get(notifier).expect("notifier").depth();
+        let target_depth = tree.get(target).expect("target").depth();
         assert!(notifier_depth < target_depth, "sanity: notifier pops first");
         tree.mark_needs_build(notifier);
         tree.mark_needs_build(target);
@@ -5057,9 +5055,9 @@ mod tests {
             },
         );
 
-        let shallow_depth = tree.get(shallow).expect("shallow").depth;
-        let current_depth = tree.get(current).expect("current").depth;
-        let deep_depth = tree.get(deep).expect("deep").depth;
+        let shallow_depth = tree.get(shallow).expect("shallow").depth();
+        let current_depth = tree.get(current).expect("current").depth();
+        let deep_depth = tree.get(deep).expect("deep").depth();
         assert!(
             shallow_depth < current_depth && current_depth < deep_depth,
             "sanity: depths"
@@ -5155,7 +5153,7 @@ mod tests {
         );
 
         should_notify.store(true, Ordering::Relaxed);
-        let notifier_depth = tree.get(notifier).expect("notifier").depth;
+        let notifier_depth = tree.get(notifier).expect("notifier").depth();
         tree.mark_needs_build(notifier);
         owner.schedule_build_for(notifier, notifier_depth, RebuildReason::StateChange);
         // Isolate what happens INSIDE the drain: the direct `schedule_build_for`
@@ -5364,8 +5362,8 @@ mod tests {
         // and gets capped too, ALL within this one `build_scope` call.
         should_reschedule_a.store(true, Ordering::Relaxed);
         should_reschedule_b.store(true, Ordering::Relaxed);
-        let a_depth = tree.get(a).expect("a").depth;
-        let b_depth = tree.get(b).expect("b").depth;
+        let a_depth = tree.get(a).expect("a").depth();
+        let b_depth = tree.get(b).expect("b").depth();
         tree.mark_needs_build(a);
         tree.mark_needs_build(b);
         owner.schedule_build_for(a, a_depth, RebuildReason::StateChange);
@@ -5438,7 +5436,7 @@ mod tests {
         // MAX_MID_DRAIN_ABSORBS): drains the Global bucket, where the counted
         // rescheduler spends exactly 10 units and stops on its own.
         global_should_run.store(true, Ordering::Relaxed);
-        let global_depth = tree.get(global_id).expect("global").depth;
+        let global_depth = tree.get(global_id).expect("global").depth();
         tree.mark_needs_build(global_id);
         owner.schedule_build_for(global_id, global_depth, RebuildReason::StateChange);
         owner.build_scope(&mut tree);
@@ -5460,7 +5458,7 @@ mod tests {
         // Pass 2 (a direct scoped drain — the layout-builder fixpoint's own
         // shape, never re-entering `build_scope`): only 6 units remain.
         scoped_should_reschedule.store(true, Ordering::Relaxed);
-        let scoped_depth = tree.get(scoped_id).expect("scoped").depth;
+        let scoped_depth = tree.get(scoped_id).expect("scoped").depth();
         tree.mark_needs_build(scoped_id);
         owner.schedule_build_for(scoped_id, scoped_depth, RebuildReason::StateChange);
         let ((), log) = flui_testing::log_capture::capture(|| {
@@ -5581,7 +5579,7 @@ mod tests {
         );
         let after_mount = outer_build_calls.load(Ordering::Relaxed);
         outer_should_reschedule.store(true, Ordering::Relaxed);
-        let outer_depth = tree.get(outer).expect("outer").depth;
+        let outer_depth = tree.get(outer).expect("outer").depth();
         tree.mark_needs_build(outer);
         owner.schedule_build_for(outer, outer_depth, RebuildReason::StateChange);
         owner.build_scope(&mut tree);
@@ -5675,7 +5673,7 @@ mod tests {
         );
 
         let first_id = link_ids[0];
-        let first_depth = tree.get(first_id).expect("first link").depth;
+        let first_depth = tree.get(first_id).expect("first link").depth();
         tree.mark_needs_build(first_id);
         owner.schedule_build_for(first_id, first_depth, RebuildReason::StateChange);
         let ((), log) = flui_testing::log_capture::capture(|| owner.build_scope(&mut tree));
@@ -5722,7 +5720,7 @@ mod tests {
         let before = build_calls.load(Ordering::Relaxed);
 
         should_run.store(true, Ordering::Relaxed);
-        let depth = tree.get(id).expect("rescheduler").depth;
+        let depth = tree.get(id).expect("rescheduler").depth();
         tree.mark_needs_build(id);
         owner.schedule_build_for(id, depth, RebuildReason::StateChange);
         owner.build_scope(&mut tree);
@@ -5796,7 +5794,7 @@ mod tests {
             },
         );
 
-        let notifier_depth = tree.get(scoped_notifier).expect("notifier").depth;
+        let notifier_depth = tree.get(scoped_notifier).expect("notifier").depth();
         tree.mark_needs_build(scoped_notifier);
         owner.schedule_build_for(scoped_notifier, notifier_depth, RebuildReason::StateChange);
         owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope));
@@ -5869,7 +5867,7 @@ mod tests {
             },
         );
 
-        let notifier_depth = tree.get(global_notifier).expect("notifier").depth;
+        let notifier_depth = tree.get(global_notifier).expect("notifier").depth();
         tree.mark_needs_build(global_notifier);
         owner.schedule_build_for(global_notifier, notifier_depth, RebuildReason::StateChange);
         owner.build_scope(&mut tree); // target = Global (a layout builder is registered)

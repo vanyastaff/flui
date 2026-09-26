@@ -23,6 +23,15 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
 
 ### Added
 
+- **`flui-runtime`** (ADR-0083): the frame runtime as its own crate, tier K, internal, above
+  `flui-widgets`. It holds the per-presentation lanes the realm drives that need nothing from
+  the realm core: the held-input lane (the bounded pointer input retained while a presentation
+  has no committed tree, and its replay), the semantics host (per-presentation semantics
+  enablement and accessibility delivery) and the commit epoch. They moved out of `flui-app`,
+  where they were crate-private, so no public path changed. Its normal graph names no platform
+  backend, windowing, GPU or engine crate; `flui-app` is its only normal dependent. The realm
+  core follows in later steps (ADR-0083 `## Migration`).
+
 - **`flui-platform-api`** (ADR-0082): the platform contracts as their own crate —
   `PlatformTextInput`, `PlatformHaptics`, `PlatformDisplay`, `Clipboard`/`ClipboardItem`, the
   `data_transfer` transport, and the input (`PlatformInput`, `DispatchEventResult`,

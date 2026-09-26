@@ -13,10 +13,8 @@
 pub(crate) mod close_request;
 mod config;
 pub mod direct;
-mod epoch;
 pub(crate) mod execution;
 mod frame_failure;
-mod held_input;
 pub(crate) mod hot_reload;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod lifecycle;
@@ -30,7 +28,6 @@ pub(crate) mod raster_lane;
 pub(crate) mod raster_test_support;
 pub mod runner;
 pub(crate) mod runtime;
-pub(crate) mod semantics_host;
 pub(crate) mod ui_realm;
 pub(crate) mod window_registry;
 #[cfg(test)]

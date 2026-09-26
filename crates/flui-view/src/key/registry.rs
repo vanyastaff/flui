@@ -30,6 +30,18 @@
 //! the previous handle, including during panic unwinding. A lookup clones the
 //! active handle and releases the TLS `RefCell` borrow before invoking either
 //! framework or user code.
+//!
+//! # Re-entrancy
+//!
+//! A binding holds its own state lock for the whole of a frame, an attach, a
+//! detach and a layout-builder build, and runs user code (build, lifecycle
+//! hooks, dispose) inside it. A lookup made from that code must not wait on
+//! that lock: it would wait on its own thread forever. So a member's closures
+//! never block. A member whose lock is already held reports [`RegistryBusy`],
+//! the composite moves on to its next member, and only when no member
+//! answered does the busy report reach `GlobalKey`, which resolves it to
+//! nothing. Bindings are `!Send`, so a held lock can only mean re-entry on
+//! the owner thread, never a race with another thread.
 
 use std::{cell::RefCell, mem::ManuallyDrop, sync::Arc};
 
@@ -59,21 +71,29 @@ pub(crate) struct GlobalKeyRegistryHandle {
     inner: Arc<GlobalKeyRegistryInner>,
 }
 
+/// A registry member could not be read because its owner is inside a frame,
+/// attach, detach or layout-builder build on this same thread (see the
+/// module's "Re-entrancy" section).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RegistryBusy;
+
 /// Lookup closure type — resolve a `GlobalKey` back to an `ElementId`.
-/// Returns `None` when no element with that key is currently mounted.
+/// Returns `Ok(None)` when no element with that key is currently mounted,
+/// and `Err(RegistryBusy)` when the member cannot be read without blocking.
 ///
 /// Takes the key itself, not its hash: the registries behind this closure
 /// index by `ViewKey::key_hash` but decide by `ViewKey::key_eq`, so passing
 /// only a hash would make two distinct keys that collide indistinguishable
 /// at exactly the boundary a caller reaches through `GlobalKey::current_*`.
-type LookupFn = dyn Fn(&dyn ViewKey) -> Option<ElementId>;
+type LookupFn = dyn Fn(&dyn ViewKey) -> Result<Option<ElementId>, RegistryBusy>;
 
 /// Visit closure type — call the inner `FnMut` once with the
-/// `&dyn ElementBase` at the given id. Type-erased here because trait
-/// objects can't carry per-call generics; the result-extraction shim
-/// for [`GlobalKeyRegistryHandle::with_element`]'s generic `R` return
-/// lives in the inner `FnMut`.
-type VisitFn = dyn Fn(ElementId, &mut dyn FnMut(&dyn ElementBase));
+/// `&dyn ElementBase` at the given id, or report `Err(RegistryBusy)` without
+/// calling it. Type-erased here because trait objects can't carry per-call
+/// generics; the result-extraction shim for
+/// [`GlobalKeyRegistryHandle::with_element`]'s generic `R` return lives in
+/// the inner `FnMut`.
+type VisitFn = dyn Fn(ElementId, &mut dyn FnMut(&dyn ElementBase)) -> Result<(), RegistryBusy>;
 
 struct GlobalKeyRegistryInner {
     lookup: Box<LookupFn>,
@@ -89,14 +109,16 @@ impl std::fmt::Debug for GlobalKeyRegistryHandle {
 impl GlobalKeyRegistryHandle {
     /// Build a handle from two closures.
     ///
-    /// `lookup` resolves `key_hash` → `Option<ElementId>`. `visit` calls
+    /// `lookup` resolves a key to `Option<ElementId>`. `visit` calls
     /// the inner `FnMut` once with the `&dyn ElementBase` at the given
     /// id; if no element exists at the id, the inner `FnMut` is simply
-    /// not called and `with_element` returns `None`.
+    /// not called and `with_element` returns `Ok(None)`. Either closure
+    /// returns `Err(RegistryBusy)` instead of blocking on a lock its own
+    /// thread already holds.
     pub(crate) fn new<L, V>(lookup: L, visit: V) -> Self
     where
-        L: Fn(&dyn ViewKey) -> Option<ElementId> + 'static,
-        V: Fn(ElementId, &mut dyn FnMut(&dyn ElementBase)) + 'static,
+        L: Fn(&dyn ViewKey) -> Result<Option<ElementId>, RegistryBusy> + 'static,
+        V: Fn(ElementId, &mut dyn FnMut(&dyn ElementBase)) -> Result<(), RegistryBusy> + 'static,
     {
         Self {
             inner: Arc::new(GlobalKeyRegistryInner {
@@ -107,26 +129,38 @@ impl GlobalKeyRegistryHandle {
     }
 
     /// Resolve a `GlobalKey` back to the `ElementId` currently holding it.
-    pub(crate) fn lookup_element(&self, key: &dyn ViewKey) -> Option<ElementId> {
+    ///
+    /// # Errors
+    ///
+    /// [`RegistryBusy`] when the owning binding's lock is held by this thread.
+    pub(crate) fn lookup_element(
+        &self,
+        key: &dyn ViewKey,
+    ) -> Result<Option<ElementId>, RegistryBusy> {
         (self.inner.lookup)(key)
     }
 
     /// Apply `f` to the `&dyn ElementBase` at the given id, returning
-    /// the closure's result. Returns `None` when the id is no longer
+    /// the closure's result. Returns `Ok(None)` when the id is no longer
     /// present in the tree.
+    ///
+    /// # Errors
+    ///
+    /// [`RegistryBusy`] when the owning binding's lock is held by this thread;
+    /// `f` is not called.
     pub(crate) fn with_element<R>(
         &self,
         id: ElementId,
         f: impl FnOnce(&dyn ElementBase) -> R,
-    ) -> Option<R> {
+    ) -> Result<Option<R>, RegistryBusy> {
         let mut result = None;
         let mut f_opt = Some(f);
         (self.inner.visit)(id, &mut |elem: &dyn ElementBase| {
             if let Some(f) = f_opt.take() {
                 result = Some(f(elem));
             }
-        });
-        result
+        })?;
+        Ok(result)
     }
 }
 
@@ -148,6 +182,14 @@ impl GlobalKeyRegistryHandle {
 /// an id that has since unmounted is simply a miss on lookup (the owning
 /// member's own `with_element` already returns `None` for a gone id), never
 /// a dangling reference.
+///
+/// A busy member (see the module's "Re-entrancy" section) is a miss for that
+/// member only: the others are still tried, so a key held by a sibling
+/// presentation resolves while this presentation's own frame is running. The
+/// composite reports busy only when no member answered and at least one was
+/// busy. A visit routed by the cache to a busy member reports busy at once
+/// rather than scanning the others, which could reach an unrelated element
+/// that reuses the same raw id.
 #[cfg(any(test, feature = "runtime-internals"))]
 pub(crate) fn build_composite(members: Vec<GlobalKeyRegistryHandle>) -> GlobalKeyRegistryHandle {
     let resolved_by: Rc<RefCell<HashMap<ElementId, usize>>> = Rc::new(RefCell::new(HashMap::new()));
@@ -157,27 +199,36 @@ pub(crate) fn build_composite(members: Vec<GlobalKeyRegistryHandle>) -> GlobalKe
 
     GlobalKeyRegistryHandle::new(
         move |key| {
+            let mut busy = false;
             for (index, member) in lookup_members.iter().enumerate() {
-                if let Some(id) = member.lookup_element(key) {
-                    lookup_cache.borrow_mut().insert(id, index);
-                    return Some(id);
+                match member.lookup_element(key) {
+                    Ok(Some(id)) => {
+                        lookup_cache.borrow_mut().insert(id, index);
+                        return Ok(Some(id));
+                    }
+                    Ok(None) => {}
+                    Err(RegistryBusy) => busy = true,
                 }
             }
-            None
+            if busy { Err(RegistryBusy) } else { Ok(None) }
         },
         move |id, f| {
             let cached_index = resolved_by.borrow().get(&id).copied();
             if let Some(index) = cached_index
                 && let Some(member) = visit_members.get(index)
-                && member.with_element(id, |el| f(el)).is_some()
+                && member.with_element(id, |el| f(el))?.is_some()
             {
-                return;
+                return Ok(());
             }
+            let mut busy = false;
             for member in &visit_members {
-                if member.with_element(id, |el| f(el)).is_some() {
-                    return;
+                match member.with_element(id, |el| f(el)) {
+                    Ok(Some(())) => return Ok(()),
+                    Ok(None) => {}
+                    Err(RegistryBusy) => busy = true,
                 }
             }
+            if busy { Err(RegistryBusy) } else { Ok(()) }
         },
     )
 }
@@ -316,11 +367,12 @@ mod tests {
     }
 
     fn handle(value: usize) -> GlobalKeyRegistryHandle {
-        GlobalKeyRegistryHandle::new(move |_| Some(ElementId::new(value + 1)), |_, _| {})
+        GlobalKeyRegistryHandle::new(move |_| Ok(Some(ElementId::new(value + 1))), |_, _| Ok(()))
     }
 
     fn current() -> Option<ElementId> {
-        with_registry(|registry| registry.lookup_element(&TestKey(0))).flatten()
+        with_registry(|registry| registry.lookup_element(&TestKey(0)))
+            .and_then(|result| result.expect("test handles are never busy"))
     }
 
     #[test]
@@ -368,7 +420,7 @@ mod tests {
             let observed = with_registry(|registry| {
                 assert_eq!(
                     registry.lookup_element(&TestKey(0)),
-                    Some(ElementId::new(6))
+                    Ok(Some(ElementId::new(6)))
                 );
                 with_active_registry(&b, current)
             });
@@ -416,13 +468,19 @@ mod tests {
             .map(|(_, id, label)| (id, label))
             .collect();
         GlobalKeyRegistryHandle::new(
-            move |key| by_hash.get(&key.key_hash()).copied(),
+            move |key| Ok(by_hash.get(&key.key_hash()).copied()),
             move |id, f| {
                 if let Some(label) = by_id.get(&id) {
                     f(&LabeledElement(label));
                 }
+                Ok(())
             },
         )
+    }
+
+    /// A member whose owner is mid-frame on this thread: every read is busy.
+    fn busy_member() -> GlobalKeyRegistryHandle {
+        GlobalKeyRegistryHandle::new(|_| Err(RegistryBusy), |_, _| Err(RegistryBusy))
     }
 
     /// Minimal `ElementBase` test double: every lifecycle/build method is
@@ -438,6 +496,10 @@ mod tests {
 
         fn depth(&self) -> usize {
             0
+        }
+
+        fn set_depth(&mut self, _depth: crate::view::ElementDepth) {
+            unreachable!("test double: never inserted into a tree")
         }
 
         fn lifecycle(&self) -> crate::element::Lifecycle {
@@ -483,13 +545,20 @@ mod tests {
         }
     }
 
-    fn visited_label(registry: &GlobalKeyRegistryHandle, id: ElementId) -> Option<&'static str> {
+    fn try_visited_label(
+        registry: &GlobalKeyRegistryHandle,
+        id: ElementId,
+    ) -> Result<Option<&'static str>, RegistryBusy> {
         registry.with_element(id, |el| {
             *el.state_as_any()
                 .expect("LabeledElement always has state")
                 .downcast_ref::<&'static str>()
                 .expect("LabeledElement's state is always &str")
         })
+    }
+
+    fn visited_label(registry: &GlobalKeyRegistryHandle, id: ElementId) -> Option<&'static str> {
+        try_visited_label(registry, id).expect("no member of this composite is busy")
     }
 
     #[test]
@@ -500,13 +569,76 @@ mod tests {
 
         assert_eq!(
             composite.lookup_element(&TestKey(1)),
-            Some(ElementId::new(5))
+            Ok(Some(ElementId::new(5)))
         );
         assert_eq!(
             composite.lookup_element(&TestKey(2)),
-            Some(ElementId::new(5))
+            Ok(Some(ElementId::new(5)))
         );
-        assert_eq!(composite.lookup_element(&TestKey(3)), None);
+        assert_eq!(composite.lookup_element(&TestKey(3)), Ok(None));
+    }
+
+    #[test]
+    fn composite_skips_a_busy_member_and_resolves_through_the_next() {
+        let composite = build_composite(vec![
+            busy_member(),
+            member(vec![(1, ElementId::new(5), "b")]),
+        ]);
+
+        assert_eq!(
+            composite.lookup_element(&TestKey(1)),
+            Ok(Some(ElementId::new(5)))
+        );
+        assert_eq!(visited_label(&composite, ElementId::new(5)), Some("b"));
+    }
+
+    #[test]
+    fn composite_reports_busy_only_when_no_member_answered() {
+        let composite = build_composite(vec![
+            busy_member(),
+            member(vec![(1, ElementId::new(5), "b")]),
+        ]);
+
+        assert_eq!(composite.lookup_element(&TestKey(2)), Err(RegistryBusy));
+        assert_eq!(
+            try_visited_label(&composite, ElementId::new(6)),
+            Err(RegistryBusy)
+        );
+        assert_eq!(
+            build_composite(vec![member(vec![])]).lookup_element(&TestKey(2)),
+            Ok(None),
+            "a miss with no busy member stays a plain miss"
+        );
+    }
+
+    /// Once a lookup has routed an id to one member, a busy visit of that
+    /// member must not fall back to a sibling that reuses the raw id.
+    #[test]
+    fn composite_visit_routed_to_a_busy_member_does_not_scan_the_others() {
+        let busy_after_lookup = Rc::new(std::cell::Cell::new(false));
+        let busy = Rc::clone(&busy_after_lookup);
+        let first = GlobalKeyRegistryHandle::new(
+            |key| Ok((key.key_hash() == 1).then_some(ElementId::new(5))),
+            move |_, f| {
+                if busy.get() {
+                    return Err(RegistryBusy);
+                }
+                f(&LabeledElement("a"));
+                Ok(())
+            },
+        );
+        let composite = build_composite(vec![first, member(vec![(2, ElementId::new(5), "b")])]);
+
+        assert_eq!(
+            composite.lookup_element(&TestKey(1)),
+            Ok(Some(ElementId::new(5)))
+        );
+        busy_after_lookup.set(true);
+        assert_eq!(
+            try_visited_label(&composite, ElementId::new(5)),
+            Err(RegistryBusy),
+            "the id belongs to the busy member; b's unrelated id 5 must not answer"
+        );
     }
 
     /// The correctness property `build_composite` exists for: two members
@@ -522,7 +654,7 @@ mod tests {
 
         assert_eq!(
             composite.lookup_element(&TestKey(1)),
-            Some(ElementId::new(5))
+            Ok(Some(ElementId::new(5)))
         );
         assert_eq!(
             visited_label(&composite, ElementId::new(5)),
@@ -533,7 +665,7 @@ mod tests {
 
         assert_eq!(
             composite.lookup_element(&TestKey(2)),
-            Some(ElementId::new(5))
+            Ok(Some(ElementId::new(5)))
         );
         assert_eq!(
             visited_label(&composite, ElementId::new(5)),
@@ -556,7 +688,7 @@ mod tests {
     #[test]
     fn composite_over_zero_members_resolves_nothing() {
         let composite = build_composite(vec![]);
-        assert_eq!(composite.lookup_element(&TestKey(1)), None);
+        assert_eq!(composite.lookup_element(&TestKey(1)), Ok(None));
         assert_eq!(visited_label(&composite, ElementId::new(1)), None);
     }
 }

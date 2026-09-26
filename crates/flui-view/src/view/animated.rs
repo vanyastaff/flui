@@ -382,7 +382,7 @@ mod tests {
     }
 
     // A `StatelessView` wrapper so the animated view can be mounted at tree
-    // depth >= 1 (its own `ElementCore::depth` field is the sibling slot, 0).
+    // depth >= 1 while its sibling slot stays 0.
     #[derive(Clone)]
     struct Wrapper {
         child: CountingAnimatedView,
@@ -457,10 +457,10 @@ mod tests {
 
     /// The same end-to-end rebuild, but with the `AnimatedView` mounted at tree
     /// depth >= 1 (under a `Wrapper`). The dirty-heap depth key must be the
-    /// element's TREE depth, looked up from its node at drain time — NOT the
-    /// `ElementCore::depth` slot index (always 0 for a single child), which
-    /// would mis-order the nested element as the root. This guards against a
-    /// regression to capturing the slot in the mark-dirty callback.
+    /// element's TREE depth, looked up from its node at drain time — NOT its
+    /// sibling slot (always 0 for a single child), which would mis-order the
+    /// nested element as the root. This guards against a regression to
+    /// capturing the slot in the mark-dirty callback.
     #[test]
     fn nested_animation_notify_reschedules_at_correct_tree_depth() {
         let listenable = Arc::new(ChangeNotifier::new());

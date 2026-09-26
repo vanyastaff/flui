@@ -172,6 +172,10 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         self.depth
     }
 
+    fn set_depth(&mut self, depth: crate::view::ElementDepth) {
+        self.depth = depth.get();
+    }
+
     fn mount(
         &mut self,
         parent: Option<ElementId>,

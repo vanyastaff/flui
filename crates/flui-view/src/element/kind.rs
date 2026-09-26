@@ -585,6 +585,10 @@ impl ElementBase for ElementKind {
         self.element().depth()
     }
 
+    fn set_depth(&mut self, depth: crate::view::ElementDepth) {
+        self.element_mut().set_depth(depth);
+    }
+
     fn lifecycle(&self) -> crate::element::Lifecycle {
         self.element().lifecycle()
     }

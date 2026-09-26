@@ -13,6 +13,47 @@ use downcast_rs::{Downcast, impl_downcast};
 use dyn_clone::{DynClone, clone_trait_object};
 use flui_rendering::parent_data::SliverSlot;
 
+/// An element's depth in the element tree (root = 0), as stamped by
+/// [`ElementTree`](crate::tree::ElementTree).
+///
+/// Only `flui-view` can construct one, so [`ElementBase::set_depth`] is
+/// implementable anywhere but callable only by the tree: an element's
+/// [`ElementBase::depth`] cannot drift from its node's
+/// [`ElementNode::depth`](crate::tree::ElementNode::depth).
+///
+/// ```compile_fail
+/// use flui_view::{ElementBase, ElementDepth};
+///
+/// fn restamp(element: &mut dyn ElementBase) {
+///     element.set_depth(ElementDepth::new(9));
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use flui_view::ElementBase;
+///
+/// fn restamp(element: &mut dyn ElementBase) {
+///     element.set_depth(9);
+/// }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ElementDepth(usize);
+
+impl ElementDepth {
+    /// Wrap a depth; the tree is the only caller.
+    #[inline]
+    pub(crate) const fn new(depth: usize) -> Self {
+        Self(depth)
+    }
+
+    /// The depth as a plain count of ancestors.
+    #[inline]
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
 /// Base trait for all Views.
 ///
 /// A View is an immutable configuration for a piece of UI. Views are created
@@ -235,7 +276,17 @@ pub trait ElementBase: Downcast + 'static {
     }
 
     /// Get the depth in the element tree (root = 0).
+    ///
+    /// The value last passed to [`Self::set_depth`].
     fn depth(&self) -> usize;
+
+    /// Record this element's depth in the element tree (root = 0).
+    ///
+    /// Called by [`crate::tree::ElementTree`] only — [`ElementDepth`] has no
+    /// public constructor — before `mount`, and again whenever a GlobalKey
+    /// retake or a reparent moves the subtree. There is no default, so every
+    /// element that reports a depth also stores the one the tree hands it.
+    fn set_depth(&mut self, depth: ElementDepth);
 
     /// Inform this element of its own `ElementId` in the surrounding
     /// `ElementTree`.

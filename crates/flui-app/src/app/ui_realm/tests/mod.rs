@@ -1659,6 +1659,12 @@ mod frame_failure_containment;
 mod frame_clock_segment_gate;
 
 // ========================================================================
+// A GlobalKey read inside a presentation's own frame returns instead of
+// re-entering that presentation's frame lock.
+// ========================================================================
+mod global_key_lookup_during_frame;
+
+// ========================================================================
 // Cross-thread signal writes run against the graph that minted the slot,
 // in whichever presentation owns it (ADR-0085 §1).
 // ========================================================================

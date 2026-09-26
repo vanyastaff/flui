@@ -795,7 +795,10 @@ mod tests {
         harness.frame();
         assert_eq!(calls.load(Ordering::Relaxed), 1);
 
-        let depth = harness.tree.get(harness.root).map_or(0, |node| node.depth);
+        let depth = harness
+            .tree
+            .get(harness.root)
+            .map_or(0, crate::tree::ElementNode::depth);
         harness.tree.mark_needs_build(harness.root);
         harness
             .owner
@@ -955,7 +958,7 @@ mod tests {
         // Parent rebuild supplies a NEW closure; constraints are unchanged.
         variant.store(1, Ordering::Relaxed);
         let root = h.root;
-        let depth = h.tree.get(root).map_or(0, |node| node.depth);
+        let depth = h.tree.get(root).map_or(0, crate::tree::ElementNode::depth);
         h.tree.mark_needs_build(root);
         h.owner
             .schedule_build_for(root, depth, crate::RebuildReason::ParentUpdate);

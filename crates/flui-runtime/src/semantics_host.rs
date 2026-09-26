@@ -1,17 +1,21 @@
 //! Per-presentation semantics enablement and platform accessibility delivery.
 //!
 //! Replaces the retired process-wide `SemanticsBinding` singleton
-//! (`flui-semantics`). Enablement (via [`SemanticsHandle`] ref-counting or a
+//! (`flui-semantics`). Enablement (via `SemanticsHandle` ref-counting or a
 //! direct platform toggle) and announcement/event delivery are a per-window
 //! platform seam, not process-global state: each `PresentationState`
-//! (`crate::app::presentation`) owns exactly one [`SemanticsHost`], so two
-//! presentations never share an enablement counter or step on each other's
-//! platform callback.
+//! (`flui-app`'s `app::presentation`) owns exactly one [`SemanticsHost`], so
+//! two presentations never share an enablement counter or step on each
+//! other's platform callback.
 //!
 //! `accessibility_features` (the OS-level, read-mostly reduced-motion/
 //! high-contrast/etc. flags) is process-scoped, not per-presentation, and
-//! lives on `SharedEngineServices` (`crate::app::runtime`) instead — see that
-//! module's own field for the other half of the retired binding's state.
+//! lives on `SharedEngineServices` (`flui-app`'s `app::runtime`) instead — see
+//! that module's own field for the other half of the retired binding's state.
+//!
+//! Handle acquisition, announcements and event delivery have no production
+//! caller yet: they are compiled only for tests and the `test-support`
+//! feature until a platform embedder wires them through a presentation.
 
 use std::sync::{
     Arc,
@@ -27,25 +31,17 @@ use parking_lot::RwLock;
 /// Mirrors the retired `SemanticsBinding::SemanticsHandle`'s ref-counting
 /// shape, now scoped to one presentation instead of a process-wide
 /// singleton.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "constructed via SemanticsHost::ensure_semantics(), which \
-                  is itself only reached from tests until a production \
-                  caller wires accessibility-handle acquisition through a \
-                  presentation"
-    )
-)]
-pub(crate) struct SemanticsHandle {
+///
+/// Constructed only by [`SemanticsHost::ensure_semantics`], which has no
+/// production caller yet (see the module doc).
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub struct SemanticsHandle {
     counter: Arc<AtomicUsize>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl SemanticsHandle {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "see the SemanticsHandle struct's own doc comment")
-    )]
     fn new(counter: Arc<AtomicUsize>) -> Self {
         // Relaxed: bare presence counter -- see `SemanticsHost::semantics_enabled`.
         counter.fetch_add(1, Ordering::Relaxed);
@@ -53,6 +49,7 @@ impl SemanticsHandle {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for SemanticsHandle {
     fn drop(&mut self) {
         // Relaxed: nothing is freed or torn down when the count reaches
@@ -61,6 +58,7 @@ impl Drop for SemanticsHandle {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl std::fmt::Debug for SemanticsHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SemanticsHandle")
@@ -72,11 +70,11 @@ impl std::fmt::Debug for SemanticsHandle {
 /// Per-presentation semantics enablement gate and platform accessibility
 /// delivery (announcements + events).
 ///
-/// One instance lives on each [`PresentationState`](super::presentation::PresentationState);
-/// there is no process-wide instance and no `instance()`/`is_initialized()`
-/// accessor — a presentation always has one from construction.
-pub(crate) struct SemanticsHost {
-    /// Number of active [`SemanticsHandle`]s.
+/// One instance lives on each `PresentationState` (in `flui-app`); there is
+/// no process-wide instance and no `instance()`/`is_initialized()` accessor —
+/// a presentation always has one from construction.
+pub struct SemanticsHost {
+    /// Number of active `SemanticsHandle`s.
     handle_count: Arc<AtomicUsize>,
 
     /// Whether the platform has requested semantics for this presentation.
@@ -112,8 +110,8 @@ pub(crate) struct SemanticsHost {
     #[expect(clippy::type_complexity)]
     announce_callback: RwLock<Option<Arc<dyn Fn(&str, Assertiveness) + Send + Sync>>>,
 
-    /// Callback for semantics events dispatched via [`Self::dispatch_event`]/
-    /// [`Self::tooltip`]. Set by the platform embedder when the
+    /// Callback for semantics events dispatched via `Self::dispatch_event`/
+    /// `Self::tooltip`. Set by the platform embedder when the
     /// accessibility surface is brought up; cleared when the platform goes
     /// silent (or the presentation closes — see
     /// [`Self::clear_event_callback`]). Mirrors [`Self::announce_callback`]'s
@@ -124,7 +122,8 @@ pub(crate) struct SemanticsHost {
 
 impl SemanticsHost {
     /// Creates a new, disabled semantics host for one presentation.
-    pub(crate) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             handle_count: Arc::new(AtomicUsize::new(0)),
             platform_semantics_enabled: Arc::new(AtomicBool::new(false)),
@@ -142,7 +141,8 @@ impl SemanticsHost {
     /// Semantics are enabled if either:
     /// - The platform has requested semantics
     /// - There are outstanding `SemanticsHandle`s
-    pub(crate) fn semantics_enabled(&self) -> bool {
+    #[must_use]
+    pub fn semantics_enabled(&self) -> bool {
         // Relaxed: this flag/counter pair only gates whether semantics
         // collection runs. No semantics data is published through these
         // atomics (the tree lives behind its own locks), and the frame loop
@@ -152,22 +152,20 @@ impl SemanticsHost {
     }
 
     /// Returns the number of outstanding semantics handles.
-    pub(crate) fn outstanding_handles(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn outstanding_handles(&self) -> usize {
         self.handle_count.load(Ordering::Relaxed)
     }
 
     /// Creates a new `SemanticsHandle` and enables semantics collection.
     ///
     /// The returned handle keeps semantics enabled until it is dropped.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- accessibility-handle \
-                      acquisition through a presentation is future wiring"
-        )
-    )]
-    pub(crate) fn ensure_semantics(&self) -> SemanticsHandle {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn ensure_semantics(&self) -> SemanticsHandle {
         SemanticsHandle::new(Arc::clone(&self.handle_count))
     }
 
@@ -178,14 +176,17 @@ impl SemanticsHost {
     /// wire_platform_accessibility` uses it to seed the already-attached
     /// case at construction (the activation listener writes the underlying
     /// flag handle directly for every later transition).
-    pub(crate) fn set_platform_semantics_enabled(&self, enabled: bool) {
+    pub fn set_platform_semantics_enabled(&self, enabled: bool) {
         // Relaxed: the flag carries no payload -- see `semantics_enabled`.
         self.platform_semantics_enabled
             .store(enabled, Ordering::Relaxed);
     }
 
     /// Returns whether the platform has requested semantics.
-    pub(crate) fn platform_semantics_enabled(&self) -> bool {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn platform_semantics_enabled(&self) -> bool {
         self.platform_semantics_enabled.load(Ordering::Relaxed)
     }
 
@@ -193,36 +194,32 @@ impl SemanticsHost {
     /// realm's `RenderingFlutterBinding::add_semantics_enabled_listener` fan-out
     /// closure — see this field's own doc for why a handle rather than
     /// borrowing `&self`. Wired at `UiRealm::construct`.
-    pub(crate) fn platform_semantics_enabled_handle(&self) -> Arc<AtomicBool> {
+    #[must_use]
+    pub fn platform_semantics_enabled_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.platform_semantics_enabled)
     }
 
     /// A cheap clone of the full-republish request flag, for the activation
     /// listener (which runs on the adapter's thread and can only touch
     /// `Send + Sync` state). See the field's own doc for the contract.
-    pub(crate) fn full_republish_handle(&self) -> Arc<AtomicBool> {
+    #[must_use]
+    pub fn full_republish_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.full_republish_requested)
     }
 
     /// Consumes a pending full-republish request, if any — the owner-thread
     /// half of the activation seam. Returns `true` at most once per
     /// request.
-    pub(crate) fn take_full_republish_request(&self) -> bool {
+    pub fn take_full_republish_request(&self) -> bool {
         self.full_republish_requested.swap(false, Ordering::Relaxed)
     }
 
     // ========== Announcements ==========
 
     /// Sets the callback for accessibility announcements.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- the platform-embedder \
-                      registration this exists for is future wiring"
-        )
-    )]
-    pub(crate) fn set_announce_callback<F>(&self, callback: F)
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn set_announce_callback<F>(&self, callback: F)
     where
         F: Fn(&str, Assertiveness) + Send + Sync + 'static,
     {
@@ -230,7 +227,7 @@ impl SemanticsHost {
     }
 
     /// Remove the registered announce callback — the platform-embedder
-    /// teardown half of [`Self::set_announce_callback`]. Called from
+    /// teardown half of `Self::set_announce_callback`. Called from
     /// `PresentationState::close()` alongside the cursor-change-callback
     /// clear, for the identical reason: a torn-down presentation must not
     /// keep a live platform accessibility-bridge `Arc` pinned past its own
@@ -240,7 +237,7 @@ impl SemanticsHost {
     /// panic, never a call into a torn-down bridge) — the same degrade path
     /// a host that never registered a callback in the first place already
     /// exercises.
-    pub(crate) fn clear_announce_callback(&self) {
+    pub fn clear_announce_callback(&self) {
         let _prev = self.announce_callback.write().take();
     }
 
@@ -256,15 +253,9 @@ impl SemanticsHost {
     ///
     /// * `message` - The message to announce.
     /// * `assertiveness` - How urgently to announce the message.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- accessibility announcements \
-                      through a presentation are future wiring"
-        )
-    )]
-    pub(crate) fn announce(&self, message: &str, assertiveness: Assertiveness) {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn announce(&self, message: &str, assertiveness: Assertiveness) {
         let cb = self.announce_callback.read().as_ref().map(Arc::clone);
         if let Some(cb) = cb {
             cb(message, assertiveness);
@@ -290,15 +281,9 @@ impl SemanticsHost {
     /// Set by the platform embedder when the accessibility surface is
     /// brought up; pass `None` (via re-setting to a no-op closure) when the
     /// platform goes silent. Mirrors [`Self::set_announce_callback`].
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- the platform-embedder \
-                      registration this exists for is future wiring"
-        )
-    )]
-    pub(crate) fn set_event_callback<F>(&self, callback: F)
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn set_event_callback<F>(&self, callback: F)
     where
         F: Fn(&SemanticsEvent) + Send + Sync + 'static,
     {
@@ -309,7 +294,7 @@ impl SemanticsHost {
     /// [`Self::clear_announce_callback`]'s teardown rationale and
     /// announce-after-close decision, for `dispatch_event`/`tooltip` instead
     /// of `announce`.
-    pub(crate) fn clear_event_callback(&self) {
+    pub fn clear_event_callback(&self) {
         let _prev = self.event_callback.write().take();
     }
 
@@ -321,15 +306,9 @@ impl SemanticsHost {
     /// `Arc<dyn Fn>` is cloned out of the read-lock before the callback
     /// runs, so user code reaching back into this host (e.g. registering
     /// another callback) cannot deadlock on the host's own lock.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- platform accessibility \
-                      event delivery through a presentation is future wiring"
-        )
-    )]
-    pub(crate) fn dispatch_event(&self, event: &SemanticsEvent) {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn dispatch_event(&self, event: &SemanticsEvent) {
         let cb = self.event_callback.read().as_ref().map(Arc::clone);
         if let Some(cb) = cb {
             cb(event);
@@ -344,15 +323,9 @@ impl SemanticsHost {
     }
 
     /// Announces a tooltip.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- see dispatch_event, which \
-                      this forwards to"
-        )
-    )]
-    pub(crate) fn tooltip(&self, message: &str) {
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn tooltip(&self, message: &str) {
         self.dispatch_event(&SemanticsEvent::tooltip(message));
     }
 }
@@ -367,10 +340,13 @@ impl std::fmt::Debug for SemanticsHost {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SemanticsHost")
             .field("semantics_enabled", &self.semantics_enabled())
-            .field("outstanding_handles", &self.outstanding_handles())
+            .field(
+                "outstanding_handles",
+                &self.handle_count.load(Ordering::Relaxed),
+            )
             .field(
                 "platform_semantics_enabled",
-                &self.platform_semantics_enabled(),
+                &self.platform_semantics_enabled.load(Ordering::Relaxed),
             )
             .finish_non_exhaustive()
     }

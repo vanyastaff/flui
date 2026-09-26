@@ -13,7 +13,7 @@
 //! - [`UpdateScheduler`] - Frame scheduling (from flui-scheduler)
 //! - [`RenderingFlutterBinding`] - Rendering integration (local); per-window
 //!   semantics enablement/announce/event delivery lives on `SemanticsHost`
-//!   (`crate::app::semantics_host`), not on a process-wide accessibility
+//!   (`flui_runtime::semantics_host`), not on a process-wide accessibility
 //!   binding
 //!
 //! # Flutter Equivalence

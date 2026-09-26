@@ -685,26 +685,45 @@ impl WidgetsBinding {
     /// element tree while it lives, and become inert `None`s once it
     /// drops (the weak-callback pattern — a dead tree is a miss, never a
     /// dangle and never a panic).
+    ///
+    /// Neither closure blocks. The binding holds its own write lock across a
+    /// frame, attach, detach and layout-builder build, and user code inside
+    /// those (build, lifecycle hooks, dispose) may read a `GlobalKey`; a
+    /// blocking read there would wait on its own thread forever. The binding
+    /// is `!Send`, so a lock that cannot be taken at once is held by this
+    /// thread, and the closure reports `RegistryBusy` instead. The read is
+    /// recursive because `GlobalKey::with_current_state`'s callback runs
+    /// inside the visit's read guard and may look up a second key; with a
+    /// fair lock a plain nested read could queue behind a waiting writer.
     #[cfg(any(test, feature = "runtime-internals"))]
     fn make_global_key_registry(
         inner: &Arc<RwLock<WidgetsBindingInner>>,
     ) -> crate::key::registry::GlobalKeyRegistryHandle {
+        use crate::key::registry::RegistryBusy;
+
         let lookup_inner = Arc::downgrade(inner);
         let visit_inner = Arc::downgrade(inner);
         crate::key::registry::GlobalKeyRegistryHandle::new(
             move |key| {
-                let inner = lookup_inner.upgrade()?;
-                let inner = inner.read();
-                inner.build_owner.element_for_global_key(key)
+                let Some(inner) = lookup_inner.upgrade() else {
+                    return Ok(None);
+                };
+                let Some(inner) = inner.try_read_recursive() else {
+                    return Err(RegistryBusy);
+                };
+                Ok(inner.build_owner.element_for_global_key(key))
             },
             move |id, f| {
                 let Some(inner) = visit_inner.upgrade() else {
-                    return;
+                    return Ok(());
                 };
-                let inner = inner.read();
+                let Some(inner) = inner.try_read_recursive() else {
+                    return Err(RegistryBusy);
+                };
                 if let Some(node) = inner.element_tree.get(id) {
                     f(node.element());
                 }
+                Ok(())
             },
         )
     }
@@ -1969,6 +1988,238 @@ mod tests {
             assert_eq!(key.with_current_state(|state| state.0), Some(10));
         });
         assert_eq!(key.current_element(), None);
+    }
+
+    /// Run `f` on a fresh thread and fail the test if it has not returned
+    /// within ten seconds.
+    ///
+    /// The binding is `!Send`, so `f` builds it on that thread. A lookup that
+    /// re-enters the binding's frame lock parks the thread forever; the
+    /// timeout turns that hang into a test failure, and the parked thread
+    /// does not keep the test process alive.
+    fn within_deadline<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(10))
+            .expect("deadlock: GlobalKey lookup re-entered the binding's frame lock")
+    }
+
+    /// Every result a probe read, in order.
+    type Seen<T> = Rc<std::cell::RefCell<Vec<Option<T>>>>;
+
+    /// Reads `key`'s state from its own `build` and records what it saw.
+    #[derive(Clone)]
+    struct LookupInBuild {
+        key: crate::GlobalKey<RegistryState>,
+        seen: Seen<i32>,
+    }
+
+    impl crate::StatelessView for LookupInBuild {
+        fn build(&self, _ctx: &dyn crate::BuildContext) -> impl IntoView {
+            self.seen
+                .borrow_mut()
+                .push(self.key.with_current_state(|state| state.0));
+            LeafView
+        }
+    }
+
+    impl View for LookupInBuild {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateless(self)
+        }
+    }
+
+    /// A keyed stateful parent whose child is a [`LookupInBuild`].
+    #[derive(Clone)]
+    struct KeyedLookupParent {
+        key: crate::GlobalKey<RegistryState>,
+        value: i32,
+        child: LookupInBuild,
+    }
+
+    impl crate::StatefulView for KeyedLookupParent {
+        type State = RegistryState;
+
+        fn create_state(&self) -> Self::State {
+            RegistryState(self.value)
+        }
+    }
+
+    impl crate::ViewState<KeyedLookupParent> for RegistryState {
+        fn build(&self, view: &KeyedLookupParent, _ctx: &dyn crate::BuildContext) -> impl IntoView {
+            view.child.clone()
+        }
+    }
+
+    impl View for KeyedLookupParent {
+        fn create_element(&self) -> crate::element::ElementKind {
+            crate::element::ElementKind::stateful(self)
+        }
+
+        fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+            Some(&self.key)
+        }
+    }
+
+    #[test]
+    fn global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking() {
+        let (during, after) = within_deadline(|| {
+            let key = crate::GlobalKey::<RegistryState>::new();
+            let seen = Seen::default();
+            let binding = WidgetsBinding::new();
+            binding
+                .attach_root_widget(&KeyedLookupParent {
+                    key: key.clone(),
+                    value: 10,
+                    child: LookupInBuild {
+                        key: key.clone(),
+                        seen: Rc::clone(&seen),
+                    },
+                })
+                .expect("attach succeeds");
+            binding.with_global_key_registry(|| binding.draw_frame());
+            let after =
+                binding.with_global_key_registry(|| key.with_current_state(|state| state.0));
+            (seen.take(), after)
+        });
+        assert_eq!(
+            during,
+            vec![None],
+            "a read inside the binding's own frame resolves to nothing"
+        );
+        assert_eq!(after, Some(10), "the same read after the frame resolves");
+    }
+
+    #[test]
+    fn global_key_in_a_sibling_binding_resolves_during_this_bindings_frame() {
+        let during = within_deadline(|| {
+            let key = crate::GlobalKey::<RegistryState>::new();
+            let seen = Seen::default();
+            let holder = WidgetsBinding::new();
+            holder
+                .attach_root_widget(&RegistryStateView {
+                    key: key.clone(),
+                    value: 20,
+                })
+                .expect("holder attach succeeds");
+            holder.draw_frame();
+
+            let reader = WidgetsBinding::new();
+            reader
+                .attach_root_widget(&LookupInBuild {
+                    key,
+                    seen: Rc::clone(&seen),
+                })
+                .expect("reader attach succeeds");
+            // The reader is tried first, and it is the member whose frame is
+            // running: it must be skipped, not end the lookup.
+            GlobalKeyRegistryComposite::assemble([&reader, &holder]).enter(|| reader.draw_frame());
+            seen.take()
+        });
+        assert_eq!(during, vec![Some(20)]);
+    }
+
+    #[test]
+    fn unmounted_global_key_read_during_a_frame_does_not_warn() {
+        let (during, log) = within_deadline(|| {
+            let seen = Seen::default();
+            let binding = WidgetsBinding::new();
+            binding
+                .attach_root_widget(&LookupInBuild {
+                    // Mounted nowhere: the only busy member cannot hold it.
+                    key: crate::GlobalKey::<RegistryState>::new(),
+                    seen: Rc::clone(&seen),
+                })
+                .expect("attach succeeds");
+            let ((), log) = flui_testing::log_capture::capture(|| {
+                binding.with_global_key_registry(|| binding.draw_frame());
+            });
+            (seen.take(), log)
+        });
+        assert_eq!(during, vec![None]);
+        assert_eq!(
+            log.at_level(tracing::Level::WARN)
+                .filter(|record| record.contains("GlobalKey"))
+                .count(),
+            0,
+            "a GlobalKey read that may simply be a miss is not a warning:\n{}",
+            log.render_at_least(tracing::Level::WARN)
+        );
+        assert_eq!(
+            log.count_containing("GlobalKey read skipped the presentation whose frame is running"),
+            1,
+            "the skipped member is still reported, once per read:\n{log}"
+        );
+    }
+
+    #[test]
+    fn global_key_lookup_from_dispose_during_detach_returns_instead_of_deadlocking() {
+        #[derive(Clone)]
+        struct LookupInDispose {
+            key: crate::GlobalKey<LookupInDisposeState>,
+            seen: Seen<ElementId>,
+        }
+
+        struct LookupInDisposeState {
+            key: crate::GlobalKey<LookupInDisposeState>,
+            seen: Seen<ElementId>,
+        }
+
+        impl crate::StatefulView for LookupInDispose {
+            type State = LookupInDisposeState;
+
+            fn create_state(&self) -> Self::State {
+                LookupInDisposeState {
+                    key: self.key.clone(),
+                    seen: Rc::clone(&self.seen),
+                }
+            }
+        }
+
+        impl crate::ViewState<LookupInDispose> for LookupInDisposeState {
+            fn build(
+                &self,
+                _view: &LookupInDispose,
+                _ctx: &dyn crate::BuildContext,
+            ) -> impl IntoView {
+                LeafView
+            }
+
+            fn dispose(&mut self) {
+                self.seen.borrow_mut().push(self.key.current_element());
+            }
+        }
+
+        impl View for LookupInDispose {
+            fn create_element(&self) -> crate::element::ElementKind {
+                crate::element::ElementKind::stateful(self)
+            }
+
+            fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+                Some(&self.key)
+            }
+        }
+
+        let seen = within_deadline(|| {
+            let seen = Seen::default();
+            let binding = WidgetsBinding::new();
+            binding
+                .attach_root_widget(&LookupInDispose {
+                    key: crate::GlobalKey::new(),
+                    seen: Rc::clone(&seen),
+                })
+                .expect("attach succeeds");
+            binding.draw_frame();
+            binding.with_global_key_registry(|| binding.detach_root_widget());
+            seen.take()
+        });
+        assert_eq!(
+            seen,
+            vec![None],
+            "dispose ran and its read inside the teardown resolved to nothing"
+        );
     }
 
     #[test]

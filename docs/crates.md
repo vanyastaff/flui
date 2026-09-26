@@ -4,7 +4,7 @@
 
 > **Scope.** This page describes the **current** workspace as it is built today. `flui-localizations`, `flui-material`, and `flui-cupertino` (Catalog.1) have landed; the remaining target crate decomposition — the formal `flui` facade — is defined in [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md); the migration is sequenced in [`ROADMAP.md`](ROADMAP.md).
 
-The FLUI workspace contains 28 crates plus the `flui` facade, organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
+The FLUI workspace contains 30 crates plus the `flui` facade, organized into a strict layered DAG. This page is the canonical inventory: what each crate does, what layer it sits in, and whether it is currently active.
 
 > **Tier and layer assignments here mirror the manifests, which are the authority.** Each crate and the facade declare `[package.metadata.flui] tier`, `tier-kind` and `order`; the root `Cargo.toml` names the tiers in `[workspace.metadata.flui] tiers`, bottom to top ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md)). `cargo xtask workspace` checks every **normal** and build dependency between workspace packages: it points to a lower tier, or to a smaller `order` in the same tier, unless the dependent lists the edge in `edge-exceptions` with the ADR that removes it (an entry for an edge no rule of ADR-0081 refuses is itself a finding, so the list only shrinks); and nothing with a tier depends on a `tier-kind = "tool"` package. Examples and tools declare only `tier-kind = "tool"`. Until the `layer` key is removed, each crate also declares `layer = N` (names in the root `layers`), and the same edges must point to the same layer or lower, never at an example or tool ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)); the layer sections below follow that key. Cargo itself rejects cycles. See [`FOUNDATIONS.md` Part IV](FOUNDATIONS.md) for the target graph. Dev-dependencies may point anywhere (tests use `flui-testing`) and Cargo permits cycles among them: `flui-view`, `flui-interaction` and `flui-scheduler` each form one with `flui-testing`, and `flui-rendering` one with `flui-objects`. A crate can narrow who depends on it: `allowed-dependents` (normal and build edges) and `allowed-dev-dependents` in its `[package.metadata.flui]`, which is how `flui-log` stays composition-only and how no crate but `flui-localizations`, `flui-app` and the facade depends on Material or Cupertino in any form ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)). Examples and tools are applications and may depend on anything.
 
@@ -20,7 +20,7 @@ The FLUI workspace contains 28 crates plus the `flui` facade, organized into a s
 | C contracts | `flui-platform-api` (1), `flui-protocol` (2) | stable |
 | S substrate | `flui-log` (1), `flui-scheduler` (2), `flui-painting` (3), `flui-interaction` (4), `flui-semantics` (5), `flui-animation` (6), `flui-assets` (7) | internal |
 | R render machine | `flui-layer` (1), `flui-rendering` (2), `flui-objects` (3), `flui-engine` (4) | internal |
-| K spine and runtime | `flui-view` (1), `flui-testing` (2), `flui-widgets` (3), `flui-localizations` (4, deleted by ADR-0081; dependents frozen) | internal |
+| K spine and runtime | `flui-view` (1), `flui-testing` (2), `flui-widgets` (3), `flui-localizations` (4, deleted by ADR-0081; dependents frozen), `flui-runtime` (5) | internal |
 | H hosts | `flui-platform` (1), `flui-app` (2), `flui-cli` (3), `flui` (4) | internal; `flui-cli` tool; `flui` stable |
 | pkg official packages | `flui-material` (1), `flui-cupertino` (2), `flui-devtools` (3), `flui-hot-reload` (4) | official |
 
@@ -89,6 +89,7 @@ These crates compose the rendering and platform substrate largely without knowin
 | Crate | Status | Purpose |
 |-------|--------|---------|
 | `flui-widgets` | ✅ ACTIVE | User-facing Flutter-style widget catalog (configuration objects over `flui-objects`); owns the `Localizations`/`Directionality`/`WidgetsLocalizations` ambient-theming and localization substrate |
+| `flui-runtime` | ✅ ACTIVE (migration) | The frame runtime of [ADR-0083](adr/ADR-0083-one-frame-transaction-in-flui-runtime.md): the per-presentation machinery a realm drives, moving out of `flui-app` in steps (the ADR's `## Migration`). Holds the held-input lane, the semantics host and the commit epoch today. Internal (not an embedder API); `flui-app` is its only normal dependent, and its normal graph reaches no platform backend, windowing, GPU or engine crate. |
 | `flui-testing` | ✅ ACTIVE | Deterministic non-singleton headless frame driver: `HeadlessBinding::pump_frame(dt)` advances a virtual `ManualClock` and polls clock-bound gesture-arena deadlines — sleep-free time-based gesture tests (long-press, double-tap). It is the workspace's **test-support** package: `WidgetTester`, virtual time, fake platform capabilities, deterministic replay, and golden helpers belong here as they land. Runtime and framework crates take *development* edges into it only. |
 | `flui-hot-reload` | ✅ ACTIVE | Runtime half of hot reload: `HotReloadDriver`, `DynLib`, worker/host ABI (dlopen). The dev-time watcher lives in `flui-cli` |
 
@@ -111,7 +112,7 @@ Neither design system may depend on `flui-localizations`: it sits a layer above 
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui-app` | ✅ ACTIVE (migration) | App runner, root widget, application lifecycle. The **private composition root** for runtime ownership during Runtime.1 — a `flui-runtime` crate is not extracted from it until two entry points prove the boundary ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)). Owns **no design tokens** ([ADR-0042](adr/ADR-0042-theming-ownership.md)); hot reload is behind its optional `hot-reload` feature. |
+| `flui-app` | ✅ ACTIVE (migration) | App runner, root widget, application lifecycle. The **composition root**: runners, platform wiring and the raster lane. The frame runtime is moving from it into `flui-runtime` ([ADR-0083](adr/ADR-0083-one-frame-transaction-in-flui-runtime.md), which supersedes ADR-0041's two-consumer gate); until the realm core moves, the realm and its presentations are still private here. Owns **no design tokens** ([ADR-0042](adr/ADR-0042-theming-ownership.md)); hot reload is behind its optional `hot-reload` feature. |
 | `flui-cli` | ✅ ACTIVE | The `flui` CLI: `create`/`run` (hot reload with hot-keys)/`build`/`doctor`/`devices`/`emulators`, one output policy (`--json`, `--quiet`, `--non-interactive`) and a documented exit-code table. The per-target build pipeline (Android/iOS/desktop/web) lives in its own `src/build/` module; depends on `flui-hot-reload`; no edge to `flui-devtools`. |
 | `flui-devtools` | ✅ ACTIVE (partial) | Profiler, timeline, inspector counters |
 
@@ -153,7 +154,7 @@ cargo build -p flui-app
 
 ## Adding a New Crate
 
-A new crate is a topology change, so it starts with the contract, not the directory: a crate is a layer, not a feature ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)). A crate created before its second consumer exists freezes a guessed boundary — `flui-runtime`, for example, waits for two entry points driving the same proven core plus a measurable dependency reduction.
+A new crate is a topology change, so it starts with the contract, not the directory: a crate is a layer, not a feature ([ADR-0041](adr/ADR-0041-workspace-topology-contract.md)). A crate created before its boundary is known freezes a guessed one, so the ADR that places it names what it owns and what its normal graph may not reach — `flui-runtime`, for example, was created by [ADR-0083](adr/ADR-0083-one-frame-transaction-in-flui-runtime.md), which justifies it by one production consumer plus the test driver that is to run the same frame (`flui-testing` takes that edge in a later step of ADR-0083 §4; it does not use the crate yet).
 
 1. Decide its tier, kind and order, and its layer, from what it depends on: a dependency points to a lower tier or a smaller `order` in the same tier, and to the same layer or lower. The kind states what it promises ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §3).
 2. Add the directory under `crates/<flui-name>/` with a standard layout (`Cargo.toml`, `src/lib.rs`, `src/error.rs`). The manifest inherits the shared `[workspace.package]` keys and the workspace lints, and declares `[package.metadata.flui] tier`, `tier-kind`, `order` (unique in the tier) and `layer = N` (plus `wasm = false`, with the reason beside it, if it cannot build for wasm32).

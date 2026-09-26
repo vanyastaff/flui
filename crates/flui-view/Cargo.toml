@@ -139,6 +139,7 @@ signals = []
 ignored-paths = [
     "tests/ui/*.rs",
     "src/tree/element_tree/activation_recovery_tests.rs",
+    "src/tree/element_tree/element_depth_tests.rs",
     "src/tree/element_tree/orphaned_render_mount_tests.rs",
     "src/tree/element_tree/update_region_tests.rs",
     "src/tree/element_tree/tests/replace_child_with_tests.rs",

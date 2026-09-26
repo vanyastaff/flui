@@ -62,7 +62,8 @@ use flui_view::GlobalKeyScope;
 use parking_lot::RwLock;
 
 #[cfg(test)]
-use super::epoch::FrameCommitState;
+use flui_runtime::epoch::FrameCommitState;
+
 #[cfg(test)]
 use super::frame_failure::{FailureDisposition, FrameFailureKind, SegmentPhase};
 use super::frame_failure::{FrameFailureDetail, FrameFailureHandler};

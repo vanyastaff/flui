@@ -23,7 +23,7 @@
 //!   └── semantics enablement  - fan-out via add_semantics_enabled_listener;
 //!                               per-presentation announce/event delivery
 //!                               lives on that presentation's SemanticsHost
-//!                               (crate::app::semantics_host), not here
+//!                               (flui_runtime::semantics_host), not here
 //! ```
 //!
 //! # Usage
@@ -101,7 +101,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 /// - Coordinating frame production
 /// - Fanning out semantics-enabled changes to listeners (per-presentation
 ///   announce/event delivery lives on that presentation's `SemanticsHost`
-///   instead — see `crate::app::semantics_host`)
+///   instead — see `flui_runtime::semantics_host`)
 ///
 /// # Thread Safety
 ///
@@ -276,7 +276,7 @@ impl RenderingFlutterBinding {
         // `SharedEngineServices` at realm install (`app/runtime.rs`).
         //
         // Semantics enablement is per-presentation now (`SemanticsHost`,
-        // `app/semantics_host.rs`) -- there is no process-wide semantics
+        // `flui_runtime::semantics_host`) -- there is no process-wide semantics
         // binding for this method to touch.
         tracing::info!("RenderingFlutterBinding initialized");
     }
@@ -511,7 +511,7 @@ impl RenderingFlutterBinding {
     /// When enabled, the framework will maintain the semantics tree. This no
     /// longer forwards to a process-wide semantics binding (retired —
     /// enablement is per-presentation now, via `SemanticsHost`
-    /// (`crate::app::semantics_host`)): a caller that owns a presentation's
+    /// (`flui_runtime::semantics_host`)): a caller that owns a presentation's
     /// `SemanticsHost` and wants it to track this toggle registers
     /// [`Self::add_semantics_enabled_listener`] and calls
     /// `SemanticsHost::set_platform_semantics_enabled` from that listener.

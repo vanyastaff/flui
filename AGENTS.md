@@ -42,7 +42,7 @@ now and expensive once consumers exist, so fix a bad shape instead of working ar
 
 ## Codebase map
 
-28 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
+30 crates under `crates/` plus the `flui` facade (`src/`), strictly layered. Each manifest
 declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtask workspace`);
 `docs/crates.md` is the readable version. Bottom to top:
 
@@ -60,8 +60,10 @@ declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtas
 - **Render machine** — `flui-rendering` (the `RenderBox`/`RenderSliver` protocols),
   `flui-objects` (the concrete render-object catalog), `flui-engine` (layers → `wgpu`).
 - **Spine & catalog** — `flui-view` (View/Element, `BuildContext`/`LifecycleContext`,
-  reconciliation, signals), `flui-widgets`, `flui-testing` (deterministic headless frame driver
-  on a virtual clock), `flui-material`, `flui-cupertino`, `flui-localizations`.
+  reconciliation, signals), `flui-widgets`, `flui-runtime` (the frame runtime a realm drives,
+  moving out of `flui-app` per ADR-0083; no host, platform or GPU edge), `flui-testing`
+  (deterministic headless frame driver on a virtual clock), `flui-material`, `flui-cupertino`,
+  `flui-localizations`.
 - **Composition roots** — `flui-app` (per-window `UiRealm`s, the run loop), `flui-cli`,
   `flui-devtools`, `flui-hot-reload`, and the facade.
 

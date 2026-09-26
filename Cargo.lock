@@ -1909,6 +1909,7 @@ dependencies = [
  "flui-painting",
  "flui-platform",
  "flui-rendering",
+ "flui-runtime",
  "flui-scheduler",
  "flui-semantics",
  "flui-testing",
@@ -2360,6 +2361,20 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "trybuild",
+]
+
+[[package]]
+name = "flui-runtime"
+version = "0.2.0-dev"
+dependencies = [
+ "flui-foundation",
+ "flui-interaction",
+ "flui-semantics",
+ "flui-testing",
+ "flui-types",
+ "parking_lot",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

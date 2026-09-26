@@ -502,7 +502,10 @@ mod tests {
         {
             self.tree
                 .update(self.root, view, &mut self.owner.element_owner_mut());
-            let depth = self.tree.get(self.root).map_or(0, |node| node.depth);
+            let depth = self
+                .tree
+                .get(self.root)
+                .map_or(0, crate::tree::ElementNode::depth);
             self.tree.mark_needs_build(self.root);
             self.owner
                 .schedule_build_for(self.root, depth, crate::RebuildReason::AsyncCompletion);

@@ -1,9 +1,7 @@
 //! Frame production: draw, paint, commit, render and frame telemetry.
 
 use super::{EpochDisposition, FramePaintOutcome, MAX_NOT_SHOWN_RETRIES, UiRealm};
-use crate::app::epoch::FrameCommitState;
 use crate::app::frame_failure::{FrameFailureKind, SegmentPhase};
-use crate::app::held_input::HeldPointerReplay;
 use crate::app::presentation::PresentationState;
 use flui_engine::RasterBackend;
 use flui_foundation::PresentationId;
@@ -11,6 +9,8 @@ use flui_layer::Scene;
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
+use flui_runtime::epoch::FrameCommitState;
+use flui_runtime::held_input::HeldPointerReplay;
 use flui_scheduler::{DemandKind, FrameSnapshot, Instant, PresentOutcome};
 use flui_types::Size;
 use flui_types::geometry::px;

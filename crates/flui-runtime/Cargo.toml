@@ -1,0 +1,67 @@
+[package]
+publish = ["crates-io"]
+name = "flui-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Frame runtime for FLUI: the per-presentation lanes a UI realm drives between the widget tree and a host (internal)"
+documentation = "https://docs.rs/flui-runtime"
+keywords = ["gui", "ui", "runtime", "flui"]
+categories = ["gui"]
+
+# Dev-only files kept out of the published archive:
+exclude = ["/ARCHITECTURE.md"]
+
+[lints]
+workspace = true
+
+[features]
+# Test hooks (`HeldPointerQueue::append`/`len`, and the `SemanticsHost`
+# surface that has no production caller yet) for this crate's own tests and
+# for `flui-app`'s, which enable it on their dev edge. Never on a normal edge.
+test-support = []
+
+[dependencies]
+# `PresentationId`, which names a held-input queue in traces.
+flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
+# `PointerEvent`/`PointerId`, the events the held-input lane retains.
+flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
+# `Assertiveness`/`SemanticsEvent`, what the semantics host delivers.
+flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# `flui_interaction::events::make_*_event`, the synthetic pointer events the
+# held-input tests queue.
+flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
+# `log_capture::disarm_interest_cache`, so a sibling test cannot poison the
+# callsites the semantics-host privacy tests capture. Once `flui-testing`
+# depends on this crate (ADR-0083 §4) this is a dev-only cycle, as
+# `flui-view`'s and `flui-interaction`'s are; no type crosses it, so the second
+# copy of this crate in the test build never meets the first.
+flui-testing = { workspace = true }
+# Pointer positions in the held-input tests.
+flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+# Capturing emitted fields is how the semantics host's privacy contract on its
+# announce/event fallbacks is checked.
+tracing-subscriber = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+
+# Tier K, order 5: the frame runtime of ADR-0083 §1 sits in the spine tier
+# above `flui-view` (1), `flui-testing` (2), `flui-widgets` (3) and
+# `flui-localizations` (4), because the realm it will own drives a widget
+# tree; `flui-app` (tier H) is its only normal dependent. Internal: it is not
+# an embedder API (ADR-0027 §9). Layer 6 is the widget catalog's: its future
+# `flui-widgets` edge allows layers 6 to 9 (`flui-app` is 9), and 6 is the
+# lowest of them.
+[package.metadata.flui]
+layer = 6
+tier = "K"
+tier-kind = "internal"
+order = 5

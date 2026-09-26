@@ -16,6 +16,7 @@ use flui_interaction::events::{
 };
 use flui_platform::traits::PlatformInput;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
+use flui_runtime::epoch::{FrameCommitState, TreeRevision};
 use flui_types::{
     Size,
     geometry::{Offset, px},
@@ -24,7 +25,6 @@ use flui_view::{BuildContext, IntoView, StatelessView};
 use flui_widgets::SizedBox;
 
 use super::{SegmentPhase, UiRealm};
-use crate::app::epoch::{FrameCommitState, TreeRevision};
 use crate::app::raster_test_support::TestRasterBackend;
 
 fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
