@@ -1098,8 +1098,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         P: crate::protocol::Protocol,
         crate::storage::RenderNode: From<Box<dyn crate::traits::RenderObject<P>>>,
     {
-        use flui_tree::traits::TreeWrite;
-
         // Convert to RenderNode using From impl (zero-cost, compile-time dispatch)
         let node: crate::storage::RenderNode = render_object.into();
         let id = self.render_tree.insert(node);
@@ -1240,8 +1238,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// The `RenderId` of the inserted node.
     pub fn insert_render_node(&mut self, node: crate::storage::RenderNode) -> RenderId {
-        use flui_tree::traits::TreeWrite;
-
         let id = self.render_tree.insert(node);
         let depth = self.render_tree.depth(id).unwrap_or(0) as usize;
 

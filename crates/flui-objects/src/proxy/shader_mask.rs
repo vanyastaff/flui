@@ -33,7 +33,7 @@
 
 use std::fmt;
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{
     Offset, Pixels, Point, Rect,
     painting::{BlendMode, Shader},

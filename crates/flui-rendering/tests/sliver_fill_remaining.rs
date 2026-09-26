@@ -1,5 +1,6 @@
 //! Harness tests for the `RenderSliverFillRemaining` family.
 
+use flui_foundation::{Leaf, Single};
 use flui_objects::{
     RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
     RenderSliverFillRemainingWithScrollable,
@@ -13,7 +14,6 @@ use flui_rendering::{
     testing::{inspect, sliver as sliver_presets},
     traits::{RenderBox, RenderSliver},
 };
-use flui_tree::{Leaf, Single};
 use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
 
 use crate::common::{
@@ -144,7 +144,7 @@ struct IntrinsicProbeSliver;
 impl flui_foundation::Diagnosticable for IntrinsicProbeSliver {}
 
 impl RenderSliver for IntrinsicProbeSliver {
-    type Arity = flui_tree::Single;
+    type Arity = flui_foundation::Single;
     type ParentData = SliverPhysicalParentData;
 
     fn perform_layout(
@@ -185,12 +185,12 @@ struct SliverHost {
 impl flui_foundation::Diagnosticable for SliverHost {}
 
 impl RenderBox for SliverHost {
-    type Arity = flui_tree::Variable;
+    type Arity = flui_foundation::Variable;
     type ParentData = BoxParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut BoxLayoutContext<'_, flui_tree::Variable, Self::ParentData>,
+        ctx: &mut BoxLayoutContext<'_, flui_foundation::Variable, Self::ParentData>,
     ) -> Size {
         if ctx.child_count() > 0 {
             let _ = ctx.layout_sliver_child(0, self.constraints);
@@ -200,7 +200,7 @@ impl RenderBox for SliverHost {
 
     fn hit_test(
         &self,
-        ctx: &mut BoxHitTestContext<'_, flui_tree::Variable, Self::ParentData>,
+        ctx: &mut BoxHitTestContext<'_, flui_foundation::Variable, Self::ParentData>,
     ) -> bool {
         ctx.hit_test_child(0, ctx.offset())
     }

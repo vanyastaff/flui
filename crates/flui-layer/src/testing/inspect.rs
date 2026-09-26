@@ -2,12 +2,11 @@
 //!
 //! These free functions are the single source of truth for layer-tree
 //! introspection — `flui-rendering`'s render harness re-exports them rather
-//! than reimplementing the walk. Every walk is `TreeNav::descendants`
+//! than reimplementing the walk. Every walk is `LayerTree::descendants`
 //! (pre-order, siblings in paint order, explicit stack), so a deep chain
 //! costs no Rust stack.
 
 use flui_foundation::{Diagnosticable, DiagnosticsNode, LayerId};
-use flui_tree::TreeNav;
 use flui_types::{Matrix4, RRect, Rect, painting::Path};
 
 use crate::{Layer, LayerTree};

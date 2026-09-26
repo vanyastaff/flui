@@ -46,9 +46,9 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use flui_foundation::{Arity, Optional, Single, Variable};
 use flui_layer::LayerLink;
 use flui_painting::{Canvas, DisplayList};
-use flui_tree::{Arity, Optional, Single, Variable};
 use flui_types::{
     Matrix4, Offset, Pixels, Point, Rect, Size,
     painting::{Alignment, BlendMode, Clip, ImageFilter, Shader},
@@ -344,7 +344,7 @@ impl FragmentRecorder {
 ///
 /// ```compile_fail
 /// use flui_rendering::context::{FragmentRecorder, PaintCx};
-/// use flui_tree::Leaf;
+/// use flui_foundation::Leaf;
 /// use flui_types::{Offset, Size};
 ///
 /// let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
@@ -666,7 +666,7 @@ impl PaintCx<'_, Variable> {
 
 #[cfg(test)]
 mod tests {
-    use flui_tree::Leaf;
+    use flui_foundation::Leaf;
     use flui_types::{Point, Size, geometry::px, painting::Paint, styling::Color};
 
     use super::*;

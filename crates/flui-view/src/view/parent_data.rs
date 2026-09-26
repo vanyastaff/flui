@@ -299,14 +299,14 @@ mod tests {
     impl flui_foundation::Diagnosticable for TestParentDataHostBox {}
 
     impl flui_rendering::traits::RenderBox for TestParentDataHostBox {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = TestParentData;
 
         fn perform_layout(
             &mut self,
             _ctx: &mut flui_rendering::context::BoxLayoutContext<
                 '_,
-                flui_tree::Leaf,
+                flui_foundation::Leaf,
                 Self::ParentData,
             >,
         ) -> flui_types::geometry::Size {

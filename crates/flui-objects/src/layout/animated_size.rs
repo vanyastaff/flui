@@ -37,7 +37,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Alignment, Point, Rect, Size, painting::Clip};
 
 use flui_animation::curve::ArcCurve;

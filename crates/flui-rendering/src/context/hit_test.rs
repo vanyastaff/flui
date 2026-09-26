@@ -33,7 +33,7 @@
 //! }
 //! ```
 
-use flui_tree::Arity;
+use flui_foundation::Arity;
 use flui_types::{
     Pixels, Size,
     geometry::{Matrix4, Offset, Rect},

@@ -17,7 +17,7 @@
 //! render-object audit #4 — an intentional, documented divergence, not a bug).
 //! [`RenderSizedBox::shrink`] is the explicit `(0, 0)` counterpart.
 
-use flui_tree::Leaf;
+use flui_foundation::Leaf;
 use flui_types::{Pixels, Size};
 
 use flui_rendering::{

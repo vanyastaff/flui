@@ -284,7 +284,7 @@ mod tests {
     // interprets the whole frame through the checkout seam, not just the
     // raw `layout_dirty_root` call the older `subtree_arena` walks use.
 
-    use flui_tree::Exact;
+    use flui_foundation::Exact;
     use flui_types::{Color, Point, Rect, Size, geometry::px};
 
     use crate::{
@@ -306,7 +306,7 @@ mod tests {
     impl flui_foundation::Diagnosticable for FrameLeaf {}
 
     impl RenderBox for FrameLeaf {
-        type Arity = flui_tree::Leaf;
+        type Arity = flui_foundation::Leaf;
         type ParentData = BoxParentData;
 
         fn perform_layout(

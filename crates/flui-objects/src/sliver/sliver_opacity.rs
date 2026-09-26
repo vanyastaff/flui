@@ -24,7 +24,7 @@
 //!   alpha value, useful for animations that want a stable compositing
 //!   layer.
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::Size;
 
 use flui_rendering::{

@@ -5,7 +5,7 @@
 //! then the child's main-axis size becomes the sliver scroll extent.
 
 use flui_foundation::Diagnosticable;
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{
     geometry::px,
     layout::AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},

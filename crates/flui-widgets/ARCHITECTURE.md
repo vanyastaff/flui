@@ -1670,8 +1670,43 @@ for the last one: skip wrapping `install_pointer_handlers`'s return value
 in `wrap_double_tap_word_select` — the selection stays collapsed after
 the second tap.
 
+### 21. Global widgets localizations live in the catalog, not in a separate `flutter_localizations` package
 
-### 21. A form field validates at the event, not in `build`
+**Oracle:** `package:flutter_localizations`
+(`lib/src/widgets_localizations.dart`,
+`lib/src/l10n/generated_widgets_localizations.dart`, tag `3.44.0`) is a
+package of its own beside the widgets library. It holds
+`GlobalWidgetsLocalizations`, its delegate, and one generated class per
+supported language.
+
+**Choice:** `GlobalWidgetsLocalizations`, `GlobalWidgetsLocalizationsDelegate`
+and `RTL_LANGUAGES` live in `flui_widgets::localization`, next to the
+`WidgetsLocalizations` contract they implement.
+
+**Why the oracle's shape does not transcribe.** Flutter's split carries
+about 80 languages of translated strings. This port has none: every string
+forwards to `DefaultWidgetsLocalizations`, and the only behavior is the RTL
+language table and the delegate. A separate crate held that one table in a
+layer of its own, which ADR-0081 deleted; the table moved down into the
+crate whose contract it implements.
+
+**Consequences:**
+
+- The delegate's `is_supported` is always `true`. Flutter's delegate gates
+  on `kWidgetsSupportedLanguages`, a proxy for "this locale has translated
+  strings"; with no translations for any locale that gate would only
+  produce false negatives.
+- Translated string catalogs, when they arrive, are a separate decision
+  about where FLUI sources translations; they do not reopen a crate here.
+
+**Tests:**
+`flui-widgets::tests::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl`
+mounts `Localizations` with the global delegate for `ar` and reads
+`Directionality::of` from inside the subtree; the unit tests in
+`localization/global_widgets_localizations.rs` pin the table, the `iw`
+alias, and `is_supported`.
+
+### 22. A form field validates at the event, not in `build`
 
 **Oracle:** `FormFieldState.build` and `FormState.build` (`widgets/form.dart`,
 tag `3.44.0`) run the autovalidate switch on every build.
@@ -1698,7 +1733,7 @@ mode change never remounts the field's content
 `tick`, which does not dirty the root, so a field that stored its error
 without scheduling a rebuild fails the first one.
 
-### 22. `FormHandle` and `FormFieldHandle` replace `GlobalKey<FormState>`
+### 23. `FormHandle` and `FormFieldHandle` replace `GlobalKey<FormState>`
 
 **Oracle:** Flutter reaches `FormState`/`FormFieldState` through a
 `GlobalKey` or `Form.of(context)`.
@@ -1717,7 +1752,7 @@ text into a controller it owns, as Flutter's `_createLocalController` does.
 `a_new_handle_on_rebuild_takes_the_mounted_field_over`,
 `dropping_the_callers_controller_moves_the_text_into_a_field_owned_one`.
 
-### 23. A field registers with its form in lifecycle hooks
+### 24. A field registers with its form in lifecycle hooks
 
 **Oracle:** `FormFieldState.build` calls `Form.maybeOf(context)?._register(this)`
 and `deactivate` unregisters.
@@ -1730,7 +1765,7 @@ form holds each field strongly and each field holds the form weakly, so a
 `dispose`. **Tests:** `save_calls_on_saved_with_each_fields_value_in_registration_order`,
 `a_disposed_field_no_longer_takes_part_in_validate`.
 
-### 24. A text field's error line is a live region instead of an announcement
+### 25. A text field's error line is a live region instead of an announcement
 
 **Oracle:** `FormState.validate` announces the first error through
 `SemanticsService.announce`.
@@ -1740,7 +1775,7 @@ error line is a `Semantics(live_region: true)` container, which assistive
 technology reads when it appears. **Test:**
 `form_reports_the_form_role_and_the_error_line_is_a_live_region`.
 
-### 25. `Form` carries the form semantics role
+### 26. `Form` carries the form semantics role
 
 **Oracle:** Flutter's `Form` adds no semantics node.
 
@@ -1748,7 +1783,7 @@ technology reads when it appears. **Test:**
 (AccessKit `Role::Form`), so a screen reader can name the group. **Test:**
 `form_reports_the_form_role_and_the_error_line_is_a_live_region`.
 
-### 26. Clipboard bindings come from `DefaultFocusTraversal`
+### 27. Clipboard bindings come from `DefaultFocusTraversal`
 
 **Oracle:** `WidgetsApp` installs `DefaultTextEditingShortcuts`, which binds
 `CopySelectionTextIntent` and `PasteTextIntent` to Ctrl/Cmd+C, X and V.
@@ -1763,7 +1798,7 @@ bubbling. **Tests:** `interaction::shortcuts::tests::clipboard_activators_map_ev
 (`copy_then_paste_round_trips_text_in_an_editable_text`,
 `ctrl_c_with_no_text_field_focused_is_left_unconsumed`).
 
-### 27. `EditableText`'s clipboard actions win over ancestor bindings
+### 28. `EditableText`'s clipboard actions win over ancestor bindings
 
 **Oracle:** Flutter's `EditableText` wraps its default actions in
 `Action.overridable`, so an ancestor `Actions` can replace them.
@@ -1775,7 +1810,7 @@ the two intent types and an ancestor mapping never replaces them. There is no
 (an ancestor `CallbackAction<PasteTextIntent>` is never invoked, and the
 field's own paste runs).
 
-### 28. Paste drops `\r` as well as `\n`
+### 29. Paste drops `\r` as well as `\n`
 
 **Oracle:** the single-line field's `FilteringTextInputFormatter.singleLineFormatter`
 is `FilteringTextInputFormatter.deny('\n')` (`services/text_formatter.dart`,
@@ -1786,7 +1821,7 @@ leaves a `\r` behind.
 carriage return is never text the user meant. **Test:**
 `paste_replaces_the_selection_and_drops_line_breaks`.
 
-### 29. `RawTextFormField`, not `TextFormField`
+### 30. `RawTextFormField`, not `TextFormField`
 
 **Choice:** the theme-free form field is named `RawTextFormField` for the
 facade-additivity reason `RawTextField` is: with the `material` feature on,
@@ -1794,7 +1829,7 @@ facade-additivity reason `RawTextField` is: with the `material` feature on,
 feature never changes what an existing name resolves to.
 `flui_material::TextFormField` is the Flutter-parity type.
 
-### 30. `SingleActivator` compares ASCII letters without case
+### 31. `SingleActivator` compares ASCII letters without case
 
 **Oracle:** `SingleActivator(LogicalKeyboardKey.keyC, control: true)` names a
 key, which has no case.
@@ -1804,7 +1839,7 @@ Lock turns Ctrl+C into a `"C"` event. A single ASCII letter trigger therefore
 matches either case; the exact Shift comparison still tells Ctrl+Shift+C
 apart. **Test:** `interaction::shortcuts::tests::a_character_activator_matches_regardless_of_caps_lock`.
 
-### 31. `EditableText::on_changed` reports only the user's edits, and a text form field reads its controller
+### 32. `EditableText::on_changed` reports only the user's edits, and a text form field reads its controller
 
 **Oracle:** Flutter's `TextFormField` listens to its controller and calls
 `didChange` on any text change it did not make itself, so a caller's

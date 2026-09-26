@@ -39,8 +39,8 @@
 use std::ops::Range;
 
 use flui_foundation::Diagnosticable;
+use flui_foundation::Leaf;
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
-use flui_tree::Leaf;
 use flui_types::{
     Color, Offset, Point, Rect, Size,
     geometry::px,

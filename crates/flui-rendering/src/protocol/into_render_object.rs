@@ -171,7 +171,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use flui_tree::Leaf;
+    use flui_foundation::Leaf;
     use flui_types::Size;
 
     use super::*;

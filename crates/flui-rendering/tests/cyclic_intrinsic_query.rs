@@ -20,6 +20,7 @@
 //!   * tests/layout_cycle_guard.rs (the layout-cycle siblings)
 
 use flui_foundation::Diagnosticable;
+use flui_foundation::Single;
 use flui_objects::RenderColoredBox;
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -29,7 +30,6 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     traits::RenderBox,
 };
-use flui_tree::Single;
 use flui_types::{Size, geometry::px};
 
 /// A widget whose `perform_layout` queries child 0's max-intrinsic-width

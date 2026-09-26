@@ -16,7 +16,7 @@
 //! "constraints not normalized" debug check at the API boundary (the typed
 //! `Pixels` boundary in `BoxConstraints` itself eliminates the rest).
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Offset, Size};
 
 use flui_rendering::{

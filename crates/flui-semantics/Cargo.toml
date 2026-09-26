@@ -26,9 +26,6 @@ testing = []
 # Foundation - canonical ID types (SemanticsId)
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 
-# Tree abstractions - TreeRead, TreeNav, etc.
-flui-tree = { path = "../flui-tree", version = "=0.2.0-dev" }
-
 # Types - geometry, semantics types
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 

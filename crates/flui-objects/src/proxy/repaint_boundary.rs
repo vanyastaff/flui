@@ -8,7 +8,7 @@
 //!
 //! [`is_repaint_boundary`]: flui_rendering::traits::RenderObject::is_repaint_boundary
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Offset, Size};
 
 use flui_rendering::{

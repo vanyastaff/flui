@@ -1,7 +1,7 @@
 //! Shared helpers for single-child proxy boxes that pass layout queries
 //! through to their child unchanged (Flutter `RenderProxyBoxMixin` parity).
 
-use flui_tree::Single;
+use flui_foundation::Single;
 use flui_types::{Offset, Size};
 
 use crate::constraints::BoxConstraints;

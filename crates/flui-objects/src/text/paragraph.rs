@@ -13,8 +13,8 @@
 //! clip/fade `TextOverflow` policies (only `ellipsis` is wired here).
 
 use flui_foundation::Diagnosticable;
+use flui_foundation::Leaf;
 use flui_painting::{Invalidation, TextBaseline as PainterBaseline, TextPainter};
-use flui_tree::Leaf;
 use flui_types::{
     Offset, Size,
     typography::{InlineSpan, TextAlign, TextDirection},

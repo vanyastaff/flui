@@ -457,7 +457,7 @@ impl FrameRun {
     /// ```
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
     /// # use flui_rendering::prelude::*;
-    /// # use flui_tree::Leaf;
+    /// # use flui_foundation::Leaf;
     /// # use flui_types::{Size, geometry::px};
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox(f32);
@@ -534,7 +534,7 @@ impl FrameRun {
     /// ```
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
     /// # use flui_rendering::prelude::*;
-    /// # use flui_tree::Leaf;
+    /// # use flui_foundation::Leaf;
     /// # use flui_types::{Size, geometry::px};
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox(f32);
@@ -673,7 +673,7 @@ impl RenderTester {
     /// ```compile_fail
     /// # use flui_rendering::testing::{box_node, RenderTester};
     /// # use flui_rendering::prelude::*;
-    /// # use flui_tree::Leaf;
+    /// # use flui_foundation::Leaf;
     /// # use flui_types::{Size, geometry::px};
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox;

@@ -273,12 +273,16 @@ impl RenderTestBox {
 impl flui_foundation::Diagnosticable for RenderTestBox {}
 
 impl RenderBox for RenderTestBox {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, flui_tree::Leaf, Self::ParentData>,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_foundation::Leaf,
+            Self::ParentData,
+        >,
     ) -> Size {
         let midpoint = Size::new(
             px(self.min_width + (self.max_width - self.min_width) / 2.0),
@@ -291,7 +295,7 @@ impl RenderBox for RenderTestBox {
         &self,
         _ctx: &mut flui_rendering::context::BoxHitTestContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             Self::ParentData,
         >,
     ) -> bool {
@@ -328,12 +332,16 @@ struct ExtentEchoProbe;
 impl flui_foundation::Diagnosticable for ExtentEchoProbe {}
 
 impl RenderBox for ExtentEchoProbe {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, flui_tree::Leaf, Self::ParentData>,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_foundation::Leaf,
+            Self::ParentData,
+        >,
     ) -> Size {
         ctx.constraints().smallest()
     }
@@ -342,7 +350,7 @@ impl RenderBox for ExtentEchoProbe {
         &self,
         _ctx: &mut flui_rendering::context::BoxHitTestContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             Self::ParentData,
         >,
     ) -> bool {
@@ -377,12 +385,16 @@ struct ExtentEchoProbeSwapped;
 impl flui_foundation::Diagnosticable for ExtentEchoProbeSwapped {}
 
 impl RenderBox for ExtentEchoProbeSwapped {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, flui_tree::Leaf, Self::ParentData>,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_foundation::Leaf,
+            Self::ParentData,
+        >,
     ) -> Size {
         ctx.constraints().smallest()
     }
@@ -391,7 +403,7 @@ impl RenderBox for ExtentEchoProbeSwapped {
         &self,
         _ctx: &mut flui_rendering::context::BoxHitTestContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             Self::ParentData,
         >,
     ) -> bool {
@@ -2300,9 +2312,9 @@ fn harness_baseline_relayout_recomputes_offset_and_size_ladder() {
 /// observable contract — fresh state in, fresh answer out — must hold).
 #[test]
 fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
+    use flui_foundation::Leaf;
     use flui_rendering::context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxLayoutContext};
     use flui_rendering::parent_data::BoxParentData;
-    use flui_tree::Leaf;
 
     /// Leaf render object with independently settable per-kind baseline
     /// offsets, mirroring Flutter's `_RenderBaselineTester` test double.
@@ -2441,14 +2453,14 @@ impl flui_foundation::Diagnosticable for SizedBaselineProbe {
 }
 
 impl RenderBox for SizedBaselineProbe {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> Size {
@@ -9659,14 +9671,14 @@ struct PanicAfterNLayouts {
 }
 
 impl flui_rendering::traits::RenderSliver for PanicAfterNLayouts {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::SliverPhysicalParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::SliverLayoutContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             Self::ParentData,
         >,
     ) -> flui_rendering::constraints::SliverGeometry {
@@ -9707,12 +9719,16 @@ struct PanicAfterNBoxLayouts {
 }
 
 impl RenderBox for PanicAfterNBoxLayouts {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
-        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, flui_tree::Leaf, Self::ParentData>,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<
+            '_,
+            flui_foundation::Leaf,
+            Self::ParentData,
+        >,
     ) -> Size {
         let nth = self
             .layouts
@@ -10127,14 +10143,14 @@ struct LayoutCountingSliver {
 }
 
 impl flui_rendering::traits::RenderSliver for LayoutCountingSliver {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::SliverPhysicalParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::SliverLayoutContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             Self::ParentData,
         >,
     ) -> flui_rendering::constraints::SliverGeometry {
@@ -11220,13 +11236,13 @@ fn harness_intrinsic_height_forces_filling_child() {
 fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
     use std::sync::{Arc, Mutex};
 
+    use flui_foundation::Single;
     use flui_rendering::{
         constraints::BoxConstraints,
         context::{BoxDryLayoutCtx, BoxIntrinsicsCtx},
         parent_data::BoxParentData,
         traits::RenderBox,
     };
-    use flui_tree::Single;
 
     // Shared cell: `compute_dry_layout` writes the child intrinsic it observed.
     let captured: Arc<Mutex<f32>> = Arc::new(Mutex::new(f32::NAN));
@@ -11959,9 +11975,9 @@ fn harness_constraints_transform_box_hit_tests_inside_own_bounds_only() {
 /// baselines would be dead writes and every live query would return `None`.
 #[test]
 fn harness_constraints_transform_box_serves_the_live_child_baseline_shifted_by_alignment() {
+    use flui_foundation::Leaf;
     use flui_rendering::context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxLayoutContext};
     use flui_rendering::parent_data::BoxParentData;
-    use flui_tree::Leaf;
 
     #[derive(Debug)]
     struct FixedBaselineProbe;
@@ -12382,14 +12398,14 @@ struct AsymmetricBaselineProbe;
 impl flui_foundation::Diagnosticable for AsymmetricBaselineProbe {}
 
 impl RenderBox for AsymmetricBaselineProbe {
-    type Arity = flui_tree::Leaf;
+    type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<
             '_,
-            flui_tree::Leaf,
+            flui_foundation::Leaf,
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> Size {
@@ -15523,14 +15539,14 @@ struct LaysOutFirstN {
 impl flui_foundation::Diagnosticable for LaysOutFirstN {}
 
 impl RenderBox for LaysOutFirstN {
-    type Arity = flui_tree::Variable;
+    type Arity = flui_foundation::Variable;
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<
             '_,
-            flui_tree::Variable,
+            flui_foundation::Variable,
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> Size {
@@ -15547,7 +15563,7 @@ impl RenderBox for LaysOutFirstN {
         &self,
         _ctx: &mut flui_rendering::context::BoxHitTestContext<
             '_,
-            flui_tree::Variable,
+            flui_foundation::Variable,
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> bool {
