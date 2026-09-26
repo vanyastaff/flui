@@ -12,6 +12,7 @@
 //! A target of its own, not a module of `tests/main.rs`: it pins the
 //! process-global font system and reads the environment.
 
+use std::fmt::Write as _;
 use std::sync::Once;
 use std::time::Duration;
 
@@ -165,7 +166,7 @@ fn record(scenario: &str, report: &FrameReport) {
     std::fs::create_dir_all(&dir).expect("create FLUI_PERF_OUT");
     let mut body = format!("[{scenario}]\n");
     for (name, value) in report.counters() {
-        body.push_str(&format!("{name} = {value}\n"));
+        writeln!(body, "{name} = {value}").expect("writing to a String cannot fail");
     }
     std::fs::write(dir.join(format!("{scenario}.toml")), body).expect("write perf record");
 }
