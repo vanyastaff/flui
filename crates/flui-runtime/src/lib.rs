@@ -7,15 +7,22 @@
 //! platform backend, windowing, GPU or engine type.
 //!
 //! Today it holds the presentation lanes that need nothing from the realm
-//! core:
+//! core, and the seam a frame leaves through:
 //!
 //! - [`epoch`]: the tree revision a presentation's frames advance and whether
 //!   the current one has been acknowledged by a submit;
 //! - [`held_input`]: the bounded pointer input a presentation retains while it
 //!   has no committed tree, and its replay;
+//! - [`performance_stats`]: the rolling frame-time window a presentation's
+//!   performance overlay draws;
 //! - [`semantics_host`]: per-presentation semantics enablement and platform
-//!   accessibility delivery.
+//!   accessibility delivery;
+//! - [`sink`]: the [`FrameSink`](sink::FrameSink) a frame is submitted
+//!   through, and the [`SubmitVerdict`](sink::SubmitVerdict) the realm
+//!   classifies.
 
 pub mod epoch;
 pub mod held_input;
+pub mod performance_stats;
 pub mod semantics_host;
+pub mod sink;

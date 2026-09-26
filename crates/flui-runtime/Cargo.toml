@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Frame runtime for FLUI: the per-presentation lanes a UI realm drives between the widget tree and a host (internal)"
+description = "Frame runtime for FLUI: the per-presentation lanes a UI realm drives between the widget tree and a host, and the frame sink it submits through (internal)"
 documentation = "https://docs.rs/flui-runtime"
 keywords = ["gui", "ui", "runtime", "flui"]
 categories = ["gui"]
@@ -29,10 +29,15 @@ test-support = []
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # `PointerEvent`/`PointerId`, the events the held-input lane retains.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
+# `Scene`, what a frame sink submits.
+flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 # `Assertiveness`/`SemanticsEvent`, what the semantics host delivers.
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 parking_lot = { workspace = true }
 tracing = { workspace = true }
+# The cross-platform clock `PerformanceStats` samples (std's `Instant` panics
+# on wasm32).
+web-time = { workspace = true }
 
 [dev-dependencies]
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the

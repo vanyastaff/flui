@@ -2369,12 +2369,14 @@ version = "0.2.0-dev"
 dependencies = [
  "flui-foundation",
  "flui-interaction",
+ "flui-layer",
  "flui-semantics",
  "flui-testing",
  "flui-types",
  "parking_lot",
  "tracing",
  "tracing-subscriber",
+ "web-time",
 ]
 
 [[package]]
