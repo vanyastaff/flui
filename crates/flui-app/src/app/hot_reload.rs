@@ -354,6 +354,24 @@ mod enabled {
             true
         }
     }
+
+    #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
+    mod tests {
+        use super::{HotReloadTier, ReloadTier, reload_tier};
+
+        #[test]
+        fn each_driver_tier_maps_to_the_realm_tier_that_applies_it() {
+            assert_eq!(
+                reload_tier(HotReloadTier::HotReload),
+                ReloadTier::Reassemble
+            );
+            assert_eq!(reload_tier(HotReloadTier::HotRestart), ReloadTier::Restart);
+            assert_eq!(
+                reload_tier(HotReloadTier::FullRestart),
+                ReloadTier::ProcessRestart
+            );
+        }
+    }
 }
 
 #[cfg(not(feature = "hot-reload"))]
