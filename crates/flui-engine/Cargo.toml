@@ -191,3 +191,8 @@ layer = 4
 tier = "R"
 tier-kind = "internal"
 order = 4
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "batches::gradients::reserve_gradient_stops::WARNED", grant = "ADR-0097", class = "diagnostic", reason = "warn-once flag for the gradient stop budget; no behavior reads it" },
+    { item = "batches::gradients::reserve_gradient_stops::WARNED_TRUNCATION", grant = "ADR-0097", class = "diagnostic", reason = "warn-once flag for truncated gradient stops; no behavior reads it" },
+]

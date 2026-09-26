@@ -93,3 +93,9 @@ layer = 2
 tier = "S"
 tier-kind = "internal"
 order = 3
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "decoration::WARN_CIRCLE_BORDER_RADIUS", grant = "ADR-0097", class = "diagnostic", reason = "warn-once gate for a circle with a border radius; no behavior reads it" },
+    { item = "decoration::WARN_CIRCLE_NON_UNIFORM_BORDER", grant = "ADR-0097", class = "diagnostic", reason = "warn-once gate for a circle with a non-uniform border; no behavior reads it" },
+    { item = "text_layout::layout::FONT_SYSTEM", exit = "ADR-0092", reason = "one cosmic-text FontSystem shared by every realm" },
+]

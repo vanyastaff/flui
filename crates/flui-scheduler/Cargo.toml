@@ -104,3 +104,7 @@ layer = 2
 tier = "S"
 tier-kind = "internal"
 order = 2
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "config::TIME_DILATION", exit = "ADR-0097", reason = "process-wide time dilation; it becomes a property of each presentation's frame clock" },
+]

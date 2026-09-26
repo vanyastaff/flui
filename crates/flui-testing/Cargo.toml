@@ -134,3 +134,8 @@ tier = "K"
 tier-kind = "internal"
 # Below flui-widgets, which names it as an optional dependency.
 order = 2
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "log_capture::SINK", grant = "ADR-0097", class = "process", reason = "per-thread capture buffer behind tracing's global dispatcher, which the process has once" },
+    { item = "log_capture::disarm_interest_cache::SENTINELS", grant = "ADR-0097", class = "process", reason = "dispatchers that reset tracing's global callsite interest cache, which the process has once" },
+]

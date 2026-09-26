@@ -62,3 +62,8 @@ layer = 3
 tier = "S"
 tier-kind = "internal"
 order = 6
+# Process-global state, checked by `cargo xtask globals` (ADR-0097).
+globals = [
+    { item = "constant::ALWAYS_COMPLETE", grant = "ADR-0097", class = "immutable", reason = "a constant animation that is always complete" },
+    { item = "constant::ALWAYS_DISMISSED", grant = "ADR-0097", class = "immutable", reason = "a constant animation that is always dismissed" },
+]
