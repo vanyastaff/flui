@@ -5720,7 +5720,7 @@ mod tests {
         let before = build_calls.load(Ordering::Relaxed);
 
         should_run.store(true, Ordering::Relaxed);
-        let depth = tree.get(id).expect("rescheduler").depth;
+        let depth = tree.get(id).expect("rescheduler").depth();
         tree.mark_needs_build(id);
         owner.schedule_build_for(id, depth, RebuildReason::StateChange);
         owner.build_scope(&mut tree);
