@@ -103,7 +103,7 @@ pub(crate) mod sealed {
 ///     ctx.depend_on_inherited_fields(token, TypeId::of::<u8>(), FieldSet::NONE, &mut |_| {});
 /// }
 /// ```
-pub trait BuildContext: sealed::Sealed {
+pub trait BuildContext: sealed::Sealed + flui_foundation::read_scope::ReadScope {
     // ========================================================================
     // Identity & State
     // ========================================================================
@@ -128,11 +128,11 @@ pub trait BuildContext: sealed::Sealed {
 
     /// The realm's reactive graph (ADR-0074). Reachable from every lifecycle
     /// hook and callback; the graph is owned by the `BuildOwner`.
+    ///
+    /// Signal *reads* do not go through this: they take the context itself as
+    /// a [`ReadScope`](flui_foundation::read_scope::ReadScope), the supertrait
+    /// whose scope subscribes the building element.
     fn reactive(&self) -> crate::reactive::Reactive;
-
-    /// Record that the element building through this context read `slot`.
-    /// Called by `Signal::get`/`with`; a no-op outside a build.
-    fn signal_read(&self, slot: crate::reactive::SignalSlot);
 
     // ========================================================================
     // Inherited Data (Dependency Injection)

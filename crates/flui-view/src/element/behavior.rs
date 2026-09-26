@@ -143,7 +143,7 @@ where
             hit_test_handle: owner.hit_test_handle.clone(),
             pipeline_owner: core.pipeline_owner().cloned(),
             keep_alive: owner.keep_alive.clone(),
-            reactive: owner.reactive.clone(),
+            reads: crate::reactive::ElementReads::new(owner.reactive.clone(), element_id),
         },
     ))
 }

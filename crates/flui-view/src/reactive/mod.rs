@@ -1,18 +1,29 @@
-//! Realm-scoped signals — ADR-0074 (feature `signals`).
+//! Realm-scoped signals — ADR-0074, placed by ADR-0085.
 //!
-//! One [`Reactive`] graph per `BuildOwner` (so per realm): an arena of
-//! generational slots holding [`Signal`] values, plus the **reader registry**
-//! that makes the whole thing worth having:
+//! One [`Reactive`] graph per `BuildOwner` (so per presentation, and every
+//! presentation belongs to a realm): an arena of generational slots holding
+//! [`Signal`] values, plus the **reader registry** that makes the whole thing
+//! worth having:
 //!
 //! - reading a signal inside `build` (through [`Signal::get`] / [`Signal::with`]
-//!   / their `try_` forms, which take the `&dyn BuildContext`) records the
-//!   building element as a reader of that slot — the same class of edge as
-//!   `depend_on` for an inherited provider, re-derived from scratch on every
-//!   build of that element (a build that no longer reads a signal stops
-//!   depending on it);
-//! - writing a signal ([`Signal::set`] / [`Signal::update`]) schedules exactly
-//!   the reader elements on the owner's existing external inbox
-//!   ([`RebuildReason::SignalChange`]).
+//!   / their `try_` forms, which take any `&S` where `S: ReadScope + ?Sized`,
+//!   `BuildContext` included) records the building element as a reader of that
+//!   slot — the same class of edge as `depend_on` for an inherited provider,
+//!   re-derived from scratch on every build of that element (a build that no
+//!   longer reads a signal stops depending on it);
+//! - writing a signal ([`SignalWriteExt::set`] / [`SignalWriteExt::update`])
+//!   schedules exactly the reader elements on the owner's existing external
+//!   inbox ([`RebuildReason::SignalChange`]).
+//!
+//! # The read contract
+//!
+//! The handles, the error type and the read contract live in
+//! [`flui_foundation::read_scope`] and are re-exported here, so render and
+//! animation code can name a `Signal<T>` without depending on this crate. The
+//! graph implements [`ReadGraph`] (pure reads, enough for [`Signal::peek`]) and
+//! never [`ReaderSink`]: the only sink that subscribes an element is the
+//! private `ElementReads`, which `make_build_ctx` mints for the element about
+//! to build. A scope built anywhere else reads but subscribes nobody.
 //!
 //! Nothing here touches the element tree: the only side effect on it is the
 //! same `ExternalBuildScheduler::schedule` call a `RebuildHandle` makes, so the
@@ -25,7 +36,7 @@
 //!
 //! Equality is opt-in, never implied: a plain `set` marks readers even when the
 //! value is equal (there is no `PartialEq` bound on `T`); only
-//! [`Signal::set_if_changed`] compares, and says so in its bounds.
+//! [`SignalWriteExt::set_if_changed`] compares, and says so in its bounds.
 //!
 //! # Refusals at run time
 //!
@@ -56,14 +67,16 @@
 //! [`SignalSlot::graph`] to the presentation whose graph minted the slot
 //! (ADR-0085 §1).
 
-use std::any::Any;
+use std::any::{Any, type_name};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
-use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+pub use flui_foundation::read_scope::{
+    ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot,
+};
 use flui_foundation::{ElementId, RebuildReason};
 use smallvec::SmallVec;
 
@@ -72,73 +85,6 @@ use crate::owner::ExternalBuildScheduler;
 /// Process-wide counter that gives every [`Reactive`] graph a distinct id, so
 /// a [`SignalSlot`] is meaningful only against the graph that minted it.
 static NEXT_GRAPH_ID: AtomicU32 = AtomicU32::new(1);
-
-/// Graph id + index + generation of a slot in a [`Reactive`] arena. `Copy`,
-/// `'static`; every operation re-checks all three, so a stale or foreign
-/// handle is an error, never a read of another value.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct SignalSlot {
-    graph: u32,
-    index: u32,
-    generation: u32,
-}
-
-impl SignalSlot {
-    /// The id of the graph that minted this slot: the [`Reactive::id`] of
-    /// that graph. Graph ids come from a process-wide monotonic counter, so a
-    /// realm uses this to route a cross-thread write to the one graph that can
-    /// accept it (ADR-0085 §1), and to refuse a slot none of its graphs minted.
-    #[must_use]
-    pub const fn graph(self) -> u32 {
-        self.graph
-    }
-}
-
-/// Why a signal operation could not be carried out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
-pub enum SignalError {
-    /// The slot was released (its owning element unmounted) and possibly
-    /// reused; the handle's generation no longer matches.
-    #[error("signal slot {index} generation {generation} was released")]
-    Released {
-        /// Arena index of the stale handle.
-        index: u32,
-        /// Generation the stale handle carries.
-        generation: u32,
-    },
-    /// The handle was minted by another realm's graph.
-    #[error("signal slot {index} belongs to graph {graph}, not to this one ({this})")]
-    ForeignGraph {
-        /// Arena index of the handle.
-        index: u32,
-        /// The graph that minted it.
-        graph: u32,
-        /// The graph the operation ran against.
-        this: u32,
-    },
-    /// A write was attempted while an element was building (ADR-0074 §5.2):
-    /// it would re-mark readers of the frame that is still building.
-    #[error("signal written during the build of {element:?}")]
-    WrittenDuringBuild {
-        /// The element whose build was running.
-        element: ElementId,
-    },
-    /// A slot was created while an element was building: one slot per
-    /// rebuild is a leak. Create in `init_state` and hold the handle.
-    #[error("signal created during the build of {element:?}")]
-    CreatedDuringBuild {
-        /// The element whose build was running.
-        element: ElementId,
-    },
-    /// The slot is being read or written by an enclosing closure on this
-    /// same slot (`a.with(.., |_| a.set(..))`); its value is out on loan.
-    #[error("signal slot {index} accessed re-entrantly from its own read/write closure")]
-    Reentrant {
-        /// Arena index of the slot.
-        index: u32,
-    },
-}
 
 struct Node {
     generation: u32,
@@ -265,11 +211,7 @@ impl Reactive {
             });
             (inner.nodes.len() - 1) as u32
         };
-        let slot = SignalSlot {
-            graph: self.id,
-            index,
-            generation: inner.nodes[index as usize].generation,
-        };
+        let slot = SignalSlot::new(self.id, index, inner.nodes[index as usize].generation);
         if let Some(owner) = owner {
             inner.owned_by_element.entry(owner).or_default().push(slot);
         }
@@ -278,18 +220,18 @@ impl Reactive {
     }
 
     fn check(&self, inner: &Inner, slot: SignalSlot) -> Result<(), SignalError> {
-        if slot.graph != self.id {
+        if slot.graph() != self.id {
             return Err(SignalError::ForeignGraph {
-                index: slot.index,
-                graph: slot.graph,
+                index: slot.index(),
+                graph: slot.graph(),
                 this: self.id,
             });
         }
-        match inner.nodes.get(slot.index as usize) {
-            Some(node) if node.live && node.generation == slot.generation => Ok(()),
+        match inner.nodes.get(slot.index() as usize) {
+            Some(node) if node.live && node.generation == slot.generation() => Ok(()),
             _ => Err(SignalError::Released {
-                index: slot.index,
-                generation: slot.generation,
+                index: slot.index(),
+                generation: slot.generation(),
             }),
         }
     }
@@ -361,7 +303,7 @@ impl Reactive {
         if self.check(&inner, slot).is_err() {
             return;
         }
-        Self::release_index(&mut inner, slot.index);
+        Self::release_index(&mut inner, slot.index());
         tracing::trace!(target: "flui::signals", slot = ?slot, "signal released");
     }
 
@@ -444,13 +386,13 @@ impl Reactive {
         if self.check(&inner, slot).is_err() {
             return;
         }
-        let node = &mut inner.nodes[slot.index as usize];
+        let node = &mut inner.nodes[slot.index() as usize];
         if !node.element_readers.contains(&element) {
             node.element_readers.push(element);
         }
         let reads = inner.element_reads.entry(element).or_default();
-        if !reads.contains(&slot.index) {
-            reads.push(slot.index);
+        if !reads.contains(&slot.index()) {
+            reads.push(slot.index());
         }
     }
 
@@ -464,7 +406,7 @@ impl Reactive {
         if let Some(owned) = inner.owned_by_element.remove(&element) {
             for slot in owned {
                 if self.check(&inner, slot).is_ok() {
-                    Self::release_index(&mut inner, slot.index);
+                    Self::release_index(&mut inner, slot.index());
                     tracing::trace!(
                         target: "flui::signals",
                         slot = ?slot,
@@ -482,7 +424,7 @@ impl Reactive {
     pub fn readers_of(&self, slot: SignalSlot) -> Vec<ElementId> {
         let inner = self.inner.borrow();
         match self.check(&inner, slot) {
-            Ok(()) => inner.nodes[slot.index as usize].element_readers.to_vec(),
+            Ok(()) => inner.nodes[slot.index() as usize].element_readers.to_vec(),
             Err(_) => Vec::new(),
         }
     }
@@ -496,7 +438,7 @@ impl Reactive {
         for (element, slots) in &inner.owned_by_element {
             for slot in slots {
                 if self.check(&inner, *slot).is_ok() {
-                    owners.insert(slot.index, *element);
+                    owners.insert(slot.index(), *element);
                 }
             }
         }
@@ -506,11 +448,7 @@ impl Reactive {
             .enumerate()
             .filter(|(_, node)| node.live)
             .map(|(index, node)| SlotInfo {
-                slot: SignalSlot {
-                    graph: self.id,
-                    index: index as u32,
-                    generation: node.generation,
-                },
+                slot: SignalSlot::new(self.id, index as u32, node.generation),
                 readers: node.element_readers.to_vec(),
                 owner: owners.get(&(index as u32)).copied(),
             })
@@ -555,10 +493,13 @@ impl Reactive {
     fn loan(&self, slot: SignalSlot) -> Result<Loan<'_>, SignalError> {
         let mut inner = self.inner.borrow_mut();
         self.check(&inner, slot)?;
-        let value = inner.nodes[slot.index as usize]
-            .value
-            .take()
-            .ok_or(SignalError::Reentrant { index: slot.index })?;
+        let value =
+            inner.nodes[slot.index() as usize]
+                .value
+                .take()
+                .ok_or(SignalError::Reentrant {
+                    index: slot.index(),
+                })?;
         Ok(Loan {
             graph: self,
             slot,
@@ -571,7 +512,7 @@ impl Reactive {
     fn put_back(&self, slot: SignalSlot, value: Box<dyn Any>) {
         let mut inner = self.inner.borrow_mut();
         if self.check(&inner, slot).is_ok() {
-            inner.nodes[slot.index as usize].value = Some(value);
+            inner.nodes[slot.index() as usize].value = Some(value);
         }
     }
 
@@ -603,12 +544,17 @@ impl Reactive {
             .value
             .as_deref()
             .and_then(<dyn Any>::downcast_ref::<T>)
-            .expect("BUG: a live slot of this graph holds a value of another type");
+            .ok_or(SignalError::TypeMismatch {
+                index: slot.index(),
+                expected: type_name::<T>(),
+            })?;
         let result = f(typed);
         drop(loan);
         Ok(result)
     }
 
+    /// The type is checked before anything is marked, so a write through a
+    /// handle of the wrong `T` changes nothing and schedules nobody.
     fn write<T: 'static, R>(
         &self,
         slot: SignalSlot,
@@ -620,11 +566,36 @@ impl Reactive {
             .value
             .as_deref_mut()
             .and_then(<dyn Any>::downcast_mut::<T>)
-            .expect("BUG: a live slot of this graph holds a value of another type");
+            .ok_or(SignalError::TypeMismatch {
+                index: slot.index(),
+                expected: type_name::<T>(),
+            })?;
         let result = f(typed);
         drop(loan);
         self.mark(slot);
         Ok(result)
+    }
+}
+
+/// Pure reads: enough for [`Signal::peek`] against a `&Reactive`. The graph is
+/// deliberately not a [`ReaderSink`], so holding it (through
+/// `BuildContext::reactive()`) is not a way to subscribe an element.
+impl ReadGraph for Reactive {
+    fn graph_id(&self) -> u32 {
+        self.id
+    }
+
+    fn read_erased(
+        &self,
+        slot: SignalSlot,
+        read: &mut dyn FnMut(&dyn Any),
+    ) -> Result<(), SignalError> {
+        let loan = self.loan(slot)?;
+        if let Some(value) = loan.value.as_deref() {
+            read(value);
+        }
+        drop(loan);
+        Ok(())
     }
 }
 
@@ -638,7 +609,7 @@ impl Reactive {
                 return;
             };
             (
-                inner.nodes[slot.index as usize].element_readers.clone(),
+                inner.nodes[slot.index() as usize].element_readers.clone(),
                 inner.scheduler.clone(),
             )
         };
@@ -657,205 +628,92 @@ impl Reactive {
     }
 }
 
-/// A `Copy` handle to a value in a [`Reactive`] arena.
-pub struct Signal<T: 'static> {
-    slot: SignalSlot,
-    _t: PhantomData<fn() -> T>,
-    /// Realm-affine: a handle is only meaningful on the thread that owns its
-    /// [`Reactive`], so it is `!Send + !Sync` like the graph itself.
-    _local: PhantomData<*const ()>,
+mod sealed {
+    /// Only the signal handles of this graph take the write extension.
+    pub trait Sealed {}
 }
 
-impl<T: 'static> Clone for Signal<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-impl<T: 'static> Copy for Signal<T> {}
+impl<T: 'static> sealed::Sealed for Signal<T> {}
 
-impl<T: 'static> PartialEq for Signal<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.slot == other.slot
-    }
-}
-impl<T: 'static> Eq for Signal<T> {}
-
-impl<T: 'static> fmt::Debug for Signal<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Signal").field("slot", &self.slot).finish()
-    }
-}
-
-impl<T: 'static> Signal<T> {
-    fn from_slot(slot: SignalSlot) -> Self {
-        Self {
-            slot,
-            _t: PhantomData,
-            _local: PhantomData,
-        }
-    }
-
-    /// The arena slot behind this handle.
-    #[must_use]
-    pub fn slot(self) -> SignalSlot {
-        self.slot
-    }
-
-    /// The `Send + Sync` form of this handle, for a closure that will run on
-    /// the owner thread later (`UiCommand::SignalWrite`).
-    #[must_use]
-    pub fn detach(self) -> SignalSender<T> {
-        SignalSender {
-            slot: self.slot,
-            _t: PhantomData,
-        }
-    }
-
-    /// Read during `build`: the building element becomes a reader.
-    ///
-    /// # Errors
-    ///
-    /// [`SignalError::Released`] for a stale handle (its owning element
-    /// unmounted — a sliver band evicted, a route popped),
-    /// [`SignalError::ForeignGraph`] for another realm's handle,
-    /// [`SignalError::Reentrant`] from inside this slot's own closure.
-    pub fn try_with<R>(
-        self,
-        cx: &dyn crate::BuildContext,
-        f: impl FnOnce(&T) -> R,
-    ) -> Result<R, SignalError> {
-        let graph = cx.reactive();
-        let result = graph.read(self.slot, f)?;
-        cx.signal_read(self.slot);
-        Ok(result)
-    }
-
-    /// [`Signal::try_with`], cloning the value.
-    ///
-    /// # Errors
-    ///
-    /// As [`Signal::try_with`].
-    pub fn try_get(self, cx: &dyn crate::BuildContext) -> Result<T, SignalError>
-    where
-        T: Clone,
-    {
-        self.try_with(cx, T::clone)
-    }
-
-    /// Borrowed read during `build`; the building element becomes a reader.
-    ///
-    /// # Panics
-    ///
-    /// On a stale handle (its owning element unmounted), a handle from another
-    /// realm, or a re-entrant read of this same slot — see
-    /// [`Signal::try_with`] for the non-panicking form.
-    pub fn with<R>(self, cx: &dyn crate::BuildContext, f: impl FnOnce(&T) -> R) -> R {
-        match self.try_with(cx, f) {
-            Ok(result) => result,
-            Err(error) => panic!("Signal::with: {error} (use try_with for a fallible read)"),
-        }
-    }
-
-    /// [`Signal::with`], cloning the value.
-    ///
-    /// # Panics
-    ///
-    /// As [`Signal::with`].
-    #[must_use]
-    pub fn get(self, cx: &dyn crate::BuildContext) -> T
-    where
-        T: Clone,
-    {
-        self.with(cx, T::clone)
-    }
-
-    /// Read without registering anything (callbacks, tests, realm commands).
-    ///
-    /// # Errors
-    ///
-    /// As [`Signal::try_with`].
-    pub fn peek<R>(self, r: &Reactive, f: impl FnOnce(&T) -> R) -> Result<R, SignalError> {
-        r.read(self.slot, f)
-    }
-
+/// The write side of a [`Signal`]: `set`, `update` and `set_if_changed`
+/// against the graph that minted it (ADR-0085 §2).
+///
+/// An extension trait because [`Signal`] lives in `flui-foundation`, which
+/// cannot name [`Reactive`]. It is sealed: the handles of this graph are the
+/// only implementors. It is in [`crate::prelude`]; without the prelude, import
+/// `flui_view::SignalWriteExt`.
+pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     /// Replace the value and mark every reader — equal or not.
     ///
     /// # Errors
     ///
     /// [`SignalError::WrittenDuringBuild`] from inside a `build`, plus the
     /// handle errors of [`Signal::try_with`].
-    pub fn set(self, r: &Reactive, value: T) -> Result<(), SignalError> {
-        r.write(self.slot, |slot: &mut T| *slot = value)
-    }
+    fn set(self, r: &Reactive, value: T) -> Result<(), SignalError>;
 
     /// Mutate in place and mark every reader.
     ///
     /// # Errors
     ///
-    /// As [`Signal::set`].
-    pub fn update<R>(self, r: &Reactive, f: impl FnOnce(&mut T) -> R) -> Result<R, SignalError> {
-        r.write(self.slot, f)
-    }
+    /// As [`SignalWriteExt::set`].
+    fn update<R>(self, r: &Reactive, f: impl FnOnce(&mut T) -> R) -> Result<R, SignalError>;
 
     /// Replace the value only if it differs; an equal write marks nobody.
     /// Returns whether a write happened.
     ///
     /// # Errors
     ///
-    /// As [`Signal::set`].
-    pub fn set_if_changed(self, r: &Reactive, value: T) -> Result<bool, SignalError>
+    /// As [`SignalWriteExt::set`].
+    fn set_if_changed(self, r: &Reactive, value: T) -> Result<bool, SignalError>
+    where
+        T: PartialEq;
+}
+
+impl<T: 'static> SignalWriteExt<T> for Signal<T> {
+    fn set(self, r: &Reactive, value: T) -> Result<(), SignalError> {
+        r.write(self.slot(), |slot: &mut T| *slot = value)
+    }
+
+    fn update<R>(self, r: &Reactive, f: impl FnOnce(&mut T) -> R) -> Result<R, SignalError> {
+        r.write(self.slot(), f)
+    }
+
+    fn set_if_changed(self, r: &Reactive, value: T) -> Result<bool, SignalError>
     where
         T: PartialEq,
     {
-        r.refuse_if_building(self.slot)?;
-        if r.read(self.slot, |current: &T| *current == value)? {
+        r.refuse_if_building(self.slot())?;
+        if r.read(self.slot(), |current: &T| *current == value)? {
             return Ok(false);
         }
         self.set(r, value).map(|()| true)
     }
 }
 
-/// The `Send + Sync` form of a [`Signal`] handle for crossing a thread
-/// boundary: it carries only the slot, and can do nothing until it is
-/// re-attached on the owner thread (inside a `UiCommand::SignalWrite`
-/// closure, ADR-0074 §5.8), where [`SignalSender::attach`] hands back the
-/// realm-affine [`Signal`]. The realm runs that closure against the graph
-/// named by [`SignalSlot::graph`] of [`SignalSender::slot`], in whichever of
-/// its presentations minted it (ADR-0085 §1).
-pub struct SignalSender<T: 'static> {
-    slot: SignalSlot,
-    _t: PhantomData<fn() -> T>,
+/// The sink that subscribes one element: minted by `make_build_ctx` for the
+/// element about to build, and by `ElementBuildContext` for its own element.
+/// Private to this crate, so no scope built elsewhere can subscribe an
+/// element.
+#[derive(Clone)]
+pub(crate) struct ElementReads {
+    graph: Reactive,
+    element: ElementId,
 }
 
-impl<T: 'static> Clone for SignalSender<T> {
-    fn clone(&self) -> Self {
-        *self
+impl ElementReads {
+    pub(crate) fn new(graph: Reactive, element: ElementId) -> Self {
+        Self { graph, element }
     }
-}
-impl<T: 'static> Copy for SignalSender<T> {}
 
-impl<T: 'static> fmt::Debug for SignalSender<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SignalSender")
-            .field("slot", &self.slot)
-            .finish()
+    /// The graph the element's reads resolve against.
+    pub(crate) fn graph(&self) -> &Reactive {
+        &self.graph
     }
 }
 
-impl<T: 'static> SignalSender<T> {
-    /// Re-attach on the owner thread. The handle is only meaningful against
-    /// the graph that minted the original signal; any operation through
-    /// another graph reports [`SignalError::ForeignGraph`].
-    #[must_use]
-    pub fn attach(self) -> Signal<T> {
-        Signal::from_slot(self.slot)
-    }
-
-    /// The arena slot behind this handle. Readable on any thread: a realm
-    /// routes the write this sender carries by its [`SignalSlot::graph`].
-    #[must_use]
-    pub fn slot(self) -> SignalSlot {
-        self.slot
+impl ReaderSink for ElementReads {
+    fn subscribe(&self, slot: SignalSlot) {
+        self.graph.register_element_reader(slot, self.element);
     }
 }
 
@@ -868,6 +726,11 @@ mod tests {
     use parking_lot::Mutex;
 
     use super::*;
+
+    // The graph handle `BuildContext::reactive()` returns cannot subscribe
+    // anyone; the element sink this crate mints can.
+    static_assertions::assert_not_impl_any!(Reactive: ReaderSink);
+    static_assertions::assert_impl_all!(ElementReads: ReaderSink);
 
     fn graph_with_inbox() -> (Reactive, Arc<Mutex<HashMap<ElementId, RebuildReasons>>>) {
         let inbox = Arc::new(Mutex::new(HashMap::new()));
@@ -969,7 +832,7 @@ mod tests {
             Err(SignalError::WrittenDuringBuild { element: e1 })
         );
         assert_eq!(
-            r.try_signal(7u8).map(|s| s.slot().index),
+            r.try_signal(7u8).map(|s| s.slot().index()),
             Err(SignalError::CreatedDuringBuild { element: e1 })
         );
         assert_eq!(a.peek(&r, |v| *v), Ok(0), "reads stay legal during build");
@@ -997,11 +860,11 @@ mod tests {
 
         let fresh = r.signal(9u8);
         assert_eq!(
-            fresh.slot().index,
-            owned.slot().index,
+            fresh.slot().index(),
+            owned.slot().index(),
             "the freed slot is reused"
         );
-        assert_ne!(fresh.slot().generation, owned.slot().generation);
+        assert_ne!(fresh.slot().generation(), owned.slot().generation());
         assert!(owned.peek(&r, |v| *v).is_err(), "the old handle stays dead");
     }
 
@@ -1016,8 +879,8 @@ mod tests {
         r.release(e_slot.slot());
         let f_slot = r.signal_owned_by(f, 2u8);
         assert_eq!(
-            f_slot.slot().index,
-            e_slot.slot().index,
+            f_slot.slot().index(),
+            e_slot.slot().index(),
             "test setup: index reused"
         );
 
@@ -1054,14 +917,14 @@ mod tests {
         assert_eq!(
             inner,
             Err(SignalError::Reentrant {
-                index: a.slot().index
+                index: a.slot().index()
             })
         );
         let inner = a.update(&r, |_| a.set(&r, 0)).unwrap();
         assert_eq!(
             inner,
             Err(SignalError::Reentrant {
-                index: a.slot().index
+                index: a.slot().index()
             })
         );
         assert_eq!(
@@ -1117,7 +980,7 @@ mod tests {
         let free = r.signal(0u8);
         r.register_element_reader(free.slot(), e1);
         let mut info = r.snapshot();
-        info.sort_by_key(|i| i.slot.index);
+        info.sort_by_key(|i| i.slot.index());
         assert_eq!(info.len(), 2);
         assert_eq!(info[0].slot, owned.slot());
         assert_eq!(info[0].owner, Some(e1));

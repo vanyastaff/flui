@@ -14,7 +14,12 @@ use flui_interaction::FocusManager;
 use parking_lot::RwLock;
 
 use super::build_context::{BuildContext, LifecycleContext};
-use crate::{element::Notification, owner::BuildOwner, tree::ElementTree};
+use crate::{
+    element::Notification,
+    owner::BuildOwner,
+    reactive::{ElementReads, ReadScope, ReaderSink, ScopeRef},
+    tree::ElementTree,
+};
 
 /// Concrete BuildContext implementation for Elements.
 ///
@@ -52,6 +57,10 @@ pub struct ElementBuildContext {
     /// Reference to the build owner.
     owner: Arc<RwLock<BuildOwner>>,
 
+    /// The owner's reactive graph with this element as its reader, captured
+    /// at construction so a read's [`ScopeRef`] can borrow it.
+    reads: ElementReads,
+
     /// Whether we're currently in a build phase (debug only).
     #[cfg(debug_assertions)]
     is_building: bool,
@@ -77,6 +86,9 @@ impl ElementBuildContext {
     /// * `mounted` - Whether the element is currently mounted
     /// * `tree` - Shared reference to the element tree
     /// * `owner` - Shared reference to the build owner
+    ///
+    /// Takes a read lock on `owner` to capture its reactive graph, so it must
+    /// not be called while the caller holds `owner`'s write lock.
     pub fn new(
         element_id: ElementId,
         depth: usize,
@@ -84,12 +96,14 @@ impl ElementBuildContext {
         tree: Arc<RwLock<ElementTree>>,
         owner: Arc<RwLock<BuildOwner>>,
     ) -> Self {
+        let reads = ElementReads::new(owner.read().reactive().clone(), element_id);
         Self {
             element_id,
             depth,
             mounted,
             tree,
             owner,
+            reads,
             #[cfg(debug_assertions)]
             is_building: false,
         }
@@ -98,6 +112,8 @@ impl ElementBuildContext {
     /// Create a context for a specific element from the tree.
     ///
     /// Returns None if the element doesn't exist in the tree.
+    ///
+    /// Takes a read lock on `owner` (as [`new`](Self::new) does).
     #[expect(clippy::needless_pass_by_value)] // Arc is cloned into Self, taking by value is idiomatic
     pub fn for_element(
         element_id: ElementId,
@@ -106,6 +122,7 @@ impl ElementBuildContext {
     ) -> Option<Self> {
         let tree_guard = tree.read();
         let node = tree_guard.get(element_id)?;
+        let reads = ElementReads::new(owner.read().reactive().clone(), element_id);
 
         Some(Self {
             element_id,
@@ -113,6 +130,7 @@ impl ElementBuildContext {
             mounted: node.element().mounted(),
             tree: tree.clone(),
             owner,
+            reads,
             #[cfg(debug_assertions)]
             is_building: false,
         })
@@ -197,6 +215,15 @@ impl ElementBuildContext {
 
 impl super::build_context::sealed::Sealed for ElementBuildContext {}
 
+/// Reads resolve against the owner's graph; they subscribe this element only
+/// while it is marked as building (outside a build a read is a plain read).
+impl ReadScope for ElementBuildContext {
+    fn scope(&self) -> ScopeRef<'_> {
+        let sink = BuildContext::is_building(self).then_some(&self.reads as &dyn ReaderSink);
+        ScopeRef::new(self.reads.graph(), sink)
+    }
+}
+
 impl BuildContext for ElementBuildContext {
     fn element_id(&self) -> ElementId {
         self.element_id
@@ -222,16 +249,7 @@ impl BuildContext for ElementBuildContext {
     }
 
     fn reactive(&self) -> crate::reactive::Reactive {
-        self.owner.read().reactive().clone()
-    }
-
-    fn signal_read(&self, slot: crate::reactive::SignalSlot) {
-        if BuildContext::is_building(self) {
-            self.owner
-                .read()
-                .reactive()
-                .register_element_reader(slot, self.element_id);
-        }
+        self.reads.graph().clone()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -706,7 +724,9 @@ pub(crate) struct BuildCapabilities {
     /// The presentation's keep-alive table, so an item can take a hold on the
     /// lazy sliver child it lives inside from `init_state`.
     pub(crate) keep_alive: crate::owner::KeepAliveHolds,
-    pub(crate) reactive: crate::reactive::Reactive,
+    /// The owner's reactive graph with the building element as its reader:
+    /// the sink every signal read in this build subscribes through.
+    pub(crate) reads: ElementReads,
 }
 
 pub(crate) struct BuildCtx<'b> {
@@ -780,6 +800,18 @@ impl<'b> BuildCtx<'b> {
 
 impl super::build_context::sealed::Sealed for BuildCtx<'_> {}
 
+/// Every read subscribes the element: this context exists only for the
+/// element's build (and its `init_state`, whose reads the following build's
+/// `begin_element_build` forgets before re-deriving the set).
+impl ReadScope for BuildCtx<'_> {
+    fn scope(&self) -> ScopeRef<'_> {
+        ScopeRef::new(
+            self.capabilities.reads.graph(),
+            Some(&self.capabilities.reads),
+        )
+    }
+}
+
 impl BuildContext for BuildCtx<'_> {
     fn element_id(&self) -> ElementId {
         self.element_id
@@ -798,13 +830,7 @@ impl BuildContext for BuildCtx<'_> {
     }
 
     fn reactive(&self) -> crate::reactive::Reactive {
-        self.capabilities.reactive.clone()
-    }
-
-    fn signal_read(&self, slot: crate::reactive::SignalSlot) {
-        self.capabilities
-            .reactive
-            .register_element_reader(slot, self.element_id);
+        self.capabilities.reads.graph().clone()
     }
 
     fn depend_on_inherited(&self, type_id: TypeId, callback: &mut dyn FnMut(&dyn Any)) -> bool {
@@ -1405,7 +1431,7 @@ mod tests {
                 hit_test_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
-                reactive: crate::reactive::Reactive::new(),
+                reads: ElementReads::new(crate::reactive::Reactive::new(), ElementId::new(1)),
             },
         );
         ctx.visit_child_elements(&mut |_| {});
@@ -1432,7 +1458,7 @@ mod tests {
                 hit_test_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
-                reactive: crate::reactive::Reactive::new(),
+                reads: ElementReads::new(crate::reactive::Reactive::new(), ElementId::new(1)),
             },
         );
 

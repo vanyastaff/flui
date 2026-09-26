@@ -219,7 +219,10 @@ pub use owner::{
     RebuildHandle, RebuildReason, RebuildReasons, RecoveredAt, RecoveredPanic,
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
-pub use reactive::{Reactive, Signal, SignalError, SignalSender, SignalSlot, SlotInfo};
+pub use reactive::{
+    Reactive, ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender,
+    SignalSlot, SignalWriteExt, SlotInfo,
+};
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
 pub use view::{
@@ -266,6 +269,10 @@ pub mod prelude {
 
     // Logging
     pub use crate::context::{BuildContext, BuildContextExt, LifecycleContext};
+    // Signal writes (`set`/`update`/`set_if_changed`). Reads need no import:
+    // `Signal::get` is inherent and takes the context as a `ReadScope`, which
+    // stays out of the prelude so `scope()` does not show on every context.
+    pub use crate::reactive::SignalWriteExt;
     pub use crate::{
         binding::{
             AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation,
