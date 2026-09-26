@@ -43,7 +43,7 @@ use regex::Regex;
 use crate::util::repo_root;
 
 /// The fragment directory, relative to the repository root.
-pub(crate) const DIR: &str = "changelog.d";
+const DIR: &str = "changelog.d";
 
 /// The file fragments merge into, relative to the repository root.
 const CHANGELOG: &str = "CHANGELOG.md";
@@ -136,9 +136,17 @@ pub(crate) fn changelog(args: &ChangelogArgs) -> anyhow::Result<ExitCode> {
     if args.self_test {
         return Ok(self_test());
     }
-    let root = repo_root();
+    run(&repo_root(), args)
+}
+
+/// The command over the repository at `root`.
+fn run(root: &Path, args: &ChangelogArgs) -> anyhow::Result<ExitCode> {
     let entries = entries(&root.join(DIR))?;
-    let text = normalized(&crate::util::read(CHANGELOG)?);
+    let target = root.join(CHANGELOG);
+    let text = normalized(
+        &std::fs::read_to_string(&target)
+            .with_context(|| format!("reading {}", target.display()))?,
+    );
     let (fragments, mut findings) = judge(&entries);
     if let Err(found) = unreleased(&text) {
         findings.extend(found);
@@ -170,7 +178,6 @@ pub(crate) fn changelog(args: &ChangelogArgs) -> anyhow::Result<ExitCode> {
         print!("{}", region(&merged));
         return Ok(ExitCode::SUCCESS);
     }
-    let target = root.join(CHANGELOG);
     std::fs::write(&target, &merged).with_context(|| format!("writing {}", target.display()))?;
     println!(
         "changelog: {} fragment(s) merged into {CHANGELOG}",

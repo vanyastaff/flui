@@ -368,3 +368,115 @@ fn section_bodies_hold_one_unordered_list() {
         [(5, "duplicate-section")]
     );
 }
+
+/// A scratch repository: `CHANGELOG.md` holding [`CHANGELOG_FIXTURE`] and
+/// `changelog.d/` holding `fragments`. Removed on drop.
+struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    fn new(name: &str, fragments: &[(&str, &str)]) -> Self {
+        let root =
+            std::env::temp_dir().join(format!("xtask-changelog-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(DIR)).expect("creates the scratch tree");
+        std::fs::write(root.join(CHANGELOG), CHANGELOG_FIXTURE).expect("writes");
+        for (name, text) in fragments {
+            std::fs::write(root.join(DIR).join(name), text).expect("writes");
+        }
+        Self(root)
+    }
+
+    fn changelog(&self) -> String {
+        std::fs::read_to_string(self.0.join(CHANGELOG)).expect("reads")
+    }
+
+    fn fragments(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(self.0.join(DIR))
+            .expect("lists")
+            .map(|entry| {
+                entry
+                    .expect("lists")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn args(check: bool, dry_run: bool) -> ChangelogArgs {
+    ChangelogArgs {
+        check,
+        dry_run,
+        self_test: false,
+    }
+}
+
+#[test]
+fn the_merge_writes_the_changelog_and_removes_the_fragments() {
+    let scratch = Scratch::new(
+        "merge",
+        &[
+            ("README.md", "Not a fragment.\n"),
+            ("b.md", "### Fixed\n\n- b fixed\n"),
+            ("a.md", "### Fixed\n\n- a fixed\n"),
+        ],
+    );
+    assert_eq!(
+        run(&scratch.0, &args(false, false)).expect("runs"),
+        ExitCode::SUCCESS
+    );
+    assert_eq!(
+        scratch.changelog(),
+        CHANGELOG_FIXTURE.replace(
+            "### Fixed\n\n- old fixed\n",
+            "### Fixed\n\n- a fixed\n\n- b fixed\n\n- old fixed\n"
+        )
+    );
+    assert_eq!(scratch.fragments(), ["README.md"]);
+    // a second run finds nothing to merge and changes nothing
+    let merged = scratch.changelog();
+    assert_eq!(
+        run(&scratch.0, &args(false, false)).expect("runs"),
+        ExitCode::SUCCESS
+    );
+    assert_eq!(scratch.changelog(), merged);
+}
+
+#[test]
+fn check_and_dry_run_write_nothing() {
+    let scratch = Scratch::new("read-only", &[("a.md", "### Added\n\n- a\n")]);
+    for (check, dry_run) in [(true, false), (false, true)] {
+        assert_eq!(
+            run(&scratch.0, &args(check, dry_run)).expect("runs"),
+            ExitCode::SUCCESS
+        );
+        assert_eq!(scratch.changelog(), CHANGELOG_FIXTURE);
+        assert_eq!(scratch.fragments(), ["a.md"]);
+    }
+}
+
+#[test]
+fn an_invalid_fragment_stops_the_merge() {
+    let scratch = Scratch::new(
+        "invalid",
+        &[
+            ("a.md", "### Added\n\n- a\n"),
+            ("b.md", "### Notes\n\n- b\n"),
+        ],
+    );
+    assert_eq!(
+        run(&scratch.0, &args(false, false)).expect("runs"),
+        ExitCode::FAILURE
+    );
+    assert_eq!(scratch.changelog(), CHANGELOG_FIXTURE);
+    assert_eq!(scratch.fragments(), ["a.md", "b.md"]);
+}
