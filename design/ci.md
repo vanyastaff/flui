@@ -356,6 +356,17 @@ that keeps file and line in a panic; both stay.
      should shrink its entry (about 1.6 GB), and five feature-matrix shards (lever 3) add two entries to
      today's four. The implementation reports the total from `gh cache list` before and after;
      staying under the 10 GB eviction limit is the goal, not a result this design shows.
+   - **What the implementation adds, and holds back.** `workspace-tests-v2` sits beside the old
+     `workspace-tests` (2.27 GB) until that entry goes unused for seven days or the owner deletes
+     it (`gh cache delete`), and it holds two feature resolutions: `test`'s default-feature
+     `cargo build --workspace --all-targets` for the example links, then `TEST_SCOPE`
+     (`flui/cupertino,flui/localizations`, flui-platform excluded). Giving the link build
+     `TEST_SCOPE`'s features would merge them but stop linking the examples under the facade's
+     default features, so it is left for the first wide run to measure how much the second
+     resolution costs. `macos-ci` and `test-windows` restore their caches but do not save them
+     (`save-if: false`) while they are advisory: at 10.98 GB, two new multi-GB entries from the
+     nightly run would evict the `test-features`, feature-matrix and `doc` entries, which only
+     `main` and wide runs restore. They start saving on `main` once `gh cache list` shows room.
 
 Rejected for CI, with the reason in the study: nextest archives (the test run is 1.6-6 min of a
 job whose build is 4.9-9.2 min, so splitting the run saves little and the archive must be

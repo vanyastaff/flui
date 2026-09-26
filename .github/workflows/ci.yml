@@ -1670,8 +1670,11 @@ jobs:
         with:
           cache-on-failure: true
           shared-key: macos-ci
-          # The nightly run is on main, so it is what saves the entry.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Restore only: the repository's caches are already past the 10 GB
+          # eviction limit (design/ci.md §4.4), and a new entry from this
+          # advisory job would evict the ones the blocking jobs restore.
+          # Saving on main waits for a `gh cache list` showing room.
+          save-if: false
           # Per tokio: binary caching breaks on macOS.
           cache-bin: false
 
@@ -1714,7 +1717,8 @@ jobs:
         with:
           cache-on-failure: true
           shared-key: test-windows
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          # Restore only, as macos-ci: no new entry past the eviction limit.
+          save-if: false
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
