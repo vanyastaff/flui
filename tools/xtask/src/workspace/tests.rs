@@ -758,7 +758,7 @@ type Placement = (String, Option<String>, String);
 fn the_tiers_match_the_adr_0081_table() {
     let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
     let members = super::Members::load(&util::repo_root(), &metadata).expect("manifests load");
-    let table: [(&str, &str, &[&str]); 8] = [
+    let table: [(&str, &str, &[&str]); 9] = [
         (
             "V",
             "internal",
@@ -770,6 +770,7 @@ fn the_tiers_match_the_adr_0081_table() {
                 "flui-tree",
             ],
         ),
+        ("C", "stable", &["flui-platform-api"]),
         (
             "S",
             "internal",
@@ -863,8 +864,6 @@ fn the_tiers_match_the_adr_0081_table() {
         })
         .collect();
     let seeded: BTreeSet<(&str, &str, &str)> = [
-        ("flui-interaction", "flui-platform", "ADR-0082"),
-        ("flui-widgets", "flui-platform", "ADR-0082"),
         ("flui-app", "flui-hot-reload", "ADR-0094"),
         ("flui", "flui-hot-reload", "ADR-0094"),
         ("flui", "flui-material", "ADR-0088"),

@@ -116,9 +116,10 @@ is legal only when it is one of the dated exceptions listed under "Core never na
 in §3; each is an `edge-exceptions` entry on the host, which the kind rule of §3 reads as well,
 and the gate reports any other H → `pkg` edge.
 
-The tier assignment has six refused edges, each seeded as an `edge-exceptions` entry:
+The tier assignment had six refused edges, each seeded as an `edge-exceptions` entry.
 `flui-interaction -> flui-platform` and `flui-widgets -> flui-platform` (the widget harness,
-optional under `testing`) exit with ADR-0082; `flui-app -> flui-hot-reload` and
+optional under `testing`) exited with ADR-0082: both now name `flui-platform-api` (tier C), and
+their entries are gone. Four remain: `flui-app -> flui-hot-reload` and
 `flui -> flui-hot-reload` exit with ADR-0094; `flui -> flui-material` and
 `flui -> flui-cupertino` exit with ADR-0088. In K, `flui-widgets` names `flui-testing` as an
 optional normal dependency (`crates/flui-widgets/Cargo.toml:89`), so `flui-testing` has the
@@ -307,8 +308,10 @@ recorded:
 For the accepted part:
 
 - `cargo xtask workspace` checks the tier rule on every manifest and reports zero findings;
-  removing the `flui-interaction` `edge-exceptions` entry makes it fail with
-  `flui-interaction (tier S, order 4) depends on flui-platform (tier H, order 1)`.
+  removing one of the facade's `edge-exceptions` entries makes it fail with the refused
+  `flui -> flui-material` (or `flui-cupertino`, `flui-hot-reload`) edge, and an exception whose
+  edge is gone is itself a finding (it caught the two `flui-platform` entries when
+  `flui-platform-api` landed).
 - `cargo xtask workspace --self-test` runs the rule over a built-in graph that plants an upward
   cross-tier edge, an in-tier edge against `order`, an H → `pkg` edge without an exception, a
   stale exception, a missing `tier-kind`, a duplicate `order` and an edge onto a `tool`; it
@@ -328,9 +331,8 @@ Still to come, with the Proposed parts:
 
 - `cargo xtask workspace --self-test` also plants a core crate with an optional dependency on an
   `official` crate (§3) and a feature with no `cfg` site (§4).
-- `cargo xtask reach --self-test`: plants a K crate depending on `winit`; must fail. The first
-  real run must fail on `flui-interaction -> flui-platform` and `flui-widgets -> flui-platform`
-  (under `testing`) before ADR-0082's trait move and pass after it.
+- `cargo xtask reach --self-test`: plants a K crate depending on `winit`; must fail. ADR-0082's
+  trait move landed first, so the first real run passes with an empty allowlist.
 - The pinned list test in `tools/xtask/src/tasks/checks.rs` names the new gates, so removing
   one from `checks` fails a unit test.
 - A doc-hidden check: `cargo doc -p flui-view` output contains no `__runtime` page.

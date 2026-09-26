@@ -37,3 +37,6 @@ all-features = true
 # `flui-widgets`. The contracts sit below every backend (ADR-0082 §1).
 [package.metadata.flui]
 layer = 1
+tier = "C"
+tier-kind = "stable"
+order = 1

@@ -209,6 +209,3 @@ layer = 6
 tier = "K"
 tier-kind = "internal"
 order = 3
-edge-exceptions = [
-    { to = "flui-platform", exit = "ADR-0082", reason = "the `testing` harness's headless platform" },
-]

@@ -126,6 +126,3 @@ layer = 2
 tier = "S"
 tier-kind = "internal"
 order = 4
-edge-exceptions = [
-    { to = "flui-platform", exit = "ADR-0082", reason = "`PlatformTextInput` moves into the platform API contract crate" },
-]
