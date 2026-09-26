@@ -229,12 +229,12 @@ pub use task::{Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
     AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
-    CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, MobileCapabilities,
-    PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities, PlatformDisplay,
-    PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback, PlatformTextInput,
-    PlatformWindow, WebCapabilities, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
-    WindowShowError,
+    CursorError, DesktopCapabilities, DispatchEventResult, DisplayId, HostWindow,
+    MobileCapabilities, PathPromptOptions, Platform, PlatformAccessibility, PlatformCapabilities,
+    PlatformDisplay, PlatformEmbedder, PlatformExecutor, PlatformHaptics, PlatformReadyCallback,
+    PlatformTextInput, PlatformWindow, WebCapabilities, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState, WindowId,
+    WindowMode, WindowOptions, WindowReveal, WindowShowError,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

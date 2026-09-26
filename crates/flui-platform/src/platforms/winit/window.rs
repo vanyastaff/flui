@@ -15,7 +15,9 @@ use winit::window::Window;
 use super::control::ControlSender;
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::traits::PlatformAccessibility;
-use crate::traits::{CursorError, PlatformTextInput, PlatformWindow, WindowAppearance, WindowId};
+use crate::traits::{
+    CursorError, HostWindow, PlatformTextInput, PlatformWindow, WindowAppearance, WindowId,
+};
 
 /// Concrete winit window wrapper
 ///
@@ -306,24 +308,10 @@ impl PlatformWindow for WinitWindow {
         self.window.display_handle()
     }
 
-    fn as_winit(&self) -> Option<&Arc<Window>> {
-        Some(&self.window)
-    }
-
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         Some(Arc::new(WinitTextInput {
             window: Arc::clone(&self.window),
         }))
-    }
-
-    /// The window's own AT-SPI bridge — the capability the composition
-    /// root's accessibility wire discovers. Without this override the trait
-    /// default (`None`) makes every real Linux window silently
-    /// screen-reader-invisible while the headless fake works, which is
-    /// exactly backwards.
-    #[cfg(all(target_os = "linux", feature = "a11y"))]
-    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
-        Some(Arc::clone(&self.accessibility) as _)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -333,4 +321,16 @@ impl PlatformWindow for WinitWindow {
     // No `haptics()` override: desktop winit targets have no haptic
     // hardware to drive, so the `PlatformWindow` trait default (`None`) is
     // the permanent correct answer here, not a stub awaiting a backend.
+}
+
+impl HostWindow for WinitWindow {
+    /// The window's own AT-SPI bridge — the capability the composition
+    /// root's accessibility wire discovers. Without this override the trait
+    /// default (`None`) makes every real Linux window silently
+    /// screen-reader-invisible while the headless fake works, which is
+    /// exactly backwards.
+    #[cfg(all(target_os = "linux", feature = "a11y"))]
+    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
+        Some(Arc::clone(&self.accessibility) as _)
+    }
 }

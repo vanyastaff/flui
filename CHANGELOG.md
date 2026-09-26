@@ -221,8 +221,18 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `deny.toml`, and are reported without failing other pull requests. The weekly `advisories`
   job (the nightly run covers it daily) and `cargo-machete` job (cargo-shear replaces it) are
   removed.
+- **`flui-platform`: `accessibility()` moved to the new `HostWindow` subtrait** (ADR-0082 §3). A
+  window as a backend hands it out is an `Arc<dyn HostWindow>`: `Platform::open_window`,
+  `WindowOpen::Ready`, `WindowOpen::try_ready` and `PendingWindow` (`wait`, `try_take`, its
+  `Future` output) return one, and it upcasts to `Arc<dyn PlatformWindow>`. `PlatformWindow`
+  itself no longer names an AccessKit type. A binding that passed an `open_window` result where
+  `&Arc<dyn PlatformWindow>` is expected needs `let window: Arc<dyn PlatformWindow> = window;`
+  first.
 
 ### Removed
+
+- `PlatformWindow::as_winit` (`flui-platform`, `winit-backend` feature): nothing called it, and
+  the window contract names no winit type (ADR-0082 §1).
 
 - `flui_rendering::slivers`, a public module with no items: the sliver windowing math lives in
   `flui_rendering::virtualization`.

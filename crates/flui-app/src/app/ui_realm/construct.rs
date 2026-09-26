@@ -8,7 +8,7 @@ use crate::app::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport,
 };
-use crate::app::presentation::{PresentationState, RealmCapabilities};
+use crate::app::presentation::{PresentationState, PresentationWindow, RealmCapabilities};
 use crate::app::presentation_forest::PresentationForest;
 use crate::app::runtime::RealmServices;
 use crossbeam_channel::bounded;
@@ -16,7 +16,6 @@ use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::InteractionLane;
 #[cfg(test)]
 use flui_platform::traits::PlatformTextInput;
-use flui_platform::traits::PlatformWindow;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_scheduler::AppLifecycleState;
 use flui_view::GlobalKeyScope;
@@ -48,7 +47,7 @@ impl UiRealm {
     /// could not be created.
     pub(crate) fn new(
         wake: Arc<dyn Fn() + Send + Sync>,
-        window: Arc<dyn PlatformWindow>,
+        window: impl Into<PresentationWindow>,
         device_pixel_ratio: f32,
         needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {
@@ -75,7 +74,7 @@ impl UiRealm {
     pub(crate) fn with_capacity(
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
-        window: Arc<dyn PlatformWindow>,
+        window: impl Into<PresentationWindow>,
         device_pixel_ratio: f32,
         needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {
@@ -120,7 +119,7 @@ impl UiRealm {
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
         (realm_id, presentation_id): (RealmId, PresentationId),
-        window: Arc<dyn PlatformWindow>,
+        window: impl Into<PresentationWindow>,
         device_pixel_ratio: Option<f32>,
         services: RealmServices,
         needs_redraw: Arc<AtomicBool>,

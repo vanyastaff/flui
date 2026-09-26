@@ -37,8 +37,8 @@ use flui_foundation::{ClaimHandle, ClaimOutcome};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
-    Clipboard, ClipboardItem, PathPromptOptions, Platform, PlatformCapabilities, PlatformDisplay,
-    PlatformExecutor, PlatformWindow, WindowAppearance, WindowEvent, WindowId, WindowOptions,
+    Clipboard, ClipboardItem, HostWindow, PathPromptOptions, Platform, PlatformCapabilities,
+    PlatformDisplay, PlatformExecutor, WindowAppearance, WindowEvent, WindowId, WindowOptions,
 };
 use crate::data_transfer::DataTransferSource;
 use crate::error::PlatformError;
@@ -369,20 +369,17 @@ assert_impl_all!(SharedPlatform: Send, Sync, Clone);
 pub enum WindowOpen {
     /// Created synchronously. Always the case inside `on_ready`, and on
     /// backends whose owner thread may create directly outside callbacks.
-    Ready(Arc<dyn PlatformWindow>),
+    Ready(Arc<dyn HostWindow>),
     /// Enqueued on the owner lane; resolves at the loop's next drain
     /// anchor.
     Pending(PendingWindow),
 }
 
 impl fmt::Debug for WindowOpen {
-    // Manual impl: `PlatformWindow` carries no blanket `Debug`.
+    // Manual impl: `HostWindow` carries no blanket `Debug`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Ready(_) => f
-                .debug_tuple("Ready")
-                .field(&"<dyn PlatformWindow>")
-                .finish(),
+            Self::Ready(_) => f.debug_tuple("Ready").field(&"<dyn HostWindow>").finish(),
             Self::Pending(pending) => f.debug_tuple("Pending").field(pending).finish(),
         }
     }
@@ -395,7 +392,7 @@ impl WindowOpen {
     /// # Errors
     /// [`OpenWindowError::NotReady`] if this call is deferred (never the
     /// case inside `on_ready`).
-    pub fn try_ready(self) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
+    pub fn try_ready(self) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
         match self {
             Self::Ready(window) => Ok(window),
             Self::Pending(pending) => Err(OpenWindowError::NotReady(pending)),
@@ -609,7 +606,7 @@ pub enum ProxySendError<T: fmt::Debug> {
 #[must_use = "dropping a PendingWindow disclaims the request; the owner \
               skips or unwinds the window"]
 pub struct PendingWindow {
-    handle: ClaimHandle<Result<Arc<dyn PlatformWindow>, OpenWindowError>>,
+    handle: ClaimHandle<Result<Arc<dyn HostWindow>, OpenWindowError>>,
     owner_thread: ThreadId,
 }
 
@@ -630,7 +627,7 @@ impl PendingWindow {
     // headless-only default) makes this constructor genuinely unused.
     #[cfg_attr(not(feature = "winit-backend"), allow(dead_code))]
     pub(crate) fn new(
-        handle: ClaimHandle<Result<Arc<dyn PlatformWindow>, OpenWindowError>>,
+        handle: ClaimHandle<Result<Arc<dyn HostWindow>, OpenWindowError>>,
         owner_thread: ThreadId,
     ) -> Self {
         Self {
@@ -649,7 +646,7 @@ impl PendingWindow {
     /// already claimed the result — `try_take` takes `&mut self`, so
     /// nothing stops a caller from following a successful `try_take` with a
     /// `wait` on the same handle; there is nothing left to wait for.
-    pub fn wait(self) -> Result<Arc<dyn PlatformWindow>, WaitError> {
+    pub fn wait(self) -> Result<Arc<dyn HostWindow>, WaitError> {
         if self.owner_thread == std::thread::current().id() {
             return Err(WaitError::WouldBlockOwner(self));
         }
@@ -665,13 +662,13 @@ impl PendingWindow {
     /// Non-blocking poll; safe on any thread.
     #[must_use = "discarding Some(_) strands whatever the owner delivered \
                   (a live window, or the typed error explaining why not)"]
-    pub fn try_take(&mut self) -> Option<Result<Arc<dyn PlatformWindow>, OpenWindowError>> {
+    pub fn try_take(&mut self) -> Option<Result<Arc<dyn HostWindow>, OpenWindowError>> {
         self.handle.try_take()
     }
 }
 
 impl std::future::Future for PendingWindow {
-    type Output = Result<Arc<dyn PlatformWindow>, OpenWindowError>;
+    type Output = Result<Arc<dyn HostWindow>, OpenWindowError>;
 
     /// Non-blocking poll — safe on any thread, including the owner (unlike
     /// [`wait`](Self::wait), which refuses there because it would block on
@@ -928,7 +925,7 @@ mod tests {
     #[test]
     fn try_ready_on_pending_yields_not_ready() {
         let (_slot, handle) =
-            claim_slot::<Result<Arc<dyn PlatformWindow>, OpenWindowError>>(Arc::new(|| {}));
+            claim_slot::<Result<Arc<dyn HostWindow>, OpenWindowError>>(Arc::new(|| {}));
         let pending = PendingWindow::new(handle, thread::current().id());
         let open = WindowOpen::Pending(pending);
 
@@ -942,7 +939,7 @@ mod tests {
     #[test]
     fn wait_on_owner_thread_refuses_with_the_handle_back() {
         let (_slot, handle) =
-            claim_slot::<Result<Arc<dyn PlatformWindow>, OpenWindowError>>(Arc::new(|| {}));
+            claim_slot::<Result<Arc<dyn HostWindow>, OpenWindowError>>(Arc::new(|| {}));
         let pending = PendingWindow::new(handle, thread::current().id());
 
         match pending.wait() {

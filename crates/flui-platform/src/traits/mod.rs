@@ -7,6 +7,7 @@
 mod accessibility;
 mod capabilities;
 mod embedder;
+mod host_window;
 // The owner-thread capability (ADR-0039): `OwnerPlatform`, `PlatformProxy`,
 // `PendingWindow`, and their typed errors. `pub(crate)` (not private): the
 // `pub(crate)` seams inside it — `OwnerHooks`, `ProxyTransport`,
@@ -35,6 +36,7 @@ pub use capabilities::{
     DesktopCapabilities, MobileCapabilities, PlatformCapabilities, WebCapabilities,
 };
 pub use embedder::PlatformEmbedder;
+pub use host_window::HostWindow;
 // Re-export keyboard-types for convenience
 pub use keyboard_types::NamedKey;
 pub use owner::{

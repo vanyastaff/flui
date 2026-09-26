@@ -643,9 +643,11 @@ mod tests {
                 if known_detached { vec![host] } else { vec![] }
             );
         }
+        let window: Arc<dyn flui_platform::PlatformWindow> =
+            Arc::new(TestWindow::new().visible(false));
         let realm = UiRealm::new(
             Arc::new(|| {}),
-            Arc::new(TestWindow::new().visible(false)),
+            window,
             1.0,
             Arc::new(AtomicBool::new(false)),
         )
@@ -670,7 +672,8 @@ mod tests {
             (false, true, AppLifecycleState::Hidden),
             (true, false, AppLifecycleState::Inactive),
         ] {
-            let window = Arc::new(TestWindow::new().visible(visible).focused(focused));
+            let window: Arc<dyn flui_platform::PlatformWindow> =
+                Arc::new(TestWindow::new().visible(visible).focused(focused));
             let realm = UiRealm::new(
                 Arc::new(|| {}),
                 window,

@@ -509,16 +509,12 @@ fn closing_the_presentation_withdraws_from_the_platform_bridge() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window =
         crate::app::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    // Hold the window strong across the drop: `close()`'s withdrawal
-    // reaches the bridge through a `Weak` window upgrade, exactly as a
-    // production runner (which owns the window) would still succeed.
-    let realm = UiRealm::new(
-        noop_wake(),
-        Arc::clone(&window),
-        1.0,
-        Arc::new(AtomicBool::new(false)),
-    )
-    .expect("realm");
+    // Hold the window strong across the drop: `close()` withdraws only
+    // while its window is alive, exactly as a production runner (which
+    // owns the window) would still succeed.
+    let _window = Arc::clone(window.window());
+    let realm =
+        UiRealm::new(noop_wake(), window, 1.0, Arc::new(AtomicBool::new(false))).expect("realm");
     let flag = realm
         .presentations
         .primary()
@@ -531,6 +527,41 @@ fn closing_the_presentation_withdraws_from_the_platform_bridge() {
     assert!(
         !flag.load(Ordering::Relaxed),
         "a closed presentation's enablement flag must never flip again"
+    );
+}
+
+/// The runner's path from an `open_window` result to a realm: the bridge is
+/// read from the host window once and carried beside the window, which the
+/// realm then only sees as a `PlatformWindow`. If that constructor drops the
+/// bridge (say, passes `None`), nothing is wired and nothing is published.
+#[test]
+fn a_realm_built_from_a_host_window_publishes_through_its_accessibility() {
+    let fake = Arc::new(flui_platform::FakeAccessibility::new());
+    let host: Arc<dyn flui_platform::traits::HostWindow> = Arc::new(
+        crate::app::window_test_support::TestWindow::new()
+            .focused(true)
+            .with_accessibility(Arc::clone(&fake) as _),
+    );
+    let realm = UiRealm::new(
+        noop_wake(),
+        crate::app::runner::presentation_window(host),
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .expect("realm");
+    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    realm
+        .enter(|realm| realm.attach_root_widget(&SizedBox::new(10.0, 10.0)))
+        .expect("root mounted");
+
+    fake.set_active(true);
+    realm.enter(|_| {
+        let _ = realm.draw_frame_entered(constraints);
+    });
+
+    assert!(
+        fake.published_count() >= 1,
+        "the bridge read from the host window must receive the assembled tree"
     );
 }
 

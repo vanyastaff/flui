@@ -333,7 +333,7 @@ impl Platform for IOSPlatform {
     fn open_window(
         &self,
         _options: WindowOptions,
-    ) -> Result<Arc<dyn PlatformWindow>, OpenWindowError> {
+    ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
         Err(OpenWindowError::Unavailable { message: "UIKit scene connection supplies the window through on_scene_event; arbitrary open_window is unsupported".into() })
     }
 
@@ -829,7 +829,7 @@ impl IOSPlatform {
                 let result = self.emit_scene(IOSSceneEvent::Connected {
                     session: origin.session.clone(),
                     attachment: IOSSceneAttachmentId(origin.attachment),
-                    window: Arc::clone(&window) as Arc<dyn PlatformWindow>,
+                    window: Arc::clone(&window) as Arc<dyn crate::traits::HostWindow>,
                     reconnect,
                 });
                 if let Err(error) = result {

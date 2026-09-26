@@ -739,11 +739,7 @@ impl WindowsWindow {
     }
 }
 
-impl PlatformWindow for WindowsWindow {
-    fn id(&self) -> WindowId {
-        WindowId(self.hwnd.0 as u64)
-    }
-
+impl crate::traits::HostWindow for WindowsWindow {
     /// The window's own UIA bridge — the capability the composition root's
     /// accessibility wire discovers. Without this override the trait
     /// default (`None`) leaves every real Windows window silently invisible
@@ -751,6 +747,12 @@ impl PlatformWindow for WindowsWindow {
     #[cfg(feature = "a11y")]
     fn accessibility(&self) -> Option<Arc<dyn crate::traits::PlatformAccessibility>> {
         Some(Arc::clone(&self.accessibility) as _)
+    }
+}
+
+impl PlatformWindow for WindowsWindow {
+    fn id(&self) -> WindowId {
+        WindowId(self.hwnd.0 as u64)
     }
 
     fn physical_size(&self) -> Size<DevicePixels> {

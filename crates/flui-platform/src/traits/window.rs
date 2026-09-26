@@ -15,11 +15,7 @@ use flui_platform_api::{
     WindowExecutionState, WindowId, WindowShowError,
 };
 
-use super::accessibility::PlatformAccessibility;
-
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-#[cfg(feature = "winit-backend")]
-use winit::window::Window;
 
 /// Trait for platform window abstraction
 ///
@@ -251,16 +247,6 @@ pub trait PlatformWindow: Send + Sync {
     /// [`PlatformHaptics`]'s module doc for the full per-window-not-global
     /// rationale.
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
-        None
-    }
-
-    /// Get this window's accessibility capability, if the backend exposes one.
-    ///
-    /// `None` for a backend with no accessibility integration — which is every
-    /// backend until its per-OS adapter is wired, and permanently for one with
-    /// no such platform API. A composition root that gets `None` simply never
-    /// enables semantics assembly, so the cost is not paid either.
-    fn accessibility(&self) -> Option<Arc<dyn PlatformAccessibility>> {
         None
     }
 
@@ -672,14 +658,6 @@ pub trait PlatformWindow: Send + Sync {
     }
 
     // ==================== Utility ====================
-
-    /// Get the underlying winit window (if available)
-    ///
-    /// Returns `None` for non-winit platforms (e.g., headless testing).
-    #[cfg(feature = "winit-backend")]
-    fn as_winit(&self) -> Option<&Arc<Window>> {
-        None
-    }
 
     /// Downcast to concrete type.
     ///
