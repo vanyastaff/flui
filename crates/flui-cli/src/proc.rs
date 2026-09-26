@@ -14,6 +14,55 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// Stop this process's own stdin/stdout/stderr handles from being inherited
+/// implicitly by the processes it spawns. A no-op outside Windows.
+///
+/// Windows `CreateProcess` (which std calls with `bInheritHandles = TRUE`)
+/// copies *every* inheritable handle into the child, not only the three it
+/// was given as stdio, and the stdio handles this process received from its
+/// parent are inheritable. So a probe spawned with piped stdio still carries
+/// a copy of the CLI's stdout and stderr, and a daemon the probe starts
+/// keeps them open after both have exited. `adb devices` starts the adb
+/// server, which runs until killed, so whoever reads `flui devices`' output
+/// (a `flui devices --json | …` pipeline, an IDE, a test harness) would
+/// wait for an EOF that never comes. Unix is unaffected: the child's
+/// descriptors 0–2 replace the parent's, and std opens everything else
+/// close-on-exec.
+///
+/// A child that *should* share the terminal still gets it: `Stdio::inherit`
+/// (the default for `spawn`/`status`) hands the child a fresh inheritable
+/// duplicate of the handle, not the original.
+pub(crate) fn keep_own_stdio_private() {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::{
+            HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
+        };
+
+        let handles = [
+            io::stdin().as_raw_handle(),
+            io::stdout().as_raw_handle(),
+            io::stderr().as_raw_handle(),
+        ];
+        for raw in handles {
+            if raw.is_null() {
+                continue;
+            }
+            // SAFETY: `raw` is one of this process's standard handles, owned
+            // by std's stdio for the process lifetime and never closed here;
+            // clearing its inherit flag changes only whether `CreateProcess`
+            // copies it, not its validity. A handle that is not a real kernel
+            // object (a detached console) makes the call fail, which is
+            // ignored: there is nothing to leak then.
+            #[expect(unsafe_code)]
+            let _ = unsafe {
+                SetHandleInformation(HANDLE(raw), HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0))
+            };
+        }
+    }
+}
+
 /// The budget for a quick version/list probe of a well-behaved tool.
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 

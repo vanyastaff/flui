@@ -161,6 +161,57 @@ fn devices_finishes_well_under_the_old_gui_launch_hang() {
     );
 }
 
+/// A probe that starts a long-lived daemon must not keep the CLI's own
+/// stdout/stderr open: the caller reading them would wait for the daemon to
+/// die. `adb devices` starting the adb server is the real case; here a fake
+/// `adb` leaves a `ping` running for ~45 s. Windows only, where every
+/// inheritable handle reaches the child (see `proc::keep_own_stdio_private`);
+/// Unix never passes the parent's descriptors 0–2 on.
+#[cfg(windows)]
+#[test]
+fn devices_output_closes_even_when_a_probe_leaves_a_daemon_running() {
+    let fake_tools = TempDir::new().expect("temp dir");
+    std::fs::write(
+        fake_tools.path().join("adb.bat"),
+        "@echo off\r\n\
+         start \"\" /b ping -n 46 127.0.0.1 >nul\r\n\
+         echo List of devices attached\r\n",
+    )
+    .expect("write fake adb");
+    let path = std::env::join_paths(std::iter::once(fake_tools.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("PATH entries");
+
+    let started = Instant::now();
+    // `assert()` returns only once flui's stdout and stderr reach EOF, so
+    // this measures what a caller reading them waits, not flui's exit.
+    let assert = flui()
+        .args(["devices", "--platform", "android", "--json"])
+        .env("PATH", path)
+        .assert()
+        .success();
+    let elapsed = started.elapsed();
+
+    let events = ndjson_events(&assert.get_output().stdout);
+    let summary = events
+        .iter()
+        .find(|e| e["event"] == "devices.summary")
+        .expect("devices.summary event");
+    assert_eq!(
+        summary["problems"],
+        serde_json::json!([]),
+        "the fake adb must have been found and run"
+    );
+    // flui itself may spend its full probe budget draining adb's pipe (the
+    // daemon holds that one too); the daemon's own ~45 s must not show up.
+    assert!(
+        elapsed < Duration::from_secs(30),
+        "reading flui's output took {elapsed:?}: a daemon started by a probe is holding \
+         the CLI's stdout/stderr open"
+    );
+}
+
 #[test]
 fn emulators_launch_unknown_name_exits_device_not_found() {
     flui()
