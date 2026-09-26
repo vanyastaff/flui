@@ -41,7 +41,7 @@ use crate::util::{ScratchDir, repo_root};
 const LIMIT: usize = 3000;
 
 /// The allowlist, relative to the repository root.
-const ALLOWLIST: &str = "tools/xtask/allowlists/file-length.toml";
+pub(crate) const ALLOWLIST: &str = "tools/xtask/allowlists/file-length.toml";
 
 /// Target kinds whose code a non-test build compiles.
 const PRODUCTION_KINDS: [&str; 8] = [

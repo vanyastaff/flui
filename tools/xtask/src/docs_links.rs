@@ -29,8 +29,9 @@ use crate::util::{ScratchDir, repo_root};
 /// runs the same version over the rendered book.
 pub(crate) const LYCHEE_VERSION: &str = "0.24.2";
 
-/// Dated records AGENTS.md exempts from upkeep: a link there that rotted is history, not a defect.
-const ARCHIVAL_ROOTS: [&str; 10] = [
+/// Dated records AGENTS.md exempts from upkeep: a link there that rotted is
+/// history, not a defect, and neither `docs-links` nor `markers` reads them.
+pub(crate) const ARCHIVAL_ROOTS: [&str; 10] = [
     "docs/archive/",
     "docs/audits/",
     "docs/brainstorms/",
