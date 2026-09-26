@@ -20,6 +20,7 @@ Divergences from Flutter are recorded under [Mapping decisions](#mapping-decisio
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
 | Wire vocabulary | `display_list/{mod,command,command_ops}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds` |
 | Text | `text_layout/{layout,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | The process-wide font system and `SharedFontSystem`, `TextLayout` (shape, truncate, caret/hit-test/line queries), family resolution against the host, `TextPainter` |
+| Parley raster side | `parley_text/{key,registry,swash}.rs` (`parley` feature) | `ParleyGlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer`; no production caller until ADR-0092 §10 step 3 |
 | Decorations | `decoration.rs`, `table_border.rs` | `paint_box_decoration` / `box_decoration_hit_test`, `paint_table_border` |
 | Test support | `testing/mod.rs`, `text_layout::init_font_system_with_faces` | `record` (`testing` feature); pinning the font system to a known face set |
 
@@ -87,6 +88,21 @@ pixels — and the `GlyphImage` that `rasterize` returns for a key. The shaped
 the one cosmic-text type on the public surface is `Family`, carried by
 `ResolvedFont`.
 
+The engine's atlas draws through the `GlyphRasterizer` trait (`glyphs.rs`):
+a key type plus `rasterize(&mut self, key)`, deterministic per key, with
+`None` for a key the rasterizer cannot draw (the atlas does not place it and
+asks again next use). `SharedFontSystem` implements it with `GlyphKey`, and
+is the engine's default. `parley_text::SwashRasterizer` implements it with
+`ParleyGlyphKey`, the key ADR-0092 §5 names: blob id and face index, glyph
+id, exact size bits, an interned variation instance, a horizontal
+quarter-pixel bin, hinting and synthesis. It drives the same swash scaler
+as the cosmic-text path with the same sources, format and offsets, so for
+the same face bytes, glyph, size and bin the two draw identical bitmaps;
+`tests/parley_oracle.rs` checks that bit for bit on Parley-shaped Latin,
+host complex scripts and colour emoji. The key has no vertical bin because
+cosmic-text truncates a glyph's row before binning, so its vertical bin is
+always zero.
+
 ---
 
 ## Thread safety
@@ -95,7 +111,10 @@ the one cosmic-text type on the public surface is `Family`, carried by
 `Canvas` and `TextPainter` are mutated through `&mut self` by one owner.
 The one lock is the font system's, never nested with another lock in this
 crate, and never held across a call into another crate except the engine's
-`with_mut` closure, which takes no painting lock.
+`with_mut` closure, which takes no painting lock. `SwashRasterizer` takes no
+lock at all: it owns its `FontRegistry` and scaler, is `Send`, and is used
+through `&mut` by whoever owns the atlas, so it can rasterize on another
+thread while shaping continues.
 
 ---
 
@@ -375,6 +394,34 @@ shaped content (or the ellipsis floor). Parents that need truncated size use dry
 committed layout. Locked by `max_lines_does_not_collapse_min_intrinsic_width`,
 `wide_ellipsis_floors_min_intrinsic_width`, and the matching `RenderParagraph` intrinsic
 tests.
+
+### 10. Synthetic bold follows Skia's fake-bold strength
+
+**Rule:** a face with no bold weight is emboldened at raster time when the
+style asks for bold. Flutter's engine does this through Skia's fake bold;
+cosmic-text has no fake bold at all (its swash call sets no `embolden`, only a
+14° skew for `FAKE_ITALIC`), so there is no in-repo oracle.
+
+**Choice:** `SwashRasterizer` grows the outline by Skia's stroke width:
+`size × ratio`, the ratio interpolated linearly from 1/24 at 9 px to 1/32 at
+36 px and clamped outside (`SkScalerContext`'s `kStdFakeBoldInterpKeys`
+`{9, 36}` and values `{1/24, 1/32}`, recalled from Skia source and not checked
+against a clone). swash moves each point by its strength on each side, so the
+strength passed is half the width.
+
+**Why:** Skia is what Flutter paints with, so its strength is the observable
+contract a bold-synthesized paragraph should match. The prototype's `size / 24`
+per side doubled Skia's width at large sizes and had no reference.
+
+**Alternatives:** FreeType's `FT_GlyphSlot_Embolden` (about `size / 24` in total at
+every size) — rejected, it is not what Flutter draws; no fake bold, as
+cosmic-text does — rejected, a bold style on a regular-only face would draw
+regular.
+
+**Accepted trade-off:** only `parley_text` applies it; the cosmic-text path
+keeps drawing no fake bold until ADR-0092 §10 step 4 moves paragraphs to
+Parley, which revisits the strength against paragraph output. Locked by
+`synthetic_bold_adds_the_skia_strength` (width gain at 9, 20, 36 and 144 px).
 
 
 ---

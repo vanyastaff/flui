@@ -410,6 +410,12 @@ bitflags = "2.10"
 # movement and deletion step by user-perceived character, as Flutter's
 # `characters` package does. Already in the graph through cosmic-text.
 unicode-segmentation = "1.12"
+# The Parley path's glyph rasterizer (ADR-0092 §5). The same swash cosmic-text
+# 0.19 already builds; a direct edge, not a second copy.
+swash = { version = "0.2.10", default-features = false, features = ["std", "scale"] }
+# Parley shaping, used by flui-painting's tests only until shaping moves (ADR-0092 §10).
+# No `system`: fontique's host scan reaches `windows`, which tier S forbids.
+parley = { version = "0.11.1", default-features = false, features = ["std"] }
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 static_assertions = "1.1"

@@ -43,9 +43,14 @@ unicode-script = { version = "=0.5.8" }
 # this is a direct edge onto the same copy, not a new one. See the
 # workspace-level comment on this dependency in the root `Cargo.toml`.
 unicode-segmentation = { workspace = true }
+# The Parley path's rasterizer (`parley_text`), behind the `parley` feature.
+swash = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+# Shapes the glyphs `parley_text`'s oracle test rasterizes. A dev edge only:
+# production shaping stays on cosmic-text until ADR-0092 §10 step 4.
+parley = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
@@ -69,6 +74,11 @@ bundled-fonts = []
 # enabled for this crate's dev targets via the self dev-dependency above.
 testing = []
 
+# parley: the Parley path's raster side (`parley_text`: `ParleyGlyphKey`,
+# `FontRegistry`, `SwashRasterizer`). Off by default, and no production caller
+# reaches it until ADR-0092 §10 step 3 puts shaped runs on the display list.
+parley = ["dep:swash"]
+
 [[test]]
 name = "painting_it"
 path = "tests/main.rs"
@@ -77,6 +87,13 @@ path = "tests/main.rs"
 [[test]]
 name = "font_registration"
 path = "tests/font_registration.rs"
+
+# swash against cosmic-text's scaler on Parley-shaped glyphs (ADR-0092 §10
+# step 1). Its own binary, so nothing in it can build the process font system.
+[[test]]
+name = "parley_oracle"
+path = "tests/parley_oracle.rs"
+required-features = ["parley"]
 
 [lints]
 workspace = true

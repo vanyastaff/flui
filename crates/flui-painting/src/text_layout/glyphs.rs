@@ -81,3 +81,29 @@ pub struct GlyphImage {
     /// Row-major texels, `width * height * content.bytes_per_texel()` bytes.
     pub data: Vec<u8>,
 }
+
+/// Turns a glyph key into the bitmap an atlas uploads (ADR-0067, ADR-0092 §5).
+///
+/// The engine's atlas hashes `Key`, and on a miss asks for the bitmap. A
+/// rasterizer is owned by whoever owns the atlas and is taken by `&mut`, so
+/// rasterization shares no lock with shaping unless an implementation brings
+/// one.
+///
+/// # Contract
+///
+/// - **Deterministic:** equal keys rasterize to equal images, however often
+///   and in whatever order. The atlas re-rasterizes live keys when a page
+///   grows and uploads into the slot the first image sized; an image of
+///   another size or content is not uploaded.
+/// - `data.len() == width * height * content.bytes_per_texel()`.
+/// - An empty glyph (a space) is `Some` with zero `width` or `height`.
+/// - `None`: this rasterizer cannot draw the key (an unknown face or
+///   variation, a size that is not finite and positive). The atlas does not
+///   place the glyph and asks again on its next use.
+pub trait GlyphRasterizer {
+    /// Identifies one bitmap.
+    type Key: Copy + Eq + core::hash::Hash + core::fmt::Debug;
+
+    /// The bitmap for `key`; see the trait's contract.
+    fn rasterize(&mut self, key: Self::Key) -> Option<GlyphImage>;
+}

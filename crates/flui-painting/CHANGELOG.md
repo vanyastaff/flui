@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the Parley path's raster side (ADR-0092 §10, step 1)
+
+- `GlyphRasterizer`: a key type plus `rasterize(&mut self, key)`, the seam the
+  engine's glyph atlas draws through. `SharedFontSystem` implements it with
+  `GlyphKey`. `SharedFontSystem::rasterize`'s doc now says what an atlas does
+  with `None` (does not place the glyph, asks again next use); behaviour is
+  unchanged.
+- Behind the new, off-by-default `parley` feature (a direct edge onto the
+  swash cosmic-text already builds): `parley_text::{ParleyGlyphKey, FaceKey,
+  SubpixelBin, Synthesis, VariationId, FontRegistry, FontBytes,
+  SwashRasterizer}`. The swash rasterizer draws bit-identical bitmaps to the
+  cosmic-text path for the same face, glyph, size and bin
+  (`tests/parley_oracle.rs`), refuses a key it cannot draw (unregistered face,
+  unknown variation, a size that is not finite and positive), and emboldens by
+  Skia's fake-bold strength (mapping decision 10). No production caller yet:
+  ADR-0092 §10 step 3 wires it.
+- `text_layout::font_system_initialized()`, test support only.
+
 ### Changed — `get_word_boundary` uses UAX #29 word segmentation, not an ASCII-whitespace scan
 
 - `TextLayout::get_word_boundary` now segments with
