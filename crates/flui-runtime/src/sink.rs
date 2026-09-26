@@ -17,6 +17,26 @@ use flui_layer::Scene;
 /// compiler name the realm's one match site (ADR-0068), and that match lives
 /// in another crate, where `#[non_exhaustive]` would force a wildcard arm and
 /// silently swallow the new variant.
+///
+/// ```
+/// use flui_runtime::sink::SubmitVerdict;
+///
+/// // Matched from outside this crate with no wildcard arm: this stops
+/// // compiling (E0004) if the enum is ever marked `#[non_exhaustive]`.
+/// fn arms_a_retry(verdict: SubmitVerdict) -> bool {
+///     match verdict {
+///         SubmitVerdict::Presented => false,
+///         SubmitVerdict::NoPresent => false,
+///         SubmitVerdict::NotShown => false,
+///         SubmitVerdict::SurfaceStale => true,
+///         SubmitVerdict::DeviceLost => true,
+///         SubmitVerdict::Failed => false,
+///     }
+/// }
+///
+/// assert!(arms_a_retry(SubmitVerdict::SurfaceStale));
+/// assert!(!arms_a_retry(SubmitVerdict::Presented));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmitVerdict {
     /// The frame rendered and reached `present()`.
@@ -65,4 +85,55 @@ pub trait FrameSink {
     /// Submit one composited scene for rasterization and classify what
     /// happened.
     fn submit(&mut self, scene: Scene) -> SubmitVerdict;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use flui_layer::{CanvasLayer, Layer, LayerTree};
+
+    use super::*;
+
+    /// A host sink that reports a fixed size and hands back scripted verdicts.
+    struct RecordingSink {
+        size: (u32, u32),
+        verdicts: VecDeque<SubmitVerdict>,
+        submitted: usize,
+    }
+
+    impl FrameSink for RecordingSink {
+        fn surface_size(&mut self) -> (u32, u32) {
+            self.size
+        }
+
+        fn submit(&mut self, _scene: Scene) -> SubmitVerdict {
+            self.submitted += 1;
+            self.verdicts
+                .pop_front()
+                .expect("BUG: the test scripts one verdict per submit")
+        }
+    }
+
+    fn empty_scene() -> Scene {
+        Scene::new(LayerTree::new(Layer::from(CanvasLayer::new())))
+    }
+
+    #[test]
+    fn a_host_sink_is_driven_through_dyn_frame_sink() {
+        let mut recording = RecordingSink {
+            size: (640, 480),
+            verdicts: VecDeque::from([SubmitVerdict::Presented, SubmitVerdict::SurfaceStale]),
+            submitted: 0,
+        };
+
+        // The realm drives its sink as a trait object (ADR-0083 §1); a
+        // generic method on the trait would stop this from compiling.
+        let sink: &mut dyn FrameSink = &mut recording;
+        assert_eq!(sink.surface_size(), (640, 480));
+        assert_eq!(sink.submit(empty_scene()), SubmitVerdict::Presented);
+        assert_eq!(sink.submit(empty_scene()), SubmitVerdict::SurfaceStale);
+
+        assert_eq!(recording.submitted, 2);
+    }
 }

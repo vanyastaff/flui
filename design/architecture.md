@@ -660,7 +660,7 @@ and ADR-0068; decisions D5 and D6.
   (`crates/flui-layer/src/layer/mod.rs:80-116`).
 - **Damage.** A differ over retained trees emits `DamageRegion::Partial` with a fallback to
   `Full`. Today `DamageRegion` has only `Full` (`crates/flui-layer/src/scene_snapshot.rs:18-21`)
-  and the lane always sends it (`crates/flui-app/src/app/raster_lane.rs:354`). wgpu has no buffer
+  and the lane always sends it (`crates/flui-app/src/app/raster_lane.rs:291`). wgpu has no buffer
   age, so the presenter renders into a retained target and blits; the retained target is
   conditional, because a blit on tile-based mobile GPUs costs bandwidth (hypothesis; the damage
   spike measures it). Damage has an off switch that really removes its cost. Pixel claims need a
@@ -1091,7 +1091,7 @@ every pull request; wall time is a nightly trend per OS.
 | Topology ∝ changed parents | one global render-children pass | local commits owned by the render tree |
 | Layout ∝ relaid nodes | slab scans per dirty root, a per-pass arena, up to 10 build-in-layout passes (`layout_builder.rs:64`) | disjoint indexing, a persistent arena, epochs; one-pass lazy bands once their ADR lands |
 | Paint ∝ dirty boundaries | the root boundary is never retained | `Arc` subtrees keyed by `RenderId` |
-| Raster ∝ damage | always `Full` (`raster_lane.rs:354`) | differ + conditional retained target |
+| Raster ∝ damage | always `Full` (`raster_lane.rs:291`) | differ + conditional retained target |
 | Idle = 0 frames | several demand carriers, one loop-wide redraw flag (`runtime.rs:727`) | one demand mask per presentation |
 | No per-node locks | `ChildManagerRegistry = Arc<Mutex<HashMap<.., Arc<Mutex<dyn ChildManager>>>>>` (`crates/flui-view/src/element/child_manager.rs:56`) | the `!Send` flip, owner-local state |
 | A glyph miss does not stall the UI | one process-wide font mutex (`layout.rs:124`) | per-realm text, rasterisation on the raster side |

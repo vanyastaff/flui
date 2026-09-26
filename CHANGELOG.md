@@ -27,8 +27,10 @@ document. Beta-readiness audit reports landed under `docs/audits/2026-09-22-beta
   `flui-widgets`. It holds the per-presentation lanes the realm drives that need nothing from
   the realm core: the held-input lane (the bounded pointer input retained while a presentation
   has no committed tree, and its replay), the semantics host (per-presentation semantics
-  enablement and accessibility delivery) and the commit epoch. They moved out of `flui-app`,
-  where they were crate-private, so no public path changed. Its normal graph names no platform
+  enablement and accessibility delivery), the commit epoch and the performance-overlay
+  frame-time window, plus the frame sink seam (`FrameSink`, which a host implements, and the
+  `SubmitVerdict` the realm classifies). They moved out of `flui-app`, where they were
+  crate-private, so no public path changed. Its normal graph names no platform
   backend, windowing, GPU or engine crate; `flui-app` is its only normal dependent. The realm
   core follows in later steps (ADR-0083 `## Migration`).
 

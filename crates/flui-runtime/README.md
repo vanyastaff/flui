@@ -11,8 +11,12 @@ hosts on `flui-app`.
   current one has been acknowledged by a submit.
 - `held_input`: the bounded pointer input a presentation retains while it has
   no committed tree, and the replay that delivers it once one exists.
+- `performance_stats`: the rolling frame-time window a presentation's
+  performance overlay draws.
 - `semantics_host`: per-presentation semantics enablement and platform
   accessibility delivery.
+- `sink`: the `FrameSink` a host implements and a frame is submitted through,
+  and the `SubmitVerdict` the realm classifies.
 
 ## What is not
 
