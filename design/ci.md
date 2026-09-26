@@ -317,12 +317,15 @@ that keeps file and line in a panic; both stay.
    invocations (`ci.yml:845-849`) become one:
    `cargo nextest run -p flui-assets -p flui-widgets --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images`.
    The features are additive (the feature policy's rule 1), so the tests that each run selected
-   still compile. The unified run is a superset, not an equal count: it also runs the rest of both
-   crates' suites under those features, so the check is that every test ID of the five old runs is
-   in it. That holds statically (`network-images` implies `asset-images`, which implies `images`,
-   and no test in the old runs' targets is gated on one of those features being off); the
-   `cargo nextest list` comparison was not run locally, so the first wide run's log is the
-   measured check. The facade step is covered by `test` now that `test` runs `cargo xtask test`
+   still compile. The unified run holds every test ID of the five old runs (`network-images`
+   implies `asset-images`, which implies `images`, and no test in the old runs' targets is gated
+   on one of those features being off), but a test ID is not the configuration it runs under:
+   the old `--features images --test image` run compiled `Image` as the
+   `cfg(not(feature = "asset-images"))` `StatelessView` impl, which is what a consumer of
+   `images` alone builds and which the unified run never compiles. That run therefore stays as a
+   second, small step (`cargo nextest run -p flui-widgets --features images --test image`); the
+   other three old runs fold into the unified one. The `cargo nextest list` comparison was not
+   run locally, so the first wide run's log is the measured check. The facade step is covered by `test` now that `test` runs `cargo xtask test`
    (`TEST_SCOPE`); the `signals` step goes with the first reactive step (ADR-0085).
 3. **Rebalanced feature-matrix shards (deferred).** `--partition k/3` gave 3.3, 6.1 and 21.4 min on
    36203822844. The implementation measures `k/5` (five shards) and keeps it if the slowest shard drops under

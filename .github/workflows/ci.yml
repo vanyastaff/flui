@@ -858,6 +858,14 @@ jobs:
           --locked --no-fail-fast
           --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images
 
+      # The one configuration the run above does not cover: without
+      # `asset-images`, `Image` is the `StatelessView` impl (image.rs, the
+      # `cfg(not(feature = "asset-images"))` blocks) that a consumer enabling
+      # `images` alone builds. Test names are not the configuration they run
+      # under, so this run stays.
+      - name: cargo nextest run (flui-widgets images only, Image tests)
+        run: cargo nextest run -p flui-widgets --locked --no-fail-fast --features images --test image
+
       # The facade's non-default catalogs (`tests/cupertino_demo.rs`, the
       # smoke test's localizations assertions) need no run here: the `test`
       # job's TEST_SCOPE turns `flui/cupertino,flui/localizations` on.

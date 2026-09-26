@@ -342,6 +342,19 @@ fn test_features_plan() -> Vec<Step> {
             "--features",
             "flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images",
         ]),
+        // not a subset of the run above: without `asset-images`, `Image` is
+        // the `StatelessView` impl a consumer of `images` alone builds, which
+        // no other run compiles with a test
+        nextest(&[
+            "-p",
+            "flui-widgets",
+            "--locked",
+            "--no-fail-fast",
+            "--features",
+            "images",
+            "--test",
+            "image",
+        ]),
         nextest(&[
             "-p",
             "flui-view",
@@ -1088,6 +1101,7 @@ mod tests {
             lines(&test_features_plan()),
             [
                 "$ cargo nextest run -p flui-assets -p flui-widgets --locked --no-fail-fast --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images",
+                "$ cargo nextest run -p flui-widgets --locked --no-fail-fast --features images --test image",
                 "$ cargo nextest run -p flui-view -p flui-testing -p flui-widgets -p flui-app --features flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals --locked --no-fail-fast",
             ]
         );
