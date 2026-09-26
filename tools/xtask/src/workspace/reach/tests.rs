@@ -140,6 +140,49 @@ fn a_weak_feature_does_not_activate_its_dependency() {
     .expect("resolves");
     let x = graph.named("x")[0];
     assert!(build.features[x].contains("g"), "{:?}", build.features[x]);
+
+    // the strong form activates the dependency and forwards the feature
+    let strong = fixture.feature("k", "s", &["x/g"]);
+    let graph = Graph::from_metadata(&strong.metadata()).expect("the graph joins");
+    let build = resolve(
+        &graph,
+        graph.member("k").expect("a member"),
+        &Selection::parse("--features s").expect("a selection"),
+    )
+    .expect("resolves");
+    let x = graph.named("x")[0];
+    assert!(build.reached.contains(&x));
+    assert!(build.features[x].contains("g"), "{:?}", build.features[x]);
+}
+
+#[test]
+fn a_strong_feature_enables_the_same_named_feature_whatever_it_lists() {
+    // `k/x` is explicit and forwards to `y`; `k/s = ["x/g"]` enables it, so
+    // `y` joins with `f`, as cargo resolves it
+    let fixture = base()
+        .member("k", "K", &json!(null))
+        .external("x")
+        .external("y")
+        .feature("x", "g", &[])
+        .feature("y", "f", &[])
+        .feature("k", "x", &["dep:x", "y/f"])
+        .feature("k", "s", &["x/g"])
+        .dep("k", "x", Dep::normal().optional())
+        .dep("k", "y", Dep::normal().optional());
+    let graph = Graph::from_metadata(&fixture.metadata()).expect("the graph joins");
+    let build = resolve(
+        &graph,
+        graph.member("k").expect("a member"),
+        &Selection::parse("--features s").expect("a selection"),
+    )
+    .expect("resolves");
+    let y = graph.named("y")[0];
+    assert!(build.reached.contains(&y), "y joins through k/x");
+    assert!(build.features[y].contains("f"), "{:?}", build.features[y]);
+    assert!(
+        build.features[graph.member("k").expect("a member")].contains("x"),
+        "k/x is enabled"
+    );
 }
 
 #[test]

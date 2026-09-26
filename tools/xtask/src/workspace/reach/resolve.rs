@@ -399,11 +399,11 @@ impl State<'_> {
                     .insert(feature.clone());
                 if strong && self.has_optional(at, &key) {
                     self.queue.push_back(Work::Activate(at, key.clone()));
-                    // the implicit feature of the same name, when the
-                    // dependency has one
-                    if package.features.get(&key).is_some_and(|values| {
-                        values.len() == 1 && values[0] == format!("dep:{key}")
-                    }) {
+                    // and the feature of the same name, whatever it lists,
+                    // when the package has one: an explicit
+                    // `x = ["dep:x", "y/f"]` as much as the implicit
+                    // `x = ["dep:x"]` (cargo's resolver, rust-lang/cargo#12130)
+                    if package.features.contains_key(&key) {
                         self.queue.push_back(Work::Enable(at, key.clone()));
                     }
                 }
