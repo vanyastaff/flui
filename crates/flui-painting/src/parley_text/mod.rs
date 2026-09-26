@@ -16,6 +16,7 @@ mod key;
 mod registry;
 mod swash;
 
+pub use crate::error::RegisterFaceError;
 pub use key::{FaceKey, ParleyGlyphKey, SubpixelBin, Synthesis, VariationId};
 pub use registry::{FontBytes, FontRegistry};
 pub use swash::SwashRasterizer;

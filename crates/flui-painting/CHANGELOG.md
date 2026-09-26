@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Behind the new, off-by-default `parley` feature (a direct edge onto the
   swash cosmic-text already builds): `parley_text::{ParleyGlyphKey, FaceKey,
   SubpixelBin, Synthesis, VariationId, FontRegistry, FontBytes,
-  SwashRasterizer}`. The swash rasterizer draws bit-identical bitmaps to the
+  RegisterFaceError, SwashRasterizer}`. `FontRegistry::register_face` refuses
+  a face key already registered over different bytes
+  (`RegisterFaceError::Conflict`). The swash rasterizer draws bit-identical bitmaps to the
   cosmic-text path for the same face, glyph, size and bin
   (`tests/parley_oracle.rs`), refuses a key it cannot draw (unregistered face,
   unknown variation, a size that is not finite and positive), and emboldens by

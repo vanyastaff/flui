@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::key::{FaceKey, VariationId};
-use crate::error::RegisterFontError;
+use crate::error::RegisterFaceError;
 
 /// A font file's bytes, shared with whoever else holds them.
 pub type FontBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
@@ -52,24 +52,34 @@ impl FontRegistry {
         Self::default()
     }
 
-    /// Adds `face` over `bytes`. A face already present keeps its first
-    /// bytes (a no-op).
+    /// Adds `face` over `bytes`. Registering a present face again over equal
+    /// bytes is a no-op.
     ///
     /// # Errors
     ///
-    /// [`RegisterFontError`] when `bytes` at `face.index` is not a face.
+    /// - [`RegisterFaceError::NotAFace`] when `bytes` at `face.index` is not
+    ///   a face.
+    /// - [`RegisterFaceError::Conflict`] when `face` is already registered
+    ///   over different bytes: the key keeps naming the first face, so glyph
+    ///   ids of the second are never drawn from the first.
     pub fn register_face(
         &mut self,
         face: FaceKey,
         bytes: FontBytes,
-    ) -> Result<(), RegisterFontError> {
-        if self.faces.contains_key(&face) {
-            return Ok(());
+    ) -> Result<(), RegisterFaceError> {
+        if let Some(held) = self.faces.get(&face) {
+            let (held, new) = ((*held.bytes).as_ref(), (*bytes).as_ref());
+            let same = (held.as_ptr() == new.as_ptr() && held.len() == new.len()) || held == new;
+            return if same {
+                Ok(())
+            } else {
+                Err(RegisterFaceError::Conflict)
+            };
         }
-        let index = usize::try_from(face.index).map_err(|_| RegisterFontError)?;
+        let index = usize::try_from(face.index).map_err(|_| RegisterFaceError::NotAFace)?;
         let (offset, cache_key) = {
-            let font =
-                swash::FontRef::from_index((*bytes).as_ref(), index).ok_or(RegisterFontError)?;
+            let font = swash::FontRef::from_index((*bytes).as_ref(), index)
+                .ok_or(RegisterFaceError::NotAFace)?;
             (font.offset, font.key)
         };
         self.faces.insert(
@@ -142,6 +152,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{FontBytes, FontRegistry};
+    use crate::error::RegisterFaceError;
     use crate::parley_text::FaceKey;
 
     const ROBOTO: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
@@ -179,21 +190,23 @@ mod tests {
             index: 0,
         };
         let garbage: FontBytes = Arc::new(vec![0x5a_u8; 256]);
-        assert!(registry.register_face(face, garbage).is_err());
+        assert_eq!(
+            registry.register_face(face, garbage),
+            Err(RegisterFaceError::NotAFace)
+        );
         let second_face_of_a_single_face_file = FaceKey {
             blob_id: 2,
             index: 1,
         };
-        assert!(
-            registry
-                .register_face(second_face_of_a_single_face_file, roboto())
-                .is_err()
+        assert_eq!(
+            registry.register_face(second_face_of_a_single_face_file, roboto()),
+            Err(RegisterFaceError::NotAFace)
         );
         assert_eq!(registry.face_count(), 0);
     }
 
     #[test]
-    fn a_face_registered_twice_keeps_its_first_bytes() {
+    fn a_face_registered_again_over_equal_bytes_is_a_no_op() {
         let mut registry = FontRegistry::new();
         let face = FaceKey {
             blob_id: 3,
@@ -203,12 +216,38 @@ mod tests {
         registry
             .register_face(face, Arc::clone(&first))
             .expect("Roboto is a face");
-        // Different bytes under the same key: ignored, not an error.
-        let other: FontBytes = Arc::new(vec![0_u8; 16]);
         registry
-            .register_face(face, other)
-            .expect("already present");
+            .register_face(face, Arc::clone(&first))
+            .expect("the same bytes again");
+        let copy: FontBytes = Arc::new(ROBOTO.to_vec());
+        registry
+            .register_face(face, copy)
+            .expect("equal bytes in another allocation");
         assert_eq!(registry.face_count(), 1);
+        let held = registry.face(face).expect("registered");
+        assert!(Arc::ptr_eq(&held.bytes, &first), "the first bytes are kept");
+    }
+
+    /// A key names one face: other bytes under it would draw their glyph ids
+    /// from the first face's outlines.
+    #[test]
+    fn a_face_key_registered_over_other_bytes_is_refused() {
+        let mut registry = FontRegistry::new();
+        let face = FaceKey {
+            blob_id: 3,
+            index: 0,
+        };
+        let first = roboto();
+        registry
+            .register_face(face, Arc::clone(&first))
+            .expect("Roboto is a face");
+        let mut altered = ROBOTO.to_vec();
+        *altered.last_mut().expect("not empty") ^= 1;
+        let altered: FontBytes = Arc::new(altered);
+        assert_eq!(
+            registry.register_face(face, altered),
+            Err(RegisterFaceError::Conflict)
+        );
         let held = registry.face(face).expect("registered");
         assert!(Arc::ptr_eq(&held.bytes, &first), "the first bytes are kept");
     }
