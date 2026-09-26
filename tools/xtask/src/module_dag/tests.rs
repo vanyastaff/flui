@@ -880,16 +880,31 @@ fn a_planted_import_in_the_real_widgets_tree_is_refused() {
             .map(Finding::identity)
             .collect()
     };
-    let before = run(&Sources::on_disk(root.clone()));
-    let support = "crates/flui-widgets/src/support.rs";
+    // a module of the lowest layer names one of the highest, whichever the
+    // manifest declares today
+    let named = |layer: Option<&Vec<String>>| -> String {
+        layer
+            .and_then(|layer| layer.iter().find(|name| *name != super::WILDCARD))
+            .expect("the widgets declaration names a module in its lowest and highest layers")
+            .clone()
+    };
+    let low = named(declaration.layers.first());
+    let high = named(declaration.layers.last());
+    let on_disk = Sources::on_disk(root.clone());
+    let file = source::scan(&on_disk, lib)
+        .expect("the widgets tree scans")
+        .modules[&low]
+        .clone();
+    let before = run(&on_disk);
     let planted = format!(
-        "{}\nuse crate::WidgetsApp;\n",
-        util::read(support).expect("support.rs")
+        "{}\nuse crate::{high};\n",
+        util::read(&file).expect("the low module's file")
     );
-    let after = run(&Sources::on_disk(root).with(support, &planted));
+    let after = run(&Sources::on_disk(root).with(&file, &planted));
+    let refused: BTreeSet<Identity> = [(low, high, "refused")].into_iter().collect();
     assert_eq!(
         after.difference(&before).cloned().collect::<BTreeSet<_>>(),
-        set(&[("support", "app", "refused")]),
+        refused,
         "before: {before:#?}"
     );
 }
