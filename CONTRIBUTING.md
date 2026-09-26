@@ -41,6 +41,19 @@ design document with no code, and a code change with no record, are both incompl
   `cargo xtask check-changed` runs that lane locally, and `cargo xtask gate` the non-test half of
   `cargo xtask ci`.
 
+## Changelog
+
+- A change a consumer would notice adds a fragment, `changelog.d/<branch-slug>.md`, instead of
+  editing `CHANGELOG.md`: a Keep a Changelog `###` header and bullets under it. The format,
+  naming and link rules are in [`changelog.d/README.md`](changelog.d/README.md), and
+  `cargo xtask changelog --check` (part of `cargo xtask checks`) enforces them.
+- Docs-only, tooling-only and CI-only changes need no fragment, and no gate requires one.
+- At release: `cargo xtask changelog --dry-run` to read the merged `## [Unreleased]` region,
+  then `cargo xtask changelog` to write it and remove the fragments, then commit. Renaming
+  `[Unreleased]` to the version stays a manual edit.
+- A pull request that already edits `CHANGELOG.md` directly can land as it is; the merge never
+  touches existing lines.
+
 ## Reporting Bugs
 
 Open a GitHub issue with:

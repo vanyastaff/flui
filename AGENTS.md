@@ -81,7 +81,9 @@ crate you're changing before changing it.
   is wrong, how to show it fails. Risky PRs get the `full-ci` label (it runs the extended
   lane: every job, the nightly-only platform jobs included). Use
   `Refs #N`; `Closes`/`Fixes #N` only when merging should close it (GitHub's linker ignores
-  negation around it).
+  negation around it). A consumer-visible change adds `changelog.d/<branch-slug>.md` (a
+  `### Added|Changed|Deprecated|Removed|Fixed|Security` header and bullets) instead of editing
+  `CHANGELOG.md`; `cargo xtask changelog` merges fragments at release.
 - **Red main:** fix forward within the hour, or revert. A red CI run on main or nightly opens a
   "CI is red on main" issue; close it once main is green.
 - **Leave these alone unless the task is about them:** `.github/workflows/` (it is the merge
@@ -156,6 +158,7 @@ memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only c
 | Links from the non-archival markdown into the checkout resolve without climbing out of it: files, `#heading` anchors, and this repository's own `main` URLs | `cargo xtask docs-links` (lychee, offline), part of `cargo xtask checks` |
 | No process markers (`Cycle N`, `Phase B`, wave and slice labels, `PR-N`, spec task ids, `H`-tracker ids) in comments, doc comments, strings, the snake-case pieces of identifiers (`test_t064_x`), Markdown text or TOML/YAML/WGSL files read whole, outside the archival roots | `cargo xtask markers`; allowlist `tools/xtask/allowlists/markers.toml`, exact counts that only shrink |
 | At most 3000 production lines per `.rs` file (test-only modules and items excluded) | `cargo xtask file-length`; allowlist `tools/xtask/allowlists/file-length.toml`, exact counts that only shrink |
+| A `changelog.d/` fragment has a known section header, only bullets under it, and only root-relative or absolute links; `CHANGELOG.md` has one `## [Unreleased]` holding only those sections | `cargo xtask changelog --check`, part of `cargo xtask checks` |
 
 ## ADR Policy
 
