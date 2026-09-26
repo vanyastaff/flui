@@ -18,6 +18,7 @@ mod file_length;
 mod fonts;
 mod globals;
 mod markers;
+mod module_dag;
 mod ratchet;
 mod toolchain;
 mod wasm;
@@ -83,6 +84,8 @@ enum Command {
     Workspace(workspace::WorkspaceArgs),
     /// Check that no crate reaches what its tier forbids (ADR-0081 §2).
     Reach(workspace::ReachArgs),
+    /// Check the declared import direction between a crate's top-level modules.
+    ModuleDag(module_dag::ModuleDagArgs),
     /// Print the packages a change touches (CI fast lane, `check-changed`).
     Affected(change_scope::AffectedArgs),
     /// Check that no include_str! target is classified as docs-only.
@@ -147,6 +150,7 @@ fn main() -> ExitCode {
         Command::Device(args) => device::device(&args),
         Command::Workspace(args) => workspace::workspace(&args),
         Command::Reach(args) => workspace::reach(&args),
+        Command::ModuleDag(args) => module_dag::module_dag(&args),
         Command::Affected(args) => change_scope::affected(&args),
         Command::PathsFilter(args) => change_scope::paths_filter(&args),
         Command::CiVerify(args) => change_scope::ci_verify(&args),

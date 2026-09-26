@@ -217,3 +217,58 @@ globals = [
     { item = "image::decode_cache::CACHE", exit = "ADR-0097", reason = "the process-wide decoded-image cache; it becomes realm-owned" },
     { item = "navigator::navigator::NAVIGATOR_COMMAND_TARGETS", exit = "ADR-0093", reason = "the owner thread's navigator command routing table" },
 ]
+
+[package.metadata.flui.modules]
+# The top-level modules of src/lib.rs, bottom to top (`cargo xtask module-dag`). Production code
+# names a module only in a lower layer; modules in one layer name none of each other. "*" alone in
+# a layer stands for every top-level module not named elsewhere, unchecked among themselves.
+# `#[cfg(test)]` code is exempt, as dev-dependencies are between crates.
+layers = [
+    [
+        "support",
+        "localization",
+        "widget_state",
+        "anchored_box",
+    ],
+    [
+        "layout",
+        "paint",
+        "clip",
+        "semantics",
+        "stack",
+        "wrap",
+        "physical_model",
+        "image",
+        "container",
+        "value_listenable_builder",
+        "async_builders",
+    ],
+    [
+        "flex",
+        "transitions",
+        "overlay",
+    ],
+    [
+        "animated",
+    ],
+    [
+        "interaction",
+    ],
+    [
+        "text",
+        "scroll",
+        "navigator",
+    ],
+    [
+        "icon",
+        "app",
+    ],
+    [
+        "testing",
+    ],
+]
+# Modules of `use` items only: a path through them counts as a path to what they re-export.
+transparent = ["prelude", "__private"]
+# A refused edge, legal until the change in the ADR named by `exit` removes it:
+# { from = "<module>", to = "<module>", exit = "ADR-NNNN", since = "YYYY-MM-DD", reason = "..." }
+exceptions = []

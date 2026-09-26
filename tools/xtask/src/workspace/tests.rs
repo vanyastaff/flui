@@ -382,6 +382,27 @@ wasm = false",
 }
 
 #[test]
+fn a_modules_table_is_accepted_and_a_non_table_is_an_error() {
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "order = 1",
+        "order = 1\n\n[package.metadata.flui.modules]\nlayers = [[\"*\"]]",
+    );
+    assert_eq!(fixture.findings(), Vec::<String>::new());
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "\n[package.metadata.flui.modules]\nlayers = [[\"*\"]]",
+        "modules = [\"*\"]",
+    );
+    assert!(
+        fixture.error().contains("`modules` must be a table"),
+        "{}",
+        fixture.error()
+    );
+}
+
+#[test]
 fn a_mistyped_or_unknown_flui_key_is_an_error() {
     let fixture = Fixture::new();
     fixture.edit(
