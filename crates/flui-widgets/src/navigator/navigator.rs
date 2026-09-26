@@ -90,8 +90,7 @@ use crate::animated::VsyncScope;
 use crate::{Overlay, OverlayEntry, OverlayHandle};
 
 // A child module, so the admission rules and the `Router`'s doors can reach
-// `NavigatorShared` without widening it.
-#[path = "addressing.rs"]
+// `NavigatorShared` without widening it (`navigator/navigator/addressing.rs`).
 mod addressing;
 #[cfg(test)]
 pub(crate) use addressing::Unaddressable;
