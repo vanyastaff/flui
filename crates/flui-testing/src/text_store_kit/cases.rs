@@ -577,13 +577,24 @@ fn async_request_inside_a_transaction_waits_for_the_next_anchor(
         "async requests inside a transaction",
     )?;
     ensure_eq(ran_inside, Some(0), "grants run inside the transaction")?;
+    // One anchor runs both, and a later one runs neither again.
     fixture.pump();
-    fixture.pump();
-    ensure_eq(edits.get(), 1, "runs of the deferred edit")?;
+    ensure_eq(edits.get(), 1, "runs of the deferred edit after one anchor")?;
     ensure_eq(
         seen.borrow().clone(),
         vec![(at(4), Selection::collapsed(at(4)))],
-        "what the deferred read saw (once, after the deferred edit)",
+        "what the deferred read saw after one anchor (once, after the deferred edit)",
+    )?;
+    fixture.pump();
+    ensure_eq(
+        edits.get(),
+        1,
+        "runs of the deferred edit after a second anchor",
+    )?;
+    ensure_eq(
+        seen.borrow().len(),
+        1,
+        "runs of the deferred read after a second anchor",
     )
 }
 
