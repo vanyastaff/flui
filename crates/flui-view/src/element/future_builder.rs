@@ -351,6 +351,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    include!("future_builder_lifetime_tests.rs");
+
     use super::*;
 
     use std::sync::atomic::{AtomicUsize, Ordering};
