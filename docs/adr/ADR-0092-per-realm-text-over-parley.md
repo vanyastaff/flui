@@ -256,6 +256,66 @@ Context). Gates 2–8 are conditions on the migration changes.
 Shaping stays in `flui-painting`. A separate text crate is considered only after the migration,
 and only if `cargo build --timings` shows shaping separates cleanly from recording.
 
+### 10. Migration series
+
+Each step is one PR (or a short series), leaves production shippable, and names the follow-up
+that wires what it adds.
+
+1. **Raster seam.** `flui_painting::GlyphRasterizer` (key type plus `rasterize`); the engine's
+   `GlyphAtlas<R: GlyphRasterizer = SharedFontSystem>`, whose default keeps today's path;
+   `ParleyGlyphKey`, `FontRegistry` and `SwashRasterizer` behind flui-painting's `parley`
+   feature, off by default and with no production caller. *Acceptance:* the existing atlas and
+   readback suites pass unmodified (`cargo xtask gpu-test`). swash matches cosmic-text's scaler
+   bit for bit on every distinct key Parley places for Latin (bundled Roboto) and at least one
+   host complex script, at 13/18/32 px across all four x bins. Rasterizing one key twice gives
+   equal images (gate 8, first half). `cargo xtask globals` is unchanged; `cargo xtask deps` and
+   `cargo xtask reach` are green.
+2. **Per-realm font context; `FONT_SYSTEM` leaves.**
+   - A FLUI `FontContext` handle, constructed by the runtime's shared engine services (not
+     forced at `crates/flui-app/src/app/runtime.rs:148`), goes to each realm and down every
+     measuring path explicitly. `shared_font_system()` and the `static FONT_SYSTEM` are
+     deleted.
+   - Shaping is still cosmic-text behind the handle. The handle's inside is replaced in step 4,
+     not its shape.
+   - The shared fontique `Collection` is created here, and `register_font` feeds it.
+     Registering raises a font-collection-changed event on every realm, which marks text render
+     objects for layout (ADR-0065's named gap).
+   - *Acceptance:* the globals allowlist is shorter by `text_layout::layout::FONT_SYSTEM`. A
+     two-realm test: a font registered through realm A re-lays out text in realm B (fails on
+     main). Test bootstraps construct the handle. A registry test: a source-cache prune while
+     the registry holds the blob keeps keys equal, and fails without the registry.
+3. **Neutral shaped runs on the display list.**
+   - `DrawOp::Paragraph` carries flui-painting's `ShapedParagraph`: runs naming a FLUI-owned
+     font blob id, face index, size, interned variation and synthesis, with glyph id, position,
+     subpixel bin and span colour. It replaces `Arc<TextLayout>`
+     (`display_list/command.rs:167-174`). Runs are produced from the same shaped layout that
+     measured, so "painted as measured" still holds.
+   - A per-frame table carries the blobs a frame names first, which is the door §5 leaves open.
+     The engine's atlas becomes `GlyphAtlas<SwashRasterizer>`, the `parley` feature folds into
+     the default build, and the atlas's default parameter goes.
+   - *Acceptance:* `draw_command_fits_its_budget` holds; the text readback suite passes
+     unmodified; `the_engine_does_not_shape` is extended so the engine's manifest names no
+     parley, fontique, skrifa, swash or cosmic-text. Glyph baselines round as today
+     (`(run.line_y * scale).round()`), pinned against today's output (gate 8, second half).
+4. **Paragraph and editable text on Parley.**
+   - `TextLayout` shapes one Parley `Layout` per paragraph, using per-realm
+     `FontContext`/`LayoutContext` over the shared collection. Carets, selection and
+     hit-testing come from clusters.
+   - The host font scan runs off the owner thread (§7). This step settles the `system` feature
+     question: `fontique/system` reaches `windows`, which tier S forbids, and needs fontconfig
+     headers on Linux. Either host discovery goes through the platform layer and feeds the
+     collection, or a reach grant is recorded.
+   - The cosmic-text path stays behind a flag for one release as the rollback.
+   - *Acceptance:* gates 2–7. The existing selection and offset↔cursor tests pass unchanged for
+     LTR, RTL and mixed bidi. The `complex-scripts` decision is recorded.
+5. **cosmic-text removed.**
+   - cosmic-text, `unicode-segmentation` and `unicode-script` leave the workspace.
+   - `SharedFontSystem`, `Shaper`, the cosmic `GlyphKey` and `pub use cosmic_text::fontdb::Family`
+     go, and the rollback flag is removed.
+   - *Acceptance:* `cargo tree -i cosmic-text` is empty; clippy `disallowed_types` rejects
+     `Mutex` in flui-painting's text path; §§1–5 are accepted and the back-links in
+     Consequences are written.
+
 ## Alternatives considered
 
 - **Stay on cosmic-text with per-realm `FontSystem`s.** Rejected as the target: each realm would
@@ -301,15 +361,19 @@ and only if `cargo build --timings` shows shaping separates cleanly from recordi
 
 ## Verification
 
-The gate 1 prototype exists on `spike/parley_atlas` (not merged); the rest do not exist yet.
+The gate 1 prototype exists on `spike/parley_atlas` (not merged). The raster seam and the
+same-key-twice test exist; the rest do not exist yet.
 
+- The raster seam, `ParleyGlyphKey`, `FontRegistry` and `SwashRasterizer` exist behind
+  flui-painting's `parley` feature, with the oracle (`crates/flui-painting/tests/parley_oracle.rs`).
 - The gate 1 prototype and its oracle glyph tests, with the glifo/skrifa choice recorded.
 - A two-realm test: registering a font in one realm makes text in the other re-lay out. FLUI's
   text path names no `Mutex` (clippy `disallowed_types` in `flui-painting`); fontique's miss-path
   locks are outside that check (§3).
 - A registry test: a source-cache prune while the registry holds the blob keeps keys equal, and
   the test fails without the registry.
-- A same-key-twice test: rasterizing one key twice yields equal bitmaps.
+- A same-key-twice test: rasterizing one key twice yields equal bitmaps
+  (`one_key_rasterizes_to_equal_images_twice`).
 - A baseline test against today's rounding.
 - `the_engine_does_not_shape` ([ADR-0067](ADR-0067-engine-owned-glyph-atlas.md)) extended so the
   engine's manifest names no Parley, fontique, skrifa or cosmic-text crate.
