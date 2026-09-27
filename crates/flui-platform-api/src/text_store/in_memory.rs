@@ -35,8 +35,19 @@ pub struct InMemoryTextStore {
     doc: RefCell<Document>,
     arbiter: LockArbiter,
     observer: RefCell<Option<Rc<dyn TextStoreObserver>>>,
+    /// App-side changes the observer has not heard of yet, because a lock
+    /// was held or the gate was shut when they happened.
+    pending: RefCell<Vec<Notice>>,
     protected: Cell<bool>,
     owner_notifications: Cell<usize>,
+}
+
+/// One notification an [`InMemoryTextStore`] owes its observer.
+#[derive(Debug)]
+enum Notice {
+    Text(TextChange),
+    Selection,
+    Status,
 }
 
 impl std::fmt::Debug for InMemoryTextStore {
@@ -44,6 +55,7 @@ impl std::fmt::Debug for InMemoryTextStore {
         f.debug_struct("InMemoryTextStore")
             .field("doc", &self.doc)
             .field("arbiter", &self.arbiter)
+            .field("pending", &self.pending)
             .field("protected", &self.protected.get())
             .finish_non_exhaustive()
     }
@@ -70,6 +82,7 @@ impl InMemoryTextStore {
             }),
             arbiter: LockArbiter::new(),
             observer: RefCell::new(None),
+            pending: RefCell::new(Vec::new()),
             protected: Cell::new(false),
             owner_notifications: Cell::new(0),
         })
@@ -96,13 +109,14 @@ impl InMemoryTextStore {
     /// Mark the store protected (a password field) and tell the observer.
     pub fn set_protected(&self, protected: bool) {
         if self.protected.replace(protected) != protected {
-            self.notify(|observer| observer.status_changed());
+            self.report(Notice::Status);
         }
     }
 
     /// An edit the application makes: `range` becomes `text` under the same
     /// rules as [`TextStoreEdit::replace`], and the observer hears of it
-    /// afterwards.
+    /// afterwards — at once, or, inside a frame transaction, once the gate
+    /// opens.
     ///
     /// # Panics
     ///
@@ -114,8 +128,8 @@ impl InMemoryTextStore {
             .borrow_mut()
             .replace(range, text)
             .expect("BUG: app_replace was given a range outside the text");
-        self.notify(|observer| observer.text_changed(change));
-        self.notify(|observer| observer.selection_changed());
+        self.pending.borrow_mut().push(Notice::Text(change));
+        self.report(Notice::Selection);
     }
 
     /// How many read-write sessions changed the document: the notifications
@@ -125,10 +139,31 @@ impl InMemoryTextStore {
         self.owner_notifications.get()
     }
 
-    fn notify(&self, call: impl FnOnce(&dyn TextStoreObserver)) {
+    /// Queue `notice` and send everything queued if the observer may hear
+    /// it now.
+    fn report(&self, notice: Notice) {
+        self.pending.borrow_mut().push(notice);
+        self.flush_notifications();
+    }
+
+    /// Send the queued notices, unless a lock is held or the gate is shut:
+    /// an observer that answers with a synchronous lock request (a TSF sink)
+    /// must be granted it.
+    fn flush_notifications(&self) {
+        if self.arbiter.is_locked() || !self.arbiter.may_commit() {
+            return;
+        }
+        let notices = std::mem::take(&mut *self.pending.borrow_mut());
         let observer = self.observer.borrow().clone();
-        if let Some(observer) = observer {
-            call(&*observer);
+        let Some(observer) = observer else {
+            return;
+        };
+        for notice in notices {
+            match notice {
+                Notice::Text(change) => observer.text_changed(change),
+                Notice::Selection => observer.selection_changed(),
+                Notice::Status => observer.status_changed(),
+            }
         }
     }
 
@@ -172,12 +207,23 @@ impl TextStore for InMemoryTextStore {
         grant: LockGrant,
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
-        self.arbiter
-            .request(grant, timing, &mut |grant| self.open(grant))
+        // An app edit still owed is reported before the platform's session
+        // can see it, and one made from inside the grant once it ends.
+        self.flush_notifications();
+        let outcome = self
+            .arbiter
+            .request(grant, timing, &mut |grant| self.open(grant));
+        self.flush_notifications();
+        outcome
     }
 
+    /// Also where notifications held back by the frame transaction are
+    /// sent, before and after the queued grants run.
     fn run_deferred_grants(&self) -> usize {
-        self.arbiter.run_deferred(&mut |grant| self.open(grant))
+        self.flush_notifications();
+        let ran = self.arbiter.run_deferred(&mut |grant| self.open(grant));
+        self.flush_notifications();
+        ran
     }
 
     fn set_commit_gate(&self, gate: CommitGate) {

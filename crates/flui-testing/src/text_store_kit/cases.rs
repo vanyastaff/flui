@@ -51,6 +51,7 @@ pub(super) const CASES: &[Case] = &[
     case!(a_panicking_grant_releases_the_lock),
     case!(platform_edits_are_not_echoed_to_the_observer),
     case!(app_edits_reach_the_observer_with_utf16_ranges),
+    case!(app_edits_inside_a_transaction_reach_the_observer_after_it),
     case!(one_session_is_one_owner_notification),
     case!(rects_advance_left_to_right),
     case!(index_at_point_round_trips_rect_for_range),
@@ -668,6 +669,39 @@ fn app_edits_reach_the_observer_with_utf16_ranges(fixture: &mut dyn TextStoreFix
         heard.refused_inside_notification.get(),
         0,
         "notifications made while the store was locked",
+    )
+}
+
+fn app_edits_inside_a_transaction_reach_the_observer_after_it(
+    fixture: &mut dyn TextStoreFixture,
+) -> Outcome {
+    let store = fresh(fixture, CORPUS);
+    let heard = observe(&store);
+    let mut heard_inside = None;
+    within_transaction(&store, || {
+        fixture.app_replace_all("x😀");
+        heard_inside = Some(heard.changes.borrow().len() + heard.selections.get());
+    });
+    fixture.pump();
+    store.set_observer(None);
+    ensure_eq(
+        heard_inside,
+        Some(0),
+        "notifications sent while the frame transaction was open",
+    )?;
+    ensure_eq(
+        heard.changes.borrow().clone(),
+        vec![TextChange {
+            start: at(0),
+            old_end: at(CORPUS_LEN),
+            new_end: at(3),
+        }],
+        "the observer's text changes once the transaction closed",
+    )?;
+    ensure_eq(
+        heard.refused_inside_notification.get(),
+        0,
+        "notifications during which the store refused a sync lock",
     )
 }
 

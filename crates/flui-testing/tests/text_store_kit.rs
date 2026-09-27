@@ -29,7 +29,7 @@ fn a_protected_in_memory_store_conforms_to_kit_v1() {
 #[test]
 fn version_one_runs_every_case() {
     let cases = text_store_kit::cases();
-    assert_eq!(cases.len(), 24);
+    assert_eq!(cases.len(), 25);
     assert!(cases.iter().all(|case| case.since == 1));
 }
 
@@ -49,6 +49,9 @@ enum Fault {
     SplitsSurrogatesOnHitTest,
     /// Notifies its owner once per edit rather than once per session.
     NotifiesPerEdit,
+    /// Tells the observer of an app edit at once, inside a frame
+    /// transaction too.
+    NotifiesInsideTransaction,
 }
 
 /// `InMemoryTextStore` with `fault` spliced into its sessions.
@@ -308,7 +311,24 @@ impl TextStoreFixture for FaultyFixture {
         let inner = &self.store.inner;
         let whole = Utf16Range::new(Utf16Offset::ZERO, utf16::utf16_len(&inner.text()))
             .expect("zero precedes every length");
+        if self.store.fault != Fault::NotifiesInsideTransaction {
+            inner.app_replace(whole, text);
+            return;
+        }
+        // Edit with the inner store's observer unset, then tell the
+        // platform's observer at once, whatever the gate says.
+        let observer = self.store.observer.borrow().clone();
+        inner.set_observer(None);
         inner.app_replace(whole, text);
+        inner.set_observer(observer.clone());
+        if let Some(observer) = observer {
+            observer.text_changed(TextChange {
+                start: Utf16Offset::ZERO,
+                old_end: whole.end(),
+                new_end: utf16::utf16_len(text),
+            });
+            observer.selection_changed();
+        }
     }
 
     fn pump(&mut self) {
@@ -383,5 +403,13 @@ fn kit_fails_a_store_that_notifies_per_edit() {
     assert_kit_catches(
         Fault::NotifiesPerEdit,
         "one_session_is_one_owner_notification",
+    );
+}
+
+#[test]
+fn kit_fails_a_store_that_notifies_inside_a_transaction() {
+    assert_kit_catches(
+        Fault::NotifiesInsideTransaction,
+        "app_edits_inside_a_transaction_reach_the_observer_after_it",
     );
 }

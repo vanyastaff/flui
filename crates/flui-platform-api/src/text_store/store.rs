@@ -60,8 +60,11 @@ pub trait TextStore {
 /// Notifications from a store to the platform, TSF's `ITextStoreACPSink`.
 ///
 /// A store calls these only for changes the platform did not make itself
-/// (an edit by the application, a relayout), and never while a lock is
-/// held, so an observer may request a synchronous lock from inside one.
+/// (an edit by the application, a relayout), and never while a lock is held
+/// or its [`CommitGate`] is shut: a change made then is reported once both
+/// allow it, at the latest by the next
+/// [`TextStore::run_deferred_grants`]. So an observer may request a
+/// synchronous lock from inside a notification and be granted it.
 pub trait TextStoreObserver {
     /// The document changed outside a platform session.
     fn text_changed(&self, change: TextChange);
