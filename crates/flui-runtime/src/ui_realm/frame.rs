@@ -21,7 +21,7 @@ impl UiRealm {
     // ========================================================================
 
     /// Draw a frame and return the produced `Scene`, if any. Test-only —
-    /// production drives frames through [`Self::render_frame`].
+    /// production drives frames through [`Self::pump`].
     #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn draw_frame(&self, constraints: BoxConstraints) -> Option<Scene> {
@@ -32,6 +32,14 @@ impl UiRealm {
             FramePaintOutcome::Painted(scene) => Some(scene),
             FramePaintOutcome::Idle | FramePaintOutcome::Errored => None,
         }
+    }
+
+    /// The draw step alone ([`Self::render_frame`]), for a test outside this
+    /// crate that pins the submit classification against a scripted backend.
+    /// Test-only — production drives frames through [`Self::pump`].
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn render_frame_for_test<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
+        self.render_frame(sink)
     }
 
     /// The complete build+layout+paint pipeline for one frame.
@@ -427,15 +435,19 @@ impl UiRealm {
         }
     }
 
-    /// Render one frame through `sink`, while the platform dispatcher already
-    /// owns the realm entry. This keeps scheduler callbacks and the full
-    /// build/layout/paint/submit transaction under one activation instead of
-    /// creating a nested scope.
+    /// The draw step of the frame transaction: render one frame through
+    /// `sink`, inside the realm entry [`Self::pump`] already holds, so
+    /// scheduler callbacks and the full build/layout/paint/submit transaction
+    /// share one activation instead of creating a nested scope.
     ///
-    /// The host chooses the sink: `flui-app` drives its raster lane on the
-    /// desktop and Android runners and a direct sink over a borrowed backend
-    /// on the web runner (its `RealmRaster` entry points); tests drive a
-    /// scripted one. Every sink feeds the same classification arms below
+    /// Crate-private: a host reaches it only through [`Self::pump`], so no
+    /// code outside this crate can draw a frame that skips begin or end frame
+    /// (tests outside it use `render_frame_for_test`, under `test-support`).
+    ///
+    /// The host chooses the sink it hands the pump: `flui-app` passes its
+    /// raster lane on the desktop, Android and iOS runners and a direct sink
+    /// over a borrowed backend on the web runner; tests pass a scripted one.
+    /// Every sink feeds the same classification arms below
     /// through [`SubmitVerdict`](crate::sink::SubmitVerdict), so the
     /// retry/telemetry semantics cannot drift between them.
     ///
@@ -473,7 +485,7 @@ impl UiRealm {
     /// submit do neither; they did not produce a reusable scene or are not
     /// retried, respectively.
     #[tracing::instrument(level = "debug", skip_all)]
-    pub fn render_frame<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
+    pub(crate) fn render_frame<S: crate::sink::FrameSink + ?Sized>(&self, sink: &mut S) -> bool {
         self.gestures().drain_deferred_arena_resolutions();
         self.gestures().flush_pending_moves();
 

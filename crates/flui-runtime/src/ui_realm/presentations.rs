@@ -272,11 +272,13 @@ impl UiRealm {
         &self.scheduler
     }
 
-    /// This realm's owner-local post-frame lane. `runner.rs`'s per-backend
-    /// frame pumps pass this to `UpdateScheduler::drive_frame_with_lane` so
-    /// the frame drive drains it in the same total order as the shared
-    /// queue — drain-by-parameter, the same reason [`Self::scheduler`]
-    /// exists rather than a process-global lookup.
+    /// This realm's owner-local post-frame lane. Test-only: production ends
+    /// every frame through [`Self::pump`], which passes the lane to
+    /// `UpdateScheduler::drive_frame_with_lane` itself so no host can drive a
+    /// frame that forgets it. A test that hand-assembles a frame drive passes
+    /// it the same way — drain-by-parameter, the same reason
+    /// [`Self::scheduler`] exists rather than a process-global lookup.
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn local_post_frame_lane(&self) -> &flui_scheduler::LocalPostFrameLane {
         &self.local_post_frame

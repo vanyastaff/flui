@@ -50,8 +50,12 @@ steps; the ADR's `## Migration` section lists them, and what is still to move
   realm's. Pinned by `ui_realm/tests/pump_transaction.rs`, each test failing
   against a pump that skips or reorders the phase it names; `flui-app`'s
   `runner_frame_ordering` scan pins that every runner goes through it.
-  `render_frame` and `draw_frame` stay callable on their own for tests of
-  the draw step.
+  Outside this crate the invariant holds by type: the draw step
+  (`render_frame`) is crate-private and the owner-local post-frame lane
+  (`local_post_frame_lane`) is `test-support` only, so a host has no way to
+  draw a frame, or end one, except the pump. Tests of the draw step alone
+  reach it through `render_frame_for_test` and `draw_frame`, both under
+  `test-support`.
 - **The realm renders through a sink, never an engine.** `UiRealm::pump`
   takes any `&mut dyn FrameSink`; the host picks one (`flui-app`'s raster
   lane, or its direct sink over a borrowed backend on the web runner), and

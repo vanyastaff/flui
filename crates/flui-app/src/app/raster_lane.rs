@@ -442,7 +442,7 @@ pub(crate) trait RealmRaster {
 #[cfg(test)]
 impl RealmRaster for flui_runtime::ui_realm::UiRealm {
     fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
-        self.render_frame(&mut DirectSink::new(renderer))
+        self.render_frame_for_test(&mut DirectSink::new(renderer))
     }
 }
 

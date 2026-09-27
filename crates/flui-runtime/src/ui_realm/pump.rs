@@ -41,6 +41,30 @@ impl UiRealm {
     /// while another frame on this realm is running. The pump enters the
     /// realm itself for the whole transaction.
     ///
+    /// It is also the only way a host outside this crate draws a frame:
+    ///
+    /// ```no_run
+    /// use flui_runtime::pump::SampledClock;
+    /// use flui_runtime::sink::FrameSink;
+    /// use flui_runtime::ui_realm::UiRealm;
+    ///
+    /// fn frame(realm: &mut UiRealm, sink: &mut dyn FrameSink) -> bool {
+    ///     realm.pump(&mut SampledClock(web_time::Instant::now()), sink).presented()
+    /// }
+    /// ```
+    ///
+    /// The draw step on its own, without begin and end frame, is not
+    /// reachable:
+    ///
+    /// ```compile_fail
+    /// use flui_runtime::sink::FrameSink;
+    /// use flui_runtime::ui_realm::UiRealm;
+    ///
+    /// fn frame(realm: &mut UiRealm, sink: &mut dyn FrameSink) -> bool {
+    ///     realm.render_frame(sink)
+    /// }
+    /// ```
+    ///
     /// The clock is read once; every phase sees that instant, `Vsync`
     /// controllers included (`now_secs` reads it for the frame's duration).
     /// Whether a wake becomes a frame at all is the host's decision (its wake
