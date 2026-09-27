@@ -1002,6 +1002,14 @@ fn drain_owner_turn_queue() {
 
 /// Claims queued owner turns once no realm-wide visit or existing drain owns
 /// the thread. Returns whether the caller must run [`drain_owner_turn_queue`].
+#[cfg(any(
+    test,
+    all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    )
+))]
 fn claim_pending_owner_turns() -> bool {
     APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
