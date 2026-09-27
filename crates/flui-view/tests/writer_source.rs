@@ -191,8 +191,9 @@ struct RenderSeen {
     count: Cell<Option<Signal<u32>>>,
     /// Every value the parent's `build` read, in order.
     reads: RefCell<Vec<u32>>,
-    /// What the leaf's render-object context returned from `writer_source`.
-    source: RefCell<Option<Option<WriterSource>>>,
+    /// What the leaf's render-object context returned from `writer_source`,
+    /// once per render object it created.
+    sources: RefCell<Vec<Option<WriterSource>>>,
 }
 
 /// A render leaf that keeps the writer source its render-object context
@@ -207,7 +208,7 @@ impl RenderView for SourceLeaf {
     type RenderObject = RenderSizedBox;
 
     fn create_render_object(&self, ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
-        *self.seen.source.borrow_mut() = Some(ctx.writer_source());
+        self.seen.sources.borrow_mut().push(ctx.writer_source());
         RenderSizedBox::shrink()
     }
 
@@ -277,12 +278,10 @@ fn a_render_object_context_writer_source_writes_the_owner_graph() {
     );
     binding.pump_frame(FRAME);
     let count = seen.count.get().expect("the probe built");
-    let writer = seen
-        .source
-        .borrow()
-        .clone()
-        .expect("the leaf created its render object")
-        .expect("a mounted render view has a writer source");
+    let sources = seen.sources.borrow().clone();
+    let [Some(writer)] = sources.as_slice() else {
+        panic!("one render object, created with a writer source: {sources:?}");
+    };
 
     assert_eq!(writer.write(|cx| count.set(cx, 4)), Ok(()));
     let graph = binding.reactive().expect("tree-bound");
