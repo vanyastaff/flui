@@ -60,6 +60,12 @@ fn two_screens_opens_a_note_and_comes_back() {
     assert!(laid_out(&app, "Note 1"));
 
     tap(&mut app, "Back");
-    assert!(laid_out(&app, "/"), "back at Home's location");
+    // Home stays laid out under the Note, so only the popped page's absence
+    // tells that the pop happened.
+    assert!(
+        app.find_text("/note/1").is_none(),
+        "the Note's location left"
+    );
     assert!(app.find_text("Note 1").is_none(), "the Note page left");
+    assert!(laid_out(&app, "Home"), "Home is shown again");
 }
