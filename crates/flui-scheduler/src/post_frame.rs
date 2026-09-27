@@ -79,6 +79,12 @@ impl LocalPostFrameLane {
         self.inner.queue.take()
     }
 
+    /// Return an uninvoked tail to the already-validated source lane.
+    /// Original IDs retain FIFO order ahead of newer registrations on the next drain.
+    pub(crate) fn restore_queue(&self, entries: Vec<LocalPostFrameEntry>) {
+        self.inner.queue.borrow_mut().extend(entries);
+    }
+
     /// Whether this lane's queue is currently borrowable -- i.e. not mid
     /// `borrow()`/`borrow_mut()` somewhere up the call stack.
     ///
@@ -633,6 +639,76 @@ mod tests {
             .expect("gate remains usable");
         scheduler.execute_frame_with_lane(&lane);
         assert!(fired.get());
+    }
+
+    #[test]
+    fn post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work() {
+        let scheduler = UpdateScheduler::new();
+        let lane = scheduler.new_local_post_frame_lane();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let panic_calls = Rc::new(Cell::new(0));
+        let counted = panic_calls.clone();
+        let reentrant = lane.local_handle();
+        let reentrant_log = log.clone();
+        lane.local_handle()
+            .schedule_local(move |_| {
+                counted.set(counted.get() + 1);
+                reentrant
+                    .schedule_local(move |_| {
+                        reentrant_log.lock().expect("log").push(3);
+                    })
+                    .expect("lane alive");
+                panic!("first callback poisons this frame, not the uninvoked queue");
+            })
+            .expect("lane alive");
+        let shared_log = log.clone();
+        scheduler.add_post_frame_callback(Box::new(move |_| {
+            shared_log.lock().expect("log").push(1);
+        }));
+        let local_log = log.clone();
+        lane.local_handle()
+            .schedule_local(move |_| {
+                local_log.lock().expect("log").push(2);
+            })
+            .expect("lane alive");
+
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame_with_lane(&lane))).is_err()
+        );
+        assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
+        assert!(
+            log.lock().expect("log").is_empty(),
+            "the poisoned frame stops delivery"
+        );
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(
+            *log.lock().expect("log"),
+            [1, 2, 3],
+            "uninvoked callbacks retain original registration order across both lanes"
+        );
+        assert_eq!(
+            panic_calls.get(),
+            1,
+            "the callback that already ran is not retried"
+        );
+    }
+
+    #[test]
+    fn shared_post_frame_panic_preserves_uninvoked_shared_tail_without_local_lane() {
+        let scheduler = UpdateScheduler::new();
+        let fired = Arc::new(Mutex::new(false));
+        scheduler.add_post_frame_callback(Box::new(|_| panic!("shared callback probe")));
+        let callback = fired.clone();
+        scheduler.add_post_frame_callback(Box::new(move |_| {
+            *callback.lock().expect("flag") = true;
+        }));
+        assert!(catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame())).is_err());
+        assert!(!*fired.lock().expect("flag"));
+        scheduler.execute_frame();
+        assert!(
+            *fired.lock().expect("flag"),
+            "shared-only owners must not lose their tail either"
+        );
     }
 
     #[test]

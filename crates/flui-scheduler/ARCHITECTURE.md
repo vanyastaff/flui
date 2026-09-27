@@ -8,6 +8,25 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### Post-frame panic preserves uninvoked work in its original queue
+
+A post-frame callback panic stops the drain and propagates after frame completion
+bookkeeping closes. The panicking entry is consumed, not retried; the uninvoked
+tail returns to its original shared or owner-local queue with its original IDs.
+The next completed frame sorts those IDs with newer registrations, so surviving
+work precedes work registered reentrantly by the failed callback. Cancellation
+records remain intact on the failed drain, including records belonging to other
+callback queues. No user callback or captured destructor runs under a queue guard.
+
+This extends the existing pre-pipeline recovery invariant to the post-frame
+snapshot. It does not catch-and-continue individual callbacks, request another
+frame, or promise that a platform host survives an application panic. A direct
+or headless caller that catches the propagated panic decides whether to resume.
+The regression tests
+`post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work` and
+`shared_post_frame_panic_preserves_uninvoked_shared_tail_without_local_lane`
+pin tail survival, mixed-queue FIFO, and consumption of the failed entry.
+
 ### One recovery boundary closes phase/completion state before any pre-pipeline panic propagates
 
 **Rule:** a caller that catches a panic out of `drive_frame`/`drive_frame_with_lane`/
