@@ -389,6 +389,44 @@ pub trait LifecycleContext: BuildContext {
     /// receive a [`LifecycleContext`], so `build` cannot reach this method.
     fn rebuild_handle(&self) -> crate::RebuildHandle;
 
+    /// An owned, `'static`, `!Send` capability that opens a signal write
+    /// (ADR-0086): `source.write(|cx| count.set(cx, 1))`.
+    ///
+    /// Keep it in the state and use it where an event reaches this widget:
+    /// wrapping a recognizer callback so the user's closure receives the
+    /// `&mut EventCx<'_>`, or inside a callback whose shape carries no `cx`.
+    /// It writes into this element's presentation graph; a signal minted by
+    /// another presentation is refused with
+    /// [`SignalError::ForeignGraph`](crate::SignalError::ForeignGraph).
+    ///
+    /// # Never acquire this during `build`
+    ///
+    /// `build` receives a [`BuildContext`], which has no such method, so a
+    /// signal write in `build` has no writer to name:
+    ///
+    /// ```compile_fail,E0599
+    /// use flui_view::BuildContext;
+    ///
+    /// fn build_body(ctx: &dyn BuildContext) {
+    ///     let _ = ctx.writer_source();
+    /// }
+    /// ```
+    ///
+    /// Nor can one be made from the graph a context exposes:
+    ///
+    /// ```compile_fail,E0624
+    /// use flui_view::{BuildContext, WriterSource};
+    ///
+    /// fn build_body(ctx: &dyn BuildContext) {
+    ///     let _ = WriterSource::new(ctx.reactive());
+    /// }
+    /// ```
+    ///
+    /// A widget that invokes a user callback synchronously inside its own
+    /// `build` can still open a write there; the run-time guard refuses it
+    /// with [`SignalError::WrittenDuringBuild`](crate::SignalError::WrittenDuringBuild).
+    fn writer_source(&self) -> crate::WriterSource;
+
     /// The binding's frame-driven async task driver, if a binding
     /// installed one.
     ///

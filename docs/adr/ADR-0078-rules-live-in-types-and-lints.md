@@ -9,6 +9,8 @@
   (`cargo xtask markers`), and an allowlist exit may be a migration-plan step.
 - **Amended:** 2026-09-26 — `flui-tree` is deleted (ADR-0081), so the printing lint row names
   `flui-foundation` and `flui-macros`.
+- **Amended-by:** [ADR-0086](ADR-0086-signal-writes-through-event-context.md) — §1 gains
+  `writer_source`, the capability that opens a signal write.
 - **Supersedes:** the capability-acquisition clauses of ADR-0018, ADR-0021, ADR-0030 and
   ADR-0037 (the rule stays, its enforcement moves into the type system); the port methodology
   (`docs/PORT.md`) and its grep gates (`scripts/port-check.sh`,
@@ -41,6 +43,7 @@ pub trait BuildContext: Sealed { /* identity, inherited lookups, ancestor walks,
 
 pub trait LifecycleContext: BuildContext {
     fn rebuild_handle(&self) -> RebuildHandle;
+    fn writer_source(&self) -> WriterSource;
     fn async_driver(&self) -> Option<AsyncDriver>;
     fn post_frame_handle(&self) -> Option<PostFrameHandle>;
     fn local_post_frame_handle(&self) -> Option<LocalPostFrameHandle>;

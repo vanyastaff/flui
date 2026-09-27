@@ -9,8 +9,8 @@ separate crates or WASM targets with their own build step.
 
 | Example | Run |
 |---|---|
-| **counter** — the minimal FLUI app: one `StateCell` and a button (start here — this is the README's own "Hello World" code sample, and the exact shape `flui create`'s `counter` template generates) | `cargo run --example counter` |
-| **todo** — the step past `counter`: a list in `StateHandle<Vec<Item>>` (not `StateCell`, which needs `T: Copy`), with add/toggle/delete. See the book's [Tutorial: counter → todo](../book/src/getting-started/tutorial-todo.md) | `cargo run --example todo --features material` |
+| **counter** — the minimal FLUI app: one `Signal` and a `RawButton` whose press writes it (start here — this is the README's own "Hello World" code sample, and the exact shape `flui create`'s `counter` template generates) | `cargo run --example counter` |
+| **todo** — the step past `counter`: a list in `Signal<Vec<Item>>`, with add/toggle/delete through `RawButton` presses and a `RawTextField`. See the book's [Tutorial: counter → todo](../book/src/getting-started/tutorial-todo.md) | `cargo run --example todo` |
 | **widgets_gallery** — a tour of the wider `flui-widgets` catalog through `flui::prelude` + `run_app` | `cargo run --example widgets_gallery` |
 | **platform_window** — the platform layer *without* widgets: a raw window and event loop, no `View`/`Element`/render tree. Useful for debugging platform integration itself, not as a first example of the framework | `cargo run --example platform_window` |
 | **colored_box_app** — the first FLUI application through the real pipeline, at the low-level `flui-view`/`flui-objects` layer (no facade) | `cargo run --example colored_box_app` |
@@ -62,7 +62,7 @@ transitions) and asserts a `*_RESULT=PASS`/`FAIL` marker; macOS-only unless note
 |---|---|---|
 | **lifecycle_probe** | `cargo xtask device macos-lifecycle` | Frame production survives minimize/restore, hide/unhide, resize |
 | **workload_probe** | `cargo xtask device macos-workload` | Scroll/type p99 latency and RSS growth budgets under a representative workload |
-| **a11y_probe** — the generated counter, run for an assistive technology | `cargo xtask device macos-a11y`, `cargo xtask device windows-a11y`, `cargo xtask device windows-input` (`cargo run --example a11y_probe --features material,a11y`) | An AXUIElement (macOS) or UI Automation (Windows) client can read the texts by name and press the button; on Windows, real clicks and Tab + Enter press it too |
+| **a11y_probe** — a Material counter, run for an assistive technology | `cargo xtask device macos-a11y`, `cargo xtask device windows-a11y`, `cargo xtask device windows-input` (`cargo run --example a11y_probe --features material,a11y`) | An AXUIElement (macOS) or UI Automation (Windows) client can read the texts by name and press the button; on Windows, real clicks and Tab + Enter press it too |
 | **resize_jitter_probe** | `cargo xtask device macos-resize-jitter` | Swapchain/surface size stays consistent through a live-resize burst |
 
 ## Hot reload

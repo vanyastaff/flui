@@ -16,6 +16,7 @@ mod listener;
 mod meta_data;
 mod mouse_region;
 mod offstage;
+mod raw_button;
 mod shortcuts;
 mod transformation_controller;
 mod visibility;
@@ -52,6 +53,7 @@ pub use listener::Listener;
 pub use meta_data::MetaData;
 pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
+pub use raw_button::{RawButton, RawButtonState};
 pub use shortcuts::{
     CallbackShortcuts, DefaultFocusTraversal, DefaultFocusTraversalState, ShortcutCallback,
     Shortcuts, ShortcutsState, SingleActivator,

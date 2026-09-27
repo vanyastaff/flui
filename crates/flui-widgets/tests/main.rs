@@ -142,6 +142,8 @@ mod page_route;
 mod parent_data_ancestry;
 #[path = "post_frame_handle.rs"]
 mod post_frame_handle;
+#[path = "raw_button.rs"]
+mod raw_button;
 #[path = "rich_text.rs"]
 mod rich_text;
 #[path = "rotated_box_layer_update.rs"]
