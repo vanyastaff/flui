@@ -28,6 +28,10 @@ requests never retain an obsolete user closure. This is pinned by
 `queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime` and the
 assistive-tap replacement, removal, multiplicity and cross-action ordering
 integration tests.
+Post-frame entries hold only a weak reference to the detector-owned delivery
+target. Teardown therefore releases the live callbacks and presentation-bound
+writer even when an aborted or absent frame leaves the queue entry pending;
+draining that entry later is an inert no-op.
 
 Tests: `animated_size_completion_writes_a_signal_after_build`,
 `dismissible_layout_notifications_write_signals_and_dismiss_once`,
@@ -1906,8 +1910,10 @@ The event methods `FormHandle::save`/`reset` and
 callbacks (ADR-0086). Validators remain queries with no writer. Form reset
 restores its validation-suppression flag on unwind, so a panicking user callback
 cannot disable validation for later edits; the partial field mutations are not
-rolled back. `a_panicking_reset_callback_does_not_disable_later_form_validation`
-pins recovery, and the signal-write form tests pin context forwarding.
+rolled back. A field schedules its rebuild immediately after committing its
+reset state, before the controller sink and `on_reset`, so an unwind cannot hide
+that partial commit behind stale UI. `a_panicking_reset_callback_does_not_disable_later_form_validation`
+pins recovery and visibility, and the signal-write form tests pin context forwarding.
 
 **Oracle:** Flutter reaches `FormState`/`FormFieldState` through a
 `GlobalKey` or `Form.of(context)`.

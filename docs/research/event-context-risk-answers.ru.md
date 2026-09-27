@@ -195,6 +195,56 @@ invalidation и то, какие дальнейшие действия host до
 закрытие одного не удаляет документ и не оставляет его subscription. Это проверка
 расширяемости, не самовольно добавленный H0 release gate.
 
+## 7. Независимая перепроверка через Keenable
+
+Keenable использован после Firecrawl как независимый путь поиска и чтения. Для
+решений оставлены только первичные или авторские источники; найденные сторонние
+пересказы не использованы. Десятый одновременный fetch упёрся в лимит организации
+10 RPS, поэтому запросы не повторялись циклом. Полностью прочитаны страницы React,
+Tokio, Rust, GPUI и Zed. Страница Apple была найдена и дала нужную карточку результата,
+но полный fetch оказался именно ограниченным запросом; это частичное, а не полное
+прочтение источника.
+
+- React отдельно подавляет устаревший async-result через cleanup/identity допуска,
+  потому что ответы могут приходить не по порядку; Tokio отдельно предупреждает,
+  что abort не даёт права ожидать завершение и не прерывает уже начатый
+  `spawn_blocking`. Это подтверждает разделение cancellation и freshness, уже
+  записанное в ADR-0027. Источники: [React useEffect](https://react.dev/reference/react/useEffect),
+  [Tokio AbortHandle](https://docs.rs/tokio/latest/tokio/task/struct.AbortHandle.html),
+  [CancellationToken](https://docs.rs/tokio-util/latest/tokio_util/sync/struct.CancellationToken.html).
+- Bounded Tokio mpsc ждёт свободное место и сохраняет порядок; `watch` хранит
+  только последнее значение. Следовательно, latest-value state и lossless command
+  остаются разными классами, а синхронный frame path не должен делать `send().await`.
+  Источники: [mpsc::channel](https://docs.rs/tokio/latest/tokio/sync/mpsc/fn.channel.html),
+  [watch](https://docs.rs/tokio/latest/tokio/sync/watch/index.html).
+- Стандартная библиотека подтверждает: `Weak` не удерживает значение, но удерживает
+  backing allocation. GPUI `WeakEntity` отказывает в update освобождённой entity.
+  Для queued UI delivery слабой должна быть ссылка на весь delivery target, а не
+  только проверка `mounted` после сильного захвата callback slots и writer.
+  Источники: [std::rc](https://doc.rust-lang.org/std/rc/index.html),
+  [GPUI WeakEntity](https://docs.rs/gpui/latest/gpui/struct.WeakEntity.html).
+- `UnwindSafe` является лишь speed bump для наблюдения нарушенных логических
+  инвариантов, а `catch_unwind` не рекомендуется как общий try/catch. Восстановление
+  scheduler queue tail поэтому не является rollback пользовательских эффектов.
+  Источники: [UnwindSafe](https://doc.rust-lang.org/core/panic/trait.UnwindSafe.html),
+  [catch_unwind](https://doc.rust-lang.org/std/panic/fn.catch_unwind.html).
+- Zed описывает app-owned entities и deferred effect queue; найденная документация
+  Apple разделяет один document и отдельный window controller для каждого его окна.
+  Это согласуется с ADR-0027: документ/revision/undo выше realms, а focus, selection
+  и UI projection принадлежат окну. Источники: [GPUI ownership](https://zed.dev/blog/gpui-ownership),
+  [Apple document architecture](https://developer.apple.com/library/archive/documentation/DataManagement/Conceptual/DocBasedAppProgrammingGuideForOSX/KeyObjects/KeyObjects.html).
+
+Перепроверка не обосновывает универсальный новый runtime. `FutureBuilder`,
+`StreamBuilder` и image resolution уже используют consumer generation поверх
+`TaskToken`; realm command inbox уже bounded и возвращает typed `ChannelFull`.
+Найдены три локальных разрыва: post-frame semantic delivery сильно удерживал
+delivery state после dispose; `FormField::reset` мог изменить состояние и упасть
+до dirty-mark; глубина общей shared/local post-frame партии не наблюдалась. В этом
+follow-up delivery closure переведён на слабый mounted target, dirty-mark перенесён
+до controller/user callbacks, а scheduler публикует точные work-item counts без
+изменения доставки. Общий signal-panic rollback и reusable cross-realm document
+subscription по-прежнему требуют отдельного ADR/prototype с реальным consumer.
+
 ## Порядок следующей реализации
 
 1. Зафиксировать кратность semantic-команд и эксклюзивность FormHandle: конкретные
