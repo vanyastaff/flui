@@ -242,6 +242,13 @@ pub(in crate::app) enum PlatformToUi {
 /// the realm explicitly for whatever runner work precedes the pump.
 pub(in crate::app) enum RealmTask {
     Event(PlatformToUi),
+    #[cfg_attr(
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "the web runner wakes frames with `Pump`; native runners build `Frame`"
+        )
+    )]
     Frame(Box<dyn FnOnce(&crate::app::ui_realm::UiRealm)>),
     Pump(Box<dyn FnOnce(&mut crate::app::ui_realm::UiRealm)>),
     ClosePresentation(flui_foundation::PresentationId),
