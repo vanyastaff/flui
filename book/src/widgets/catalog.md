@@ -28,8 +28,8 @@ group in isolation.
   official package on `flui-sdk`.
   [`packages/flui-material/src/`](https://github.com/vanyastaff/flui/tree/main/packages/flui-material/src)
 - **`flui-cupertino`** — iOS-style widgets (buttons, nav bar, page/tab scaffold, theming) built on
-  `flui-widgets` plus `CupertinoTheme`.
-  [`crates/flui-cupertino/src/`](https://github.com/vanyastaff/flui/tree/main/crates/flui-cupertino/src)
+  `flui-widgets` plus `CupertinoTheme`, an official package on `flui-sdk`.
+  [`packages/flui-cupertino/src/`](https://github.com/vanyastaff/flui/tree/main/packages/flui-cupertino/src)
 
 Once the framework crates publish (see `docs/ROADMAP.md`), this page becomes a thin index into
 docs.rs instead of the source tree directly.

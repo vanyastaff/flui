@@ -60,13 +60,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_types::geometry::{EdgeInsets, px};
-use flui_types::styling::BoxDecoration;
-use flui_view::BoxedView;
-use flui_view::prelude::*;
-use flui_view::{AnimatedView, impl_animated_view};
-use flui_widgets::{
+use flui_sdk::foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_sdk::types::geometry::{EdgeInsets, px};
+use flui_sdk::types::styling::BoxDecoration;
+use flui_sdk::view::BoxedView;
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{AnimatedView, impl_animated_view};
+use flui_sdk::widgets::{
     DecoratedBox, HeroMode, MediaQuery, Offstage, Padding, Positioned, PreferredSizeView, SizedBox,
     Stack, StackFit, TickerMode,
 };
@@ -80,7 +80,7 @@ use crate::theme::CupertinoTheme;
 /// (`tab_scaffold.dart`, oracle tag `3.44.0`) — a `ChangeNotifier` wrapping
 /// an `int`, ported here as a genuinely `Arc`-shared handle (every
 /// `.clone()` observes and mutates the *same* index — unlike
-/// `flui_foundation::ValueNotifier<T>`, whose `Clone` deep-copies the
+/// `flui_sdk::foundation::ValueNotifier<T>`, whose `Clone` deep-copies the
 /// value; this controller is handed to both the scaffold and the tab bar's
 /// `on_tap` closure and both must see one shared index).
 ///
@@ -157,8 +157,8 @@ type TabBuilder = Rc<dyn Fn(&dyn BuildContext, usize) -> BoxedView>;
 ///
 /// ```
 /// use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem, CupertinoTabController, CupertinoTabScaffold};
-/// use flui_view::prelude::*;
-/// use flui_widgets::{Icon, IconData, SizedBox};
+/// use flui_sdk::view::prelude::*;
+/// use flui_sdk::widgets::{Icon, IconData, SizedBox};
 ///
 /// let controller = CupertinoTabController::new(0);
 /// let tab_bar = CupertinoTabBar::new(vec![
@@ -287,7 +287,7 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         // oracle doesn't clamp either, it crashes.
         //
         // A panic here is caught by this crate's own build-error boundary
-        // (`build_or_recover`, `flui_view::element::behavior_commons`) and
+        // (`flui-view`'s `build_or_recover`) and
         // substitutes an `ErrorView` for this whole subtree rather than
         // unwinding to the caller — mirroring Flutter's own
         // `ComponentElement.performRebuild` try/catch → `ErrorWidget.builder`

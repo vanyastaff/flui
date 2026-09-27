@@ -60,12 +60,12 @@
 
 use std::rc::Rc;
 
-use flui_types::Size;
-use flui_types::geometry::px;
-use flui_types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_view::BoxedView;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::types::Size;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::view::BoxedView;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Column, CrossAxisAlignment, DecoratedBox, DefaultTextStyle, Expanded, GestureDetector,
     HitTestBehavior, IconTheme, IconThemeData, MainAxisAlignment, MediaQuery, Padding,
     PreferredSizeView, Row, Semantics, SizedBox, Text,
@@ -101,7 +101,7 @@ fn default_border_color() -> CupertinoDynamicColor {
 ///
 /// ```
 /// use flui_cupertino::CupertinoTabBarItem;
-/// use flui_widgets::{Icon, IconData};
+/// use flui_sdk::widgets::{Icon, IconData};
 ///
 /// let _item = CupertinoTabBarItem::new(Icon::new(IconData::new(0xF3A1))).label("Home");
 /// ```
@@ -161,7 +161,7 @@ type TabTapCallback = Rc<dyn Fn(usize)>;
 ///
 /// ```
 /// use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem};
-/// use flui_widgets::{Icon, IconData};
+/// use flui_sdk::widgets::{Icon, IconData};
 ///
 /// let _bar = CupertinoTabBar::new(vec![
 ///     CupertinoTabBarItem::new(Icon::new(IconData::new(0xF3A1))).label("Home"),
@@ -178,7 +178,7 @@ pub struct CupertinoTabBar {
     inactive_color: CupertinoColor,
     icon_size: f32,
     height: f32,
-    border: Option<Border<flui_types::geometry::Pixels>>,
+    border: Option<Border<flui_sdk::types::geometry::Pixels>>,
     /// Whether `border` still holds the un-overridden default. If so,
     /// `build` resolves [`default_border_color`]'s light/dark variant fresh
     /// against the ambient brightness every time, rather than using a color
@@ -289,7 +289,7 @@ impl CupertinoTabBar {
     /// Overrides the top border, or removes it with `None`. Defaults to
     /// the hairline border. Flutter parity: `CupertinoTabBar.border`.
     #[must_use]
-    pub fn border(mut self, border: Option<Border<flui_types::geometry::Pixels>>) -> Self {
+    pub fn border(mut self, border: Option<Border<flui_sdk::types::geometry::Pixels>>) -> Self {
         self.border = border;
         self.border_is_default = false;
         self
@@ -359,7 +359,7 @@ impl StatelessView for CupertinoTabBar {
                 let color = if is_active { active } else { inactive };
 
                 let mut column_children: Vec<BoxedView> =
-                    vec![Expanded::new(flui_widgets::Center::new().child(icon)).boxed()];
+                    vec![Expanded::new(flui_sdk::widgets::Center::new().child(icon)).boxed()];
                 if let Some(label) = &item.label {
                     column_children.push(Text::new(label.clone()).boxed());
                 }
@@ -372,10 +372,11 @@ impl StatelessView for CupertinoTabBar {
                     },
                     DefaultTextStyle::new(
                         tab_label_style.clone().with_color(color),
-                        Padding::new(flui_types::geometry::EdgeInsets::only_bottom(px(4.0))).child(
-                            Column::new(column_children)
-                                .main_axis_alignment(MainAxisAlignment::End),
-                        ),
+                        Padding::new(flui_sdk::types::geometry::EdgeInsets::only_bottom(px(4.0)))
+                            .child(
+                                Column::new(column_children)
+                                    .main_axis_alignment(MainAxisAlignment::End),
+                            ),
                     ),
                 );
 
@@ -402,12 +403,14 @@ impl StatelessView for CupertinoTabBar {
         // true, child: Row(...)))` (`bottom_tab_bar.dart`, oracle tag
         // `3.44.0`) — each item owns its own semantics node rather than
         // merging into one.
-        let toolbar = Padding::new(flui_types::geometry::EdgeInsets::only_bottom(bottom_inset))
-            .child(
-                Semantics::new()
-                    .explicit_child_nodes(true)
-                    .child(Row::new(item_views).cross_axis_alignment(CrossAxisAlignment::End)),
-            );
+        let toolbar = Padding::new(flui_sdk::types::geometry::EdgeInsets::only_bottom(
+            bottom_inset,
+        ))
+        .child(
+            Semantics::new()
+                .explicit_child_nodes(true)
+                .child(Row::new(item_views).cross_axis_alignment(CrossAxisAlignment::End)),
+        );
 
         let resolved_border = if self.border_is_default {
             Some(Border::new(

@@ -12,10 +12,10 @@
 //! `onTapDown`/`onTapMove`/`onTapUp`/`onTapCancel` — four independent
 //! callbacks, so the fade can start the instant the finger goes down and
 //! reverse mid-gesture if the finger drags outside `kCupertinoButtonTapMoveSlop`
-//! before lifting. FLUI's [`flui_widgets::GestureDetector`] exposes only
+//! before lifting. FLUI's [`flui_sdk::widgets::GestureDetector`] exposes only
 //! `on_tap` (fires once a tap is *recognized* — down + up without exceeding
 //! touch slop) and `on_long_press`, with no down/move primitives to hang
-//! separate handlers on — the same gap `flui_material::ink_well` documents
+//! separate handlers on — the same gap `flui-material`'s `ink_well` documents
 //! for its own press-state timing.
 //!
 //! This port applies the oracle's fade *sequence* uniformly to that single
@@ -49,23 +49,23 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::ext::AnimatableExt;
-use flui_animation::ext::AnimationExt;
-use flui_animation::{
+use flui_sdk::animation::ext::AnimatableExt;
+use flui_sdk::animation::ext::AnimationExt;
+use flui_sdk::animation::{
     Animation, AnimationController, Curves, FloatTween, TickerFuture, UpdateScheduler, Vsync,
     VsyncRegistration,
 };
-use flui_types::geometry::{EdgeInsets, Pixels, px};
-use flui_types::layout::Alignment;
-use flui_types::platform::Brightness;
-use flui_types::styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
-use flui_types::typography::TextStyle;
-use flui_view::RebuildHandle;
-use flui_view::prelude::*;
-use flui_view::{BoxedView, StatefulView, ViewState};
-use flui_widgets::animated::VsyncScope;
-use flui_widgets::prelude::BoxConstraints;
-use flui_widgets::{
+use flui_sdk::types::geometry::{EdgeInsets, Pixels, px};
+use flui_sdk::types::layout::Alignment;
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::types::styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
+use flui_sdk::types::typography::TextStyle;
+use flui_sdk::view::RebuildHandle;
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{BoxedView, StatefulView, ViewState};
+use flui_sdk::widgets::animated::VsyncScope;
+use flui_sdk::widgets::prelude::BoxConstraints;
+use flui_sdk::widgets::{
     Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, GestureDetector,
     Padding, Semantics,
 };
@@ -309,7 +309,7 @@ impl CupertinoButton {
     }
 
     /// Sets the long-press handler — wired straight to
-    /// [`flui_widgets::GestureDetector::on_long_press`], with no fade
+    /// [`flui_sdk::widgets::GestureDetector::on_long_press`], with no fade
     /// animation tied to it (matching the oracle: `LongPressGestureRecognizer`
     /// is a wholly separate recognizer from the tap-driven fade).
     #[must_use]
@@ -445,14 +445,14 @@ fn start_press_fade(
     rebuild: Option<&RebuildHandle>,
 ) -> Option<TickerFuture> {
     pressed_opacity?;
-    let curve: Arc<dyn flui_animation::Curve + Send + Sync> =
+    let curve: Arc<dyn flui_sdk::animation::Curve + Send + Sync> =
         Arc::new(Curves::EaseInOutCubicEmphasized);
     let outcome = controller.animate_to_curved(1.0, Some(K_FADE_OUT_DURATION), curve);
     if let Err(error) = &outcome {
         tracing::debug!(?error, "CupertinoButton press fade failed to start");
     }
     if let Some(rebuild) = rebuild {
-        rebuild.schedule(flui_view::RebuildReason::StateChange);
+        rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
     }
     outcome.ok()
 }
@@ -477,7 +477,7 @@ fn chain_release_fade(controller: &AnimationController, press_fade: TickerFuture
     let release_controller = controller.clone();
     press_fade.when_complete_or_cancel(move |outcome| {
         if outcome.is_ok() {
-            let curve: Arc<dyn flui_animation::Curve + Send + Sync> =
+            let curve: Arc<dyn flui_sdk::animation::Curve + Send + Sync> =
                 Arc::new(Curves::EaseOutCubic);
             if let Err(error) =
                 release_controller.animate_to_curved(0.0, Some(K_FADE_IN_DURATION), curve)
@@ -531,7 +531,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
         let Some(vsync) = ctx.get::<VsyncScope, _>(|scope| scope.vsync().clone()) else {
             // No ambient VsyncScope: no clock to animate the fade against.
             // Tapping still fires the handler with no visible fade — the same
-            // degrade `flui_material::ink_well` documents for its own
+            // degrade `flui-material`'s `ink_well` documents for its own
             // `VsyncScope`-less case.
             return;
         };
@@ -607,7 +607,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                         .animate(curved as Arc<dyn Animation<f32>>),
                 )
             }
-            None => Arc::new(flui_animation::ConstantAnimation::new(1.0)),
+            None => Arc::new(flui_sdk::animation::ConstantAnimation::new(1.0)),
         };
 
         // Flutter parity: `Semantics(button: true, child: ConstrainedBox(...))`
@@ -710,7 +710,7 @@ mod tests {
 
     #[test]
     fn plain_button_defaults_to_quaternary_system_fill_disabled_color() {
-        let button = CupertinoButton::new(flui_widgets::SizedBox::shrink());
+        let button = CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink());
         assert_eq!(
             button.disabled_color,
             CupertinoColor::Dynamic(CupertinoColors::QUATERNARY_SYSTEM_FILL)
@@ -719,8 +719,8 @@ mod tests {
 
     #[test]
     fn tinted_and_filled_default_to_tertiary_system_fill_disabled_color() {
-        let tinted = CupertinoButton::tinted(flui_widgets::SizedBox::shrink());
-        let filled = CupertinoButton::filled(flui_widgets::SizedBox::shrink());
+        let tinted = CupertinoButton::tinted(flui_sdk::widgets::SizedBox::shrink());
+        let filled = CupertinoButton::filled(flui_sdk::widgets::SizedBox::shrink());
         assert_eq!(
             tinted.disabled_color,
             CupertinoColor::Dynamic(CupertinoColors::TERTIARY_SYSTEM_FILL)
@@ -733,13 +733,13 @@ mod tests {
 
     #[test]
     fn button_with_no_handlers_is_disabled() {
-        assert!(!CupertinoButton::new(flui_widgets::SizedBox::shrink()).enabled());
+        assert!(!CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink()).enabled());
     }
 
     #[test]
     fn on_pressed_makes_the_button_enabled() {
         assert!(
-            CupertinoButton::new(flui_widgets::SizedBox::shrink())
+            CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink())
                 .on_pressed(|| {})
                 .enabled()
         );
@@ -748,7 +748,7 @@ mod tests {
     #[test]
     fn on_long_press_alone_also_makes_the_button_enabled() {
         assert!(
-            CupertinoButton::new(flui_widgets::SizedBox::shrink())
+            CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink())
                 .on_long_press(|| {})
                 .enabled()
         );
@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn default_pressed_opacity_is_0_4() {
-        let button = CupertinoButton::new(flui_widgets::SizedBox::shrink());
+        let button = CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink());
         assert_eq!(button.pressed_opacity, Some(0.4));
     }
 
@@ -764,7 +764,7 @@ mod tests {
     fn debug_reports_style_size_and_enabled_without_the_closures() {
         let debug = format!(
             "{:?}",
-            CupertinoButton::filled(flui_widgets::SizedBox::shrink()).on_pressed(|| {})
+            CupertinoButton::filled(flui_sdk::widgets::SizedBox::shrink()).on_pressed(|| {})
         );
         assert!(debug.contains("Filled"));
         assert!(debug.contains("enabled: true"));
@@ -835,7 +835,7 @@ mod tests {
         let forward_count = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&forward_count);
         controller.add_status_listener(Arc::new(move |status| {
-            if status == flui_animation::AnimationStatus::Forward {
+            if status == flui_sdk::animation::AnimationStatus::Forward {
                 counter.fetch_add(1, Ordering::SeqCst);
             }
         }));

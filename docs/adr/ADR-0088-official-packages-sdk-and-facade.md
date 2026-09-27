@@ -2,8 +2,9 @@
 
 - **Status:** Proposed. First moves landed (2026-09-26): `flui-sdk` exists and
   `flui-foundation` carries the train guard `links = "flui_train"`; `flui-material` builds on
-  `flui-sdk` alone from `packages/flui-material`, and the FLUI derives resolve through the SDK
-  first ([migration plan](../plans/2026-09-25-architecture-migration-plan.md)).
+  `flui-sdk` alone from `packages/flui-material`, `flui-cupertino` builds on `flui-sdk` alone
+  from `packages/flui-cupertino`, and the FLUI derives resolve through the SDK first
+  ([migration plan](../plans/2026-09-25-architecture-migration-plan.md)).
 - **Date:** 2026-09-25
 - **Supersedes in part (on acceptance):** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) — the
   placement of Material and Cupertino as core-workspace crates, and the exemption set
@@ -33,7 +34,7 @@
 Material and Cupertino are workspace members (`Cargo.toml:33-34`) at layer 7. ADR-0028's rule is
 enforced by their own manifests: both list `allowed-dependents = ["flui-app", "flui"]` and
 the same `allowed-dev-dependents`
-(Material's manifest before move 2, `crates/flui-cupertino/Cargo.toml:82-85`), checked by
+(the design systems' manifests before moves 2 and 3), checked by
 `cargo xtask workspace` (`tools/xtask/src/workspace.rs:9-14`, `:146`, `:240-257`). In practice
 only the facade depends on them: `flui-material` and `flui-cupertino` are optional facade
 dependencies (`Cargo.toml:525-526`) behind `material` and `cupertino` features (`:605-606`), and
@@ -108,7 +109,7 @@ already reads; no parallel allowlist is added, and an entry that admits nothing 
   is refused unless the dependent's `edge-exceptions` declares it, so ADR-0028's "Material and
   Cupertino do not depend on each other" holds without per-package lists. Until a package
   moves onto `flui-sdk` its internal-crate edges are `edge-exceptions` entries in its manifest
-  (Cupertino's six, `flui-devtools`' two, `flui-hot-reload`'s four); the list only shrinks,
+  (`flui-devtools`' two, `flui-hot-reload`'s four); the list only shrinks,
   each package's entries go when it moves, and a member under `packages/` may list none.
 - **Reverse, strict from the start.** No core crate names an official package in any form:
   normal, optional, build or dev. Named exceptions, each with its reason and exit:
@@ -232,15 +233,15 @@ Five moves, each of which leaves `main` green and merges on its own. The
 |---|---|---|
 | 1. SDK and guard (in place) | `crates/flui-sdk` is created: tier K, `tier-kind = "evolving"`, `order = 6`, layer 6, `version = "0.1.0-dev"`, with the measured surface of §4 and no consumer yet. `flui-foundation` declares `links = "flui_train"` with a build script that does nothing else (§5). `cargo xtask workspace` requires an evolving crate's own `0.N` version and the guard on `flui-foundation` alone; `cargo xtask reach` states that `flui-foundation` is in the SDK's and the facade's builds | — |
 | 2. Material (in place) | `flui-material`'s nine internal normal dependencies become `flui-sdk` (plus `tracing`), its imports move to SDK paths, and it moves to `packages/flui-material` in the same change, with its dev-dependency paths rewritten. Done when no `flui_(widgets\|view\|types\|objects\|rendering\|foundation\|animation\|interaction\|scheduler\|painting)::` path is left in its `src`. Its examples stay with the facade until move 5. **Outcome:** done, with no change to the SDK's surface; the view, inherited and animation derives resolve through `flui-sdk` first, so a package on the SDK alone can use them (the `Diagnosticable` derive has no SDK path yet); the kind rule of §2 is checked, and Material's `allowed-dependents` lists are replaced by it. It landed ahead of the parity command of §3, which still waits | move 1; the `cargo package` parity command of §3 |
-| 3. Cupertino | The same for `flui-cupertino` | move 1; independent of move 2 |
+| 3. Cupertino (in place) | The same for `flui-cupertino`, which moves to `packages/flui-cupertino`. **Outcome:** done, with no change to the SDK's surface: its normal dependencies are `flui-sdk` and `tracing`, and its six seeded internal-crate exceptions and `allowed-dependents` lists are gone | move 1; independent of move 2 |
 | 4. Devtools and hot reload | `flui-devtools` moves onto the SDK, which gains `hooks` for the observation seam (ADR-0040), and the observation-seam test moves into it, removing `flui-testing`'s dev edge. `flui-hot-reload` moves together with the `DevReloadHook` of ADR-0094 §2, which deletes the `flui-app` edge and the facade's `hot-reload` feature | move 1; `flui-view`'s `runtime-internals` feature replaced by a hidden module first |
 | 5. Facade | §6: `default = []`, no `material`/`cupertino` features, dependencies, `edge-exceptions`, re-exports or Material prelude half; `flui_material::prelude`; `flui create` adds `flui-material`, with a CLI test that checks the generated project; Material examples move to `packages/flui-material/examples`; `cargo xtask facade-combos` and the documents from the `rg` list of the Consequences are updated; the CI Material example build changes with the owner's sign-off | moves 2 and 3 |
 
-Material's `allowed-dependents` lists were replaced in move 2 by the kind rule of §2, which
-refuses every edge they refused: a core crate names Material only through a named exception
-(the facade's edges are such exceptions until move 5), and another official package names it,
-in any dependency kind, only through a declared exception, none of which exists. Cupertino's
-lists are replaced in move 3.
+Material's and Cupertino's `allowed-dependents` lists were replaced in moves 2 and 3 by the kind
+rule of §2, which refuses every edge they refused: a core crate names either design system only
+through a named exception (the facade's edges are such exceptions until move 5), and another
+official package names one, in any dependency kind, only through a declared exception, none of
+which exists.
 
 ## Alternatives considered
 
@@ -318,15 +319,17 @@ In place with move 1:
 - **Own version (§4).** `cargo xtask workspace` refuses an evolving crate that inherits the
   workspace version or has a major above 0.
 
-In place with move 2:
+In place with moves 2 and 3:
 
 - **The kind rule (§2).** `cargo xtask workspace` fails, in its own self-test, on a core crate
   that names an official package (normal and dev planted), on an official package whose normal
   edge leaves the SDK, on an official package's dev edge to another official package, and on a member under `packages/` that is not official or lists
   `edge-exceptions`; excepted edges and a `tool` crate's edge stay silent.
-- **Material on the SDK alone.** `flui_material_builds_on_the_sdk_alone` in `tools/xtask` reads
-  the real metadata: the manifest is `packages/flui-material/Cargo.toml` and its normal and
-  build dependencies are exactly `flui-sdk` and `tracing`.
+- **The design systems on the SDK alone.** `the_design_systems_build_on_the_sdk_alone` in
+  `tools/xtask` reads the real metadata: the manifests are `packages/flui-material/Cargo.toml`
+  and `packages/flui-cupertino/Cargo.toml`, and each one's normal and build dependencies are
+  exactly `flui-sdk` and `tracing`; `the_design_systems_carry_no_dependents_list` checks that
+  neither keeps an `allowed-dependents` list.
 - **Derives through the SDK.** `sdk_consumers_derive_through_the_sdk_even_beside_the_facade` in
   `tests/facade_consumer.rs` builds a consumer on `flui-sdk` alone (plain and renamed) and one
   with the facade as a dev-dependency, each using the FLUI derives.

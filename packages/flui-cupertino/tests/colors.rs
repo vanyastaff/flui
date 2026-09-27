@@ -17,10 +17,10 @@ use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
 use flui_cupertino::{CupertinoColor, CupertinoColors, CupertinoTheme, CupertinoThemeData};
-use flui_types::Color;
-use flui_types::platform::Brightness;
-use flui_view::prelude::*;
-use flui_widgets::SizedBox;
+use flui_sdk::types::Color;
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::SizedBox;
 
 fn channels(color: Color) -> (u8, u8, u8, u8) {
     (color.r, color.g, color.b, color.a)

@@ -10,20 +10,21 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, tight};
-use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_cupertino::{
     CupertinoTabBar, CupertinoTabBarItem, CupertinoTabController, CupertinoTabScaffold,
 };
-use flui_scheduler::UpdateScheduler;
-use flui_types::Color;
-use flui_types::geometry::px;
+use flui_sdk::animation::{
+    Animation, AnimationController, UpdateScheduler, Vsync, VsyncRegistration,
+};
+use flui_sdk::types::Color;
+use flui_sdk::types::geometry::px;
 // Only the `#[cfg(debug_assertions)]` recovery test names this type: the
 // ErrorView substitution it asserts on exists only in debug builds.
 #[cfg(debug_assertions)]
-use flui_view::ErrorView;
-use flui_view::prelude::*;
-use flui_widgets::prelude::EdgeInsets;
-use flui_widgets::{Icon, IconData, MediaQuery, MediaQueryData, SizedBox, VsyncScope};
+use flui_sdk::view::ErrorView;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::prelude::EdgeInsets;
+use flui_sdk::widgets::{Icon, IconData, MediaQuery, MediaQueryData, SizedBox, VsyncScope};
 
 /// Per-pump virtual-time step for the `TickerMode` animation test — half the
 /// probe `AnimationController`'s own 1s duration, matching
@@ -44,8 +45,8 @@ fn two_tab_bar() -> CupertinoTabBar {
 struct Probe(Rc<Cell<u32>>);
 
 impl View for Probe {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
+    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::stateful(self)
     }
 }
 
@@ -433,9 +434,8 @@ fn tapping_a_tab_item_switches_the_active_tab() {
 /// `debug_assert!` in `tab_scaffold.rs`'s `build` (test binaries build in
 /// debug profile, so it is live).
 ///
-/// This test observes the `ErrorView` substituted by this crate's build-error
-/// boundary
-/// (`flui_view::element::behavior_commons::build_or_recover`) catches a
+/// This test observes the `ErrorView` substituted by the build-error
+/// boundary (`flui-view`'s `build_or_recover`) catches a
 /// panicking `build()` and substitutes an `ErrorView` for the
 /// whole subtree — the same recovery `flui-material/tests/theme.rs` and
 /// `flui-widgets/tests/visibility.rs` document for exactly this reason

@@ -27,25 +27,19 @@
 //! nav-bar/tab-bar border colors) is a verbatim, per-value-cited port — see
 //! each module's docs for the exact oracle source.
 //!
-//! ## ADR-0028: no upward or sideways design-system dependency
+//! ## ADR-0088: built on `flui-sdk` alone
 //!
-//! This crate depends only on `flui-widgets`/`flui-view`/`flui-types`/
-//! `flui-animation`/`flui-objects`/`flui-foundation` (plus `tracing`) —
-//! **never** `flui-material` (the sibling design system; the two are
-//! independent, per ADR-0028) and **never** a `flui-objects`/`flui-rendering`
-//! render object of its own (every component here composes existing
-//! `flui-widgets` widgets — `FadeTransition`, `GestureDetector`,
-//! `DecoratedBox`, `SlideTransition`, `Stack`/`Positioned`, `Offstage`,
-//! `HeroMode`, … — it does not paint its own render objects). The
-//! `flui-objects` dependency is exactly one value type
-//! ([`flui_objects::TranslationFraction`]) that `flui-widgets`' own
-//! `SlideTransition` requires as a parameter (see [`route`]'s module docs);
-//! the `flui-foundation` dependency is [`CupertinoTabController`]'s notify
-//! substrate (`ChangeNotifier`/`Listenable`, see [`tab_scaffold`]'s module
-//! docs) — both value-type/trait dependencies, not render objects. See each
-//! dependency's `Cargo.toml` comment. `flui-interaction` appears only as a
-//! dev-dependency, for the `tests/common` mount harness — no `src/` code
-//! references it.
+//! This crate is an official package: its only FLUI dependency is `flui-sdk`
+//! (plus `tracing`), and it names the framework as `flui_sdk::…`, as a
+//! third-party package would. It **never** depends on `flui-material`: the
+//! two design systems are independent (ADR-0028), and the kind rule
+//! (ADR-0081 §3, ADR-0088 §2) refuses that edge in any dependency kind. It
+//! adds no render object of its own either: every component here composes
+//! existing widgets — `FadeTransition`, `GestureDetector`, `DecoratedBox`,
+//! `SlideTransition`, `Stack`/`Positioned`, `Offstage`, `HeroMode`, … The one
+//! render-layer value it names is [`flui_sdk::pipeline::TranslationFraction`]
+//! (an Evolving SDK path), which `SlideTransition` requires as its animation
+//! parameter (see [`route`]'s module docs).
 //!
 //! ## Scope (V1 — theming, one page route, and the two-scaffold family)
 //!
@@ -87,7 +81,7 @@
 //!
 //! ```rust
 //! use flui_cupertino::{CupertinoTheme, CupertinoThemeData};
-//! use flui_widgets::SizedBox;
+//! use flui_sdk::widgets::SizedBox;
 //!
 //! let _themed = CupertinoTheme::new(CupertinoThemeData::default(), SizedBox::shrink());
 //! ```
