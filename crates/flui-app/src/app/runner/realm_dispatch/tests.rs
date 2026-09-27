@@ -51,6 +51,91 @@ fn install_test_realm() -> RealmDispatcher {
 }
 
 #[test]
+fn background_owner_pump_drains_before_polling_without_a_frame() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let _clear = OwnerHostClearGuard::arm();
+    let realm = crate::app::ui_realm::UiRealm::for_test();
+    let scheduler = realm.scheduler().clone();
+    let sender = realm.command_sender();
+    let dispatcher = install_platform_realm(realm, &test_window());
+    sender.request_redraw();
+    dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).expect("background turn");
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(|realm| {
+            assert!(!realm.take_redraw_request(), "the owner inbox was drained");
+        })),
+    )
+    .expect("inspect inbox");
+
+    let polled = Arc::new(AtomicBool::new(false));
+    let polled_in_task = Arc::clone(&polled);
+    let _token = scheduler.spawn_local(Box::pin(async move {
+        polled_in_task.store(true, Ordering::SeqCst);
+        sender.request_redraw();
+    }));
+    let frames_before = scheduler.frame_count();
+    dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).expect("poll background work");
+    assert!(polled.load(Ordering::SeqCst));
+    assert_eq!(
+        scheduler.frame_count(),
+        frames_before,
+        "no frame transaction"
+    );
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(|realm| {
+            assert!(
+                realm.take_redraw_request(),
+                "poll-generated work survives until the next turn"
+            );
+        })),
+    )
+    .expect("inspect next-turn work");
+    teardown_platform_realm();
+}
+
+#[test]
+fn background_owner_pump_defers_reentrant_work_and_respects_close() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let _clear = OwnerHostClearGuard::arm();
+    let realm = crate::app::ui_realm::UiRealm::for_test();
+    let scheduler = realm.scheduler().clone();
+    let sender = realm.command_sender();
+    let dispatcher = install_platform_realm(realm, &test_window());
+    let polled = Arc::new(AtomicBool::new(false));
+    let polled_in_task = Arc::clone(&polled);
+    let _token = scheduler.spawn_local(Box::pin(async move {
+        polled_in_task.store(true, Ordering::SeqCst);
+        dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).expect("queue nested pump");
+        APP_RUNTIME.with(|slot| assert_eq!(slot.borrow().owner_turn_queue.len(), 1));
+        sender.request_redraw();
+    }));
+    dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).expect("outer pump");
+    assert!(polled.load(Ordering::SeqCst));
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(move |realm| {
+            assert!(
+                !realm.take_redraw_request(),
+                "the deferred pump drains after the outer poll"
+            );
+            dispatch_platform_realm(
+                dispatcher,
+                RealmTask::ClosePresentation(dispatcher.address.presentation_id),
+            )
+            .expect("admit terminal close");
+            assert!(
+                dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).is_err(),
+                "admitted close fences background work immediately"
+            );
+        })),
+    )
+    .expect("close realm");
+    teardown_platform_realm();
+}
+
+#[test]
 fn explicit_platform_quit_detaches_every_installed_realm() {
     let _clear = OwnerHostClearGuard::arm();
     let platform = flui_platform::HeadlessPlatform::new();
