@@ -14,8 +14,15 @@ path.
   crates above from reaching the backends through a side door.
 - **No `unsafe`.** `#![forbid(unsafe_code)]`: FFI belongs to the backends.
 - **Flat root.** Every public item is re-exported at the crate root; the
-  modules are private except `data_transfer`, whose many vocabulary types keep
-  their module path (`flui_platform::data_transfer` re-exports it whole).
+  modules are private except two whose many vocabulary types keep their module
+  path: `data_transfer` (`flui_platform::data_transfer` re-exports it whole)
+  and `text_store`, whose four traits (`TextStore`, `TextStoreRead`,
+  `TextStoreEdit`, `TextStoreObserver`) are also at the root.
+- **The text store is owner-thread and UTF-16.** `TextStore` is shared as
+  `Rc<dyn TextStore>`; `LockArbiter` and `InMemoryTextStore` are not `Send`
+  (a `static_assertions` test pins it). Every offset on the surface is a
+  `Utf16Offset`, and the conversion to a field's own representation is
+  `text_store::utf16`, nowhere else.
 - **`ui-events` re-exports are debt.** `PlatformInput` wraps the `ui-events`
   pointer and keyboard types and re-exports them (with `keyboard-types`' `Key`
   and `Modifiers` through `ui-events`). ADR-0089 keeps upstream types out of

@@ -6,6 +6,8 @@
 //! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`],
 //!   [`PlatformDisplay`], [`Clipboard`] and the data-transfer transport
 //!   ([`data_transfer::DataTransferSource`], ADR-0038);
+//! - the text store an input method pulls from ([`TextStore`] and the rest of
+//!   [`text_store`], ADR-0090);
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
 //!   [`DragDropEvent`] and the conversion helpers);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
@@ -91,6 +93,7 @@ mod haptics;
 mod input;
 mod platform_window;
 mod text_input;
+pub mod text_store;
 mod window;
 
 pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
@@ -108,6 +111,7 @@ pub use input::{
 };
 pub use platform_window::PlatformWindow;
 pub use text_input::PlatformTextInput;
+pub use text_store::{TextStore, TextStoreEdit, TextStoreObserver, TextStoreRead};
 pub use window::{
     CursorError, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent,
     WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,

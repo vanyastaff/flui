@@ -38,6 +38,10 @@ thiserror = { workspace = true }
 # types is ADR-0089 debt: own types replace them before the first release.
 ui-events = { workspace = true }
 
+[dev-dependencies]
+# Pins that the lock arbiter and the reference store are owner-thread only.
+static_assertions = { workspace = true }
+
 [package.metadata.docs.rs]
 all-features = true
 
