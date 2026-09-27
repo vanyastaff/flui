@@ -1858,3 +1858,39 @@ field's value and its controller disagree until the next edit. **Tests:**
 `tests/editable_text.rs::on_changed_reports_user_edits_but_not_the_callers_own`,
 `reset_restores_initial_values_and_clears_errors_and_interaction`,
 `set_value_on_a_text_form_field_is_seen_by_value_validate_and_save`.
+
+### 33. `EditableText` answers an input method's pulls; one platform session is one change
+
+**Oracle:** Flutter's `EditableTextState` is a `TextInputClient`: the engine
+pushes whole `TextEditingValue`s through `updateEditingValue`, and each push is
+one controller change and one `onChanged`.
+
+**Choice:** `EditableText` is a `flui_platform_api::TextStore` (ADR-0090). The
+input method reads the text, selection, composition and geometry in UTF-16
+offsets and edits under a lock; a push `ImeEvent` is projected onto the same
+store. A read-write session is written back to the controller once, when the
+lock is released: one listener notification and at most one `on_changed`,
+however many edits the session made (a TSF conversion replaces, re-marks and
+moves the caret in one session). A lock asked for inside the frame
+transaction runs after the frame; a key press first runs those queued grants,
+so it lands after an IME commit. **Tests:** `tests/text_store_kit.rs`
+(`editable_text_conforms_to_kit_v1`,
+`obscured_editable_text_conforms_to_kit_v1`), `tests/editable_text.rs`'s
+`text_store::a_three_edit_session_calls_on_changed_once`,
+`a_lock_requested_from_a_post_frame_callback_is_granted_after_the_frame`,
+`typing_after_a_deferred_commit_lands_after_the_commit`.
+
+### 34. Platform selection is exact; user selection snaps
+
+**Oracle:** Flutter's `updateEditingValue` applies the platform's selection as
+the engine sends it.
+
+**Choice:** the same for the platform: a selection set through the text store
+is kept at any scalar boundary, including inside a grapheme cluster (offset 4
+of `"a😀e\u{301}…"` is between the `e` and its combining mark), because TSF and
+AppKit address scalars and a snapped answer would disagree with what they set.
+A tap, a drag and the arrow keys keep snapping to extended grapheme clusters
+through the controller (its "Character unit"). **Tests:**
+`tests/editable_text.rs`'s
+`text_store::platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps`,
+the kit's `selection_inside_a_grapheme_is_kept_exactly`.

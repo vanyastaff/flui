@@ -659,6 +659,15 @@ AccessKit nodes, translated by the same `flui_semantics::tree_to_update` a
 platform adapter uses — so a test and a screen reader cannot disagree. Query by
 role rather than by node index.
 
+### Text fields and IME
+
+`flui_testing::text_store_kit` is the conformance kit for any widget that
+implements `flui_platform_api::TextStore` (ADR-0090): write a
+`TextStoreFixture` for it and call `text_store_kit::assert_conforms(&mut fixture,
+KIT_VERSION)`. `InMemoryFixture` is the worked example, and
+`crates/flui-widgets/tests/text_store_kit.rs` runs the built-in `EditableText`
+through it.
+
 ### Asserting on what was logged
 
 Some contracts are only observable as a diagnostic — a misconfiguration

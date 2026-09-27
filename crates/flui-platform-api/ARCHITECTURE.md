@@ -53,3 +53,17 @@ implementations, so a crate that names a capability links no OS code and a
 plugin can implement one without the backends. The observable contracts of
 each capability are those of its own ADR; only where the trait is defined
 changed.
+
+### A TSF-shaped pull store replaces Flutter's `TextInputClient` push
+
+Flutter's text input is a push protocol: the engine sends whole
+`TextEditingValue`s to a `TextInputClient` over a method channel, and the
+client pushes its value back. `text_store` inverts it (ADR-0090): the field is
+a `TextStore` the platform locks, reads and edits, in UTF-16 offsets, the
+shape of TSF's `ITextStoreACP` that AppKit's `NSTextInputClient` and Android's
+`InputConnection` also map onto. A push source (winit's `ImeEvent`) goes
+through `project_ime_event`, so a field has one editing path. `LockArbiter`
+holds the lock rules once for every implementation, and
+`flui_testing::text_store_kit` checks a store against them. **Tests:** the
+`text_store` module's unit tests, and `flui-testing`'s
+`in_memory_store_conforms_to_kit_v1`.
