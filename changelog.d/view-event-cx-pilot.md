@@ -13,6 +13,8 @@
   disabled without a callback.
 - **`flui-foundation`**: `Signal::default()`, an unbound handle a `ViewState` can hold until
   `init_state` creates the signal; every read or write through it is `SignalError::Unbound`.
+  `SignalSlot::UNBOUND_GRAPH` names the graph id it uses, which no graph is given, and
+  `SignalSlot::is_unbound` tests for it.
 
 ### Changed
 
