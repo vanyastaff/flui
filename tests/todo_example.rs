@@ -10,9 +10,9 @@
 #[allow(dead_code, reason = "the example's `main` is not called here")]
 mod todo;
 
-use flui::testing::widgets::{LaidOut, lay_out, tight};
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
+use flui_widgets::testing::{LaidOut, lay_out, tight};
 use flui_widgets::{MediaQuery, MediaQueryData};
 
 const WIDTH: f32 = 480.0;

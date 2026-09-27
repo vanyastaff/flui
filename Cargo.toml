@@ -671,6 +671,9 @@ flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
 
 # === Test support (for the vertical_slice_demo acceptance test) ===
 flui-testing = { workspace = true }
+# `lay_out` for tests/todo_example.rs, which then runs in the default feature
+# set instead of only under `flui/testing`.
+flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev", features = ["testing"] }
 # Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
 insta = { workspace = true }
 parking_lot.workspace = true
@@ -874,12 +877,6 @@ required-features = ["material", "cupertino"]
 # feature (for `flui::testing` to exist at all) and `material` (the tree
 # includes an `ElevatedButton`). Without this entry a `--no-default-features
 # --features testing` build would still try to compile it and fail.
-# Mounts `examples/todo.rs` headless through `flui::testing`.
-[[test]]
-name = "todo_example"
-path = "tests/todo_example.rs"
-required-features = ["testing"]
-
 [[test]]
 name = "agent_workflow"
 path = "tests/agent_workflow.rs"
