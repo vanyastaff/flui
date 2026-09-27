@@ -1579,6 +1579,12 @@ fn full_restart_command_does_not_arm_a_presentation_redraw() {
 mod frame_pipeline_and_vsync;
 
 // ========================================================================
+// `UiRealm::pump`, the frame transaction (ADR-0083 §1): its phases, their
+// order, and the frame clock it publishes; and `pump_background`.
+// ========================================================================
+mod pump_transaction;
+
+// ========================================================================
 // Presentation-owned text input — migrated from the retired
 // `AppBinding`'s own test module (`binding.rs`, deleted alongside it).
 // End-to-end against a headless `FakeTextInput`, including realm-routed

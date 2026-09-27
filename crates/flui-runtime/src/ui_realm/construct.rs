@@ -184,6 +184,7 @@ impl UiRealm {
             focus_coordinator: FocusCoordinator::new(presentation_id),
             host_lifecycle: Cell::new(HostLifecycle::Observed(AppLifecycleState::Resumed)),
             start: web_time::Instant::now(),
+            frame_time: Cell::new(None),
             needs_redraw,
             wake: Arc::clone(&wake),
             #[cfg(any(test, feature = "test-support"))]

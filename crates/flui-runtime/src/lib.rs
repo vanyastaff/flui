@@ -33,6 +33,9 @@
 //!   the host-injection seam — which only the host constructs;
 //! - [`performance_stats`]: the rolling frame-time window a presentation's
 //!   performance overlay draws;
+//! - [`pump`]: what a realm's frame transaction reads and reports — the
+//!   [`FrameClockSource`](pump::FrameClockSource) it samples once per frame
+//!   and the [`FrameOutcome`](pump::FrameOutcome) the host paces from;
 //! - `reload` (with the `hot-reload` feature): the development reload tier a
 //!   realm applies, translated from the host's hot-reload driver;
 //! - [`semantics_host`]: per-presentation semantics enablement and platform
@@ -40,8 +43,8 @@
 //! - [`sink`]: the [`FrameSink`](sink::FrameSink) a frame is submitted
 //!   through, and the [`SubmitVerdict`](sink::SubmitVerdict) the realm
 //!   classifies;
-//! - `testing` (with the `test-support` feature): a window double and a
-//!   scripted sink for driving a realm headlessly.
+//! - `testing` (with the `test-support` feature): a window double, a
+//!   scripted sink and a manual frame clock for driving a realm headlessly.
 
 pub mod epoch;
 pub mod execution;
@@ -52,6 +55,7 @@ pub mod media_query_root;
 pub mod performance_stats;
 pub mod presentation;
 mod presentation_forest;
+pub mod pump;
 mod realm_services;
 #[cfg(feature = "hot-reload")]
 pub mod reload;

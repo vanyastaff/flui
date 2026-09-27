@@ -87,14 +87,19 @@ impl UiRealm {
             .any(|presentation| presentation.vsync().has_running())
     }
 
-    /// Current virtual seconds for the Vsync tick.
+    /// Current virtual seconds for the Vsync tick, relative to this realm's
+    /// `start`.
     ///
-    /// Production: `self.start.elapsed().as_secs_f64()` — one monotonic
-    /// origin shared across the Vsync tick and all frame accounting, so
-    /// there is no clock drift between the two. Tests: the injected
-    /// override (`set_now_secs_for_test`, `#[cfg(test)]`-only so it cannot be
-    /// linked from a normal doc build) takes precedence, allowing
-    /// deterministic animation stepping with no wall-clock reads.
+    /// Checked in order:
+    ///
+    /// 1. the test override (`set_now_secs_for_test`, compiled only for
+    ///    tests and `test-support`), for deterministic stepping through a
+    ///    bare `draw_frame`/`render_frame`;
+    /// 2. the timestamp of the frame [`Self::pump`] is running — the one
+    ///    instant its [`FrameClockSource`](crate::pump::FrameClockSource)
+    ///    returned, so `Vsync` controllers advance on the frame's clock, as
+    ///    Flutter's tickers see the frame's timestamp;
+    /// 3. the wall clock, for a frame driven outside a pump.
     pub(super) fn now_secs(&self) -> f64 {
         #[cfg(any(test, feature = "test-support"))]
         {
@@ -103,7 +108,12 @@ impl UiRealm {
                 return f64::from_bits(bits);
             }
         }
-        self.start.elapsed().as_secs_f64()
+        match self.frame_time.get() {
+            Some(frame_time) => frame_time
+                .saturating_duration_since(self.start)
+                .as_secs_f64(),
+            None => self.start.elapsed().as_secs_f64(),
+        }
     }
 
     /// Inject a deterministic virtual `now_secs` for test frames: overrides

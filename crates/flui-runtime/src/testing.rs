@@ -8,8 +8,10 @@
 //!   text-input capability) and recorders for what the realm asked of it
 //!   (redraws, pre-present notifications, the cursor).
 //! - [`ScriptedSink`]: a [`FrameSink`] whose submit verdicts a test scripts.
+//! - [`ManualClock`]: a [`FrameClockSource`] a test advances by hand, the
+//!   frame clock a `UiRealm::pump` reads.
 //!
-//! Neither is `flui_platform`'s `MockWindow` or a raster backend: those are
+//! Neither the window nor the sink is `flui_platform`'s `MockWindow` or a raster backend: those are
 //! minted by a live headless platform or a GPU device, and a state-level
 //! realm test wants a value with no platform or device ceremony. A test that
 //! needs the real headless window's capabilities opens one from
@@ -25,6 +27,7 @@ use flui_platform_api::{
 use flui_semantics::platform::PlatformAccessibility;
 use flui_types::geometry::{DevicePixels, Pixels, Size};
 
+use crate::pump::FrameClockSource;
 use crate::sink::{FrameSink, SubmitVerdict};
 
 /// Configurable [`PlatformWindow`] double. Construct with [`TestWindow::new`],
@@ -351,6 +354,51 @@ impl FrameSink for ScriptedSink {
         let call_index = self.submit_calls;
         self.submit_calls += 1;
         (self.script)(call_index, &scene)
+    }
+}
+
+/// A [`FrameClockSource`] a test advances by hand, so a pump's frame
+/// timestamp — and every `Vsync` controller ticked at it — is a value the
+/// test controls rather than whatever the wall clock read.
+///
+/// Starts at the instant it was constructed. Construct it after the realm it
+/// drives: a realm measures frame time from its own start, and an instant
+/// before that start reads as zero.
+#[derive(Debug, Clone, Copy)]
+pub struct ManualClock {
+    now: web_time::Instant,
+}
+
+impl Default for ManualClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ManualClock {
+    /// A clock reading the current instant.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            now: web_time::Instant::now(),
+        }
+    }
+
+    /// Move the clock forward by `by`.
+    pub fn advance(&mut self, by: std::time::Duration) {
+        self.now += by;
+    }
+
+    /// What the next pump will read as its frame timestamp.
+    #[must_use]
+    pub fn now(&self) -> web_time::Instant {
+        self.now
+    }
+}
+
+impl FrameClockSource for ManualClock {
+    fn frame_time(&mut self) -> web_time::Instant {
+        self.now
     }
 }
 

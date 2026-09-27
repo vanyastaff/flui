@@ -111,6 +111,7 @@ mod frame;
 mod frame_clock;
 mod input;
 mod presentations;
+mod pump;
 
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
@@ -175,6 +176,11 @@ pub struct UiRealm {
     /// every frame this realm produces shares one monotonically-increasing
     /// origin instead of drifting between the Vsync tick and elsewhere.
     start: web_time::Instant,
+    /// The timestamp of the frame [`Self::pump`] is running, published for
+    /// the frame's duration so `now_secs` (the `Vsync` tick) reads the frame
+    /// clock instead of the wall clock. `None` outside a pump; a drop guard
+    /// clears it, so a panic unwinding out of the frame does too.
+    frame_time: Cell<Option<web_time::Instant>>,
     /// Whether a redraw has been requested since the last
     /// [`Self::mark_rendered`] — a clone of `AppRuntime`'s own
     /// `needs_redraw` flag (production; a fresh, unshared flag for the
