@@ -1,0 +1,9 @@
+error[E0521]: borrowed data escapes outside of closure
+ --> tests/ui/writer_escapes_the_dispatch.rs:8:23
+  |
+7 |     let mut out = None;
+  |         ------- `out` declared here, outside of the closure body
+8 |     source.write(|cx| out = Some(&mut **cx));
+  |                   --  ^^^^^^^^^^^^^^^^^^^^^ `cx` escapes the closure body here
+  |                   |
+  |                   `cx` is a reference that is only valid in the closure body

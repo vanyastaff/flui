@@ -12,6 +12,19 @@ pub(super) fn runtime_wake_callback() -> Arc<dyn Fn() + Send + Sync> {
     APP_RUNTIME.with(|slot| slot.borrow().frame_wake_callback())
 }
 
+/// The platform clipboard for [`crate::app::ui_realm::UiRealm::new`]'s
+/// `clipboard` parameter. Same borrow rule as [`runtime_wake_callback`].
+///
+/// # Panics
+///
+/// If no platform clipboard is installed: [`install_owner_platform`] installs
+/// it, and every runner calls that before it builds any realm.
+pub(super) fn runtime_clipboard() -> Arc<dyn flui_platform::traits::Clipboard> {
+    APP_RUNTIME
+        .with(|slot| slot.borrow().clipboard())
+        .expect("BUG: the runner installs the platform clipboard before it builds a realm")
+}
+
 /// A clone of the loop-scoped `needs_redraw` flag, for [`crate::app::ui_realm::UiRealm::new`]'s
 /// `needs_redraw` parameter.
 pub(super) fn runtime_needs_redraw_handle() -> Arc<AtomicBool> {
@@ -93,12 +106,16 @@ pub(crate) fn install_owner_platform(
         not(target_arch = "wasm32")
     ))]
     super::main_window::shutdown_main_window();
+    // The platform clipboard (ADR-0038 §9) is installed with the owner, so
+    // every realm a runner builds afterwards finds it (`runtime_clipboard`).
+    let clipboard = owner.shared().clipboard();
     let previous = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         state.owner_install_generation = state
             .owner_install_generation
             .checked_add(1)
             .expect("BUG: owner install generation exhausted");
+        state.set_platform_clipboard(clipboard);
         let previous = state.owner_platform.replace(std::rc::Rc::new(owner));
         #[cfg(all(
             not(target_os = "android"),

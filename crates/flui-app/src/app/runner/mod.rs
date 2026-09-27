@@ -328,6 +328,7 @@ mod tests {
             presentation_window(host),
             1.0,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            crate::app::presentation::test_clipboard(),
         )
         .expect("realm");
         let constraints = flui_rendering::constraints::BoxConstraints::tight(

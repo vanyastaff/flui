@@ -683,16 +683,22 @@ fn test_build_owner_memory_size() {
     // table). The realm's `reactive: Reactive` (a `u32` graph id plus an
     // `Rc`: 16 bytes) sits beside it, always compiled now that signals are.
     //
+    // 712 -> 728 (704 -> 720 without debug assertions) for the presentation
+    // clipboard (`clipboard_handle: Option<ClipboardHandle>`): one
+    // `Arc<dyn Clipboard>` fat pointer, 16 bytes, `Option`'s niche absorbing
+    // the discriminant. Inline for the reason the hit-test handle is: it is
+    // cloned into every `BuildCtx`.
+    //
     // The one configuration input is `debug_assertions`: the fields add up to
-    // 697 bytes in every build, and a debug build adds the re-entrancy guards
-    // `building: bool` and `scope_depth: usize` (9), so 712 with debug
-    // assertions and 704 without, each rounded up to the 8-byte alignment.
+    // 713 bytes in every build, and a debug build adds the re-entrancy guards
+    // `building: bool` and `scope_depth: usize` (9), so 728 with debug
+    // assertions and 720 without, each rounded up to the 8-byte alignment.
     // No cargo feature changes the layout: the workspace build enables
     // `test-utils` and `runtime-internals` on this crate beyond what
     // `-p flui-view` does, and neither gates a field of `BuildOwner` or of a
     // type it holds inline; `-p flui-view` and the whole-workspace lane both
-    // measure 712.
-    let expected = if cfg!(debug_assertions) { 712 } else { 704 };
+    // measure 728.
+    let expected = if cfg!(debug_assertions) { 728 } else { 720 };
     assert_eq!(
         size, expected,
         "BuildOwner is {size} bytes, not {expected}: account for the change in this comment"

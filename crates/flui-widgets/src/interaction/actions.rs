@@ -267,8 +267,7 @@ impl Actions {
     /// nearest declaring scope regardless of its enabled state.
     #[must_use]
     pub fn action<T: Intent>(mut self, action: impl Action<T> + 'static) -> Self {
-        self.own
-            .push((TypeId::of::<T>(), ErasedAction::new(action)));
+        self.own.push(erased_action(action));
         self
     }
 
@@ -314,17 +313,32 @@ impl StatelessView for Actions {
     /// binds the same type twice, the later call wins, same as a duplicate
     /// key in Flutter's `Map<Type, Action<Intent>>` literal.
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let mut chain: HashMap<TypeId, ErasedAction> = ambient_action_chain(ctx)
-            .map(|enclosing| (*enclosing).clone())
-            .unwrap_or_default();
-        for (type_id, action) in &self.own {
-            chain.insert(*type_id, action.clone());
-        }
         ActionChainProvider {
-            chain: Rc::new(chain),
+            chain: layered_chain(ambient_action_chain(ctx), &self.own),
             child: self.child.clone(),
         }
     }
+}
+
+/// `own` layered over `enclosing`: each of `own`'s types replaces the
+/// enclosing entry for that type, and every other type keeps it. Later
+/// entries in `own` win over earlier ones for the same type.
+pub(crate) fn layered_chain(
+    enclosing: Option<ActionChain>,
+    own: &[(TypeId, ErasedAction)],
+) -> ActionChain {
+    let mut chain: HashMap<TypeId, ErasedAction> = enclosing
+        .map(|enclosing| (*enclosing).clone())
+        .unwrap_or_default();
+    for (type_id, action) in own {
+        chain.insert(*type_id, action.clone());
+    }
+    Rc::new(chain)
+}
+
+/// `action` as one entry of a chain, keyed by `T`.
+pub(crate) fn erased_action<T: Intent>(action: impl Action<T> + 'static) -> (TypeId, ErasedAction) {
+    (TypeId::of::<T>(), ErasedAction::new(action))
 }
 
 /// The chain a focused [`Focus`](super::focus::Focus) recorded on its node:
@@ -478,3 +492,27 @@ impl Action<PreviousFocusIntent> for PreviousFocusAction {
         }
     }
 }
+
+// ============================================================================
+// Text editing intents (ADR-0023)
+// ============================================================================
+
+/// Copy or cut the focused field's selection — Flutter's
+/// `CopySelectionTextIntent.copy`/`.cut` (`text_editing_intents.dart`, tag
+/// `3.44.0`). [`DefaultFocusTraversal`](super::shortcuts::DefaultFocusTraversal)
+/// binds Ctrl+C/Ctrl+X (Cmd on Apple platforms); an `EditableText` answers it
+/// on its own focus node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopySelectionTextIntent {
+    /// Write the selection to the clipboard and keep it.
+    Copy,
+    /// Write the selection to the clipboard and delete it.
+    Cut,
+}
+impl Intent for CopySelectionTextIntent {}
+
+/// Paste the clipboard's text over the focused field's selection — Flutter's
+/// `PasteTextIntent`, bound to Ctrl+V (Cmd+V on Apple platforms).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PasteTextIntent;
+impl Intent for PasteTextIntent {}

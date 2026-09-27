@@ -14,6 +14,7 @@ use crate::realm_services::RealmServices;
 use crossbeam_channel::bounded;
 use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::InteractionLane;
+use flui_platform_api::Clipboard;
 #[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
@@ -41,6 +42,11 @@ impl UiRealm {
     /// but the scale must already agree so the first frame's `RenderView`
     /// configuration and layout do not disagree on it.
     ///
+    /// `clipboard` is the platform clipboard every presentation of this realm
+    /// hands its widgets through `LifecycleContext::clipboard_handle`; in
+    /// production it is `AppRuntime::clipboard()`, installed before any realm
+    /// is built.
+    ///
     /// # Errors
     ///
     /// [`UiRealmError::InteractionLane`] if the owner-local interaction lane
@@ -50,6 +56,7 @@ impl UiRealm {
         window: impl Into<PresentationWindow>,
         device_pixel_ratio: f32,
         needs_redraw: Arc<AtomicBool>,
+        clipboard: Arc<dyn Clipboard>,
     ) -> Result<Self, UiRealmError> {
         Self::with_capacity(
             DEFAULT_COMMAND_CAPACITY,
@@ -57,6 +64,7 @@ impl UiRealm {
             window,
             device_pixel_ratio,
             needs_redraw,
+            clipboard,
         )
     }
 
@@ -77,10 +85,11 @@ impl UiRealm {
         window: impl Into<PresentationWindow>,
         device_pixel_ratio: f32,
         needs_redraw: Arc<AtomicBool>,
+        clipboard: Arc<dyn Clipboard>,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
         let identity = crate::realm_services::next_identity();
-        let services = RealmServices::construct();
+        let services = RealmServices::construct(clipboard);
         Self::construct(
             capacity,
             wake,
@@ -130,6 +139,7 @@ impl UiRealm {
             local_post_frame,
             async_driver,
             scheduler,
+            clipboard,
         } = services;
 
         // The realm's scheduler fires the SAME platform wake its presentation
@@ -172,6 +182,7 @@ impl UiRealm {
                     presentation_id,
                     wake: Arc::clone(&wake),
                 },
+                clipboard: Arc::clone(&clipboard),
             },
         );
 
@@ -187,6 +198,7 @@ impl UiRealm {
             frame_time: Cell::new(None),
             needs_redraw,
             wake: Arc::clone(&wake),
+            clipboard,
             #[cfg(any(test, feature = "test-support"))]
             now_secs_override: AtomicU64::new(0),
             rx,
@@ -242,7 +254,7 @@ impl UiRealm {
             identity,
             window,
             None,
-            RealmServices::construct(),
+            RealmServices::construct(crate::presentation::test_clipboard()),
             needs_redraw,
         )
         .expect("test UiRealm should create an interaction lane")
