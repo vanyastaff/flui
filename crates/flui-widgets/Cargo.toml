@@ -189,11 +189,7 @@ serde = ["flui-types/serde"]
 # (pipeline inspection) and flui-interaction (synthetic event constructors).
 # Named `testing` to match the flui-rendering/flui-layer convention for
 # feature-gated `src/testing` modules.
-testing = [
-    "dep:flui-testing",
-    "flui-rendering/testing",
-    "flui-interaction/testing",
-]
+testing = ["dep:flui-testing", "flui-rendering/testing", "flui-interaction/testing"]
 
 [lints]
 workspace = true
