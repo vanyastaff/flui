@@ -15,8 +15,27 @@ mutate with `.update(...)`/`.set(...)`:
 count.update(|n| n + 1);
 ```
 
-*(from `examples/counter.rs` — copied verbatim.)* This replaces the older pattern of a raw
+*(from `examples/a11y_probe.rs` — copied verbatim.)* This replaces the older pattern of a raw
 `Rc<Cell<T>>` field plus a hand-threaded rebuild handle with one field.
+
+## Signals
+
+`examples/counter.rs` keeps its count in a realm-scoped signal instead. `flui::prelude::Signal<T>`
+(ADR-0074, placed by ADR-0085) is a `Copy` handle to a value in the presentation's reactive graph:
+created in `init_state` (`self.count = ctx.signal(0)`), read in `build` (`count.get(ctx)`, which
+subscribes the element), and written from an event callback through the `cx` it receives
+(ADR-0086):
+
+```rust,ignore
+RawButton::new(Text::new("Increment"))
+    .on_press(move |cx| count.update(cx, |n| *n += 1)),
+```
+
+*(from `examples/counter.rs` — copied verbatim.)* `build` has no `cx`, so `count.set(cx, ..)`
+cannot be written there; a write from `build` through another route is refused at run time
+(`SignalError::WrittenDuringBuild`). A widget that has to write from a callback with no `cx`
+takes a `WriterSource` in `init_state` and opens one: `source.write(|cx| count.set(cx, 0))`. A write rebuilds exactly the
+elements that read the signal.
 
 ## `InheritedView`
 
@@ -42,9 +61,5 @@ outside the `View`/`Element` tree, or shared across more than one subtree withou
 
 ## What's not here
 
-This book does not yet describe realm-scoped signals. They exist: `flui_view::Signal<T>`
-(ADR-0074, placed by ADR-0085) is a `Copy` handle to a value in the realm's reactive graph.
-Reading it in `build` (`sig.get(cx)`) subscribes the element, and writing it outside `build`
-(`sig.set(&graph, v)`, from `SignalWriteExt` in the prelude) rebuilds exactly the elements that
-read it. The three mechanisms above remain the canonical state story; a chapter on signals is
-still to be written.
+A full chapter on signals (derived values, collections, cross-thread writes through
+`SignalSender`) is still to be written; the section above covers what the examples use.

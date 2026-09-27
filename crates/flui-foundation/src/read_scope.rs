@@ -54,6 +54,11 @@ pub struct SignalSlot {
 }
 
 impl SignalSlot {
+    /// The graph id of an unbound handle ([`Signal::default`]). A graph never
+    /// takes it as its id, so a slot naming it is refused as
+    /// [`SignalError::Unbound`] by every read and write.
+    pub const UNBOUND_GRAPH: u32 = 0;
+
     /// A slot handle. Minted by the graph that owns the arena; a handle built
     /// any other way is checked like every handle and refused unless it names
     /// a live slot of the graph it is used against.
@@ -74,6 +79,12 @@ impl SignalSlot {
     #[must_use]
     pub const fn graph(self) -> u32 {
         self.graph
+    }
+
+    /// Whether this slot names no graph ([`SignalSlot::UNBOUND_GRAPH`]).
+    #[must_use]
+    pub const fn is_unbound(self) -> bool {
+        self.graph == Self::UNBOUND_GRAPH
     }
 
     /// The arena index of the slot.
@@ -139,6 +150,9 @@ pub enum SignalError {
         /// Arena index of the slot.
         index: u32,
     },
+    /// The handle was never bound to a graph: it is a [`Signal::default`]
+    /// placeholder that `init_state` did not replace with a created signal.
+    Unbound,
 }
 
 impl fmt::Display for SignalError {
@@ -168,6 +182,9 @@ impl fmt::Display for SignalError {
                 f,
                 "signal slot {index} accessed re-entrantly from its own read/write closure"
             ),
+            Self::Unbound => {
+                f.write_str("signal handle was never bound to a graph (create it in init_state)")
+            }
         }
     }
 }
@@ -305,17 +322,35 @@ impl<T: 'static> fmt::Debug for Signal<T> {
     }
 }
 
+/// An unbound placeholder, so a `ViewState` can hold `Signal<T>` rather than
+/// `Option<Signal<T>>` between `create_state` and `init_state`, where the
+/// real handle is created (`self.count = cx.signal(0)`).
+///
+/// It names graph id 0, which no graph mints (graph ids start at 1 and skip 0
+/// on wrap), so every read and every write through it is
+/// [`SignalError::Unbound`], never a read of another slot.
+impl<T: 'static> Default for Signal<T> {
+    fn default() -> Self {
+        Self::from_slot(SignalSlot::new(SignalSlot::UNBOUND_GRAPH, 0, 0))
+    }
+}
+
 /// Lend `slot` to a typed closure through an erased graph.
 ///
 /// The downcast is checked: a slot holding another type is
 /// [`SignalError::TypeMismatch`]. A graph that returns `Ok` without calling
 /// the reader breaks [`ReadGraph::read_erased`]'s contract and is refused as
-/// [`SignalError::Released`]; a second call of the reader does nothing.
+/// [`SignalError::Released`]; a second call of the reader does nothing. An
+/// unbound handle ([`Signal::default`]) is [`SignalError::Unbound`] before any
+/// graph is asked.
 fn read_typed<T: 'static, R>(
     graph: &dyn ReadGraph,
     slot: SignalSlot,
     f: impl FnOnce(&T) -> R,
 ) -> Result<R, SignalError> {
+    if slot.is_unbound() {
+        return Err(SignalError::Unbound);
+    }
     let mut f = Some(f);
     let mut out: Option<Result<R, SignalError>> = None;
     graph.read_erased(slot, &mut |value: &dyn Any| {
@@ -595,10 +630,35 @@ mod tests {
                 SignalError::Reentrant { index: 5 },
                 "signal slot 5 accessed re-entrantly from its own read/write closure".to_owned(),
             ),
+            (
+                SignalError::Unbound,
+                "signal handle was never bound to a graph (create it in init_state)".to_owned(),
+            ),
         ];
         for (error, text) in cases {
             assert_eq!(error.to_string(), text);
         }
+    }
+
+    /// A default handle is a placeholder, not a read of whatever slot 0 of
+    /// the scope's graph holds: even a graph that answers for graph id 0 is
+    /// never asked.
+    #[test]
+    fn a_default_handle_is_unbound_on_every_read() {
+        let graph = OneSlot::new(0, 7u32);
+        let sink = Recorder::default();
+        let cx = Cx {
+            graph: &graph,
+            sink: Some(&sink),
+        };
+        let unbound = Signal::<u32>::default();
+
+        assert_eq!(unbound.try_get(&cx), Err(SignalError::Unbound));
+        assert_eq!(unbound.peek(&graph, |v| *v), Err(SignalError::Unbound));
+        assert!(
+            sink.0.borrow().is_empty(),
+            "an unbound read subscribes nobody"
+        );
     }
 
     #[test]

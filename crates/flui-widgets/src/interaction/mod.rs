@@ -3,7 +3,7 @@
 //! [`RenderView`](flui_view::prelude::RenderView) over a `flui-objects` proxy.
 
 mod absorb_pointer;
-mod actions;
+pub(crate) mod actions;
 mod dismissible;
 mod drag_target;
 mod draggable;
@@ -16,6 +16,7 @@ mod listener;
 mod meta_data;
 mod mouse_region;
 mod offstage;
+mod raw_button;
 mod shortcuts;
 mod transformation_controller;
 mod visibility;
@@ -23,8 +24,9 @@ mod visibility_gate;
 
 pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
-    Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent, CallbackAction, Intent,
-    NextFocusAction, NextFocusIntent, PreviousFocusAction, PreviousFocusIntent,
+    Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent, CallbackAction,
+    CopySelectionTextIntent, Intent, NextFocusAction, NextFocusIntent, PasteTextIntent,
+    PreviousFocusAction, PreviousFocusIntent,
 };
 pub use dismissible::{
     DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
@@ -51,6 +53,7 @@ pub use listener::Listener;
 pub use meta_data::MetaData;
 pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
+pub use raw_button::{RawButton, RawButtonState};
 pub use shortcuts::{
     CallbackShortcuts, DefaultFocusTraversal, DefaultFocusTraversalState, ShortcutCallback,
     Shortcuts, ShortcutsState, SingleActivator,

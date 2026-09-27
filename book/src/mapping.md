@@ -26,7 +26,7 @@ deliberately changed.
   `flui-interaction`, not navigation.
 - **No `MaterialApp` equivalent.** Flutter's `MaterialApp` bundles a `Navigator`, a `Theme`, a
   title, and app-level configuration into one widget. FLUI doesn't have a single type that does
-  the same — the shipped pattern (see `examples/counter.rs` and the CLI's generated `main()`) is
+  the same — the shipped pattern (see `examples/form.rs`) is
   `Theme::new(ThemeData::light(), <root view>)` passed to `run_app`.
 - **`Layer` is a closed `enum`, not a class hierarchy** — see
   [View, Element, RenderObject](concepts/view-element-render.md).

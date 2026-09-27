@@ -244,6 +244,33 @@ present gap rather than reading "the `InkResponse` owns activation" as parity.
   node) and reddens to `[GenericContainer, Button, CheckBox]` when the group flag
   is removed from `Radio::build`.
 
+### `TextFormField` is a `FormField<String>` over `TextField`, and takes the user's edits from `on_changed`
+
+**Oracle:** `material/text_form_field.dart` (tag `3.44.0`): a
+`FormField<String>` whose builder returns a `TextField` with
+`decoration.copyWith(errorText: field.errorText)`, a controller listener that
+calls `didChange`, and a `reset` that writes `initialValue` back into the
+controller.
+
+**Choice:** the same composition, with two named differences. A field error
+replaces the decoration's `error_text`, so it reaches `InputDecorator`'s error
+line and the error caret colour exactly as a hand-set error does; with no
+field error a caller-set `error_text` stays, as `copyWith(errorText: null)`
+keeps it. The user's
+edits come from `TextField::on_changed` rather than a controller listener,
+because FLUI's controller listeners are `Send + Sync` and cannot reach the
+owner-thread field state; the controller is read before the field validates or
+saves (`flui_widgets::__private::TextFormFieldCore`, shared with
+`RawTextFormField`; this type supplies only the Material input), so a caller's own controller edit is still validated and
+saved but does not count as the user's interaction — see `flui-widgets`
+mapping decision 31. `initialValue` and `controller` are two constructors
+(`new`, `with_initial_value`) rather than an assert.
+
+**Tests** (`tests/text_form_field.rs`):
+`validator_error_reaches_the_input_decorator_error_line` (no "Required" is
+rendered when the builder does not write the field's error into the
+decoration) and `reset_restores_the_initial_value`.
+
 ---
 
 ## Thread safety

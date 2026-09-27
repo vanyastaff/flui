@@ -11,13 +11,13 @@ pub(crate) mod font_resolve;
 pub(crate) mod glyphs;
 pub(crate) mod layout;
 
-pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, PlacedGlyph};
+pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 pub(crate) use layout::paint_color;
 pub use layout::{ResolvedFont, Shaper, SharedFontSystem, TextLayout, shared_font_system};
 // Test-support only: pinning the process-wide font system is irreversible, so
 // it stays off the shipped surface. See its docs.
 #[cfg(any(test, feature = "testing"))]
-pub use layout::init_font_system_with_faces;
+pub use layout::{font_system_initialized, init_font_system_with_faces};
 
 /// Text layout result containing computed metrics.
 #[derive(Debug, Clone)]

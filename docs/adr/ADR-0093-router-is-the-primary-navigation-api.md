@@ -1,6 +1,8 @@
 # ADR-0093: Router is the primary navigation API
 
-- **Status:** Proposed
+- **Status:** Proposed. Step one of the implementation series is in `flui-widgets`: `Routable`,
+  `RoutePath`, `Router` and `RouterHandle`, over an addressed Navigator. The derive and the later
+  steps are not implemented.
 - **Date:** 2026-09-25
 - **Supersedes (on acceptance):** [ADR-0024](ADR-0024-named-routes-seam.md) (string-named
   routes; `RouteKey<T>` of its §3 carries over)
