@@ -1042,11 +1042,54 @@ pub(super) mod tests {
 
     #[test]
     fn a_dev_dependent_is_the_last_hop() {
+        // base <- mid (normal) <- tester (dev) <- above_tester (normal);
+        // base <- both (normal and dev) <- above_both (normal).
+        let root = Path::new("/ws");
+        let package = |name: &str, deps: &[(&str, Option<&str>)]| -> Package {
+            let deps: Vec<_> = deps
+                .iter()
+                .map(|(dep, kind)| {
+                    serde_json::json!({
+                        "name": dep, "kind": kind, "rename": null, "optional": false,
+                        "path": root.join(dep),
+                    })
+                })
+                .collect();
+            serde_json::from_value(serde_json::json!({
+                "name": name,
+                "manifest_path": root.join(name).join("Cargo.toml"),
+                "dependencies": deps,
+                "targets": [],
+                "features": {},
+            }))
+            .expect("a package")
+        };
+        let ws = Workspace::from_packages(
+            root,
+            vec![
+                package("base", &[]),
+                package("mid", &[("base", None)]),
+                package("tester", &[("mid", Some("dev"))]),
+                package("above_tester", &[("tester", None)]),
+                package("both", &[("base", None), ("base", Some("dev"))]),
+                package("above_both", &[("both", None)]),
+            ],
+        );
+        let affected = ws.affected(&BTreeSet::from(["base".to_owned()]));
+        let expected: BTreeSet<String> = ["base", "mid", "tester", "both", "above_both"]
+            .map(str::to_owned)
+            .into();
+        // tester's tests link mid, so they run; its library does not
+        // contain mid, so nothing depending on tester is affected.
+        assert_eq!(affected, expected);
+    }
+
+    #[test]
+    fn a_design_system_change_leaves_the_other_out() {
         // Material → the facade (optional normal) → flui-sdk, whose tests
         // dev-depend on the facade. Cupertino's library links flui-sdk's
         // library, which does not contain Material, so it stays out.
         let s = scope(&["packages/flui-material/src/lib.rs"]);
-        assert!(s.packages.contains(&"flui-sdk".to_owned()));
         assert!(!s.packages.contains(&"flui-cupertino".to_owned()));
         // A dev-dependent is still in scope: flui-view's tests use flui-testing.
         assert!(
