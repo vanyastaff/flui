@@ -71,13 +71,25 @@ owner signal, Android pokes its window without falsely marking a frame dirty and
 acknowledges that opportunity only while native execution is running,
 and web consumes the logical continuation on its already-scheduled next RAF.
 Stale operations still consume budget because validation and captured-value
-destruction are real owner-thread work.
+destruction are real owner-thread work. A platform adapter may synchronously
+re-enter its frame callback (the web window can do this from `request_redraw`);
+that entry is a nested root of the existing physical callback and shares its
+budget rather than consuming or finishing a second continuation opportunity.
 
 Fresh native roots run synchronously while that callback still has budget;
 excess roots join the carried FIFO rather than extending an event-loop turn.
+An iOS continuation does not synthesize another background `Pump` for every
+retained scene: it spends that callback on the carried FIFO, so a scene count
+at or above the batch limit cannot starve old work or grow duplicate pumps on
+every continuation. It re-arms one ordinary owner opportunity because the
+platform signal coalesces causes; once the carried FIFO drains, that later turn
+still services any async/frame wake that shared the continuation callback.
 A close therefore installs a terminal barrier for its exact
 presentation incarnation when admitted; later work for that address is
-refused even before the bounded queue executes the close. This deliberately
+refused even before the bounded queue executes the close. The same barrier
+revokes authority to install a sibling presentation alongside the closing
+address, so a delayed shared-window completion cannot change an admitted
+whole-realm close into a partial close. This deliberately
 diverges from a single total FIFO across independent native and owner-local
 ingress: responsiveness has priority, while per-queue FIFO and terminal
 ordering remain explicit and tested.

@@ -624,6 +624,7 @@ impl Drop for OwnerHostClearGuard {
                 runtime.owner_turn_continuation = None;
                 runtime.owner_turn_continuation_failed = false;
                 runtime.owner_turn_callback_budget = None;
+                runtime.owner_turn_callback_active = false;
                 (
                     runtime.owner_platform.take(),
                     runtime.owner_turn_wake.take(),

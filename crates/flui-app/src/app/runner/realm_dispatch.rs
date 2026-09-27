@@ -516,6 +516,7 @@ pub(super) fn install_platform_realm(
         state.owner_turn_continuation = None;
         state.owner_turn_continuation_failed = false;
         state.owner_turn_callback_budget = None;
+        state.owner_turn_callback_active = false;
         state.owner_turn_draining = false;
         state.closing_presentations.clear();
         for (displaced_id, _) in &displaced {
@@ -701,6 +702,13 @@ pub(super) enum InstallPresentationError {
     /// alongside it, not merely one whose realm happens to still exist.
     #[error("the presentation this dispatcher was minted for is no longer registered")]
     StalePresentation,
+    /// A terminal close for `dispatcher.address` was already admitted but
+    /// has not necessarily reached the bounded owner FIFO yet. The address
+    /// is still registered during that interval, but it no longer
+    /// authorizes expanding the presentation forest: doing so could turn a
+    /// sole-presentation close into a partial close after admission.
+    #[error("the presentation this dispatcher was minted for is closing")]
+    PresentationClosing,
     /// `window`'s id was already registered to a (possibly different)
     /// address — practically unreachable for a freshly opened window, but
     /// a real, distinct failure mode from `RealmUnavailable`: the realm
@@ -738,7 +746,10 @@ pub(super) enum InstallPresentationError {
 /// registered address (its own presentation closed, even though a sibling
 /// kept the realm alive) — the same authorization
 /// `dispatch_platform_realm` requires of every dispatched task, applied to
-/// this mutation too. [`InstallPresentationError::WindowAlreadyMapped`] if
+/// this mutation too. [`InstallPresentationError::PresentationClosing`] if
+/// the address is still registered but its terminal close has already been
+/// admitted — the close barrier covers forest mutations as well as ordinary
+/// tasks. [`InstallPresentationError::WindowAlreadyMapped`] if
 /// `window`'s id is somehow already registered (practically unreachable: a
 /// freshly opened window has a fresh id by construction) — nothing is
 /// installed into the forest in this case.
@@ -810,6 +821,19 @@ pub(super) fn install_presentation_alongside(
                  no longer registered, even though its realm survives"
             );
             return Err(InstallPresentationError::StalePresentation);
+        }
+        // A close becomes terminal when admitted, not when the bounded
+        // owner FIFO eventually executes it. Registration alone therefore
+        // cannot authorize this mutation: installing a sibling in that
+        // interval would change the admitted close from a whole-realm close
+        // into a partial close and leave the new presentation alive.
+        if state.closing_presentations.contains(&dispatcher.address) {
+            tracing::debug!(
+                ?dispatcher,
+                "rejecting install_presentation_alongside: the dispatcher's presentation has a \
+                 terminal close pending"
+            );
+            return Err(InstallPresentationError::PresentationClosing);
         }
         let realm_slot = state
             .realms
@@ -1118,25 +1142,104 @@ fn request_owner_turn_continuation() {
 /// (or retries after a failed post), every fresh root in this callback shares
 /// one finite budget with the deferred FIFO.
 #[must_use = "the guard finishes the physical owner callback, including during unwind"]
-pub(super) struct OwnerCallbackGuard;
+pub(super) struct OwnerCallbackGuard {
+    #[cfg_attr(
+        all(not(test), not(target_os = "ios")),
+        expect(
+            dead_code,
+            reason = "only the iOS owner wake synthesizes one root per retained presentation"
+        )
+    )]
+    resumes_carried_work: bool,
+    outermost: bool,
+}
+
+impl OwnerCallbackGuard {
+    /// Whether this callback consumed the continuation reserved for carried
+    /// owner-local work.
+    ///
+    /// A backend that would otherwise synthesize a root for every retained
+    /// presentation can use this to avoid replenishing the deferred FIFO
+    /// faster than its finite continuation batch can drain it.
+    #[cfg_attr(
+        all(not(test), not(target_os = "ios")),
+        expect(
+            dead_code,
+            reason = "only the iOS owner wake synthesizes one root per retained presentation"
+        )
+    )]
+    pub(super) fn resumes_carried_work(&self) -> bool {
+        self.resumes_carried_work
+    }
+}
 
 impl Drop for OwnerCallbackGuard {
     fn drop(&mut self) {
+        if !self.outermost {
+            return;
+        }
+
+        // Keep nested synchronous platform callbacks attached to this
+        // physical callback until its tail drain has completed. The clear
+        // guard also restores the flag if a carried operation panics while
+        // that tail is draining.
+        struct ActiveCallbackClearGuard;
+        impl Drop for ActiveCallbackClearGuard {
+            fn drop(&mut self) {
+                APP_RUNTIME.with(|slot| slot.borrow_mut().owner_turn_callback_active = false);
+            }
+        }
+
+        let _active_callback = ActiveCallbackClearGuard;
         finish_owner_callback();
     }
 }
 
 pub(super) fn begin_owner_callback() -> OwnerCallbackGuard {
-    APP_RUNTIME.with(|slot| {
+    let (resumes_carried_work, outermost) = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
+        if state.owner_turn_callback_active {
+            return (false, false);
+        }
+        state.owner_turn_callback_active = true;
         debug_assert!(state.owner_turn_callback_budget.is_none());
-        if state.owner_turn_continuation.take().is_some()
-            || std::mem::take(&mut state.owner_turn_continuation_failed)
-        {
+        let resumes_carried_work = state.owner_turn_continuation.take().is_some()
+            || std::mem::take(&mut state.owner_turn_continuation_failed);
+        if resumes_carried_work {
             state.owner_turn_callback_budget = Some(OWNER_TURN_BUDGET);
         }
+        (resumes_carried_work, true)
     });
-    OwnerCallbackGuard
+    OwnerCallbackGuard {
+        resumes_carried_work,
+        outermost,
+    }
+}
+
+/// Runs one backend owner wake as a single physical callback.
+///
+/// Backends that fan one native wake out into multiple presentation roots
+/// must not generate that fan-out while the wake is a continuation reserved
+/// for the carried FIFO. `fresh_roots` is therefore called only for an
+/// ordinary wake; `rearm_fresh_roots` records one later ordinary opportunity
+/// when a coalescing native signal may have combined both causes.
+#[cfg_attr(
+    all(not(test), not(target_os = "ios")),
+    expect(
+        dead_code,
+        reason = "only the iOS owner wake fans one callback out across presentations"
+    )
+)]
+pub(super) fn drive_fanout_owner_callback(
+    fresh_roots: impl FnOnce(),
+    rearm_fresh_roots: impl FnOnce(),
+) {
+    let owner_callback = begin_owner_callback();
+    if owner_callback.resumes_carried_work() {
+        rearm_fresh_roots();
+    } else {
+        fresh_roots();
+    }
 }
 
 /// Finishes a native callback and spends its unused continuation budget on
@@ -1868,6 +1971,7 @@ pub(super) fn teardown_platform_realm() {
         state.owner_turn_continuation = None;
         state.owner_turn_continuation_failed = false;
         state.owner_turn_callback_budget = None;
+        state.owner_turn_callback_active = false;
         state.owner_turn_draining = false;
         state.closing_presentations.clear();
         debug_assert!(

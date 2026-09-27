@@ -52,9 +52,19 @@ impl AndroidWindow {
         &self.callbacks
     }
 
-    /// Check and clear the redraw request flag
-    pub fn take_redraw_request(&self) -> bool {
-        self.redraw_requested.swap(false, Ordering::SeqCst)
+    /// Read whether a redraw is pending without consuming it. The event loop
+    /// uses this only to choose its poll timeout; native lifecycle events may
+    /// still suspend execution before delivery becomes possible.
+    pub(crate) fn has_redraw_request(&self) -> bool {
+        self.redraw_requested.load(Ordering::SeqCst)
+    }
+
+    /// Consume a redraw only when the same loop turn can deliver its frame.
+    pub(crate) fn take_deliverable_redraw_request(&self) -> bool {
+        take_deliverable_redraw_request(
+            &self.redraw_requested,
+            self.execution_resumed.load(Ordering::SeqCst),
+        )
     }
 
     /// Get native window dimensions, returning (0, 0) if window is not
@@ -66,6 +76,10 @@ impl AndroidWindow {
             (0, 0)
         }
     }
+}
+
+fn take_deliverable_redraw_request(redraw_requested: &AtomicBool, execution_running: bool) -> bool {
+    execution_running && redraw_requested.swap(false, Ordering::SeqCst)
 }
 
 impl crate::traits::HostWindow for AndroidWindow {}

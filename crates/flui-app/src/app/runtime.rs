@@ -541,6 +541,12 @@ pub(crate) struct AppRuntime {
     /// continuation. `None` means this callback is not servicing carried
     /// owner work.
     pub(super) owner_turn_callback_budget: Option<usize>,
+    /// True from the outermost native callback entry until its completion
+    /// work has finished. Some platform adapters (notably the web window)
+    /// can synchronously invoke a frame callback from `request_redraw`, so a
+    /// nested entry is another root of the current physical callback, not a
+    /// second opportunity that may consume or finish its budget.
+    pub(super) owner_turn_callback_active: bool,
     /// Monotonic source for [`Self::owner_turn_continuation`].
     pub(super) owner_turn_next_sequence: u64,
     /// Host-specific continuation actuator. It is owner-local because
@@ -749,6 +755,7 @@ impl AppRuntime {
             owner_turn_continuation: None,
             owner_turn_continuation_failed: false,
             owner_turn_callback_budget: None,
+            owner_turn_callback_active: false,
             owner_turn_next_sequence: 0,
             owner_turn_wake: None,
             closing_presentations: HashSet::new(),
