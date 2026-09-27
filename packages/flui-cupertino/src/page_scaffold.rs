@@ -10,13 +10,13 @@
 //! - The `Stack` composition itself: content first, the navigation bar
 //!   `Positioned` on top — `_CupertinoPageScaffoldState.build`'s own shape,
 //!   not a `CustomMultiChildLayoutDelegate` (the oracle doesn't use one
-//!   either; `flui_material::Scaffold`'s is a different, busier widget with
+//!   either; `flui-material`'s `Scaffold` is a different, busier widget with
 //!   a floating-action-button slot this one has no equivalent of).
 //! - The content padding contract: when a navigation bar is present, the
 //!   content is pushed down by exactly
 //!   [`preferred_size`](PreferredSizeView::preferred_size)'s height *plus*
 //!   the ambient `MediaQuery.padding.top` — mirroring
-//!   `flui_material::Scaffold`'s own "the app bar slot's cap is
+//!   `flui-material`'s `Scaffold` and its own "the app bar slot's cap is
 //!   `preferred_height + padding.top`, but `content_top` reads the app bar's
 //!   *measured* height only" contract, which this scaffold reproduces with
 //!   `Padding` instead of a layout delegate because there is no second slot
@@ -43,9 +43,9 @@
 //!   oracle picks between two `MediaQuery` transforms depending on
 //!   `navigationBar!.shouldFullyObstruct(context)` (opaque: fully consume
 //!   `padding.top`; translucent: keep it, so content sliding underneath
-//!   still avoids the notch). `flui_widgets::PreferredSizeView` carries no
+//!   still avoids the notch). `flui_sdk::widgets::PreferredSizeView` carries no
 //!   `should_fully_obstruct` — this V1 always takes the opaque branch,
-//!   matching `flui_material::AppBar`/`Scaffold`'s own "no translucent
+//!   matching `flui-material`'s `AppBar`/`Scaffold` and their own "no translucent
 //!   content-behind-the-bar" contract in this same workspace.
 //! - **Status-bar tap-to-scroll-to-top** (`_HitTestableAtOrigin`,
 //!   `PrimaryScrollController.animateTo`). No `PrimaryScrollController`/
@@ -55,11 +55,11 @@
 //!   `TextScaler`/no-scaling variant to apply yet — `text_scale_factor`
 //!   passes through unchanged.
 
-use flui_types::geometry::{EdgeInsets, px};
-use flui_types::styling::BoxDecoration;
-use flui_view::BoxedView;
-use flui_view::prelude::*;
-use flui_widgets::{DecoratedBox, MediaQuery, Padding, Positioned, PreferredSizeView, Stack};
+use flui_sdk::types::geometry::{EdgeInsets, px};
+use flui_sdk::types::styling::BoxDecoration;
+use flui_sdk::view::BoxedView;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{DecoratedBox, MediaQuery, Padding, Positioned, PreferredSizeView, Stack};
 
 use crate::colors::CupertinoColor;
 use crate::theme::CupertinoTheme;
@@ -71,7 +71,7 @@ use crate::theme::CupertinoTheme;
 ///
 /// ```
 /// use flui_cupertino::{CupertinoNavigationBar, CupertinoPageScaffold};
-/// use flui_widgets::{SizedBox, Text};
+/// use flui_sdk::widgets::{SizedBox, Text};
 ///
 /// let _page = CupertinoPageScaffold::new(SizedBox::shrink())
 ///     .navigation_bar(CupertinoNavigationBar::new().middle(Text::new("Settings")));

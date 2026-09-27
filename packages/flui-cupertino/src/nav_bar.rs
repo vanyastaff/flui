@@ -14,7 +14,7 @@
 //!   height — verified at the oracle source, not the plan's guess: it is
 //!   *not* itself topped up by `MediaQuery.padding.top` (that addition
 //!   happens once, in `CupertinoPageScaffold`, the same "advertise the bar
-//!   height only" contract `flui_material::AppBar` already established in
+//!   height only" contract `flui-material`'s `AppBar` already established in
 //!   this workspace).
 //! - The hairline bottom border, `_kDefaultNavBarBorder` (color
 //!   `0x4D000000`) — see the "hairline" divergence note below.
@@ -22,7 +22,7 @@
 //!   [`crate::CupertinoThemeData::bar_background_color`] when unset.
 //! - Self-padding against the top safe-area inset via [`SafeArea`],
 //!   matching the oracle's `_PersistentNavigationBar` (and
-//!   `flui_material::AppBar`'s own "the bar pads itself" contract).
+//!   `flui-material`'s `AppBar` and its own "the bar pads itself" contract).
 //! - `middle` true-centered across the bar's full width (a [`Stack`] +
 //!   full-bleed [`Center`], not `Row`'s remaining-space centering) — see
 //!   "Layout: no `NavigationToolbar`" below.
@@ -85,12 +85,12 @@
 //! shifts or clips `middle` if `leading`/`trailing` grow wide enough to
 //! visually collide with it.
 
-use flui_types::Size;
-use flui_types::geometry::px;
-use flui_types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_view::BoxedView;
-use flui_view::prelude::*;
-use flui_widgets::{
+use flui_sdk::types::Size;
+use flui_sdk::types::geometry::px;
+use flui_sdk::types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::view::BoxedView;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{
     Center, DecoratedBox, DefaultTextStyle, MediaQuery, Positioned, PreferredSizeView, SafeArea,
     Semantics, SizedBox, Stack,
 };
@@ -119,7 +119,7 @@ pub const HAIRLINE_BORDER_WIDTH: f32 = 1.0;
 
 /// `_kDefaultNavBarBorder` (`nav_bar.dart`, oracle tag `3.44.0`): a
 /// bottom-only hairline, approximated per [`HAIRLINE_BORDER_WIDTH`]'s doc.
-fn default_border() -> Border<flui_types::geometry::Pixels> {
+fn default_border() -> Border<flui_sdk::types::geometry::Pixels> {
     Border::new(
         None,
         None,
@@ -140,7 +140,7 @@ fn default_border() -> Border<flui_types::geometry::Pixels> {
 ///
 /// ```
 /// use flui_cupertino::CupertinoNavigationBar;
-/// use flui_widgets::Text;
+/// use flui_sdk::widgets::Text;
 ///
 /// let _bar = CupertinoNavigationBar::new().middle(Text::new("Settings"));
 /// ```
@@ -150,7 +150,7 @@ pub struct CupertinoNavigationBar {
     middle: Option<BoxedView>,
     trailing: Option<BoxedView>,
     background_color: Option<CupertinoColor>,
-    border: Option<Border<flui_types::geometry::Pixels>>,
+    border: Option<Border<flui_sdk::types::geometry::Pixels>>,
 }
 
 impl CupertinoNavigationBar {
@@ -202,7 +202,7 @@ impl CupertinoNavigationBar {
     /// the hairline border — see the module docs' divergence note. Flutter
     /// parity: `CupertinoNavigationBar.border`.
     #[must_use]
-    pub fn border(mut self, border: Option<Border<flui_types::geometry::Pixels>>) -> Self {
+    pub fn border(mut self, border: Option<Border<flui_sdk::types::geometry::Pixels>>) -> Self {
         self.border = border;
         self
     }

@@ -4,8 +4,8 @@
 //! leading/middle/trailing all actually reach the mounted render tree.
 //!
 //! Every mount wraps the bar in a [`MediaQuery`] ancestor: `SafeArea`
-//! (`nav_bar.rs`'s own self-padding, matching `flui_material::AppBar`'s
-//! identical contract) reads `MediaQuery::of` unconditionally and panics
+//! (`nav_bar.rs`'s own self-padding, matching `flui-material`'s `AppBar`
+//! and its identical contract) reads `MediaQuery::of` unconditionally and panics
 //! with no ancestor — see `flui-material/tests/app_bar.rs` for the same
 //! precedent.
 
@@ -13,10 +13,10 @@ use crate::common;
 
 use common::{lay_out, loose, tight};
 use flui_cupertino::CupertinoNavigationBar;
-use flui_types::Size;
-use flui_types::geometry::px;
-use flui_widgets::prelude::EdgeInsets;
-use flui_widgets::{MediaQuery, MediaQueryData, PreferredSizeView, SizedBox, Text};
+use flui_sdk::types::Size;
+use flui_sdk::types::geometry::px;
+use flui_sdk::widgets::prelude::EdgeInsets;
+use flui_sdk::widgets::{MediaQuery, MediaQueryData, PreferredSizeView, SizedBox, Text};
 
 fn media_with_top_padding(top: f32) -> MediaQueryData {
     MediaQueryData {

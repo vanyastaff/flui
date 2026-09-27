@@ -3,9 +3,9 @@
 //!
 //! Flutter parity: `cupertino/colors.dart` (oracle tag `3.44.0`).
 
-use flui_types::Color;
-use flui_types::platform::Brightness;
-use flui_view::prelude::BuildContext;
+use flui_sdk::types::Color;
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::view::prelude::BuildContext;
 
 // =============================================================================
 // CupertinoColor — the Rust-native answer to Dart's `Color`/`CupertinoDynamicColor`

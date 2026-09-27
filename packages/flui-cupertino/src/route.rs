@@ -76,12 +76,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::{Animation, ArcCurve, Curve, CurvedAnimation, Curves, Tween, animate};
-use flui_objects::TranslationFraction;
-use flui_types::Color;
-use flui_view::prelude::BuildContext;
-use flui_view::{BoxedView, ViewExt};
-use flui_widgets::{Directionality, NavigatorHandle, PageRoute, RouteAnimation, SlideTransition};
+use flui_sdk::animation::{Animation, ArcCurve, Curve, CurvedAnimation, Curves, Tween, animate};
+use flui_sdk::pipeline::TranslationFraction;
+use flui_sdk::types::Color;
+use flui_sdk::view::prelude::BuildContext;
+use flui_sdk::view::{BoxedView, ViewExt};
+use flui_sdk::widgets::{
+    Directionality, NavigatorHandle, PageRoute, RouteAnimation, SlideTransition,
+};
 
 /// `CupertinoRouteTransitionMixin.kTransitionDuration` (`route.dart`, oracle
 /// tag `3.44.0`).
@@ -123,8 +125,8 @@ fn middle_left_tween() -> Tween<TranslationFraction> {
 ///
 /// ```
 /// use flui_cupertino::cupertino_page_route;
-/// use flui_widgets::Text;
-/// use flui_view::prelude::*;
+/// use flui_sdk::widgets::Text;
+/// use flui_sdk::view::prelude::*;
 ///
 /// let route = cupertino_page_route::<(), _>(|_ctx, _primary, _secondary| {
 ///     Text::new("Details").into_view().boxed()

@@ -9,11 +9,11 @@ use crate::common;
 use std::time::Duration;
 
 use common::{lay_out_animated, tight};
-use flui_animation::{Curve, Curves, Vsync};
 use flui_cupertino::cupertino_page_route;
-use flui_types::Color;
-use flui_view::prelude::*;
-use flui_widgets::{ColoredBox, Navigator, NavigatorHandle, SimpleRoute, VsyncScope};
+use flui_sdk::animation::{Curve, Curves, Vsync};
+use flui_sdk::types::Color;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{ColoredBox, Navigator, NavigatorHandle, SimpleRoute, VsyncScope};
 
 /// `CupertinoRouteTransitionMixin.kTransitionDuration` (`route.dart`, oracle
 /// tag `3.44.0`).
@@ -241,7 +241,11 @@ fn cupertino_page_route_paints_a_transition_barrier_dim() {
     // (a bare `SizedBox` mounts no `DecoratedBox` of its own) — the only
     // `RenderDecoratedBox` this push can add is the barrier's.
     let _result = navigator.push(cupertino_page_route::<(), _>(
-        |_ctx, _primary, _secondary| flui_widgets::SizedBox::new(10.0, 10.0).into_view().boxed(),
+        |_ctx, _primary, _secondary| {
+            flui_sdk::widgets::SizedBox::new(10.0, 10.0)
+                .into_view()
+                .boxed()
+        },
     ));
     laid.tick();
 

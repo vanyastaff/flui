@@ -23,10 +23,10 @@ use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
 use flui_cupertino::{CupertinoColor, CupertinoColors, CupertinoTheme, CupertinoThemeData};
-use flui_types::Color;
-use flui_types::platform::Brightness;
-use flui_view::prelude::*;
-use flui_widgets::{MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::types::Color;
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
 
 /// Captures `CupertinoTheme::of(ctx).primary_color()` — with no further
 /// resolution — during `build()`.

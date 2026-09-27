@@ -1970,13 +1970,8 @@ dependencies = [
 name = "flui-cupertino"
 version = "0.2.0-dev"
 dependencies = [
- "flui-animation",
- "flui-foundation",
- "flui-objects",
- "flui-scheduler",
+ "flui-sdk",
  "flui-testing",
- "flui-types",
- "flui-view",
  "flui-widgets",
  "tracing",
 ]
