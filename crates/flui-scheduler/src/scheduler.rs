@@ -78,10 +78,11 @@ use crate::{
     },
     id::{CallbackId, IdGenerator},
     panic_payload::discard_panic_payload,
-    post_frame::LocalPostFrameEntry,
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
 };
+
+mod post_frame_dispatch;
 
 // CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
 
@@ -144,28 +145,6 @@ struct CancellablePersistentCallback {
 struct CancellablePostFrameCallback {
     id: CallbackId,
     callback: PostFrameCallback,
-}
-
-/// Preserve queue provenance so an uninvoked panic tail can return to its owner.
-enum PendingPostFrame {
-    Shared(CancellablePostFrameCallback),
-    Local(LocalPostFrameEntry),
-}
-
-impl PendingPostFrame {
-    fn id(&self) -> CallbackId {
-        match self {
-            Self::Shared(entry) => entry.id,
-            Self::Local(entry) => entry.id,
-        }
-    }
-
-    fn invoke(self, timing: &FrameTiming) {
-        match self {
-            Self::Shared(entry) => (entry.callback)(timing),
-            Self::Local(entry) => (entry.callback)(timing),
-        }
-    }
 }
 
 /// Lifecycle state listener with ID for removal
@@ -1627,53 +1606,7 @@ impl UpdateScheduler {
             // itself traces the error and returns `Err`; this treats that
             // exactly like "no lane was passed" for this call, leaving the
             // lane's queue untouched.
-            let mut callbacks: Vec<PendingPostFrame> = {
-                let _registration = self.inner.callbacks.post_frame_registration.lock();
-                let mut cbs = self.inner.callbacks.post_frame.lock();
-                let mut snapshot: Vec<_> = cbs.drain(..).map(PendingPostFrame::Shared).collect();
-                if let Some(lane) = lane
-                    && let Ok(local_entries) = lane.take_queue_for(self)
-                {
-                    snapshot.extend(local_entries.into_iter().map(PendingPostFrame::Local));
-                }
-                snapshot
-            };
-
-            callbacks.sort_unstable_by_key(|entry| entry.id().get());
-            // Keep the iterator outside the unwind boundary: the panicking
-            // entry is consumed, but its uninvoked siblings remain owned here.
-            let mut callbacks = callbacks.into_iter();
-            let callback_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                for entry in callbacks.by_ref() {
-                    if self.inner.callbacks.cancelled.contains_key(&entry.id()) {
-                        continue;
-                    }
-                    entry.invoke(&timing);
-                }
-            }));
-
-            if callback_result.is_err() {
-                let mut shared = Vec::new();
-                let mut local = Vec::new();
-                for entry in callbacks {
-                    match entry {
-                        PendingPostFrame::Shared(entry) => shared.push(entry),
-                        PendingPostFrame::Local(entry) => local.push(entry),
-                    }
-                }
-                // Move only: no user callback or capture is dropped under a
-                // queue guard. Original IDs put this tail ahead of reentrant
-                // registrations when the next completed frame sorts its batch.
-                let _registration = self.inner.callbacks.post_frame_registration.lock();
-                self.inner.callbacks.post_frame.lock().extend(shared);
-                if !local.is_empty() {
-                    lane.expect("BUG: local post-frame tail has a validated source lane")
-                        .restore_queue(local);
-                }
-                // Keep cancellations for the restored tail and other queues.
-            } else {
-                self.inner.callbacks.cancelled.clear();
-            }
+            let callback_result = self.dispatch_post_frame_callbacks(lane, &timing);
 
             // Notify frame completion futures. Caught here, alongside
             // `callback_result`, rather than left to propagate bare: a

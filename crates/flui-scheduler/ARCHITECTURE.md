@@ -13,6 +13,8 @@ decisions` entries below; a full crate architecture writeup is deferred.
 A post-frame callback panic stops the drain and propagates after frame completion
 bookkeeping closes. The panicking entry is consumed, not retried; the uninvoked
 tail returns to its original shared or owner-local queue with its original IDs.
+The private `scheduler::post_frame_dispatch` module owns this snapshot and tail
+recovery; the frame-close path retains phase and completion bookkeeping.
 The next completed frame sorts those IDs with newer registrations, so surviving
 work precedes work registered reentrantly by the failed callback. Cancellation
 records remain intact on the failed drain, including records belonging to other
