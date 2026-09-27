@@ -96,8 +96,6 @@ pub enum PointMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct TextStoreStatus {
-    /// No edit is accepted.
-    pub read_only: bool,
     /// The text must not be read out (a password field). Text reads return
     /// [`TextStoreError::Protected`]; edits, selection and geometry still work.
     pub protected: bool,
@@ -108,7 +106,6 @@ pub struct TextStoreStatus {
 impl TextStoreStatus {
     /// An editable, unprotected, single-line field.
     pub const EDITABLE_SINGLE_LINE: Self = Self {
-        read_only: false,
         protected: false,
         single_line: true,
     };
@@ -117,12 +114,6 @@ impl TextStoreStatus {
     #[must_use]
     pub const fn with_protected(self, protected: bool) -> Self {
         Self { protected, ..self }
-    }
-
-    /// This status with `read_only` set.
-    #[must_use]
-    pub const fn with_read_only(self, read_only: bool) -> Self {
-        Self { read_only, ..self }
     }
 }
 
@@ -196,14 +187,15 @@ pub trait TextStoreEdit: TextStoreRead {
     ///
     /// # Errors
     ///
-    /// [`TextStoreError::ReadOnly`], or an offset error.
+    /// An offset error.
     fn replace(&mut self, range: Utf16Range, text: &str) -> Result<TextChange, TextStoreError>;
 
     /// Replace the selection with `text`.
     ///
     /// # Errors
     ///
-    /// [`TextStoreError::ReadOnly`].
+    /// None from the built-in stores; the `Result` leaves room for a store
+    /// that refuses edits.
     fn insert_at_selection(&mut self, text: &str) -> Result<TextChange, TextStoreError>;
 
     /// Set the selection, exactly: a platform selection is kept at any scalar
@@ -218,6 +210,6 @@ pub trait TextStoreEdit: TextStoreRead {
     ///
     /// # Errors
     ///
-    /// [`TextStoreError::ReadOnly`], or an offset error.
+    /// An offset error.
     fn set_composition(&mut self, composition: Option<Composition>) -> Result<(), TextStoreError>;
 }

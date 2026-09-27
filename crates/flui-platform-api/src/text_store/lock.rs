@@ -48,11 +48,12 @@ use std::marker::PhantomData;
 use super::session::{TextStoreEdit, TextStoreRead};
 use super::utf16::OffsetError;
 
-/// A read lock's body.
-pub type ReadBody = Box<dyn FnOnce(&dyn TextStoreRead)>;
+/// A read lock's body. Private: callers build one with [`LockGrant::read`].
+type ReadBody = Box<dyn FnOnce(&dyn TextStoreRead)>;
 
-/// A read-write lock's body.
-pub type EditBody = Box<dyn FnOnce(&mut dyn TextStoreEdit)>;
+/// A read-write lock's body. Private: callers build one with
+/// [`LockGrant::read_write`].
+type EditBody = Box<dyn FnOnce(&mut dyn TextStoreEdit)>;
 
 /// A lock's body, which the store runs with the session its kind allows.
 pub enum LockGrant {
@@ -136,9 +137,6 @@ pub enum TextStoreError {
     /// An offset or range does not name a position in the document.
     #[error(transparent)]
     Offset(#[from] OffsetError),
-    /// The store accepts no edits.
-    #[error("the text store is read-only")]
-    ReadOnly,
     /// The store's text must not be read out.
     #[error("the text store is protected")]
     Protected,

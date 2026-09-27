@@ -33,8 +33,8 @@ pub mod utf16;
 
 pub use in_memory::InMemoryTextStore;
 pub use lock::{
-    DEFERRED_LOCK_CAPACITY, EditBody, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,
-    ReadBody, TextStoreError,
+    DEFERRED_LOCK_CAPACITY, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,
+    TextStoreError,
 };
 pub use projection::project_ime_event;
 pub use session::{
