@@ -14,6 +14,7 @@ use flui_view::prelude::*;
 
 use super::AutovalidateMode;
 use super::form_field::{FormField, FormFieldHandle, FormFieldSetter, FormFieldValidator};
+use crate::support::EventCallback;
 use crate::text::{SubmitCallback, TextEditingController};
 
 /// A text form field's configuration, whichever input it draws.
@@ -33,7 +34,7 @@ pub struct TextFormFieldConfig {
     /// Receives the text when the form saves.
     pub on_saved: Option<FormFieldSetter<String>>,
     /// Called after the field resets.
-    pub on_reset: Option<Rc<dyn Fn(&mut EventCx<'_>)>>,
+    pub on_reset: Option<EventCallback>,
     /// Whether the field accepts input and autovalidates.
     pub enabled: bool,
     /// When the field validates on its own.
@@ -124,7 +125,7 @@ impl TextFormFieldInput {
     /// The input's `on_changed`: a user edit is the field's `did_change`.
     pub fn on_changed(&self) -> impl Fn(&mut EventCx<'_>, &str) + 'static {
         let field = self.field.clone();
-        move |cx: &mut EventCx<'_>, text: &str| field.did_change(cx, text.to_owned())
+        move |cx: &mut EventCx<'_>, text: &str| field.did_change(cx, text.to_owned()).report()
     }
 }
 

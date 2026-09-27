@@ -132,7 +132,7 @@ fn reset_restores_the_initial_value() {
     assert_eq!(controller.text(), "star");
     assert!(form.has_interacted_by_user());
 
-    probe.write(|cx| form.reset(cx));
+    probe.write(|cx| form.reset(cx)).expect("same presentation");
 
     assert_eq!(controller.text(), "start");
     assert!(!form.has_interacted_by_user());

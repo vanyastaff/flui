@@ -36,6 +36,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_rendering::semantics::SemanticsRole;
+use flui_view::EventContextError;
 use flui_view::element::ElementKind;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
@@ -69,12 +70,13 @@ pub enum AutovalidateMode {
 
 /// What a [`Form`] needs from each registered field, whatever its value type.
 pub(crate) trait FormFieldEntry {
+    fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError>;
     /// Run the validator, show its result, and report whether it passed.
     fn validate(&self) -> bool;
     /// Hand the current value to `on_saved`.
-    fn save(&self, cx: &mut EventCx<'_>);
+    fn save(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError>;
     /// Back to the initial value, errors and interaction cleared.
-    fn reset(&self, cx: &mut EventCx<'_>);
+    fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError>;
     fn has_interacted_by_user(&self) -> bool;
     fn has_error(&self) -> bool;
 }
@@ -82,6 +84,7 @@ pub(crate) trait FormFieldEntry {
 /// The form's shared state; fields hold it weakly.
 #[derive(Default)]
 pub(crate) struct FormInner {
+    writer: RefCell<Option<WriterSource>>,
     /// Registered fields, in registration order (Flutter's insertion-ordered
     /// `Set<FormFieldState>`).
     fields: RefCell<Vec<Rc<dyn FormFieldEntry>>>,
@@ -99,6 +102,9 @@ pub(crate) struct FormInner {
 /// instead of a `GlobalKey<FormState>`.
 ///
 /// Cheap to clone; every clone names the same form. Owner-thread only.
+/// A handle must be bound to at most one mounted `Form` at a time. Reusing
+/// the same handle for simultaneous mounts is unsupported: the shared fields,
+/// callbacks and presentation binding cannot represent two owners.
 ///
 /// [`Self::has_interacted_by_user`] reads plain state, not a signal, so a
 /// `build` that calls it does not subscribe; see [`FormFieldHandle`]'s
@@ -139,24 +145,72 @@ impl FormHandle {
     /// Takes the `&mut EventCx<'_>` of the event callback that saves (a
     /// submit button's press), and hands it to each `on_saved` (ADR-0086 §6):
     /// `.on_press(move |cx| form.save(cx))`.
-    pub fn save(&self, cx: &mut EventCx<'_>) {
-        for field in self.fields() {
-            field.save(cx);
+    ///
+    /// # Errors
+    /// Refuses a detached form, a foreign presentation or a build-time call
+    /// before dispatching any callback.
+    /// The current field snapshot is checked before dispatch; if a callback
+    /// detaches a later field, that field refuses its turn. Earlier callback
+    /// effects are not rolled back.
+    pub fn save(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        let fields = self.checked_fields(cx)?;
+        for field in fields {
+            field.save(cx)?;
         }
+        Ok(())
     }
 
     /// Every field back to its initial value, its error and interaction
     /// cleared; then the form's interaction is cleared and `on_changed`
     /// runs — Flutter's `FormState.reset`. The caller's `&mut EventCx<'_>`
     /// reaches every `on_reset` and `on_changed`.
-    pub fn reset(&self, cx: &mut EventCx<'_>) {
-        self.inner.resetting.set(true);
-        for field in self.fields() {
-            field.reset(cx);
+    ///
+    /// # Errors
+    /// Refuses a detached form, a foreign presentation or a build-time call
+    /// before changing field state. User callbacks are not transactional.
+    pub fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        let fields = self.checked_fields(cx)?;
+        struct ResetGuard<'a> {
+            resetting: &'a Cell<bool>,
+            previous: bool,
         }
-        self.inner.resetting.set(false);
+        impl Drop for ResetGuard<'_> {
+            fn drop(&mut self) {
+                self.resetting.set(self.previous);
+            }
+        }
+        let guard = ResetGuard {
+            resetting: &self.inner.resetting,
+            previous: self.inner.resetting.replace(true),
+        };
+        for field in fields {
+            field.reset(cx)?;
+        }
+        drop(guard);
         self.inner.interacted.set(false);
         self.field_did_change(cx);
+        Ok(())
+    }
+
+    pub(crate) fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError> {
+        self.inner
+            .writer
+            .borrow()
+            .as_ref()
+            .ok_or(EventContextError::Detached)?
+            .check_context(cx)
+    }
+
+    fn checked_fields(
+        &self,
+        cx: &EventCx<'_>,
+    ) -> Result<Vec<Rc<dyn FormFieldEntry>>, EventContextError> {
+        self.check_context(cx)?;
+        let fields = self.fields();
+        for field in &fields {
+            field.check_context(cx)?;
+        }
+        Ok(fields)
     }
 
     /// Whether the user has edited any field, or `validate()` ran since the
@@ -390,6 +444,10 @@ impl StatefulView for Form {
 }
 
 impl ViewState<Form> for FormState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.handle.inner.writer.borrow_mut() = Some(ctx.writer_source());
+    }
+
     fn did_update_view(&mut self, old_view: &Form, new_view: &Form) {
         let handle_changed = match (&old_view.handle, &new_view.handle) {
             (Some(old), Some(new)) => !old.same_form(new),
@@ -399,13 +457,21 @@ impl ViewState<Form> for FormState {
         if handle_changed {
             // The scope notifies its dependents, and each field registers
             // with the new form in `did_change_dependencies`.
+            let writer = self.handle.inner.writer.borrow_mut().take();
             self.handle = new_view.handle.clone().unwrap_or_default();
+            *self.handle.inner.writer.borrow_mut() = writer;
         }
         self.configure(new_view);
         // A reconfigured form rebuilds in Flutter, and its build runs the
         // form-level autovalidation.
         let fields = self.handle.fields();
         self.handle.autovalidate(&fields);
+    }
+
+    fn dispose(&mut self) {
+        self.handle.inner.writer.borrow_mut().take();
+        let callback = self.handle.inner.on_changed.borrow_mut().take();
+        drop(callback);
     }
 
     fn build(&self, view: &Form, _ctx: &dyn BuildContext) -> impl IntoView {

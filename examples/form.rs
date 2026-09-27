@@ -116,9 +116,9 @@ impl ViewState<SignUpForm> for SignUpState {
             SizedBox::width(FIELD_WIDTH).child(password),
             SizedBox::height(16.0),
             Row::new(row![
-                ElevatedButton::new(Text::new("Submit")).on_pressed(move || {
+                ElevatedButton::new(Text::new("Submit")).on_pressed(move |cx| {
                     if submit_form.validate() {
-                        submit_form.save();
+                        submit_form.save(cx)?;
                         let saved = submit_saved.with(Clone::clone);
                         submit_summary.update(|summary| {
                             *summary = format!(
@@ -131,11 +131,13 @@ impl ViewState<SignUpForm> for SignUpState {
                             "Fix the fields marked in red".clone_into(summary);
                         });
                     }
+                    Ok::<(), flui::view::EventContextError>(())
                 }),
                 SizedBox::width(8.0),
-                ElevatedButton::new(Text::new("Reset")).on_pressed(move || {
-                    reset_form.reset();
+                ElevatedButton::new(Text::new("Reset")).on_pressed(move |cx| {
+                    reset_form.reset(cx)?;
                     reset_summary.update(String::clear);
+                    Ok::<(), flui::view::EventContextError>(())
                 }),
             ]),
             SizedBox::height(16.0),

@@ -9,7 +9,7 @@
 //! `3.44.0` — the cases here port its validate/save/reset/autovalidate
 //! coverage onto FLUI's handles.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
@@ -338,7 +338,7 @@ fn save_calls_on_saved_with_each_fields_value_in_registration_order() {
     second.request_focus();
     type_text(&laid, "x");
 
-    probe.write(|cx| form.save(cx));
+    probe.write(|cx| form.save(cx)).expect("same presentation");
 
     assert_eq!(*saved.borrow(), ["a", "bx", "c"]);
 }
@@ -375,7 +375,7 @@ fn reset_restores_initial_values_and_clears_errors_and_interaction() {
         "precondition: error up"
     );
 
-    probe.write(|cx| form.reset(cx));
+    probe.write(|cx| form.reset(cx)).expect("same presentation");
     laid.tick();
 
     assert_eq!(controller.text(), "init");
@@ -533,7 +533,7 @@ fn set_value_on_a_text_form_field_is_seen_by_value_validate_and_save() {
     assert!(!field.has_interacted_by_user());
     assert_eq!(field.error_text(), None, "set_value does not validate");
     assert!(form.validate());
-    probe.write(|cx| form.save(cx));
+    probe.write(|cx| form.save(cx)).expect("same presentation");
     assert_eq!(saved.borrow().as_deref(), Some("set"));
 }
 
@@ -613,7 +613,7 @@ fn save_with_a_cx_reaches_on_saved_which_writes_a_signal() {
     });
     let mut laid = lay_out(probe.view(), tight(400.0, 300.0));
 
-    probe.write(|cx| form.save(cx));
+    probe.write(|cx| form.save(cx)).expect("same presentation");
 
     assert_eq!(probe.value(), Ok(4));
     laid.tick();
@@ -654,9 +654,256 @@ fn reset_with_a_cx_reaches_on_reset_and_form_on_changed() {
     });
     let _laid = lay_out(probe.view(), tight(400.0, 300.0));
 
-    probe.write(|cx| form.reset(cx));
+    probe.write(|cx| form.reset(cx)).expect("same presentation");
 
     // The field's on_reset (+10), its change notice while the form resets
     // (+1), and the form's own notice after the loop (+1).
     assert_eq!(probe.value(), Ok(12));
+}
+
+#[test]
+fn a_panicking_reset_callback_does_not_disable_later_form_validation() {
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    let (_laid, probe) = mount_probed(
+        Form::new(
+            RawTextFormField::with_initial_value("valid")
+                .handle(field.clone())
+                .validator(required("Required"))
+                .on_reset(|_cx| -> () { panic!("test callback failure") }),
+        )
+        .handle(form.clone())
+        .autovalidate_mode(AutovalidateMode::OnUserInteraction),
+    );
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        probe.write(|cx| form.reset(cx)).expect("same presentation");
+    }));
+    assert!(result.is_err(), "callback panic propagates");
+    probe
+        .write(|cx| field.did_change(cx, String::new()))
+        .expect("same presentation");
+    assert_eq!(field.error_text().as_deref(), Some("Required"));
+}
+
+#[test]
+fn a_foreign_presentation_cannot_partially_reset_a_form() {
+    use flui_view::SignalWriteExt as _;
+
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    let mounted_form = form.clone();
+    let mounted_field = field.clone();
+    let callbacks = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&callbacks);
+    let owner = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        let observed = Rc::clone(&observed);
+        Form::new(
+            RawTextFormField::with_initial_value("initial")
+                .handle(mounted_field.clone())
+                .on_reset(move |cx| {
+                    observed.set(observed.get() + 1);
+                    count.set(cx, 1)
+                }),
+        )
+        .handle(mounted_form.clone())
+    });
+    let _owner_tree = lay_out(owner.view(), tight(400.0, 300.0));
+    owner
+        .write(|cx| field.did_change(cx, "edited".to_owned()))
+        .expect("same presentation");
+    assert!(field.has_interacted_by_user());
+
+    let foreign = SignalProbe::new(|_| SizedBox::shrink());
+    let _foreign_tree = lay_out(foreign.view(), tight(100.0, 100.0));
+    assert_eq!(
+        foreign.write(|cx| form.reset(cx)),
+        Err(flui_view::EventContextError::ForeignPresentation)
+    );
+
+    assert_eq!(
+        field.value(),
+        "edited",
+        "ownership is checked before mutation"
+    );
+    assert!(field.has_interacted_by_user());
+    assert_eq!(
+        foreign.write(|cx| form.save(cx)),
+        Err(flui_view::EventContextError::ForeignPresentation)
+    );
+    assert_eq!(
+        foreign.write(|cx| field.reset(cx)),
+        Err(flui_view::EventContextError::ForeignPresentation)
+    );
+    assert_eq!(callbacks.get(), 0, "a rejected reset emits no callbacks");
+    assert_eq!(owner.value(), Ok(0));
+}
+
+#[test]
+fn a_foreign_presentation_cannot_partially_edit_a_form_field() {
+    use flui_view::SignalWriteExt as _;
+
+    let field = FormFieldHandle::new();
+    let mounted_field = field.clone();
+    let callbacks = Rc::new(Cell::new(0));
+    let observed = Rc::clone(&callbacks);
+    let owner = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        let observed = Rc::clone(&observed);
+        Form::new(RawTextFormField::with_initial_value("initial").handle(mounted_field.clone()))
+            .on_changed(move |cx| {
+                observed.set(observed.get() + 1);
+                count.set(cx, 1)
+            })
+    });
+    let _owner_tree = lay_out(owner.view(), tight(400.0, 300.0));
+    let foreign = SignalProbe::new(|_| SizedBox::shrink());
+    let _foreign_tree = lay_out(foreign.view(), tight(100.0, 100.0));
+    assert_eq!(
+        foreign.write(|cx| field.did_change(cx, "foreign edit".to_owned())),
+        Err(flui_view::EventContextError::ForeignPresentation)
+    );
+
+    assert_eq!(
+        field.value(),
+        "initial",
+        "a foreign edit changes no field state"
+    );
+    assert!(!field.has_interacted_by_user());
+    assert_eq!(callbacks.get(), 0, "a rejected edit emits no callbacks");
+    assert_eq!(owner.value(), Ok(0));
+}
+
+#[test]
+fn detached_forms_and_fields_refuse_event_operations() {
+    use flui_view::EventContextError;
+
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    let (mut laid, probe) = mount_probed(
+        Form::new(RawTextFormField::with_initial_value("initial").handle(field.clone()))
+            .handle(form.clone()),
+    );
+    probe
+        .write(|cx| field.did_change(cx, "edited".to_owned()))
+        .expect("mounted owner");
+    laid.pump_widget(SizedBox::shrink());
+
+    assert_eq!(
+        probe.write(|cx| form.reset(cx)),
+        Err(EventContextError::Detached)
+    );
+    assert_eq!(
+        probe.write(|cx| form.save(cx)),
+        Err(EventContextError::Detached)
+    );
+    assert_eq!(
+        probe.write(|cx| field.reset(cx)),
+        Err(EventContextError::Detached)
+    );
+    assert_eq!(
+        probe.write(|cx| field.did_change(cx, "late".to_owned())),
+        Err(EventContextError::Detached)
+    );
+    assert_eq!(field.value(), "edited");
+    assert!(field.has_interacted_by_user());
+}
+
+#[test]
+fn an_owner_context_opened_during_build_cannot_partially_reset_a_form() {
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    let mounted_form = form.clone();
+    let mounted_field = field.clone();
+    let source = Rc::new(RefCell::new(None::<SignalProbe>));
+    let weak_source = Rc::downgrade(&source);
+    let attempted = Rc::new(Cell::new(false));
+    let build_attempted = Rc::clone(&attempted);
+    let result = Rc::new(RefCell::new(None));
+    let observed = Rc::clone(&result);
+    let probe = SignalProbe::new(move |_| {
+        if build_attempted.get() {
+            let source = weak_source.upgrade().expect("test owns source slot");
+            let source = source.borrow().clone().expect("probe mounted");
+            *observed.borrow_mut() = Some(source.write(|cx| mounted_form.reset(cx)));
+        }
+        Form::new(RawTextFormField::with_initial_value("initial").handle(mounted_field.clone()))
+            .handle(mounted_form.clone())
+    });
+    let mut laid = lay_out(probe.view(), tight(400.0, 300.0));
+    *source.borrow_mut() = Some(probe.clone());
+    probe
+        .write(|cx| field.did_change(cx, "edited".to_owned()))
+        .expect("mounted owner");
+    attempted.set(true);
+    laid.pump_widget(probe.view());
+
+    assert!(matches!(
+        *result.borrow(),
+        Some(Err(flui_view::EventContextError::WrittenDuringBuild { .. }))
+    ));
+    assert_eq!(field.value(), "edited");
+    assert!(field.has_interacted_by_user());
+}
+
+#[test]
+fn one_event_callback_can_reset_a_form_then_write_a_signal_with_question_mark() {
+    use flui_view::{EventError, SignalWriteExt as _};
+
+    let form = FormHandle::new();
+    let mounted_form = form.clone();
+    let signal = Rc::new(RefCell::new(None));
+    let captured = Rc::clone(&signal);
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        *captured.borrow_mut() = Some(count);
+        Form::new(RawTextFormField::with_initial_value("initial")).handle(mounted_form.clone())
+    });
+    let _laid = lay_out(probe.view(), tight(400.0, 300.0));
+    let count = signal.borrow().expect("mounted signal");
+    let callback = flui_view::callback(move |cx| -> Result<(), EventError> {
+        form.reset(cx)?;
+        count.set(cx, 42)?;
+        Ok(())
+    });
+    probe
+        .write(callback)
+        .expect("both operations share their owner");
+    assert_eq!(probe.value(), Ok(42));
+}
+
+#[test]
+fn replacing_form_and_field_handles_transfers_event_ownership() {
+    use flui_view::EventContextError;
+
+    let old_form = FormHandle::new();
+    let old_field = FormFieldHandle::new();
+    let new_form = FormHandle::new();
+    let new_field = FormFieldHandle::new();
+    let selected = Rc::new(RefCell::new((old_form.clone(), old_field.clone())));
+    let selection = Rc::clone(&selected);
+    let probe = SignalProbe::new(move |_| {
+        let (form, field) = selection.borrow().clone();
+        Form::new(RawTextFormField::with_initial_value("initial").handle(field)).handle(form)
+    });
+    let mut laid = lay_out(probe.view(), tight(400.0, 300.0));
+    probe
+        .write(|cx| old_field.did_change(cx, "edited".to_owned()))
+        .expect("original owner");
+    *selected.borrow_mut() = (new_form.clone(), new_field.clone());
+    laid.pump_widget(probe.view());
+
+    assert_eq!(
+        probe.write(|cx| old_form.reset(cx)),
+        Err(EventContextError::Detached)
+    );
+    assert_eq!(
+        probe.write(|cx| old_field.reset(cx)),
+        Err(EventContextError::Detached)
+    );
+    assert_eq!(new_field.value(), "edited");
+    probe
+        .write(|cx| new_form.save(cx))
+        .expect("new form owns the event target");
+    probe
+        .write(|cx| new_field.did_change(cx, "new owner".to_owned()))
+        .expect("new field owns event target");
+    assert_eq!(new_field.value(), "new owner");
 }
