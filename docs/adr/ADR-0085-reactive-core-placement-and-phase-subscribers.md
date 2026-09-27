@@ -477,7 +477,7 @@ foundation contract stays, because production element reads use it.
 What exists:
 
 - §1: `a_write_to_a_secondary_presentations_signal_rebuilds_its_reader` in
-  `crates/flui-app/src/app/ui_realm/tests/signal_write_routing.rs` writes, through
+  `crates/flui-runtime/src/ui_realm/tests/signal_write_routing.rs` writes, through
   `UiCommand::SignalWrite`, a signal minted by the second presentation of a realm and asserts
   that its reader rebuilds and the primary's does not. It failed with `ForeignGraph` on the
   primary-only routing. Its siblings pin the dropped-and-counted case for a closed presentation

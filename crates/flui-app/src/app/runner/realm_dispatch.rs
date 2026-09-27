@@ -234,9 +234,23 @@ pub(in crate::app) enum PlatformToUi {
 /// `&UiRealm` receiver.
 // `pub(in crate::app)` (rather than private) so `AppRuntime`'s `queue` field, defined
 // in the sibling `runtime` module, can name this type.
+///
+/// `Pump` is a runner's frame wake. Like `ClosePresentation` it needs
+/// `&mut UiRealm` — [`UiRealm::pump`](crate::app::ui_realm::UiRealm::pump)
+/// takes the realm exclusively and enters it itself — so the drain loop runs
+/// it on the checked-out realm without entering it first; the closure enters
+/// the realm explicitly for whatever runner work precedes the pump.
 pub(in crate::app) enum RealmTask {
     Event(PlatformToUi),
+    #[cfg_attr(
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "the web runner wakes frames with `Pump`; native runners build `Frame`"
+        )
+    )]
     Frame(Box<dyn FnOnce(&crate::app::ui_realm::UiRealm)>),
+    Pump(Box<dyn FnOnce(&mut crate::app::ui_realm::UiRealm)>),
     ClosePresentation(flui_foundation::PresentationId),
 }
 
@@ -265,6 +279,11 @@ impl RealmTask {
         match self {
             Self::Event(event) => event.run(realm, presentation_id),
             Self::Frame(run) => run(realm),
+            Self::Pump(_) => unreachable!(
+                "BUG: RealmTask::Pump reached RealmTask::run -- dispatch_platform_realm's drain \
+                 loop must match this variant out before calling run, so it can hand the pump \
+                 &mut UiRealm instead"
+            ),
             Self::ClosePresentation(id) => unreachable!(
                 "BUG: RealmTask::ClosePresentation({id:?}) reached RealmTask::run -- \
                  dispatch_platform_realm's drain loop must match this variant out before \
@@ -683,7 +702,7 @@ pub(super) enum InstallPresentationError {
 /// whatever it already hosts — the addressed-routing counterpart to
 /// [`install_realm_alongside`] (which installs a second REALM instead of a
 /// second presentation of the SAME realm). This is the production entry
-/// point [`crate::app::presentation_forest::PresentationForest`]'s doc
+/// point `flui_runtime`'s `PresentationForest` doc
 /// points to: the forest's former `len()<=1` ratchet lifted (issue #555)
 /// specifically so this function has somewhere real to install into.
 ///
@@ -1182,6 +1201,9 @@ pub(super) fn dispatch_platform_realm(
                         realm.close_presentation_entered(id);
                     }
                 }
+                // Not entered here: the pump enters the realm itself, and a
+                // runner's pump closure enters it explicitly for its gate.
+                RealmTask::Pump(run) => run(&mut realm),
                 other => realm.enter(|realm| other.run(realm, task_presentation_id)),
             }
             next = APP_RUNTIME.with(|slot| {
@@ -1527,26 +1549,6 @@ fn drain_quit_notification() {
     if let Some(payload) = first_panic {
         std::panic::resume_unwind(payload);
     }
-}
-
-/// Drains the per-frame owner-inbox commands and reports whether the drain
-/// itself asked for a redraw.
-///
-/// Every platform's frame callback must call this exactly once per wake, at
-/// the Idle frame boundary — before the dirty gate, and before any
-/// early-return fast path a platform's frame callback takes (e.g. Android's
-/// hot-reload plugin scene) — never inside the frame transaction below.
-/// Running it unconditionally on every wake is what keeps
-/// `UiCommandSender`'s bounded inbox draining: a wake that skips the drain
-/// lets the inbox fill until it hard-errors, and a coalesced redraw request
-/// that nothing consumes never wakes the loop again (`take_redraw_request`
-/// only flips back to `false` once observed here).
-pub(super) fn drain_owner_inbox(realm: &crate::app::ui_realm::UiRealm) -> bool {
-    let report = realm.drain_commands();
-    if report != crate::app::ui_realm::DrainReport::default() {
-        tracing::trace!(?report, "owner inbox drained");
-    }
-    realm.take_redraw_request()
 }
 
 /// Per-pool grace deadline for joining running background work at full

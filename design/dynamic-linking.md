@@ -304,8 +304,8 @@ Reading the worker path turned up two more. Both are **hypotheses that were not 
 1. **The old worker image may be unmapped while the host still holds its code.**
    `WorkerReloadDriver::poll` unloads the old image (`crates/flui-hot-reload/src/worker.rs:458`)
    and loads the new one (`worker.rs:460`); the realm reassembles only afterwards
-   (`crates/flui-app/src/app/hot_reload.rs:226-228`, reaching `perform_reassemble` at
-   `crates/flui-app/src/app/presentation.rs:1300`). The host's element tree still holds views
+   (`crates/flui-app/src/app/hot_reload.rs:241-243`, reaching `perform_reassemble` at
+   `crates/flui-runtime/src/presentation.rs:1377`). The host's element tree still holds views
    and closures built by the old image: `build_counter_ui` returns a `BoxedView`
    (`examples/hot_reload_counter/logic/src/lib.rs:29`) with an `on_tap` closure (`lib.rs:36`).
    On Windows, `FreeLibrary` (`crates/flui-hot-reload/src/dynlib.rs:211`) unmaps an image whose

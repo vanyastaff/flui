@@ -17,7 +17,6 @@
 //!   │   ├─ platform.rs      - Central Platform trait
 //!   │   ├─ host_window.rs   - HostWindow: PlatformWindow + accessibility
 //!   │   ├─ owner.rs         - Owner-thread capability (ADR-0039)
-//!   │   ├─ accessibility.rs - PlatformAccessibility (AccessKit)
 //!   │   └─ capabilities.rs  - Platform capabilities
 //!   │
 //!   ├─ shared/              - Shared infrastructure

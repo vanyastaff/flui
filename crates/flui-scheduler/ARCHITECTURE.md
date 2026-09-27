@@ -393,7 +393,7 @@ driving the frame, only `Idle`/`PostFrameCallbacks` reach the
 thread, every phase reaches it.
 
 **Conflict:** `RenderingFlutterBinding::request_visual_update`
-(`flui-app`'s `bindings/renderer_binding.rs`) called the retired
+(`flui-runtime`'s `renderer_binding.rs`) called the retired
 `schedule_frame`, which pushed onto the (now-deleted) legacy queue and then
 called the **ungated** `request_frame()` directly. A binding whose
 scheduler had frames disabled (backgrounded app, `Hidden`/`Paused`/
@@ -405,7 +405,7 @@ request.
 `frames_enabled` gate (`ensure_visual_update` calls
 `schedule_frame_if_enabled`, which calls `request_frame` only when
 `frames_enabled` is true) and needed no new code, only a caller.
-`crates/flui-app/src/bindings/renderer_binding.rs`'s test module pins both
+`crates/flui-runtime/src/renderer_binding.rs`'s test module pins both
 edges:
 `request_visual_update_does_not_schedule_a_frame_while_frames_are_disabled`
 and `request_visual_update_schedules_a_frame_while_frames_are_enabled`.
@@ -447,7 +447,7 @@ is a sanctioned divergence point): the pipeline carrier no longer bypasses
 `VisualUpdateNotifier::fire_need_visual_update`
 (`flui-rendering/src/pipeline/notifier.rs`), which still invokes the
 closure a presentation registers via `owner.set_on_need_visual_update`
-(`flui-app/src/app/presentation.rs`) — but that closure no longer calls
+(`flui-runtime/src/presentation.rs`) — but that closure no longer calls
 the realm's shared `visual_wake()` and no longer pokes
 `window.request_redraw()` unconditionally. It now captures a
 `WeakUpdateScheduler` (matching `RenderingFlutterBinding.scheduler`'s
@@ -716,6 +716,31 @@ run fully rather than one half of a duplicated pair.
 start-contract gap and the cross-thread register/store TOCTOU) ship
 unfixed, named rather than silently assumed closed; both predate this fix
 and are not measured to have widened under it.
+
+### A ticker's elapsed time is wall-clock time, not the frame timestamp
+
+**Rule:** `Ticker` reports `start_time.elapsed()`: the wall-clock time since
+`start`, read when the tick runs. The frame's vsync timestamp, which the
+scheduler hands every transient callback, is ignored (`_vsync_time` in both
+auto-tick registrations).
+
+**Conflict:** Flutter's `Ticker._tick(timeStamp)` (`ticker.dart`, the method
+`tick_and_reschedule_static` ports) anchors `_startTime` on the first frame's
+timestamp and reports `timeStamp - _startTime`, so every ticker in a frame
+sees the same instant and a test's fake clock drives them. Here a host that
+drives frames on a virtual clock (`flui-runtime`'s `UiRealm::pump` with a
+`ManualClock`) moves the frame timestamp, the realm's `Vsync` controllers and
+the scheduler's frame timing, but not an `AnimationController` built on the
+scheduler: that one advances only as real time passes.
+
+**Choice:** kept for now, named. Moving the ticker onto the frame timestamp
+changes `start`, `mute`/`unmute`'s elapsed rebasing and the manual
+`Ticker::tick` path together, and belongs with the headless driver that needs
+it, not with the pump that exposed it. Pinned by
+`ticker::tests::a_scheduler_ticker_measures_wall_time_not_the_frame_timestamp`
+(two frames 10 s apart on the frame clock report ticks well under a second
+apart); moving the ticker onto the frame timestamp turns it red, and should
+delete this entry.
 
 ### `end_of_frame` registers before it demands, and the live registry is the memo
 

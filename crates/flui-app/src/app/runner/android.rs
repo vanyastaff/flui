@@ -1,7 +1,7 @@
 use flui_scheduler::AppLifecycleState;
 use flui_view::{StatelessView, View};
 
-use super::device_recovery::{new_device_recovery_backoff, render_frame_with_device_recovery};
+use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
 use super::frame_pacing::{
     BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
 };
@@ -10,7 +10,7 @@ use super::host::{
     runtime_wake_callback, with_owner_platform,
 };
 use super::realm_dispatch::{
-    PlatformToUi, RealmTask, dispatch_platform_realm, drain_owner_inbox, install_platform_realm,
+    PlatformToUi, RealmTask, dispatch_platform_realm, install_platform_realm,
     install_surface_applier, teardown_platform_realm,
 };
 use super::surface_lifecycle::{
@@ -311,89 +311,120 @@ where
             let surface_recreation_retry = Arc::clone(&surface_recreation_retry);
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmTask::Frame(Box::new(move |realm| {
-                    // Owner-inbox drain: commands and worker results commit HERE,
-                    // at the frame boundary while the scheduler phase is Idle —
-                    // never inside the frame transaction below. Runs before
-                    // everything else in this callback, including the hot-reload
-                    // plugin scene fast path below, so a command-driven redraw
-                    // request is observed by the very frame its wake produced
-                    // regardless of which rendering path this frame takes.
-                    let inbox_redraw = drain_owner_inbox(realm);
+                RealmTask::Pump(Box::new(move |realm| {
+                    // The gate half of the wake runs inside one realm entry
+                    // and decides; the pump below enters the realm itself.
+                    let (action, now) = realm.enter(|realm| {
+                        let now = web_time::Instant::now();
+                        // Owner-inbox drain: commands and worker results commit HERE,
+                        // at the frame boundary while the scheduler phase is Idle —
+                        // never inside the frame transaction below. Runs before
+                        // everything else in this callback, including the hot-reload
+                        // plugin scene fast path below, so a command-driven redraw
+                        // request is observed by the very frame its wake produced
+                        // regardless of which rendering path this frame takes.
+                        let inbox_redraw = realm.drain_owner_inbox();
 
-                    // If a scene plugin is live it owns this presentation frame,
-                    // but the callback still executes inside the realm entry
-                    // scope. Always `false` in a build without the `hot-reload`
-                    // feature. The plugin renders through the backend directly
-                    // (its own diagnostic scene, not a realm-produced frame),
-                    // so it goes through the lane's scoped backend access —
-                    // per ADR-0045 decision 6 the plugin path is one of the
-                    // named inline-only lanes.
-                    {
-                        let Some(mut lane) = lane_frame.try_lock() else {
-                            tracing::error!(
-                                "frame skipped: raster lane already held by an outer \
+                        // If a scene plugin is live it owns this presentation frame,
+                        // but the callback still executes inside the realm entry
+                        // scope. Always `false` in a build without the `hot-reload`
+                        // feature. The plugin renders through the backend directly
+                        // (its own diagnostic scene, not a realm-produced frame),
+                        // so it goes through the lane's scoped backend access —
+                        // per ADR-0045 decision 6 the plugin path is one of the
+                        // named inline-only lanes.
+                        {
+                            let Some(mut lane) = lane_frame.try_lock() else {
+                                tracing::error!(
+                                    "frame skipped: raster lane already held by an outer \
                                  frame dispatch"
-                            );
-                            return;
-                        };
-                        let plugin_rendered = lane.with_backend(|r| {
-                            let (w, h) = r.size();
-                            hot_reload_frame.try_render_frame(r, w as f32, h as f32)
-                        });
-                        if plugin_rendered {
-                            return;
+                                );
+                                return (WakeAction::Skip, now);
+                            };
+                            let plugin_rendered = lane.with_backend(|r| {
+                                let (w, h) = r.size();
+                                hot_reload_frame.try_render_frame(r, w as f32, h as f32)
+                            });
+                            if plugin_rendered {
+                                return (WakeAction::Skip, now);
+                            }
                         }
-                    }
 
-                    let has_pending = realm.has_pending_work();
-                    // See the desktop closure's matching comment: a wake-
-                    // deadline source (here, `set_wake_deadline_hook` forces
-                    // a dispatch once due — `flui-platform`'s
-                    // `platforms/android/mod.rs`'s own `run` loop) that is
-                    // absent from `dirty` reaches `WakeAction::Skip` and
-                    // returns before this closure ever calls `render_frame_
-                    // with_device_recovery`, no matter how faithfully the
-                    // platform actuates the wake. Calls the shared
-                    // `frame_is_dirty` — see that function's own doc for why
-                    // this must not be reimplemented locally.
-                    //
-                    // The surface-retry deadline joins the device-recovery one
-                    // here for the same reason that one must be present.
-                    let retry_deadline = super::host::merge_wake_deadlines(
-                        device_recovery_backoff.next_attempt_at(),
-                        surface_recreation_retry.next_attempt_at(),
-                    );
-                    let dirty = frame_is_dirty(
-                        inbox_redraw,
-                        realm.needs_redraw(),
-                        has_pending,
-                        retry_deadline,
-                        // Android's wake-deadline hook carries only the retry
-                        // deadlines, so no fallback deferral exists to consult
-                        // (ADR-0058): its backgrounded pump sleeps.
-                        FallbackGate::default(),
-                    );
-                    let scheduler = realm.scheduler();
-                    match wake_action(
-                        scheduler.frames_enabled(),
-                        dirty,
-                        scheduler.is_frame_scheduled(),
-                        FallbackGate::default(),
-                    ) {
+                        let has_pending = realm.has_pending_work();
+                        // See the desktop closure's matching comment: a wake-
+                        // deadline source (here, `set_wake_deadline_hook` forces
+                        // a dispatch once due — `flui-platform`'s
+                        // `platforms/android/mod.rs`'s own `run` loop) that is
+                        // absent from `dirty` reaches `WakeAction::Skip` and
+                        // returns before this closure ever calls
+                        // `pump_with_device_recovery`, no matter how faithfully the
+                        // platform actuates the wake. Calls the shared
+                        // `frame_is_dirty` — see that function's own doc for why
+                        // this must not be reimplemented locally.
+                        //
+                        // The surface-retry deadline joins the device-recovery one
+                        // here for the same reason that one must be present.
+                        let retry_deadline = super::host::merge_wake_deadlines(
+                            device_recovery_backoff.next_attempt_at(),
+                            surface_recreation_retry.next_attempt_at(),
+                        );
+                        let dirty = frame_is_dirty(
+                            inbox_redraw,
+                            realm.needs_redraw(),
+                            has_pending,
+                            retry_deadline,
+                            // Android's wake-deadline hook carries only the retry
+                            // deadlines, so no fallback deferral exists to consult
+                            // (ADR-0058): its backgrounded pump sleeps.
+                            FallbackGate::default(),
+                        );
+                        let scheduler = realm.scheduler();
+                        let action = wake_action(
+                            scheduler.frames_enabled(),
+                            dirty,
+                            scheduler.is_frame_scheduled(),
+                            FallbackGate::default(),
+                        );
+                        if action != WakeAction::Render {
+                            return (action, now);
+                        }
+
+                        // A retry owed by a genuine surface-recreation failure gets
+                        // its gated attempt here, BEFORE the frame, through the shared
+                        // helper (its own lane-lock scope, released before the realm
+                        // half). This closure already runs as the realm's Pump task, so
+                        // the full-repaint mark goes to `realm` directly and the frame
+                        // about to run is the one that repaints into the new surface —
+                        // re-dispatching it as another task would queue it behind
+                        // this one (the dispatcher is mid-phase) and land it a frame late.
+                        match retry_surface_recreation(&lane_frame, &surface_recreation_retry, now)
+                        {
+                            Some(SurfaceLifecycleOutcome::Recreated) => {
+                                realm.mark_primary_needs_full_repaint();
+                            }
+                            Some(SurfaceLifecycleOutcome::Failed(source)) => {
+                                tracing::warn!(
+                                    platform = "Android",
+                                    ?source,
+                                    "surface recreation retry failed; the deadline-paced retry \
+                                 continues"
+                                );
+                            }
+                            Some(SurfaceLifecycleOutcome::Released) | None => {}
+                        }
+                        (action, now)
+                    });
+
+                    match action {
                         WakeAction::Skip => return,
                         WakeAction::PumpAsync => {
                             // Frames disabled: pump only the async driver — no
-                            // begin/draw frame, no tickers, no pipeline, no
-                            // present. See `wake_action`'s doc for why this is
-                            // the only thing keeping a spawned future
-                            // progressing while backgrounded.
-                            //
-                            // `finish_async_pump` MUST run first, not after —
-                            // see `UpdateScheduler::finish_async_pump`'s doc for the
-                            // starvation hazard this ordering avoids.
-                            scheduler.finish_async_pump();
-                            scheduler.drive_async_tasks();
+                            // frame, no tickers, no pipeline, no present. See
+                            // `wake_action`'s doc for why this is the only thing
+                            // keeping a spawned future progressing while
+                            // backgrounded, and `UiRealm::pump_background` for
+                            // the latch-first order it keeps.
+                            realm.pump_background();
                             // Unconditional throttle: a self-re-arming task has
                             // no vsync/present call to bound it here either, and
                             // this arm has no gate-open signal to make the pace
@@ -407,34 +438,9 @@ where
                         WakeAction::Render => {}
                     }
 
-                    let now = web_time::Instant::now();
-
-                    // A retry owed by a genuine surface-recreation failure gets
-                    // its gated attempt here, BEFORE the frame, through the shared
-                    // helper (its own lane-lock scope, released before the realm
-                    // half). This closure already runs as the realm's Frame task, so
-                    // the full-repaint mark goes to `realm` directly and the frame
-                    // about to run is the one that repaints into the new surface —
-                    // re-dispatching it as another Frame task would queue it behind
-                    // this one (the dispatcher is mid-phase) and land it a frame late.
-                    match retry_surface_recreation(&lane_frame, &surface_recreation_retry, now) {
-                        Some(SurfaceLifecycleOutcome::Recreated) => {
-                            realm.mark_primary_needs_full_repaint();
-                        }
-                        Some(SurfaceLifecycleOutcome::Failed(source)) => {
-                            tracing::warn!(
-                                platform = "Android",
-                                ?source,
-                                "surface recreation retry failed; the deadline-paced retry \
-                                 continues"
-                            );
-                        }
-                        Some(SurfaceLifecycleOutcome::Released) | None => {}
-                    }
-
-                    // UpdateScheduler callbacks and rendering share ONE `UiRealm::enter`
-                    // dynamic extent; callbacks may legally resolve realm-local
-                    // capabilities throughout the complete frame transaction.
+                    // The frame: `UiRealm::pump` at `now`, with device-loss
+                    // recovery around it, same shape as the desktop path — see
+                    // `pump_with_device_recovery`.
                     //
                     // No sleep here, unlike an earlier version of this
                     // closure: both retries pace their ATTEMPT via a
@@ -453,24 +459,14 @@ where
                     // consults the hook every iteration and forces a
                     // dispatch once the deadline is due (`flui-platform`'s
                     // `platforms/android/mod.rs`).
-                    realm.drive_frame(now, || {
-                        // Device-loss recovery around the frame, same
-                        // shape as the desktop path — see
-                        // `render_frame_with_device_recovery`.
-                        let Some(mut lane) = lane_frame.try_lock() else {
-                            tracing::error!(
-                                "frame skipped: raster lane already held by an \
-                                     outer frame dispatch"
-                            );
-                            return;
-                        };
-                        let _ = render_frame_with_device_recovery(
-                            realm,
-                            &mut *lane,
-                            &device_recovery_backoff,
-                            now,
+                    let Some(mut lane) = lane_frame.try_lock() else {
+                        tracing::error!(
+                            "frame skipped: raster lane already held by an outer frame dispatch"
                         );
-                    });
+                        return;
+                    };
+                    let _ =
+                        pump_with_device_recovery(realm, &mut *lane, &device_recovery_backoff, now);
                 })),
             );
         }));

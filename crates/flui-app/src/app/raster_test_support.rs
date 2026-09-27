@@ -31,13 +31,12 @@ type RenderScript = Box<dyn FnMut(u32, &Scene) -> Result<PresentDisposition, Eng
 
 /// Closure-configurable [`RasterBackend`] double.
 ///
-/// Construct through [`always_presents`], [`single_shot`],
-/// [`fails_once_then_presents`], or — for a behavior none of those name —
-/// the general [`new`] with an explicit `render_scene` script.
+/// Construct through [`always_presents`], or — for a behavior it does not
+/// name — the general [`new`] with an explicit `render_scene` script. The
+/// realm's own frame-transaction tests script verdicts instead, through
+/// `flui_runtime::testing::ScriptedSink`.
 ///
 /// [`always_presents`]: TestRasterBackend::always_presents
-/// [`single_shot`]: TestRasterBackend::single_shot
-/// [`fails_once_then_presents`]: TestRasterBackend::fails_once_then_presents
 /// [`new`]: TestRasterBackend::new
 pub(crate) struct TestRasterBackend {
     /// Scripted `render_scene` behavior. Invoked with the zero-based index
@@ -73,32 +72,6 @@ impl TestRasterBackend {
     /// Every `render_scene` call reports a successful present.
     pub(crate) fn always_presents() -> Self {
         Self::new(|_, _| Ok(PresentDisposition::Presented))
-    }
-
-    /// Exactly one `render_scene` call is allowed; it returns `outcome`.
-    ///
-    /// A second call panics: single-frame tests script one outcome and rely
-    /// on the panic to catch a frame that unexpectedly reaches the backend
-    /// twice (`EngineError` is not `Clone`, so the outcome cannot simply be
-    /// replayed).
-    pub(crate) fn single_shot(outcome: Result<PresentDisposition, EngineError>) -> Self {
-        let mut outcome = Some(outcome);
-        Self::new(move |_, _| {
-            outcome
-                .take()
-                .expect("render_scene called more than once in a single-frame test")
-        })
-    }
-
-    /// The first `render_scene` call fails with `error`; every call after
-    /// reports a successful present — the shape a transient submit failure
-    /// followed by a genuine retry produces.
-    pub(crate) fn fails_once_then_presents(error: EngineError) -> Self {
-        let mut error = Some(error);
-        Self::new(move |_, _| match error.take() {
-            Some(error) => Err(error),
-            None => Ok(PresentDisposition::Presented),
-        })
     }
 
     /// Override the reported surface size (default `(800, 600)`).
