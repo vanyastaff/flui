@@ -270,10 +270,36 @@ to one element: `make_build_ctx` mints it for the element about to build (`Build
 subscribes), and `ElementBuildContext` captures one for its own element and subscribes only while
 marked as building. `begin_element_build`/`end_element_build` bracket every build in
 `build_or_recover` and `release_element` runs on every unmount, in every build: there is no
-`signals` feature. Writes are the sealed `SignalWriteExt` trait over `&Reactive` until ADR-0086
-moves them to the event context. The routing test is
+`signals` feature. Writes are the sealed `SignalWriteExt` trait over a sealed `WriteTarget`
+(next section). The routing test is
 `tests/signal_reads.rs::a_read_in_build_subscribes_through_the_production_context`; the
 `Reactive`/`ElementReads` sink pair is pinned by `static_assertions` in the module's tests.
+
+### Writes open through a WriterSource
+
+Signals have no Flutter counterpart; this is a local invariant (ADR-0086).
+
+**Rule.** `SignalWriteExt::set`/`update`/`set_if_changed` take `&W` where `W: WriteTarget`, a
+sealed trait whose graph accessor takes a token only this crate can make
+(`reactive/writer.rs`). Application code meets one target: the `&mut EventCx<'_>` an event
+callback receives, which derefs to a `Writer`. `Writer` has no public constructor and is neither
+`Clone` nor `Send`; an `EventCx` exists only inside `WriterSource::write`, and the only way to a
+`WriterSource` is `LifecycleContext::writer_source`, which `build`'s `&dyn BuildContext` does not
+have. Both context implementations hand out a source over the graph their element reads through
+(`ElementReads::graph`), so a source writes into its own presentation's graph and refuses another
+graph's handles with `ForeignGraph`. The run-time guard is unchanged and stays authoritative: a
+write a widget opens inside its own `build` is refused with `WrittenDuringBuild`. `Reactive` is
+still a `WriteTarget` so tests, the `signals_rebuilds` bench and `UiCommand::SignalWrite` keep
+compiling; ADR-0086 §8 step 3 removes it with both `reactive()` accessors. An event callback may
+return `()` or a write's `Result`; `EventOutcome::report` logs a refused write on
+`flui::signals` rather than dropping it silently. A `Signal::default()` handle names graph 0,
+which `Reactive::new` never mints, and is refused with `Unbound`.
+
+Pinned by the `reactive/writer.rs` unit tests and `static_assertions`,
+`tests/writer_source.rs` (the production context's source rebuilds the reader, the test
+context's writes the owner's graph, a write opened in `build` is refused), the
+`compile_fail` doctests on `WriterSource` and `LifecycleContext::writer_source`, and the
+`tests/ui/signal_write_*`, `unit_closure_*`, `let_bound_*` and `writer_escapes_*` snapshots.
 
 ### Reconciliation emits typed events on the live path
 

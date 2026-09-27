@@ -59,10 +59,19 @@ fn launch_fixture(client: &mut Client) -> TcpStream {
     loop {
         match listener.accept() {
             Ok((mut stream, _)) => {
+                // Windows hands the accepted socket the listener's nonblocking
+                // mode, and a nonblocking socket ignores its read timeout: a
+                // read before the killed fixture's socket closes would fail
+                // at once with WouldBlock instead of waiting for the close.
+                stream
+                    .set_nonblocking(false)
+                    .expect("BUG: the fixture observation blocks");
                 stream
                     .set_read_timeout(Some(Duration::from_millis(100)))
                     .expect("BUG: the fixture observation has a timeout");
                 let alive = stream.read(&mut [0]);
+                // A blocking read that times out reports TimedOut on Windows
+                // and WouldBlock (EAGAIN) on Unix.
                 assert!(
                     matches!(alive, Err(ref error) if matches!(
                         error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut

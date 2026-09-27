@@ -17,6 +17,31 @@ pub trait Clipboard: Send + Sync {
     }
 }
 
+/// An in-process clipboard: the headless backend's clipboard and the fake that
+/// widget tests read back. Starts empty.
+#[derive(Debug, Default)]
+pub struct InMemoryClipboard {
+    content: parking_lot::Mutex<Option<String>>,
+}
+
+impl InMemoryClipboard {
+    /// An empty clipboard.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Clipboard for InMemoryClipboard {
+    fn read_text(&self) -> Option<String> {
+        self.content.lock().clone()
+    }
+
+    fn write_text(&self, text: String) {
+        *self.content.lock() = Some(text);
+    }
+}
+
 /// Rich clipboard item with text content and optional metadata
 ///
 /// Wraps clipboard content for cross-platform exchange. Currently supports
@@ -54,5 +79,23 @@ impl ClipboardItem {
     /// Get the metadata, if any
     pub fn metadata(&self) -> Option<&str> {
         self.metadata.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Clipboard, InMemoryClipboard};
+
+    #[test]
+    fn in_memory_clipboard_starts_empty_and_round_trips() {
+        let clipboard = InMemoryClipboard::new();
+        assert_eq!(clipboard.read_text(), None);
+        assert!(!clipboard.has_text());
+
+        clipboard.write_text("first".to_owned());
+        assert_eq!(clipboard.read_text().as_deref(), Some("first"));
+        clipboard.write_text("second".to_owned());
+        assert_eq!(clipboard.read_text().as_deref(), Some("second"));
+        assert!(clipboard.has_text());
     }
 }

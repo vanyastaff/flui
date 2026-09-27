@@ -21,6 +21,8 @@ mod build_context_tests;
 mod build_owner_tests;
 #[path = "build_phase_span.rs"]
 mod build_phase_span;
+#[path = "clipboard_handle.rs"]
+mod clipboard_handle;
 #[path = "dense_reconcile_containment.rs"]
 mod dense_reconcile_containment;
 #[path = "dense_update_containment.rs"]
@@ -77,3 +79,5 @@ mod trybuild_ui;
 mod view_element_conversion_tests;
 #[path = "view_reconcile_match.rs"]
 mod view_reconcile_match;
+#[path = "writer_source.rs"]
+mod writer_source;

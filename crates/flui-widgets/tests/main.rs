@@ -47,6 +47,8 @@ mod directionality;
 mod directionality_dependency;
 #[path = "editable_text.rs"]
 mod editable_text;
+#[path = "editable_text_clipboard.rs"]
+mod editable_text_clipboard;
 #[path = "exclude_focus.rs"]
 mod exclude_focus;
 #[path = "fade_transition.rs"]
@@ -61,6 +63,8 @@ mod flex_parent_data;
 mod flow;
 #[path = "focus.rs"]
 mod focus;
+#[path = "form.rs"]
+mod form;
 #[path = "future_builder.rs"]
 mod future_builder;
 #[path = "gesture_detector.rs"]
@@ -138,6 +142,8 @@ mod page_route;
 mod parent_data_ancestry;
 #[path = "post_frame_handle.rs"]
 mod post_frame_handle;
+#[path = "raw_button.rs"]
+mod raw_button;
 #[path = "rich_text.rs"]
 mod rich_text;
 #[path = "rotated_box_layer_update.rs"]

@@ -42,4 +42,12 @@ fn ui_tests() {
     t.compile_fail("tests/ui/scope_ref_exposes_no_graph.rs");
     t.compile_fail("tests/ui/depend_on_inherited_fields_needs_token.rs");
     t.compile_fail("tests/ui/inherited_access_mutation_needs_token.rs");
+    // ADR-0086: the typed signal write. The snapshots are the record of what
+    // a user sees for each mistake; the pilot record in ADR-0086 §9 grades
+    // them.
+    t.compile_fail("tests/ui/signal_write_through_build_context.rs");
+    t.compile_fail("tests/ui/signal_write_without_a_writer.rs");
+    t.compile_fail("tests/ui/unit_closure_where_event_cx_expected.rs");
+    t.compile_fail("tests/ui/let_bound_event_closure_without_helper.rs");
+    t.compile_fail("tests/ui/writer_escapes_the_dispatch.rs");
 }

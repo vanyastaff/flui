@@ -93,7 +93,7 @@ mod platform_window;
 mod text_input;
 mod window;
 
-pub use clipboard::{Clipboard, ClipboardItem};
+pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 /// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;

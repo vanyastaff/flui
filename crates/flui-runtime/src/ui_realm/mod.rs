@@ -193,6 +193,10 @@ pub struct UiRealm {
     /// render-retry path all need this, exactly as the retired
     /// `AppBinding::wake_frame` did).
     wake: Arc<dyn Fn() + Send + Sync>,
+    /// The platform clipboard this realm's presentations hand their widgets:
+    /// the initial one at construction, every later one through
+    /// [`Self::assemble_presentation`].
+    clipboard: Arc<dyn flui_platform_api::Clipboard>,
     /// Test-only injectable clock, stored as the f64 bits in a u64 atomic
     /// (rather than an `Option<f64>`/`Cell<f64>`) so [`Self::now_secs`] can
     /// read it with a single relaxed load; `0u64` is the "not set" sentinel

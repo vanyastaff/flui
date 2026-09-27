@@ -72,6 +72,10 @@ pub mod table_border;
 pub mod text_layout;
 pub mod text_painter;
 
+// The Parley path's raster side (ADR-0092 §10 step 1); no production caller yet.
+#[cfg(feature = "parley")]
+pub mod parley_text;
+
 // Test harness: `record` (`cfg(test)`, or the `testing` feature).
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -87,8 +91,8 @@ pub use error::RegisterFontError;
 pub use cosmic_text::fontdb::Family;
 pub use table_border::paint_table_border;
 pub use text_layout::{
-    GlyphContent, GlyphImage, GlyphKey, PlacedGlyph, ResolvedFont, Shaper, SharedFontSystem,
-    TextLayout, TextLayoutResult, shared_font_system,
+    GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph, ResolvedFont, Shaper,
+    SharedFontSystem, TextLayout, TextLayoutResult, shared_font_system,
 };
 pub use text_painter::{Invalidation, TextBaseline, TextPainter};
 

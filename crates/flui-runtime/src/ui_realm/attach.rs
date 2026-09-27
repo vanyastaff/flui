@@ -1,7 +1,7 @@
 //! Attaching root widgets to a presentation.
 
 use super::UiRealm;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use flui_foundation::PresentationId;
 use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 
@@ -75,12 +75,11 @@ impl UiRealm {
         Ok(())
     }
 
-    /// [`Self::attach_root_widget_entered`], but targets an arbitrary
-    /// RESIDENT presentation instead of always `primary()` — for tests that
-    /// need a SECOND presentation to carry real, paintable content.
-    /// `draw_frame_for_presentation` resolves to `FramePaintOutcome::Idle`
-    /// for a presentation with nothing attached (no layer tree to paint),
-    /// so a multi-presentation test proving telemetry attribution follows
+    /// [`Self::attach_root_widget`], but targets an arbitrary RESIDENT
+    /// presentation instead of always the primary one — for tests that need a
+    /// SECOND presentation to carry real, paintable content. A frame paints
+    /// nothing for a presentation with nothing attached (no layer tree), so a
+    /// multi-presentation test proving telemetry attribution follows
     /// the presentation that actually produced (not `primary()`
     /// unconditionally) needs the non-primary presentation to genuinely
     /// paint, not merely flip a dirty bit.
@@ -89,8 +88,8 @@ impl UiRealm {
     ///
     /// Panics if `id` does not name a presentation this realm currently
     /// hosts.
-    #[cfg(test)]
-    pub(crate) fn attach_root_widget_to_for_test<V>(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn attach_root_widget_to_for_test<V>(
         &self,
         id: PresentationId,
         view: &V,

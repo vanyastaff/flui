@@ -183,6 +183,7 @@ impl UiRealm {
                 scheduler: &self.scheduler,
                 wake: Arc::clone(&self.wake),
                 command_sender,
+                clipboard: Arc::clone(&self.clipboard),
             },
         )
     }

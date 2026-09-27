@@ -94,6 +94,9 @@ mod tabs;
 
 #[path = "text_field.rs"]
 mod text_field;
+
+#[path = "text_form_field.rs"]
+mod text_form_field;
 #[path = "theme_fields.rs"]
 mod theme_fields;
 

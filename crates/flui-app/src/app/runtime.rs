@@ -1568,16 +1568,9 @@ impl AppRuntime {
         let _prev = self.platform_clipboard.lock().take();
     }
 
-    /// Access the installed platform clipboard, if any.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- a Clipboard capability \
-                      through BuildContext is future wiring; kept for parity \
-                      with the retired AppBinding::clipboard accessor"
-        )
-    )]
+    /// Access the installed platform clipboard, if any. Every runner reads it
+    /// through `runner::host::runtime_clipboard` to hand each realm it builds
+    /// the platform clipboard.
     pub(super) fn clipboard(&self) -> Option<Arc<dyn Clipboard>> {
         let clipboard = self.platform_clipboard.lock().clone();
         if clipboard.is_none() {
