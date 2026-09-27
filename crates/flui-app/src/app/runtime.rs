@@ -44,6 +44,8 @@ use std::thread::ThreadId;
 
 use flui_foundation::PresentationAddress;
 use flui_platform::OwnerPlatform;
+#[cfg(any(test, target_os = "android"))]
+use flui_platform::traits::WindowExecutionState;
 use flui_platform::traits::{Clipboard, PlatformWindow};
 use flui_semantics::AccessibilityFeatures;
 use parking_lot::{Mutex, RwLock};
@@ -1420,14 +1422,19 @@ impl AppRuntime {
     /// Owner-thread poke used only to continue bounded owner work. Unlike a
     /// frame wake it does not mark the realm dirty; operations in the batch
     /// request a frame themselves when their effects require one.
-    #[cfg(target_os = "android")]
-    pub(super) fn owner_turn_window_poke(&self) -> Arc<dyn Fn() + Send + Sync> {
+    #[cfg(any(test, target_os = "android"))]
+    pub(super) fn owner_turn_window_poke(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
         let redraw_window = Arc::clone(&self.redraw_window);
         Arc::new(move || {
             let window = redraw_window.lock().as_ref().cloned();
-            if let Some(window) = window {
-                window.request_redraw();
+            let Some(window) = window else {
+                return false;
+            };
+            if window.execution_state() != WindowExecutionState::Running {
+                return false;
             }
+            window.request_redraw();
+            true
         })
     }
 
@@ -1821,6 +1828,40 @@ mod wake_and_clipboard_tests {
             1,
             "wake_frame must call PlatformWindow::request_redraw exactly once"
         );
+    }
+
+    /// A continuation actuator may acknowledge only a native callback that
+    /// the platform can actually deliver. Android consumes redraw flags while
+    /// paused, so accepting a suspended window would strand the carried batch.
+    #[test]
+    fn owner_turn_poke_refuses_suspended_window_before_acknowledging() {
+        use std::sync::atomic::AtomicUsize;
+
+        let window = crate::app::window_test_support::headless_test_window();
+        let mock = window
+            .as_any()
+            .downcast_ref::<flui_platform::MockWindow>()
+            .expect("headless platform windows are MockWindow values");
+        let frame_requests = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&frame_requests);
+        window.on_request_frame(Box::new(move || {
+            observed.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        let runtime = AppRuntime::new();
+        runtime.set_redraw_window(Arc::clone(&window));
+        let poke = runtime.owner_turn_window_poke();
+
+        mock.simulate_execution_state(WindowExecutionState::Suspended);
+        assert!(
+            !poke(),
+            "suspended native execution cannot accept a continuation"
+        );
+        assert_eq!(frame_requests.load(Ordering::Relaxed), 0);
+
+        mock.simulate_execution_state(WindowExecutionState::Running);
+        assert!(poke(), "running native execution can accept a continuation");
+        assert_eq!(frame_requests.load(Ordering::Relaxed), 1);
     }
 
     /// The frame wake pokes the platform window from whatever thread completed

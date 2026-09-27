@@ -15,7 +15,7 @@ use flui_types::geometry::{DevicePixels, Pixels, Point, Size, device_px, px};
 
 use crate::{
     shared::WindowCallbacks,
-    traits::{CursorError, PlatformWindow, WindowId},
+    traits::{CursorError, PlatformWindow, WindowExecutionState, WindowId},
 };
 
 /// Android window wrapping the native ANativeWindow via `AndroidApp`
@@ -32,15 +32,17 @@ pub struct AndroidWindow {
     app: AndroidApp,
     callbacks: Arc<WindowCallbacks>,
     redraw_requested: Arc<AtomicBool>,
+    execution_resumed: Arc<AtomicBool>,
 }
 
 impl AndroidWindow {
     /// Create a new Android window wrapping the given `AndroidApp`
-    pub fn new(app: AndroidApp) -> Self {
+    pub(crate) fn new(app: AndroidApp, execution_resumed: Arc<AtomicBool>) -> Self {
         Self {
             app,
             callbacks: Arc::new(WindowCallbacks::new()),
             redraw_requested: Arc::new(AtomicBool::new(true)),
+            execution_resumed,
         }
     }
 
@@ -99,6 +101,14 @@ impl PlatformWindow for AndroidWindow {
         let config = self.app.config();
         let density = config.density().unwrap_or(320);
         density as f64 / 160.0
+    }
+
+    fn execution_state(&self) -> WindowExecutionState {
+        if self.execution_resumed.load(Ordering::SeqCst) {
+            WindowExecutionState::Running
+        } else {
+            WindowExecutionState::Suspended
+        }
     }
 
     fn request_redraw(&self) {

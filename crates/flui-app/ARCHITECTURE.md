@@ -67,7 +67,8 @@ The owner-local cross-realm FIFO is cooperative: one logical operation is
 never preempted internally, but a continuation callback executes at most 32
 operations and then requests one later opportunity. Fresh native roots and
 the carried FIFO share that physical-callback budget. Desktop and iOS use the platform
-owner signal, Android pokes its window without falsely marking a frame dirty,
+owner signal, Android pokes its window without falsely marking a frame dirty and
+acknowledges that opportunity only while native execution is running,
 and web consumes the logical continuation on its already-scheduled next RAF.
 Stale operations still consume budget because validation and captured-value
 destruction are real owner-thread work.

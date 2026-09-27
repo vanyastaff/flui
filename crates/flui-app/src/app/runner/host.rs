@@ -94,10 +94,7 @@ pub(crate) fn install_owner_platform(
     #[cfg(target_os = "android")]
     let owner_turn_wake: Rc<dyn Fn() -> bool> = {
         let poke = APP_RUNTIME.with(|slot| slot.borrow().owner_turn_window_poke());
-        Rc::new(move || {
-            poke();
-            true
-        })
+        Rc::new(move || poke())
     };
     #[cfg(target_arch = "wasm32")]
     let owner_turn_wake: Rc<dyn Fn() -> bool> = Rc::new(|| true);

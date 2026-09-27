@@ -156,6 +156,7 @@ pub struct AndroidPlatform {
     app: AndroidApp,
     handlers: Arc<Mutex<PlatformHandlers>>,
     running: Arc<AtomicBool>,
+    execution_resumed: Arc<AtomicBool>,
     window: Arc<Mutex<Option<Arc<AndroidWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
     clipboard: Arc<MockClipboard>,
@@ -182,6 +183,7 @@ impl AndroidPlatform {
             app,
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
             running: Arc::new(AtomicBool::new(true)),
+            execution_resumed: Arc::new(AtomicBool::new(false)),
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
             clipboard: Arc::new(MockClipboard::new()),
@@ -320,7 +322,7 @@ impl Platform for AndroidPlatform {
         let platform = Arc::new(*self);
 
         let mut on_ready = Some(on_ready);
-        let mut resumed = false;
+        platform.execution_resumed.store(false, Ordering::SeqCst);
         // Set when `on_ready` returns `Err`: a fallible bootstrap
         // failure (window creation, GPU init, root-widget attach) has no
         // other return path back to `run`'s caller. Stopping `running` and
@@ -361,6 +363,7 @@ impl Platform for AndroidPlatform {
                 .lock()
                 .as_ref()
                 .is_some_and(|w| w.take_redraw_request());
+            let resumed = platform.execution_resumed.load(Ordering::SeqCst);
             let should_render = should_force_render_poll(resumed, deadline_due, redraw_requested);
 
             let timeout = if should_render {
@@ -378,7 +381,7 @@ impl Platform for AndroidPlatform {
                             tracing::info!(
                                 "Android: Resumed — lifecycle transition, native window untouched"
                             );
-                            resumed = true;
+                            platform.execution_resumed.store(true, Ordering::SeqCst);
 
                             // Notify window of activation. The surface signal
                             // rides along: a `Resume` with no window yet (the
@@ -397,7 +400,10 @@ impl Platform for AndroidPlatform {
                                 "Android: Paused — releasing the surface; the native window \
                                  outlives this"
                             );
-                            resumed = false;
+                            // Publish suspension before invoking embedder callbacks: a nested
+                            // continuation request must not acknowledge a redraw opportunity
+                            // that this loop will refuse to dispatch.
+                            platform.execution_resumed.store(false, Ordering::SeqCst);
 
                             // Release BEFORE deactivating: the drop is the one
                             // step here with a validity window behind it, and
@@ -445,6 +451,7 @@ impl Platform for AndroidPlatform {
                         }
                         MainEvent::Destroy => {
                             tracing::info!("Android: Destroy — shutting down");
+                            platform.execution_resumed.store(false, Ordering::SeqCst);
 
                             // A window that never arrived leaves `on_ready`
                             // untaken, and exiting clean here would report a
@@ -523,6 +530,7 @@ impl Platform for AndroidPlatform {
             }
 
             // Process input events (touch, key) and dispatch through callbacks
+            let resumed = platform.execution_resumed.load(Ordering::SeqCst);
             if resumed {
                 platform.process_input_events();
             }
@@ -535,6 +543,8 @@ impl Platform for AndroidPlatform {
                 w.callbacks().dispatch_request_frame();
             }
         }
+
+        platform.execution_resumed.store(false, Ordering::SeqCst);
 
         // The loop's one exit, reached by its three returning routes: a
         // `MainEvent::Destroy`, a `quit()` from any thread, a bootstrap
@@ -599,6 +609,7 @@ impl Platform for AndroidPlatform {
 
     fn quit(&self) {
         tracing::info!("Android: quit requested");
+        self.execution_resumed.store(false, Ordering::SeqCst);
         self.running.store(false, Ordering::Relaxed);
     }
 
@@ -606,7 +617,10 @@ impl Platform for AndroidPlatform {
         &self,
         _options: WindowOptions,
     ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
-        let window = Arc::new(AndroidWindow::new(self.app.clone()));
+        let window = Arc::new(AndroidWindow::new(
+            self.app.clone(),
+            Arc::clone(&self.execution_resumed),
+        ));
         let _prev = self.window.lock().replace(Arc::clone(&window));
         tracing::info!("Android window created (wrapping ANativeWindow)");
         Ok(window)
