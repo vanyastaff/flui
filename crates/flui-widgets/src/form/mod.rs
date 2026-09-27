@@ -42,7 +42,8 @@ use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
 
 pub use form_field::{
-    FormField, FormFieldHandle, FormFieldSetter, FormFieldState, FormFieldValidator,
+    FormField, FormFieldHandle, FormFieldHandleAlreadyAttached, FormFieldSetter, FormFieldState,
+    FormFieldValidator,
 };
 pub use raw_text_form_field::{RawTextFormField, RawTextFormFieldState};
 
@@ -84,6 +85,9 @@ pub(crate) trait FormFieldEntry {
 /// The form's shared state; fields hold it weakly.
 #[derive(Default)]
 pub(crate) struct FormInner {
+    active_attachment: Cell<Option<u64>>,
+    next_attachment: Cell<u64>,
+    attachment_error_pending: Cell<bool>,
     writer: RefCell<Option<WriterSource>>,
     /// Registered fields, in registration order (Flutter's insertion-ordered
     /// `Set<FormFieldState>`).
@@ -97,14 +101,42 @@ pub(crate) struct FormInner {
     resetting: Cell<bool>,
 }
 
+/// A typed diagnostic emitted when one [`FormHandle`] is requested by two
+/// simultaneously mounted forms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the FormHandle is already attached to another mounted Form")]
+pub struct FormHandleAlreadyAttached;
+
+/// Exclusive ownership of a mounted form handle. The generation makes stale
+/// cleanup harmless after a later attachment has taken ownership.
+struct FormAttachment {
+    inner: Rc<FormInner>,
+    generation: u64,
+}
+
+impl Drop for FormAttachment {
+    fn drop(&mut self) {
+        if self.inner.active_attachment.get() != Some(self.generation) {
+            return;
+        }
+        self.inner.active_attachment.set(None);
+        self.inner.writer.borrow_mut().take();
+        self.inner.on_changed.borrow_mut().take();
+        self.inner.fields.borrow_mut().clear();
+        self.inner.interacted.set(false);
+        self.inner.resetting.set(false);
+    }
+}
+
 /// The form's imperative surface — Flutter's `FormState`, reached by a handle
 /// the caller creates and passes to [`Form::handle`], or from [`Form::of`],
 /// instead of a `GlobalKey<FormState>`.
 ///
 /// Cheap to clone; every clone names the same form. Owner-thread only.
-/// A handle must be bound to at most one mounted `Form` at a time. Reusing
-/// the same handle for simultaneous mounts is unsupported: the shared fields,
-/// callbacks and presentation binding cannot represent two owners.
+/// A handle binds to at most one mounted `Form` at a time. A simultaneous
+/// duplicate is diagnosed and receives an isolated internal handle: it cannot
+/// replace or later detach the first form's fields, callbacks or presentation
+/// binding. Once the owner unmounts, the handle can be attached again.
 ///
 /// [`Self::has_interacted_by_user`] reads plain state, not a signal, so a
 /// `build` that calls it does not subscribe; see [`FormFieldHandle`]'s
@@ -129,6 +161,37 @@ impl FormHandle {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Take the duplicate-attachment diagnostic recorded during mounting.
+    ///
+    /// The refused form is isolated behind its own internal handle, so it
+    /// cannot mutate this handle's owner. This drain is the typed counterpart
+    /// to the tracing error, following the duplicate-`GlobalKey` diagnostic
+    /// contract rather than panicking on caller-controlled input.
+    pub fn take_attachment_error(&self) -> Option<FormHandleAlreadyAttached> {
+        self.inner
+            .attachment_error_pending
+            .replace(false)
+            .then_some(FormHandleAlreadyAttached)
+    }
+
+    fn try_attach(&self) -> Option<FormAttachment> {
+        if self.inner.active_attachment.get().is_some() {
+            return None;
+        }
+        let generation = self
+            .inner
+            .next_attachment
+            .get()
+            .checked_add(1)
+            .expect("BUG: a FormHandle attachment generation cannot exhaust u64");
+        self.inner.next_attachment.set(generation);
+        self.inner.active_attachment.set(Some(generation));
+        Some(FormAttachment {
+            inner: Rc::clone(&self.inner),
+            generation,
+        })
     }
 
     /// Validate every registered field and show each result; mark the form
@@ -410,13 +473,19 @@ impl View for Form {
 /// The state behind [`Form`]: its handle and configuration.
 pub struct FormState {
     handle: FormHandle,
+    /// The external handle actually owned by this state. `None` means the
+    /// form owns an internal handle, including the isolated fallback used
+    /// after an external duplicate is refused.
+    bound_external: Option<FormHandle>,
+    attachment: Option<FormAttachment>,
 }
 
 impl std::fmt::Debug for FormState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FormState")
             .field("handle", &self.handle)
-            .finish()
+            .field("uses_external_handle", &self.bound_external.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -429,17 +498,72 @@ impl FormState {
             .borrow_mut()
             .clone_from(&view.on_changed);
     }
+
+    fn attach(view: &Form) -> Self {
+        let requested = view.handle.clone().unwrap_or_default();
+        if let Some(attachment) = requested.try_attach() {
+            let state = Self {
+                handle: requested,
+                bound_external: view.handle.clone(),
+                attachment: Some(attachment),
+            };
+            state.configure(view);
+            return state;
+        }
+
+        tracing::error!(
+            "FormHandle is already attached to a mounted Form; the duplicate Form uses an \
+             isolated internal handle so it cannot mutate or detach the existing owner"
+        );
+        requested.inner.attachment_error_pending.set(true);
+        let handle = FormHandle::new();
+        let attachment = handle
+            .try_attach()
+            .expect("BUG: a fresh FormHandle has no existing attachment");
+        let state = Self {
+            handle,
+            bound_external: None,
+            attachment: Some(attachment),
+        };
+        state.configure(view);
+        state
+    }
+
+    fn owns_requested_handle(&self, view: &Form) -> bool {
+        match (&self.bound_external, &view.handle) {
+            (Some(bound), Some(requested)) => bound.same_form(requested),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn try_rebind(&mut self, view: &Form) {
+        if self.owns_requested_handle(view) {
+            return;
+        }
+        let requested = view.handle.clone().unwrap_or_default();
+        let Some(attachment) = requested.try_attach() else {
+            tracing::error!(
+                "FormHandle is already attached to a mounted Form; retaining the current \
+                 attachment until a later update can acquire the requested handle"
+            );
+            requested.inner.attachment_error_pending.set(true);
+            return;
+        };
+        let writer = self.handle.inner.writer.borrow().clone();
+        *requested.inner.writer.borrow_mut() = writer;
+        let old_attachment = self.attachment.replace(attachment);
+        self.handle = requested;
+        self.bound_external.clone_from(&view.handle);
+        drop(old_attachment);
+    }
 }
 
 impl StatefulView for Form {
     type State = FormState;
 
     fn create_state(&self) -> FormState {
-        let state = FormState {
-            handle: self.handle.clone().unwrap_or_default(),
-        };
-        state.configure(self);
-        state
+        FormState::attach(self)
     }
 }
 
@@ -448,19 +572,10 @@ impl ViewState<Form> for FormState {
         *self.handle.inner.writer.borrow_mut() = Some(ctx.writer_source());
     }
 
-    fn did_update_view(&mut self, old_view: &Form, new_view: &Form) {
-        let handle_changed = match (&old_view.handle, &new_view.handle) {
-            (Some(old), Some(new)) => !old.same_form(new),
-            (None, None) => false,
-            _ => true,
-        };
-        if handle_changed {
-            // The scope notifies its dependents, and each field registers
-            // with the new form in `did_change_dependencies`.
-            let writer = self.handle.inner.writer.borrow_mut().take();
-            self.handle = new_view.handle.clone().unwrap_or_default();
-            *self.handle.inner.writer.borrow_mut() = writer;
-        }
+    fn did_update_view(&mut self, _old_view: &Form, new_view: &Form) {
+        // Acquire before releasing: a busy replacement cannot detach the
+        // form from the handle that still owns its fields and writer.
+        self.try_rebind(new_view);
         self.configure(new_view);
         // A reconfigured form rebuilds in Flutter, and its build runs the
         // form-level autovalidation.
@@ -469,9 +584,7 @@ impl ViewState<Form> for FormState {
     }
 
     fn dispose(&mut self) {
-        self.handle.inner.writer.borrow_mut().take();
-        let callback = self.handle.inner.on_changed.borrow_mut().take();
-        drop(callback);
+        drop(self.attachment.take());
     }
 
     fn build(&self, view: &Form, _ctx: &dyn BuildContext) -> impl IntoView {

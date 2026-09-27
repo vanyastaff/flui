@@ -156,7 +156,6 @@ impl TextFormFieldCore {
             .clone()
             .unwrap_or_else(|| TextEditingController::with_text(config.initial_value.clone()));
         let handle = config.handle.clone().unwrap_or_default();
-        bind_text_controller(&handle, &controller);
         Self {
             initial_value: controller.text(),
             controller,
@@ -169,15 +168,12 @@ impl TextFormFieldCore {
     /// edited from now on; dropping the caller's controller moves the text
     /// into one the field owns; a new handle takes the field over.
     pub fn update(&mut self, old: &TextFormFieldConfig, new: &TextFormFieldConfig) {
-        let mut rebind = false;
         match (&old.controller, &new.controller) {
             (_, Some(controller)) if !controller.is_same_controller(&self.controller) => {
                 self.controller = controller.clone();
-                rebind = true;
             }
             (Some(_), None) => {
                 self.controller = TextEditingController::with_text(self.controller.text());
-                rebind = true;
             }
             _ => {}
         }
@@ -185,10 +181,6 @@ impl TextFormFieldCore {
             && !handle.same_field(&self.handle)
         {
             self.handle = handle.clone();
-            rebind = true;
-        }
-        if rebind {
-            bind_text_controller(&self.handle, &self.controller);
         }
     }
 
@@ -204,6 +196,8 @@ impl TextFormFieldCore {
         let obscure_text = config.obscure_text;
         let focus_node = config.focus_node.clone();
         let on_submitted = config.on_submitted.clone();
+        let sink = self.controller.clone();
+        let source = self.controller.clone();
         let mut field = FormField::new(self.initial_value.clone(), move |_ctx, field| {
             input(TextFormFieldInput {
                 controller: controller.clone(),
@@ -216,27 +210,15 @@ impl TextFormFieldCore {
         })
         .enabled(config.enabled)
         .autovalidate_mode(config.autovalidate_mode)
-        .handle(self.handle.clone());
+        .handle(self.handle.clone())
+        .value_binding(
+            Rc::new(move |value: &String| sink.set_text(value.clone())),
+            Rc::new(move || source.text()),
+        );
         field.validator.clone_from(&config.validator);
         field.on_saved.clone_from(&config.on_saved);
         field.on_reset.clone_from(&config.on_reset);
         field.force_error_text.clone_from(&config.force_error_text);
         field
     }
-}
-
-/// Keep `handle`'s value and `controller`'s text one: a value change the
-/// form makes (a reset, `set_value`) is written to the controller, and the
-/// value is read from the controller before it is used, so a caller's own
-/// controller edit is validated and saved too — without counting as the
-/// user's interaction.
-fn bind_text_controller(handle: &FormFieldHandle<String>, controller: &TextEditingController) {
-    let sink = controller.clone();
-    let source = controller.clone();
-    handle.bind(
-        // `set_text` is a no-op for an unchanged text, so the user's own edit,
-        // already in the controller, is not written back.
-        Rc::new(move |value: &String| sink.set_text(value.clone())),
-        Rc::new(move || source.text()),
-    );
 }

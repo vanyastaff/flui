@@ -8,5 +8,7 @@
 ### Fixed
 
 - Queued assistive gesture activation uses the current handler and is cancelled after handler removal or widget disposal.
+- Accepted assistive gesture actions preserve their multiplicity and FIFO order across tap and long-press commands, including the queued tail after an earlier callback panics.
+- Simultaneously reusing a `FormHandle` or `FormFieldHandle` is diagnosed through a typed drain and isolated before the duplicate can replace or detach the mounted owner's state.
 - Layout/build-observed animation and dismissal callbacks are delivered through the owner-local post-frame lane instead of attempting signal writes during build.
 - Disposing a ScaffoldMessenger cancels pending completion callbacks; missing post-frame support no longer invokes completion callbacks inside build. Form reset and messenger completion guards recover after callback panics.

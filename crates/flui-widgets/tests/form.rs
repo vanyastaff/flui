@@ -18,8 +18,8 @@ use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform_api::Clipboard as _;
 use flui_view::{BoxedView, ViewExt as _};
 use flui_widgets::{
-    AutovalidateMode, Column, Form, FormFieldHandle, FormHandle, RawTextFormField, SizedBox,
-    TextEditingController,
+    AutovalidateMode, Column, Form, FormFieldHandle, FormFieldHandleAlreadyAttached, FormHandle,
+    FormHandleAlreadyAttached, RawTextFormField, SizedBox, TextEditingController,
 };
 
 use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
@@ -503,6 +503,42 @@ fn dropping_the_callers_controller_moves_the_text_into_a_field_owned_one() {
     assert_eq!(field.value(), "abc");
 }
 
+#[test]
+fn unmounting_a_text_form_field_releases_callbacks_and_controller_binding() {
+    let field = FormFieldHandle::new();
+    let controller = TextEditingController::with_text("mounted");
+    let captured = Rc::new(());
+    let weak_capture = Rc::downgrade(&captured);
+    {
+        let callback_capture = Rc::clone(&captured);
+        let _owner = mount(Form::new(
+            RawTextFormField::new(controller.clone())
+                .on_saved(move |_cx, _value| drop(Rc::clone(&callback_capture)))
+                .handle(field.clone()),
+        ));
+        controller.set_text("latest mounted".to_owned());
+    }
+    drop(captured);
+
+    assert!(
+        weak_capture.upgrade().is_none(),
+        "detaching clears callbacks retained by the mounted configuration"
+    );
+    assert_eq!(
+        field.value(),
+        "latest mounted",
+        "detach materializes the last lazily observed controller value"
+    );
+    controller.set_text("outside edit".to_owned());
+    assert_eq!(field.value(), "latest mounted");
+    field.set_value("detached snapshot".to_owned());
+    assert_eq!(
+        controller.text(),
+        "outside edit",
+        "a detached handle no longer writes the old controller"
+    );
+}
+
 /// `set_value` on a text form field is its value from then on — `value()`,
 /// the validator and `on_saved` all see it — because it reaches the
 /// controller the field reads; it neither marks interaction nor validates.
@@ -906,4 +942,292 @@ fn replacing_form_and_field_handles_transfers_event_ownership() {
         .write(|cx| new_field.did_change(cx, "new owner".to_owned()))
         .expect("new field owns event target");
     assert_eq!(new_field.value(), "new owner");
+}
+
+/// One handle names one mounted form. A second simultaneous mount must fail
+/// before its configuration can replace the first form's callback or owner.
+///
+/// Fails without an attachment lease because `Form::create_state` configures
+/// the shared handle and the second `init_state` replaces its writer.
+#[test]
+fn a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first() {
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    let first_changes = Rc::new(Cell::new(0));
+    let observed_first = Rc::clone(&first_changes);
+    let mounted_form = form.clone();
+    let mounted_field = field.clone();
+    let first_probe = SignalProbe::new(move |_| {
+        let observed_first = Rc::clone(&observed_first);
+        Form::new(RawTextFormField::with_initial_value("first").handle(mounted_field.clone()))
+            .handle(mounted_form.clone())
+            .on_changed(move |_cx| observed_first.set(observed_first.get() + 1))
+    });
+    let _first_tree = lay_out(first_probe.view(), tight(400.0, 300.0));
+
+    let duplicate_changes = Rc::new(Cell::new(0));
+    let observed_duplicate = Rc::clone(&duplicate_changes);
+    let duplicate_form = form.clone();
+    let (duplicate_tree, log) = flui_testing::log_capture::capture(|| {
+        lay_out(
+            Form::new(SizedBox::shrink())
+                .handle(duplicate_form)
+                .on_changed(move |_cx| {
+                    observed_duplicate.set(observed_duplicate.get() + 1);
+                }),
+            tight(400.0, 300.0),
+        )
+    });
+    assert!(
+        log.contains("FormHandle is already attached"),
+        "the caller-triggerable refusal is reported without unwinding: {log}"
+    );
+    assert_eq!(
+        form.take_attachment_error(),
+        Some(FormHandleAlreadyAttached),
+        "the refusal is available as a typed diagnostic"
+    );
+
+    first_probe
+        .write(|cx| field.did_change(cx, "edited".to_owned()))
+        .expect("the original form remains attached");
+    assert_eq!(first_changes.get(), 1);
+    assert_eq!(
+        duplicate_changes.get(),
+        0,
+        "the refused form cannot replace the original callback"
+    );
+
+    drop(duplicate_tree);
+    first_probe
+        .write(|cx| field.did_change(cx, "still attached".to_owned()))
+        .expect("disposing the refused form cannot detach the original form");
+    assert_eq!(first_changes.get(), 2);
+}
+
+#[test]
+fn a_form_field_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first() {
+    let field = FormFieldHandle::new();
+    let mounted_field = field.clone();
+    let first_probe = SignalProbe::new(move |_| {
+        RawTextFormField::with_initial_value("first").handle(mounted_field.clone())
+    });
+    let _first_tree = lay_out(first_probe.view(), tight(400.0, 300.0));
+
+    let duplicate_field = field.clone();
+    let (duplicate_tree, log) = flui_testing::log_capture::capture(|| {
+        lay_out(
+            RawTextFormField::with_initial_value("second").handle(duplicate_field),
+            tight(400.0, 300.0),
+        )
+    });
+    assert!(
+        log.contains("FormFieldHandle is already attached"),
+        "the caller-triggerable refusal is reported without unwinding: {log}"
+    );
+    assert_eq!(
+        field.take_attachment_error(),
+        Some(FormFieldHandleAlreadyAttached),
+        "the refusal is available as a typed diagnostic"
+    );
+    assert_eq!(
+        field.value(),
+        "first",
+        "the refused field cannot replace the original value"
+    );
+
+    drop(duplicate_tree);
+    first_probe
+        .write(|cx| field.did_change(cx, "still attached".to_owned()))
+        .expect("disposing the refused field cannot detach the original field");
+    assert_eq!(field.value(), "still attached");
+}
+
+#[test]
+fn form_and_field_handles_can_reattach_after_their_owner_unmounts() {
+    let form = FormHandle::new();
+    let field = FormFieldHandle::new();
+    {
+        let _first_owner = lay_out(
+            Form::new(RawTextFormField::with_initial_value("first owner").handle(field.clone()))
+                .handle(form.clone()),
+            tight(400.0, 300.0),
+        );
+    }
+
+    let mounted_form = form.clone();
+    let mounted_field = field.clone();
+    let second_probe = SignalProbe::new(move |_| {
+        Form::new(
+            RawTextFormField::with_initial_value("second owner").handle(mounted_field.clone()),
+        )
+        .handle(mounted_form.clone())
+    });
+    let (_second_owner, log) =
+        flui_testing::log_capture::capture(|| lay_out(second_probe.view(), tight(400.0, 300.0)));
+
+    assert!(
+        !log.contains("already attached"),
+        "unmount releases both exclusive leases: {log}"
+    );
+    second_probe
+        .write(|cx| field.did_change(cx, "reattached".to_owned()))
+        .expect("the field writer belongs to the new owner");
+    second_probe
+        .write(|cx| form.reset(cx))
+        .expect("the form writer belongs to the new owner");
+    assert_eq!(field.value(), "second owner");
+}
+
+#[test]
+fn a_busy_form_handle_rebind_keeps_the_old_owner_until_a_later_update_can_acquire() {
+    use flui_view::EventContextError;
+
+    let old_form = FormHandle::new();
+    let busy_form = FormHandle::new();
+    let first_field = FormFieldHandle::new();
+    let busy_field = FormFieldHandle::new();
+    let request_busy = Rc::new(Cell::new(false));
+    let show_busy_owner = Rc::new(Cell::new(true));
+
+    let mounted_old = old_form.clone();
+    let requested = busy_form.clone();
+    let mounted_first_field = first_field.clone();
+    let mounted_busy = busy_form.clone();
+    let mounted_busy_field = busy_field.clone();
+    let choose_busy = Rc::clone(&request_busy);
+    let include_busy = Rc::clone(&show_busy_owner);
+    let probe = SignalProbe::new(move |_| {
+        let first_handle = if choose_busy.get() {
+            requested.clone()
+        } else {
+            mounted_old.clone()
+        };
+        let mut children = vec![
+            Form::new(
+                RawTextFormField::with_initial_value("first").handle(mounted_first_field.clone()),
+            )
+            .handle(first_handle)
+            .boxed(),
+        ];
+        if include_busy.get() {
+            children.push(
+                Form::new(
+                    RawTextFormField::with_initial_value("busy").handle(mounted_busy_field.clone()),
+                )
+                .handle(mounted_busy.clone())
+                .boxed(),
+            );
+        }
+        fields(children)
+    });
+    let mut laid = lay_out(probe.view(), tight(400.0, 300.0));
+    probe
+        .write(|cx| first_field.did_change(cx, "first edited".to_owned()))
+        .expect("old form owns the first field");
+    probe
+        .write(|cx| busy_field.did_change(cx, "busy edited".to_owned()))
+        .expect("busy form owns the second field");
+
+    request_busy.set(true);
+    let ((), log) = flui_testing::log_capture::capture(|| laid.pump_widget(probe.view()));
+    assert!(log.contains("retaining the current attachment"), "{log}");
+    assert_eq!(
+        busy_form.take_attachment_error(),
+        Some(FormHandleAlreadyAttached)
+    );
+    probe
+        .write(|cx| old_form.reset(cx))
+        .expect("failed acquisition keeps the old binding live");
+    probe
+        .write(|cx| busy_form.reset(cx))
+        .expect("failed acquisition leaves the busy owner untouched");
+    assert_eq!(first_field.value(), "first");
+    assert_eq!(busy_field.value(), "busy");
+
+    show_busy_owner.set(false);
+    laid.pump_widget(probe.view());
+    laid.pump_widget(probe.view());
+    assert_eq!(
+        probe.write(|cx| old_form.reset(cx)),
+        Err(EventContextError::Detached),
+        "the old handle detaches only after the replacement is acquired"
+    );
+    probe
+        .write(|cx| busy_form.reset(cx))
+        .expect("a later update retries and acquires the released handle");
+}
+
+#[test]
+fn a_busy_field_handle_rebind_keeps_both_owners_until_a_later_update_can_acquire() {
+    use flui_view::EventContextError;
+
+    let form = FormHandle::new();
+    let old_field = FormFieldHandle::new();
+    let busy_field = FormFieldHandle::new();
+    let request_busy = Rc::new(Cell::new(false));
+    let show_busy_owner = Rc::new(Cell::new(true));
+
+    let mounted_form = form.clone();
+    let mounted_old = old_field.clone();
+    let requested = busy_field.clone();
+    let mounted_busy = busy_field.clone();
+    let choose_busy = Rc::clone(&request_busy);
+    let include_busy = Rc::clone(&show_busy_owner);
+    let probe = SignalProbe::new(move |_| {
+        let first_handle = if choose_busy.get() {
+            requested.clone()
+        } else {
+            mounted_old.clone()
+        };
+        let mut children = vec![
+            RawTextFormField::with_initial_value("first")
+                .handle(first_handle)
+                .boxed(),
+        ];
+        if include_busy.get() {
+            children.push(
+                RawTextFormField::with_initial_value("busy")
+                    .handle(mounted_busy.clone())
+                    .boxed(),
+            );
+        }
+        Form::new(fields(children)).handle(mounted_form.clone())
+    });
+    let mut laid = lay_out(probe.view(), tight(400.0, 300.0));
+    probe
+        .write(|cx| old_field.did_change(cx, "first edited".to_owned()))
+        .expect("old handle owns the first field");
+    probe
+        .write(|cx| busy_field.did_change(cx, "busy edited".to_owned()))
+        .expect("busy handle owns the second field");
+
+    request_busy.set(true);
+    let ((), log) = flui_testing::log_capture::capture(|| laid.pump_widget(probe.view()));
+    assert!(log.contains("retaining the current attachment"), "{log}");
+    assert_eq!(
+        busy_field.take_attachment_error(),
+        Some(FormFieldHandleAlreadyAttached)
+    );
+    probe
+        .write(|cx| old_field.did_change(cx, "old still owns".to_owned()))
+        .expect("failed acquisition keeps the old field binding live");
+    probe
+        .write(|cx| busy_field.did_change(cx, "busy still owns".to_owned()))
+        .expect("failed acquisition leaves the busy field untouched");
+    assert_eq!(old_field.value(), "old still owns");
+    assert_eq!(busy_field.value(), "busy still owns");
+
+    show_busy_owner.set(false);
+    laid.pump_widget(probe.view());
+    laid.pump_widget(probe.view());
+    assert_eq!(
+        probe.write(|cx| old_field.did_change(cx, "detached".to_owned())),
+        Err(EventContextError::Detached),
+        "the old field detaches only after the replacement is acquired"
+    );
+    probe
+        .write(|cx| busy_field.did_change(cx, "acquired".to_owned()))
+        .expect("a later update retries and acquires the released field handle");
+    assert_eq!(busy_field.value(), "acquired");
 }

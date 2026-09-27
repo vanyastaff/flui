@@ -227,8 +227,9 @@ pub use flui_objects::OverflowBoxFit;
 pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
 pub use form::{
-    AutovalidateMode, Form, FormField, FormFieldHandle, FormFieldSetter, FormFieldState,
-    FormFieldValidator, FormHandle, FormState, RawTextFormField, RawTextFormFieldState,
+    AutovalidateMode, Form, FormField, FormFieldHandle, FormFieldHandleAlreadyAttached,
+    FormFieldSetter, FormFieldState, FormFieldValidator, FormHandle, FormHandleAlreadyAttached,
+    FormState, RawTextFormField, RawTextFormFieldState,
 };
 pub use navigator::{
     FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope, HeroMode,

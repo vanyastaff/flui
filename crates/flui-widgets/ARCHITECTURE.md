@@ -21,10 +21,13 @@ post-frame lane reports a warning and drops the event, never dispatches inline.
 
 Queued `GestureDetector` assistive activation also resolves the current callback
 at delivery, after configuration updates, and checks that the state is still
-mounted. Removing a handler or disposing the widget cancels delivery; queued
+mounted. Each accepted platform action remains a distinct FIFO command across
+tap and long-press kinds; only the rebuild used to wake the UI thread may
+coalesce. Removing a handler or disposing the widget cancels delivery; queued
 requests never retain an obsolete user closure. This is pinned by
 `queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime` and the
-assistive-tap replacement and removal integration tests.
+assistive-tap replacement, removal, multiplicity and cross-action ordering
+integration tests.
 
 Tests: `animated_size_completion_writes_a_signal_after_build`,
 `dismissible_layout_notifications_write_signals_and_dismiss_once`,
@@ -1915,13 +1918,28 @@ handle is a cheap `Rc` clone that owns the state, so it outlives the build
 that created it and needs no key registry. A mounted field rebuilt with a
 different handle moves onto it: the new handle takes the field's value,
 error, interaction and registration slot, and the old handle is detached.
+Each mounted form or field holds an exclusive generation-stamped attachment
+lease. A simultaneous duplicate is reported and isolated behind a fresh
+internal handle before configuration mutates the requested handle; conditional
+lease cleanup prevents a refused or stale owner from detaching the live one.
+Acquiring a replacement precedes releasing the current lease, so a busy target
+cannot leave a mounted state detached. This is a local recovery contract rather
+than a panic because duplicate attachment is caller-triggerable and lifecycle
+admission is infallible. The tracing error is paired with the typed
+`take_attachment_error` drain on the requested handle, matching the framework's
+duplicate-`GlobalKey` diagnostic shape instead of making a mount-time error look
+like an event-time `Result`.
 Flutter would remount a field whose `GlobalKey` changed and lose its state;
 a handle is not the element's identity here, so the element and its state
 stay. A text form field rebuilt without the caller's controller moves its
 text into a controller it owns, as Flutter's `_createLocalController` does.
 **Tests:** every `tests/form.rs` case drives the form through a handle;
 `a_new_handle_on_rebuild_takes_the_mounted_field_over`,
-`dropping_the_callers_controller_moves_the_text_into_a_field_owned_one`.
+`dropping_the_callers_controller_moves_the_text_into_a_field_owned_one`,
+`a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first`,
+`a_form_field_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first`,
+the two `a_busy_*_rebind_*` tests, and
+`unmounting_a_text_form_field_releases_callbacks_and_controller_binding`.
 
 ### 24. A field registers with its form in lifecycle hooks
 
