@@ -503,7 +503,7 @@ fn primary_tap_does_not_fire_on_secondary_tap() {
 // ============================================================================
 
 mod event_cx {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::time::Duration;
 
@@ -676,6 +676,10 @@ mod event_cx {
     }
 
     fn click(pipeline_owner: &PipelineCell, tree: &A11yTree) {
+        invoke_labelled_action(pipeline_owner, tree, Action::Click);
+    }
+
+    fn invoke_labelled_action(pipeline_owner: &PipelineCell, tree: &A11yTree, action: Action) {
         let id = tree
             .find_by_label("Tap")
             .unwrap_or_else(|error| {
@@ -685,7 +689,7 @@ mod event_cx {
         invoke_semantics_action(
             pipeline_owner,
             ActionRequest {
-                action: Action::Click,
+                action,
                 target_tree: TreeId::ROOT,
                 target_node: id,
                 data: None,
@@ -719,6 +723,115 @@ mod event_cx {
         );
         app.tick();
         assert_eq!(probe.reads().last(), Some(&1), "and its reader rebuilt");
+    }
+
+    #[test]
+    fn accepted_assistive_taps_preserve_the_multiplicity_of_pointer_taps() {
+        let calls = Rc::new(Cell::new(0));
+        let callback_calls = Rc::clone(&calls);
+        let mut app = lay_out(
+            labelled(GestureDetector::new().on_tap(move |_cx| {
+                callback_calls.set(callback_calls.get() + 1);
+            })),
+            tight(100.0, 100.0),
+        );
+
+        tap(&app);
+        tap(&app);
+        assert_eq!(
+            calls.get(),
+            2,
+            "two ordinary pointer activations invoke the callback twice"
+        );
+
+        app.enable_semantics();
+        app.pump();
+        let tree = app.a11y_tree().expect("semantics enabled before the frame");
+        click(&app.pipeline_owner(), &tree);
+        click(&app.pipeline_owner(), &tree);
+        assert_eq!(
+            calls.get(),
+            2,
+            "accepted semantics actions are deferred until the next frame"
+        );
+
+        app.tick();
+
+        assert_eq!(
+            calls.get(),
+            4,
+            "two accepted semantic Click actions are two activations, just like two pointer taps"
+        );
+    }
+
+    #[test]
+    fn accepted_assistive_actions_preserve_ingress_order_across_action_kinds() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let tap_calls = Rc::clone(&calls);
+        let long_press_calls = Rc::clone(&calls);
+        let mut app = lay_out(
+            labelled(
+                GestureDetector::new()
+                    .on_tap(move |_cx| tap_calls.borrow_mut().push("tap"))
+                    .on_long_press(move |_cx| long_press_calls.borrow_mut().push("long-press")),
+            ),
+            tight(100.0, 100.0),
+        );
+        app.enable_semantics();
+        app.pump();
+        let tree = app.a11y_tree().expect("semantics enabled before the frame");
+        let owner = app.pipeline_owner();
+
+        invoke_labelled_action(&owner, &tree, Action::Click);
+        invoke_labelled_action(&owner, &tree, Action::ShowContextMenu);
+        invoke_labelled_action(&owner, &tree, Action::Click);
+        app.tick();
+
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["tap", "long-press", "tap"],
+            "accepted commands retain their cross-action ingress order"
+        );
+    }
+
+    #[test]
+    fn a_panicking_assistive_action_does_not_discard_the_fifo_tail() {
+        let long_press_calls = Rc::new(Cell::new(0));
+        let observed_long_press = Rc::clone(&long_press_calls);
+        let mut app = lay_out(
+            labelled(
+                GestureDetector::new()
+                    .on_tap(|_cx| -> () { panic!("intentional assistive tap panic") })
+                    .on_long_press(move |_cx| {
+                        observed_long_press.set(observed_long_press.get() + 1);
+                    }),
+            ),
+            tight(100.0, 100.0),
+        );
+        app.enable_semantics();
+        app.pump();
+        let tree = app.a11y_tree().expect("semantics enabled before the frame");
+        let owner = app.pipeline_owner();
+        invoke_labelled_action(&owner, &tree, Action::Click);
+        invoke_labelled_action(&owner, &tree, Action::ShowContextMenu);
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
+        assert!(
+            panicked.is_err(),
+            "the user callback panic still propagates"
+        );
+        assert_eq!(
+            long_press_calls.get(),
+            0,
+            "the tail has not run out of order"
+        );
+
+        app.tick();
+        assert_eq!(
+            long_press_calls.get(),
+            1,
+            "scheduler recovery retains the next accepted command"
+        );
     }
 
     #[test]

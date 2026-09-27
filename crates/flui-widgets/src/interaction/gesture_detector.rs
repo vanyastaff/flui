@@ -3,11 +3,9 @@
 
 use std::{
     cell::{Cell, RefCell},
+    collections::VecDeque,
     rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use flui_interaction::{
@@ -528,13 +526,37 @@ pub struct GestureDetectorState {
     mounted: Rc<Cell<bool>>,
 }
 
-/// The assistive-technology activations a detector has been asked for and
-/// not yet performed. Flags rather than a queue: a second request for the
-/// same action before the frame that performs the first is the same press.
+/// The assistive-technology activations a detector has accepted but not yet
+/// performed. Each platform request is a distinct command; the FIFO preserves
+/// both multiplicity and ordering across action kinds while rebuild requests
+/// remain free to coalesce as a wake-up optimization.
 #[derive(Default)]
 struct SemanticsRequests {
-    tap: AtomicBool,
-    long_press: AtomicBool,
+    pending: Mutex<VecDeque<PendingSemanticsAction>>,
+}
+
+#[derive(Clone, Copy)]
+enum PendingSemanticsAction {
+    Tap,
+    LongPress,
+}
+
+impl SemanticsRequests {
+    fn push(&self, action: PendingSemanticsAction) {
+        self.pending
+            .lock()
+            .expect("BUG: semantics request lock is never held across user code")
+            .push_back(action);
+    }
+
+    fn take_all(&self) -> VecDeque<PendingSemanticsAction> {
+        std::mem::take(
+            &mut *self
+                .pending
+                .lock()
+                .expect("BUG: semantics request lock is never held across user code"),
+        )
+    }
 }
 
 impl std::fmt::Debug for GestureDetectorState {
@@ -590,38 +612,29 @@ impl GestureDetectorState {
     /// where its writes are refused. The activation is dropped with a
     /// warning instead.
     fn drain_semantics_requests(&self) {
-        let pending = [
-            (
-                self.semantics_requests.tap.swap(false, Ordering::AcqRel),
-                &self.tap_slot,
-            ),
-            (
-                self.semantics_requests
-                    .long_press
-                    .swap(false, Ordering::AcqRel),
-                &self.long_press_slot,
-            ),
-        ];
-        for (requested, slot) in pending {
-            if !requested {
-                continue;
-            }
-            if slot.borrow().is_none() {
-                continue;
-            }
-            let Some(handle) = self.local_post_frame.as_ref() else {
-                tracing::warn!(
-                    "GestureDetector: dropping an assistive-technology activation — \
-                     the context has no local post-frame lane, and running it now would \
-                     run it inside build"
-                );
-                continue;
+        let mut pending = self.semantics_requests.take_all();
+        if pending.is_empty() {
+            return;
+        }
+        let Some(handle) = self.local_post_frame.as_ref() else {
+            tracing::warn!(
+                count = pending.len(),
+                "GestureDetector: dropping an assistive-technology activation batch — \
+                 the context has no local post-frame lane, and running them now would \
+                 run them inside build"
+            );
+            return;
+        };
+        let writer = self
+            .writer
+            .clone()
+            .expect("BUG: init_state acquires the writer source before the first build");
+        while let Some(action) = pending.pop_front() {
+            let slot = match action {
+                PendingSemanticsAction::Tap => Rc::clone(&self.tap_slot),
+                PendingSemanticsAction::LongPress => Rc::clone(&self.long_press_slot),
             };
-            let writer = self
-                .writer
-                .clone()
-                .expect("BUG: init_state acquires the writer source before the first build");
-            let slot = Rc::clone(slot);
+            let writer = writer.clone();
             let mounted = Rc::clone(&self.mounted);
             if let Err(error) = handle.schedule_local(move |_timing| {
                 if !mounted.get() {
@@ -634,9 +647,11 @@ impl GestureDetectorState {
             }) {
                 tracing::warn!(
                     ?error,
-                    "GestureDetector: dropping an assistive-technology activation — \
+                    dropped = pending.len() + 1,
+                    "GestureDetector: dropping an assistive-technology activation batch — \
                      the owning lane is gone"
                 );
+                break;
             }
         }
     }
@@ -653,14 +668,14 @@ impl GestureDetectorState {
             let requests = Arc::clone(&self.semantics_requests);
             let rebuild = rebuild.clone();
             semantics = semantics.on_tap(move || {
-                requests.tap.store(true, Ordering::Release);
+                requests.push(PendingSemanticsAction::Tap);
                 rebuild.schedule(flui_view::RebuildReason::StateChange);
             });
         }
         if view.on_long_press.is_some() {
             let requests = Arc::clone(&self.semantics_requests);
             semantics = semantics.on_long_press(move || {
-                requests.long_press.store(true, Ordering::Release);
+                requests.push(PendingSemanticsAction::LongPress);
                 rebuild.schedule(flui_view::RebuildReason::StateChange);
             });
         }
@@ -1143,7 +1158,7 @@ mod tests {
             state.writer = Some(writer.clone());
             state.local_post_frame = Some(lane.local_handle());
             state.mounted.set(true);
-            state.semantics_requests.tap.store(true, Ordering::Release);
+            state.semantics_requests.push(PendingSemanticsAction::Tap);
             // Queue through the production semantics-to-post-frame bridge,
             // then alter its target before the real scheduler delivers it.
             state.drain_semantics_requests();
