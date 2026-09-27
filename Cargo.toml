@@ -677,6 +677,9 @@ flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
 
 # === Test support (for the vertical_slice_demo acceptance test) ===
 flui-testing = { workspace = true }
+# `lay_out` for tests/todo_example.rs, which then runs in the default feature
+# set instead of only under `flui/testing`.
+flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev", features = ["testing"] }
 # Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
 insta = { workspace = true }
 parking_lot.workspace = true
@@ -777,21 +780,21 @@ name = "material_demo"
 path = "examples/material_demo/main.rs"
 required-features = ["material"]
 
-# `default = ["material"]` does not make this redundant: `cargo xtask facade-combos`
-# builds every isolated feature combination with `--no-default-features`, and
-# `counter.rs` uses `Theme`/`ThemeData`/`ElevatedButton` from the Material
-# catalog, so an isolated non-material build fails with E0433 without this.
 [[example]]
 name = "counter"
 path = "examples/counter.rs"
-required-features = ["material"]
 
-# Same reason as `counter.rs` above: `todo.rs` uses `Checkbox`/`ElevatedButton`/
-# `IconButton`/`TextField`/`Theme`/`ThemeData` from the Material catalog, so
-# an isolated non-material `cargo xtask facade-combos` build fails without this.
 [[example]]
 name = "todo"
 path = "examples/todo.rs"
+
+# `default = ["material"]` does not make this redundant: `cargo xtask facade-combos`
+# builds every isolated feature combination with `--no-default-features`, and
+# `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme` from the Material
+# catalog, so an isolated non-material build fails with E0433 without this.
+[[example]]
+name = "form"
+path = "examples/form.rs"
 required-features = ["material"]
 
 [[example]]

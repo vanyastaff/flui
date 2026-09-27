@@ -61,6 +61,9 @@ pub struct Harness {
     /// Per-contact pointer identity, shared with `crate::testing`'s
     /// integration harness so the two cannot drift.
     contacts: PointerContacts,
+    /// The clipboard installed in the build owner, as a realm installs its
+    /// platform's: always present.
+    clipboard: Arc<flui_platform_api::InMemoryClipboard>,
 }
 
 impl std::fmt::Debug for Harness {
@@ -140,6 +143,7 @@ pub fn mount_with_capabilities(
     let pipeline_owner = PipelineCell::new(PipelineOwner::new());
     let mut owners = MountOwners::with_pipeline_owner(pipeline_owner.clone());
     let focus_manager = owners.build_owner.focus_manager();
+    let clipboard = super::install_clipboard(&mut owners.build_owner);
     let build_owner = &mut owners.build_owner;
 
     let mut binding = HeadlessBinding::new();
@@ -200,6 +204,7 @@ pub fn mount_with_capabilities(
         ime_allowed_calls,
         text_input_owner,
         contacts: PointerContacts::new(),
+        clipboard,
     }
 }
 
@@ -207,6 +212,12 @@ impl Harness {
     /// Focus manager that owns this harness's mounted tree.
     pub fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
         Rc::clone(&self.focus_manager)
+    }
+
+    /// The clipboard this tree's widgets reach through
+    /// `LifecycleContext::clipboard_handle`.
+    pub fn clipboard(&self) -> Arc<flui_platform_api::InMemoryClipboard> {
+        Arc::clone(&self.clipboard)
     }
 
     /// Run an owner-side test action under the binding's full local scope.

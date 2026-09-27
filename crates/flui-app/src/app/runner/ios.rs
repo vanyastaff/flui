@@ -180,8 +180,6 @@ where
             Ok::<_, flui_platform::WakeRegistrationError>(())
         })
         .expect("BUG: owner installed above")?;
-        let clipboard = with_owner_platform(|owner| owner.shared().clipboard())
-            .expect("BUG: owner installed above");
         APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             runtime.ios_running = true;
@@ -190,7 +188,6 @@ where
             }
             runtime.reopen_lifecycles();
             runtime.ensure_execution();
-            runtime.set_platform_clipboard(clipboard);
         });
         for service in &config.services {
             APP_RUNTIME.with(|slot| slot.borrow_mut().start_service(service))?;
@@ -286,6 +283,7 @@ where
         presentation_window,
         scale_factor,
         runtime_needs_redraw_handle(),
+        super::host::runtime_clipboard(),
     ) {
         Ok(realm) => realm,
         Err(error) => {

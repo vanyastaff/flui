@@ -6,6 +6,11 @@
 //! apart. For a tour of the wider widget catalog, see
 //! `examples/widgets_gallery.rs`.
 //!
+//! The count is a `Signal`: created in `init_state`, read in `build` (which
+//! rebuilds this view when it changes), and written by the button's press,
+//! whose callback receives the `cx` a write needs. `build` has no `cx` to
+//! write with.
+//!
 //! Run with: cargo run --example counter
 
 use flui::prelude::*;
@@ -16,43 +21,42 @@ struct CounterApp;
 
 impl StatelessView for CounterApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        Theme::new(ThemeData::light(), SafeArea::new().child(CounterView))
+        SafeArea::new().child(CounterView)
     }
 }
 
 #[derive(Clone, StatefulView)]
 struct CounterView;
 
+#[derive(Default)]
 struct CounterState {
-    count: StateCell<usize>,
+    count: Signal<usize>,
 }
 
 impl StatefulView for CounterView {
     type State = CounterState;
 
     fn create_state(&self) -> Self::State {
-        CounterState {
-            count: StateCell::new(0),
-        }
+        CounterState::default()
     }
 }
 
 impl ViewState<CounterView> for CounterState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count.bind(ctx);
+        self.count = ctx.signal(0);
     }
 
-    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> impl IntoView {
-        let count = self.count.clone();
+    fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
+        let count = self.count;
 
         Center::new().child(
             Column::new(column![
                 Text::new("You have pushed the button this many times:"),
                 SizedBox::height(16.0),
-                Text::new(self.count.get().to_string()),
+                Text::new(count.get(ctx).to_string()),
                 SizedBox::height(16.0),
-                ElevatedButton::new(Text::new("Increment"))
-                    .on_pressed(move || count.update(|n| n + 1)),
+                RawButton::new(Text::new("Increment"))
+                    .on_press(move |cx| count.update(cx, |n| *n += 1)),
             ])
             .main_axis_alignment(MainAxisAlignment::Center),
         )

@@ -270,6 +270,7 @@ layers = [
     [
         "icon",
         "app",
+        "form",
     ],
     [
         "testing",

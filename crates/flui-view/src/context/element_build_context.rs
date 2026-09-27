@@ -616,6 +616,9 @@ impl LifecycleContext for ElementBuildContext {
         // across the returned handle's lifetime.
         self.owner.read().rebuild_handle(self.element_id)
     }
+    fn writer_source(&self) -> crate::WriterSource {
+        crate::WriterSource::new(self.reads.graph().clone())
+    }
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
         self.owner.read().async_driver().cloned()
     }
@@ -633,6 +636,9 @@ impl LifecycleContext for ElementBuildContext {
     }
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.owner.read().text_input_handle().cloned()
+    }
+    fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
+        self.owner.read().clipboard_handle().cloned()
     }
     fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
         self.owner.read().hit_test_handle().cloned()
@@ -715,6 +721,8 @@ pub(crate) struct BuildCapabilities {
     pub(crate) local_post_frame_handle: Option<flui_scheduler::LocalPostFrameHandle>,
     /// The binding's IME/text-input attach-detach capability.
     pub(crate) text_input_handle: Option<flui_interaction::TextInputHandle>,
+    /// The presentation's plain-text clipboard.
+    pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
     /// The realm's fresh-hit-test capability, narrowed from its interaction
     /// dispatch handle.
     pub(crate) hit_test_handle: Option<flui_interaction::HitTestHandle>,
@@ -1041,6 +1049,9 @@ impl LifecycleContext for BuildCtx<'_> {
     fn rebuild_handle(&self) -> crate::RebuildHandle {
         self.rebuild.clone()
     }
+    fn writer_source(&self) -> crate::WriterSource {
+        crate::WriterSource::new(self.capabilities.reads.graph().clone())
+    }
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
         self.capabilities.async_driver.clone()
     }
@@ -1052,6 +1063,9 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn text_input_handle(&self) -> Option<flui_interaction::TextInputHandle> {
         self.capabilities.text_input_handle.clone()
+    }
+    fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle> {
+        self.capabilities.clipboard_handle.clone()
     }
     fn hit_test_handle(&self) -> Option<flui_interaction::HitTestHandle> {
         self.capabilities.hit_test_handle.clone()
@@ -1428,6 +1442,7 @@ mod tests {
                 post_frame_handle: None,
                 local_post_frame_handle: None,
                 text_input_handle: None,
+                clipboard_handle: None,
                 hit_test_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),
@@ -1455,6 +1470,7 @@ mod tests {
                 post_frame_handle: None,
                 local_post_frame_handle: None,
                 text_input_handle: None,
+                clipboard_handle: None,
                 hit_test_handle: None,
                 pipeline_owner: None,
                 keep_alive: crate::owner::KeepAliveHolds::default(),

@@ -33,6 +33,7 @@ fn redraw_request_from_a_does_not_wake_bs_window() {
         Arc::clone(&window_a),
         1.0,
         Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
     )
     .expect("realm constructs");
     let a_id = realm.presentation_id();
@@ -105,8 +106,14 @@ fn a_scheduler_frame_request_reaches_the_realms_platform_wake() {
     });
 
     let (window, _calls) = counting_window(1);
-    let realm = UiRealm::new(wake, window, 1.0, Arc::new(AtomicBool::new(false)))
-        .expect("realm constructs");
+    let realm = UiRealm::new(
+        wake,
+        window,
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
+    )
+    .expect("realm constructs");
 
     // Construction may legitimately have demanded a first frame;
     // measure only the transition this test causes.
@@ -138,8 +145,14 @@ fn a_cross_thread_frame_request_reaches_the_realms_platform_wake() {
     });
 
     let (window, _calls) = counting_window(1);
-    let realm = UiRealm::new(wake, window, 1.0, Arc::new(AtomicBool::new(false)))
-        .expect("realm constructs");
+    let realm = UiRealm::new(
+        wake,
+        window,
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
+    )
+    .expect("realm constructs");
     // Clear the `frame_scheduled` latch so the request below is a real
     // false->true transition — the only edge the hook fires on.
     realm.scheduler().finish_async_pump();
@@ -169,8 +182,14 @@ fn a_cross_thread_frame_request_reaches_the_realms_platform_wake() {
 #[test]
 fn a_pipeline_visual_update_flips_the_schedulers_frame_scheduled_edge() {
     let (window_a, _calls) = counting_window(1);
-    let realm = UiRealm::new(noop_wake(), window_a, 1.0, Arc::new(AtomicBool::new(false)))
-        .expect("realm constructs");
+    let realm = UiRealm::new(
+        noop_wake(),
+        window_a,
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
+    )
+    .expect("realm constructs");
     // Clear the latch so the visual update below is the edge under
     // test, not construction's own initial demand.
     realm.scheduler().finish_async_pump();
@@ -210,6 +229,7 @@ fn a_pipeline_visual_update_during_the_realm_frame_does_not_redraw_immediately()
         Arc::clone(&window_a),
         1.0,
         Arc::new(AtomicBool::new(false)),
+        crate::app::presentation::test_clipboard(),
     )
     .expect("realm constructs");
     let a_id = realm.presentation_id();

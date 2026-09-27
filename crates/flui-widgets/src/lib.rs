@@ -85,6 +85,7 @@ mod async_builders;
 pub mod clip;
 mod container;
 pub mod flex;
+pub mod form;
 pub mod icon;
 pub mod image;
 pub mod interaction;
@@ -185,18 +186,19 @@ pub use image::{
 };
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent,
-    CallbackAction, CallbackShortcuts, DefaultFocusTraversal, DefaultFocusTraversalState,
-    DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
-    Dismissible, DismissibleState, DragPosition, DragTarget, DragTargetAccept, DragTargetBuilder,
-    DragTargetDetails, DragTargetLeave, DragTargetMove, DragTargetSlot, DragTargetState,
-    DragTargetWillAccept, Draggable, DraggableDetails, DraggableState, ErasedDragData,
-    ExcludeFocus, Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope,
-    FocusScopeState, FocusState, GestureArenaScope, GestureDetector, GestureDetectorState,
-    IgnorePointer, Intent, InteractionEndDetails, InteractionStartDetails,
+    CallbackAction, CallbackShortcuts, CopySelectionTextIntent, DefaultFocusTraversal,
+    DefaultFocusTraversalState, DismissDirection, DismissDirectionCallback, DismissUpdateCallback,
+    DismissUpdateDetails, Dismissible, DismissibleState, DragPosition, DragTarget,
+    DragTargetAccept, DragTargetBuilder, DragTargetDetails, DragTargetLeave, DragTargetMove,
+    DragTargetSlot, DragTargetState, DragTargetWillAccept, Draggable, DraggableDetails,
+    DraggableState, ErasedDragData, ExcludeFocus, Focus, FocusChangeHandler, FocusRoot,
+    FocusRootState, FocusScope, FocusScopeState, FocusState, GestureArenaScope, GestureDetector,
+    GestureDetectorState, IgnorePointer, Intent, InteractionEndDetails, InteractionStartDetails,
     InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MetaData,
-    MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis, PreviousFocusAction,
-    PreviousFocusIntent, ShortcutCallback, Shortcuts, ShortcutsState, SingleActivator,
-    TransformationController, Visibility, VisibilityGate, WheelScaleGate,
+    MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis, PasteTextIntent,
+    PreviousFocusAction, PreviousFocusIntent, RawButton, RawButtonState, ShortcutCallback,
+    Shortcuts, ShortcutsState, SingleActivator, TransformationController, Visibility,
+    VisibilityGate, WheelScaleGate,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
@@ -213,6 +215,10 @@ pub use flui_objects::OverflowBoxFit;
 // need only import from `flui_widgets`.
 pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
+pub use form::{
+    AutovalidateMode, Form, FormField, FormFieldHandle, FormFieldSetter, FormFieldState,
+    FormFieldValidator, FormHandle, FormState, RawTextFormField, RawTextFormFieldState,
+};
 pub use navigator::{
     FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope, HeroMode,
     KeyedSettings, NamedRouteError, Navigator, NavigatorCommand, NavigatorCommandError,
@@ -327,13 +333,14 @@ pub mod prelude {
     // The widget catalog.
     pub use crate::{
         AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, Align, AspectRatio,
-        Baseline, Brightness, ButtonActivateIntent, CallbackAction, CallbackShortcuts, Center,
-        ClipOval, ClipPath, ClipRRect, ClipRect, ColoredBox, Column, ConstrainedBox, Container,
-        CustomMultiChildLayout, CustomPaint, CustomScrollView, CustomSingleChildLayout,
-        DecoratedBox, DefaultFocusTraversal, DefaultFocusTraversalState, DefaultTextStyle,
-        DefaultWidgetsLocalizations, Directionality, DragTarget, Draggable, EditableText,
-        EditableTextState, ExcludeFocus, ExcludeSemantics, Expanded, FittedBox, Flex, FlexFit,
-        Flexible, FlightDirection, Flow, Focus, FocusRoot, FocusScope, FractionalTranslation,
+        AutovalidateMode, Baseline, Brightness, ButtonActivateIntent, CallbackAction,
+        CallbackShortcuts, Center, ClipOval, ClipPath, ClipRRect, ClipRect, ColoredBox, Column,
+        ConstrainedBox, Container, CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint,
+        CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal,
+        DefaultFocusTraversalState, DefaultTextStyle, DefaultWidgetsLocalizations, Directionality,
+        DragTarget, Draggable, EditableText, EditableTextState, ExcludeFocus, ExcludeSemantics,
+        Expanded, FittedBox, Flex, FlexFit, Flexible, FlightDirection, Flow, Focus, FocusRoot,
+        FocusScope, Form, FormField, FormFieldHandle, FormHandle, FractionalTranslation,
         FractionallySizedBox, FutureBuilder, GestureArenaScope, GestureDetector, GridView, Hero,
         HeroController, HeroMode, Icon, IconData, IconTheme, IconThemeData, IgnoreBaseline,
         IgnorePointer, Image, ImageAlignment, ImageFit, ImageProvider, IndexedSemantics,
@@ -342,11 +349,12 @@ pub mod prelude {
         MediaQuery, MediaQueryData, MergeSemantics, MouseRegion, Navigator, NavigatorHandle,
         NextFocusAction, NextFocusIntent, Offstage, Opacity, OverflowBox, OverflowBoxFit, Overlay,
         OverlayEntry, OverlayEntryId, OverlayHandle, Padding, PageController, PageRoute,
-        PageScrollPhysics, PageView, PhysicalModel, PhysicalShape, PopScope, PopupRoute,
-        Positioned, PreferredSize, PreferredSizeView, PreviousFocusAction, PreviousFocusIntent,
-        RawTextField, RawTextFieldState, RepaintBoundary, RichText, RotatedBox, Row, SafeArea,
-        ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport,
-        SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox,
+        PageScrollPhysics, PageView, PasteTextIntent, PhysicalModel, PhysicalShape, PopScope,
+        PopupRoute, Positioned, PreferredSize, PreferredSizeView, PreviousFocusAction,
+        PreviousFocusIntent, RawButton, RawButtonState, RawTextField, RawTextFieldState,
+        RawTextFormField, RepaintBoundary, RichText, RotatedBox, Row, SafeArea, ScrollController,
+        Scrollable, Scrollbar, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute,
+        SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox,
         SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
         SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
         SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,

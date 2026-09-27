@@ -650,6 +650,7 @@ mod tests {
             window,
             1.0,
             Arc::new(AtomicBool::new(false)),
+            crate::app::presentation::test_clipboard(),
         )
         .expect("hidden realm");
         let history = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -679,6 +680,7 @@ mod tests {
                 window,
                 1.0,
                 Arc::new(AtomicBool::new(false)),
+                crate::app::presentation::test_clipboard(),
             )
             .expect("realm");
             realm.synchronize_window_lifecycle();
