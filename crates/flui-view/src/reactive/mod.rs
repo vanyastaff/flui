@@ -56,6 +56,16 @@
 //! *same* slot finds the value on loan and gets [`SignalError::Reentrant`],
 //! never a `RefCell` panic.
 //!
+//! # Unwind consistency
+//!
+//! An `update` closure is not a transaction. If it mutates the value and then
+//! panics, the partial value is put back, every registered reader is durably
+//! enqueued as one batch, and the original panic resumes, provided the closure
+//! did not explicitly release that same slot. Rolling arbitrary `T` back would
+//! require a separate snapshot/transaction contract; leaving a committed value
+//! invisible to the UI is not an acceptable substitute. Explicit release still
+//! wins by destroying the slot and its reader set.
+//!
 //! # Threading
 //!
 //! Everything here is `!Send + !Sync` — realm-affine like the element tree. A
@@ -315,7 +325,9 @@ impl Reactive {
 
     /// Release a slot explicitly: its value drops, its readers forget it, later
     /// handle use reports [`SignalError::Released`]. A no-op for a handle that
-    /// is already stale.
+    /// is already stale. Release is authoritative even while the slot's value
+    /// is loaned to its own read or update closure: the loaned value is dropped
+    /// when that closure returns or unwinds, and no readers are invalidated.
     pub fn release(&self, slot: SignalSlot) {
         let mut inner = self.inner.borrow_mut();
         if self.check(&inner, slot).is_err() {
@@ -588,10 +600,29 @@ impl Reactive {
                 index: slot.index(),
                 expected: type_name::<T>(),
             })?;
-        let result = f(typed);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(typed)));
         drop(loan);
-        self.mark(slot);
-        Ok(result)
+        match outcome {
+            Ok(result) => {
+                self.mark(slot);
+                Ok(result)
+            }
+            Err(payload) => {
+                // Invalidation is best-effort recovery for an already
+                // panicking updater. The durable enqueue happens before its
+                // wake and telemetry, so a secondary panic cannot hide the
+                // committed value from a prefix of readers. Preserve the
+                // user's original payload; forgetting a secondary payload
+                // avoids running an arbitrary panicking destructor while the
+                // original unwind is resumed.
+                if let Err(secondary) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.mark(slot)))
+                {
+                    std::mem::forget(secondary);
+                }
+                std::panic::resume_unwind(payload)
+            }
+        }
     }
 }
 
@@ -631,6 +662,9 @@ impl Reactive {
                 inner.scheduler.clone(),
             )
         };
+        if let Some(scheduler) = &scheduler {
+            scheduler.schedule_many(readers.iter().copied(), RebuildReason::SignalChange);
+        }
         tracing::debug!(
             target: "flui::signals",
             slot = ?slot,
@@ -638,11 +672,6 @@ impl Reactive {
             scheduled = scheduler.is_some(),
             "signal written"
         );
-        if let Some(scheduler) = scheduler {
-            for element in readers {
-                scheduler.schedule(element, RebuildReason::SignalChange);
-            }
-        }
     }
 }
 
@@ -677,6 +706,13 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError>;
 
     /// Mutate in place and mark every reader.
+    ///
+    /// If `f` panics after changing the value, the partial change remains,
+    /// every reader is invalidated, and the original panic resumes, unless
+    /// `f` explicitly releases this same slot. Release is authoritative: it
+    /// destroys the loaned value and reader set, so there is no surviving
+    /// commit to invalidate. This method does not provide transactional
+    /// rollback.
     ///
     /// # Errors
     ///
@@ -766,6 +802,40 @@ mod tests {
     // anyone; the element sink this crate mints can.
     static_assertions::assert_not_impl_any!(Reactive: ReaderSink);
     static_assertions::assert_impl_all!(ElementReads: ReaderSink);
+
+    struct PanickingSubscriber;
+
+    impl tracing::Subscriber for PanickingSubscriber {
+        fn register_callsite(
+            &self,
+            _metadata: &'static tracing::Metadata<'static>,
+        ) -> tracing::subscriber::Interest {
+            tracing::subscriber::Interest::sometimes()
+        }
+
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            metadata.target() == "flui::signals"
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            assert!(
+                event.metadata().target() != "flui::signals",
+                "signal telemetry probe"
+            );
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
 
     fn graph_with_inbox() -> (Reactive, Arc<Mutex<HashMap<ElementId, RebuildReasons>>>) {
         let inbox = Arc::new(Mutex::new(HashMap::new()));
@@ -986,6 +1056,32 @@ mod tests {
     }
 
     #[test]
+    fn releasing_a_slot_from_its_panicking_update_remains_authoritative() {
+        let (r, inbox) = graph_with_inbox();
+        let a = r.signal(String::from("alive"));
+        r.register_element_reader(a.slot(), ElementId::new(1));
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = a.update(&r, |value| {
+                value.push_str(" but loaned");
+                r.release(a.slot());
+                panic!("release wins");
+            });
+        }));
+
+        let payload = outcome.expect_err("the updater panic must resume");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"release wins"));
+        assert!(matches!(
+            a.peek(&r, String::len),
+            Err(SignalError::Released { .. })
+        ));
+        assert!(
+            scheduled(&inbox).is_empty(),
+            "a released slot has no surviving value or readers to invalidate"
+        );
+    }
+
+    #[test]
     fn a_handle_from_another_graph_is_refused_not_read() {
         let (a_graph, _) = graph_with_inbox();
         let (b_graph, _) = graph_with_inbox();
@@ -1024,11 +1120,13 @@ mod tests {
     }
 
     #[test]
-    fn a_panicking_closure_returns_the_loaned_value_and_marks_nobody() {
+    fn a_panicking_update_returns_the_loaned_value_and_marks_its_readers() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(3u32);
         let e1 = ElementId::new(1);
+        let e2 = ElementId::new(2);
         r.register_element_reader(a.slot(), e1);
+        r.register_element_reader(a.slot(), e2);
 
         let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             a.peek(&r, |_| panic!("reader panics"))
@@ -1046,22 +1144,90 @@ mod tests {
                 panic!("writer panics");
             })
         }));
-        assert!(write.is_err());
+        let payload = write.expect_err("writer panic must resume after invalidation");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"writer panics"));
         assert_eq!(
             a.peek(&r, |v| *v),
             Ok(99),
             "the (partially) written value came back; the slot is usable"
         );
-        assert!(
-            scheduled(&inbox).is_empty(),
-            "a panicking write marks nobody"
+        assert_eq!(
+            scheduled(&inbox),
+            vec![e1, e2],
+            "a partially committed value must not stay invisible to its readers"
         );
         a.set(&r, 5).unwrap();
         assert_eq!(
             scheduled(&inbox),
-            vec![e1],
+            vec![e1, e2],
             "and the slot still schedules afterwards"
         );
+    }
+
+    #[test]
+    fn a_panicking_frame_wake_observes_the_complete_reader_batch() {
+        let inbox = Arc::new(Mutex::new(HashMap::new()));
+        let r = Reactive::new();
+        r.set_scheduler(ExternalBuildScheduler::from_parts(
+            Arc::clone(&inbox),
+            Some(Arc::new(|| panic!("wake probe"))),
+        ));
+        let signal = r.signal(0u8);
+        let readers = [ElementId::new(1), ElementId::new(2)];
+        for reader in readers {
+            r.register_element_reader(signal.slot(), reader);
+        }
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| signal.set(&r, 1)));
+
+        assert!(outcome.is_err());
+        assert_eq!(scheduled(&inbox), readers);
+        assert_eq!(signal.peek(&r, |value| *value), Ok(1));
+    }
+
+    #[test]
+    fn updater_panic_keeps_priority_over_a_secondary_wake_panic() {
+        let inbox = Arc::new(Mutex::new(HashMap::new()));
+        let r = Reactive::new();
+        r.set_scheduler(ExternalBuildScheduler::from_parts(
+            Arc::clone(&inbox),
+            Some(Arc::new(|| panic!("wake probe"))),
+        ));
+        let signal = r.signal(0u8);
+        let readers = [ElementId::new(1), ElementId::new(2)];
+        for reader in readers {
+            r.register_element_reader(signal.slot(), reader);
+        }
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            signal.update(&r, |value| {
+                *value = 1;
+                panic!("updater probe");
+            })
+        }));
+
+        let payload = outcome.expect_err("the updater panic must resume");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"updater probe"));
+        assert_eq!(scheduled(&inbox), readers);
+        assert_eq!(signal.peek(&r, |value| *value), Ok(1));
+    }
+
+    #[test]
+    fn signal_telemetry_runs_only_after_durable_reader_invalidation() {
+        let (r, inbox) = graph_with_inbox();
+        let signal = r.signal(0u8);
+        let readers = [ElementId::new(1), ElementId::new(2)];
+        for reader in readers {
+            r.register_element_reader(signal.slot(), reader);
+        }
+
+        let outcome = tracing::subscriber::with_default(PanickingSubscriber, || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| signal.set(&r, 1)))
+        });
+
+        assert!(outcome.is_err());
+        assert_eq!(scheduled(&inbox), readers);
+        assert_eq!(signal.peek(&r, |value| *value), Ok(1));
     }
 
     #[test]

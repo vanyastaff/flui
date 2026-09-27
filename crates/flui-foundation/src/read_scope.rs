@@ -345,6 +345,7 @@ impl<T: 'static> Default for Signal<T> {
 /// graph is asked.
 fn read_typed<T: 'static, R>(
     graph: &dyn ReadGraph,
+    sink: Option<&dyn ReaderSink>,
     slot: SignalSlot,
     f: impl FnOnce(&T) -> R,
 ) -> Result<R, SignalError> {
@@ -352,23 +353,42 @@ fn read_typed<T: 'static, R>(
         return Err(SignalError::Unbound);
     }
     let mut f = Some(f);
-    let mut out: Option<Result<R, SignalError>> = None;
+    let mut out: Option<Result<std::thread::Result<R>, SignalError>> = None;
     graph.read_erased(slot, &mut |value: &dyn Any| {
         let Some(f) = f.take() else {
             return;
         };
         out = Some(match value.downcast_ref::<T>() {
-            Some(typed) => Ok(f(typed)),
+            Some(typed) => Ok(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || f(typed),
+            ))),
             None => Err(SignalError::TypeMismatch {
                 index: slot.index,
                 expected: type_name::<T>(),
             }),
         });
     })?;
-    out.unwrap_or(Err(SignalError::Released {
+    let outcome = out.unwrap_or(Err(SignalError::Released {
         index: slot.index,
         generation: slot.generation,
-    }))
+    }))?;
+    let subscription = sink.map(|sink| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sink.subscribe(slot)))
+    });
+    match (outcome, subscription) {
+        (Ok(result), None | Some(Ok(()))) => Ok(result),
+        (Ok(_), Some(Err(payload))) | (Err(payload), None | Some(Ok(()))) => {
+            std::panic::resume_unwind(payload)
+        }
+        (Err(payload), Some(Err(secondary))) => {
+            // A dependency-recording failure must not replace the user
+            // closure's original panic. The secondary payload is exceptional
+            // and may itself panic on drop, so do not run its destructor while
+            // resuming the first unwind.
+            std::mem::forget(secondary);
+            std::panic::resume_unwind(payload)
+        }
+    }
 }
 
 impl<T: 'static> Signal<T> {
@@ -402,7 +422,10 @@ impl<T: 'static> Signal<T> {
     }
 
     /// Read through `cx`; during `build` the building element becomes a
-    /// reader. A refused read subscribes nobody.
+    /// reader. Once the graph and value type are validated, that subscription
+    /// is recorded after the graph releases its read loan and before a panic
+    /// from `f` resumes, so a recovered build can still be invalidated by a
+    /// later write. A refused read subscribes nobody.
     ///
     /// # Errors
     ///
@@ -417,11 +440,7 @@ impl<T: 'static> Signal<T> {
         f: impl FnOnce(&T) -> R,
     ) -> Result<R, SignalError> {
         let scope = cx.scope();
-        let result = read_typed(scope.graph, self.slot, f)?;
-        if let Some(sink) = scope.sink {
-            sink.subscribe(self.slot);
-        }
-        Ok(result)
+        read_typed(scope.graph, scope.sink, self.slot, f)
     }
 
     /// [`Signal::try_with`], cloning the value.
@@ -470,7 +489,7 @@ impl<T: 'static> Signal<T> {
     ///
     /// As [`Signal::try_with`].
     pub fn peek<R>(self, graph: &dyn ReadGraph, f: impl FnOnce(&T) -> R) -> Result<R, SignalError> {
-        read_typed(graph, self.slot, f)
+        read_typed(graph, None, self.slot, f)
     }
 }
 
@@ -583,12 +602,89 @@ mod tests {
     /// A context over a graph and an optional sink.
     struct Cx<'a> {
         graph: &'a dyn ReadGraph,
-        sink: Option<&'a Recorder>,
+        sink: Option<&'a dyn ReaderSink>,
     }
 
     impl ReadScope for Cx<'_> {
         fn scope(&self) -> ScopeRef<'_> {
-            ScopeRef::new(self.graph, self.sink.map(|s| s as &dyn ReaderSink))
+            ScopeRef::new(self.graph, self.sink)
+        }
+    }
+
+    struct PanickingSink;
+
+    impl ReaderSink for PanickingSink {
+        fn subscribe(&self, _slot: SignalSlot) {
+            panic!("subscription probe");
+        }
+    }
+
+    struct SharedCellInner {
+        value: Box<dyn Any>,
+        subscriptions: Vec<SignalSlot>,
+    }
+
+    /// A valid graph and sink that keep both faces in one `RefCell`. The read
+    /// loan therefore must end before the sink is called.
+    struct SharedCellGraph {
+        id: u32,
+        inner: RefCell<SharedCellInner>,
+    }
+
+    impl SharedCellGraph {
+        fn new<T: 'static>(id: u32, value: T) -> Self {
+            Self {
+                id,
+                inner: RefCell::new(SharedCellInner {
+                    value: Box::new(value),
+                    subscriptions: Vec::new(),
+                }),
+            }
+        }
+
+        fn slot(&self) -> SignalSlot {
+            SignalSlot::new(self.id, 0, 0)
+        }
+    }
+
+    impl ReadGraph for SharedCellGraph {
+        fn graph_id(&self) -> u32 {
+            self.id
+        }
+
+        fn read_erased(
+            &self,
+            slot: SignalSlot,
+            read: &mut dyn FnMut(&dyn Any),
+        ) -> Result<(), SignalError> {
+            if slot.graph() != self.id {
+                return Err(SignalError::ForeignGraph {
+                    index: slot.index(),
+                    graph: slot.graph(),
+                    this: self.id,
+                });
+            }
+            if slot.index() != 0 || slot.generation() != 0 {
+                return Err(SignalError::Released {
+                    index: slot.index(),
+                    generation: slot.generation(),
+                });
+            }
+            let inner = self.inner.borrow();
+            read(&*inner.value);
+            Ok(())
+        }
+    }
+
+    impl ReaderSink for SharedCellGraph {
+        fn subscribe(&self, slot: SignalSlot) {
+            self.inner.borrow_mut().subscriptions.push(slot);
+        }
+    }
+
+    impl ReadScope for SharedCellGraph {
+        fn scope(&self) -> ScopeRef<'_> {
+            ScopeRef::new(self, Some(self))
         }
     }
 
@@ -685,6 +781,73 @@ mod tests {
         let right = Signal::<u32>::from_slot(graph.slot());
         assert_eq!(right.try_get(&cx), Ok(7));
         assert_eq!(*sink.0.borrow(), [graph.slot()]);
+    }
+
+    #[test]
+    fn a_valid_read_subscribes_before_its_user_closure_panic_resumes() {
+        let graph = OneSlot::new(1, 7u32);
+        let sink = Recorder::default();
+        let cx = Cx {
+            graph: &graph,
+            sink: Some(&sink),
+        };
+        let signal = Signal::<u32>::from_slot(graph.slot());
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            signal.with(&cx, |_| panic!("reader panics"));
+        }));
+
+        assert!(outcome.is_err());
+        assert_eq!(
+            *sink.0.borrow(),
+            [graph.slot()],
+            "a recovered build must retain the read that reached a valid signal value"
+        );
+    }
+
+    #[test]
+    fn subscription_waits_until_a_shared_graph_read_loan_is_released() {
+        let graph = SharedCellGraph::new(1, 7u32);
+        let signal = Signal::<u32>::from_slot(graph.slot());
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            signal.with(&graph, |_| panic!("reader probe"));
+        }));
+
+        let payload = outcome.expect_err("the original read panic must resume");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"reader probe"));
+        assert_eq!(
+            graph.inner.borrow().subscriptions,
+            [graph.slot()],
+            "subscription happens after read_erased releases its RefCell borrow"
+        );
+    }
+
+    #[test]
+    fn a_user_read_panic_keeps_priority_over_a_subscription_panic() {
+        let graph = OneSlot::new(1, 7u32);
+        let sink = PanickingSink;
+        let cx = Cx {
+            graph: &graph,
+            sink: Some(&sink),
+        };
+        let signal = Signal::<u32>::from_slot(graph.slot());
+
+        let subscription_only = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            signal.with(&cx, |value| *value)
+        }));
+        let payload = subscription_only.expect_err("the subscription panic must resume");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"subscription probe"));
+
+        let dual_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            signal.with(&cx, |_| panic!("reader probe"));
+        }));
+        let payload = dual_panic.expect_err("the original read panic must resume");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"reader probe"),
+            "a secondary subscription panic must not replace the user failure"
+        );
     }
 
     #[test]

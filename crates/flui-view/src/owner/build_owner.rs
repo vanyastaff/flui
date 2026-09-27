@@ -95,20 +95,34 @@ impl ExternalBuildScheduler {
     /// only for the insert and released before `request_frame` runs (no lock
     /// across the platform wake).
     pub(crate) fn schedule(&self, id: ElementId, reason: RebuildReason) {
-        let newly_queued = {
+        self.schedule_many(std::iter::once(id), reason);
+    }
+
+    /// Enqueue a related set of ids as one durable batch, then request one
+    /// frame after every id is visible to the drain. A panicking wake can
+    /// therefore delay the batch, but cannot expose only a prefix of it.
+    pub(crate) fn schedule_many(
+        &self,
+        ids: impl IntoIterator<Item = ElementId>,
+        reason: RebuildReason,
+    ) {
+        let any_newly_queued = {
             let mut inbox = self.inbox.lock();
-            match inbox.entry(id) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(RebuildReasons::from_reason(reason));
-                    true
-                }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().insert(reason);
-                    false
+            let mut any_newly_queued = false;
+            for id in ids {
+                match inbox.entry(id) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(RebuildReasons::from_reason(reason));
+                        any_newly_queued = true;
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        entry.get_mut().insert(reason);
+                    }
                 }
             }
+            any_newly_queued
         };
-        if newly_queued && let Some(request_frame) = &self.request_frame {
+        if any_newly_queued && let Some(request_frame) = &self.request_frame {
             request_frame();
         }
     }

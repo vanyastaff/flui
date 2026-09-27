@@ -179,6 +179,17 @@ signal.set(v)                         // owner thread, outside build
 - **Re-entrancy.** A read/write closure runs with no borrow of the graph held (the value is on
   loan, put back if the generation still matches). Touching *another* slot from inside is fine;
   touching the same slot is `SignalError::Reentrant`, never a `RefCell` panic.
+- **Unwind consistency.** `update(&mut T)` is commit-on-unwind, not transactional: if its closure
+  mutates the value and panics while the slot remains live, the partial value is returned to the
+  slot, all current readers are durably enqueued as one batch, and the original panic resumes.
+  Enqueue precedes the frame wake and signal telemetry, so either of those panicking cannot leave
+  only a prefix invalidated. Explicitly releasing the same slot inside the closure remains
+  authoritative: the release destroys the loaned value and reader set, so no commit survives to
+  invalidate. Rollback for arbitrary `T` and arbitrary external effects is not promised; a domain
+  operation needing atomicity prepares and validates a replacement before `set`, or needs a
+  separate transaction primitive. A valid typed read records its dependency after graph/type
+  validation but before its user panic escapes, so first-build recovery retains a path for a later
+  write without imposing a reentrant `ReadGraph` contract.
 - Writes during a drain (e.g. from `did_update_view`) fall into the mid-drain absorb path.
 
 ### 5.4 Effects
@@ -288,7 +299,9 @@ A headless test builds the model with the binding's `reactive()`, writes with
 - Cross-thread writes go through the realm proxy: `UiCommand::SignalWrite(Box<dyn FnOnce(&Reactive)
   + Send>)` runs on the owner thread at the next idle drain, marks readers, and wakes a frame. The
   closure captures `signal.detach()` — a `Send + Sync` `SignalSender<T>` re-attached with
-  `.attach()` on the owner side.
+  `.attach()` on the owner side. If the command panics after a partial signal commit, the owning
+  presentation and realm retain redraw demand before the original panic resumes; a sibling
+  presentation is not woken.
 - Writes from a dead realm's sender return `OwnerGone`, like every realm-scoped command.
 - `UiCommand::SignalWrite` and `UiCommandSender::send_signal_write` are `pub(crate)` until an
   async task API vends a `SignalSender` through the realm handle; this ADR adds no public realm

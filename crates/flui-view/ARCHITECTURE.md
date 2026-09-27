@@ -311,6 +311,38 @@ context's writes the owner's graph, a write opened in `build` is refused), the
 `compile_fail` doctests on `WriterSource` and `LifecycleContext::writer_source`, and the
 `tests/ui/signal_write_*`, `unit_closure_*`, `let_bound_*` and `writer_escapes_*` snapshots.
 
+### Signal mutation is commit-on-unwind, not transactional
+
+Signals have no Flutter counterpart; this is the unwind half of ADR-0074's
+write-to-dirty contract.
+
+**Rule.** An `update` closure that mutates its value and then panics leaves the
+partial value committed while the slot remains live. Before the original panic resumes, every registered
+reader is inserted into the external rebuild inbox as one durable batch. The
+batch releases its lock before requesting one frame; a panicking wake therefore
+cannot expose only a prefix of the reader set. Signal telemetry runs only after
+that enqueue. If invalidation itself panics while an updater panic is already
+being handled, the updater's original payload keeps priority.
+
+A valid typed read releases the graph's value loan, then subscribes before a
+panic from its user closure resumes. A recovered first build that panics in
+`Signal::with` therefore retains the dependency needed for a later write to
+retry it without requiring a reentrant `ReadGraph`. Foreign, stale, unbound and
+type-mismatched reads still subscribe nobody.
+
+**Not promised.** `update(&mut T)` is not a transaction and cannot roll back an
+arbitrary `T` or external effects. Code requiring atomic domain changes prepares
+and validates a replacement value before `set`; a future transactional primitive
+needs its own consumer and contract. Notification stays deferred through the
+existing rebuild inbox and never invokes signal readers inline. An explicit
+`Reactive::release` of that same slot from inside its closure remains
+authoritative: it destroys the loaned value and reader set, so no commit
+survives to invalidate.
+
+Pinned by the reactive graph unit tests for updater/wake/telemetry panics,
+`flui-foundation`'s subscribe-before-unwind test, and
+`tests/signal_reads.rs` for mounted partial-commit and first-build recovery.
+
 ### Reconciliation emits typed events on the live path
 
 **Rule.** `reconcile_children_by_id` emits one `ReconcileEvent` per child disposition (`Mount`,
