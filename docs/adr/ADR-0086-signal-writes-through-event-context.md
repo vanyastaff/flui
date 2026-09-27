@@ -224,10 +224,17 @@ The changes land one at a time, each with `cargo xtask check-changed` green:
 2. `EventCx`, `Writer`, `WriterSource`, and a `callback(|cx| ..)` helper that fixes the
    higher-ranked signature, named in the widget-author documentation.
 3. The `Signal` write signatures, and removal of both `reactive()` accessors.
-4. The setter signatures, migrated crate by crate by `flui migrate`, starting with a pilot on
-   `flui-cupertino` and the `counter` and `todo` examples (`examples/counter.rs`,
-   `examples/todo.rs`), so the pilot covers catalog code and application code. Steps 3 and 4
-   land before the first crates.io publication (ADR-0091 §1).
+4. The setter signatures, migrated crate by crate by `flui migrate`, starting with a pilot. The
+   pilot surface is one new catalog widget, `flui_widgets::RawButton` (its `on_press` takes
+   `Fn(&mut EventCx<'_>)` and wraps an unchanged `GestureDetector::on_tap` through a
+   `WriterSource`), and the application code that uses it: the `counter` and `todo` examples
+   (`examples/counter.rs`, `examples/todo.rs`) and the `flui create` counter template
+   (`crates/flui-cli/src/templates/counter.rs`). Those examples previously used only Material
+   setters and `StateCell`/`StateHandle` (untyped by §7), so they move to the widgets catalog
+   and to `Signal<T>` state. `flui-cupertino`'s three setters move to the crate-by-crate
+   migration with `GestureDetector`'s thirteen: converting either inside the pilot would touch
+   Material and Cupertino call sites and make the pilot costly to revert. Steps 3 and 4 land
+   before the first crates.io publication (ADR-0091 §1).
 
 `Writer` and `WriterSource` live in `flui-view`, beside the graph (ADR-0085 §6).
 
@@ -237,6 +244,27 @@ materially longer than the probe's, the design switches before 1.0 to the guard-
 `Signal` handle resolves its realm itself, writes are allowed anywhere outside `build`, and the
 run-time guard is the only enforcement. The pilot's diff and the decision are recorded by
 amending this record.
+
+**Pilot thresholds.** Fixed before any pilot code was written:
+
+- *Converted sites* are five: the counter example's Increment, the todo example's Toggle,
+  Delete and Add, and the template's Increment. A site's guard-only counterfactual is the same
+  code with `|cx|` replaced by `||` and each `cx, ` argument removed.
+- *Excess* at a site is anything else that differs from its counterfactual: `let _`, `.ok()`,
+  clones, type annotations, extra lines.
+- The trigger **fires** if any converted site needs a closure parameter annotation that
+  `callback` does not remove, or if any converted site carries excess beyond passing `cx` into a
+  helper's parameter (the probe's pattern).
+- Reported but outside the trigger: the excess at the one transitional site (the todo field's
+  Enter handler, which stays on an unconverted `Fn(&str)` setter and opens its write through a
+  held `WriterSource`); the diff from moving state to `Signal` (the cost of ADR-0074 and
+  ADR-0085, not of this record); collateral edits to non-pilot code, expected to be none.
+- Measured with `git diff --numstat` against the base in five groups (application code, the
+  catalog widget, the core crates, tests, docs); `git grep -nE '\|[a-z_]+: *&mut EventCx' --
+  examples crates/flui-cli/src/templates` (annotations, expected empty); `git grep -c
+  'callback(' -- examples` (helper uses); and, for each compile-fail snapshot, the error code,
+  its first line, whether the primary label points at the offending token, and whether a note
+  names the fix.
 
 ## Alternatives considered
 
