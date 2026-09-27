@@ -2,12 +2,21 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-28
+- **Amended:** 2026-09-27 by [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) — §8's
+  foundation-only dependency and the test's place in `flui-testing` no longer hold:
+  `flui-devtools` is an official package in `packages/flui-devtools` whose only framework
+  dependency is `flui-sdk`, and the end-to-end test and the overhead bench live there. The
+  inspector still names only the seam (`flui_sdk::foundation::observe`); that its surface stays
+  that narrow is a convention, not a dependency fact. Of alternative 2's reasons, the inversion
+  still holds (the kind rule forbids any core crate naming devtools, so no in-framework consumer
+  can form a cycle), and the compile cost is already paid (every app that links devtools builds
+  the tree stack through the facade).
 
 *`flui-foundation` declares a narrow `TreeObserver` trait plus typed event structs; `BuildOwner`
 holds one per-realm `Option<Arc<dyn TreeObserver>>` slot; emissions fire from the tree's true
 mutation funnels (mint, move, rebuild drain, the two unmount primitives); `flui-devtools`
-implements the trait behind its `inspector` feature with `flui-foundation` as its only tree-side
-dependency. The `flui::reconcile` tracing stream (FR-035) stays, but is not the seam.*
+implements the trait behind its `inspector` feature, naming only the seam
+(`flui_sdk::foundation::observe`). The `flui::reconcile` tracing stream (FR-035) stays, but is not the seam.*
 
 ## Context
 
@@ -173,7 +182,7 @@ With no observer installed, each site costs one load of a niche-optimized `Optio
 and a predictable branch — no payload, no `catch_unwind`, no allocation or locking. That is not
 literally zero like `#[cfg]`-removed code, and this ADR does not claim it is; it is the same order
 as the adjacent tracing interest check. With an observer installed, each emission also pays the
-`catch_unwind` frame. The claim is checked by `crates/flui-testing/benches/tree_observer_overhead.rs`
+`catch_unwind` frame. The claim is checked by `packages/flui-devtools/benches/tree_observer_overhead.rs`
 (observer absent vs. no-op vs. counting, over a rebuild-heavy tree).
 
 Emission is unconditionally compiled; the runtime `Option` is the per-realm, per-run off switch.
@@ -205,17 +214,20 @@ Callbacks run on the realm's owner thread, inside frame phases, with the realm's
 `WidgetsBindingObserver`). Dependency inversion requires the erasure: emitter crates cannot name a
 devtools type above them in the DAG.
 
-### 8. The devtools half: `inspector` feature, foundation-only dependency
+### 8. The devtools half: `inspector` feature, seam-only surface
 
 `flui-devtools`'s `inspector` feature (on by default in that crate; release builds avoid devtools
-cost by not depending on the crate) pulls in `flui-foundation` and `tracing` and nothing from the
-tree stack. It compiles for `wasm32-unknown-unknown`. `flui_devtools::inspector::InspectorCounters`
+cost by not depending on the crate) pulls in `tracing` and names only the seam, as
+`flui_sdk::foundation::observe`. Devtools depends on `flui-sdk`, not on `flui-foundation` alone
+(amended by ADR-0088): the SDK's closure holds the tree stack, but the inspector's code and
+public surface name nothing from it. It compiles for `wasm32-unknown-unknown`. `flui_devtools::inspector::InspectorCounters`
 is a counting/logging observer over private atomics; `snapshot()` returns an `InspectorSnapshot`
 (`mounts`, `unmounts`, `rebuilds`, `moves`, `rebuilds_for(RebuildReason)`, `is_final()`). Each
 counter is individually monotonic; cross-counter consistency within a snapshot is not guaranteed.
 
-The end-to-end proof needs both halves, so it lives in `flui-testing`
-(`tests/tree_observer_inspector.rs`, with `flui-devtools` as a dev-dependency): mount → rebuild →
+The end-to-end proof needs both halves, so it lives with the inspector
+(`packages/flui-devtools/tests/tree_observer_inspector.rs`, which reaches the tree through
+`flui_sdk::view`): mount → rebuild →
 keyed reorder → GlobalKey reparent → unmount → detach against `InspectorCounters`, asserting exact
 counts, reason sets, the §4 balance invariant, and `detached()` on teardown. Tests install via
 `WidgetsBinding::install_tree_observer` / `remove_tree_observer`.
@@ -245,8 +257,8 @@ counts, reason sets, the §4 balance invariant, and `detached()` on teardown. Te
 ## Consequences
 
 **Positive**
-- Devtools observe the tree with `flui-foundation` as the only framework dependency; the seam is
-  inert without an installed observer.
+- Devtools observe the tree through the seam alone (`flui_sdk::foundation::observe`); the seam
+  is inert without an installed observer.
 - Typed, realm-scoped, mutation-ordered events; generational `ElementId`s make consumer stores
   ABA-safe; the §4 invariant keeps a mirror's parent/slot edges correct through reparents and
   reorders.

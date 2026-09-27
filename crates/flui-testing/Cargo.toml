@@ -11,9 +11,6 @@ description = "Test support for FLUI: a deterministic headless frame driver on a
 keywords = ["ui", "gesture", "headless", "testing"]
 categories = ["gui"]
 
-# Dev-only files a `cargo package --list` sweep found leaking into the
-# published archive (internal architecture docs, criterion benches, etc.):
-exclude = ["/benches/"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 2
 # separate binaries). See the `[[test]] name = "flui_testing_it"` target below.
@@ -104,12 +101,7 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features 
 # Same dev-only feature-unification pattern used by flui-app; the hook stays out
 # of release builds.
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
-# The end-to-end observation-seam test (ADR-0040) drives a real tree
-# against the devtools inspector — this crate is the one that links both
-# halves (acyclic: flui-devtools depends only on flui-foundation).
-flui-devtools = { path = "../flui-devtools", version = "=0.2.0-dev", features = ["inspector"] }
 flui-objects = { workspace = true }
-criterion = { workspace = true }
 # The long-press deadline recognizer + settings exercised by the pump_frame test,
 # plus the geometry/offset types for the synthetic pointer-down. The `testing`
 # feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
@@ -128,21 +120,12 @@ path = "tests/main.rs"
 name = "log_capture_global_subscriber"
 path = "tests/log_capture_global_subscriber.rs"
 
-[[bench]]
-name = "tree_observer_overhead"
-harness = false
-
 [package.metadata.flui]
 layer = 6
 tier = "K"
 tier-kind = "internal"
 # Below flui-widgets, which names it as an optional dependency.
 order = 2
-# The kind rule (ADR-0081 §3): a core crate names an official package only by
-# exception.
-edge-exceptions = [
-    { to = "flui-devtools", exit = "ADR-0088", reason = "observation-seam test links both halves (dev)" },
-]
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
     { item = "log_capture::SINK", grant = "ADR-0097", class = "process", reason = "per-thread capture buffer behind tracing's global dispatcher, which the process has once" },

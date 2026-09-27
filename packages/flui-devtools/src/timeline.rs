@@ -37,7 +37,7 @@
 
 use std::sync::Arc;
 
-use flui_scheduler::FrameSnapshot;
+use flui_sdk::hooks::FrameSnapshot;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

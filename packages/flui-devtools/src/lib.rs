@@ -53,12 +53,13 @@
 //!
 //! - `profiling`: [`Profiler`] and [`FrameTimingLayer`] (`tracing` +
 //!   `tracing-subscriber`).
-//! - `timeline`: [`timeline`] (`flui-scheduler` for `FrameSnapshot`, `serde`
-//!   for the exporters).
-//! - `inspector`: [`inspector`] (`flui-foundation` for the seam).
+//! - `timeline`: [`timeline`] (`flui_sdk::hooks::FrameSnapshot` for the
+//!   scheduler bridge, `serde` for the exporters).
+//! - `inspector`: [`inspector`] (`flui_sdk::foundation::observe` for the
+//!   seam).
 //! - `full`: all of the above, as one name for feature-matrix runs.
 
-// Ship bar (wave 4): every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
 

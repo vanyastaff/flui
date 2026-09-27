@@ -16,10 +16,10 @@ use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_devtools::inspector::InspectorCounters;
-use flui_foundation::observe::TreeObserver;
-use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
-use flui_view::{BuildOwner, ElementTree, RebuildReason, RenderView, View, ViewExt};
+use flui_sdk::foundation::observe::TreeObserver;
+use flui_sdk::foundation::{ElementId, ValueKey, ViewKey};
+use flui_sdk::view::{BuildOwner, ElementTree, RebuildReason, RenderView, View, ViewExt};
 
 #[derive(Clone)]
 struct KeyedLeafBox {
@@ -35,28 +35,28 @@ impl KeyedLeafBox {
 }
 
 impl RenderView for KeyedLeafBox {
-    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type Protocol = flui_sdk::rendering::BoxProtocol;
     type RenderObject = RenderSizedBox;
 
     fn create_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        _ctx: &flui_sdk::view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
         RenderSizedBox::shrink()
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        _ctx: &flui_sdk::view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
+    ) -> flui_sdk::rendering::RenderUpdateImpact {
+        flui_sdk::rendering::RenderUpdateImpact::NONE
     }
 }
 
 impl View for KeyedLeafBox {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::render_variable(self)
+    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::render_variable(self)
     }
 
     fn key(&self) -> Option<&dyn ViewKey> {
@@ -66,7 +66,7 @@ impl View for KeyedLeafBox {
 
 #[derive(Clone)]
 struct MultiBox {
-    children: Vec<flui_view::BoxedView>,
+    children: Vec<flui_sdk::view::BoxedView>,
 }
 
 impl MultiBox {
@@ -82,22 +82,22 @@ impl MultiBox {
 }
 
 impl RenderView for MultiBox {
-    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type Protocol = flui_sdk::rendering::BoxProtocol;
     type RenderObject = RenderSizedBox;
 
     fn create_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        _ctx: &flui_sdk::view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
         RenderSizedBox::shrink()
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        _ctx: &flui_sdk::view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
+    ) -> flui_sdk::rendering::RenderUpdateImpact {
+        flui_sdk::rendering::RenderUpdateImpact::NONE
     }
 
     fn has_children(&self) -> bool {
@@ -112,8 +112,8 @@ impl RenderView for MultiBox {
 }
 
 impl View for MultiBox {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::render_variable(self)
+    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::render_variable(self)
     }
 }
 

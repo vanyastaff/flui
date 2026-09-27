@@ -71,7 +71,7 @@ let timeline = Timeline::new();
 std::fs::write("trace.json", timeline.export_chrome_trace())?;
 ```
 
-`Timeline::record_frame_snapshots` converts `flui_scheduler::FrameSnapshot`s
+`Timeline::record_frame_snapshots` converts `flui_sdk::hooks::FrameSnapshot`s
 (from `FrameClock::frames_since`) into `Frame` events in the same trace, so a
 presentation's frame history and hand-recorded events share one file.
 
@@ -81,7 +81,7 @@ presentation's frame history and hand-recorded events share one file.
 use std::sync::Arc;
 
 use flui_devtools::inspector::InspectorCounters;
-use flui_foundation::observe::TreeObserver;
+use flui_sdk::foundation::observe::TreeObserver;
 
 let counters = Arc::new(InspectorCounters::new());
 build_owner.set_tree_observer(Arc::clone(&counters) as Arc<dyn TreeObserver>);
@@ -92,7 +92,12 @@ println!("{} mounts, {} rebuilds, {} unmounts", snapshot.mounts, snapshot.rebuil
 
 This is the event half of ADR-0040's dependency-inverted seam: structural
 observations pushed by the core, with no access to the trees themselves.
-`flui-testing` drives a real tree against it as the seam's proof.
+The seam's end-to-end test lives in this package
+(`tests/tree_observer_inspector.rs`): it drives a real tree against the
+counters.
+
+Devtools is an official package: its only framework dependency is `flui-sdk`
+([ADR-0088](../../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)).
 
 ## What this crate is not
 

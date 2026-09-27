@@ -45,9 +45,9 @@ implementation, and the types that define it live inside that implementation:
   and the agent-workflow test asserts against an unbounded diagnostics string
   (`tests/agent_workflow.rs:136-140`, `to_string_deep`).
 - **There is no in-process server.** `flui-devtools` says of itself that it walks no tree and
-  opens no port (`crates/flui-devtools/src/lib.rs:15-24`); its tree access is limited to a
+  opens no port (`packages/flui-devtools/src/lib.rs:16-23`); its tree access is limited to a
   counting observer over the ADR-0040 seam (the `inspector` feature,
-  `crates/flui-devtools/Cargo.toml:62-65`).
+  `packages/flui-devtools/Cargo.toml:63-66`).
 
 So a finder written for `flui test`, a query an agent sends through the desktop server and a
 DevTools view of the same app share no type, and nothing can check that the two backends

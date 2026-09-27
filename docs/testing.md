@@ -705,10 +705,11 @@ its own logging subscriber, events outside a capture still reach it, and
 concurrent captures on different threads neither block nor see each other.
 A crate whose capture helper is too specialised to replace keeps it, and calls
 `log_capture::disarm_interest_cache` first — that is public for exactly this.
-`flui-view`, `flui-interaction`, `flui-app` and `flui-devtools` do, through a
+`flui-view`, `flui-interaction` and `flui-app` do, through a
 **dev-dependency cycle**: `flui-testing` depends on them normally, and cargo
 permits the reverse edge for dev-dependencies precisely so a lower crate can
-use the test support built on it.
+use the test support built on it. `flui-devtools` does too, through a plain
+dev-dependency, since it sits above `flui-testing`.
 
 Two crates deliberately do not, because they have nothing to poison — their
 capture tests share no callsite with anything else in their binary, each

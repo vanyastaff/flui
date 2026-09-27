@@ -938,6 +938,36 @@ fn the_design_systems_build_on_the_sdk_alone() {
     }
 }
 
+/// Devtools is an official package on the SDK (ADR-0088 move 4): it lives
+/// under `packages/`, and its only framework normal dependency is `flui-sdk`;
+/// the rest are third-party crates for timing, locking, export and tracing.
+#[test]
+fn devtools_builds_on_the_sdk_alone() {
+    let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
+    let members = super::Members::load(&util::repo_root(), &metadata).expect("manifests load");
+    let member = members.by_name()["flui-devtools"];
+    assert_eq!(member.rel, "packages/flui-devtools/Cargo.toml");
+    assert!(member.edge_exceptions.is_empty());
+    let dependencies: BTreeSet<&str> = member
+        .deps
+        .iter()
+        .filter(|dep| dep.kind != cargo_metadata::DependencyKind::Development)
+        .map(|dep| dep.name.as_str())
+        .collect();
+    assert_eq!(
+        dependencies,
+        BTreeSet::from([
+            "flui-sdk",
+            "parking_lot",
+            "serde",
+            "serde_json",
+            "tracing",
+            "tracing-subscriber",
+            "web-time",
+        ])
+    );
+}
+
 /// `flui-runtime` holds public execution services that ADR-0047 keeps out of
 /// every library crate's reach, so the host is the one crate allowed a normal
 /// edge to it. Dev edges stay open: tests of other crates may drive it.
@@ -1063,12 +1093,7 @@ fn the_tiers_match_the_adr_0081_table() {
         ("flui", "flui-hot-reload", "ADR-0094"),
         ("flui", "flui-material", "ADR-0088"),
         ("flui", "flui-cupertino", "ADR-0088"),
-        // The kind rule (ADR-0081 §3): a core crate's dev edge to an official
-        // package.
-        ("flui-testing", "flui-devtools", "ADR-0088"),
-        // The official packages not yet on flui-sdk (ADR-0088 §2).
-        ("flui-devtools", "flui-foundation", "ADR-0088"),
-        ("flui-devtools", "flui-scheduler", "ADR-0088"),
+        // The official package not yet on flui-sdk (ADR-0088 §2).
         ("flui-hot-reload", "flui-foundation", "ADR-0094"),
         ("flui-hot-reload", "flui-layer", "ADR-0094"),
         ("flui-hot-reload", "flui-rendering", "ADR-0094"),

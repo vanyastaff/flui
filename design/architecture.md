@@ -183,7 +183,6 @@ Rules:
 - **Core names no official crate.** No core crate depends on an `official` crate in any form,
   optional and dev included. The exceptions are named, each with a reason and an exit
   ([ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)):
-  `flui-testing` → `flui-devtools` (dev, `crates/flui-testing/Cargo.toml:106`);
   `flui-app` → `flui-hot-reload` (optional, `crates/flui-app/Cargo.toml:65,108`) and the facade's
   optional and dev edges to it (`Cargo.toml:519,554`), all deleted in the change that moves
   `flui-hot-reload` into `packages/` (ADR-0094 §2); the facade's `material`/`cupertino` edges
@@ -194,8 +193,8 @@ Rules:
   rule, `tools/xtask/src/workspace/tiers.rs`), and the dependent's `edge-exceptions` entry
   admits each one, the same list the direction rule reads; the design systems'
   `allowed-dependents` lists are replaced by it. The same rule holds an official package's
-  normal and build edges to `flui-sdk` and the contract crates; devtools' and hot reload's
-  internal-crate edges are seeded as exceptions until each moves.
+  normal and build edges to `flui-sdk` and the contract crates; hot reload's internal-crate
+  edges are seeded as exceptions until it moves.
 - **The crate count is not a goal.** It is a reported fact of the tier table.
 
 **Why the runtime sits above `flui-widgets`.** The realm composes widget-level roots:

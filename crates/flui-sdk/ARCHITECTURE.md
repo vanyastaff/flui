@@ -22,8 +22,9 @@ topology is not part of any package manifest.
   the `pub use`/`pub mod` lines of `src/lib.rs` with a pinned list, so adding an item is a
   visible decision, and its `measured` module names every measured item through its SDK path,
   so removing one fails to build.
-- **Evolving surface under the ceiling.** Only `pipeline` is Evolving; ADR-0088 §4 revisits the
-  crate when its Evolving surface passes about thirty items.
+- **Evolving surface under the ceiling.** `pipeline` and `hooks` are Evolving (four items
+  between them); ADR-0088 §4 revisits the crate when its Evolving surface passes about thirty
+  items.
 - **Own version.** `version = "0.N"`, not the workspace's: `cargo xtask workspace` refuses an
   evolving crate that inherits the version or leaves major 0.
 - **One train per graph.** The guard is not here: `flui-foundation` declares
@@ -56,7 +57,9 @@ their tests, measured at `431c8757c` (2026-09-26):
 | `flui_objects` | 3 | `pipeline::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction}` |
 | `flui_scheduler` | 1 | `LocalPostFrameHandle`, which `flui_view` already re-exports: `view::LocalPostFrameHandle` |
 
-`painting::DrawOp` is added for the packages' paint tests, the only place they name it. Their
+`painting::DrawOp` is added for the packages' paint tests, the only place they name it.
+`flui-devtools`, measured the same way when it moved, adds `hooks::FrameSnapshot` and the
+`foundation::observe` paths (see Consumers). Their
 tests under `tests/` also use `flui-widgets`' and `flui-interaction`'s `testing` features and
 `flui-testing`; those stay dev-dependencies of the packages and are not SDK surface.
 
@@ -72,11 +75,21 @@ tests under `tests/` also use `flui-widgets`' and `flui-interaction`'s `testing`
   normal dependencies are `flui-sdk` and `tracing`. The port needed no new item; its tests reach
   `UpdateScheduler` as `animation::UpdateScheduler` and `RenderId` as `foundation::RenderId`,
   both inside whole-module re-exports.
+- **`flui-devtools`** (`packages/flui-devtools`) builds on this crate alone: its normal
+  dependencies are `flui-sdk` plus `parking_lot`, `serde`, `serde_json`, `tracing`,
+  `tracing-subscriber` and `web-time`. It needed one new item, `hooks::FrameSnapshot`, which
+  its timeline turns into Chrome-trace events; the facade has no scheduler module, so the item
+  sits in an Evolving module. Its inspector's ADR-0040 observation seam is
+  `foundation::observe` (`TreeObserver`, the four event types) and `foundation::RebuildReason`,
+  already inside the whole `foundation` re-export at the facade's path, so the `measured`
+  module names them and `src/lib.rs` gains no line for them.
 
-`the_design_systems_build_on_the_sdk_alone` in `tools/xtask` pins both manifests.
+`the_design_systems_build_on_the_sdk_alone` and `devtools_builds_on_the_sdk_alone` in
+`tools/xtask` pin the three manifests.
 
 An item a package needs that is not here is added by ADR-0088 §4 (at the facade's path when the
-facade has one, otherwise in `pipeline`) with a line in `tests/surface.rs`'s pinned list.
+facade has one, otherwise in an Evolving module: `pipeline` for render internals, `hooks` for
+development hooks) with a line in `tests/surface.rs`'s pinned list.
 
 ## The derives resolve through the SDK
 
