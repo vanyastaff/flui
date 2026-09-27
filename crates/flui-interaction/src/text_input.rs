@@ -14,6 +14,8 @@
 //! - One active client per presentation.
 //! - Attaching replaces the previous client.
 //! - Detach is token guarded: a stale token cannot close the replacement.
+//! - A client replaced or detached inside a frame transaction keeps its
+//!   store until that frame's commit anchor, where the grants it queued run.
 //! - The platform IME is enabled on the first attach and disabled on the active
 //!   detach or explicit owner close.
 //! - Platform events are demultiplexed to the presentation before
@@ -133,6 +135,21 @@ struct AttachedClient {
 struct OwnerState {
     lifecycle: OwnerLifecycle,
     active: Option<AttachedClient>,
+    /// Stores replaced or detached while the frame transaction was open.
+    /// A grant they queued then was the platform's answer to them, so it
+    /// runs at the anchor that closes this frame, not whenever the field is
+    /// next focused.
+    retired: Vec<Rc<dyn TextStore>>,
+}
+
+impl OwnerState {
+    /// `client` stops being the active one; keep its store for the anchor
+    /// if it may still hold grants queued behind the frame.
+    fn retire(&mut self, client: AttachedClient, transaction_open: bool) {
+        if transaction_open {
+            self.retired.push(client.client.store);
+        }
+    }
 }
 
 /// Direct owner of one presentation's platform text-input connection.
@@ -166,6 +183,7 @@ impl TextInputOwner {
             state: RefCell::new(OwnerState {
                 lifecycle: OwnerLifecycle::Open,
                 active: None,
+                retired: Vec::new(),
             }),
         })
     }
@@ -202,10 +220,14 @@ impl TextInputOwner {
         // Before the client is reachable through `dispatch`, so no lock is
         // ever requested on a store that does not yet follow the frame.
         client.store.set_commit_gate(self.gate.clone());
+        let transaction_open = self.is_transaction_open();
         let enable_platform = {
             let mut state = self.state.borrow_mut();
-            let enable_platform = state.active.is_none();
-            state.active = Some(AttachedClient { token, client });
+            let replaced = state.active.replace(AttachedClient { token, client });
+            let enable_platform = replaced.is_none();
+            if let Some(replaced) = replaced {
+                state.retire(replaced, transaction_open);
+            }
             enable_platform
         };
 
@@ -220,14 +242,12 @@ impl TextInputOwner {
         self.ensure_open()?;
         let platform = self.platform.as_ref().ok_or(TextInputError::Unsupported)?;
 
+        let transaction_open = self.is_transaction_open();
         let detached = {
             let mut state = self.state.borrow_mut();
-            if state
-                .active
-                .as_ref()
-                .is_some_and(|client| client.token == token)
-            {
-                state.active = None;
+            let active = state.active.take_if(|client| client.token == token);
+            if let Some(active) = active {
+                state.retire(active, transaction_open);
                 true
             } else {
                 false
@@ -298,18 +318,29 @@ impl TextInputOwner {
         !self.gate.is_open()
     }
 
-    /// Run the grants the active client's store queued while commits were
-    /// closed. The composition root calls this once the frame returns;
-    /// returns how many ran.
+    /// Run the grants queued while commits were closed: first those of the
+    /// stores replaced or detached during the frame, in that order, then
+    /// the active client's. The composition root calls this once the frame
+    /// returns; returns how many ran.
     pub fn run_deferred_grants(&self) -> usize {
-        let store = {
-            let state = self.state.borrow();
-            state
+        if self.is_transaction_open() {
+            // Nothing could run, and the retired stores wait for the anchor
+            // that closes this transaction.
+            return 0;
+        }
+        let (retired, active) = {
+            let mut state = self.state.borrow_mut();
+            let active = state
                 .active
                 .as_ref()
-                .map(|active| Rc::clone(&active.client.store))
+                .map(|active| Rc::clone(&active.client.store));
+            (std::mem::take(&mut state.retired), active)
         };
-        store.map_or(0, |store| store.run_deferred_grants())
+        retired
+            .iter()
+            .chain(active.as_ref())
+            .map(|store| store.run_deferred_grants())
+            .sum()
     }
 
     /// The active client's store.
@@ -338,6 +369,7 @@ impl TextInputOwner {
                 return;
             }
             state.lifecycle = OwnerLifecycle::Closed;
+            state.retired.clear();
             state.active.take().is_some()
         };
         if disable_platform && let Some(platform) = &self.platform {
@@ -602,6 +634,44 @@ mod tests {
         assert!(!owner.is_transaction_open());
         assert_eq!(owner.run_deferred_grants(), 2);
         assert_eq!(store.text(), "東京", "applied in arrival order");
+    }
+
+    /// Focus moving from one field to another inside a frame: the commit
+    /// the first field's store queued runs on that store at the anchor
+    /// closing the frame, not at its next key press or lock.
+    #[test]
+    fn a_grant_queued_by_a_replaced_or_detached_client_runs_at_the_anchor() {
+        let (owner, _) = owner_with_recorder();
+        let handle = owner.handle();
+        let (first, second, third) = (
+            InMemoryTextStore::new(""),
+            InMemoryTextStore::new(""),
+            InMemoryTextStore::new(""),
+        );
+        let _first = handle.attach(client(&first)).expect("connection");
+
+        owner.set_transaction_open(true);
+        owner.dispatch(&ImeEvent::Commit("東".to_owned()));
+        let second_token = handle.attach(client(&second)).expect("replacement");
+        owner.dispatch(&ImeEvent::Commit("京".to_owned()));
+        assert_eq!(handle.detach(second_token), Ok(DetachOutcome::Detached));
+        let _third = handle.attach(client(&third)).expect("another field");
+        assert_eq!(
+            owner.run_deferred_grants(),
+            0,
+            "an anchor attempted inside the transaction runs nothing and keeps the retired stores"
+        );
+        owner.set_transaction_open(false);
+
+        assert_eq!(owner.run_deferred_grants(), 2);
+        assert_eq!(first.text(), "東", "the replaced client's commit");
+        assert_eq!(second.text(), "京", "the detached client's commit");
+        assert_eq!(third.text(), "", "nothing reached the new client");
+        assert_eq!(
+            owner.run_deferred_grants(),
+            0,
+            "a retired store is drained once, then released"
+        );
     }
 
     #[test]
