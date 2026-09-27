@@ -106,7 +106,9 @@ before `flui-testing` and `flui-sdk`. It owns:
   semantics → produce the `SceneSnapshot` → end frame (`end_frame_with_lane`,
   `scheduler.rs:1552`, which runs the post-frame callbacks of both queues). The
   per-presentation panic boundary of ADR-0048 moves with it unchanged. The clock is read once
-  per pump and every phase sees that timestamp, the realm's `Vsync` controllers included.
+  per pump: it is the scheduler's frame timestamp and the time the realm's `Vsync` controllers
+  tick at. A scheduler `Ticker` still measures elapsed time on the wall clock, a divergence
+  from Flutter's `Ticker._tick` recorded and pinned in `flui-scheduler`'s `ARCHITECTURE.md`.
   Whether a wake becomes a frame stays the runner's per-backend wake gate (ADR-0058); a wake
   with frames disabled calls `UiRealm::pump_background` (clear the frame latch, then poll the
   async driver) and runs no frame;

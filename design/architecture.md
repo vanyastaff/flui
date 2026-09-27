@@ -495,8 +495,9 @@ App (flui-app runners) ── one OS-trampoline host cell (P3's named exception)
 fixes the order: apply commands → begin frame (transient callbacks, so tickers advance, then
 microtasks) → draw frame (persistent callbacks) → drain build → effects (the ADR-0075 slot) →
 layout → compositing → paint (retained layers) → semantics (incremental) → layer diff → damage →
-`SceneSnapshot` → end frame (post-frame callbacks). Every phase sees the one timestamp the clock
-returns, the realm's `Vsync` controllers included. The runner's per-backend wake gate decides
+`SceneSnapshot` → end frame (post-frame callbacks). The clock is read once: its timestamp is the
+scheduler's frame time and the time the realm's `Vsync` controllers tick at (a scheduler `Ticker`
+still reads the wall clock; `flui-scheduler`'s `ARCHITECTURE.md` records why). The runner's per-backend wake gate decides
 whether a wake becomes a pump at all (ADR-0058), and a wake with frames disabled runs
 `UiRealm::pump_background` instead. `flui-app` drives the pump with platform clocks and the
 raster lane, and `flui-testing` is to drive it with a manual clock and a headless or CPU sink

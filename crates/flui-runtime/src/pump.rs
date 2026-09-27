@@ -7,10 +7,14 @@
 
 /// Where a pump reads its frame's timestamp (Flutter's vsync time).
 ///
-/// Read once per pump: every phase of that frame — the scheduler's begin
-/// frame, the realm's `Vsync` tick, the post-frame callbacks — sees the same
-/// instant, so animations advance on the frame's clock rather than on
-/// whenever each phase happened to read the wall clock.
+/// Read once per pump and handed to the scheduler's begin frame (its frame
+/// timing, and the timestamp every transient and post-frame callback
+/// receives) and to the realm's `Vsync` tick, so `Vsync` controllers advance
+/// on the frame's clock rather than on whenever the tick read the wall clock.
+///
+/// A `flui_scheduler::Ticker` does not follow it: a controller built on the
+/// scheduler measures elapsed time on the wall clock (a recorded divergence,
+/// `flui-scheduler`'s `ARCHITECTURE.md`).
 pub trait FrameClockSource {
     /// This frame's timestamp. Called exactly once per pump.
     fn frame_time(&mut self) -> web_time::Instant;

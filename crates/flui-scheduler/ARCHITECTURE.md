@@ -717,6 +717,31 @@ start-contract gap and the cross-thread register/store TOCTOU) ship
 unfixed, named rather than silently assumed closed; both predate this fix
 and are not measured to have widened under it.
 
+### A ticker's elapsed time is wall-clock time, not the frame timestamp
+
+**Rule:** `Ticker` reports `start_time.elapsed()`: the wall-clock time since
+`start`, read when the tick runs. The frame's vsync timestamp, which the
+scheduler hands every transient callback, is ignored (`_vsync_time` in both
+auto-tick registrations).
+
+**Conflict:** Flutter's `Ticker._tick(timeStamp)` (`ticker.dart`, the method
+`tick_and_reschedule_static` ports) anchors `_startTime` on the first frame's
+timestamp and reports `timeStamp - _startTime`, so every ticker in a frame
+sees the same instant and a test's fake clock drives them. Here a host that
+drives frames on a virtual clock (`flui-runtime`'s `UiRealm::pump` with a
+`ManualClock`) moves the frame timestamp, the realm's `Vsync` controllers and
+the scheduler's frame timing, but not an `AnimationController` built on the
+scheduler: that one advances only as real time passes.
+
+**Choice:** kept for now, named. Moving the ticker onto the frame timestamp
+changes `start`, `mute`/`unmute`'s elapsed rebasing and the manual
+`Ticker::tick` path together, and belongs with the headless driver that needs
+it, not with the pump that exposed it. Pinned by
+`ticker::tests::a_scheduler_ticker_measures_wall_time_not_the_frame_timestamp`
+(two frames 10 s apart on the frame clock report ticks well under a second
+apart); moving the ticker onto the frame timestamp turns it red, and should
+delete this entry.
+
 ### `end_of_frame` registers before it demands, and the live registry is the memo
 
 **Rule:** `UpdateScheduler::end_of_frame` pushes its waiter onto the completion

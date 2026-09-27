@@ -43,7 +43,10 @@ steps; the ADR's `## Migration` section lists them, and what is still to move
   apply commands (the owner inbox, at the Idle boundary) → begin frame →
   draw frame (persistent callbacks, then the pipeline and the submit through
   the sink) → end frame (both post-frame queues, the realm's owner-local lane
-  included). Its clock is read once and every phase sees that timestamp.
+  included). Its clock is read once: that timestamp is the scheduler's
+  frame time and the time `Vsync` controllers tick at, though a scheduler
+  `Ticker` still reads the wall clock (see "`Vsync` controllers tick at the
+  frame's timestamp" below).
   A wake with frames disabled runs `UiRealm::pump_background` instead: clear
   the frame latch, then poll the async driver, no frame. Whether a wake
   becomes a pump is the host's per-backend wake gate (ADR-0058), not the
@@ -156,6 +159,15 @@ driven outside a pump (a bare `draw_frame`/`render_frame` in a test) falls
 back to the wall clock, and a test can still override it with
 `set_now_secs_for_test`. Pinned by
 `pump_ticks_vsync_controllers_at_the_frame_clocks_time`.
+
+This covers the realm's `Vsync` registry only. A controller built on the
+scheduler (`AnimationController::new(d, realm.scheduler())`) is ticked by a
+`flui_scheduler::Ticker`, which ignores the timestamp it is handed and
+measures elapsed time on the wall clock, so a pump driven on a manual clock
+does not advance it. That divergence is recorded and pinned in
+`flui-scheduler`'s `ARCHITECTURE.md` ("A ticker's elapsed time is wall-clock
+time, not the frame timestamp"); `pump_advances_a_scheduler_ticker_between_two_pumps`
+therefore lets real time pass between its pumps.
 
 ### `Vsync` ticks in the persistent phase, not among the transient callbacks
 
