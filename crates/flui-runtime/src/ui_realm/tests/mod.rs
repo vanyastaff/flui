@@ -269,8 +269,7 @@ fn stale_semantics_action_is_gracefully_dropped() {
 fn platform_action_request_routes_through_the_wire_to_the_handler() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    let realm =
-        UiRealm::new(
+    let realm = UiRealm::new(
         noop_wake(),
         window,
         1.0,
@@ -326,8 +325,7 @@ fn platform_action_request_routes_through_the_wire_to_the_handler() {
 fn platform_action_payload_reaches_the_handler_with_its_arguments() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    let realm =
-        UiRealm::new(
+    let realm = UiRealm::new(
         noop_wake(),
         window,
         1.0,
@@ -382,8 +380,7 @@ fn platform_action_payload_reaches_the_handler_with_its_arguments() {
 fn unroutable_platform_action_requests_are_dropped_at_the_listener() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    let realm =
-        UiRealm::new(
+    let realm = UiRealm::new(
         noop_wake(),
         window,
         1.0,
@@ -444,8 +441,7 @@ fn unroutable_platform_action_requests_are_dropped_at_the_listener() {
 fn at_activation_drives_semantics_assembly_through_the_frame_reconcile() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    let realm =
-        UiRealm::new(
+    let realm = UiRealm::new(
         noop_wake(),
         window,
         1.0,
@@ -502,8 +498,7 @@ fn at_activation_drives_semantics_assembly_through_the_frame_reconcile() {
 fn at_activation_requests_a_full_republish_and_the_reconcile_consumes_it() {
     let fake = Arc::new(flui_platform::FakeAccessibility::new());
     let window = crate::presentation::test_platform_window_with_accessibility(Arc::clone(&fake));
-    let realm =
-        UiRealm::new(
+    let realm = UiRealm::new(
         noop_wake(),
         window,
         1.0,
