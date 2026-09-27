@@ -187,6 +187,7 @@ where
         // 5. Register frame callback
         let renderer_frame = Arc::clone(&renderer);
         window.on_request_frame(Box::new(move || {
+            let _owner_callback = super::realm_dispatch::begin_owner_callback();
             let renderer_frame = Arc::clone(&renderer_frame);
             let _ = dispatch_platform_realm(
                 realm_dispatch,

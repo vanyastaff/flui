@@ -125,25 +125,40 @@ fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError
 }
 
 fn drive_owner() {
-    let dispatchers = APP_RUNTIME.with(|slot| {
-        slot.borrow()
-            .ios_controller
-            .as_ref()
-            .map(SessionController::dispatchers)
-            .unwrap_or_default()
-    });
-    for dispatcher in dispatchers {
-        let _ = dispatch_platform_realm(
-            dispatcher,
-            RealmTask::Pump(Box::new(|realm| {
-                // An owner turn commits commands and polls the async driver;
-                // it runs no frame, so it has no gate to feed the drain's
-                // redraw report to.
-                let _ = realm.enter(flui_runtime::ui_realm::UiRealm::drain_owner_inbox);
-                realm.pump_background();
-            })),
-        );
-    }
+    // A continuation exists to make progress on roots already carried across
+    // the previous finite owner turn. Generating another Pump for every
+    // retained scene here could consume the whole budget before that FIFO is
+    // reached and, above the budget, grow the queue on every continuation.
+    // The guard's tail spends this callback exclusively on the carried batch.
+    // Re-arm one ordinary owner opportunity as well: OwnerSignal coalesces
+    // causes, so this physical callback may also represent an async/frame wake
+    // whose per-session Pumps must run after the backlog has made progress.
+    super::realm_dispatch::drive_fanout_owner_callback(
+        || {
+            let dispatchers = APP_RUNTIME.with(|slot| {
+                slot.borrow()
+                    .ios_controller
+                    .as_ref()
+                    .map(SessionController::dispatchers)
+                    .unwrap_or_default()
+            });
+            for dispatcher in dispatchers {
+                let _ = dispatch_platform_realm(
+                    dispatcher,
+                    RealmTask::Pump(Box::new(|realm| {
+                        // An owner turn commits commands and polls the async driver;
+                        // it runs no frame, so it has no gate to feed the drain's
+                        // redraw report to.
+                        let _ = realm.enter(flui_runtime::ui_realm::UiRealm::drain_owner_inbox);
+                        realm.pump_background();
+                    })),
+                );
+            }
+        },
+        || {
+            let _ = with_owner_platform(|owner| owner.proxy().wake());
+        },
+    );
 }
 
 fn stop_process() {

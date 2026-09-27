@@ -991,6 +991,16 @@ true background suspension pauses the display link and releases it. Foreground
 restores execution while unfocused; duplicate foreground preserves established
 focus. Headless simulation exercises the same observation contract.
 
+Android publishes `Resume`/`Pause` as a shared execution snapshot before invoking
+embedder callbacks. Its window reports `Running` only while resumed and otherwise
+reports `Suspended`; focus and native-window availability remain separate facts.
+This makes redraw-backed owner continuations honest: the loop consumes redraw
+flags only after polling confirms execution is still running. A queued `Pause`
+therefore preserves the flag rather than acknowledging a continuation whose frame
+will be refused; `Resume` makes the callback deliverable again. The app also retains
+a logical continuation when the initial actuator refuses it and retries from the
+next fresh native root.
+
 The iOS protocol probe is reproducible with a dedicated booted simulator:
 
 ```sh

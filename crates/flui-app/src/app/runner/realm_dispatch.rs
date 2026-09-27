@@ -83,8 +83,17 @@ pub(super) enum RealmDispatchError {
     /// presentation replacement within a live realm. Kept as its own
     /// variant now: the design-for-N contract, not dead code.
     StalePresentation,
+    /// A terminal close for this exact presentation incarnation was already
+    /// accepted. Later work must not jump the deferred close at a bounded
+    /// batch boundary.
+    PresentationClosing,
     RealmUnavailable,
 }
+
+/// Maximum logical owner operations in one continuation callback. Fresh
+/// native roots and deferred FIFO entries share this budget; an individual
+/// operation is cooperative and is never preempted internally.
+const OWNER_TURN_BUDGET: usize = 32;
 
 /// Typed, closed cross-thread payload (ADR-0037 §3): every routable
 /// platform-to-UI event. Compile-time evidence that this is a real `Send`
@@ -504,6 +513,12 @@ pub(super) fn install_platform_realm(
         // displaced slots so arbitrary capture destructors run only after
         // this TLS borrow has ended.
         let stale_owner_turns = std::mem::take(&mut state.owner_turn_queue);
+        state.owner_turn_continuation = None;
+        state.owner_turn_continuation_failed = false;
+        state.owner_turn_callback_budget = None;
+        state.owner_turn_callback_active = false;
+        state.owner_turn_draining = false;
+        state.closing_presentations.clear();
         for (displaced_id, _) in &displaced {
             removed_window_mappings += state.registry.remove_realm(*displaced_id).len();
         }
@@ -687,6 +702,13 @@ pub(super) enum InstallPresentationError {
     /// alongside it, not merely one whose realm happens to still exist.
     #[error("the presentation this dispatcher was minted for is no longer registered")]
     StalePresentation,
+    /// A terminal close for `dispatcher.address` was already admitted but
+    /// has not necessarily reached the bounded owner FIFO yet. The address
+    /// is still registered during that interval, but it no longer
+    /// authorizes expanding the presentation forest: doing so could turn a
+    /// sole-presentation close into a partial close after admission.
+    #[error("the presentation this dispatcher was minted for is closing")]
+    PresentationClosing,
     /// `window`'s id was already registered to a (possibly different)
     /// address — practically unreachable for a freshly opened window, but
     /// a real, distinct failure mode from `RealmUnavailable`: the realm
@@ -724,7 +746,10 @@ pub(super) enum InstallPresentationError {
 /// registered address (its own presentation closed, even though a sibling
 /// kept the realm alive) — the same authorization
 /// `dispatch_platform_realm` requires of every dispatched task, applied to
-/// this mutation too. [`InstallPresentationError::WindowAlreadyMapped`] if
+/// this mutation too. [`InstallPresentationError::PresentationClosing`] if
+/// the address is still registered but its terminal close has already been
+/// admitted — the close barrier covers forest mutations as well as ordinary
+/// tasks. [`InstallPresentationError::WindowAlreadyMapped`] if
 /// `window`'s id is somehow already registered (practically unreachable: a
 /// freshly opened window has a fresh id by construction) — nothing is
 /// installed into the forest in this case.
@@ -796,6 +821,19 @@ pub(super) fn install_presentation_alongside(
                  no longer registered, even though its realm survives"
             );
             return Err(InstallPresentationError::StalePresentation);
+        }
+        // A close becomes terminal when admitted, not when the bounded
+        // owner FIFO eventually executes it. Registration alone therefore
+        // cannot authorize this mutation: installing a sibling in that
+        // interval would change the admitted close from a whole-realm close
+        // into a partial close and leave the new presentation alive.
+        if state.closing_presentations.contains(&dispatcher.address) {
+            tracing::debug!(
+                ?dispatcher,
+                "rejecting install_presentation_alongside: the dispatcher's presentation has a \
+                 terminal close pending"
+            );
+            return Err(InstallPresentationError::PresentationClosing);
         }
         let realm_slot = state
             .realms
@@ -945,22 +983,75 @@ pub(super) fn dispatch_platform_realm(
         return Err(RealmDispatchError::WrongThread);
     }
 
-    let starts_drain = APP_RUNTIME.with(|slot| {
+    let mut event = Some(event);
+    let (starts_drain, queued_fallback, carried_callback) = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         validate_dispatch_admission(&state, dispatcher)?;
-        state.owner_turn_queue.push_back((dispatcher, event));
+        if let Some(RealmTask::ClosePresentation(presentation_id)) = event.as_ref() {
+            let closing_address = flui_foundation::PresentationAddress {
+                realm_id: dispatcher.address.realm_id,
+                presentation_id: *presentation_id,
+            };
+            if !state.registry.contains_address(closing_address) {
+                return Err(RealmDispatchError::StalePresentation);
+            }
+            if !state.closing_presentations.insert(closing_address) {
+                return Err(RealmDispatchError::PresentationClosing);
+            }
+        } else if state.closing_presentations.contains(&dispatcher.address) {
+            return Err(RealmDispatchError::PresentationClosing);
+        }
         if state.owner_turn_draining || state.iterating_all_realms {
-            return Ok(false);
+            state.owner_turn_queue.push_back((
+                dispatcher,
+                event.take().expect("BUG: admitted owner event is present"),
+            ));
+            return Ok((false, false, false));
+        }
+        if let Some(remaining) = state.owner_turn_callback_budget.as_mut() {
+            if *remaining == 0 {
+                state.owner_turn_queue.push_back((
+                    dispatcher,
+                    event.take().expect("BUG: admitted owner event is present"),
+                ));
+                return Ok((false, false, true));
+            }
+            *remaining -= 1;
+            state.owner_turn_draining = true;
+            return Ok((true, false, true));
+        }
+        let carried_continuation = state.owner_turn_continuation.is_some();
+        if !state.owner_turn_queue.is_empty()
+            && !carried_continuation
+            && !state.owner_turn_continuation_failed
+        {
+            state.owner_turn_queue.push_back((
+                dispatcher,
+                event.take().expect("BUG: admitted owner event is present"),
+            ));
+            state.owner_turn_draining = true;
+            return Ok((true, true, false));
         }
         state.owner_turn_draining = true;
-        Ok(true)
+        Ok((true, false, carried_continuation))
     })?;
     if !starts_drain {
         return Ok(());
     }
 
-    drain_owner_turn_queue();
-    Ok(())
+    let _guard = OwnerTurnDrainGuard;
+    if queued_fallback {
+        drain_owner_turn_queue(OWNER_TURN_BUDGET);
+        return Ok(());
+    }
+    let result = dispatch_platform_realm_now(
+        dispatcher,
+        event.take().expect("BUG: fresh owner event was not queued"),
+    );
+    if result.is_ok() && !carried_callback {
+        drain_owner_turn_queue(OWNER_TURN_BUDGET.saturating_sub(1));
+    }
+    result
 }
 
 /// Drains the owner-local turn queue after the caller has atomically claimed
@@ -971,17 +1062,17 @@ pub(super) fn dispatch_platform_realm(
 /// checked-out realm has been restored. The guard is deliberately local to
 /// this function so an unwinding task always releases the claim while leaving
 /// later queued turns available to the next top-level owner turn.
-fn drain_owner_turn_queue() {
-    struct OwnerTurnDrainGuard;
+struct OwnerTurnDrainGuard;
 
-    impl Drop for OwnerTurnDrainGuard {
-        fn drop(&mut self) {
-            APP_RUNTIME.with(|slot| slot.borrow_mut().owner_turn_draining = false);
-        }
+impl Drop for OwnerTurnDrainGuard {
+    fn drop(&mut self) {
+        APP_RUNTIME.with(|slot| slot.borrow_mut().owner_turn_draining = false);
+        request_owner_turn_continuation();
     }
+}
 
-    let _drain_guard = OwnerTurnDrainGuard;
-    loop {
+fn drain_owner_turn_queue(budget: usize) {
+    for _ in 0..budget {
         let next = APP_RUNTIME.with(|slot| slot.borrow_mut().owner_turn_queue.pop_front());
         let Some((next_dispatcher, next_event)) = next else {
             return;
@@ -1000,8 +1091,189 @@ fn drain_owner_turn_queue() {
     }
 }
 
-/// Claims queued owner turns once no realm-wide visit or existing drain owns
-/// the thread. Returns whether the caller must run [`drain_owner_turn_queue`].
+/// Reserves and posts exactly one continuation opportunity for carried work.
+/// The actuator runs after the TLS borrow and drain claim are released. A
+/// failed or panicking actuator clears only its own sequence reservation, so
+/// a synchronously reentrant replacement request cannot be erased.
+fn request_owner_turn_continuation() {
+    let request = APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        if state.owner_turn_callback_budget.is_some()
+            || state.owner_turn_queue.is_empty()
+            || state.owner_turn_continuation.is_some()
+        {
+            return None;
+        }
+        let wake = state.owner_turn_wake.clone()?;
+        state.owner_turn_next_sequence = state
+            .owner_turn_next_sequence
+            .checked_add(1)
+            .expect("BUG: owner-turn continuation sequence exhausted");
+        let sequence = state.owner_turn_next_sequence;
+        state.owner_turn_continuation = Some(sequence);
+        Some((sequence, wake))
+    });
+    let Some((sequence, wake)) = request else {
+        return;
+    };
+    let posted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| wake())).unwrap_or(false);
+    if posted {
+        APP_RUNTIME.with(|slot| {
+            let mut state = slot.borrow_mut();
+            if state.owner_turn_continuation == Some(sequence) {
+                state.owner_turn_continuation_failed = false;
+            }
+        });
+    } else {
+        APP_RUNTIME.with(|slot| {
+            let mut state = slot.borrow_mut();
+            if state.owner_turn_continuation == Some(sequence) {
+                state.owner_turn_continuation = None;
+                state.owner_turn_continuation_failed = true;
+            }
+        });
+        tracing::warn!(
+            "owner-turn continuation could not be posted; a later owner entry will retry"
+        );
+    }
+}
+
+/// Starts a physical native callback. If it consumes a posted continuation
+/// (or retries after a failed post), every fresh root in this callback shares
+/// one finite budget with the deferred FIFO.
+#[must_use = "the guard finishes the physical owner callback, including during unwind"]
+pub(super) struct OwnerCallbackGuard {
+    #[cfg_attr(
+        all(not(test), not(target_os = "ios")),
+        expect(
+            dead_code,
+            reason = "only the iOS owner wake synthesizes one root per retained presentation"
+        )
+    )]
+    resumes_carried_work: bool,
+    outermost: bool,
+}
+
+impl OwnerCallbackGuard {
+    /// Whether this callback consumed the continuation reserved for carried
+    /// owner-local work.
+    ///
+    /// A backend that would otherwise synthesize a root for every retained
+    /// presentation can use this to avoid replenishing the deferred FIFO
+    /// faster than its finite continuation batch can drain it.
+    #[cfg_attr(
+        all(not(test), not(target_os = "ios")),
+        expect(
+            dead_code,
+            reason = "only the iOS owner wake synthesizes one root per retained presentation"
+        )
+    )]
+    pub(super) fn resumes_carried_work(&self) -> bool {
+        self.resumes_carried_work
+    }
+}
+
+impl Drop for OwnerCallbackGuard {
+    fn drop(&mut self) {
+        if !self.outermost {
+            return;
+        }
+
+        // Keep nested synchronous platform callbacks attached to this
+        // physical callback until its tail drain has completed. The clear
+        // guard also restores the flag if a carried operation panics while
+        // that tail is draining.
+        struct ActiveCallbackClearGuard;
+        impl Drop for ActiveCallbackClearGuard {
+            fn drop(&mut self) {
+                APP_RUNTIME.with(|slot| slot.borrow_mut().owner_turn_callback_active = false);
+            }
+        }
+
+        let _active_callback = ActiveCallbackClearGuard;
+        finish_owner_callback();
+    }
+}
+
+pub(super) fn begin_owner_callback() -> OwnerCallbackGuard {
+    let (resumes_carried_work, outermost) = APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        if state.owner_turn_callback_active {
+            return (false, false);
+        }
+        state.owner_turn_callback_active = true;
+        debug_assert!(state.owner_turn_callback_budget.is_none());
+        let resumes_carried_work = state.owner_turn_continuation.take().is_some()
+            || std::mem::take(&mut state.owner_turn_continuation_failed);
+        if resumes_carried_work {
+            state.owner_turn_callback_budget = Some(OWNER_TURN_BUDGET);
+        }
+        (resumes_carried_work, true)
+    });
+    OwnerCallbackGuard {
+        resumes_carried_work,
+        outermost,
+    }
+}
+
+/// Runs one backend owner wake as a single physical callback.
+///
+/// Backends that fan one native wake out into multiple presentation roots
+/// must not generate that fan-out while the wake is a continuation reserved
+/// for the carried FIFO. `fresh_roots` is therefore called only for an
+/// ordinary wake; `rearm_fresh_roots` records one later ordinary opportunity
+/// when a coalescing native signal may have combined both causes.
+#[cfg_attr(
+    all(not(test), not(target_os = "ios")),
+    expect(
+        dead_code,
+        reason = "only the iOS owner wake fans one callback out across presentations"
+    )
+)]
+pub(super) fn drive_fanout_owner_callback(
+    fresh_roots: impl FnOnce(),
+    rearm_fresh_roots: impl FnOnce(),
+) {
+    let owner_callback = begin_owner_callback();
+    if owner_callback.resumes_carried_work() {
+        rearm_fresh_roots();
+    } else {
+        fresh_roots();
+    }
+}
+
+/// Finishes a native callback and spends its unused continuation budget on
+/// the deferred FIFO. The drain guard posts exactly one later opportunity if
+/// work remains.
+fn finish_owner_callback() {
+    let unwinding = std::thread::panicking();
+    let remaining = APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let remaining = state.owner_turn_callback_budget.take()?;
+        if unwinding {
+            return None;
+        }
+        if state.owner_turn_draining
+            || state.iterating_all_realms
+            || state.owner_turn_queue.is_empty()
+        {
+            return None;
+        }
+        state.owner_turn_draining = true;
+        Some(remaining)
+    });
+    if unwinding {
+        request_owner_turn_continuation();
+        return;
+    }
+    if let Some(remaining) = remaining {
+        let _guard = OwnerTurnDrainGuard;
+        drain_owner_turn_queue(remaining);
+    }
+}
+
+/// Drains one finite batch when queued work becomes runnable outside a native
+/// callback, notably after a whole-realm visitor restores its checkouts.
 #[cfg(any(
     test,
     all(
@@ -1010,9 +1282,14 @@ fn drain_owner_turn_queue() {
         not(target_arch = "wasm32")
     )
 ))]
-fn claim_pending_owner_turns() -> bool {
-    APP_RUNTIME.with(|slot| {
+fn continue_owner_turns() {
+    let claimed = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
+        if state.owner_turn_callback_budget.is_some() {
+            return false;
+        }
+        state.owner_turn_continuation = None;
+        state.owner_turn_continuation_failed = false;
         if state.owner_turn_draining
             || state.iterating_all_realms
             || state.owner_turn_queue.is_empty()
@@ -1021,7 +1298,11 @@ fn claim_pending_owner_turns() -> bool {
         }
         state.owner_turn_draining = true;
         true
-    })
+    });
+    if claimed {
+        let _guard = OwnerTurnDrainGuard;
+        drain_owner_turn_queue(OWNER_TURN_BUDGET);
+    }
 }
 
 fn validate_dispatch_admission(
@@ -1139,7 +1420,13 @@ fn dispatch_platform_realm_now(
                 RealmTask::ClosePresentation(id) => {
                     if realm.is_sole_presentation(id) {
                         // Reentrant events must fail admission before terminal observers run.
-                        APP_RUNTIME.with(|slot| slot.borrow_mut().registry.remove_realm(realm_id));
+                        APP_RUNTIME.with(|slot| {
+                            let mut state = slot.borrow_mut();
+                            state.registry.remove_realm(realm_id);
+                            state
+                                .closing_presentations
+                                .retain(|address| address.realm_id != realm_id);
+                        });
                         APP_RUNTIME
                             .with(|slot| slot.borrow().close_requests())
                             .forget_realm(realm_id);
@@ -1209,8 +1496,11 @@ fn dispatch_platform_realm_now(
                             realm_id,
                             presentation_id: id,
                         };
-                        let unregistered = APP_RUNTIME
-                            .with(|slot| slot.borrow_mut().registry.remove_presentation(address));
+                        let unregistered = APP_RUNTIME.with(|slot| {
+                            let mut state = slot.borrow_mut();
+                            state.closing_presentations.remove(&address);
+                            state.registry.remove_presentation(address)
+                        });
                         drop(unregistered);
                         // Same step for the close-request router (issue
                         // #558): this presentation can no longer be asked
@@ -1511,15 +1801,13 @@ fn for_each_installed_realm(mut f: impl FnMut(&crate::app::ui_realm::UiRealm)) {
         state.drain_pending_realm_mutations()
     });
     drop_removed_realms(removed, &mut panic_payload);
-    if claim_pending_owner_turns() {
-        let owner_turns =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(drain_owner_turn_queue)).err();
-        preserve_first_lifecycle_panic(
-            &mut panic_payload,
-            owner_turns,
-            "owner turns queued during realm visit",
-        );
-    }
+    let owner_turns =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(continue_owner_turns)).err();
+    preserve_first_lifecycle_panic(
+        &mut panic_payload,
+        owner_turns,
+        "owner turns queued during realm visit",
+    );
     // Same rationale as `dispatch_platform_realm`'s own tail: a visited
     // realm's frame callback may have resolved an `open_secondary_window`
     // Pending completion via `UpdateScheduler::drive_async_tasks`, which cannot
@@ -1680,6 +1968,12 @@ pub(super) fn teardown_platform_realm() {
         state.dispatched_realm_id = None;
         state.iterating_all_realms = false;
         let queued_turns = std::mem::take(&mut state.owner_turn_queue);
+        state.owner_turn_continuation = None;
+        state.owner_turn_continuation_failed = false;
+        state.owner_turn_callback_budget = None;
+        state.owner_turn_callback_active = false;
+        state.owner_turn_draining = false;
+        state.closing_presentations.clear();
         debug_assert!(
             !state.has_pending_realm_mutations(),
             "BUG: realm-map mutations still pending at full loop-exit teardown -- \

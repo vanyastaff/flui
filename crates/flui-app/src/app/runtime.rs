@@ -36,13 +36,16 @@ use flui_foundation::{PresentationId, RealmId};
 use flui_scheduler::UpdateScheduler;
 
 use std::cell::OnceCell;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
 
 use flui_foundation::PresentationAddress;
 use flui_platform::OwnerPlatform;
+#[cfg(any(test, target_os = "android"))]
+use flui_platform::traits::WindowExecutionState;
 use flui_platform::traits::{Clipboard, PlatformWindow};
 use flui_semantics::AccessibilityFeatures;
 use parking_lot::{Mutex, RwLock};
@@ -526,6 +529,32 @@ pub(crate) struct AppRuntime {
     /// invocation owns the queue drain. Reentrant dispatch only appends and
     /// returns; it never recursively checks out a sibling realm.
     pub(super) owner_turn_draining: bool,
+    /// Sequence of the one continuation opportunity currently requested for
+    /// carried owner work. The sequence lets a failed, synchronously
+    /// reentrant actuator clear only its own reservation.
+    pub(super) owner_turn_continuation: Option<u64>,
+    /// The last attempt to post a continuation failed. A fresh native root
+    /// must still run synchronously instead of joining the carried backlog;
+    /// its tail retries the post.
+    pub(super) owner_turn_continuation_failed: bool,
+    /// Remaining logical operations in the native callback that consumed a
+    /// continuation. `None` means this callback is not servicing carried
+    /// owner work.
+    pub(super) owner_turn_callback_budget: Option<usize>,
+    /// True from the outermost native callback entry until its completion
+    /// work has finished. Some platform adapters (notably the web window)
+    /// can synchronously invoke a frame callback from `request_redraw`, so a
+    /// nested entry is another root of the current physical callback, not a
+    /// second opportunity that may consume or finish its budget.
+    pub(super) owner_turn_callback_active: bool,
+    /// Monotonic source for [`Self::owner_turn_continuation`].
+    pub(super) owner_turn_next_sequence: u64,
+    /// Host-specific continuation actuator. It is owner-local because
+    /// `AppRuntime` is owner-affine; `true` means an opportunity was posted.
+    pub(super) owner_turn_wake: Option<Rc<dyn Fn() -> bool>>,
+    /// Addresses whose terminal close has been admitted but may still be
+    /// waiting in a bounded batch. Later work cannot jump that barrier.
+    pub(super) closing_presentations: HashSet<PresentationAddress>,
     /// The thread that installed the first realm hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-realm: every realm this `AppRuntime` ever hosts lives on the same
@@ -723,6 +752,13 @@ impl AppRuntime {
             realms: RealmRegistry::new(),
             owner_turn_queue: VecDeque::new(),
             owner_turn_draining: false,
+            owner_turn_continuation: None,
+            owner_turn_continuation_failed: false,
+            owner_turn_callback_budget: None,
+            owner_turn_callback_active: false,
+            owner_turn_next_sequence: 0,
+            owner_turn_wake: None,
+            closing_presentations: HashSet::new(),
             owner_thread: None,
             registry: WindowRegistry::new(),
             close_requests: Arc::new(super::close_request::CloseRequestRouter::new()),
@@ -1390,6 +1426,25 @@ impl AppRuntime {
         }
     }
 
+    /// Owner-thread poke used only to continue bounded owner work. Unlike a
+    /// frame wake it does not mark the realm dirty; operations in the batch
+    /// request a frame themselves when their effects require one.
+    #[cfg(any(test, target_os = "android"))]
+    pub(super) fn owner_turn_window_poke(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        let redraw_window = Arc::clone(&self.redraw_window);
+        Arc::new(move || {
+            let window = redraw_window.lock().as_ref().cloned();
+            let Some(window) = window else {
+                return false;
+            };
+            if window.execution_state() != WindowExecutionState::Running {
+                return false;
+            }
+            window.request_redraw();
+            true
+        })
+    }
+
     /// A `Send + Sync`, `'static` capability that sets `needs_redraw` and
     /// pokes the installed window — safe to hand to an `UpdateScheduler` lifecycle
     /// hook, an `on_frame_scheduled` hook, or a spawned future's `Waker`,
@@ -1780,6 +1835,40 @@ mod wake_and_clipboard_tests {
             1,
             "wake_frame must call PlatformWindow::request_redraw exactly once"
         );
+    }
+
+    /// A continuation actuator may acknowledge only a native callback that
+    /// the platform can actually deliver. Android consumes redraw flags while
+    /// paused, so accepting a suspended window would strand the carried batch.
+    #[test]
+    fn owner_turn_poke_refuses_suspended_window_before_acknowledging() {
+        use std::sync::atomic::AtomicUsize;
+
+        let window = crate::app::window_test_support::headless_test_window();
+        let mock = window
+            .as_any()
+            .downcast_ref::<flui_platform::MockWindow>()
+            .expect("headless platform windows are MockWindow values");
+        let frame_requests = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&frame_requests);
+        window.on_request_frame(Box::new(move || {
+            observed.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        let runtime = AppRuntime::new();
+        runtime.set_redraw_window(Arc::clone(&window));
+        let poke = runtime.owner_turn_window_poke();
+
+        mock.simulate_execution_state(WindowExecutionState::Suspended);
+        assert!(
+            !poke(),
+            "suspended native execution cannot accept a continuation"
+        );
+        assert_eq!(frame_requests.load(Ordering::Relaxed), 0);
+
+        mock.simulate_execution_state(WindowExecutionState::Running);
+        assert!(poke(), "running native execution can accept a continuation");
+        assert_eq!(frame_requests.load(Ordering::Relaxed), 1);
     }
 
     /// The frame wake pokes the platform window from whatever thread completed

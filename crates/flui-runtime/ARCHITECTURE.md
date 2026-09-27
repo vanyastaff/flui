@@ -38,10 +38,15 @@ host.
   Before ADR-0083 move 5a, `flui-app` rejected realm B while realm A was
   checked out, which could lose B's UI close after its native window had
   already closed. The app now provides the host-wide FIFO behavior that the
-  extraction must preserve. Move 5a deliberately retains the old unbounded
-  drain-until-empty policy as a transitional implementation; before
-  extraction, move 5b replaces it with bounded batches and one coalesced
-  continuation wake so self-enqueue cannot monopolize the owner thread.
+  extraction must preserve. `flui-app` now executes at most 32 logical
+  operations per continuation callback, sharing the budget between fresh
+  native roots and carried FIFO entries, counts stale entries against it, and
+  requests one sequence-stamped continuation opportunity when work remains.
+  A fresh native root stays synchronous while budget remains, while a close fences its exact
+  `PresentationAddress` from later work at admission time so root priority
+  cannot let input jump a deferred terminal operation. The remaining
+  pre-extraction work is the closed operation vocabulary and its
+  operation-specific admission rules.
   Checkout restoration and deferred mutations are unwind-safe, and
   realm-owning values are dropped after every mutable host borrow is released.
 - **Owner operations form a closed vocabulary.** Input, lifecycle, normalized

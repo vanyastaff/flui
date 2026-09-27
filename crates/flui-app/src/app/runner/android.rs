@@ -305,6 +305,7 @@ where
         // Reuses the SAME backoff constructed at step 0b (already wired
         // into the wake-deadline hook above) — not a fresh one.
         window.on_request_frame(Box::new(move || {
+            let _owner_callback = super::realm_dispatch::begin_owner_callback();
             let lane_frame = Arc::clone(&lane_frame);
             let hot_reload_frame = hot_reload_frame.clone();
             let device_recovery_backoff = Arc::clone(&device_recovery_backoff);
