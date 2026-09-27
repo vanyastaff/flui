@@ -291,17 +291,20 @@ fn enter_with_no_on_submitted_is_ignored() {
 #[test]
 fn enter_while_composing_is_ignored_and_does_not_submit() {
     let controller = TextEditingController::with_text("hi");
-    controller.set_composing_text("に", None);
     let focus_node = FocusNode::with_debug_label("composing field");
     let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let submitted_for_callback = Rc::clone(&submitted);
 
-    let harness = crate::common::harness::mount(
+    let harness = crate::common::harness::mount_with_ime(
         EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(move |text| {
             submitted_for_callback.replace(Some(text.to_string()));
         }),
     );
     focus_node.request_focus();
+    harness.dispatch_ime(&flui_types::ImeEvent::Preedit {
+        text: "に".to_owned(),
+        cursor: None,
+    });
     assert!(controller.is_composing(), "sanity: composition is active");
 
     let result = harness
@@ -893,10 +896,10 @@ fn unmount_while_focused_detaches_the_ime_client() {
 /// doc comment for the documented divergence (Flutter keeps the buffer;
 /// FLUI strips the composing slice).
 ///
-/// Red-check: drop the `guard.text.replace_range(range, "")` in
-/// `TextEditingController::clear_composing` (keep only the marker
-/// clear) — this test's text assertion fails, keeping the uncommitted
-/// preedit instead of stripping it.
+/// Red-check: drop the `session.replace(composition.range, "")` in the
+/// projection's `end_composition` (`flui_platform_api::text_store`; keep
+/// only the composition clear) — this test's text assertion fails, keeping
+/// the uncommitted preedit instead of stripping it.
 #[test]
 fn disabled_mid_preedit_strips_the_composing_slice_through_the_attached_client() {
     let controller = TextEditingController::with_text("Hello ");
@@ -2025,8 +2028,8 @@ fn commit_removes_the_underline_and_restores_the_caret() {
 /// untouched; FLUI's `ImeEvent::Disabled` additionally strips the
 /// in-progress composing slice (see
 /// `disabled_mid_preedit_strips_the_composing_slice_through_the_attached_client`
-/// below, and `TextEditingController::clear_composing`'s doc, for the
-/// documented divergence this pins).
+/// below, and `flui_platform_api::text_store::project_ime_event`'s doc, for
+/// the documented divergence this pins).
 #[test]
 fn disabled_removes_the_underline_and_restores_the_caret() {
     let controller = TextEditingController::with_text("Hello ");
@@ -2102,7 +2105,7 @@ fn empty_preedit_cancels_the_composition_through_the_attached_client() {
 
 /// Inactive empty `Preedit` through the attached client must not delete
 /// a committed selection — the production path that X11 Start uses
-/// (`ImeEvent` → `apply_ime_event` → `set_composing_text`).
+/// (`ImeEvent` → `project_ime_event` → the field's text store).
 #[test]
 fn empty_preedit_with_no_composition_preserves_selection_through_attached_client() {
     let controller = TextEditingController::with_text("hello world");
@@ -2327,4 +2330,359 @@ fn on_changed_reports_user_edits_but_not_the_callers_own() {
         ["a", "ab", "a", "ac"],
         "a caret move, the caller's set_text and the submit callback's clear are not user edits"
     );
+}
+
+// ------------------------------------------------------------------
+// The field as a text store (ADR-0090)
+//
+// The conformance kit (`text_store_kit.rs`) certifies the contract; these
+// pin what is specific to `EditableText`: how the store's UTF-16 surface
+// maps onto the controller, and when the field and the platform hear of
+// each other's changes.
+// ------------------------------------------------------------------
+
+mod text_store {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    use flui_interaction::routing::FocusNode;
+    use flui_platform_api::text_store::{
+        LockGrant, LockOutcome, LockTiming, Selection, TextChange, TextStore, TextStoreEdit,
+        TextStoreError, TextStoreObserver, TextStoreRead, Utf16Offset, Utf16Range,
+    };
+    use flui_widgets::{EditableText, TextEditingController};
+
+    use super::{ImeUnmountRoot, character_key_event, dispatch_ime};
+    use crate::common::harness::{Harness, mount_with_ime};
+
+    /// "a", a supplementary emoji, "e" plus a combining acute, a ZWJ family
+    /// and a flag: every offset kind the UTF-16 surface has to map.
+    const CORPUS: &str = "a😀e\u{301}👨‍👩‍👧🇯🇵";
+
+    fn at(units: usize) -> Utf16Offset {
+        Utf16Offset::new(units)
+    }
+
+    fn focused(controller: &TextEditingController) -> (Harness, Rc<FocusNode>) {
+        let focus_node = FocusNode::with_debug_label("text store field");
+        let mut harness = mount_with_ime(EditableText::new(
+            controller.clone(),
+            Rc::clone(&focus_node),
+        ));
+        focus_node.request_focus();
+        harness.tick();
+        (harness, focus_node)
+    }
+
+    fn store(harness: &Harness) -> Rc<dyn TextStore> {
+        harness
+            .active_text_store()
+            .expect("the focused field is the active IME client")
+    }
+
+    fn read<R: 'static>(
+        store: &Rc<dyn TextStore>,
+        body: impl FnOnce(&dyn TextStoreRead) -> R + 'static,
+    ) -> R {
+        let slot = Rc::new(RefCell::new(None));
+        let sink = Rc::clone(&slot);
+        let outcome = store.request_lock(
+            LockGrant::read(move |session| *sink.borrow_mut() = Some(body(session))),
+            LockTiming::Sync,
+        );
+        assert_eq!(outcome, Ok(LockOutcome::Granted));
+        slot.take().expect("the grant ran")
+    }
+
+    fn edit<R: 'static>(
+        store: &Rc<dyn TextStore>,
+        body: impl FnOnce(&mut dyn TextStoreEdit) -> R + 'static,
+    ) -> R {
+        let slot = Rc::new(RefCell::new(None));
+        let sink = Rc::clone(&slot);
+        let outcome = store.request_lock(
+            LockGrant::read_write(move |session| *sink.borrow_mut() = Some(body(session))),
+            LockTiming::Sync,
+        );
+        assert_eq!(outcome, Ok(LockOutcome::Granted));
+        slot.take().expect("the grant ran")
+    }
+
+    #[derive(Default)]
+    struct Heard {
+        changes: RefCell<Vec<TextChange>>,
+        layouts: Cell<usize>,
+    }
+
+    struct Recorder(Rc<Heard>);
+
+    impl TextStoreObserver for Recorder {
+        fn text_changed(&self, change: TextChange) {
+            self.0.changes.borrow_mut().push(change);
+        }
+        fn selection_changed(&self) {}
+        fn layout_changed(&self) {
+            self.0.layouts.set(self.0.layouts.get() + 1);
+        }
+        fn status_changed(&self) {}
+    }
+
+    fn observe(store: &Rc<dyn TextStore>) -> Rc<Heard> {
+        let heard = Rc::new(Heard::default());
+        store.set_observer(Some(Rc::new(Recorder(Rc::clone(&heard)))));
+        heard
+    }
+
+    /// The store's UTF-16 offsets and the controller's UTF-8 bytes name the
+    /// same positions, in both directions.
+    #[test]
+    fn store_offsets_match_controller_bytes_across_surrogates_and_graphemes() {
+        let controller = TextEditingController::with_text(CORPUS);
+        let (harness, _focus) = focused(&controller);
+        let store = store(&harness);
+
+        // Platform to controller: UTF-16 13 is the flag's start, byte 26.
+        let set = edit(&store, |session| {
+            session.set_selection(Selection {
+                anchor: at(13),
+                active: at(1),
+            })
+        });
+        assert_eq!(set, Ok(()));
+        assert_eq!(controller.selection(), 1..26);
+        assert_eq!(
+            controller.caret_byte_offset(),
+            1,
+            "the active end is the caret"
+        );
+
+        // Controller to platform: bytes 5..8 ("e" and its mark) are 3..5.
+        controller.set_selection(5, 8);
+        let seen = read(&store, |session| session.selection());
+        assert_eq!(
+            seen,
+            Selection {
+                anchor: at(3),
+                active: at(5)
+            }
+        );
+        assert_eq!(read(&store, |session| session.document_len()), at(17));
+    }
+
+    /// A platform session is one change to the field (Mapping decision #33):
+    /// three edits, one listener notification, one `on_changed`.
+    #[test]
+    fn a_three_edit_session_calls_on_changed_once() {
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("one session");
+        let changes = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&changes);
+        let mut harness = mount_with_ime(
+            EditableText::new(controller.clone(), Rc::clone(&focus_node))
+                .on_changed(move |text| sink.borrow_mut().push(text.to_owned())),
+        );
+        focus_node.request_focus();
+        harness.tick();
+        let notified = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&notified);
+        flui_foundation::notifier::Listenable::add_listener(
+            &controller,
+            std::sync::Arc::new(move || {
+                counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }),
+        );
+
+        edit(&store(&harness), |session| {
+            for text in ["a", "b", "c"] {
+                session.insert_at_selection(text).expect("editable");
+            }
+        });
+
+        assert_eq!(controller.text(), "abc");
+        assert_eq!(*changes.borrow(), ["abc"], "one on_changed for the session");
+        assert_eq!(
+            notified.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "one listener notification for the session"
+        );
+    }
+
+    /// A platform selection is kept at any scalar boundary; a tap still
+    /// snaps to a grapheme. The divergence ARCHITECTURE.md's Mapping
+    /// decision #34 records.
+    #[test]
+    fn platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps() {
+        let controller = TextEditingController::with_text(CORPUS);
+        let (mut harness, _focus) = focused(&controller);
+        let store = store(&harness);
+
+        // UTF-16 4 sits between "e" (byte 5) and its combining mark (byte 6).
+        edit(&store, |session| {
+            session.set_selection(Selection::collapsed(at(4)))
+        })
+        .expect("a scalar boundary");
+        assert_eq!(
+            controller.caret_byte_offset(),
+            6,
+            "exactly where the platform put it"
+        );
+        harness.tick();
+        assert_eq!(
+            read(&store, |session| session.selection()),
+            Selection::collapsed(at(4))
+        );
+
+        // A tap in the middle of that same cluster lands on one of its edges.
+        let rect = read(&store, |session| {
+            session.rect_for_range(Utf16Range::new(at(3), at(5)).expect("ordered"))
+        })
+        .expect("laid out")
+        .bounds;
+        let (x, y) = (
+            (rect.origin.x + rect.size.width / 2.0).get(),
+            (rect.origin.y + rect.size.height / 2.0).get(),
+        );
+        harness.dispatch_pointer_down(x, y);
+        harness.dispatch_pointer_up(x, y);
+        let caret = controller.caret_byte_offset();
+        assert!(
+            caret == 5 || caret == 8,
+            "a tap snaps to the cluster's edge (5 or 8), got {caret}"
+        );
+    }
+
+    /// The store reads through the field's controller cell, so a swapped
+    /// controller is a change of the whole document to the platform.
+    #[test]
+    fn swapping_the_controller_reports_a_whole_document_change_to_the_observer() {
+        let first = TextEditingController::with_text("hello");
+        let focus_node = FocusNode::with_debug_label("swapped controller");
+        let mut harness = mount_with_ime(EditableText::new(first.clone(), Rc::clone(&focus_node)));
+        focus_node.request_focus();
+        harness.tick();
+        let store = store(&harness);
+        let heard = observe(&store);
+
+        let second = TextEditingController::with_text("world");
+        harness.swap_root(EditableText::new(second.clone(), Rc::clone(&focus_node)));
+        harness.tick();
+
+        assert_eq!(
+            *heard.changes.borrow(),
+            [TextChange {
+                start: at(0),
+                old_end: at(5),
+                new_end: at(5)
+            }]
+        );
+        assert_eq!(read(&store, |session| session.document_len()), at(5));
+        store.set_observer(None);
+    }
+
+    /// Red-check: make `EditableTextStore::layout_changed` record nothing —
+    /// the count stays at zero.
+    #[test]
+    fn caret_movement_reports_layout_changed() {
+        let controller = TextEditingController::with_text("hello");
+        let (mut harness, _focus) = focused(&controller);
+        let store = store(&harness);
+        let heard = observe(&store);
+
+        controller.move_caret_left();
+        harness.tick();
+
+        assert!(
+            heard.layouts.get() >= 1,
+            "the moved caret is a layout change"
+        );
+        store.set_observer(None);
+    }
+
+    /// Red-check: drop `store.detach()` from `dispose` — the lock is granted
+    /// and edits a controller the unmounted field no longer owns.
+    #[test]
+    fn a_disposed_field_refuses_locks_with_detached() {
+        let controller = TextEditingController::with_text("kept");
+        let focus_node = FocusNode::with_debug_label("disposed store");
+        let mut harness = mount_with_ime(ImeUnmountRoot {
+            controller: controller.clone(),
+            focus_node: Rc::clone(&focus_node),
+            show: true,
+        });
+        focus_node.request_focus();
+        harness.tick();
+        let store = store(&harness);
+
+        harness.swap_root(ImeUnmountRoot {
+            controller: controller.clone(),
+            focus_node,
+            show: false,
+        });
+
+        let outcome = store.request_lock(
+            LockGrant::read_write(|session| {
+                let _ = session.insert_at_selection("lost");
+            }),
+            LockTiming::Async,
+        );
+        assert_eq!(outcome, Err(TextStoreError::Detached));
+        assert_eq!(store.run_deferred_grants(), 0);
+        assert_eq!(controller.text(), "kept");
+    }
+
+    /// Red-check: drop the transaction bracket from the harness's `tick`
+    /// (`flui-app` brackets its frame the same way) — the grant runs inside
+    /// the post-frame callback and the outcome is `Granted`.
+    #[test]
+    fn a_lock_requested_from_a_post_frame_callback_is_granted_after_the_frame() {
+        let controller = TextEditingController::with_text("abc");
+        let (mut harness, _focus) = focused(&controller);
+        let store = store(&harness);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let outcome = Rc::new(Cell::new(None));
+
+        let (callback_log, callback_outcome) = (Rc::clone(&log), Rc::clone(&outcome));
+        harness
+            .local_post_frame_handle()
+            .schedule_local(move |_| {
+                callback_log.borrow_mut().push("post-frame callback");
+                let grant_log = Rc::clone(&callback_log);
+                callback_outcome.set(Some(store.request_lock(
+                    LockGrant::read(move |session| {
+                        grant_log.borrow_mut().push("grant");
+                        assert_eq!(session.document_len(), Utf16Offset::new(3));
+                    }),
+                    LockTiming::Async,
+                )));
+                callback_log.borrow_mut().push("callback ends");
+            })
+            .expect("post-frame handle installed");
+        harness.tick();
+
+        assert_eq!(outcome.get(), Some(Ok(LockOutcome::Deferred)));
+        assert_eq!(
+            *log.borrow(),
+            ["post-frame callback", "callback ends", "grant"],
+            "the grant ran once the frame returned"
+        );
+    }
+
+    /// Red-check: drop `run_deferred_before_app_edit` from the key handler —
+    /// the key lands while the commit is still queued and the text reads "b".
+    #[test]
+    fn typing_after_a_deferred_commit_lands_after_the_commit() {
+        let controller = TextEditingController::new();
+        let (harness, _focus) = focused(&controller);
+
+        harness.set_transaction_open(true);
+        dispatch_ime(&harness, &flui_types::ImeEvent::Commit("A".to_owned()));
+        assert_eq!(controller.text(), "", "the commit waits for the anchor");
+        harness.set_transaction_open(false);
+
+        let handled = harness
+            .focus_manager()
+            .dispatch_key_event(&character_key_event('b'));
+        assert!(handled);
+        assert_eq!(controller.text(), "Ab");
+    }
 }

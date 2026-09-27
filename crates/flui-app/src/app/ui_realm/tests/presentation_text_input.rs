@@ -1,5 +1,4 @@
-use std::cell::RefCell;
-
+use flui_platform_api::text_store::{InMemoryTextStore, TextStore};
 use flui_types::ImeEvent;
 use flui_types::geometry::Bounds;
 
@@ -20,23 +19,27 @@ fn test_constraints() -> BoxConstraints {
     BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
 }
 
+/// A client over a fresh in-memory store, and the store.
+fn in_memory_client(text: &str) -> (Rc<InMemoryTextStore>, flui_interaction::TextInputClient) {
+    let store = InMemoryTextStore::new(text);
+    let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
+    (store, flui_interaction::TextInputClient::new(erased))
+}
+
 /// Attach records `set_ime_allowed(true)`; preedit/commit events
-/// routed through `handle_input_entered` reach the attached client
-/// with the exact delivered strings; detach from the still-active
-/// token records `set_ime_allowed(false)`.
+/// routed through `handle_input_entered` are projected onto the
+/// attached client's store; detach from the still-active token records
+/// `set_ime_allowed(false)`.
 #[test]
-fn attach_dispatch_and_active_detach_round_trip_through_the_platform() {
+fn handle_input_entered_projects_ime_onto_the_attached_store() {
     let (fake, text_input) = headless_text_input();
 
     let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
     let handle = realm.text_input_handle();
 
-    let received = Rc::new(RefCell::new(Vec::new()));
-    let sink = Rc::clone(&received);
+    let (store, client) = in_memory_client("");
     let token = handle
-        .attach(Rc::new(move |event: &ImeEvent| {
-            sink.borrow_mut().push(event.clone());
-        }))
+        .attach(client)
         .expect("headless presentation supports text input");
 
     assert_eq!(
@@ -54,16 +57,11 @@ fn attach_dispatch_and_active_detach_round_trip_through_the_platform() {
     });
 
     assert_eq!(
-        received.borrow().as_slice(),
-        [
-            ImeEvent::Preedit {
-                text: "ni".to_string(),
-                cursor: Some((0, 2)),
-            },
-            ImeEvent::Commit("你好".to_string()),
-        ],
-        "handle_input_entered must deliver the exact ImeEvent payload to the attached client"
+        store.text(),
+        "你好",
+        "the commit replaces the preedit the same realm call projected"
     );
+    assert_eq!(store.composition(), None);
 
     assert_eq!(
         handle.detach(token).expect("presentation remains open"),
@@ -88,12 +86,12 @@ fn a_stale_detach_records_nothing_on_the_platform() {
     let handle = realm.text_input_handle();
 
     let token_a = handle
-        .attach(Rc::new(|_event: &ImeEvent| {}))
+        .attach(in_memory_client("").1)
         .expect("supported presentation");
     assert_eq!(fake.ime_allowed_calls(), vec![true]);
 
     let token_b = handle
-        .attach(Rc::new(|_event: &ImeEvent| {}))
+        .attach(in_memory_client("").1)
         .expect("supported presentation");
     assert_eq!(
         fake.ime_allowed_calls(),

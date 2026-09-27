@@ -188,6 +188,8 @@ mod text;
 mod text_field;
 #[path = "text_field_widget.rs"]
 mod text_field_widget;
+#[path = "text_store_kit.rs"]
+mod text_store_kit;
 #[path = "ticker_mode.rs"]
 mod ticker_mode;
 /// Issue #536: a `Transform` rebuild reaches the composited layer.

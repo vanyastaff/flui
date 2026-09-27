@@ -87,11 +87,10 @@ lru = { workspace = true, optional = true }
 # production graph ever links the test driver (a same-layer edge: both
 # crates are layer 6).
 flui-testing = { workspace = true, optional = true }
-# The element-level harness (`testing::harness`) records the IME calls a
-# mounted `EditableText` makes through a `PlatformTextInput` it supplies.
-# Activated only by the `testing` feature, like `flui-testing` above. It is
-# the contract crate, so the harness links no OS backend (ADR-0082).
-flui-platform-api = { workspace = true, optional = true }
+# `EditableText` is a text store an input method pulls from: it implements
+# the `TextStore` contract and converts offsets with its `utf16` helper
+# (ADR-0090). The contract crate, so this links no OS backend (ADR-0082).
+flui-platform-api = { workspace = true }
 
 [dev-dependencies]
 # Enable this crate's own `testing` feature for its integration tests:
@@ -118,10 +117,6 @@ flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 # Constructs `PointerEvent`s (make_down_event, behind the `testing` feature) for
 # the `Listener` dispatch test.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
-# Test-only recording `PlatformTextInput` used by the widget harness. The
-# production widget crate reaches this capability through flui-interaction's
-# concrete weak `TextInputHandle` and has no platform dependency.
-flui-platform-api = { workspace = true }
 # Headless frame driver: provides the shared clock-bound arena a `GestureArenaScope`
 # hands to detectors, and `pump_frame` to poll deadline-driven gestures in tests.
 flui-testing = { workspace = true }
@@ -196,7 +191,6 @@ serde = ["flui-types/serde"]
 # feature-gated `src/testing` modules.
 testing = [
     "dep:flui-testing",
-    "dep:flui-platform-api",
     "flui-rendering/testing",
     "flui-interaction/testing",
 ]
