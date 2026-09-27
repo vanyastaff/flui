@@ -5,7 +5,7 @@ UI realm (`ui_realm::UiRealm`) and the per-presentation frame machinery it
 drives, placed below the hosts (`flui-app`'s runners, platform wiring, raster
 lane and realm dispatch layer) and above the widget spine. It arrived in
 steps; the ADR's `## Migration` section lists them, and what is still to move
-(`Realm::pump`, the owner host, the dispatch layer).
+(the owner host and the dispatch layer).
 
 ## Invariants
 
@@ -37,12 +37,26 @@ steps; the ADR's `## Migration` section lists them, and what is still to move
   reported through `frame_failure` and re-dirties only that presentation,
   and siblings still frame (pinned by
   `an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames`).
-- **The realm renders through a sink, never an engine.** `UiRealm::render_frame`
-  takes any `FrameSink`; the host picks one (`flui-app`'s raster lane, or its
-  direct sink over a borrowed backend on the web runner, both through its
-  `RealmRaster` trait), and the realm tests pick
-  `testing::ScriptedSink`. How a host maps its backend's outcomes to verdicts
-  is that host's to test.
+- **A realm's frame runs only through `UiRealm::pump`.** The pump takes
+  `&mut self`, so no second frame on the same realm can start while one runs,
+  and it enters the realm itself for the whole transaction, in this order:
+  apply commands (the owner inbox, at the Idle boundary) → begin frame →
+  draw frame (persistent callbacks, then the pipeline and the submit through
+  the sink) → end frame (both post-frame queues, the realm's owner-local lane
+  included). Its clock is read once and every phase sees that timestamp.
+  A wake with frames disabled runs `UiRealm::pump_background` instead: clear
+  the frame latch, then poll the async driver, no frame. Whether a wake
+  becomes a pump is the host's per-backend wake gate (ADR-0058), not the
+  realm's. Pinned by `ui_realm/tests/pump_transaction.rs`, each test failing
+  against a pump that skips or reorders the phase it names; `flui-app`'s
+  `runner_frame_ordering` scan pins that every runner goes through it.
+  `render_frame` and `draw_frame` stay callable on their own for tests of
+  the draw step.
+- **The realm renders through a sink, never an engine.** `UiRealm::pump`
+  takes any `&mut dyn FrameSink`; the host picks one (`flui-app`'s raster
+  lane, or its direct sink over a borrowed backend on the web runner), and
+  the realm tests pick `testing::ScriptedSink`. How a host maps its
+  backend's outcomes to verdicts is that host's to test.
 - **Internal, and only the host depends on it.** Tier K,
   `tier-kind = "internal"`: nothing here is an embedder API (ADR-0027 §9)
   except the `execution` host-injection seam below.
@@ -82,9 +96,7 @@ steps; the ADR's `## Migration` section lists them, and what is still to move
 - **The frame sink is the host's, the verdict is the realm's.** A host
   implements `sink::FrameSink`; the realm reads its `SubmitVerdict` and
   classifies retry, device loss and not-shown (ADR-0068). The trait stays
-  object-safe: `UiRealm::render_frame<S: FrameSink + ?Sized>` accepts
-  `&mut dyn FrameSink` today, the shape the proposed `Realm::pump`
-  (ADR-0083) drives (pinned by
+  object-safe: `UiRealm::pump` drives it as `&mut dyn FrameSink` (pinned by
   `sink::tests::a_host_sink_is_driven_through_dyn_frame_sink`).
   `SubmitVerdict` stays exhaustive, never `#[non_exhaustive]`: a new variant
   must make the compiler name the realm's match site and every host's
@@ -127,6 +139,34 @@ frame with nothing to present falls back to no-present pacing (ADR-0068). The
 divergence predates this crate; it is recorded here because the verdict is now
 a crate contract. Pinned by `flui-app`'s raster-lane classification tests, for
 example `app::raster_lane::tests::a_withheld_frame_is_not_collapsed_into_no_present`.
+
+### `Vsync` controllers tick at the frame's timestamp
+
+Flutter's tickers see the frame's timestamp: `SchedulerBinding.handleBeginFrame`
+hands its `timeStamp` to every transient callback, and `Ticker._tick` measures
+elapsed time from it. The realm's `Vsync` registry ticks at the timestamp the
+pump's `FrameClockSource` returned (`now_secs` reads it for the frame's
+duration, relative to the realm's start), so a controller advances by frame
+time, not by whenever the tick happened to read the wall clock. A frame
+driven outside a pump (a bare `draw_frame`/`render_frame` in a test) falls
+back to the wall clock, and a test can still override it with
+`set_now_secs_for_test`. Pinned by
+`pump_ticks_vsync_controllers_at_the_frame_clocks_time`.
+
+### `Vsync` ticks in the persistent phase, not among the transient callbacks
+
+Flutter's tickers are transient frame callbacks, so they run in begin frame,
+before the microtask flush and before any persistent callback. The realm's
+`Vsync` registry is ticked by `draw_frame_entered` at the start of the draw
+step, which runs in the scheduler's persistent phase: after the transient
+callbacks and microtasks, and after any persistent callback registered before
+the pipeline. A controller's listener that schedules a microtask therefore
+sees it flushed at the next frame's begin, not this one's. The two sets are
+disjoint (a controller registered with a scheduler ticks in begin frame, one
+registered with `Vsync` ticks here), so no controller advances twice, and the
+tick still precedes every presentation's build, which is the ordering the
+segment relies on. Moving the tick into begin frame is a separate change.
+Pinned by `pump_ticks_vsync_in_the_persistent_phase_not_among_transient_callbacks`.
 
 `execution` has no Flutter counterpart to map: runtime and scheduling
 topology, including background execution, is outside Flutter's reference

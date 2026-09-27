@@ -9,6 +9,7 @@
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
+use flui_foundation::notifier::Listenable as _;
 use flui_types::geometry::px;
 
 use super::*;
@@ -148,6 +149,47 @@ fn pump_ticks_vsync_controllers_at_the_frame_clocks_time() {
     assert!(
         (value - 0.5).abs() < 1e-4,
         "50 ms of frame clock into a 100 ms run is halfway (value={value})"
+    );
+    controller.dispose();
+}
+
+/// The realm's `Vsync` registry ticks in the scheduler's persistent phase, at
+/// the start of the draw step — not among the transient callbacks, where
+/// Flutter's tickers run. A recorded divergence (this crate's
+/// `ARCHITECTURE.md`, "`Vsync` ticks in the persistent phase"); moving the tick
+/// into begin frame turns this red.
+#[test]
+fn pump_ticks_vsync_in_the_persistent_phase_not_among_transient_callbacks() {
+    let mut realm = UiRealm::for_test();
+    let controller = AnimationController::new(
+        Duration::from_millis(100),
+        &flui_scheduler::UpdateScheduler::new(),
+    );
+    realm.vsync().register(controller.clone());
+    let phases = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let phases_in_listener = Arc::clone(&phases);
+    let scheduler = realm.scheduler().clone();
+    let _listener = controller.add_listener(Arc::new(move || {
+        phases_in_listener.lock().push(scheduler.phase());
+    }));
+    controller.forward().expect("fresh controller forwards");
+    phases.lock().clear();
+
+    let _ = realm.pump(
+        &mut ManualClock::new(),
+        &mut ScriptedSink::always_presents(),
+    );
+
+    let phases = phases.lock();
+    assert!(
+        !phases.is_empty(),
+        "the pump must tick the running controller"
+    );
+    assert!(
+        phases
+            .iter()
+            .all(|phase| *phase == SchedulerPhase::PersistentCallbacks),
+        "the Vsync tick runs in the persistent phase (got {phases:?})"
     );
     controller.dispose();
 }
