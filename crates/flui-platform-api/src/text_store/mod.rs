@@ -14,7 +14,8 @@
 //! - [`TextStoreRead`] and [`TextStoreEdit`]: what a session can do. A read
 //!   lock hands out only the first, so an edit under it does not compile.
 //! - [`LockGrant`] and [`LockArbiter`]: the lock, and the one state machine
-//!   every store embeds to decide when a grant runs.
+//!   every store embeds to decide when a grant runs. [`CommitGate`] is the
+//!   presentation's frame transaction as that machine reads it.
 //! - [`TextStore`] and [`TextStoreObserver`]: the field side and the
 //!   platform side of the connection.
 //! - [`project_ime_event`]: a push-model [`ImeEvent`](flui_types::ImeEvent)
@@ -33,7 +34,7 @@ pub mod utf16;
 
 pub use in_memory::InMemoryTextStore;
 pub use lock::{
-    DEFERRED_LOCK_CAPACITY, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,
+    CommitGate, DEFERRED_LOCK_CAPACITY, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,
     TextStoreError,
 };
 pub use projection::project_ime_event;

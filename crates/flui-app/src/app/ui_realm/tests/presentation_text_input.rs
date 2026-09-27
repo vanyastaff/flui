@@ -28,47 +28,6 @@ fn in_memory_client(text: &str) -> (Rc<InMemoryTextStore>, flui_interaction::Tex
     (store, flui_interaction::TextInputClient::new(erased))
 }
 
-/// An in-memory store whose commit gate is the presentation's, read through
-/// its handle the way `EditableText`'s store reads it.
-struct GatedStore {
-    inner: Rc<InMemoryTextStore>,
-    handle: flui_interaction::TextInputHandle,
-}
-
-impl GatedStore {
-    fn gate(&self) {
-        self.inner
-            .set_commits_allowed(self.handle.may_commit().unwrap_or(false));
-    }
-}
-
-impl TextStore for GatedStore {
-    fn status(&self) -> flui_platform_api::text_store::TextStoreStatus {
-        self.inner.status()
-    }
-
-    fn request_lock(
-        &self,
-        grant: LockGrant,
-        timing: LockTiming,
-    ) -> Result<LockOutcome, flui_platform_api::text_store::TextStoreError> {
-        self.gate();
-        self.inner.request_lock(grant, timing)
-    }
-
-    fn run_deferred_grants(&self) -> usize {
-        self.gate();
-        self.inner.run_deferred_grants()
-    }
-
-    fn set_observer(
-        &self,
-        observer: Option<Rc<dyn flui_platform_api::text_store::TextStoreObserver>>,
-    ) {
-        self.inner.set_observer(observer);
-    }
-}
-
 /// Asks `store` for an async read lock on every build, logging around it.
 #[derive(Clone)]
 struct LockRequester {
@@ -108,12 +67,10 @@ fn a_text_store_lock_requested_during_draw_frame_is_granted_after_it_returns() {
     let (_fake, text_input) = headless_text_input();
     let realm = UiRealm::for_test_with_text_input(Some(text_input));
     let handle = realm.text_input_handle();
-    let store: Rc<dyn TextStore> = Rc::new(GatedStore {
-        inner: InMemoryTextStore::new("abc"),
-        handle: handle.clone(),
-    }); // the presentation holds the gated test store through the erased contract.
+    let (concrete, client) = in_memory_client("abc");
+    let store: Rc<dyn TextStore> = concrete; // the requester asks through the erased contract, as an input method does.
     let _token = handle
-        .attach(flui_interaction::TextInputClient::new(Rc::clone(&store)))
+        .attach(client)
         .expect("headless presentation supports text input");
     let requester = LockRequester {
         store,
@@ -140,7 +97,13 @@ fn a_text_store_lock_requested_during_draw_frame_is_granted_after_it_returns() {
         ["build", "build ends", "grant"],
         "the grant ran once, after the frame returned"
     );
-    assert_eq!(handle.may_commit(), Ok(true), "the frame reopened commits");
+    assert_eq!(
+        requester
+            .store
+            .request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
+        Ok(LockOutcome::Granted),
+        "the frame reopened commits"
+    );
 }
 
 /// Attach records `set_ime_allowed(true)`; preedit/commit events

@@ -7,8 +7,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_platform_api::text_store::{
-    Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect,
-    Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
+    CommitGate, Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, PointMode,
+    RangeRect, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
     TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
 };
 use flui_testing::text_store_kit::{
@@ -38,7 +38,7 @@ fn version_one_runs_every_case() {
 enum Fault {
     /// Reports its length in UTF-8 bytes.
     CountsUtf8Bytes,
-    /// Ignores the frame transaction and grants at once.
+    /// Ignores the commit gate it is handed and grants at once.
     GrantsInsideTransaction,
     /// Tells the observer about the platform's own edits.
     EchoesPlatformEdits,
@@ -94,6 +94,12 @@ impl TextStore for Faulty {
 
     fn run_deferred_grants(&self) -> usize {
         self.inner.run_deferred_grants()
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        if self.fault != Fault::GrantsInsideTransaction {
+            self.inner.set_commit_gate(gate);
+        }
     }
 
     fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
@@ -303,16 +309,6 @@ impl TextStoreFixture for FaultyFixture {
         let whole = Utf16Range::new(Utf16Offset::ZERO, utf16::utf16_len(&inner.text()))
             .expect("zero precedes every length");
         inner.app_replace(whole, text);
-    }
-
-    fn within_transaction(&mut self, body: &mut dyn FnMut()) {
-        if self.store.fault == Fault::GrantsInsideTransaction {
-            body();
-            return;
-        }
-        self.store.inner.set_commits_allowed(false);
-        body();
-        self.store.inner.set_commits_allowed(true);
     }
 
     fn pump(&mut self) {

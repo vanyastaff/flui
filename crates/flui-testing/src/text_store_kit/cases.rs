@@ -5,9 +5,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
 use flui_platform_api::text_store::{
-    Composition, LockGrant, LockOutcome, LockTiming, OffsetError, PointMode, Selection, TextChange,
-    TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead, Utf16Offset,
-    Utf16Range, utf16,
+    CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OffsetError, PointMode, Selection,
+    TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
+    Utf16Offset, Utf16Range, utf16,
 };
 use flui_types::geometry::{Bounds, Pixels, Point, px};
 
@@ -84,6 +84,18 @@ fn ensure_eq<T: PartialEq + std::fmt::Debug>(actual: T, expected: T, what: &str)
 fn fresh(fixture: &mut dyn TextStoreFixture, text: &str) -> Rc<dyn TextStore> {
     fixture.reset(text);
     fixture.store()
+}
+
+/// Run `body` inside a frame transaction the kit holds, the way a store's
+/// owner holds one: a [`CommitGate`] installed through
+/// [`TextStore::set_commit_gate`] and shut for `body`'s length. A store
+/// that ignores the gate it is handed grants inside, and fails.
+fn within_transaction(store: &Rc<dyn TextStore>, body: impl FnOnce()) {
+    let gate = CommitGate::new();
+    store.set_commit_gate(gate.clone());
+    gate.set_open(false);
+    body();
+    gate.set_open(true);
 }
 
 /// Run `body` under a synchronous read lock and return what it returned.
@@ -517,7 +529,7 @@ fn sync_request_inside_a_transaction_is_refused(fixture: &mut dyn TextStoreFixtu
     let store = fresh(fixture, CORPUS);
     let ran = Rc::new(Cell::new(false));
     let mut outcome = None;
-    fixture.within_transaction(&mut || {
+    within_transaction(&store, || {
         let ran = Rc::clone(&ran);
         outcome =
             Some(store.request_lock(LockGrant::read(move |_| ran.set(true)), LockTiming::Sync));
@@ -539,7 +551,7 @@ fn async_request_inside_a_transaction_waits_for_the_next_anchor(
     let seen = Rc::new(RefCell::new(Vec::new()));
     let mut outcomes = Vec::new();
     let mut ran_inside = None;
-    fixture.within_transaction(&mut || {
+    within_transaction(&store, || {
         let edits_run = Rc::clone(&edits);
         outcomes.push(store.request_lock(
             LockGrant::read_write(move |session| {
@@ -577,7 +589,7 @@ fn async_request_inside_a_transaction_waits_for_the_next_anchor(
 fn deferred_grants_run_in_request_order(fixture: &mut dyn TextStoreFixture) -> Outcome {
     let store = fresh(fixture, CORPUS);
     let log = Rc::new(RefCell::new(Vec::new()));
-    fixture.within_transaction(&mut || {
+    within_transaction(&store, || {
         for label in ["first", "second", "third"] {
             let sink = Rc::clone(&log);
             let _ = store.request_lock(

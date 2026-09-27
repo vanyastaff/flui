@@ -53,11 +53,12 @@ pub trait TextStoreFixture {
     /// platform: the store reports it to its observer.
     fn app_replace_all(&mut self, text: &str);
 
-    /// Run `body` with commits closed, as inside a frame transaction.
-    fn within_transaction(&mut self, body: &mut dyn FnMut());
-
     /// Reach the next commit anchor, where deferred grants run. A widget
     /// fixture drives a frame here.
+    ///
+    /// The kit holds frame transactions itself, through the gate it
+    /// installs with [`TextStore::set_commit_gate`], so a fixture has no
+    /// way to stand in for a store that ignores the gate.
     fn pump(&mut self);
 
     /// How many change notifications the field has sent its own listeners
@@ -258,12 +259,6 @@ impl TextStoreFixture for InMemoryFixture {
         )
         .expect("BUG: zero precedes every length");
         self.store.app_replace(whole, text);
-    }
-
-    fn within_transaction(&mut self, body: &mut dyn FnMut()) {
-        self.store.set_commits_allowed(false);
-        body();
-        self.store.set_commits_allowed(true);
     }
 
     fn pump(&mut self) {

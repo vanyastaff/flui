@@ -43,9 +43,9 @@ use std::rc::Rc;
 use flui_interaction::TextInputHandle;
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_platform_api::text_store::{
-    Composition, LockArbiter, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect, Selection,
-    TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
-    TextStoreStatus, Utf16Offset, Utf16Range, utf16,
+    CommitGate, Composition, LockArbiter, LockGrant, LockOutcome, LockTiming, PointMode, RangeRect,
+    Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
+    TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
 use flui_types::geometry::{Bounds, Pixels, Point};
@@ -160,8 +160,10 @@ pub(super) struct EditableTextStore {
     /// it happened while the store could not notify.
     layout_dirty: Cell<bool>,
     status_dirty: Cell<bool>,
-    /// Whether commits are allowed: `false` inside the presentation's frame
-    /// transaction. `None` (no presentation IME) always allows them.
+    /// The presentation's text input, whose closing detaches the store.
+    /// Whether commits are allowed is the gate it installs on attach, which
+    /// the arbiter reads; with no presentation IME the arbiter's own gate
+    /// stays open.
     handle: Option<TextInputHandle>,
     pipeline: Option<PipelineCell>,
     inner_anchor: SubtreeAnchor,
@@ -268,14 +270,16 @@ impl EditableTextStore {
         let _ran = self.run_deferred_grants();
     }
 
+    /// Whether the gate the presentation installed on attach is open; an
+    /// error once the field or its presentation is gone.
     fn may_commit(&self) -> Result<bool, TextStoreError> {
         if !self.alive.get() {
             return Err(TextStoreError::Detached);
         }
-        match &self.handle {
-            None => Ok(true),
-            Some(handle) => handle.may_commit().map_err(|_| TextStoreError::Detached),
+        if let Some(handle) = &self.handle {
+            handle.ensure_open().map_err(|_| TextStoreError::Detached)?;
         }
+        Ok(self.arbiter.may_commit())
     }
 
     fn notify(&self, call: impl FnOnce(&dyn TextStoreObserver)) {
@@ -452,15 +456,13 @@ impl TextStore for EditableTextStore {
         grant: LockGrant,
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
-        let may_commit = self.may_commit()?;
+        self.may_commit()?;
         // An app edit not yet reported is reported before the platform's
         // session can see (and write back over) it.
         self.flush_notifications();
         let outcome = self
             .arbiter
-            .request(grant, timing, may_commit, &mut |grant| {
-                self.open(grant);
-            });
+            .request(grant, timing, &mut |grant| self.open(grant));
         self.flush_notifications();
         outcome
     }
@@ -469,15 +471,17 @@ impl TextStore for EditableTextStore {
     /// for the frame transaction to end is reported here, before and after
     /// the queued grants run.
     fn run_deferred_grants(&self) -> usize {
-        let Ok(may_commit) = self.may_commit() else {
+        if self.may_commit().is_err() {
             return 0;
-        };
+        }
         self.flush_notifications();
-        let ran = self
-            .arbiter
-            .run_deferred(may_commit, &mut |grant| self.open(grant));
+        let ran = self.arbiter.run_deferred(&mut |grant| self.open(grant));
         self.flush_notifications();
         ran
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.arbiter.set_gate(gate);
     }
 
     fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {

@@ -27,11 +27,12 @@
 //! ([`project_ime_event`]), so a field has one editing path whichever model
 //! its platform speaks.
 //!
-//! The owner also holds whether its presentation is inside a frame
-//! transaction (ADR-0027 §3). While it is, [`TextInputHandle::may_commit`]
-//! is `false` and a store refuses synchronous locks and queues asynchronous
-//! ones; the composition root reopens commits when the frame returns and
-//! calls [`TextInputOwner::run_deferred_grants`].
+//! The owner also holds its presentation's frame transaction (ADR-0027 §3)
+//! as a [`CommitGate`], and installs that gate into every store it attaches
+//! ([`TextStore::set_commit_gate`]), so no store can miss it. While the gate
+//! is shut, a store refuses synchronous locks and queues asynchronous ones;
+//! the composition root opens it once the frame has returned and calls
+//! [`TextInputOwner::run_deferred_grants`].
 //!
 //! A platform backend cannot hold the store yet: `PlatformTextInput` is
 //! `Send + Sync` and the store is an owner-thread `Rc`, so the pull
@@ -44,7 +45,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use flui_platform_api::PlatformTextInput;
-use flui_platform_api::text_store::{TextStore, project_ime_event};
+use flui_platform_api::text_store::{CommitGate, TextStore, project_ime_event};
 use flui_types::ImeEvent;
 use flui_types::geometry::{Bounds, Pixels};
 
@@ -145,9 +146,10 @@ struct OwnerState {
 pub struct TextInputOwner {
     platform: Option<Arc<dyn PlatformTextInput>>, // direct OS text-input capability owned by one presentation; no intermediary.
     next_token: Cell<NonZeroU64>,
-    /// Whether the presentation is inside a frame transaction, where text
-    /// stores may not commit (ADR-0027 §3).
-    transaction_open: Cell<bool>,
+    /// Shut while the presentation is inside a frame transaction, where text
+    /// stores may not commit (ADR-0027 §3); installed into every attached
+    /// store.
+    gate: CommitGate,
     state: RefCell<OwnerState>,
 }
 
@@ -160,7 +162,7 @@ impl TextInputOwner {
         Rc::new(Self {
             platform,
             next_token: Cell::new(NonZeroU64::MIN),
-            transaction_open: Cell::new(false),
+            gate: CommitGate::new(),
             state: RefCell::new(OwnerState {
                 lifecycle: OwnerLifecycle::Open,
                 active: None,
@@ -197,6 +199,9 @@ impl TextInputOwner {
         self.next_token.set(next);
         let token = ClientToken(current);
 
+        // Before the client is reachable through `dispatch`, so no lock is
+        // ever requested on a store that does not yet follow the frame.
+        client.store.set_commit_gate(self.gate.clone());
         let enable_platform = {
             let mut state = self.state.borrow_mut();
             let enable_platform = state.active.is_none();
@@ -281,10 +286,16 @@ impl TextInputOwner {
         }
     }
 
-    /// Open or close this presentation's frame transaction. While it is
-    /// open, [`TextInputHandle::may_commit`] is `false`.
+    /// Open or close this presentation's frame transaction: while it is
+    /// open, the gate every attached store follows is shut.
     pub fn set_transaction_open(&self, open: bool) {
-        self.transaction_open.set(open);
+        self.gate.set_open(!open);
+    }
+
+    /// Whether this presentation's frame transaction is open.
+    #[must_use]
+    pub fn is_transaction_open(&self) -> bool {
+        !self.gate.is_open()
     }
 
     /// Run the grants the active client's store queued while commits were
@@ -358,7 +369,7 @@ impl std::fmt::Debug for TextInputOwner {
         f.debug_struct("TextInputOwner")
             .field("lifecycle", &state.lifecycle)
             .field("next_token", &self.next_token.get())
-            .field("transaction_open", &self.transaction_open.get())
+            .field("transaction_open", &!self.gate.is_open())
             .field(
                 "active_token",
                 &state.active.as_ref().map(|client| client.token),
@@ -400,22 +411,20 @@ impl TextInputHandle {
         self.owner.upgrade().ok_or(TextInputError::OwnerGone)
     }
 
-    /// Attach `client` as this presentation's active IME client.
+    /// Attach `client` as this presentation's active IME client, installing
+    /// the presentation's commit gate into its store.
     pub fn attach(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
         self.owner()?.attach(client)
     }
 
-    /// Whether a text store may commit edits now: `false` inside the
-    /// presentation's frame transaction.
+    /// Whether the presentation still takes text input.
     ///
     /// # Errors
     ///
     /// [`TextInputError::Closed`] or [`TextInputError::OwnerGone`] once the
-    /// presentation is closing or gone.
-    pub fn may_commit(&self) -> Result<bool, TextInputError> {
-        let owner = self.owner()?;
-        owner.ensure_open()?;
-        Ok(!owner.transaction_open.get())
+    /// presentation is closing or gone: a store then refuses every lock.
+    pub fn ensure_open(&self) -> Result<(), TextInputError> {
+        self.owner()?.ensure_open()
     }
 
     /// Detach `token` if it still names the active client.
@@ -442,8 +451,8 @@ mod tests {
     use std::cell::RefCell;
 
     use flui_platform_api::text_store::{
-        InMemoryTextStore, LockGrant, LockOutcome, LockTiming, Selection, TextStoreError,
-        TextStoreObserver, TextStoreStatus, Utf16Offset,
+        InMemoryTextStore, LockGrant, LockTiming, Selection, TextStoreError, TextStoreStatus,
+        Utf16Offset,
     };
     use flui_types::geometry::{Point, Size, px};
     use parking_lot::Mutex;
@@ -493,44 +502,6 @@ mod tests {
 
     fn empty_client() -> TextInputClient {
         client(&InMemoryTextStore::new(""))
-    }
-
-    /// An in-memory store whose commit gate is the owner's, read through
-    /// its handle the way a widget's store reads it.
-    struct GatedStore {
-        inner: Rc<InMemoryTextStore>,
-        handle: TextInputHandle,
-    }
-
-    impl GatedStore {
-        fn gate(&self) {
-            self.inner
-                .set_commits_allowed(self.handle.may_commit().unwrap_or(false));
-        }
-    }
-
-    impl TextStore for GatedStore {
-        fn status(&self) -> TextStoreStatus {
-            self.inner.status()
-        }
-
-        fn request_lock(
-            &self,
-            grant: LockGrant,
-            timing: LockTiming,
-        ) -> Result<LockOutcome, TextStoreError> {
-            self.gate();
-            self.inner.request_lock(grant, timing)
-        }
-
-        fn run_deferred_grants(&self) -> usize {
-            self.gate();
-            self.inner.run_deferred_grants()
-        }
-
-        fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {
-            self.inner.set_observer(observer);
-        }
     }
 
     #[test]
@@ -605,24 +576,22 @@ mod tests {
         assert_eq!(store.owner_notifications(), 0);
     }
 
+    /// The reference store, attached as it is, with no wrapper reading the
+    /// owner: attaching installs the owner's gate, so the transaction holds
+    /// for a store whose author never looked at it.
     #[test]
-    fn transaction_open_defers_and_run_deferred_grants_drains() {
+    fn an_attached_store_follows_the_owners_frame_transaction() {
         let (owner, _) = owner_with_recorder();
-        let inner = InMemoryTextStore::new("");
-        let store: Rc<dyn TextStore> = Rc::new(GatedStore {
-            inner: Rc::clone(&inner),
-            handle: owner.handle(),
-        }); // the gated test store behind the erased contract, as a widget attaches its own.
-        let _token = owner
-            .handle()
-            .attach(TextInputClient::new(store))
-            .expect("connection");
+        let store = InMemoryTextStore::new("");
+        let _token = owner.handle().attach(client(&store)).expect("connection");
 
         owner.set_transaction_open(true);
-        assert_eq!(owner.handle().may_commit(), Ok(false));
+        assert!(owner.is_transaction_open());
         owner.dispatch(&ImeEvent::Commit("東".to_owned()));
         owner.dispatch(&ImeEvent::Commit("京".to_owned()));
-        assert_eq!(inner.text(), "", "nothing commits inside the transaction");
+        assert_eq!(store.text(), "", "nothing commits inside the transaction");
+        let sync = store.request_lock(LockGrant::read(|_| {}), LockTiming::Sync);
+        assert_eq!(sync, Err(TextStoreError::SyncLockUnavailable));
         assert_eq!(
             owner.run_deferred_grants(),
             0,
@@ -630,23 +599,24 @@ mod tests {
         );
 
         owner.set_transaction_open(false);
-        assert_eq!(owner.handle().may_commit(), Ok(true));
+        assert!(!owner.is_transaction_open());
         assert_eq!(owner.run_deferred_grants(), 2);
-        assert_eq!(inner.text(), "東京", "applied in arrival order");
+        assert_eq!(store.text(), "東京", "applied in arrival order");
     }
 
     #[test]
-    fn may_commit_reports_owner_gone() {
+    fn ensure_open_reports_a_closed_or_dropped_owner() {
         let handle = {
             let (owner, _) = owner_with_recorder();
             owner.handle()
         };
-        assert_eq!(handle.may_commit(), Err(TextInputError::OwnerGone));
+        assert_eq!(handle.ensure_open(), Err(TextInputError::OwnerGone));
 
         let (owner, _) = owner_with_recorder();
         let handle = owner.handle();
+        assert_eq!(handle.ensure_open(), Ok(()));
         owner.close();
-        assert_eq!(handle.may_commit(), Err(TextInputError::Closed));
+        assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use super::lock::{LockGrant, LockOutcome, LockTiming, TextStoreError};
+use super::lock::{CommitGate, LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::session::{TextChange, TextStoreStatus};
 
 /// A text field's document as the platform's input method sees it
@@ -15,7 +15,8 @@ use super::session::{TextChange, TextStoreStatus};
 /// `Rc<dyn TextStore>` and are not `Send`.
 ///
 /// An implementation embeds a [`LockArbiter`](super::LockArbiter) so every
-/// store follows the same lock rules, and passes the conformance kit in
+/// store follows the same lock rules, hands it the gate
+/// [`Self::set_commit_gate`] receives, and passes the conformance kit in
 /// `flui_testing::text_store_kit`.
 pub trait TextStore {
     /// The store's standing properties.
@@ -39,6 +40,17 @@ pub trait TextStore {
     /// allowed now. The store's owner calls this at each commit anchor;
     /// returns how many ran.
     fn run_deferred_grants(&self) -> usize;
+
+    /// Follow `gate` from now on: while it is shut, a sync lock is refused
+    /// and an async one waits for [`Self::run_deferred_grants`].
+    ///
+    /// The owner that attaches the store installs its presentation's gate
+    /// here, so a store has no transaction flag of its own; an
+    /// implementation passes `gate` to its arbiter's
+    /// [`LockArbiter::set_gate`](super::LockArbiter::set_gate). One that
+    /// ignores it commits mid-frame, and fails the conformance kit's
+    /// transaction cases.
+    fn set_commit_gate(&self, gate: CommitGate);
 
     /// Register the platform's observer, replacing any earlier one, or
     /// remove it with `None`.

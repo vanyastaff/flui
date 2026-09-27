@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 use flui_types::geometry::{Bounds, Pixels, Point, Size, px};
 
-use super::lock::{LockArbiter, LockGrant, LockOutcome, LockTiming, TextStoreError};
+use super::lock::{CommitGate, LockArbiter, LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::session::{
     Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
     TextStoreStatus,
@@ -35,7 +35,6 @@ pub struct InMemoryTextStore {
     doc: RefCell<Document>,
     arbiter: LockArbiter,
     observer: RefCell<Option<Rc<dyn TextStoreObserver>>>,
-    commits_allowed: Cell<bool>,
     protected: Cell<bool>,
     owner_notifications: Cell<usize>,
 }
@@ -45,7 +44,6 @@ impl std::fmt::Debug for InMemoryTextStore {
         f.debug_struct("InMemoryTextStore")
             .field("doc", &self.doc)
             .field("arbiter", &self.arbiter)
-            .field("commits_allowed", &self.commits_allowed.get())
             .field("protected", &self.protected.get())
             .finish_non_exhaustive()
     }
@@ -57,8 +55,9 @@ impl InMemoryTextStore {
     /// The height of the one line, in logical pixels.
     pub const LINE_HEIGHT: f32 = 20.0;
 
-    /// A store holding `text`, caret at the end, no composition, commits
-    /// allowed.
+    /// A store holding `text`, caret at the end, no composition, behind an
+    /// open gate of its own until [`TextStore::set_commit_gate`] installs
+    /// another.
     #[must_use]
     pub fn new(text: impl Into<String>) -> Rc<Self> {
         let text = text.into();
@@ -71,7 +70,6 @@ impl InMemoryTextStore {
             }),
             arbiter: LockArbiter::new(),
             observer: RefCell::new(None),
-            commits_allowed: Cell::new(true),
             protected: Cell::new(false),
             owner_notifications: Cell::new(0),
         })
@@ -93,13 +91,6 @@ impl InMemoryTextStore {
     #[must_use]
     pub fn composition(&self) -> Option<Composition> {
         self.doc.borrow().composition
-    }
-
-    /// Open or close commits, as a frame transaction does: while closed, a
-    /// sync lock is refused and an async one waits for
-    /// [`TextStore::run_deferred_grants`].
-    pub fn set_commits_allowed(&self, allowed: bool) {
-        self.commits_allowed.set(allowed);
     }
 
     /// Mark the store protected (a password field) and tell the observer.
@@ -182,14 +173,15 @@ impl TextStore for InMemoryTextStore {
         timing: LockTiming,
     ) -> Result<LockOutcome, TextStoreError> {
         self.arbiter
-            .request(grant, timing, self.commits_allowed.get(), &mut |grant| {
-                self.open(grant);
-            })
+            .request(grant, timing, &mut |grant| self.open(grant))
     }
 
     fn run_deferred_grants(&self) -> usize {
-        self.arbiter
-            .run_deferred(self.commits_allowed.get(), &mut |grant| self.open(grant))
+        self.arbiter.run_deferred(&mut |grant| self.open(grant))
+    }
+
+    fn set_commit_gate(&self, gate: CommitGate) {
+        self.arbiter.set_gate(gate);
     }
 
     fn set_observer(&self, observer: Option<Rc<dyn TextStoreObserver>>) {

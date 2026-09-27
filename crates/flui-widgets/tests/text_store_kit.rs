@@ -64,12 +64,6 @@ impl TextStoreFixture for EditableTextFixture {
         self.harness.tick();
     }
 
-    fn within_transaction(&mut self, body: &mut dyn FnMut()) {
-        self.harness.set_transaction_open(true);
-        body();
-        self.harness.set_transaction_open(false);
-    }
-
     fn pump(&mut self) {
         self.harness.tick();
     }

@@ -148,8 +148,16 @@ fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::super::InMemoryTextStore;
+    use super::super::{CommitGate, InMemoryTextStore};
     use super::*;
+
+    /// Install a shut gate into `store`, as a frame transaction would.
+    fn shut_gate(store: &InMemoryTextStore) -> CommitGate {
+        let gate = CommitGate::new();
+        gate.set_open(false);
+        store.set_commit_gate(gate.clone());
+        gate
+    }
 
     fn at(units: usize) -> Utf16Offset {
         Utf16Offset::new(units)
@@ -337,7 +345,7 @@ mod tests {
     #[test]
     fn a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor() {
         let store = InMemoryTextStore::new("");
-        store.set_commits_allowed(false);
+        let gate = shut_gate(&store);
         for event in [
             preedit_event("と", Some((3, 3))),
             preedit_event("とう", Some((6, 6))),
@@ -349,7 +357,7 @@ mod tests {
             );
         }
         assert_eq!(store.text(), "", "nothing applies inside the transaction");
-        store.set_commits_allowed(true);
+        gate.set_open(true);
         assert_eq!(store.run_deferred_grants(), 3);
         assert_eq!(store.text(), "東");
         assert_eq!(store.composition(), None);
@@ -361,7 +369,7 @@ mod tests {
         let store = InMemoryTextStore::new("ab");
         // Commits closed: a lock request would be deferred, so `Granted`
         // shows that none was made.
-        store.set_commits_allowed(false);
+        let _gate = shut_gate(&store);
         assert_eq!(
             project_ime_event(&*store, &ImeEvent::Enabled),
             Ok(LockOutcome::Granted)
