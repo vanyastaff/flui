@@ -1707,14 +1707,22 @@ impl CursorAreaLoop {
     }
 
     /// The IME candidate window's current target rect in window-root-space
-    /// logical pixels: `inner_anchor`'s committed transform to the render
-    /// root, applied to the anchored `RenderEditable` child's composing
+    /// logical pixels: the anchored `RenderEditable`'s committed transform
+    /// to the render root (the text store's geometry uses the same one;
+    /// it equals `inner_anchor`'s, since `RenderSubtreeAnchor` lays its
+    /// child out at its own origin), applied to the editable's composing
     /// region rect when one is active, falling back to its collapsed caret
     /// rect otherwise — Flutter's own `_updateComposingRectIfNeeded` order
     /// (`editable_text.dart`, tag `3.44.0`: prefer the composing rect,
     /// fall back to the caret rect when none is available). ADR-0030
     /// upgrades this loop from the caret-rect-only reduction ADR-0030
     /// originally landed.
+    ///
+    /// `None` also when the pipeline is checked out by a frame phase
+    /// (`with_editable_global` uses `try_with`): the loop fires as a
+    /// post-frame callback, after the pipeline is released, so this only
+    /// skips one firing's send instead of panicking, and the next firing
+    /// retries.
     fn global_caret_rect(&self) -> Option<Bounds<Pixels>> {
         let owner = self.pipeline_owner.as_ref()?;
         with_editable_global(owner, &self.inner_anchor, |editable, to_root| {
