@@ -97,3 +97,9 @@ layer = 9
 tier = "pkg"
 tier-kind = "official"
 order = 3
+# ADR-0088 §2: an official package's normal dependencies are the SDK and the
+# contract crates. These go when devtools moves onto flui-sdk.
+edge-exceptions = [
+    { to = "flui-foundation", exit = "ADR-0088", reason = "internal crate until the move onto flui-sdk" },
+    { to = "flui-scheduler", exit = "ADR-0088", reason = "internal crate until the move onto flui-sdk" },
+]

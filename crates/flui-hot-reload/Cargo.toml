@@ -62,6 +62,14 @@ layer = 6
 tier = "pkg"
 tier-kind = "official"
 order = 4
+# ADR-0088 §2: an official package's normal dependencies are the SDK and the
+# contract crates. The dlopen reload path these serve is removed by ADR-0094.
+edge-exceptions = [
+    { to = "flui-foundation", exit = "ADR-0094", reason = "the dlopen reload path's internal-crate edges" },
+    { to = "flui-layer", exit = "ADR-0094", reason = "the dlopen reload path's internal-crate edges" },
+    { to = "flui-rendering", exit = "ADR-0094", reason = "the dlopen reload path's internal-crate edges" },
+    { to = "flui-view", exit = "ADR-0094", reason = "the dlopen reload path's internal-crate edges" },
+]
 reach-exceptions = [
     { to = "windows", exit = "ADR-0094", reason = "the dlopen loader's Win32 LibraryLoader calls" },
     { to = "android_log-sys", exit = "ADR-0094", reason = "the loader's Android logging" },
