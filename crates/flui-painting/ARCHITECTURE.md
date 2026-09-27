@@ -446,11 +446,13 @@ against paragraph output. Locked by `synthetic_bold_adds_the_interpolated_width`
 
 ### 11. The font collection is app-scoped and passed explicitly; each realm shapes through its own context
 
-**Rule:** the Parley path has one `FontCollection` per app, handed to each
-realm by its constructor, and each realm shapes through a `TextContext` of its
-own. A face registered on the collection reaches every context built from it,
-including ones built before the registration. The collection offers no
-removal.
+**Rule:** the Parley path has one `FontCollection` per app, and each realm
+shapes through a `TextContext` of its own built from it. A face registered on
+the collection reaches every context built from it, including ones built
+before the registration. The collection offers no removal. This crate provides
+both types; nothing constructs them in production yet. The runtime handing the
+collection to each realm's constructor is the other half of ADR-0092 §10
+step 2, and layout measuring through the context is step 3.
 
 **Flutter:** one engine-wide `FontCollection` behind `dart:ui`, reached
 ambiently by every paragraph builder in the process; `loadFontFromList` adds
@@ -466,7 +468,9 @@ because a glyph key names its face by blob and must not outlive it
 (ADR-0092 §2).
 
 **Accepted trade-off:** a registration makes each realm deep-copy the
-collection's data once, on its next shape; accepted because registration is
+collection's data once, on its next shape, and `register_font` itself clones
+fontique's local collection data to get the `&mut` its registration takes,
+rather than holding a FLUI lock; both are accepted because registration is
 rare. Until ADR-0092 §10 step 6 the bundled faces sit in both this collection
 and the cosmic-text font system. Locked by `two_realms_shape_in_parallel` and
 `a_face_registered_after_the_fork_shapes_in_every_realm`
