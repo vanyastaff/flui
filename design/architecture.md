@@ -609,10 +609,12 @@ decisions 5 and 7.
   ([ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) §6).
 - **Writes go through `EventCx`.** Framework-issued event callbacks receive `&mut EventCx<'_>`,
   borrowed and created per dispatch, which derefs to `Writer`. A `WriterSource`, acquired from
-  `LifecycleContext`, `!Send` and realm-bound, is the only way to open one, for catalog widgets,
-  third-party widgets and the internal continuation path alike. `Signal::set/update` take the
-  writer, so a write from `build` fails to compile. Today `set` takes `&Reactive`
-  (`mod.rs:774`), which any context can hand out (`build_context.rs:132`).
+  `LifecycleContext`, `!Send` and realm-bound (bound to one presentation until the realm core
+  lands, [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) §3), is the
+  only way to open one, for catalog widgets, third-party widgets and the internal continuation
+  path alike. `Signal::set/update` take the writer, so a write from `build` fails to compile.
+  The writes take a `WriteTarget`, and `&Reactive`, which any context can hand out
+  (`BuildContext::reactive`), remains one until that accessor is removed (ADR-0086 §8 step 3).
   - The run-time guard of ADR-0074 stays authoritative; `Writer` narrows it, it does not replace
     it. Writes from computations and from nested synchronous callbacks during build are still
     caught at run time.

@@ -1,30 +1,9 @@
 # FLUI design
 
-- **Status:** Proposed. The ADRs this folder relies on (ADR-0081 to ADR-0097) are `Proposed`,
-  except four accepted in part on 2026-09-26. ADR-0081: its tiers, `order`, direction rule,
-  `edge-exceptions` and `tier-kind` declarations are implemented and checked by
-  `cargo xtask workspace`. Its reach facts (§2) are implemented and checked by
-  `cargo xtask reach` but stay Proposed until the owner decides the three points ADR-0081's
-  status names. ADR-0082: `flui-platform-api` exists and holds the capability traits and the
-  window and input vocabulary, and only `flui-app` depends on `flui-platform`; its `Send`
-  removal is still Proposed, but Win32 has done its first step (owner-only callbacks, off-owner
-  registration refused). ADR-0081's deletions of `flui-tree` and `flui-localizations` landed on
-  2026-09-26. ADR-0095: the `flui-protocol` crate exists and holds `SemanticsRole`,
-  `SemanticsAction` and the ADR-0080 wire vocabulary. ADR-0097: `cargo xtask globals` gates
-  process-global state against the seeded `globals` entries in each manifest. ADR-0083:
-  `flui-runtime` exists (tier K, internal, above `flui-widgets`) and holds the held-input lane,
-  the semantics host, the commit epoch, the performance-stats window, the frame sink seam and
-  the execution services; the realm core has not moved yet. The module-DAG gate for
-  flui-widgets is implemented as `cargo xtask module-dag`. The phase counters and
-  `cargo xtask perf` with its baseline are implemented, non-blocking
-  ([architecture.md](architecture.md), budgets). ADR-0088, still Proposed, has its first two
-  moves: `flui-sdk` exists and `flui-foundation` carries the train guard
-  `links = "flui_train"`; `flui-material` builds on `flui-sdk` alone from
-  `packages/flui-material`, and the FLUI derives resolve through the SDK first. ADR-0081 §3's
-  kind rule (core names no official package in any form; an official package's normal edges
-  are the SDK and the contract crates) is implemented and checked by `cargo xtask workspace`,
-  with the refused edges of today seeded as `edge-exceptions`; it stays Proposed until the owner
-  accepts it. Nothing else described here is implemented.
+- **Status:** in progress. What is implemented is recorded in one place per decision: the
+  `Status` line of each ADR (ADR-0081 to ADR-0097) and the step rows of the
+  [migration plan](../docs/plans/2026-09-25-architecture-migration-plan.md). This page does not
+  repeat them, so a change that lands a step edits its ADR and its plan row, not this paragraph.
   The owner answered the open questions on 2026-09-25; the ADRs and this folder carry those
   answers.
 - **Date:** 2026-09-25

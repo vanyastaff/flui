@@ -1858,3 +1858,25 @@ field's value and its controller disagree until the next edit. **Tests:**
 `tests/editable_text.rs::on_changed_reports_user_edits_but_not_the_callers_own`,
 `reset_restores_initial_values_and_clears_errors_and_interaction`,
 `set_value_on_a_text_form_field_is_seen_by_value_validate_and_save`.
+
+### 33. `RawButton` is a widgets-layer button whose press writes through `EventCx`
+
+**Oracle:** Flutter's widgets library has no button. `RawMaterialButton` lives
+in the Material library, and a theme-free press target is a `GestureDetector`
+with a `Semantics(button: true)` around it.
+
+**Choice:** `RawButton` is that composition as one widget, so an application
+that uses no design system has a button, and its `on_press` takes
+`Fn(&mut EventCx<'_>)`, the typed write capability of ADR-0086. It builds
+`Semantics::new().container(true).button(true).enabled(on_press.is_some())`
+around an opaque `GestureDetector`, and wraps the press in the `WriterSource`
+it takes in `init_state` around an unchanged `GestureDetector::on_tap`, so the
+gesture arena and its callback aliases do not change (ADR-0086 §4). Without
+`on_press` the node is disabled and advertises no click, and a tap does
+nothing (Flutter's disabled-button semantics). A press may return a write's
+`Result`; a refused write is logged on `flui::signals`. Keyboard activation
+(Enter and Space through `ButtonActivateIntent`) and pressed and hovered
+state are not implemented yet. **Tests:** `tests/raw_button.rs`
+(`raw_button_without_on_press_is_disabled_and_advertises_no_click`,
+`raw_button_press_is_reachable_through_a_platform_click`, and the pointer,
+rebuild, `callback` and refused-write cases).

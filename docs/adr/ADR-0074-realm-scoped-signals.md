@@ -13,6 +13,10 @@
   `S: ReadScope + ?Sized`, which `BuildContext` is, instead of `&dyn BuildContext`, and writes
   go through `SignalWriteExt`); its §5 removes the `signals` feature. The write signature is
   ADR-0086's.
+- **Amended-by:** [ADR-0086](ADR-0086-signal-writes-through-event-context.md) — writes take any
+  `WriteTarget` (in a callback, the `&mut EventCx` it receives) beside the `&Reactive` of §5.1,
+  which stays a target until ADR-0086 §8 step 3 replaces §5.1; the run-time guard of §5.2 stays
+  authoritative.
 
 Two limits are part of the decision: a value read by hundreds of cells is an `InheritedView` +
 field-mask concern, not a per-cell signal (§5.10); structural list changes are

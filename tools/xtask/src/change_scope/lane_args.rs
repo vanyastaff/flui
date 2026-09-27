@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(
             a.ci_test_args,
             "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests \
-             --features flui/cupertino \
+             --features flui/cupertino,flui-painting/parley \
              -E package(flui)|package(flui-material)|package(flui-sdk)|package(flui-web-counter)"
         );
         // check-changed keeps the scoped build

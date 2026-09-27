@@ -1,6 +1,9 @@
 # ADR-0088: Official packages live in this workspace, build on `flui-sdk`, and the facade names none of them
 
-- **Status:** Proposed
+- **Status:** Proposed. First moves landed (2026-09-26): `flui-sdk` exists and
+  `flui-foundation` carries the train guard `links = "flui_train"`; `flui-material` builds on
+  `flui-sdk` alone from `packages/flui-material`, and the FLUI derives resolve through the SDK
+  first (migration plan W3-A1, W3-A4a).
 - **Date:** 2026-09-25
 - **Supersedes in part (on acceptance):** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) — the
   placement of Material and Cupertino as core-workspace crates, and the exemption set

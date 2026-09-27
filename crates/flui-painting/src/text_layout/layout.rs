@@ -22,7 +22,7 @@ use crate::error::RegisterFontError;
 
 use super::TextLayoutResult;
 use super::font_resolve::{self, InstalledFamilies};
-use super::glyphs::{GlyphContent, GlyphImage, GlyphKey, PlacedGlyph};
+use super::glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 
 /// The font database and the derived index that describes it, kept together so
 /// the index cannot be consulted about a database it was not built from.
@@ -245,6 +245,14 @@ pub fn init_font_system_with_faces(faces: &[&[u8]], default_family: &str, locale
         .is_ok()
 }
 
+/// Whether the process-wide font system has been built. A test of a path that
+/// must not touch process-global font state asserts `false` after running it.
+#[cfg(any(test, feature = "testing"))]
+#[must_use]
+pub fn font_system_initialized() -> bool {
+    FONT_SYSTEM.get().is_some()
+}
+
 /// The process-wide font system, as a shared handle.
 ///
 /// The render engine's glyph pipeline shapes against the exact same faces
@@ -337,7 +345,8 @@ impl SharedFontSystem {
     /// size and subpixel bin, synthesised italic/bold where the key says so.
     /// `None` when the key's face is not in the database, which cannot
     /// happen for a key this crate produced (faces are never removed); an
-    /// atlas treats it as an empty glyph. Colour bitmaps (emoji) come back as
+    /// atlas does not place such a glyph and asks again on its next use (the
+    /// [`GlyphRasterizer`] contract). Colour bitmaps (emoji) come back as
     /// [`GlyphContent::Color`]; everything else as a coverage mask.
     ///
     /// Not cached here: the caller's atlas is the cache, and a second copy
@@ -399,6 +408,16 @@ impl SharedFontSystem {
         state.db_generation = state.db_generation.wrapping_add(1);
         tracing::debug!(faces_added, "registered font");
         Ok(())
+    }
+}
+
+/// The cosmic-text path's rasterizer: the engine's default atlas draws
+/// through this, under the font lock ([`SharedFontSystem::rasterize`]).
+impl GlyphRasterizer for SharedFontSystem {
+    type Key = GlyphKey;
+
+    fn rasterize(&mut self, key: GlyphKey) -> Option<GlyphImage> {
+        SharedFontSystem::rasterize(self, key)
     }
 }
 

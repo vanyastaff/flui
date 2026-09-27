@@ -1,0 +1,27 @@
+error[E0277]: `dyn flui_view::BuildContext` cannot write a signal
+ --> tests/ui/signal_write_through_build_context.rs:7:23
+  |
+7 |     let _ = count.set(ctx, 1);
+  |                   --- ^^^ not a write context
+  |                   |
+  |                   required by a bound introduced by this call
+  |
+  = help: the trait `WriteTarget` is not implemented for `dyn flui_view::BuildContext`
+  = note: a signal write takes the `&mut EventCx` an event callback receives: `move |cx| count.set(cx, v)`
+  = note: outside a callback, acquire a `WriterSource` in `init_state` and call `source.write(|cx| ..)`; `build` has none
+help: the following other types implement trait `WriteTarget`
+ --> src/reactive/writer.rs
+  |
+  | impl WriteTarget for Reactive {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Reactive`
+...
+  | impl WriteTarget for Writer {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Writer`
+...
+  | impl WriteTarget for EventCx<'_> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `EventCx<'_>`
+note: required by a bound in `set`
+ --> src/reactive/mod.rs
+  |
+  |     fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError>;
+  |               ^^^^^^^^^^^ required by this bound in `SignalWriteExt::set`
