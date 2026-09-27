@@ -701,9 +701,10 @@ fn reset_with_a_cx_reaches_on_reset_and_form_on_changed() {
 fn a_panicking_reset_callback_does_not_disable_later_form_validation() {
     let form = FormHandle::new();
     let field = FormFieldHandle::new();
-    let (_laid, probe) = mount_probed(
+    let controller = TextEditingController::with_text("valid");
+    let (mut laid, probe) = mount_probed(
         Form::new(
-            RawTextFormField::with_initial_value("valid")
+            RawTextFormField::new(controller.clone())
                 .handle(field.clone())
                 .validator(required("Required"))
                 .on_reset(|_cx| -> () { panic!("test callback failure") }),
@@ -711,10 +712,27 @@ fn a_panicking_reset_callback_does_not_disable_later_form_validation() {
         .handle(form.clone())
         .autovalidate_mode(AutovalidateMode::OnUserInteraction),
     );
+    probe
+        .write(|cx| field.did_change(cx, String::new()))
+        .expect("same presentation");
+    laid.tick();
+    assert!(
+        laid.find_text("Required").is_some(),
+        "precondition: the edited field shows its error"
+    );
+
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         probe.write(|cx| form.reset(cx)).expect("same presentation");
     }));
     assert!(result.is_err(), "callback panic propagates");
+    assert_eq!(controller.text(), "valid", "the controller was reset");
+    assert_eq!(field.error_text(), None, "the error state was reset");
+    laid.tick();
+    assert!(
+        laid.find_text("Required").is_none(),
+        "the committed reset remains dirty when on_reset panics"
+    );
+
     probe
         .write(|cx| field.did_change(cx, String::new()))
         .expect("same presentation");

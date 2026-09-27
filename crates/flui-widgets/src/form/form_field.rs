@@ -225,6 +225,11 @@ impl<T: Clone + 'static> FieldInner<T> {
         self.value.borrow_mut().clone_from(&initial);
         self.interacted.set(false);
         *self.error.borrow_mut() = None;
+        // The reset state is already committed. Mark it visible before
+        // entering external code: the controller sink or `on_reset` may
+        // unwind, and that does not roll back the value, interaction or error
+        // mutations above.
+        self.schedule_rebuild();
         if let Some(initial) = &initial {
             self.push_to_sink(initial);
         }
@@ -232,7 +237,6 @@ impl<T: Clone + 'static> FieldInner<T> {
         if let Some(on_reset) = on_reset {
             on_reset(cx);
         }
-        self.schedule_rebuild();
         if let Some(form) = self.form() {
             form.field_did_change(cx);
         }
