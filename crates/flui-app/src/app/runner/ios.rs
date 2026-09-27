@@ -139,7 +139,7 @@ fn drive_owner() {
                 // An owner turn commits commands and polls the async driver;
                 // it runs no frame, so it has no gate to feed the drain's
                 // redraw report to.
-                let _ = realm.enter(|realm| realm.drain_owner_inbox());
+                let _ = realm.enter(flui_runtime::ui_realm::UiRealm::drain_owner_inbox);
                 realm.pump_background();
             })),
         );
