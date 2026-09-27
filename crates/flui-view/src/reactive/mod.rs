@@ -87,11 +87,9 @@ pub use writer::{EventCx, EventOutcome, WriteTarget, Writer, WriterSource, callb
 
 /// Process-wide counter that gives every [`Reactive`] graph a distinct id, so
 /// a [`SignalSlot`] is meaningful only against the graph that minted it. Id 0
-/// is never handed out: it names the unbound handle [`Signal::default`].
+/// ([`SignalSlot::UNBOUND_GRAPH`]) is never handed out: it names the unbound
+/// handle [`Signal::default`].
 static NEXT_GRAPH_ID: AtomicU32 = AtomicU32::new(1);
-
-/// The graph id of an unbound [`Signal::default`] handle.
-const UNBOUND_GRAPH: u32 = 0;
 
 struct Node {
     generation: u32,
@@ -169,7 +167,7 @@ impl Reactive {
         // Skip the unbound id if the counter ever wraps.
         let id = loop {
             let id = NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed);
-            if id != UNBOUND_GRAPH {
+            if id != SignalSlot::UNBOUND_GRAPH {
                 break id;
             }
         };
@@ -234,7 +232,7 @@ impl Reactive {
     }
 
     fn check(&self, inner: &Inner, slot: SignalSlot) -> Result<(), SignalError> {
-        if slot.graph() == UNBOUND_GRAPH {
+        if slot.is_unbound() {
             return Err(SignalError::Unbound);
         }
         if slot.graph() != self.id {

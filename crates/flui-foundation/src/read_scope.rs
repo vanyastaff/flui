@@ -54,6 +54,11 @@ pub struct SignalSlot {
 }
 
 impl SignalSlot {
+    /// The graph id of an unbound handle ([`Signal::default`]). A graph never
+    /// takes it as its id, so a slot naming it is refused as
+    /// [`SignalError::Unbound`] by every read and write.
+    pub const UNBOUND_GRAPH: u32 = 0;
+
     /// A slot handle. Minted by the graph that owns the arena; a handle built
     /// any other way is checked like every handle and refused unless it names
     /// a live slot of the graph it is used against.
@@ -74,6 +79,12 @@ impl SignalSlot {
     #[must_use]
     pub const fn graph(self) -> u32 {
         self.graph
+    }
+
+    /// Whether this slot names no graph ([`SignalSlot::UNBOUND_GRAPH`]).
+    #[must_use]
+    pub const fn is_unbound(self) -> bool {
+        self.graph == Self::UNBOUND_GRAPH
     }
 
     /// The arena index of the slot.
@@ -320,12 +331,9 @@ impl<T: 'static> fmt::Debug for Signal<T> {
 /// [`SignalError::Unbound`], never a read of another slot.
 impl<T: 'static> Default for Signal<T> {
     fn default() -> Self {
-        Self::from_slot(SignalSlot::new(UNBOUND_GRAPH, 0, 0))
+        Self::from_slot(SignalSlot::new(SignalSlot::UNBOUND_GRAPH, 0, 0))
     }
 }
-
-/// The graph id of an unbound handle; no graph is ever given it.
-const UNBOUND_GRAPH: u32 = 0;
 
 /// Lend `slot` to a typed closure through an erased graph.
 ///
@@ -340,7 +348,7 @@ fn read_typed<T: 'static, R>(
     slot: SignalSlot,
     f: impl FnOnce(&T) -> R,
 ) -> Result<R, SignalError> {
-    if slot.graph == UNBOUND_GRAPH {
+    if slot.is_unbound() {
         return Err(SignalError::Unbound);
     }
     let mut f = Some(f);
