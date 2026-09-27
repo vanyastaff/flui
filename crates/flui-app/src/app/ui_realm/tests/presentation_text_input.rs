@@ -1,4 +1,6 @@
-use flui_platform_api::text_store::{InMemoryTextStore, TextStore};
+use flui_platform_api::text_store::{
+    InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
+};
 use flui_types::ImeEvent;
 use flui_types::geometry::Bounds;
 
@@ -24,6 +26,121 @@ fn in_memory_client(text: &str) -> (Rc<InMemoryTextStore>, flui_interaction::Tex
     let store = InMemoryTextStore::new(text);
     let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
     (store, flui_interaction::TextInputClient::new(erased))
+}
+
+/// An in-memory store whose commit gate is the presentation's, read through
+/// its handle the way `EditableText`'s store reads it.
+struct GatedStore {
+    inner: Rc<InMemoryTextStore>,
+    handle: flui_interaction::TextInputHandle,
+}
+
+impl GatedStore {
+    fn gate(&self) {
+        self.inner
+            .set_commits_allowed(self.handle.may_commit().unwrap_or(false));
+    }
+}
+
+impl TextStore for GatedStore {
+    fn status(&self) -> flui_platform_api::text_store::TextStoreStatus {
+        self.inner.status()
+    }
+
+    fn request_lock(
+        &self,
+        grant: LockGrant,
+        timing: LockTiming,
+    ) -> Result<LockOutcome, flui_platform_api::text_store::TextStoreError> {
+        self.gate();
+        self.inner.request_lock(grant, timing)
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        self.gate();
+        self.inner.run_deferred_grants()
+    }
+
+    fn set_observer(
+        &self,
+        observer: Option<Rc<dyn flui_platform_api::text_store::TextStoreObserver>>,
+    ) {
+        self.inner.set_observer(observer);
+    }
+}
+
+/// Asks `store` for an async read lock on every build, logging around it.
+#[derive(Clone)]
+struct LockRequester {
+    store: Rc<dyn TextStore>,
+    log: Rc<std::cell::RefCell<Vec<&'static str>>>,
+    outcomes: Rc<std::cell::RefCell<Vec<Result<LockOutcome, TextStoreError>>>>,
+}
+
+impl flui_view::View for LockRequester {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for LockRequester {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.log.borrow_mut().push("build");
+        let log = Rc::clone(&self.log);
+        let outcome = self.store.request_lock(
+            LockGrant::read(move |_| log.borrow_mut().push("grant")),
+            LockTiming::Async,
+        );
+        self.outcomes.borrow_mut().push(outcome);
+        self.log.borrow_mut().push("build ends");
+        SizedBox::square(10.0)
+    }
+}
+
+/// A lock an input method asks for while the realm draws a frame waits for
+/// the frame to return (ADR-0027 §3), then runs once.
+///
+/// Red-check: drop the `TextCommitsClosed::close` guard from
+/// `draw_frame_entered` — the grant runs inside `build` and the outcome is
+/// `Granted`.
+#[test]
+fn a_text_store_lock_requested_during_draw_frame_is_granted_after_it_returns() {
+    let (_fake, text_input) = headless_text_input();
+    let realm = UiRealm::for_test_with_text_input(Some(text_input));
+    let handle = realm.text_input_handle();
+    let store: Rc<dyn TextStore> = Rc::new(GatedStore {
+        inner: InMemoryTextStore::new("abc"),
+        handle: handle.clone(),
+    }); // the presentation holds the gated test store through the erased contract.
+    let _token = handle
+        .attach(flui_interaction::TextInputClient::new(Rc::clone(&store)))
+        .expect("headless presentation supports text input");
+    let requester = LockRequester {
+        store,
+        log: Rc::default(),
+        outcomes: Rc::default(),
+    };
+
+    realm
+        .enter(|realm| realm.attach_root_widget(&requester))
+        .expect("attach succeeds");
+    assert!(
+        requester.log.borrow().is_empty(),
+        "attaching schedules the build; the frame runs it"
+    );
+    let _ = realm.draw_frame(test_constraints());
+
+    assert_eq!(
+        *requester.outcomes.borrow(),
+        [Ok(LockOutcome::Deferred)],
+        "a lock asked for inside the frame is queued, not granted"
+    );
+    assert_eq!(
+        *requester.log.borrow(),
+        ["build", "build ends", "grant"],
+        "the grant ran once, after the frame returned"
+    );
+    assert_eq!(handle.may_commit(), Ok(true), "the frame reopened commits");
 }
 
 /// Attach records `set_ime_allowed(true)`; preedit/commit events

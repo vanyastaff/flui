@@ -137,6 +137,14 @@ impl UiRealm {
         // frame, on the right `UpdateScheduler` instance, is enforced by the
         // scheduler itself.
 
+        // The frame transaction (ADR-0027 §3) closes text-store commits: an
+        // input method's lock asked for from here on is refused (sync) or
+        // queued (async), and a push event is applied after the frame, so
+        // no platform edit lands in a tree mid-build/layout/paint. The guard
+        // reopens commits on every exit, the ADR-0048 unwind included; it
+        // runs no grants, which happen below only once the loop returned.
+        let commits_closed = TextCommitsClosed::close(self);
+
         let mut last_outcome = FramePaintOutcome::Idle;
         let mut producer = self.presentations.primary().id();
         // Whether ANY presentation's segment failed THIS pump (a pipeline
@@ -307,6 +315,12 @@ impl UiRealm {
             }
             last_outcome = result;
             producer = presentation.id();
+        }
+        drop(commits_closed);
+        // The commit anchor: grants queued during the frame run now, each
+        // presentation's against its own attached store.
+        for presentation in self.presentations.iter() {
+            let _ran = presentation.text_input().run_deferred_grants();
         }
         (producer, last_outcome, any_failed)
     }
@@ -1051,5 +1065,31 @@ impl UiRealm {
     /// `SystemTime` — so this is a readability choice, not a portability one.
     fn duration_micros_saturated(duration: web_time::Duration) -> u64 {
         u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+    }
+}
+
+/// Every presentation's text-store commits, closed for one frame.
+///
+/// Dropping it reopens them — on a normal return or while a segment's panic
+/// unwinds past the per-presentation boundary — and does nothing else: the
+/// queued grants run at the anchor after the frame, never from a destructor.
+struct TextCommitsClosed<'a> {
+    realm: &'a UiRealm,
+}
+
+impl<'a> TextCommitsClosed<'a> {
+    fn close(realm: &'a UiRealm) -> Self {
+        for presentation in realm.presentations.iter() {
+            presentation.text_input().set_transaction_open(true);
+        }
+        Self { realm }
+    }
+}
+
+impl Drop for TextCommitsClosed<'_> {
+    fn drop(&mut self) {
+        for presentation in self.realm.presentations.iter() {
+            presentation.text_input().set_transaction_open(false);
+        }
     }
 }
