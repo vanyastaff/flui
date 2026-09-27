@@ -64,10 +64,10 @@ tests under `tests/` also use `flui-widgets`' and `flui-interaction`'s `testing`
 
 - **`flui-material`** (`packages/flui-material`) builds on this crate alone: its normal
   dependencies are `flui-sdk` and `tracing`, and every path in its `src`, doctests and tests goes
-  through `flui_sdk::`. The port needed no new item. `TextFormField` added four paths inside the whole
-  `widgets` re-export, so no new line in `src/lib.rs`: `AutovalidateMode`, `FormFieldHandle` and
-  the `__private` seams `TextFormFieldConfig` and `TextFormFieldCore`, which the `measured`
-  module names.
+  through `flui_sdk::`. The port needed no new item. `TextFormField` added four paths inside
+  the whole `widgets` re-export, so no new line in `src/lib.rs`: `AutovalidateMode`,
+  `FormFieldHandle` and the `__private` seams `TextFormFieldConfig` and `TextFormFieldCore`,
+  which the `measured` module names.
 - **`flui-cupertino`** (`packages/flui-cupertino`) builds on this crate alone the same way: its
   normal dependencies are `flui-sdk` and `tracing`. The port needed no new item; its tests reach
   `UpdateScheduler` as `animation::UpdateScheduler` and `RenderId` as `foundation::RenderId`,
@@ -91,8 +91,9 @@ itself has no SDK path; its expansion still resolves through the SDK.
 
 Because `flui-sdk`'s dev-dependency on the facade reaches `flui-material` through the facade's
 default `material` feature, a unit test inside this crate would see a second copy of
-`flui_sdk` (the one Material links). The same holds for Cupertino when `flui/cupertino` is on,
-which the test scope turns on. The surface test is an integration test and is not affected.
+`flui_sdk` (the one Material links). The same holds for Cupertino whenever a build enables
+`flui/cupertino`, as an `--all-features` test run does. The surface test is an integration test
+and is not affected.
 
 The count is from source, not from rustdoc JSON; the rustdoc measurement ADR-0088 §4 asks for
 needs the nightly JSON tooling and replaces this table when it lands.

@@ -31,11 +31,14 @@
 //!   Dev-dependencies may point up (tests use `flui-testing`).
 //! - **Allowed dependents.** A crate may list `allowed-dependents`, the complete
 //!   set of crates allowed a normal or build dependency on it, and
-//!   `allowed-dev-dependents`, the same for dev-dependencies: `flui-log`, which
-//!   only composition roots link, and `flui-platform` (ADR-0082) and
-//!   `flui-runtime` (ADR-0047), which only the host links. The design systems
-//!   carry no list: the kind rule decides who names them. Examples and tools
-//!   are applications and may depend on anything.
+//!   `allowed-dev-dependents`, the same for dev-dependencies. Three crates list
+//!   `allowed-dependents`: `flui-log`, which only composition roots link, and
+//!   `flui-platform` (ADR-0082) and `flui-runtime` (ADR-0047), which only the
+//!   host links; their dev-dependents are not restricted. No manifest lists
+//!   `allowed-dev-dependents` since the design systems moved to the kind rule
+//!   (ADR-0088); the key stays as the dev-edge restriction ADR-0041 and
+//!   ADR-0081 keep, and the self-test exercises it. Examples and tools are
+//!   applications and may depend on anything.
 //! - **wasm32.** `wasm = false` marks a package that cannot build for wasm32;
 //!   wasm-check and the fast lane leave it out. `globals` is ADR-0097's
 //!   allowlist, which `cargo xtask globals` reads and checks. Any other key in
