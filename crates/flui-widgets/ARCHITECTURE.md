@@ -1872,8 +1872,10 @@ store. A read-write session is written back to the controller once, when the
 lock is released: one listener notification and at most one `on_changed`,
 however many edits the session made (a TSF conversion replaces, re-marks and
 moves the caret in one session). A lock asked for inside the frame
-transaction runs after the frame; a key press first runs those queued grants,
-so it lands after an IME commit. **Tests:** `tests/text_store_kit.rs`
+transaction (the whole frame drive, post-frame callbacks included, in the
+harness's `tick` as in `flui-app`'s `UiRealm::drive_frame`) runs after the
+frame; a key press first runs those queued grants, so it lands after an IME
+commit. **Tests:** `tests/text_store_kit.rs`
 (`editable_text_conforms_to_kit_v1`,
 `obscured_editable_text_conforms_to_kit_v1`), `tests/editable_text.rs`'s
 `text_store::a_three_edit_session_calls_on_changed_once`,

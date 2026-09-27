@@ -94,9 +94,11 @@ thread, in `flui-platform-api` ([ADR-0082](ADR-0082-platform-api-contract-crate.
 The surface is `flui_platform_api::text_store`:
 
 - `TextStore` (owner thread, shared as `Rc<dyn TextStore>`, not `Send`): `status`,
-  `request_lock`, `run_deferred_grants`, `set_observer`. `TextStoreObserver` is the platform's
-  sink: `text_changed(TextChange)`, `selection_changed`, `layout_changed`, `status_changed`,
-  never called while a lock is held.
+  `request_lock`, `run_deferred_grants`, `set_commit_gate`, `set_observer`. `TextStoreObserver`
+  is the platform's sink: `text_changed(TextChange)`, `selection_changed`, `layout_changed`,
+  `status_changed`, never called while a lock is held or the store's commit gate is shut (what
+  waited is sent by the next `run_deferred_grants` at the latest), so a sink may answer a
+  notification with a synchronous lock.
 - A lock is a closure: `LockGrant::Read(FnOnce(&dyn TextStoreRead))` or
   `LockGrant::ReadWrite(FnOnce(&mut dyn TextStoreEdit))`, requested with `LockTiming::{Sync,
   Async}`, answered `LockOutcome::{Granted, Deferred}` or `TextStoreError::SyncLockUnavailable`
@@ -109,9 +111,14 @@ The surface is `flui_platform_api::text_store`:
   `TextChange`), `set_selection`, `set_composition`.
 - Offsets are `Utf16Offset`/`Utf16Range`; `text_store::utf16` is the one converter, and an
   offset past the end or inside a surrogate pair is an `OffsetError`, never a clamp.
-- "Commits closed" is the realm's frame transaction: `TextInputOwner` holds the flag per
-  presentation, `TextInputHandle::may_commit` reads it, and `flui-app` closes it around
-  `draw_frame_entered` and runs the queued grants once the frame returns.
+- "Commits closed" is the realm's frame transaction, and a type a store cannot skip: each
+  presentation's `TextInputOwner` holds a `CommitGate` and installs it into every store it
+  attaches (`TextStore::set_commit_gate`), and the store's `LockArbiter` reads it on every
+  request, so a store has no transaction flag of its own. `flui-app`'s `UiRealm::drive_frame`
+  shuts every presentation's gate for the whole `drive_frame_with_lane` call (begin frame
+  through post-frame callbacks) and runs the commit anchor (`run_deferred_grants`) after it
+  returns, with the scheduler `Idle`, per ADR-0027 §3. A store replaced or detached inside the
+  transaction keeps its queued grants for that anchor.
 - One read-write session is one change notification to the widget. There is no undo stack in
   the framework yet, so "one undo step" has nothing to apply to; it binds the first undo
   implementation.
@@ -154,8 +161,10 @@ synchronous locks, and rect/point queries against layout. The built-in text fiel
 kit. This kit, not a live session, is the H0 gate for IME.
 
 The kit is `flui_testing::text_store_kit`, versioned by `KIT_VERSION` (1): a field supplies a
-`TextStoreFixture` (its store, a reset, an app-side edit, a frame transaction, a commit anchor,
-its own change count and its capabilities) and calls `assert_conforms`; each `Case` names the
+`TextStoreFixture` (its store, a reset, an app-side edit, a commit anchor, its own change count
+and its capabilities) and calls `assert_conforms`. The kit holds frame transactions itself,
+through a `CommitGate` it installs with `set_commit_gate`, so no fixture can stand in for a
+store that ignores its gate. Each `Case` names the
 version that added it, so a pinned version never grows. `flui_platform_api::text_store::
 InMemoryTextStore` is the test-only minimal field, with `text_store_kit::InMemoryFixture` as the
 worked example; the kit's own tests wrap it with one fault each and assert the kit catches every
@@ -175,8 +184,10 @@ controller listeners are `Send + Sync` and the store is not.
 
 No platform backend holds a store yet: `PlatformTextInput` is `Send + Sync` and the store is an
 owner-thread `Rc`, so the pull connection waits for ADR-0082's owner-thread capability split. Until
-then the production caller is the push projection, and `TextInputOwner::active_store` stays
-test-only until the TSF backend reads it.
+then the production caller is the push projection. `TextInputOwner::active_store` is
+`#[doc(hidden)]` until the Win32 TSF backend (§3) reads it, and the observer,
+`rect_for_range`, `index_at_point` and `document_bounds` have no production caller before then
+either.
 
 ## Divergences
 
@@ -253,8 +264,8 @@ In place:
 
 - §1: `flui-platform-api` `text_store::utf16::tests` (surrogates, combining marks, ZWJ, flags,
   round trips, refusals), `text_store::lock::tests` (`sync_inside_a_session_is_refused`,
-  `async_inside_a_session_runs_on_release`, `async_while_commits_closed_waits_for_run_deferred`,
-  `deferred_run_in_fifo_order`, `a_full_queue_refuses_with_deferred_queue_full`,
+  `async_inside_a_session_runs_on_release`, `async_while_the_gate_is_shut_waits_for_run_deferred`,
+  `a_new_arbiter_is_open_until_a_gate_is_installed`, `deferred_run_in_fifo_order`, `a_full_queue_refuses_with_deferred_queue_full`,
   `a_panicking_grant_releases_the_lock`, `clear_drops_pending_grants_unrun`), and the
   `compile_fail` doctest on `text_store::lock`.
 - §2: `text_store::projection::tests` (preedit, cursor mapping and clamping, `cursor: None`,
@@ -262,12 +273,16 @@ In place:
   `Disabled`, `a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor`);
   `flui-interaction` `dispatch_projects_preedit_and_commit_onto_the_active_store`,
   `enabled_runs_on_session_start_and_edits_nothing`,
-  `transaction_open_defers_and_run_deferred_grants_drains`; `flui-app`
+  `an_attached_store_follows_the_owners_frame_transaction` (the reference store, unwrapped),
+  `a_grant_queued_by_a_replaced_or_detached_client_runs_at_the_anchor`; `flui-app`
   `handle_input_entered_projects_ime_onto_the_attached_store`,
-  `a_text_store_lock_requested_during_draw_frame_is_granted_after_it_returns`; the existing
-  `EditableText` IME tests, now through the projection.
+  `a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns` (the grant
+  runs in `Idle`), `an_edit_made_at_the_commit_anchor_schedules_the_next_frame`, and
+  `runner_frame_ordering`'s scan that every runner drives frames through `UiRealm::drive_frame`;
+  the existing `EditableText` IME tests, now through the projection.
 - §4: `flui-testing` `tests/text_store_kit.rs` (`in_memory_store_conforms_to_kit_v1` and one
-  `kit_fails_a_store_that_…` test per fault); `flui-widgets` `tests/text_store_kit.rs`
+  `kit_fails_a_store_that_…` test per fault, including a store that ignores the commit gate it
+  is handed and one that notifies inside a transaction); `flui-widgets` `tests/text_store_kit.rs`
   (`editable_text_conforms_to_kit_v1`, `obscured_editable_text_conforms_to_kit_v1`) and
   `tests/editable_text.rs`'s `text_store` module (offset mapping, one `on_changed` per session,
   exact platform selection, controller swap, `layout_changed`, `Detached` after dispose, a lock
@@ -277,5 +292,8 @@ Outstanding:
 
 - Mock `ITextStoreACP` unit tests in the Win32 backend (§3), clippy-only in CI like the rest of
   Win32 until a Windows test job runs them.
+- A winit backend test that a `Preedit`/`Commit` sequence produces the same store edits as the
+  kit's `tsf_style_conversion_script` (§2). The projection's own tests pin each event; nothing
+  yet compares the two paths end to end.
 - `cargo xtask device windows-ime` on a host with ja-JP installed, and the recorded B1 evidence
   (§5).

@@ -664,7 +664,9 @@ role rather than by node index.
 `flui_testing::text_store_kit` is the conformance kit for any widget that
 implements `flui_platform_api::TextStore` (ADR-0090): write a
 `TextStoreFixture` for it and call `text_store_kit::assert_conforms(&mut fixture,
-KIT_VERSION)`. `InMemoryFixture` is the worked example, and
+KIT_VERSION)`. The kit holds frame transactions itself, through the
+`CommitGate` it installs with `TextStore::set_commit_gate`; the fixture only
+supplies the commit anchor (`pump`). `InMemoryFixture` is the worked example, and
 `crates/flui-widgets/tests/text_store_kit.rs` runs the built-in `EditableText`
 through it.
 

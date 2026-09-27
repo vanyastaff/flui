@@ -63,7 +63,9 @@ a `TextStore` the platform locks, reads and edits, in UTF-16 offsets, the
 shape of TSF's `ITextStoreACP` that AppKit's `NSTextInputClient` and Android's
 `InputConnection` also map onto. A push source (winit's `ImeEvent`) goes
 through `project_ime_event`, so a field has one editing path. `LockArbiter`
-holds the lock rules once for every implementation, and
-`flui_testing::text_store_kit` checks a store against them. **Tests:** the
-`text_store` module's unit tests, and `flui-testing`'s
+holds the lock rules once for every implementation, including the frame
+transaction: it reads the `CommitGate` the store's owner installs through
+`TextStore::set_commit_gate`, so no store keeps a transaction flag of its own
+to forget. `flui_testing::text_store_kit` checks a store against these rules.
+**Tests:** the `text_store` module's unit tests, and `flui-testing`'s
 `in_memory_store_conforms_to_kit_v1`.
