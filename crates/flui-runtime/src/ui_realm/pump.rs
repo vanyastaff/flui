@@ -38,7 +38,11 @@ impl UiRealm {
     /// 3. draw frame: persistent callbacks, then this realm's pipeline and
     ///    the submit through `sink` (the crate-private `render_frame`);
     /// 4. end frame: the shared post-frame queue and this realm's owner-local
-    ///    post-frame lane, in one total order.
+    ///    post-frame lane, in one total order;
+    /// 5. commit anchor: steps 2–4 are every presentation's text-store
+    ///    transaction, its commit gate shut for their whole duration, so an
+    ///    input method's lock asked for inside them is queued; the queued
+    ///    grants run here, with the scheduler back in `Idle` (ADR-0027 §3).
     ///
     /// `&mut self` is the point: the compiler rules out starting a frame
     /// while another frame on this realm is running. The pump enters the
@@ -96,12 +100,9 @@ impl UiRealm {
             if report != DrainReport::default() {
                 tracing::trace!(?report, "owner inbox drained at pump start");
             }
-            let presented = realm.scheduler.drive_frame_with_lane(
-                now,
-                deadline,
-                || realm.render_frame(sink),
-                &realm.local_post_frame,
-            );
+            // Begin, draw and end frame run as the realm's text-store
+            // transaction, with the commit anchor after it (ADR-0027 §3).
+            let presented = realm.drive_frame(now, deadline, || realm.render_frame(sink));
             FrameOutcome::new(presented)
         })
     }

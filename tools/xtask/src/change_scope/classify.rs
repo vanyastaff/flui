@@ -45,6 +45,8 @@ pub(super) const DOCS_ONLY: &[&str] = &[
     ".editorconfig",
     "crates/*/ARCHITECTURE.md",
     "crates/*/CHANGELOG.md",
+    "packages/*/ARCHITECTURE.md",
+    "packages/*/CHANGELOG.md",
     "changelog.d/**", // changelog fragments; `changelog --check` in `checks` judges them
 ];
 
@@ -763,6 +765,8 @@ pub(super) mod tests {
             ".github/PULL_REQUEST_TEMPLATE.md",
             "crates/flui-view/ARCHITECTURE.md",
             "crates/flui-view/CHANGELOG.md",
+            "packages/flui-material/ARCHITECTURE.md",
+            "packages/flui-material/CHANGELOG.md",
             "changelog.d/tools-changelog-fragments.md",
             "changelog.d/README.md",
         ] {
@@ -775,6 +779,7 @@ pub(super) mod tests {
         // crate READMEs are include_str!()'d into doctests; a nested .md is not a root .md
         for path in [
             "crates/flui-animation/README.md",
+            "packages/flui-material/README.md",
             "crates/flui-cli/templates/platforms/ios/README.md",
             ".github/workflows/ci.yml",
             "src/lib.rs",
@@ -1000,7 +1005,7 @@ pub(super) mod tests {
 
     #[test]
     fn crate_change_pulls_in_its_dependents() {
-        let s = scope(&["crates/flui-material/src/lib.rs"]);
+        let s = scope(&["packages/flui-material/src/lib.rs"]);
         assert_eq!(s.mode, Mode::Packages);
         assert!(s.packages.contains(&"flui".to_owned())); // the facade depends on it
         assert!(!s.packages.contains(&"flui-types".to_owned())); // a dependency, not a dependent
@@ -1036,7 +1041,7 @@ pub(super) mod tests {
     #[test]
     fn a_changed_manifest_is_reported() {
         assert_eq!(
-            scope(&["crates/flui-material/Cargo.toml"]).manifests,
+            scope(&["packages/flui-material/Cargo.toml"]).manifests,
             ["flui-material"]
         );
     }

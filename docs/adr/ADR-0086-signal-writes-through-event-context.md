@@ -56,7 +56,7 @@ line: the realm is already explicit for reads, and this record makes it explicit
 never reaches the write never sees the error.
 
 Signals have no production users yet: no catalog crate, example or facade module creates one
-(`grep -rn "Signal<\|\.signal(" crates/flui-widgets/src crates/flui-material/src
+(`grep -rn "Signal<\|\.signal(" crates/flui-widgets/src packages/flui-material/src
 crates/flui-cupertino/src examples` is empty; the only users are tests and the
 `signals_rebuilds` bench). Changing the write signature now costs the catalog nothing it has
 already written against signals.
@@ -66,7 +66,7 @@ already written against signals.
 The catalog has 105 public `on_*` setters:
 
 ```text
-grep -rhoE 'pub fn on_[a-z_]+' crates/flui-widgets/src crates/flui-material/src crates/flui-cupertino/src | wc -l   # 108
+grep -rhoE 'pub fn on_[a-z_]+' crates/flui-widgets/src packages/flui-material/src crates/flui-cupertino/src | wc -l   # 108
 ```
 
 (The one hit that is not a setter is `on_drag_start` in `navigator/back_gesture.rs`, the

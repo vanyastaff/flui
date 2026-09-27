@@ -274,10 +274,10 @@ impl UiRealm {
     }
 
     /// This realm's owner-local post-frame lane. Test-only: production ends
-    /// every frame through [`Self::pump`], which passes the lane to
-    /// `UpdateScheduler::drive_frame_with_lane` itself so no host can drive a
-    /// frame that forgets it. A test that hand-assembles a frame drive passes
-    /// it the same way — drain-by-parameter, the same reason
+    /// every frame through [`Self::pump`], whose frame drive passes the lane
+    /// to `UpdateScheduler::drive_frame_with_lane` itself so no host can
+    /// drive a frame that forgets it. A test that hand-assembles a frame
+    /// drive passes it the same way — drain-by-parameter, the same reason
     /// [`Self::scheduler`] exists rather than a process-global lookup.
     #[cfg(any(test, feature = "test-support"))]
     #[must_use]

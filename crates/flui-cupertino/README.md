@@ -37,6 +37,6 @@ let _themed = CupertinoTheme::new(CupertinoThemeData::default(), SizedBox::shrin
 
 ## See also
 
-- [`flui-material`](../flui-material) — the Material Design theming counterpart
+- [`flui-material`](../../packages/flui-material) — the Material Design theming counterpart
 - [`flui-widgets`](../flui-widgets) — the design-neutral widget catalog this crate themes
 - [`docs/adr/ADR-0042-theming-ownership.md`](../../docs/adr/ADR-0042-theming-ownership.md) — why theming lives in the catalog crates, not the facade

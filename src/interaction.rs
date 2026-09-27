@@ -51,5 +51,5 @@ pub use flui_interaction::routing::{
     ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalEdgeBehavior,
 };
 pub use flui_interaction::text_input::{
-    ClientToken, DetachOutcome, ImeEventCallback, TextInputError, TextInputHandle,
+    ClientToken, DetachOutcome, TextInputClient, TextInputError, TextInputHandle,
 };

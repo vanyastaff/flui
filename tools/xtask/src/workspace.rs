@@ -1,6 +1,7 @@
 //! `cargo xtask workspace`: the shape of the workspace.
 //!
-//! - **Tiers** (ADR-0081). Each crate under `crates/` and the facade declare
+//! - **Tiers** (ADR-0081). Each crate under `crates/` or `packages/` (the
+//!   official packages, ADR-0088) and the facade declare
 //!   `[package.metadata.flui] tier`, `tier-kind` and `order`; the tier names
 //!   live in the root manifest's `[workspace.metadata.flui] tiers`, bottom to
 //!   top. A normal or build dependency on another workspace package points to a
@@ -9,13 +10,20 @@
 //!   exception for an edge the rule admits, or one that does not exist, is a
 //!   finding, so the list only shrinks. Nothing with a tier depends on a
 //!   `tier-kind = "tool"` package. Examples and tools declare only
-//!   `tier-kind = "tool"`. Dev-dependencies may point anywhere.
+//!   `tier-kind = "tool"`. Dev-dependencies may point anywhere, except as the
+//!   kind rule says.
+//! - **Kinds** (ADR-0081 §3, ADR-0088 §2). Only applications and official
+//!   packages name a `tier-kind = "official"` package, in any dependency kind;
+//!   an official package's normal and build dependencies are `flui-sdk` and
+//!   the contract crates; a member under `packages/` is official and lists no
+//!   `edge-exceptions`. A refused edge needs the dependent's `edge-exceptions`
+//!   entry, as for the tiers.
 //! - **Reach declarations** (ADR-0081 §2). `reach-forbid` and
 //!   `reach-exceptions` are read here, and each exception's `exit` or `grant`
 //!   must cite an ADR with a file under `docs/adr`; what they mean over the
 //!   resolved graph is `cargo xtask reach` ([`mod@reach`]).
 //! - **Layers** (ADR-0041), checked beside the tiers until the `layer` key is
-//!   removed. Each crate under `crates/` and the facade declare
+//!   removed. Each crate under `crates/` or `packages/` and the facade declare
 //!   `[package.metadata.flui] layer`; the names live in the root manifest's
 //!   `[workspace.metadata.flui] layers`. A normal or build dependency on another
 //!   workspace package points to the same layer or lower, never higher, and never
@@ -24,8 +32,8 @@
 //! - **Allowed dependents.** A crate may list `allowed-dependents`, the complete
 //!   set of crates allowed a normal or build dependency on it, and
 //!   `allowed-dev-dependents`, the same for dev-dependencies: `flui-log`, which
-//!   only composition roots link, the design systems, which nothing else
-//!   depends on in any form (ADR-0028), and the crates ADR-0081 deletes, whose
+//!   only composition roots link, a design system not yet under the kind rule
+//!   (ADR-0028), and the crates ADR-0081 deletes, whose
 //!   dependents are frozen until then. Examples and tools are applications and
 //!   may depend on anything.
 //! - **wasm32.** `wasm = false` marks a package that cannot build for wasm32;
@@ -246,10 +254,12 @@ impl Member {
         &self.name
     }
 
-    /// Crates under `crates/` and the root facade carry a layer, a tier and
-    /// an order.
+    /// Crates under `crates/` or `packages/` and the root facade carry a
+    /// layer, a tier and an order.
     fn must_have_layer(&self) -> bool {
-        self.rel == "Cargo.toml" || self.rel.starts_with("crates/")
+        self.rel == "Cargo.toml"
+            || self.rel.starts_with("crates/")
+            || self.rel.starts_with("packages/")
     }
 
     fn is_example_or_tool(&self) -> bool {
@@ -498,8 +508,8 @@ fn check_layers(
     for member in members.iter() {
         match member.layer {
             None if member.must_have_layer() => findings.push(format!(
-                "{} has no `[package.metadata.flui] layer`; every crate under crates/ declares \
-                 one",
+                "{} has no `[package.metadata.flui] layer`; every crate under crates/ or \
+                 packages/ declares one",
                 member.rel
             )),
             Some(layer) if layer >= names.len() => findings.push(format!(

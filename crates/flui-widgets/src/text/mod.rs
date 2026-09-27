@@ -8,6 +8,7 @@ mod text;
 pub mod controller;
 pub mod editable_text;
 pub mod text_field;
+mod text_store;
 
 pub use controller::TextEditingController;
 pub use default_text_style::DefaultTextStyle;

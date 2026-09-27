@@ -190,8 +190,13 @@ Rules:
   (`Cargo.toml:525-526`), deleted by ADR-0088 §6. `flui-cli`'s dev edge to `flui-hot-reload`
   (`crates/flui-cli/Cargo.toml:114`) needs no exception: `flui-cli` has kind `tool`. Because
   `pkg` is ordered after H, these H → `pkg` edges are also the only exceptions to the direction
-  rule (ADR-0081 §1). The gate generalizes the existing `allowed-dependents`
-  mechanism (`crates/flui-material/Cargo.toml:87-88`) instead of adding a parallel rule.
+  rule (ADR-0081 §1). Implemented: `cargo xtask workspace` refuses these edges (the kind
+  rule, `tools/xtask/src/workspace/tiers.rs`), and the dependent's `edge-exceptions` entry
+  admits each one, the same list the direction rule reads; Material's `allowed-dependents`
+  lists went when it moved onto the SDK, Cupertino's go when it does. The same rule holds an
+  official package's normal and build edges to `flui-sdk` and the contract crates, with
+  Cupertino's, devtools' and hot reload's internal-crate edges seeded as exceptions until each
+  moves.
 - **The crate count is not a goal.** It is a reported fact of the tier table.
 
 **Why the runtime sits above `flui-widgets`.** The realm composes widget-level roots: its
@@ -205,7 +210,7 @@ intent (§10.4).
 lives in `flui-view` (`crates/flui-view/src/context/build_context.rs:377`) and cannot name a type
 from `flui-runtime`. So the *type* stays low and the runtime owns the *instance*: `AsyncDriver`
 stays in `flui-scheduler` (returned at `build_context.rs:406`), `GlobalKeyScope` in `flui-view`,
-`FontContext` in `flui-painting`.
+`TextContext` in `flui-painting`.
 
 ### 3.2 Stability kinds
 
@@ -233,11 +238,11 @@ inline test modules are large.
 | flui-geometry | 0, 19.3k | V / internal | Keep, shrink | Drop unused GPUI-era vocabulary and the no-op `mint` feature; fix `Pixels` Eq/Hash consistency (§15). Merging into types is rejected: types has many more dependents. |
 | flui-types | 0, 21.8k | V / internal | Keep, compress | Physics duplicates `flui-animation`'s simulations; the second `BoxConstraints` and `MaterialColors` move to their owners. Rule: a type lives here only with two consumers. |
 | flui-foundation | 1, 11.3k | V / internal | Keep, absorb tree markers | Takes the arity markers and `IndexedSlot` (done 2026-09-26; `Depth` and `Slot` had no user and were deleted). Runtime-protocol identities go behind `#[doc(hidden)]`. Carries `links = "flui_train"` (§6.2). Takes the signal read contract (`read_scope`, ADR-0085 §2); the reactive graph does **not** go here: a foundation edit re-checks 15 crates, a graph edit in `flui-view` 3 (`cargo check -p flui-app`, one run). |
-| flui-macros | 1, 0.9k | V / internal | Keep, extend | `RenderView`, `Store`, `Catalog` and `Route` derives, `#[flui::main]`, `#[flui::test]`. Already resolves its runtime path through `proc_macro_crate` with a fallback to `flui` (`crates/flui-macros/src/runtime_path.rs:21-24`), so derives work from packages. |
+| flui-macros | 1, 0.9k | V / internal | Keep, extend | `RenderView`, `Store`, `Catalog` and `Routable` derives, `#[flui::main]`, `#[flui::test]`. Already resolves its runtime path through `proc_macro_crate` with a fallback to `flui` (`crates/flui-macros/src/runtime_path.rs:21-24`), so derives work from packages. |
 | flui-tree | 2, 6.9k | — | **Deleted 2026-09-26** (ADR-0081); markers merged into foundation | The `TreeRead`/`TreeNav`/`TreeWrite` traits had eight implementations, all on the layer, render and semantics trees, and no generic consumer; the call sites became inherent methods on those trees. |
 | flui-platform | 3, 46.3k | H / internal | **Split**: contracts to `flui-platform-api`, backends stay | Its only production import below the app is `crates/flui-interaction/src/text_input.rs:27`. Delete the no-op `desktop = ["dep:winit"]` feature (`crates/flui-platform/Cargo.toml:303`, zero `feature = "desktop"` sites in `src/`) and `LinuxPlatform` (`crates/flui-platform/src/platforms/linux/mod.rs:108`, whose methods are `unimplemented!`). `PlatformAccessibility` lives in `flui_semantics::platform` (internal, tier S), re-exported at `flui_platform::traits`, and never in `flui-platform-api`; that edge is why the crate sits at layer 3 ([ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) §2, amended). |
 | flui-scheduler | 2, 20.6k | S / internal | Keep, lighten | An owner-local core with a `Send` waker instead of the mutexes inside the scheduler. `AsyncDriver` and `Spawner` stay here as `!Send` types. `TIME_DILATION` (`crates/flui-scheduler/src/config.rs:43`) becomes a property of each presentation's clock. |
-| flui-painting | 2, 7.0k | S / internal | Keep | `FONT_SYSTEM` (`crates/flui-painting/src/text_layout/layout.rs:124`) becomes an injected per-realm `FontContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
+| flui-painting | 2, 7.0k | S / internal | Keep | `FONT_SYSTEM` (`crates/flui-painting/src/text_layout/layout.rs:124`) becomes an injected per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
 | flui-interaction | 2, 40.3k | S / internal | Keep | Depends on `flui-platform-api` instead of `flui-platform`. The gesture arena keeps its shape ([ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md)). |
 | flui-assets | 2, 5.1k | S / internal | Keep, detach from the runtime | Delete `AssetRegistry::global()` (`crates/flui-assets/src/registry/mod.rs:83`) and its own tokio runtime (`crates/flui-assets/src/registry/bridge.rs:66`). |
 | flui-log | 2, 3.7k | S / internal | Keep | Linked only by composition roots; merging it into the app closes no exit criterion. |
@@ -251,7 +256,7 @@ inline test modules are large.
 | flui-widgets | 6, 82.1k | K / internal | **One crate**, module-DAG gate | The 2026-09-23 decision stands. `cargo xtask module-dag -p flui-widgets` enforces import direction between modules. Raw primitives move down from Material; Router and Form arrive; `__private` (`crates/flui-widgets/src/lib.rs:75`) goes. The harness-reaching tests of the 22 `src/` files that used `crate::testing` moved to `tests/`; `__test_access` is temporary ([ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §4). |
 | flui-testing | 6, 3.7k | K / internal (dev) | **Move above the runtime** | Drives the real transaction under a manual clock; absorbs `flui_widgets::testing`; the optional `flui-widgets → flui-testing` edge (`crates/flui-widgets/Cargo.toml:89`) is removed. |
 | flui-hot-reload | 6, 2.9k | pkg / official | **Rewrite over Subsecond** as an official package | The dlopen design carries a documented residual risk; the three-crate template and its examples go only after the Subsecond spike ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). It links the `windows` crate directly today (`crates/flui-hot-reload/Cargo.toml:47`), which the package reach set forbids; the rewrite removes it. |
-| flui-material | 7, 26.9k | pkg / official | Official package on `flui-sdk` | 14 exact internal pins today (`grep -c '=0.2.0-dev' crates/flui-material/Cargo.toml`). Moves to `packages/flui-material` in the same change that ports it to `flui-sdk`; gains `flui_material::prelude`. |
+| flui-material | 7, 26.9k | pkg / official | Official package on `flui-sdk` | Done: `packages/flui-material` builds on `flui-sdk` alone (its normal dependencies are `flui-sdk` and `tracing`, pinned by `flui_material_builds_on_the_sdk_alone` in `tools/xtask/src/workspace/tests.rs`). Still to come: `flui_material::prelude`. |
 | flui-cupertino | 7, 4.3k | pkg / official | Official package on `flui-sdk` | Same; gains focus and keyboard activation from the Raw primitives. |
 | flui-localizations | 8, 0.3k | — | **Deleted 2026-09-26** (ADR-0081) | 281 lines in a layer of its own, with no translated strings. The RTL table and delegate moved to `flui_widgets::localization`; nothing went to the packages; ICU4X goes to `flui-i18n` (H1). |
 | flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Realm, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the one trampoline cell (`APP_RUNTIME`, `crates/flui-app/src/app/runner/host.rs:25-47`). `realm_dispatch.rs` is 7,149 lines, but production code ends at line 1690 and the rest is one test module (`crates/flui-app/src/app/runner/realm_dispatch.rs:1691-1692`): the file-length gate counts production lines only, so it is within the limit and needs neither a move nor dissolving. |
@@ -463,7 +468,7 @@ packages, same run).
 App (flui-app runners) ── one OS-trampoline host cell (P3's named exception)
  └─ OwnerHost (flui-runtime)
      ├─ Realm (!Send): reactive graph, GlobalKey scope, capability registry, focus coordinator,
-     │                 scheduler core, Spawner, FontContext, image-cache handle, observer
+     │                 scheduler core, Spawner, TextContext, image-cache handle, observer
      │   └─ Presentation × N: element tree + BuildOwner, PipelineOwner, frame clock (demand mask),
      │                        vsync, semantics host → frame sink
      └─ Shared engine services: GpuContext, font Collection { shared: true }
@@ -545,7 +550,7 @@ The known entries, each with its exit:
 | Global | Where | Exit |
 |---|---|---|
 | `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:46` | Stays: the one named trampoline cell. |
-| `FONT_SYSTEM` | `crates/flui-painting/src/text_layout/layout.rs:124` | Per-realm `FontContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
+| `FONT_SYSTEM` | `crates/flui-painting/src/text_layout/layout.rs:124` | Per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
 | `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43` | Presentation clock property ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). |
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | Subsecond runtime hook ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). |
 | `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Realm-owned GlobalKey scope ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) removes its `ManuallyDrop` form). |
@@ -624,7 +629,7 @@ decisions 5 and 7.
     bound is removed. Platform hooks write through `SignalSender`.
   - Query callbacks (route generators, drag will-accept, anything returning a verdict) get no
     writer. The ADR classifies all 92 `pub fn on_*` setters (`grep -rhoE 'pub fn on_[a-z_]+'
-    crates/flui-widgets/src crates/flui-material/src crates/flui-cupertino/src | wc -l`).
+    crates/flui-widgets/src packages/flui-material/src crates/flui-cupertino/src | wc -l`).
   - `StateCell` and `RebuildHandle` stay a guarded runtime tier and move to `flui::state::low`.
   - A `callback(|cx| ..)` helper ships with the signature change (closures otherwise hit a
     higher-ranked lifetime error). A rollback trigger to "guard plus realm from the handle" is
@@ -725,6 +730,13 @@ writer has no tree position. The Navigator is frozen, and the thread-local comma
 (`crates/flui-widgets/src/navigator/navigator.rs:91`) goes. Every push is URL-addressable: a
 route that enters the stack has a path, and there are no pageless pages. Dialogs, popups, sheets
 and menus are overlay entries owned by the page that opened them and never appear in the URL.
+
+The route trait and its derive are `Routable` (`flui_widgets::Route` is the Navigator's
+route-lifecycle trait). `Router::<R>::handle(cx: &dyn LifecycleContext)` returns
+`Result<RouterHandle<R>, RouterError>`, and the handle's `push`, `replace`, `pop` and
+`go(location)` take no event context. The trait, `RoutePath`, `Router` and `RouterHandle` are
+implemented in `flui-widgets`, with a hand-written `Routable`; the derive and the rest are listed
+in ADR-0093's implementation series.
 
 ---
 
@@ -1004,11 +1016,11 @@ assembled from `StateCell` and a text controller behind `Arc<Mutex<..>>`
 ### 13.3 Two screens
 
 ```rust
-#[derive(Route, Clone, PartialEq)]
+#[derive(Routable, Clone, PartialEq)]
 enum AppRoute { #[route("/")] Home, #[route("/note/:id")] Note { id: NoteId } }
 
 fn main() -> App {
-    App::new(Router::new(|r: &AppRoute, _cx| match r {
+    App::new(Router::new(AppRoute::Home, |r: &AppRoute, _cx| match r {
         AppRoute::Home => Home.boxed(),
         AppRoute::Note { id } => NoteView(*id).boxed(),
     }))
@@ -1017,12 +1029,15 @@ fn main() -> App {
 struct HomeState { router: Option<RouterHandle<AppRoute>> }
 impl ViewState<Home> for HomeState {
     fn init_state(&mut self, cx: &dyn LifecycleContext) {
-        self.router = Some(Router::<AppRoute>::handle(cx));   // nearest ancestor Router
+        // Nearest ancestor Router; `Home` is only ever built as one of its pages, so a
+        // `RouterError::NoRouter` here is a bug, reported where it happens.
+        let router = Router::<AppRoute>::handle(cx).expect("BUG: Home is built under its Router");
+        self.router = Some(router);
     }
     fn build(&self, _: &Home, _cx: &dyn BuildContext) -> impl IntoView {
-        let router = self.router.clone().expect("BUG: router handle acquired in init_state");
+        let router = self.router.clone().expect("BUG: init_state runs before build");
         RawButton::new(Text::new("Open"))
-            .on_press(move |cx| router.push(cx, AppRoute::Note { id: NoteId(1) }))
+            .on_press(move || { let _ = router.push(AppRoute::Note { id: NoteId(1) }); })
     }
 }
 ```

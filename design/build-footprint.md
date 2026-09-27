@@ -216,7 +216,7 @@ below is the measured incremental share, not a before-and-after.
 What R1 needs as tests (they belong to the CI implementation, together with [ci.md §5](ci.md#5-implementation-shape)):
 
 - `lane_args::fast_lane_builds_the_test_scope_and_filters`: for
-  `crates/flui-material/src/lib.rs`, `test_args` is the `TEST_SCOPE` string followed by
+  `packages/flui-material/src/lib.rs`, `test_args` is the `TEST_SCOPE` string followed by
   `-E 'package(flui) | package(flui-material) | package(flui-web-counter)'`. Fails today: the
   value is `-p flui -p flui-material -p flui-web-counter --lib --bins --tests`
   (`lane_args.rs:327-345`).

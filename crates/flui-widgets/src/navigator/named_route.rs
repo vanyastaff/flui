@@ -70,6 +70,7 @@ use std::rc::Rc;
 
 use parking_lot::Mutex;
 
+use super::binding::is_pageless_popup;
 use super::history::ReplaceTarget;
 use super::navigator::NavigatorHandle;
 use super::overlay_route::NavigatorRoute;
@@ -230,6 +231,10 @@ trait ErasedPush {
     /// the same way: `Navigator.defaultGenerateInitialRoutes`' failure branch
     /// walks its partial result calling `route?.dispose()`.
     fn dispose_unpushed(self: Box<Self>);
+
+    /// Whether the route is a pageless popup — the one kind a `Router`'s
+    /// navigator admits through the facade.
+    fn is_pageless_popup(&self) -> bool;
 }
 
 impl<R: NavigatorRoute> ErasedPush for R {
@@ -252,6 +257,10 @@ impl<R: NavigatorRoute> ErasedPush for R {
 
     fn dispose_unpushed(mut self: Box<Self>) {
         Route::dispose(&mut *self);
+    }
+
+    fn is_pageless_popup(&self) -> bool {
+        is_pageless_popup(self.binding_slot())
     }
 }
 
@@ -354,6 +363,13 @@ impl GeneratedRoute {
                  carrier was reconstructed around an already-pushed route",
             )
             .push_erased(handle, mode)
+    }
+
+    /// Whether the carried route is a pageless popup (see `ErasedPush`).
+    pub(super) fn is_pageless_popup(&self) -> bool {
+        self.push
+            .as_ref()
+            .is_some_and(|route| route.is_pageless_popup())
     }
 
     /// Confirm this route delivers `T`, yielding the token that can push it.
@@ -683,6 +699,23 @@ pub enum NamedRouteError {
         expected: &'static str,
         /// `type_name` of the generated route's own `Route::Output`.
         actual: &'static str,
+    },
+    /// The navigator is driven by a `Router`, and this door may not place the
+    /// route there: a page reaches a Router's stack only as a route value with
+    /// a path (ADR-0093 §4), and a pageless popup only through a plain
+    /// [`push_named`](NavigatorHandle::push_named) — the doors that replace,
+    /// pop or sweep refuse before they resolve anything. **Nothing was pushed
+    /// or dismissed.**
+    ///
+    /// Transitional: the named-route doors are removed when `WidgetsApp`
+    /// builds on the Router, and this variant goes with them.
+    #[error(
+        "route {name:?} may not be placed on a Router's navigator by this door: only a \
+         pageless popup, through a plain push"
+    )]
+    NotAddressable {
+        /// The requested name, or `""` when the request carried none.
+        name: String,
     },
 }
 

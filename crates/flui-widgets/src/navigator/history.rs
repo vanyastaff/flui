@@ -711,6 +711,23 @@ impl RouteHistory {
         self.entries.iter().map(RouteEntry::id).collect()
     }
 
+    /// The present routes' ids, bottom to top.
+    pub(crate) fn present_ids(&self) -> impl Iterator<Item = RouteId> + '_ {
+        self.entries
+            .iter()
+            .filter(|entry| entry.state.is_present())
+            .map(RouteEntry::id)
+    }
+
+    /// Whether the top present route handles a pop itself (a local-history
+    /// entry), so that popping it removes no route.
+    pub(crate) fn top_handles_pop_internally(&self) -> bool {
+        self.entries
+            .iter()
+            .rfind(|entry| entry.state.is_present())
+            .is_some_and(|entry| entry.route.will_handle_pop_internally())
+    }
+
     /// The state of `id`'s entry, or `None` once disposed and dropped.
     pub(crate) fn state_of(&self, id: RouteId) -> Option<RouteLifecycle> {
         self.entries
@@ -1047,6 +1064,55 @@ impl RouteHistory {
         for result in displaced {
             self.record_undelivered(Some(result));
         }
+        self.flush(true);
+    }
+
+    /// Replace everything above `keep` with `below` and `top`, in **one** flush —
+    /// the shape of Flutter's page-list diff (`NavigatorState._updatePages`):
+    /// the pages that left complete (observers see `did_remove`), the new pages
+    /// beneath the new top enter quietly in `Add` (observers see `did_push`, no
+    /// transition runs), and only `top` enters in `Push`, so only it animates.
+    ///
+    /// `keep: None` completes every present entry. The removed entries and the
+    /// quiet additions wait in `Removing` / `Adding` until `top` settles and
+    /// covers them (`canRemoveOrAdd`), exactly as they do in Flutter's flush.
+    ///
+    /// Each route arrives with the id the caller already bound it to.
+    pub(crate) fn replace_tail_with_ids<R: Route>(
+        &mut self,
+        keep: Option<RouteId>,
+        below: Vec<(RouteId, R)>,
+        top: (RouteId, R),
+    ) {
+        let first_removed = match keep {
+            None => 0,
+            Some(keep) => self
+                .entries
+                .iter()
+                .position(|entry| entry.id() == keep)
+                .map_or(self.entries.len(), |index| index + 1),
+        };
+        let mut displaced = Vec::new();
+        for entry in &mut self.entries[first_removed..] {
+            if entry.state.is_present() {
+                let armed = entry.arm_complete(None, false);
+                displaced.extend(armed.undelivered);
+            }
+        }
+        for result in displaced {
+            self.record_undelivered(Some(result));
+        }
+        for (id, route) in below {
+            // The result handle is dropped: a page the Router adds quietly has
+            // no awaiter, and dropping a `RouteResult` cancels nothing.
+            let (erased, _result) = RouteRecord::erase_with_id(id, route);
+            self.entries
+                .push(RouteEntry::new(erased, RouteLifecycle::Add));
+        }
+        let (id, route) = top;
+        let (erased, _result) = RouteRecord::erase_with_id(id, route);
+        self.entries
+            .push(RouteEntry::new(erased, RouteLifecycle::Push));
         self.flush(true);
     }
 

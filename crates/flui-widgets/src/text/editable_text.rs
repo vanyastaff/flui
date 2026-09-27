@@ -18,13 +18,13 @@ use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
 };
-use flui_interaction::{ClientToken, ClipboardHandle, TextInputHandle};
+use flui_interaction::{ClientToken, ClipboardHandle, TextInputClient, TextInputHandle};
 use flui_objects::RenderEditable;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{
-    Color, ImeEvent, Offset, Point, Rect,
+    Color, Offset, Point, Rect,
     geometry::{Bounds, Pixels},
     platform::TargetPlatform,
     typography::{TextDirection, TextSpan, TextStyle},
@@ -39,6 +39,7 @@ use crate::interaction::actions::{
 };
 use crate::semantics::Semantics;
 use crate::text::controller::TextEditingController;
+use crate::text::text_store::{EditableTextStore, FieldParts, with_editable_global};
 
 type ImeFocusTransition = Rc<dyn Fn(bool)>;
 /// Callback for [`EditableText::on_submitted`] — see that method's doc.
@@ -92,7 +93,7 @@ const DEFAULT_OBSCURING_CHARACTER: char = '\u{2022}';
 /// maps. Average and worst case O(clusters × offsets); `offsets` is three
 /// entries at its largest, so this is the single walk the mask needs either
 /// way.
-fn obscure(text: &str, offsets: &mut [usize], mask: char) -> String {
+pub(super) fn obscure(text: &str, offsets: &mut [usize], mask: char) -> String {
     let mask_len = mask.len_utf8();
     let mut masked = String::with_capacity(text.len());
     let mut mapped = vec![0_usize; offsets.len()];
@@ -142,30 +143,17 @@ fn source_offset_at_global(
     obscuring: Option<char>,
     source_text: &str,
 ) -> Option<usize> {
-    let anchor_id = inner_anchor.get()?;
-    // `try_with`, not `with`: a pointer event can land in a callback a frame
-    // phase happens to drive, and `with` panics on a live `with_mut` checkout.
-    // "The tree is busy" is a real answer here — the gesture does nothing for
-    // that event — and `try_with`'s own doc names this exact case.
-    owner
-        .try_with(|owner| {
-            let root_id = owner.root_id()?;
-            let tree = owner.render_tree();
-            let editable_id = *tree.children(anchor_id).first()?;
-            let editable = tree
-                .get(editable_id)?
-                .as_box()?
-                .render_object()
-                .downcast_ref::<RenderEditable>()?; // the pointer handlers reach the one concrete render object type this widget mounts under `inner_anchor`, through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure — the same sanctioned boundary as `CursorAreaLoop::global_caret_rect`.
-            let to_root = owner.transform_to(editable_id, root_id)?;
-            let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
-            let masked = editable.byte_offset_for_local_offset(Offset::new(x, y))?;
-            Some(match obscuring {
-                Some(mask) => source_offset_for_masked_offset(source_text, masked, mask),
-                None => masked,
-            })
+    // A pointer event can land in a callback a frame phase happens to drive;
+    // "the tree is busy" is a real answer here — the gesture does nothing for
+    // that event — which is why the helper uses `try_with`.
+    with_editable_global(owner, inner_anchor, |editable, to_root| {
+        let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
+        let masked = editable.byte_offset_for_local_offset(Offset::new(x, y))?;
+        Some(match obscuring {
+            Some(mask) => source_offset_for_masked_offset(source_text, masked, mask),
+            None => masked,
         })
-        .flatten()
+    })
 }
 
 /// The SOURCE byte range of the word under a point in the root's
@@ -203,29 +191,17 @@ fn source_word_range_at_global(
     obscuring: Option<char>,
     source_text: &str,
 ) -> Option<Range<usize>> {
-    let anchor_id = inner_anchor.get()?;
-    owner
-        .try_with(|owner| {
-            let root_id = owner.root_id()?;
-            let tree = owner.render_tree();
-            let editable_id = *tree.children(anchor_id).first()?;
-            let editable = tree
-                .get(editable_id)?
-                .as_box()?
-                .render_object()
-                .downcast_ref::<RenderEditable>()?; // same sanctioned boundary as `source_offset_at_global` above.
-            let to_root = owner.transform_to(editable_id, root_id)?;
-            let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
-            let masked = editable.word_range_at_local_offset(Offset::new(x, y))?;
-            Some(match obscuring {
-                Some(mask) => {
-                    source_offset_for_masked_offset(source_text, masked.start, mask)
-                        ..source_offset_for_masked_offset(source_text, masked.end, mask)
-                }
-                None => masked,
-            })
+    with_editable_global(owner, inner_anchor, |editable, to_root| {
+        let (x, y) = to_root.try_inverse()?.transform_point(global.dx, global.dy);
+        let masked = editable.word_range_at_local_offset(Offset::new(x, y))?;
+        Some(match obscuring {
+            Some(mask) => {
+                source_offset_for_masked_offset(source_text, masked.start, mask)
+                    ..source_offset_for_masked_offset(source_text, masked.end, mask)
+            }
+            None => masked,
         })
-        .flatten()
+    })
 }
 
 /// The source byte offset a masked byte offset corresponds to — the inverse
@@ -248,7 +224,11 @@ fn source_word_range_at_global(
 /// inside. Neither should occur — the render object clamps to its own char
 /// boundaries, which for masked text are multiples of the mask width — but
 /// clamping rather than asserting keeps a wrong offset from panicking a field.
-fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: char) -> usize {
+pub(super) fn source_offset_for_masked_offset(
+    source: &str,
+    masked_offset: usize,
+    mask: char,
+) -> usize {
     let cluster_index = masked_offset / mask.len_utf8();
     source
         .grapheme_indices(true)
@@ -272,21 +252,39 @@ fn source_offset_for_masked_offset(source: &str, masked_offset: usize, mask: cha
 ///
 /// # IME composition
 ///
-/// On focus gain, `EditableTextState` attaches an IME client through
+/// The field is a text store the platform's input method pulls from
+/// ([`flui_platform_api::TextStore`], ADR-0090). On focus gain,
+/// `EditableTextState` attaches it as a [`TextInputClient`] through
 /// [`LifecycleContext::text_input_handle`] (acquired in `init_state`, per the
-/// frame-capability rule that method's doc states) — its callback routes
-/// each [`ImeEvent`] to the matching [`TextEditingController`] composing
-/// operation (`Preedit` → `set_composing_text`, `Commit` → `commit_text`,
-/// `Disabled` → `clear_composing`). On blur and on dispose the client is
-/// detached (the ADR-0030 detach-on-dispose contract — a field unmounted
-/// while still focused must not leave a stale IME client attached).
+/// frame-capability rule that method's doc states). The input method reads
+/// the text, selection, composition and geometry in UTF-16 offsets and edits
+/// them under a lock; a push-model [`flui_types::ImeEvent`] (winit) is
+/// projected onto the same store, so there is one editing path. On blur and
+/// on dispose the client is detached (the ADR-0030 detach-on-dispose
+/// contract — a field unmounted while still focused must not leave a stale
+/// IME client attached), and a disposed field refuses every lock.
+///
+/// A platform session is one change to the field: its edits are written to
+/// the controller once when the lock is released, with one listener
+/// notification and at most one [`EditableText::on_changed`] call. A
+/// platform selection is kept exactly, even inside a grapheme cluster; a tap
+/// or an arrow key still snaps to one (Mapping decisions #33 and #34 in
+/// `flui-widgets/ARCHITECTURE.md`). An obscured field reports itself
+/// protected: the input method may edit it and ask for geometry, but not
+/// read its text.
+///
+/// Inside a frame transaction the store cannot commit: a lock asked for
+/// then runs after the frame. A key press first runs any such queued grant,
+/// so a key typed after an IME commit lands after it; an edit made through
+/// the controller directly while a grant is queued (`set_text`) goes ahead
+/// of it.
 ///
 /// **Suppression contract**: the key handler skips `Key::Character`
 /// insertion only while [`TextEditingController::is_composing`] is `true` —
 /// suppressing unconditionally after focus gain would silently kill plain
 /// (non-IME) typing for the rest of the session, since winit only sends
 /// `Key::Character` for keys it did **not** already route through
-/// composition. See [`ImeEvent`]'s doc for the full contract.
+/// composition. See [`flui_types::ImeEvent`]'s doc for the full contract.
 ///
 /// # IME cursor-area tracking
 ///
@@ -698,6 +696,12 @@ pub struct EditableTextState {
     /// Whether the field is obscured, read by the copy action at key time
     /// and kept current by `did_update_view`.
     obscure: Rc<Cell<bool>>,
+    /// The mask character, read by the text store's geometry and kept
+    /// current by `did_update_view`.
+    obscuring_character: Rc<Cell<char>>,
+    /// This field as the input method's text store (ADR-0090), built in
+    /// `init_state` and attached while the field has focus.
+    text_store: Option<Rc<EditableTextStore>>,
     /// The enclosing `Actions` chain the recorded one was layered over, so a
     /// changed ancestor chain is recorded again.
     enclosing_action_chain: Option<ActionChain>,
@@ -748,6 +752,8 @@ impl StatefulView for EditableText {
             on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
             clipboard: None,
             obscure: Rc::new(Cell::new(self.obscure_text)),
+            obscuring_character: Rc::new(Cell::new(self.obscuring_character)),
+            text_store: None,
             enclosing_action_chain: None,
             action_chain: None,
             action_chain_registration: None,
@@ -966,13 +972,24 @@ impl EditableTextState {
             controller: Rc::clone(&self.controller),
             on_changed: Rc::clone(&self.on_changed),
         };
+        let store = self.text_store.clone();
         Rc::new(move |event| {
+            // An IME grant still queued from the last frame lands first, so
+            // this key's edit follows it rather than overtaking it.
+            if let Some(store) = &store {
+                store.run_deferred_before_app_edit();
+            }
             // Enter only submits; a controller change there is the submit
             // callback's own programmatic edit, not the user's.
-            if matches!(event.key, Key::Named(NamedKey::Enter)) {
-                return handler(event);
+            let result = if matches!(event.key, Key::Named(NamedKey::Enter)) {
+                handler(event)
+            } else {
+                edits.around(|| handler(event))
+            };
+            if let Some(store) = &store {
+                store.controller_changed();
             }
-            edits.around(|| handler(event))
+            result
         })
     }
 
@@ -1026,7 +1043,7 @@ impl EditableTextState {
 /// text before and after the edit, and calls the callback with no borrow
 /// held when they differ.
 #[derive(Clone)]
-struct EditObserver {
+pub(super) struct EditObserver {
     controller: Rc<RefCell<TextEditingController>>,
     on_changed: Rc<RefCell<Option<TextChanged>>>,
 }
@@ -1042,7 +1059,7 @@ impl EditObserver {
         result
     }
 
-    fn report_if_changed(&self, before: &str) {
+    pub(super) fn report_if_changed(&self, before: &str) {
         let after = self.controller.borrow().text();
         if after == before {
             return;
@@ -1154,6 +1171,27 @@ impl ViewState<EditableText> for EditableTextState {
         self.rect_provider = Some(rect_provider);
         self.rect_provider_registration = Some(rect_provider_registration);
 
+        // 1b. The field's text store (ADR-0090), built before the key
+        //     handler so a key edit can run the grants queued ahead of it.
+        //     `text_input_handle()` and `pipeline_owner()` are frame
+        //     capabilities — acquired here, in `init_state`, never in `build`
+        //     (see `LifecycleContext::text_input_handle`'s doc) — and stored
+        //     so the focus-listener closure below and `dispose` reach them.
+        self.ime_handle = ctx.text_input_handle();
+        self.pipeline_owner = ctx.pipeline_owner();
+        self.text_store = Some(EditableTextStore::new(FieldParts {
+            controller: Rc::clone(&self.controller),
+            handle: self.ime_handle.clone(),
+            pipeline: self.pipeline_owner.clone(),
+            inner_anchor: self.inner_anchor.clone(),
+            obscure: Rc::clone(&self.obscure),
+            obscuring_character: Rc::clone(&self.obscuring_character),
+            edits: EditObserver {
+                controller: Rc::clone(&self.controller),
+                on_changed: Rc::clone(&self.on_changed),
+            },
+        }));
+
         // 2. Install the key handler on the node itself. It only fires when
         //    this node is on the primary-focus dispatch path. Gated on
         //    `can_request_focus` (kept in sync with `enabled` in
@@ -1200,26 +1238,19 @@ impl ViewState<EditableText> for EditableTextState {
         )));
 
         // 5. Attach/detach the IME client on this field's own focus
-        //    transitions. `text_input_handle()` is a frame capability —
-        //    acquired here, in `init_state`, never in `build` (see
-        //    `LifecycleContext::text_input_handle`'s doc) — and stored so the
-        //    focus-listener closure below (which cannot borrow `&mut self`)
-        //    and `dispose` can both reach it. `local_post_frame_handle()` and
-        //    `pipeline_owner()` are acquired alongside it for the same
-        //    reason — the IME cursor-area loop (ADR-0030) they drive is
-        //    started/stopped by that same closure.
-        self.ime_handle = ctx.text_input_handle();
+        //    transitions, through the handle acquired in 1b.
+        //    `local_post_frame_handle()` is acquired here for the same
+        //    reason — the IME cursor-area loop (ADR-0030) it drives is
+        //    started/stopped by the same closure.
         self.local_post_frame_handle = ctx.local_post_frame_handle();
         let ime_handle_for_focus = self.ime_handle.clone();
         let post_frame_handle_for_focus = self.local_post_frame_handle.clone();
-        let pipeline_owner_for_focus = ctx.pipeline_owner();
-        self.pipeline_owner.clone_from(&pipeline_owner_for_focus);
+        let pipeline_owner_for_focus = self.pipeline_owner.clone();
         let inner_anchor_for_focus = self.inner_anchor.clone();
-        let controller_for_ime = Rc::clone(&self.controller);
-        let edits_for_ime = EditObserver {
-            controller: Rc::clone(&self.controller),
-            on_changed: Rc::clone(&self.on_changed),
-        };
+        let store_for_ime = self
+            .text_store
+            .clone()
+            .expect("BUG: init_state builds the text store before the IME listener");
         let ime_token_for_focus = Rc::clone(&self.ime_token);
         let cursor_area_alive_for_focus = Rc::clone(&self.cursor_area_alive);
         let ime_focus_transition: ImeFocusTransition = Rc::new(move |now_focused| {
@@ -1239,20 +1270,15 @@ impl ViewState<EditableText> for EditableTextState {
                     .borrow_mut()
                     .replace(Rc::clone(&alive));
 
-                let controller_for_callback = Rc::clone(&controller_for_ime);
-                let edits = edits_for_ime.clone();
-                let last_sent_for_ime_event = Rc::clone(&last_sent);
-                let token = match handle.attach(Rc::new(move |event: &ImeEvent| {
-                    edits.around(|| apply_ime_event(&controller_for_callback.borrow(), event));
-                    // The backend may have restarted the IME session
-                    // (`Enabled` re-fires on that restart) — clearing
-                    // `last_sent` guarantees the new session gets a
-                    // fresh rect instead of the dedupe cache silently
-                    // suppressing it.
-                    if matches!(event, ImeEvent::Enabled) {
-                        last_sent_for_ime_event.set(None);
-                    }
-                })) {
+                let last_sent_for_session = Rc::clone(&last_sent);
+                let store: Rc<dyn flui_platform_api::TextStore> = store_for_ime.clone(); // the presentation holds this field through the erased text-store contract.
+                // The backend may have restarted the IME session (`Enabled`
+                // re-fires on that restart) — clearing `last_sent`
+                // guarantees the new session gets a fresh rect instead of
+                // the dedupe cache silently suppressing it.
+                let client = TextInputClient::new(store)
+                    .on_session_start(move || last_sent_for_session.set(None));
+                let token = match handle.attach(client) {
                     Ok(token) => token,
                     Err(error) => {
                         alive.set(false);
@@ -1269,6 +1295,7 @@ impl ViewState<EditableText> for EditableTextState {
                         pipeline_owner: pipeline_owner_for_focus.clone(),
                         inner_anchor: inner_anchor_for_focus.clone(),
                         text_input: handle.clone(),
+                        store: Rc::downgrade(&store_for_ime),
                         alive,
                         last_sent,
                     }
@@ -1335,7 +1362,13 @@ impl ViewState<EditableText> for EditableTextState {
         self.on_changed
             .borrow_mut()
             .clone_from(&new_view.on_changed);
-        self.obscure.set(new_view.obscure_text);
+        let was_obscured = self.obscure.replace(new_view.obscure_text);
+        self.obscuring_character.set(new_view.obscuring_character);
+        if was_obscured != new_view.obscure_text
+            && let Some(store) = &self.text_store
+        {
+            store.status_changed();
+        }
 
         // A parent rebuilding with a DIFFERENT controller retargets the
         // mounted field onto it, rather than the field silently going on
@@ -1343,8 +1376,8 @@ impl ViewState<EditableText> for EditableTextState {
         // `didUpdateWidget`: drop the listener from the old, add it to the
         // new, and resynchronise.
         //
-        // Everything that reaches the controller — the key handler, the IME
-        // attach callback, `build` — reads through `self.controller`'s cell at
+        // Everything that reaches the controller — the key handler, the text
+        // store, `build` — reads through `self.controller`'s cell at
         // use time, so writing the cell retargets all of them at once. Only
         // the change LISTENER has to move by hand, because it is registered on
         // the controller rather than read from it.
@@ -1369,6 +1402,10 @@ impl ViewState<EditableText> for EditableTextState {
             // will say so: the old controller's notifications are gone and the
             // new one has not changed since it was handed over.
             self.rebuild_notifier.notify_listeners();
+            // The input method's document is the replacement's too.
+            if let Some(store) = &self.text_store {
+                store.controller_changed();
+            }
         }
 
         if !Rc::ptr_eq(&self.focus_node, &new_view.focus_node) {
@@ -1533,6 +1570,11 @@ impl ViewState<EditableText> for EditableTextState {
                 "IME dispose detach reached a presentation that was already closing"
             );
         }
+        // A platform that still holds the store (or a grant queued in it)
+        // must not reach the controller of a field that is gone.
+        if let Some(store) = self.text_store.take() {
+            store.detach();
+        }
 
         // Stop the IME cursor-area loop (ADR-0030) if one is running — the
         // same unconditional-on-unmount contract as the IME token detach
@@ -1581,28 +1623,6 @@ impl ViewState<EditableText> for EditableTextState {
 // Helpers
 // ============================================================================
 
-/// Route one delivered [`ImeEvent`] to the matching
-/// [`TextEditingController`] composing operation — the IME client callback
-/// installed in `EditableTextState::init_state`.
-///
-/// `Enabled` is purely informational (nothing on the controller models
-/// "composition is available but not yet started"); the other three variants
-/// map 1:1 onto the controller's composing methods, which carry the
-/// replace-vs-insert and clamping rules — see each method's doc.
-fn apply_ime_event(controller: &TextEditingController, event: &ImeEvent) {
-    match event {
-        ImeEvent::Preedit { text, cursor } => controller.set_composing_text(text, *cursor),
-        ImeEvent::Commit(text) => controller.commit_text(text),
-        ImeEvent::Disabled => controller.clear_composing(),
-        // Covers `Enabled` (purely informational, see this fn's doc) and any
-        // future variant a winit upgrade adds — `ImeEvent` is
-        // `#[non_exhaustive]`, so an unhandled new variant is a no-op here
-        // until this match is revisited, never a broken build for an
-        // unrelated crate bump.
-        _ => {}
-    }
-}
-
 /// The self-rescheduling IME cursor-area tracking loop (ADR-0030).
 ///
 /// One instance is created per IME attach (focus gain). Each firing reads the
@@ -1623,6 +1643,10 @@ struct CursorAreaLoop {
     /// `EditableTextState::inner_anchor`'s doc.
     inner_anchor: flui_objects::SubtreeAnchor,
     text_input: TextInputHandle,
+    /// The field's text store, told when the rect moves (TSF's
+    /// `OnLayoutChange`) and given a chance each frame to report app edits.
+    /// Weak: the loop must not keep a disposed field's store alive.
+    store: std::rc::Weak<EditableTextStore>,
     /// Per-attach liveness flag — see `EditableTextState::cursor_area_alive`'s
     /// doc for why it is fresh per attach. Checked at the START of every
     /// firing so a callback already queued when the attach ended dies
@@ -1655,6 +1679,10 @@ impl CursorAreaLoop {
         if !self.alive.get() {
             return;
         }
+        let store = self.store.upgrade();
+        if let Some(store) = &store {
+            store.controller_changed();
+        }
         // A `None` read is a transient miss (the anchored subtree unmounted
         // mid-rebuild, or a transform is momentarily unavailable) — skip
         // this firing's send but keep the loop alive. Only `alive == false`
@@ -1671,36 +1699,37 @@ impl CursorAreaLoop {
                 return;
             }
             self.last_sent.set(Some(rect));
+            if let Some(store) = &store {
+                store.layout_changed();
+            }
         }
         self.schedule();
     }
 
     /// The IME candidate window's current target rect in window-root-space
-    /// logical pixels: `inner_anchor`'s committed transform to the render
-    /// root, applied to the anchored `RenderEditable` child's composing
+    /// logical pixels: the anchored `RenderEditable`'s committed transform
+    /// to the render root (the text store's geometry uses the same one;
+    /// it equals `inner_anchor`'s, since `RenderSubtreeAnchor` lays its
+    /// child out at its own origin), applied to the editable's composing
     /// region rect when one is active, falling back to its collapsed caret
     /// rect otherwise — Flutter's own `_updateComposingRectIfNeeded` order
     /// (`editable_text.dart`, tag `3.44.0`: prefer the composing rect,
     /// fall back to the caret rect when none is available). ADR-0030
     /// upgrades this loop from the caret-rect-only reduction ADR-0030
     /// originally landed.
+    ///
+    /// `None` also when the pipeline is checked out by a frame phase
+    /// (`with_editable_global` uses `try_with`): the loop fires as a
+    /// post-frame callback, after the pipeline is released, so this only
+    /// skips one firing's send instead of panicking, and the next firing
+    /// retries.
     fn global_caret_rect(&self) -> Option<Bounds<Pixels>> {
-        let anchor_id = self.inner_anchor.get()?;
         let owner = self.pipeline_owner.as_ref()?;
-        owner.with(|owner| {
-            let root_id = owner.root_id()?;
-            let tree = owner.render_tree();
-            let editable_id = *tree.children(anchor_id).first()?;
-            let editable = tree
-                .get(editable_id)?
-                .as_box()?
-                .render_object()
-                .downcast_ref::<RenderEditable>()?; // ADR-0030 IME cursor-area loop reaches the one concrete render object type it knows sits under `inner_anchor` (an `EditableTextRenderView`'s `RenderEditable`) through the storage layer's `&dyn RenderObject<BoxProtocol>` erasure.
+        with_editable_global(owner, &self.inner_anchor, |editable, to_root| {
             let local_rect = editable
                 .rect_for_composing_range()
                 .unwrap_or_else(|| editable.caret_local_rect());
-            let transform = owner.transform_to(anchor_id, root_id)?;
-            Some(bounds_from_rect(transform.transform_rect(&local_rect)))
+            Some(bounds_from_rect(to_root.transform_rect(&local_rect)))
         })
     }
 }
@@ -1708,7 +1737,7 @@ impl CursorAreaLoop {
 /// `Rect` (min/max corners) to `Bounds` (origin/size) — `PlatformTextInput::
 /// set_ime_cursor_area`'s parameter convention, matching `PlatformWindow::
 /// bounds`.
-fn bounds_from_rect(rect: Rect) -> Bounds<Pixels> {
+pub(super) fn bounds_from_rect(rect: Rect) -> Bounds<Pixels> {
     Bounds::new(
         Point::new(rect.min.x, rect.min.y),
         flui_types::Size::new(rect.width(), rect.height()),

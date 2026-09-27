@@ -484,7 +484,8 @@ where
 
                 // The frame: `UiRealm::pump` at `now` (apply commands ->
                 // begin -> persistent callbacks -> the pipeline and submit ->
-                // post-frame callbacks -> Idle), with a lost GPU device
+                // post-frame callbacks -> Idle, as the text-store transaction
+                // with its commit anchor after it), with a lost GPU device
                 // rebuilt around it: BEFORE the pump when the loss predates
                 // the frame (the frame runs anyway, see
                 // `pump_with_device_recovery`'s doc for why), and AFTER when

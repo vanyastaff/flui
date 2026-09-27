@@ -8,8 +8,13 @@
   `wgpu`; and that the ungated graph was red through three edges, none of them through
   `flui-platform`, where the migration plan expected only `flui-platform` edges. ADR-0082's
   trait move landed first, so the first run on `main` needed no `flui-platform` entry. The
-  kind rules of §3 (core never names official, the forward allowlist), §4
-  and §5 remain Proposed. The §1 deletions of `flui-tree` and `flui-localizations` landed 2026-09-26.
+  kind rules of §3 (core never names official, in any dependency kind; an official package's
+  normal and build edges go to `flui-sdk` and the contract crates; an edge between official
+  packages, in any kind, is declared) are implemented and checked
+  by `cargo xtask workspace`, with today's refused edges seeded as `edge-exceptions` in place of
+  a separate allowlist (ADR-0088 §2), but remain Proposed until the owner accepts them. §4 and
+  §5 remain Proposed. The §1 deletions of `flui-tree` and `flui-localizations` landed
+  2026-09-26.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md) through the
   accepted §1 (the numbered layer table, "a crate is a layer" as the only reason for a crate, and
@@ -40,7 +45,8 @@ each crate declares `[package.metadata.flui] layer = N`, the root names eleven l
 (`tools/xtask/src/workspace.rs:1-8`). A crate may narrow its dependents with
 `allowed-dependents`/`allowed-dev-dependents` (`tools/xtask/src/workspace.rs:9-14`, keys at
 `:80-81`, read at `:146-147`, enforced at `:225-262`); the design systems use it for ADR-0028
-(`crates/flui-material/Cargo.toml:87-88`, `crates/flui-cupertino/Cargo.toml:84-85`) and
+(`crates/flui-cupertino/Cargo.toml:84-85`, and Material's manifest until ADR-0088 move 2
+replaced its lists with the kind rule of §3) and
 `flui-log` for composition roots (`crates/flui-log/Cargo.toml:66`).
 
 That gate checks direct edges only. It cannot say what must never be reachable, and the graph
@@ -274,9 +280,11 @@ from the first day, with named, dated exceptions:
 entry: `flui-cli` has kind `tool`. The partial supersession of ADR-0028's exemption set is
 ADR-0088's; this record supplies the kind rule it uses.
 
-The forward direction (an `official` package depends only on `flui-sdk`, `flui-platform-api`,
-`flui-protocol` and declared `official` edges) is ADR-0088's rule; until `flui-sdk` exists it
-runs as an allowlist that can only shrink.
+The forward direction (an `official` package's normal and build dependencies are `flui-sdk`,
+`flui-platform-api` and `flui-protocol`, and an edge to another `official` package, in any
+dependency kind, is declared) is ADR-0088's rule. `cargo xtask workspace` checks it; a package
+not yet on `flui-sdk` declares its remaining internal-crate edges in its own `edge-exceptions`,
+a list that can only shrink, and a member under `packages/` declares none.
 
 A new crate still needs a reason, as ADR-0041 required: a tier, a kind, and an ADR that names
 its second consumer or the compile or semver seam it buys.
