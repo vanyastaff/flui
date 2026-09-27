@@ -34,13 +34,13 @@ use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
 /// Both offsets are byte offsets into [`ControllerInner::text`] and always sit
 /// on UTF-8 char boundaries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Selection {
+pub(super) struct Selection {
     /// Where the selection started — Flutter's `baseOffset`. Unmoved by
     /// extension; a drag moves the caret, not this.
-    anchor: usize,
+    pub(super) anchor: usize,
     /// Where the caret is — Flutter's `extentOffset`. The end a further
     /// extension moves.
-    caret: usize,
+    pub(super) caret: usize,
 }
 
 impl ControllerInner {
@@ -62,7 +62,7 @@ impl ControllerInner {
 
 impl Selection {
     /// A caret: a selection with nothing between its ends.
-    const fn collapsed(offset: usize) -> Self {
+    pub(super) const fn collapsed(offset: usize) -> Self {
         Self {
             anchor: offset,
             caret: offset,
@@ -72,7 +72,7 @@ impl Selection {
     /// The selected span in ascending order, which is what text operations
     /// need — the anchor may sit after the caret when the user dragged
     /// backwards.
-    const fn range(self) -> Range<usize> {
+    pub(super) const fn range(self) -> Range<usize> {
         if self.anchor <= self.caret {
             self.anchor..self.caret
         } else {
@@ -97,16 +97,21 @@ impl Selection {
 ///
 /// Guarded by a `Mutex` inside `Arc` so any clone of the controller refers to
 /// the same live text and caret state.
-struct ControllerInner {
-    text: String,
+///
+/// The field's text store (`super::text_store`) reads and writes these fields
+/// directly through [`TextEditingController::with_inner`] and
+/// [`TextEditingController::with_inner_silent`]: a platform session applies
+/// its edits in one write and notifies once.
+pub(super) struct ControllerInner {
+    pub(super) text: String,
     /// The selection, of which the caret is the collapsed case — see
     /// [`Selection`].
-    selection: Selection,
+    pub(super) selection: Selection,
     /// The in-progress IME composition, if any. `None` means no composition
     /// is active — see [`ComposingState`]'s doc for why its two fields are
     /// folded into one option rather than a sibling `caret_hidden: bool`
     /// field tracked independently.
-    composing: Option<ComposingState>,
+    pub(super) composing: Option<ComposingState>,
 }
 
 /// The in-progress IME composition: its byte range into
@@ -122,23 +127,19 @@ struct ControllerInner {
 /// remembers to *also* clear `caret_hidden` — a rule enforced by convention,
 /// not the type system. Folding both into one `Option<ComposingState>` makes
 /// the leak impossible instead of merely disciplined: every `composing =
-/// None` site (both `set_composing_text`'s empty-preedit-cancel path and
-/// every existing mutator-clears site — [`TextEditingController::insert_str`]
+/// None` site (the text store ending a composition, and every non-IME
+/// mutator — [`TextEditingController::insert_str`]
 /// /[`backspace`](TextEditingController::backspace)/
-/// [`delete_forward`](TextEditingController::delete_forward)/
-/// [`commit_text`](TextEditingController::commit_text)/
-/// [`clear_composing`](TextEditingController::clear_composing)) drops
+/// [`delete_forward`](TextEditingController::delete_forward)) drops
 /// `caret_hidden` for free, along with the range it was never meaningful
 /// without.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ComposingState {
-    /// Byte range into `text`. Always char-boundary-clamped — see
-    /// [`TextEditingController::set_composing_text`]'s "Malformed input"
-    /// doc. Every read site additionally re-clamps against the CURRENT
-    /// `text` before use (`clamp_range_to_text`), so even a stored range
-    /// that somehow outlived a mutation degrades to a wrong-but-in-bounds
-    /// slice, never a `replace_range` panic.
-    range: Range<usize>,
+pub(super) struct ComposingState {
+    /// Byte range into `text`, on char boundaries: the text store converts
+    /// and checks every platform offset before writing one here, and every
+    /// non-IME edit clears the composition rather than leaving the range
+    /// describing text that moved.
+    pub(super) range: Range<usize>,
     /// Whether the caret should be hidden because the IME currently owns
     /// its position — winit's `ImeEvent::Preedit { cursor: None, .. }`
     /// signal. Cleared (implicitly, by this whole struct going away) on
@@ -147,7 +148,7 @@ struct ComposingState {
     /// active (see [`TextEditingController::move_caret_left`] and its
     /// siblings) — the user taking the caret back means the IME no longer
     /// owns its position, even though the composition itself continues.
-    caret_hidden: bool,
+    pub(super) caret_hidden: bool,
 }
 
 // ============================================================================
@@ -176,23 +177,20 @@ struct ComposingState {
 ///
 /// # IME composition
 ///
-/// [`Self::set_composing_text`]/[`Self::commit_text`]/[`Self::clear_composing`]
-/// implement Flutter's `TextEditingValue.composing` model — see each method's
-/// doc for the exact replace-vs-insert and clamping rules. The **hidden
+/// The controller holds Flutter's `TextEditingValue.composing` model, but
+/// only a mounted [`EditableText`](super::EditableText)'s text store edits
+/// it: the platform's input method reads and edits the field through that
+/// store (ADR-0090), and a push-model `ImeEvent` is projected onto the same
+/// store (`flui_platform_api::text_store::project_ime_event`), so there is
+/// one editing path. The controller exposes what the rest of the widget
+/// reads: [`Self::composing_range`], [`Self::is_composing`] and the **hidden
 /// caret** case (`cursor: None` on a preedit event, winit's own semantics for
-/// "the IME wants no caret drawn") is tracked internally and exposed through
-/// [`Self::caret_hidden_by_ime`] — the owning `EditableTextState` consults it
-/// to suppress the painted caret while composition still paints its own
-/// underline (see ADR-0030). Composition end — a commit, `Disabled`, a
-/// non-IME edit, or `Preedit` cancellation (see below) — always drops the
-/// whole internal composing state, so the hidden-caret flag can never
-/// outlive the composition it describes.
-///
-/// **`Preedit` with empty text cancels an active composition; it is not an
-/// empty-but-active composition.** Winit signals a cancelled composition as
-/// `Preedit { text: "", cursor: None }` with no following `Commit`/`Disabled`.
-/// When no composition is active the same empty payload is inert (winit X11
-/// also emits it on IME Start) — see [`Self::set_composing_text`]'s doc.
+/// "the IME wants no caret drawn") through [`Self::caret_hidden_by_ime`] —
+/// the owning `EditableTextState` consults it to suppress the painted caret
+/// while composition still paints its own underline (see ADR-0030).
+/// Composition end — a commit, `Disabled`, a non-IME edit, or `Preedit`
+/// cancellation — always drops the whole internal composing state, so the
+/// hidden-caret flag can never outlive the composition it describes.
 ///
 /// # DEFERRED (v1)
 ///
@@ -477,9 +475,8 @@ impl TextEditingController {
     /// on every programmatic change (`editable_text.dart`, tag `3.44.0`).
     /// A stale composing region left pointing at a now-shifted buffer is
     /// exactly the "stored range no longer describes the current text" bug
-    /// class this controller must not reintroduce (see
-    /// [`Self::set_composing_text`]'s "Malformed input" doc) — this is a
-    /// non-IME edit, so IME composition state does not survive it.
+    /// class this controller must not reintroduce — this is a non-IME edit,
+    /// so IME composition state does not survive it.
     ///
     /// Notifies listeners after the insertion.
     pub fn insert_str(&self, text: &str) {
@@ -513,9 +510,8 @@ impl TextEditingController {
     ///
     /// A no-op (no notification) when `text` already equals the current
     /// buffer — the same "notify only on a real change" rule most mutators
-    /// here follow ([`Self::insert_str`]/[`Self::commit_text`] are the
-    /// exceptions: they notify unconditionally on every call, since an
-    /// insertion or IME commit is by construction never a no-op) — so a
+    /// here follow ([`Self::insert_str`] is the exception: it notifies
+    /// unconditionally on every call) — so a
     /// caller that calls this unconditionally on every build does not force
     /// a rebuild loop.
     pub fn set_text(&self, text: impl Into<String>) {
@@ -978,9 +974,9 @@ impl TextEditingController {
     /// position — `false` whenever no composition is active, so a caller
     /// never needs to separately check [`Self::is_composing`] first.
     ///
-    /// Reflects the most recent [`Self::set_composing_text`]'s `cursor`
-    /// argument: `cursor: None` (winit's "hide the caret" signal) sets this
-    /// `true`; a caret-navigation call (
+    /// Reflects the composition's `hides_caret` as the input method last set
+    /// it (winit's `Preedit { cursor: None }` sets it `true`); a
+    /// caret-navigation call (
     /// [`move_caret_left`](Self::move_caret_left)/
     /// [`move_caret_right`](Self::move_caret_right)/
     /// [`move_caret_home`](Self::move_caret_home)/
@@ -1000,130 +996,29 @@ impl TextEditingController {
             .is_some_and(|state| state.caret_hidden)
     }
 
-    /// Apply an IME preedit update.
+    // =========================================================================
+    // Text-store access
+    // =========================================================================
+
+    /// Read the controller's state under its lock.
     ///
-    /// `text` is the full current composition string; `cursor` is a byte
-    /// offset range **into `text`** (not into [`Self::text`]) — matching
-    /// [`flui_types::ImeEvent::Preedit`]'s own convention.
-    ///
-    /// Replaces the existing composing region if one is already active,
-    /// else inserts `text` at the current caret and starts a new composing
-    /// region there. The caret is repositioned to `cursor`'s end, translated
-    /// into the outer buffer; `cursor: None` (the platform wants no caret
-    /// drawn) sets [`Self::caret_hidden_by_ime`] and additionally collapses
-    /// the caret to the end of the composing region (both — hiding it is
-    /// not a substitute for tracking where it logically sits).
-    ///
-    /// # `text.is_empty()` is composition cancellation (when composing)
-    ///
-    /// Winit signals a cancelled composition as `Preedit { text: "", cursor:
-    /// None }`, with **no** following `Commit`/`Disabled` event. Treating
-    /// this the same as any other (non-empty) preedit update would strip the
-    /// composing slice — correct — but then set `composing = Some(empty
-    /// range)` — wrong: [`Self::is_composing`] would report `true` forever
-    /// after, permanently suppressing `Key::Character` insertion for the
-    /// rest of the focus session (the exact failure mode
-    /// [`flui_types::ImeEvent`]'s suppression contract warns against). So an
-    /// empty `text` strips the **existing** composing slice the same way
-    /// [`Self::clear_composing`] does, and ends composition — `composing`
-    /// becomes `None`, not `Some` of an empty range.
-    ///
-    /// When **no** composition is active, empty `text` is a no-op: committed
-    /// text, selection, and caret stay unchanged, and listeners are not
-    /// notified. Winit's X11 path also emits empty `Preedit` on IME Start
-    /// (before any composing slice exists); that bookkeeping event must not
-    /// delete a committed selection.
-    ///
-    /// # Malformed input
-    ///
-    /// `cursor` offsets that land mid-character or past `text`'s end are
-    /// clamped to the nearest valid char boundary — a byte offset from an
-    /// IME is untrusted platform input, not an internal invariant, so this
-    /// never panics (`docs/PANIC-POLICY.md`).
-    pub fn set_composing_text(&self, text: &str, cursor: Option<(usize, usize)>) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            if text.is_empty() {
-                // Empty preedit: clear only an owned composing span. Inactive
-                // empty is inert (see this method's doc) — same helper as
-                // `clear_composing`.
-                strip_active_composing(&mut guard)
-            } else {
-                let region = match guard.composing.as_ref() {
-                    Some(state) => state.range.clone(),
-                    // No composition yet: the preedit replaces the SELECTION, so
-                    // starting to compose over selected text behaves the way
-                    // typing over it does. Collapsed, this is the caret, which is
-                    // what it always was.
-                    None => guard.selection.range(),
-                };
-                // Defense in depth — see the empty-branch comment above.
-                let region = clamp_range_to_text(&region, &guard.text);
-                guard.text.replace_range(region.clone(), text);
-                guard.composing = Some(ComposingState {
-                    range: region.start..region.start + text.len(),
-                    caret_hidden: cursor.is_none(),
-                });
-                let caret_in_preedit = match cursor {
-                    Some((_, end)) => clamp_to_char_boundary(text, end),
-                    None => text.len(),
-                };
-                guard.selection = Selection::collapsed(region.start + caret_in_preedit);
-                true
-            }
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
+    /// For the field's text store (`super::text_store`), which answers a
+    /// platform's reads from these fields directly.
+    pub(super) fn with_inner<R>(&self, f: impl FnOnce(&ControllerInner) -> R) -> R {
+        f(&self.inner.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// Apply an IME commit.
-    ///
-    /// Replaces the composing region with `text` if one is active, else
-    /// inserts `text` at the current caret (a direct commit with no
-    /// preceding preedit — winit delivers these too, not every commit is
-    /// composition-terminated). Clears the composing region and positions
-    /// the caret immediately after the committed text.
-    pub fn commit_text(&self, text: &str) {
-        {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            let insert_at = if let Some(state) = guard.composing.clone() {
-                // Defense in depth — see `set_composing_text`'s matching comment.
-                let range = clamp_range_to_text(&state.range, &guard.text);
-                guard.text.replace_range(range.clone(), text);
-                range.start
-            } else {
-                // A direct commit with no preedit is an insertion, and an
-                // insertion replaces a selection — same rule as `insert_str`.
-                let at = guard.delete_selected_range();
-                guard.text.insert_str(at, text);
-                at
-            };
-            guard.composing = None;
-            guard.selection = Selection::collapsed(insert_at + text.len());
-        }
+    /// Change the controller's state under its lock WITHOUT notifying
+    /// listeners — the caller notifies once through [`Self::notify_changed`]
+    /// when it is done. A platform session writes all of its edits back this
+    /// way, so the session is one change to the field, not one per edit.
+    pub(super) fn with_inner_silent<R>(&self, f: impl FnOnce(&mut ControllerInner) -> R) -> R {
+        f(&mut self.inner.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Notify listeners of a change made through [`Self::with_inner_silent`].
+    pub(super) fn notify_changed(&self) {
         self.notifier.notify_listeners();
-    }
-
-    /// Apply an IME `Disabled` notification.
-    ///
-    /// Strips the in-progress composing **slice** from the buffer, not just
-    /// the region marker — winit's own semantics, a documented divergence
-    /// from Flutter's `TextInputConnection.connectionClosed`, which instead
-    /// keeps the uncommitted text (see [`flui_types::ImeEvent`]'s doc).
-    /// No-op (and no listener notification) when no composition is active.
-    ///
-    /// The caret clamps to the stripped region's start when it sat inside
-    /// or past it; a caret positioned strictly before the composing region
-    /// is left untouched.
-    pub fn clear_composing(&self) {
-        let changed = {
-            let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-            strip_active_composing(&mut guard)
-        };
-        if changed {
-            self.notifier.notify_listeners();
-        }
     }
 
     // =========================================================================
@@ -1170,33 +1065,6 @@ fn clear_caret_hidden(guard: &mut ControllerInner) -> bool {
             true
         }
         _ => false,
-    }
-}
-
-/// Strip an active composing slice from `inner`, ending composition.
-///
-/// Returns whether anything changed. Shared by
-/// [`TextEditingController::clear_composing`] and the empty-preedit branch of
-/// [`TextEditingController::set_composing_text`] so the two cannot drift:
-/// inactive clear is always a no-op; active clear always strips the owned
-/// span and collapses the caret with the same `min` rule.
-fn strip_active_composing(inner: &mut ControllerInner) -> bool {
-    match inner.composing.take() {
-        Some(state) => {
-            // Defense in depth: every non-IME mutator already clears
-            // `composing` on a text edit (see `TextEditingController::insert_str`'s
-            // doc), so `range` should already describe `inner.text` — this
-            // re-clamp is what makes a future mutator that forgets that rule
-            // degrade to wrong text instead of a `replace_range` panic.
-            let range = clamp_range_to_text(&state.range, &inner.text);
-            inner.text.replace_range(range.clone(), "");
-            // Collapse unconditionally — a selection cannot survive the text
-            // under it being removed — while keeping the original `min` so a
-            // caret already before the region does not jump forward.
-            inner.selection = Selection::collapsed(inner.selection.caret.min(range.start));
-            true
-        }
-        None => false,
     }
 }
 
@@ -1351,23 +1219,6 @@ fn clamp_to_char_boundary(s: &str, offset: usize) -> usize {
         .chain(std::iter::once(s.len()))
         .find(|idx| *idx >= offset)
         .unwrap_or(s.len())
-}
-
-/// Clamp a stored composing [`Range`] to `text`'s current bounds and char
-/// boundaries, degrading a stale range (one that no longer describes `text`
-/// — e.g. a non-IME edit that should have cleared it but didn't) to a
-/// sane, in-bounds slice instead of a `replace_range` panic. `start > end`
-/// after clamping (the range's start itself outlived the text) collapses to
-/// a zero-width range at the clamped start, matching an empty composing
-/// region rather than reordering the bounds.
-fn clamp_range_to_text(range: &Range<usize>, text: &str) -> Range<usize> {
-    let start = clamp_to_char_boundary(text, range.start);
-    let end = clamp_to_char_boundary(text, range.end);
-    if start > end {
-        start..start
-    } else {
-        start..end
-    }
 }
 
 // ============================================================================
@@ -1544,33 +1395,6 @@ mod tests {
             1,
             "control: a real change does notify"
         );
-    }
-
-    /// An IME commit with no preedit is an insertion, and an insertion
-    /// replaces a selection.
-    #[test]
-    fn a_direct_commit_replaces_a_selection() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(6, 11);
-
-        controller.commit_text("there");
-
-        assert_eq!(controller.text(), "hello there");
-        assert_eq!(controller.caret_byte_offset(), 11);
-    }
-
-    /// Starting a composition over selected text replaces it, the way typing
-    /// over it does — the preedit's region is the selection when there is no
-    /// composition yet.
-    #[test]
-    fn a_composition_started_over_a_selection_replaces_it() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(6, 11);
-
-        controller.set_composing_text("にほん", None);
-
-        assert_eq!(controller.text(), "hello にほん");
-        assert_eq!(controller.composing_range(), Some(6..6 + "にほん".len()));
     }
 
     /// Shift+Right grows the span from a collapsed caret, and Shift+Left then
@@ -1764,22 +1588,6 @@ mod tests {
             1,
             "control: a real change does notify"
         );
-    }
-
-    /// `set_text` clears an active IME composing region the same way
-    /// `insert_str` does — a stale composing range pointing at a
-    /// now-replaced buffer is the exact bug class `set_composing_text`'s
-    /// doc warns about.
-    #[test]
-    fn set_text_clears_an_active_composing_region() {
-        let controller = TextEditingController::with_text("hello");
-        controller.set_composing_text("world", None);
-        assert!(controller.is_composing());
-
-        controller.set_text("replaced");
-
-        assert!(!controller.is_composing());
-        assert_eq!(controller.text(), "replaced");
     }
 
     #[test]
@@ -2380,437 +2188,66 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // IME composing region
+    // The composing region, as the field's text store leaves it
+    //
+    // Only the text store edits the composition (the IME rules themselves
+    // are pinned by `flui_platform_api::text_store`'s projection tests);
+    // these pin what the controller does with one while it is there.
     // ------------------------------------------------------------------
 
+    /// Mark `range` as composed, silently, as a platform session's
+    /// write-back does.
+    fn compose(controller: &TextEditingController, range: Range<usize>, caret_hidden: bool) {
+        controller.with_inner_silent(|inner| {
+            inner.composing = Some(ComposingState {
+                range,
+                caret_hidden,
+            });
+        });
+    }
+
     #[test]
-    fn set_composing_text_inserts_at_the_caret_when_no_composition_is_active() {
+    fn set_text_clears_an_active_composing_region() {
         let controller = TextEditingController::with_text("hello");
-        controller.set_composing_text("ni", Some((0, 2)));
-        assert_eq!(controller.text(), "helloni");
-        assert_eq!(controller.composing_range(), Some(5..7));
-        assert_eq!(controller.caret_byte_offset(), 7);
+        compose(&controller, 0..5, true);
         assert!(controller.is_composing());
-    }
 
-    #[test]
-    fn set_composing_text_replaces_the_existing_composing_region_as_preedit_grows() {
-        let controller = TextEditingController::with_text("Hello ");
-        controller.set_composing_text("n", Some((1, 1)));
-        assert_eq!(controller.text(), "Hello n");
-        assert_eq!(controller.composing_range(), Some(6..7));
+        controller.set_text("replaced");
 
-        controller.set_composing_text("ni", Some((2, 2)));
-        assert_eq!(controller.text(), "Hello ni");
-        assert_eq!(controller.composing_range(), Some(6..8));
-        assert_eq!(controller.caret_byte_offset(), 8);
-
-        controller.set_composing_text("nihao", Some((5, 5)));
-        assert_eq!(controller.text(), "Hello nihao");
-        assert_eq!(controller.composing_range(), Some(6..11));
-    }
-
-    #[test]
-    fn set_composing_text_replaces_the_existing_composing_region_as_preedit_shrinks() {
-        let controller = TextEditingController::with_text("Hello ");
-        controller.set_composing_text("nihao", Some((5, 5)));
-        assert_eq!(controller.text(), "Hello nihao");
-
-        // The user backspaced inside the IME candidate window.
-        controller.set_composing_text("niha", Some((4, 4)));
-        assert_eq!(controller.text(), "Hello niha");
-        assert_eq!(controller.composing_range(), Some(6..10));
-        assert_eq!(controller.caret_byte_offset(), 10);
-    }
-
-    /// The full pinyin-style composition lifecycle: preedit grows, shrinks,
-    /// then a multi-byte CJK commit replaces the whole composing region.
-    #[test]
-    fn cjk_composition_grows_shrinks_then_commits() {
-        let controller = TextEditingController::with_text("Hello ");
-        controller.set_composing_text("n", Some((1, 1)));
-        controller.set_composing_text("ni", Some((2, 2)));
-        controller.set_composing_text("nihao", Some((5, 5)));
-        controller.set_composing_text("niha", Some((4, 4)));
-        assert_eq!(controller.text(), "Hello niha");
-
-        controller.commit_text("你好");
-        assert_eq!(controller.text(), "Hello 你好");
-        assert_eq!(controller.composing_range(), None);
         assert!(!controller.is_composing());
-        assert_eq!(controller.caret_byte_offset(), "Hello 你好".len());
-    }
-
-    #[test]
-    fn composing_region_growth_with_multibyte_preedit_content_tracks_byte_length() {
-        let controller = TextEditingController::new();
-        // "に" is a 3-byte character; cursor.1 indexes bytes within the
-        // preedit string, not chars.
-        controller.set_composing_text("に", Some((3, 3)));
-        assert_eq!(controller.composing_range(), Some(0..3));
-
-        controller.set_composing_text("にほ", Some((6, 6)));
-        assert_eq!(controller.text(), "にほ");
-        assert_eq!(controller.composing_range(), Some(0..6));
-        assert_eq!(controller.caret_byte_offset(), 6);
-    }
-
-    #[test]
-    fn commit_text_with_no_active_composing_inserts_at_the_caret() {
-        let controller = TextEditingController::with_text("ab");
-        controller.commit_text("X");
-        assert_eq!(controller.text(), "abX");
-        assert_eq!(controller.caret_byte_offset(), 3);
-        assert!(!controller.is_composing());
-    }
-
-    /// Oracle analog: `'connection is closed when TextInputClient
-    /// .onConnectionClosed message received'` (`editable_text_test.dart`,
-    /// tag `3.44.0`) — **adapted, not a direct port**: Flutter's
-    /// `connectionClosed` leaves the buffer untouched; `clear_composing`
-    /// (FLUI's `ImeEvent::Disabled` handler) strips the composing slice
-    /// instead — see this method's own doc comment for the documented
-    /// divergence, and
-    /// `flui_widgets::text::editable_text::tests::disabled_removes_the_underline_and_restores_the_caret`
-    /// for the widget-level counterpart.
-    ///
-    /// Red-check: change `clear_composing`'s `replace_range(range, "")` to
-    /// only clear the `composing` marker (`guard.composing = None`) without
-    /// touching `guard.text` — this test's text assertion fails because the
-    /// composing slice would still be present.
-    #[test]
-    fn clear_composing_strips_exactly_the_composing_slice() {
-        let controller = TextEditingController::with_text("Hello ");
-        controller.set_composing_text("wor", Some((3, 3)));
-        assert_eq!(controller.text(), "Hello wor");
-
-        controller.clear_composing();
-        assert_eq!(
-            controller.text(),
-            "Hello ",
-            "a mid-composition Disabled must strip the composing slice, not \
-             keep it — winit semantics, a documented divergence from \
-             Flutter's TextInputConnection.connectionClosed"
-        );
-        assert!(!controller.is_composing());
-        assert_eq!(controller.caret_byte_offset(), "Hello ".len());
-    }
-
-    #[test]
-    fn clear_composing_with_no_active_composition_is_a_noop() {
-        let controller = TextEditingController::with_text("abc");
-        controller.clear_composing(); // Must not panic or change the buffer.
-        assert_eq!(controller.text(), "abc");
-        assert_eq!(controller.caret_byte_offset(), 3);
-    }
-
-    /// Oracle analog: `'Clears composing range if cursor moves outside that
-    /// range'` (`editable_text_test.dart`, tag `3.44.0`) — see
-    /// `caret_navigation_restores_the_caret_while_composing`'s doc comment
-    /// for the divergence this contrasts with (Flutter would clear the
-    /// composing range here; FLUI's `clear_composing` is a distinct,
-    /// explicit call — direct caret navigation alone never triggers it).
-    #[test]
-    fn clear_composing_leaves_a_caret_before_the_region_untouched() {
-        let controller = TextEditingController::with_text("Hello ");
-        controller.set_composing_text("wor", Some((3, 3)));
-        // Simulate Home pressed mid-composition: the caret moves out of the
-        // composing region while the region itself stays active.
-        controller.move_caret_home();
-        assert_eq!(controller.caret_byte_offset(), 0);
-
-        controller.clear_composing();
-        assert_eq!(controller.text(), "Hello ");
-        assert_eq!(
-            controller.caret_byte_offset(),
-            0,
-            "a caret strictly before the composing region must not be pulled forward"
-        );
-    }
-
-    #[test]
-    fn cursor_none_collapses_the_caret_to_the_end_of_the_composing_region() {
-        let controller = TextEditingController::with_text("Hi ");
-        controller.set_composing_text("wor", None);
-        assert_eq!(controller.text(), "Hi wor");
-        assert_eq!(controller.composing_range(), Some(3..6));
-        assert_eq!(
-            controller.caret_byte_offset(),
-            6,
-            "cursor: None (the platform's hidden-caret signal) collapses the \
-             caret to the end of the composing region in v1"
-        );
-        assert!(
-            controller.caret_hidden_by_ime(),
-            "cursor: None must also mark the caret hidden, not just collapse \
-             its position"
-        );
-    }
-
-    #[test]
-    fn cursor_some_leaves_the_caret_visible() {
-        let controller = TextEditingController::with_text("Hi ");
-        controller.set_composing_text("wor", Some((3, 3)));
-        assert!(
-            !controller.caret_hidden_by_ime(),
-            "a cursor: Some preedit must not hide the caret"
-        );
-    }
-
-    #[test]
-    fn caret_hidden_by_ime_is_false_when_no_composition_is_active() {
-        let controller = TextEditingController::with_text("Hi");
         assert!(!controller.caret_hidden_by_ime());
+        assert_eq!(controller.text(), "replaced");
     }
 
-    /// The bug this reshape fixes: winit signals a cancelled composition as
-    /// `Preedit { text: "", cursor: None }` with no following
-    /// `Commit`/`Disabled`. Before the fix, `set_composing_text("", _)` left
-    /// `composing = Some(n..n)` (an empty-but-active region), so
-    /// `is_composing()` stayed `true` forever and `Key::Character` insertion
-    /// was permanently suppressed for the rest of the focus session.
-    ///
-    /// Red-check: revert `set_composing_text` to always take the
-    /// `Some(region.start..region.start + text.len())` branch regardless of
-    /// whether `text` is empty — `is_composing()` after the cancel returns
-    /// `true` instead of `false`, and the typed-character assertion below
-    /// fails (the character never reaches the buffer).
     #[test]
-    fn empty_preedit_ends_composition_instead_of_leaving_an_empty_active_region() {
-        let controller = TextEditingController::new();
-        controller.set_composing_text("nihao", Some((5, 5)));
-        assert_eq!(controller.text(), "nihao");
-        assert!(controller.is_composing());
-
-        // Winit's composition-cancel signal: empty text, no cursor.
-        controller.set_composing_text("", None);
-
-        assert_eq!(
-            controller.text(),
-            "",
-            "the cancelled preedit's slice must be stripped from the buffer"
-        );
-        assert!(
-            !controller.is_composing(),
-            "Preedit(\"\") must end composition, not leave an empty-but-active \
-             region behind"
-        );
+    fn caret_hidden_by_ime_follows_the_composition() {
+        let controller = TextEditingController::with_text("Hi wor");
+        assert!(!controller.caret_hidden_by_ime(), "no composition");
+        compose(&controller, 3..6, false);
         assert!(!controller.caret_hidden_by_ime());
-
-        // Plain typing must work immediately after the cancel — the exact
-        // suppression-forever failure mode this fix closes.
-        controller.insert_str("x");
-        assert_eq!(controller.text(), "x");
-    }
-
-    /// Empty preedit with no active composition must not treat the committed
-    /// selection as a replace region. Winit's X11 path emits empty `Preedit`
-    /// on IME Start as well as cancel; deleting selected committed text on
-    /// that event is data loss.
-    ///
-    /// Red-check: restore the old "pick region before checking emptiness"
-    /// order in `set_composing_text` — this test fails with text `" world"`
-    /// and selection `0..0` instead of preserving `"hello world"` / `0..5`.
-    #[test]
-    fn empty_preedit_with_no_composition_preserves_committed_selection() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(0, 5);
-        assert!(!controller.is_composing());
-        assert_eq!(controller.selection(), 0..5);
-        assert_eq!(controller.caret_byte_offset(), 5);
-
-        controller.set_composing_text("", None);
-
-        assert_eq!(controller.text(), "hello world");
-        assert_eq!(controller.selection(), 0..5);
-        assert_eq!(controller.caret_byte_offset(), 5);
-        assert!(!controller.is_composing());
-    }
-
-    /// Inactive empty preedit is inert bookkeeping: no edit, no notify.
-    ///
-    /// Red-check: keep the always-notify tail on `set_composing_text` —
-    /// this test fails with `call_count == 1` after the empty preedit.
-    #[test]
-    fn empty_preedit_with_no_composition_does_not_notify() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let controller = TextEditingController::with_text("hello");
-        controller.set_selection(2, 2);
-        assert!(!controller.is_composing());
-
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
-        controller.add_listener(Arc::new(move || {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        }));
-
-        controller.set_composing_text("", None);
-        assert_eq!(call_count.load(Ordering::Relaxed), 0);
-        assert_eq!(controller.text(), "hello");
-        assert_eq!(controller.selection(), 2..2);
-    }
-
-    /// Backward selection (anchor after caret) must survive inactive empty
-    /// preedit the same way a forward selection does — `selection()` is
-    /// ascending, but the caret extent must stay at the low end.
-    #[test]
-    fn empty_preedit_with_no_composition_preserves_backward_selection() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(5, 0);
-        assert_eq!(controller.selection(), 0..5);
-        assert_eq!(controller.caret_byte_offset(), 0);
-        assert!(!controller.is_composing());
-
-        controller.set_composing_text("", None);
-
-        assert_eq!(controller.text(), "hello world");
-        assert_eq!(controller.selection(), 0..5);
-        assert_eq!(controller.caret_byte_offset(), 0);
-        assert!(!controller.is_composing());
-    }
-
-    /// Multi-byte committed selection must not be rewritten into a mid-char
-    /// collapse by an inactive empty preedit.
-    #[test]
-    fn empty_preedit_with_no_composition_preserves_unicode_selection() {
-        // "こんにちは" is 5 chars × 3 bytes = 15 bytes; select first two chars.
-        let controller = TextEditingController::with_text("こんにちは世界");
-        controller.set_selection(0, 6);
-        assert_eq!(controller.selection(), 0..6);
-        assert_eq!(controller.caret_byte_offset(), 6);
-
-        controller.set_composing_text("", None);
-
-        assert_eq!(controller.text(), "こんにちは世界");
-        assert_eq!(controller.selection(), 0..6);
-        assert_eq!(controller.caret_byte_offset(), 6);
-        assert!(!controller.is_composing());
-    }
-
-    /// Winit X11 emits empty Preedit on IME Start and again on End. Neither
-    /// may touch a preexisting committed selection when composition never
-    /// became active.
-    #[test]
-    fn x11_style_empty_start_then_empty_end_preserves_selection() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(0, 5);
-
-        controller.set_composing_text("", None); // Start
-        controller.set_composing_text("", None); // End
-
-        assert_eq!(controller.text(), "hello world");
-        assert_eq!(controller.selection(), 0..5);
-        assert_eq!(controller.caret_byte_offset(), 5);
-        assert!(!controller.is_composing());
-    }
-
-    /// Empty Start (inert) → non-empty Preedit (replaces selection once) →
-    /// empty clear (strips composing) → Commit (inserts at caret). The
-    /// committed replacement must appear exactly once — no leftover preedit
-    /// and no double-insert from the Start empty.
-    #[test]
-    fn empty_start_then_preedit_then_clear_then_commit_replaces_selection_once() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(0, 5);
-
-        controller.set_composing_text("", None); // X11 Start — inert
-        assert_eq!(controller.text(), "hello world");
-        assert_eq!(controller.selection(), 0..5);
-
-        controller.set_composing_text("nihao", Some((5, 5)));
-        assert_eq!(controller.text(), "nihao world");
-        assert!(controller.is_composing());
-        assert_eq!(controller.composing_range(), Some(0..5));
-
-        controller.set_composing_text("", None); // cancel composing
-        assert_eq!(controller.text(), " world");
-        assert!(!controller.is_composing());
-
-        controller.commit_text("你好");
-        assert_eq!(controller.text(), "你好 world");
-        assert!(!controller.is_composing());
-        assert_eq!(controller.caret_byte_offset(), "你好".len());
-    }
-
-    /// After an active cancel notifies once, further empty preedits stay
-    /// inert — no second mutation, no extra notify.
-    #[test]
-    fn repeated_empty_preedits_after_active_clear_are_inert() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let controller = TextEditingController::new();
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
-        controller.add_listener(Arc::new(move || {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        }));
-
-        controller.set_composing_text("nihao", Some((5, 5)));
-        assert_eq!(call_count.load(Ordering::Relaxed), 1);
-
-        controller.set_composing_text("", None);
-        assert_eq!(call_count.load(Ordering::Relaxed), 2);
-        assert_eq!(controller.text(), "");
-        assert!(!controller.is_composing());
-
-        controller.set_composing_text("", None);
-        controller.set_composing_text("", None);
-        assert_eq!(call_count.load(Ordering::Relaxed), 2);
-        assert_eq!(controller.text(), "");
-    }
-
-    /// Active empty cancel must notify exactly once (the notify gate is
-    /// shared with inactive no-op; without this pin only the inactive side
-    /// is covered).
-    #[test]
-    fn empty_preedit_active_cancel_notifies_once() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let controller = TextEditingController::with_text("Hi ");
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
-        controller.add_listener(Arc::new(move || {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        }));
-
-        controller.set_composing_text("wor", None);
-        assert_eq!(call_count.load(Ordering::Relaxed), 1);
+        compose(&controller, 3..6, true);
         assert!(controller.caret_hidden_by_ime());
-
-        controller.set_composing_text("", None);
-        assert_eq!(call_count.load(Ordering::Relaxed), 2);
-        assert_eq!(controller.text(), "Hi ");
-        assert!(!controller.is_composing());
-        assert!(!controller.caret_hidden_by_ime());
+        assert_eq!(controller.composing_range(), Some(3..6));
     }
 
-    /// Direct caret navigation takes the caret back from the IME: the
-    /// composition itself keeps running (the underline still paints), but
-    /// the caret is no longer hidden.
+    /// Direct caret navigation takes the caret back from the IME without
+    /// ending the composition.
     ///
     /// Oracle analog: `'Preserves composing range if cursor moves within
     /// that range'`, `'Clears composing range if cursor moves outside that
     /// range'`, and its `'case two'` variant (`editable_text_test.dart`, tag
     /// `3.44.0`) — **divergent, not a port**: Flutter clears the composing
     /// range whenever the selection moves outside it; FLUI's direct caret
-    /// navigation never touches the composing range at all (only the
-    /// caret-hidden flag this test pins) — see
-    /// `tests/parity/text_editing_controller_test.rs`'s
-    /// `direct_caret_navigation_leaves_the_composing_range_untouched_unlike_flutter`
-    /// for the divergence pinned again from outside the crate, and
-    /// `clear_composing_leaves_a_caret_before_the_region_untouched` below for
-    /// the composing-range-survives half of this same contrast.
+    /// navigation never touches the composing range at all, only the
+    /// caret-hidden flag this test pins.
     ///
     /// Red-check: remove the `clear_caret_hidden` call from
-    /// `move_caret_home` — `caret_hidden_by_ime()` stays `true` after this
-    /// test's `move_caret_home()` call.
+    /// `move_caret_home` — `caret_hidden_by_ime()` stays `true`.
     #[test]
     fn caret_navigation_restores_the_caret_while_composing() {
-        let controller = TextEditingController::with_text("abc");
-        controller.set_composing_text("def", None);
+        let controller = TextEditingController::with_text("abcdef");
+        compose(&controller, 3..6, true);
         assert!(controller.caret_hidden_by_ime());
-        let composing_before = controller.composing_range();
 
         controller.move_caret_home();
 
@@ -2818,211 +2255,69 @@ mod tests {
             !controller.caret_hidden_by_ime(),
             "moving the caret directly must restore its visibility"
         );
-        assert!(
-            controller.is_composing(),
-            "caret navigation must not end the composition"
-        );
         assert_eq!(
             controller.composing_range(),
-            composing_before,
-            "the composing range itself must stay untouched by caret navigation"
+            Some(3..6),
+            "caret navigation must not end the composition"
         );
     }
 
-    /// Oracle analog: `'Asserts if composing text is not valid'` (`test`,
-    /// `editable_text_test.dart`, tag `3.44.0`) — **divergent, not a port**:
-    /// Flutter throws constructing/assigning a `TextEditingValue` whose
-    /// composing range is out of bounds; FLUI's `set_composing_text` takes
-    /// text + cursor directly and clamps instead of asserting
-    /// (`docs/PANIC-POLICY.md`: untrusted platform input must not panic) —
-    /// see `tests/parity/text_editing_controller_test.rs`'s
-    /// `malformed_composing_cursor_clamps_through_the_public_api_instead_of_asserting`
-    /// for the same contract proven from outside the crate.
-    ///
-    /// Red-check: drop the `clamp_to_char_boundary` call in
-    /// `set_composing_text` (use `cursor.1` raw) — this test panics instead
-    /// of asserting the clamped value.
-    #[test]
-    fn malformed_cursor_offset_past_the_preedit_end_clamps_without_panicking() {
-        let controller = TextEditingController::new();
-        controller.set_composing_text("ni", Some((0, 100)));
-        assert_eq!(controller.composing_range(), Some(0..2));
-        assert_eq!(
-            controller.caret_byte_offset(),
-            2,
-            "an out-of-range cursor offset clamps to the preedit's own length"
-        );
-    }
-
-    #[test]
-    fn malformed_cursor_offset_mid_multibyte_char_clamps_forward_without_panicking() {
-        let controller = TextEditingController::new();
-        // '€' is 3 bytes; a cursor end of 1 lands mid-character.
-        controller.set_composing_text("€", Some((0, 1)));
-        assert_eq!(
-            controller.caret_byte_offset(),
-            3,
-            "a cursor offset landing mid-character rounds forward to the next \
-             boundary rather than panicking"
-        );
-    }
-
-    #[test]
-    fn is_composing_reflects_active_composition_state() {
-        let controller = TextEditingController::new();
-        assert!(!controller.is_composing());
-
-        controller.set_composing_text("a", Some((1, 1)));
-        assert!(controller.is_composing());
-
-        controller.commit_text("a");
-        assert!(!controller.is_composing());
-    }
-
-    #[test]
-    fn listeners_fire_on_composing_updates_and_commit() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let controller = TextEditingController::new();
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
-        controller.add_listener(Arc::new(move || {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        }));
-
-        controller.set_composing_text("a", Some((1, 1)));
-        assert_eq!(call_count.load(Ordering::Relaxed), 1);
-
-        controller.commit_text("a");
-        assert_eq!(call_count.load(Ordering::Relaxed), 2);
-    }
-
-    #[test]
-    fn clear_composing_notifies_only_when_it_actually_strips_something() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let controller = TextEditingController::new();
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
-        controller.add_listener(Arc::new(move || {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        }));
-
-        controller.clear_composing(); // No active composition — no notify.
-        assert_eq!(call_count.load(Ordering::Relaxed), 0);
-
-        controller.set_composing_text("a", Some((1, 1)));
-        assert_eq!(call_count.load(Ordering::Relaxed), 1);
-
-        controller.clear_composing();
-        assert_eq!(call_count.load(Ordering::Relaxed), 2);
-    }
-
-    // ------------------------------------------------------------------
-    // Interleaving a non-IME edit with an active composition
-    //
-    // A real field can receive a plain edit (Backspace/Delete — the
-    // suppression contract only gates `Key::Character`, per ADR-0030) while
-    // an IME composition is in progress. The composing region must not
-    // survive that edit stale: a later `commit_text`/`clear_composing`
-    // trusting the old range against the now-shifted `text` is exactly the
-    // `replace_range` panic class this controller must not reintroduce.
-    // ------------------------------------------------------------------
-
-    /// Red-check: comment out the `guard.composing = None;` line in
-    /// `backspace` — this test panics (`replace_range` end index out of
-    /// bounds) instead of reaching its assertions. Verified by hand before
-    /// this test was written: reverting the fix reproduces exactly this
-    /// panic on `commit_text`.
-    #[test]
-    fn backspace_during_active_composition_clears_it_so_a_later_commit_does_not_panic() {
-        let controller = TextEditingController::with_text("Hello ");
-        controller.set_composing_text("nihao", Some((5, 5)));
-        assert_eq!(controller.text(), "Hello nihao");
-        assert_eq!(controller.composing_range(), Some(6..11));
-
-        // A non-IME edit while composing is active: Backspace is never
-        // suppressed (only `Key::Character` is, per ADR-0030).
-        controller.backspace();
-        assert_eq!(controller.text(), "Hello niha");
-        assert!(
-            !controller.is_composing(),
-            "a non-IME text edit must clear the composing region, not leave \
-             it pointing at a range the backspace already invalidated"
-        );
-
-        // Must not panic: before the fix, `commit_text` trusted the stale
-        // `6..11` range against an 10-byte buffer.
-        controller.commit_text("X");
-        assert_eq!(controller.text(), "Hello nihaX");
-    }
-
-    /// The `insert_str` counterpart of the above, and `clear_composing` as
-    /// the second composing-region consumer (not just `commit_text`).
+    /// A non-IME edit while composing ends the composition rather than
+    /// leaving its range describing text that moved: Backspace is never
+    /// suppressed while composing (only `Key::Character` is, per ADR-0030).
     ///
     /// Red-check: comment out the `guard.composing = None;` line in
-    /// `insert_str` — this test panics on `clear_composing`'s
-    /// `replace_range` instead of reaching its assertions.
+    /// `backspace` — the composition survives with a stale range.
     #[test]
-    fn insert_str_during_active_composition_clears_it_so_a_later_clear_composing_does_not_panic() {
-        let controller = TextEditingController::with_text("Hello ");
-        controller.set_composing_text("nihao", Some((5, 5)));
-        assert_eq!(controller.text(), "Hello nihao");
-
-        // `insert_str` is what the suppression contract exists to prevent
-        // for `Key::Character` specifically, but nothing stops another
-        // caller (a paste, a programmatic edit) from calling it directly
-        // while composing is active.
-        controller.insert_str("Z");
-        assert_eq!(controller.text(), "Hello nihaoZ");
-        assert!(
-            !controller.is_composing(),
-            "a non-IME insert must clear the composing region"
-        );
-
-        // Must not panic: before the fix, `clear_composing` trusted the
-        // stale `6..11` range against a 12-byte buffer that had already
-        // grown past it in the wrong place.
-        controller.clear_composing();
-        assert_eq!(
-            controller.text(),
-            "Hello nihaoZ",
-            "a no-op clear changes nothing"
-        );
-    }
-
-    /// Defense in depth, exercised directly: even if a stale composing range
-    /// somehow survived to reach a use site (bypassing the mutator-clears
-    /// rule the two tests above verify), `clamp_range_to_text` must degrade
-    /// it to an in-bounds slice rather than let `replace_range` panic. This
-    /// reaches into `ControllerInner` directly (test-only) to fabricate
-    /// exactly that otherwise-unreachable state.
-    ///
-    /// Red-check: remove the `clamp_range_to_text` call in `commit_text` —
-    /// this test panics instead of asserting the degraded (wrong but
-    /// in-bounds) outcome.
-    /// Oracle analog: `'Asserts if composing text is not valid'` (`test`,
-    /// `editable_text_test.dart`, tag `3.44.0`) — see
-    /// `malformed_cursor_offset_past_the_preedit_end_clamps_without_panicking`'s
-    /// doc comment for the divergence (Flutter asserts; FLUI clamps).
-    #[test]
-    fn a_stale_composing_range_that_bypasses_the_mutator_guard_still_cannot_panic_commit() {
+    fn backspace_during_active_composition_clears_it() {
         let controller = TextEditingController::with_text("Hello nihao");
-        {
-            let mut guard = controller.inner.lock().unwrap();
-            // Fabricate exactly the otherwise-unreachable state a future
-            // mutator that forgets to clear `composing` could produce: a
-            // region that described the text BEFORE it shrank.
-            guard.text = "Hello niha".to_string(); // shrank by one byte
-            guard.selection.caret = guard.text.len();
-            guard.composing = Some(ComposingState {
-                range: 6..11, // now out of bounds
-                caret_hidden: false,
-            });
-        }
+        compose(&controller, 6..11, false);
 
-        // Must not panic.
-        controller.commit_text("X");
+        controller.backspace();
+
+        assert_eq!(controller.text(), "Hello niha");
         assert!(!controller.is_composing());
+    }
+
+    /// The `insert_str` counterpart: a paste or a programmatic edit while
+    /// composing ends the composition.
+    ///
+    /// Red-check: comment out the `guard.composing = None;` line in
+    /// `insert_str`.
+    #[test]
+    fn insert_str_during_active_composition_clears_it() {
+        let controller = TextEditingController::with_text("Hello nihao");
+        compose(&controller, 6..11, true);
+
+        controller.insert_str("Z");
+
+        assert_eq!(controller.text(), "Hello nihaoZ");
+        assert!(!controller.is_composing());
+        assert!(!controller.caret_hidden_by_ime());
+    }
+
+    /// A silent change notifies no one until `notify_changed`, which
+    /// notifies once — the shape a platform session's write-back relies on.
+    #[test]
+    fn a_silent_change_notifies_once_when_asked() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let controller = TextEditingController::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        controller.add_listener(Arc::new(move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        controller.with_inner_silent(|inner| {
+            inner.text.push_str("abc");
+            inner.selection = Selection::collapsed(3);
+        });
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        assert_eq!(controller.text(), "abc");
+
+        controller.notify_changed();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert_eq!(controller.with_inner(|inner| inner.selection.caret), 3);
     }
 }

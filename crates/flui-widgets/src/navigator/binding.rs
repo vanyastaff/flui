@@ -479,6 +479,12 @@ impl fmt::Debug for RouteBinding {
 #[derive(Clone, Default)]
 pub struct RouteBindingSlot {
     inner: Arc<Mutex<Option<RouteBinding>>>,
+    /// The transition family of the framework route that owns this slot, or
+    /// `None` for a slot a third-party route constructed itself. Written only
+    /// by the crate's `TransitionRoute`, so a route outside this crate cannot
+    /// claim to be a pageless popup: a `Navigator` under a `Router` admits a
+    /// route only when this reads `Some(TransitionGroup::Default)`.
+    group: Arc<Mutex<Option<TransitionGroup>>>,
 }
 
 impl RouteBindingSlot {
@@ -504,6 +510,27 @@ impl RouteBindingSlot {
     pub(crate) fn get(&self) -> Option<RouteBinding> {
         self.inner.lock().clone()
     }
+
+    /// Record the owning route's transition family. `TransitionRoute` calls
+    /// this at construction and again whenever its family changes.
+    pub(crate) fn set_group(&self, group: TransitionGroup) {
+        *self.group.lock() = Some(group);
+    }
+
+    /// The owning route's transition family; `None` when no framework route
+    /// wrote one.
+    pub(crate) fn group(&self) -> Option<TransitionGroup> {
+        *self.group.lock()
+    }
+}
+
+/// Whether the route owning `slot` is a pageless popup: a framework transition
+/// route in [`TransitionGroup::Default`] (`PopupRoute`). A `Navigator` driven by
+/// a `Router` admits these through its facade and refuses every other route —
+/// a `PageRoute` (`TransitionGroup::Page`), a slot-less `SimpleRoute`, and a
+/// third-party route whose slot no framework route wrote.
+pub(crate) fn is_pageless_popup(slot: Option<&RouteBindingSlot>) -> bool {
+    slot.and_then(RouteBindingSlot::group) == Some(TransitionGroup::Default)
 }
 
 impl fmt::Debug for RouteBindingSlot {

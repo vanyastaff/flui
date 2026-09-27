@@ -1,8 +1,10 @@
 # ADR-0090: IME talks to a pull text-store contract with edits and asynchronous locks
 
-- **Status:** Proposed
+- **Status:** Accepted in part (2026-09-26): §1, §2 and §4 are implemented (the migration
+  plan's IME text-store row); §3 waits for the Win32 TSF backend, §5 for exit B1. §2 was amended
+  on acceptance: the projection takes an asynchronous lock, not a synchronous one (see §2).
 - **Date:** 2026-09-25
-- **Supersedes (on acceptance):** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1
+- **Supersedes in part:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1
   (the winit-shaped push vocabulary as the contract) and the push-only shape of §2
 - **Related:** [ADR-0037](ADR-0037-presentation-ownership-domains.md) §5 (who owns a text-input
   session), [ADR-0069](ADR-0069-a-keydown-produces-one-semantic-event.md) (one semantic event per
@@ -86,13 +88,51 @@ thread, in `flui-platform-api` ([ADR-0082](ADR-0082-platform-api-contract-crate.
   one undo step and one change notification to the widget.
 - The implementor is the field's editing state over its text layout (a `TextFieldState` over
   Parley, [ADR-0092](ADR-0092-per-realm-text-over-parley.md)); the controller's
-  `Arc<Mutex<…>>` does not survive into this surface.
+  `Arc<Mutex<…>>` does not survive into this surface. Until then the built-in field implements
+  it over today's state ("Interim implementation" below).
+
+The surface is `flui_platform_api::text_store`:
+
+- `TextStore` (owner thread, shared as `Rc<dyn TextStore>`, not `Send`): `status`,
+  `request_lock`, `run_deferred_grants`, `set_commit_gate`, `set_observer`. `TextStoreObserver`
+  is the platform's sink: `text_changed(TextChange)`, `selection_changed`, `layout_changed`,
+  `status_changed`, never called while a lock is held or the store's commit gate is shut (what
+  waited is sent by the next `run_deferred_grants` at the latest), so a sink may answer a
+  notification with a synchronous lock.
+- A lock is a closure: `LockGrant::Read(FnOnce(&dyn TextStoreRead))` or
+  `LockGrant::ReadWrite(FnOnce(&mut dyn TextStoreEdit))`, requested with `LockTiming::{Sync,
+  Async}`, answered `LockOutcome::{Granted, Deferred}` or `TextStoreError::SyncLockUnavailable`
+  (`TS_E_SYNCHRONOUS`) / `DeferredQueueFull`. Editing under a read lock does not compile (a
+  `compile_fail` doctest). `LockArbiter` is the one lock state machine every store embeds.
+- Reads (`TextStoreRead`): `document_len`, `text`, `selection` (`Selection { anchor, active }`),
+  `composition` (`Composition { range, hides_caret }`), `rect_for_range` (`RangeRect`),
+  `document_bounds`, `index_at_point` (`PointMode::{Exact, Nearest}`). Edits
+  (`TextStoreEdit`): `replace` and `insert_at_selection` (each returning a `TS_TEXTCHANGE`-shaped
+  `TextChange`), `set_selection`, `set_composition`.
+- Offsets are `Utf16Offset`/`Utf16Range`; `text_store::utf16` is the one converter, and an
+  offset past the end or inside a surrogate pair is an `OffsetError`, never a clamp.
+- "Commits closed" is the realm's frame transaction, and a type a store cannot skip: each
+  presentation's `TextInputOwner` holds a `CommitGate` and installs it into every store it
+  attaches (`TextStore::set_commit_gate`), and the store's `LockArbiter` reads it on every
+  request, so a store has no transaction flag of its own. `flui-app`'s `UiRealm::drive_frame`
+  shuts every presentation's gate for the whole `drive_frame_with_lane` call (begin frame
+  through post-frame callbacks) and runs the commit anchor (`run_deferred_grants`) after it
+  returns, with the scheduler `Idle`, per ADR-0027 §3. A store replaced or detached inside the
+  transaction keeps its queued grants for that anchor.
+- One read-write session is one change notification to the widget. There is no undo stack in
+  the framework yet, so "one undo step" has nothing to apply to; it binds the first undo
+  implementation.
 
 ### 2. The push vocabulary becomes a projection
 
-`ImeEvent` stays as the adapter for push-model sources (winit today). The winit backend
-translates `Preedit`/`Commit`/`Disabled` into store edits under a synchronous read-write lock,
-so there is one editing path. Kept from [ADR-0030](ADR-0030-platform-text-input-ime-capability.md):
+`ImeEvent` stays as the adapter for push-model sources (winit today).
+`flui_platform_api::text_store::project_ime_event` translates `Preedit`/`Commit`/`Disabled` into
+store edits under a read-write lock, and `TextInputOwner::dispatch` calls it for the active
+client, so there is one editing path. The lock is **asynchronous**, not synchronous as first
+written: a push event that arrives while the store cannot grant a lock (inside a frame
+transaction, or inside another session) is then applied in order at the next commit anchor
+instead of being dropped. A preedit's composition carries `hides_caret` for winit's
+`cursor: None`. Kept from [ADR-0030](ADR-0030-platform-text-input-ime-capability.md):
 §3 (one active client per presentation, token-guarded detach), §5 (composing state is one value),
 §6 (rendering the composing region, including its single-line limit) and §7 (the candidate window
 follows the composition, one rect). Kept from
@@ -101,7 +141,8 @@ event, and the input method is a route, not a second producer.
 
 §4's rule that `Disabled` mid-composition strips the uncommitted text is winit behaviour. Under TSF the
 equivalent is the text service ending its composition with a final edit (commit or removal)
-through the store; the store never strips on its own.
+through the store; the store never strips on its own. The winit strip therefore lives in the
+projection, as an explicit edit.
 
 ### 3. Windows uses TSF and UIA text patterns from the first line
 
@@ -118,6 +159,63 @@ side, and checks reads against edits. It covers surrogate pairs, grapheme cluste
 several UTF-16 units, composing ranges, async grants that arrive after a frame, refused
 synchronous locks, and rect/point queries against layout. The built-in text field passes the same
 kit. This kit, not a live session, is the H0 gate for IME.
+
+The kit is `flui_testing::text_store_kit`, versioned by `KIT_VERSION` (1): a field supplies a
+`TextStoreFixture` (its store, a reset, an app-side edit, a commit anchor, its own change count
+and its capabilities) and calls `assert_conforms`. The kit holds frame transactions itself,
+through a `CommitGate` it installs with `set_commit_gate`, so no fixture can stand in for a
+store that ignores its gate. Each `Case` names the
+version that added it, so a pinned version never grows. `flui_platform_api::text_store::
+InMemoryTextStore` is the test-only minimal field, with `text_store_kit::InMemoryFixture` as the
+worked example; the kit's own tests wrap it with one fault each and assert the kit catches every
+one.
+
+## Interim implementation
+
+`EditableText` implements `TextStore` over `TextEditingController` and `RenderEditable`
+(`crates/flui-widgets/src/text/text_store.rs`) until ADR-0092's `TextFieldState` replaces both
+behind the same trait. The controller's `Arc<Mutex<…>>` survives behind the trait for now: the
+store reads a snapshot of it when a lock opens and writes a read-write session back once. There is
+no undo stack. Converting offsets walks the text (O(n)), fine for single-line fields; multiline
+needs a cached index. A push event queued behind a frame lands before a later key press (the key
+handler runs queued grants first), but a programmatic `set_text` made while a grant is queued goes
+ahead of it. App edits reach the observer at the next frame, key press or lock request, since
+controller listeners are `Send + Sync` and the store is not.
+
+No platform backend holds a store yet: `PlatformTextInput` is `Send + Sync` and the store is an
+owner-thread `Rc`, so the pull connection waits for ADR-0082's owner-thread capability split. Until
+then the production caller is the push projection. `TextInputOwner::active_store` is
+`#[doc(hidden)]` until the Win32 TSF backend (§3) reads it, and the observer,
+`rect_for_range`, `index_at_point` and `document_bounds` have no production caller before then
+either.
+
+## Divergences
+
+- **Platform selection is exact.** A selection the platform sets is kept at any scalar
+  boundary, including inside a grapheme cluster (TSF and AppKit address scalars); a tap or an
+  arrow key still snaps to graphemes, as the controller always has. Pinned by the kit's `selection_inside_a_grapheme_is_kept_exactly` and
+  `platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps`
+  (`flui-widgets/ARCHITECTURE.md` Mapping decision #35).
+- **Obscured means protected.** An obscured field reports `status().protected`: text reads
+  return `Protected`, while edits, selection and geometry (through the mask) work. Pinned by
+  `obscured_editable_text_conforms_to_kit_v1`.
+- **Composition tracking.** An edit that does not touch the composition shifts it; one that
+  overlaps it, or inserts strictly inside it, clears it; no edit creates or extends one. Pinned
+  by the kit's `edit_shifts_an_untouched_composition_and_clears_an_overlapped_one`.
+
+## Platform mapping
+
+No backend code exists for any of these yet; this is the shape each backend implements.
+
+| Platform | Mapping |
+|---|---|
+| Windows, TSF `ITextStoreACP` (ACP offsets are UTF-16) | `RequestLock(TS_LF_READ\|TS_LF_READWRITE [\|TS_LF_SYNC])` → `LockGrant::{Read, ReadWrite}` with `LockTiming::{Sync, Async}`; `Granted` sets `*phrSession` to `OnLockGranted`'s HRESULT (the grant calls it), `Deferred` returns `TS_S_ASYNC`, `SyncLockUnavailable` returns `TS_E_SYNCHRONOUS`. `GetStatus` → `status()` (protected → an `IS_PASSWORD` input scope); `GetEndACP` → `document_len`; `GetText` → `text`, one `TS_RT_PLAIN` run; `GetSelection` → `selection()` (`TS_AE_START` when active < anchor, `fInterimChar` false). `SetSelection` → `set_selection`; `SetText` → `replace`; `InsertTextAtSelection` → `insert_at_selection` (`TF_IAS_QUERYONLY` answered from `selection()`); `QueryInsert` returns the range as given. `GetTextExt` → `rect_for_range` in screen physical pixels (`pfClipped` from `clipped`, `NoLayout` → `TS_E_NOLAYOUT`); `GetScreenExt` → `document_bounds`; `GetACPFromPoint` → `index_at_point` (`GXFPF_NEAREST` → `Nearest`, else `Exact`; `PointOutside` → `TS_E_INVALIDPOINT`). `AdviseSink`/`UnadviseSink` → `set_observer` (`OnTextChange`, `OnSelectionChange`, `OnLayoutChange(TS_LC_CHANGE)`, `OnStatusChange`). `ITfContextOwnerCompositionSink` `OnStart`/`OnUpdate`/`OnEndComposition` → `set_composition` inside the text service's read-write session. Embedded-object verbs return `E_NOTIMPL`; no attributes are reported. Errors: `Offset` → `TS_E_INVALIDPOS`, `Detached` → `E_UNEXPECTED`, `DeferredQueueFull` → `E_FAIL`. No field is read-only yet, so `TS_SD_READONLY` and `TS_E_READONLY` have no source; the status flag and the error are added with the first read-only field. UIA `TextPattern`/`ValuePattern` read the same store under sync read locks. |
+| macOS, `NSTextInputClient` (`NSRange` is UTF-16) | Every call is synchronous and uses `Sync`; a refused lock returns today's empty answers (`nil`, `{NSNotFound, 0}`), never blocks. `markedRange`/`hasMarkedText` → `composition`; `selectedRange` → `selection().range()`; `attributedSubstringForProposedRange:actualRange:` → `text` over the clamped range, returned as `actualRange`; `firstRectForCharacterRange:actualRange:` → `rect_for_range` through `convertRectToScreen` with a flipped y (single-line today); `characterIndexForPoint:` → `index_at_point(Nearest)` or `NSNotFound`. `setMarkedText:selectedRange:replacementRange:` → `replace` of the replacement range, else the composition, else the selection, then `set_composition(hides_caret: false)` and `set_selection`; `insertText:replacementRange:` → `replace` and clear the composition; `unmarkText` → clear the composition keeping the text (unlike winit's `Disabled`). `layout_changed` → `invalidateCharacterCoordinates`; an app edit overlapping the composition → `discardMarkedText`. The backend's own UTF-16 converter is replaced by `text_store::utf16`. |
+| Linux, winit (X11 XIM, Wayland) | Push-only: through `project_ime_event`. The candidate area comes from `rect_for_range` over the composition or the caret. |
+| Linux, native Wayland `text-input-v3` (if a backend bypasses winit) | `set_surrounding_text` takes UTF-8 byte cursor and anchor (at most 4000 bytes), read under a sync read lock; `delete_surrounding_text` → `replace`; `preedit_string` byte cursors are handled as the projection handles them; `done(serial)` is one read-write lock. |
+| Linux, IBus over D-Bus; AT-SPI | IBus counts Unicode scalars, so a scalar↔UTF-16 helper is needed then. AT-SPI `Text` reads through the store. |
+| Android | `InputConnection` maps onto the same verbs. |
+| Web | A hidden-input bridge implements the same store. |
 
 ### 5. Live evidence stays in exit B1
 
@@ -162,13 +260,40 @@ set is unverified.
 
 ## Verification
 
-None of these exist yet.
+In place:
 
-- The conformance kit (§4) in `flui-testing`, run in CI against the built-in text field and a
-  test-only minimal field.
+- §1: `flui-platform-api` `text_store::utf16::tests` (surrogates, combining marks, ZWJ, flags,
+  round trips, refusals), `text_store::lock::tests` (`sync_inside_a_session_is_refused`,
+  `async_inside_a_session_runs_on_release`, `async_while_the_gate_is_shut_waits_for_run_deferred`,
+  `a_new_arbiter_is_open_until_a_gate_is_installed`, `deferred_run_in_fifo_order`, `a_full_queue_refuses_with_deferred_queue_full`,
+  `a_panicking_grant_releases_the_lock`, `clear_drops_pending_grants_unrun`), and the
+  `compile_fail` doctest on `text_store::lock`.
+- §2: `text_store::projection::tests` (preedit, cursor mapping and clamping, `cursor: None`,
+  empty preedit with and without a composition, X11 start/end, commit, direct commit,
+  `Disabled`, `a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor`);
+  `flui-interaction` `dispatch_projects_preedit_and_commit_onto_the_active_store`,
+  `enabled_runs_on_session_start_and_edits_nothing`,
+  `an_attached_store_follows_the_owners_frame_transaction` (the reference store, unwrapped),
+  `a_grant_queued_by_a_replaced_or_detached_client_runs_at_the_anchor`; `flui-app`
+  `handle_input_entered_projects_ime_onto_the_attached_store`,
+  `a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns` (the grant
+  runs in `Idle`), `an_edit_made_at_the_commit_anchor_schedules_the_next_frame`, and
+  `runner_frame_ordering`'s scan that every runner drives frames through `UiRealm::drive_frame`;
+  the existing `EditableText` IME tests, now through the projection.
+- §4: `flui-testing` `tests/text_store_kit.rs` (`in_memory_store_conforms_to_kit_v1` and one
+  `kit_fails_a_store_that_…` test per fault, including a store that ignores the commit gate it
+  is handed and one that notifies inside a transaction); `flui-widgets` `tests/text_store_kit.rs`
+  (`editable_text_conforms_to_kit_v1`, `obscured_editable_text_conforms_to_kit_v1`) and
+  `tests/editable_text.rs`'s `text_store` module (offset mapping, one `on_changed` per session,
+  exact platform selection, controller swap, `layout_changed`, `Detached` after dispose, a lock
+  from a post-frame callback, typing after a deferred commit).
+
+Outstanding:
+
 - Mock `ITextStoreACP` unit tests in the Win32 backend (§3), clippy-only in CI like the rest of
   Win32 until a Windows test job runs them.
 - A winit backend test that a `Preedit`/`Commit` sequence produces the same store edits as the
-  kit's synchronous-lock script (§2).
+  kit's `tsf_style_conversion_script` (§2). The projection's own tests pin each event; nothing
+  yet compares the two paths end to end.
 - `cargo xtask device windows-ime` on a host with ja-JP installed, and the recorded B1 evidence
   (§5).

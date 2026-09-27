@@ -44,5 +44,7 @@ mod pointer_script_replay;
 mod post_frame_after_layout;
 #[path = "self_rescheduling_local_post_frame.rs"]
 mod self_rescheduling_local_post_frame;
+#[path = "text_store_kit.rs"]
+mod text_store_kit;
 #[path = "tree_observer_inspector.rs"]
 mod tree_observer_inspector;

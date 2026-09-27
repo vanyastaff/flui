@@ -1,7 +1,6 @@
-use std::cell::RefCell;
-
 use flui_interaction::events::{PointerType, make_down_event};
 use flui_interaction::testing::input::KeyEventBuilder;
+use flui_platform_api::text_store::{InMemoryTextStore, TextStore};
 use flui_types::ImeEvent;
 use flui_types::geometry::{Offset, Pixels};
 
@@ -161,22 +160,20 @@ fn ime_event_addressed_to_b_does_not_reach_as_session() {
     let presentation_b = realm.assemble_presentation(window_b);
     let b_id = realm.install_presentation(presentation_b);
 
-    let received_a = Rc::new(RefCell::new(Vec::new()));
-    let sink_a = Rc::clone(&received_a);
+    let client = |store: &Rc<InMemoryTextStore>| {
+        let erased: Rc<dyn TextStore> = store.clone(); // each presentation holds its field's store through the erased contract.
+        flui_interaction::TextInputClient::new(erased)
+    };
+    let store_a = InMemoryTextStore::new("");
     let handle_a = realm.presentation_text_input_handle_for_test(a_id);
     let _token_a = handle_a
-        .attach(Rc::new(move |event: &ImeEvent| {
-            sink_a.borrow_mut().push(event.clone());
-        }))
+        .attach(client(&store_a))
         .expect("A's headless window supports text input");
 
-    let received_b = Rc::new(RefCell::new(Vec::new()));
-    let sink_b = Rc::clone(&received_b);
+    let store_b = InMemoryTextStore::new("");
     let handle_b = realm.presentation_text_input_handle_for_test(b_id);
     let _token_b = handle_b
-        .attach(Rc::new(move |event: &ImeEvent| {
-            sink_b.borrow_mut().push(event.clone());
-        }))
+        .attach(client(&store_b))
         .expect("B's headless window supports text input");
 
     assert_eq!(fake_a.last_ime_allowed(), Some(true));
@@ -190,14 +187,15 @@ fn ime_event_addressed_to_b_does_not_reach_as_session() {
     });
 
     assert_eq!(
-        received_b.borrow().as_slice(),
-        [ImeEvent::Commit("hello".to_string())],
-        "B's attached client must receive the event addressed to B, even though A is \
+        store_b.text(),
+        "hello",
+        "B's attached store must receive the event addressed to B, even though A is \
          this realm's primary"
     );
-    assert!(
-        received_a.borrow().is_empty(),
-        "an IME event addressed to B must never reach A's attached client"
+    assert_eq!(
+        store_a.text(),
+        "",
+        "an IME event addressed to B must never reach A's attached store"
     );
     assert_eq!(
         fake_a.last_ime_allowed(),

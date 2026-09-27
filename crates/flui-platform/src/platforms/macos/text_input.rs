@@ -348,8 +348,9 @@ extern "C-unwind" fn set_marked_text(
 /// cancelled slice stays in its buffer. AppKit's own header is silent on
 /// whether `unmarkText` is always preceded by an empty `setMarkedText:`, so
 /// both paths must be covered. The event is inert when nothing is composing
-/// (`TextEditingController::set_composing_text`'s empty branch strips only an
-/// active span, and reports no change when there is none), which is why this
+/// (`flui_platform_api::text_store::project_ime_event` strips an empty
+/// preedit's composition only when one is active, and edits nothing when
+/// there is none), which is why this
 /// callback needs no `hasMarkedText` check of its own.
 extern "C-unwind" fn unmark_text(this: &AnyObject, _sel: Sel) {
     // SAFETY: `this` is a live FLUIContentView (see `insert_text`).

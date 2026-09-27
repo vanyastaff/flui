@@ -22,10 +22,12 @@ use flui_types::geometry::{Bounds, Pixels};
 /// # Scope
 ///
 /// This trait only carries the platform *composition* controls
-/// (enable/disable IME, place the candidate window). It does not model a
-/// text buffer, cursor/selection state, or the suppression contract a
-/// client applies to incoming [`flui_types::ImeEvent`]s — that is
-/// `flui-interaction`'s presentation-owned text-input client contract.
+/// (enable/disable IME, place the candidate window). The document the input
+/// method reads and edits is the field's [`TextStore`](crate::TextStore)
+/// (ADR-0090), attached through `flui-interaction`'s presentation-owned
+/// text-input owner, which projects incoming [`flui_types::ImeEvent`]s onto
+/// it. A backend cannot hold that store through this trait yet: the trait is
+/// `Send + Sync` and the store is owner-thread (ADR-0082 §4).
 pub trait PlatformTextInput: Send + Sync {
     /// Enable or disable IME composition for this window's active input.
     ///

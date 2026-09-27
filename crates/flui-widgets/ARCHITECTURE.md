@@ -35,6 +35,10 @@ into the `Overlay` and `Dismissible` slides its child with a `Stack`, a
 a cycle, so they can become a node of their own only after they move together
 into one module.
 
+`router` sits in a layer of its own above `navigator` and below `app`: the
+`Router` builds a `Navigator` and places its pages on it (and wraps each page
+in `Semantics`), and `WidgetsApp` is where an app will build on the `Router`.
+
 `form` sits in the top widget layer beside `icon` and `app`: a text form
 field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
 the error line's `Column` and `Semantics`, and nothing below names a form.
@@ -1670,7 +1674,125 @@ for the last one: skip wrapping `install_pointer_handlers`'s return value
 in `wrap_double_tap_word_select` — the selection stays collapsed after
 the second tap.
 
-### 21. Global widgets localizations live in the catalog, not in a separate `flutter_localizations` package
+### 21. The `Router` is derived from the route type, and its handle is lifecycle-only
+
+**Oracle:** Flutter's `Router` takes a hand-written `RouteInformationParser`
+and `RouterDelegate` (`widgets/router.dart`), and `Navigator.of(context)` is
+callable from `build`.
+
+**Choice:** `Router<R>` (`src/router/`, ADR-0093) needs only `R: Routable` —
+`to_path`, `from_path`, and a provided `back_stack` — and keeps its stack
+of `R` itself; the parser and delegate are the route type. The page per value
+is a `PageRoute<()>` named with the value's path, on a `Navigator` the router
+builds, so transitions, heroes and `PopScope` are unchanged.
+`Router::<R>::handle` takes `&dyn LifecycleContext` (ADR-0078), so a handle
+is acquired in `init_state`/`did_change_dependencies` and resolves the
+**nearest** `Router<R>`, which is `Navigator.of`'s contract. The page builder
+and transitions are shared with every page, so a parent rebuild reaches the
+pages already on the stack; a transition duration is fixed when a page is
+placed, because the page's animation controller is made with it.
+
+**Pinned by:** `nested_router_handle_targets_the_nearest_router`,
+`a_parent_rebuild_reaches_the_pages_already_on_the_stack`,
+`router_handle_without_a_router_is_no_router`, the `compile_fail` doctest on
+`Router::handle`, and `route_path_round_trips_a_hand_written_routable`.
+
+### 22. A Router's navigator refuses pages pushed through its facade, and admits pageless popups
+
+**Oracle:** Flutter's `Navigator` under a `Router` accepts pageless routes
+(`Navigator.push`, `showDialog`) beside its pages; a pageless route is not in
+the URL and is removed silently with the page below it.
+
+**Choice:** every page on a Router's stack has a path (ADR-0093 §2), and only
+the Router places, replaces or seeds pages. The navigator a Router builds is
+*addressed*. A plain `push` (and `push_named`) admits only routes whose
+binding slot a framework `TransitionRoute` marked `TransitionGroup::Default`
+— `PopupRoute` — and refuses `PageRoute`, `SimpleRoute` and every
+third-party route. The doors that replace, sweep or seed
+(`push_replacement[_with]`, `push_and_remove_until`, `seed_initial`, and the
+named `push_replacement_named[_with]`, `pop_and_push_named[_with]` and
+`push_named_and_remove_until`) refuse every route, a popup included, because
+what they remove or place beneath belongs to the Router, whose stack would
+otherwise name a page that is gone. The typed doors cannot return a `Result`
+without a public signature change, so a refusal disposes the route unpushed,
+returns a `RouteResult` already complete with `None`, logs `tracing::error!`
+with the reason, and fails a `debug_assert!`. The named doors answer
+`NamedRouteError::NotAddressable` before anything is resolved, dismissed or
+pushed. Popups stay admitted, because `show_dialog` pushes a `PopupRoute` on
+the root navigator, until dialogs move to overlay entries (ADR-0093 §4). Every
+pop the navigator makes — the facade's, a back gesture's, a barrier's —
+reaches the Router's stack through an internal `NavigatorObserver`, so the
+location follows it.
+
+**Pinned by:** `pushing_a_page_route_under_a_router_is_not_addressable`,
+`doors_that_remove_or_seed_refuse_even_a_popup_under_a_router`,
+`popup_routes_are_admitted_and_leave_the_location_alone`,
+`facade_pop_updates_the_router_location`.
+
+### 23. A Router never pops or removes its last page
+
+**Oracle:** Flutter's `Navigator.pop` on a one-route navigator removes that
+route and leaves the navigator empty.
+
+**Choice:** a Router always has a location. The navigator records the pages
+the Router places, and no pop or removal takes the last present one, whether
+it is on top or beneath a popup: `RouterHandle::pop` answers `Ok(false)`, the
+facade's `pop`, `pop_with` and `remove_route[_with]` answer `false`,
+`maybe_pop` bubbles (as a lone route does in Flutter), and `pop_until` stops
+there, all with the stack unchanged. A top page that handles the pop itself
+(a local-history entry) still pops, since that removes no page.
+
+**Pinned by:** `router_never_pops_its_last_page`,
+`pop_until_stops_at_a_routers_last_page`,
+`a_routers_last_page_cannot_be_removed_even_under_a_popup`,
+`pops_never_take_the_last_page_from_above_a_popup`.
+
+### 24. `go` reconciles by common prefix, as Flutter's page-list diff does
+
+**Oracle:** `NavigatorState._updatePages` (a new page list keeps the matching
+bottom entries, removes the rest, adds the new pages beneath the new top
+without a transition and pushes the new top), and
+`Navigator.defaultGenerateInitialRoutes` (`'Initial route can have gaps'`,
+`'The full initial route has to be matched'`), from Flutter 3.44 as
+remembered — not checked against a local clone of that tag.
+
+**Choice:** `RouterHandle::go(location)` derives the new stack with
+`Routable::back_stack` — every prefix of the path that parses, the full path
+required — and keeps the longest common prefix with the current stack
+(compared with `PartialEq`). A new stack that is a prefix of the current one
+pops back to it with exit transitions; otherwise the pages above the common
+prefix are removed and the new pages are placed in one flush, the ones
+beneath the new top entering quietly (`RouteLifecycle::Add`) and only the new
+top running its entrance. The pages that stay keep their state; a page above
+the divergence point is rebuilt. **Divergence:** where Flutter falls back to
+the default route when the full initial route does not match, `go` and
+`Router::from_location` report `RouteParseError::NoMatch` and change nothing.
+
+**Pinned by:** `go_reconciles_only_the_diverging_tail`,
+`go_adds_the_new_back_stack_beneath_the_new_top`,
+`router_opens_at_a_location_with_its_back_stack`,
+`go_with_an_unknown_location_leaves_the_stack_alone`, and
+`back_stack_is_the_matching_prefix_chain`.
+
+### 25. Every Router page scopes a semantics route, and a labelled route names it
+
+**Oracle:** Flutter's `ModalRoute` wraps a page in no route-scoping
+`Semantics`: `_ModalScopeState` and `ModalRoute.buildModalScope` in
+`widgets/routes.dart` add only `sortKey` wrappers, `RawDialogRoute.buildPage`
+scopes a dialog's route, and a page's route name comes from inside the page,
+typically `AppBar`'s title (`namesRoute`). Read from the stable branch's
+`routes.dart` on 2026-09-26 through a partial fetch, not a local clone of a
+tagged release; treat the page-side half as recalled.
+
+**Choice — a divergence:** a Router page is an addressable screen, so the
+Router wraps each one in `Semantics::scopes_route(true)
+.explicit_child_nodes(true)`, and adds `names_route(true)` with the label when
+`Routable::semantics_label` returns one. An assistive technology then hears a
+route change on every navigation, with no app bar required.
+
+**Pinned by:** `router_pages_scope_and_name_a_semantics_route`.
+
+### 26. Global widgets localizations live in the catalog, not in a separate `flutter_localizations` package
 
 **Oracle:** `package:flutter_localizations`
 (`lib/src/widgets_localizations.dart`,
@@ -1880,3 +2002,41 @@ state are not implemented yet. **Tests:** `tests/raw_button.rs`
 (`raw_button_without_on_press_is_disabled_and_advertises_no_click`,
 `raw_button_press_is_reachable_through_a_platform_click`, and the pointer,
 rebuild, `callback` and refused-write cases).
+
+### 34. `EditableText` answers an input method's pulls; one platform session is one change
+
+**Oracle:** Flutter's `EditableTextState` is a `TextInputClient`: the engine
+pushes whole `TextEditingValue`s through `updateEditingValue`, and each push is
+one controller change and one `onChanged`.
+
+**Choice:** `EditableText` is a `flui_platform_api::TextStore` (ADR-0090). The
+input method reads the text, selection, composition and geometry in UTF-16
+offsets and edits under a lock; a push `ImeEvent` is projected onto the same
+store. A read-write session is written back to the controller once, when the
+lock is released: one listener notification and at most one `on_changed`,
+however many edits the session made (a TSF conversion replaces, re-marks and
+moves the caret in one session). A lock asked for inside the frame
+transaction (the whole frame drive, post-frame callbacks included, in the
+harness's `tick` as in `flui-app`'s `UiRealm::drive_frame`) runs after the
+frame; a key press first runs those queued grants, so it lands after an IME
+commit. **Tests:** `tests/text_store_kit.rs`
+(`editable_text_conforms_to_kit_v1`,
+`obscured_editable_text_conforms_to_kit_v1`), `tests/editable_text.rs`'s
+`text_store::a_three_edit_session_calls_on_changed_once`,
+`a_lock_requested_from_a_post_frame_callback_is_granted_after_the_frame`,
+`typing_after_a_deferred_commit_lands_after_the_commit`.
+
+### 35. Platform selection is exact; user selection snaps
+
+**Oracle:** Flutter's `updateEditingValue` applies the platform's selection as
+the engine sends it.
+
+**Choice:** the same for the platform: a selection set through the text store
+is kept at any scalar boundary, including inside a grapheme cluster (offset 4
+of `"a😀e\u{301}…"` is between the `e` and its combining mark), because TSF and
+AppKit address scalars and a snapped answer would disagree with what they set.
+A tap, a drag and the arrow keys keep snapping to extended grapheme clusters
+through the controller (its "Character unit"). **Tests:**
+`tests/editable_text.rs`'s
+`text_store::platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps`,
+the kit's `selection_inside_a_grapheme_is_kept_exactly`.

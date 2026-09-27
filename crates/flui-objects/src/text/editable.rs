@@ -354,8 +354,36 @@ impl RenderEditable {
     #[must_use]
     pub fn rect_for_composing_range(&self) -> Option<Rect> {
         let range = self.composing_range.clone()?;
-        if range.is_empty() || !self.painter.has_layout() {
+        if range.is_empty() {
             return None;
+        }
+        self.local_rect_for_range(range)
+    }
+
+    /// The bounding rect of the byte range `range` of [`Self::plain_text`]
+    /// in this object's local painted coordinates: the union of its
+    /// selection boxes, or — for an empty range — the caret at that offset,
+    /// `caret_width` × `caret_height`.
+    ///
+    /// `None` before layout, and for a non-empty range that covers no glyph.
+    /// A range inside a multi-scalar glyph cluster is a proportional slice of
+    /// the cluster's box, the same interpolation caret placement uses. This
+    /// is the geometry a text store answers an input method's rect queries
+    /// with (ADR-0090).
+    #[must_use]
+    pub fn local_rect_for_range(&self, range: Range<usize>) -> Option<Rect> {
+        if !self.painter.has_layout() {
+            return None;
+        }
+        let range = self.clamp_text_range(range);
+        if range.is_empty() {
+            let caret = self
+                .painter
+                .get_offset_for_caret(TextPosition::new(range.start, TextAffinity::Downstream));
+            return Some(Rect::from_origin_size(
+                Point::new(caret.dx, caret.dy),
+                Size::new(px(self.caret_width), px(self.caret_height)),
+            ));
         }
         self.painter
             .get_boxes_for_selection(range.start, range.end)

@@ -187,6 +187,18 @@ impl flui_foundation::Diagnosticable for RenderSemanticsAnnotations {
             self.configuration.has_been_annotated(),
             "has semantics",
         );
+        // The two route flags a route's page wrapper sets, so a widget test can
+        // assert the wrapper scopes (and names) a route.
+        builder.add_flag(
+            "scopes_route",
+            self.configuration.scopes_route(),
+            "scopes route",
+        );
+        builder.add_flag(
+            "names_route",
+            self.configuration.names_route(),
+            "names route",
+        );
         // The shape of a `GestureDetector`'s action-advertising helper node,
         // so a test asking for a control's own wrapper can leave it out.
         builder.add_flag(

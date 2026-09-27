@@ -1826,6 +1826,60 @@ fn harness_editable_rect_for_composing_range_some() {
     assert!(rect.width().get() > 0.0);
 }
 
+/// `local_rect_for_range` unions a range's boxes, and answers an empty range
+/// with the caret rect at that offset — the geometry a text store hands an
+/// input method for a range and for a caret.
+#[test]
+fn harness_editable_local_rect_for_range_unions_boxes_and_gives_a_caret_rect_when_empty() {
+    let run = RenderTester::mount(box_node(
+        RenderEditable::new(TextSpan::new("hello world"), TextDirection::Ltr)
+            .with_caret_byte_offset(3),
+    ))
+    .with_constraints(loose(200.0))
+    .run_layout();
+    let editable = run
+        .owner()
+        .render_tree()
+        .get(run.root())
+        .expect("root render id must be live")
+        .as_box()
+        .expect("root is a box node")
+        .render_object()
+        .downcast_ref::<RenderEditable>()
+        .expect("root is a RenderEditable");
+
+    let first = editable.local_rect_for_range(0..2).expect("laid out");
+    let second = editable.local_rect_for_range(2..5).expect("laid out");
+    let both = editable.local_rect_for_range(0..5).expect("laid out");
+    assert_eq!(
+        both,
+        first.union(&second),
+        "a range is the union of its parts"
+    );
+    assert!(first.width().get() > 0.0);
+    assert!(second.left() >= first.left());
+
+    let caret = editable.local_rect_for_range(3..3).expect("laid out");
+    assert_eq!(
+        caret,
+        editable.caret_local_rect(),
+        "an empty range at the caret is the caret's own rect"
+    );
+    let at_start = editable.local_rect_for_range(0..0).expect("laid out");
+    assert!(
+        at_start.left() < caret.left(),
+        "an empty range follows its offset"
+    );
+}
+
+/// Before layout there is no geometry to report, for any range.
+#[test]
+fn harness_editable_local_rect_for_range_is_none_before_layout() {
+    let editable = RenderEditable::new(TextSpan::new("abc"), TextDirection::Ltr);
+    assert_eq!(editable.local_rect_for_range(0..2), None);
+    assert_eq!(editable.local_rect_for_range(1..1), None);
+}
+
 // ============================================================================
 // Single-child box proxies
 // ============================================================================

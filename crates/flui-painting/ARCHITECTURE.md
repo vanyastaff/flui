@@ -20,7 +20,9 @@ Divergences from Flutter are recorded under [Mapping decisions](#mapping-decisio
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
 | Wire vocabulary | `display_list/{mod,command,command_ops}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds` |
 | Text | `text_layout/{layout,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | The process-wide font system and `SharedFontSystem`, `TextLayout` (shape, truncate, caret/hit-test/line queries), family resolution against the host, `TextPainter` |
-| Parley raster side | `parley_text/{key,registry,swash}.rs` (`parley` feature) | `ParleyGlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer`; no production caller until ADR-0092 §10 step 3 |
+| Per-realm text context | `text_layout/context.rs` (every build; shaping and registration behind `parley`) | `FontCollection` (the app's shared, add-only fontique collection) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); no production caller until ADR-0092 §10 step 3 |
+| Parley shaping | `parley_text/shape.rs` (`parley` feature) | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction) to a `ParagraphLayout` whose `metrics()` read the laid-out lines |
+| Parley raster side | `parley_text/{key,registry,swash}.rs` (`parley` feature) | `ParleyGlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer`; no production caller until ADR-0092 §10 step 4 |
 | Decorations | `decoration.rs`, `table_border.rs` | `paint_box_decoration` / `box_decoration_hit_test`, `paint_table_border` |
 | Test support | `testing/mod.rs`, `text_layout::init_font_system_with_faces` | `record` (`testing` feature); pinning the font system to a known face set |
 
@@ -113,12 +115,23 @@ always zero.
 
 `#![forbid(unsafe_code)]`. Every type is plain `Send + Sync` value data;
 `Canvas` and `TextPainter` are mutated through `&mut self` by one owner.
-The one lock is the font system's, never nested with another lock in this
-crate, and never held across a call into another crate except the engine's
-`with_mut` closure, which takes no painting lock. `SwashRasterizer` takes no
-lock at all: it owns its `FontRegistry` and scaler, is `Send`, and is used
-through `&mut` by whoever owns the atlas, so it can rasterize on another
-thread while shaping continues.
+The one lock is the cosmic-text path's font system, never nested with another
+lock in this crate, and never held across a call into another crate except the
+engine's `with_mut` closure, which takes no painting lock. The crate's
+`clippy.toml` disallows `Mutex` and `RwLock`; that font system is the one
+`#[expect]`ed site (`text_layout/layout.rs`), and it leaves at ADR-0092 §10
+step 6.
+
+The Parley path takes no FLUI lock. A `TextContext` is `Send` and used
+through `&mut` by the realm that owns it, so two realms shape at the same time
+(`tests/text_context.rs`, `two_realms_shape_in_parallel`). The
+`FontCollection` they share is fontique's shared mode: a registration takes
+fontique's mutex and bumps a version, and each context re-reads the collection
+under that mutex once, on its next shape; otherwise a shape costs one atomic
+load (ADR-0092 §3 cites the fontique lines). `SwashRasterizer` takes no lock
+either: it owns its `FontRegistry` and scaler, is `Send`, and is used through
+`&mut` by whoever owns the atlas, so it can rasterize on another thread while
+shaping continues.
 
 ---
 
@@ -426,11 +439,67 @@ measured; no fake bold, as cosmic-text does — rejected, a bold style on a
 regular-only face would draw regular.
 
 **Accepted trade-off:** only `parley_text` applies it; the cosmic-text path
-keeps drawing no fake bold until ADR-0092 §10 step 4 moves paragraphs to
+keeps drawing no fake bold until ADR-0092 §10 step 5 moves paragraphs to
 Parley, which checks the strength against Skia's source per platform and
 against paragraph output. Locked by `synthetic_bold_adds_the_interpolated_width`
 (width gain at 9, 20, 36 and 144 px).
 
+### 11. The font collection is app-scoped and passed explicitly; each realm shapes through its own context
+
+**Rule:** the Parley path has one `FontCollection` per app, and each realm
+shapes through a `TextContext` of its own built from it. A face registered on
+the collection reaches every context built from it, including ones built
+before the registration. The collection offers no removal. This crate provides
+both types; nothing constructs them in production yet. The runtime handing the
+collection to each realm's constructor is the other half of ADR-0092 §10
+step 2, and layout measuring through the context is step 3.
+
+**Flutter:** one engine-wide `FontCollection` behind `dart:ui`, reached
+ambiently by every paragraph builder in the process; `loadFontFromList` adds
+to it and `PaintingBinding.systemFonts` notifies listeners. Recalled from
+Flutter's API, not checked against a clone.
+
+**Why:** FLUI runs several realms on their own threads (ADR-0027, ADR-0091).
+An ambient collection behind one lock makes every realm's shaping wait on the
+others, which is what the cosmic-text path's `FONT_SYSTEM` does today, and is
+process-global state ADR-0097 retires. Passing the collection keeps it out of
+any `static`; a context per realm keeps shaping lock-free. Removal is left out
+because a glyph key names its face by blob and must not outlive it
+(ADR-0092 §2).
+
+**Accepted trade-off:** a registration makes each realm deep-copy the
+collection's data once, on its next shape, and `register_font` itself clones
+fontique's local collection data to get the `&mut` its registration takes,
+rather than holding a FLUI lock; both are accepted because registration is
+rare. Until ADR-0092 §10 step 6 the bundled faces sit in both this collection
+and the cosmic-text font system. Locked by `two_realms_shape_in_parallel` and
+`a_face_registered_after_the_fork_shapes_in_every_realm`
+(`tests/text_context.rs`).
+
+
+### 12. `TextDirection` sets line alignment on the Parley path, not the base direction
+
+**Rule:** `ParagraphSpec::direction` aligns lines: `Ltr` to the left edge,
+`Rtl` to the right. The bidi base direction is Parley's own, taken from the
+paragraph's first strong character, so Latin-first text under `Rtl` is still
+ordered as an LTR paragraph, and Hebrew-first text under `Ltr` is ordered RTL.
+
+**Flutter:** `ParagraphStyle.textDirection` sets SkParagraph's base
+direction, which orders the runs and decides which side the start edge is.
+Recalled from Flutter's API, not checked against a clone.
+
+**Why:** Parley 0.11.1 has no way to set it: its analysis calls the bidi
+resolver with `None` for the base level (`analysis/mod.rs:539-546`), and
+neither the builder nor the layout exposes one. Right alignment is the part
+of `Rtl` that can be honoured today.
+
+**Accepted trade-off:** a right-to-left paragraph whose text starts with Latin
+or neutrals lays out its runs in the wrong order until the base direction can
+be set; that belongs to ADR-0092 §10 step 5, where editable text moves to
+Parley and its acceptance covers LTR, RTL and mixed bidi. No production path
+shapes through `ParagraphSpec` before then. Locked by
+`rtl_aligns_lines_right_without_setting_the_base_direction`
+(`src/parley_text/shape.rs`).
 
 ---
 

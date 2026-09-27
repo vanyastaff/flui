@@ -311,6 +311,38 @@ impl UiRealm {
         (producer, last_outcome, any_failed)
     }
 
+    /// Drive one frame on this realm's scheduler — begin frame, persistent
+    /// callbacks with `pipeline`, post-frame callbacks — as its
+    /// presentations' text-store transaction (ADR-0027 §3), then run the
+    /// commit anchor.
+    ///
+    /// Every presentation's commit gate is shut for the whole drive, so an
+    /// input method's lock asked for anywhere inside it (a build, a
+    /// post-frame callback, a nested platform pump) is refused (sync) or
+    /// queued (async), and no platform edit lands in a tree mid-frame. The
+    /// gates reopen on every exit, a panic's unwind included. The queued
+    /// grants run only after `drive_frame_with_lane` returned, with the
+    /// scheduler back in `Idle`: an edit a grant makes there marks the tree
+    /// dirty and schedules the next frame like any other owner-thread edit,
+    /// where the same edit inside the frame would have its visual-update
+    /// request dropped.
+    pub(crate) fn drive_frame<R>(&self, now: Instant, pipeline: impl FnOnce() -> R) -> R {
+        let commits_closed = TextCommitsClosed::close(self);
+        let result = self.scheduler.drive_frame_with_lane(
+            now,
+            flui_scheduler::IdleDeadline::far_future(now),
+            pipeline,
+            &self.local_post_frame,
+        );
+        drop(commits_closed);
+        // The commit anchor: each presentation's queued grants, against the
+        // stores that queued them.
+        for presentation in self.presentations.iter() {
+            let _ran = presentation.text_input().run_deferred_grants();
+        }
+        result
+    }
+
     /// One presentation's build+layout+paint segment — moves VERBATIM from
     /// the retired `AppBinding::draw_frame_entered`'s Phase 1–4, now
     /// parameterized by `presentation` instead of hard-wired to
@@ -1027,5 +1059,33 @@ impl UiRealm {
     /// `SystemTime` — so this is a readability choice, not a portability one.
     fn duration_micros_saturated(duration: web_time::Duration) -> u64 {
         u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+    }
+}
+
+/// Every presentation's text-store commits, closed for one frame drive.
+///
+/// Dropping it reopens them — on a normal return or while a panic unwinds
+/// out of the drive — and does nothing else: the queued grants run at the
+/// anchor after the drive, never from a destructor. Drives do not nest (the
+/// scheduler refuses a second begin-frame inside a frame), so there is no
+/// outer transaction to restore.
+struct TextCommitsClosed<'a> {
+    realm: &'a UiRealm,
+}
+
+impl<'a> TextCommitsClosed<'a> {
+    fn close(realm: &'a UiRealm) -> Self {
+        for presentation in realm.presentations.iter() {
+            presentation.text_input().set_transaction_open(true);
+        }
+        Self { realm }
+    }
+}
+
+impl Drop for TextCommitsClosed<'_> {
+    fn drop(&mut self) {
+        for presentation in self.realm.presentations.iter() {
+            presentation.text_input().set_transaction_open(false);
+        }
     }
 }
