@@ -445,6 +445,8 @@ mod desktop_pacing_tests {
     use flui_engine::PresentDisposition;
     use std::time::{Duration, Instant};
 
+    use crate::app::raster_lane::RealmRaster as _;
+
     use super::{
         DEFAULT_DISPLAY_PERIOD, FallbackGate, FallbackWake, WakeAction, frame_is_dirty,
         keeps_frame_gate_open, wake_action,

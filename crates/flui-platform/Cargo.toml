@@ -20,12 +20,16 @@ exclude = ["/ARCHITECTURE.md"]
 autotests = false
 
 [dependencies]
-# The accessibility tree this crate's `PlatformAccessibility` capability
-# speaks. Data model only -- the per-OS `accesskit_*` adapters are separate and
-# feature-gated. This crate is layer 2 and cannot name `flui-semantics` (layer
-# 3) types, so an already-translated `accesskit::TreeUpdate` is what crosses
+# The accessibility tree the `PlatformAccessibility` capability speaks. Data
+# model only -- the per-OS `accesskit_*` adapters are separate and
+# feature-gated. An already-translated `accesskit::TreeUpdate` is what crosses
 # the seam.
 accesskit = { workspace = true }
+# `PlatformAccessibility` and its listener types, which the backends implement
+# and `traits` re-exports at their old paths. The trait lives there so the
+# frame runtime can hold a window's bridge without linking a backend
+# (ADR-0082 §2).
+flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # The contracts the backends implement (capability traits, window/input and
@@ -363,8 +367,11 @@ all-features = true
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 block2 = "0.6.2"
 
+# Layer 3, not the substrate's 2: its `flui-semantics` edge (the
+# `PlatformAccessibility` trait, ADR-0082 §2) points at layer 3. Only
+# `flui-app` (layer 9) depends on it, so nothing below is affected.
 [package.metadata.flui]
-layer = 2
+layer = 3
 tier = "H"
 tier-kind = "internal"
 order = 1

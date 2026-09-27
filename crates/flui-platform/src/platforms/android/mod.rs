@@ -67,6 +67,7 @@ pub use window::AndroidWindow;
 use crate::{
     data_transfer::{DataTransferSource, NullDataTransferSource},
     error::{BootstrapError, PlatformError},
+    redraw_poll::RedrawPoll,
     shared::PlatformHandlers,
     traits::{
         Clipboard, DisplayId, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform,
@@ -105,35 +106,6 @@ fn is_deadline_due(deadline: Option<web_time::Instant>, now: web_time::Instant) 
     deadline.is_some_and(|deadline| now >= deadline)
 }
 
-/// Whether `run`'s loop should force a zero-timeout `poll_events` call (and,
-/// once actually dispatched a few lines later, a frame) THIS iteration.
-///
-/// `redraw_requested` passes through unconditionally: it comes from
-/// [`AndroidWindow::take_redraw_request`](super::window::AndroidWindow::take_redraw_request), which
-/// consumes on read (an atomic swap to `false`), so it is already
-/// self-limiting the way [`is_deadline_due`] is NOT — one call answering
-/// `true` clears it for every subsequent call until something re-arms it.
-///
-/// `deadline_due` is gated on `resumed` because it carries no such
-/// self-limiting property, and round 6 found what happens when it is
-/// counted in unconditionally: with the app paused and a deadline armed —
-/// which device loss and `MainEvent::Pause` are frequently the same
-/// real-world event for — `is_deadline_due` answers `true` on every
-/// iteration (see its own doc: it is stateless), forcing a 0ms
-/// `poll_events` timeout every iteration, while the actual dispatch this
-/// would be for stays gated on `resumed` too (`run`'s loop, a few lines
-/// below this decision) and so never runs — nothing ever consumes the
-/// deadline, and the loop spins at 100% CPU on a backgrounded phone for as
-/// long as it stays paused. Gating here means a due-but-unconsumable
-/// deadline instead falls through to the ordinary ~16ms idle timeout; it is
-/// not lost, only deferred — the moment a real `MainEvent::Resume` arrives,
-/// the wake-deadline hook is re-consulted on the very next iteration (that
-/// read is unconditional and never cached) and a still-due deadline is
-/// caught then.
-fn should_force_render_poll(resumed: bool, deadline_due: bool, redraw_requested: bool) -> bool {
-    (resumed && deadline_due) || redraw_requested
-}
-
 /// Android platform implementation using `android-activity`
 ///
 /// Wraps the `AndroidApp` provided by `android_main()` and implements the
@@ -156,6 +128,7 @@ pub struct AndroidPlatform {
     app: AndroidApp,
     handlers: Arc<Mutex<PlatformHandlers>>,
     running: Arc<AtomicBool>,
+    execution_resumed: Arc<AtomicBool>,
     window: Arc<Mutex<Option<Arc<AndroidWindow>>>>,
     background_executor: Arc<SimpleExecutor>,
     clipboard: Arc<MockClipboard>,
@@ -182,6 +155,7 @@ impl AndroidPlatform {
             app,
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
             running: Arc::new(AtomicBool::new(true)),
+            execution_resumed: Arc::new(AtomicBool::new(false)),
             window: Arc::new(Mutex::new(None)),
             background_executor: Arc::new(SimpleExecutor),
             clipboard: Arc::new(MockClipboard::new()),
@@ -320,7 +294,7 @@ impl Platform for AndroidPlatform {
         let platform = Arc::new(*self);
 
         let mut on_ready = Some(on_ready);
-        let mut resumed = false;
+        platform.execution_resumed.store(false, Ordering::SeqCst);
         // Set when `on_ready` returns `Err`: a fallible bootstrap
         // failure (window creation, GPU init, root-widget attach) has no
         // other return path back to `run`'s caller. Stopping `running` and
@@ -352,33 +326,33 @@ impl Platform for AndroidPlatform {
             let wake_deadline = wake_deadline_hook.and_then(|hook| hook());
             let deadline_due = is_deadline_due(wake_deadline, web_time::Instant::now());
 
-            // Check if we should render before polling — see
-            // `should_force_render_poll`'s own doc for why `deadline_due`'s
-            // contribution is gated on `resumed` and `redraw_requested`'s is
-            // not.
+            // Check if we should render before polling. Pending sources are
+            // gated on `resumed`; otherwise a due deadline would force a 0ms
+            // busy loop while the backgrounded app cannot consume it. The redraw is observed
+            // without consumption because `poll_events` may suspend execution
+            // before the callback can be delivered.
             let redraw_requested = platform
                 .window
                 .lock()
                 .as_ref()
-                .is_some_and(|w| w.take_redraw_request());
-            let should_render = should_force_render_poll(resumed, deadline_due, redraw_requested);
-
-            let timeout = if should_render {
-                Duration::from_millis(0)
-            } else {
-                Duration::from_millis(16)
-            };
-
+                .is_some_and(|w| w.has_redraw_request());
+            let resumed = platform.execution_resumed.load(Ordering::SeqCst);
             let mut should_call_ready = false;
-
-            platform.app.poll_events(Some(timeout), |event| {
+            let ((), redraw_after_poll) =
+                RedrawPoll::new(deadline_due, redraw_requested).poll(resumed, |should_render| {
+                    let timeout = if should_render {
+                        Duration::from_millis(0)
+                    } else {
+                        Duration::from_millis(16)
+                    };
+                    platform.app.poll_events(Some(timeout), |event| {
                 if let PollEvent::Main(main_event) = event {
                     match main_event {
                         MainEvent::Resume { .. } => {
                             tracing::info!(
                                 "Android: Resumed — lifecycle transition, native window untouched"
                             );
-                            resumed = true;
+                            platform.execution_resumed.store(true, Ordering::SeqCst);
 
                             // Notify window of activation. The surface signal
                             // rides along: a `Resume` with no window yet (the
@@ -397,7 +371,10 @@ impl Platform for AndroidPlatform {
                                 "Android: Paused — releasing the surface; the native window \
                                  outlives this"
                             );
-                            resumed = false;
+                            // Publish suspension before invoking embedder callbacks: a nested
+                            // continuation request must not acknowledge a redraw opportunity
+                            // that this loop will refuse to dispatch.
+                            platform.execution_resumed.store(false, Ordering::SeqCst);
 
                             // Release BEFORE deactivating: the drop is the one
                             // step here with a validity window behind it, and
@@ -445,6 +422,7 @@ impl Platform for AndroidPlatform {
                         }
                         MainEvent::Destroy => {
                             tracing::info!("Android: Destroy — shutting down");
+                            platform.execution_resumed.store(false, Ordering::SeqCst);
 
                             // A window that never arrived leaves `on_ready`
                             // untaken, and exiting clean here would report a
@@ -495,7 +473,8 @@ impl Platform for AndroidPlatform {
                         _ => {}
                     }
                 }
-            });
+                    });
+                });
 
             // Call on_ready outside of poll_events (FnOnce can't be called in
             // closure). Fires once, at the first `MainEvent::InitWindow` — the
@@ -523,18 +502,23 @@ impl Platform for AndroidPlatform {
             }
 
             // Process input events (touch, key) and dispatch through callbacks
+            let resumed = platform.execution_resumed.load(Ordering::SeqCst);
             if resumed {
                 platform.process_input_events();
             }
 
-            // Dispatch frame rendering if resumed and redraw was requested
-            if resumed
-                && should_render
-                && let Some(ref w) = *platform.window.lock()
+            // Consume the redraw only after polling confirms this turn can
+            // deliver it. A queued Pause therefore preserves the request for
+            // Resume rather than stranding an acknowledged continuation.
+            if let Some(ref w) = *platform.window.lock()
+                && redraw_after_poll
+                    .take_if_deliverable(resumed, || w.take_deliverable_redraw_request())
             {
                 w.callbacks().dispatch_request_frame();
             }
         }
+
+        platform.execution_resumed.store(false, Ordering::SeqCst);
 
         // The loop's one exit, reached by its three returning routes: a
         // `MainEvent::Destroy`, a `quit()` from any thread, a bootstrap
@@ -599,6 +583,7 @@ impl Platform for AndroidPlatform {
 
     fn quit(&self) {
         tracing::info!("Android: quit requested");
+        self.execution_resumed.store(false, Ordering::SeqCst);
         self.running.store(false, Ordering::Relaxed);
     }
 
@@ -606,7 +591,10 @@ impl Platform for AndroidPlatform {
         &self,
         _options: WindowOptions,
     ) -> Result<Arc<dyn crate::traits::HostWindow>, OpenWindowError> {
-        let window = Arc::new(AndroidWindow::new(self.app.clone()));
+        let window = Arc::new(AndroidWindow::new(
+            self.app.clone(),
+            Arc::clone(&self.execution_resumed),
+        ));
         let _prev = self.window.lock().replace(Arc::clone(&window));
         tracing::info!("Android window created (wrapping ANativeWindow)");
         Ok(window)
@@ -748,7 +736,7 @@ impl PlatformDisplay for AndroidDisplay {
 mod wake_deadline_tests {
     use std::time::Duration;
 
-    use super::{is_deadline_due, should_force_render_poll};
+    use super::{RedrawPoll, is_deadline_due};
 
     #[test]
     fn no_hook_or_an_empty_hook_is_never_due() {
@@ -804,7 +792,9 @@ mod wake_deadline_tests {
     #[test]
     fn a_due_deadline_does_not_force_a_render_poll_while_paused() {
         assert!(
-            !should_force_render_poll(false, true, false),
+            !RedrawPoll::new(true, false)
+                .poll(false, std::convert::identity)
+                .0,
             "paused + due + no explicit redraw request must fall through to the ordinary idle \
              timeout, not force a 0ms poll nobody can act on"
         );
@@ -812,20 +802,38 @@ mod wake_deadline_tests {
 
     #[test]
     fn a_due_deadline_forces_a_render_poll_while_resumed() {
-        assert!(should_force_render_poll(true, true, false));
+        assert!(
+            RedrawPoll::new(true, false)
+                .poll(true, std::convert::identity)
+                .0
+        );
     }
 
     #[test]
-    fn an_explicit_redraw_request_forces_a_render_poll_regardless_of_resumed_or_deadline_state() {
-        // `redraw_requested` is already self-limiting (consume-on-read), so
-        // unlike `deadline_due` it is never gated on `resumed` here.
-        assert!(should_force_render_poll(false, false, true));
-        assert!(should_force_render_poll(true, false, true));
+    fn an_explicit_redraw_waits_while_paused_and_forces_a_poll_while_resumed() {
+        assert!(
+            !RedrawPoll::new(false, true)
+                .poll(false, std::convert::identity)
+                .0
+        );
+        assert!(
+            RedrawPoll::new(false, true)
+                .poll(true, std::convert::identity)
+                .0
+        );
     }
 
     #[test]
     fn nothing_pending_never_forces_a_render_poll() {
-        assert!(!should_force_render_poll(false, false, false));
-        assert!(!should_force_render_poll(true, false, false));
+        assert!(
+            !RedrawPoll::new(false, false)
+                .poll(false, std::convert::identity)
+                .0
+        );
+        assert!(
+            !RedrawPoll::new(false, false)
+                .poll(true, std::convert::identity)
+                .0
+        );
     }
 }

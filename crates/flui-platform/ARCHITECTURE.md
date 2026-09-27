@@ -11,7 +11,9 @@ The contracts this crate's backends implement — `PlatformWindow`,
 (`flui_platform::X`, `flui_platform::traits::X`, `flui_platform::data_transfer`),
 so a backend or `flui-app` names them as before. What stays here is what names
 an OS stack, AccessKit or tokio: `Platform`, the owner-thread capability,
-`PlatformAccessibility`, `HostWindow` and every backend. Only `flui-app` may
+`HostWindow` and every backend. `PlatformAccessibility`, the trait the backends'
+AccessKit adapters implement, is `flui-semantics`' (ADR-0082 §2, amended) and is
+re-exported at `flui_platform::traits`. Only `flui-app` may
 depend on this crate (`allowed-dependents`); a crate that needs a capability
 trait depends on `flui-platform-api` instead.
 
@@ -988,6 +990,16 @@ background pauses native ticks immediately, including during nested UIKit loops.
 true background suspension pauses the display link and releases it. Foreground
 restores execution while unfocused; duplicate foreground preserves established
 focus. Headless simulation exercises the same observation contract.
+
+Android publishes `Resume`/`Pause` as a shared execution snapshot before invoking
+embedder callbacks. Its window reports `Running` only while resumed and otherwise
+reports `Suspended`; focus and native-window availability remain separate facts.
+This makes redraw-backed owner continuations honest: the loop consumes redraw
+flags only after polling confirms execution is still running. A queued `Pause`
+therefore preserves the flag rather than acknowledging a continuation whose frame
+will be refused; `Resume` makes the callback deliverable again. The app also retains
+a logical continuation when the initial actuator refuses it and retries from the
+next fresh native root.
 
 The iOS protocol probe is reproducible with a dedicated booted simulator:
 

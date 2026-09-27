@@ -21,6 +21,7 @@ use super::super::host::{
 use super::super::secondary_window::{open_secondary_window, open_secondary_window_impl};
 use super::super::{install_close_request_wiring, request_presentation_close};
 use super::*;
+use crate::app::raster_lane::RealmRaster as _;
 use crate::app::raster_test_support::TestRasterBackend;
 use crate::app::runtime::{ExitPolicy, WindowPolicy};
 use crate::app::{AppConfig, FrameFailureDetail};
@@ -47,6 +48,91 @@ fn test_presentation_window() -> crate::app::presentation::PresentationWindow {
 
 fn install_test_realm() -> RealmDispatcher {
     install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &test_window())
+}
+
+#[test]
+fn background_owner_pump_drains_before_polling_without_a_frame() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let _clear = OwnerHostClearGuard::arm();
+    let realm = crate::app::ui_realm::UiRealm::for_test();
+    let scheduler = realm.scheduler().clone();
+    let sender = realm.command_sender();
+    let dispatcher = install_platform_realm(realm, &test_window());
+    sender.request_redraw();
+    dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).expect("background turn");
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(|realm| {
+            assert!(!realm.take_redraw_request(), "the owner inbox was drained");
+        })),
+    )
+    .expect("inspect inbox");
+
+    let polled = Arc::new(AtomicBool::new(false));
+    let polled_in_task = Arc::clone(&polled);
+    let _token = scheduler.spawn_local(Box::pin(async move {
+        polled_in_task.store(true, Ordering::SeqCst);
+        sender.request_redraw();
+    }));
+    let frames_before = scheduler.frame_count();
+    dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).expect("poll background work");
+    assert!(polled.load(Ordering::SeqCst));
+    assert_eq!(
+        scheduler.frame_count(),
+        frames_before,
+        "no frame transaction"
+    );
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(|realm| {
+            assert!(
+                realm.take_redraw_request(),
+                "poll-generated work survives until the next turn"
+            );
+        })),
+    )
+    .expect("inspect next-turn work");
+    teardown_platform_realm();
+}
+
+#[test]
+fn background_owner_pump_defers_reentrant_work_and_respects_close() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let _clear = OwnerHostClearGuard::arm();
+    let realm = crate::app::ui_realm::UiRealm::for_test();
+    let scheduler = realm.scheduler().clone();
+    let sender = realm.command_sender();
+    let dispatcher = install_platform_realm(realm, &test_window());
+    let polled = Arc::new(AtomicBool::new(false));
+    let polled_in_task = Arc::clone(&polled);
+    let _token = scheduler.spawn_local(Box::pin(async move {
+        polled_in_task.store(true, Ordering::SeqCst);
+        dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).expect("queue nested pump");
+        APP_RUNTIME.with(|slot| assert_eq!(slot.borrow().owner_turn_queue.len(), 1));
+        sender.request_redraw();
+    }));
+    dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).expect("outer pump");
+    assert!(polled.load(Ordering::SeqCst));
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(move |realm| {
+            assert!(
+                !realm.take_redraw_request(),
+                "the deferred pump drains after the outer poll"
+            );
+            dispatch_platform_realm(
+                dispatcher,
+                RealmTask::ClosePresentation(dispatcher.address.presentation_id),
+            )
+            .expect("admit terminal close");
+            assert!(
+                dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump).is_err(),
+                "admitted close fences background work immediately"
+            );
+        })),
+    )
+    .expect("close realm");
+    teardown_platform_realm();
 }
 
 #[test]
@@ -285,7 +371,7 @@ fn window_execution_is_local_reversible_and_cannot_override_host_or_terminal_sto
                     AppLifecycleState::Paused
                 );
                 assert!(!realm.scheduler().frames_enabled());
-                realm.stop_presentation(a.address.presentation_id);
+                realm.stop_presentation_for_test(a.address.presentation_id);
                 realm.update_window_execution(a.address.presentation_id, Running);
                 realm.update_window_focus(a.address.presentation_id, true);
                 assert_eq!(
@@ -298,6 +384,114 @@ fn window_execution_is_local_reversible_and_cannot_override_host_or_terminal_sto
             })),
         )
         .expect("host and terminal fences");
+    });
+}
+
+#[test]
+fn queued_window_snapshots_preserve_transitions_and_address_the_sibling() {
+    with_quit_notification_loop(|_, _| {
+        let a = install_test_realm();
+        let b = install_presentation_alongside(a, test_presentation_window())
+            .expect("shared presentation");
+        resume_for_quit(a);
+        let checked = Rc::new(Cell::new(false));
+        let checked_in_task = Rc::clone(&checked);
+        dispatch_platform_realm(
+            a,
+            RealmTask::Frame(Box::new(move |realm| {
+                let history = Rc::new(RefCell::new(Vec::new()));
+                let observed = Rc::clone(&history);
+                let handle = realm
+                    .presentation_widgets_for_test(b.address.presentation_id)
+                    .lifecycle_source()
+                    .handle();
+                let (_, subscription) = handle
+                    .subscribe(move |state| observed.borrow_mut().push(state))
+                    .expect("subscription");
+                let original_a = realm
+                    .presentation_widgets_for_test(a.address.presentation_id)
+                    .lifecycle_source()
+                    .current();
+                for execution in [
+                    flui_platform::WindowExecutionState::Suspended,
+                    flui_platform::WindowExecutionState::Running,
+                ] {
+                    dispatch_platform_realm(
+                        b,
+                        RealmTask::Event(PlatformToUi::WindowSnapshot {
+                            execution,
+                            focused: false,
+                            visible: true,
+                        }),
+                    )
+                    .expect("queued observation");
+                }
+                dispatch_platform_realm(
+                    b,
+                    RealmTask::Frame(Box::new(move |realm| {
+                        let _subscription = subscription;
+                        let history = history.borrow();
+                        let paused = history
+                            .iter()
+                            .position(|state| *state == AppLifecycleState::Paused)
+                            .expect("suspension must remain observable");
+                        assert!(
+                            history
+                                .iter()
+                                .skip(paused + 1)
+                                .any(|state| *state == AppLifecycleState::Inactive),
+                            "the later running observation must follow suspension"
+                        );
+                        assert!(!history.contains(&AppLifecycleState::Resumed));
+                        assert_eq!(
+                            handle.snapshot().expect("live"),
+                            Some(AppLifecycleState::Inactive)
+                        );
+                        assert_eq!(
+                            realm
+                                .presentation_widgets_for_test(a.address.presentation_id)
+                                .lifecycle_source()
+                                .current(),
+                            original_a,
+                            "an unfocused sibling snapshot must not change the primary"
+                        );
+                        checked_in_task.set(true);
+                    })),
+                )
+                .expect("queued verification");
+            })),
+        )
+        .expect("dispatch and drain");
+        assert!(
+            checked.get(),
+            "the production FIFO executed the observations"
+        );
+    });
+}
+
+#[test]
+fn admitted_close_refuses_a_later_typed_window_snapshot() {
+    with_quit_notification_loop(|_, _| {
+        let dispatcher = install_test_realm();
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| {
+                close_presentation(dispatcher, dispatcher.address.presentation_id)
+                    .expect("admitted close");
+                assert_eq!(
+                    dispatch_platform_realm(
+                        dispatcher,
+                        RealmTask::Event(PlatformToUi::WindowSnapshot {
+                            execution: flui_platform::WindowExecutionState::Running,
+                            focused: true,
+                            visible: true,
+                        }),
+                    ),
+                    Err(RealmDispatchError::PresentationClosing)
+                );
+            })),
+        )
+        .expect("drain terminal operation");
     });
 }
 
@@ -1125,6 +1319,87 @@ fn reinstall_without_teardown_drops_the_displaced_realm_and_queue_outside_the_bo
     teardown_platform_realm();
 }
 
+#[test]
+fn panic_reinstall_drops_stale_owner_turns_outside_the_runtime_borrow() {
+    struct ReenterOnDrop {
+        dispatcher: RealmDispatcher,
+        dropped: Rc<Cell<bool>>,
+        reentry: Rc<RefCell<Option<Result<(), RealmDispatchError>>>>,
+    }
+
+    impl Drop for ReenterOnDrop {
+        fn drop(&mut self) {
+            let result =
+                dispatch_platform_realm(self.dispatcher, RealmTask::Frame(Box::new(|_| {})));
+            *self.reentry.borrow_mut() = Some(result);
+            self.dropped.set(true);
+        }
+    }
+
+    let dispatcher_a = install_test_realm();
+    let stale_turn_ran = Rc::new(Cell::new(false));
+    let stale_turn_ran_in_task = Rc::clone(&stale_turn_ran);
+    let stale_turn_dropped = Rc::new(Cell::new(false));
+    let stale_turn_reentry = Rc::new(RefCell::new(None));
+    let drop_probe = ReenterOnDrop {
+        dispatcher: dispatcher_a,
+        dropped: Rc::clone(&stale_turn_dropped),
+        reentry: Rc::clone(&stale_turn_reentry),
+    };
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |_| {
+                dispatch_platform_realm(
+                    dispatcher_a,
+                    RealmTask::Frame(Box::new(move |_| {
+                        stale_turn_ran_in_task.set(true);
+                        drop(drop_probe);
+                    })),
+                )
+                .expect("the later old-incarnation turn is admitted");
+                panic!("old incarnation failed after enqueueing another turn");
+            })),
+        )
+        .expect("the outer old-incarnation turn is admitted");
+    }));
+    assert!(panic.is_err());
+    assert!(
+        !stale_turn_dropped.get(),
+        "the panic leaves the later owner turn queued until recovery replaces the incarnation"
+    );
+
+    let dispatcher_b = install_test_realm();
+
+    assert!(
+        stale_turn_dropped.get(),
+        "reinstall must destroy stale owner-turn captures immediately"
+    );
+    assert_eq!(
+        *stale_turn_reentry.borrow(),
+        Some(Err(RealmDispatchError::StaleRealm)),
+        "capture destruction must happen after the runtime borrow is released and after the fresh \
+         incarnation is installed"
+    );
+    assert!(
+        !stale_turn_ran.get(),
+        "an old-incarnation turn must never execute in the fresh loop"
+    );
+    assert!(APP_RUNTIME.with(|slot| slot.borrow().owner_turn_queue.is_empty()));
+
+    let fresh_turn_ran = Rc::new(Cell::new(false));
+    let fresh_turn_ran_in_task = Rc::clone(&fresh_turn_ran);
+    dispatch_platform_realm(
+        dispatcher_b,
+        RealmTask::Frame(Box::new(move |_| fresh_turn_ran_in_task.set(true))),
+    )
+    .expect("the fresh incarnation dispatches normally");
+    assert!(fresh_turn_ran.get());
+
+    teardown_platform_realm();
+}
+
 /// `install_platform_realm` only ever touches the realm-facing fields
 /// (`realm`, `queue`, `owner_thread`, `address`, `surface_applier`,
 /// `visible`, `focused`) — `owner_platform` is a separate, loop-scoped
@@ -1452,7 +1727,7 @@ fn queued_events_for_a_removed_presentation_never_deliver() {
 /// (`expect`) and this panics out of the dispatch instead of running the
 /// task queued behind it.
 #[test]
-fn queued_safe_area_for_a_closed_sibling_presentation_is_dropped() {
+fn admitted_close_fences_later_safe_area_for_that_presentation() {
     let platform = flui_platform::headless_platform();
     let window_a: Arc<dyn PlatformWindow> = platform
         .open_window(flui_platform::WindowOptions::default())
@@ -1468,11 +1743,9 @@ fn queued_safe_area_for_a_closed_sibling_presentation_is_dropped() {
         .expect("B installs alongside A with a real window mapping");
     let b_id = dispatcher_b.address.presentation_id;
 
-    // Queue the close and the report BEHIND it from inside one dispatched
-    // task — the realm is mid-drain, so both go through the REAL admission
-    // path (the registry still holds B for each) and land in the shared
-    // queue in that order. The marker dispatched last proves the drain
-    // reached the end of the queue.
+    // Admit the close from inside a dispatched task, then try to route newer
+    // presentation work before the bounded queue reaches that close. The
+    // terminal barrier begins at admission, not eventual execution.
     let drained = Rc::new(RefCell::new(false));
     let drained_in_task = Rc::clone(&drained);
     dispatch_platform_realm(
@@ -1480,7 +1753,7 @@ fn queued_safe_area_for_a_closed_sibling_presentation_is_dropped() {
         RealmTask::Frame(Box::new(move |_| {
             dispatch_platform_realm(dispatcher_b, RealmTask::ClosePresentation(b_id))
                 .expect("B's close is admitted while B is still registered");
-            dispatch_platform_realm(
+            let late = dispatch_platform_realm(
                 dispatcher_b,
                 RealmTask::Event(PlatformToUi::SafeAreaChanged(
                     flui_types::geometry::EdgeInsets::new(
@@ -1490,8 +1763,8 @@ fn queued_safe_area_for_a_closed_sibling_presentation_is_dropped() {
                         flui_types::geometry::px(0.0),
                     ),
                 )),
-            )
-            .expect("the report is still admitted: B's address outlives it until the close runs");
+            );
+            assert_eq!(late, Err(RealmDispatchError::PresentationClosing));
             dispatch_platform_realm(
                 dispatcher_a,
                 RealmTask::Frame(Box::new(move |_| {
@@ -1501,11 +1774,75 @@ fn queued_safe_area_for_a_closed_sibling_presentation_is_dropped() {
             .expect("the drain marker is admitted");
         })),
     )
-    .expect("the queued close, addressed report and drain marker all dispatch");
+    .expect("the queued close and drain marker dispatch");
 
     assert!(
         *drained.borrow(),
-        "the drain must continue past an addressed report for the closed presentation"
+        "rejecting late work must not stop the owner queue"
+    );
+    teardown_platform_realm();
+}
+
+/// A close barrier protects the shape of the presentation forest as well as
+/// later tasks. Once a sole presentation's close is admitted, a delayed
+/// shared-window completion must not install a sibling through that closing
+/// dispatcher: doing so would make the queued close observe a non-sole
+/// presentation and leave the newly expanded realm alive.
+///
+/// The callback budget creates the real interval under test: the close is
+/// accepted as the first carried operation after 32 fresh roots, so its
+/// address remains registered until a later physical callback drains it.
+///
+/// If reverted (removing the `closing_presentations` check from
+/// `install_presentation_alongside`), the install succeeds while the close is
+/// pending and this assertion fails.
+#[test]
+fn admitted_close_fences_shared_presentation_installation() {
+    let platform = flui_platform::headless_platform();
+    let window_a: Arc<dyn PlatformWindow> = platform
+        .open_window(flui_platform::WindowOptions::default())
+        .expect("headless platform should create window a");
+    let window_b: Arc<dyn PlatformWindow> = platform
+        .open_window(flui_platform::WindowOptions::default())
+        .expect("headless platform should create window b");
+    let dispatcher = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
+
+    APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.owner_turn_wake = Some(Rc::new(|| true));
+        state.owner_turn_continuation = Some(1);
+    });
+
+    // Enter as the physical callback that consumes an already-posted
+    // continuation; that is what activates the finite shared budget.
+    let owner_callback = begin_owner_callback();
+    for _ in 0..OWNER_TURN_BUDGET {
+        dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {})))
+            .expect("fresh root consumes callback budget");
+    }
+    close_presentation(dispatcher, dispatcher.address.presentation_id)
+        .expect("close is admitted into the carried FIFO");
+
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        assert!(
+            state.registry.contains_address(dispatcher.address),
+            "precondition: bounded FIFO has not executed the close yet"
+        );
+        assert!(state.closing_presentations.contains(&dispatcher.address));
+    });
+
+    let result = install_presentation_alongside(dispatcher, &window_b);
+    assert!(
+        matches!(result, Err(InstallPresentationError::PresentationClosing)),
+        "an admitted terminal close must revoke authority to expand the forest immediately"
+    );
+
+    drop(owner_callback);
+    drop(begin_owner_callback());
+    assert!(
+        !presentation_is_hosted(dispatcher.address),
+        "the next physical callback must execute the deferred sole-presentation close"
     );
     teardown_platform_realm();
 }
@@ -1697,24 +2034,35 @@ fn teardown_drops_queued_destructors_outside_tls_borrow() {
     }
 
     let dispatcher = install_test_realm();
-    let dropped = Rc::new(RefCell::new(false));
-    let probe = ReenterOnDrop {
+    let realm_queue_dropped = Rc::new(RefCell::new(false));
+    let realm_queue_probe = ReenterOnDrop {
         dispatcher,
-        dropped: Rc::clone(&dropped),
+        dropped: Rc::clone(&realm_queue_dropped),
+    };
+    let owner_queue_dropped = Rc::new(RefCell::new(false));
+    let owner_queue_probe = ReenterOnDrop {
+        dispatcher,
+        dropped: Rc::clone(&owner_queue_dropped),
     };
     APP_RUNTIME.with(|slot| {
-        slot.borrow_mut()
+        let mut state = slot.borrow_mut();
+        state
             .realms
             .get_mut(&dispatcher.address.realm_id)
             .expect("just installed above")
             .queue
             .push_back((
                 dispatcher.address.presentation_id,
-                RealmTask::Frame(Box::new(move |_| drop(probe))),
+                RealmTask::Frame(Box::new(move |_| drop(realm_queue_probe))),
             ));
+        state.owner_turn_queue.push_back((
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| drop(owner_queue_probe))),
+        ));
     });
     teardown_platform_realm();
-    assert!(*dropped.borrow());
+    assert!(*realm_queue_dropped.borrow());
+    assert!(*owner_queue_dropped.borrow());
 }
 
 #[cfg(feature = "hot-reload")]
@@ -2152,58 +2500,599 @@ fn next_wake_is_none_when_no_realm_owned_deadline_is_armed() {
     teardown_platform_realm();
 }
 
-/// A rejected nested cross-realm dispatch must never smuggle its task
-/// into the target realm's queue: the task must not run during the
-/// rejected attempt, AND must not be silently delivered by the NEXT
-/// legitimate dispatch to that same realm either. Before the ordering
-/// fix, the event was pushed into realm B's queue BEFORE the
-/// nested-dispatch guard ran, so nothing ever removed a rejected
-/// event — the very next legitimate dispatch to B would pop and run it.
+/// Owner-local reentrancy across realms queues one turn instead of either
+/// recursing or losing the event. The outer realm finishes first; then the
+/// host drains the sibling turn in global FIFO order.
 #[test]
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "the nested-dispatch guard fires via debug_assert!(false, ...) in this build; \
-              release builds return Err without panicking, so realm A's own outer dispatch \
-              never unwinds and this test's catch_unwind expectation does not apply"
-)]
-fn rejected_nested_dispatch_never_delivers_its_task_on_the_next_legitimate_dispatch() {
+fn cross_realm_reentrant_dispatch_runs_after_the_current_owner_turn() {
     let (dispatcher_a, dispatcher_b) = install_two_test_realms();
 
-    let rejected_ran = Rc::new(Cell::new(false));
-    let rejected_ran_in_task = Rc::clone(&rejected_ran);
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let order_in_a = Rc::clone(&order);
+    let order_in_b = Rc::clone(&order);
 
-    // From inside realm A's own dispatched task, attempt a NESTED
-    // dispatch to realm B -- a DIFFERENT, resident-and-idle realm --
-    // which the nested-cross-realm-dispatch guard must reject before
-    // ever touching B's queue. The guard's debug_assert! panics in this
-    // build; the panic unwinds through A's own dispatch, which this
-    // catch_unwind survives.
-    let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    dispatch_platform_realm(
+        dispatcher_a,
+        RealmTask::Frame(Box::new(move |_realm| {
+            order_in_a.borrow_mut().push("a:start");
+            dispatch_platform_realm(
+                dispatcher_b,
+                RealmTask::Frame(Box::new(move |_| {
+                    order_in_b.borrow_mut().push("b");
+                })),
+            )
+            .expect("the sibling turn is accepted into the owner queue");
+            assert_eq!(
+                order_in_a.borrow().as_slice(),
+                ["a:start"],
+                "realm B must not run recursively inside realm A"
+            );
+            order_in_a.borrow_mut().push("a:end");
+        })),
+    )
+    .expect("the outer owner turn drains both addressed tasks");
+
+    assert_eq!(order.borrow().as_slice(), ["a:start", "a:end", "b"]);
+
+    teardown_platform_realm();
+}
+
+#[test]
+fn cross_realm_reentrant_close_runs_after_the_current_owner_turn() {
+    use std::sync::Mutex;
+
+    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+    let realm_a_id = dispatcher_a.address.realm_id;
+    let realm_b_id = dispatcher_b.address.realm_id;
+
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let order_on_detached = Arc::clone(&order);
+    dispatch_platform_realm(
+        dispatcher_b,
+        RealmTask::Frame(Box::new(move |realm| {
+            realm
+                .scheduler()
+                .add_lifecycle_state_listener(Arc::new(move |state| {
+                    if state == AppLifecycleState::Detached {
+                        order_on_detached
+                            .lock()
+                            .expect("test-local order mutex is never poisoned")
+                            .push("b:detached");
+                    }
+                }));
+        })),
+    )
+    .expect("realm B accepts its lifecycle observer");
+
+    let order_in_a = Arc::clone(&order);
+    dispatch_platform_realm(
+        dispatcher_a,
+        RealmTask::Frame(Box::new(move |_| {
+            order_in_a
+                .lock()
+                .expect("test-local order mutex is never poisoned")
+                .push("a:start");
+            dispatch_platform_realm(
+                dispatcher_b,
+                RealmTask::ClosePresentation(dispatcher_b.address.presentation_id),
+            )
+            .expect("realm B close is accepted into the owner queue");
+            assert!(
+                APP_RUNTIME.with(|slot| slot.borrow().realms.get(&realm_b_id).is_some()),
+                "realm B must not close recursively inside realm A's callback"
+            );
+            order_in_a
+                .lock()
+                .expect("test-local order mutex is never poisoned")
+                .push("a:end");
+        })),
+    )
+    .expect("realm A's turn drains the queued close");
+
+    assert_eq!(
+        order
+            .lock()
+            .expect("test-local order mutex is never poisoned")
+            .as_slice(),
+        ["a:start", "a:end", "b:detached"],
+        "realm A must finish before realm B closes and observes Detached exactly once"
+    );
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        assert!(state.realms.get(&realm_a_id).is_some());
+        assert!(state.realms.get(&realm_b_id).is_none());
+        assert!(!state.registry.contains_address(dispatcher_b.address));
+        assert!(state.owner_turn_queue.is_empty());
+        assert!(!state.owner_turn_draining);
+    });
+
+    teardown_platform_realm();
+}
+
+/// A turn accepted while the whole-realm visitor has a realm checked out must
+/// run as soon as the visitor restores every realm. A close is the important
+/// case: leaving it parked until an unrelated later dispatch loses the native
+/// close when the event loop has no further work.
+#[test]
+fn realm_visit_drains_cross_realm_close_after_restoring_every_realm() {
+    use std::sync::Mutex;
+
+    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+    let realm_a_id = dispatcher_a.address.realm_id;
+    let realm_b_id = dispatcher_b.address.realm_id;
+
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let order_on_detached = Arc::clone(&order);
+    dispatch_platform_realm(
+        dispatcher_b,
+        RealmTask::Frame(Box::new(move |realm| {
+            realm
+                .scheduler()
+                .add_lifecycle_state_listener(Arc::new(move |state| {
+                    if state == AppLifecycleState::Detached {
+                        order_on_detached
+                            .lock()
+                            .expect("test-local order mutex is never poisoned")
+                            .push("b:detached");
+                    }
+                }));
+        })),
+    )
+    .expect("realm B accepts its lifecycle observer");
+
+    let order_in_visit = Arc::clone(&order);
+    for_each_installed_realm(move |realm| {
+        if realm.realm_id() != realm_a_id {
+            return;
+        }
+        order_in_visit
+            .lock()
+            .expect("test-local order mutex is never poisoned")
+            .push("a:start");
         dispatch_platform_realm(
-            dispatcher_a,
-            RealmTask::Frame(Box::new(move |_realm| {
-                let _ = dispatch_platform_realm(
-                    dispatcher_b,
-                    RealmTask::Frame(Box::new(move |_| {
-                        rejected_ran_in_task.set(true);
-                    })),
-                );
-            })),
+            dispatcher_b,
+            RealmTask::ClosePresentation(dispatcher_b.address.presentation_id),
         )
-    }));
-    assert!(
-        attempt.is_err(),
-        "the nested cross-realm dispatch attempt must panic via the guard's debug_assert!"
+        .expect("realm B close is admitted while realm A is visited");
+        assert!(
+            APP_RUNTIME.with(|slot| slot.borrow().realms.get(&realm_b_id).is_some()),
+            "realm B must not close recursively inside realm A's visitor callback"
+        );
+        order_in_visit
+            .lock()
+            .expect("test-local order mutex is never poisoned")
+            .push("a:end");
+    });
+
+    assert_eq!(
+        order
+            .lock()
+            .expect("test-local order mutex is never poisoned")
+            .as_slice(),
+        ["a:start", "a:end", "b:detached"],
+        "realm A must finish before realm B's close and Detached notification run exactly once"
+    );
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        assert!(
+            state.realms.get(&realm_a_id).is_some(),
+            "closing realm B must leave realm A live"
+        );
+        assert!(
+            state.realms.get(&realm_b_id).is_none(),
+            "the queued close must uninstall realm B before the visitor returns"
+        );
+        assert!(
+            !state.registry.contains_address(dispatcher_b.address),
+            "realm B's presentation address must be removed"
+        );
+        assert!(
+            state.owner_turn_queue.is_empty(),
+            "the visitor tail must fully drain the global owner-turn FIFO"
+        );
+        assert!(
+            !state.owner_turn_draining,
+            "the visitor tail must release its owner-turn drain claim"
+        );
+    });
+
+    teardown_platform_realm();
+}
+
+#[test]
+fn reentrant_owner_turns_preserve_global_fifo_across_realms() {
+    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let order_in_outer_a = Rc::clone(&order);
+    let order_in_b = Rc::clone(&order);
+    let order_in_queued_a = Rc::clone(&order);
+
+    dispatch_platform_realm(
+        dispatcher_a,
+        RealmTask::Frame(Box::new(move |_realm| {
+            order_in_outer_a.borrow_mut().push("a:outer:start");
+            dispatch_platform_realm(
+                dispatcher_b,
+                RealmTask::Frame(Box::new(move |_| {
+                    order_in_b.borrow_mut().push("b");
+                })),
+            )
+            .expect("realm B turn is admitted");
+            dispatch_platform_realm(
+                dispatcher_a,
+                RealmTask::Frame(Box::new(move |_| {
+                    order_in_queued_a.borrow_mut().push("a:queued");
+                })),
+            )
+            .expect("second realm A turn is admitted");
+            order_in_outer_a.borrow_mut().push("a:outer:end");
+        })),
+    )
+    .expect("the outer turn drains every admitted turn");
+
+    assert_eq!(
+        order.borrow().as_slice(),
+        ["a:outer:start", "a:outer:end", "b", "a:queued"]
     );
 
-    // A LEGITIMATE, top-level dispatch to realm B, driven afterward.
-    dispatch_platform_realm(dispatcher_b, RealmTask::Frame(Box::new(|_| {})))
-        .expect("realm B still dispatches normally after the rejected nested attempt");
+    teardown_platform_realm();
+}
 
+#[test]
+fn self_replenishing_owner_work_yields_at_each_finite_batch() {
+    fn enqueue_next(
+        dispatchers: [RealmDispatcher; 2],
+        remaining: usize,
+        order: Rc<RefCell<Vec<usize>>>,
+    ) {
+        let index = order.borrow().len();
+        let dispatcher = dispatchers[index % dispatchers.len()];
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| {
+                order.borrow_mut().push(index);
+                if remaining > 1 {
+                    enqueue_next(dispatchers, remaining - 1, Rc::clone(&order));
+                }
+            })),
+        )
+        .expect("the next owner-local operation is admitted");
+    }
+
+    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+    let wake_posts = Rc::new(Cell::new(0usize));
+    let wake_posts_in_actuator = Rc::clone(&wake_posts);
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut().owner_turn_wake = Some(Rc::new(move || {
+            wake_posts_in_actuator.set(wake_posts_in_actuator.get() + 1);
+            true
+        }));
+    });
+
+    let total = OWNER_TURN_BUDGET * 2 + 5;
+    let order = Rc::new(RefCell::new(Vec::new()));
+    enqueue_next([dispatcher_a, dispatcher_b], total, Rc::clone(&order));
+
+    assert_eq!(order.borrow().len(), OWNER_TURN_BUDGET);
+    assert_eq!(wake_posts.get(), 1, "one logical continuation is posted");
+    assert!(APP_RUNTIME.with(|slot| slot.borrow().owner_turn_continuation.is_some()));
+
+    continue_owner_turns();
+    assert_eq!(order.borrow().len(), OWNER_TURN_BUDGET * 2);
+    assert_eq!(wake_posts.get(), 2, "the consumed wake rearms exactly once");
+
+    continue_owner_turns();
+    assert_eq!(order.borrow().as_slice(), (0..total).collect::<Vec<_>>());
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        assert!(state.owner_turn_queue.is_empty());
+        assert!(state.owner_turn_continuation.is_none());
+        assert!(!state.owner_turn_draining);
+    });
+
+    teardown_platform_realm();
+}
+
+#[test]
+fn continuation_callback_shares_one_budget_between_fresh_roots_and_carried_fifo() {
+    fn enqueue_next(dispatcher: RealmDispatcher, remaining: usize, completed: Rc<Cell<usize>>) {
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| {
+                completed.set(completed.get() + 1);
+                if remaining > 1 {
+                    enqueue_next(dispatcher, remaining - 1, Rc::clone(&completed));
+                }
+            })),
+        )
+        .expect("the next carried operation is admitted");
+    }
+
+    let dispatcher = install_test_realm();
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut().owner_turn_wake = Some(Rc::new(|| true));
+    });
+    let completed = Rc::new(Cell::new(0));
+    enqueue_next(dispatcher, OWNER_TURN_BUDGET * 2, Rc::clone(&completed));
+    assert_eq!(completed.get(), OWNER_TURN_BUDGET);
+
+    let owner_callback = begin_owner_callback();
+    let fresh_roots = Rc::new(Cell::new(0));
+    for _ in 0..3 {
+        let fresh_roots_in_task = Rc::clone(&fresh_roots);
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| {
+                fresh_roots_in_task.set(fresh_roots_in_task.get() + 1);
+            })),
+        )
+        .expect("fresh native root is admitted");
+    }
+    drop(owner_callback);
+
+    assert_eq!(fresh_roots.get(), 3);
+    assert_eq!(completed.get(), OWNER_TURN_BUDGET * 2 - 3);
+    assert!(APP_RUNTIME.with(|slot| slot.borrow().owner_turn_continuation.is_some()));
+
+    drop(begin_owner_callback());
+    assert_eq!(completed.get(), OWNER_TURN_BUDGET * 2);
+
+    teardown_platform_realm();
+}
+
+#[test]
+fn continuation_can_reserve_the_callback_for_carried_work_before_root_fanout() {
+    let dispatcher = install_test_realm();
+    let carried_ran = Rc::new(Cell::new(false));
+    let carried_ran_in_task = Rc::clone(&carried_ran);
+    APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.owner_turn_wake = Some(Rc::new(|| true));
+        state.owner_turn_continuation = Some(1);
+        state.owner_turn_queue.push_back((
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| carried_ran_in_task.set(true))),
+        ));
+    });
+
+    let fresh_roots = Rc::new(Cell::new(0));
+    let rearms = Rc::new(Cell::new(0));
+    drive_fanout_owner_callback(
+        || {
+            for _ in 0..=OWNER_TURN_BUDGET {
+                let fresh_roots_in_task = Rc::clone(&fresh_roots);
+                dispatch_platform_realm(
+                    dispatcher,
+                    RealmTask::Frame(Box::new(move |_| {
+                        fresh_roots_in_task.set(fresh_roots_in_task.get() + 1);
+                    })),
+                )
+                .expect("fresh root is admitted");
+            }
+        },
+        || rearms.set(rearms.get() + 1),
+    );
+
+    assert!(carried_ran.get(), "the carried FIFO receives this batch");
+    assert_eq!(
+        fresh_roots.get(),
+        0,
+        "a continuation must not replenish more per-presentation roots than its finite batch drains"
+    );
+    assert_eq!(rearms.get(), 1, "fresh fan-out is re-armed exactly once");
+
+    drive_fanout_owner_callback(
+        || fresh_roots.set(fresh_roots.get() + 1),
+        || rearms.set(rearms.get() + 1),
+    );
+    assert_eq!(
+        fresh_roots.get(),
+        1,
+        "after the carried batch drains, an unrelated native wake generates fresh roots"
+    );
+    assert_eq!(rearms.get(), 1);
+
+    teardown_platform_realm();
+}
+
+/// A platform redraw callback is not necessarily asynchronous. WebWindow's
+/// `request_redraw` currently invokes the registered callback immediately,
+/// so a frame wake from inside an RAF can re-enter `begin_owner_callback`
+/// before the outer guard is dropped. Both entries are roots of one physical
+/// callback and must therefore share one continuation budget.
+///
+/// If reverted to an unconditional begin/finish pair, the nested begin trips
+/// the debug assertion; in release, dropping the nested guard consumes the
+/// outer budget and the assertion after that drop fails.
+#[test]
+fn nested_owner_callback_preserves_the_outer_continuation_budget() {
+    let dispatcher = install_test_realm();
+    APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.owner_turn_wake = Some(Rc::new(|| true));
+        state.owner_turn_continuation = Some(1);
+    });
+
+    let outer = begin_owner_callback();
+    assert!(outer.resumes_carried_work());
+    let nested = begin_owner_callback();
     assert!(
-        !rejected_ran.get(),
-        "the REJECTED task must never run -- not during the rejected attempt, and not \
-         smuggled into realm B's queue for a later legitimate dispatch to deliver"
+        !nested.resumes_carried_work(),
+        "a nested callback is not a second continuation opportunity"
+    );
+
+    dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {})))
+        .expect("the nested root shares the active callback budget");
+    drop(nested);
+
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        assert!(state.owner_turn_callback_active);
+        assert_eq!(
+            state.owner_turn_callback_budget,
+            Some(OWNER_TURN_BUDGET - 1)
+        );
+        assert!(state.owner_turn_continuation.is_none());
+    });
+
+    drop(outer);
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        assert!(!state.owner_turn_callback_active);
+        assert!(state.owner_turn_callback_budget.is_none());
+    });
+
+    teardown_platform_realm();
+}
+
+#[test]
+fn panicking_fresh_root_releases_callback_budget_and_rearms_carried_work() {
+    let dispatcher = install_test_realm();
+    APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.owner_turn_wake = Some(Rc::new(|| true));
+        state.owner_turn_continuation = Some(1);
+    });
+    let carried_panic_ran = Rc::new(Cell::new(false));
+    let carried_panic_ran_in_task = Rc::clone(&carried_panic_ran);
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut().owner_turn_queue.push_back((
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| {
+                carried_panic_ran_in_task.set(true);
+                panic!("carried panic");
+            })),
+        ));
+    });
+
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _owner_callback = begin_owner_callback();
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(|_| panic!("fresh root panic"))),
+        )
+        .expect("the panic resumes before this result exists");
+    }));
+    assert!(panicked.is_err());
+    assert!(
+        !carried_panic_ran.get(),
+        "carried work must not run during unwind"
+    );
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        assert!(state.owner_turn_callback_budget.is_none());
+        assert!(!state.owner_turn_callback_active);
+        assert!(state.owner_turn_continuation.is_some());
+        assert!(!state.owner_turn_draining);
+    });
+
+    let carried_panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drop(begin_owner_callback());
+    }));
+    assert!(carried_panicked.is_err());
+    assert!(carried_panic_ran.get());
+
+    teardown_platform_realm();
+}
+
+#[test]
+fn failed_continuation_post_does_not_latch_a_phantom_wake() {
+    fn enqueue_bounded_test_chain(
+        dispatchers: [RealmDispatcher; 2],
+        remaining: usize,
+        order: Rc<RefCell<Vec<usize>>>,
+    ) {
+        let index = order.borrow().len();
+        let dispatcher = dispatchers[index % dispatchers.len()];
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| {
+                order.borrow_mut().push(index);
+                if remaining > 1 {
+                    enqueue_bounded_test_chain(dispatchers, remaining - 1, Rc::clone(&order));
+                }
+            })),
+        )
+        .expect("the next owner-local operation is admitted");
+    }
+
+    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+    let posts = Rc::new(Cell::new(0usize));
+    let posts_in_actuator = Rc::clone(&posts);
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut().owner_turn_wake = Some(Rc::new(move || {
+            let attempt = posts_in_actuator.get() + 1;
+            posts_in_actuator.set(attempt);
+            attempt != 1
+        }));
+    });
+
+    let order = Rc::new(RefCell::new(Vec::new()));
+    enqueue_bounded_test_chain(
+        [dispatcher_a, dispatcher_b],
+        OWNER_TURN_BUDGET * 2 + 1,
+        Rc::clone(&order),
+    );
+    assert_eq!(posts.get(), 1);
+    assert!(APP_RUNTIME.with(|slot| slot.borrow().owner_turn_continuation.is_none()));
+
+    let owner_callback = begin_owner_callback();
+    let fresh_root_ran = Rc::new(Cell::new(false));
+    let fresh_root_ran_in_task = Rc::clone(&fresh_root_ran);
+    dispatch_platform_realm(
+        dispatcher_a,
+        RealmTask::Frame(Box::new(move |_| fresh_root_ran_in_task.set(true))),
+    )
+    .expect("the later native root is admitted synchronously");
+    assert!(fresh_root_ran.get());
+    drop(owner_callback);
+
+    assert_eq!(posts.get(), 2);
+    assert!(APP_RUNTIME.with(|slot| slot.borrow().owner_turn_continuation.is_some()));
+    assert_eq!(order.borrow().len(), OWNER_TURN_BUDGET * 2 - 1);
+
+    drop(begin_owner_callback());
+    assert_eq!(order.borrow().len(), OWNER_TURN_BUDGET * 2 + 1);
+
+    teardown_platform_realm();
+}
+
+#[test]
+fn panic_restores_the_owner_turn_drain_and_preserves_queued_fifo() {
+    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+
+    let order = Rc::new(RefCell::new(Vec::new()));
+    let order_in_b = Rc::clone(&order);
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = dispatch_platform_realm(
+            dispatcher_a,
+            RealmTask::Frame(Box::new(move |_| {
+                dispatch_platform_realm(
+                    dispatcher_b,
+                    RealmTask::Frame(Box::new(move |_| {
+                        order_in_b.borrow_mut().push("b:queued-before-panic");
+                    })),
+                )
+                .expect("realm B turn is admitted before the panic");
+                panic!("outer realm panic");
+            })),
+        );
+    }));
+    assert!(panicked.is_err());
+
+    let order_in_a = Rc::clone(&order);
+    dispatch_platform_realm(
+        dispatcher_a,
+        RealmTask::Frame(Box::new(move |_| {
+            order_in_a.borrow_mut().push("a:next-top-level");
+        })),
+    )
+    .expect("a later top-level turn restarts the owner drain");
+
+    assert_eq!(
+        order.borrow().as_slice(),
+        ["b:queued-before-panic", "a:next-top-level"]
     );
 
     teardown_platform_realm();
@@ -3868,6 +4757,41 @@ fn panicking_visit_restores_the_checked_out_realm_and_clears_iterating_all_realm
     teardown_platform_realm();
 }
 
+#[test]
+fn panicking_visit_drains_queued_owner_turns_without_replacing_its_panic() {
+    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+    let realm_a_id = dispatcher_a.address.realm_id;
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for_each_installed_realm(|realm| {
+            assert_eq!(realm.realm_id(), realm_a_id);
+            dispatch_platform_realm(
+                dispatcher_b,
+                RealmTask::Frame(Box::new(|_| {
+                    panic!("queued owner-turn panic");
+                })),
+            )
+            .expect("the sibling turn is admitted during the visit");
+            panic!("original visitor panic");
+        });
+    }))
+    .expect_err("the visitor panic must resume after cleanup");
+
+    assert_eq!(
+        panic.downcast_ref::<&str>(),
+        Some(&"original visitor panic"),
+        "a queued owner-turn panic must not replace the visitor's earlier panic"
+    );
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        assert!(state.owner_turn_queue.is_empty());
+        assert!(!state.owner_turn_draining);
+        assert!(!state.iterating_all_realms);
+    });
+
+    teardown_platform_realm();
+}
+
 /// Fence-(c) two-realm probe: with realm A mid-frame-transaction and a
 /// SECOND, fully idle realm B also resident, `with_owner_platform`'s
 /// debug_assert must still trip. A two-realm registry is not an "OR of
@@ -4017,9 +4941,10 @@ fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter() {
             // (1) Resolve a GlobalKey registered in the SIBLING
             // presentation B: only possible if the whole-frame composite
             // is still active for this dispose call, spanning every
-            // OTHER presentation the realm hosts (this presentation
-            // itself, mid-teardown, is deliberately excluded from that
-            // composite -- see `UiRealm::enter_for_close`'s doc).
+            // presentation the realm hosts. This presentation's own
+            // registry, whose binding lock the teardown walk holds,
+            // reports itself busy and is skipped rather than re-entered
+            // (`flui-view`'s `key::registry`, "Re-entrancy").
             self.resolved_sibling_element
                 .set(self.key_in_sibling.current_element());
 

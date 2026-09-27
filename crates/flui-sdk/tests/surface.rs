@@ -1,10 +1,11 @@
 //! The SDK's surface is the measured list, and each re-export is the item it
 //! names, not a copy.
 //!
-//! The list is every path `flui-material` and `flui-cupertino` import from the
-//! internal crates outside their tests, rewritten to its SDK path (an
-//! associated item reduced to its type), plus `painting::DrawOp`, which their
-//! paint tests read. ARCHITECTURE.md records how it was measured.
+//! The list is every path `flui-material`, `flui-cupertino` and `flui-devtools`
+//! import from the internal crates outside their tests, rewritten to its SDK
+//! path (an associated item reduced to its type), plus `painting::DrawOp`,
+//! which the design systems' paint tests read. ARCHITECTURE.md records how it
+//! was measured.
 
 /// Every measured item through its SDK path: removing or moving one fails to
 /// build this test.
@@ -21,10 +22,15 @@ mod measured {
         animate as _,
     };
     use flui_sdk::foundation::notifier::Listenable as _;
+    use flui_sdk::foundation::observe::{
+        ElementMounted as _, ElementMoved as _, ElementRebuilt as _, ElementUnmounted as _,
+        TreeObserver as _,
+    };
     use flui_sdk::foundation::{
         ChangeNotifier as _, ElementId as _, Listenable as _, ListenerCallback as _,
-        ListenerId as _, ViewKey as _,
+        ListenerId as _, RebuildReason as _, ViewKey as _,
     };
+    use flui_sdk::hooks::FrameSnapshot as _;
     use flui_sdk::interaction::{DragDownDetails as _, FocusNode as _};
     use flui_sdk::painting::{Canvas as _, DrawOp as _};
     use flui_sdk::pipeline::{
@@ -132,6 +138,7 @@ fn declared_surface() -> Vec<&'static str> {
 #[test]
 fn the_public_surface_is_the_measured_list() {
     let pinned = [
+        "pub mod hooks {",
         "pub mod interaction {",
         "pub mod painting {",
         "pub mod pipeline {",
@@ -149,6 +156,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",
+        "pub use flui_scheduler::FrameSnapshot;",
         "pub use flui_types as types;",
         "pub use flui_view as view;",
         "pub use flui_widgets as widgets;",

@@ -1,0 +1,111 @@
+[package]
+publish = ["crates-io"]
+name = "flui-devtools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Runtime developer tooling for FLUI - frame profiler, timeline and tree-observation counters"
+keywords = ["gui", "profiler", "devtools", "flutter", "flui"]
+categories = ["development-tools::profiling", "gui"]
+# The criterion bench is a development file; the published archive ships the
+# library, its tests and examples only.
+exclude = ["/benches/"]
+
+# The crate exists only to provide these modules, so the docs must show them.
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+# The package-author surface (ADR-0088 §4): `hooks::FrameSnapshot` for the
+# timeline's scheduler bridge and `foundation::observe` for the inspector's
+# ADR-0040 seam. Devtools names no internal crate in a normal dependency.
+# Not optional: an app that links devtools already compiles the SDK's closure
+# through the facade, so the edge costs only the SDK crate itself, and every
+# feature combination reaches the framework the same way.
+flui-sdk = { workspace = true }
+
+# Timing and performance (web-time is the maintained replacement for instant)
+web-time = { workspace = true }
+
+# Data structures
+parking_lot = { workspace = true }
+
+# `timeline` only: `TimelineEvent` serialises for the Chrome-trace and JSON
+# exporters, so the feature owns both edges.
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+# `profiling` (the subscriber layer) and `inspector` (its log output).
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+
+[features]
+# Everything on: a crate that exists only to provide these three modules
+# gives its user nothing with an empty default. Release builds stay at zero
+# devtools cost by not depending on this crate at all, not by a feature here.
+default = ["profiling", "timeline", "inspector"]
+
+# Frame profiler. `tracing-subscriber` is what lets it be *fed*: an official
+# package cannot be called by the framework, so `FrameTimingLayer` subscribes
+# to the frame spans the framework already emits.
+profiling = ["dep:tracing", "dep:tracing-subscriber"]
+
+# The serialisation half of `timeline`, not a capability of its own. It is
+# a named feature because the `flui` facade has a `serde` feature and cargo
+# applies a workspace-root `--features serde` to every default member,
+# which is an error on a package whose optional `serde` is reachable only
+# through `dep:` (the feature-matrix job runs exactly that command).
+serde = ["dep:serde"]
+
+# Event timeline with Chrome-trace export and the FrameSnapshot bridge.
+timeline = ["serde", "dep:serde_json"]
+
+# Counting/logging tree observer over the ADR-0040 observation seam, which
+# it reaches as `flui_sdk::foundation::observe`: its surface has no access
+# to the trees themselves.
+inspector = ["dep:tracing"]
+
+# The complete inventory, kept as an explicit name for `cargo hack` runs.
+full = ["profiling", "timeline", "inspector"]
+
+[dev-dependencies]
+# `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
+# tests call so a sibling test cannot poison their callsites' cached interest,
+# and `HeadlessBinding`, which the end-to-end tests drive real frames through.
+flui-testing = { workspace = true }
+# The frame clock the `timeline` unit tests build real `FrameSnapshot`s with.
+flui-scheduler = { path = "../../crates/flui-scheduler", version = "=0.2.0-dev" }
+# The end-to-end tests' one-leaf tree: a `RenderView` over `RenderSizedBox`,
+# and the pipeline owner the binding lays it out with. Neither is SDK surface.
+flui-objects = { path = "../../crates/flui-objects", version = "=0.2.0-dev" }
+flui-rendering = { path = "../../crates/flui-rendering", version = "=0.2.0-dev" }
+# The composition an app ships: FLUI's log subscriber plus the profiler layer.
+flui-log = { path = "../../crates/flui-log", version = "=0.2.0-dev" }
+# The observer-overhead bench.
+criterion = { workspace = true }
+
+# The profiler demo exercises the `profiling`-gated `profiler` module.
+[[example]]
+name = "profiler_demo"
+required-features = ["profiling"]
+
+# What an installed observer costs the tree against none.
+[[bench]]
+name = "tree_observer_overhead"
+harness = false
+required-features = ["inspector"]
+
+[lints]
+workspace = true
+
+[package.metadata.flui]
+layer = 9
+tier = "pkg"
+tier-kind = "official"
+order = 3
+# The kind rule (ADR-0081 §3, ADR-0088 §2) replaces a dependents list: only
+# applications and official packages name this crate, and a core crate that
+# does lists the edge in its own `edge-exceptions`.

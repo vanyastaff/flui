@@ -30,29 +30,22 @@
 //! *ownership* (one struct, one thread-local slot instead of two), not the
 //! dispatch/teardown semantics those functions implement.
 
-use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::Ordering;
 
 use flui_foundation::{PresentationId, RealmId};
-use flui_scheduler::{AsyncDriver, LocalPostFrameLane, UpdateScheduler};
-
-// `RealmServices` and `next_identity` below are used unconditionally by
-// `ui_realm/` (every `UiRealm` constructor resolves its own
-// `RealmServices` now, on every platform `UiRealm` itself compiles for,
-// including iOS's stub). `AppRuntime` and `SharedEngineServices` further
-// down are the loop-scoped composition root that only the non-iOS runners
-// (`runner.rs`'s desktop/android/web dispatch) instantiate, so they -- and
-// the imports only they need -- stay `#[cfg(not(target_os = "ios"))]`,
-// matching the cfg the absorbed `RealmHost`/`OWNER_PLATFORM_HOST` carried.
+use flui_scheduler::UpdateScheduler;
 
 use std::cell::OnceCell;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
 
 use flui_foundation::PresentationAddress;
 use flui_platform::OwnerPlatform;
+#[cfg(any(test, target_os = "android"))]
+use flui_platform::traits::WindowExecutionState;
 use flui_platform::traits::{Clipboard, PlatformWindow};
 use flui_semantics::AccessibilityFeatures;
 use parking_lot::{Mutex, RwLock};
@@ -61,7 +54,7 @@ use parking_lot::{Mutex, RwLock};
 use super::lifecycle::{
     ServiceDefinition, ServiceRegistry, ServiceShutdownReport, ServiceStartError,
 };
-use super::runner::{RealmTask, SurfaceApplier};
+use super::runner::{RealmDispatcher, RealmTask, SurfaceApplier};
 use super::ui_realm::UiRealm;
 use super::window_registry::{RegistryError, WindowRegistry};
 #[cfg(not(target_arch = "wasm32"))]
@@ -75,7 +68,7 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// Owns the process-level accessibility flags and initializes the shared font
 /// system through [`flui_painting::shared_font_system`]. Semantics state belongs
 /// to each presentation's `SemanticsHost`; scheduling belongs to each realm
-/// (see [`RealmServices::construct`]). The retired `SemanticsBinding`
+/// (see `flui_runtime`'s `RealmServices::construct`). The retired `SemanticsBinding`
 /// singleton no longer exists at all (its enablement/announce/event state
 /// moved to the per-presentation `SemanticsHost` instead — see
 /// `flui_runtime::semantics_host` — since that half of the old binding was a
@@ -83,7 +76,7 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// read-mostly accessibility flags stayed process-scoped, and this struct
 /// now owns that value directly. There is no `scheduler` field here any
 /// more: each realm now owns its own `UpdateScheduler` strong root (see
-/// [`RealmServices::construct`]), so there is no process-level scheduler
+/// `RealmServices::construct` in `flui_runtime`), so there is no process-level scheduler
 /// left for this struct to resolve.
 pub(crate) struct SharedEngineServices {
     /// OS-level accessibility flags (reduced motion, high contrast, ...).
@@ -151,63 +144,6 @@ impl SharedEngineServices {
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
         }
     }
-}
-
-/// What [`UiRealm::construct`](super::ui_realm) needs to wire itself up: a
-/// fresh, realm-owned [`UpdateScheduler`] — the strong root — plus the
-/// `local_post_frame_lane()` and `async_driver()` handles derived from that
-/// SAME scheduler (formerly `UpdateScheduler::instance()` calls inside
-/// `ui_realm/` itself). Resolved once, here — never inside `ui_realm/`
-/// itself, so `UiRealm`'s own source performs zero `::instance()` calls.
-pub(crate) struct RealmServices {
-    pub(crate) local_post_frame: LocalPostFrameLane,
-    pub(crate) async_driver: AsyncDriver,
-    pub(crate) scheduler: UpdateScheduler,
-    /// The platform clipboard every presentation of this realm hands its
-    /// widgets (`LifecycleContext::clipboard_handle`).
-    pub(crate) clipboard: Arc<dyn Clipboard>,
-}
-
-impl RealmServices {
-    /// Builds a brand-new `UpdateScheduler` for a realm about to be constructed.
-    /// Every `UiRealm` constructor (`new`, `with_capacity`, `for_test`,
-    /// `for_test_with_text_input`) calls this instead of reaching for a
-    /// process-global scheduler — each realm gets its OWN strong root, torn
-    /// down when the realm drops, none of them taking a process-host
-    /// parameter any more (the retired `AppBinding` is gone).
-    ///
-    /// `clipboard` is the platform clipboard the realm's presentations hand
-    /// their widgets; a realm always has one.
-    pub(crate) fn construct(clipboard: Arc<dyn Clipboard>) -> Self {
-        let scheduler = UpdateScheduler::new();
-        Self {
-            local_post_frame: scheduler.new_local_post_frame_lane(),
-            async_driver: scheduler.async_driver().clone(),
-            scheduler,
-            clipboard,
-        }
-    }
-}
-
-/// Monotonic incarnation counter: every successfully constructed realm gets
-/// a fresh `RealmId` generation, so a recreated realm never compares equal
-/// to its predecessor. Moved here from `ui_realm/`: identity minting is an
-/// `AppRuntime` concern now, not a `UiRealm` one — a real multi-window
-/// `AppRuntime` registry mints slots from here once it exists.
-static NEXT_INCARNATION: AtomicU32 = AtomicU32::new(1);
-
-/// Mints a fresh, process-unique `(RealmId, PresentationId)` pair. Slot 0 is
-/// the single-window slot; a real multi-window `AppRuntime` registry mints
-/// slots once the element forest lets a realm host multiple presentations —
-/// the shape is the deliverable now, single-window the only instantiation.
-pub(crate) fn next_identity() -> (RealmId, PresentationId) {
-    let incarnation = NEXT_INCARNATION.fetch_add(1, Ordering::Relaxed);
-    let generation = NonZeroU32::new(incarnation)
-        .expect("BUG: incarnation counter starts at 1 and only increments");
-    (
-        RealmId::new_gen(0, generation),
-        PresentationId::new_gen(0, generation),
-    )
 }
 
 // ============================================================================
@@ -572,7 +508,7 @@ pub(super) enum QuitNotification {
 ///
 /// The realm-facing API is `RealmId`-keyed: `realms` is [`RealmRegistry`],
 /// an insertion-ordered map of any number of hosted realms (issue #555) —
-/// `next_identity` above already mints from a shape that never needed to
+/// the realm's `next_identity` (`flui_runtime`) already mints from a shape that never needed to
 /// change for this to land.
 pub(crate) struct AppRuntime {
     /// Every hosted realm, keyed by `RealmId`, in mount (insertion) order.
@@ -581,6 +517,44 @@ pub(crate) struct AppRuntime {
     /// struct used to carry — see [`RealmSlot`]'s doc for why those four
     /// moved inside the per-realm entry instead of staying flat.
     pub(super) realms: RealmRegistry,
+    /// Owner-local work accepted while another realm callback is running.
+    ///
+    /// This is one queue for the whole loop, rather than one queue per realm:
+    /// reentrant A -> B -> A dispatch must run after the current callback in
+    /// exactly that admission order. Entries retain their complete stamped
+    /// dispatcher so stale realm/presentation admission is checked again
+    /// when the turn reaches the front of the queue.
+    pub(super) owner_turn_queue: VecDeque<(RealmDispatcher, RealmTask)>,
+    /// True while the outermost [`dispatch_platform_realm`](super::runner)
+    /// invocation owns the queue drain. Reentrant dispatch only appends and
+    /// returns; it never recursively checks out a sibling realm.
+    pub(super) owner_turn_draining: bool,
+    /// Sequence of the one continuation opportunity currently requested for
+    /// carried owner work. The sequence lets a failed, synchronously
+    /// reentrant actuator clear only its own reservation.
+    pub(super) owner_turn_continuation: Option<u64>,
+    /// The last attempt to post a continuation failed. A fresh native root
+    /// must still run synchronously instead of joining the carried backlog;
+    /// its tail retries the post.
+    pub(super) owner_turn_continuation_failed: bool,
+    /// Remaining logical operations in the native callback that consumed a
+    /// continuation. `None` means this callback is not servicing carried
+    /// owner work.
+    pub(super) owner_turn_callback_budget: Option<usize>,
+    /// True from the outermost native callback entry until its completion
+    /// work has finished. Some platform adapters (notably the web window)
+    /// can synchronously invoke a frame callback from `request_redraw`, so a
+    /// nested entry is another root of the current physical callback, not a
+    /// second opportunity that may consume or finish its budget.
+    pub(super) owner_turn_callback_active: bool,
+    /// Monotonic source for [`Self::owner_turn_continuation`].
+    pub(super) owner_turn_next_sequence: u64,
+    /// Host-specific continuation actuator. It is owner-local because
+    /// `AppRuntime` is owner-affine; `true` means an opportunity was posted.
+    pub(super) owner_turn_wake: Option<Rc<dyn Fn() -> bool>>,
+    /// Addresses whose terminal close has been admitted but may still be
+    /// waiting in a bounded batch. Later work cannot jump that barrier.
+    pub(super) closing_presentations: HashSet<PresentationAddress>,
     /// The thread that installed the first realm hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-realm: every realm this `AppRuntime` ever hosts lives on the same
@@ -776,6 +750,15 @@ impl AppRuntime {
     pub(super) fn new() -> Self {
         Self {
             realms: RealmRegistry::new(),
+            owner_turn_queue: VecDeque::new(),
+            owner_turn_draining: false,
+            owner_turn_continuation: None,
+            owner_turn_continuation_failed: false,
+            owner_turn_callback_budget: None,
+            owner_turn_callback_active: false,
+            owner_turn_next_sequence: 0,
+            owner_turn_wake: None,
+            closing_presentations: HashSet::new(),
             owner_thread: None,
             registry: WindowRegistry::new(),
             close_requests: Arc::new(super::close_request::CloseRequestRouter::new()),
@@ -1443,6 +1426,25 @@ impl AppRuntime {
         }
     }
 
+    /// Owner-thread poke used only to continue bounded owner work. Unlike a
+    /// frame wake it does not mark the realm dirty; operations in the batch
+    /// request a frame themselves when their effects require one.
+    #[cfg(any(test, target_os = "android"))]
+    pub(super) fn owner_turn_window_poke(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        let redraw_window = Arc::clone(&self.redraw_window);
+        Arc::new(move || {
+            let window = redraw_window.lock().as_ref().cloned();
+            let Some(window) = window else {
+                return false;
+            };
+            if window.execution_state() != WindowExecutionState::Running {
+                return false;
+            }
+            window.request_redraw();
+            true
+        })
+    }
+
     /// A `Send + Sync`, `'static` capability that sets `needs_redraw` and
     /// pokes the installed window — safe to hand to an `UpdateScheduler` lifecycle
     /// hook, an `on_frame_scheduled` hook, or a spawned future's `Waker`,
@@ -1676,6 +1678,8 @@ impl Drop for AppRuntime {
 
 #[cfg(all(test, not(target_os = "ios")))]
 mod app_runtime_tests {
+    use std::num::NonZeroU32;
+
     use super::*;
 
     #[test]
@@ -1831,6 +1835,40 @@ mod wake_and_clipboard_tests {
             1,
             "wake_frame must call PlatformWindow::request_redraw exactly once"
         );
+    }
+
+    /// A continuation actuator may acknowledge only a native callback that
+    /// the platform can actually deliver. Android consumes redraw flags while
+    /// paused, so accepting a suspended window would strand the carried batch.
+    #[test]
+    fn owner_turn_poke_refuses_suspended_window_before_acknowledging() {
+        use std::sync::atomic::AtomicUsize;
+
+        let window = crate::app::window_test_support::headless_test_window();
+        let mock = window
+            .as_any()
+            .downcast_ref::<flui_platform::MockWindow>()
+            .expect("headless platform windows are MockWindow values");
+        let frame_requests = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&frame_requests);
+        window.on_request_frame(Box::new(move || {
+            observed.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        let runtime = AppRuntime::new();
+        runtime.set_redraw_window(Arc::clone(&window));
+        let poke = runtime.owner_turn_window_poke();
+
+        mock.simulate_execution_state(WindowExecutionState::Suspended);
+        assert!(
+            !poke(),
+            "suspended native execution cannot accept a continuation"
+        );
+        assert_eq!(frame_requests.load(Ordering::Relaxed), 0);
+
+        mock.simulate_execution_state(WindowExecutionState::Running);
+        assert!(poke(), "running native execution can accept a continuation");
+        assert_eq!(frame_requests.load(Ordering::Relaxed), 1);
     }
 
     /// The frame wake pokes the platform window from whatever thread completed
@@ -2087,21 +2125,6 @@ mod wake_and_clipboard_tests {
             "the wake hook wired onto the scheduler must be a Send handle captured \
              at install time, not one resolved from a thread-local at fire time -- a foreign \
              OS thread has no such thread-local to resolve"
-        );
-    }
-}
-
-#[cfg(test)]
-mod identity_tests {
-    use super::*;
-
-    #[test]
-    fn next_identity_mints_distinct_generations() {
-        let (realm_a, _) = next_identity();
-        let (realm_b, _) = next_identity();
-        assert_ne!(
-            realm_a, realm_b,
-            "every mint must produce a fresh generation, never repeating"
         );
     }
 }

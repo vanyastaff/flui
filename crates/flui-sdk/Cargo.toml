@@ -24,8 +24,8 @@ exclude = ["/ARCHITECTURE.md", "/tests/"]
 workspace = true
 
 # Each internal crate is pinned to the train exactly (ADR-0088 §4). The list is
-# what `flui-material` and `flui-cupertino` import outside their tests; see
-# ARCHITECTURE.md for how it was measured.
+# what `flui-material`, `flui-cupertino` and `flui-devtools` import outside
+# their tests; see ARCHITECTURE.md for how it was measured.
 [dependencies]
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
@@ -36,6 +36,9 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
+# `hooks::FrameSnapshot`, which `flui-devtools`' timeline records. Already in
+# this crate's closure through `flui-view`, so reach does not change.
+flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 
 [dev-dependencies]
 # `tests/surface.rs` checks that each re-export is the facade's own type.

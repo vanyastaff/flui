@@ -57,7 +57,7 @@ use desktop::run_desktop;
 pub(crate) use host::{OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 #[cfg(target_os = "ios")]
 pub use ios::{run_app_ios, run_app_ios_with_config};
-pub(in crate::app) use realm_dispatch::{RealmTask, SurfaceApplier};
+pub(in crate::app) use realm_dispatch::{RealmDispatcher, RealmTask, SurfaceApplier};
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -307,6 +307,45 @@ mod tests {
     #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
     use super::realm_dispatch::teardown_platform_realm;
     use super::*;
+
+    /// The runner's path from an `open_window` result to a realm: the bridge is
+    /// read from the host window once and carried beside the window, which the
+    /// realm then only sees as a `PlatformWindow`. If that constructor drops the
+    /// bridge (say, passes `None`), nothing is wired and nothing is published.
+    #[test]
+    fn a_realm_built_from_a_host_window_publishes_through_its_accessibility() {
+        use crate::app::window_test_support::{HostedTestWindow, TestWindow};
+
+        let fake = std::sync::Arc::new(flui_platform::FakeAccessibility::new());
+        let host: std::sync::Arc<dyn flui_platform::traits::HostWindow> =
+            std::sync::Arc::new(HostedTestWindow::new(
+                TestWindow::new()
+                    .focused(true)
+                    .with_accessibility(std::sync::Arc::clone(&fake) as _),
+            ));
+        let realm = crate::app::ui_realm::UiRealm::new(
+            std::sync::Arc::new(|| {}),
+            presentation_window(host),
+            1.0,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            crate::app::presentation::test_clipboard(),
+        )
+        .expect("realm");
+        let constraints = flui_rendering::constraints::BoxConstraints::tight(
+            flui_types::Size::new(px(100.0), px(100.0)),
+        );
+        realm
+            .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
+            .expect("root mounted");
+
+        fake.set_active(true);
+        let _ = realm.draw_frame(constraints);
+
+        assert!(
+            fake.published_count() >= 1,
+            "the bridge read from the host window must receive the assembled tree"
+        );
+    }
 
     /// Trivial leaf fixture: an empty view used as the terminal node under
     /// `OwnerLocalRoot` below, and constructible on its own wherever a test

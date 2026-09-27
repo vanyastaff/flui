@@ -6,7 +6,10 @@
   registry, opaque window handle, application IME bridge), since removed from that record
 - **Superseded in part by:** ADR-0078 (capability acquisition)
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (the
-  `interaction -> platform` edge becomes `interaction -> platform-api`)
+  `interaction -> platform` edge becomes `interaction -> platform-api`);
+  [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) in part (§1 and §4:
+  `PresentationState` and the realm that composes it live in `flui-runtime`, not `flui-app`;
+  the ownership domains themselves are unchanged)
 
 ## Context
 

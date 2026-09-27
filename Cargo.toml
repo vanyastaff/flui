@@ -41,6 +41,7 @@ members = [
     # Built on `flui-sdk` alone, as a third-party package would be.
     "packages/flui-material",  # Material Design: ColorScheme/TextTheme/ThemeData/Theme and the M3 widget catalog
     "packages/flui-cupertino", # iOS-style (Cupertino) theming and widget family
+    "packages/flui-devtools",  # Profiler / timeline / inspector counters
 
     # === Examples (platform-specific) ===
     # NOTE: Android examples are excluded from workspace.members because they
@@ -72,8 +73,7 @@ members = [
     "crates/flui-animation", # Animation system (ACTIVE)
 
     # === DX tooling ===
-    "crates/flui-devtools", # Profiler / timeline / inspector counters
-    "crates/flui-cli",      # `flui` CLI (create / run / build / doctor / devices); owns the build pipeline and the source watcher
+    "crates/flui-cli", # `flui` CLI (create / run / build / doctor / devices); owns the build pipeline and the source watcher
     # NOTE: there is deliberately NO signals crate. flui-reactivity (a signals/
     # hooks experiment) was removed 2026-07-28: it had zero consumers, could not
     # build even standalone (inherited workspace deps that were never declared),
@@ -230,8 +230,8 @@ crossbeam-channel = "0.5"
 web-time = "1.1"
 
 # ACCESSIBILITY - the cross-platform a11y tree model. Data model only here;
-# the per-OS `accesskit_*` platform adapters are a separate, later concern that
-# belongs in flui-platform, which cannot depend on flui-semantics (layer 2 vs 3).
+# the per-OS `accesskit_*` platform adapters are feature-gated in flui-platform,
+# and the `PlatformAccessibility` trait they implement is flui-semantics'.
 # One required dependency of its own (uuid), MIT OR Apache-2.0.
 accesskit = "0.25"
 # The tree model every AccessKit adapter reads through; tests use it to see

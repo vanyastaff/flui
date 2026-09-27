@@ -1064,14 +1064,11 @@ fn finish_open_secondary_window(
     let visible = window.is_visible();
     let _ = dispatch_platform_realm(
         realm_dispatch,
-        RealmTask::Frame(Box::new(move |realm| {
-            realm.synchronize_window_snapshot(
-                realm_dispatch.address.presentation_id,
-                execution,
-                focused,
-                visible,
-            );
-        })),
+        RealmTask::Event(PlatformToUi::WindowSnapshot {
+            execution,
+            focused,
+            visible,
+        }),
     );
 
     let _ = dispatch_platform_realm(
@@ -1625,6 +1622,7 @@ mod clipboard_tests {
     use super::super::host::{OwnerHostClearGuard, install_owner_platform};
     use super::super::realm_dispatch::teardown_platform_realm;
     use super::*;
+    use crate::app::raster_lane::RealmRaster as _;
     use crate::app::raster_test_support::TestRasterBackend;
 
     /// Writes `text` through the clipboard handle its `init_state` acquires.

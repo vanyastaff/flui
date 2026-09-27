@@ -14,12 +14,13 @@
 //! - **Curated modules** at the facade's paths: [`interaction`], [`painting`]
 //!   and [`rendering`] hold the subset of the facade's module that packages
 //!   use, as the same items, not wrappers.
-//! - **Evolving module** [`pipeline`]: render-object internals the facade does
-//!   not expose. A package's exposure to it is
-//!   `grep 'flui_sdk::pipeline'`.
+//! - **Evolving modules** [`pipeline`] and [`hooks`]: render-object internals
+//!   and development hooks the facade does not expose. A package's exposure to
+//!   them is `grep -E 'flui_sdk::(pipeline|hooks)::'`.
 //!
-//! Each item is here because `flui-material` or `flui-cupertino` imports it
-//! outside its tests; `tests/surface.rs` pins the list.
+//! Each item is here because `flui-material`, `flui-cupertino` or
+//! `flui-devtools` imports it outside its tests; `tests/surface.rs` pins the
+//! list.
 
 pub use flui_animation as animation;
 pub use flui_foundation as foundation;
@@ -59,4 +60,17 @@ pub mod pipeline {
     pub use flui_objects::PathClipConfiguration;
     pub use flui_objects::RenderPhysicalShape;
     pub use flui_objects::TranslationFraction;
+}
+
+/// Development hooks the facade does not expose.
+///
+/// **Evolving** (ADR-0088 §4), like [`pipeline`]: frame telemetry that
+/// development tooling reads. The tree-observation seam is not here; it is
+/// `foundation::observe`, at the facade's path.
+///
+/// No public API produces a `FrameSnapshot` yet: the
+/// presentation's frame clock is internal to the app host. A public snapshot
+/// source is the follow-up recorded in ADR-0088's move 4.
+pub mod hooks {
+    pub use flui_scheduler::FrameSnapshot;
 }

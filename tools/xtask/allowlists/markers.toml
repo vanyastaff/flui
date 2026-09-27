@@ -35,11 +35,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-devtools/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-engine/src/aa_oracle_tests.rs"
 class = "phase-letter"
 count = 2
