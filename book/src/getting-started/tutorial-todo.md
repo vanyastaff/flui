@@ -121,9 +121,15 @@ fn add_item(
 ```
 
 ```rust,ignore
-RawTextField::new(self.new_item.clone()).on_submitted(move |text| {
-    let _ = writer.write(|cx| add_item(cx, items, &submit_field, text));
-}),
+Text::new("New item"),
+SizedBox::width(8.0),
+Expanded::new(
+    RawTextField::new(self.new_item.clone()).on_submitted(move |text| {
+        writer
+            .write(|cx| add_item(cx, items, &submit_field, text))
+            .report();
+    })
+),
 RawButton::new(Text::new("Add")).on_press(move |cx| {
     add_item(cx, items, &button_field, &button_field.text())
 }),
@@ -132,8 +138,11 @@ RawButton::new(Text::new("Add")).on_press(move |cx| {
 The button's press receives a `cx` and passes it straight on. `RawTextField::on_submitted`
 (`Fn(&str)`) fires on a raw Enter keypress while the field has focus, and hands its callback the
 text but no `cx`; so `TodoState` takes a `WriterSource` in `init_state`
-(`self.writer = Some(ctx.writer_source())`) and the Enter handler opens a write with it. The
-button reads the controller's live text directly (`.text()`), since a press has no text to hand
+(`self.writer = Some(ctx.writer_source())`) and the Enter handler opens a write with it.
+`.report()` (the `EventOutcome` trait) logs a refused write on `flui::signals`, as a button's
+press does with the `Result` it returns. The field sits in `Expanded` for the same reason as the
+list: a `Row` gives its children unbounded width, and an empty field sized to its text would be
+a few pixels wide. The button reads the controller's live text directly (`.text()`), since a press has no text to hand
 over. `TextEditingController::clear()` empties the field after either path adds the item, so it's
 ready for the next one.
 

@@ -874,6 +874,12 @@ required-features = ["material", "cupertino"]
 # feature (for `flui::testing` to exist at all) and `material` (the tree
 # includes an `ElevatedButton`). Without this entry a `--no-default-features
 # --features testing` build would still try to compile it and fail.
+# Mounts `examples/todo.rs` headless through `flui::testing`.
+[[test]]
+name = "todo_example"
+path = "tests/todo_example.rs"
+required-features = ["testing"]
+
 [[test]]
 name = "agent_workflow"
 path = "tests/agent_workflow.rs"

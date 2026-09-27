@@ -17,12 +17,14 @@
 //!
 //! `on_submitted` hands its callback the text but no `cx`, so the field's
 //! Enter handler opens its write through a `WriterSource` this view takes in
-//! `init_state`.
+//! `init_state`, and hands a refused write to `EventOutcome::report`, which
+//! logs it as a button's press does.
 //!
 //! Run with: cargo run --example todo
+//! (`tests/todo_example.rs` mounts this file's tree headless.)
 
 use flui::prelude::*;
-use flui::view::SignalError;
+use flui::view::{EventOutcome, SignalError};
 use flui::widgets::{SafeArea, column, row};
 
 /// The height of one row. `ListView::new` requires a fixed item extent up
@@ -63,7 +65,7 @@ fn add_item(
 }
 
 #[derive(Clone, StatelessView)]
-struct TodoApp;
+pub(crate) struct TodoApp;
 
 impl StatelessView for TodoApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -134,9 +136,18 @@ impl ViewState<TodoView> for TodoState {
 
         Column::new(column![
             Row::new(row![
-                RawTextField::new(self.new_item.clone()).on_submitted(move |text| {
-                    let _ = writer.write(|cx| add_item(cx, items, &submit_field, text));
-                }),
+                Text::new("New item"),
+                SizedBox::width(8.0),
+                // A `Row` gives its children unbounded width, and a text
+                // field sizes itself to its text; the field takes what is
+                // left, or an empty one is a few pixels wide.
+                Expanded::new(
+                    RawTextField::new(self.new_item.clone()).on_submitted(move |text| {
+                        writer
+                            .write(|cx| add_item(cx, items, &submit_field, text))
+                            .report();
+                    })
+                ),
                 RawButton::new(Text::new("Add")).on_press(move |cx| {
                     add_item(cx, items, &button_field, &button_field.text())
                 }),
