@@ -10,6 +10,9 @@ repository.workspace = true
 description = "Runtime developer tooling for FLUI - frame profiler, timeline and tree-observation counters"
 keywords = ["gui", "profiler", "devtools", "flutter", "flui"]
 categories = ["development-tools::profiling", "gui"]
+# The criterion bench is a development file; the published archive ships the
+# library, its tests and examples only.
+exclude = ["/benches/"]
 
 # The crate exists only to provide these modules, so the docs must show them.
 [package.metadata.docs.rs]

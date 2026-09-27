@@ -22,9 +22,10 @@ topology is not part of any package manifest.
   the `pub use`/`pub mod` lines of `src/lib.rs` with a pinned list, so adding an item is a
   visible decision, and its `measured` module names every measured item through its SDK path,
   so removing one fails to build.
-- **Evolving surface under the ceiling.** `pipeline` and `hooks` are Evolving (four items
-  between them); ADR-0088 §4 revisits the crate when its Evolving surface passes about thirty
-  items.
+- **Evolving surface under the ceiling.** `pipeline` and `hooks` are Evolving. The three
+  `pipeline` items count toward the ceiling; `hooks` holds one (`FrameSnapshot`) and, like every
+  development hook, sits outside it. ADR-0088 §4 revisits the crate when its Evolving surface
+  beyond the hooks passes about thirty items.
 - **Own version.** `version = "0.N"`, not the workspace's: `cargo xtask workspace` refuses an
   evolving crate that inherits the version or leaves major 0.
 - **One train per graph.** The guard is not here: `flui-foundation` declares

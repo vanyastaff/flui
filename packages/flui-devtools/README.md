@@ -72,8 +72,10 @@ std::fs::write("trace.json", timeline.export_chrome_trace())?;
 ```
 
 `Timeline::record_frame_snapshots` converts `flui_sdk::hooks::FrameSnapshot`s
-(from `FrameClock::frames_since`) into `Frame` events in the same trace, so a
-presentation's frame history and hand-recorded events share one file.
+into `Frame` events in the same trace, so a presentation's frame history and
+hand-recorded events share one file. The presentation's frame clock produces
+the snapshots, and it is internal to the app host: no public API hands them
+out yet (ADR-0088, move 4, names the follow-up).
 
 ## Inspector counters
 
