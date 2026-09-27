@@ -5,7 +5,9 @@ UI realm (`ui_realm::UiRealm`) and the per-presentation frame machinery it
 drives, placed below the hosts (`flui-app`'s runners, platform wiring, raster
 lane and realm dispatch layer) and above the widget spine. It arrived in
 steps; the ADR's `## Migration` section lists them, and what is still to move
-(the owner host and the dispatch layer).
+(the realm-neutral owner host and typed operation application). Native-window
+demultiplexing and the platform/raster tails of an owner turn remain in the
+host.
 
 ## Invariants
 
@@ -24,6 +26,32 @@ steps; the ADR's `## Migration` section lists them, and what is still to move
   `PhantomData` marker; pinned by `assert_not_impl_any!` in the realm tests).
   Everything that crosses a thread goes through a `UiCommandSender` into a
   bounded inbox that the owner drains only while the scheduler is idle.
+- **The owner host is an ordinary owner-affine value.** The planned
+  `OwnerHost` is `!Send + !Sync` and owns only the realm registry, one
+  host-wide FIFO of typed operations carrying `PresentationAddress`, realm
+  checkout/restore state and deferred realm-map mutations. It owns no TLS,
+  native-window registry, platform capability, surface applier, engine/raster
+  object, application service or execution-pool lifetime. `flui-app`'s sole
+  `APP_RUNTIME` trampoline contains it beside those host-only owners.
+- **Owner work is non-reentrant across realms.** A reentrant operation for any
+  realm appends to the same FIFO; only the outermost owner turn executes it.
+  Before ADR-0083 move 5a, `flui-app` rejected realm B while realm A was
+  checked out, which could lose B's UI close after its native window had
+  already closed. The app now provides the host-wide FIFO behavior that the
+  extraction must preserve. Move 5a deliberately retains the old unbounded
+  drain-until-empty policy as a transitional implementation; before
+  extraction, move 5b replaces it with bounded batches and one coalesced
+  continuation wake so self-enqueue cannot monopolize the owner thread.
+  Checkout restoration and deferred mutations are unwind-safe, and
+  realm-owning values are dropped after every mutable host borrow is released.
+- **Owner operations form a closed vocabulary.** Input, lifecycle, normalized
+  metrics, close, install, uninstall, pump and background-pump are typed
+  operations or explicit methods. The host accepts no arbitrary
+  `Box<dyn FnOnce(&UiRealm)>`, `Box<dyn FnOnce(&mut UiRealm)>`, `dyn Any` or
+  executor job. A bounded typed ingress plus a wake capability is the only
+  cross-thread path; an owner-local dispatcher is `!Send` and appends to the
+  same FIFO. Operation-specific admission distinguishes lossless transitions,
+  latest-value state and edge-coalesced wakes.
 - **Every entry composes every presentation.** `UiRealm::enter` activates a
   `GlobalKey` registry composite over all the realm's presentations for the
   whole dynamic extent of the call, closing included. A binding whose own
@@ -87,6 +115,11 @@ steps; the ADR's `## Migration` section lists them, and what is still to move
   The rest of `execution` (`ExecutionServices`) is reached
   only by `flui-app` and carries no promise. `execution_public_paths` in
   `flui-app` pins the re-exported paths.
+- **The test driver shares the transaction, not the production host.** Once
+  `flui-testing` moves above this crate it drives `UiRealm::pump` directly
+  with its manual clock and headless sink. It neither constructs `OwnerHost`
+  nor reproduces native event-loop routing; owner-turn behavior is tested in
+  this crate's own host tests.
 - **Per realm, per presentation or per host loop, never per process.** Every
   type here is owned by one realm (`UiRealm`, its scheduler and command
   inbox), one presentation (`PresentationState`, `HeldPointerQueue`,
@@ -133,6 +166,25 @@ on it. Semantics enablement follows: `SemanticsHost` is one per presentation
 instead of `SemanticsBinding`'s single instance, so two windows never share an
 enablement count or a platform callback. Pinned by
 `presentation::tests::semantics_host_is_exclusive_to_this_presentation`.
+
+### The owner host is scheduling state, not a fourth physical owner
+
+ADR-0037 keeps three physical owners: the event-loop/native-window side in
+`flui-app`, the realm/presentation state here, and the raster owner in
+`flui-engine`. `OwnerHost` is the owner-thread non-reentrant operation
+mechanism for the middle owner, not a facade that forwards platform or raster
+operations.
+`flui-app` consumes `WindowId`, applies renderer surface changes, normalizes
+native appearance, removes native mappings before close, and then submits a
+FLUI-owned addressed operation. The runtime admits and drains that operation
+without naming the window, platform backend or engine.
+
+The acceptance scenario installs realms A and B and runs an A operation whose
+user callback synchronously requests B's close. A completes first; B's close
+and Detached teardown then run exactly once; B's address is gone; A remains
+live; and the host FIFO is empty. Companion tests pin A/B/A FIFO order, a
+stale operation queued behind close being dropped, panic-safe realm restore,
+and destruction outside mutable `OwnerHost` and `APP_RUNTIME` borrows.
 
 ### A submit returns a verdict
 

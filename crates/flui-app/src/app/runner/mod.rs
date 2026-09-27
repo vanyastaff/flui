@@ -57,7 +57,7 @@ use desktop::run_desktop;
 pub(crate) use host::{OwnerHostClearGuard, install_owner_platform, with_owner_platform};
 #[cfg(target_os = "ios")]
 pub use ios::{run_app_ios, run_app_ios_with_config};
-pub(in crate::app) use realm_dispatch::{RealmTask, SurfaceApplier};
+pub(in crate::app) use realm_dispatch::{RealmDispatcher, RealmTask, SurfaceApplier};
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),

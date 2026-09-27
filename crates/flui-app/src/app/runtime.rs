@@ -51,7 +51,7 @@ use parking_lot::{Mutex, RwLock};
 use super::lifecycle::{
     ServiceDefinition, ServiceRegistry, ServiceShutdownReport, ServiceStartError,
 };
-use super::runner::{RealmTask, SurfaceApplier};
+use super::runner::{RealmDispatcher, RealmTask, SurfaceApplier};
 use super::ui_realm::UiRealm;
 use super::window_registry::{RegistryError, WindowRegistry};
 #[cfg(not(target_arch = "wasm32"))]
@@ -514,6 +514,18 @@ pub(crate) struct AppRuntime {
     /// struct used to carry — see [`RealmSlot`]'s doc for why those four
     /// moved inside the per-realm entry instead of staying flat.
     pub(super) realms: RealmRegistry,
+    /// Owner-local work accepted while another realm callback is running.
+    ///
+    /// This is one queue for the whole loop, rather than one queue per realm:
+    /// reentrant A -> B -> A dispatch must run after the current callback in
+    /// exactly that admission order. Entries retain their complete stamped
+    /// dispatcher so stale realm/presentation admission is checked again
+    /// when the turn reaches the front of the queue.
+    pub(super) owner_turn_queue: VecDeque<(RealmDispatcher, RealmTask)>,
+    /// True while the outermost [`dispatch_platform_realm`](super::runner)
+    /// invocation owns the queue drain. Reentrant dispatch only appends and
+    /// returns; it never recursively checks out a sibling realm.
+    pub(super) owner_turn_draining: bool,
     /// The thread that installed the first realm hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-realm: every realm this `AppRuntime` ever hosts lives on the same
@@ -709,6 +721,8 @@ impl AppRuntime {
     pub(super) fn new() -> Self {
         Self {
             realms: RealmRegistry::new(),
+            owner_turn_queue: VecDeque::new(),
+            owner_turn_draining: false,
             owner_thread: None,
             registry: WindowRegistry::new(),
             close_requests: Arc::new(super::close_request::CloseRequestRouter::new()),

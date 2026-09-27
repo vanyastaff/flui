@@ -252,12 +252,12 @@ inline test modules are large.
 | flui-engine | 4, 72.5k | R / internal | Keep, narrow | The wgpu backend of the raster contract. Remove `pub use ::wgpu` (`crates/flui-engine/src/lib.rs:229`) from every Stable-reachable path; GPU interop moves to `flui_sdk::gpu`. `RasterOwner` stays here in H0. |
 | flui-view | 5, 52.7k | K / internal | Keep, cut | The element protocol stops depending on objects and animation; `ElementBuildContext` (`crates/flui-view/src/context/element_build_context.rs:39`) is deleted; `BuildContext::reactive()` (`build_context.rs:132`) is deleted when signal writes move to `EventCx`; `WidgetsBinding` moves into the runtime. |
 | flui-widgets | 6, 82.1k | K / internal | **One crate**, module-DAG gate | The 2026-09-23 decision stands. `cargo xtask module-dag -p flui-widgets` enforces import direction between modules. Raw primitives move down from Material; Router and Form arrive; `__private` (`crates/flui-widgets/src/lib.rs:75`) goes. The harness-reaching tests of the 22 `src/` files that used `crate::testing` moved to `tests/`; `__test_access` is temporary ([ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §4). |
-| flui-testing | 6, 3.7k | K / internal (dev) | **Move above the runtime** | Drives the real transaction under a manual clock; absorbs `flui_widgets::testing`; the optional `flui-widgets → flui-testing` edge (`crates/flui-widgets/Cargo.toml:89`) is removed. |
+| flui-testing | 6, 3.7k | K / internal (dev) | **Move above the runtime** | Drives `UiRealm::pump` directly under a manual clock; it does not reproduce the production `OwnerHost` or event-loop topology. Absorbs `flui_widgets::testing`; the optional `flui-widgets → flui-testing` edge (`crates/flui-widgets/Cargo.toml:89`) is removed. |
 | flui-hot-reload | 6, 2.9k | pkg / official | **Rewrite over Subsecond** as an official package | The dlopen design carries a documented residual risk; the three-crate template and its examples go only after the Subsecond spike ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). It links the `windows` crate directly today (`crates/flui-hot-reload/Cargo.toml:47`), which the package reach set forbids; the rewrite removes it. |
 | flui-material | 7, 26.9k | pkg / official | Official package on `flui-sdk` | Done: `packages/flui-material` builds on `flui-sdk` alone (its normal dependencies are `flui-sdk` and `tracing`, pinned by `the_design_systems_build_on_the_sdk_alone` in `tools/xtask/src/workspace/tests.rs`). Still to come: `flui_material::prelude`. |
 | flui-cupertino | 7, 4.3k | pkg / official | Official package on `flui-sdk` | `packages/flui-cupertino` builds on `flui-sdk` alone, pinned by the same test; gains focus and keyboard activation from the Raw primitives. |
 | flui-localizations | 8, 0.3k | — | **Deleted 2026-09-26** (ADR-0081) | 281 lines in a layer of its own, with no translated strings. The RTL table and delegate moved to `flui_widgets::localization`; nothing went to the packages; ICU4X goes to `flui-i18n` (H1). |
-| flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Realm, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the one trampoline cell (`APP_RUNTIME`, `crates/flui-app/src/app/runner/host.rs:25-47`). `realm_dispatch.rs` is 7,149 lines, but production code ends at line 1690 and the rest is one test module (`crates/flui-app/src/app/runner/realm_dispatch.rs:1691-1692`): the file-length gate counts production lines only, so it is within the limit and needs neither a move nor dissolving. |
+| flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Realm, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the sole trampoline cell `APP_RUNTIME`, which contains an ordinary `!Send + !Sync` `OwnerHost` beside platform-only state. Native-window mapping, surface application, owner-platform access, raster/engine ownership, services and execution-pool lifetime stay here. `realm_dispatch.rs` is split by ownership, not moved wholesale. |
 | flui-cli | 9, 18.6k | H / tool | Keep, own version | `mcp`, `devtools`, `test --golden --accept` with per-test NDJSON, `catalog`; absorbs `tools/web-server`. |
 | flui-devtools | 9, 2.5k | pkg / official | Official package | The in-process protocol server. It does not merge with `flui-protocol`: schema and server stay apart. |
 
@@ -464,12 +464,13 @@ packages, same run).
 
 ```text
 App (flui-app runners) ── one OS-trampoline host cell (P3's named exception)
- └─ OwnerHost (flui-runtime)
-     ├─ Realm (!Send): reactive graph, GlobalKey scope, capability registry, focus coordinator,
-     │                 scheduler core, Spawner, TextContext, image-cache handle, observer
-     │   └─ Presentation × N: element tree + BuildOwner, PipelineOwner, frame clock (demand mask),
-     │                        vsync, semantics host → frame sink
-     └─ Shared engine services: GpuContext, font Collection { shared: true }
+ ├─ platform host state: WindowRegistry, OwnerPlatform, surface/raster ownership, services
+ └─ OwnerHost (flui-runtime; ordinary !Send + !Sync value, not another TLS)
+     ├─ host-wide addressed FIFO, checkout state, deferred realm-map mutations
+     └─ Realm (!Send): reactive graph, GlobalKey scope, capability registry, focus coordinator,
+         │             scheduler core, Spawner, TextContext, image-cache handle, observer
+         └─ Presentation × N: element tree + BuildOwner, PipelineOwner, frame clock (demand mask),
+                              vsync, semantics host → frame sink
 ```
 
 - **One owner thread per process hosts N isolated realms, through H2**
@@ -489,6 +490,20 @@ App (flui-app runners) ── one OS-trampoline host cell (P3's named exception)
   done the same and registration goes through owner-proof types. The AppKit and Win32
   trampolines keep reaching one cell for good; that is the recorded exception class
   ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)).
+- **Owner work has one FIFO across realms.** The previous dispatcher rejected a synchronous
+  dispatch to realm B while realm A was checked out, so an A callback closing B's native window
+  could lose B's UI close. The transitional dispatcher now serializes reentrant A/B/A work over
+  one host-wide queue, with a stale-target recheck before execution and panic-safe checkout
+  restoration. It still inherits the old unbounded drain-until-empty policy. Before `OwnerHost`
+  moves, owner turns become bounded batches with one coalesced continuation wake, and the private
+  `RealmTask::Frame`/`Pump` closure escape hatches become typed operations or explicit methods.
+- **The owner host is realm-neutral, not a fourth physical owner.** It owns the realm registry,
+  addressed FIFO, checkout bookkeeping and deferred realm-map mutations. `flui-app` retains the
+  `WindowId → PresentationAddress` authority, native event normalization, surface appliers,
+  close admission and the application/platform/raster service tails. Cross-thread producers use
+  a bounded typed ingress and wake the owner; owner-local callbacks use a `!Send` dispatcher into
+  the same FIFO. Admission policy is operation-specific: lossless transitions are never silently
+  coalesced, state reports may be latest-value, and wake requests are edge-coalesced.
 - **No parallel layout inside a realm**, and that is written down. What rules it out today is
   `PipelineCell`, not the render-object types.
 
@@ -503,7 +518,8 @@ scheduler's frame time and the time the realm's `Vsync` controllers tick at (a s
 still reads the wall clock; `flui-scheduler`'s `ARCHITECTURE.md` records why). The runner's per-backend wake gate decides
 whether a wake becomes a pump at all (ADR-0058), and a wake with frames disabled runs
 `UiRealm::pump_background` instead. `flui-app` drives the pump with platform clocks and the
-raster lane, and `flui-testing` is to drive it with a manual clock and a headless or CPU sink
+raster lane, and `flui-testing` is to drive `UiRealm::pump` directly with a manual clock and a
+headless or CPU sink — it needs the product transaction, not the production `OwnerHost`
 ([ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md), which amends
 ADR-0037 §12: one production consumer plus the test driver).
 
