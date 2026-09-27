@@ -7,7 +7,7 @@ use super::host::{
     with_owner_platform,
 };
 use super::realm_dispatch::{
-    PlatformToUi, RealmTask, dispatch_platform_realm, drain_owner_inbox, install_platform_realm,
+    PlatformToUi, RealmTask, dispatch_platform_realm, install_platform_realm,
     install_surface_applier,
 };
 use crate::app::AppConfig;
@@ -30,7 +30,9 @@ where
     };
     use parking_lot::Mutex;
 
-    use crate::app::raster_lane::RealmRaster as _;
+    use flui_runtime::pump::SampledClock;
+
+    use crate::app::raster_lane::DirectSink;
 
     tracing::info!("Starting web platform via flui-platform");
 
@@ -188,37 +190,38 @@ where
             let renderer_frame = Arc::clone(&renderer_frame);
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmTask::Frame(Box::new(move |realm| {
-                    // Owner-inbox drain: commands and worker results commit HERE,
-                    // at the frame boundary while the scheduler phase is Idle —
-                    // never inside the frame transaction below. Runs before the
-                    // dirty gate so a command-driven redraw request is observed
-                    // by the very frame its wake produced.
-                    let inbox_redraw = drain_owner_inbox(realm);
+                RealmTask::Pump(Box::new(move |realm| {
+                    let action = realm.enter(|realm| {
+                        // Owner-inbox drain: commands and worker results commit
+                        // HERE, at the frame boundary while the scheduler phase
+                        // is Idle — never inside the frame transaction below.
+                        // Runs before the dirty gate so a command-driven redraw
+                        // request is observed by the very frame its wake
+                        // produced.
+                        let inbox_redraw = realm.drain_owner_inbox();
 
-                    let has_pending = realm.has_pending_work();
-                    let dirty = inbox_redraw || realm.needs_redraw() || has_pending;
-                    let scheduler = realm.scheduler();
-                    match wake_action(
-                        scheduler.frames_enabled(),
-                        dirty,
-                        scheduler.is_frame_scheduled(),
-                        // No deferral on web: this callback is driven by the
-                        // browser's own `requestAnimationFrame` loop, which
-                        // already paces at the display's rate — the exact job
-                        // ADR-0058's deadline does for the native backends.
-                        FallbackGate::default(),
-                    ) {
+                        let has_pending = realm.has_pending_work();
+                        let dirty = inbox_redraw || realm.needs_redraw() || has_pending;
+                        let scheduler = realm.scheduler();
+                        wake_action(
+                            scheduler.frames_enabled(),
+                            dirty,
+                            scheduler.is_frame_scheduled(),
+                            // No deferral on web: this callback is driven by the
+                            // browser's own `requestAnimationFrame` loop, which
+                            // already paces at the display's rate — the exact job
+                            // ADR-0058's deadline does for the native backends.
+                            FallbackGate::default(),
+                        )
+                    });
+                    match action {
                         WakeAction::Skip => return,
                         WakeAction::PumpAsync => {
                             // Frames disabled: pump only the async driver — see
                             // `wake_action`'s doc for why this is the only thing
                             // keeping a spawned future progressing while
-                            // backgrounded.
-                            //
-                            // `finish_async_pump` MUST run first, not after —
-                            // see `UpdateScheduler::finish_async_pump`'s doc for the
-                            // starvation hazard this ordering avoids.
+                            // backgrounded, and `UiRealm::pump_background` for
+                            // the latch-first order it keeps.
                             //
                             // No `NO_PRESENT_FALLBACK_PACE` sleep here, unlike
                             // desktop/Android: this callback is driven by the
@@ -233,22 +236,23 @@ where
                             // no real OS threads, and blocking the single JS
                             // thread with `std::thread::sleep` would hang the
                             // page rather than pace it.
-                            scheduler.finish_async_pump();
-                            scheduler.drive_async_tasks();
+                            realm.pump_background();
                             return;
                         }
                         WakeAction::Render => {}
                     }
 
                     let now = web_time::Instant::now();
-                    // UpdateScheduler callbacks and rendering share one realm entry.
-                    scheduler.drive_frame_with_lane(now, flui_scheduler::IdleDeadline::far_future(now), || {
+                    {
+                        // No frame runs before the renderer exists: the realm
+                        // stays dirty, and the first animation frame after the
+                        // renderer arrives renders.
                         let mut slot = renderer_frame.lock();
                         let Some(r) = slot.as_mut() else {
                             return;
                         };
 
-                        realm.render_frame_entered(r);
+                        let _ = realm.pump(&mut SampledClock(now), &mut DirectSink::new(r));
 
                         if r.is_device_lost() {
                             drop(slot);
@@ -333,7 +337,7 @@ where
                                 }
                             });
                         }
-                    }, realm.local_post_frame_lane());
+                    }
                 })),
             );
         }));

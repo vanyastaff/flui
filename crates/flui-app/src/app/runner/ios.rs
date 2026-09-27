@@ -32,7 +32,7 @@ use flui_platform::platforms::ios::{IOSSceneEvent, IOSSceneSessionId};
 use flui_view::{StatelessView, View};
 use std::sync::Arc;
 
-use super::device_recovery::{new_device_recovery_backoff, render_frame_with_device_recovery};
+use super::device_recovery::{new_device_recovery_backoff, pump_with_device_recovery};
 use super::frame_pacing::{
     BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
 };
@@ -42,7 +42,7 @@ use super::host::{
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
-    drain_owner_inbox, install_realm_alongside, install_surface_applier, teardown_platform_realm,
+    install_realm_alongside, install_surface_applier, teardown_platform_realm,
 };
 use super::surface_lifecycle::{
     SurfaceLifecycleOutcome, SurfaceRecreationRetry, report_surface_settlement,
@@ -135,11 +135,12 @@ fn drive_owner() {
     for dispatcher in dispatchers {
         let _ = dispatch_platform_realm(
             dispatcher,
-            RealmTask::Frame(Box::new(|realm| {
-                drain_owner_inbox(realm);
-                let scheduler = realm.scheduler();
-                scheduler.finish_async_pump();
-                scheduler.drive_async_tasks();
+            RealmTask::Pump(Box::new(|realm| {
+                // An owner turn commits commands and polls the async driver;
+                // it runs no frame, so it has no gate to feed the drain's
+                // redraw report to.
+                let _ = realm.enter(|realm| realm.drain_owner_inbox());
+                realm.pump_background();
             })),
         );
     }
@@ -358,94 +359,92 @@ where
         let worker_reload_frame = worker_reload_frame.clone();
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Frame(Box::new(move |realm| {
-                // Development reload: applies a queued rebuild at the frame
-                // boundary (the `dlopen` stays owner-thread), exactly as the
-                // desktop runner does.
-                worker_reload_frame.poll_and_apply(realm);
+            RealmTask::Pump(Box::new(move |realm| {
+                // The gate half of the wake runs inside one realm entry and
+                // decides; the pump below enters the realm itself.
+                let (action, now) = realm.enter(|realm| {
+                    let now = web_time::Instant::now();
+                    // Development reload: applies a queued rebuild at the frame
+                    // boundary (the `dlopen` stays owner-thread), exactly as the
+                    // desktop runner does.
+                    worker_reload_frame.poll_and_apply(realm);
 
-                let inbox_redraw = drain_owner_inbox(realm);
+                    let inbox_redraw = realm.drain_owner_inbox();
 
-                let has_pending = realm.has_pending_work();
-                // The surface-retry deadline joins the device-recovery one in
-                // the `dirty` predicate, for the same reason that one must be
-                // present: a deadline the platform faithfully actuates still
-                // reaches `WakeAction::Skip` and returns before the retry is
-                // consulted if it is absent from this gate.
-                let retry_deadline = super::host::merge_wake_deadlines(
-                    device_recovery_backoff.next_attempt_at(),
-                    surface_recreation_retry.next_attempt_at(),
-                );
-                let dirty = frame_is_dirty(
-                    inbox_redraw,
-                    realm.needs_redraw(),
-                    has_pending,
-                    retry_deadline,
-                    FallbackGate::default(),
-                );
-                let scheduler = realm.scheduler();
-                match wake_action(
-                    scheduler.frames_enabled(),
-                    dirty,
-                    scheduler.is_frame_scheduled(),
-                    FallbackGate::default(),
-                ) {
+                    let has_pending = realm.has_pending_work();
+                    // The surface-retry deadline joins the device-recovery one in
+                    // the `dirty` predicate, for the same reason that one must be
+                    // present: a deadline the platform faithfully actuates still
+                    // reaches `WakeAction::Skip` and returns before the retry is
+                    // consulted if it is absent from this gate.
+                    let retry_deadline = super::host::merge_wake_deadlines(
+                        device_recovery_backoff.next_attempt_at(),
+                        surface_recreation_retry.next_attempt_at(),
+                    );
+                    let dirty = frame_is_dirty(
+                        inbox_redraw,
+                        realm.needs_redraw(),
+                        has_pending,
+                        retry_deadline,
+                        FallbackGate::default(),
+                    );
+                    let scheduler = realm.scheduler();
+                    let action = wake_action(
+                        scheduler.frames_enabled(),
+                        dirty,
+                        scheduler.is_frame_scheduled(),
+                        FallbackGate::default(),
+                    );
+                    if action != WakeAction::Render {
+                        return (action, now);
+                    }
+
+                    // A retry owed by a genuine surface-recreation failure gets
+                    // its gated attempt here, BEFORE the frame, through the shared
+                    // helper (its own lane-lock scope, released before the realm
+                    // half). This closure already runs as the realm's Pump task, so
+                    // the full-repaint mark goes to `realm` directly and the frame
+                    // about to run is the one that repaints into the new surface —
+                    // re-dispatching it as another task would queue it behind
+                    // this one (the dispatcher is mid-phase) and land it a frame late.
+                    match retry_surface_recreation(&lane_frame, &surface_recreation_retry, now) {
+                        Some(SurfaceLifecycleOutcome::Recreated) => {
+                            realm.mark_primary_needs_full_repaint();
+                        }
+                        Some(SurfaceLifecycleOutcome::Failed(source)) => {
+                            tracing::warn!(
+                                platform = "iOS",
+                                ?source,
+                                "surface recreation retry failed; the deadline-paced retry \
+                             continues"
+                            );
+                        }
+                        Some(SurfaceLifecycleOutcome::Released) | None => {}
+                    }
+                    (action, now)
+                });
+
+                match action {
                     WakeAction::Skip => return,
                     WakeAction::PumpAsync => {
                         // Frames disabled (backgrounded): pump only the async
                         // driver, then sleep to bound a self-re-arming task.
-                        scheduler.finish_async_pump();
-                        scheduler.drive_async_tasks();
+                        realm.pump_background();
                         std::thread::sleep(BACKGROUNDED_PUMP_PACE);
                         return;
                     }
                     WakeAction::Render => {}
                 }
 
-                let now = web_time::Instant::now();
-
-                // A retry owed by a genuine surface-recreation failure gets
-                // its gated attempt here, BEFORE the frame, through the shared
-                // helper (its own lane-lock scope, released before the realm
-                // half). This closure already runs as the realm's Frame task, so
-                // the full-repaint mark goes to `realm` directly and the frame
-                // about to run is the one that repaints into the new surface —
-                // re-dispatching it as another Frame task would queue it behind
-                // this one (the dispatcher is mid-phase) and land it a frame late.
-                match retry_surface_recreation(&lane_frame, &surface_recreation_retry, now) {
-                    Some(SurfaceLifecycleOutcome::Recreated) => {
-                        realm.mark_primary_needs_full_repaint();
-                    }
-                    Some(SurfaceLifecycleOutcome::Failed(source)) => {
-                        tracing::warn!(
-                            platform = "iOS",
-                            ?source,
-                            "surface recreation retry failed; the deadline-paced retry continues"
-                        );
-                    }
-                    Some(SurfaceLifecycleOutcome::Released) | None => {}
-                }
-
-                scheduler.drive_frame_with_lane(
-                    now,
-                    flui_scheduler::IdleDeadline::far_future(now),
-                    || {
-                        let Some(mut lane) = lane_frame.try_lock() else {
-                            tracing::error!(
-                                "frame skipped: raster lane already held by an outer frame \
-                                 dispatch"
-                            );
-                            return;
-                        };
-                        let _ = render_frame_with_device_recovery(
-                            realm,
-                            &mut *lane,
-                            &device_recovery_backoff,
-                            now,
-                        );
-                    },
-                    realm.local_post_frame_lane(),
-                );
+                // The frame: `UiRealm::pump` at `now`, with device-loss
+                // recovery around it (`pump_with_device_recovery`).
+                let Some(mut lane) = lane_frame.try_lock() else {
+                    tracing::error!(
+                        "frame skipped: raster lane already held by an outer frame dispatch"
+                    );
+                    return;
+                };
+                let _ = pump_with_device_recovery(realm, &mut *lane, &device_recovery_backoff, now);
             })),
         );
     }));

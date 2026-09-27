@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 use super::device_recovery::{
-    FrameRecoveryOutcome, new_device_recovery_backoff, render_frame_with_device_recovery,
+    FrameRecoveryOutcome, new_device_recovery_backoff, pump_with_device_recovery,
 };
 use super::first_reveal::FirstReveal;
 use super::frame_pacing::{
@@ -20,7 +20,7 @@ use super::host::{
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
-    drain_owner_inbox, install_realm_alongside, install_surface_applier,
+    install_realm_alongside, install_surface_applier,
 };
 use crate::app::AppConfig;
 
@@ -84,7 +84,7 @@ where
     // down at step 6 alongside the renderer it paces) so the
     // wake-deadline hook below can be wired to it from the start — one
     // instance for the whole closure's life, `Arc`'d because a fresh
-    // clone is threaded into each `RealmTask::Frame` the frame closure
+    // clone is threaded into each `RealmTask::Pump` the frame closure
     // builds while the underlying counters/deadline must persist. See
     // `DeviceRecoveryBackoff`'s own doc.
     let device_recovery_backoff = Arc::new(new_device_recovery_backoff());
@@ -345,7 +345,7 @@ where
         DispatchEventResult::resolved(false, true)
     }));
 
-    // 6. Register frame callback -> scheduler + UiRealm::render_frame_on_lane()
+    // 6. Register frame callback -> the wake gate, then UiRealm::pump
     let lane_frame = Arc::clone(&lane);
     let worker_reload_frame = worker_reload.clone();
     // Reuses the SAME backoff constructed at step 0c (already wired
@@ -365,105 +365,98 @@ where
         let reveal_window = frame_reveal_window.clone();
         let _ = dispatch_platform_realm(
             realm_dispatch,
-            RealmTask::Frame(Box::new(move |realm| {
-                worker_reload_frame.poll_and_apply(realm);
+            RealmTask::Pump(Box::new(move |realm| {
+                // The gate half of the wake runs inside one realm entry and
+                // decides; the pump below enters the realm itself.
+                let (action, now) = realm.enter(|realm| {
+                    worker_reload_frame.poll_and_apply(realm);
 
-                let scheduler = realm.scheduler();
+                    let scheduler = realm.scheduler();
 
-                // Every fire of this callback is a genuine platform-delivered
-                // frame-request signal on this backend (`WinitWindowEvent::
-                // RedrawRequested` -> `dispatch_request_frame` -> here; see
-                // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
-                // pace this via the compositor vs. deliver it immediately).
-                // Recorded unconditionally, before the dirty/wake_action gate below
-                // decides whether anything actually runs this pump: pacing
-                // feedback is about observing the PLATFORM's own delivery timing,
-                // independent of whether this particular delivery ends up idle.
-                // `now` is read ONCE here and reused ~60 lines below at this
-                // closure's `drive_frame_with_lane(now, ...)` call, past the
-                // `wake_action` match below (that later call site's own comment
-                // points back to this one) — this pump's pacing-feedback sample
-                // and its own frame-drive instant must agree, the same
-                // single-`now`-per-pump discipline every other call site in this
-                // closure already follows.
-                let now = web_time::Instant::now();
-                realm.record_compositor_tick(now);
+                    // Every fire of this callback is a genuine platform-delivered
+                    // frame-request signal on this backend (`WinitWindowEvent::
+                    // RedrawRequested` -> `dispatch_request_frame` -> here; see
+                    // `docs/adr/ADR-0044-driver-loop-hybrid.md`'s per-platform table for which backends
+                    // pace this via the compositor vs. deliver it immediately).
+                    // Recorded unconditionally, before the dirty/wake_action gate below
+                    // decides whether anything actually runs this pump: pacing
+                    // feedback is about observing the PLATFORM's own delivery timing,
+                    // independent of whether this particular delivery ends up idle.
+                    // `now` is read ONCE here and is also the pump's frame
+                    // timestamp below (`pump_with_device_recovery` hands it to
+                    // `UiRealm::pump` as a `SampledClock`) — this wake's
+                    // pacing-feedback sample and its frame's timestamp must agree.
+                    let now = web_time::Instant::now();
+                    realm.record_compositor_tick(now);
 
-                // Owner-inbox drain: commands and worker results
-                // commit HERE, at the frame boundary while the scheduler phase is
-                // Idle — never inside the frame transaction below. Runs before the
-                // dirty gate so a command-driven redraw request is observed by the
-                // very frame its wake produced.
-                //
-                // The runtime is TAKEN out of the slot for the drain (and restored
-                // after) so drained user closures never run under the RefCell
-                // borrow: a command that re-enters this frame callback through a
-                // nested platform pump then finds an empty slot and skips the
-                // drain, instead of panicking the borrow.
-                let inbox_redraw = drain_owner_inbox(realm);
+                    // Owner-inbox drain: commands and worker results
+                    // commit HERE, at the frame boundary while the scheduler phase is
+                    // Idle — never inside the frame transaction below. Runs before the
+                    // dirty gate so a command-driven redraw request is observed by the
+                    // very frame its wake produced.
+                    //
+                    // The runtime is TAKEN out of the slot for the drain (and restored
+                    // after) so drained user closures never run under the RefCell
+                    // borrow: a command that re-enters this frame callback through a
+                    // nested platform pump then finds an empty slot and skips the
+                    // drain, instead of panicking the borrow.
+                    let inbox_redraw = realm.drain_owner_inbox();
 
-                // `device_recovery_backoff.next_attempt_at().is_some()` is a
-                // REQUIRED fourth dirty source, not an optional extra: a
-                // deadline wired into the wake-deadline hook (installed
-                // below, after this realm exists) but absent from THIS
-                // predicate reaches `WakeAction::Skip` and returns before
-                // `render_frame_with_device_recovery` is ever called, no
-                // matter how faithfully the platform actuates the wake —
-                // see `DeviceRecoveryBackoff`'s own doc for the two paired
-                // obligations a wake-deadline source carries and the
-                // dropped-attempt trace that motivated this line. Calls
-                // the shared `frame_is_dirty` (not a local reimplementation)
-                // for the same reason `wake_action` itself is a named
-                // function here and not inlined: this closure's own
-                // `dirty` computation and the tests that pin it must run
-                // the identical code, or a regression in one is invisible
-                // to the other.
-                // The frame-pacing deferral (ADR-0058), read ONCE per wake:
-                // `gate` consumes a due deadline, so this is both the
-                // "is a deferral pending" question the gate below asks and
-                // the "this wake IS the deferred one" answer that makes it
-                // dirty. Reading it twice would consume it in the first read
-                // and skip the very wake it asked for.
-                let fallback_gate = fallback.gate(now);
-                let dirty = frame_is_dirty(
-                    inbox_redraw,
-                    realm.needs_redraw(),
-                    realm.has_pending_work(),
-                    // The reveal fallback joins the device-recovery deadline
-                    // here for the same reason that one must be present.
-                    merge_wake_deadlines(
-                        device_recovery_backoff.next_attempt_at(),
-                        first_reveal.next_deadline(),
-                    ),
-                    fallback_gate,
-                );
-                match wake_action(
-                    scheduler.frames_enabled(),
-                    dirty,
-                    scheduler.is_frame_scheduled(),
-                    fallback_gate,
-                ) {
+                    // `device_recovery_backoff.next_attempt_at().is_some()` is a
+                    // REQUIRED fourth dirty source, not an optional extra: a
+                    // deadline wired into the wake-deadline hook (installed
+                    // below, after this realm exists) but absent from THIS
+                    // predicate reaches `WakeAction::Skip` and returns before
+                    // `pump_with_device_recovery` is ever called, no
+                    // matter how faithfully the platform actuates the wake —
+                    // see `DeviceRecoveryBackoff`'s own doc for the two paired
+                    // obligations a wake-deadline source carries and the
+                    // dropped-attempt trace that motivated this line. Calls
+                    // the shared `frame_is_dirty` (not a local reimplementation)
+                    // for the same reason `wake_action` itself is a named
+                    // function here and not inlined: this closure's own
+                    // `dirty` computation and the tests that pin it must run
+                    // the identical code, or a regression in one is invisible
+                    // to the other.
+                    // The frame-pacing deferral (ADR-0058), read ONCE per wake:
+                    // `gate` consumes a due deadline, so this is both the
+                    // "is a deferral pending" question the gate below asks and
+                    // the "this wake IS the deferred one" answer that makes it
+                    // dirty. Reading it twice would consume it in the first read
+                    // and skip the very wake it asked for.
+                    let fallback_gate = fallback.gate(now);
+                    let dirty = frame_is_dirty(
+                        inbox_redraw,
+                        realm.needs_redraw(),
+                        realm.has_pending_work(),
+                        // The reveal fallback joins the device-recovery deadline
+                        // here for the same reason that one must be present.
+                        merge_wake_deadlines(
+                            device_recovery_backoff.next_attempt_at(),
+                            first_reveal.next_deadline(),
+                        ),
+                        fallback_gate,
+                    );
+                    let action = wake_action(
+                        scheduler.frames_enabled(),
+                        dirty,
+                        scheduler.is_frame_scheduled(),
+                        fallback_gate,
+                    );
+                    (action, now)
+                });
+
+                match action {
                     WakeAction::Skip => return,
                     WakeAction::PumpAsync => {
-                        // Frames disabled (Hidden/Paused/Detached): the mid-frame
-                        // `drive_async_tasks` poll inside `handle_begin_frame`
-                        // never runs because no frame runs at all — this
-                        // explicit call is the ONLY thing keeping a spawned
-                        // future progressing while backgrounded. No begin/draw
-                        // frame, no tickers, no pipeline, no present.
-                        //
-                        // `finish_async_pump` MUST run first, not after: nothing
-                        // else ever clears the scheduler's `frame_scheduled`
-                        // latch on this path (only `handle_begin_frame` does,
-                        // and it never runs here), so without this call a LATER,
-                        // independent wake (a network response's `Waker::wake`,
-                        // arriving after this pump cycle returns) would find the
-                        // latch already set, never re-fire `on_frame_scheduled`,
-                        // and never wake this loop again — see
-                        // `UpdateScheduler::finish_async_pump`'s doc for the full
-                        // starvation hazard and why the ordering matters.
-                        scheduler.finish_async_pump();
-                        scheduler.drive_async_tasks();
+                        // Frames disabled (Hidden/Paused/Detached): no frame
+                        // runs, so the mid-frame async poll never does either
+                        // — this background pump is the ONLY thing keeping a
+                        // spawned future progressing while backgrounded. It
+                        // clears the frame latch before polling; see
+                        // `UiRealm::pump_background` for why that order is
+                        // load-bearing.
+                        realm.pump_background();
                         // A backgrounded wake with dirty/pending work
                         // re-requesting another wake every loop tick has the
                         // identical busy-spin risk an un-presented frame with an
@@ -477,7 +470,7 @@ where
                         // backgrounded self-re-arming task would otherwise spin.
                         let keeps_gate_open = keeps_frame_gate_open(
                             realm.needs_redraw(),
-                            scheduler.is_frame_scheduled(),
+                            realm.scheduler().is_frame_scheduled(),
                             realm.has_pending_work(),
                         );
                         if keeps_gate_open {
@@ -488,55 +481,30 @@ where
                     WakeAction::Render => {}
                 }
 
-                // The `now` used below is the SAME instant bound near the top of
-                // this closure and already recorded into `record_compositor_tick`
-                // there (see the comment at that earlier `let now` binding) --
-                // reused here, not re-read fresh.
-                // UpdateScheduler callbacks (animations). NOTE: the global `UpdateScheduler` is driven
-                // off this per-frame `Instant::now()`, while the tree-bound `Vsync`
-                // (`UiRealm::draw_frame`) ticks off the realm's own `start` origin —
-                // two separate clocks ON PURPOSE: the controller sets are disjoint (implicit
-                // animations register with `Vsync`; plain controllers carry a private
-                // `UpdateScheduler` ticker, never the global one), so the origins never need to
-                // agree and no controller is advanced twice.
-                // The ONE shared frame ordering — begin (transient +
-                // microtasks + the single async-driver poll) -> persistent callbacks ->
-                // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
-                // drives the same helper on its binding-local scheduler.
-                let outcome = scheduler.drive_frame_with_lane(
-                    now,
-                    flui_scheduler::IdleDeadline::far_future(now),
-                    || {
-                        // Render frame via the realm, rebuilding a lost GPU device
-                        // around it: BEFORE the frame build when the loss predates
-                        // the frame (a dead device never pays extra for it — the
-                        // frame builds anyway, see this function's own doc for why),
-                        // and AFTER when the wgpu device-lost callback fired
-                        // mid-frame — see `render_frame_with_device_recovery`.
-                        let Some(mut lane) = lane_frame.try_lock() else {
-                            // A reentrant frame dispatch that slipped past the
-                            // empty-slot drain protection upstream: skip this
-                            // nested frame rather than deadlock mid-pump; the
-                            // outer dispatch still completes its own.
-                            tracing::error!(
-                                "frame skipped: raster lane already held by an \
-                             outer frame dispatch"
-                            );
-                            return FrameRecoveryOutcome {
-                                presented: false,
-                                just_failed: false,
-                                next_attempt_at: None,
-                            };
-                        };
-                        render_frame_with_device_recovery(
-                            realm,
-                            &mut *lane,
-                            &device_recovery_backoff,
-                            now,
-                        )
-                    },
-                    realm.local_post_frame_lane(),
-                );
+                // The frame: `UiRealm::pump` at `now` (apply commands ->
+                // begin -> persistent callbacks -> the pipeline and submit ->
+                // post-frame callbacks -> Idle), with a lost GPU device
+                // rebuilt around it: BEFORE the pump when the loss predates
+                // the frame (the frame runs anyway, see
+                // `pump_with_device_recovery`'s doc for why), and AFTER when
+                // the wgpu device-lost callback fired mid-frame.
+                let outcome = if let Some(mut lane) = lane_frame.try_lock() {
+                    pump_with_device_recovery(realm, &mut *lane, &device_recovery_backoff, now)
+                } else {
+                    // A reentrant frame dispatch that slipped past the
+                    // empty-slot drain protection upstream: skip this nested
+                    // frame rather than deadlock mid-pump; the outer dispatch
+                    // still completes its own. The pacing tail below still
+                    // arms its fallback for it.
+                    tracing::error!(
+                        "frame skipped: raster lane already held by an outer frame dispatch"
+                    );
+                    FrameRecoveryOutcome {
+                        presented: false,
+                        just_failed: false,
+                        next_attempt_at: None,
+                    }
+                };
 
                 // Frame-pacing fallback (ADR-0058), replacing the fixed
                 // 16 ms sleep this thread used to take here. A frame that
@@ -554,7 +522,7 @@ where
                 // same wake-deadline hook.
                 let keeps_gate_open = keeps_frame_gate_open(
                     realm.needs_redraw(),
-                    scheduler.is_frame_scheduled(),
+                    realm.scheduler().is_frame_scheduled(),
                     realm.has_pending_work(),
                 );
                 let pace_now = web_time::Instant::now();

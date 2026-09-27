@@ -401,52 +401,48 @@ impl<B: RasterBackend> FrameSink for RasterLane<B> {
 /// arrives asynchronously and recovers across an `.await`, a shape the lane
 /// does not yet accommodate) and by tests that pin the realm's frame
 /// transaction against scripted backends.
+#[cfg_attr(
+    all(not(target_arch = "wasm32"), not(test)),
+    expect(
+        dead_code,
+        reason = "the web runner's production sink (wasm32) and the scripted-backend test \
+                  seam; the native runners pump through the raster lane instead"
+    )
+)]
 pub(crate) struct DirectSink<'a, R: RasterBackend> {
     renderer: &'a mut R,
 }
 
 impl<'a, R: RasterBackend> DirectSink<'a, R> {
+    #[cfg_attr(
+        all(not(target_arch = "wasm32"), not(test)),
+        expect(
+            dead_code,
+            reason = "see DirectSink's own expectation: no native production caller"
+        )
+    )]
     pub(crate) fn new(renderer: &'a mut R) -> Self {
         Self { renderer }
     }
 }
 
-/// The realm's frame transaction over this crate's two engine-backed sinks.
+/// The realm's draw-and-submit step over a [`DirectSink`], without the rest
+/// of the frame transaction: a test seam only.
 ///
-/// The realm (`flui_runtime::ui_realm::UiRealm`) renders through any
-/// [`FrameSink`] and names no engine type; these entry points pick the sink
-/// that wraps an engine backend, which is this crate's to name.
+/// Every production frame goes through `UiRealm::pump`. Tests that pin the
+/// submit classification against a scripted engine backend drive the draw
+/// step on its own, the way the realm's own tests call `render_frame`.
+#[cfg(test)]
 pub(crate) trait RealmRaster {
-    /// Render one frame through a [`DirectSink`] over `renderer`: the web
-    /// runner's production frame path and the tests that pin the transaction
-    /// against scripted backends. Returns whether the frame presented.
-    #[cfg_attr(
-        all(not(target_arch = "wasm32"), not(test)),
-        expect(
-            dead_code,
-            reason = "the direct-sink entry point is the web runner's production frame path \
-                      (wasm32) and the scripted-backend test seam; native production drives \
-                      render_frame_on_lane instead -- see DirectSink's own doc"
-        )
-    )]
+    /// Render one frame through a [`DirectSink`] over `renderer`. Returns
+    /// whether the frame presented.
     fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool;
-
-    /// Render one frame through the raster mailbox: the desktop and Android
-    /// runners' canonical frame path (ADR-0045's inline lane). The scene
-    /// crosses the raster boundary as an owned, stamped `SceneSnapshot` and
-    /// is rendered by the lane's own pump.
-    #[cfg(not(target_arch = "wasm32"))]
-    fn render_frame_on_lane<B: RasterBackend>(&self, lane: &mut RasterLane<B>) -> bool;
 }
 
+#[cfg(test)]
 impl RealmRaster for flui_runtime::ui_realm::UiRealm {
     fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
         self.render_frame(&mut DirectSink::new(renderer))
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn render_frame_on_lane<B: RasterBackend>(&self, lane: &mut RasterLane<B>) -> bool {
-        self.render_frame(lane)
     }
 }
 
