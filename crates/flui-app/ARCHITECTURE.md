@@ -61,6 +61,26 @@ the dispatch layer moves there too.
 
 ## Mapping decisions
 
+### Owner work yields between finite batches
+
+The owner-local cross-realm FIFO is cooperative: one logical operation is
+never preempted internally, but a continuation callback executes at most 32
+operations and then requests one later opportunity. Fresh native roots and
+the carried FIFO share that physical-callback budget. Desktop and iOS use the platform
+owner signal, Android pokes its window without falsely marking a frame dirty,
+and web consumes the logical continuation on its already-scheduled next RAF.
+Stale operations still consume budget because validation and captured-value
+destruction are real owner-thread work.
+
+Fresh native roots run synchronously while that callback still has budget;
+excess roots join the carried FIFO rather than extending an event-loop turn.
+A close therefore installs a terminal barrier for its exact
+presentation incarnation when admitted; later work for that address is
+refused even before the bounded queue executes the close. This deliberately
+diverges from a single total FIFO across independent native and owner-local
+ingress: responsiveness has priority, while per-queue FIFO and terminal
+ordering remain explicit and tested.
+
 ### Native execution caps remain presentation-local
 
 ADR-0072 adds a window execution observation to the existing presentation facts.

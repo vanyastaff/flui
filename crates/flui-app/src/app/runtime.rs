@@ -36,7 +36,8 @@ use flui_foundation::{PresentationId, RealmId};
 use flui_scheduler::UpdateScheduler;
 
 use std::cell::OnceCell;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
@@ -526,6 +527,26 @@ pub(crate) struct AppRuntime {
     /// invocation owns the queue drain. Reentrant dispatch only appends and
     /// returns; it never recursively checks out a sibling realm.
     pub(super) owner_turn_draining: bool,
+    /// Sequence of the one continuation opportunity currently requested for
+    /// carried owner work. The sequence lets a failed, synchronously
+    /// reentrant actuator clear only its own reservation.
+    pub(super) owner_turn_continuation: Option<u64>,
+    /// The last attempt to post a continuation failed. A fresh native root
+    /// must still run synchronously instead of joining the carried backlog;
+    /// its tail retries the post.
+    pub(super) owner_turn_continuation_failed: bool,
+    /// Remaining logical operations in the native callback that consumed a
+    /// continuation. `None` means this callback is not servicing carried
+    /// owner work.
+    pub(super) owner_turn_callback_budget: Option<usize>,
+    /// Monotonic source for [`Self::owner_turn_continuation`].
+    pub(super) owner_turn_next_sequence: u64,
+    /// Host-specific continuation actuator. It is owner-local because
+    /// `AppRuntime` is owner-affine; `true` means an opportunity was posted.
+    pub(super) owner_turn_wake: Option<Rc<dyn Fn() -> bool>>,
+    /// Addresses whose terminal close has been admitted but may still be
+    /// waiting in a bounded batch. Later work cannot jump that barrier.
+    pub(super) closing_presentations: HashSet<PresentationAddress>,
     /// The thread that installed the first realm hosted here; every dispatch
     /// checks against this before touching the registry. Loop-scoped, not
     /// per-realm: every realm this `AppRuntime` ever hosts lives on the same
@@ -723,6 +744,12 @@ impl AppRuntime {
             realms: RealmRegistry::new(),
             owner_turn_queue: VecDeque::new(),
             owner_turn_draining: false,
+            owner_turn_continuation: None,
+            owner_turn_continuation_failed: false,
+            owner_turn_callback_budget: None,
+            owner_turn_next_sequence: 0,
+            owner_turn_wake: None,
+            closing_presentations: HashSet::new(),
             owner_thread: None,
             registry: WindowRegistry::new(),
             close_requests: Arc::new(super::close_request::CloseRequestRouter::new()),
@@ -1388,6 +1415,20 @@ impl AppRuntime {
             needs_redraw: Arc::clone(&self.needs_redraw),
             redraw_window: Arc::clone(&self.redraw_window),
         }
+    }
+
+    /// Owner-thread poke used only to continue bounded owner work. Unlike a
+    /// frame wake it does not mark the realm dirty; operations in the batch
+    /// request a frame themselves when their effects require one.
+    #[cfg(target_os = "android")]
+    pub(super) fn owner_turn_window_poke(&self) -> Arc<dyn Fn() + Send + Sync> {
+        let redraw_window = Arc::clone(&self.redraw_window);
+        Arc::new(move || {
+            let window = redraw_window.lock().as_ref().cloned();
+            if let Some(window) = window {
+                window.request_redraw();
+            }
+        })
     }
 
     /// A `Send + Sync`, `'static` capability that sets `needs_redraw` and

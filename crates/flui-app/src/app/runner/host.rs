@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -82,6 +83,24 @@ thread_local! {
 pub(crate) fn install_owner_platform(
     owner: flui_platform::OwnerPlatform,
 ) -> Result<(), flui_platform::WakeRegistrationError> {
+    #[cfg(any(
+        target_os = "ios",
+        all(not(target_os = "android"), not(target_arch = "wasm32"))
+    ))]
+    let owner_turn_wake: Rc<dyn Fn() -> bool> = {
+        let proxy = owner.proxy();
+        Rc::new(move || proxy.wake().is_ok())
+    };
+    #[cfg(target_os = "android")]
+    let owner_turn_wake: Rc<dyn Fn() -> bool> = {
+        let poke = APP_RUNTIME.with(|slot| slot.borrow().owner_turn_window_poke());
+        Rc::new(move || {
+            poke();
+            true
+        })
+    };
+    #[cfg(target_arch = "wasm32")]
+    let owner_turn_wake: Rc<dyn Fn() -> bool> = Rc::new(|| true);
     #[cfg(all(
         not(target_os = "android"),
         not(target_os = "ios"),
@@ -94,6 +113,7 @@ pub(crate) fn install_owner_platform(
             if APP_RUNTIME
                 .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &installed_identity))
             {
+                let _owner_callback = super::realm_dispatch::begin_owner_callback();
                 super::secondary_window::drain_pending_secondary_window_completions();
                 super::main_window::drive_main_window();
             }
@@ -109,13 +129,14 @@ pub(crate) fn install_owner_platform(
     // The platform clipboard (ADR-0038 §9) is installed with the owner, so
     // every realm a runner builds afterwards finds it (`runtime_clipboard`).
     let clipboard = owner.shared().clipboard();
-    let previous = APP_RUNTIME.with(|slot| {
+    let (previous, previous_owner_turn_wake) = APP_RUNTIME.with(|slot| {
         let mut state = slot.borrow_mut();
         state.owner_install_generation = state
             .owner_install_generation
             .checked_add(1)
             .expect("BUG: owner install generation exhausted");
         state.set_platform_clipboard(clipboard);
+        let previous_owner_turn_wake = state.owner_turn_wake.replace(owner_turn_wake);
         let previous = state.owner_platform.replace(std::rc::Rc::new(owner));
         #[cfg(all(
             not(target_os = "android"),
@@ -127,9 +148,10 @@ pub(crate) fn install_owner_platform(
             state.loop_identity = identity;
             state.pending_window_reservations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         }
-        previous
+        (previous, previous_owner_turn_wake)
     });
     drop(previous);
+    drop(previous_owner_turn_wake);
     Ok(())
 }
 
@@ -599,14 +621,21 @@ impl OwnerHostClearGuard {
 
 impl Drop for OwnerHostClearGuard {
     fn drop(&mut self) {
-        let removed = APP_RUNTIME.with(|slot| {
+        let (removed, owner_turn_wake) = APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             if runtime.owner_install_generation == self.expected_generation {
-                runtime.owner_platform.take()
+                runtime.owner_turn_continuation = None;
+                runtime.owner_turn_continuation_failed = false;
+                runtime.owner_turn_callback_budget = None;
+                (
+                    runtime.owner_platform.take(),
+                    runtime.owner_turn_wake.take(),
+                )
             } else {
-                None
+                (None, None)
             }
         });
         drop(removed);
+        drop(owner_turn_wake);
     }
 }

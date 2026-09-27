@@ -125,6 +125,7 @@ fn scene_event(event: IOSSceneEvent) -> Result<(), flui_platform::BootstrapError
 }
 
 fn drive_owner() {
+    let _owner_callback = super::realm_dispatch::begin_owner_callback();
     let dispatchers = APP_RUNTIME.with(|slot| {
         slot.borrow()
             .ios_controller
