@@ -337,6 +337,17 @@ The ADR audit found these; each is settled when the named ADR is accepted.
 - The AGENTS.md "ID offset" row says `LayerId` and `SemanticsId` are 1-based `NonZeroUsize`; the
   review reports reusable slab indices. A doc fix, not an ADR.
 
+### App roots and the Router
+
+`WidgetsApp::router` roots a design-neutral app in a `Router` (ADR-0093). Two questions follow:
+
+- **What `App::new` takes.** It either wraps its root in `WidgetsApp`, so an application writes
+  `App::new(WidgetsApp::router(..))`, or accepts a `Router` directly, as
+  [architecture.md §13.3](architecture.md#133-two-screens) shows.
+- **When the design-system apps get a router form.** `MaterialApp::router` and
+  `CupertinoApp::router` sit in ADR-0093's step 7; the H0 exit's Notes application uses Material,
+  so whether they come forward is the owner's call.
+
 ### CI redesign
 
 A follow-up task created by items 5 and 19, done together with the build-footprint study and

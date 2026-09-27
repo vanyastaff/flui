@@ -20,6 +20,10 @@
 - **Amended by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (2026-09-26) —
   `flui-tree` (L2) and `flui-localizations` are deleted, so L8 is empty and "Localization direction is locked" has
   nothing left to govern. The layer table below is a dated reading and stays as written.
+- **Amended:** 2026-09-26 — the design systems no longer carry `allowed-dependents` /
+  `allowed-dev-dependents`: [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) moves 2 and 3
+  replaced their lists with the kind rule of ADR-0081 §3. The sentences below that name the
+  design systems among the lists' users describe the contract before that change.
 - **Related:** ADR-0028 (the design-system rule this generalizes), ADR-0037 (the
   `interaction -> platform` same-layer edge)
 

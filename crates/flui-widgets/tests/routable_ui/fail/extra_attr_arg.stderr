@@ -1,0 +1,5 @@
+error: `#[route]` takes only the path pattern; nothing may follow it
+ --> tests/routable_ui/fail/extra_attr_arg.rs:5:16
+  |
+5 |     #[route("/", label = "Home")]
+  |                ^

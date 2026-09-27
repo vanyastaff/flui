@@ -1,0 +1,5 @@
+error: a route pattern has no trailing `/`
+ --> tests/routable_ui/fail/pattern_trailing_slash.rs:5:13
+  |
+5 |     #[route("/note/:id/")]
+  |             ^^^^^^^^^^^^

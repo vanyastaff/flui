@@ -44,10 +44,10 @@ each crate declares `[package.metadata.flui] layer = N`, the root names eleven l
 (`Cargo.toml:91-103`), and a normal or build edge may point to the same layer or lower
 (`tools/xtask/src/workspace.rs:1-8`). A crate may narrow its dependents with
 `allowed-dependents`/`allowed-dev-dependents` (`tools/xtask/src/workspace.rs:9-14`, keys at
-`:80-81`, read at `:146-147`, enforced at `:225-262`); the design systems use it for ADR-0028
-(`crates/flui-cupertino/Cargo.toml:84-85`, and Material's manifest until ADR-0088 move 2
-replaced its lists with the kind rule of §3) and
-`flui-log` for composition roots (`crates/flui-log/Cargo.toml:66`).
+`:80-81`, read at `:146-147`, enforced at `:225-262`); `flui-log` uses it for composition
+roots (`crates/flui-log/Cargo.toml:66`), and the design systems used it for ADR-0028 (the
+design systems' manifests until ADR-0088 moves 2 and 3 replaced their lists with §3's kind
+rule).
 
 That gate checks direct edges only. It cannot say what must never be reachable, and the graph
 already contains what it cannot see:

@@ -51,6 +51,8 @@ unicode-segmentation = { workspace = true }
 # `RoutePath` percent-encodes each segment it joins and decodes each segment it
 # yields, with the URL path-segment set.
 percent-encoding = { workspace = true }
+# `#[derive(Routable)]`, re-exported beside the trait it implements.
+flui-macros = { workspace = true }
 # Gesture recognizers + arena that `GestureDetector` drives.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 # Styling + typography + layout value types (Alignment, Color, BoxDecoration,
@@ -130,6 +132,10 @@ static_assertions = { workspace = true }
 # `#[tokio::test]` for the `image::decode_cache` coalescing unit tests
 # (`asset-images` feature) and the async `Image` widget integration tests.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# `#[derive(Routable)]`: the pass and compile-fail suite (`tests/routable_ui.rs`)
+# and the round-trip property test (`tests/routable_derive.rs`).
+trybuild = { workspace = true }
+proptest = { workspace = true }
 # All root tests/*.rs files, consolidated into one binary via `#[path]` module
 # declarations in tests/main.rs (autotests = false above disables the per-file
 # auto-discovered binaries that each linked the whole wgpu stack).
@@ -152,6 +158,13 @@ harness = true
 [[test]]
 name = "image_network"
 path = "tests/image_network.rs"
+harness = true
+
+# The `#[derive(Routable)]` trybuild suite: its own binary, because it runs a
+# nested cargo build (the `nested-cargo` test group in `.config/nextest.toml`).
+[[test]]
+name = "routable_ui"
+path = "tests/routable_ui.rs"
 harness = true
 
 # The counted perf scenarios `cargo xtask perf` runs. A target of its own, not
@@ -204,6 +217,11 @@ workspace = true
 [[bench]]
 name = "signals_rebuilds"
 harness = false
+
+# cargo-shear reports the trybuild inputs as unlinked: `tests/routable_ui.rs`
+# hands them to rustc, never `mod`s them.
+[package.metadata.cargo-shear]
+ignored-paths = ["tests/routable_ui/**/*.rs"]
 
 [package.metadata.flui]
 layer = 6

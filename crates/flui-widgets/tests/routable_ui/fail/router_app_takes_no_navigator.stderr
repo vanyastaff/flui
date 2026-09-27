@@ -1,0 +1,13 @@
+error[E0599]: no method named `navigator` found for struct `WidgetsApp<RouterForm>` in the current scope
+  --> tests/routable_ui/fail/router_app_takes_no_navigator.rs:25:42
+   |
+25 |     let _ = WidgetsApp::router(router()).navigator(NavigatorHandle::new());
+   |                                          ^^^^^^^^^ private field, not a method
+
+error[E0599]: no method named `observer` found for struct `WidgetsApp<RouterForm>` in the current scope
+  --> tests/routable_ui/fail/router_app_takes_no_navigator.rs:26:42
+   |
+26 |     let _ = WidgetsApp::router(router()).observer(Arc::new(Analytics));
+   |                                          ^^^^^^^^ method not found in `WidgetsApp<RouterForm>`
+   |
+   = note: the method was found for `WidgetsApp`

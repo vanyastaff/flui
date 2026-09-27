@@ -192,11 +192,10 @@ Rules:
   `pkg` is ordered after H, these H → `pkg` edges are also the only exceptions to the direction
   rule (ADR-0081 §1). Implemented: `cargo xtask workspace` refuses these edges (the kind
   rule, `tools/xtask/src/workspace/tiers.rs`), and the dependent's `edge-exceptions` entry
-  admits each one, the same list the direction rule reads; Material's `allowed-dependents`
-  lists went when it moved onto the SDK, Cupertino's go when it does. The same rule holds an
-  official package's normal and build edges to `flui-sdk` and the contract crates, with
-  Cupertino's, devtools' and hot reload's internal-crate edges seeded as exceptions until each
-  moves.
+  admits each one, the same list the direction rule reads; the design systems'
+  `allowed-dependents` lists are replaced by it. The same rule holds an official package's
+  normal and build edges to `flui-sdk` and the contract crates; devtools' and hot reload's
+  internal-crate edges are seeded as exceptions until each moves.
 - **The crate count is not a goal.** It is a reported fact of the tier table.
 
 **Why the runtime sits above `flui-widgets`.** The realm composes widget-level roots: its
@@ -256,8 +255,8 @@ inline test modules are large.
 | flui-widgets | 6, 82.1k | K / internal | **One crate**, module-DAG gate | The 2026-09-23 decision stands. `cargo xtask module-dag -p flui-widgets` enforces import direction between modules. Raw primitives move down from Material; Router and Form arrive; `__private` (`crates/flui-widgets/src/lib.rs:75`) goes. The harness-reaching tests of the 22 `src/` files that used `crate::testing` moved to `tests/`; `__test_access` is temporary ([ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) §4). |
 | flui-testing | 6, 3.7k | K / internal (dev) | **Move above the runtime** | Drives the real transaction under a manual clock; absorbs `flui_widgets::testing`; the optional `flui-widgets → flui-testing` edge (`crates/flui-widgets/Cargo.toml:89`) is removed. |
 | flui-hot-reload | 6, 2.9k | pkg / official | **Rewrite over Subsecond** as an official package | The dlopen design carries a documented residual risk; the three-crate template and its examples go only after the Subsecond spike ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). It links the `windows` crate directly today (`crates/flui-hot-reload/Cargo.toml:47`), which the package reach set forbids; the rewrite removes it. |
-| flui-material | 7, 26.9k | pkg / official | Official package on `flui-sdk` | Done: `packages/flui-material` builds on `flui-sdk` alone (its normal dependencies are `flui-sdk` and `tracing`, pinned by `flui_material_builds_on_the_sdk_alone` in `tools/xtask/src/workspace/tests.rs`). Still to come: `flui_material::prelude`. |
-| flui-cupertino | 7, 4.3k | pkg / official | Official package on `flui-sdk` | Same; gains focus and keyboard activation from the Raw primitives. |
+| flui-material | 7, 26.9k | pkg / official | Official package on `flui-sdk` | Done: `packages/flui-material` builds on `flui-sdk` alone (its normal dependencies are `flui-sdk` and `tracing`, pinned by `the_design_systems_build_on_the_sdk_alone` in `tools/xtask/src/workspace/tests.rs`). Still to come: `flui_material::prelude`. |
+| flui-cupertino | 7, 4.3k | pkg / official | Official package on `flui-sdk` | `packages/flui-cupertino` builds on `flui-sdk` alone, pinned by the same test; gains focus and keyboard activation from the Raw primitives. |
 | flui-localizations | 8, 0.3k | — | **Deleted 2026-09-26** (ADR-0081) | 281 lines in a layer of its own, with no translated strings. The RTL table and delegate moved to `flui_widgets::localization`; nothing went to the packages; ICU4X goes to `flui-i18n` (H1). |
 | flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Realm, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the one trampoline cell (`APP_RUNTIME`, `crates/flui-app/src/app/runner/host.rs:25-47`). `realm_dispatch.rs` is 7,149 lines, but production code ends at line 1690 and the rest is one test module (`crates/flui-app/src/app/runner/realm_dispatch.rs:1691-1692`): the file-length gate counts production lines only, so it is within the limit and needs neither a move nor dissolving. |
 | flui-cli | 9, 18.6k | H / tool | Keep, own version | `mcp`, `devtools`, `test --golden --accept` with per-test NDJSON, `catalog`; absorbs `tools/web-server`. |
@@ -629,7 +628,7 @@ decisions 5 and 7.
     bound is removed. Platform hooks write through `SignalSender`.
   - Query callbacks (route generators, drag will-accept, anything returning a verdict) get no
     writer. The ADR classifies all 92 `pub fn on_*` setters (`grep -rhoE 'pub fn on_[a-z_]+'
-    crates/flui-widgets/src packages/flui-material/src crates/flui-cupertino/src | wc -l`).
+    crates/flui-widgets/src packages/flui-material/src packages/flui-cupertino/src | wc -l`).
   - `StateCell` and `RebuildHandle` stay a guarded runtime tier and move to `flui::state::low`.
   - A `callback(|cx| ..)` helper ships with the signature change (closures otherwise hit a
     higher-ranked lifetime error). A rollback trigger to "guard plus realm from the handle" is
@@ -734,9 +733,12 @@ and menus are overlay entries owned by the page that opened them and never appea
 The route trait and its derive are `Routable` (`flui_widgets::Route` is the Navigator's
 route-lifecycle trait). `Router::<R>::handle(cx: &dyn LifecycleContext)` returns
 `Result<RouterHandle<R>, RouterError>`, and the handle's `push`, `replace`, `pop` and
-`go(location)` take no event context. The trait, `RoutePath`, `Router` and `RouterHandle` are
-implemented in `flui-widgets`, with a hand-written `Routable`; the derive and the rest are listed
-in ADR-0093's implementation series.
+`go(location)` take no event context. `#[derive(Routable)]` maps each variant to one
+`#[route("/note/:id")]` pattern, checks the patterns at compile time, and parses by specificity:
+a literal segment wins over a parameter whatever the declaration order. `WidgetsApp::router`
+roots an app in a `Router`: the Router is the app's routing subtree and its only navigator, and
+the router form has no navigator builders. The outermost Router owns the presentation's URL
+(ADR-0093 §2).
 
 ---
 
@@ -1037,10 +1039,14 @@ impl ViewState<Home> for HomeState {
     fn build(&self, _: &Home, _cx: &dyn BuildContext) -> impl IntoView {
         let router = self.router.clone().expect("BUG: init_state runs before build");
         RawButton::new(Text::new("Open"))
-            .on_press(move || { let _ = router.push(AppRoute::Note { id: NoteId(1) }); })
+            .on_press(move |_cx| { let _ = router.push(AppRoute::Note { id: NoteId(1) }); })
     }
 }
 ```
+
+Whether `App::new` takes a `Router` itself or a `WidgetsApp::router` is an
+[open question](open-questions.md#app-roots-and-the-router); `examples/two_screens.rs` is the
+same program through `WidgetsApp::router` and `run_app`.
 
 ### 13.4 A plugin
 

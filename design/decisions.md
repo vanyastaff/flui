@@ -389,8 +389,7 @@ overlays are excluded. ADR-0093 §2 records it.
 
 **Renamed in implementation.** The route trait and its derive are `Routable`, not `Route`:
 `flui_widgets::Route` is already the Navigator's route-lifecycle trait, and a derive carries its
-trait's name. Step one of ADR-0093's implementation series (the trait, `RoutePath`, `Router` and
-`RouterHandle`) is implemented; the derive is step two.
+trait's name.
 
 ### D15. Hot reload through Subsecond
 

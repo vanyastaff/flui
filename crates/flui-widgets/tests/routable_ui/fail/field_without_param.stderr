@@ -1,0 +1,5 @@
+error: field `draft` is not in the pattern `/note/:id`: add a `:draft` segment
+ --> tests/routable_ui/fail/field_without_param.rs:6:21
+  |
+6 |     Note { id: u32, draft: bool },
+  |                     ^^^^^

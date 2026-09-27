@@ -37,7 +37,9 @@ into one module.
 
 `router` sits in a layer of its own above `navigator` and below `app`: the
 `Router` builds a `Navigator` and places its pages on it (and wraps each page
-in `Semantics`), and `WidgetsApp` is where an app will build on the `Router`.
+in `Semantics`), and `WidgetsApp::router` roots an app in a `Router`. The
+derive's helpers (`router::__derive`) live in `router` too, beside the trait
+they serve.
 
 `form` sits in the top widget layer beside `icon` and `app`: a text form
 field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
@@ -2040,3 +2042,34 @@ through the controller (its "Character unit"). **Tests:**
 `tests/editable_text.rs`'s
 `text_store::platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps`,
 the kit's `selection_inside_a_grapheme_is_kept_exactly`.
+
+### 36. `WidgetsApp::router`: a bare Router as the routing subtree, and a form without navigator builders
+
+**Oracle:** Flutter's `_WidgetsAppState.build` (`widgets/app.dart`, checked
+against a local copy of the file) mounts `Router`/`Router.withConfig` as the
+routing subtree with no `FocusScope` around it, below `Localizations` and the
+`builder` callback; only the navigator form builds `FocusScope(autofocus:
+true, child: Navigator(...))`. `WidgetsApp.router` asserts that
+`navigatorKey` and `navigatorObservers` are not given with it.
+
+**Choice:** `WidgetsApp::router(Router<R>)` keeps the Router as a
+`BoxedView` and mounts it bare, under the same `builder`, `DefaultTextStyle`
+and `Localizations` bands; each of its pages has its route's focus scope. The
+app has no navigator of its own: the Router's is its root navigator, and its
+facade refuses a stray page pushed through `NavigatorHandle::maybe_of_root`.
+A rebuilt app updates the boxed Router in place (same view type), so the
+stack and page state survive. Divergence: the routing form is a type
+parameter, not a run-time assertion. `router` returns a
+`WidgetsApp<RouterForm>` and `new`/`with_builder` a
+`WidgetsApp<NavigatorForm>` (the default, so `WidgetsApp` alone still names
+it); only the navigator form has `navigator` and `observer`, so the
+configuration Flutter asserts against does not compile. The two forms are two
+view types, so switching one to the other remounts the shell, and the
+navigator form's `dispose` releases its navigator and observers. Owning the
+presentation's URL waits for ADR-0093 step 3's `RouterScope`. **Tests:**
+`tests/widgets_app_router.rs`
+(`widgets_app_router_roots_the_app_in_its_router`,
+`widgets_app_router_adds_no_focus_scope_above_the_router`,
+`rebuilt_widgets_app_router_keeps_its_stack`,
+`switching_widgets_app_from_home_to_router_releases_the_navigator`, and the
+navigation and localization cases); `tests/routable_ui/fail/router_app_takes_no_navigator.rs`.

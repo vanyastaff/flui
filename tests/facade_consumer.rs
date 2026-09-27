@@ -288,7 +288,8 @@ fn internal_consumers_can_rename_direct_owning_crates() {
     );
 }
 
-/// A package on `flui-sdk` alone: every derive names the SDK's module path.
+/// A package on `flui-sdk` alone: every derive names the SDK's module path,
+/// `Routable` included (`flui_sdk::widgets::router::__derive`).
 /// `Diagnosticable` has no SDK path for its derive, so the consumer names it
 /// from `flui-macros` directly; its expansion still resolves through the SDK.
 const SDK_CONSUMER_SOURCE: &str = r#"
@@ -296,7 +297,7 @@ use flui_sdk::animation::{Animatable, TwoWayConverter};
 use flui_sdk::foundation::Diagnosticable;
 use flui_sdk::view::prelude::{InheritedData, StatefulView, StatelessView};
 use flui_sdk::view::{BuildContext, IntoView, View, ViewState};
-use flui_sdk::widgets::Text;
+use flui_sdk::widgets::{Routable, Text};
 
 #[derive(Clone, StatelessView)]
 pub struct Greeting<T: View + Clone> {
@@ -340,6 +341,14 @@ pub struct Position {
     pub y: f32,
 }
 
+#[derive(Routable, Clone, PartialEq)]
+pub enum AppRoute {
+    #[route("/")]
+    Home,
+    #[route("/note/:id")]
+    Note { id: u32 },
+}
+
 #[derive(Debug, derive_support::Diagnosticable)]
 pub struct Details {
     pub count: usize,
@@ -357,6 +366,8 @@ pub fn exercise_generated_impls() {
     let vector = Position { x: 1.0, y: 2.0 }.to_vector();
     let _position = Position::from_vector(vector);
     let _node = Details { count: 1 }.to_diagnostics_node();
+    let _route = AppRoute::from_path(&AppRoute::Note { id: 1 }.to_path());
+    let _home = AppRoute::Home.to_path();
 }
 "#;
 

@@ -13,5 +13,3 @@
   typed doors, the new `NamedRouteError::NotAddressable` for the named ones), admits pageless
   popups such as dialogs through a plain push only, follows every pop it makes, and never pops
   or removes its last page; `NavigatorHandle::pop_until` stops at a pop that is refused.
-  `#[derive(Routable)]` and `WidgetsApp::router` are later steps; nothing in the framework
-  builds a Router yet.

@@ -1967,13 +1967,8 @@ dependencies = [
 name = "flui-cupertino"
 version = "0.2.0-dev"
 dependencies = [
- "flui-animation",
- "flui-foundation",
- "flui-objects",
- "flui-scheduler",
+ "flui-sdk",
  "flui-testing",
- "flui-types",
- "flui-view",
  "flui-widgets",
  "tracing",
 ]
@@ -2545,6 +2540,7 @@ dependencies = [
  "flui-foundation",
  "flui-geometry",
  "flui-interaction",
+ "flui-macros",
  "flui-objects",
  "flui-painting",
  "flui-platform-api",
@@ -2560,10 +2556,12 @@ dependencies = [
  "lru",
  "parking_lot",
  "percent-encoding",
+ "proptest",
  "static_assertions",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "trybuild",
  "unicode-segmentation",
 ]
 
