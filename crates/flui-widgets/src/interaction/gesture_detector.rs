@@ -519,11 +519,37 @@ pub struct GestureDetectorState {
     /// Minted in `init_state`; the drained request's `Rc` callback runs
     /// through it after the frame.
     local_post_frame: Option<flui_view::LocalPostFrameHandle>,
-    /// Acquired first in `init_state`; every callback runs inside a write it
-    /// opens (ADR-0086 §4). `None` only before `init_state` runs.
-    writer: Option<WriterSource>,
-    /// Scheduled semantics delivery must not outlive this mounted detector.
-    mounted: Rc<Cell<bool>>,
+    /// Owner-local target for queued semantics delivery. Post-frame callbacks
+    /// retain only a weak reference, so the lane cannot keep this detector's
+    /// callbacks or writer source alive after the state is dropped.
+    semantics_delivery: Option<Rc<SemanticsDeliveryTarget>>,
+}
+
+/// The owner-local resources needed to deliver one queued semantics action.
+///
+/// The state owns this target. A post-frame queue holds only [`std::rc::Weak`]
+/// references to it, which preserves live callback replacement while the
+/// detector is mounted without extending any of these resources past teardown.
+struct SemanticsDeliveryTarget {
+    tap_slot: Rc<RefCell<Option<GestureCallback>>>,
+    long_press_slot: Rc<RefCell<Option<GestureCallback>>>,
+    writer: WriterSource,
+    mounted: Cell<bool>,
+}
+
+impl SemanticsDeliveryTarget {
+    fn deliver(&self, action: PendingSemanticsAction) {
+        if !self.mounted.get() {
+            return;
+        }
+        let callback = match action {
+            PendingSemanticsAction::Tap => self.tap_slot.borrow().clone(),
+            PendingSemanticsAction::LongPress => self.long_press_slot.borrow().clone(),
+        };
+        if let Some(callback) = callback {
+            self.writer.write(|cx| callback(cx));
+        }
+    }
 }
 
 /// The assistive-technology activations a detector has accepted but not yet
@@ -595,8 +621,7 @@ impl StatefulView for GestureDetector {
             semantics_requests: Arc::new(SemanticsRequests::default()),
             rebuild: None,
             local_post_frame: None,
-            writer: None,
-            mounted: Rc::new(Cell::new(false)),
+            semantics_delivery: None,
         }
     }
 }
@@ -625,24 +650,15 @@ impl GestureDetectorState {
             );
             return;
         };
-        let writer = self
-            .writer
-            .clone()
-            .expect("BUG: init_state acquires the writer source before the first build");
+        let delivery = self
+            .semantics_delivery
+            .as_ref()
+            .expect("BUG: init_state creates the semantics delivery target before the first build");
         while let Some(action) = pending.pop_front() {
-            let slot = match action {
-                PendingSemanticsAction::Tap => Rc::clone(&self.tap_slot),
-                PendingSemanticsAction::LongPress => Rc::clone(&self.long_press_slot),
-            };
-            let writer = writer.clone();
-            let mounted = Rc::clone(&self.mounted);
+            let delivery = Rc::downgrade(delivery);
             if let Err(error) = handle.schedule_local(move |_timing| {
-                if !mounted.get() {
-                    return;
-                }
-                let callback = slot.borrow().clone();
-                if let Some(callback) = callback {
-                    writer.write(|cx| callback(cx));
+                if let Some(delivery) = delivery.upgrade() {
+                    delivery.deliver(action);
                 }
             }) {
                 tracing::warn!(
@@ -685,9 +701,13 @@ impl GestureDetectorState {
 
 impl ViewState<GestureDetector> for GestureDetectorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.mounted.set(true);
         let writer = ctx.writer_source();
-        self.writer = Some(writer.clone());
+        self.semantics_delivery = Some(Rc::new(SemanticsDeliveryTarget {
+            tap_slot: Rc::clone(&self.tap_slot),
+            long_press_slot: Rc::clone(&self.long_press_slot),
+            writer: writer.clone(),
+            mounted: Cell::new(true),
+        }));
         let arena = GestureArenaScope::of(ctx);
         self.rebuild = Some(ctx.rebuild_handle());
         self.local_post_frame = ctx.local_post_frame_handle();
@@ -883,7 +903,9 @@ impl ViewState<GestureDetector> for GestureDetectorState {
     }
 
     fn dispose(&mut self) {
-        self.mounted.set(false);
+        if let Some(delivery) = self.semantics_delivery.as_ref() {
+            delivery.mounted.set(false);
+        }
         if let Some(recognizers) = self.recognizers.as_ref() {
             recognizers.tap.dispose();
             recognizers.long_press.dispose();
@@ -1155,9 +1177,13 @@ mod tests {
             let mut state = GestureDetector::new()
                 .on_tap(move |_cx| old_calls.set(1))
                 .create_state();
-            state.writer = Some(writer.clone());
+            state.semantics_delivery = Some(Rc::new(SemanticsDeliveryTarget {
+                tap_slot: Rc::clone(&state.tap_slot),
+                long_press_slot: Rc::clone(&state.long_press_slot),
+                writer: writer.clone(),
+                mounted: Cell::new(true),
+            }));
             state.local_post_frame = Some(lane.local_handle());
-            state.mounted.set(true);
             state.semantics_requests.push(PendingSemanticsAction::Tap);
             // Queue through the production semantics-to-post-frame bridge,
             // then alter its target before the real scheduler delivers it.
@@ -1179,6 +1205,63 @@ mod tests {
                 "{change}"
             );
         }
+    }
+
+    #[test]
+    #[expect(
+        clippy::arc_with_non_send_sync,
+        reason = "ElementBuildContext's test seam accepts Arc over owner-local state"
+    )]
+    fn queued_semantics_delivery_does_not_retain_callback_after_state_drop() {
+        struct DropProbe(Rc<Cell<usize>>);
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        let tree = Arc::new(parking_lot::RwLock::new(flui_view::ElementTree::new()));
+        let owner = Arc::new(parking_lot::RwLock::new(flui_view::BuildOwner::new()));
+        let writer = flui_view::ElementBuildContext::new(
+            flui_foundation::ElementId::new(1),
+            0,
+            false,
+            tree,
+            owner,
+        )
+        .writer_source();
+        let scheduler = flui_scheduler::UpdateScheduler::new();
+        let lane = scheduler.new_local_post_frame_lane();
+        let drops = Rc::new(Cell::new(0));
+        let probe = DropProbe(Rc::clone(&drops));
+        let calls = Rc::new(Cell::new(0));
+        let callback_calls = Rc::clone(&calls);
+        let mut state = GestureDetector::new()
+            .on_tap(move |_cx| {
+                let _keep_alive = &probe;
+                callback_calls.set(callback_calls.get() + 1);
+            })
+            .create_state();
+        state.semantics_delivery = Some(Rc::new(SemanticsDeliveryTarget {
+            tap_slot: Rc::clone(&state.tap_slot),
+            long_press_slot: Rc::clone(&state.long_press_slot),
+            writer,
+            mounted: Cell::new(true),
+        }));
+        state.local_post_frame = Some(lane.local_handle());
+        state.semantics_requests.push(PendingSemanticsAction::Tap);
+
+        state.drain_semantics_requests();
+        assert_eq!(lane.local_handle().pending_len(), 1);
+
+        state.dispose();
+        drop(state);
+        assert_eq!(drops.get(), 1, "the queued closure must not retain on_tap");
+
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(calls.get(), 0);
+        assert_eq!(drops.get(), 1);
     }
 
     #[test]
