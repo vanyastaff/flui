@@ -1674,7 +1674,9 @@ mod tests {
         presentation.close();
 
         assert_eq!(
-            handle.attach(Rc::new(|_| {})),
+            handle.attach(flui_interaction::TextInputClient::new(
+                flui_platform_api::text_store::InMemoryTextStore::new("")
+            )),
             Err(flui_interaction::TextInputError::Closed)
         );
     }

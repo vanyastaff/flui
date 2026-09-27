@@ -504,40 +504,38 @@ where
                 // microtasks + the single async-driver poll) -> persistent callbacks ->
                 // the pipeline below -> post-frame callbacks -> Idle. `HeadlessBinding`
                 // drives the same helper on its binding-local scheduler.
-                let outcome = scheduler.drive_frame_with_lane(
-                    now,
-                    flui_scheduler::IdleDeadline::far_future(now),
-                    || {
-                        // Render frame via the realm, rebuilding a lost GPU device
-                        // around it: BEFORE the frame build when the loss predates
-                        // the frame (a dead device never pays extra for it — the
-                        // frame builds anyway, see this function's own doc for why),
-                        // and AFTER when the wgpu device-lost callback fired
-                        // mid-frame — see `render_frame_with_device_recovery`.
-                        let Some(mut lane) = lane_frame.try_lock() else {
-                            // A reentrant frame dispatch that slipped past the
-                            // empty-slot drain protection upstream: skip this
-                            // nested frame rather than deadlock mid-pump; the
-                            // outer dispatch still completes its own.
-                            tracing::error!(
-                                "frame skipped: raster lane already held by an \
+                // `UiRealm::drive_frame` also makes the drive the text-store
+                // transaction and runs the commit anchor after it (ADR-0027
+                // §3).
+                let outcome = realm.drive_frame(now, || {
+                    // Render frame via the realm, rebuilding a lost GPU device
+                    // around it: BEFORE the frame build when the loss predates
+                    // the frame (a dead device never pays extra for it — the
+                    // frame builds anyway, see this function's own doc for why),
+                    // and AFTER when the wgpu device-lost callback fired
+                    // mid-frame — see `render_frame_with_device_recovery`.
+                    let Some(mut lane) = lane_frame.try_lock() else {
+                        // A reentrant frame dispatch that slipped past the
+                        // empty-slot drain protection upstream: skip this
+                        // nested frame rather than deadlock mid-pump; the
+                        // outer dispatch still completes its own.
+                        tracing::error!(
+                            "frame skipped: raster lane already held by an \
                              outer frame dispatch"
-                            );
-                            return FrameRecoveryOutcome {
-                                presented: false,
-                                just_failed: false,
-                                next_attempt_at: None,
-                            };
+                        );
+                        return FrameRecoveryOutcome {
+                            presented: false,
+                            just_failed: false,
+                            next_attempt_at: None,
                         };
-                        render_frame_with_device_recovery(
-                            realm,
-                            &mut *lane,
-                            &device_recovery_backoff,
-                            now,
-                        )
-                    },
-                    realm.local_post_frame_lane(),
-                );
+                    };
+                    render_frame_with_device_recovery(
+                        realm,
+                        &mut *lane,
+                        &device_recovery_backoff,
+                        now,
+                    )
+                });
 
                 // Frame-pacing fallback (ADR-0058), replacing the fixed
                 // 16 ms sleep this thread used to take here. A frame that

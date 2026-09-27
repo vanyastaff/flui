@@ -354,6 +354,23 @@ impl Harness {
             .expect("active_ime_clients requires mount_with_ime")
             .active_count()
     }
+
+    /// The text store of the field attached as the IME client, if any: the
+    /// surface a platform input method pulls from (ADR-0090).
+    pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform_api::TextStore>> {
+        self.text_input_owner
+            .as_ref()
+            .expect("active_text_store requires mount_with_ime")
+            .active_store()
+    }
+
+    /// Open or close the presentation's frame transaction, inside which a
+    /// text store cannot commit. [`Self::tick`] brackets its frame with it.
+    pub fn set_transaction_open(&self, open: bool) {
+        if let Some(owner) = &self.text_input_owner {
+            owner.set_transaction_open(open);
+        }
+    }
     /// The root element id.
     pub fn root(&mut self) -> ElementId {
         let logical_root_type = self.logical_root_type;
@@ -370,8 +387,17 @@ impl Harness {
     /// `OverlayHandle` / `OverlayEntry` scheduled through its `RebuildHandle`
     /// rebuilds. Every rebuild assertion depends on this: a root-dirtying pump
     /// would rebuild the whole tree and prove nothing.
+    ///
+    /// The frame is a transaction for text stores, as `flui-app`'s is: commits
+    /// close for its duration, and the grants queued meanwhile run once it
+    /// returns.
     pub fn tick(&mut self) {
+        self.set_transaction_open(true);
         self.binding.pump_frame(Duration::ZERO);
+        self.set_transaction_open(false);
+        if let Some(owner) = &self.text_input_owner {
+            let _ran = owner.run_deferred_grants();
+        }
     }
 
     /// Replace the root view and settle.

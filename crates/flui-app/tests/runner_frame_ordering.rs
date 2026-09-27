@@ -134,39 +134,58 @@ fn every_runner_frame_site_uses_the_shared_drive_frame_helper() {
         );
     }
 
-    // `drive_frame_with_lane` is the same shared helper, additionally
-    // draining the realm's owner-local post-frame lane in the same total
-    // order as the shared queue (drain-by-parameter, not an ambient lookup)
-    // — every production frame site names it, not the bare `drive_frame`,
-    // because every production site owns a `UiRealm` and its lane. Asserted
-    // as two counts, not one OR'd count: an OR'd `== 3` stays green if a
-    // production site regresses from `drive_frame_with_lane(` back to the
-    // bare `drive_frame(` spelling (silently losing the lane's drain), since
-    // the total site count would not change. `"drive_frame_with_lane(".
-    // contains("drive_frame(")` is false (the literal text between them is
-    // `_with_lane`, not `(`), so these two filters are already disjoint —
-    // no site is double-counted.
-    let with_lane_sites = code_lines
+    // Every production frame site goes through `UiRealm::drive_frame`, the
+    // one place that calls `drive_frame_with_lane` with the realm's
+    // owner-local post-frame lane (drained in the same total order as the
+    // shared queue) and makes the drive the text-store transaction with its
+    // commit anchor after it (ADR-0027 §3). Asserted as separate counts: a
+    // site that regressed to calling the scheduler itself — with or without
+    // the lane — would keep the total site count unchanged while silently
+    // losing the lane's drain or the transaction.
+    let realm_sites = code_lines
         .iter()
-        .filter(|l| l.contains("drive_frame_with_lane("))
+        .filter(|l| l.contains("realm.drive_frame("))
         .count();
-    let bare_sites = code_lines
+    let scheduler_sites = code_lines
         .iter()
-        .filter(|l| l.contains("drive_frame("))
+        .filter(|l| {
+            l.contains("drive_frame_with_lane(")
+                || (l.contains("drive_frame(") && !l.contains("realm.drive_frame("))
+        })
         .count();
     assert_eq!(
-        with_lane_sites, 3,
+        realm_sites, 3,
         "expected exactly three PRODUCTION frame sites (desktop, android, wasm) naming \
-         drive_frame_with_lane(; found {with_lane_sites} — a unit test driving a throwaway \
+         realm.drive_frame(; found {realm_sites} — a unit test driving a throwaway \
          `UpdateScheduler` directly is excluded from this count"
     );
     assert_eq!(
-        bare_sites, 0,
-        "found {bare_sites} production site(s) still calling the bare drive_frame( instead of \
-         drive_frame_with_lane( — that silently stops draining the realm's owner-local post-frame \
-         lane"
+        scheduler_sites, 0,
+        "found {scheduler_sites} production site(s) driving the scheduler directly instead of \
+         through UiRealm::drive_frame — that skips the realm's post-frame lane or its text-store \
+         transaction"
+    );
+
+    let realm_frame = production_lines(REALM_FRAME_SOURCE);
+    let lane_drives: Vec<&&str> = realm_frame
+        .iter()
+        .filter(|l| l.contains("drive_frame_with_lane("))
+        .collect();
+    assert_eq!(
+        lane_drives.len(),
+        1,
+        "UiRealm::drive_frame is the one scheduler drive in the realm's frame module"
+    );
+    assert!(
+        realm_frame
+            .iter()
+            .any(|l| l.contains("&self.local_post_frame,")),
+        "UiRealm::drive_frame passes the realm's own post-frame lane"
     );
 }
+
+/// The realm's frame module, home of `UiRealm::drive_frame`.
+const REALM_FRAME_SOURCE: &str = include_str!("../src/app/ui_realm/frame.rs");
 
 /// Every `WakeAction::PumpAsync` arm (desktop, Android, web) must actually
 /// pump the async driver, and must consume the `frame_scheduled` latch

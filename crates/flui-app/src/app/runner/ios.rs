@@ -424,26 +424,21 @@ where
                     Some(SurfaceLifecycleOutcome::Released) | None => {}
                 }
 
-                scheduler.drive_frame_with_lane(
-                    now,
-                    flui_scheduler::IdleDeadline::far_future(now),
-                    || {
-                        let Some(mut lane) = lane_frame.try_lock() else {
-                            tracing::error!(
-                                "frame skipped: raster lane already held by an outer frame \
-                                 dispatch"
-                            );
-                            return;
-                        };
-                        let _ = render_frame_with_device_recovery(
-                            realm,
-                            &mut *lane,
-                            &device_recovery_backoff,
-                            now,
+                realm.drive_frame(now, || {
+                    let Some(mut lane) = lane_frame.try_lock() else {
+                        tracing::error!(
+                            "frame skipped: raster lane already held by an outer frame \
+                             dispatch"
                         );
-                    },
-                    realm.local_post_frame_lane(),
-                );
+                        return;
+                    };
+                    let _ = render_frame_with_device_recovery(
+                        realm,
+                        &mut *lane,
+                        &device_recovery_backoff,
+                        now,
+                    );
+                });
             })),
         );
     }));

@@ -3,7 +3,9 @@
 - **Status:** Accepted
 - **Date:** 2026-07-17
 - **Absorbs:** ADR-0032, ADR-0033
-- **Superseded in part by:** ADR-0078 (capability acquisition)
+- **Superseded in part by:** ADR-0078 (capability acquisition);
+  [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (§1, and the push-only shape of §2: the
+  push vocabulary is now projected onto a pull text store)
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§2: `PlatformTextInput`
   now lives in `flui-platform-api`, re-exported at its old `flui-platform` path; its contract is
   unchanged)

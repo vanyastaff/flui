@@ -2309,7 +2309,9 @@ dependencies = [
  "flui-types",
  "parking_lot",
  "raw-window-handle",
+ "static_assertions",
  "thiserror 2.0.20",
+ "tracing",
  "ui-events",
 ]
 
@@ -2440,6 +2442,7 @@ dependencies = [
  "flui-interaction",
  "flui-objects",
  "flui-painting",
+ "flui-platform-api",
  "flui-rendering",
  "flui-scheduler",
  "flui-semantics",

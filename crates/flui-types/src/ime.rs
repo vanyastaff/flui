@@ -16,13 +16,17 @@
 //!   the app's `Editable` to read/replace spans) rather than winit's push
 //!   model of discrete events.
 //!
-//! A future web or Android backend adapts its native model into this
-//! vocabulary; this enum does not grow variants to accommodate them.
+//! This is the vocabulary of push-model sources only. The IME contract is a
+//! pull text store (ADR-0090, `flui_platform_api::text_store`): a field is a
+//! `TextStore` the platform locks, reads and edits, and
+//! `flui_platform_api::text_store::project_ime_event` turns each of these
+//! events into edits on that store. A pull-model platform (Windows TSF,
+//! AppKit, Android's `InputConnection`) talks to the store directly and does
+//! not adapt into this enum, which does not grow variants for them.
 //!
-//! See `docs/adr/` for the "Platform text input (IME) capability" ADR
-//! (the platform capability trait, `PlatformTextInput`, lives in
-//! `flui-platform`; this crate only defines the event vocabulary the
-//! capability's window callback delivers).
+//! See ADR-0030 for the capability (`PlatformTextInput`, in
+//! `flui-platform-api`) and ADR-0090 for the store this vocabulary is
+//! projected onto.
 
 /// A single IME composition/commit notification delivered by the platform.
 ///
@@ -31,9 +35,9 @@
 /// [`ImeEvent::Preedit`]'s `cursor` field indexes *into the preedit string
 /// itself* (`text`), as a byte offset `(start, end)` range — not into the
 /// surrounding committed document. `cursor == None` means the platform wants
-/// the composition caret hidden (winit's own semantics for this case);
-/// `flui_widgets::TextEditingController::caret_hidden_by_ime` tracks this and
-/// the owning widget suppresses its painted caret accordingly (ADR-0030).
+/// the composition caret hidden (winit's own semantics for this case); the
+/// projection marks the store's composition `hides_caret`, and the owning
+/// widget suppresses its painted caret accordingly (ADR-0030).
 ///
 /// # `Preedit` with an empty `text` is composition cancellation (when composing)
 ///
@@ -61,12 +65,13 @@
 /// composition and immediately after a commit, so a client that suppressed
 /// *all* typing after [`ImeEvent::Enabled`] would silently kill plain
 /// (non-IME) keyboard input for the rest of the session. [`ImeEvent::Disabled`]
-/// delivered mid-composition means the client must strip the in-progress
-/// composing slice from its buffer — winit's semantics, a documented
-/// divergence from Flutter's `TextInputConnection.connectionClosed`, which
-/// instead *keeps* the uncommitted text. Detach-on-dispose is part of the
-/// same client contract (the bound-drop-cascade knot class this workspace
-/// has hit before with other owner-thread callback registries).
+/// delivered mid-composition strips the in-progress composing slice from the
+/// buffer — winit's semantics, applied by the projection as an explicit edit,
+/// and a documented divergence from Flutter's
+/// `TextInputConnection.connectionClosed`, which instead *keeps* the
+/// uncommitted text. Detach-on-dispose is part of the same client contract
+/// (the bound-drop-cascade knot class this workspace has hit before with
+/// other owner-thread callback registries).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ImeEvent {
