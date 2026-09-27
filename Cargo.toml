@@ -422,6 +422,10 @@ bitflags = "2.10"
 # movement and deletion step by user-perceived character, as Flutter's
 # `characters` package does. Already in the graph through cosmic-text.
 unicode-segmentation = "1.12"
+# Percent-encoding of route path segments (`flui_widgets::RoutePath`): the
+# servo/rust-url implementation of the URL path-segment set. Already in the
+# graph through `url`.
+percent-encoding = "2"
 # The Parley path's glyph rasterizer (ADR-0092 §5). The same swash cosmic-text
 # 0.19 already builds; a direct edge, not a second copy.
 swash = { version = "0.2.10", default-features = false, features = ["std", "scale"] }

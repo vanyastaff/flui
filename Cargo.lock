@@ -2550,6 +2550,7 @@ dependencies = [
  "image",
  "lru",
  "parking_lot",
+ "percent-encoding",
  "static_assertions",
  "thiserror 2.0.20",
  "tokio",
