@@ -803,6 +803,10 @@ path = "examples/counter.rs"
 name = "todo"
 path = "examples/todo.rs"
 
+[[example]]
+name = "two_screens"
+path = "examples/two_screens.rs"
+
 # `default = ["material"]` does not make this redundant: `cargo xtask facade-combos`
 # builds every isolated feature combination with `--no-default-features`, and
 # `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme` from the Material
