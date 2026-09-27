@@ -31,9 +31,10 @@ RawButton::new(Text::new("Increment"))
     .on_press(move |cx| count.update(cx, |n| *n += 1)),
 ```
 
-*(from `examples/counter.rs` — copied verbatim.)* `build` has no `cx`, so a write there does not
-compile. A widget that has to write from a callback with no `cx` takes a `WriterSource` in
-`init_state` and opens one: `source.write(|cx| count.set(cx, 0))`. A write rebuilds exactly the
+*(from `examples/counter.rs` — copied verbatim.)* `build` has no `cx`, so `count.set(cx, ..)`
+cannot be written there; a write from `build` through another route is refused at run time
+(`SignalError::WrittenDuringBuild`). A widget that has to write from a callback with no `cx`
+takes a `WriterSource` in `init_state` and opens one: `source.write(|cx| count.set(cx, 0))`. A write rebuilds exactly the
 elements that read the signal.
 
 ## `InheritedView`
