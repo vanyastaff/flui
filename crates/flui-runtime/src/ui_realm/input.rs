@@ -191,7 +191,7 @@ impl UiRealm {
     ///
     /// Pointer events are coalesced by the target presentation's own
     /// `GestureBinding` — high-frequency move events are stored and flushed
-    /// once per frame via [`Self::render_frame`].
+    /// once per frame by the draw step of [`Self::pump`].
     pub fn handle_input_addressed(&self, presentation_id: PresentationId, input: PlatformInput) {
         let target_id = match &input {
             PlatformInput::Keyboard(_) => self.focus_coordinator.active(),

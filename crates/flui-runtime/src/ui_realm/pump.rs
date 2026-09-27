@@ -36,7 +36,7 @@ impl UiRealm {
     /// 2. begin frame: transient callbacks, microtasks and the one mid-frame
     ///    async poll, at the timestamp `clock` returns;
     /// 3. draw frame: persistent callbacks, then this realm's pipeline and
-    ///    the submit through `sink` ([`Self::render_frame`]);
+    ///    the submit through `sink` (the crate-private `render_frame`);
     /// 4. end frame: the shared post-frame queue and this realm's owner-local
     ///    post-frame lane, in one total order.
     ///

@@ -34,7 +34,7 @@ impl UiRealm {
         }
     }
 
-    /// The draw step alone ([`Self::render_frame`]), for a test outside this
+    /// The draw step alone (the crate-private `render_frame`), for a test outside this
     /// crate that pins the submit classification against a scripted backend.
     /// Test-only — production drives frames through [`Self::pump`].
     #[cfg(any(test, feature = "test-support"))]
