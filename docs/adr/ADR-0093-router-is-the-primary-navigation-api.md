@@ -109,10 +109,13 @@ Builder-style route tables are not a second public way to declare routes.
   `RouteParseError::Param`.
 - **The round trip, qualified.** The derive keeps `from_path(&r.to_path()) == Ok(r)` for every
   value whose fields print non-empty (`RoutePath::join` drops an empty segment), whose
-  `Display` output `FromStr` reads back as the same value, and that no literal sibling claims:
-  beside `#[route("/s/new")]`, `Slug { slug: "new" }` prints `/s/new`, which parses as the
-  literal variant. The derive cannot see either condition, so it is documented on `Routable`
-  rather than rejected.
+  `Display` output `FromStr` reads back as the same value, and whose printed path no pattern
+  tried before its own also matches. Beside `#[route("/s/new")]`, `Slug { slug: "new" }` prints
+  `/s/new`, which parses as the literal variant; patterns that cross do the same, so beside
+  `#[route("/s/:b")]`, `A { a: "s" }` of `#[route("/:a/new")]` prints `/s/new`, which parses as
+  `B { b: "new" }`, because the literal at the first differing position ranks first. The derive
+  cannot see which values a field type prints, so the overlap is documented on `Routable` rather
+  than rejected; two patterns of the same shape, which overlap for every value, are rejected.
 
 ### 2. The URL is the source of truth
 
@@ -218,8 +221,11 @@ agent protocol from naming a widget-catalog type.
    `#[route("/…/:param")]` on unit and named-field variants, fields through
    `FromStr`/`Display`, specificity ordering and compile-time pattern checks (§1), trybuild pass
    and fail tests, a proptest round trip. `WidgetsApp::router(Router<R>)` roots an app in its
-   Router, which is then the app's routing subtree and its only navigator, and so owns the
-   presentation's URL (§2); a navigator handle or observers given with it are refused.
+   Router, mounted bare as the routing subtree (Flutter's `WidgetsApp.router` adds no
+   `FocusScope`), whose navigator is the app's only one. It returns a `WidgetsApp<RouterForm>`,
+   which has no `navigator` or `observer` builder, so the configuration Flutter asserts against
+   does not compile. That Router is the one that will own the presentation's URL once step 3
+   gives the outermost Router its `RouterScope` (§2); nothing marks it outermost yet.
    `examples/two_screens.rs` is the program of `design/architecture.md` §13.3 on that root.
 3. **Nested routes.** `#[nest("/settings")] Settings(SettingsRoute)` composes a child enum into
    the parent's path: one stack, one URL. A nested `Router` widget is a local stack saved with
@@ -304,15 +310,19 @@ Landed with step two:
   specificity and back-stack. `crates/flui-widgets/tests/routable_ui.rs` compiles the accepted
   shapes (each asserting its round trip) and every rejection of §1 against its diagnostic; the
   pattern parser, specificity order and conflict detection have unit tests in
-  `crates/flui-macros/src/derive_routable/pattern.rs`. The derive resolves through the facade
-  and a renamed owner (`tests/fixtures/facade_consumer.rs`).
+  `crates/flui-macros/src/derive_routable/pattern.rs`. The derive resolves through the facade,
+  a renamed owner (`tests/fixtures/facade_consumer.rs`) and a package on `flui-sdk` alone
+  (`sdk_consumers_derive_through_the_sdk_even_beside_the_facade` in `tests/facade_consumer.rs`).
 - **App root.** `crates/flui-widgets/tests/widgets_app_router.rs`:
   `widgets_app_router_roots_the_app_in_its_router` (the app's root navigator is the Router's,
   and it refuses a stray page), `widgets_app_router_navigates_by_handle_and_the_url_follows`,
   `widgets_app_router_pages_see_localizations_and_builder`,
   `rebuilt_widgets_app_router_keeps_its_stack` (a rebuilt app updates its Router in place),
-  `switching_widgets_app_from_home_to_router_releases_the_navigator`, and the two refusal
-  tests. `tests/two_screens_example.rs` drives the example.
+  `switching_widgets_app_from_home_to_router_releases_the_navigator` (the two forms are two view
+  types, so the switch remounts the shell and disposes its navigator),
+  `widgets_app_router_adds_no_focus_scope_above_the_router`, and the compile-fail case
+  `router_app_takes_no_navigator` in `crates/flui-widgets/tests/routable_ui.rs`.
+  `tests/two_screens_example.rs` drives the example.
 
 Still to land, each with its step:
 

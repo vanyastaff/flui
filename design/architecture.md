@@ -733,8 +733,9 @@ route-lifecycle trait). `Router::<R>::handle(cx: &dyn LifecycleContext)` returns
 `go(location)` take no event context. `#[derive(Routable)]` maps each variant to one
 `#[route("/note/:id")]` pattern, checks the patterns at compile time, and parses by specificity:
 a literal segment wins over a parameter whatever the declaration order. `WidgetsApp::router`
-roots an app in a `Router`: the Router is the app's routing subtree and its only navigator, so
-it is the presentation's outermost Router and owns its URL.
+roots an app in a `Router`: the Router is the app's routing subtree and its only navigator, and
+the router form has no navigator builders. The outermost Router owns the presentation's URL
+(ADR-0093 §2).
 
 ---
 
@@ -1039,9 +1040,9 @@ impl ViewState<Home> for HomeState {
 }
 ```
 
-`App::new` is the target entry. Today the same program roots in `WidgetsApp::router` and runs
-through `run_app` (`examples/two_screens.rs`). Whether `App::new` takes a `Router` itself or a
-`WidgetsApp` is an [open question](open-questions.md#app-roots-and-the-router).
+Whether `App::new` takes a `Router` itself or a `WidgetsApp::router` is an
+[open question](open-questions.md#app-roots-and-the-router); `examples/two_screens.rs` is the
+same program through `WidgetsApp::router` and `run_app`.
 
 ### 13.4 A plugin
 

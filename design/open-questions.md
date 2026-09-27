@@ -339,15 +339,14 @@ The ADR audit found these; each is settled when the named ADR is accepted.
 
 ### App roots and the Router
 
-`WidgetsApp::router` roots a design-neutral app in a `Router` (ADR-0093). Two roots cannot yet:
+`WidgetsApp::router` roots a design-neutral app in a `Router` (ADR-0093). Two questions follow:
 
-- **`App::new`** (the [migration plan](../docs/plans/2026-09-25-architecture-migration-plan.md)'s
-  application entry step) is not built. It either wraps its root in `WidgetsApp`, so an
-  application writes `App::new(WidgetsApp::router(..))`, or accepts a `Router` directly, as
+- **What `App::new` takes.** It either wraps its root in `WidgetsApp`, so an application writes
+  `App::new(WidgetsApp::router(..))`, or accepts a `Router` directly, as
   [architecture.md §13.3](architecture.md#133-two-screens) shows.
-- **`MaterialApp::router` and `CupertinoApp::router`** are ADR-0093 step 7. The H0 exit's Notes
-  application uses Material, so it cannot root in a Router until they exist; bringing them
-  forward is the owner's call.
+- **When the design-system apps get a router form.** `MaterialApp::router` and
+  `CupertinoApp::router` sit in ADR-0093's step 7; the H0 exit's Notes application uses Material,
+  so whether they come forward is the owner's call.
 
 ### CI redesign
 
