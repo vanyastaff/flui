@@ -37,7 +37,9 @@ into one module.
 
 `router` sits in a layer of its own above `navigator` and below `app`: the
 `Router` builds a `Navigator` and places its pages on it (and wraps each page
-in `Semantics`), and `WidgetsApp` is where an app will build on the `Router`.
+in `Semantics`), and `WidgetsApp::router` roots an app in a `Router`. The
+derive's helpers (`router::__derive`) live in `router` too, beside the trait
+they serve.
 
 `form` sits in the top widget layer beside `icon` and `app`: a text form
 field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
@@ -2040,3 +2042,32 @@ through the controller (its "Character unit"). **Tests:**
 `tests/editable_text.rs`'s
 `text_store::platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps`,
 the kit's `selection_inside_a_grapheme_is_kept_exactly`.
+
+### 36. `WidgetsApp::router`: the Router is the app's routing subtree; navigator configuration is refused
+
+**Oracle:** Flutter's `WidgetsApp.router` (`widgets/app.dart`, 3.44, from
+memory; no local clone on this host) builds the `Router` as the app's routing
+subtree, below `Localizations` and the `builder` callback, and asserts that
+`navigatorKey` and `navigatorObservers` are not given with it.
+
+**Choice:** `WidgetsApp::router(Router<R>)` keeps the Router as a
+`BoxedView` and builds `FocusScope > Router` where the navigator form builds
+`FocusScope > Navigator`, under the same `builder`, `DefaultTextStyle` and
+`Localizations` bands. The app has no navigator of its own: the Router's is
+its root navigator, so the Router is the presentation's outermost one and owns
+its URL (ADR-0093 §2), and its facade refuses a stray page pushed through
+`NavigatorHandle::maybe_of_root`. A rebuilt app updates the boxed Router in
+place (same view type), so the stack and page state survive. `navigator` and
+`observer` on the router form fail a `debug_assert!` at construction and are
+logged and ignored in release builds, the same line as Flutter's asserts; a
+type-level split waits for the removal of the navigator form (ADR-0093 step
+7). An element updated from the home or navigator form to the router form
+releases its navigator (its observers leave the handle), so switching back
+installs the handle the new configuration names. **Tests:**
+`tests/widgets_app_router.rs`
+(`widgets_app_router_roots_the_app_in_its_router`,
+`rebuilt_widgets_app_router_keeps_its_stack`,
+`switching_widgets_app_from_home_to_router_releases_the_navigator`,
+`widgets_app_router_refuses_a_navigator_handle`,
+`widgets_app_router_refuses_observers`, and the navigation and localization
+cases).

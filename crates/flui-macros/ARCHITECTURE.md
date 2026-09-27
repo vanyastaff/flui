@@ -10,11 +10,11 @@ owning crates; generated code resolves them from the consuming manifest.
 All the derives use `proc-macro-crate` to resolve names in the consumer's
 manifest, in this order:
 
-1. `flui-sdk`, giving `::flui_sdk::{view,foundation,animation}`: a package
-   builds on the SDK alone (ADR-0088 §4).
-2. The owning crate (`flui-view`, `flui-foundation`, `flui-animation`), so
-   framework crates and advanced consumers keep their explicit owner/version
-   selection.
+1. `flui-sdk`, giving `::flui_sdk::{view,foundation,animation,widgets}`: a
+   package builds on the SDK alone (ADR-0088 §4).
+2. The owning crate (`flui-view`, `flui-foundation`, `flui-animation`,
+   `flui-widgets` for `Routable`), so framework crates and advanced consumers
+   keep their explicit owner/version selection.
 3. The `flui` facade, whose runtime modules serve an application.
 
 Every step honors Cargo renames without per-derive configuration attributes.
@@ -37,3 +37,29 @@ Owner unit tests cover expansion inside libraries; consumer integration tests
 (`tests/facade_consumer.rs` at the root) cover facade-only and SDK-only
 manifests, the SDK beside a facade dev-dependency, renamed dependencies, and
 generic view derives.
+
+### Routable derive: specificity order, compile-time pattern validation, hidden helpers
+
+**Oracle:** Flutter has no derive; a `RouteInformationParser` is written by
+hand. The shape follows Dioxus's `#[derive(Routable)]` with `#[route("…")]`
+per variant.
+
+**Choice:** `#[derive(Routable)]` (ADR-0093 §1) checks every pattern while
+expanding: a leading `/`, no empty segment, trailing `/`, `?`, `#` or `%`;
+each `:param` names one field and each field one parameter; no two patterns of
+the same shape. A tuple variant, a generic enum, a struct and a missing, doubled
+or over-long `#[route]` are errors with the span on the literal or item at
+fault. `from_path` tries patterns by specificity, not declaration order:
+shorter first, then segment by segment with a literal above a parameter, so
+`/s/new` wins over `/s/:slug`. It decodes the path's segments once, matches a
+slice pattern with literal equality per candidate, and parses fields with
+`FromStr`; the first field that fails in a candidate whose literals matched is
+the `Param` error when nothing matches in full, otherwise `NoMatch`. The
+generated code calls only `flui_widgets::router::__derive` (`segments`,
+`Matcher`, `assert_segment`), a `#[doc(hidden)]` module with no semver
+promise, so `RouteParseError` stays `#[non_exhaustive]`; `assert_segment` is
+spanned at each field type, so a missing `FromStr` or `Display` is reported on
+the field. **Tests:** the parser, ordering and conflict rules in
+`src/derive_routable/pattern.rs`; `crates/flui-widgets/tests/routable_ui.rs`
+(trybuild pass and fail cases) and `crates/flui-widgets/tests/routable_derive.rs`
+(the proptest round trip).
