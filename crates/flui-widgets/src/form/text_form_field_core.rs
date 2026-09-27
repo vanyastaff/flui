@@ -122,9 +122,9 @@ impl std::fmt::Debug for TextFormFieldInput {
 
 impl TextFormFieldInput {
     /// The input's `on_changed`: a user edit is the field's `did_change`.
-    pub fn on_changed(&self) -> impl Fn(&str) + 'static {
+    pub fn on_changed(&self) -> impl Fn(&mut EventCx<'_>, &str) + 'static {
         let field = self.field.clone();
-        move |text| field.did_change(text.to_owned())
+        move |_cx: &mut EventCx<'_>, text: &str| field.did_change(text.to_owned())
     }
 }
 

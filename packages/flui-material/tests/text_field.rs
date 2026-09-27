@@ -575,7 +575,7 @@ fn on_submitted_reaches_the_composed_editable_text_and_fires_on_enter() {
             ThemeData::light(),
             TextField::new(controller.clone())
                 .focus_node(Rc::clone(&focus_node))
-                .on_submitted(move |text| {
+                .on_submitted(move |_cx, text| {
                     submitted_for_callback.replace(Some(text.to_string()));
                 }),
         ),

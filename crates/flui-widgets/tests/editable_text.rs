@@ -237,9 +237,11 @@ fn enter_calls_on_submitted_with_the_current_text() {
     let submitted_for_callback = Rc::clone(&submitted);
 
     let harness = crate::common::harness::mount(
-        EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(move |text| {
-            submitted_for_callback.replace(Some(text.to_string()));
-        }),
+        EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(
+            move |_cx, text| {
+                submitted_for_callback.replace(Some(text.to_string()));
+            },
+        ),
     );
     focus_node.request_focus();
 
@@ -296,9 +298,11 @@ fn enter_while_composing_is_ignored_and_does_not_submit() {
     let submitted_for_callback = Rc::clone(&submitted);
 
     let harness = crate::common::harness::mount_with_ime(
-        EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(move |text| {
-            submitted_for_callback.replace(Some(text.to_string()));
-        }),
+        EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(
+            move |_cx, text| {
+                submitted_for_callback.replace(Some(text.to_string()));
+            },
+        ),
     );
     focus_node.request_focus();
     harness.dispatch_ime(&flui_types::ImeEvent::Preedit {
@@ -332,7 +336,7 @@ fn ctrl_enter_is_a_command_chord_not_a_submit() {
     let submitted_for_callback = Rc::clone(&submitted);
 
     let harness = crate::common::harness::mount(
-        EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |text| {
+        EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |_cx, text| {
             submitted_for_callback.replace(Some(text.to_string()));
         }),
     );
@@ -366,7 +370,7 @@ fn shift_enter_is_reserved_and_does_not_submit() {
     let submitted_for_callback = Rc::clone(&submitted);
 
     let harness = crate::common::harness::mount(
-        EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |text| {
+        EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |_cx, text| {
             submitted_for_callback.replace(Some(text.to_string()));
         }),
     );
@@ -408,7 +412,7 @@ fn repeated_enter_consumes_the_key_without_resubmitting() {
     let calls_for_callback = Rc::clone(&calls);
 
     let harness = crate::common::harness::mount(
-        EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |_text| {
+        EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |_cx, _text| {
             calls_for_callback.fetch_add(1, Ordering::Relaxed);
         }),
     );
@@ -449,9 +453,11 @@ fn on_submitted_may_clear_its_own_controller_without_panicking() {
     let controller_for_callback = controller.clone();
 
     let harness = crate::common::harness::mount(
-        EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(move |_text| {
-            controller_for_callback.clear();
-        }),
+        EditableText::new(controller.clone(), Rc::clone(&focus_node)).on_submitted(
+            move |_cx, _text| {
+                controller_for_callback.clear();
+            },
+        ),
     );
     focus_node.request_focus();
 
@@ -2305,8 +2311,8 @@ fn on_changed_reports_user_edits_but_not_the_callers_own() {
     let focus_node = FocusNode::with_debug_label("on_changed field");
     let harness = crate::common::harness::mount_with_ime(
         EditableText::new(controller.clone(), Rc::clone(&focus_node))
-            .on_changed(move |text| sink.borrow_mut().push(text.to_owned()))
-            .on_submitted(move |_| submit_controller.clear()),
+            .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned()))
+            .on_submitted(move |_cx, _| submit_controller.clear()),
     );
     harness.enter_owner_scope(|| focus_node.request_focus());
 
@@ -2479,7 +2485,7 @@ mod text_store {
         let sink = Rc::clone(&changes);
         let mut harness = mount_with_ime(
             EditableText::new(controller.clone(), Rc::clone(&focus_node))
-                .on_changed(move |text| sink.borrow_mut().push(text.to_owned())),
+                .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
         );
         focus_node.request_focus();
         harness.tick();
@@ -2684,5 +2690,127 @@ mod text_store {
             .dispatch_key_event(&character_key_event('b'));
         assert!(handled);
         assert_eq!(controller.text(), "Ab");
+    }
+}
+
+/// Event context (ADR-0086): `on_changed` and `on_submitted` run inside a
+/// write the field opens from the writer source it acquired in
+/// `init_state`, whichever path made the edit.
+mod event_cx {
+    use std::rc::Rc;
+
+    use flui_interaction::routing::FocusNode;
+    use flui_view::prelude::*;
+    use flui_widgets::{EditableText, TextEditingController};
+
+    use super::{character_key_event, dispatch_ime, enter_key_event};
+    use crate::common::harness::{Harness, mount_with_ime};
+    use crate::common::{ProbeSignals, SignalProbe};
+
+    /// A focused field built by `field`, below a probe.
+    fn mounted(
+        field: impl Fn(ProbeSignals, TextEditingController, Rc<FocusNode>) -> EditableText + 'static,
+    ) -> (SignalProbe, Harness, TextEditingController) {
+        let controller = TextEditingController::new();
+        let focus_node = FocusNode::with_debug_label("event field");
+        let (probe_controller, probe_node) = (controller.clone(), Rc::clone(&focus_node));
+        let probe = SignalProbe::new(move |signals| {
+            field(signals, probe_controller.clone(), Rc::clone(&probe_node))
+        });
+        let mut harness = mount_with_ime(probe.view());
+        harness.enter_owner_scope(|| focus_node.request_focus());
+        harness.tick();
+        (probe, harness, controller)
+    }
+
+    #[test]
+    fn typing_writes_through_on_changed_and_rebuilds_its_reader() {
+        let (probe, mut harness, _controller) = mounted(|signals, controller, node| {
+            let count = signals.count;
+            EditableText::new(controller, node)
+                .on_changed(move |cx, text| count.set(cx, text.len() as u32))
+        });
+
+        let keys = harness.focus_manager();
+        keys.dispatch_key_event(&character_key_event('a'));
+        keys.dispatch_key_event(&character_key_event('b'));
+
+        assert_eq!(probe.value(), Ok(2));
+        harness.tick();
+        assert_eq!(probe.reads().last(), Some(&2), "the reader rebuilt");
+    }
+
+    #[test]
+    fn enter_writes_through_on_submitted() {
+        let (probe, harness, _controller) = mounted(|signals, controller, node| {
+            let count = signals.count;
+            EditableText::new(controller, node)
+                .on_submitted(move |cx, text| count.set(cx, text.len() as u32 + 10))
+        });
+
+        let keys = harness.focus_manager();
+        keys.dispatch_key_event(&character_key_event('a'));
+        assert_eq!(probe.value(), Ok(0), "typing alone does not submit");
+        assert!(keys.dispatch_key_event(&enter_key_event()));
+
+        assert_eq!(probe.value(), Ok(11));
+    }
+
+    /// An IME commit that arrives while the frame holds the transaction is
+    /// deferred to the frame's end; its `on_changed` write lands then,
+    /// outside any build.
+    #[test]
+    fn an_ime_commit_deferred_by_the_frame_writes_after_it() {
+        let (probe, mut harness, controller) = mounted(|signals, controller, node| {
+            let count = signals.count;
+            EditableText::new(controller, node)
+                .on_changed(move |cx, text| count.set(cx, text.len() as u32))
+        });
+
+        harness.set_transaction_open(true);
+        dispatch_ime(&harness, &flui_types::ImeEvent::Commit("abc".to_owned()));
+        assert_eq!(probe.value(), Ok(0), "the commit waits for the frame");
+        harness.tick();
+
+        assert_eq!(controller.text(), "abc");
+        assert_eq!(probe.value(), Ok(3), "the deferred commit wrote");
+    }
+
+    #[test]
+    fn a_let_bound_on_changed_compiles_through_callback_ref() {
+        let (probe, harness, _controller) = mounted(|signals, controller, node| {
+            let count = signals.count;
+            let changed = callback_ref(move |cx, text: &str| {
+                count.update(cx, |n| *n += u32::try_from(text.len()).unwrap_or(u32::MAX))
+            });
+            EditableText::new(controller, node).on_changed(changed)
+        });
+
+        harness
+            .focus_manager()
+            .dispatch_key_event(&character_key_event('a'));
+
+        assert_eq!(probe.value(), Ok(1));
+    }
+
+    #[test]
+    fn a_refused_write_in_on_changed_is_reported_not_panicked() {
+        let (probe, harness, controller) = mounted(|signals, controller, node| {
+            let released = signals.released;
+            EditableText::new(controller, node).on_changed(move |cx, _text| released.set(cx, 1))
+        });
+
+        let (_, log) = flui_testing::log_capture::capture(|| {
+            harness
+                .focus_manager()
+                .dispatch_key_event(&character_key_event('a'))
+        });
+
+        assert!(
+            log.contains("an event callback's signal write was refused"),
+            "the refusal is logged at the dispatch boundary: {log}"
+        );
+        assert_eq!(controller.text(), "a", "the edit itself landed");
+        assert_eq!(probe.value(), Ok(0));
     }
 }

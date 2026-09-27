@@ -153,8 +153,17 @@ pub struct TextField {
     on_changed: Option<TextChanged>,
 }
 
-/// Callback for [`TextField::on_changed`].
-type TextChanged = Rc<dyn Fn(&str)>;
+/// Callback for [`TextField::on_changed`], with the dispatch's [`EventCx`].
+type TextChanged = Rc<dyn Fn(&mut EventCx<'_>, &str)>;
+
+/// Store a text callback, adapted to report its outcome (ADR-0086).
+fn text_callback<F, R>(callback: F) -> TextChanged
+where
+    F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+    R: EventOutcome,
+{
+    Rc::new(move |cx: &mut EventCx<'_>, text: &str| callback(cx, text).report())
+}
 
 // Hand-written rather than derived: `on_submitted`'s `Rc<dyn Fn(&str)>` has
 // no `Debug` impl. Mirrors `flui_sdk::widgets::EditableText`'s own manual impl,
@@ -243,19 +252,29 @@ impl TextField {
     /// Call `callback` with the field's current text when Enter is pressed
     /// while it has focus. Forwards to [`EditableText::on_submitted`] — see
     /// that method's doc for exactly when it fires and why it is Enter
-    /// rather than an IME action-button commit.
+    /// rather than an IME action-button commit. The callback receives the
+    /// dispatch's `&mut EventCx<'_>` first (ADR-0086).
     #[must_use]
-    pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
-        self.on_submitted = Some(Rc::new(callback));
+    pub fn on_submitted<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_submitted = Some(text_callback(callback));
         self
     }
 
-    /// Call `callback` with the new text after each user edit — Flutter's
-    /// `TextField.onChanged`. Forwards to [`EditableText::on_changed`]; a
-    /// caller's own controller edits do not call it.
+    /// Call `callback` with the dispatch's `&mut EventCx<'_>` and the new
+    /// text after each user edit — Flutter's `TextField.onChanged`. Forwards
+    /// to [`EditableText::on_changed`]; a caller's own controller edits do
+    /// not call it.
     #[must_use]
-    pub fn on_changed(mut self, callback: impl Fn(&str) + 'static) -> Self {
-        self.on_changed = Some(Rc::new(callback));
+    pub fn on_changed<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_changed = Some(text_callback(callback));
         self
     }
 }
@@ -432,10 +451,10 @@ impl ViewState<TextField> for MaterialTextFieldState {
             editable = editable.text_style(text_style);
         }
         if let Some(on_submitted) = view.on_submitted.clone() {
-            editable = editable.on_submitted(move |text| on_submitted(text));
+            editable = editable.on_submitted(move |cx, text| on_submitted(cx, text));
         }
         if let Some(on_changed) = view.on_changed.clone() {
-            editable = editable.on_changed(move |text| on_changed(text));
+            editable = editable.on_changed(move |cx, text| on_changed(cx, text));
         }
 
         let focus_node = Rc::clone(&self.focus_node);

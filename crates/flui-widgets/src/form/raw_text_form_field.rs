@@ -15,6 +15,7 @@ use super::form_field::FormFieldHandle;
 use super::text_form_field_core::{TextFormFieldConfig, TextFormFieldCore};
 use crate::flex::Column;
 use crate::semantics::Semantics;
+use crate::support::ref_callback;
 use crate::text::{RawTextField, Text, TextEditingController};
 use flui_objects::{CrossAxisAlignment, MainAxisSize};
 
@@ -114,10 +115,15 @@ impl RawTextFormField {
         self
     }
 
-    /// Called with the text when Enter is pressed.
+    /// Called with the dispatch's `&mut EventCx<'_>` and the text when Enter
+    /// is pressed.
     #[must_use]
-    pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
-        self.config.on_submitted = Some(Rc::new(callback));
+    pub fn on_submitted<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.config.on_submitted = Some(ref_callback(callback));
         self
     }
 
@@ -168,7 +174,7 @@ impl ViewState<RawTextFormField> for RawTextFormFieldState {
                 field = field.focus_node(Rc::clone(node));
             }
             if let Some(on_submitted) = input.on_submitted.clone() {
-                field = field.on_submitted(move |text| on_submitted(text));
+                field = field.on_submitted(move |cx, text| on_submitted(cx, text));
             }
             with_error_line(field.boxed(), input.field.error_text())
         })

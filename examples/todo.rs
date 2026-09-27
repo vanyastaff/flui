@@ -13,18 +13,14 @@
 //! `examples/form.rs` for `Form` and `TextFormField`). Adding an item is a
 //! theme-free `RawTextField`: pressing Enter (`RawTextField::on_submitted`)
 //! or the "Add" button both call the same `add_item` helper, which pushes the
-//! item and clears the field (`TextEditingController::clear`).
-//!
-//! `on_submitted` hands its callback the text but no `cx`, so the field's
-//! Enter handler opens its write through a `WriterSource` this view takes in
-//! `init_state`, and hands a refused write to `EventOutcome::report`, which
-//! logs it as a button's press does.
+//! item and clears the field (`TextEditingController::clear`). Both
+//! callbacks receive the `cx` they pass on to it.
 //!
 //! Run with: cargo run --example todo
 //! (`tests/todo_example.rs` mounts this file's tree headless.)
 
 use flui::prelude::*;
-use flui::view::{EventOutcome, SignalError};
+use flui::view::SignalError;
 use flui::widgets::{SafeArea, column, row};
 
 /// The height of one row. `ListView::new` requires a fixed item extent up
@@ -79,7 +75,6 @@ struct TodoView;
 struct TodoState {
     items: Signal<Vec<Item>>,
     new_item: TextEditingController,
-    writer: Option<WriterSource>,
 }
 
 impl StatefulView for TodoView {
@@ -89,7 +84,6 @@ impl StatefulView for TodoView {
         TodoState {
             items: Signal::default(),
             new_item: TextEditingController::new(),
-            writer: None,
         }
     }
 }
@@ -97,7 +91,6 @@ impl StatefulView for TodoView {
 impl ViewState<TodoView> for TodoState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.items = ctx.signal(Vec::new());
-        self.writer = Some(ctx.writer_source());
     }
 
     fn build(&self, _view: &TodoView, ctx: &dyn BuildContext) -> impl IntoView {
@@ -127,10 +120,6 @@ impl ViewState<TodoView> for TodoState {
                 .collect()
         });
 
-        let writer = self
-            .writer
-            .clone()
-            .expect("init_state acquires the writer source");
         let submit_field = self.new_item.clone();
         let button_field = self.new_item.clone();
 
@@ -142,11 +131,8 @@ impl ViewState<TodoView> for TodoState {
                 // field sizes itself to its text; the field takes what is
                 // left, or an empty one is a few pixels wide.
                 Expanded::new(
-                    RawTextField::new(self.new_item.clone()).on_submitted(move |text| {
-                        writer
-                            .write(|cx| add_item(cx, items, &submit_field, text))
-                            .report();
-                    })
+                    RawTextField::new(self.new_item.clone())
+                        .on_submitted(move |cx, text| { add_item(cx, items, &submit_field, text) })
                 ),
                 RawButton::new(Text::new("Add")).on_press(move |cx| {
                     add_item(cx, items, &button_field, &button_field.text())

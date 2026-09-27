@@ -60,7 +60,7 @@ fn on_submitted_reaches_the_composed_editable_text_and_fires_on_enter() {
     let harness = mount(
         RawTextField::new(controller)
             .focus_node(Rc::clone(&focus_node))
-            .on_submitted(move |text| {
+            .on_submitted(move |_cx, text| {
                 submitted_for_callback.replace(Some(text.to_string()));
             }),
     );
@@ -77,6 +77,39 @@ fn on_submitted_reaches_the_composed_editable_text_and_fires_on_enter() {
         Some(String::new()),
         "Enter must call on_submitted through RawTextField's own passthrough"
     );
+}
+
+/// `RawTextField` forwards the `cx` its `EditableText` opens, so both of its
+/// callbacks write signals (ADR-0086).
+#[test]
+fn raw_text_field_callbacks_write_through_the_forwarded_cx() {
+    use crate::common::{ProbeSignals, SignalProbe};
+
+    let controller = TextEditingController::new();
+    let focus_node = FocusNode::with_debug_label("raw-cx field");
+    let (probe_controller, probe_node) = (controller.clone(), Rc::clone(&focus_node));
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        RawTextField::new(probe_controller.clone())
+            .focus_node(Rc::clone(&probe_node))
+            .on_changed(move |cx, text| count.set(cx, text.len() as u32))
+            .on_submitted(move |cx, _text| count.update(cx, |n| *n += 100))
+    });
+    let harness = mount(probe.view());
+    focus_node.request_focus();
+
+    let typed = KeyEventBuilder::new(Code::KeyA)
+        .with_key(Key::Character("a".to_owned()))
+        .with_state(KeyState::Down)
+        .build();
+    harness.focus_manager().dispatch_key_event(&typed);
+    assert_eq!(probe.value(), Ok(1), "on_changed wrote");
+
+    let enter = KeyEventBuilder::new(Code::Enter)
+        .with_key(Key::Named(NamedKey::Enter))
+        .with_state(KeyState::Down)
+        .build();
+    harness.focus_manager().dispatch_key_event(&enter);
+    assert_eq!(probe.value(), Ok(101), "on_submitted wrote");
 }
 
 /// A parent rebuilding with a different `on_submitted` closure must
@@ -96,7 +129,7 @@ fn swapping_the_on_submitted_closure_via_a_rebuild_replaces_it() {
     let mut harness = mount(
         RawTextField::new(controller.clone())
             .focus_node(Rc::clone(&focus_node))
-            .on_submitted(move |_| {
+            .on_submitted(move |_cx, _| {
                 *first_calls_cb.borrow_mut() += 1;
             }),
     );
@@ -113,7 +146,7 @@ fn swapping_the_on_submitted_closure_via_a_rebuild_replaces_it() {
     harness.swap_root(
         RawTextField::new(controller)
             .focus_node(Rc::clone(&focus_node))
-            .on_submitted(move |_| {
+            .on_submitted(move |_cx, _| {
                 *second_calls_cb.borrow_mut() += 1;
             }),
     );

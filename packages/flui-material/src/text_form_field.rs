@@ -129,10 +129,17 @@ impl TextFormField {
         self
     }
 
-    /// Called with the text when Enter is pressed.
+    /// Called with the dispatch's `&mut EventCx<'_>` and the text when Enter
+    /// is pressed.
     #[must_use]
-    pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
-        self.config.on_submitted = Some(Rc::new(callback));
+    pub fn on_submitted<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.config.on_submitted = Some(Rc::new(move |cx: &mut EventCx<'_>, text: &str| {
+            callback(cx, text).report();
+        }));
         self
     }
 
@@ -191,7 +198,7 @@ impl ViewState<TextFormField> for TextFormFieldState {
                 field = field.focus_node(Rc::clone(node));
             }
             if let Some(on_submitted) = input.on_submitted.clone() {
-                field = field.on_submitted(move |text| on_submitted(text));
+                field = field.on_submitted(move |cx, text| on_submitted(cx, text));
             }
             field.boxed()
         })
