@@ -240,3 +240,6 @@ examples/*/pkg/
 
 # Per-run agent checklist (AGENTS.md "Long runs"); lives in the worktree, never committed.
 /TASKS.md
+
+# Local web-research source snapshots.
+/.firecrawl/

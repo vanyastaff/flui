@@ -8,6 +8,8 @@
 
 Материалы независимых разборов:
 
+- [Ответы на оставшиеся риски по первоисточникам Firecrawl](event-context-risk-answers.ru.md).
+
 - [Альтернативные модели и первоисточники](event-context-alternatives.md).
 - [Атака на владение и жизненный цикл](event-context-ownership-attack.md).
 - [Масштабирование и цена эволюции API](event-context-scalability.md).
