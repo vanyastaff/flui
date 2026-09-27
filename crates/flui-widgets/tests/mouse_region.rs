@@ -37,7 +37,7 @@ fn mouse_region_hover_callback_fires_on_hover_move() {
     let in_callback = Arc::clone(&hovers);
     let laid = lay_out(
         MouseRegion::new()
-            .on_hover(move |_device, _position| {
+            .on_hover(move |_cx, _device, _position| {
                 in_callback.fetch_add(1, Ordering::SeqCst);
             })
             .child(SizedBox::new(60.0, 30.0)),
@@ -50,4 +50,47 @@ fn mouse_region_hover_callback_fires_on_hover_move() {
         1,
         "MouseRegion::on_hover must route through RenderMouseRegion's hit entry",
     );
+}
+
+/// Event context (ADR-0086): the region takes the owner's writer source from
+/// its render-object context and opens one write per enter, hover or exit.
+mod event_cx {
+    use crate::common::{ProbeSignals, SignalProbe, lay_out, tight};
+    use flui_view::SignalWriteExt;
+    use flui_widgets::{MouseRegion, SizedBox};
+
+    #[test]
+    fn an_enter_writes_a_signal_and_rebuilds_its_reader() {
+        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+            MouseRegion::new()
+                .on_enter(move |cx, _device, position| count.set(cx, position.dx.get() as u32))
+                .child(SizedBox::new(60.0, 30.0))
+        });
+        let mut app = lay_out(probe.view(), tight(60.0, 30.0));
+
+        app.dispatch_pointer_hover(12.0, 10.0);
+        assert_eq!(probe.value(), Ok(12), "the enter carried its position");
+        app.tick();
+
+        assert_eq!(probe.reads(), [0, 12], "the reader rebuilt once");
+    }
+
+    #[test]
+    fn a_refused_write_in_an_enter_is_reported_not_panicked() {
+        let probe = SignalProbe::new(|ProbeSignals { released, .. }| {
+            MouseRegion::new()
+                .on_enter(move |cx, _device, _position| released.set(cx, 1))
+                .child(SizedBox::new(60.0, 30.0))
+        });
+        let app = lay_out(probe.view(), tight(60.0, 30.0));
+
+        let ((), log) =
+            flui_testing::log_capture::capture(|| app.dispatch_pointer_hover(12.0, 10.0));
+
+        assert!(
+            log.contains("an event callback's signal write was refused"),
+            "the refusal is logged at the dispatch boundary: {log}"
+        );
+        assert_eq!(probe.value(), Ok(0));
+    }
 }

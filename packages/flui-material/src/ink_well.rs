@@ -435,12 +435,12 @@ impl ViewState<InkWell> for InkWellState {
             // presentation-owned MouseTracker also re-hit-tests stationary
             // devices after layout, so a widget appearing beneath an
             // unmoved pointer takes the same path as a physical pointer move.
-            .on_enter(move |_device, _position| {
+            .on_enter(move |_cx, _device, _position| {
                 if enabled {
                     hover_states_enter.update(WidgetState::Hovered, true);
                 }
             })
-            .on_exit(move |_device, _position| {
+            .on_exit(move |_cx, _device, _position| {
                 hover_states_exit.update(WidgetState::Hovered, false);
             });
 
