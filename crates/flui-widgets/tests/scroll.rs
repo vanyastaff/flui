@@ -672,7 +672,7 @@ fn scrollable_sub_slop_drag_waits_while_a_tap_competitor_remains() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 500.0);
 
-    let widget = GestureDetector::new().on_tap(|| {}).child(
+    let widget = GestureDetector::new().on_tap(|_cx| {}).child(
         Scrollable::new()
             .controller(controller.clone())
             .child(SizedBox::new(300.0, 800.0)),
@@ -1853,6 +1853,195 @@ fn scrollbar_thumb_drag_clamps_at_max_scroll_extent() {
 // RefreshIndicator — pull-to-refresh
 // ============================================================================
 
+#[test]
+fn refresh_callback_writes_a_signal_in_the_dispatching_presentation() {
+    use flui_view::prelude::*;
+    use flui_widgets::RefreshIndicator;
+    use std::{cell::RefCell, rc::Rc};
+
+    type Observation = Rc<RefCell<Option<(Signal<u32>, flui_view::Reactive)>>>;
+
+    #[derive(Clone, StatefulView)]
+    struct RefreshProbe(Observation);
+
+    #[derive(Default)]
+    struct RefreshProbeState {
+        count: Signal<u32>,
+    }
+
+    impl StatefulView for RefreshProbe {
+        type State = RefreshProbeState;
+
+        fn create_state(&self) -> Self::State {
+            RefreshProbeState::default()
+        }
+    }
+
+    impl ViewState<RefreshProbe> for RefreshProbeState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            self.count = ctx.signal(0);
+        }
+
+        fn build(&self, view: &RefreshProbe, ctx: &dyn BuildContext) -> impl IntoView {
+            *view.0.borrow_mut() = Some((self.count, ctx.reactive()));
+            let count = self.count;
+            RefreshIndicator::new()
+                .threshold_px(50.0)
+                .on_refresh(move |cx| count.update(cx, |value| *value += 1))
+                .child(SizedBox::new(300.0, 800.0))
+        }
+    }
+
+    let observation = Rc::new(RefCell::new(None));
+    let app = lay_out(RefreshProbe(observation.clone()), tight(300.0, 300.0));
+    app.dispatch_pointer_down(150.0, 50.0);
+    app.dispatch_pointer_move(150.0, 120.0);
+    app.dispatch_pointer_up(150.0, 120.0);
+    let observed = observation.borrow();
+    let (count, graph) = observed.as_ref().expect("mounted refresh probe");
+    assert_eq!(count.peek(graph, |value| *value), Ok(1));
+}
+
+#[test]
+fn interactive_viewer_wheel_callbacks_write_in_order_in_the_dispatching_presentation() {
+    use flui_view::prelude::*;
+    use flui_widgets::InteractiveViewer;
+    use std::{cell::RefCell, rc::Rc};
+
+    type Observation = Rc<RefCell<Option<(Signal<u32>, flui_view::Reactive)>>>;
+    #[derive(Clone, StatefulView)]
+    struct ViewerProbe(Observation);
+    #[derive(Default)]
+    struct ViewerProbeState(Signal<u32>);
+    impl StatefulView for ViewerProbe {
+        type State = ViewerProbeState;
+        fn create_state(&self) -> Self::State {
+            ViewerProbeState::default()
+        }
+    }
+    impl ViewState<ViewerProbe> for ViewerProbeState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            self.0 = ctx.signal(0);
+        }
+        fn build(&self, view: &ViewerProbe, ctx: &dyn BuildContext) -> impl IntoView {
+            *view.0.borrow_mut() = Some((self.0, ctx.reactive()));
+            let signal = self.0;
+            InteractiveViewer::new()
+                .on_interaction_start(move |cx, _| signal.update(cx, |n| *n = *n * 10 + 1))
+                .on_interaction_update(move |cx, _| signal.update(cx, |n| *n = *n * 10 + 2))
+                .on_interaction_end(move |cx, _| signal.update(cx, |n| *n = *n * 10 + 3))
+                .child(SizedBox::new(300.0, 300.0))
+        }
+    }
+    let observation = Rc::new(RefCell::new(None));
+    let app = lay_out(ViewerProbe(observation.clone()), tight(300.0, 300.0));
+    app.dispatch_scroll(150.0, 100.0, 0.0, 53.0);
+    let observed = observation.borrow();
+    let (signal, graph) = observed.as_ref().expect("mounted viewer probe");
+    assert_eq!(signal.peek(graph, |value| *value), Ok(123));
+}
+
+#[test]
+fn dismissible_layout_notifications_write_signals_and_dismiss_once() {
+    use flui_view::prelude::*;
+    use flui_widgets::{DismissDirection, Dismissible};
+    use std::{cell::RefCell, rc::Rc};
+
+    type Observation = Rc<RefCell<Option<(Signal<Vec<&'static str>>, flui_view::Reactive)>>>;
+    #[derive(Clone, StatefulView)]
+    struct DismissProbe {
+        observation: Observation,
+        vsync: Vsync,
+    }
+    #[derive(Default)]
+    struct DismissProbeState(Signal<Vec<&'static str>>);
+    impl StatefulView for DismissProbe {
+        type State = DismissProbeState;
+        fn create_state(&self) -> Self::State {
+            DismissProbeState::default()
+        }
+    }
+    impl ViewState<DismissProbe> for DismissProbeState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            self.0 = ctx.signal(Vec::new());
+        }
+        fn build(&self, view: &DismissProbe, ctx: &dyn BuildContext) -> impl IntoView {
+            *view.observation.borrow_mut() = Some((self.0, ctx.reactive()));
+            let signal = self.0;
+            VsyncScope::new(
+                view.vsync.clone(),
+                Dismissible::new(SizedBox::square(300.0))
+                    .direction(DismissDirection::Down)
+                    .movement_duration(Duration::from_millis(100))
+                    .resize_duration(Some(Duration::from_millis(100)))
+                    .on_update(move |cx, _| signal.update(cx, |events| events.push("update")))
+                    .on_resize(move |cx| signal.update(cx, |events| events.push("resize")))
+                    .on_dismissed(move |cx, _| {
+                        signal.update(cx, |events| events.push("dismissed"))
+                    }),
+            )
+        }
+    }
+    let observation = Rc::new(RefCell::new(None));
+    let vsync = Vsync::new();
+    let mut app = crate::common::lay_out_animated(
+        DismissProbe {
+            observation: observation.clone(),
+            vsync: vsync.clone(),
+        },
+        tight(300.0, 300.0),
+        vsync,
+    );
+    app.dispatch_pointer_down(150.0, 20.0);
+    app.dispatch_pointer_move(150.0, 200.0);
+    app.dispatch_pointer_up(150.0, 200.0);
+    for _ in 0..20 {
+        app.pump_for(Duration::from_millis(20));
+    }
+    let observed = observation.borrow();
+    let (signal, graph) = observed.as_ref().expect("mounted dismissal probe");
+    let events = signal.peek(graph, Clone::clone).expect("live signal");
+    assert!(events.contains(&"update"), "{events:?}");
+    assert!(events.contains(&"resize"), "{events:?}");
+    assert_eq!(
+        events.iter().filter(|event| **event == "dismissed").count(),
+        1,
+        "{events:?}"
+    );
+    assert_eq!(events.last(), Some(&"dismissed"));
+}
+
+#[test]
+fn fully_slid_dismissible_without_resize_notifies_before_pointer_up_returns() {
+    use flui_widgets::{DismissDirection, Dismissible};
+    use std::{cell::Cell, rc::Rc};
+
+    let calls = Rc::new(Cell::new(0));
+    let captured = calls.clone();
+    let widget = Dismissible::new(SizedBox::square(100.0))
+        .direction(DismissDirection::Down)
+        .resize_duration(None)
+        .on_dismissed(move |_cx, direction| {
+            assert_eq!(direction, DismissDirection::Down);
+            captured.set(captured.get() + 1);
+        });
+    let mut app = lay_out(widget, tight(100.0, 100.0));
+    app.dispatch_pointer_down(50.0, 10.0);
+    app.dispatch_pointer_move(50.0, 40.0);
+    // A captured pointer route continues outside the original box. A move
+    // past the whole extent reaches Completed while the drag is underway.
+    app.dispatch_pointer_move(50.0, 180.0);
+    assert_eq!(calls.get(), 0);
+    app.dispatch_pointer_up(50.0, 180.0);
+    assert_eq!(calls.get(), 1, "the input-time completion is synchronous");
+    app.pump();
+    assert_eq!(
+        calls.get(),
+        1,
+        "layout must not redeliver the completed drag"
+    );
+}
+
 /// An over-threshold pull at the top + release must fire `on_refresh` and
 /// transition the controller to the refreshing state.
 ///
@@ -1877,7 +2066,7 @@ fn refresh_indicator_over_threshold_pull_fires_on_refresh() {
         .controller(refresh_ctrl.clone())
         // Default threshold is 80 px; use 50 px for a smaller test pull.
         .threshold_px(50.0)
-        .on_refresh(move || {
+        .on_refresh(move |_cx| {
             refreshed_cb.store(true, Ordering::SeqCst);
         })
         .child(SizedBox::new(300.0, 800.0));
@@ -1923,7 +2112,7 @@ fn refresh_indicator_under_threshold_pull_does_not_fire_on_refresh() {
         .scroll_controller(scroll_ctrl.clone())
         .controller(refresh_ctrl.clone())
         .threshold_px(80.0)
-        .on_refresh(move || {
+        .on_refresh(move |_cx| {
             refreshed_cb.store(true, Ordering::SeqCst);
         })
         .child(SizedBox::new(300.0, 800.0));
@@ -1964,7 +2153,7 @@ fn refresh_indicator_finish_dismisses_spinner() {
         .scroll_controller(scroll_ctrl.clone())
         .controller(refresh_ctrl.clone())
         .threshold_px(50.0)
-        .on_refresh(move || {
+        .on_refresh(move |_cx| {
             refreshed_cb.store(true, Ordering::SeqCst);
         })
         .child(SizedBox::new(300.0, 800.0));
@@ -2031,7 +2220,7 @@ type RecordedPosition = Rc<Cell<Option<(f32, f32)>>>;
 fn recording_listener() -> (RecordedPosition, Listener) {
     let recorded = Rc::new(Cell::new(None));
     let probe = Rc::clone(&recorded);
-    let listener = Listener::new().on_pointer_down(move |dispatch: PointerDispatch<'_>| {
+    let listener = Listener::new().on_pointer_down(move |_cx, dispatch: PointerDispatch<'_>| {
         let position = dispatch.local.position();
         probe.set(Some((position.dx.get(), position.dy.get())));
     });
@@ -2779,7 +2968,7 @@ fn a_claimed_wheel_tick_is_still_observed_by_the_whole_path() {
 
     let observed_in_listener = Rc::clone(&observed);
     let widget = Listener::new()
-        .on_pointer_signal(move |_event| {
+        .on_pointer_signal(move |_cx, _event| {
             observed_in_listener.set(observed_in_listener.get() + 1);
         })
         .child(
@@ -2930,7 +3119,7 @@ fn a_wheel_tick_mid_drag_is_observed_under_the_cursor_not_the_captured_route() {
     let observed_in_listener = Rc::clone(&observed_over_listener);
     let widget = flui_widgets::Column::new(vec![
         Listener::new()
-            .on_pointer_signal(move |_event| {
+            .on_pointer_signal(move |_cx, _event| {
                 observed_in_listener.set(observed_in_listener.get() + 1);
             })
             .child(SizedBox::new(300.0, 150.0).child(ColoredBox::new(Color::rgb(0x40, 0x40, 0x40))))

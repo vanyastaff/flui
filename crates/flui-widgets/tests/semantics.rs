@@ -1432,7 +1432,7 @@ fn a_gesture_detector_tap_is_reachable_through_a_platform_click() {
             .label(LABEL)
             .child(
                 flui_widgets::GestureDetector::new()
-                    .on_tap(move || counted.set(counted.get() + 1))
+                    .on_tap(move |_cx| counted.set(counted.get() + 1))
                     .child(SizedBox::new(40.0, 20.0)),
             ),
     );

@@ -427,11 +427,11 @@ fn chip_content_min_height(padding: EdgeInsets, label_padding: EdgeInsets) -> Pi
 
 /// A tap/press callback taking no arguments. `Rc`-based (owner-local, per
 /// ADR-0027) — matches [`InkWell::on_tap`]'s own callback shape.
-type ChipTapCallback = Rc<dyn Fn()>;
+type ChipTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
 
 /// A selection-change callback: the next selected value. `Rc`-based, same
 /// shape as [`ChipTapCallback`].
-type FilterChipSelectCallback = Rc<dyn Fn(bool)>;
+type FilterChipSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, bool)>;
 
 /// A Material Design chip: a compact label with an optional leading avatar
 /// and trailing delete affordance, outlined and unfilled by default.
@@ -445,8 +445,8 @@ type FilterChipSelectCallback = Rc<dyn Fn(bool)>;
 /// use flui_sdk::widgets::Text;
 ///
 /// let _info = Chip::new(Text::new("Tag"));
-/// let _pressable = Chip::new(Text::new("Tag")).on_pressed(|| {});
-/// let _deletable = Chip::new(Text::new("Tag")).on_deleted(|| {});
+/// let _pressable = Chip::new(Text::new("Tag")).on_pressed(|_cx| {});
+/// let _deletable = Chip::new(Text::new("Tag")).on_deleted(|_cx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct Chip {
@@ -491,16 +491,22 @@ impl Chip {
     /// Sets the press handler. Presence of a handler is what makes this
     /// chip tappable — see the module docs' "V1 scope" section.
     #[must_use]
-    pub fn on_pressed(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_pressed = Some(Rc::new(callback));
+    pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self
     }
 
     /// Sets the delete handler. Presence of a handler is what shows the
     /// trailing delete icon. Flutter parity: `Chip.onDeleted`.
     #[must_use]
-    pub fn on_deleted(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_deleted = Some(Rc::new(callback));
+    pub fn on_deleted<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_deleted = Some(crate::event_callback::press_callback(callback));
         self
     }
 
@@ -598,7 +604,7 @@ impl StatelessView for Chip {
             ))
             .shape(MaterialShape::Stadium);
             if self.enabled {
-                delete_button = delete_button.on_tap(move || on_deleted());
+                delete_button = delete_button.on_tap(move |cx| on_deleted(cx));
             }
             delete_button.boxed()
         });
@@ -619,9 +625,9 @@ impl StatelessView for Chip {
         let mut ink_well = InkWell::new(padded_content).shape(shape);
         if self.is_pressable() {
             let on_pressed = self.on_pressed.clone();
-            ink_well = ink_well.on_tap(move || {
+            ink_well = ink_well.on_tap(move |cx| {
                 if let Some(handler) = &on_pressed {
-                    handler();
+                    handler(cx);
                 }
             });
         }
@@ -652,7 +658,7 @@ impl StatelessView for Chip {
 ///
 /// let _chip = FilterChip::new(Text::new("Vegetarian"))
 ///     .selected(true)
-///     .on_selected(|_next| { /* ... */ });
+///     .on_selected(|_cx, _next| { /* ... */ });
 /// let _disabled = FilterChip::new(Text::new("Vegetarian"));
 /// ```
 #[derive(Clone, StatelessView)]
@@ -708,16 +714,22 @@ impl FilterChip {
     /// interactive — Flutter parity: `FilterChip.isEnabled => onSelected !=
     /// null`.
     #[must_use]
-    pub fn on_selected(mut self, callback: impl Fn(bool) + 'static) -> Self {
-        self.on_selected = Some(Rc::new(callback));
+    pub fn on_selected<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, bool) -> R + 'static,
+    ) -> Self {
+        self.on_selected = Some(crate::event_callback::value_callback(callback));
         self
     }
 
     /// Sets the delete handler. Presence of a handler is what shows the
     /// trailing delete icon.
     #[must_use]
-    pub fn on_deleted(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_deleted = Some(Rc::new(callback));
+    pub fn on_deleted<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_deleted = Some(crate::event_callback::press_callback(callback));
         self
     }
 
@@ -876,7 +888,7 @@ impl StatelessView for FilterChip {
             ))
             .shape(MaterialShape::Stadium);
             if enabled {
-                delete_button = delete_button.on_tap(move || on_deleted());
+                delete_button = delete_button.on_tap(move |cx| on_deleted(cx));
             }
             delete_button.boxed()
         });
@@ -897,9 +909,9 @@ impl StatelessView for FilterChip {
         let mut ink_well = InkWell::new(padded_content).shape(shape);
         if enabled {
             let on_selected = self.on_selected.clone();
-            ink_well = ink_well.on_tap(move || {
+            ink_well = ink_well.on_tap(move |cx| {
                 if let Some(handler) = &on_selected {
-                    handler(!selected);
+                    handler(cx, !selected);
                 }
             });
         }
@@ -1071,21 +1083,21 @@ mod tests {
 
     #[test]
     fn chip_on_pressed_makes_the_chip_pressable() {
-        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag")).on_pressed(|| {});
+        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag")).on_pressed(|_cx| {});
         assert!(chip.is_pressable());
     }
 
     #[test]
     fn chip_disabled_is_never_pressable_even_with_a_handler() {
         let chip = Chip::new(flui_sdk::widgets::Text::new("Tag"))
-            .on_pressed(|| {})
+            .on_pressed(|_cx| {})
             .enabled(false);
         assert!(!chip.is_pressable());
     }
 
     #[test]
     fn chip_on_deleted_shows_the_delete_button() {
-        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag")).on_deleted(|| {});
+        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag")).on_deleted(|_cx| {});
         assert!(chip.has_delete_button());
     }
 
@@ -1100,7 +1112,7 @@ mod tests {
 
     #[test]
     fn filter_chip_on_selected_makes_it_enabled() {
-        let chip = FilterChip::new(flui_sdk::widgets::Text::new("Tag")).on_selected(|_| {});
+        let chip = FilterChip::new(flui_sdk::widgets::Text::new("Tag")).on_selected(|_cx, _| {});
         assert!(chip.is_enabled());
     }
 

@@ -2,9 +2,11 @@
 //!
 //! A signal write takes a [`WriteTarget`]. Application code meets exactly one:
 //! the `&mut EventCx<'_>` a framework event callback receives. The only way to
-//! open one is [`WriterSource::write`], and the only way to get a
-//! [`WriterSource`] is [`LifecycleContext::writer_source`], which `build`
-//! cannot reach (ADR-0078). So a write in `build` has no writer to name:
+//! open one is [`WriterSource::write`]. Stateful widgets acquire a
+//! [`WriterSource`] through [`LifecycleContext::writer_source`]; render views
+//! use [`crate::RenderObjectContext::writer_source`] while registering their
+//! owner-local handlers. Neither method is available on the build context
+//! (ADR-0078). So a write in `build` has no writer to name:
 //!
 //! ```rust,ignore
 //! RawButton::new(Text::new("+")).on_press(move |cx| count.update(cx, |n| *n += 1))
@@ -22,10 +24,11 @@
 //!
 //! [`LifecycleContext::writer_source`]: crate::LifecycleContext::writer_source
 
+use std::any::Any;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
-use super::{Reactive, SignalError};
+use super::{Reactive, ReadGraph, SignalError, SignalSlot};
 
 pub(super) mod sealed {
     /// Only this module's write targets and event outcomes implement the
@@ -66,6 +69,20 @@ impl fmt::Debug for Writer {
     }
 }
 
+impl ReadGraph for Writer {
+    fn graph_id(&self) -> u32 {
+        self.graph.graph_id()
+    }
+
+    fn read_erased(
+        &self,
+        slot: SignalSlot,
+        read: &mut dyn FnMut(&dyn Any),
+    ) -> Result<(), SignalError> {
+        self.graph.read_erased(slot, read)
+    }
+}
+
 /// What an event callback receives: `&mut EventCx<'_>`, borrowed for one
 /// dispatch and dropped when the callback returns.
 ///
@@ -73,8 +90,46 @@ impl fmt::Debug for Writer {
 /// position, no realm id. A signal write takes it directly:
 /// `count.set(cx, 3)`, `count.update(cx, |n| *n += 1)`. Passing `cx` to a
 /// write reborrows it, so one callback can make several writes.
+/// Current values can be inspected with `signal.peek(cx, |value| ...)`.
+/// These reads neither subscribe an element nor schedule a rebuild.
 pub struct EventCx<'a> {
     writer: &'a mut Writer,
+}
+
+/// Why an owner-bound operation cannot use the supplied event context.
+///
+/// Check before changing non-signal state: refusing a later signal write
+/// cannot undo an earlier controller or form mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum EventContextError {
+    /// The handle is not attached to a live widget.
+    #[error("the event target is detached")]
+    Detached,
+    /// The event and target belong to different presentations.
+    #[error("the event context belongs to another presentation")]
+    ForeignPresentation,
+    /// The owning presentation is currently building an element.
+    #[error("an event operation was attempted during the build of {element:?}")]
+    WrittenDuringBuild {
+        /// The element whose build is in progress.
+        element: flui_foundation::ElementId,
+    },
+}
+
+/// A framework refusal from a callback that combines signal and owner-bound
+/// operations. Individual operations keep their precise error types; use
+/// `Result<(), EventError>` as the callback return type to propagate both
+/// with `?`.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum EventError {
+    /// A signal could not be read or written.
+    #[error(transparent)]
+    Signal(#[from] SignalError),
+    /// An owner-bound operation rejected the event context.
+    #[error(transparent)]
+    Context(#[from] EventContextError),
 }
 
 impl<'a> EventCx<'a> {
@@ -102,6 +157,20 @@ impl fmt::Debug for EventCx<'_> {
         f.debug_struct("EventCx")
             .field("graph", &self.writer.graph.id())
             .finish()
+    }
+}
+
+impl ReadGraph for EventCx<'_> {
+    fn graph_id(&self) -> u32 {
+        self.writer.graph_id()
+    }
+
+    fn read_erased(
+        &self,
+        slot: SignalSlot,
+        read: &mut dyn FnMut(&dyn Any),
+    ) -> Result<(), SignalError> {
+        self.writer.read_erased(slot, read)
     }
 }
 
@@ -137,6 +206,20 @@ pub struct WriterSource {
 impl WriterSource {
     pub(crate) fn new(graph: Reactive) -> Self {
         Self { graph }
+    }
+
+    /// Validate a caller's context before an owner-bound operation mutates
+    /// state. This checks presentation identity and the signal build guard,
+    /// but is not a transaction or proof that the target widget is mounted.
+    /// The target must separately invalidate its stored source on disposal.
+    pub fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError> {
+        if self.graph.id() != cx.writer.graph.id() {
+            return Err(EventContextError::ForeignPresentation);
+        }
+        if let Some(element) = self.graph.inner.borrow().building {
+            return Err(EventContextError::WrittenDuringBuild { element });
+        }
+        Ok(())
     }
 
     /// Open one [`EventCx`] for the duration of `f`.
@@ -197,12 +280,15 @@ impl WriteTarget for EventCx<'_> {
     }
 }
 
-/// What an event callback may return: `()`, or the `Result` of a signal
-/// write, so `move |cx| count.set(cx, v)` needs no `let _`.
+/// What an event callback may return: `()`, or a `Result` with
+/// [`SignalError`], [`EventContextError`] or their union [`EventError`].
+/// Thus `move |cx| count.set(cx, v)` needs no `let _`.
 ///
 /// Sealed. A refused write is not lost silently: [`EventOutcome::report`]
 /// logs it at the dispatch boundary, the same way the guard logs a write
-/// refused during `build`.
+/// refused during `build`. Automatic reporting is deliberately limited to
+/// framework refusals. Application and domain errors must be handled by the
+/// application, rather than implicitly discarded into a warning log.
 pub trait EventOutcome: sealed::Sealed {
     /// Hand the outcome to the dispatch boundary: a refused write becomes a
     /// `tracing::warn!` on the `flui::signals` target.
@@ -223,6 +309,30 @@ impl<T> EventOutcome for Result<T, SignalError> {
                 %error,
                 "an event callback's signal write was refused"
             );
+        }
+    }
+}
+
+impl<T> sealed::Sealed for Result<T, EventContextError> {}
+impl<T> EventOutcome for Result<T, EventContextError> {
+    fn report(self) {
+        if let Err(error) = self {
+            tracing::warn!(
+                target: "flui::signals",
+                %error,
+                "an event callback's owner-bound operation was refused"
+            );
+        }
+    }
+}
+
+impl<T> sealed::Sealed for Result<T, EventError> {}
+impl<T> EventOutcome for Result<T, EventError> {
+    fn report(self) {
+        match self {
+            Ok(_) => {}
+            Err(EventError::Signal(error)) => Err::<(), _>(error).report(),
+            Err(EventError::Context(error)) => Err::<(), _>(error).report(),
         }
     }
 }
@@ -254,6 +364,62 @@ where
     f
 }
 
+/// [`callback`] for an event callback that also receives a value: a
+/// `let`-bound closure shaped `|cx, details| ..`.
+///
+/// The value is passed by value (`DragUpdateDetails`, `bool`, a `DeviceId`).
+/// For a borrowed argument (`&str`, `&KeyEvent`), use [`callback_ref`].
+///
+/// ```
+/// use flui_view::{Signal, SignalError, SignalWriteExt, WriterSource, callback_with};
+///
+/// fn wire(source: &WriterSource, a: Signal<u32>, b: Signal<u32>) -> Result<(), SignalError> {
+///     let moved = callback_with(move |cx, delta: u32| {
+///         a.update(cx, |n| *n += delta)?;
+///         b.set(cx, delta)
+///     });
+///     source.write(|cx| moved(cx, 4))
+/// }
+/// ```
+pub fn callback_with<A, F, R>(f: F) -> F
+where
+    F: Fn(&mut EventCx<'_>, A) -> R + 'static,
+    R: EventOutcome,
+{
+    f
+}
+
+/// [`callback`] for an event callback that also receives a borrowed value: a
+/// `let`-bound closure shaped `|cx, text| ..` where `text: &str`.
+///
+/// [`callback_with`] cannot express it, because its argument type is one
+/// fixed type and a borrowed argument has to accept every lifetime.
+///
+/// ```
+/// use flui_view::{Signal, SignalError, SignalWriteExt, WriterSource, callback_ref};
+///
+/// fn wire(
+///     source: &WriterSource,
+///     text: Signal<String>,
+///     edits: Signal<u32>,
+/// ) -> Result<(), SignalError> {
+///     let changed = callback_ref(move |cx, value: &str| {
+///         text.set(cx, value.to_owned())?;
+///         edits.update(cx, |n| *n += 1)
+///     });
+///     let typed = String::from("hello");
+///     source.write(|cx| changed(cx, &typed))
+/// }
+/// ```
+pub fn callback_ref<T, F, R>(f: F) -> F
+where
+    T: ?Sized,
+    F: for<'a> Fn(&mut EventCx<'_>, &'a T) -> R + 'static,
+    R: EventOutcome,
+{
+    f
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -278,6 +444,26 @@ mod tests {
         is_static::<WriterSource>();
     }
 
+    #[test]
+    fn an_owner_bound_operation_checks_identity_and_phase_before_mutating() {
+        let graph = Reactive::new();
+        let source = WriterSource::new(graph.clone());
+        let foreign = WriterSource::new(Reactive::new());
+        assert_eq!(source.write(|cx| source.check_context(cx)), Ok(()));
+        assert_eq!(
+            foreign.write(|cx| source.check_context(cx)),
+            Err(EventContextError::ForeignPresentation)
+        );
+        let element = ElementId::new(1);
+        graph.begin_element_build(element);
+        assert_eq!(
+            source.write(|cx| source.check_context(cx)),
+            Err(EventContextError::WrittenDuringBuild { element })
+        );
+        graph.end_element_build(element, true);
+        assert_eq!(source.write(|cx| source.check_context(cx)), Ok(()));
+    }
+
     fn graph_with_inbox() -> (Reactive, Arc<Mutex<HashMap<ElementId, RebuildReasons>>>) {
         let inbox = Arc::new(Mutex::new(HashMap::new()));
         let reactive = Reactive::new();
@@ -289,6 +475,100 @@ mod tests {
         let mut ids: Vec<_> = inbox.lock().keys().copied().collect();
         ids.sort();
         ids
+    }
+
+    #[test]
+    fn event_reads_observe_latest_values_without_a_rebuild() {
+        let (graph, inbox) = graph_with_inbox();
+        let count = graph.signal(1u32);
+        let source = WriterSource::new(graph);
+
+        source.write(|cx| {
+            assert_eq!(count.peek(cx, |value| *value), Ok(1));
+            count.set(cx, 2).expect("event write");
+        });
+        source.write(|cx| {
+            assert_eq!(count.peek(cx, |value| *value), Ok(2));
+            assert_eq!(count.peek(&**cx, |value| *value), Ok(2));
+        });
+
+        assert!(scheduled(&inbox).is_empty());
+    }
+
+    #[test]
+    fn a_callback_composes_context_and_signal_errors_with_question_mark() {
+        let (graph, inbox) = graph_with_inbox();
+        let count = graph.signal(0u32);
+        let reader = ElementId::new(1);
+        graph.register_element_reader(count.slot(), reader);
+        let source = WriterSource::new(graph.clone());
+        let target = source.clone();
+        let press = callback(move |cx| -> Result<(), EventError> {
+            target.check_context(cx)?;
+            count.set(cx, 1)?;
+            Ok(())
+        });
+
+        source.write(&press).expect("matching event context");
+        assert_eq!(count.peek(&graph, |value| *value), Ok(1));
+        assert_eq!(scheduled(&inbox), vec![reader]);
+
+        let foreign = WriterSource::new(Reactive::new());
+        assert!(matches!(
+            foreign.write(&press),
+            Err(EventError::Context(EventContextError::ForeignPresentation))
+        ));
+
+        graph.release(count.slot());
+        assert!(matches!(
+            source.write(&press),
+            Err(EventError::Signal(SignalError::Released { .. }))
+        ));
+    }
+
+    #[test]
+    fn event_reads_neither_invalidate_nor_subscribe_an_element() {
+        let (graph, inbox) = graph_with_inbox();
+        let count = graph.signal(7u32);
+        let reader = ElementId::new(1);
+        let building = ElementId::new(2);
+        graph.register_element_reader(count.slot(), reader);
+        let source = WriterSource::new(graph.clone());
+
+        graph.begin_element_build(building);
+        source.write(|cx| {
+            assert_eq!(count.peek(cx, |value| *value), Ok(7));
+            assert_eq!(count.peek(&**cx, |value| *value), Ok(7));
+        });
+        graph.end_element_build(building, true);
+
+        assert!(scheduled(&inbox).is_empty(), "reads do not invalidate");
+        assert_eq!(count.peek(&graph, |value| *value), Ok(7));
+        assert_eq!(graph.readers_of(count.slot()), vec![reader]);
+        source.write(|cx| count.set(cx, 8)).expect("event write");
+        assert_eq!(scheduled(&inbox), vec![reader]);
+    }
+
+    #[test]
+    fn event_and_writer_reads_refuse_foreign_graphs_without_invoking_the_reader() {
+        let (mine, inbox) = graph_with_inbox();
+        let (theirs, foreign_inbox) = graph_with_inbox();
+        let foreign = theirs.signal(1u32);
+        let source = WriterSource::new(mine);
+
+        source.write(|cx| {
+            assert!(matches!(
+                foreign.peek(cx, |_| panic!("foreign read must not run")),
+                Err(SignalError::ForeignGraph { .. })
+            ));
+            assert!(matches!(
+                foreign.peek(&**cx, |_| panic!("foreign read must not run")),
+                Err(SignalError::ForeignGraph { .. })
+            ));
+        });
+        assert_eq!(foreign.peek(&theirs, |value| *value), Ok(1));
+        assert!(scheduled(&inbox).is_empty());
+        assert!(scheduled(&foreign_inbox).is_empty());
     }
 
     #[test]

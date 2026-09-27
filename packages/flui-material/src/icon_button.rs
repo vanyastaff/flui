@@ -145,7 +145,7 @@ pub const ICON_BUTTON_ICON_SIZE: f32 = 24.0;
 /// use flui_material::IconButton;
 /// use flui_sdk::widgets::{Icon, IconData};
 ///
-/// let _button = IconButton::new(Icon::new(IconData::new(0xE87D))).on_pressed(|| {});
+/// let _button = IconButton::new(Icon::new(IconData::new(0xE87D))).on_pressed(|_cx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct IconButton {
@@ -178,8 +178,11 @@ impl IconButton {
     /// Sets the press handler. Presence of a handler is what makes this
     /// button enabled.
     #[must_use]
-    pub fn on_pressed(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_pressed = Some(std::rc::Rc::new(callback));
+    pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self
     }
 
@@ -424,7 +427,7 @@ mod tests {
         assert!(!IconButton::new(flui_sdk::widgets::SizedBox::shrink()).is_interactive());
         assert!(
             IconButton::new(flui_sdk::widgets::SizedBox::shrink())
-                .on_pressed(|| {})
+                .on_pressed(|_cx| {})
                 .is_interactive()
         );
     }

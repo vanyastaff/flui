@@ -5,7 +5,7 @@ use crate::common;
 
 use std::rc::Rc;
 
-use common::{lay_out, tight};
+use common::{SignalProbe, lay_out, tight};
 use flui_interaction::events::{Code, Key, KeyState, NamedKey};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_material::{InputDecoration, TextFormField, Theme, ThemeData};
@@ -109,14 +109,20 @@ fn reset_restores_the_initial_value() {
     let form = FormHandle::new();
     let controller = TextEditingController::with_text("start");
     let node = FocusNode::with_debug_label("reset");
-    let laid = lay_out(
+    let (probe_form, probe_controller, probe_node) =
+        (form.clone(), controller.clone(), Rc::clone(&node));
+    // The probe's writer opens the `cx` a reset takes, as a button's press
+    // would.
+    let probe = SignalProbe::new(move |_| {
         Theme::new(
             ThemeData::light(),
-            Form::new(TextFormField::new(controller.clone()).focus_node(Rc::clone(&node)))
-                .handle(form.clone()),
-        ),
-        tight(300.0, 120.0),
-    );
+            Form::new(
+                TextFormField::new(probe_controller.clone()).focus_node(Rc::clone(&probe_node)),
+            )
+            .handle(probe_form.clone()),
+        )
+    });
+    let laid = lay_out(probe.view(), tight(300.0, 120.0));
     node.request_focus();
     let backspace = KeyEventBuilder::new(Code::Backspace)
         .with_key(Key::Named(NamedKey::Backspace))
@@ -126,7 +132,7 @@ fn reset_restores_the_initial_value() {
     assert_eq!(controller.text(), "star");
     assert!(form.has_interacted_by_user());
 
-    form.reset();
+    probe.write(|cx| form.reset(cx)).expect("same presentation");
 
     assert_eq!(controller.text(), "start");
     assert!(!form.has_interacted_by_user());

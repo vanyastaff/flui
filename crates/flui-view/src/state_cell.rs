@@ -182,7 +182,7 @@ impl<T: Copy> StateCell<T> {
     ///     fn build(&self, _view: &Counter, _ctx: &dyn BuildContext) -> impl IntoView {
     ///         let count = self.count.clone();
     ///         ElevatedButton::new(Text::new(self.count.get().to_string()))
-    ///             .on_pressed(move || count.update(|n| n + 1))
+    ///             .on_pressed(move |_cx| count.update(|n| n + 1))
     ///     }
     /// }
     /// ```
@@ -348,8 +348,8 @@ impl<T> StateHandle<T> {
     ///
     ///     fn build(&self, _view: &Notes, _ctx: &dyn BuildContext) -> impl IntoView {
     ///         let text = self.text.clone();
-    ///         TextField::new().value(self.text.with(Clone::clone)).on_changed(move |next| {
-    ///             text.update(|t| *t = next);
+    ///         RawTextField::new(self.controller.clone()).on_changed(move |_cx, next| {
+    ///             text.update(|t| next.clone_into(t));
     ///         })
     ///     }
     /// }

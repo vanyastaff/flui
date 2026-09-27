@@ -5,22 +5,28 @@ use std::rc::{Rc, Weak};
 
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
-use flui_view::{RebuildHandle, RebuildReason};
+use flui_view::{EventContextError, RebuildHandle, RebuildReason};
 
 use super::{AutovalidateMode, Form, FormFieldEntry, FormHandle, FormInner};
 use crate::interaction::Focus;
+use crate::support::{EventCallback, event_callback, ref_callback};
 
 /// Checks a value; `Some(message)` is the error to show — Flutter's
 /// `FormFieldValidator<T>`.
 pub type FormFieldValidator<T> = Rc<dyn Fn(&T) -> Option<String>>;
-/// Receives the value on `save` — Flutter's `FormFieldSetter<T>`.
-pub type FormFieldSetter<T> = Rc<dyn Fn(&T)>;
+/// Receives the value on `save` — Flutter's `FormFieldSetter<T>` — with the
+/// `&mut EventCx<'_>` the caller of [`FormHandle::save`] passed (ADR-0086).
+pub type FormFieldSetter<T> = Rc<dyn Fn(&mut EventCx<'_>, &T)>;
 /// Builds the field's content from its handle — Flutter's
 /// `FormFieldBuilder<T>`, which receives the `FormFieldState`.
 type FormFieldBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &FormFieldHandle<T>) -> BoxedView>;
 
 /// The field's state, shared by its handle, its widget state and its form.
 struct FieldInner<T> {
+    active_attachment: Cell<Option<u64>>,
+    next_attachment: Cell<u64>,
+    attachment_error_pending: Cell<bool>,
+    writer: RefCell<Option<WriterSource>>,
     /// `None` until the field mounts.
     value: RefCell<Option<T>>,
     initial: RefCell<Option<T>>,
@@ -28,7 +34,7 @@ struct FieldInner<T> {
     interacted: Cell<bool>,
     validator: RefCell<Option<FormFieldValidator<T>>>,
     on_saved: RefCell<Option<FormFieldSetter<T>>>,
-    on_reset: RefCell<Option<Rc<dyn Fn()>>>,
+    on_reset: RefCell<Option<EventCallback>>,
     enabled: Cell<bool>,
     mode: Cell<AutovalidateMode>,
     force_error_text: RefCell<Option<String>>,
@@ -51,6 +57,10 @@ type ValueSource<T> = Rc<dyn Fn() -> T>;
 impl<T> Default for FieldInner<T> {
     fn default() -> Self {
         Self {
+            active_attachment: Cell::new(None),
+            next_attachment: Cell::new(0),
+            attachment_error_pending: Cell::new(false),
+            writer: RefCell::new(None),
             value: RefCell::new(None),
             initial: RefCell::new(None),
             error: RefCell::new(None),
@@ -66,6 +76,42 @@ impl<T> Default for FieldInner<T> {
             value_sink: RefCell::new(None),
             value_source: RefCell::new(None),
         }
+    }
+}
+
+/// A typed diagnostic emitted when one [`FormFieldHandle`] is requested by
+/// two simultaneously mounted fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the FormFieldHandle is already attached to another mounted FormField")]
+pub struct FormFieldHandleAlreadyAttached;
+
+struct FieldAttachment<T: Clone + 'static> {
+    inner: Rc<FieldInner<T>>,
+    generation: u64,
+}
+
+impl<T: Clone + 'static> Drop for FieldAttachment<T> {
+    fn drop(&mut self) {
+        if self.inner.active_attachment.get() != Some(self.generation) {
+            return;
+        }
+        self.inner.active_attachment.set(None);
+        if let Some(form) = self.inner.form() {
+            let entry: Rc<dyn FormFieldEntry> = self.inner.clone();
+            form.unregister(&entry);
+        }
+        self.inner.writer.borrow_mut().take();
+        self.inner.rebuild.borrow_mut().take();
+        *self.inner.form.borrow_mut() = Weak::new();
+        // A text controller is read lazily. Materialize its last mounted
+        // value before releasing the source so the detached handle retains
+        // the state that was observable immediately before unmount.
+        self.inner.sync_from_source();
+        self.inner.validator.borrow_mut().take();
+        self.inner.on_saved.borrow_mut().take();
+        self.inner.on_reset.borrow_mut().take();
+        self.inner.value_sink.borrow_mut().take();
+        self.inner.value_source.borrow_mut().take();
     }
 }
 
@@ -160,51 +206,72 @@ impl<T: Clone + 'static> FieldInner<T> {
         }
     }
 
-    fn did_change(&self, value: T) {
+    fn did_change(&self, cx: &mut EventCx<'_>, value: T) -> Result<(), EventContextError> {
+        self.check_context(cx)?;
         *self.value.borrow_mut() = Some(value.clone());
         self.interacted.set(true);
         self.push_to_sink(&value);
         self.autovalidate();
         self.schedule_rebuild();
         if let Some(form) = self.form() {
-            form.field_did_change();
+            form.field_did_change(cx);
         }
+        Ok(())
     }
 
-    fn reset(&self) {
+    fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        self.check_context(cx)?;
         let initial = self.initial.borrow().clone();
         self.value.borrow_mut().clone_from(&initial);
         self.interacted.set(false);
         *self.error.borrow_mut() = None;
+        // The reset state is already committed. Mark it visible before
+        // entering external code: the controller sink or `on_reset` may
+        // unwind, and that does not roll back the value, interaction or error
+        // mutations above.
+        self.schedule_rebuild();
         if let Some(initial) = &initial {
             self.push_to_sink(initial);
         }
         let on_reset = self.on_reset.borrow().clone();
         if let Some(on_reset) = on_reset {
-            on_reset();
+            on_reset(cx);
         }
-        self.schedule_rebuild();
         if let Some(form) = self.form() {
-            form.field_did_change();
+            form.field_did_change(cx);
         }
+        Ok(())
     }
 }
 
 impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
+    fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError> {
+        self.writer
+            .borrow()
+            .as_ref()
+            .ok_or(EventContextError::Detached)?
+            .check_context(cx)?;
+        if let Some(form) = self.form() {
+            form.check_context(cx)?;
+        }
+        Ok(())
+    }
     fn validate(&self) -> bool {
         self.run_validate();
         self.error.borrow().is_none()
     }
 
-    fn save(&self) {
+    fn save(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        self.check_context(cx)?;
         let on_saved = self.on_saved.borrow().clone();
         if let (Some(on_saved), Some(value)) = (on_saved, self.current()) {
-            on_saved(&value);
+            on_saved(cx, &value);
         }
+        Ok(())
     }
 
-    fn reset(&self) {
-        Self::reset(self);
+    fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        Self::reset(self, cx)
     }
 
     fn has_interacted_by_user(&self) -> bool {
@@ -225,6 +292,10 @@ impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
 /// handed to the field's builder.
 ///
 /// Cheap to clone; every clone names the same field. Owner-thread only.
+/// A handle binds to at most one mounted field at a time. A simultaneous
+/// duplicate is diagnosed and receives an isolated internal handle: it cannot
+/// replace or later detach the first field's value binding, callbacks or
+/// presentation binding. Once the owner unmounts, the handle can attach again.
 ///
 /// A mounted field given a different handle on a later rebuild moves onto
 /// it: the new handle takes the field's value, error, interaction and place
@@ -264,7 +335,7 @@ impl<T> Default for FormFieldHandle<T> {
 impl<T> std::fmt::Debug for FormFieldHandle<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FormFieldHandle")
-            .field("mounted", &self.inner.value.borrow().is_some())
+            .field("mounted", &self.inner.active_attachment.get().is_some())
             .field("error", &self.inner.error.borrow())
             .field("interacted", &self.inner.interacted.get())
             .finish_non_exhaustive()
@@ -276,6 +347,35 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Take the duplicate-attachment diagnostic recorded during mounting.
+    ///
+    /// The refused field is isolated behind its own internal handle, so it
+    /// cannot mutate this handle's owner.
+    pub fn take_attachment_error(&self) -> Option<FormFieldHandleAlreadyAttached> {
+        self.inner
+            .attachment_error_pending
+            .replace(false)
+            .then_some(FormFieldHandleAlreadyAttached)
+    }
+
+    fn try_attach(&self) -> Option<FieldAttachment<T>> {
+        if self.inner.active_attachment.get().is_some() {
+            return None;
+        }
+        let generation = self
+            .inner
+            .next_attachment
+            .get()
+            .checked_add(1)
+            .expect("BUG: a FormFieldHandle attachment generation cannot exhaust u64");
+        self.inner.next_attachment.set(generation);
+        self.inner.active_attachment.set(Some(generation));
+        Some(FieldAttachment {
+            inner: Rc::clone(&self.inner),
+            generation,
+        })
     }
 
     /// The field's current value.
@@ -318,8 +418,15 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
     /// A user edit: set the value, mark the field interacted, run the
     /// field's and the form's autovalidation, and report the change to the
     /// form — Flutter's `FormFieldState.didChange`.
-    pub fn did_change(&self, value: T) {
-        self.inner.did_change(value);
+    ///
+    /// Takes the `&mut EventCx<'_>` of the event callback that made the edit
+    /// and passes it to [`Form::on_changed`] (ADR-0086 §6).
+    ///
+    /// # Errors
+    /// Refuses a detached field, foreign presentation or build-time call
+    /// before changing the value or invoking callbacks.
+    pub fn did_change(&self, cx: &mut EventCx<'_>, value: T) -> Result<(), EventContextError> {
+        self.inner.did_change(cx, value)
     }
 
     /// Set the value without marking interaction, validating or rebuilding
@@ -340,17 +447,14 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
     }
 
     /// Back to the initial value, error and interaction cleared, then
-    /// `on_reset` — Flutter's `FormFieldState.reset`.
-    pub fn reset(&self) {
-        self.inner.reset();
-    }
-
-    /// Push every later value change into `sink` and read the value from
-    /// `source` before it is used — how a text field keeps its controller
-    /// and its value one.
-    pub(crate) fn bind(&self, sink: ValueSink<T>, source: ValueSource<T>) {
-        *self.inner.value_sink.borrow_mut() = Some(sink);
-        *self.inner.value_source.borrow_mut() = Some(source);
+    /// `on_reset` — Flutter's `FormFieldState.reset`. The caller's
+    /// `&mut EventCx<'_>` reaches `on_reset` and [`Form::on_changed`].
+    ///
+    /// # Errors
+    /// Refuses a detached field, foreign presentation or build-time call
+    /// before changing the value or invoking callbacks.
+    pub fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        self.inner.reset(cx)
     }
 
     /// Whether `self` and `other` name the same field.
@@ -377,11 +481,13 @@ pub struct FormField<T> {
     builder: FormFieldBuilder<T>,
     pub(super) validator: Option<FormFieldValidator<T>>,
     pub(super) on_saved: Option<FormFieldSetter<T>>,
-    pub(super) on_reset: Option<Rc<dyn Fn()>>,
+    pub(super) on_reset: Option<EventCallback>,
     enabled: bool,
     autovalidate_mode: AutovalidateMode,
     pub(super) force_error_text: Option<String>,
     handle: Option<FormFieldHandle<T>>,
+    value_sink: Option<ValueSink<T>>,
+    value_source: Option<ValueSource<T>>,
 }
 
 impl<T: Clone> Clone for FormField<T> {
@@ -396,6 +502,8 @@ impl<T: Clone> Clone for FormField<T> {
             autovalidate_mode: self.autovalidate_mode,
             force_error_text: self.force_error_text.clone(),
             handle: self.handle.clone(),
+            value_sink: self.value_sink.clone(),
+            value_source: self.value_source.clone(),
         }
     }
 }
@@ -428,6 +536,8 @@ impl<T: Clone + 'static> FormField<T> {
             autovalidate_mode: AutovalidateMode::Disabled,
             force_error_text: None,
             handle: None,
+            value_sink: None,
+            value_source: None,
         }
     }
 
@@ -438,17 +548,27 @@ impl<T: Clone + 'static> FormField<T> {
         self
     }
 
-    /// Receive the value when the form saves.
+    /// Receive the value when the form saves, with the `&mut EventCx<'_>`
+    /// passed to [`FormHandle::save`].
     #[must_use]
-    pub fn on_saved(mut self, on_saved: impl Fn(&T) + 'static) -> Self {
-        self.on_saved = Some(Rc::new(on_saved));
+    pub fn on_saved<F, R>(mut self, on_saved: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &T) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_saved = Some(ref_callback(on_saved));
         self
     }
 
-    /// Called after the field resets.
+    /// Called after the field resets, with the `&mut EventCx<'_>` passed to
+    /// the reset.
     #[must_use]
-    pub fn on_reset(mut self, on_reset: impl Fn() + 'static) -> Self {
-        self.on_reset = Some(Rc::new(on_reset));
+    pub fn on_reset<F, R>(mut self, on_reset: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_reset = Some(event_callback(on_reset));
         self
     }
 
@@ -482,6 +602,15 @@ impl<T: Clone + 'static> FormField<T> {
         self.handle = Some(handle);
         self
     }
+
+    /// Keep an adapter-owned value source and sink with the field. Stored on
+    /// the view until attachment admission succeeds, so a duplicate mount
+    /// cannot rebind the live handle before it is refused.
+    pub(crate) fn value_binding(mut self, sink: ValueSink<T>, source: ValueSource<T>) -> Self {
+        self.value_sink = Some(sink);
+        self.value_source = Some(source);
+        self
+    }
 }
 
 impl<T: Clone + 'static> View for FormField<T> {
@@ -491,21 +620,55 @@ impl<T: Clone + 'static> View for FormField<T> {
 }
 
 /// The state behind [`FormField`].
-pub struct FormFieldState<T> {
+pub struct FormFieldState<T: Clone + 'static> {
     handle: FormFieldHandle<T>,
+    attachment: Option<FieldAttachment<T>>,
     form: Option<FormHandle>,
 }
 
-impl<T> std::fmt::Debug for FormFieldState<T> {
+impl<T: Clone + 'static> std::fmt::Debug for FormFieldState<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FormFieldState")
             .field("handle", &self.handle)
             .field("registered", &self.form.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl<T: Clone + 'static> FormFieldState<T> {
+    fn attach(view: &FormField<T>) -> Self {
+        let requested = view.handle.clone().unwrap_or_default();
+        let (handle, attachment) = if let Some(attachment) = requested.try_attach() {
+            (requested, attachment)
+        } else {
+            tracing::error!(
+                "FormFieldHandle is already attached to a mounted FormField; the duplicate \
+                 field uses an isolated internal handle so it cannot mutate or detach the \
+                 existing owner"
+            );
+            requested.inner.attachment_error_pending.set(true);
+            let handle = FormFieldHandle::new();
+            let attachment = handle
+                .try_attach()
+                .expect("BUG: a fresh FormFieldHandle has no existing attachment");
+            (handle, attachment)
+        };
+        let state = Self {
+            handle,
+            attachment: Some(attachment),
+            form: None,
+        };
+        state.configure(view);
+        *state.handle.inner.value.borrow_mut() = Some(view.initial_value.clone());
+        state
+            .handle
+            .inner
+            .error
+            .borrow_mut()
+            .clone_from(&view.force_error_text);
+        state
+    }
+
     fn configure(&self, view: &FormField<T>) {
         let inner = &self.handle.inner;
         inner.validator.borrow_mut().clone_from(&view.validator);
@@ -517,6 +680,11 @@ impl<T: Clone + 'static> FormFieldState<T> {
             .force_error_text
             .borrow_mut()
             .clone_from(&view.force_error_text);
+        inner.value_sink.borrow_mut().clone_from(&view.value_sink);
+        inner
+            .value_source
+            .borrow_mut()
+            .clone_from(&view.value_source);
         *inner.initial.borrow_mut() = Some(view.initial_value.clone());
     }
 
@@ -525,9 +693,18 @@ impl<T: Clone + 'static> FormFieldState<T> {
     /// handle is detached — it keeps its last value, error and interaction
     /// but no longer rebuilds the field, writes its controller or belongs to
     /// the form.
-    fn adopt(&mut self, handle: FormFieldHandle<T>) {
+    fn try_adopt(&mut self, handle: FormFieldHandle<T>) {
+        let Some(attachment) = handle.try_attach() else {
+            tracing::error!(
+                "FormFieldHandle is already attached to a mounted FormField; retaining the \
+                 current attachment until a later update can acquire the requested handle"
+            );
+            handle.inner.attachment_error_pending.set(true);
+            return;
+        };
         let old = std::mem::replace(&mut self.handle, handle);
         let (from, to) = (&old.inner, &self.handle.inner);
+        *to.writer.borrow_mut() = from.writer.borrow_mut().take();
         to.value.borrow_mut().clone_from(&from.value.borrow());
         to.error.borrow_mut().clone_from(&from.error.borrow());
         to.interacted.set(from.interacted.get());
@@ -546,6 +723,8 @@ impl<T: Clone + 'static> FormFieldState<T> {
         if let Some(form) = &self.form {
             form.replace(&old.as_entry(), self.handle.as_entry());
         }
+        let old_attachment = self.attachment.replace(attachment);
+        drop(old_attachment);
     }
 
     /// Move this field's registration to the form enclosing it now.
@@ -580,24 +759,13 @@ impl<T: Clone + 'static> StatefulView for FormField<T> {
     type State = FormFieldState<T>;
 
     fn create_state(&self) -> FormFieldState<T> {
-        let state = FormFieldState {
-            handle: self.handle.clone().unwrap_or_default(),
-            form: None,
-        };
-        state.configure(self);
-        *state.handle.inner.value.borrow_mut() = Some(self.initial_value.clone());
-        state
-            .handle
-            .inner
-            .error
-            .borrow_mut()
-            .clone_from(&self.force_error_text);
-        state
+        FormFieldState::attach(self)
     }
 }
 
 impl<T: Clone + 'static> ViewState<FormField<T>> for FormFieldState<T> {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.handle.inner.writer.borrow_mut() = Some(ctx.writer_source());
         *self.handle.inner.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
         self.register_with(Form::maybe_of(ctx));
         self.handle.inner.autovalidate();
@@ -611,7 +779,7 @@ impl<T: Clone + 'static> ViewState<FormField<T>> for FormFieldState<T> {
         if let Some(handle) = &new_view.handle
             && !handle.same_field(&self.handle)
         {
-            self.adopt(handle.clone());
+            self.try_adopt(handle.clone());
         }
         self.configure(new_view);
         if old_view.force_error_text != new_view.force_error_text {
@@ -632,8 +800,7 @@ impl<T: Clone + 'static> ViewState<FormField<T>> for FormFieldState<T> {
         if let Some(form) = self.form.take() {
             form.unregister(&self.handle.as_entry());
         }
-        *self.handle.inner.form.borrow_mut() = Weak::new();
-        *self.handle.inner.rebuild.borrow_mut() = None;
+        drop(self.attachment.take());
     }
 
     fn build(&self, view: &FormField<T>, ctx: &dyn BuildContext) -> impl IntoView {
@@ -647,7 +814,7 @@ impl<T: Clone + 'static> ViewState<FormField<T>> for FormFieldState<T> {
             .can_request_focus(false)
             .include_semantics(false)
             .debug_label("FormField")
-            .on_focus_change(move |focused| {
+            .on_focus_change(move |_cx, focused| {
                 if !focused && inner.validates_on_unfocus() {
                     inner.run_validate();
                 }

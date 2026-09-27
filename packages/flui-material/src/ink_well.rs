@@ -121,7 +121,7 @@ use crate::shape::MaterialShape;
 
 /// A user tap handler. `Rc`-based (owner-local, per ADR-0027) — matches
 /// `GestureDetector::on_tap`'s own callback shape.
-type TapCallback = Rc<dyn Fn()>;
+type TapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
 
 /// Flutter's `_InkResponseState._activationDuration` — see the module doc's
 /// "Press-state timing" section for why this substrate applies it
@@ -160,8 +160,11 @@ impl InkWell {
     /// `InkWell` [interactive](self) — see the module doc's `enabled`
     /// section.
     #[must_use]
-    pub fn on_tap(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_tap = Some(Rc::new(callback));
+    pub fn on_tap<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_tap = Some(crate::event_callback::press_callback(callback));
         self
     }
 
@@ -241,6 +244,7 @@ pub struct InkWellState {
     vsync: Option<Vsync>,
     /// `Some` once `init_state` has run — always the case by `build`.
     rebuild: Option<RebuildHandle>,
+    writer: Option<flui_sdk::view::WriterSource>,
     pending_deactivation: Rc<RefCell<Option<PendingDeactivation>>>,
 }
 
@@ -278,6 +282,7 @@ impl StatefulView for InkWell {
             tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
             vsync: None,
             rebuild: None,
+            writer: None,
             pending_deactivation: Rc::new(RefCell::new(None)),
         }
     }
@@ -285,6 +290,7 @@ impl StatefulView for InkWell {
 
 impl ViewState<InkWell> for InkWellState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.writer = Some(ctx.writer_source());
         // ADR-0018: `rebuild_handle()` is acquired here, fired later (from
         // the states-controller listener and the press-deactivation status
         // listener below) — never called from `build`.
@@ -392,12 +398,12 @@ impl ViewState<InkWell> for InkWellState {
         // `activateOnIntent` (`ink_well.dart` `:883-900`) is both what its
         // `ActivateIntent`/`ButtonActivateIntent` actions run and the shape
         // this substrate's single `on_tap` callback already has.
-        let activate: Option<Rc<dyn Fn()>> = enabled.then(|| {
+        let activate: Option<TapCallback> = enabled.then(|| {
             let tap_slot = Rc::clone(&self.tap_slot);
             let press_states = self.states.clone();
             let vsync = self.vsync.clone();
             let pending_deactivation = Rc::clone(&self.pending_deactivation);
-            Rc::new(move || {
+            Rc::new(move |cx: &mut flui_sdk::view::EventCx<'_>| {
                 // Oracle order (`ink_well.dart` `activateOnIntent`, `:864-900`
                 // — the synthetic/no-real-down-up activation path this
                 // substrate's single `on_tap` callback architecturally
@@ -408,10 +414,10 @@ impl ViewState<InkWell> for InkWellState {
                 // start. A handler that reads the states set (e.g. to
                 // resolve its own overlay) must observe `Pressed` — the
                 // oracle guarantees it is already set by the time `onTap`
-                // runs, so it is set here before `handler()`, not after.
+                // runs, so it is set here before `handler(cx)`, not after.
                 press_states.update(WidgetState::Pressed, true);
                 if let Some(handler) = tap_slot.borrow().clone() {
-                    handler();
+                    handler(cx);
                 }
                 InkWellState::cancel_pending_deactivation(&pending_deactivation);
                 begin_press_deactivation(
@@ -420,11 +426,11 @@ impl ViewState<InkWell> for InkWellState {
                     vsync.clone(),
                     &rebuild,
                 );
-            }) as Rc<dyn Fn()>
+            }) as Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>
         });
         if let Some(activate) = &activate {
             let activate = Rc::clone(activate);
-            gesture_detector = gesture_detector.on_tap(move || activate());
+            gesture_detector = gesture_detector.on_tap(move |cx| activate(cx));
         }
 
         let hover_states_enter = self.states.clone();
@@ -435,19 +441,19 @@ impl ViewState<InkWell> for InkWellState {
             // presentation-owned MouseTracker also re-hit-tests stationary
             // devices after layout, so a widget appearing beneath an
             // unmoved pointer takes the same path as a physical pointer move.
-            .on_enter(move |_device, _position| {
+            .on_enter(move |_cx, _device, _position| {
                 if enabled {
                     hover_states_enter.update(WidgetState::Hovered, true);
                 }
             })
-            .on_exit(move |_device, _position| {
+            .on_exit(move |_cx, _device, _position| {
                 hover_states_exit.update(WidgetState::Hovered, false);
             });
 
         let focus_states = self.states.clone();
         let mut focus = Focus::new(overlay_content(view, resolved_overlay))
             .can_request_focus(enabled)
-            .on_focus_change(move |has_focus| {
+            .on_focus_change(move |_cx, has_focus| {
                 focus_states.update(WidgetState::Focused, has_focus);
             });
         if let Some(node) = &view.focus_node {
@@ -461,10 +467,14 @@ impl ViewState<InkWell> for InkWellState {
         if let Some(activate) = &activate {
             let on_activate = Rc::clone(activate);
             let on_button_activate = Rc::clone(activate);
+            let writer = self.writer.clone().expect("BUG: init_state precedes build");
+            let button_writer = writer.clone();
             actions = actions
-                .action(CallbackAction::new(move |_: &ActivateIntent| on_activate()))
+                .action(CallbackAction::new(move |_: &ActivateIntent| {
+                    writer.write(|cx| on_activate(cx));
+                }))
                 .action(CallbackAction::new(move |_: &ButtonActivateIntent| {
-                    on_button_activate();
+                    button_writer.write(|cx| on_button_activate(cx));
                 }));
         }
 
@@ -571,7 +581,7 @@ mod tests {
         assert!(!InkWell::new(flui_sdk::widgets::SizedBox::shrink()).is_interactive());
         assert!(
             InkWell::new(flui_sdk::widgets::SizedBox::shrink())
-                .on_tap(|| {})
+                .on_tap(|_cx| {})
                 .is_interactive()
         );
     }
@@ -580,7 +590,7 @@ mod tests {
     fn debug_reports_whether_on_tap_is_set_without_the_closure() {
         let debug = format!(
             "{:?}",
-            InkWell::new(flui_sdk::widgets::SizedBox::shrink()).on_tap(|| {})
+            InkWell::new(flui_sdk::widgets::SizedBox::shrink()).on_tap(|_cx| {})
         );
         assert!(debug.contains("on_tap: true"));
     }

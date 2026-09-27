@@ -35,17 +35,19 @@
 //!   since [`FocusScope::of`] already covers "give me the nearest scope".
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     rc::Rc,
 };
 
 use crate::anchored_box::AnchoredBox;
 use crate::semantics::Semantics;
+use crate::support::value_callback;
 use flui_foundation::ListenerId;
 use flui_geometry::Rect;
+use flui_interaction::events::KeyEvent;
 use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
-    KeyEventHandler, RectProvider,
+    KeyEventHandler, KeyEventResult, RectProvider,
 };
 use flui_objects::SubtreeAnchor;
 use flui_types::geometry::px;
@@ -56,8 +58,32 @@ use flui_view::{RebuildHandle, impl_inherited_view};
 use super::actions::{ActionChain, ActionChainProvider, as_node_context};
 use super::shortcuts::DefaultFocusTraversal;
 
-/// Reports whether this widget's node gained or lost the primary focus.
-pub type FocusChangeHandler = Rc<dyn Fn(bool)>;
+/// Reports whether this widget's node gained or lost the primary focus, with
+/// the dispatch's [`EventCx`] (ADR-0086).
+pub type FocusChangeHandler = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
+
+/// A key handler as [`Focus::on_key_event`] stores it: it decides the event's
+/// routing, and may write signals through the `cx` it receives.
+type FocusKeyHandler = Rc<dyn Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult>;
+
+/// The writer source a [`FocusState`] acquires in `init_state`, shared with
+/// the key handler `create_state` already registered on the node. A key event
+/// cannot reach the node before `init_state` attaches it, so the cell is set
+/// by then.
+type WriterSlot = Rc<OnceCell<WriterSource>>;
+
+/// Wrap a key handler into the node's shape, opening its write from `writer`.
+fn key_handler(handler: &FocusKeyHandler, writer: &WriterSlot) -> KeyEventHandler {
+    let handler = Rc::clone(handler);
+    let writer = Rc::clone(writer);
+    Rc::new(move |event| {
+        let Some(writer) = writer.get() else {
+            tracing::warn!("Focus: a key event reached a node whose widget has not initialized");
+            return KeyEventResult::Ignored;
+        };
+        writer.write(|cx| handler(cx, event))
+    })
+}
 
 // ============================================================================
 // The ambient scope
@@ -258,7 +284,7 @@ pub struct Focus {
     skip_traversal: Option<bool>,
     descendants_are_focusable: Option<bool>,
     on_focus_change: Option<FocusChangeHandler>,
-    on_key_event: Option<KeyEventHandler>,
+    on_key_event: Option<FocusKeyHandler>,
     debug_label: Option<&'static str>,
     include_semantics: bool,
 }
@@ -354,13 +380,21 @@ impl Focus {
     }
 
     /// Called with `true`/`false` as this widget's node gains/loses the
-    /// primary focus — Flutter's `onFocusChange` (`:167`).
+    /// primary focus — Flutter's `onFocusChange` (`:167`) — and the
+    /// dispatch's `&mut EventCx<'_>`, so it writes a signal directly
+    /// (ADR-0086): `.on_focus_change(move |cx, focused| has_focus.set(cx, focused))`.
+    ///
+    /// Framework autofocus and reconfiguration run in lifecycle hooks outside
+    /// the signal build guard, so their focus edges can write too. An application
+    /// that explicitly requests focus inside its own `build` still has its
+    /// resulting signal writes refused by the guard.
     #[must_use]
-    pub fn on_focus_change<F>(mut self, handler: F) -> Self
+    pub fn on_focus_change<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(bool) + 'static,
+        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        R: EventOutcome,
     {
-        self.on_focus_change = Some(Rc::new(handler));
+        self.on_focus_change = Some(value_callback(handler));
         self
     }
 
@@ -372,9 +406,18 @@ impl Focus {
     /// bubble to the enclosing `Focus`, or
     /// [`SkipRemainingHandlers`](flui_interaction::KeyEventResult::SkipRemainingHandlers)
     /// to stop the bubbling without consuming (ADR-0023).
+    ///
+    /// The handler runs after routing, so it receives the dispatch's
+    /// `&mut EventCx<'_>` and may write signals; it keeps its decision as the
+    /// return value, so a write's `Result` is not reported for it: call
+    /// [`report`](EventOutcome::report) on a write whose refusal should be
+    /// logged (ADR-0086 §6).
     #[must_use]
-    pub fn on_key_event(mut self, handler: KeyEventHandler) -> Self {
-        self.on_key_event = Some(handler);
+    pub fn on_key_event<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &KeyEvent) -> KeyEventResult + 'static,
+    {
+        self.on_key_event = Some(Rc::new(handler));
         self
     }
 
@@ -446,6 +489,7 @@ impl Focus {
         &self,
         node: &Rc<FocusNode>,
         key_handler_registration: &mut Option<FocusNodeRegistration>,
+        writer: &WriterSlot,
     ) {
         match &self.node_ownership {
             FocusNodeOwnership::Internal => {
@@ -454,7 +498,7 @@ impl Focus {
                 node.set_descendants_are_focusable(self.descendants_are_focusable.unwrap_or(true));
                 if let Some(handler) = &self.on_key_event {
                     *key_handler_registration =
-                        Some(node.register_on_key_event(Rc::clone(handler)));
+                        Some(node.register_on_key_event(key_handler(handler, writer)));
                 } else {
                     key_handler_registration.take();
                     node.clear_on_key_event();
@@ -472,7 +516,7 @@ impl Focus {
                 }
                 if let Some(handler) = &self.on_key_event {
                     *key_handler_registration =
-                        Some(node.register_on_key_event(Rc::clone(handler)));
+                        Some(node.register_on_key_event(key_handler(handler, writer)));
                 }
             }
             FocusNodeOwnership::ExternalSource(_) => {
@@ -506,9 +550,11 @@ impl StatefulView for Focus {
         // The node is configured here — `init_state` has no view reference,
         // and `did_update_view` re-syncs later configurations.
         let node = self.make_node();
+        let writer = WriterSlot::default();
         let mut key_handler_registration = None;
-        self.configure(&node, &mut key_handler_registration);
+        self.configure(&node, &mut key_handler_registration, &writer);
         FocusState {
+            writer,
             observed_node: Rc::new(RefCell::new(Rc::clone(&node))),
             observed_was_focused: Rc::new(Cell::new(false)),
             node_revision: Rc::new(Cell::new(0)),
@@ -535,6 +581,9 @@ impl StatefulView for Focus {
 /// requires it, and re-exported like every other widget's state in this crate
 /// (`GestureDetectorState`, `AnimatedAlignState`, …) so a caller can name it.
 pub struct FocusState {
+    /// Set first in `init_state`; the focus-edge listener and the key handler
+    /// open their writes from it (ADR-0086).
+    writer: WriterSlot,
     node: Rc<FocusNode>,
     /// Generation-checked ownership of the key handler this host installed.
     ///
@@ -622,6 +671,11 @@ impl FocusState {
         let was_focused_for_listener = Rc::clone(&self.observed_was_focused);
         let node_revision = Rc::clone(&self.node_revision);
         let on_focus_change = Rc::clone(&self.on_focus_change);
+        let writer = self
+            .writer
+            .get()
+            .expect("BUG: Focus listener installed before init_state acquired its writer source")
+            .clone();
         node.add_listener(Rc::new(move || {
             let next_revision = node_revision
                 .get()
@@ -640,7 +694,7 @@ impl FocusState {
                 // same re-entrancy reason.
                 let handler = on_focus_change.borrow().clone();
                 if let Some(handler) = handler {
-                    handler(now_focused);
+                    writer.write(|cx| handler(cx, now_focused));
                 }
             }
         }))
@@ -735,6 +789,9 @@ impl ViewState<Focus> for FocusState {
     /// (`_FocusState.initState` + `didChangeDependencies`,
     /// `focus_scope.dart:565-630`).
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.writer
+            .set(ctx.writer_source())
+            .expect("BUG: Focus init_state runs once per state");
         self.focus_manager = Some(ctx.focus_manager());
         self.rebuild_handle = Some(ctx.rebuild_handle());
         let parent = enclosing_focus_parent(ctx);
@@ -792,7 +849,11 @@ impl ViewState<Focus> for FocusState {
         if node_changed {
             let replacement = new_view.make_node();
             let mut replacement_key_handler_registration = None;
-            new_view.configure(&replacement, &mut replacement_key_handler_registration);
+            new_view.configure(
+                &replacement,
+                &mut replacement_key_handler_registration,
+                &self.writer,
+            );
             let replacement_rect_provider_registration = self
                 .rect_provider
                 .as_ref()
@@ -839,7 +900,7 @@ impl ViewState<Focus> for FocusState {
         } else {
             // Re-sync flags and handlers from the latest configuration
             // (`didUpdateWidget`, `:646-682`).
-            new_view.configure(&self.node, &mut self.key_handler_registration);
+            new_view.configure(&self.node, &mut self.key_handler_registration, &self.writer);
         }
 
         self.autofocus = new_view.autofocus;

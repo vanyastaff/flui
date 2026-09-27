@@ -4,6 +4,7 @@
 //! They bridge the View/Element system with the Render tree for layout and
 //! painting.
 
+use crate::reactive::{Reactive, WriterSource};
 use crate::view::View;
 
 /// Owner-runtime capabilities available while a [`RenderView`] creates or
@@ -12,10 +13,16 @@ use crate::view::View;
 /// The context is intentionally narrow: it carries only the composition
 /// capabilities a render-object widget needs to register owner-local
 /// interaction callbacks while keeping the render object itself data-only and
-/// `Send + Sync`.
+/// `Send + Sync`, and the [`WriterSource`] those callbacks open their
+/// [`EventCx`](crate::EventCx) from (ADR-0086 §3).
+///
+/// `build` cannot reach it: the element creates and updates the render object
+/// outside the build pass, so a render view has no path to a writer inside
+/// its own `build` either.
 #[derive(Debug, Clone, Copy)]
 pub struct RenderObjectContext<'a> {
     interaction_dispatch: Option<&'a flui_interaction::InteractionDispatchHandle>,
+    graph: Option<&'a Reactive>,
 }
 
 /// Errors returned by owner-runtime operations exposed through
@@ -33,12 +40,15 @@ pub enum RenderObjectContextError {
 }
 
 impl<'a> RenderObjectContext<'a> {
-    /// Construct a context from the active owner interaction handle.
+    /// Construct a context from the active owner interaction handle and the
+    /// owner's reactive graph.
     pub(crate) const fn new(
         interaction_dispatch: Option<&'a flui_interaction::InteractionDispatchHandle>,
+        graph: Option<&'a Reactive>,
     ) -> Self {
         Self {
             interaction_dispatch,
+            graph,
         }
     }
 
@@ -46,7 +56,19 @@ impl<'a> RenderObjectContext<'a> {
     /// mounted under a FLUI owner runtime.
     #[must_use]
     pub const fn detached() -> Self {
-        Self::new(None)
+        Self::new(None, None)
+    }
+
+    /// The writer source of the owner the render object is mounted under, for
+    /// the event callbacks a render view registers (a `Listener`'s pointer
+    /// handlers, a `MouseRegion`'s enter and exit). `None` in a
+    /// [`detached`](Self::detached) context.
+    ///
+    /// A render view has no `init_state`, so this is its counterpart of
+    /// [`LifecycleContext::writer_source`](crate::LifecycleContext::writer_source).
+    #[must_use]
+    pub fn writer_source(&self) -> Option<WriterSource> {
+        self.graph.map(|graph| WriterSource::new(graph.clone()))
     }
 
     fn dispatch_handle(

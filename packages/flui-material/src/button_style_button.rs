@@ -94,7 +94,6 @@
 //! keep resolving it fresh, exactly matching the oracle's own
 //! `overlayColor: WidgetStateProperty.resolveWith(...)` wrapper.
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::foundation::{Listenable, ListenerId};
@@ -112,9 +111,7 @@ use crate::button_style::ButtonStyle;
 use crate::ink_well::InkWell;
 use crate::material::Material;
 
-/// A no-argument press handler — the button-family counterpart to
-/// `InkWell`'s own `Rc<dyn Fn()>` tap callback (owner-local, per ADR-0027).
-pub(crate) type PressCallback = Rc<dyn Fn()>;
+pub(crate) use crate::event_callback::PressCallback;
 
 /// Resolves one [`ButtonStyle`] property through the widget → theme →
 /// default cascade — see the module docs.
@@ -366,7 +363,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
         .overlay_color(overlay_color)
         .states_controller(self.states.clone());
         if let Some(on_pressed) = view.on_pressed.clone() {
-            ink_well = ink_well.on_tap(move || on_pressed());
+            ink_well = ink_well.on_tap(move |cx| on_pressed(cx));
         }
 
         Semantics::new()

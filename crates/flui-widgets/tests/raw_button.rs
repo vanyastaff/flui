@@ -2,13 +2,13 @@
 //! `WriterSource` and writes a signal (ADR-0086). Pointer and assistive
 //! technology both reach it; without a callback it is disabled.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use flui_testing::{Action, ActionRequest, NodeId, TreeId, invoke_semantics_action};
 use flui_view::prelude::*;
 use flui_view::{Reactive, SignalError};
-use flui_widgets::{Column, RawButton, Text, column};
+use flui_widgets::{Column, RawButton, SizedBox, Text, column};
 
 use crate::common::{LaidOut, lay_out, loose};
 
@@ -240,4 +240,178 @@ fn a_refused_write_in_a_press_is_reported_not_panicked() {
     );
     assert_eq!(value(&seen), Ok(0), "other state is intact");
     assert!(app.find_text("0").is_some(), "and the tree still lays out");
+}
+
+#[derive(Clone, StatelessView)]
+struct CountedSignalReader {
+    signal: Signal<u32>,
+    builds: Rc<Cell<u32>>,
+    observed: Rc<Cell<u32>>,
+}
+
+impl StatelessView for CountedSignalReader {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        self.builds.set(self.builds.get() + 1);
+        self.observed.set(self.signal.get(ctx));
+        SizedBox::new(10.0, 10.0)
+    }
+}
+
+#[derive(Clone, StatefulView)]
+struct CountedEventApp {
+    writes: u32,
+    root_builds: Rc<Cell<u32>>,
+    reader_builds: [Rc<Cell<u32>>; 3],
+    observed: [Rc<Cell<u32>>; 3],
+}
+
+#[derive(Default)]
+struct CountedEventState {
+    changed: Signal<u32>,
+    unrelated: Signal<u32>,
+}
+
+impl StatefulView for CountedEventApp {
+    type State = CountedEventState;
+
+    fn create_state(&self) -> Self::State {
+        CountedEventState::default()
+    }
+}
+
+impl ViewState<CountedEventApp> for CountedEventState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.changed = ctx.signal(0);
+        self.unrelated = ctx.signal(7);
+    }
+
+    fn build(&self, view: &CountedEventApp, _ctx: &dyn BuildContext) -> impl IntoView {
+        view.root_builds.set(view.root_builds.get() + 1);
+        let reader = |index: usize, signal| CountedSignalReader {
+            signal,
+            builds: view.reader_builds[index].clone(),
+            observed: view.observed[index].clone(),
+        };
+        let changed = self.changed;
+        let writes = view.writes;
+        Column::new(column![
+            reader(0, self.changed),
+            reader(1, self.changed),
+            reader(2, self.unrelated),
+            RawButton::new(Text::new("Press")).on_press(move |cx| {
+                for _ in 0..writes {
+                    changed.update(cx, |value| *value += 1)?;
+                }
+                Ok::<(), SignalError>(())
+            }),
+        ])
+    }
+}
+
+/// Counts actual build invocations after pointer-delivered EventCx writes.
+/// Increasing the write burst must not increase rebuild fan-out or rebuild an
+/// unrelated signal reader. This is a work-count contract, not a timing claim.
+#[test]
+fn event_write_bursts_rebuild_each_subscriber_once_without_unrelated_builds() {
+    for writes in [1, 100, 10_000] {
+        let root_builds = Rc::new(Cell::new(0));
+        let reader_builds = std::array::from_fn(|_| Rc::new(Cell::new(0)));
+        let observed = std::array::from_fn(|_| Rc::new(Cell::new(0)));
+        let mut app = lay_out(
+            CountedEventApp {
+                writes,
+                root_builds: root_builds.clone(),
+                reader_builds: reader_builds.clone(),
+                observed: observed.clone(),
+            },
+            loose(400.0),
+        );
+        let before = reader_builds.each_ref().map(|count| count.get());
+        let root_before = root_builds.get();
+        assert_eq!(observed.each_ref().map(|value| value.get()), [0, 0, 7]);
+        assert!(before.into_iter().all(|count| count > 0));
+
+        // Real pointer down/up followed by a normal frame; no harness root
+        // dirtying, reassemble, or replacement can inflate the reader counts.
+        press(&mut app);
+        let after = reader_builds.each_ref().map(|count| count.get());
+        assert_eq!(after, [before[0] + 1, before[1] + 1, before[2]]);
+        assert_eq!(root_builds.get(), root_before, "burst of {writes}");
+        assert_eq!(
+            observed.each_ref().map(|value| value.get()),
+            [writes, writes, 7]
+        );
+
+        app.tick();
+        assert_eq!(reader_builds.each_ref().map(|count| count.get()), after);
+        assert_eq!(
+            root_builds.get(),
+            root_before,
+            "idle after burst of {writes}"
+        );
+    }
+}
+
+/// Assistive requests coalesce into a pending flag until the next build drains
+/// them. Closing the owner first releases the mounted callback's capture; this
+/// does not exercise retention by queued post-frame closures.
+#[test]
+fn pending_assistive_requests_release_mounted_capture_when_owner_is_dropped() {
+    struct CapturedModel {
+        drops: Rc<Cell<u32>>,
+        calls: Rc<Cell<u32>>,
+    }
+
+    impl CapturedModel {
+        fn called(&self) {
+            self.calls.set(self.calls.get() + 1);
+        }
+    }
+
+    impl Drop for CapturedModel {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
+
+    let drops = Rc::new(Cell::new(0));
+    let calls = Rc::new(Cell::new(0));
+    let model = CapturedModel {
+        drops: drops.clone(),
+        calls: calls.clone(),
+    };
+    let mut app = lay_out(
+        RawButton::new(Text::new("Press")).on_press(move |_cx| model.called()),
+        loose(400.0),
+    );
+    let (tree, id) = button_node(&mut app);
+    for _ in 0..100 {
+        invoke_semantics_action(
+            &app.pipeline_owner(),
+            ActionRequest {
+                action: Action::Click,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: None,
+            },
+        )
+        .expect("the mounted button accepts the activation request");
+    }
+    assert_eq!(calls.get(), 0, "requests must not run inline");
+    assert_eq!(
+        drops.get(),
+        0,
+        "the mounted callback still owns its capture"
+    );
+
+    // No pump: the coalesced request has not reached drain_semantics_requests,
+    // so teardown drops the mounted callback, not a post-frame delivery batch.
+    drop(tree);
+    drop(app);
+    assert_eq!(
+        calls.get(),
+        0,
+        "closed owner must not deliver pending requests"
+    );
+    assert_eq!(drops.get(), 1, "the mounted callback releases its model");
 }

@@ -1,5 +1,51 @@
 # flui-widgets architecture
 
+## Event callback phase boundary
+
+`InteractiveViewer`, `RefreshIndicator`, `PopScope`, `AnimatedSize` and
+`Dismissible` event setters receive `EventCx` (ADR-0086). Composite input
+handlers forward their child's context; wheel and pinch claim handlers keep
+their query signature and open the viewer's lifecycle-acquired `WriterSource`
+only for the interaction notifications. `PopScope` preserves synchronous
+navigation outcome delivery and the existing observer ordering.
+
+Animation listeners still carry `Send + Sync`. `AnimatedSize` therefore
+observes completion counts during build but invokes `on_end` after the frame.
+`Dismissible` likewise calculates transitions with layout constraints, then
+queues the event payloads on the owner-local post-frame lane; its fully-slid
+input-time completion bypass remains synchronous. This intentionally differs
+from Flutter's synchronous animation-listener notifications: user effects must
+not execute during a FLUI build. Deferred events use the latest configured
+callback and are cancelled when their widget is disposed. A missing or closed
+post-frame lane reports a warning and drops the event, never dispatches inline.
+
+Queued `GestureDetector` assistive activation also resolves the current callback
+at delivery, after configuration updates, and checks that the state is still
+mounted. Each accepted platform action remains a distinct FIFO command across
+tap and long-press kinds; only the rebuild used to wake the UI thread may
+coalesce. Removing a handler or disposing the widget cancels delivery; queued
+requests never retain an obsolete user closure. This is pinned by
+`queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime` and the
+assistive-tap replacement, removal, multiplicity and cross-action ordering
+integration tests.
+Post-frame entries hold only a weak reference to the detector-owned delivery
+target. Teardown therefore releases the live callbacks and presentation-bound
+writer even when an aborted or absent frame leaves the queue entry pending;
+draining that entry later is an inert no-op.
+
+Tests: `animated_size_completion_writes_a_signal_after_build`,
+`dismissible_layout_notifications_write_signals_and_dismiss_once`,
+`interactive_viewer_wheel_callbacks_write_in_order_in_the_dispatching_presentation`,
+`refresh_callback_writes_a_signal_in_the_dispatching_presentation`, and
+`pop_scope_callback_writes_through_its_presentations_context`.
+
+This does not migrate `PageView`'s shared controller listener, the drag-target
+hit-test payload callbacks, semantics action handlers, or the unmounted
+`LocalHistoryEntry::on_remove` navigation primitive. The first three require
+their owner/shared topology to change with the callback contract; the last
+needs an explicit navigation write-context contract rather than an invented
+ambient writer.
+
 The user-facing widget catalog: configuration objects over the `flui-objects`
 render catalog, plus the stateful widgets that own gesture, focus, routing and
 overlay behavior. Layer rules, dependency direction, and the crate's place in
@@ -1859,6 +1905,16 @@ without scheduling a rebuild fails the first one.
 
 ### 23. `FormHandle` and `FormFieldHandle` replace `GlobalKey<FormState>`
 
+The event methods `FormHandle::save`/`reset` and
+`FormFieldHandle::did_change`/`reset` forward the caller's `EventCx` to their
+callbacks (ADR-0086). Validators remain queries with no writer. Form reset
+restores its validation-suppression flag on unwind, so a panicking user callback
+cannot disable validation for later edits; the partial field mutations are not
+rolled back. A field schedules its rebuild immediately after committing its
+reset state, before the controller sink and `on_reset`, so an unwind cannot hide
+that partial commit behind stale UI. `a_panicking_reset_callback_does_not_disable_later_form_validation`
+pins recovery and visibility, and the signal-write form tests pin context forwarding.
+
 **Oracle:** Flutter reaches `FormState`/`FormFieldState` through a
 `GlobalKey` or `Form.of(context)`.
 
@@ -1868,13 +1924,28 @@ handle is a cheap `Rc` clone that owns the state, so it outlives the build
 that created it and needs no key registry. A mounted field rebuilt with a
 different handle moves onto it: the new handle takes the field's value,
 error, interaction and registration slot, and the old handle is detached.
+Each mounted form or field holds an exclusive generation-stamped attachment
+lease. A simultaneous duplicate is reported and isolated behind a fresh
+internal handle before configuration mutates the requested handle; conditional
+lease cleanup prevents a refused or stale owner from detaching the live one.
+Acquiring a replacement precedes releasing the current lease, so a busy target
+cannot leave a mounted state detached. This is a local recovery contract rather
+than a panic because duplicate attachment is caller-triggerable and lifecycle
+admission is infallible. The tracing error is paired with the typed
+`take_attachment_error` drain on the requested handle, matching the framework's
+duplicate-`GlobalKey` diagnostic shape instead of making a mount-time error look
+like an event-time `Result`.
 Flutter would remount a field whose `GlobalKey` changed and lose its state;
 a handle is not the element's identity here, so the element and its state
 stay. A text form field rebuilt without the caller's controller moves its
 text into a controller it owns, as Flutter's `_createLocalController` does.
 **Tests:** every `tests/form.rs` case drives the form through a handle;
 `a_new_handle_on_rebuild_takes_the_mounted_field_over`,
-`dropping_the_callers_controller_moves_the_text_into_a_field_owned_one`.
+`dropping_the_callers_controller_moves_the_text_into_a_field_owned_one`,
+`a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first`,
+`a_form_field_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first`,
+the two `a_busy_*_rebind_*` tests, and
+`unmounting_a_text_form_field_releases_callbacks_and_controller_binding`.
 
 ### 24. A field registers with its form in lifecycle hooks
 
@@ -1993,9 +2064,10 @@ with a `Semantics(button: true)` around it.
 that uses no design system has a button, and its `on_press` takes
 `Fn(&mut EventCx<'_>)`, the typed write capability of ADR-0086. It builds
 `Semantics::new().container(true).button(true).enabled(on_press.is_some())`
-around an opaque `GestureDetector`, and wraps the press in the `WriterSource`
-it takes in `init_state` around an unchanged `GestureDetector::on_tap`, so the
-gesture arena and its callback aliases do not change (ADR-0086 §4). Without
+around an opaque `GestureDetector` and forwards its event context to the press
+callback. The detector owns the lifecycle-acquired writer source; `RawButton`
+is stateless. The gesture arena's lower-level callback aliases do not change
+(ADR-0086 §4). Without
 `on_press` the node is disabled and advertises no click, and a tap does
 nothing (Flutter's disabled-button semantics). A press may return a write's
 `Result`; a refused write is logged on `flui::signals`. Keyboard activation

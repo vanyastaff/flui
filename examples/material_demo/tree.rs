@@ -349,7 +349,7 @@ fn async_section_builder(attempt: StateCell<u32>) -> SnapshotBuilder<String, Str
             ConnectionState::None => {
                 let attempt_for_load = attempt.clone();
                 ElevatedButton::new(Text::new(LOAD_BUTTON_LABEL))
-                    .on_pressed(move || attempt_for_load.update(|n| n + 1))
+                    .on_pressed(move |_cx| attempt_for_load.update(|n| n + 1))
                     .boxed()
             }
             ConnectionState::Waiting | ConnectionState::Active => Text::new(LOADING_TEXT).boxed(),
@@ -359,7 +359,7 @@ fn async_section_builder(attempt: StateCell<u32>) -> SnapshotBuilder<String, Str
                     Column::new(column![
                         Text::new(error.as_str()),
                         ElevatedButton::new(Text::new(RETRY_BUTTON_LABEL))
-                            .on_pressed(move || attempt_for_retry.update(|n| n + 1)),
+                            .on_pressed(move |_cx| attempt_for_retry.update(|n| n + 1)),
                     ])
                     .boxed()
                 }
@@ -451,7 +451,7 @@ impl ViewState<FormPage> for FormPageState {
         let mut submit_button = ElevatedButton::new(Text::new(SUBMIT_LABEL));
         if valid {
             let submitted_name = self.submitted_name.clone();
-            submit_button = submit_button.on_pressed(move || {
+            submit_button = submit_button.on_pressed(move |_cx| {
                 submitted_name.update(|current| *current = Some(name.clone()));
             });
         }
@@ -701,7 +701,7 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
                 let label_for_tap = label.clone();
                 Card::new(
                     InkWell::new(Padding::new(EdgeInsets::all(px(12.0))).child(Text::new(label)))
-                        .on_tap(move || {
+                        .on_tap(move |_cx| {
                             selected_for_tap.borrow_mut().replace(label_for_tap.clone());
                             rebuild_for_tap.schedule(flui_view::RebuildReason::StateChange);
                         }),
@@ -716,7 +716,7 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
         let scroll_controller_for_drag = self.scroll_controller.clone();
         let list = GestureDetector::new()
             .behavior(HitTestBehavior::Opaque)
-            .on_pan_update(move |details: DragUpdateDetails| {
+            .on_pan_update(move |_cx, details: DragUpdateDetails| {
                 let proposed = scroll_controller_for_drag.pixels() - details.delta.dy.get();
                 scroll_controller_for_drag.jump_to(proposed);
             })
@@ -740,17 +740,17 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
             .automatically_imply_leading(false)
             .actions(vec![
                 IconButton::new(Icon::new(tabs_icon_data()))
-                    .on_pressed(move || {
+                    .on_pressed(move |_cx| {
                         navigator_for_tabs_action.push(tabs_route());
                     })
                     .boxed(),
                 IconButton::new(Icon::new(settings_icon_data()))
-                    .on_pressed(move || {
+                    .on_pressed(move |_cx| {
                         navigator_for_settings_action.push(settings_route());
                     })
                     .boxed(),
                 IconButton::new(Icon::new(form_icon_data()))
-                    .on_pressed(move || {
+                    .on_pressed(move |_cx| {
                         navigator_for_form_action.push(form_route(
                             name_controller_for_form_action.clone(),
                             fetch_control_for_form_action.clone(),
@@ -763,17 +763,14 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
         let items_for_fab = Rc::clone(&self.items);
         let rebuild_for_fab = rebuild;
         let messenger_for_fab = messenger;
-        let fab = FloatingActionButton::new(
-            Some(move || {
-                open_add_item_dialog(
-                    &navigator_for_fab,
-                    Rc::clone(&items_for_fab),
-                    rebuild_for_fab.clone(),
-                    messenger_for_fab.clone(),
-                );
-            }),
-            Text::new(FAB_LABEL),
-        );
+        let fab = FloatingActionButton::new(Text::new(FAB_LABEL)).on_pressed(move |_cx| {
+            open_add_item_dialog(
+                &navigator_for_fab,
+                Rc::clone(&items_for_fab),
+                rebuild_for_fab.clone(),
+                messenger_for_fab.clone(),
+            );
+        });
 
         Scaffold::new()
             .app_bar(app_bar)
@@ -814,12 +811,12 @@ fn open_add_item_dialog(
             .content(Text::new(ADD_DIALOG_CONTENT))
             .actions(vec![
                 TextButton::new(Text::new(CANCEL_LABEL))
-                    .on_pressed(move || {
+                    .on_pressed(move |_cx| {
                         navigator_for_cancel.pop();
                     })
                     .boxed(),
                 FilledButton::new(Text::new(ADD_LABEL))
-                    .on_pressed(move || {
+                    .on_pressed(move |_cx| {
                         let next_index = items_for_add.borrow().len();
                         items_for_add
                             .borrow_mut()
@@ -900,7 +897,7 @@ impl ViewState<CounterTab> for CounterTabState {
         Center::new().child(
             Column::new(column![
                 Text::new(format!("{COUNTER_LABEL_PREFIX}{displayed_count}")),
-                ElevatedButton::new(Text::new(COUNTER_INCREMENT_LABEL)).on_pressed(move || {
+                ElevatedButton::new(Text::new(COUNTER_INCREMENT_LABEL)).on_pressed(move |_cx| {
                     count_for_tap.set(count_for_tap.get() + 1);
                     rebuild.schedule(flui_view::RebuildReason::StateChange);
                 }),

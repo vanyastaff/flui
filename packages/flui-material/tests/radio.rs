@@ -55,7 +55,7 @@ fn themed<T: PartialEq + Clone + 'static>(radio: Radio<T>) -> Theme {
 #[test]
 fn mounting_a_radio_creates_a_semantics_annotated_tap_target() {
     let laid = lay_out(
-        themed(Radio::new("spring", Some("spring")).on_changed(|_| {})),
+        themed(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {})),
         constraints(),
     );
 
@@ -92,7 +92,7 @@ fn a_mounted_radio_announces_as_a_radio_button() {
     // mutually-exclusive group member by construction (`is_selected` derives
     // from `group_value`), so a node announcing as a checkbox is announcing
     // the wrong control to assistive technology.
-    let roles = announced_roles(Radio::new("spring", Some("spring")).on_changed(|_| {}));
+    let roles = announced_roles(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {}));
     assert!(
         roles.contains(&Role::RadioButton),
         "a mounted Radio must announce as a radio button, got {roles:?}",
@@ -101,7 +101,7 @@ fn a_mounted_radio_announces_as_a_radio_button() {
 
 #[test]
 fn a_mounted_radio_does_not_announce_as_a_checkbox() {
-    let roles = announced_roles(Radio::new("spring", Some("spring")).on_changed(|_| {}));
+    let roles = announced_roles(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {}));
     assert!(
         !roles.contains(&Role::CheckBox),
         "a Radio announcing as a checkbox is the #1117 defect, got {roles:?}",
@@ -112,7 +112,7 @@ fn a_mounted_radio_does_not_announce_as_a_checkbox() {
 fn an_unselected_group_member_announces_as_a_radio_button() {
     // Group membership does not depend on which member is currently selected:
     // every member of the group is a radio, selected or not.
-    let roles = announced_roles(Radio::new("summer", Some("spring")).on_changed(|_| {}));
+    let roles = announced_roles(Radio::new("summer", Some("spring")).on_changed(|_cx, _| {}));
     assert!(
         roles.contains(&Role::RadioButton),
         "an unselected group member is still a radio button, got {roles:?}",
@@ -152,7 +152,7 @@ fn a_radio_nested_under_an_annotated_ancestor_still_announces_as_a_radio_button(
     // is what decides.
     let tree = Semantics::new()
         .button(true)
-        .child(Radio::new("spring", Some("spring")).on_changed(|_| {}));
+        .child(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {}));
     let mut laid = lay_out(Theme::new(ThemeData::light(), tree), constraints());
     laid.enable_semantics();
     laid.pump();
@@ -180,7 +180,7 @@ fn tap_on_an_unselected_radio_fires_on_changed_with_its_own_value() {
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
         themed(
-            Radio::new("summer", Some("spring")).on_changed(move |next| {
+            Radio::new("summer", Some("spring")).on_changed(move |_cx, next| {
                 *recorder.borrow_mut() = Some(next);
             }),
         ),
@@ -203,7 +203,7 @@ fn tap_on_an_already_selected_radio_is_a_no_op() {
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
         themed(
-            Radio::new("spring", Some("spring")).on_changed(move |next| {
+            Radio::new("spring", Some("spring")).on_changed(move |_cx, next| {
                 *recorder.borrow_mut() = Some(next);
             }),
         ),
@@ -236,7 +236,7 @@ fn disabled_radio_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
     let mut laid_enabled = laid_disabled;
     let counter = Rc::clone(&taps);
     laid_enabled.pump_widget(themed(Radio::new("summer", Some("spring")).on_changed(
-        move |_| {
+        move |_cx, _| {
             *counter.borrow_mut() += 1;
         },
     )));

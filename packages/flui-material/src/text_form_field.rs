@@ -80,17 +80,31 @@ impl TextFormField {
         self
     }
 
-    /// Receive the text when the form saves.
+    /// Receive the text when the form saves, with the `&mut EventCx<'_>`
+    /// passed to `FormHandle::save`.
     #[must_use]
-    pub fn on_saved(mut self, on_saved: impl Fn(&String) + 'static) -> Self {
-        self.config.on_saved = Some(Rc::new(on_saved));
+    pub fn on_saved<F, R>(mut self, on_saved: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &String) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.config.on_saved = Some(Rc::new(move |cx: &mut EventCx<'_>, value: &String| {
+            on_saved(cx, value).report();
+        }));
         self
     }
 
-    /// Called after the field resets.
+    /// Called after the field resets, with the `&mut EventCx<'_>` passed to
+    /// the reset.
     #[must_use]
-    pub fn on_reset(mut self, on_reset: impl Fn() + 'static) -> Self {
-        self.config.on_reset = Some(Rc::new(on_reset));
+    pub fn on_reset<F, R>(mut self, on_reset: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.config.on_reset = Some(Rc::new(move |cx: &mut EventCx<'_>| {
+            on_reset(cx).report();
+        }));
         self
     }
 
@@ -129,10 +143,17 @@ impl TextFormField {
         self
     }
 
-    /// Called with the text when Enter is pressed.
+    /// Called with the dispatch's `&mut EventCx<'_>` and the text when Enter
+    /// is pressed.
     #[must_use]
-    pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
-        self.config.on_submitted = Some(Rc::new(callback));
+    pub fn on_submitted<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.config.on_submitted = Some(Rc::new(move |cx: &mut EventCx<'_>, text: &str| {
+            callback(cx, text).report();
+        }));
         self
     }
 
@@ -191,7 +212,7 @@ impl ViewState<TextFormField> for TextFormFieldState {
                 field = field.focus_node(Rc::clone(node));
             }
             if let Some(on_submitted) = input.on_submitted.clone() {
-                field = field.on_submitted(move |text| on_submitted(text));
+                field = field.on_submitted(move |cx, text| on_submitted(cx, text));
             }
             field.boxed()
         })

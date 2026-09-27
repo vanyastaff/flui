@@ -17,7 +17,7 @@ fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
 
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             // A hit-testable child so the DeferToChild Listener registers.
@@ -47,7 +47,7 @@ fn gesture_detector_does_not_fire_without_a_hittable_target() {
     // so no pointer reaches the recognizer.
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(SizedBox::new(100.0, 100.0)),
@@ -71,7 +71,7 @@ fn gesture_detector_does_not_fire_when_the_pointer_moves_past_slop() {
 
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -98,7 +98,7 @@ fn gesture_detector_cancel_aborts_the_tap_without_wedging_the_detector() {
 
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -149,16 +149,16 @@ fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
     // to the pan recognizer and cancel the tap.
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_pan_start(move |_details| {
+            .on_pan_start(move |_cx, _details| {
                 start_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_pan_update(move |_details| {
+            .on_pan_update(move |_cx, _details| {
                 update_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_pan_end(move |_details| {
+            .on_pan_end(move |_cx, _details| {
                 end_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -211,10 +211,10 @@ fn gesture_detector_quick_tap_beats_the_pan_recognizer() {
     // is the arena's front member and wins; the pan never starts.
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_pan_start(move |_details| {
+            .on_pan_start(move |_cx, _details| {
                 start_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -244,10 +244,10 @@ fn secondary_tap_fires_on_secondary_down_up() {
 
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 primary_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_secondary_tap(move || {
+            .on_secondary_tap(move |_cx| {
                 secondary_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -302,16 +302,16 @@ fn horizontal_drag_fires_down_start_update_end_for_horizontal_motion() {
 
     let laid = lay_out(
         GestureDetector::new()
-            .on_horizontal_drag_down(move |_details| {
+            .on_horizontal_drag_down(move |_cx, _details| {
                 down_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_horizontal_drag_start(move |_details| {
+            .on_horizontal_drag_start(move |_cx, _details| {
                 start_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_horizontal_drag_update(move |_details| {
+            .on_horizontal_drag_update(move |_cx, _details| {
                 update_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_horizontal_drag_end(move |_details| {
+            .on_horizontal_drag_end(move |_cx, _details| {
                 end_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -366,9 +366,9 @@ fn horizontal_drag_does_not_fire_for_purely_vertical_motion() {
     let start_cb = Arc::clone(&starts);
 
     let laid = lay_out(
-        GestureDetector::new().on_pan_start(|_| {}).child(
+        GestureDetector::new().on_pan_start(|_cx, _| {}).child(
             GestureDetector::new()
-                .on_horizontal_drag_start(move |_details| {
+                .on_horizontal_drag_start(move |_cx, _details| {
                     start_cb.fetch_add(1, Ordering::SeqCst);
                 })
                 .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -400,13 +400,13 @@ fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_d
 
     let laid = lay_out(
         GestureDetector::new()
-            .on_horizontal_drag_start(move |_details| {
+            .on_horizontal_drag_start(move |_cx, _details| {
                 start_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_horizontal_drag_cancel(move || {
+            .on_horizontal_drag_cancel(move |_cx| {
                 cancel_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_horizontal_drag_end(move |_details| {
+            .on_horizontal_drag_end(move |_cx, _details| {
                 end_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -449,8 +449,8 @@ fn horizontal_drag_cancel_before_acceptance_fires_cancel() {
     let cancels_for_callback = Arc::clone(&cancels);
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(|| {})
-            .on_horizontal_drag_cancel(move || {
+            .on_tap(|_cx| {})
+            .on_horizontal_drag_cancel(move |_cx| {
                 cancels_for_callback.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -471,10 +471,10 @@ fn primary_tap_does_not_fire_on_secondary_tap() {
 
     let laid = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 primary_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_secondary_tap(move || {
+            .on_secondary_tap(move |_cx| {
                 secondary_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -495,4 +495,427 @@ fn primary_tap_does_not_fire_on_secondary_tap() {
         0,
         "a primary tap must NOT fire on_secondary_tap",
     );
+}
+
+// ============================================================================
+// Event context (ADR-0086): every callback receives `&mut EventCx<'_>` and
+// writes a signal through it; the write rebuilds the signal's reader.
+// ============================================================================
+
+mod event_cx {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    use crate::common::harness::{
+        PostFrameCapability, TextInputCapability, mount_with_capabilities,
+    };
+    use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
+    use flui_interaction::{DragEndDetails, DragUpdateDetails};
+    use flui_rendering::pipeline::PipelineCell;
+    use flui_testing::{A11yTree, Action, ActionRequest, TreeId, invoke_semantics_action};
+    use flui_types::Color;
+    use flui_view::prelude::*;
+    use flui_widgets::{ColoredBox, GestureDetector, Semantics, Text};
+
+    fn target() -> ColoredBox {
+        ColoredBox::new(Color::rgb(10, 20, 30))
+    }
+
+    /// A tap at the centre of a 100x100 detector.
+    fn tap(app: &LaidOut) {
+        app.dispatch_pointer_down(50.0, 50.0);
+        app.dispatch_pointer_up(50.0, 50.0);
+    }
+
+    #[test]
+    fn a_tap_writes_a_signal_and_rebuilds_its_reader() {
+        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+            GestureDetector::new()
+                .on_tap(move |cx| count.update(cx, |n| *n += 1))
+                .child(target())
+        });
+        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
+
+        tap(&app);
+        assert_eq!(probe.value(), Ok(1));
+        app.tick();
+
+        assert_eq!(
+            probe.reads(),
+            [0, 1],
+            "the reader rebuilt once, with the new value"
+        );
+    }
+
+    #[test]
+    fn a_long_press_on_the_virtual_clock_writes_a_signal() {
+        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+            GestureDetector::new()
+                .on_long_press(move |cx| count.set(cx, 5))
+                .child(target())
+        });
+        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
+
+        app.dispatch_pointer_down(50.0, 50.0);
+        app.pump_for(Duration::from_millis(300));
+        assert_eq!(probe.value(), Ok(0), "not before the hold deadline");
+        app.pump_for(Duration::from_millis(300));
+
+        assert_eq!(probe.value(), Ok(5));
+        app.tick();
+        assert_eq!(probe.reads().last(), Some(&5), "the reader rebuilt");
+    }
+
+    #[test]
+    fn a_double_tap_down_writes_the_position_it_carries() {
+        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+            GestureDetector::new()
+                .on_double_tap_down(move |cx, details| {
+                    count.set(cx, details.local_position.dx.get() as u32)
+                })
+                .child(target())
+        });
+        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
+
+        app.dispatch_pointer_down(40.0, 50.0);
+        app.dispatch_pointer_up(40.0, 50.0);
+        app.pump_for(Duration::from_millis(50));
+        app.dispatch_pointer_down(40.0, 50.0);
+
+        assert_eq!(probe.value(), Ok(40));
+        app.tick();
+        assert_eq!(probe.reads().last(), Some(&40));
+    }
+
+    #[test]
+    fn a_pan_update_writes_a_signal_per_update() {
+        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+            GestureDetector::new()
+                .on_pan_update(move |cx, details: DragUpdateDetails| {
+                    count.update(cx, |n| *n += details.delta.dy.get() as u32)
+                })
+                .child(target())
+        });
+        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
+
+        app.dispatch_pointer_down(50.0, 10.0);
+        app.dispatch_pointer_move(50.0, 50.0);
+        app.dispatch_pointer_move(50.0, 90.0);
+        app.dispatch_pointer_up(50.0, 90.0);
+
+        let moved = probe.value().expect("the probe's signal is live");
+        assert!(moved > 0, "each update added its delta, got {moved}");
+        app.tick();
+        assert_eq!(probe.reads(), [0, moved], "one rebuild after the drag");
+    }
+
+    #[test]
+    fn a_horizontal_drag_end_writes_a_signal() {
+        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+            GestureDetector::new()
+                .on_horizontal_drag_end(move |cx, _details: DragEndDetails| count.set(cx, 1))
+                .child(target())
+        });
+        let mut app = lay_out(probe.view(), tight(200.0, 200.0));
+
+        app.dispatch_pointer_down(20.0, 100.0);
+        app.dispatch_pointer_move(80.0, 100.0);
+        app.dispatch_pointer_move(150.0, 100.0);
+        assert_eq!(probe.value(), Ok(0), "nothing before the drag ends");
+        app.dispatch_pointer_up(150.0, 100.0);
+
+        assert_eq!(probe.value(), Ok(1));
+        app.tick();
+        assert_eq!(probe.reads(), [0, 1]);
+    }
+
+    #[test]
+    fn a_let_bound_pan_callback_compiles_through_callback_with() {
+        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+            let on_update =
+                callback_with(move |cx, _details: DragUpdateDetails| count.update(cx, |n| *n += 1));
+            GestureDetector::new()
+                .on_pan_update(on_update)
+                .child(target())
+        });
+        let app = lay_out(probe.view(), tight(100.0, 100.0));
+
+        app.dispatch_pointer_down(50.0, 10.0);
+        app.dispatch_pointer_move(50.0, 90.0);
+        app.dispatch_pointer_up(50.0, 90.0);
+
+        assert!(probe.value().expect("live") >= 1);
+    }
+
+    #[test]
+    fn a_refused_write_in_a_tap_is_reported_not_panicked() {
+        let probe = SignalProbe::new(|ProbeSignals { released, .. }| {
+            GestureDetector::new()
+                .on_tap(move |cx| released.set(cx, 1))
+                .child(target())
+        });
+        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
+
+        let ((), log) = flui_testing::log_capture::capture(|| tap(&app));
+
+        assert!(
+            log.contains("an event callback's signal write was refused"),
+            "the refusal is logged at the dispatch boundary: {log}"
+        );
+        app.tick();
+        assert_eq!(probe.value(), Ok(0), "other state is intact");
+    }
+
+    /// The detector wrapped so that its semantics actions merge into one
+    /// node labelled `Tap`.
+    fn labelled(detector: GestureDetector) -> Semantics {
+        Semantics::new()
+            .container(true)
+            .child(detector.child(Text::new("Tap")))
+    }
+
+    fn click(pipeline_owner: &PipelineCell, tree: &A11yTree) {
+        invoke_labelled_action(pipeline_owner, tree, Action::Click);
+    }
+
+    fn invoke_labelled_action(pipeline_owner: &PipelineCell, tree: &A11yTree, action: Action) {
+        let id = tree
+            .find_by_label("Tap")
+            .unwrap_or_else(|error| {
+                panic!("one node labelled \"Tap\": {error}\n{}", tree.describe())
+            })
+            .id();
+        invoke_semantics_action(
+            pipeline_owner,
+            ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: None,
+            },
+        )
+        .expect("a click on a node advertising one resolves");
+    }
+
+    #[test]
+    fn an_assistive_tap_writes_after_the_frame() {
+        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+            labelled(GestureDetector::new().on_tap(move |cx| count.update(cx, |n| *n += 1)))
+        });
+        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
+        app.enable_semantics();
+        app.pump();
+        let tree = app.a11y_tree().expect("semantics enabled before the frame");
+
+        click(&app.pipeline_owner(), &tree);
+        assert_eq!(
+            probe.value(),
+            Ok(0),
+            "the request is recorded, not performed inline"
+        );
+        app.tick();
+
+        assert_eq!(
+            probe.value(),
+            Ok(1),
+            "the tap ran after the frame, outside any build, so the write was accepted"
+        );
+        app.tick();
+        assert_eq!(probe.reads().last(), Some(&1), "and its reader rebuilt");
+    }
+
+    #[test]
+    fn accepted_assistive_taps_preserve_the_multiplicity_of_pointer_taps() {
+        let calls = Rc::new(Cell::new(0));
+        let callback_calls = Rc::clone(&calls);
+        let mut app = lay_out(
+            labelled(GestureDetector::new().on_tap(move |_cx| {
+                callback_calls.set(callback_calls.get() + 1);
+            })),
+            tight(100.0, 100.0),
+        );
+
+        tap(&app);
+        tap(&app);
+        assert_eq!(
+            calls.get(),
+            2,
+            "two ordinary pointer activations invoke the callback twice"
+        );
+
+        app.enable_semantics();
+        app.pump();
+        let tree = app.a11y_tree().expect("semantics enabled before the frame");
+        click(&app.pipeline_owner(), &tree);
+        click(&app.pipeline_owner(), &tree);
+        assert_eq!(
+            calls.get(),
+            2,
+            "accepted semantics actions are deferred until the next frame"
+        );
+
+        app.tick();
+
+        assert_eq!(
+            calls.get(),
+            4,
+            "two accepted semantic Click actions are two activations, just like two pointer taps"
+        );
+    }
+
+    #[test]
+    fn accepted_assistive_actions_preserve_ingress_order_across_action_kinds() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let tap_calls = Rc::clone(&calls);
+        let long_press_calls = Rc::clone(&calls);
+        let mut app = lay_out(
+            labelled(
+                GestureDetector::new()
+                    .on_tap(move |_cx| tap_calls.borrow_mut().push("tap"))
+                    .on_long_press(move |_cx| long_press_calls.borrow_mut().push("long-press")),
+            ),
+            tight(100.0, 100.0),
+        );
+        app.enable_semantics();
+        app.pump();
+        let tree = app.a11y_tree().expect("semantics enabled before the frame");
+        let owner = app.pipeline_owner();
+
+        invoke_labelled_action(&owner, &tree, Action::Click);
+        invoke_labelled_action(&owner, &tree, Action::ShowContextMenu);
+        invoke_labelled_action(&owner, &tree, Action::Click);
+        app.tick();
+
+        assert_eq!(
+            calls.borrow().as_slice(),
+            ["tap", "long-press", "tap"],
+            "accepted commands retain their cross-action ingress order"
+        );
+    }
+
+    #[test]
+    fn a_panicking_assistive_action_does_not_discard_the_fifo_tail() {
+        let long_press_calls = Rc::new(Cell::new(0));
+        let observed_long_press = Rc::clone(&long_press_calls);
+        let mut app = lay_out(
+            labelled(
+                GestureDetector::new()
+                    .on_tap(|_cx| -> () { panic!("intentional assistive tap panic") })
+                    .on_long_press(move |_cx| {
+                        observed_long_press.set(observed_long_press.get() + 1);
+                    }),
+            ),
+            tight(100.0, 100.0),
+        );
+        app.enable_semantics();
+        app.pump();
+        let tree = app.a11y_tree().expect("semantics enabled before the frame");
+        let owner = app.pipeline_owner();
+        invoke_labelled_action(&owner, &tree, Action::Click);
+        invoke_labelled_action(&owner, &tree, Action::ShowContextMenu);
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
+        assert!(
+            panicked.is_err(),
+            "the user callback panic still propagates"
+        );
+        assert_eq!(
+            long_press_calls.get(),
+            0,
+            "the tail has not run out of order"
+        );
+
+        app.tick();
+        assert_eq!(
+            long_press_calls.get(),
+            1,
+            "scheduler recovery retains the next accepted command"
+        );
+    }
+
+    #[test]
+    fn an_assistive_tap_uses_the_replacement_callback() {
+        let old = Rc::new(Cell::new(0));
+        let old_callback = Rc::clone(&old);
+        let mut app = lay_out(
+            labelled(
+                GestureDetector::new().on_tap(move |_cx| old_callback.set(old_callback.get() + 1)),
+            ),
+            tight(100.0, 100.0),
+        );
+        app.enable_semantics();
+        app.pump();
+        click(
+            &app.pipeline_owner(),
+            &app.a11y_tree().expect("semantics tree"),
+        );
+        let current = Rc::new(Cell::new(0));
+        let current_callback = Rc::clone(&current);
+        app.pump_widget(labelled(GestureDetector::new().on_tap(move |_cx| {
+            current_callback.set(current_callback.get() + 1);
+        })));
+        assert_eq!(old.get(), 0);
+        assert_eq!(current.get(), 1);
+    }
+
+    #[test]
+    fn an_assistive_tap_is_cancelled_when_its_handler_is_removed() {
+        let calls = Rc::new(Cell::new(0));
+        let callback_calls = Rc::clone(&calls);
+        let mut app = lay_out(
+            labelled(
+                GestureDetector::new()
+                    .on_tap(move |_cx| callback_calls.set(callback_calls.get() + 1)),
+            ),
+            tight(100.0, 100.0),
+        );
+        app.enable_semantics();
+        app.pump();
+        click(
+            &app.pipeline_owner(),
+            &app.a11y_tree().expect("semantics tree"),
+        );
+        app.pump_widget(labelled(GestureDetector::new()));
+        assert_eq!(calls.get(), 0);
+    }
+
+    /// Without a local post-frame lane there is no moment after the frame to
+    /// run the activation in. Running it at once would run it inside the
+    /// detector's `build`, where its writes are refused; the detector drops it
+    /// with a warning instead.
+    #[test]
+    fn without_a_local_post_frame_lane_an_assistive_tap_is_dropped_not_run_in_build() {
+        let ran = Rc::new(Cell::new(0_u32));
+        let ran_in_tap = Rc::clone(&ran);
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            let ran = Rc::clone(&ran_in_tap);
+            labelled(GestureDetector::new().on_tap(move |cx| {
+                ran.set(ran.get() + 1);
+                count.set(cx, 1)
+            }))
+        });
+        let mut app = mount_with_capabilities(
+            probe.view(),
+            PostFrameCapability::Absent,
+            TextInputCapability::Absent,
+        );
+        app.enable_semantics();
+        app.tick();
+        let tree = app.a11y_tree().expect("semantics enabled before the frame");
+        click(&app.pipeline_owner(), &tree);
+
+        let ((), log) = flui_testing::log_capture::capture(|| app.tick());
+
+        assert_eq!(ran.get(), 0, "the callback never ran: {log}");
+        assert!(
+            log.contains("dropping an assistive-technology activation"),
+            "the drop is logged: {log}"
+        );
+        assert!(
+            !log.contains("signal write was refused"),
+            "nothing was written inside build: {log}"
+        );
+        assert_eq!(probe.value(), Ok(0));
+    }
 }

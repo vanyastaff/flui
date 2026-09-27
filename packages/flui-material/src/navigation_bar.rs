@@ -191,7 +191,7 @@ const _: () = assert!(NAVIGATION_DESTINATION_ICON_SIZE <= NAVIGATION_INDICATOR_H
 /// A destination-selected callback: the tapped destination's index.
 /// `Rc`-based (owner-local, per ADR-0027) — matches [`InkWell::on_tap`]'s own
 /// callback shape.
-type DestinationSelectedCallback = Rc<dyn Fn(usize)>;
+type DestinationSelectedCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, usize)>;
 
 /// One destination (icon + label) in a [`NavigationBar`].
 ///
@@ -270,7 +270,7 @@ impl std::fmt::Debug for NavigationDestination {
 ///     NavigationDestination::new(Icon::new(IconData::new(0xE7FD)), "Profile"),
 /// ])
 /// .selected_index(0)
-/// .on_destination_selected(|index| {
+/// .on_destination_selected(|_cx, index| {
 ///     let _ = index;
 /// });
 /// ```
@@ -326,8 +326,11 @@ impl NavigationBar {
     /// Sets the callback fired with a destination's index when it is tapped
     /// (and [`NavigationDestination::enabled`]).
     #[must_use]
-    pub fn on_destination_selected(mut self, callback: impl Fn(usize) + 'static) -> Self {
-        self.on_destination_selected = Some(Rc::new(callback));
+    pub fn on_destination_selected<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, usize) -> R + 'static,
+    ) -> Self {
+        self.on_destination_selected = Some(crate::event_callback::value_callback(callback));
         self
     }
 
@@ -565,9 +568,9 @@ fn build_destination(
     let mut ink_well = InkWell::new(column).overlay_color(overlay_color.clone());
     if enabled {
         let callback = on_destination_selected.cloned();
-        ink_well = ink_well.on_tap(move || {
+        ink_well = ink_well.on_tap(move |cx| {
             if let Some(callback) = &callback {
-                callback(index);
+                callback(cx, index);
             }
         });
     }
@@ -680,7 +683,7 @@ mod tests {
             NavigationDestination::new(icon(), "Home"),
             NavigationDestination::new(icon(), "Profile"),
         ])
-        .on_destination_selected(|_| {});
+        .on_destination_selected(|_cx, _| {});
         assert!(bar.on_destination_selected.is_some());
     }
 

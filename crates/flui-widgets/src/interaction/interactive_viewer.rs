@@ -156,9 +156,9 @@ pub struct InteractionEndDetails {
     pub velocity: Velocity,
 }
 
-type StartCallback = Rc<dyn Fn(InteractionStartDetails)>;
-type UpdateCallback = Rc<dyn Fn(InteractionUpdateDetails)>;
-type EndCallback = Rc<dyn Fn(InteractionEndDetails)>;
+type StartCallback = Rc<dyn Fn(&mut EventCx<'_>, InteractionStartDetails)>;
+type UpdateCallback = Rc<dyn Fn(&mut EventCx<'_>, InteractionUpdateDetails)>;
+type EndCallback = Rc<dyn Fn(&mut EventCx<'_>, InteractionEndDetails)>;
 
 // ============================================================================
 // InteractiveViewer
@@ -383,32 +383,34 @@ impl InteractiveViewer {
 
     /// Called when a pan or wheel-scale interaction begins.
     #[must_use]
-    pub fn on_interaction_start(
+    pub fn on_interaction_start<R: EventOutcome>(
         mut self,
-        callback: impl Fn(InteractionStartDetails) + 'static,
+        callback: impl Fn(&mut EventCx<'_>, InteractionStartDetails) -> R + 'static,
     ) -> Self {
-        self.on_interaction_start = Some(Rc::new(callback));
+        self.on_interaction_start =
+            Some(Rc::new(move |cx, details| callback(cx, details).report()));
         self
     }
 
     /// Called on every applied (or attempted, if disabled) pan/wheel-scale
     /// update.
     #[must_use]
-    pub fn on_interaction_update(
+    pub fn on_interaction_update<R: EventOutcome>(
         mut self,
-        callback: impl Fn(InteractionUpdateDetails) + 'static,
+        callback: impl Fn(&mut EventCx<'_>, InteractionUpdateDetails) -> R + 'static,
     ) -> Self {
-        self.on_interaction_update = Some(Rc::new(callback));
+        self.on_interaction_update =
+            Some(Rc::new(move |cx, details| callback(cx, details).report()));
         self
     }
 
     /// Called when a pan or wheel-scale interaction ends.
     #[must_use]
-    pub fn on_interaction_end(
+    pub fn on_interaction_end<R: EventOutcome>(
         mut self,
-        callback: impl Fn(InteractionEndDetails) + 'static,
+        callback: impl Fn(&mut EventCx<'_>, InteractionEndDetails) -> R + 'static,
     ) -> Self {
-        self.on_interaction_end = Some(Rc::new(callback));
+        self.on_interaction_end = Some(Rc::new(move |cx, details| callback(cx, details).report()));
         self
     }
 
@@ -437,6 +439,7 @@ impl StatefulView for InteractiveViewer {
                 current_axis: Cell::new(None),
             }),
             pipeline_cell: None,
+            writer: None,
         }
     }
 }
@@ -464,6 +467,7 @@ struct GestureTracking {
 /// Persistent state for [`InteractiveViewer`].
 #[derive(Debug)]
 pub struct InteractiveViewerState {
+    writer: Option<WriterSource>,
     /// Publishes the child's `RenderId` while mounted — see
     /// [`geometry`](Self::geometry) for why one anchor is enough in V1.
     subtree_anchor: SubtreeAnchor,
@@ -481,6 +485,7 @@ pub struct InteractiveViewerState {
 impl ViewState<InteractiveViewer> for InteractiveViewerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.pipeline_cell = ctx.pipeline_owner();
+        self.writer = Some(ctx.writer_source());
     }
 
     #[expect(clippy::too_many_lines)] // one gesture-wiring build(); splitting fragments the callback capture set
@@ -503,6 +508,10 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
         let on_start = view.on_interaction_start.clone();
         let on_update = view.on_interaction_update.clone();
         let on_end = view.on_interaction_end.clone();
+        let writer = self
+            .writer
+            .clone()
+            .expect("BUG: InteractiveViewer initialized before build");
 
         let listenable = controller.as_listenable();
 
@@ -512,25 +521,28 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             // -- Pan (GestureDetector) -------------------------------------
             let gesture_start = Rc::clone(&gesture);
             let on_start_pan = on_start.clone();
-            let pan_start_details = move |details: DragStartDetails| {
+            let pan_start_details = callback_with(move |cx, details: DragStartDetails| {
                 gesture_start.current_axis.set(None);
                 gesture_start
                     .pan_start_local
                     .set(Some(details.local_position));
                 if let Some(callback) = &on_start_pan {
-                    callback(InteractionStartDetails {
-                        focal_point: details.global_position,
-                        local_focal_point: details.local_position,
-                    });
+                    callback(
+                        cx,
+                        InteractionStartDetails {
+                            focal_point: details.global_position,
+                            local_focal_point: details.local_position,
+                        },
+                    );
                 }
-            };
+            });
 
             let gesture_update = Rc::clone(&gesture);
             let controller_update = controller.clone();
             let anchor_update = anchor.clone();
             let pipeline_cell_update = pipeline_cell.clone();
             let on_update_pan = on_update.clone();
-            let pan_update_details = move |details: DragUpdateDetails| {
+            let pan_update_details = callback_with(move |cx, details: DragUpdateDetails| {
                 if pan_enabled {
                     if let Some(start_local) = gesture_update.pan_start_local.get()
                         && gesture_update.current_axis.get().is_none()
@@ -566,29 +578,35 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                     }
                 }
                 if let Some(callback) = &on_update_pan {
-                    callback(InteractionUpdateDetails {
-                        focal_point: details.global_position,
-                        local_focal_point: details.local_position,
-                        scale: 1.0,
-                        focal_point_delta: Offset::new(
-                            px(details.delta.dx.get()),
-                            px(details.delta.dy.get()),
-                        ),
-                    });
+                    callback(
+                        cx,
+                        InteractionUpdateDetails {
+                            focal_point: details.global_position,
+                            local_focal_point: details.local_position,
+                            scale: 1.0,
+                            focal_point_delta: Offset::new(
+                                px(details.delta.dx.get()),
+                                px(details.delta.dy.get()),
+                            ),
+                        },
+                    );
                 }
-            };
+            });
 
             let gesture_end = Rc::clone(&gesture);
             let on_end_pan = on_end.clone();
-            let pan_end_details = move |details: DragEndDetails| {
+            let pan_end_details = callback_with(move |cx, details: DragEndDetails| {
                 gesture_end.pan_start_local.set(None);
                 gesture_end.current_axis.set(None);
                 if let Some(callback) = &on_end_pan {
-                    callback(InteractionEndDetails {
-                        velocity: details.velocity,
-                    });
+                    callback(
+                        cx,
+                        InteractionEndDetails {
+                            velocity: details.velocity,
+                        },
+                    );
                 }
-            };
+            });
 
             // -- Wheel scale (Listener::on_scroll_claim) -------------------
             //
@@ -606,86 +624,102 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let on_start_wheel = on_start.clone();
             let on_update_wheel = on_update.clone();
             let on_end_wheel = on_end.clone();
+            let wheel_writer = writer.clone();
             let scroll_claim = move |data: &ScrollEventData| {
-                if wheel_scale_gate == WheelScaleGate::CtrlWheel
-                    && !data.modifiers.contains(Modifiers::CONTROL)
-                {
-                    // Plain ticks belong to an enclosing scrollable under
-                    // the ctrl-gated contract.
-                    return EventPropagation::Continue;
-                }
-                if data.delta.dy.get() == 0.0 {
-                    // Ignore horizontal-only wheel scroll, matching the
-                    // oracle (`_receivedPointerSignal` returns early on
-                    // `scrollDelta.dy == 0.0`).
-                    return EventPropagation::Continue;
-                }
+                wheel_writer.write(|cx| {
+                    if wheel_scale_gate == WheelScaleGate::CtrlWheel
+                        && !data.modifiers.contains(Modifiers::CONTROL)
+                    {
+                        // Plain ticks belong to an enclosing scrollable under
+                        // the ctrl-gated contract.
+                        return EventPropagation::Continue;
+                    }
+                    if data.delta.dy.get() == 0.0 {
+                        // Ignore horizontal-only wheel scroll, matching the
+                        // oracle (`_receivedPointerSignal` returns early on
+                        // `scrollDelta.dy == 0.0`).
+                        return EventPropagation::Continue;
+                    }
 
-                if let Some(callback) = &on_start_wheel {
-                    callback(InteractionStartDetails {
-                        focal_point: data.position,
-                        local_focal_point: data.position,
-                    });
-                }
+                    if let Some(callback) = &on_start_wheel {
+                        callback(
+                            cx,
+                            InteractionStartDetails {
+                                focal_point: data.position,
+                                local_focal_point: data.position,
+                            },
+                        );
+                    }
 
-                let scale_change = (-data.delta.dy.get() / scale_factor).exp();
+                    let scale_change = (-data.delta.dy.get() / scale_factor).exp();
 
-                let value_before_zoom = controller_wheel.value();
-                if scale_enabled
-                    && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
-                        pipeline_cell_wheel.as_ref(),
-                        &anchor_wheel,
-                        boundary_margin,
-                    )
-                {
-                    let scene_before = controller_wheel.to_scene(data.position);
-                    let scaled = clamp_scale(
-                        controller_wheel.value(),
-                        scale_change,
-                        min_scale,
-                        max_scale,
-                        viewport,
-                        boundary,
-                    );
-                    controller_wheel.set_value(scaled);
+                    let value_before_zoom = controller_wheel.value();
+                    if scale_enabled
+                        && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
+                            pipeline_cell_wheel.as_ref(),
+                            &anchor_wheel,
+                            boundary_margin,
+                        )
+                    {
+                        let scene_before = controller_wheel.to_scene(data.position);
+                        let scaled = clamp_scale(
+                            controller_wheel.value(),
+                            scale_change,
+                            min_scale,
+                            max_scale,
+                            viewport,
+                            boundary,
+                        );
+                        controller_wheel.set_value(scaled);
 
-                    // Keep the same scene point under the cursor before and
-                    // after the scale (Flutter parity).
-                    let scene_after = controller_wheel.to_scene(data.position);
-                    let correction = Offset::new(
-                        scene_after.dx - scene_before.dx,
-                        scene_after.dy - scene_before.dy,
-                    );
-                    let translated =
-                        clamp_translation(controller_wheel.value(), correction, viewport, boundary);
-                    controller_wheel.set_value(translated);
-                }
+                        // Keep the same scene point under the cursor before and
+                        // after the scale (Flutter parity).
+                        let scene_after = controller_wheel.to_scene(data.position);
+                        let correction = Offset::new(
+                            scene_after.dx - scene_before.dx,
+                            scene_after.dy - scene_before.dy,
+                        );
+                        let translated = clamp_translation(
+                            controller_wheel.value(),
+                            correction,
+                            viewport,
+                            boundary,
+                        );
+                        controller_wheel.set_value(translated);
+                    }
 
-                if let Some(callback) = &on_update_wheel {
-                    callback(InteractionUpdateDetails {
-                        focal_point: data.position,
-                        local_focal_point: data.position,
-                        scale: scale_change,
-                        focal_point_delta: Offset::ZERO,
-                    });
-                }
-                if let Some(callback) = &on_end_wheel {
-                    callback(InteractionEndDetails {
-                        velocity: Velocity::ZERO,
-                    });
-                }
-                // Claim only when the viewer actually zoomed — the same
-                // shape as the scrollable's can-move predicate. Scaling
-                // disabled, or a zoom the boundary/min/max clamp collapsed
-                // to a no-op (e.g. zoom-out at identity with a zero
-                // boundary margin), leaves the tick to an enclosing
-                // scrollable; the interaction callbacks above still observed
-                // it (Flutter fires them even then).
-                if controller_wheel.value().m == value_before_zoom.m {
-                    EventPropagation::Continue
-                } else {
-                    EventPropagation::Stop
-                }
+                    if let Some(callback) = &on_update_wheel {
+                        callback(
+                            cx,
+                            InteractionUpdateDetails {
+                                focal_point: data.position,
+                                local_focal_point: data.position,
+                                scale: scale_change,
+                                focal_point_delta: Offset::ZERO,
+                            },
+                        );
+                    }
+                    if let Some(callback) = &on_end_wheel {
+                        callback(
+                            cx,
+                            InteractionEndDetails {
+                                velocity: Velocity::ZERO,
+                            },
+                        );
+                    }
+                    // Claim only when the viewer actually zoomed — the same
+                    // shape as the scrollable's can-move predicate. Scaling
+                    // disabled, or a zoom the boundary/min/max clamp collapsed
+                    // to a no-op (e.g. zoom-out at identity with a zero
+                    // boundary margin), leaves the tick to an enclosing
+                    // scrollable; the interaction callbacks above still observed
+                    // it (Flutter fires them even then).
+                    if controller_wheel.value().m == value_before_zoom.m {
+                        EventPropagation::Continue
+                    } else {
+                        EventPropagation::Stop
+                    }
+                })
             };
 
             let mut transform = Transform::new(matrix);
@@ -733,72 +767,88 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let on_start_pinch = on_start.clone();
             let on_update_pinch = on_update.clone();
             let on_end_pinch = on_end.clone();
+            let pinch_writer = writer.clone();
             let pan_zoom = move |event: &flui_interaction::PointerPanZoomEvent| {
-                let flui_interaction::PointerPanZoomEvent::Update {
-                    position, scale, ..
-                } = *event
-                else {
-                    return EventPropagation::Continue;
-                };
-                if let Some(callback) = &on_start_pinch {
-                    callback(InteractionStartDetails {
-                        focal_point: position,
-                        local_focal_point: position,
-                    });
-                }
-                #[expect(clippy::cast_possible_truncation)] // per-tick factors are near 1.0
-                let scale_change = scale as f32;
-                let value_before_zoom = controller_pinch.value();
-                if scale_enabled
-                    && scale_change != 1.0
-                    && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
-                        pipeline_cell_pinch.as_ref(),
-                        &anchor_pinch,
-                        boundary_margin,
-                    )
-                {
-                    let scene_before = controller_pinch.to_scene(position);
-                    let scaled = clamp_scale(
-                        controller_pinch.value(),
-                        scale_change,
-                        min_scale,
-                        max_scale,
-                        viewport,
-                        boundary,
-                    );
-                    controller_pinch.set_value(scaled);
-                    let scene_after = controller_pinch.to_scene(position);
-                    let correction = Offset::new(
-                        scene_after.dx - scene_before.dx,
-                        scene_after.dy - scene_before.dy,
-                    );
-                    let translated =
-                        clamp_translation(controller_pinch.value(), correction, viewport, boundary);
-                    controller_pinch.set_value(translated);
-                }
-                if let Some(callback) = &on_update_pinch {
-                    callback(InteractionUpdateDetails {
-                        focal_point: position,
-                        local_focal_point: position,
-                        scale: scale_change,
-                        focal_point_delta: Offset::ZERO,
-                    });
-                }
-                if let Some(callback) = &on_end_pinch {
-                    callback(InteractionEndDetails {
-                        velocity: Velocity::ZERO,
-                    });
-                }
-                // Claim only when the viewer actually transformed — the same
-                // predicate the wheel branch uses. Scaling disabled, a pure
-                // rotation tick, or a zoom the clamps collapsed to a no-op
-                // leaves the tick to an enclosing viewer; the interaction
-                // callbacks above still observed it.
-                if controller_pinch.value().m == value_before_zoom.m {
-                    EventPropagation::Continue
-                } else {
-                    EventPropagation::Stop
-                }
+                pinch_writer.write(|cx| {
+                    let flui_interaction::PointerPanZoomEvent::Update {
+                        position, scale, ..
+                    } = *event
+                    else {
+                        return EventPropagation::Continue;
+                    };
+                    if let Some(callback) = &on_start_pinch {
+                        callback(
+                            cx,
+                            InteractionStartDetails {
+                                focal_point: position,
+                                local_focal_point: position,
+                            },
+                        );
+                    }
+                    #[expect(clippy::cast_possible_truncation)] // per-tick factors are near 1.0
+                    let scale_change = scale as f32;
+                    let value_before_zoom = controller_pinch.value();
+                    if scale_enabled
+                        && scale_change != 1.0
+                        && let Some((viewport, boundary)) = InteractiveViewerState::geometry(
+                            pipeline_cell_pinch.as_ref(),
+                            &anchor_pinch,
+                            boundary_margin,
+                        )
+                    {
+                        let scene_before = controller_pinch.to_scene(position);
+                        let scaled = clamp_scale(
+                            controller_pinch.value(),
+                            scale_change,
+                            min_scale,
+                            max_scale,
+                            viewport,
+                            boundary,
+                        );
+                        controller_pinch.set_value(scaled);
+                        let scene_after = controller_pinch.to_scene(position);
+                        let correction = Offset::new(
+                            scene_after.dx - scene_before.dx,
+                            scene_after.dy - scene_before.dy,
+                        );
+                        let translated = clamp_translation(
+                            controller_pinch.value(),
+                            correction,
+                            viewport,
+                            boundary,
+                        );
+                        controller_pinch.set_value(translated);
+                    }
+                    if let Some(callback) = &on_update_pinch {
+                        callback(
+                            cx,
+                            InteractionUpdateDetails {
+                                focal_point: position,
+                                local_focal_point: position,
+                                scale: scale_change,
+                                focal_point_delta: Offset::ZERO,
+                            },
+                        );
+                    }
+                    if let Some(callback) = &on_end_pinch {
+                        callback(
+                            cx,
+                            InteractionEndDetails {
+                                velocity: Velocity::ZERO,
+                            },
+                        );
+                    }
+                    // Claim only when the viewer actually transformed — the same
+                    // predicate the wheel branch uses. Scaling disabled, a pure
+                    // rotation tick, or a zoom the clamps collapsed to a no-op
+                    // leaves the tick to an enclosing viewer; the interaction
+                    // callbacks above still observed it.
+                    if controller_pinch.value().m == value_before_zoom.m {
+                        EventPropagation::Continue
+                    } else {
+                        EventPropagation::Stop
+                    }
+                })
             };
 
             Listener::new()

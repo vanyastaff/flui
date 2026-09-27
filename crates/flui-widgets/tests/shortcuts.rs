@@ -40,10 +40,10 @@ mod tests {
         // The inner "field" consumes the character "x" and ignores all else.
         let inner = Focus::new(SizedBox::new(10.0, 10.0))
             .focus_node(Rc::clone(&field))
-            .on_key_event(Rc::new(|event| match &event.key {
+            .on_key_event(|_cx, event| match &event.key {
                 Key::Character(c) if c == "x" => KeyEventResult::Handled,
                 _ => KeyEventResult::Ignored,
-            }));
+            });
 
         let fired_for_binding = Arc::clone(&fired);
         let harness = mount(CallbackShortcuts::new(inner).binding(

@@ -223,6 +223,47 @@ fn check_consumer(dependencies: toml::Table, source: &str, scenario: &str) {
 }
 
 #[test]
+fn external_notes_consumer_executes_edit_save_and_navigation() {
+    // A real external Cargo package with local path dependencies, not a
+    // published-crate or native platform end-to-end acceptance claim.
+    let Some(root) = checkout_root() else { return };
+    let mut dependencies = toml::Table::new();
+    dependencies.insert("flui".into(), dependency("flui", root, true));
+    let mut framework = dependency("flui", root, true);
+    framework
+        .as_table_mut()
+        .expect("framework dependency")
+        .insert(
+            "features".into(),
+            toml::Value::Array(vec!["testing".into()]),
+        );
+    let mut dev_dependencies = toml::Table::new();
+    dev_dependencies.insert("flui".into(), framework);
+    let output = run_consumer(
+        dependencies,
+        Some(dev_dependencies),
+        include_str!("fixtures/notes_workflow.rs"),
+        "test",
+    );
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("notes_edit_validation_save_and_navigation_use_real_dispatch ... ok"),
+        "the downstream workflow test must execute"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("notes_edit_validation_save_and_navigation_use_semantic_actions ... ok"),
+        "the downstream semantics workflow must execute"
+    );
+}
+
+#[test]
 fn missing_runtime_dependency_reports_how_to_fix_the_manifest() {
     let Some(root) = checkout_root() else { return };
     let mut dependencies = toml::Table::new();

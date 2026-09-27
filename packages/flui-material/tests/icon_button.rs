@@ -54,7 +54,7 @@ fn tap_fires_on_pressed_and_the_button_mounts_a_material_surface() {
     let laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            IconButton::new(SizedBox::square(24.0)).on_pressed(move || {
+            IconButton::new(SizedBox::square(24.0)).on_pressed(move |_cx| {
                 counted.fetch_add(1, Ordering::SeqCst);
             }),
         ),
@@ -105,7 +105,7 @@ fn an_unconstrained_icon_button_collapses_to_the_40_by_40_m3_minimum_size() {
     let laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            IconButton::new(SizedBox::square(10.0)).on_pressed(|| {}),
+            IconButton::new(SizedBox::square(10.0)).on_pressed(|_cx| {}),
         ),
         loose(200.0),
     );
@@ -159,7 +159,7 @@ fn enabled_icon_button_resolves_the_on_surface_variant_color_through_the_real_mo
     };
 
     let _laid = lay_out(
-        Theme::new(theme, IconButton::new(probe).on_pressed(|| {})),
+        Theme::new(theme, IconButton::new(probe).on_pressed(|_cx| {})),
         tight(40.0, 40.0),
     );
 
@@ -199,7 +199,7 @@ fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
     });
 
     let _laid = lay_out(
-        Theme::new(theme, IconButton::new(probe).on_pressed(|| {})),
+        Theme::new(theme, IconButton::new(probe).on_pressed(|_cx| {})),
         tight(40.0, 40.0),
     );
 
@@ -253,7 +253,7 @@ fn icon_button_theme_slot_background_color_reaches_the_mounted_material() {
     let laid = lay_out(
         Theme::new(
             theme,
-            IconButton::new(SizedBox::square(24.0)).on_pressed(|| {}),
+            IconButton::new(SizedBox::square(24.0)).on_pressed(|_cx| {}),
         ),
         tight(40.0, 40.0),
     );
@@ -306,7 +306,7 @@ fn a_hover_varying_icon_button_theme_foreground_color_stays_frozen_at_the_initia
     });
 
     let laid = lay_out(
-        Theme::new(theme, IconButton::new(probe).on_pressed(|| {})),
+        Theme::new(theme, IconButton::new(probe).on_pressed(|_cx| {})),
         tight(40.0, 40.0),
     );
 
@@ -348,10 +348,12 @@ fn a_style_foreground_color_override_reaches_the_icons_icon_theme() {
     let _laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            IconButton::new(probe).on_pressed(|| {}).style(ButtonStyle {
-                foreground_color: Some(WidgetStateProperty::all(Some(overridden))),
-                ..ButtonStyle::default()
-            }),
+            IconButton::new(probe)
+                .on_pressed(|_cx| {})
+                .style(ButtonStyle {
+                    foreground_color: Some(WidgetStateProperty::all(Some(overridden))),
+                    ..ButtonStyle::default()
+                }),
         ),
         tight(40.0, 40.0),
     );

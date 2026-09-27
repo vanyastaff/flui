@@ -9,18 +9,50 @@ use flui_rendering::hit_testing::{
 };
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Offset;
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{
+    Child, EventCx, EventOutcome, IntoView, RenderView, WriterSource, impl_render_view,
+};
+
+/// An enter, hover or exit callback, stored already adapted to report its
+/// outcome.
+type MouseCallback = Rc<dyn Fn(&mut EventCx<'_>, DeviceId, Offset)>;
+
+/// Store a mouse callback, adapted to report its outcome.
+fn mouse_callback<F, R>(callback: F) -> MouseCallback
+where
+    F: Fn(&mut EventCx<'_>, DeviceId, Offset) -> R + 'static,
+    R: EventOutcome,
+{
+    Rc::new(move |cx: &mut EventCx<'_>, device, position| {
+        callback(cx, device, position).report();
+    })
+}
+
+/// Wrap a stored callback into the lane's shape: one write per event.
+fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(DeviceId, Offset)> {
+    let writer = writer.clone();
+    let callback = Rc::clone(callback);
+    Rc::new(move |device, position| writer.write(|cx| callback(cx, device, position)))
+}
 
 /// Calls callbacks when the mouse enters, hovers within, or exits its bounds.
 ///
 /// Flutter parity: `widgets/basic.dart` `MouseRegion` over
 /// `RenderMouseRegion`. Layout and paint are pass-through when a child exists;
 /// without a child the region grows to the incoming biggest constraint.
+///
+/// Each callback receives the dispatch's `&mut EventCx<'_>` first, so it
+/// writes a signal directly (ADR-0086):
+/// `.on_enter(move |cx, _device, _position| hovered.set(cx, true))`. The
+/// region has no `init_state`; it takes the owner's [`WriterSource`] from the
+/// render-object context that registers its callbacks. A stationary device's
+/// re-hit-test after layout also delivers enter and exit, so those writes
+/// land between layout and the next frame's build, which the guard accepts.
 #[derive(Clone)]
 pub struct MouseRegion {
-    on_enter: Option<MouseEnterCallback>,
-    on_hover: Option<MouseHoverCallback>,
-    on_exit: Option<MouseExitCallback>,
+    on_enter: Option<MouseCallback>,
+    on_hover: Option<MouseCallback>,
+    on_exit: Option<MouseCallback>,
     cursor: CursorIcon,
     opaque: bool,
     behavior: HitTestBehavior,
@@ -62,22 +94,34 @@ impl MouseRegion {
 
     /// Called when the mouse enters this region.
     #[must_use]
-    pub fn on_enter(mut self, callback: impl Fn(DeviceId, Offset) + 'static) -> Self {
-        self.on_enter = Some(Rc::new(callback));
+    pub fn on_enter<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, DeviceId, Offset) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_enter = Some(mouse_callback(callback));
         self
     }
 
     /// Called when the mouse moves within this region.
     #[must_use]
-    pub fn on_hover(mut self, callback: impl Fn(DeviceId, Offset) + 'static) -> Self {
-        self.on_hover = Some(Rc::new(callback));
+    pub fn on_hover<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, DeviceId, Offset) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_hover = Some(mouse_callback(callback));
         self
     }
 
     /// Called when the mouse exits this region.
     #[must_use]
-    pub fn on_exit(mut self, callback: impl Fn(DeviceId, Offset) + 'static) -> Self {
-        self.on_exit = Some(Rc::new(callback));
+    pub fn on_exit<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, DeviceId, Offset) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_exit = Some(mouse_callback(callback));
         self
     }
 
@@ -115,11 +159,24 @@ impl MouseRegion {
         render_object.set_behavior(self.behavior);
     }
 
-    fn mouse_callbacks(&self) -> MouseRegionCallbacks {
+    /// The lane's callback set, each opening its write from `writer`.
+    fn mouse_callbacks(&self, writer: &WriterSource) -> MouseRegionCallbacks {
+        let on_enter: Option<MouseEnterCallback> = self
+            .on_enter
+            .as_ref()
+            .map(|callback| in_write(writer, callback));
+        let on_exit: Option<MouseExitCallback> = self
+            .on_exit
+            .as_ref()
+            .map(|callback| in_write(writer, callback));
+        let on_hover: Option<MouseHoverCallback> = self
+            .on_hover
+            .as_ref()
+            .map(|callback| in_write(writer, callback));
         MouseRegionCallbacks {
-            on_enter: self.on_enter.clone(),
-            on_exit: self.on_exit.clone(),
-            on_hover: self.on_hover.clone(),
+            on_enter,
+            on_exit,
+            on_hover,
         }
     }
 
@@ -154,21 +211,32 @@ impl MouseRegion {
         ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut RenderMouseRegion,
     ) {
+        let Some(writer) = ctx.writer_source() else {
+            if self.has_callbacks() {
+                tracing::debug!(
+                    "MouseRegion mounted without an owner graph; \
+                     enter/exit events will not be delivered"
+                );
+            }
+            return;
+        };
         match render_object.mouse_region_target() {
             Some(target) => {
-                if let Err(error) = ctx.replace_mouse_region(target, self.mouse_callbacks()) {
+                if let Err(error) = ctx.replace_mouse_region(target, self.mouse_callbacks(&writer))
+                {
                     tracing::warn!(?error, "MouseRegion callback replacement failed");
                 }
             }
-            None if self.has_callbacks() => match ctx.register_mouse_region(self.mouse_callbacks())
-            {
-                Ok(target) => render_object.set_mouse_region_target(Some(target)),
-                Err(error) => tracing::debug!(
-                    ?error,
-                    "MouseRegion mounted without an active interaction lane; \
+            None if self.has_callbacks() => {
+                match ctx.register_mouse_region(self.mouse_callbacks(&writer)) {
+                    Ok(target) => render_object.set_mouse_region_target(Some(target)),
+                    Err(error) => tracing::debug!(
+                        ?error,
+                        "MouseRegion mounted without an active interaction lane; \
                      enter/exit events will not be delivered"
-                ),
-            },
+                    ),
+                }
+            }
             None => {}
         }
     }
@@ -270,7 +338,7 @@ mod tests {
 
     #[test]
     fn debug_reports_callback_presence_and_configuration_without_child() {
-        let widget = MouseRegion::new().on_hover(|_device, _offset| {});
+        let widget = MouseRegion::new().on_hover(|_cx, _device, _offset| {});
         let debug = format!("{widget:?}");
         assert!(
             debug.contains("on_hover: true") && debug.contains("on_enter: false"),

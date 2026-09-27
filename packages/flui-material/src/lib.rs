@@ -79,6 +79,7 @@ pub mod dialog;
 pub mod divider;
 pub mod drawer;
 pub mod elevated_button;
+mod event_callback;
 pub mod filled_button;
 pub mod flexible_space_bar;
 pub mod floating_action_button;

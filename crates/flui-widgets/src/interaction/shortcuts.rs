@@ -230,7 +230,7 @@ impl StatelessView for CallbackShortcuts {
         Focus::new(self.child.clone())
             .can_request_focus(false)
             .debug_label("CallbackShortcuts")
-            .on_key_event(Rc::new(move |event| {
+            .on_key_event(move |_cx, event| {
                 let mut handled = false;
                 for (activator, callback) in &bindings {
                     if activator.matches(event) {
@@ -243,7 +243,7 @@ impl StatelessView for CallbackShortcuts {
                 } else {
                     KeyEventResult::Ignored
                 }
-            }))
+            })
     }
 }
 
@@ -361,7 +361,7 @@ impl ViewState<Shortcuts> for ShortcutsState {
         focus
             .can_request_focus(false)
             .debug_label("Shortcuts")
-            .on_key_event(Rc::new(move |event| {
+            .on_key_event(move |_cx, event| {
                 // `_find` (`shortcuts.dart:892-899`): the FIRST matching
                 // activator decides; an unresolvable intent falls through as
                 // ignored, it does not try later activators (`:922-938`).
@@ -386,7 +386,7 @@ impl ViewState<Shortcuts> for ShortcutsState {
                     Some(action) => action.invoke_for_key(intent),
                     None => KeyEventResult::Ignored,
                 }
-            }))
+            })
     }
 }
 

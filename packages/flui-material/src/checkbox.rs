@@ -134,7 +134,7 @@ const _: () = assert!(CHECKBOX_EDGE_SIZE < CHECKBOX_TAP_TARGET_SIZE);
 
 /// A value-change callback: the next tristate value. `Rc`-based
 /// (owner-local, per ADR-0027) — matches [`InkWell`]'s own callback shape.
-type CheckboxChangeCallback = Rc<dyn Fn(Option<bool>)>;
+type CheckboxChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, Option<bool>)>;
 
 /// A Material Design tristate-capable checkbox.
 ///
@@ -151,7 +151,7 @@ type CheckboxChangeCallback = Rc<dyn Fn(Option<bool>)>;
 /// ```rust
 /// use flui_material::Checkbox;
 ///
-/// let _off = Checkbox::new(false).on_changed(|_next| { /* ... */ });
+/// let _off = Checkbox::new(false).on_changed(|_cx, _next| { /* ... */ });
 /// let _tristate = Checkbox::tristate(None);
 /// let _disabled = Checkbox::new(true);
 /// ```
@@ -262,8 +262,11 @@ impl Checkbox {
     /// `Some(false) -> Some(true) -> (tristate: None, else: Some(false))
     /// -> Some(false) -> ...`. Flutter parity: `Checkbox.onChanged`.
     #[must_use]
-    pub fn on_changed(mut self, callback: impl Fn(Option<bool>) + 'static) -> Self {
-        self.on_changed = Some(Rc::new(callback));
+    pub fn on_changed<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, Option<bool>) -> R + 'static,
+    ) -> Self {
+        self.on_changed = Some(crate::event_callback::value_callback(callback));
         self
     }
 
@@ -451,9 +454,9 @@ impl ViewState<Checkbox> for CheckboxState {
         .overlay_color(overlay_color)
         .states_controller(self.states.clone());
         if interactive {
-            ink_well = ink_well.on_tap(move || {
+            ink_well = ink_well.on_tap(move |cx| {
                 if let Some(handler) = &on_changed {
-                    handler(next_value);
+                    handler(cx, next_value);
                 }
             });
         }
@@ -727,7 +730,7 @@ mod tests {
 
     #[test]
     fn on_changed_makes_the_checkbox_interactive() {
-        let checkbox = Checkbox::new(false).on_changed(|_| {});
+        let checkbox = Checkbox::new(false).on_changed(|_cx, _| {});
         assert!(checkbox.is_interactive());
     }
 

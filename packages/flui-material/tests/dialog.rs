@@ -176,7 +176,7 @@ fn default_corner_radius_reaches_the_mounted_material() {
             ThemeData::light(),
             Dialog::new(
                 GestureDetector::new()
-                    .on_tap(move || {
+                    .on_tap(move |_cx| {
                         counted.fetch_add(1, Ordering::SeqCst);
                     })
                     .child(ColoredBox::new(Color::rgb(5, 5, 5)).child(SizedBox::new(50.0, 50.0))),
@@ -215,7 +215,7 @@ fn an_overridden_24dp_corner_radius_includes_the_same_probe_point() {
             ThemeData::light(),
             Dialog::new(
                 GestureDetector::new()
-                    .on_tap(move || {
+                    .on_tap(move |_cx| {
                         counted.fetch_add(1, Ordering::SeqCst);
                     })
                     .child(ColoredBox::new(Color::rgb(5, 5, 5)).child(SizedBox::new(50.0, 50.0))),
@@ -299,7 +299,7 @@ fn a_tap_on_an_action_fires_its_handler() {
             ThemeData::light(),
             AlertDialog::new().title(Text::new("Delete?")).actions(vec![
                 GestureDetector::new()
-                    .on_tap(move || {
+                    .on_tap(move |_cx| {
                         counted.fetch_add(1, Ordering::SeqCst);
                     })
                     .child(

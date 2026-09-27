@@ -76,7 +76,7 @@ fn navigator_with_tappable_home(taps: &Arc<AtomicUsize>) -> NavigatorHandle {
     navigator.seed_initial(SimpleRoute::<i32>::new(move |_ctx| {
         let taps = Arc::clone(&taps);
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 taps.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30)))

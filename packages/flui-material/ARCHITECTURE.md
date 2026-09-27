@@ -24,6 +24,29 @@ are touched.
 
 ## Mapping decisions
 
+### Catalog events forward the dispatch's write context
+
+Press, selection and value-change setters accept `&mut EventCx` and an
+`EventOutcome` result (ADR-0086). Composed controls pass the context they
+receive from `InkWell` or the input widget; they do not open a new write
+scope per wrapper. Query callbacks keep their return values and receive no
+writer. `InkWell` obtains a `WriterSource` in `init_state` for its keyboard
+`CallbackAction` bridge, since the action protocol carries an intent rather
+than an event context. Pointer activation forwards the gesture's context.
+Both paths retain pressed-state-before-callback ordering.
+
+`FloatingActionButton::new(child).on_pressed(callback)` uses the same disabled
+default and setter shape as the other buttons. An optional generic callback
+in the constructor obstructed higher-ranked closure inference and forced
+type annotations even for a disabled button. The setter gives the closure
+its expected signature directly; the mounted test
+`inline_press_callback_writes_a_signal_without_type_annotations` pins that
+ergonomics together with actual signal delivery.
+
+`tests/ink_well.rs::pointer_and_keyboard_activation_write_the_owning_signal`
+and `tests/checkbox.rs::a_toggle_passes_its_value_and_writer_to_the_callback`
+exercise the production dispatch, signal mutation and reader rebuild.
+
 ### Checkbox value/tristate is a private mode enum, not independent fields
 
 **Rule:** Flutter's `Checkbox` takes `bool? value` plus `bool tristate` and

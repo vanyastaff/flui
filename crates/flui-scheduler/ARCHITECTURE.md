@@ -8,6 +8,36 @@ decisions` entries below; a full crate architecture writeup is deferred.
 
 ## Mapping decisions
 
+### Post-frame panic preserves uninvoked work in its original queue
+
+A post-frame callback panic stops the drain and propagates after frame completion
+bookkeeping closes. The panicking entry is consumed, not retried; the uninvoked
+tail returns to its original shared or owner-local queue with its original IDs.
+The private `scheduler::post_frame_dispatch` module owns this snapshot and tail
+recovery; the frame-close path retains phase and completion bookkeeping.
+The next completed frame sorts those IDs with newer registrations, so surviving
+work precedes work registered reentrantly by the failed callback. Cancellation
+records remain intact on the failed drain, including records belonging to other
+callback queues. No user callback or captured destructor runs under a queue guard.
+
+After the shared and owner-local queues have been snapshotted, but before their
+entries are sorted or invoked, the dispatcher emits one debug event with
+`shared_callbacks`, `local_callbacks`, and `total_callbacks`. These are queue
+work-item counts for diagnosing post-frame amplification; they are only a lower
+bound on retained memory because an opaque callback's captured bytes cannot be
+measured. Nested registrations therefore appear in the next frame's event, and
+a panic-restored tail appears again in the retry frame's event. Observability
+does not impose a capacity, coalesce commands, or alter delivery order.
+
+This extends the existing pre-pipeline recovery invariant to the post-frame
+snapshot. It does not catch-and-continue individual callbacks, request another
+frame, or promise that a platform host survives an application panic. A direct
+or headless caller that catches the propagated panic decides whether to resume.
+The regression tests
+`post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work` and
+`shared_post_frame_panic_preserves_uninvoked_shared_tail_without_local_lane`
+pin tail survival, mixed-queue FIFO, and consumption of the failed entry.
+
 ### One recovery boundary closes phase/completion state before any pre-pipeline panic propagates
 
 **Rule:** a caller that catches a panic out of `drive_frame`/`drive_frame_with_lane`/

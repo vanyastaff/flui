@@ -283,9 +283,12 @@ Signals have no Flutter counterpart; this is a local invariant (ADR-0086).
 sealed trait whose graph accessor takes a token only this crate can make
 (`reactive/writer.rs`). Application code meets one target: the `&mut EventCx<'_>` an event
 callback receives, which derefs to a `Writer`. `Writer` has no public constructor and is neither
-`Clone` nor `Send`; an `EventCx` exists only inside `WriterSource::write`, and the only way to a
-`WriterSource` is `LifecycleContext::writer_source`, which `build`'s `&dyn BuildContext` does not
-have. Both context implementations hand out a source over the graph their element reads through
+`Clone` nor `Send`; an `EventCx` exists only inside `WriterSource::write`. Stateful widgets acquire
+their `WriterSource` through `LifecycleContext::writer_source`; render views acquire it through
+`RenderObjectContext::writer_source` while registering owner-local interaction handlers.
+Neither capability is exposed by `build`'s `&dyn BuildContext`. A detached render context
+returns `None`, rather than manufacturing a graph unrelated to a presentation.
+The contexts hand out a source over the graph their element reads through
 (`ElementReads::graph`), so a source writes into its own presentation's graph and refuses another
 graph's handles with `ForeignGraph`. The run-time guard is unchanged and stays authoritative: a
 write a widget opens inside its own `build` is refused with `WrittenDuringBuild`. `Reactive` is
@@ -294,6 +297,13 @@ compiling; ADR-0086 §8 step 3 removes it with both `reactive()` accessors. An e
 return `()` or a write's `Result`; `EventOutcome::report` logs a refused write on
 `flui::signals` rather than dropping it silently. A `Signal::default()` handle names graph 0,
 which `Reactive::new` never mints, and is refused with `Unbound`.
+
+The borrowed `Writer` and `EventCx` also implement pure `ReadGraph`: an event's
+`peek` observes current values without creating a build subscription. Owner-bound
+non-signal mutations use `WriterSource::check_context` before changing state;
+it refuses foreign presentation contexts and a build in progress. It cannot prove
+the target widget is mounted: the target clears its stored source when detached.
+This preflight is not rollback of effects a user callback has already performed.
 
 Pinned by the `reactive/writer.rs` unit tests and `static_assertions`,
 `tests/writer_source.rs` (the production context's source rebuilds the reader, the test

@@ -37,7 +37,7 @@ fn absorbing_true_blocks_the_tap_from_reaching_a_child_gesture_detector() {
     let laid = lay_out(
         AbsorbPointer::new().child(
             GestureDetector::new()
-                .on_tap(move || {
+                .on_tap(move |_cx| {
                     in_cb.fetch_add(1, Ordering::SeqCst);
                 })
                 .child(target()),
@@ -64,7 +64,7 @@ fn absorbing_false_lets_the_tap_reach_a_child_gesture_detector() {
     let laid = lay_out(
         AbsorbPointer::new().absorbing(false).child(
             GestureDetector::new()
-                .on_tap(move || {
+                .on_tap(move |_cx| {
                     in_cb.fetch_add(1, Ordering::SeqCst);
                 })
                 .child(target()),

@@ -17,15 +17,36 @@ use flui_material::InkWell;
 use flui_sdk::animation::Vsync;
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::types::Color;
+use flui_sdk::view::SignalWriteExt;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{SizedBox, WidgetState, WidgetStatesController};
+
+#[test]
+fn pointer_and_keyboard_activation_write_the_owning_signal() {
+    let node = FocusNode::with_debug_label("writer-activation");
+    let child_node = Rc::clone(&node);
+    let probe = common::SignalProbe::new(move |signals| {
+        InkWell::new(SizedBox::new(80.0, 40.0))
+            .focus_node(Rc::clone(&child_node))
+            .on_tap(move |cx| signals.count.update(cx, |count| *count += 1))
+    });
+    let mut laid = lay_out(probe.view(), tight(80.0, 40.0));
+    laid.dispatch_pointer_down(40.0, 20.0);
+    laid.dispatch_pointer_up(40.0, 20.0);
+    assert_eq!(probe.value(), Ok(1));
+    node.request_focus();
+    assert!(laid.focus_manager().dispatch_key_event(&enter()));
+    assert_eq!(probe.value(), Ok(2));
+    laid.pump();
+    assert_eq!(probe.reads(), [0, 2]);
+}
 
 #[test]
 fn hover_updates_widget_states_when_the_pointer_moves_over_the_ink_well() {
     let states = WidgetStatesController::default();
     let laid = lay_out(
         InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|| {})
+            .on_tap(|_cx| {})
             .states_controller(states.clone()),
         tight(60.0, 40.0),
     );
@@ -45,7 +66,7 @@ fn hover_clears_when_the_pointer_exits_the_ink_well() {
     let states = WidgetStatesController::default();
     let laid = lay_out(
         InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|| {})
+            .on_tap(|_cx| {})
             .states_controller(states.clone()),
         tight(60.0, 40.0),
     );
@@ -86,7 +107,7 @@ fn tap_fires_on_tap_for_a_down_up_on_the_ink_well() {
     let taps = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&taps);
     let laid = lay_out(
-        InkWell::new(SizedBox::new(60.0, 40.0)).on_tap(move || {
+        InkWell::new(SizedBox::new(60.0, 40.0)).on_tap(move |_cx| {
             counted.fetch_add(1, Ordering::SeqCst);
         }),
         tight(60.0, 40.0),
@@ -118,7 +139,7 @@ fn on_tap_handler_observes_pressed_already_set() {
     let laid = lay_out(
         InkWell::new(SizedBox::new(60.0, 40.0))
             .states_controller(states.clone())
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 observed_for_handler.store(
                     states_for_handler
                         .value()
@@ -170,7 +191,7 @@ fn pressed_state_clears_after_the_activation_delay_under_an_ambient_vsync() {
         VsyncScope::new(
             vsync.clone(),
             InkWell::new(SizedBox::new(60.0, 40.0))
-                .on_tap(|| {})
+                .on_tap(|_cx| {})
                 .states_controller(states.clone()),
         ),
         tight(60.0, 40.0),
@@ -216,7 +237,7 @@ fn pressed_state_clears_immediately_without_an_ambient_vsync() {
     let states = WidgetStatesController::default();
     let laid = lay_out(
         InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|| {})
+            .on_tap(|_cx| {})
             .states_controller(states.clone()),
         tight(60.0, 40.0),
     );
@@ -240,7 +261,7 @@ fn overlay_color_resolution_reflects_the_hovered_state() {
 
     let mut laid = lay_out(
         InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|| {})
+            .on_tap(|_cx| {})
             .overlay_color(WidgetStateProperty::from_map([(
                 WidgetStateConstraint::Is(WidgetState::Hovered),
                 Some(Color::rgb(200, 10, 10)),
@@ -279,14 +300,14 @@ fn rebuilding_with_a_different_states_controller_re_homes_hover_tracking() {
 
     let mut laid = lay_out(
         InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|| {})
+            .on_tap(|_cx| {})
             .states_controller(controller_a.clone()),
         tight(60.0, 40.0),
     );
 
     laid.pump_widget(
         InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|| {})
+            .on_tap(|_cx| {})
             .states_controller(controller_b.clone()),
     );
 
@@ -312,14 +333,14 @@ fn rebuilding_with_the_same_cloned_controller_keeps_driving_it() {
 
     let mut laid = lay_out(
         InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|| {})
+            .on_tap(|_cx| {})
             .states_controller(controller.clone()),
         tight(60.0, 40.0),
     );
 
     laid.pump_widget(
         InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|| {})
+            .on_tap(|_cx| {})
             .states_controller(controller.clone()),
     );
 
@@ -359,7 +380,7 @@ fn focused_state_tracks_the_exact_external_focus_node() {
     let focus_node = FocusNode::with_debug_label("ink-well");
     let mut laid = lay_out(
         InkWell::new(SizedBox::new(80.0, 40.0))
-            .on_tap(|| {})
+            .on_tap(|_cx| {})
             .states_controller(states.clone())
             .focus_node(Rc::clone(&focus_node)),
         tight(80.0, 40.0),
@@ -397,7 +418,7 @@ fn enter_on_a_focused_ink_well_fires_on_tap() {
     let focus_node = FocusNode::with_debug_label("ink-well");
     let laid = lay_out(
         InkWell::new(SizedBox::new(80.0, 40.0))
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 counted.fetch_add(1, Ordering::SeqCst);
             })
             .focus_node(Rc::clone(&focus_node)),

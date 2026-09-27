@@ -17,6 +17,9 @@
 //! cannot drift apart between crates again.
 
 pub mod harness;
+mod signal_probe;
+
+pub use signal_probe::{ProbeRoot, ProbeRootState, ProbeSignals, SignalProbe};
 
 use std::any::TypeId;
 use std::cell::Cell;

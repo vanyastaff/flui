@@ -160,7 +160,7 @@ fn tap_fires_on_destination_selected_with_the_tapped_index() {
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
         themed(
-            NavigationBar::new(three_destinations()).on_destination_selected(move |index| {
+            NavigationBar::new(three_destinations()).on_destination_selected(move |_cx, index| {
                 *recorder.borrow_mut() = Some(index);
             }),
         ),
@@ -188,7 +188,7 @@ fn tapping_a_disabled_destination_does_not_fire_the_callback() {
 
     let laid = lay_out(
         themed(
-            NavigationBar::new(destinations).on_destination_selected(move |index| {
+            NavigationBar::new(destinations).on_destination_selected(move |_cx, index| {
                 *recorder.borrow_mut() = Some(index);
             }),
         ),

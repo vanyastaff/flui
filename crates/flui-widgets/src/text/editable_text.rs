@@ -38,6 +38,7 @@ use crate::interaction::actions::{
     PasteTextIntent, as_node_context, erased_action, layered_chain,
 };
 use crate::semantics::Semantics;
+use crate::support::ref_callback;
 use crate::text::controller::TextEditingController;
 use crate::text::text_store::{EditableTextStore, FieldParts, with_editable_global};
 
@@ -45,8 +46,10 @@ type ImeFocusTransition = Rc<dyn Fn(bool)>;
 /// Callback for [`EditableText::on_submitted`] — see that method's doc.
 /// Exported (not crate-private) so [`RawTextField`](super::text_field::RawTextField)'s
 /// own `on_submitted` passthrough and `flui_material::TextField`'s can share
-/// one canonical alias instead of each declaring their own.
-pub type SubmitCallback = Rc<dyn Fn(&str)>;
+/// one canonical alias instead of each declaring their own. It receives the
+/// dispatch's [`EventCx`] first (ADR-0086), and is stored already adapted to
+/// report its outcome.
+pub type SubmitCallback = Rc<dyn Fn(&mut EventCx<'_>, &str)>;
 
 // ============================================================================
 // EditableText
@@ -403,8 +406,9 @@ pub struct EditableText {
     pub(super) on_changed: Option<TextChanged>,
 }
 
-/// Callback for [`EditableText::on_changed`].
-pub(crate) type TextChanged = Rc<dyn Fn(&str)>;
+/// Callback for [`EditableText::on_changed`], with the dispatch's
+/// [`EventCx`].
+pub(crate) type TextChanged = Rc<dyn Fn(&mut EventCx<'_>, &str)>;
 
 impl EditableText {
     /// Create an `EditableText` driven by `controller` and `focus_node`.
@@ -526,9 +530,17 @@ impl EditableText {
     /// No multiline support exists in this substrate (there is no
     /// newline-insertion behavior to conflict with), so Enter has exactly
     /// one meaning here: submit.
+    ///
+    /// The callback receives the dispatch's `&mut EventCx<'_>` first, so it
+    /// writes a signal directly (ADR-0086); the field opens that write from
+    /// the writer source it acquired in `init_state`.
     #[must_use]
-    pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
-        self.on_submitted = Some(Rc::new(callback));
+    pub fn on_submitted<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_submitted = Some(ref_callback(callback));
         self
     }
 
@@ -539,10 +551,16 @@ impl EditableText {
     /// Only user edits: a caller changing the controller itself
     /// (`set_text`, `clear`) does not call it, which is what keeps a form
     /// field's reset from counting as the user's input. Runs after the edit,
-    /// with no borrow of the field held.
+    /// with no borrow of the field held, inside a write the field opens: the
+    /// callback receives that `&mut EventCx<'_>` first (ADR-0086). An IME
+    /// commit reaches it once the frame that deferred the commit has ended.
     #[must_use]
-    pub fn on_changed(mut self, callback: impl Fn(&str) + 'static) -> Self {
-        self.on_changed = Some(Rc::new(callback));
+    pub fn on_changed<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_changed = Some(ref_callback(callback));
         self
     }
 }
@@ -710,6 +728,9 @@ pub struct EditableTextState {
     action_chain: Option<ActionChain>,
     /// Generation-checked ownership of that record on the node.
     action_chain_registration: Option<FocusNodeRegistration>,
+    /// Acquired first in `init_state`: `on_changed` and `on_submitted` run
+    /// inside a write it opens (ADR-0086). `None` only before `init_state`.
+    writer: Option<WriterSource>,
 }
 
 impl std::fmt::Debug for EditableTextState {
@@ -748,6 +769,7 @@ impl StatefulView for EditableText {
             ime_token: Rc::new(RefCell::new(None)),
             local_post_frame_handle: None,
             cursor_area_alive: Rc::new(RefCell::new(None)),
+            writer: None,
             on_submitted: Rc::new(RefCell::new(self.on_submitted.clone())),
             on_changed: Rc::new(RefCell::new(self.on_changed.clone())),
             clipboard: None,
@@ -819,7 +841,7 @@ impl EditableTextState {
             let controller = Rc::clone(&controller);
             let focus_node = Rc::clone(&focus_node);
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |dispatch: PointerDispatch<'_>| {
+            move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 if !enabled {
                     return;
                 }
@@ -839,7 +861,7 @@ impl EditableTextState {
             let resolve = resolve.clone();
             let controller = Rc::clone(&controller);
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |dispatch: PointerDispatch<'_>| {
+            move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 let Some(from) = drag_anchor.get() else {
                     return;
                 };
@@ -859,11 +881,11 @@ impl EditableTextState {
         // gesture entirely — extend a selection the user abandoned.
         let release = {
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |_: PointerDispatch<'_>| drag_anchor.set(None)
+            move |_: &mut EventCx<'_>, _: PointerDispatch<'_>| drag_anchor.set(None)
         };
         let cancel = {
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |_: PointerDispatch<'_>| drag_anchor.set(None)
+            move |_: &mut EventCx<'_>, _: PointerDispatch<'_>| drag_anchor.set(None)
         };
 
         field
@@ -933,7 +955,7 @@ impl EditableTextState {
         // ancestor's own tap and letting this no-op recognizer compete to
         // win a contact it does nothing with.
         if view.enabled {
-            detector = detector.on_double_tap_down(move |details| {
+            detector = detector.on_double_tap_down(move |_cx, details| {
                 let Some(owner) = owner.as_ref() else {
                     return;
                 };
@@ -960,6 +982,22 @@ impl EditableTextState {
         )
     }
 
+    /// The writer source `on_changed` and `on_submitted` run inside.
+    fn writer(&self) -> WriterSource {
+        self.writer
+            .clone()
+            .expect("BUG: EditableText init_state acquires its writer source first")
+    }
+
+    /// The observer every user-edit path reports through.
+    fn edit_observer(&self) -> EditObserver {
+        EditObserver {
+            controller: Rc::clone(&self.controller),
+            on_changed: Rc::clone(&self.on_changed),
+            writer: self.writer(),
+        }
+    }
+
     /// The key handler for `node`: [`build_key_handler`], reporting each
     /// edit it makes through `on_changed`.
     fn key_handler(&self, node: &Rc<FocusNode>) -> KeyEventHandler {
@@ -967,11 +1005,9 @@ impl EditableTextState {
             Rc::clone(&self.controller),
             Rc::clone(node),
             Rc::clone(&self.on_submitted),
+            self.writer(),
         );
-        let edits = EditObserver {
-            controller: Rc::clone(&self.controller),
-            on_changed: Rc::clone(&self.on_changed),
-        };
+        let edits = self.edit_observer();
         let store = self.text_store.clone();
         Rc::new(move |event| {
             // An IME grant still queued from the last frame lands first, so
@@ -1018,10 +1054,7 @@ impl EditableTextState {
             focus_node: Rc::clone(&self.observed_focus_node),
             obscure: Rc::clone(&self.obscure),
             clipboard: self.clipboard.clone(),
-            edits: EditObserver {
-                controller: Rc::clone(&self.controller),
-                on_changed: Rc::clone(&self.on_changed),
-            },
+            edits: self.edit_observer(),
         };
         let chain = layered_chain(
             enclosing.clone(),
@@ -1041,11 +1074,12 @@ impl EditableTextState {
 
 /// Reports a user edit through [`EditableText::on_changed`]: compares the
 /// text before and after the edit, and calls the callback with no borrow
-/// held when they differ.
+/// held when they differ, inside a write `writer` opens.
 #[derive(Clone)]
 pub(super) struct EditObserver {
     controller: Rc<RefCell<TextEditingController>>,
     on_changed: Rc<RefCell<Option<TextChanged>>>,
+    writer: WriterSource,
 }
 
 impl EditObserver {
@@ -1066,7 +1100,7 @@ impl EditObserver {
         }
         let callback = self.on_changed.borrow().clone();
         if let Some(callback) = callback {
-            callback(&after);
+            self.writer.write(|cx| callback(cx, &after));
         }
     }
 }
@@ -1158,6 +1192,8 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
 
 impl ViewState<EditableText> for EditableTextState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        // First: every edit path built below reports through it.
+        self.writer = Some(ctx.writer_source());
         self.focus_manager = Some(ctx.focus_manager());
 
         // Resolve the focus parent first, but attach only after every
@@ -1186,10 +1222,7 @@ impl ViewState<EditableText> for EditableTextState {
             inner_anchor: self.inner_anchor.clone(),
             obscure: Rc::clone(&self.obscure),
             obscuring_character: Rc::clone(&self.obscuring_character),
-            edits: EditObserver {
-                controller: Rc::clone(&self.controller),
-                on_changed: Rc::clone(&self.on_changed),
-            },
+            edits: self.edit_observer(),
         }));
 
         // 2. Install the key handler on the node itself. It only fires when
@@ -1854,6 +1887,7 @@ fn build_key_handler(
     controller: Rc<RefCell<TextEditingController>>,
     focus_node: Rc<FocusNode>,
     on_submitted: Rc<RefCell<Option<SubmitCallback>>>,
+    writer: WriterSource,
 ) -> KeyEventHandler {
     // Resolved once, at handler-construction time, not per keystroke — the
     // one place a future runtime-resolved platform would be injected
@@ -2019,7 +2053,7 @@ fn build_key_handler(
                 if !event.repeat {
                     let text = controller.text();
                     drop(controller);
-                    callback(&text);
+                    writer.write(|cx| callback(cx, &text));
                 }
                 KeyEventResult::Handled
             }
@@ -2220,6 +2254,21 @@ mod tests {
     use super::*;
     use crate::text::controller::TextEditingController;
 
+    /// A writer source over a fresh owner's graph, for the key-handler tests
+    /// below, which drive the handler directly and never submit.
+    fn test_writer() -> WriterSource {
+        let tree = Arc::new(parking_lot::RwLock::new(flui_view::ElementTree::new()));
+        let owner = Arc::new(parking_lot::RwLock::new(flui_view::BuildOwner::new()));
+        flui_view::ElementBuildContext::new(
+            flui_foundation::ElementId::new(1),
+            0,
+            false,
+            tree,
+            owner,
+        )
+        .writer_source()
+    }
+
     /// The mask is one character per SOURCE grapheme cluster, and the caret
     /// lands where it should in the masked string.
     ///
@@ -2345,6 +2394,7 @@ mod tests {
             Rc::new(RefCell::new(controller.clone())),
             Rc::clone(&focus_node),
             Rc::new(RefCell::new(None)),
+            test_writer(),
         );
 
         let event = KeyEventBuilder::new(Code::KeyA)
@@ -2389,6 +2439,7 @@ mod tests {
                 Rc::new(RefCell::new(controller.clone())),
                 Rc::clone(&focus_node),
                 Rc::new(RefCell::new(None)),
+                test_writer(),
             );
             let event = KeyEventBuilder::new(code)
                 .with_key(Key::Character(key.to_string()))
@@ -2540,6 +2591,7 @@ mod tests {
             Rc::new(RefCell::new(controller.clone())),
             Rc::clone(&focus_node),
             Rc::new(RefCell::new(None)),
+            test_writer(),
         );
         controller.move_caret_end();
 
@@ -2573,6 +2625,7 @@ mod tests {
             Rc::new(RefCell::new(controller.clone())),
             Rc::clone(&focus_node),
             Rc::new(RefCell::new(None)),
+            test_writer(),
         );
         controller.move_caret_end();
 
@@ -2604,6 +2657,7 @@ mod tests {
             Rc::new(RefCell::new(controller.clone())),
             Rc::clone(&focus_node),
             Rc::new(RefCell::new(None)),
+            test_writer(),
         );
         controller.move_caret_home();
 
@@ -2637,6 +2691,7 @@ mod tests {
             Rc::new(RefCell::new(controller.clone())),
             Rc::clone(&focus_node),
             Rc::new(RefCell::new(None)),
+            test_writer(),
         );
         controller.move_caret_home();
 
@@ -2669,6 +2724,7 @@ mod tests {
             Rc::new(RefCell::new(controller.clone())),
             Rc::clone(&focus_node),
             Rc::new(RefCell::new(None)),
+            test_writer(),
         );
         controller.move_caret_home();
 

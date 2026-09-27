@@ -207,9 +207,9 @@ pub use interaction::{
     GestureDetectorState, IgnorePointer, Intent, InteractionEndDetails, InteractionStartDetails,
     InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MetaData,
     MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis, PasteTextIntent,
-    PreviousFocusAction, PreviousFocusIntent, RawButton, RawButtonState, ShortcutCallback,
-    Shortcuts, ShortcutsState, SingleActivator, TransformationController, Visibility,
-    VisibilityGate, WheelScaleGate,
+    PreviousFocusAction, PreviousFocusIntent, RawButton, ShortcutCallback, Shortcuts,
+    ShortcutsState, SingleActivator, TransformationController, Visibility, VisibilityGate,
+    WheelScaleGate,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
@@ -227,8 +227,9 @@ pub use flui_objects::OverflowBoxFit;
 pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 pub use flui_types::styling::TableBorder;
 pub use form::{
-    AutovalidateMode, Form, FormField, FormFieldHandle, FormFieldSetter, FormFieldState,
-    FormFieldValidator, FormHandle, FormState, RawTextFormField, RawTextFormFieldState,
+    AutovalidateMode, Form, FormField, FormFieldHandle, FormFieldHandleAlreadyAttached,
+    FormFieldSetter, FormFieldState, FormFieldValidator, FormHandle, FormHandleAlreadyAttached,
+    FormState, RawTextFormField, RawTextFormFieldState,
 };
 pub use navigator::{
     FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope, HeroMode,
@@ -365,9 +366,9 @@ pub mod prelude {
         OverlayEntry, OverlayEntryId, OverlayHandle, Padding, PageController, PageRoute,
         PageScrollPhysics, PageView, PasteTextIntent, PhysicalModel, PhysicalShape, PopScope,
         PopupRoute, Positioned, PreferredSize, PreferredSizeView, PreviousFocusAction,
-        PreviousFocusIntent, RawButton, RawButtonState, RawTextField, RawTextFieldState,
-        RawTextFormField, RepaintBoundary, RichText, RotatedBox, Routable, RoutePath, Router,
-        RouterHandle, Row, SafeArea, ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts,
+        PreviousFocusIntent, RawButton, RawTextField, RawTextFieldState, RawTextFormField,
+        RepaintBoundary, RichText, RotatedBox, Routable, RoutePath, Router, RouterHandle, Row,
+        SafeArea, ScrollController, Scrollable, Scrollbar, Semantics, Shortcuts,
         ShrinkWrappingViewport, SimpleRoute, SingleActivator, SingleChildScrollView, SizedBox,
         SizedOverflowBox, SliverChildBuilderDelegate, SliverFillRemaining,
         SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,

@@ -225,6 +225,27 @@ impl Harness {
         self.binding.enter_owner_scope(callback)
     }
 
+    /// Turn semantics on, as a platform adapter does when assistive
+    /// technology attaches; the next frame assembles the tree.
+    ///
+    /// # Panics
+    ///
+    /// If the binding is not bound to a tree, which a mounted harness always
+    /// is.
+    pub fn enable_semantics(&mut self) {
+        self.binding
+            .enable_semantics()
+            .expect("a mounted Harness is tree-bound");
+    }
+
+    /// The accessibility tree as a platform adapter would receive it, or
+    /// `None` until [`enable_semantics`](Self::enable_semantics) has been
+    /// called and a frame has run since.
+    #[must_use]
+    pub fn a11y_tree(&self) -> Option<flui_testing::A11yTree> {
+        self.binding.a11y_tree()
+    }
+
     /// Advance the binding's virtual clock by the shared
     /// [`POINTER_SAMPLE_INTERVAL`] before a synthetic Move that records a new
     /// velocity sample — the same mechanism (and same 8ms rationale) as

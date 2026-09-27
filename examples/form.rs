@@ -87,11 +87,11 @@ impl ViewState<SignUpForm> for SignUpState {
                     .is_empty()
                     .then(|| "Enter your name".to_owned())
             })
-            .on_saved(move |value| save_name.update(|saved| saved.name.clone_from(value)));
+            .on_saved(move |_cx, value| save_name.update(|saved| saved.name.clone_from(value)));
         let email = TextFormField::with_initial_value("")
             .decoration(labelled("Email"))
             .validator(|value| (!value.contains('@')).then(|| "Enter an email address".to_owned()))
-            .on_saved(move |value| save_email.update(|saved| saved.email.clone_from(value)));
+            .on_saved(move |_cx, value| save_email.update(|saved| saved.email.clone_from(value)));
         let password = TextFormField::with_initial_value("")
             .decoration(labelled("Password"))
             .obscure_text(true)
@@ -99,7 +99,7 @@ impl ViewState<SignUpForm> for SignUpState {
             .validator(|value| {
                 (value.chars().count() < 8).then(|| "Use 8 or more characters".to_owned())
             })
-            .on_saved(move |value| {
+            .on_saved(move |_cx, value| {
                 save_password.update(|saved| saved.password_length = value.chars().count());
             });
 
@@ -116,9 +116,9 @@ impl ViewState<SignUpForm> for SignUpState {
             SizedBox::width(FIELD_WIDTH).child(password),
             SizedBox::height(16.0),
             Row::new(row![
-                ElevatedButton::new(Text::new("Submit")).on_pressed(move || {
+                ElevatedButton::new(Text::new("Submit")).on_pressed(move |cx| {
                     if submit_form.validate() {
-                        submit_form.save();
+                        submit_form.save(cx)?;
                         let saved = submit_saved.with(Clone::clone);
                         submit_summary.update(|summary| {
                             *summary = format!(
@@ -131,11 +131,13 @@ impl ViewState<SignUpForm> for SignUpState {
                             "Fix the fields marked in red".clone_into(summary);
                         });
                     }
+                    Ok::<(), flui::view::EventContextError>(())
                 }),
                 SizedBox::width(8.0),
-                ElevatedButton::new(Text::new("Reset")).on_pressed(move || {
-                    reset_form.reset();
+                ElevatedButton::new(Text::new("Reset")).on_pressed(move |cx| {
+                    reset_form.reset(cx)?;
                     reset_summary.update(String::clear);
+                    Ok::<(), flui::view::EventContextError>(())
                 }),
             ]),
             SizedBox::height(16.0),

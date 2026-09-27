@@ -39,6 +39,7 @@ use flui_view::prelude::*;
 use crate::interaction::GestureDetector;
 use crate::layout::Padding;
 use crate::paint::DecoratedBox;
+use crate::support::ref_callback;
 use crate::text::controller::TextEditingController;
 use crate::text::editable_text::{EditableText, SubmitCallback, TextChanged};
 
@@ -162,11 +163,15 @@ impl RawTextField {
         self
     }
 
-    /// Call `callback` with the new text after each user edit. Forwards to
-    /// [`EditableText::on_changed`].
+    /// Call `callback` with the dispatch's `&mut EventCx<'_>` and the new
+    /// text after each user edit. Forwards to [`EditableText::on_changed`].
     #[must_use]
-    pub fn on_changed(mut self, callback: impl Fn(&str) + 'static) -> Self {
-        self.on_changed = Some(Rc::new(callback));
+    pub fn on_changed<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_changed = Some(ref_callback(callback));
         self
     }
 
@@ -181,10 +186,14 @@ impl RawTextField {
     /// while it has focus. Forwards to [`EditableText::on_submitted`] — see
     /// that method's doc for exactly when it fires. Added for symmetry with
     /// `flui_material::TextField::on_submitted`, which forwards the same
-    /// way.
+    /// way. The callback receives the dispatch's `&mut EventCx<'_>` first.
     #[must_use]
-    pub fn on_submitted(mut self, callback: impl Fn(&str) + 'static) -> Self {
-        self.on_submitted = Some(Rc::new(callback));
+    pub fn on_submitted<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &str) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_submitted = Some(ref_callback(callback));
         self
     }
 }
@@ -232,10 +241,10 @@ impl ViewState<RawTextField> for RawTextFieldState {
             .obscure_text(view.obscure_text)
             .enabled(view.enabled);
         if let Some(on_submitted) = view.on_submitted.clone() {
-            editable = editable.on_submitted(move |text| on_submitted(text));
+            editable = editable.on_submitted(move |cx, text| on_submitted(cx, text));
         }
         if let Some(on_changed) = view.on_changed.clone() {
-            editable = editable.on_changed(move |text| on_changed(text));
+            editable = editable.on_changed(move |cx, text| on_changed(cx, text));
         }
 
         let padded = Padding::new(view.content_padding).child(editable);
@@ -243,7 +252,7 @@ impl ViewState<RawTextField> for RawTextFieldState {
 
         let focus_node = Rc::clone(&self.focus_node);
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 focus_node.request_focus();
             })
             .child(decorated)

@@ -1085,7 +1085,10 @@ where
         if let Some(pipeline_owner) = core.pipeline_owner() {
             tracing::info!("RenderBehavior::on_mount creating RenderObject");
 
-            let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
+            let ctx = crate::RenderObjectContext::new(
+                owner.interaction_dispatch.as_ref(),
+                Some(owner.reactive),
+            );
             let render_object = core.view().create_render_object(&ctx);
 
             let sliver_slot = core.sliver_slot();
@@ -1199,7 +1202,10 @@ where
         if let Some(render_id) = self.render_id
             && let Some(pipeline_owner) = core.pipeline_owner()
         {
-            let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
+            let ctx = crate::RenderObjectContext::new(
+                owner.interaction_dispatch.as_ref(),
+                Some(owner.reactive),
+            );
             pipeline_owner.with_mut(|pipeline_owner| {
                 if let Some(render_object) = pipeline_owner
                     .render_tree_mut()
@@ -1261,7 +1267,10 @@ where
                 panic!("BUG: active RenderBehavior must have a PipelineOwner during update")
             }
         };
-        let ctx = crate::RenderObjectContext::new(owner.interaction_dispatch.as_ref());
+        let ctx = crate::RenderObjectContext::new(
+            owner.interaction_dispatch.as_ref(),
+            Some(owner.reactive),
+        );
         let impact = pipeline_owner.with_mut(|pipeline_owner| {
             let node = pipeline_owner
                 .render_tree_mut()

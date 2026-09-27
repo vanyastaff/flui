@@ -153,14 +153,14 @@ const _: () = assert!(ACTIVE_THUMB_RADIUS <= SWITCH_TRACK_HEIGHT / 2.0);
 
 /// A value-change callback: the next boolean value. `Rc`-based (owner-local,
 /// per ADR-0027) — matches [`InkWell`]'s own callback shape.
-type SwitchChangeCallback = Rc<dyn Fn(bool)>;
+type SwitchChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, bool)>;
 
 /// A Material Design binary (on/off) switch.
 ///
 /// ```rust
 /// use flui_material::Switch;
 ///
-/// let _off = Switch::new(false).on_changed(|_next| { /* ... */ });
+/// let _off = Switch::new(false).on_changed(|_cx, _next| { /* ... */ });
 /// let _disabled = Switch::new(true);
 /// ```
 #[derive(Clone, StatefulView)]
@@ -196,8 +196,11 @@ impl Switch {
     /// swallows taps. On tap, fires with `!value`. Flutter parity:
     /// `Switch.onChanged`.
     #[must_use]
-    pub fn on_changed(mut self, callback: impl Fn(bool) + 'static) -> Self {
-        self.on_changed = Some(Rc::new(callback));
+    pub fn on_changed<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, bool) -> R + 'static,
+    ) -> Self {
+        self.on_changed = Some(crate::event_callback::value_callback(callback));
         self
     }
 
@@ -324,9 +327,9 @@ impl ViewState<Switch> for SwitchState {
         .overlay_color(overlay_color)
         .states_controller(self.states.clone());
         if interactive {
-            ink_well = ink_well.on_tap(move || {
+            ink_well = ink_well.on_tap(move |cx| {
                 if let Some(handler) = &on_changed {
-                    handler(next_value);
+                    handler(cx, next_value);
                 }
             });
         }
@@ -562,7 +565,7 @@ mod tests {
 
     #[test]
     fn on_changed_makes_the_switch_interactive() {
-        let switch = Switch::new(false).on_changed(|_| {});
+        let switch = Switch::new(false).on_changed(|_cx, _| {});
         assert!(switch.is_interactive());
     }
 

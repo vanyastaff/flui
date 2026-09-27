@@ -426,6 +426,32 @@ fn tapping_a_tab_item_switches_the_active_tab() {
     );
 }
 
+#[test]
+fn tab_callback_observes_updated_controller_and_can_write_a_signal() {
+    let controller = CupertinoTabController::new(0);
+    let probe = common::SignalProbe::new(move |signals| {
+        let observed = controller.clone();
+        let bar = two_tab_bar().on_tap(move |cx, index| {
+            assert_eq!(observed.index(), index);
+            signals
+                .count
+                .set(cx, u32::try_from(index).expect("test index fits u32"))
+        });
+        MediaQuery::new(
+            MediaQueryData::default(),
+            CupertinoTabScaffold::new(bar, controller.clone(), |_ctx, _index| {
+                SizedBox::shrink().boxed()
+            }),
+        )
+    });
+    let mut laid = lay_out(probe.view(), tight(400.0, 800.0));
+    laid.dispatch_pointer_down(300.0, 790.0);
+    laid.dispatch_pointer_up(300.0, 790.0);
+    assert_eq!(probe.value(), Ok(1));
+    laid.pump();
+    assert_eq!(probe.reads(), [0, 1]);
+}
+
 /// An out-of-range controller index must fail loudly, not silently render
 /// every tab `Offstage` with `tab_builder` never invoked. Flutter parity:
 /// `_onCurrentIndexChange`'s `assert(_controller.index >= 0 &&

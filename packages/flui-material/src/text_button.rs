@@ -40,7 +40,7 @@ use crate::theme::Theme;
 /// use flui_material::TextButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _button = TextButton::new(Text::new("Learn more")).on_pressed(|| {});
+/// let _button = TextButton::new(Text::new("Learn more")).on_pressed(|_cx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct TextButton {
@@ -72,8 +72,11 @@ impl TextButton {
     /// Sets the press handler. Presence of a handler is what makes this
     /// button enabled.
     #[must_use]
-    pub fn on_pressed(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_pressed = Some(std::rc::Rc::new(callback));
+    pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self
     }
 

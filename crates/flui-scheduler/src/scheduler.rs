@@ -78,10 +78,11 @@ use crate::{
     },
     id::{CallbackId, IdGenerator},
     panic_payload::discard_panic_payload,
-    post_frame::{LocalPostFrameEntry, OwnerPostFrameCallback},
     task::{Priority, TaskQueue},
     ticker::TickerProvider,
 };
+
+mod post_frame_dispatch;
 
 // CallbackId is imported from crate::id (re-exported from flui_foundation::FrameCallbackId)
 
@@ -1605,36 +1606,7 @@ impl UpdateScheduler {
             // itself traces the error and returns `Err`; this treats that
             // exactly like "no lane was passed" for this call, leaving the
             // lane's queue untouched.
-            let mut callbacks: Vec<LocalPostFrameEntry> = {
-                let _registration = self.inner.callbacks.post_frame_registration.lock();
-                let mut cbs = self.inner.callbacks.post_frame.lock();
-                let mut snapshot: Vec<_> = cbs
-                    .drain(..)
-                    .map(|entry| LocalPostFrameEntry {
-                        id: entry.id,
-                        callback: entry.callback as OwnerPostFrameCallback,
-                    })
-                    .collect();
-                if let Some(lane) = lane
-                    && let Ok(local_entries) = lane.take_queue_for(self)
-                {
-                    snapshot.extend(local_entries);
-                }
-                snapshot
-            };
-
-            callbacks.sort_unstable_by_key(|entry| entry.id.get());
-            let callback_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                for entry in callbacks {
-                    if self.inner.callbacks.cancelled.contains_key(&entry.id) {
-                        continue;
-                    }
-                    (entry.callback)(&timing);
-                }
-            }));
-
-            // Clear processed cancellations
-            self.inner.callbacks.cancelled.clear();
+            let callback_result = self.dispatch_post_frame_callbacks(lane, &timing);
 
             // Notify frame completion futures. Caught here, alongside
             // `callback_result`, rather than left to propagate bare: a

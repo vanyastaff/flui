@@ -101,7 +101,10 @@ use flui_types::Size;
 use flui_types::painting::Clip;
 use flui_types::typography::TextDirection;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, BuildContextExt, IntoView, RebuildHandle, ViewExt, ViewState};
+use flui_view::{
+    BoxedView, BuildContextExt, EventCx, EventOutcome, IntoView, LocalPostFrameHandle,
+    RebuildHandle, ViewExt, ViewState, WriterSource,
+};
 
 use crate::animated::VsyncScope;
 use crate::localization::Directionality;
@@ -150,13 +153,17 @@ pub enum DismissDirection {
 /// collapse has finished (or immediately, if `resize_duration` is `None`).
 ///
 /// Flutter parity: `DismissDirectionCallback` (`dismissible.dart:28`).
-pub type DismissDirectionCallback = Rc<dyn Fn(DismissDirection)>;
+pub type DismissDirectionCallback = Rc<dyn Fn(&mut EventCx<'_>, DismissDirection)>;
 
 /// Fired on every drag/threshold-state change while a [`Dismissible`] is
 /// being dragged.
 ///
 /// Flutter parity: `DismissUpdateCallback` (`dismissible.dart:39`).
-pub type DismissUpdateCallback = Rc<dyn Fn(DismissUpdateDetails)>;
+pub type DismissUpdateCallback = Rc<dyn Fn(&mut EventCx<'_>, DismissUpdateDetails)>;
+
+type ResizeCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+type DirectionDelivery = Rc<dyn Fn(DismissDirection)>;
+type UpdateDelivery = Rc<dyn Fn(DismissUpdateDetails)>;
 
 /// Details delivered to [`Dismissible::on_update`].
 ///
@@ -185,7 +192,7 @@ pub struct Dismissible {
     child: BoxedView,
     background: Option<BoxedView>,
     secondary_background: Option<BoxedView>,
-    on_resize: Option<Rc<dyn Fn()>>,
+    on_resize: Option<ResizeCallback>,
     on_dismissed: Option<DismissDirectionCallback>,
     on_update: Option<DismissUpdateCallback>,
     direction: DismissDirection,
@@ -236,24 +243,35 @@ impl Dismissible {
 
     /// Called on every resize-collapse tick before the collapse completes.
     #[must_use]
-    pub fn on_resize(mut self, on_resize: impl Fn() + 'static) -> Self {
-        self.on_resize = Some(Rc::new(on_resize));
+    pub fn on_resize<R: EventOutcome>(
+        mut self,
+        on_resize: impl Fn(&mut EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_resize = Some(Rc::new(move |cx| on_resize(cx).report()));
         self
     }
 
     /// Called once the dismissible has been dismissed — after the resize
     /// collapse finishes, or immediately if `resize_duration` is `None`.
     #[must_use]
-    pub fn on_dismissed(mut self, on_dismissed: impl Fn(DismissDirection) + 'static) -> Self {
-        self.on_dismissed = Some(Rc::new(on_dismissed));
+    pub fn on_dismissed<R: EventOutcome>(
+        mut self,
+        on_dismissed: impl Fn(&mut EventCx<'_>, DismissDirection) -> R + 'static,
+    ) -> Self {
+        self.on_dismissed = Some(Rc::new(move |cx, direction| {
+            on_dismissed(cx, direction).report();
+        }));
         self
     }
 
     /// Called on every drag update with the current direction/threshold
     /// state.
     #[must_use]
-    pub fn on_update(mut self, on_update: impl Fn(DismissUpdateDetails) + 'static) -> Self {
-        self.on_update = Some(Rc::new(on_update));
+    pub fn on_update<R: EventOutcome>(
+        mut self,
+        on_update: impl Fn(&mut EventCx<'_>, DismissUpdateDetails) -> R + 'static,
+    ) -> Self {
+        self.on_update = Some(Rc::new(move |cx, details| on_update(cx, details).report()));
         self
     }
 
@@ -525,14 +543,88 @@ struct DragState {
 /// snapshot, so the `'static` closures `build()` constructs — invoked later,
 /// against whatever `view` was current when they were built — read a
 /// consistent value instead of a borrow that cannot outlive `build()`.
+#[derive(Clone)]
 struct ResolvedConfig {
     direction: DismissDirection,
     text_direction: TextDirection,
     dismiss_thresholds: HashMap<DismissDirection, f32>,
     resize_duration: Option<Duration>,
     cross_axis_end_offset: f32,
-    on_dismissed: Option<DismissDirectionCallback>,
+    on_dismissed: Option<DirectionDelivery>,
     on_resize: Option<Rc<dyn Fn()>>,
+}
+
+#[derive(Clone)]
+struct DismissCallbacks {
+    resize: Option<ResizeCallback>,
+    dismissed: Option<DismissDirectionCallback>,
+    update: Option<DismissUpdateCallback>,
+}
+
+impl From<&Dismissible> for DismissCallbacks {
+    fn from(view: &Dismissible) -> Self {
+        Self {
+            resize: view.on_resize.clone(),
+            dismissed: view.on_dismissed.clone(),
+            update: view.on_update.clone(),
+        }
+    }
+}
+
+enum DismissEvent {
+    Resize,
+    Dismissed(DismissDirection),
+    Update(DismissUpdateDetails),
+}
+
+/// Layout discovers transitions but cannot run user effects. Snapshot their
+/// payloads there, then dispatch after the frame through the latest callbacks.
+/// The input-time completion bypass dispatches immediately with the same source.
+struct DismissEvents {
+    writer: WriterSource,
+    post_frame: Option<LocalPostFrameHandle>,
+    mounted: Cell<bool>,
+    callbacks: Rc<RefCell<DismissCallbacks>>,
+}
+
+impl DismissEvents {
+    fn dispatch(&self, event: DismissEvent) {
+        if !self.mounted.get() {
+            return;
+        }
+        let callbacks = self.callbacks.borrow().clone();
+        self.writer.write(|cx| match event {
+            DismissEvent::Resize => {
+                if let Some(callback) = callbacks.resize {
+                    callback(cx);
+                }
+            }
+            DismissEvent::Dismissed(direction) => {
+                if let Some(callback) = callbacks.dismissed {
+                    callback(cx, direction);
+                }
+            }
+            DismissEvent::Update(details) => {
+                if let Some(callback) = callbacks.update {
+                    callback(cx, details);
+                }
+            }
+        });
+    }
+
+    fn defer(self: &Rc<Self>, event: DismissEvent) {
+        let Some(post_frame) = &self.post_frame else {
+            tracing::warn!("Dismissible: event dropped because there is no owner post-frame lane");
+            return;
+        };
+        let events = self.clone();
+        if let Err(error) = post_frame.schedule_local(move |_| events.dispatch(event)) {
+            tracing::warn!(
+                ?error,
+                "Dismissible: event dropped because the owner post-frame lane is closed"
+            );
+        }
+    }
 }
 
 /// State for [`Dismissible`]. Owns the persistent `move_controller` (created
@@ -541,6 +633,8 @@ struct ResolvedConfig {
 /// ADR-0018 — never acquired from `build`/layout) that the lazily created
 /// resize controller's listener needs later.
 pub struct DismissibleState {
+    events: Option<Rc<DismissEvents>>,
+    callbacks: Rc<RefCell<DismissCallbacks>>,
     move_controller: AnimationController,
     move_value_listener_id: Option<ListenerId>,
     move_status_listener_id: Option<ListenerId>,
@@ -575,6 +669,8 @@ impl StatefulView for Dismissible {
         // `UpdateScheduler` at all.
         let move_controller = AnimationController::with_detached_ticker(self.movement_duration);
         DismissibleState {
+            events: None,
+            callbacks: Rc::new(RefCell::new(DismissCallbacks::from(self))),
             move_controller,
             move_value_listener_id: None,
             move_status_listener_id: None,
@@ -586,7 +682,18 @@ impl StatefulView for Dismissible {
 }
 
 impl ViewState<Dismissible> for DismissibleState {
+    fn did_update_view(&mut self, _old_view: &Dismissible, new_view: &Dismissible) {
+        let previous = self.callbacks.replace(DismissCallbacks::from(new_view));
+        drop(previous);
+    }
+
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.events = Some(Rc::new(DismissEvents {
+            writer: ctx.writer_source(),
+            post_frame: ctx.local_post_frame_handle(),
+            mounted: Cell::new(true),
+            callbacks: self.callbacks.clone(),
+        }));
         let rebuild = ctx.rebuild_handle();
 
         let rebuild_for_value = rebuild.clone();
@@ -639,16 +746,38 @@ impl ViewState<Dismissible> for DismissibleState {
         } else {
             TextDirection::Ltr
         };
+        let events = self
+            .events
+            .clone()
+            .expect("BUG: Dismissible initialized before build");
+        let direct_events = events.clone();
         let resolved = Rc::new(ResolvedConfig {
             direction: view.direction,
             text_direction,
             dismiss_thresholds: view.dismiss_thresholds.clone(),
             resize_duration: view.resize_duration,
             cross_axis_end_offset: view.cross_axis_end_offset,
-            on_dismissed: view.on_dismissed.clone(),
-            on_resize: view.on_resize.clone(),
+            on_dismissed: view.on_dismissed.as_ref().map(|_| {
+                Rc::new(move |direction| direct_events.dispatch(DismissEvent::Dismissed(direction)))
+                    as DirectionDelivery
+            }),
+            on_resize: None,
         });
-        let on_update = view.on_update.clone();
+        let mut deferred = (*resolved).clone();
+        let dismiss_events = events.clone();
+        deferred.on_dismissed = view.on_dismissed.as_ref().map(|_| {
+            Rc::new(move |direction| dismiss_events.defer(DismissEvent::Dismissed(direction)))
+                as DirectionDelivery
+        });
+        let resize_events = events.clone();
+        deferred.on_resize = view
+            .on_resize
+            .as_ref()
+            .map(|_| Rc::new(move || resize_events.defer(DismissEvent::Resize)) as Rc<dyn Fn()>);
+        let deferred = Rc::new(deferred);
+        let on_update: Option<UpdateDelivery> = view.on_update.as_ref().map(|_| {
+            Rc::new(move |details| events.defer(DismissEvent::Update(details))) as UpdateDelivery
+        });
         let behavior = view.behavior;
         let direction = view.direction;
         let child = view.child.clone();
@@ -682,49 +811,19 @@ impl ViewState<Dismissible> for DismissibleState {
                  (got an unbounded/non-finite extent) — see module docs divergence #4"
             );
 
-            // Firing `on_update`/`on_resize`/`on_dismissed` (and scheduling
-            // further rebuilds via `RebuildHandle::schedule()`) from HERE runs
-            // them during LAYOUT, not from an animation-listener callback the
-            // way the oracle's `_handleDismissUpdateValueChanged`/
-            // `_handleResizeProgressChanged`/`_handleMoveCompleted` do
-            // (Dart's `AnimationController` listeners are not
-            // thread-constrained, so the oracle fires straight from them). This
-            // port cannot: the `Send + Sync`-bounded status/value listeners
-            // registered in `init_state` can only touch `Arc<Atomic*>` signals,
-            // never the `Rc`-based `on_update`/`on_resize`/`on_dismissed`
-            // callbacks (see `DragState`'s own doc) — so delivery is deferred
-            // to here, the next time this `LayoutBuilder` (re-)runs.
-            //
-            // Verified, not assumed, safe to do from a layout-phase closure:
-            // - `RebuildHandle::schedule()`'s own contract (`rebuild_handle.rs`)
-            //   states it "never touches the element tree, the render tree, or
-            //   the pipeline. It writes to a mutex-guarded map and calls one
-            //   `Fn()`" — callable from any thread, any phase, by design.
-            // - `BuildOwner::service_layout_builders` (`owner/layout_builder.rs`,
-            //   the fixpoint that actually invokes this closure) calls
-            //   `self.build_scope(tree)` with the pipeline write-lock
-            //   EXPLICITLY released first — "with NO pipeline lock held, so a
-            //   builder that mounts a child can insert its render objects".
-            //   That is: this closure runs as a genuine, ordinary build pass
-            //   (the same `build_scope` every other `StatefulView::build` runs
-            //   through), just one sequenced *between* layout passes rather
-            //   than at the top of the frame — not a restricted context with
-            //   different rules. The lifecycle-only rule governs *acquiring*
-            //   `rebuild_handle()`/`post_frame_handle()` (only `LifecycleContext`
-            //   offers them, so never from `build`/`layout`/`paint` — an
-            //   unbounded-rebuild-loop hazard); it says nothing
-            //   about *calling* `.schedule(reason)` on a handle already acquired in
-            //   `init_state` (this one), which is exactly what every listener
-            //   callback in this file already does.
+            // This closure is an ordinary build pass serviced between layout
+            // passes. Resolve the animation transitions with these constraints,
+            // but dispatch their user effects only after the frame: a signal
+            // write from here would be rejected as WrittenDuringBuild.
             deliver_move_completion(
                 &drag,
                 &move_controller,
-                &resolved,
+                &deferred,
                 vsync.as_ref(),
                 &rebuild,
                 constraints,
             );
-            deliver_resize_progress(&drag, &resolved);
+            deliver_resize_progress(&drag, &deferred);
             deliver_on_update(
                 &drag,
                 &move_controller,
@@ -782,7 +881,7 @@ impl ViewState<Dismissible> for DismissibleState {
 
             if axis_is_x {
                 detector = detector
-                    .on_horizontal_drag_start(move |_details: DragStartDetails| {
+                    .on_horizontal_drag_start(move |_cx, _details: DragStartDetails| {
                         handle_drag_start(
                             &drag_for_start,
                             &controller_for_start,
@@ -790,7 +889,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             overall_extent,
                         );
                     })
-                    .on_horizontal_drag_update(move |details: DragUpdateDetails| {
+                    .on_horizontal_drag_update(move |_cx, details: DragUpdateDetails| {
                         handle_drag_update(
                             &drag_for_update,
                             &controller_for_update,
@@ -800,7 +899,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             details.delta.dx.get(),
                         );
                     })
-                    .on_horizontal_drag_end(move |details: DragEndDetails| {
+                    .on_horizontal_drag_end(move |_cx, details: DragEndDetails| {
                         handle_drag_end(
                             &drag_for_end,
                             &controller_for_end,
@@ -814,7 +913,7 @@ impl ViewState<Dismissible> for DismissibleState {
                     });
             } else {
                 detector = detector
-                    .on_pan_start(move |_details: DragStartDetails| {
+                    .on_pan_start(move |_cx, _details: DragStartDetails| {
                         handle_drag_start(
                             &drag_for_start,
                             &controller_for_start,
@@ -822,7 +921,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             overall_extent,
                         );
                     })
-                    .on_pan_update(move |details: DragUpdateDetails| {
+                    .on_pan_update(move |_cx, details: DragUpdateDetails| {
                         handle_drag_update(
                             &drag_for_update,
                             &controller_for_update,
@@ -832,7 +931,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             details.delta.dy.get(),
                         );
                     })
-                    .on_pan_end(move |details: DragEndDetails| {
+                    .on_pan_end(move |_cx, details: DragEndDetails| {
                         handle_drag_end(
                             &drag_for_end,
                             &controller_for_end,
@@ -851,6 +950,9 @@ impl ViewState<Dismissible> for DismissibleState {
     }
 
     fn dispose(&mut self) {
+        if let Some(events) = &self.events {
+            events.mounted.set(false);
+        }
         if let Some(id) = self.move_value_listener_id.take() {
             self.move_controller.remove_listener(id);
         }
@@ -1285,7 +1387,7 @@ fn deliver_on_update(
     direction: DismissDirection,
     text_direction: TextDirection,
     resolved: &Rc<ResolvedConfig>,
-    on_update: Option<&DismissUpdateCallback>,
+    on_update: Option<&UpdateDelivery>,
 ) {
     let Some(on_update) = on_update else { return };
     let value = move_controller.value();
@@ -1709,6 +1811,64 @@ mod tests {
             .expect("init_state must have captured a handle")
     }
 
+    #[derive(Clone, StatefulView)]
+    struct DeferredDismissProbe(Rc<RefCell<DismissibleState>>);
+
+    struct DeferredDismissProbeState(Rc<RefCell<DismissibleState>>);
+
+    impl StatefulView for DeferredDismissProbe {
+        type State = DeferredDismissProbeState;
+        fn create_state(&self) -> Self::State {
+            DeferredDismissProbeState(self.0.clone())
+        }
+    }
+
+    impl ViewState<DeferredDismissProbe> for DeferredDismissProbeState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            self.0.borrow_mut().init_state(ctx);
+        }
+        fn build(&self, _: &DeferredDismissProbe, _: &dyn BuildContext) -> impl IntoView {
+            crate::SizedBox::shrink()
+        }
+    }
+
+    #[test]
+    fn queued_dismiss_events_keep_payload_use_live_callback_and_cancel_on_dispose() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let old_calls = calls.clone();
+        let old = Dismissible::new(crate::SizedBox::shrink())
+            .on_dismissed(move |_cx, direction| old_calls.borrow_mut().push(("old", direction)));
+        let state = Rc::new(RefCell::new(old.create_state()));
+        let scheduler = flui_scheduler::UpdateScheduler::new();
+        let lane = scheduler.new_local_post_frame_lane();
+        let mut owner = flui_view::BuildOwner::new();
+        owner.set_local_post_frame_handle(lane.local_handle());
+        let mut tree = flui_view::ElementTree::new();
+        let root = tree.mount_root(
+            &DeferredDismissProbe(state.clone()),
+            &mut owner.element_owner_mut(),
+        );
+        owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
+        owner.build_scope(&mut tree);
+        let events = state
+            .borrow()
+            .events
+            .clone()
+            .expect("mounted event dispatcher");
+        events.defer(DismissEvent::Dismissed(DismissDirection::Down));
+        assert!(calls.borrow().is_empty());
+        let new_calls = calls.clone();
+        let new = Dismissible::new(crate::SizedBox::shrink())
+            .on_dismissed(move |_cx, direction| new_calls.borrow_mut().push(("new", direction)));
+        state.borrow_mut().did_update_view(&old, &new);
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(*calls.borrow(), [("new", DismissDirection::Down)]);
+        events.defer(DismissEvent::Dismissed(DismissDirection::Up));
+        state.borrow_mut().dispose();
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(*calls.borrow(), [("new", DismissDirection::Down)]);
+    }
+
     #[test]
     fn move_controller_reaching_the_clamp_mid_drag_does_not_leave_a_stale_completion_latch() {
         let rebuild = mount_and_capture_rebuild_handle();
@@ -1726,7 +1886,7 @@ mod tests {
         }));
 
         let dismissed = Arc::new(AtomicU64::new(0));
-        let on_dismissed_probe: DismissDirectionCallback = {
+        let on_dismissed_probe: DirectionDelivery = {
             let dismissed = Arc::clone(&dismissed);
             Rc::new(move |_direction| {
                 dismissed.fetch_add(1, Ordering::SeqCst);

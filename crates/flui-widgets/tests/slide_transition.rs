@@ -54,7 +54,7 @@ fn build_wires_the_animations_current_offset_into_fractional_translation() {
         SlideTransition::new(
             position,
             GestureDetector::new()
-                .on_tap(move || {
+                .on_tap(move |_cx| {
                     in_cb.fetch_add(1, Ordering::SeqCst);
                 })
                 .child(SizedBox::new(50.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),
@@ -98,7 +98,7 @@ fn build_wires_transform_hit_tests_false_into_fractional_translation() {
         SlideTransition::new(
             position,
             GestureDetector::new()
-                .on_tap(move || {
+                .on_tap(move |_cx| {
                     in_cb.fetch_add(1, Ordering::SeqCst);
                 })
                 .child(SizedBox::new(50.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),
@@ -165,7 +165,7 @@ fn build_delivers_the_animation_localized_position_to_the_child_mid_animation() 
         SlideTransition::new(
             position,
             Listener::new()
-                .on_pointer_down(move |dispatch| {
+                .on_pointer_down(move |_cx, dispatch| {
                     let local = dispatch.local.position();
                     probe.set(Some((local.dx.get(), local.dy.get())));
                 })

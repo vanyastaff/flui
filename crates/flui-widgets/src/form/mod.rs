@@ -36,16 +36,19 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_rendering::semantics::SemanticsRole;
+use flui_view::EventContextError;
 use flui_view::element::ElementKind;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
 
 pub use form_field::{
-    FormField, FormFieldHandle, FormFieldSetter, FormFieldState, FormFieldValidator,
+    FormField, FormFieldHandle, FormFieldHandleAlreadyAttached, FormFieldSetter, FormFieldState,
+    FormFieldValidator,
 };
 pub use raw_text_form_field::{RawTextFormField, RawTextFormFieldState};
 
 use crate::semantics::Semantics;
+use crate::support::{EventCallback, event_callback};
 
 /// When a field validates without an explicit `validate()` — Flutter's
 /// `AutovalidateMode`.
@@ -68,12 +71,13 @@ pub enum AutovalidateMode {
 
 /// What a [`Form`] needs from each registered field, whatever its value type.
 pub(crate) trait FormFieldEntry {
+    fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError>;
     /// Run the validator, show its result, and report whether it passed.
     fn validate(&self) -> bool;
     /// Hand the current value to `on_saved`.
-    fn save(&self);
+    fn save(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError>;
     /// Back to the initial value, errors and interaction cleared.
-    fn reset(&self);
+    fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError>;
     fn has_interacted_by_user(&self) -> bool;
     fn has_error(&self) -> bool;
 }
@@ -81,16 +85,47 @@ pub(crate) trait FormFieldEntry {
 /// The form's shared state; fields hold it weakly.
 #[derive(Default)]
 pub(crate) struct FormInner {
+    active_attachment: Cell<Option<u64>>,
+    next_attachment: Cell<u64>,
+    attachment_error_pending: Cell<bool>,
+    writer: RefCell<Option<WriterSource>>,
     /// Registered fields, in registration order (Flutter's insertion-ordered
     /// `Set<FormFieldState>`).
     fields: RefCell<Vec<Rc<dyn FormFieldEntry>>>,
     interacted: Cell<bool>,
     mode: Cell<AutovalidateMode>,
-    on_changed: RefCell<Option<Rc<dyn Fn()>>>,
+    on_changed: RefCell<Option<EventCallback>>,
     /// Set while `reset` visits its fields: a field's change notice then
     /// reports `on_changed` but defers autovalidation to the end, as
     /// Flutter's single rebuild after the loop does.
     resetting: Cell<bool>,
+}
+
+/// A typed diagnostic emitted when one [`FormHandle`] is requested by two
+/// simultaneously mounted forms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the FormHandle is already attached to another mounted Form")]
+pub struct FormHandleAlreadyAttached;
+
+/// Exclusive ownership of a mounted form handle. The generation makes stale
+/// cleanup harmless after a later attachment has taken ownership.
+struct FormAttachment {
+    inner: Rc<FormInner>,
+    generation: u64,
+}
+
+impl Drop for FormAttachment {
+    fn drop(&mut self) {
+        if self.inner.active_attachment.get() != Some(self.generation) {
+            return;
+        }
+        self.inner.active_attachment.set(None);
+        self.inner.writer.borrow_mut().take();
+        self.inner.on_changed.borrow_mut().take();
+        self.inner.fields.borrow_mut().clear();
+        self.inner.interacted.set(false);
+        self.inner.resetting.set(false);
+    }
 }
 
 /// The form's imperative surface — Flutter's `FormState`, reached by a handle
@@ -98,6 +133,10 @@ pub(crate) struct FormInner {
 /// instead of a `GlobalKey<FormState>`.
 ///
 /// Cheap to clone; every clone names the same form. Owner-thread only.
+/// A handle binds to at most one mounted `Form` at a time. A simultaneous
+/// duplicate is diagnosed and receives an isolated internal handle: it cannot
+/// replace or later detach the first form's fields, callbacks or presentation
+/// binding. Once the owner unmounts, the handle can be attached again.
 ///
 /// [`Self::has_interacted_by_user`] reads plain state, not a signal, so a
 /// `build` that calls it does not subscribe; see [`FormFieldHandle`]'s
@@ -124,6 +163,37 @@ impl FormHandle {
         Self::default()
     }
 
+    /// Take the duplicate-attachment diagnostic recorded during mounting.
+    ///
+    /// The refused form is isolated behind its own internal handle, so it
+    /// cannot mutate this handle's owner. This drain is the typed counterpart
+    /// to the tracing error, following the duplicate-`GlobalKey` diagnostic
+    /// contract rather than panicking on caller-controlled input.
+    pub fn take_attachment_error(&self) -> Option<FormHandleAlreadyAttached> {
+        self.inner
+            .attachment_error_pending
+            .replace(false)
+            .then_some(FormHandleAlreadyAttached)
+    }
+
+    fn try_attach(&self) -> Option<FormAttachment> {
+        if self.inner.active_attachment.get().is_some() {
+            return None;
+        }
+        let generation = self
+            .inner
+            .next_attachment
+            .get()
+            .checked_add(1)
+            .expect("BUG: a FormHandle attachment generation cannot exhaust u64");
+        self.inner.next_attachment.set(generation);
+        self.inner.active_attachment.set(Some(generation));
+        Some(FormAttachment {
+            inner: Rc::clone(&self.inner),
+            generation,
+        })
+    }
+
     /// Validate every registered field and show each result; mark the form
     /// interacted. `true` iff every field passed. Flutter's
     /// `FormState.validate`.
@@ -134,23 +204,76 @@ impl FormHandle {
 
     /// Call every field's `on_saved` with its current value, in registration
     /// order — Flutter's `FormState.save`.
-    pub fn save(&self) {
-        for field in self.fields() {
-            field.save();
+    ///
+    /// Takes the `&mut EventCx<'_>` of the event callback that saves (a
+    /// submit button's press), and hands it to each `on_saved` (ADR-0086 §6):
+    /// `.on_press(move |cx| form.save(cx))`.
+    ///
+    /// # Errors
+    /// Refuses a detached form, a foreign presentation or a build-time call
+    /// before dispatching any callback.
+    /// The current field snapshot is checked before dispatch; if a callback
+    /// detaches a later field, that field refuses its turn. Earlier callback
+    /// effects are not rolled back.
+    pub fn save(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        let fields = self.checked_fields(cx)?;
+        for field in fields {
+            field.save(cx)?;
         }
+        Ok(())
     }
 
     /// Every field back to its initial value, its error and interaction
     /// cleared; then the form's interaction is cleared and `on_changed`
-    /// runs — Flutter's `FormState.reset`.
-    pub fn reset(&self) {
-        self.inner.resetting.set(true);
-        for field in self.fields() {
-            field.reset();
+    /// runs — Flutter's `FormState.reset`. The caller's `&mut EventCx<'_>`
+    /// reaches every `on_reset` and `on_changed`.
+    ///
+    /// # Errors
+    /// Refuses a detached form, a foreign presentation or a build-time call
+    /// before changing field state. User callbacks are not transactional.
+    pub fn reset(&self, cx: &mut EventCx<'_>) -> Result<(), EventContextError> {
+        let fields = self.checked_fields(cx)?;
+        struct ResetGuard<'a> {
+            resetting: &'a Cell<bool>,
+            previous: bool,
         }
-        self.inner.resetting.set(false);
+        impl Drop for ResetGuard<'_> {
+            fn drop(&mut self) {
+                self.resetting.set(self.previous);
+            }
+        }
+        let guard = ResetGuard {
+            resetting: &self.inner.resetting,
+            previous: self.inner.resetting.replace(true),
+        };
+        for field in fields {
+            field.reset(cx)?;
+        }
+        drop(guard);
         self.inner.interacted.set(false);
-        self.field_did_change();
+        self.field_did_change(cx);
+        Ok(())
+    }
+
+    pub(crate) fn check_context(&self, cx: &EventCx<'_>) -> Result<(), EventContextError> {
+        self.inner
+            .writer
+            .borrow()
+            .as_ref()
+            .ok_or(EventContextError::Detached)?
+            .check_context(cx)
+    }
+
+    fn checked_fields(
+        &self,
+        cx: &EventCx<'_>,
+    ) -> Result<Vec<Rc<dyn FormFieldEntry>>, EventContextError> {
+        self.check_context(cx)?;
+        let fields = self.fields();
+        for field in &fields {
+            field.check_context(cx)?;
+        }
+        Ok(fields)
     }
 
     /// Whether the user has edited any field, or `validate()` ran since the
@@ -217,10 +340,10 @@ impl FormHandle {
 
     /// A field's value changed, or it was reset — Flutter's `_fieldDidChange`
     /// followed by the form's autovalidation in `FormState.build`.
-    pub(crate) fn field_did_change(&self) {
+    pub(crate) fn field_did_change(&self, cx: &mut EventCx<'_>) {
         let on_changed = self.inner.on_changed.borrow().clone();
         if let Some(on_changed) = on_changed {
-            on_changed();
+            on_changed(cx);
         }
         if self.inner.resetting.get() {
             return;
@@ -266,7 +389,7 @@ pub struct Form {
     child: BoxedView,
     handle: Option<FormHandle>,
     autovalidate_mode: AutovalidateMode,
-    on_changed: Option<Rc<dyn Fn()>>,
+    on_changed: Option<EventCallback>,
 }
 
 impl std::fmt::Debug for Form {
@@ -306,10 +429,17 @@ impl Form {
         self
     }
 
-    /// Called when any field's value changes, and on `reset`.
+    /// Called when any field's value changes, and on `reset`, with the
+    /// `&mut EventCx<'_>` of the event that changed it: the field's own edit
+    /// callback, or the caller of [`FormFieldHandle::did_change`],
+    /// [`FormFieldHandle::reset`] or [`FormHandle::reset`] (ADR-0086 §6).
     #[must_use]
-    pub fn on_changed(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_changed = Some(Rc::new(callback));
+    pub fn on_changed<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_changed = Some(event_callback(callback));
         self
     }
 
@@ -343,13 +473,19 @@ impl View for Form {
 /// The state behind [`Form`]: its handle and configuration.
 pub struct FormState {
     handle: FormHandle,
+    /// The external handle actually owned by this state. `None` means the
+    /// form owns an internal handle, including the isolated fallback used
+    /// after an external duplicate is refused.
+    bound_external: Option<FormHandle>,
+    attachment: Option<FormAttachment>,
 }
 
 impl std::fmt::Debug for FormState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FormState")
             .field("handle", &self.handle)
-            .finish()
+            .field("uses_external_handle", &self.bound_external.is_some())
+            .finish_non_exhaustive()
     }
 }
 
@@ -362,37 +498,93 @@ impl FormState {
             .borrow_mut()
             .clone_from(&view.on_changed);
     }
+
+    fn attach(view: &Form) -> Self {
+        let requested = view.handle.clone().unwrap_or_default();
+        if let Some(attachment) = requested.try_attach() {
+            let state = Self {
+                handle: requested,
+                bound_external: view.handle.clone(),
+                attachment: Some(attachment),
+            };
+            state.configure(view);
+            return state;
+        }
+
+        tracing::error!(
+            "FormHandle is already attached to a mounted Form; the duplicate Form uses an \
+             isolated internal handle so it cannot mutate or detach the existing owner"
+        );
+        requested.inner.attachment_error_pending.set(true);
+        let handle = FormHandle::new();
+        let attachment = handle
+            .try_attach()
+            .expect("BUG: a fresh FormHandle has no existing attachment");
+        let state = Self {
+            handle,
+            bound_external: None,
+            attachment: Some(attachment),
+        };
+        state.configure(view);
+        state
+    }
+
+    fn owns_requested_handle(&self, view: &Form) -> bool {
+        match (&self.bound_external, &view.handle) {
+            (Some(bound), Some(requested)) => bound.same_form(requested),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn try_rebind(&mut self, view: &Form) {
+        if self.owns_requested_handle(view) {
+            return;
+        }
+        let requested = view.handle.clone().unwrap_or_default();
+        let Some(attachment) = requested.try_attach() else {
+            tracing::error!(
+                "FormHandle is already attached to a mounted Form; retaining the current \
+                 attachment until a later update can acquire the requested handle"
+            );
+            requested.inner.attachment_error_pending.set(true);
+            return;
+        };
+        let writer = self.handle.inner.writer.borrow().clone();
+        *requested.inner.writer.borrow_mut() = writer;
+        let old_attachment = self.attachment.replace(attachment);
+        self.handle = requested;
+        self.bound_external.clone_from(&view.handle);
+        drop(old_attachment);
+    }
 }
 
 impl StatefulView for Form {
     type State = FormState;
 
     fn create_state(&self) -> FormState {
-        let state = FormState {
-            handle: self.handle.clone().unwrap_or_default(),
-        };
-        state.configure(self);
-        state
+        FormState::attach(self)
     }
 }
 
 impl ViewState<Form> for FormState {
-    fn did_update_view(&mut self, old_view: &Form, new_view: &Form) {
-        let handle_changed = match (&old_view.handle, &new_view.handle) {
-            (Some(old), Some(new)) => !old.same_form(new),
-            (None, None) => false,
-            _ => true,
-        };
-        if handle_changed {
-            // The scope notifies its dependents, and each field registers
-            // with the new form in `did_change_dependencies`.
-            self.handle = new_view.handle.clone().unwrap_or_default();
-        }
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.handle.inner.writer.borrow_mut() = Some(ctx.writer_source());
+    }
+
+    fn did_update_view(&mut self, _old_view: &Form, new_view: &Form) {
+        // Acquire before releasing: a busy replacement cannot detach the
+        // form from the handle that still owns its fields and writer.
+        self.try_rebind(new_view);
         self.configure(new_view);
         // A reconfigured form rebuilds in Flutter, and its build runs the
         // form-level autovalidation.
         let fields = self.handle.fields();
         self.handle.autovalidate(&fields);
+    }
+
+    fn dispose(&mut self) {
+        drop(self.attachment.take());
     }
 
     fn build(&self, view: &Form, _ctx: &dyn BuildContext) -> impl IntoView {

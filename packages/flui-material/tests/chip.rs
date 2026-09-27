@@ -100,7 +100,7 @@ fn tap_fires_on_pressed_for_a_pressable_chip() {
     let taps = Rc::new(RefCell::new(0_u32));
     let counter = Rc::clone(&taps);
     let laid = lay_out(
-        themed(Chip::new(Text::new("Tag")).on_pressed(move || {
+        themed(Chip::new(Text::new("Tag")).on_pressed(move |_cx| {
             *counter.borrow_mut() += 1;
         })),
         loose(300.0),
@@ -125,7 +125,7 @@ fn tap_fires_on_selected_with_the_flipped_value_for_a_filter_chip() {
         themed(
             FilterChip::new(Text::new("Vegetarian"))
                 .selected(false)
-                .on_selected(move |next| {
+                .on_selected(move |_cx, next| {
                     *recorder.borrow_mut() = Some(next);
                 }),
         ),
@@ -159,10 +159,10 @@ fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
     let laid = lay_out(
         themed(
             Chip::new(Text::new("Tag"))
-                .on_pressed(move || {
+                .on_pressed(move |_cx| {
                     *press_counter.borrow_mut() += 1;
                 })
-                .on_deleted(move || {
+                .on_deleted(move |_cx| {
                     *delete_counter.borrow_mut() += 1;
                 }),
         ),
@@ -196,10 +196,10 @@ fn tapping_elsewhere_on_the_chip_fires_the_chip_tap_only_not_on_deleted() {
     let laid = lay_out(
         themed(
             Chip::new(Text::new("Tag"))
-                .on_pressed(move || {
+                .on_pressed(move |_cx| {
                     *press_counter.borrow_mut() += 1;
                 })
-                .on_deleted(move || {
+                .on_deleted(move |_cx| {
                     *delete_counter.borrow_mut() += 1;
                 }),
         ),
@@ -228,11 +228,11 @@ fn ancestor_detector_and_chip_compete_in_the_binding_root_arena() {
     let chip_taps = Rc::new(RefCell::new(0_u32));
     let ancestor_counter = Rc::clone(&ancestor_taps);
     let chip_counter = Rc::clone(&chip_taps);
-    let chip = Chip::new(Text::new("Tag")).on_pressed(move || {
+    let chip = Chip::new(Text::new("Tag")).on_pressed(move |_cx| {
         *chip_counter.borrow_mut() += 1;
     });
     let root = GestureDetector::new()
-        .on_tap(move || *ancestor_counter.borrow_mut() += 1)
+        .on_tap(move |_cx| *ancestor_counter.borrow_mut() += 1)
         .behavior(HitTestBehavior::Opaque)
         .child(chip);
     let laid = lay_out(themed(root), loose(300.0));
@@ -265,7 +265,7 @@ fn selected_filter_chip_fill_reaches_the_mounted_material() {
         themed(
             FilterChip::new(Text::new("Vegetarian"))
                 .selected(true)
-                .on_selected(|_| {}),
+                .on_selected(|_cx, _| {}),
         ),
         loose(300.0),
     );
@@ -299,10 +299,10 @@ fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
         themed(
             Chip::new(Text::new("Tag"))
                 .enabled(false)
-                .on_pressed(move || {
+                .on_pressed(move |_cx| {
                     *press_counter.borrow_mut() += 1;
                 })
-                .on_deleted(move || {
+                .on_deleted(move |_cx| {
                     *delete_counter.borrow_mut() += 1;
                 }),
         ),
@@ -339,7 +339,7 @@ fn disabled_filter_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
 
     let laid = lay_out(
         themed(
-            FilterChip::new(Text::new("Vegetarian")).on_deleted(move || {
+            FilterChip::new(Text::new("Vegetarian")).on_deleted(move |_cx| {
                 *delete_counter.borrow_mut() += 1;
             }),
         ),

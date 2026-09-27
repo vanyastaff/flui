@@ -8,6 +8,24 @@
 //! `Scaffold`'s `floating_action_button` slot actually lays out.
 
 use crate::common;
+use flui_sdk::view::SignalWriteExt;
+
+#[test]
+fn inline_press_callback_writes_a_signal_without_type_annotations() {
+    let probe = common::SignalProbe::new(|signals| {
+        Theme::new(
+            ThemeData::light(),
+            FloatingActionButton::new(SizedBox::square(24.0))
+                .on_pressed(move |cx| signals.count.update(cx, |count| *count += 1)),
+        )
+    });
+    let mut laid = lay_out(probe.view(), tight(56.0, 56.0));
+    laid.dispatch_pointer_down(28.0, 28.0);
+    laid.dispatch_pointer_up(28.0, 28.0);
+    assert_eq!(probe.value(), Ok(1));
+    laid.pump();
+    assert_eq!(probe.reads(), [0, 1]);
+}
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,12 +52,9 @@ fn tap_fires_on_pressed_and_the_button_mounts_a_material_surface() {
     let laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            FloatingActionButton::new(
-                Some(move || {
-                    counted.fetch_add(1, Ordering::SeqCst);
-                }),
-                SizedBox::square(24.0),
-            ),
+            FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(move |_cx| {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }),
         ),
         tight(56.0, 56.0),
     );
@@ -65,7 +80,7 @@ fn a_button_with_no_press_handler_is_disabled_and_a_tap_dispatch_is_a_no_op() {
     let laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            FloatingActionButton::new(None::<fn()>, SizedBox::square(24.0)),
+            FloatingActionButton::new(SizedBox::square(24.0)),
         ),
         tight(56.0, 56.0),
     );
@@ -103,10 +118,7 @@ fn disabled_fab_still_resolves_the_m3_default_background_and_elevation() {
     let theme = ThemeData::light();
     let colors = theme.color_scheme;
     let laid = lay_out(
-        Theme::new(
-            theme,
-            FloatingActionButton::new(None::<fn()>, SizedBox::square(24.0)),
-        ),
+        Theme::new(theme, FloatingActionButton::new(SizedBox::square(24.0))),
         tight(56.0, 56.0),
     );
 
@@ -133,7 +145,7 @@ fn enabled_fab_resolves_the_m3_default_background_and_elevation() {
     let laid = lay_out(
         Theme::new(
             theme,
-            FloatingActionButton::new(Some(|| {}), SizedBox::square(24.0)),
+            FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(|_cx| {}),
         ),
         tight(56.0, 56.0),
     );
@@ -171,7 +183,7 @@ fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let laid = lay_out(
         Theme::new(
             theme,
-            FloatingActionButton::new(Some(|| {}), SizedBox::square(24.0)),
+            FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(|_cx| {}),
         ),
         tight(56.0, 56.0),
     );
@@ -233,12 +245,9 @@ fn removing_the_press_handler_via_swap_makes_a_later_tap_a_no_op() {
     let mut laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            FloatingActionButton::new(
-                Some(move || {
-                    counted.fetch_add(1, Ordering::SeqCst);
-                }),
-                SizedBox::square(24.0),
-            ),
+            FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(move |_cx| {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }),
         ),
         tight(56.0, 56.0),
     );
@@ -257,7 +266,7 @@ fn removing_the_press_handler_via_swap_makes_a_later_tap_a_no_op() {
     // `tests/elevated_button.rs`'s identical swap pattern.
     laid.pump_widget(Theme::new(
         ThemeData::light(),
-        FloatingActionButton::new(None::<fn()>, SizedBox::square(24.0)),
+        FloatingActionButton::new(SizedBox::square(24.0)),
     ));
 
     laid.dispatch_pointer_down(28.0, 28.0);
@@ -282,10 +291,9 @@ fn mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_posi
                 MediaQueryData::default(),
                 Scaffold::new()
                     .body(SizedBox::new(10.0, 10.0))
-                    .floating_action_button(FloatingActionButton::new(
-                        Some(|| {}),
-                        SizedBox::square(24.0),
-                    )),
+                    .floating_action_button(
+                        FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(|_cx| {}),
+                    ),
             ),
         ),
         tight(400.0, 800.0),
@@ -333,10 +341,9 @@ fn a_nonzero_bottom_safe_area_still_clears_the_fab_by_at_least_the_flat_margin()
                 media_query,
                 Scaffold::new()
                     .body(SizedBox::new(10.0, 10.0))
-                    .floating_action_button(FloatingActionButton::new(
-                        Some(|| {}),
-                        SizedBox::square(24.0),
-                    )),
+                    .floating_action_button(
+                        FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(|_cx| {}),
+                    ),
             ),
         ),
         tight(400.0, 800.0),

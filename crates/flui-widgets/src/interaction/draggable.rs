@@ -1352,7 +1352,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             // that way; the global half is what lets a recogniser report a
             // global position at all, since dispatch rewrote it away before
             // any handler here runs.
-            .on_pointer_down(move |dispatch| {
+            .on_pointer_down(move |_cx, dispatch| {
                 if let Some(max) = max
                     && active_count.load(Ordering::Acquire) >= max
                 {
@@ -1365,9 +1365,9 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
                     dispatch.global.position(),
                 );
             })
-            .on_pointer_move(move |dispatch| move_recognizer.handle_event(dispatch))
-            .on_pointer_up(move |dispatch| up_recognizer.handle_event(dispatch))
-            .on_pointer_cancel(move |dispatch| cancel_recognizer.handle_event(dispatch));
+            .on_pointer_move(move |_cx, dispatch| move_recognizer.handle_event(dispatch))
+            .on_pointer_up(move |_cx, dispatch| up_recognizer.handle_event(dispatch))
+            .on_pointer_cancel(move |_cx, dispatch| cancel_recognizer.handle_event(dispatch));
 
         let currently_active = self.active_count.load(Ordering::Acquire);
         let showing_child_when_dragging =

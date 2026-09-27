@@ -46,7 +46,7 @@ impl ViewState<Root> for RootState {
         Center::new().child(
             Column::new(flui::widgets::column![
                 Text::new("Primary window"),
-                ElevatedButton::new(Text::new(label)).on_pressed(move || {
+                ElevatedButton::new(Text::new(label)).on_pressed(move |_cx| {
                     if opened.get() {
                         return;
                     }
