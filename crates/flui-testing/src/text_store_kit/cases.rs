@@ -31,7 +31,7 @@ macro_rules! case {
     };
 }
 
-pub(super) static CASES: &[Case] = &[
+pub(super) const CASES: &[Case] = &[
     case!(length_counts_utf16_units),
     case!(text_reads_utf16_ranges),
     case!(offset_inside_a_surrogate_pair_is_refused),
