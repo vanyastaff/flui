@@ -9,12 +9,14 @@ use flui_view::{RebuildHandle, RebuildReason};
 
 use super::{AutovalidateMode, Form, FormFieldEntry, FormHandle, FormInner};
 use crate::interaction::Focus;
+use crate::support::{EventCallback, event_callback, ref_callback};
 
 /// Checks a value; `Some(message)` is the error to show — Flutter's
 /// `FormFieldValidator<T>`.
 pub type FormFieldValidator<T> = Rc<dyn Fn(&T) -> Option<String>>;
-/// Receives the value on `save` — Flutter's `FormFieldSetter<T>`.
-pub type FormFieldSetter<T> = Rc<dyn Fn(&T)>;
+/// Receives the value on `save` — Flutter's `FormFieldSetter<T>` — with the
+/// `&mut EventCx<'_>` the caller of [`FormHandle::save`] passed (ADR-0086).
+pub type FormFieldSetter<T> = Rc<dyn Fn(&mut EventCx<'_>, &T)>;
 /// Builds the field's content from its handle — Flutter's
 /// `FormFieldBuilder<T>`, which receives the `FormFieldState`.
 type FormFieldBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &FormFieldHandle<T>) -> BoxedView>;
@@ -28,7 +30,7 @@ struct FieldInner<T> {
     interacted: Cell<bool>,
     validator: RefCell<Option<FormFieldValidator<T>>>,
     on_saved: RefCell<Option<FormFieldSetter<T>>>,
-    on_reset: RefCell<Option<Rc<dyn Fn()>>>,
+    on_reset: RefCell<Option<EventCallback>>,
     enabled: Cell<bool>,
     mode: Cell<AutovalidateMode>,
     force_error_text: RefCell<Option<String>>,
@@ -160,18 +162,18 @@ impl<T: Clone + 'static> FieldInner<T> {
         }
     }
 
-    fn did_change(&self, value: T) {
+    fn did_change(&self, cx: &mut EventCx<'_>, value: T) {
         *self.value.borrow_mut() = Some(value.clone());
         self.interacted.set(true);
         self.push_to_sink(&value);
         self.autovalidate();
         self.schedule_rebuild();
         if let Some(form) = self.form() {
-            form.field_did_change();
+            form.field_did_change(cx);
         }
     }
 
-    fn reset(&self) {
+    fn reset(&self, cx: &mut EventCx<'_>) {
         let initial = self.initial.borrow().clone();
         self.value.borrow_mut().clone_from(&initial);
         self.interacted.set(false);
@@ -181,11 +183,11 @@ impl<T: Clone + 'static> FieldInner<T> {
         }
         let on_reset = self.on_reset.borrow().clone();
         if let Some(on_reset) = on_reset {
-            on_reset();
+            on_reset(cx);
         }
         self.schedule_rebuild();
         if let Some(form) = self.form() {
-            form.field_did_change();
+            form.field_did_change(cx);
         }
     }
 }
@@ -196,15 +198,15 @@ impl<T: Clone + 'static> FormFieldEntry for FieldInner<T> {
         self.error.borrow().is_none()
     }
 
-    fn save(&self) {
+    fn save(&self, cx: &mut EventCx<'_>) {
         let on_saved = self.on_saved.borrow().clone();
         if let (Some(on_saved), Some(value)) = (on_saved, self.current()) {
-            on_saved(&value);
+            on_saved(cx, &value);
         }
     }
 
-    fn reset(&self) {
-        Self::reset(self);
+    fn reset(&self, cx: &mut EventCx<'_>) {
+        Self::reset(self, cx);
     }
 
     fn has_interacted_by_user(&self) -> bool {
@@ -318,8 +320,11 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
     /// A user edit: set the value, mark the field interacted, run the
     /// field's and the form's autovalidation, and report the change to the
     /// form — Flutter's `FormFieldState.didChange`.
-    pub fn did_change(&self, value: T) {
-        self.inner.did_change(value);
+    ///
+    /// Takes the `&mut EventCx<'_>` of the event callback that made the edit
+    /// and passes it to [`Form::on_changed`] (ADR-0086 §6).
+    pub fn did_change(&self, cx: &mut EventCx<'_>, value: T) {
+        self.inner.did_change(cx, value);
     }
 
     /// Set the value without marking interaction, validating or rebuilding
@@ -340,9 +345,10 @@ impl<T: Clone + 'static> FormFieldHandle<T> {
     }
 
     /// Back to the initial value, error and interaction cleared, then
-    /// `on_reset` — Flutter's `FormFieldState.reset`.
-    pub fn reset(&self) {
-        self.inner.reset();
+    /// `on_reset` — Flutter's `FormFieldState.reset`. The caller's
+    /// `&mut EventCx<'_>` reaches `on_reset` and [`Form::on_changed`].
+    pub fn reset(&self, cx: &mut EventCx<'_>) {
+        self.inner.reset(cx);
     }
 
     /// Push every later value change into `sink` and read the value from
@@ -377,7 +383,7 @@ pub struct FormField<T> {
     builder: FormFieldBuilder<T>,
     pub(super) validator: Option<FormFieldValidator<T>>,
     pub(super) on_saved: Option<FormFieldSetter<T>>,
-    pub(super) on_reset: Option<Rc<dyn Fn()>>,
+    pub(super) on_reset: Option<EventCallback>,
     enabled: bool,
     autovalidate_mode: AutovalidateMode,
     pub(super) force_error_text: Option<String>,
@@ -438,17 +444,27 @@ impl<T: Clone + 'static> FormField<T> {
         self
     }
 
-    /// Receive the value when the form saves.
+    /// Receive the value when the form saves, with the `&mut EventCx<'_>`
+    /// passed to [`FormHandle::save`].
     #[must_use]
-    pub fn on_saved(mut self, on_saved: impl Fn(&T) + 'static) -> Self {
-        self.on_saved = Some(Rc::new(on_saved));
+    pub fn on_saved<F, R>(mut self, on_saved: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &T) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_saved = Some(ref_callback(on_saved));
         self
     }
 
-    /// Called after the field resets.
+    /// Called after the field resets, with the `&mut EventCx<'_>` passed to
+    /// the reset.
     #[must_use]
-    pub fn on_reset(mut self, on_reset: impl Fn() + 'static) -> Self {
-        self.on_reset = Some(Rc::new(on_reset));
+    pub fn on_reset<F, R>(mut self, on_reset: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_reset = Some(event_callback(on_reset));
         self
     }
 

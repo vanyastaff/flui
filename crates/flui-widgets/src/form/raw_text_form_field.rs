@@ -15,7 +15,7 @@ use super::form_field::FormFieldHandle;
 use super::text_form_field_core::{TextFormFieldConfig, TextFormFieldCore};
 use crate::flex::Column;
 use crate::semantics::Semantics;
-use crate::support::ref_callback;
+use crate::support::{event_callback, ref_callback};
 use crate::text::{RawTextField, Text, TextEditingController};
 use flui_objects::{CrossAxisAlignment, MainAxisSize};
 
@@ -66,17 +66,27 @@ impl RawTextFormField {
         self
     }
 
-    /// Receive the text when the form saves.
+    /// Receive the text when the form saves, with the `&mut EventCx<'_>`
+    /// passed to `FormHandle::save`.
     #[must_use]
-    pub fn on_saved(mut self, on_saved: impl Fn(&String) + 'static) -> Self {
-        self.config.on_saved = Some(Rc::new(on_saved));
+    pub fn on_saved<F, R>(mut self, on_saved: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &String) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.config.on_saved = Some(ref_callback(on_saved));
         self
     }
 
-    /// Called after the field resets.
+    /// Called after the field resets, with the `&mut EventCx<'_>` passed to
+    /// the reset.
     #[must_use]
-    pub fn on_reset(mut self, on_reset: impl Fn() + 'static) -> Self {
-        self.config.on_reset = Some(Rc::new(on_reset));
+    pub fn on_reset<F, R>(mut self, on_reset: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.config.on_reset = Some(event_callback(on_reset));
         self
     }
 

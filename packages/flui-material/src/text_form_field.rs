@@ -80,17 +80,31 @@ impl TextFormField {
         self
     }
 
-    /// Receive the text when the form saves.
+    /// Receive the text when the form saves, with the `&mut EventCx<'_>`
+    /// passed to `FormHandle::save`.
     #[must_use]
-    pub fn on_saved(mut self, on_saved: impl Fn(&String) + 'static) -> Self {
-        self.config.on_saved = Some(Rc::new(on_saved));
+    pub fn on_saved<F, R>(mut self, on_saved: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &String) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.config.on_saved = Some(Rc::new(move |cx: &mut EventCx<'_>, value: &String| {
+            on_saved(cx, value).report();
+        }));
         self
     }
 
-    /// Called after the field resets.
+    /// Called after the field resets, with the `&mut EventCx<'_>` passed to
+    /// the reset.
     #[must_use]
-    pub fn on_reset(mut self, on_reset: impl Fn() + 'static) -> Self {
-        self.config.on_reset = Some(Rc::new(on_reset));
+    pub fn on_reset<F, R>(mut self, on_reset: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.config.on_reset = Some(Rc::new(move |cx: &mut EventCx<'_>| {
+            on_reset(cx).report();
+        }));
         self
     }
 

@@ -46,6 +46,7 @@ pub use form_field::{
 pub use raw_text_form_field::{RawTextFormField, RawTextFormFieldState};
 
 use crate::semantics::Semantics;
+use crate::support::{EventCallback, event_callback};
 
 /// When a field validates without an explicit `validate()` — Flutter's
 /// `AutovalidateMode`.
@@ -71,9 +72,9 @@ pub(crate) trait FormFieldEntry {
     /// Run the validator, show its result, and report whether it passed.
     fn validate(&self) -> bool;
     /// Hand the current value to `on_saved`.
-    fn save(&self);
+    fn save(&self, cx: &mut EventCx<'_>);
     /// Back to the initial value, errors and interaction cleared.
-    fn reset(&self);
+    fn reset(&self, cx: &mut EventCx<'_>);
     fn has_interacted_by_user(&self) -> bool;
     fn has_error(&self) -> bool;
 }
@@ -86,7 +87,7 @@ pub(crate) struct FormInner {
     fields: RefCell<Vec<Rc<dyn FormFieldEntry>>>,
     interacted: Cell<bool>,
     mode: Cell<AutovalidateMode>,
-    on_changed: RefCell<Option<Rc<dyn Fn()>>>,
+    on_changed: RefCell<Option<EventCallback>>,
     /// Set while `reset` visits its fields: a field's change notice then
     /// reports `on_changed` but defers autovalidation to the end, as
     /// Flutter's single rebuild after the loop does.
@@ -134,23 +135,28 @@ impl FormHandle {
 
     /// Call every field's `on_saved` with its current value, in registration
     /// order — Flutter's `FormState.save`.
-    pub fn save(&self) {
+    ///
+    /// Takes the `&mut EventCx<'_>` of the event callback that saves (a
+    /// submit button's press), and hands it to each `on_saved` (ADR-0086 §6):
+    /// `.on_press(move |cx| form.save(cx))`.
+    pub fn save(&self, cx: &mut EventCx<'_>) {
         for field in self.fields() {
-            field.save();
+            field.save(cx);
         }
     }
 
     /// Every field back to its initial value, its error and interaction
     /// cleared; then the form's interaction is cleared and `on_changed`
-    /// runs — Flutter's `FormState.reset`.
-    pub fn reset(&self) {
+    /// runs — Flutter's `FormState.reset`. The caller's `&mut EventCx<'_>`
+    /// reaches every `on_reset` and `on_changed`.
+    pub fn reset(&self, cx: &mut EventCx<'_>) {
         self.inner.resetting.set(true);
         for field in self.fields() {
-            field.reset();
+            field.reset(cx);
         }
         self.inner.resetting.set(false);
         self.inner.interacted.set(false);
-        self.field_did_change();
+        self.field_did_change(cx);
     }
 
     /// Whether the user has edited any field, or `validate()` ran since the
@@ -217,10 +223,10 @@ impl FormHandle {
 
     /// A field's value changed, or it was reset — Flutter's `_fieldDidChange`
     /// followed by the form's autovalidation in `FormState.build`.
-    pub(crate) fn field_did_change(&self) {
+    pub(crate) fn field_did_change(&self, cx: &mut EventCx<'_>) {
         let on_changed = self.inner.on_changed.borrow().clone();
         if let Some(on_changed) = on_changed {
-            on_changed();
+            on_changed(cx);
         }
         if self.inner.resetting.get() {
             return;
@@ -266,7 +272,7 @@ pub struct Form {
     child: BoxedView,
     handle: Option<FormHandle>,
     autovalidate_mode: AutovalidateMode,
-    on_changed: Option<Rc<dyn Fn()>>,
+    on_changed: Option<EventCallback>,
 }
 
 impl std::fmt::Debug for Form {
@@ -306,10 +312,17 @@ impl Form {
         self
     }
 
-    /// Called when any field's value changes, and on `reset`.
+    /// Called when any field's value changes, and on `reset`, with the
+    /// `&mut EventCx<'_>` of the event that changed it: the field's own edit
+    /// callback, or the caller of [`FormFieldHandle::did_change`],
+    /// [`FormFieldHandle::reset`] or [`FormHandle::reset`] (ADR-0086 §6).
     #[must_use]
-    pub fn on_changed(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_changed = Some(Rc::new(callback));
+    pub fn on_changed<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_changed = Some(event_callback(callback));
         self
     }
 

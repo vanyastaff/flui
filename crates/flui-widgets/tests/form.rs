@@ -22,7 +22,7 @@ use flui_widgets::{
     TextEditingController,
 };
 
-use crate::common::{LaidOut, lay_out, tight};
+use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
 
 fn character(ch: char) -> KeyEvent {
     KeyEventBuilder::new(Code::KeyA)
@@ -75,6 +75,13 @@ fn fields(children: Vec<BoxedView>) -> Column {
 
 fn mount(form: Form) -> LaidOut {
     lay_out(form, tight(400.0, 300.0))
+}
+
+/// [`mount`] below a probe, whose writer source opens the `cx` that
+/// `FormHandle::save` and `reset` take, as a submit button's press would.
+fn mount_probed(form: Form) -> (LaidOut, SignalProbe) {
+    let probe = SignalProbe::new(move |_| form.clone());
+    (lay_out(probe.view(), tight(400.0, 300.0)), probe)
 }
 
 /// `validate()` shows the validator's message, and a valid value clears it
@@ -314,13 +321,13 @@ fn save_calls_on_saved_with_each_fields_value_in_registration_order() {
     let field = |initial: &str, node: Option<&Rc<FocusNode>>| {
         let sink = Rc::clone(&saved);
         let mut field = RawTextFormField::with_initial_value(initial)
-            .on_saved(move |value| sink.borrow_mut().push(value.clone()));
+            .on_saved(move |_cx, value| sink.borrow_mut().push(value.clone()));
         if let Some(node) = node {
             field = field.focus_node(Rc::clone(node));
         }
         field.boxed()
     };
-    let laid = mount(
+    let (laid, probe) = mount_probed(
         Form::new(fields(vec![
             field("a", None),
             field("b", Some(&second)),
@@ -331,7 +338,7 @@ fn save_calls_on_saved_with_each_fields_value_in_registration_order() {
     second.request_focus();
     type_text(&laid, "x");
 
-    form.save();
+    probe.write(|cx| form.save(cx));
 
     assert_eq!(*saved.borrow(), ["a", "bx", "c"]);
 }
@@ -347,7 +354,7 @@ fn reset_restores_initial_values_and_clears_errors_and_interaction() {
     let field = FormFieldHandle::new();
     let controller = TextEditingController::with_text("init");
     let node = FocusNode::with_debug_label("reset");
-    let mut laid = mount(
+    let (mut laid, probe) = mount_probed(
         Form::new(
             RawTextFormField::new(controller.clone())
                 .validator(required("Required"))
@@ -368,7 +375,7 @@ fn reset_restores_initial_values_and_clears_errors_and_interaction() {
         "precondition: error up"
     );
 
-    form.reset();
+    probe.write(|cx| form.reset(cx));
     laid.tick();
 
     assert_eq!(controller.text(), "init");
@@ -509,11 +516,11 @@ fn set_value_on_a_text_form_field_is_seen_by_value_validate_and_save() {
     let saved = Rc::new(RefCell::new(None));
     let sink = Rc::clone(&saved);
     let controller = TextEditingController::with_text("");
-    let _laid = mount(
+    let (_laid, probe) = mount_probed(
         Form::new(
             RawTextFormField::new(controller.clone())
                 .validator(required("Required"))
-                .on_saved(move |value| *sink.borrow_mut() = Some(value.clone()))
+                .on_saved(move |_cx, value| *sink.borrow_mut() = Some(value.clone()))
                 .handle(field.clone()),
         )
         .handle(form.clone()),
@@ -526,7 +533,7 @@ fn set_value_on_a_text_form_field_is_seen_by_value_validate_and_save() {
     assert!(!field.has_interacted_by_user());
     assert_eq!(field.error_text(), None, "set_value does not validate");
     assert!(form.validate());
-    form.save();
+    probe.write(|cx| form.save(cx));
     assert_eq!(saved.borrow().as_deref(), Some("set"));
 }
 
@@ -584,4 +591,72 @@ fn copy_then_paste_round_trips_text_in_a_text_form_field() {
     assert_eq!(controller.text(), "abcabc");
     assert_eq!(field.value(), "abcabc");
     assert!(field.has_interacted_by_user(), "a paste is the user's edit");
+}
+
+// ============================================================================
+// Event context (ADR-0086): the handle methods take the caller's `cx` and
+// hand it to the callbacks they run; a field's edit hands on its own.
+// ============================================================================
+
+#[test]
+fn save_with_a_cx_reaches_on_saved_which_writes_a_signal() {
+    use flui_view::SignalWriteExt as _;
+
+    let form = FormHandle::new();
+    let probe_form = form.clone();
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        Form::new(
+            RawTextFormField::with_initial_value("four")
+                .on_saved(move |cx, value| count.set(cx, value.len() as u32)),
+        )
+        .handle(probe_form.clone())
+    });
+    let mut laid = lay_out(probe.view(), tight(400.0, 300.0));
+
+    probe.write(|cx| form.save(cx));
+
+    assert_eq!(probe.value(), Ok(4));
+    laid.tick();
+    assert_eq!(probe.reads().last(), Some(&4), "the reader rebuilt");
+}
+
+#[test]
+fn a_text_form_field_edit_reaches_form_on_changed_with_its_cx() {
+    use flui_view::SignalWriteExt as _;
+
+    let node = FocusNode::with_debug_label("changed");
+    let probe_node = Rc::clone(&node);
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        Form::new(RawTextFormField::with_initial_value("").focus_node(Rc::clone(&probe_node)))
+            .on_changed(move |cx| count.update(cx, |n| *n += 1))
+    });
+    let laid = lay_out(probe.view(), tight(400.0, 300.0));
+    node.request_focus();
+
+    type_text(&laid, "ab");
+
+    assert_eq!(probe.value(), Ok(2), "one on_changed per edit");
+}
+
+#[test]
+fn reset_with_a_cx_reaches_on_reset_and_form_on_changed() {
+    use flui_view::SignalWriteExt as _;
+
+    let form = FormHandle::new();
+    let probe_form = form.clone();
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        Form::new(
+            RawTextFormField::with_initial_value("x")
+                .on_reset(move |cx| count.update(cx, |n| *n += 10)),
+        )
+        .handle(probe_form.clone())
+        .on_changed(move |cx| count.update(cx, |n| *n += 1))
+    });
+    let _laid = lay_out(probe.view(), tight(400.0, 300.0));
+
+    probe.write(|cx| form.reset(cx));
+
+    // The field's on_reset (+10), its change notice while the form resets
+    // (+1), and the form's own notice after the loop (+1).
+    assert_eq!(probe.value(), Ok(12));
 }

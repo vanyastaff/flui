@@ -41,6 +41,7 @@ pub struct ProbeSignals {
 struct Seen {
     count: RefCell<Option<(Signal<u32>, Reactive)>>,
     reads: RefCell<Vec<u32>>,
+    writer: RefCell<Option<WriterSource>>,
 }
 
 type Builder = Rc<dyn Fn(ProbeSignals) -> BoxedView>;
@@ -103,6 +104,24 @@ impl SignalProbe {
     pub fn reads(&self) -> Vec<u32> {
         self.seen.reads.borrow().clone()
     }
+
+    /// Run `f` with an [`EventCx`] opened from the probe's writer source,
+    /// as an event callback would: for a test that calls an API taking the
+    /// caller's `cx` (`FormHandle::save`, `FormFieldHandle::reset`) outside
+    /// any widget's callback.
+    ///
+    /// # Panics
+    ///
+    /// Before the probe has built once.
+    pub fn write<R>(&self, f: impl FnOnce(&mut EventCx<'_>) -> R) -> R {
+        let writer = self
+            .seen
+            .writer
+            .borrow()
+            .clone()
+            .expect("the probe built before it writes");
+        writer.write(f)
+    }
 }
 
 /// The mounted form of a [`SignalProbe`].
@@ -119,11 +138,13 @@ impl std::fmt::Debug for ProbeRoot {
     }
 }
 
-/// The state of a [`ProbeRoot`]: the two signals, minted in `init_state`.
+/// The state of a [`ProbeRoot`]: the two signals and the writer source,
+/// acquired in `init_state`.
 #[derive(Debug, Default)]
 pub struct ProbeRootState {
     count: Signal<u32>,
     released: Signal<u32>,
+    writer: Option<WriterSource>,
 }
 
 impl StatefulView for ProbeRoot {
@@ -140,6 +161,7 @@ impl ViewState<ProbeRoot> for ProbeRootState {
         let graph = ctx.reactive();
         self.released = graph.signal(0);
         graph.release(self.released.slot());
+        self.writer = Some(ctx.writer_source());
     }
 
     fn build(&self, view: &ProbeRoot, ctx: &dyn BuildContext) -> impl IntoView {
@@ -147,6 +169,7 @@ impl ViewState<ProbeRoot> for ProbeRootState {
         seen.count
             .borrow_mut()
             .get_or_insert_with(|| (self.count, ctx.reactive()));
+        seen.writer.borrow_mut().clone_from(&self.writer);
         seen.reads.borrow_mut().push(self.count.get(ctx));
         (view.probe.builder)(ProbeSignals {
             count: self.count,

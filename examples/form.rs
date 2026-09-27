@@ -87,11 +87,11 @@ impl ViewState<SignUpForm> for SignUpState {
                     .is_empty()
                     .then(|| "Enter your name".to_owned())
             })
-            .on_saved(move |value| save_name.update(|saved| saved.name.clone_from(value)));
+            .on_saved(move |_cx, value| save_name.update(|saved| saved.name.clone_from(value)));
         let email = TextFormField::with_initial_value("")
             .decoration(labelled("Email"))
             .validator(|value| (!value.contains('@')).then(|| "Enter an email address".to_owned()))
-            .on_saved(move |value| save_email.update(|saved| saved.email.clone_from(value)));
+            .on_saved(move |_cx, value| save_email.update(|saved| saved.email.clone_from(value)));
         let password = TextFormField::with_initial_value("")
             .decoration(labelled("Password"))
             .obscure_text(true)
@@ -99,7 +99,7 @@ impl ViewState<SignUpForm> for SignUpState {
             .validator(|value| {
                 (value.chars().count() < 8).then(|| "Use 8 or more characters".to_owned())
             })
-            .on_saved(move |value| {
+            .on_saved(move |_cx, value| {
                 save_password.update(|saved| saved.password_length = value.chars().count());
             });
 
