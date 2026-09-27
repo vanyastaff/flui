@@ -494,6 +494,52 @@ mod device_recovery_tests {
         );
     }
 
+    /// The desktop, Android and iOS runners reach begin frame and end frame
+    /// only through this function, so it must drive the realm's whole frame
+    /// transaction, not just its draw step: a transient frame callback runs
+    /// at the frame's timestamp, and a post-frame callback runs after it.
+    ///
+    /// Fails against a wrapper that calls the realm's draw step on its own
+    /// (neither callback runs) or that hands the pump a clock other than the
+    /// wake's `now` (the transient callback sees another timestamp).
+    #[test]
+    fn the_recovery_wrapper_runs_the_whole_frame_transaction() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mut realm = mount_root();
+        let mut lane = lane_over(ScriptedDeviceBackend::healthy());
+        let backoff = new_device_recovery_backoff();
+        let now = Instant::now() + Duration::from_secs(5);
+
+        let transient_at = Arc::new(parking_lot::Mutex::new(None));
+        let transient_in_cb = Arc::clone(&transient_at);
+        let _id = realm
+            .scheduler()
+            .schedule_frame_callback(Box::new(move |vsync_time| {
+                *transient_in_cb.lock() = Some(vsync_time);
+            }));
+        let post_frame_ran = Arc::new(AtomicBool::new(false));
+        let post_frame_in_cb = Arc::clone(&post_frame_ran);
+        realm
+            .scheduler()
+            .add_post_frame_callback(Box::new(move |_timing| {
+                post_frame_in_cb.store(true, Ordering::SeqCst);
+            }));
+
+        let _ = pump_with_device_recovery(&mut realm, &mut lane, &backoff, now);
+
+        assert_eq!(
+            *transient_at.lock(),
+            Some(now),
+            "begin frame runs the transient callbacks at the wake's timestamp"
+        );
+        assert!(
+            post_frame_ran.load(Ordering::SeqCst),
+            "end frame runs the post-frame callbacks"
+        );
+    }
+
     #[test]
     fn a_pre_frame_loss_with_a_successful_recovery_renders_the_same_frame_and_arms_nothing() {
         let mut realm = mount_root();
