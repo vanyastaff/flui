@@ -14,10 +14,14 @@ use super::path::{RouteParseError, RoutePath};
 /// `#[derive(Routable)]` writes `to_path` and `from_path` from one
 /// `#[route("…")]` pattern per variant. It keeps the round trip for every
 /// value whose fields print non-empty, whose `Display` output `FromStr` reads
-/// back as the same value, and that no literal sibling claims: beside
-/// `#[route("/s/new")]`, a `#[route("/s/:slug")]` value with `slug == "new"`
-/// parses as the literal variant. A hand-written impl keeps the contract
-/// itself.
+/// back as the same value, and whose printed path no pattern tried before
+/// its own also matches. Patterns are tried by specificity (a literal ranks
+/// above a parameter at the first position where two differ), so a value
+/// that prints a more specific pattern's literals parses as that pattern's
+/// variant: beside `#[route("/s/new")]`, a `#[route("/s/:slug")]` value with
+/// `slug == "new"`; and beside `#[route("/s/:b")]`, a `#[route("/:a/new")]`
+/// value with `a == "s"`, whose `/s/new` fills `b` with `"new"`. A
+/// hand-written impl keeps the contract itself.
 ///
 /// # Example
 ///

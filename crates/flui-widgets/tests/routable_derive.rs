@@ -100,6 +100,35 @@ fn literal_segments_win_over_parameters() {
     );
 }
 
+/// Two patterns that cross: each has a literal where the other has a
+/// parameter. Declared with the one tried later first.
+#[derive(Routable, Debug, Clone, PartialEq)]
+enum Crossing {
+    #[route("/:a/new")]
+    A { a: String },
+    #[route("/s/:b")]
+    B { b: String },
+}
+
+#[test]
+fn crossing_patterns_resolve_by_the_first_differing_segment() {
+    // The documented overlap on `Routable`: `A { a: "s" }` prints a path the
+    // earlier-tried `/s/:b` matches, so it parses as `B`.
+    let a = Crossing::A { a: "s".into() };
+    assert_eq!(a.to_path().as_str(), "/s/new");
+    assert_eq!(
+        Crossing::from_path(&a.to_path()),
+        Ok(Crossing::B { b: "new".into() })
+    );
+    // Values outside the overlap round-trip.
+    for route in [
+        Crossing::A { a: "t".into() },
+        Crossing::B { b: "old".into() },
+    ] {
+        assert_eq!(Crossing::from_path(&route.to_path()), Ok(route));
+    }
+}
+
 #[test]
 fn derived_back_stack_skips_gaps() {
     let path = RoutePath::parse("/note/1").expect("parses");
