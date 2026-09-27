@@ -28,8 +28,11 @@ impl Drop for FrameTimeGuard<'_> {
 impl UiRealm {
     /// The frame transaction (ADR-0083 §1), in this order:
     ///
-    /// 1. apply commands: drain the owner inbox at the Idle boundary (the
-    ///    coalesced redraw request is left for the host's gate to read);
+    /// 1. apply commands: drain the owner inbox at the Idle boundary. A host
+    ///    gate has usually drained it already this wake
+    ///    ([`Self::drain_owner_inbox`]), so this catches only what a worker
+    ///    sent in between; the redraw request such a command raises stays
+    ///    set, and the host's next gate reads it (one extra frame at most);
     /// 2. begin frame: transient callbacks, microtasks and the one mid-frame
     ///    async poll, at the timestamp `clock` returns;
     /// 3. draw frame: persistent callbacks, then this realm's pipeline and
@@ -103,9 +106,11 @@ impl UiRealm {
         })
     }
 
-    /// A wake with frames disabled (the app is hidden, paused or detached):
-    /// clear the scheduler's frame latch, then poll the async driver once.
-    /// No frame runs — no begin frame, no tickers, no pipeline, no present.
+    /// A wake that runs no frame: clear the scheduler's frame latch, then
+    /// poll the async driver once. No begin frame, no tickers, no pipeline,
+    /// no present. Hosts call it for a wake whose gate found frames disabled
+    /// (the app is hidden, paused or detached), and iOS for every owner turn,
+    /// which only commits commands and polls, frames enabled or not.
     ///
     /// The order is load-bearing. Only a begin frame clears the latch, and
     /// none runs here; polling first would let a future that schedules a

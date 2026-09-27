@@ -31,7 +31,24 @@ the dispatch layer moves there too.
   pump's begin frame and its post-frame attempt after the post-frame
   callbacks; only `mark_primary_needs_full_repaint` touches the tree, and it
   lands before the pipeline that repaints. The pump's frame timestamp is the
-  wake's own `now`. Pinned by the `device_recovery_tests`.
+  wake's own `now`. Pinned by the `device_recovery_tests`, among them
+  `the_recovery_wrapper_runs_the_whole_frame_transaction`, which fails if the
+  wrapper draws without begin or end frame.
+- **The raster lane is held for the whole pump.** The lane (the renderer slot
+  on web) is the pump's sink, so its lock now spans the transaction, begin
+  frame and end frame included, not just the draw step: transient callbacks,
+  microtasks, the async poll and post-frame callbacks run under it. That is
+  safe because nothing in those phases reaches a lane lock on the owner
+  thread synchronously. The other lane lock sites are the frame wake's own
+  `try_lock` (which skips a frame rather than wait), the resize hook's
+  construction at bootstrap, and the surface-status callbacks on Android and
+  iOS, which the platform delivers as their own event, never from inside a
+  realm frame; a same-realm dispatch a callback makes is queued, not run
+  inline. On web, the renderer slot's other users are the surface applier
+  (run from a queued `Resized` dispatch) and the recovery future (spawned,
+  so it runs after the frame callback returns). A new lane lock site
+  reachable from user code inside a frame must be a `try_lock` or live
+  outside the pump.
 - **Web runs no frame before its renderer exists.** The web renderer arrives
   asynchronously; until it does, a render wake returns without pumping, so no
   begin, draw or post-frame callback runs, and the realm stays dirty for the
