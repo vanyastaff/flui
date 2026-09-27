@@ -10,14 +10,31 @@ use flui_interaction::{PointerDispatch, PointerPanZoomEvent, PointerTarget, from
 use flui_objects::RenderListener;
 use flui_rendering::hit_testing::{HitTestBehavior, PointerEvent};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, IntoView, RenderObjectContext, RenderView, impl_render_view};
+use flui_view::{
+    Child, EventCx, EventOutcome, IntoView, RenderObjectContext, RenderView, WriterSource,
+    impl_render_view,
+};
 
-/// A pointer-event callback: receives the event that landed on the
-/// [`Listener`] in both spaces — see [`PointerDispatch`].
-type PointerCallback = Rc<dyn Fn(PointerDispatch<'_>)>;
+use crate::support::{RefCallback, ref_callback};
+
+/// A pointer-event callback: receives the dispatch's [`EventCx`] and the event
+/// that landed on the [`Listener`] in both spaces — see [`PointerDispatch`].
+/// Stored already adapted to report its outcome.
+type PointerCallback = Rc<dyn Fn(&mut EventCx<'_>, PointerDispatch<'_>)>;
 
 /// A trackpad pan/zoom callback routed from a [`PointerEvent::Gesture`] update.
-type PointerPanZoomCallback = Rc<dyn Fn(&PointerPanZoomEvent)>;
+type PointerPanZoomCallback = RefCallback<PointerPanZoomEvent>;
+
+/// Store a pointer callback, adapted to report its outcome.
+fn pointer_callback<F, R>(callback: F) -> PointerCallback
+where
+    F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+    R: EventOutcome,
+{
+    Rc::new(move |cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
+        callback(cx, dispatch).report();
+    })
+}
 
 /// An arbitrated scroll-signal handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
@@ -38,7 +55,15 @@ type PanZoomClaimCallback = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation>
 ///
 /// # What a callback receives
 ///
-/// Each `on_pointer_*` callback is handed a [`PointerDispatch`], which carries
+/// Each `on_pointer_*` callback receives the dispatch's `&mut EventCx<'_>`
+/// first, so it writes a signal directly (ADR-0086):
+/// `.on_pointer_down(move |cx, _dispatch| presses.update(cx, |n| *n += 1))`.
+/// The listener has no `init_state`; it takes the owner's [`WriterSource`]
+/// from the [`RenderObjectContext`] that registers its handler, and opens one
+/// write per event. The two claim callbacks decide during routing and receive
+/// no `cx` (ADR-0086 §6).
+///
+/// Then it is handed a [`PointerDispatch`], which carries
 /// the event in two spaces: `local` (this listener's own box, the value to
 /// measure against its size or child offsets) and `global` (the root's space,
 /// the value to compare against another widget's position or to hand to a
@@ -122,22 +147,34 @@ impl Listener {
 
     /// Called when a pointer makes contact within the child's bounds.
     #[must_use]
-    pub fn on_pointer_down(mut self, callback: impl Fn(PointerDispatch<'_>) + 'static) -> Self {
-        self.on_pointer_down = Some(Rc::new(callback));
+    pub fn on_pointer_down<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_pointer_down = Some(pointer_callback(callback));
         self
     }
 
     /// Called when a pointer that was in contact lifts.
     #[must_use]
-    pub fn on_pointer_up(mut self, callback: impl Fn(PointerDispatch<'_>) + 'static) -> Self {
-        self.on_pointer_up = Some(Rc::new(callback));
+    pub fn on_pointer_up<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_pointer_up = Some(pointer_callback(callback));
         self
     }
 
     /// Called when a pointer moves while in contact.
     #[must_use]
-    pub fn on_pointer_move(mut self, callback: impl Fn(PointerDispatch<'_>) + 'static) -> Self {
-        self.on_pointer_move = Some(Rc::new(callback));
+    pub fn on_pointer_move<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_pointer_move = Some(pointer_callback(callback));
         self
     }
 
@@ -146,16 +183,24 @@ impl Listener {
     /// FLUI models Flutter's distinct `PointerHoverEvent` as
     /// [`PointerEvent::Move`] whose current button mask is empty.
     #[must_use]
-    pub fn on_pointer_hover(mut self, callback: impl Fn(PointerDispatch<'_>) + 'static) -> Self {
-        self.on_pointer_hover = Some(Rc::new(callback));
+    pub fn on_pointer_hover<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_pointer_hover = Some(pointer_callback(callback));
         self
     }
 
     /// Called when contact is interrupted (the platform cancels the pointer, or
     /// it leaves the surface) — a gesture must abandon any in-flight tracking.
     #[must_use]
-    pub fn on_pointer_cancel(mut self, callback: impl Fn(PointerDispatch<'_>) + 'static) -> Self {
-        self.on_pointer_cancel = Some(Rc::new(callback));
+    pub fn on_pointer_cancel<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_pointer_cancel = Some(pointer_callback(callback));
         self
     }
 
@@ -169,8 +214,12 @@ impl Listener {
     /// leaf-most interested party registers with
     /// [`on_scroll_claim`](Self::on_scroll_claim) instead.
     #[must_use]
-    pub fn on_pointer_signal(mut self, callback: impl Fn(PointerDispatch<'_>) + 'static) -> Self {
-        self.on_pointer_signal = Some(Rc::new(callback));
+    pub fn on_pointer_signal<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_pointer_signal = Some(pointer_callback(callback));
         self
     }
 
@@ -209,11 +258,12 @@ impl Listener {
     /// [`on_pointer_pan_zoom_claim`](Self::on_pointer_pan_zoom_claim)
     /// instead.
     #[must_use]
-    pub fn on_pointer_pan_zoom_update(
-        mut self,
-        callback: impl Fn(&PointerPanZoomEvent) + 'static,
-    ) -> Self {
-        self.on_pointer_pan_zoom_update = Some(Rc::new(callback));
+    pub fn on_pointer_pan_zoom_update<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, &PointerPanZoomEvent) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_pointer_pan_zoom_update = Some(ref_callback(callback));
         self
     }
 
@@ -248,10 +298,11 @@ impl Listener {
     }
 
     /// Merge the per-kind callbacks into the single owner-local handler the
-    /// interaction lane invokes: route each event to the matching callback. A
-    /// raw `Listener` never claims an event — ordinary pointer delivery has no
-    /// propagation result (ADR-0027).
-    fn handler(&self) -> impl Fn(PointerDispatch<'_>) + 'static {
+    /// interaction lane invokes: route each event to the matching callback,
+    /// inside one write `writer` opens. A raw `Listener` never claims an
+    /// event — ordinary pointer delivery has no propagation result
+    /// (ADR-0027).
+    fn handler(&self, writer: WriterSource) -> impl Fn(PointerDispatch<'_>) + 'static {
         let on_down = self.on_pointer_down.clone();
         let on_up = self.on_pointer_up.clone();
         let on_move = self.on_pointer_move.clone();
@@ -261,46 +312,44 @@ impl Listener {
         let on_pan_zoom_update = self.on_pointer_pan_zoom_update.clone();
         // The event KIND is the same in both spaces, so the routing match
         // reads the local one and each callback receives the whole pair.
-        move |dispatch: PointerDispatch<'_>| match dispatch.local {
-            PointerEvent::Down(_) => {
-                if let Some(callback) = &on_down {
-                    callback(dispatch);
-                }
-            }
-            PointerEvent::Up(_) => {
-                if let Some(callback) = &on_up {
-                    callback(dispatch);
-                }
-            }
-            PointerEvent::Move(update) => {
-                if update.current.buttons.is_empty() {
-                    if let Some(callback) = &on_hover {
-                        callback(dispatch);
+        move |dispatch: PointerDispatch<'_>| {
+            let callback = match dispatch.local {
+                PointerEvent::Down(_) => &on_down,
+                PointerEvent::Up(_) => &on_up,
+                PointerEvent::Move(update) if update.current.buttons.is_empty() => &on_hover,
+                PointerEvent::Move(_) => &on_move,
+                PointerEvent::Cancel(_) => &on_cancel,
+                PointerEvent::Scroll(_) => &on_signal,
+                PointerEvent::Gesture(_) => {
+                    if let Some(callback) = &on_pan_zoom_update
+                        && let Some(pan_zoom) = from_w3c_event(dispatch.local)
+                        && pan_zoom.is_update()
+                    {
+                        writer.write(|cx| callback(cx, &pan_zoom));
                     }
-                } else if let Some(callback) = &on_move {
-                    callback(dispatch);
+                    return;
                 }
+                _ => return,
+            };
+            if let Some(callback) = callback {
+                writer.write(|cx| callback(cx, dispatch));
             }
-            PointerEvent::Cancel(_) => {
-                if let Some(callback) = &on_cancel {
-                    callback(dispatch);
-                }
-            }
-            PointerEvent::Scroll(_) => {
-                if let Some(callback) = &on_signal {
-                    callback(dispatch);
-                }
-            }
-            PointerEvent::Gesture(_) => {
-                if let Some(callback) = &on_pan_zoom_update
-                    && let Some(pan_zoom) = from_w3c_event(dispatch.local)
-                    && pan_zoom.is_update()
-                {
-                    callback(&pan_zoom);
-                }
-            }
-            _ => {}
         }
+    }
+
+    /// The merged handler over the owner's writer source, or `None` when the
+    /// context has none (a detached mount).
+    fn owner_handler(
+        &self,
+        ctx: &RenderObjectContext<'_>,
+    ) -> Option<impl Fn(PointerDispatch<'_>) + 'static> {
+        let Some(writer) = ctx.writer_source() else {
+            tracing::debug!(
+                "Listener mounted without an owner graph; pointer events will not be delivered"
+            );
+            return None;
+        };
+        Some(self.handler(writer))
     }
 
     /// Register the merged handler in the active owner lane, returning its
@@ -309,7 +358,8 @@ impl Listener {
     /// Returns `None` when no owner lane is active (a detached mount): the
     /// listener then participates in hit-testing without pointer delivery.
     fn register(&self, ctx: &RenderObjectContext<'_>) -> Option<PointerTarget> {
-        match ctx.register_pointer(self.handler()) {
+        let handler = self.owner_handler(ctx)?;
+        match ctx.register_pointer(handler) {
             Ok(target) => Some(target),
             Err(error) => {
                 tracing::debug!(
@@ -434,7 +484,9 @@ impl RenderView for Listener {
         // cached route observes the new configuration (ADR-0027 §rebuild).
         match render_object.target() {
             Some(target) => {
-                if let Err(error) = ctx.replace_pointer(target, self.handler()) {
+                if let Some(handler) = self.owner_handler(ctx)
+                    && let Err(error) = ctx.replace_pointer(target, handler)
+                {
                     tracing::warn!(?error, "Listener handler replacement failed");
                 }
             }

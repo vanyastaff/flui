@@ -165,7 +165,7 @@ fn build_delivers_the_animation_localized_position_to_the_child_mid_animation() 
         SlideTransition::new(
             position,
             Listener::new()
-                .on_pointer_down(move |dispatch| {
+                .on_pointer_down(move |_cx, dispatch| {
                     let local = dispatch.local.position();
                     probe.set(Some((local.dx.get(), local.dy.get())));
                 })

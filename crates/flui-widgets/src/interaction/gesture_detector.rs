@@ -926,10 +926,10 @@ impl GestureDetectorState {
         // only the local event has no way to report a global position and can
         // only restate the local one under that name (issue #908).
         Listener::new()
-            .on_pointer_down(move |dispatch| down.handle_down(dispatch))
-            .on_pointer_move(move |dispatch| on_move.forward(dispatch))
-            .on_pointer_up(move |dispatch| on_up.forward(dispatch))
-            .on_pointer_cancel(move |dispatch| on_cancel.forward(dispatch))
+            .on_pointer_down(move |_cx, dispatch| down.handle_down(dispatch))
+            .on_pointer_move(move |_cx, dispatch| on_move.forward(dispatch))
+            .on_pointer_up(move |_cx, dispatch| on_up.forward(dispatch))
+            .on_pointer_cancel(move |_cx, dispatch| on_cancel.forward(dispatch))
     }
 }
 

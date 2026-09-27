@@ -14,28 +14,41 @@ use flui_interaction::events::pointer::{
 };
 use flui_types::Color;
 use flui_types::{Offset, geometry::px};
+use flui_view::EventCx;
 use flui_widgets::prelude::HitTestBehavior;
 use flui_widgets::{ColoredBox, Listener, PointerPanZoomEvent, SizedBox};
 
 /// A counter callback + a readable handle.
-fn counter() -> (Rc<Cell<usize>>, impl Fn(PointerDispatch<'_>) + 'static) {
+fn counter() -> (
+    Rc<Cell<usize>>,
+    impl Fn(&mut EventCx<'_>, PointerDispatch<'_>) + 'static,
+) {
     let count = Rc::new(Cell::new(0));
     let in_cb = Rc::clone(&count);
-    (count, move |_event| {
-        in_cb.set(in_cb.get() + 1);
-    })
+    (
+        count,
+        move |_cx: &mut EventCx<'_>, _event: PointerDispatch<'_>| {
+            in_cb.set(in_cb.get() + 1);
+        },
+    )
 }
 
-fn pan_zoom_counter() -> (Rc<Cell<usize>>, impl Fn(&PointerPanZoomEvent) + 'static) {
+fn pan_zoom_counter() -> (
+    Rc<Cell<usize>>,
+    impl Fn(&mut EventCx<'_>, &PointerPanZoomEvent) + 'static,
+) {
     let count = Rc::new(Cell::new(0));
     let in_cb = Rc::clone(&count);
-    (count, move |event| {
-        assert!(
-            event.is_update(),
-            "current FLUI PointerEvent::Gesture conversion should produce pan/zoom updates",
-        );
-        in_cb.set(in_cb.get() + 1);
-    })
+    (
+        count,
+        move |_cx: &mut EventCx<'_>, event: &PointerPanZoomEvent| {
+            assert!(
+                event.is_update(),
+                "current FLUI PointerEvent::Gesture conversion should produce pan/zoom updates",
+            );
+            in_cb.set(in_cb.get() + 1);
+        },
+    )
 }
 
 #[test]
@@ -233,4 +246,86 @@ fn listener_routes_gesture_to_pan_zoom_update_callback() {
         1,
         "PointerEvent::Gesture should route through Listener's pan/zoom update callback",
     );
+}
+
+// ============================================================================
+// Event context (ADR-0086): the listener takes the owner's writer source
+// from its render-object context and opens one write per event.
+// ============================================================================
+
+mod event_cx {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use crate::common::{ProbeSignals, SignalProbe, lay_out, tight};
+    use flui_types::Color;
+    use flui_view::SignalWriteExt;
+    use flui_widgets::{ColoredBox, Listener};
+
+    fn target() -> ColoredBox {
+        ColoredBox::new(Color::rgb(10, 20, 30))
+    }
+
+    #[test]
+    fn a_pointer_down_writes_a_signal_and_rebuilds_its_reader() {
+        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+            Listener::new()
+                .on_pointer_down(move |cx, _dispatch| count.update(cx, |n| *n += 1))
+                .child(target())
+        });
+        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
+
+        app.dispatch_pointer_down(50.0, 50.0);
+        app.dispatch_pointer_up(50.0, 50.0);
+        assert_eq!(probe.value(), Ok(1));
+        app.tick();
+
+        assert_eq!(probe.reads(), [0, 1], "the reader rebuilt once");
+    }
+
+    /// A rebuild replaces the handler inside the registered target; the new
+    /// handler still opens its write from the owner's source.
+    #[test]
+    fn a_callback_replaced_on_rebuild_writes_through_the_update_path() {
+        let step = Rc::new(Cell::new(1_u32));
+        let step_in_build = Rc::clone(&step);
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            let by = step_in_build.get();
+            Listener::new()
+                .on_pointer_down(move |cx, _dispatch| count.update(cx, |n| *n += by))
+                .child(target())
+        });
+        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
+        app.dispatch_pointer_down(50.0, 50.0);
+        app.dispatch_pointer_up(50.0, 50.0);
+        assert_eq!(probe.value(), Ok(1));
+
+        step.set(10);
+        app.pump();
+        app.dispatch_pointer_down(50.0, 50.0);
+        app.dispatch_pointer_up(50.0, 50.0);
+
+        assert_eq!(probe.value(), Ok(11), "the rebuilt handler ran");
+    }
+
+    #[test]
+    fn a_refused_write_in_a_pointer_callback_is_reported_not_panicked() {
+        let probe = SignalProbe::new(|ProbeSignals { released, .. }| {
+            Listener::new()
+                .on_pointer_down(move |cx, _dispatch| released.set(cx, 1))
+                .child(target())
+        });
+        let app = lay_out(probe.view(), tight(100.0, 100.0));
+
+        let ((), log) = flui_testing::log_capture::capture(|| {
+            app.dispatch_pointer_down(50.0, 50.0);
+            app.dispatch_pointer_up(50.0, 50.0);
+        });
+
+        assert!(
+            log.contains("an event callback's signal write was refused"),
+            "the refusal is logged at the dispatch boundary: {log}"
+        );
+        assert_eq!(probe.value(), Ok(0));
+    }
 }

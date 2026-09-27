@@ -2031,7 +2031,7 @@ type RecordedPosition = Rc<Cell<Option<(f32, f32)>>>;
 fn recording_listener() -> (RecordedPosition, Listener) {
     let recorded = Rc::new(Cell::new(None));
     let probe = Rc::clone(&recorded);
-    let listener = Listener::new().on_pointer_down(move |dispatch: PointerDispatch<'_>| {
+    let listener = Listener::new().on_pointer_down(move |_cx, dispatch: PointerDispatch<'_>| {
         let position = dispatch.local.position();
         probe.set(Some((position.dx.get(), position.dy.get())));
     });
@@ -2779,7 +2779,7 @@ fn a_claimed_wheel_tick_is_still_observed_by_the_whole_path() {
 
     let observed_in_listener = Rc::clone(&observed);
     let widget = Listener::new()
-        .on_pointer_signal(move |_event| {
+        .on_pointer_signal(move |_cx, _event| {
             observed_in_listener.set(observed_in_listener.get() + 1);
         })
         .child(
@@ -2930,7 +2930,7 @@ fn a_wheel_tick_mid_drag_is_observed_under_the_cursor_not_the_captured_route() {
     let observed_in_listener = Rc::clone(&observed_over_listener);
     let widget = flui_widgets::Column::new(vec![
         Listener::new()
-            .on_pointer_signal(move |_event| {
+            .on_pointer_signal(move |_cx, _event| {
                 observed_in_listener.set(observed_in_listener.get() + 1);
             })
             .child(SizedBox::new(300.0, 150.0).child(ColoredBox::new(Color::rgb(0x40, 0x40, 0x40))))

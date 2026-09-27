@@ -58,3 +58,17 @@ where
 {
     Rc::new(move |cx: &mut EventCx<'_>, value: D| callback(cx, value).report())
 }
+
+/// A stored event callback that also receives a borrowed value.
+pub(crate) type RefCallback<T> = Rc<dyn Fn(&mut EventCx<'_>, &T)>;
+
+/// [`event_callback`] for a callback that also receives a borrowed value
+/// (the field's text, a pan-zoom event, a form field's value).
+pub(crate) fn ref_callback<T, F, R>(callback: F) -> RefCallback<T>
+where
+    T: ?Sized + 'static,
+    F: for<'a> Fn(&mut EventCx<'_>, &'a T) -> R + 'static,
+    R: EventOutcome,
+{
+    Rc::new(move |cx: &mut EventCx<'_>, value: &T| callback(cx, value).report())
+}

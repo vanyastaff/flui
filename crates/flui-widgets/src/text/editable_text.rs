@@ -819,7 +819,7 @@ impl EditableTextState {
             let controller = Rc::clone(&controller);
             let focus_node = Rc::clone(&focus_node);
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |dispatch: PointerDispatch<'_>| {
+            move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 if !enabled {
                     return;
                 }
@@ -839,7 +839,7 @@ impl EditableTextState {
             let resolve = resolve.clone();
             let controller = Rc::clone(&controller);
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |dispatch: PointerDispatch<'_>| {
+            move |_cx: &mut EventCx<'_>, dispatch: PointerDispatch<'_>| {
                 let Some(from) = drag_anchor.get() else {
                     return;
                 };
@@ -859,11 +859,11 @@ impl EditableTextState {
         // gesture entirely — extend a selection the user abandoned.
         let release = {
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |_: PointerDispatch<'_>| drag_anchor.set(None)
+            move |_: &mut EventCx<'_>, _: PointerDispatch<'_>| drag_anchor.set(None)
         };
         let cancel = {
             let drag_anchor = Rc::clone(&drag_anchor);
-            move |_: PointerDispatch<'_>| drag_anchor.set(None)
+            move |_: &mut EventCx<'_>, _: PointerDispatch<'_>| drag_anchor.set(None)
         };
 
         field

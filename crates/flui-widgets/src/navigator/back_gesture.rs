@@ -559,12 +559,12 @@ impl ViewState<BackGestureDetector> for BackGestureDetectorState {
             .behavior(HitTestBehavior::Translucent)
             // The drag recognizer tracks one space; hand it the local one,
             // which is what it has always received.
-            .on_pointer_down(move |dispatch| {
+            .on_pointer_down(move |_cx, dispatch| {
                 down_runtime.on_pointer_down(&down_drag, dispatch);
             })
-            .on_pointer_move(move |dispatch| move_drag.handle_event(dispatch))
-            .on_pointer_up(move |dispatch| up_drag.handle_event(dispatch))
-            .on_pointer_cancel(move |dispatch| cancel_drag.handle_event(dispatch));
+            .on_pointer_move(move |_cx, dispatch| move_drag.handle_event(dispatch))
+            .on_pointer_up(move |_cx, dispatch| up_drag.handle_event(dispatch))
+            .on_pointer_cancel(move |_cx, dispatch| cancel_drag.handle_event(dispatch));
 
         let child = view
             .child
