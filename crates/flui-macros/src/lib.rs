@@ -11,7 +11,11 @@
 //!   type. Replaces the legacy `impl_stateful_view!` declarative
 //!   macro (also deleted here).
 //!
-//! Both derives are re-exported from `flui_view::prelude` so widget
+//! - [`macro@Routable`] — emit `impl Routable` for a route enum from its
+//!   `#[route("…")]` patterns; re-exported beside the trait by
+//!   `flui_widgets` and its prelude.
+//!
+//! The two view derives are re-exported from `flui_view::prelude` so widget
 //! authors write a single `use flui_view::prelude::*;` and pick up the
 //! derives alongside the supporting trait — no extra `use
 //! flui_macros::…` import.
@@ -30,8 +34,9 @@
 //!
 //! Derives resolve the owning runtime crate from the consumer's Cargo manifest,
 //! honoring renamed dependencies. A direct runtime dependency takes precedence;
-//! otherwise the generated code uses `flui::view`, `flui::foundation`, or
-//! `flui::animation` through the facade (including a renamed facade).
+//! otherwise the generated code uses `flui::view`, `flui::foundation`,
+//! `flui::animation` or `flui::widgets` through the facade (including a
+//! renamed facade).
 //! Framework library code and integration targets use the same absolute path.
 
 // Ship bar (wave 1): every public item is documented; keep it that way.
@@ -44,6 +49,7 @@
 mod derive_animatable;
 mod derive_diagnosticable;
 mod derive_inherited_data;
+mod derive_routable;
 mod derive_stateful;
 mod derive_stateless;
 mod runtime_path;
@@ -282,4 +288,45 @@ pub fn derive_diagnosticable(input: TokenStream) -> TokenStream {
 pub fn derive_animatable(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive_animatable::expand(&input).into()
+}
+
+/// Emit `impl Routable` for a route enum: `to_path` and `from_path` from one
+/// `#[route("…")]` pattern per variant (ADR-0093 §1).
+///
+/// ```rust,ignore
+/// use flui_widgets::prelude::*;
+///
+/// #[derive(Routable, Clone, PartialEq)]
+/// enum AppRoute {
+///     #[route("/")]
+///     Home,
+///     #[route("/note/:id")]
+///     Note { id: u32 },
+/// }
+/// ```
+///
+/// A pattern starts with `/` (`/` alone is the root) and has no empty
+/// segment, no trailing `/`, and no `?`, `#` or `%`. A `:name` segment fills
+/// the field `name` (`:type` fills `r#type`), which prints through `Display`
+/// and parses through `FromStr`; every other segment is literal text, encoded
+/// by `RoutePath`. Every field appears as exactly one parameter.
+///
+/// Rejected at compile time: a struct, union or generic type; a tuple
+/// variant; a variant with no `#[route]`, two, or one with anything after the
+/// pattern; a malformed pattern; a parameter that names no field, or a field
+/// no parameter names; and two patterns of the same shape, since the second
+/// could never be parsed.
+///
+/// `from_path` tries the patterns from the most specific: a literal segment
+/// wins over a parameter in the same place whatever the declaration order,
+/// so `/s/new` parses as the `/s/new` variant even beside `/s/:slug`. A path
+/// no pattern matches is `RouteParseError::NoMatch`; a path whose pattern
+/// matches but whose segment does not parse as its field is
+/// `RouteParseError::Param`.
+#[proc_macro_derive(Routable, attributes(route))]
+pub fn derive_routable(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    derive_routable::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }

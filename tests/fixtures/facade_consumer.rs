@@ -43,6 +43,14 @@ pub struct Details {
     pub count: usize,
 }
 
+#[derive(Routable, Clone, PartialEq)]
+pub enum AppRoute {
+    #[route("/")]
+    Home,
+    #[route("/note/:id")]
+    Note { id: u32 },
+}
+
 pub fn exercise_generated_impls() {
     let view = Greeting {
         child: Text::new("Hello"),
@@ -52,4 +60,7 @@ pub fn exercise_generated_impls() {
     let vector = Position { x: 1.0, y: 2.0 }.to_vector();
     let _position = Position::from_vector(vector);
     let _node = Details { count: 1 }.to_diagnostics_node();
+    let path = AppRoute::Note { id: 1 }.to_path();
+    let _route = AppRoute::from_path(&path);
+    let _home = AppRoute::Home.to_path();
 }

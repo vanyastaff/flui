@@ -1,0 +1,64 @@
+error[E0277]: `NoteId` doesn't implement `std::fmt::Display`
+ --> tests/routable_ui/fail/field_not_fromstr.rs:9:12
+  |
+6 | #[derive(Routable, Clone, PartialEq)]
+  |          -------- required by a bound introduced by this call
+...
+9 |     Note { id: NoteId },
+  |            ^^ unsatisfied trait bound
+  |
+help: the trait `std::fmt::Display` is not implemented for `NoteId`
+ --> tests/routable_ui/fail/field_not_fromstr.rs:4:1
+  |
+4 | struct NoteId(u32);
+  | ^^^^^^^^^^^^^
+  = note: required for `&NoteId` to implement `std::fmt::Display`
+note: required by a bound in `RoutePath::join`
+ --> src/router/path.rs
+  |
+  |     pub fn join(mut self, segment: impl fmt::Display) -> Self {
+  |                                         ^^^^^^^^^^^^ required by this bound in `RoutePath::join`
+
+error[E0277]: the trait bound `NoteId: FromStr` is not satisfied
+ --> tests/routable_ui/fail/field_not_fromstr.rs:9:16
+  |
+9 |     Note { id: NoteId },
+  |                ^^^^^^ unsatisfied trait bound
+  |
+help: the trait `FromStr` is not implemented for `NoteId`
+ --> tests/routable_ui/fail/field_not_fromstr.rs:4:1
+  |
+4 | struct NoteId(u32);
+  | ^^^^^^^^^^^^^
+  = help: the following other types implement trait `FromStr`:
+            ByteString
+            CString
+            CursorIcon
+            IpAddr
+            Ipv4Addr
+            Ipv6Addr
+            NonZero<i128>
+            NonZero<i16>
+          and $N others
+note: required by a bound in `flui_widgets::router::__derive::assert_segment`
+ --> src/router/__derive.rs
+  |
+  | pub fn assert_segment<T: FromStr + Display>() {}
+  |                          ^^^^^^^ required by this bound in `assert_segment`
+
+error[E0277]: `NoteId` doesn't implement `std::fmt::Display`
+ --> tests/routable_ui/fail/field_not_fromstr.rs:9:16
+  |
+9 |     Note { id: NoteId },
+  |                ^^^^^^ unsatisfied trait bound
+  |
+help: the trait `std::fmt::Display` is not implemented for `NoteId`
+ --> tests/routable_ui/fail/field_not_fromstr.rs:4:1
+  |
+4 | struct NoteId(u32);
+  | ^^^^^^^^^^^^^
+note: required by a bound in `flui_widgets::router::__derive::assert_segment`
+ --> src/router/__derive.rs
+  |
+  | pub fn assert_segment<T: FromStr + Display>() {}
+  |                                    ^^^^^^^ required by this bound in `assert_segment`

@@ -150,6 +150,8 @@ mod rich_text;
 mod rotated_box_layer_update;
 #[path = "rotation_transition.rs"]
 mod rotation_transition;
+#[path = "routable_derive.rs"]
+mod routable_derive;
 #[path = "router.rs"]
 mod router;
 #[path = "routes.rs"]

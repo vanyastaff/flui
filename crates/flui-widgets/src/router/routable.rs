@@ -9,43 +9,27 @@ use super::path::{RouteParseError, RoutePath};
 ///
 /// For every value `r`, `Self::from_path(&r.to_path()) == Ok(r)`. A path no
 /// value matches is [`RouteParseError::NoMatch`] — never a panic and never a
-/// fallback to some default value. `#[derive(Routable)]` will guarantee this;
-/// a hand-written impl must.
+/// fallback to some default value.
+///
+/// `#[derive(Routable)]` writes `to_path` and `from_path` from one
+/// `#[route("…")]` pattern per variant. It keeps the round trip for every
+/// value whose fields print non-empty, whose `Display` output `FromStr` reads
+/// back as the same value, and that no literal sibling claims: beside
+/// `#[route("/s/new")]`, a `#[route("/s/:slug")]` value with `slug == "new"`
+/// parses as the literal variant. A hand-written impl keeps the contract
+/// itself.
 ///
 /// # Example
 ///
 /// ```
 /// use flui_widgets::{Routable, RouteParseError, RoutePath};
 ///
-/// #[derive(Debug, Clone, PartialEq)]
+/// #[derive(Routable, Debug, Clone, PartialEq)]
 /// enum AppRoute {
+///     #[route("/")]
 ///     Home,
+///     #[route("/note/:id")]
 ///     Note { id: u32 },
-/// }
-///
-/// impl Routable for AppRoute {
-///     fn to_path(&self) -> RoutePath {
-///         match self {
-///             Self::Home => RoutePath::root(),
-///             Self::Note { id } => RoutePath::root().join("note").join(id),
-///         }
-///     }
-///
-///     fn from_path(path: &RoutePath) -> Result<Self, RouteParseError> {
-///         let segments: Vec<_> = path.segments().collect();
-///         match segments.as_slice() {
-///             [] => Ok(Self::Home),
-///             [note, id] if note == "note" => id
-///                 .parse()
-///                 .map(|id| Self::Note { id })
-///                 .map_err(|_| RouteParseError::Param {
-///                     path: path.clone(),
-///                     field: "id",
-///                     segment: id.to_string(),
-///                 }),
-///             _ => Err(RouteParseError::NoMatch { path: path.clone() }),
-///         }
-///     }
 /// }
 ///
 /// let note = AppRoute::Note { id: 7 };

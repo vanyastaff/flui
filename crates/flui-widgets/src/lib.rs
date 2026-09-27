@@ -63,6 +63,14 @@
 // focused owner-local handle migration can replace these with `Rc` later.
 #![expect(clippy::arc_with_non_send_sync)]
 
+// `#[derive(Routable)]` names this crate by its absolute path, which also
+// resolves inside the crate and its doctests through this alias.
+#[allow(
+    unused_extern_crates,
+    reason = "derive expansions resolve the owner by its absolute crate name"
+)]
+extern crate self as flui_widgets;
+
 // ============================================================================
 // Modules
 // ============================================================================

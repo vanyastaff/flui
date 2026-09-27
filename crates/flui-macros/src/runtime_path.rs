@@ -9,6 +9,7 @@ pub(crate) enum Runtime {
     View,
     Foundation,
     Animation,
+    Widgets,
 }
 
 impl Runtime {
@@ -27,6 +28,7 @@ impl Runtime {
             Self::View => ("flui-view", "view"),
             Self::Foundation => ("flui-foundation", "foundation"),
             Self::Animation => ("flui-animation", "animation"),
+            Self::Widgets => ("flui-widgets", "widgets"),
         };
         if let Ok(found) = crate_name("flui-sdk") {
             return module_path(found, "flui-sdk", module, span);

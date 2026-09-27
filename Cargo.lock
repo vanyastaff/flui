@@ -2536,6 +2536,7 @@ dependencies = [
  "flui-foundation",
  "flui-geometry",
  "flui-interaction",
+ "flui-macros",
  "flui-objects",
  "flui-painting",
  "flui-platform-api",
@@ -2551,10 +2552,12 @@ dependencies = [
  "lru",
  "parking_lot",
  "percent-encoding",
+ "proptest",
  "static_assertions",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "trybuild",
  "unicode-segmentation",
 ]
 
