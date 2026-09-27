@@ -492,11 +492,11 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
 
                 GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
-                    .on_pan_start(move |_details| {
+                    .on_pan_start(move |_cx, _details| {
                         // Halt any in-flight fling when the user grabs the content.
                         let _ = fling_stop.stop();
                     })
-                    .on_pan_update(move |details| {
+                    .on_pan_update(move |_cx, details| {
                         // Ignore scroll/pull updates while a refresh is in progress
                         // so the indicator stays stable.
                         if rc_update.is_refreshing() {
@@ -520,7 +520,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                             sc_update.set_pixels(clamped);
                         }
                     })
-                    .on_pan_end(move |details| {
+                    .on_pan_end(move |_cx, details| {
                         let pull = rc_end.pull_distance_px();
                         if pull >= threshold_px {
                             // Sufficient overscroll: enter refreshing state and

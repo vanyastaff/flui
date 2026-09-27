@@ -4,9 +4,9 @@
 use std::rc::Rc;
 
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_view::EventOutcome;
 use flui_view::prelude::*;
 
+use crate::support::event_callback;
 use crate::{GestureDetector, Semantics};
 
 /// A press callback, already adapted to report its outcome.
@@ -31,14 +31,14 @@ type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// [`on_press`](Self::on_press) the button is disabled: its node says so and
 /// offers no action, and a tap does nothing.
 ///
-/// The gesture arena does not change (ADR-0086 §4): the button captures a
-/// [`WriterSource`] in `init_state` and wraps the callback around an
-/// unchanged [`GestureDetector::on_tap`].
+/// The button holds no state: it forwards the callback to
+/// [`GestureDetector::on_tap`], whose own [`WriterSource`] opens the
+/// [`EventCx`] for each press.
 ///
 /// Flutter has no counterpart in its widgets layer (`RawMaterialButton` lives
 /// in the Material library); see `ARCHITECTURE.md` "Mapping decisions".
 /// Keyboard activation and pressed or hovered state are not implemented yet.
-#[derive(Clone, StatefulView)]
+#[derive(Clone, StatelessView)]
 pub struct RawButton {
     on_press: Option<PressCallback>,
     child: Child,
@@ -72,57 +72,26 @@ impl RawButton {
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_press = Some(Rc::new(move |cx: &mut EventCx<'_>| callback(cx).report()));
+        self.on_press = Some(event_callback(callback));
         self
     }
 }
 
-/// The state of a [`RawButton`]: the writer source its presses open their
-/// [`EventCx`] from.
-pub struct RawButtonState {
-    /// Acquired in `init_state`; `None` only before it runs.
-    writer: Option<WriterSource>,
-}
-
-impl std::fmt::Debug for RawButtonState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RawButtonState")
-            .field("writer", &self.writer)
-            .finish()
-    }
-}
-
-impl StatefulView for RawButton {
-    type State = RawButtonState;
-
-    fn create_state(&self) -> Self::State {
-        RawButtonState { writer: None }
-    }
-}
-
-impl ViewState<RawButton> for RawButtonState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.writer = Some(ctx.writer_source());
-    }
-
-    fn build(&self, view: &RawButton, _ctx: &dyn BuildContext) -> impl IntoView {
+impl StatelessView for RawButton {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         let mut detector = GestureDetector::new().behavior(HitTestBehavior::Opaque);
         // `GestureDetector` refreshes its tap slot on every build, so a new
-        // closure takes effect on the next press without a slot here.
-        if let Some(handler) = view.on_press.clone() {
-            let writer = self
-                .writer
-                .clone()
-                .expect("BUG: init_state acquires the writer source before the first build");
-            detector = detector.on_tap(move || writer.write(|cx| handler(cx)));
+        // closure takes effect on the next press.
+        if let Some(handler) = self.on_press.clone() {
+            detector = detector.on_tap(move |cx| handler(cx));
         }
-        if let Some(child) = view.child.clone().into_inner() {
+        if let Some(child) = self.child.clone().into_inner() {
             detector = detector.child(child);
         }
         Semantics::new()
             .container(true)
             .button(true)
-            .enabled(view.on_press.is_some())
+            .enabled(self.on_press.is_some())
             .child(detector)
     }
 }

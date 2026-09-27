@@ -33,7 +33,7 @@ fn build_counter_ui(
     Column::new(vec![
         Text::new(format!("Count: {count}")).boxed(),
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 count_for_tap.fetch_add(1, Ordering::Relaxed);
                 request_rebuild();
             })

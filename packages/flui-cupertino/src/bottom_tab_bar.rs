@@ -382,7 +382,7 @@ impl StatelessView for CupertinoTabBar {
 
                 let mut detector = GestureDetector::new().behavior(HitTestBehavior::Opaque);
                 if let Some(on_tap) = self.on_tap.clone() {
-                    detector = detector.on_tap(move || on_tap(index));
+                    detector = detector.on_tap(move |_cx| on_tap(index));
                 }
 
                 // `Semantics(selected: active, hint: localizations.tabSemanticsLabel(...), …)`

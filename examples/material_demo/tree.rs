@@ -716,7 +716,7 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
         let scroll_controller_for_drag = self.scroll_controller.clone();
         let list = GestureDetector::new()
             .behavior(HitTestBehavior::Opaque)
-            .on_pan_update(move |details: DragUpdateDetails| {
+            .on_pan_update(move |_cx, details: DragUpdateDetails| {
                 let proposed = scroll_controller_for_drag.pixels() - details.delta.dy.get();
                 scroll_controller_for_drag.jump_to(proposed);
             })

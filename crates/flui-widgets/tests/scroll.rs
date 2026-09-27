@@ -672,7 +672,7 @@ fn scrollable_sub_slop_drag_waits_while_a_tap_competitor_remains() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 500.0);
 
-    let widget = GestureDetector::new().on_tap(|| {}).child(
+    let widget = GestureDetector::new().on_tap(|_cx| {}).child(
         Scrollable::new()
             .controller(controller.clone())
             .child(SizedBox::new(300.0, 800.0)),

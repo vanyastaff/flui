@@ -232,7 +232,7 @@ fn ancestor_detector_and_chip_compete_in_the_binding_root_arena() {
         *chip_counter.borrow_mut() += 1;
     });
     let root = GestureDetector::new()
-        .on_tap(move || *ancestor_counter.borrow_mut() += 1)
+        .on_tap(move |_cx| *ancestor_counter.borrow_mut() += 1)
         .behavior(HitTestBehavior::Opaque)
         .child(chip);
     let laid = lay_out(themed(root), loose(300.0));

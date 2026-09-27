@@ -782,7 +782,7 @@ impl ViewState<Dismissible> for DismissibleState {
 
             if axis_is_x {
                 detector = detector
-                    .on_horizontal_drag_start(move |_details: DragStartDetails| {
+                    .on_horizontal_drag_start(move |_cx, _details: DragStartDetails| {
                         handle_drag_start(
                             &drag_for_start,
                             &controller_for_start,
@@ -790,7 +790,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             overall_extent,
                         );
                     })
-                    .on_horizontal_drag_update(move |details: DragUpdateDetails| {
+                    .on_horizontal_drag_update(move |_cx, details: DragUpdateDetails| {
                         handle_drag_update(
                             &drag_for_update,
                             &controller_for_update,
@@ -800,7 +800,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             details.delta.dx.get(),
                         );
                     })
-                    .on_horizontal_drag_end(move |details: DragEndDetails| {
+                    .on_horizontal_drag_end(move |_cx, details: DragEndDetails| {
                         handle_drag_end(
                             &drag_for_end,
                             &controller_for_end,
@@ -814,7 +814,7 @@ impl ViewState<Dismissible> for DismissibleState {
                     });
             } else {
                 detector = detector
-                    .on_pan_start(move |_details: DragStartDetails| {
+                    .on_pan_start(move |_cx, _details: DragStartDetails| {
                         handle_drag_start(
                             &drag_for_start,
                             &controller_for_start,
@@ -822,7 +822,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             overall_extent,
                         );
                     })
-                    .on_pan_update(move |details: DragUpdateDetails| {
+                    .on_pan_update(move |_cx, details: DragUpdateDetails| {
                         handle_drag_update(
                             &drag_for_update,
                             &controller_for_update,
@@ -832,7 +832,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             details.delta.dy.get(),
                         );
                     })
-                    .on_pan_end(move |details: DragEndDetails| {
+                    .on_pan_end(move |_cx, details: DragEndDetails| {
                         handle_drag_end(
                             &drag_for_end,
                             &controller_for_end,

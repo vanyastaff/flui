@@ -586,7 +586,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let position_end = ctrl_update.position();
             let gestures = GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
-                .on_pan_start(move |_details| {
+                .on_pan_start(move |_cx, _details| {
                     // Grab: halt any in-flight fling so the list stops at the
                     // finger's contact position (Flutter parity — ScrollPosition
                     // calls `activity.cancel()` on `handleDragStart`).
@@ -597,7 +597,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     // hand-off would flicker the activity signal off.
                     position_start.set_is_scrolling(true);
                 })
-                .on_pan_update(move |details| {
+                .on_pan_update(move |_cx, details| {
                     // Flutter convention: a downward/rightward finger drag
                     // (positive delta on the scroll axis) moves the viewport
                     // toward the axis's START, so the offset DECREASES — but
@@ -632,7 +632,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     let clamped = phys_update.apply_boundary_conditions(&metrics, proposed);
                     ctrl_update.set_pixels(clamped);
                 })
-                .on_pan_end(move |details| {
+                .on_pan_end(move |_cx, details| {
                     // Pointer velocity is in "screen coordinates": positive dy/dx
                     // = finger moving down/right. For a NOT-reversed axis
                     // direction the scroll offset increases when the finger

@@ -843,8 +843,10 @@ fn closed_edge_strip(
     // simplification (see the type docs).
     Align::new(outer_alignment(alignment)).child(
         GestureDetector::new()
-            .on_horizontal_drag_update(move |details| move_core.move_by(details.primary_delta))
-            .on_horizontal_drag_end(move |details| settle_core.settle(details.primary_velocity))
+            .on_horizontal_drag_update(move |_cx, details| move_core.move_by(details.primary_delta))
+            .on_horizontal_drag_end(move |_cx, details| {
+                settle_core.settle(details.primary_velocity);
+            })
             .behavior(HitTestBehavior::Translucent)
             .child(SizedBox::new(drag_area_width, f32::INFINITY)),
     )
@@ -859,7 +861,7 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
     let mut scrim_detector = GestureDetector::new();
     if view.barrier_dismissible {
         let close_core = Rc::clone(core);
-        scrim_detector = scrim_detector.on_tap(move || close_core.close());
+        scrim_detector = scrim_detector.on_tap(move |_cx| close_core.close());
     }
     // `Stack` gives a non-positioned child LOOSE constraints (Flutter's
     // default `StackFit.loose`) — a bare `ColoredBox` (no size of its own)
@@ -887,12 +889,14 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
     let end_core = Rc::clone(core);
     let cancel_core = Rc::clone(core);
     GestureDetector::new()
-        .on_horizontal_drag_down(move |_details: flui_sdk::interaction::DragDownDetails| {
-            let _ = down_core.controller.stop();
-        })
-        .on_horizontal_drag_update(move |details| update_core.move_by(details.primary_delta))
-        .on_horizontal_drag_end(move |details| end_core.settle(details.primary_velocity))
-        .on_horizontal_drag_cancel(move || cancel_core.handle_drag_cancel())
+        .on_horizontal_drag_down(
+            move |_cx, _details: flui_sdk::interaction::DragDownDetails| {
+                let _ = down_core.controller.stop();
+            },
+        )
+        .on_horizontal_drag_update(move |_cx, details| update_core.move_by(details.primary_delta))
+        .on_horizontal_drag_end(move |_cx, details| end_core.settle(details.primary_velocity))
+        .on_horizontal_drag_cancel(move |_cx| cancel_core.handle_drag_cancel())
         .child(scoped)
 }
 

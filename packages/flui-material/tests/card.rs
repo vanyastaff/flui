@@ -125,7 +125,7 @@ fn default_corner_radius_reaches_the_mounted_material() {
             ThemeData::light(),
             Card::new(
                 GestureDetector::new()
-                    .on_tap(move || {
+                    .on_tap(move |_cx| {
                         counted.fetch_add(1, Ordering::SeqCst);
                     })
                     .child(ColoredBox::new(Color::rgb(5, 5, 5))),
@@ -164,7 +164,7 @@ fn an_overridden_99dp_corner_radius_excludes_the_same_probe_point() {
             ThemeData::light(),
             Card::new(
                 GestureDetector::new()
-                    .on_tap(move || {
+                    .on_tap(move |_cx| {
                         counted.fetch_add(1, Ordering::SeqCst);
                     })
                     .child(ColoredBox::new(Color::rgb(5, 5, 5))),

@@ -149,7 +149,7 @@ fn find_panel(laid: &common::LaidOut, configured_width: f32) -> RenderId {
 fn tap_counter(taps: Arc<AtomicUsize>) -> impl IntoView {
     SizedBox::new(400.0, 800.0).child(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 taps.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -173,7 +173,7 @@ impl StatelessView for HandleProbe {
         let _prev = self.slot.borrow_mut().replace(handle.clone());
         let on_tap = Rc::clone(&self.on_tap);
         GestureDetector::new()
-            .on_tap(move || on_tap(&handle))
+            .on_tap(move |_cx| on_tap(&handle))
             .child(SizedBox::new(20.0, 20.0))
     }
 }

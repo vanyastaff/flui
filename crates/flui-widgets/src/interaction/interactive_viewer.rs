@@ -512,7 +512,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             // -- Pan (GestureDetector) -------------------------------------
             let gesture_start = Rc::clone(&gesture);
             let on_start_pan = on_start.clone();
-            let pan_start_details = move |details: DragStartDetails| {
+            let pan_start_details = callback_with(move |_cx, details: DragStartDetails| {
                 gesture_start.current_axis.set(None);
                 gesture_start
                     .pan_start_local
@@ -523,14 +523,14 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         local_focal_point: details.local_position,
                     });
                 }
-            };
+            });
 
             let gesture_update = Rc::clone(&gesture);
             let controller_update = controller.clone();
             let anchor_update = anchor.clone();
             let pipeline_cell_update = pipeline_cell.clone();
             let on_update_pan = on_update.clone();
-            let pan_update_details = move |details: DragUpdateDetails| {
+            let pan_update_details = callback_with(move |_cx, details: DragUpdateDetails| {
                 if pan_enabled {
                     if let Some(start_local) = gesture_update.pan_start_local.get()
                         && gesture_update.current_axis.get().is_none()
@@ -576,11 +576,11 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         ),
                     });
                 }
-            };
+            });
 
             let gesture_end = Rc::clone(&gesture);
             let on_end_pan = on_end.clone();
-            let pan_end_details = move |details: DragEndDetails| {
+            let pan_end_details = callback_with(move |_cx, details: DragEndDetails| {
                 gesture_end.pan_start_local.set(None);
                 gesture_end.current_axis.set(None);
                 if let Some(callback) = &on_end_pan {
@@ -588,7 +588,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         velocity: details.velocity,
                     });
                 }
-            };
+            });
 
             // -- Wheel scale (Listener::on_scroll_claim) -------------------
             //

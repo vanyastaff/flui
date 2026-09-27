@@ -933,7 +933,7 @@ impl EditableTextState {
         // ancestor's own tap and letting this no-op recognizer compete to
         // win a contact it does nothing with.
         if view.enabled {
-            detector = detector.on_double_tap_down(move |details| {
+            detector = detector.on_double_tap_down(move |_cx, details| {
                 let Some(owner) = owner.as_ref() else {
                     return;
                 };

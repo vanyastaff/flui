@@ -53,7 +53,7 @@ pub use listener::Listener;
 pub use meta_data::MetaData;
 pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
-pub use raw_button::{RawButton, RawButtonState};
+pub use raw_button::RawButton;
 pub use shortcuts::{
     CallbackShortcuts, DefaultFocusTraversal, DefaultFocusTraversalState, ShortcutCallback,
     Shortcuts, ShortcutsState, SingleActivator,

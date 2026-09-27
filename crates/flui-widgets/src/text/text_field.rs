@@ -243,7 +243,7 @@ impl ViewState<RawTextField> for RawTextFieldState {
 
         let focus_node = Rc::clone(&self.focus_node);
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 focus_node.request_focus();
             })
             .child(decorated)

@@ -623,7 +623,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                 let controller = self.controller.clone();
                 let rebuild = self.rebuild.clone();
                 let pressed_opacity = view.pressed_opacity;
-                gesture_detector = gesture_detector.on_tap(move || {
+                gesture_detector = gesture_detector.on_tap(move |_cx| {
                     if let Some(controller) = &controller
                         && let Some(future) =
                             start_press_fade(controller, pressed_opacity, rebuild.as_ref())
@@ -634,7 +634,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                 });
             }
             if let Some(on_long_press) = view.on_long_press.clone() {
-                gesture_detector = gesture_detector.on_long_press(move || on_long_press());
+                gesture_detector = gesture_detector.on_long_press(move |_cx| on_long_press());
             }
         }
 

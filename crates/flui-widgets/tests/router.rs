@@ -168,7 +168,7 @@ fn pages(home: &Probe) -> impl Fn(&AppRoute, &dyn BuildContext) -> BoxedView + '
             page(&home, move || {
                 let probe = probe.clone();
                 GestureDetector::new()
-                    .on_tap(move || {
+                    .on_tap(move |_cx| {
                         probe
                             .handle()
                             .push(AppRoute::Note { id: 1 })

@@ -1,6 +1,11 @@
 //! Support macros shared across widget families. The impl macro is also
 //! exported, doc-hidden, through [`crate::__private`] for the sibling
-//! `flui-*` widget crates.
+//! `flui-*` widget crates. The event-callback adapters store a user's
+//! `Fn(&mut EventCx<'_>, ..) -> R` so that its outcome is reported.
+
+use std::rc::Rc;
+
+use flui_view::{EventCx, EventOutcome};
 
 /// Generate the `View` impl for a multi-child render-object widget generic over
 /// a single [`ViewSeq`](flui_view::seq::ViewSeq) type parameter `C`.
@@ -26,3 +31,30 @@ macro_rules! __generic_render_view_element {
 }
 
 pub(crate) use crate::__generic_render_view_element as generic_render_view_element;
+
+/// A stored no-argument event callback.
+pub(crate) type EventCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+
+/// A stored event callback that also receives a value.
+pub(crate) type ValueCallback<D> = Rc<dyn Fn(&mut EventCx<'_>, D)>;
+
+/// Store a no-argument event callback, adapted to report its outcome: a
+/// refused signal write is logged at the dispatch boundary (ADR-0086).
+pub(crate) fn event_callback<F, R>(callback: F) -> EventCallback
+where
+    F: Fn(&mut EventCx<'_>) -> R + 'static,
+    R: EventOutcome,
+{
+    Rc::new(move |cx: &mut EventCx<'_>| callback(cx).report())
+}
+
+/// [`event_callback`] for a callback that also receives a value by value
+/// (gesture details, the new focus state).
+pub(crate) fn value_callback<D, F, R>(callback: F) -> ValueCallback<D>
+where
+    D: 'static,
+    F: Fn(&mut EventCx<'_>, D) -> R + 'static,
+    R: EventOutcome,
+{
+    Rc::new(move |cx: &mut EventCx<'_>, value: D| callback(cx, value).report())
+}

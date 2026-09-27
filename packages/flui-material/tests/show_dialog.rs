@@ -58,7 +58,7 @@ impl ViewState<HomePage> for HomePageState {
     fn build(&self, view: &HomePage, _ctx: &dyn BuildContext) -> impl IntoView {
         let taps = Arc::clone(&view.taps);
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 taps.fetch_add(1, Ordering::SeqCst);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30)))

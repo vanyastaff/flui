@@ -424,7 +424,7 @@ impl ViewState<InkWell> for InkWellState {
         });
         if let Some(activate) = &activate {
             let activate = Rc::clone(activate);
-            gesture_detector = gesture_detector.on_tap(move || activate());
+            gesture_detector = gesture_detector.on_tap(move |_cx| activate());
         }
 
         let hover_states_enter = self.states.clone();

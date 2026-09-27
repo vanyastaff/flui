@@ -43,7 +43,7 @@ fn long_press_fires_when_held_past_the_deadline() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_long_press(move || {
+            .on_long_press(move |_cx| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -82,7 +82,7 @@ fn quick_release_does_not_fire_long_press() {
 
     let scoped = lay_out(
         GestureDetector::new()
-            .on_long_press(move || {
+            .on_long_press(move |_cx| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -111,7 +111,7 @@ fn double_tap_fires_on_two_quick_taps() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_double_tap(move || {
+            .on_double_tap(move |_cx| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -143,10 +143,10 @@ fn double_tap_down_fires_before_the_second_contact_lifts() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_double_tap_down(move |_details| {
+            .on_double_tap_down(move |_cx, _details| {
                 down_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_double_tap(move || {
+            .on_double_tap(move |_cx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -196,7 +196,7 @@ fn double_tap_down_reports_the_real_pointer_kind() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_double_tap_down(move |details| {
+            .on_double_tap_down(move |_cx, details| {
                 *kind_cb.lock().unwrap() = Some(details.kind);
             })
             .child(target()),
@@ -229,7 +229,7 @@ fn double_tap_down_is_not_recognized_from_a_secondary_button() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_double_tap_down(move |_details| {
+            .on_double_tap_down(move |_cx, _details| {
                 down_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -262,7 +262,7 @@ fn on_double_tap_down_alone_with_no_on_double_tap_still_participates() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_double_tap_down(move |_details| {
+            .on_double_tap_down(move |_cx, _details| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -288,7 +288,7 @@ fn second_tap_after_the_window_is_not_a_double_tap() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_double_tap(move || {
+            .on_double_tap(move |_cx| {
                 in_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -322,10 +322,10 @@ fn quick_tap_beats_long_press_in_the_same_detector() {
 
     let scoped = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_long_press(move || {
+            .on_long_press(move |_cx| {
                 press_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -357,10 +357,10 @@ fn held_press_beats_tap_in_the_same_detector() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_long_press(move || {
+            .on_long_press(move |_cx| {
                 press_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -394,7 +394,7 @@ fn held_press_beats_tap_in_the_same_detector() {
 #[test]
 #[should_panic(expected = "GestureArenaScope")]
 fn gesture_detector_without_a_presentation_arena_fails_during_mount() {
-    mount_without_presentation_scope(GestureDetector::new().on_tap(|| {}).child(target()));
+    mount_without_presentation_scope(GestureDetector::new().on_tap(|_cx| {}).child(target()));
 }
 
 #[test]
@@ -415,10 +415,10 @@ fn double_tap_combined_with_tap_fires_double_tap_once_and_tap_never() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_double_tap(move || {
+            .on_double_tap(move |_cx| {
                 double_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -456,10 +456,10 @@ fn lone_tap_is_held_until_the_double_tap_window_closes_then_fires_tap() {
 
     let mut scoped = lay_out(
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_double_tap(move || {
+            .on_double_tap(move |_cx| {
                 double_cb.fetch_add(1, Ordering::SeqCst);
             })
             .child(target()),
@@ -507,12 +507,12 @@ fn nested_tap_over_long_press(
     press_count: Arc<AtomicUsize>,
 ) -> GestureDetector {
     GestureDetector::new()
-        .on_long_press(move || {
+        .on_long_press(move |_cx| {
             press_count.fetch_add(1, Ordering::SeqCst);
         })
         .child(
             GestureDetector::new()
-                .on_tap(move || {
+                .on_tap(move |_cx| {
                     tap_count.fetch_add(1, Ordering::SeqCst);
                 })
                 .child(target()),

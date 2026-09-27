@@ -177,7 +177,7 @@ impl StatelessView for Scrollbar {
                 // same `scrollExtent / trackExtent` ratio.
                 let thumb_gesture = GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
-                    .on_pan_update(move |details| {
+                    .on_pan_update(move |_cx, details| {
                         let delta_track_px = details.delta.dy.get();
                         if available_track > 0.0 {
                             let content_delta =

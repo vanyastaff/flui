@@ -306,7 +306,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                 // painted area, not only where a hit-testable descendant
                 // (the "+" glyph's own ink) happens to sit.
                 .behavior(HitTestBehavior::Opaque)
-                .on_tap(move || count_for_tap.update(|n| n + 1))
+                .on_tap(move |_cx| count_for_tap.update(|n| n + 1))
                 .child(
                     Container::new()
                         .padding(EdgeInsets::all(px(8.0)))
@@ -320,7 +320,7 @@ impl ViewState<DemoHome> for DemoHomeState {
         let details_row = GestureDetector::new()
             // Opaque: same reasoning as the "+" button above.
             .behavior(HitTestBehavior::Opaque)
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 navigator_for_details.push(details_route(navigator_for_details.clone()));
             })
             .child(
@@ -338,7 +338,7 @@ impl ViewState<DemoHome> for DemoHomeState {
             // only where a hit-testable descendant (an item's `Text`/padding)
             // happens to sit — same reasoning as the "+" button above.
             .behavior(HitTestBehavior::Opaque)
-            .on_pan_update(move |details: DragUpdateDetails| {
+            .on_pan_update(move |_cx, details: DragUpdateDetails| {
                 // Flutter convention (matches `Scrollable`'s own pan-update
                 // wiring in `scrollable.rs`): a downward finger drag (positive
                 // delta on the scroll axis) moves the viewport toward the
@@ -388,7 +388,7 @@ impl ViewState<DemoHome> for DemoHomeState {
             // painted color IS its content), so hit-testing must fire across
             // the whole animated box regardless of child hit-testability.
             .behavior(HitTestBehavior::Opaque)
-            .on_tap(move || expanded_for_tap.update(|e| !e))
+            .on_tap(move |_cx| expanded_for_tap.update(|e| !e))
             .child(
                 // An empty `Text` filler, not `SizedBox` — a `SizedBox`
                 // nested inside this container's own tight width/height
@@ -436,7 +436,7 @@ fn details_route(navigator: NavigatorHandle) -> PageRoute<()> {
                 SizedBox::height(16.0),
                 GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
-                    .on_tap(move || {
+                    .on_tap(move |_cx| {
                         navigator_for_back.pop();
                     })
                     .child(

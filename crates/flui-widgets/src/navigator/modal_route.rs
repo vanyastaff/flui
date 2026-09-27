@@ -236,7 +236,7 @@ impl ModalInner {
         // borrow here and popped later, from the gesture callback.
         let navigator = NavigatorHandle::maybe_of(ctx);
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 if let Some(navigator) = &navigator {
                     navigator.maybe_pop();
                 }
