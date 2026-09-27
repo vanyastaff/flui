@@ -1,37 +1,35 @@
-//! Every runner path drives the ONE shared frame ordering.
+//! Every runner path drives the ONE frame transaction, `UiRealm::pump`.
 //!
 //! # Why a source scan, and what it is *not* evidence of
 //!
-//! The three frame sites in the `app/runner/` module (`desktop.rs`,
-//! `android.rs`, `web.rs`) are `cfg`-gated: the desktop site
-//! compiles on this host, the `wasm32` site compiles under
-//! `cargo check -p flui-app --target wasm32-unknown-unknown` (run for this
-//! change), and the **android site needs the NDK and was not compiled**. The
-//! desktop site's runtime behavior is proven by
-//! `production_post_frame_callback_observes_this_frames_committed_layout` in
-//! `flui-app`'s unit tests; the wasm site only type-checks; the android site
-//! neither.
+//! The four frame sites in the `app/runner/` module (`desktop.rs`,
+//! `android.rs`, `ios.rs`, `web.rs`) are `cfg`-gated: the desktop site
+//! compiles on this host, the `wasm32` site under
+//! `cargo check -p flui-app --target wasm32-unknown-unknown`, and the android
+//! and iOS sites only under `cargo xtask cross-typecheck`. The pump's own
+//! phase order is proven by `flui-runtime`'s `pump_transaction` tests; the
+//! sites themselves only type-check off the host.
 //!
 //! This scan therefore proves exactly one thing, and it is a real thing: **no
-//! frame site hand-rolls the begin/draw/end sequence.** A site that reintroduced
-//! `handle_draw_frame()` would drain post-frame callbacks before its pipeline —
-//! the bug this test exists to catch — and this test would go red. It is a
-//! regression guard, not a proof of the android body's runtime behavior. Stated
-//! rather than implied.
+//! frame site assembles a frame out of scheduler phases itself.** A site that
+//! reintroduced `handle_draw_frame()` would drain post-frame callbacks before
+//! its pipeline, and one that called `drive_frame` directly would bypass the
+//! pump's command drain and frame clock; either turns this test red. It is a
+//! regression guard, not a proof of the mobile bodies' runtime behavior.
 
 /// Every source file of the `app/runner/` module, so the scans below cover
 /// the whole runner regardless of which file a frame site lives in — a
-/// fourth `drive_frame` site added anywhere in the module is counted, not
-/// just one appearing next to the existing three.
+/// fifth frame site added anywhere in the module is counted, not just one
+/// appearing next to the existing four.
 const RUNNER_SOURCES: &[&str] = &[
     include_str!("../src/app/runner/mod.rs"),
     include_str!("../src/app/runner/android.rs"),
     include_str!("../src/app/runner/desktop.rs"),
+    include_str!("../src/app/runner/ios.rs"),
     include_str!("../src/app/runner/main_window.rs"),
     include_str!("../src/app/runner/device_recovery.rs"),
     include_str!("../src/app/runner/frame_pacing.rs"),
     include_str!("../src/app/runner/host.rs"),
-    include_str!("../src/app/lifecycle_state.rs"),
     include_str!("../src/app/runner/realm_dispatch.rs"),
     include_str!("../src/app/runner/secondary_window.rs"),
     include_str!("../src/app/runner/web.rs"),
@@ -114,137 +112,153 @@ fn production_lines(source: &str) -> Vec<&str> {
     lines
 }
 
-/// The `app/runner/` module must reach the scheduler only through `drive_frame`.
+/// The `app/runner/` module reaches a frame only through `UiRealm::pump`.
 ///
-/// Red-check: change any site back to `handle_begin_frame` + `handle_draw_frame`.
+/// Red-check: change any site back to `scheduler.drive_frame_with_lane(...)`
+/// around `render_frame`, or to `handle_begin_frame` + `handle_draw_frame`.
 #[test]
-fn every_runner_frame_site_uses_the_shared_drive_frame_helper() {
+fn every_runner_frame_site_drives_the_realm_pump() {
     let code_lines: Vec<&str> = RUNNER_SOURCES
         .iter()
         .flat_map(|source| production_lines(source))
         .collect();
 
-    for banned in ["handle_begin_frame", "handle_draw_frame", "end_frame("] {
+    for banned in [
+        "handle_begin_frame",
+        "handle_draw_frame",
+        "end_frame(",
+        "drive_frame(",
+        "drive_frame_with_lane(",
+        "finish_async_pump(",
+        "drive_async_tasks(",
+    ] {
         assert!(
             !code_lines.iter().any(|l| l.contains(banned)),
             "the app/runner/ module calls `{banned}` directly in production code; every frame \
-             site must go \
-             through `UpdateScheduler::drive_frame`, which orders begin → persistent → pipeline → \
-             post-frame → idle"
+             site must go through `UiRealm::pump` (apply commands → begin → persistent → \
+             pipeline → post-frame → idle) and every background wake through \
+             `UiRealm::pump_background`"
         );
     }
 
-    // Every production frame site goes through `UiRealm::drive_frame`, the
-    // one place that calls `drive_frame_with_lane` with the realm's
-    // owner-local post-frame lane (drained in the same total order as the
-    // shared queue) and makes the drive the text-store transaction with its
-    // commit anchor after it (ADR-0027 §3). Asserted as separate counts: a
-    // site that regressed to calling the scheduler itself — with or without
-    // the lane — would keep the total site count unchanged while silently
-    // losing the lane's drain or the transaction.
-    let realm_sites = code_lines
+    // The native sites (desktop, Android, iOS) pump through the device-
+    // recovery wrapper; the wrapper and the web site call the pump with the
+    // wake's sampled clock. The wrapper's definition is spelled
+    // `pump_with_device_recovery<B>(`, so it is not counted as a call.
+    let recovery_sites = code_lines
         .iter()
-        .filter(|l| l.contains("realm.drive_frame("))
-        .count();
-    let scheduler_sites = code_lines
-        .iter()
-        .filter(|l| {
-            l.contains("drive_frame_with_lane(")
-                || (l.contains("drive_frame(") && !l.contains("realm.drive_frame("))
-        })
+        .filter(|l| l.contains("pump_with_device_recovery("))
         .count();
     assert_eq!(
-        realm_sites, 3,
-        "expected exactly three PRODUCTION frame sites (desktop, android, wasm) naming \
-         realm.drive_frame(; found {realm_sites} — a unit test driving a throwaway \
-         `UpdateScheduler` directly is excluded from this count"
+        recovery_sites, 3,
+        "expected exactly three PRODUCTION `pump_with_device_recovery(` call sites (desktop, \
+         Android, iOS); found {recovery_sites}"
     );
+    let direct_pump_sites = code_lines
+        .iter()
+        .filter(|l| l.contains(".pump(&mut SampledClock"))
+        .count();
     assert_eq!(
-        scheduler_sites, 0,
-        "found {scheduler_sites} production site(s) driving the scheduler directly instead of \
-         through UiRealm::drive_frame — that skips the realm's post-frame lane or its text-store \
-         transaction"
+        direct_pump_sites, 2,
+        "expected exactly two PRODUCTION `.pump(&mut SampledClock` sites (the device-recovery \
+         wrapper and the web runner); found {direct_pump_sites}"
     );
+}
 
+/// The realm's frame module in `flui-runtime`, home of `UiRealm::drive_frame`.
+const REALM_FRAME_SOURCE: &str = include_str!("../../flui-runtime/src/ui_realm/frame.rs");
+
+/// The realm's pump module in `flui-runtime`, home of `UiRealm::pump`.
+const REALM_PUMP_SOURCE: &str = include_str!("../../flui-runtime/src/ui_realm/pump.rs");
+
+/// The pump every runner goes through drives its frame inside the realm's
+/// frame drive, the one scheduler drive in `flui-runtime`'s realm: it passes
+/// the realm's owner-local post-frame lane (drained in the same total order
+/// as the shared queue) and makes the drive every presentation's text-store
+/// transaction, with its commit anchor after it (ADR-0027 §3). A pump that
+/// called the scheduler itself would keep every runner count above
+/// unchanged while losing the transaction; its behavior is pinned by
+/// `flui-runtime`'s `presentation_text_input` tests, which pump.
+///
+/// Red-check: have `pump_entered` call `realm.scheduler.drive_frame_with_lane`
+/// around `render_frame` and this fails twice (a second scheduler drive, no
+/// `realm.drive_frame(` in the pump).
+#[test]
+fn the_realm_pump_drives_its_frame_through_the_text_store_transaction() {
     let realm_frame = production_lines(REALM_FRAME_SOURCE);
-    let lane_drives: Vec<&&str> = realm_frame
+    let realm_pump = production_lines(REALM_PUMP_SOURCE);
+
+    let scheduler_drives = realm_frame
         .iter()
+        .chain(realm_pump.iter())
         .filter(|l| l.contains("drive_frame_with_lane("))
-        .collect();
+        .count();
     assert_eq!(
-        lane_drives.len(),
-        1,
-        "UiRealm::drive_frame is the one scheduler drive in the realm's frame module"
+        scheduler_drives, 1,
+        "UiRealm::drive_frame is the one scheduler drive across the realm's frame and pump \
+         modules; found {scheduler_drives}"
     );
     assert!(
         realm_frame
             .iter()
-            .any(|l| l.contains("&self.local_post_frame,")),
+            .any(|l| l.contains("&self.local_post_frame")),
         "UiRealm::drive_frame passes the realm's own post-frame lane"
+    );
+    assert!(
+        realm_frame
+            .iter()
+            .any(|l| l.contains("TextCommitsClosed::close(self)")),
+        "UiRealm::drive_frame shuts every presentation's text-store commit gate for the drive"
+    );
+    let pump_drives = realm_pump
+        .iter()
+        .filter(|l| l.contains("realm.drive_frame("))
+        .count();
+    assert_eq!(
+        pump_drives, 1,
+        "UiRealm::pump runs its frame through UiRealm::drive_frame exactly once; found \
+         {pump_drives}"
     );
 }
 
-/// The realm's frame module, home of `UiRealm::drive_frame`.
-const REALM_FRAME_SOURCE: &str = include_str!("../src/app/ui_realm/frame.rs");
-
-/// Every `WakeAction::PumpAsync` arm (desktop, Android, web) must actually
-/// pump the async driver, and must consume the `frame_scheduled` latch
-/// FIRST — see `UpdateScheduler::finish_async_pump`'s doc for why a `PumpAsync`
-/// wake that skips either call silently starves a future indefinitely
-/// (`drive_async_tasks` never runs = the future never advances;
-/// `finish_async_pump` never runs = a LATER, independent wake finds the
-/// latch already set and never re-fires `on_frame_scheduled`).
+/// Every background wake — each `WakeAction::PumpAsync` arm (desktop,
+/// Android, iOS, web) and iOS's owner turn — must pump the async driver
+/// through `UiRealm::pump_background`, which clears the `frame_scheduled`
+/// latch before polling. Its order is pinned by `flui-runtime`'s
+/// `pump_background_clears_the_frame_latch_before_polling`; this pins that
+/// every arm reaches it. An arm that skips it silently stops a spawned future
+/// from advancing while the app is backgrounded.
 ///
-/// A per-arm assertion (not just "these two calls appear somewhere in the
-/// file") would need a real parser; the site-count pin below is the same
-/// mechanism `every_runner_frame_site_uses_the_shared_drive_frame_helper`
-/// already uses for `drive_frame` sites, and is proven load-bearing the
-/// same way: deleting either call from any ONE arm drops its count below 3.
-///
-/// Red-check: delete the `scheduler.drive_async_tasks();` call from the
-/// desktop `PumpAsync` arm and this fails (found 2, not 3) — deleting that
-/// one call from `run_desktop` alone otherwise passes every other test in
-/// the suite, since nothing else exercises a real backgrounded frame loop.
+/// Red-check: delete the `realm.pump_background();` call from the desktop
+/// `PumpAsync` arm and this fails (found 4, not 5).
 #[test]
-fn every_pump_async_arm_calls_finish_then_drive_async_tasks() {
+fn every_background_wake_calls_pump_background() {
     let code_lines: Vec<&str> = RUNNER_SOURCES
         .iter()
         .flat_map(|source| production_lines(source))
         .collect();
 
-    let finish_sites = code_lines
+    let background_sites = code_lines
         .iter()
-        .filter(|l| l.contains("finish_async_pump("))
+        .filter(|l| l.contains("pump_background("))
         .count();
     assert_eq!(
-        finish_sites, 3,
-        "expected exactly three PRODUCTION `finish_async_pump()` call sites (one per \
-         `PumpAsync` arm: desktop, Android, web); found {finish_sites}"
-    );
-
-    let drive_sites = code_lines
-        .iter()
-        .filter(|l| l.contains("drive_async_tasks("))
-        .count();
-    assert_eq!(
-        drive_sites, 3,
-        "expected exactly three PRODUCTION `drive_async_tasks()` call sites in a `PumpAsync` \
-         arm (desktop, Android, web); found {drive_sites} — a `PumpAsync` wake that never \
-         drives the async tasks silently stops any spawned future from ever advancing while \
-         the app is backgrounded"
+        background_sites, 5,
+        "expected exactly five PRODUCTION `pump_background()` call sites (the `PumpAsync` arms \
+         of desktop, Android, iOS and web, and iOS's owner turn); found {background_sites}"
     );
 }
 
-/// The native (desktop/Android) production frame paths must drive the
+/// The native (desktop/Android/iOS) production frame paths must drive the
 /// raster mailbox — every frame crossing to the backend as an owned,
 /// stamped `SceneSnapshot` through `RasterLane` (ADR-0045's inline lane) —
-/// never the pre-mailbox direct backend call. Only the web runner still
-/// takes the direct entry point, for a stated reason (its renderer arrives
+/// never the pre-mailbox direct sink. Only the web runner still pumps
+/// through a `DirectSink`, for a stated reason (its renderer arrives
 /// asynchronously and recovers across an `.await`, a shape the lane does
 /// not yet accommodate — see `DirectSink`'s doc in `raster_lane.rs`).
 ///
-/// Red-check: revert either native bootstrap to `Arc<Mutex<Renderer>>` +
-/// `render_frame_entered` and the corresponding count here breaks.
+/// Red-check: revert any native bootstrap to `Arc<Mutex<Renderer>>` +
+/// `DirectSink` and the corresponding count here breaks.
 #[test]
 fn native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend() {
     // `main` split the flat `runner.rs` into the `runner/` module, so this
@@ -261,32 +275,21 @@ fn native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend() {
         .filter(|l| l.contains("RasterLane::new("))
         .count();
     assert_eq!(
-        lane_constructions, 2,
-        "expected exactly two PRODUCTION `RasterLane::new(` sites (the desktop and Android \
-         bootstraps each wrap their renderer in the raster mailbox); found \
+        lane_constructions, 3,
+        "expected exactly three PRODUCTION `RasterLane::new(` sites (the desktop, Android and \
+         iOS bootstraps each wrap their renderer in the raster mailbox); found \
          {lane_constructions}"
     );
 
-    let direct_entry_sites = code_lines
+    let direct_sink_sites = code_lines
         .iter()
-        .filter(|l| l.contains(".render_frame_entered("))
+        .filter(|l| l.contains("DirectSink::new("))
         .count();
     assert_eq!(
-        direct_entry_sites, 1,
-        "expected exactly one PRODUCTION `.render_frame_entered(` site (the web runner's \
+        direct_sink_sites, 1,
+        "expected exactly one PRODUCTION `DirectSink::new(` site (the web runner's \
          direct-backend path, the only one with a stated reason to bypass the mailbox); \
-         found {direct_entry_sites} — a second site means a native path regressed to the \
+         found {direct_sink_sites} — a second site means a native path regressed to the \
          pre-mailbox direct call"
-    );
-
-    let recovery_sites = code_lines
-        .iter()
-        .filter(|l| l.contains("render_frame_with_device_recovery("))
-        .count();
-    assert_eq!(
-        recovery_sites, 2,
-        "expected exactly two PRODUCTION `render_frame_with_device_recovery(` call sites \
-         (desktop and Android, each handing their raster lane to the recovery wrapper); \
-         found {recovery_sites}"
     );
 }

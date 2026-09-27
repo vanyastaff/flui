@@ -2216,6 +2216,36 @@ mod tests {
         assert!(elapsed.value() < 1.0);
     }
 
+    /// A scheduler-driven ticker measures elapsed time on the wall clock, not
+    /// on the frame's vsync timestamp: a recorded divergence from Flutter's
+    /// `Ticker._tick(timeStamp)` (this crate's `ARCHITECTURE.md`, "A ticker's
+    /// elapsed time is wall-clock time, not the frame timestamp"). Two frames
+    /// 10 s apart on the frame clock, driven back to back, report elapsed
+    /// times well under a second apart; a ticker that read the frame
+    /// timestamp would report 10 s between them and turn this red.
+    #[test]
+    fn a_scheduler_ticker_measures_wall_time_not_the_frame_timestamp() {
+        let scheduler = crate::scheduler::UpdateScheduler::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut ticker = Ticker::new_with_scheduler(&scheduler);
+        let seen_in_tick = Arc::clone(&seen);
+        ticker.start(move |elapsed| seen_in_tick.lock().push(elapsed));
+
+        let first = Instant::now();
+        for vsync in [first, first + std::time::Duration::from_secs(10)] {
+            scheduler.drive_frame(vsync, crate::scheduler::IdleDeadline(vsync), || {});
+        }
+
+        let seen = seen.lock().clone();
+        assert_eq!(seen.len(), 2, "the ticker ticks once per frame");
+        assert!(
+            seen[1] - seen[0] < 1.0,
+            "elapsed time follows the wall clock, not the 10 s the frame clock \
+             advanced (ticks at {seen:?})"
+        );
+        ticker.dispose();
+    }
+
     /// Teardown control: a retained ticker whose backing scheduler has
     /// already been dropped must still `dispose()` cleanly — the failed
     /// `WeakUpdateScheduler` upgrade is a no-op, not an early return, so

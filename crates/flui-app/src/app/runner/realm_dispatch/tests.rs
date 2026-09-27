@@ -21,6 +21,7 @@ use super::super::host::{
 use super::super::secondary_window::{open_secondary_window, open_secondary_window_impl};
 use super::super::{install_close_request_wiring, request_presentation_close};
 use super::*;
+use crate::app::raster_lane::RealmRaster as _;
 use crate::app::raster_test_support::TestRasterBackend;
 use crate::app::runtime::{ExitPolicy, WindowPolicy};
 use crate::app::{AppConfig, FrameFailureDetail};
@@ -285,7 +286,7 @@ fn window_execution_is_local_reversible_and_cannot_override_host_or_terminal_sto
                     AppLifecycleState::Paused
                 );
                 assert!(!realm.scheduler().frames_enabled());
-                realm.stop_presentation(a.address.presentation_id);
+                realm.stop_presentation_for_test(a.address.presentation_id);
                 realm.update_window_execution(a.address.presentation_id, Running);
                 realm.update_window_focus(a.address.presentation_id, true);
                 assert_eq!(
@@ -4017,9 +4018,10 @@ fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter() {
             // (1) Resolve a GlobalKey registered in the SIBLING
             // presentation B: only possible if the whole-frame composite
             // is still active for this dispose call, spanning every
-            // OTHER presentation the realm hosts (this presentation
-            // itself, mid-teardown, is deliberately excluded from that
-            // composite -- see `UiRealm::enter_for_close`'s doc).
+            // presentation the realm hosts. This presentation's own
+            // registry, whose binding lock the teardown walk holds,
+            // reports itself busy and is skipped rather than re-entered
+            // (`flui-view`'s `key::registry`, "Re-entrancy").
             self.resolved_sibling_element
                 .set(self.key_in_sibling.current_element());
 

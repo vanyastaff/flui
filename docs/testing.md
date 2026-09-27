@@ -32,6 +32,7 @@ the same bug found by a whole-demo snapshot names a demo.
 | Layer | Structural walkers over a `LayerTree` (built with `SceneBuilder` or `push_child`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
 | **Frame** | A **whole headless frame** on a virtual clock: build → layout → paint → composite, gestures, animation, async tasks | `flui_testing::HeadlessBinding` | dev-dependency |
+| Realm | A `UiRealm`'s own frame transaction, multi-presentation routing and failure containment, submitting to a scripted sink | `flui_runtime::ui_realm::UiRealm::for_test` with `flui_runtime::testing::{ScriptedSink, TestWindow}` (the realm tests live in `crates/flui-runtime/src/ui_realm/`) | `flui-runtime/test-support` |
 | **Widget** | A mounted widget tree with geometry probes and synthetic input | `flui_widgets::testing::{lay_out, LaidOut}` | `flui-widgets/testing` |
 | Accessibility | The assembled semantics tree, queried by role | `flui_testing::a11y::{A11yTree, A11yQuery}` | dev-dependency |
 | Gesture replay | A scripted gesture replayed with its timing | `flui_testing::replay::PointerScript` | dev-dependency |

@@ -140,8 +140,10 @@ pub const PUBLIC_FIELD_SUFFIX: &str = ".public";
 pub const PRIVATE_FIELD_SUFFIX: &str = ".private";
 
 /// What a redacted value renders as, matching Apple's own placeholder so a
-/// reader of either platform's log recognises it.
-pub const REDACTED_VALUE: &str = "<private>";
+/// reader of either platform's log recognises it. Defined in
+/// `flui-foundation` so framework types that withhold text can format as it
+/// without depending on this crate.
+pub use flui_foundation::diagnostics::REDACTED_VALUE;
 
 /// The event field `tracing`'s macros store the formatted message under.
 pub(crate) const MESSAGE_FIELD: &str = "message";

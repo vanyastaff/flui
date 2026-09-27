@@ -1625,6 +1625,7 @@ mod clipboard_tests {
     use super::super::host::{OwnerHostClearGuard, install_owner_platform};
     use super::super::realm_dispatch::teardown_platform_realm;
     use super::*;
+    use crate::app::raster_lane::RealmRaster as _;
     use crate::app::raster_test_support::TestRasterBackend;
 
     /// Writes `text` through the clipboard handle its `init_state` acquires.

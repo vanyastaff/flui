@@ -1,5 +1,64 @@
 # Application runtime architecture
 
+`flui-app` is the composition root: the platform runners, the loop-scoped
+`AppRuntime`, the realm dispatch layer, the raster lane and the platform
+wiring. The realm itself (`UiRealm`, its presentations and their frame
+transaction) lives in `flui-runtime` (ADR-0083); `crate::app::ui_realm`,
+`presentation` and `lifecycle_state` alias its modules for the runners until
+the dispatch layer moves there too.
+
+## Invariants
+
+- **The engine stays here.** The realm renders through a
+  `flui_runtime::sink::FrameSink` and names no engine type. This crate's two
+  sinks are `RasterLane<B>` (the desktop, Android and iOS runners, ADR-0045)
+  and `DirectSink` (the web runner). `DirectSink` alone maps `EngineError`s to
+  `SubmitVerdict`s for the web runner (pinned by
+  `direct_sink_classifies_each_engine_outcome`); the realm's own tests script
+  verdicts and never reach it. `raster_lane::RealmRaster` renders a realm's
+  draw step over a `DirectSink` for this crate's tests only.
+- **A runner's frame is gate → pump → pacing.** Each runner's frame wake is a
+  `RealmTask::Pump`: one `UiRealm::enter` holds the owner-inbox drain
+  (`UiRealm::drain_owner_inbox`), the pre-frame runner work and the wake gate
+  (`wake_action`, `frame_is_dirty`, `FallbackGate`, ADR-0058), which stays per
+  backend here; the render arm calls `UiRealm::pump` (ADR-0083 §1), the
+  background arm `UiRealm::pump_background`; the pacing after it only reads
+  flags. No runner drives scheduler phases itself (pinned by
+  `runner_frame_ordering`'s source scan over every runner file, `ios.rs`
+  included).
+- **Device recovery brackets the pump.** On desktop, Android and iOS,
+  `pump_with_device_recovery` runs its pre-frame recovery attempt before the
+  pump's begin frame and its post-frame attempt after the post-frame
+  callbacks; only `mark_primary_needs_full_repaint` touches the tree, and it
+  lands before the pipeline that repaints. The pump's frame timestamp is the
+  wake's own `now`. Pinned by the `device_recovery_tests`, among them
+  `the_recovery_wrapper_runs_the_whole_frame_transaction`, which fails if the
+  wrapper draws without begin or end frame.
+- **The raster lane is held for the whole pump.** The lane (the renderer slot
+  on web) is the pump's sink, so its lock now spans the transaction, begin
+  frame and end frame included, not just the draw step: transient callbacks,
+  microtasks, the async poll and post-frame callbacks run under it. That is
+  safe because nothing in those phases reaches a lane lock on the owner
+  thread synchronously. The other lane lock sites are the frame wake's own
+  `try_lock` (which skips a frame rather than wait), the resize hook's
+  construction at bootstrap, and the surface-status callbacks on Android and
+  iOS, which the platform delivers as their own event, never from inside a
+  realm frame; a same-realm dispatch a callback makes is queued, not run
+  inline. On web, the renderer slot's other users are the surface applier
+  (run from a queued `Resized` dispatch) and the recovery future (spawned,
+  so it runs after the frame callback returns). A new lane lock site
+  reachable from user code inside a frame must be a `try_lock` or live
+  outside the pump.
+- **Web runs no frame before its renderer exists.** The web renderer arrives
+  asynchronously; until it does, a render wake returns without pumping, so no
+  begin, draw or post-frame callback runs, and the realm stays dirty for the
+  first animation frame after it arrives. wasm-only: CI's `wasm-check` and
+  `wasm-test` compile it; nothing on this host runs it.
+- **A window reaches a realm with its bridge.** `runner::presentation_window`
+  reads a host window's accessibility bridge once and pairs it with the
+  window in a `PresentationWindow` (pinned by
+  `a_realm_built_from_a_host_window_publishes_through_its_accessibility`).
+
 ## Mapping decisions
 
 ### Native execution caps remain presentation-local

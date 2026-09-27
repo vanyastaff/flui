@@ -259,7 +259,7 @@ pub trait RendererBinding {
     /// implementer silently skip wiring the counter at all — the exact
     /// drift this trait method's history was flagged for. The one
     /// production implementation lives on `RenderingFlutterBinding`
-    /// (`flui-app`'s `crates/flui-app/src/bindings/renderer_binding.rs`);
+    /// (`flui-runtime`'s `crates/flui-runtime/src/renderer_binding.rs`);
     /// implement this by delegating to that same counter rather than
     /// growing a second one.
     fn send_frames_to_engine(&self) -> bool;
