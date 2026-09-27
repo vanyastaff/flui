@@ -1,0 +1,5 @@
+error: `:id` names no field of `Note`
+ --> tests/routable_ui/fail/param_without_field.rs:5:13
+  |
+5 |     #[route("/note/:id")]
+  |             ^^^^^^^^^^^

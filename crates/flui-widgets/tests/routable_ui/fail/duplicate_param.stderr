@@ -1,0 +1,5 @@
+error: `:id` appears twice in the pattern
+ --> tests/routable_ui/fail/duplicate_param.rs:5:13
+  |
+5 |     #[route("/note/:id/copy/:id")]
+  |             ^^^^^^^^^^^^^^^^^^^^

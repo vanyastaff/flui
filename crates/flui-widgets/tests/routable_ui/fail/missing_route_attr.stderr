@@ -1,0 +1,5 @@
+error: variant `About` needs a `#[route("/path")]` attribute with its path pattern
+ --> tests/routable_ui/fail/missing_route_attr.rs:7:5
+  |
+7 |     About,
+  |     ^^^^^

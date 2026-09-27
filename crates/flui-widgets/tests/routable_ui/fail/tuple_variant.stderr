@@ -1,0 +1,5 @@
+error: derive(Routable) takes unit and named-field variants; name the fields of `Note`. A tuple variant that nests a child route type (`#[nest]`) is not supported yet, see ADR-0093's implementation series
+ --> tests/routable_ui/fail/tuple_variant.rs:8:5
+  |
+8 |     Note(u32),
+  |     ^^^^

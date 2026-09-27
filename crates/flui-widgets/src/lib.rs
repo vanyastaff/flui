@@ -63,6 +63,14 @@
 // focused owner-local handle migration can replace these with `Rc` later.
 #![expect(clippy::arc_with_non_send_sync)]
 
+// `#[derive(Routable)]` names this crate by its absolute path, which also
+// resolves inside the crate and its doctests through this alias.
+#[allow(
+    unused_extern_crates,
+    reason = "derive expansions resolve the owner by its absolute crate name"
+)]
+extern crate self as flui_widgets;
+
 // ============================================================================
 // Modules
 // ============================================================================
@@ -142,7 +150,8 @@ pub mod wrap;
 // implements. The Material `Theme`/`ThemeData` widget itself lives in
 // `flui-material` — see `app` module docs.
 pub use app::{
-    AppBuilder, InheritedTheme, MediaQuery, MediaQueryData, SafeArea, WidgetsApp, WidgetsAppState,
+    AppBuilder, AppForm, InheritedTheme, MediaQuery, MediaQueryData, NavigatorForm, RouterForm,
+    SafeArea, WidgetsApp, WidgetsAppState,
 };
 // `Brightness` is the value type `MediaQueryData` (and any theme's
 // brightness field) uses; re-exported here so callers need only

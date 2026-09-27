@@ -150,6 +150,8 @@ mod rich_text;
 mod rotated_box_layer_update;
 #[path = "rotation_transition.rs"]
 mod rotation_transition;
+#[path = "routable_derive.rs"]
+mod routable_derive;
 #[path = "router.rs"]
 mod router;
 #[path = "routes.rs"]
@@ -205,5 +207,7 @@ mod transition_route;
 mod visibility;
 #[path = "widgets_app.rs"]
 mod widgets_app;
+#[path = "widgets_app_router.rs"]
+mod widgets_app_router;
 #[path = "wrap.rs"]
 mod wrap;

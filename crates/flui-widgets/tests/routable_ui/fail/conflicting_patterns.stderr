@@ -1,0 +1,5 @@
+error: `/note/:slug` has the same shape as the pattern of `Note`, `/note/:id`: `NoteBySlug` could never be parsed
+ --> tests/routable_ui/fail/conflicting_patterns.rs:7:13
+  |
+7 |     #[route("/note/:slug")]
+  |             ^^^^^^^^^^^^^

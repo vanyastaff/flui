@@ -1,0 +1,26 @@
+error[E0277]: the trait bound `NoteId: FromStr` is not satisfied
+  --> tests/routable_ui/fail/field_not_fromstr.rs:18:16
+   |
+18 |     Note { id: NoteId },
+   |                ^^^^^^ unsatisfied trait bound
+   |
+help: the trait `FromStr` is not implemented for `NoteId`
+  --> tests/routable_ui/fail/field_not_fromstr.rs:7:1
+   |
+ 7 | struct NoteId(u32);
+   | ^^^^^^^^^^^^^
+   = help: the following other types implement trait `FromStr`:
+             ByteString
+             CString
+             CursorIcon
+             IpAddr
+             Ipv4Addr
+             Ipv6Addr
+             NonZero<i128>
+             NonZero<i16>
+           and $N others
+note: required by a bound in `flui_widgets::router::__derive::assert_segment`
+  --> src/router/__derive.rs
+   |
+   | pub fn assert_segment<T: FromStr + Display>() {}
+   |                          ^^^^^^^ required by this bound in `assert_segment`

@@ -1,8 +1,9 @@
 # ADR-0093: Router is the primary navigation API
 
-- **Status:** Proposed. Step one of the implementation series is in `flui-widgets`: `Routable`,
-  `RoutePath`, `Router` and `RouterHandle`, over an addressed Navigator. The derive and the later
-  steps are not implemented.
+- **Status:** Proposed. Steps one and two of the implementation series are implemented: in
+  `flui-widgets`, `Routable`, `RoutePath`, `Router` and `RouterHandle` over an addressed
+  Navigator, and `WidgetsApp::router`; in `flui-macros`, `#[derive(Routable)]`. The later steps
+  are not implemented.
 - **Date:** 2026-09-25
 - **Supersedes (on acceptance):** [ADR-0024](ADR-0024-named-routes-seam.md) (string-named
   routes; `RouteKey<T>` of its §3 carries over)
@@ -19,8 +20,9 @@
 - **Refs:** decision D14 in the [decision index](../../design/decisions.md); the
   [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md)
 
-This record changed nothing in `crates/` when it was written. Step one of the
-[implementation series](#implementation-series) is in `crates/flui-widgets/src/router/`.
+This record changed nothing in `crates/` when it was written. Steps one and two of the
+[implementation series](#implementation-series) are in `crates/flui-widgets/src/router/`,
+`crates/flui-widgets/src/app/widgets_app.rs` and `crates/flui-macros/src/derive_routable.rs`.
 
 ## Context
 
@@ -88,6 +90,32 @@ a location opens with. Field types parse through `FromStr` and print through `Di
 `from_path(&r.to_path()) == Ok(r)`. A path that matches no variant is a typed
 `RouteParseError::NoMatch`, never a panic and never a silent fallback to the first variant.
 Builder-style route tables are not a second public way to declare routes.
+
+- **Patterns.** Each variant carries exactly one `#[route("…")]`. A pattern starts with `/`
+  (`/` alone is the root) and has no empty segment, no trailing `/`, and no `?`, `#` or `%`. A
+  `:name` segment fills the field `name` (`:type` fills `r#type`); every other segment is
+  literal text, which `RoutePath` encodes, so a non-ASCII literal is written as itself. Every
+  parameter names a field exactly once, and every field is a parameter.
+- **Compile-time rejections.** A struct, union or generic type; a tuple variant (nesting is
+  step 3's `#[nest]`); a variant with no `#[route]`, with two, or with anything after the
+  pattern; a malformed pattern; a parameter without a field or a field without a parameter; a
+  field type that is not `FromStr + Display` (reported on the field); and two patterns of the
+  same shape (the same length, the same literals and parameters in the same places), because
+  the second could never be parsed.
+- **Specificity, not declaration order.** `from_path` tries the patterns shortest first, then
+  segment by segment with a literal ranking above a parameter, so `/s/new` wins over `/s/:slug`
+  wherever either is declared. A location no pattern matches is `NoMatch`; when a pattern's
+  literals match but a segment does not parse as its field, the first such failure is
+  `RouteParseError::Param`.
+- **The round trip, qualified.** The derive keeps `from_path(&r.to_path()) == Ok(r)` for every
+  value whose fields print non-empty (`RoutePath::join` drops an empty segment), whose
+  `Display` output `FromStr` reads back as the same value, and whose printed path no pattern
+  tried before its own also matches. Beside `#[route("/s/new")]`, `Slug { slug: "new" }` prints
+  `/s/new`, which parses as the literal variant; patterns that cross do the same, so beside
+  `#[route("/s/:b")]`, `A { a: "s" }` of `#[route("/:a/new")]` prints `/s/new`, which parses as
+  `B { b: "new" }`, because the literal at the first differing position ranks first. The derive
+  cannot see which values a field type prints, so the overlap is documented on `Routable` rather
+  than rejected; two patterns of the same shape, which overlap for every value, are rejected.
 
 ### 2. The URL is the source of truth
 
@@ -189,9 +217,16 @@ agent protocol from naming a widget-catalog type.
    `current`, `can_pop`), in `crates/flui-widgets/src/router/`. The back-stack of a location is
    its prefix chain. Router pages are `PageRoute`s on an addressed Navigator whose facade
    refuses unaddressable pushes (§4), and each page scopes a semantics route.
-2. **`#[derive(Routable)]`** in `flui-macros`: `#[route("/…/:param")]` on unit and named-field
-   variants, fields through `FromStr`/`Display`, trybuild pass and fail tests, a proptest round
-   trip.
+2. **Derive, app root and example (implemented).** `#[derive(Routable)]` in `flui-macros`:
+   `#[route("/…/:param")]` on unit and named-field variants, fields through
+   `FromStr`/`Display`, specificity ordering and compile-time pattern checks (§1), trybuild pass
+   and fail tests, a proptest round trip. `WidgetsApp::router(Router<R>)` roots an app in its
+   Router, mounted bare as the routing subtree (Flutter's `WidgetsApp.router` adds no
+   `FocusScope`), whose navigator is the app's only one. It returns a `WidgetsApp<RouterForm>`,
+   which has no `navigator` or `observer` builder, so the configuration Flutter asserts against
+   does not compile. That Router is the one that will own the presentation's URL once step 3
+   gives the outermost Router its `RouterScope` (§2); nothing marks it outermost yet.
+   `examples/two_screens.rs` is the program of `design/architecture.md` §13.3 on that root.
 3. **Nested routes.** `#[nest("/settings")] Settings(SettingsRoute)` composes a child enum into
    the parent's path: one stack, one URL. A nested `Router` widget is a local stack saved with
    its page (§2); a `RouterScope` marker gives the outermost Router per presentation the URL.
@@ -206,8 +241,7 @@ agent protocol from naming a widget-catalog type.
    applied by the realm to that presentation's URL-owning Router (§5); `Platform::on_open_urls`
    delivers intents, and the Router gains an `on_unknown` hook. `NAVIGATOR_COMMAND_TARGETS`, the
    `NavigatorCommand*` types and their `globals` entry are deleted.
-7. **Freeze and removal.** `WidgetsApp::router(..)` and the Material and Cupertino router
-   constructors; the named-route doors, `on_generate_route` and the `WidgetsApp` routes table
+7. **Freeze and removal.** The Material and Cupertino router constructors; the named-route doors, `on_generate_route` and the `WidgetsApp` routes table
    are removed (`flui migrate` rewrites callers); dialogs move to overlay entries and popups stop
    being admitted.
 8. **Web history and restoration.** `pushState`/`popstate` and browser back/forward on wasm,
@@ -252,8 +286,7 @@ Landed with step one (`crates/flui-widgets/tests/router.rs` and the unit tests i
 `crates/flui-widgets/src/router/`):
 
 - **Round trip, hand-written.** `route_path_round_trips_a_hand_written_routable` and
-  `parse_reports_no_match_and_bad_params` over a hand-written `Routable`; the derive's property
-  test lands with step 2.
+  `parse_reports_no_match_and_bad_params` over a hand-written `Routable`.
 - **Nearest ancestor.** `nested_router_handle_targets_the_nearest_router`: a handle acquired
   inside the inner `Router<R>` pushes to the inner stack and leaves the outer one unchanged.
   `router_handle_without_a_router_is_no_router`: with no `Router` above, `NoRouter`.
@@ -268,11 +301,31 @@ Landed with step one (`crates/flui-widgets/tests/router.rs` and the unit tests i
   `router_opens_at_a_location_with_its_back_stack`, `go_reconciles_only_the_diverging_tail`,
   `go_adds_the_new_back_stack_beneath_the_new_top`.
 
+Landed with step two:
+
+- **Derive round trip.** `derived_routable_round_trips` (`crates/flui-widgets/tests/routable_derive.rs`)
+  is a property test over generated values of a derived route enum with multi-parameter,
+  string, literal-sibling and non-ASCII patterns; `derived_routable_reports_no_match_and_bad_params`,
+  `literal_segments_win_over_parameters` and `derived_back_stack_skips_gaps` pin the errors,
+  specificity and back-stack. `crates/flui-widgets/tests/routable_ui.rs` compiles the accepted
+  shapes (each asserting its round trip) and every rejection of §1 against its diagnostic; the
+  pattern parser, specificity order and conflict detection have unit tests in
+  `crates/flui-macros/src/derive_routable/pattern.rs`. The derive resolves through the facade,
+  a renamed owner (`tests/fixtures/facade_consumer.rs`) and a package on `flui-sdk` alone
+  (`sdk_consumers_derive_through_the_sdk_even_beside_the_facade` in `tests/facade_consumer.rs`).
+- **App root.** `crates/flui-widgets/tests/widgets_app_router.rs`:
+  `widgets_app_router_roots_the_app_in_its_router` (the app's root navigator is the Router's,
+  and it refuses a stray page), `widgets_app_router_navigates_by_handle_and_the_url_follows`,
+  `widgets_app_router_pages_see_localizations_and_builder`,
+  `rebuilt_widgets_app_router_keeps_its_stack` (a rebuilt app updates its Router in place),
+  `switching_widgets_app_from_home_to_router_releases_the_navigator` (the two forms are two view
+  types, so the switch remounts the shell and disposes its navigator),
+  `widgets_app_router_adds_no_focus_scope_above_the_router`, and the compile-fail case
+  `router_app_takes_no_navigator` in `crates/flui-widgets/tests/routable_ui.rs`.
+  `tests/two_screens_example.rs` drives the example.
+
 Still to land, each with its step:
 
-- **Derive round trip** (step 2). A property test over generated values of a test route enum
-  asserts `from_path(&r.to_path()) == Ok(r)`; a table test asserts `NoMatch` for unknown paths
-  and for malformed parameters.
 - **Inbound deep link** (step 6). The headless platform delivers a URL through
   `on_open_urls`; after one frame the stack is the parsed route and the page is mounted and laid out (not merely present).
 - **Overlays are not state** (step 7; step one pins only that a popup leaves the path

@@ -1,0 +1,5 @@
+error: a route pattern has no empty segment
+ --> tests/routable_ui/fail/pattern_empty_segment.rs:5:13
+  |
+5 |     #[route("/note//:id")]
+  |             ^^^^^^^^^^^^

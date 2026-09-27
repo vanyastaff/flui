@@ -25,6 +25,14 @@ mod routable;
 #[expect(clippy::module_inception)]
 mod router;
 
+/// The helpers `#[derive(Routable)]` generates calls to: no semver
+/// guarantee, and no other caller.
+#[doc(hidden)]
+pub mod __derive;
+
+/// `#[derive(Routable)]`: `to_path` and `from_path` from one
+/// `#[route("…")]` pattern per variant (ADR-0093 §1).
+pub use flui_macros::Routable;
 pub use handle::{RouterError, RouterHandle};
 pub use path::{RouteParseError, RoutePath};
 pub use routable::Routable;

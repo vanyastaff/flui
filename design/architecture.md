@@ -729,9 +729,12 @@ and menus are overlay entries owned by the page that opened them and never appea
 The route trait and its derive are `Routable` (`flui_widgets::Route` is the Navigator's
 route-lifecycle trait). `Router::<R>::handle(cx: &dyn LifecycleContext)` returns
 `Result<RouterHandle<R>, RouterError>`, and the handle's `push`, `replace`, `pop` and
-`go(location)` take no event context. The trait, `RoutePath`, `Router` and `RouterHandle` are
-implemented in `flui-widgets`, with a hand-written `Routable`; the derive and the rest are listed
-in ADR-0093's implementation series.
+`go(location)` take no event context. `#[derive(Routable)]` maps each variant to one
+`#[route("/note/:id")]` pattern, checks the patterns at compile time, and parses by specificity:
+a literal segment wins over a parameter whatever the declaration order. `WidgetsApp::router`
+roots an app in a `Router`: the Router is the app's routing subtree and its only navigator, and
+the router form has no navigator builders. The outermost Router owns the presentation's URL
+(ADR-0093 §2).
 
 ---
 
@@ -1031,10 +1034,14 @@ impl ViewState<Home> for HomeState {
     fn build(&self, _: &Home, _cx: &dyn BuildContext) -> impl IntoView {
         let router = self.router.clone().expect("BUG: init_state runs before build");
         RawButton::new(Text::new("Open"))
-            .on_press(move || { let _ = router.push(AppRoute::Note { id: NoteId(1) }); })
+            .on_press(move |_cx| { let _ = router.push(AppRoute::Note { id: NoteId(1) }); })
     }
 }
 ```
+
+Whether `App::new` takes a `Router` itself or a `WidgetsApp::router` is an
+[open question](open-questions.md#app-roots-and-the-router); `examples/two_screens.rs` is the
+same program through `WidgetsApp::router` and `run_app`.
 
 ### 13.4 A plugin
 
