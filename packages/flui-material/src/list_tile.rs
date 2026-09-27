@@ -140,8 +140,6 @@
 //!   resolved icon color the way the
 //!   oracle's does.
 
-use std::rc::Rc;
-
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::types::geometry::px;
 use flui_sdk::types::styling::Color;
@@ -208,7 +206,7 @@ fn default_tile_height(is_three_line: bool, has_subtitle: bool, is_dense: bool) 
 ///     .leading(Icon::new(IconData::new(0xE87D)))
 ///     .title(Text::new("Inbox"))
 ///     .subtitle(Text::new("12 unread messages"))
-///     .on_tap(|| {});
+///     .on_tap(|_cx| {});
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct ListTile {
@@ -227,7 +225,7 @@ pub struct ListTile {
     leading_and_trailing_text_style: Option<TextStyle>,
     content_padding: Option<EdgeInsets>,
     enabled: bool,
-    on_tap: Option<Rc<dyn Fn()>>,
+    on_tap: Option<crate::event_callback::PressCallback>,
     selected: bool,
     tile_color: Option<Color>,
     selected_tile_color: Option<Color>,
@@ -414,8 +412,11 @@ impl ListTile {
     /// Sets the whole-tile tap handler, wired through an [`InkWell`].
     /// Inoperative while [`ListTile::enabled`] is `false`.
     #[must_use]
-    pub fn on_tap(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_tap = Some(Rc::new(callback));
+    pub fn on_tap<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_tap = Some(crate::event_callback::press_callback(callback));
         self
     }
 
@@ -819,7 +820,7 @@ impl StatelessView for ListTile {
                 .on_tap
                 .clone()
                 .expect("BUG: is_interactive() checked on_tap.is_some()");
-            ink_well = ink_well.on_tap(move || on_tap());
+            ink_well = ink_well.on_tap(move |cx| on_tap(cx));
         }
 
         let tile_constraints = BoxConstraints::new(
@@ -862,10 +863,10 @@ mod tests {
         assert!(
             !ListTile::new()
                 .enabled(false)
-                .on_tap(|| {})
+                .on_tap(|_cx| {})
                 .is_interactive()
         );
-        assert!(ListTile::new().on_tap(|| {}).is_interactive());
+        assert!(ListTile::new().on_tap(|_cx| {}).is_interactive());
     }
 
     /// `_RenderListTile._defaultTileHeight`'s literal table (`list_tile.dart`

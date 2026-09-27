@@ -16,7 +16,7 @@
 //! by `Align`, would silently wipe the in-flight animation state on every
 //! unrelated rebuild).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,7 +31,12 @@ use flui_objects::RenderAnimatedSize;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{Alignment, painting::Clip};
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BuildContextExt, Child, IntoView, RenderView, ViewState, impl_render_view};
+use flui_view::{
+    BuildContextExt, Child, EventCx, EventOutcome, IntoView, LocalPostFrameHandle, RenderView,
+    ViewState, WriterSource, impl_render_view,
+};
+
+type EndCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 
 use crate::animated::vsync_scope::VsyncScope;
 
@@ -49,7 +54,7 @@ pub struct AnimatedSize {
     reverse_duration: Option<Duration>,
     curve: ArcCurve,
     clip_behavior: Clip,
-    on_end: Option<Rc<dyn Fn()>>,
+    on_end: Option<EndCallback>,
     child: Child,
 }
 
@@ -113,8 +118,11 @@ impl AnimatedSize {
 
     /// Sets a callback fired each time a resize run completes.
     #[must_use]
-    pub fn on_end(mut self, on_end: impl Fn() + 'static) -> Self {
-        self.on_end = Some(Rc::new(on_end));
+    pub fn on_end<R: EventOutcome>(
+        mut self,
+        on_end: impl Fn(&mut EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_end = Some(Rc::new(move |cx| on_end(cx).report()));
         self
     }
 }
@@ -140,6 +148,10 @@ pub struct AnimatedSizeState {
     status_listener_id: Option<ListenerId>,
     completed_runs: Arc<AtomicU64>,
     delivered_completed_runs: Cell<u64>,
+    writer: Option<WriterSource>,
+    post_frame: Option<LocalPostFrameHandle>,
+    mounted: Rc<Cell<bool>>,
+    on_end: Rc<RefCell<Option<EndCallback>>>,
     child: Child,
 }
 
@@ -176,6 +188,10 @@ impl StatefulView for AnimatedSize {
             status_listener_id: None,
             completed_runs: Arc::new(AtomicU64::new(0)),
             delivered_completed_runs: Cell::new(0),
+            writer: None,
+            post_frame: None,
+            mounted: Rc::new(Cell::new(true)),
+            on_end: Rc::new(RefCell::new(self.on_end.clone())),
             child: self.child.clone(),
         }
     }
@@ -183,6 +199,8 @@ impl StatefulView for AnimatedSize {
 
 impl ViewState<AnimatedSize> for AnimatedSizeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.writer = Some(ctx.writer_source());
+        self.post_frame = ctx.local_post_frame_handle();
         let completed_runs = Arc::clone(&self.completed_runs);
         let rebuild = ctx.rebuild_handle();
         self.status_listener_id =
@@ -204,9 +222,34 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
         let delivered_runs = self.delivered_completed_runs.get();
         if completed_runs > delivered_runs {
             self.delivered_completed_runs.set(completed_runs);
-            if let Some(on_end) = view.on_end.as_ref() {
-                for _ in delivered_runs..completed_runs {
-                    on_end();
+            if self.on_end.borrow().is_some() {
+                if let Some(post_frame) = &self.post_frame {
+                    let writer = self
+                        .writer
+                        .clone()
+                        .expect("BUG: AnimatedSize initialized before build");
+                    let mounted = self.mounted.clone();
+                    let callback = self.on_end.clone();
+                    if let Err(error) = post_frame.schedule_local(move |_| {
+                        for _ in delivered_runs..completed_runs {
+                            if !mounted.get() {
+                                break;
+                            }
+                            let on_end = callback.borrow().clone();
+                            if let Some(on_end) = on_end {
+                                writer.write(|cx| on_end(cx));
+                            }
+                        }
+                    }) {
+                        tracing::warn!(
+                            ?error,
+                            "AnimatedSize: completion dropped because the owner post-frame lane is closed"
+                        );
+                    }
+                } else {
+                    tracing::warn!(
+                        "AnimatedSize: completion dropped because there is no owner post-frame lane"
+                    );
                 }
             }
         }
@@ -221,6 +264,8 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
     }
 
     fn did_update_view(&mut self, _old_view: &AnimatedSize, new_view: &AnimatedSize) {
+        let previous = self.on_end.replace(new_view.on_end.clone());
+        drop(previous);
         self.child = new_view.child.clone();
         // Plain-assignment setters, matching the oracle — no restart of an
         // in-flight run.
@@ -231,6 +276,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
     }
 
     fn dispose(&mut self) {
+        self.mounted.set(false);
         if let Some(id) = self.status_listener_id.take() {
             self.controller.remove_status_listener(id);
         }
@@ -309,6 +355,85 @@ mod tests {
 
     use super::*;
     use crate::SizedBox;
+
+    #[derive(Clone, StatefulView)]
+    struct DeferredProbe {
+        state: Rc<RefCell<AnimatedSizeState>>,
+        view: AnimatedSize,
+    }
+
+    struct DeferredProbeState(DeferredProbe);
+
+    impl StatefulView for DeferredProbe {
+        type State = DeferredProbeState;
+        fn create_state(&self) -> Self::State {
+            DeferredProbeState(self.clone())
+        }
+    }
+
+    impl ViewState<DeferredProbe> for DeferredProbeState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            self.0.state.borrow_mut().init_state(ctx);
+        }
+
+        fn build(&self, _: &DeferredProbe, ctx: &dyn BuildContext) -> impl IntoView {
+            let state = self.0.state.borrow();
+            let _built = state.build(&self.0.view, ctx);
+            SizedBox::shrink()
+        }
+    }
+
+    #[test]
+    fn queued_completion_uses_updated_callback_and_cancels_after_dispose() {
+        let scheduler = flui_scheduler::UpdateScheduler::new();
+        let lane = scheduler.new_local_post_frame_lane();
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let old_calls = calls.clone();
+        let old = AnimatedSize::new(Duration::from_millis(100))
+            .on_end(move |_cx| old_calls.borrow_mut().push("old"));
+        let state = Rc::new(RefCell::new(old.create_state()));
+        // Simulate the Send status listener's completion counter. The real
+        // build below must queue it, not call the user while building.
+        state.borrow().completed_runs.store(1, Ordering::SeqCst);
+        let mut owner = flui_view::BuildOwner::new();
+        owner.set_local_post_frame_handle(lane.local_handle());
+        let mut tree = flui_view::ElementTree::new();
+        let root = tree.mount_root(
+            &DeferredProbe {
+                state: state.clone(),
+                view: old.clone(),
+            },
+            &mut owner.element_owner_mut(),
+        );
+        owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
+        owner.build_scope(&mut tree);
+        assert!(
+            calls.borrow().is_empty(),
+            "completion must not run during build"
+        );
+        assert_eq!(lane.local_handle().pending_len(), 1);
+        let new_calls = calls.clone();
+        let new = AnimatedSize::new(Duration::from_millis(100))
+            .on_end(move |_cx| new_calls.borrow_mut().push("new"));
+        state.borrow_mut().did_update_view(&old, &new);
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(*calls.borrow(), ["new"]);
+
+        state.borrow().completed_runs.store(2, Ordering::SeqCst);
+        // The real listener's RebuildHandle marks its target dirty when its
+        // inbox is absorbed. This manual counter injection must do both parts.
+        tree.mark_needs_build(root);
+        owner.schedule_build_for(root, 0, flui_view::RebuildReason::AnimationTick);
+        owner.build_scope(&mut tree);
+        assert_eq!(lane.local_handle().pending_len(), 1);
+        state.borrow_mut().dispose();
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(
+            *calls.borrow(),
+            ["new"],
+            "disposed widget cancels queued completion"
+        );
+    }
 
     fn render_view(alignment: Alignment, clip_behavior: Clip) -> AnimatedSizeRenderView {
         // See `create_state`'s doc: a real (detached) ticker is required for

@@ -676,7 +676,7 @@ fn on_drawer_changed_forwards_to_the_app_authors_callback() {
                 // own hit-test bounds — see the module docs' "harness
                 // limitation" note.
                 .drawer_edge_drag_width(400.0)
-                .on_drawer_changed(move |opened| {
+                .on_drawer_changed(move |_cx, opened| {
                     events_for_callback.borrow_mut().push(opened);
                 }),
         ),
@@ -705,6 +705,29 @@ fn on_drawer_changed_forwards_to_the_app_authors_callback() {
         vec![true, false],
         "crossing back below 0.5 must forward on_drawer_changed(false)"
     );
+}
+
+#[test]
+fn drawer_edges_write_the_owning_presentations_signal() {
+    use flui_sdk::view::SignalWriteExt as _;
+    use flui_sdk::widgets::testing::{ProbeSignals, SignalProbe};
+
+    let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+        themed(
+            Scaffold::new()
+                .drawer(Drawer::new())
+                .drawer_edge_drag_width(400.0)
+                .on_drawer_changed(move |cx, opened| count.set(cx, u32::from(opened))),
+        )
+    });
+    let mut laid = lay_out(probe.view(), tight(400.0, 800.0));
+    laid.dispatch_pointer_down(5.0, 400.0);
+    laid.dispatch_pointer_move(185.0, 400.0);
+    assert_eq!(probe.value(), Ok(1));
+    laid.dispatch_pointer_move(30.0, 400.0);
+    assert_eq!(probe.value(), Ok(0));
+    laid.tick();
+    assert_eq!(probe.reads().last(), Some(&0));
 }
 
 // ============================================================================

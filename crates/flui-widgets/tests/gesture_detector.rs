@@ -721,6 +721,52 @@ mod event_cx {
         assert_eq!(probe.reads().last(), Some(&1), "and its reader rebuilt");
     }
 
+    #[test]
+    fn an_assistive_tap_uses_the_replacement_callback() {
+        let old = Rc::new(Cell::new(0));
+        let old_callback = Rc::clone(&old);
+        let mut app = lay_out(
+            labelled(
+                GestureDetector::new().on_tap(move |_cx| old_callback.set(old_callback.get() + 1)),
+            ),
+            tight(100.0, 100.0),
+        );
+        app.enable_semantics();
+        app.pump();
+        click(
+            &app.pipeline_owner(),
+            &app.a11y_tree().expect("semantics tree"),
+        );
+        let current = Rc::new(Cell::new(0));
+        let current_callback = Rc::clone(&current);
+        app.pump_widget(labelled(GestureDetector::new().on_tap(move |_cx| {
+            current_callback.set(current_callback.get() + 1);
+        })));
+        assert_eq!(old.get(), 0);
+        assert_eq!(current.get(), 1);
+    }
+
+    #[test]
+    fn an_assistive_tap_is_cancelled_when_its_handler_is_removed() {
+        let calls = Rc::new(Cell::new(0));
+        let callback_calls = Rc::clone(&calls);
+        let mut app = lay_out(
+            labelled(
+                GestureDetector::new()
+                    .on_tap(move |_cx| callback_calls.set(callback_calls.get() + 1)),
+            ),
+            tight(100.0, 100.0),
+        );
+        app.enable_semantics();
+        app.pump();
+        click(
+            &app.pipeline_owner(),
+            &app.a11y_tree().expect("semantics tree"),
+        );
+        app.pump_widget(labelled(GestureDetector::new()));
+        assert_eq!(calls.get(), 0);
+    }
+
     /// Without a local post-frame lane there is no moment after the frame to
     /// run the activation in. Running it at once would run it inside the
     /// detector's `build`, where its writes are refused; the detector drops it

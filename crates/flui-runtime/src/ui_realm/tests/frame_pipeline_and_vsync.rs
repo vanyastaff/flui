@@ -611,12 +611,12 @@ fn shell_installed_arena_resolves_nested_tap_detectors_to_one_winner() {
     let outer = Arc::clone(&outer_taps);
 
     let root = GestureDetector::new()
-        .on_tap(move || {
+        .on_tap(move |_cx| {
             outer.fetch_add(1, Ordering::SeqCst);
         })
         .child(
             GestureDetector::new()
-                .on_tap(move || {
+                .on_tap(move |_cx| {
                     inner.fetch_add(1, Ordering::SeqCst);
                 })
                 .child(ColoredBox::new(Color::rgb(10, 20, 30))),
@@ -686,12 +686,12 @@ fn root_gesture_scope_arbitrates_overlapping_detectors_once() {
 
     let inner_count = Rc::clone(&inner_taps);
     let inner = GestureDetector::new()
-        .on_tap(move || inner_count.set(inner_count.get() + 1))
+        .on_tap(move |_cx| inner_count.set(inner_count.get() + 1))
         .behavior(HitTestBehavior::Opaque)
         .child(SizedBox::new(100.0, 100.0));
     let outer_count = Rc::clone(&outer_taps);
     let root = GestureDetector::new()
-        .on_tap(move || outer_count.set(outer_count.get() + 1))
+        .on_tap(move |_cx| outer_count.set(outer_count.get() + 1))
         .behavior(HitTestBehavior::Opaque)
         .child(inner);
 
@@ -891,7 +891,7 @@ fn long_press_fires_at_its_deadline_with_no_further_input() {
     let presses = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&presses);
     let root = GestureDetector::new()
-        .on_long_press(move || {
+        .on_long_press(move |_cx| {
             in_cb.fetch_add(1, Ordering::SeqCst);
         })
         .child(ColoredBox::new(Color::rgb(10, 20, 30)));

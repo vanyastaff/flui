@@ -293,7 +293,7 @@ fn action_press_closes_the_snack_bar_and_is_single_fire() {
         mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
 
     handle.show_snack_bar(
-        SnackBar::new(Text::new("Saved")).action(SnackBarAction::new("UNDO", move || {
+        SnackBar::new(Text::new("Saved")).action(SnackBarAction::new("UNDO", move |_cx| {
             action_presses_for_cb.fetch_add(1, Ordering::SeqCst);
         })),
     );
@@ -392,11 +392,9 @@ fn floating_action_button_lifts_above_the_snack_bar_mid_animation_and_at_rest() 
     let vsync = Vsync::new();
     let (mut laid, handle) = mount_with_scaffolds(
         &vsync,
-        vec![
-            Scaffold::new()
-                .body(body_marker())
-                .floating_action_button(FloatingActionButton::new(Some(|| {}), Text::new("+"))),
-        ],
+        vec![Scaffold::new().body(body_marker()).floating_action_button(
+            FloatingActionButton::new(Text::new("+")).on_pressed(|_cx| {}),
+        )],
     );
 
     let scaffold_root = scaffold_roots(&laid)[0];
@@ -723,7 +721,7 @@ fn tick_driven_close_defers_a_reentrant_show_snack_bar_out_of_the_build_phase() 
     let handle_for_on_closed = handle.clone();
     handle
         .show_snack_bar(SnackBar::new(Text::new("a")).duration(Duration::from_millis(60)))
-        .on_closed(move |_reason| {
+        .on_closed(move |_cx, _reason| {
             // Reentrant, reached from a PURELY tick-driven close (no
             // explicit hide/remove call below) — must land in a safe,
             // post-build window, not corrupt the frame that just built.
@@ -767,4 +765,104 @@ fn tick_driven_close_defers_a_reentrant_show_snack_bar_out_of_the_build_phase() 
         find_text(&laid, "b").is_some(),
         "the reentrant show_snack_bar from a's deferred on_closed must eventually take effect"
     );
+}
+
+#[test]
+fn a_direct_snack_bar_close_writes_its_presentations_signal() {
+    let vsync = Vsync::new();
+    let handle_slot = Rc::new(RefCell::new(None));
+    let captured_handle = Rc::clone(&handle_slot);
+    let signal_slot = Rc::new(RefCell::new(None));
+    let captured_signal = Rc::clone(&signal_slot);
+    let probe = common::SignalProbe::new(move |common::ProbeSignals { count, .. }| {
+        *captured_signal.borrow_mut() = Some(count);
+        ScaffoldMessenger::new(HandleProbe {
+            slot: Rc::clone(&captured_handle),
+        })
+    });
+    let mut laid = lay_out_animated(
+        themed_animated(&vsync, probe.view()),
+        tight(400.0, 600.0),
+        vsync.clone(),
+    );
+    let handle = handle_slot.borrow().clone().expect("messenger mounted");
+    let count = signal_slot.borrow().expect("signal initialized");
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("direct")))
+        .on_closed(move |cx, reason| {
+            assert_eq!(reason, flui_material::SnackBarClosedReason::Remove);
+            count.update(cx, |value| *value += 1)
+        });
+
+    handle.remove_current_snack_bar();
+    assert_eq!(probe.value(), Ok(1));
+    handle.remove_current_snack_bar();
+    assert_eq!(probe.value(), Ok(1), "completion fires only once");
+    laid.pump();
+    assert_eq!(probe.reads().last(), Some(&1));
+}
+
+#[test]
+fn a_timer_driven_snack_bar_close_writes_after_build() {
+    let vsync = Vsync::new();
+    let handle_slot = Rc::new(RefCell::new(None));
+    let captured_handle = Rc::clone(&handle_slot);
+    let signal_slot = Rc::new(RefCell::new(None));
+    let captured_signal = Rc::clone(&signal_slot);
+    let probe = common::SignalProbe::new(move |common::ProbeSignals { count, .. }| {
+        *captured_signal.borrow_mut() = Some(count);
+        ScaffoldMessenger::new(HandleProbe {
+            slot: Rc::clone(&captured_handle),
+        })
+    });
+    let mut laid = lay_out_animated(
+        themed_animated(&vsync, probe.view()),
+        tight(400.0, 600.0),
+        vsync.clone(),
+    );
+    let handle = handle_slot.borrow().clone().expect("messenger mounted");
+    let count = signal_slot.borrow().expect("signal initialized");
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("timer")).duration(Duration::from_millis(60)))
+        .on_closed(move |cx, reason| {
+            assert_eq!(reason, flui_material::SnackBarClosedReason::Timeout);
+            count.update(cx, |value| *value += 1)
+        });
+
+    pump_ms(&mut laid, 700);
+    assert_eq!(
+        probe.value(),
+        Ok(1),
+        "timer completion gets a writable event"
+    );
+    laid.pump();
+    assert_eq!(probe.reads().last(), Some(&1));
+}
+
+#[test]
+fn a_snack_bar_completion_cannot_write_another_presentations_signal() {
+    let signal_slot = Rc::new(RefCell::new(None));
+    let captured = Rc::clone(&signal_slot);
+    let probe = common::SignalProbe::new(move |common::ProbeSignals { count, .. }| {
+        *captured.borrow_mut() = Some(count);
+        SizedBox::shrink()
+    });
+    let _first = common::lay_out(probe.view(), tight(100.0, 100.0));
+    let count = signal_slot.borrow().expect("signal initialized");
+    let vsync = Vsync::new();
+    let (_second, handle) = mount_with_scaffolds(&vsync, Vec::new());
+    let outcome = Rc::new(RefCell::new(None));
+    let recorded = Rc::clone(&outcome);
+    handle
+        .show_snack_bar(SnackBar::new(Text::new("foreign")))
+        .on_closed(move |cx, _reason| {
+            *recorded.borrow_mut() = Some(count.set(cx, 1));
+        });
+
+    handle.remove_current_snack_bar();
+    assert!(matches!(
+        *outcome.borrow(),
+        Some(Err(flui_sdk::view::SignalError::ForeignGraph { .. }))
+    ));
+    assert_eq!(probe.value(), Ok(0));
 }

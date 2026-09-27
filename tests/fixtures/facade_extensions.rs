@@ -204,7 +204,7 @@ fn pointer_input_schedules_a_widget_rebuild() {
         let notification = notification.clone();
         let count = count.clone();
         GestureDetector::new()
-            .on_tap(move || {
+            .on_tap(move |_cx| {
                 count.fetch_add(1, Ordering::SeqCst);
                 notification.notify_listeners();
             })
@@ -231,7 +231,7 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     let observed = downs.clone();
     let tree = lay_out(
         GestureDetector::new()
-            .on_horizontal_drag_down(move |_details: flui::widgets::DragDownDetails| {
+            .on_horizontal_drag_down(move |_cx, _details: flui::widgets::DragDownDetails| {
                 observed.fetch_add(1, Ordering::SeqCst);
             })
             .behavior(HitTestBehavior::Opaque)
@@ -571,7 +571,7 @@ impl ViewState<FocusCapabilityView> for FocusCapabilityState {
         let changes = self.0.changes.clone();
         flui::widgets::Focus::new(SizedBox::new(30.0, 30.0))
             .focus_node(self.0.node.clone())
-            .on_focus_change(move |focused| changes.borrow_mut().push(focused))
+            .on_focus_change(move |_cx, focused| changes.borrow_mut().push(focused))
     }
 }
 

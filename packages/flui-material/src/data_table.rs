@@ -130,9 +130,9 @@ const SELECTED_ROW_OPACITY: f32 = 0.08;
 /// A row-selection toggle: fires with the row's next `selected` value.
 /// `Rc`-based (owner-local, per ADR-0027) — matches [`InkWell`]'s own
 /// callback shape.
-type RowSelectCallback = Rc<dyn Fn(bool)>;
+type RowSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, bool)>;
 /// A cell tap handler.
-type CellTapCallback = Rc<dyn Fn()>;
+type CellTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
 /// A resolved, per-state row/overlay color cascade.
 type RowColorProperty = WidgetStateProperty<Option<Color>>;
 
@@ -212,8 +212,11 @@ impl DataCell {
     /// the row's own selection-toggle tap for this cell only. Flutter
     /// parity: `DataCell.onTap`.
     #[must_use]
-    pub fn on_tap(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_tap = Some(Rc::new(callback));
+    pub fn on_tap<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_tap = Some(crate::event_callback::press_callback(callback));
         self
     }
 }
@@ -265,8 +268,11 @@ impl DataRow {
     /// handler is what makes this row selectable — see the module docs'
     /// "Selection" section. Flutter parity: `DataRow.onSelectChanged`.
     #[must_use]
-    pub fn on_select_changed(mut self, callback: impl Fn(bool) + 'static) -> Self {
-        self.on_select_changed = Some(Rc::new(callback));
+    pub fn on_select_changed<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, bool) -> R + 'static,
+    ) -> Self {
+        self.on_select_changed = Some(crate::event_callback::value_callback(callback));
         self
     }
 }
@@ -363,8 +369,11 @@ impl DataTable {
     /// it, every selectable row's own handler is called directly. Flutter
     /// parity: `DataTable.onSelectAll`.
     #[must_use]
-    pub fn on_select_all(mut self, callback: impl Fn(bool) + 'static) -> Self {
-        self.on_select_all = Some(Rc::new(callback));
+    pub fn on_select_all<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, bool) -> R + 'static,
+    ) -> Self {
+        self.on_select_all = Some(crate::event_callback::value_callback(callback));
         self
     }
 
@@ -790,7 +799,7 @@ fn selection_summary(rows: &[DataRow], display_checkbox_column: bool) -> (bool, 
 /// comment.
 fn wrap_selectable(
     content: BoxedView,
-    on_tap: impl Fn() + 'static,
+    on_tap: impl Fn(&mut flui_sdk::view::EventCx<'_>) + 'static,
     overlay: Option<RowColorProperty>,
 ) -> BoxedView {
     let mut ink_well = InkWell::new(content).on_tap(on_tap);
@@ -806,7 +815,7 @@ fn wrap_selectable(
 /// (`data_table.dart`, oracle tag `3.44.0`).
 fn header_checkbox_cell(
     checked: Option<bool>,
-    on_change: impl Fn(Option<bool>) + 'static,
+    on_change: impl Fn(&mut flui_sdk::view::EventCx<'_>, Option<bool>) + 'static,
     margin_start: f32,
     margin_end: f32,
 ) -> BoxedView {
@@ -836,7 +845,7 @@ fn row_checkbox_cell(
 ) -> BoxedView {
     let mut checkbox = Checkbox::new(selected);
     if let Some(handler) = on_select_changed.clone() {
-        checkbox = checkbox.on_changed(move |next| handler(next.unwrap_or(false)));
+        checkbox = checkbox.on_changed(move |cx, next| handler(cx, next.unwrap_or(false)));
     }
     let content: BoxedView = Semantics::new()
         .container(true)
@@ -852,7 +861,7 @@ fn row_checkbox_cell(
         .boxed();
 
     let wrapped = match on_select_changed {
-        Some(handler) => wrap_selectable(content, move || handler(!selected), overlay),
+        Some(handler) => wrap_selectable(content, move |cx| handler(cx, !selected), overlay),
         None => content,
     };
     TableCell::new(TableCellVerticalAlignment::Fill, wrapped).boxed()
@@ -921,9 +930,9 @@ fn data_cell(
         .boxed();
 
     if let Some(on_tap) = cell.on_tap.clone() {
-        wrap_selectable(content, move || on_tap(), overlay)
+        wrap_selectable(content, move |cx| on_tap(cx), overlay)
     } else if let Some(toggle) = row_toggle {
-        wrap_selectable(content, move || toggle(), overlay)
+        wrap_selectable(content, move |cx| toggle(cx), overlay)
     } else {
         content
     }
@@ -999,16 +1008,16 @@ impl StatelessView for DataTable {
             let on_select_all = self.on_select_all.clone();
             heading_cells.push(header_checkbox_cell(
                 checked,
-                move |next: Option<bool>| {
+                move |cx, next: Option<bool>| {
                     let effective = some_checked || next.unwrap_or(false);
                     if let Some(handler) = &on_select_all {
-                        handler(effective);
+                        handler(cx, effective);
                     } else {
                         for (selected, handler) in &rows_snapshot {
                             if let Some(handler) = handler
                                 && *selected != effective
                             {
-                                handler(effective);
+                                handler(cx, effective);
                             }
                         }
                     }
@@ -1066,7 +1075,8 @@ impl StatelessView for DataTable {
             let row_toggle: Option<CellTapCallback> =
                 row.on_select_changed.clone().map(|handler| {
                     let selected = row.selected;
-                    Rc::new(move || handler(!selected)) as CellTapCallback
+                    Rc::new(move |cx: &mut flui_sdk::view::EventCx<'_>| handler(cx, !selected))
+                        as CellTapCallback
                 });
             for (col_index, column) in self.columns.iter().enumerate() {
                 let padding = cell_padding(
@@ -1435,10 +1445,10 @@ mod tests {
         let rows = vec![
             DataRow::new(vec![text_cell("a")])
                 .selected(true)
-                .on_select_changed(|_| {}),
+                .on_select_changed(|_cx, _| {}),
             DataRow::new(vec![text_cell("b")])
                 .selected(true)
-                .on_select_changed(|_| {}),
+                .on_select_changed(|_cx, _| {}),
         ];
         assert_eq!(selection_summary(&rows, true), (true, false));
     }
@@ -1446,8 +1456,8 @@ mod tests {
     #[test]
     fn selection_summary_none_checked_when_no_selectable_row_is_selected() {
         let rows = vec![
-            DataRow::new(vec![text_cell("a")]).on_select_changed(|_| {}),
-            DataRow::new(vec![text_cell("b")]).on_select_changed(|_| {}),
+            DataRow::new(vec![text_cell("a")]).on_select_changed(|_cx, _| {}),
+            DataRow::new(vec![text_cell("b")]).on_select_changed(|_cx, _| {}),
         ];
         assert_eq!(selection_summary(&rows, true), (false, false));
     }
@@ -1461,8 +1471,8 @@ mod tests {
         let rows = vec![
             DataRow::new(vec![text_cell("a")])
                 .selected(true)
-                .on_select_changed(|_| {}),
-            DataRow::new(vec![text_cell("b")]).on_select_changed(|_| {}),
+                .on_select_changed(|_cx, _| {}),
+            DataRow::new(vec![text_cell("b")]).on_select_changed(|_cx, _| {}),
         ];
         assert_eq!(selection_summary(&rows, true), (false, true));
     }
@@ -1474,7 +1484,7 @@ mod tests {
         let rows = vec![
             DataRow::new(vec![text_cell("a")])
                 .selected(true)
-                .on_select_changed(|_| {}),
+                .on_select_changed(|_cx, _| {}),
             DataRow::new(vec![text_cell("b")]).selected(false), // not selectable
         ];
         assert_eq!(selection_summary(&rows, true), (true, false));

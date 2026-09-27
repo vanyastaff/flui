@@ -182,22 +182,26 @@ impl std::fmt::Debug for SnackBar {
 /// ```rust
 /// use flui_material::SnackBarAction;
 ///
-/// let _action = SnackBarAction::new("UNDO", || {});
+/// let _action = SnackBarAction::new("UNDO", |_cx| {});
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct SnackBarAction {
     label: String,
-    on_pressed: std::rc::Rc<dyn Fn()>,
+    on_pressed: std::rc::Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>,
 }
 
 impl SnackBarAction {
     /// An action labeled `label`, calling `on_pressed` at most once when
     /// pressed.
     #[must_use]
-    pub fn new(label: impl Into<String>, on_pressed: impl Fn() + 'static) -> Self {
+    pub fn new<F, R>(label: impl Into<String>, on_pressed: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
         Self {
             label: label.into(),
-            on_pressed: std::rc::Rc::new(on_pressed),
+            on_pressed: crate::event_callback::press_callback(on_pressed),
         }
     }
 }
@@ -263,9 +267,9 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
                 .rebuild
                 .clone()
                 .expect("BUG: init_state runs before the first build");
-            button = button.on_pressed(move || {
+            button = button.on_pressed(move |cx| {
                 triggered.set(true);
-                on_pressed();
+                on_pressed(cx);
                 if let Some(messenger) = &messenger {
                     messenger.hide_current_snack_bar_because(SnackBarClosedReason::Action);
                 }
@@ -411,7 +415,7 @@ mod tests {
     #[test]
     fn action_builder_attaches_the_action() {
         let snack_bar = SnackBar::new(flui_sdk::widgets::Text::new("hi"))
-            .action(SnackBarAction::new("UNDO", || {}));
+            .action(SnackBarAction::new("UNDO", |_cx| {}));
         assert!(snack_bar.action.is_some());
     }
 }

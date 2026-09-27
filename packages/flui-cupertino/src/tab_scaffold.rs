@@ -384,10 +384,10 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
             .tab_bar
             .clone()
             .current_index(current_index)
-            .on_tap(move |index| {
+            .on_tap(move |cx, index| {
                 controller.set_index(index);
                 if let Some(original) = &original_on_tap {
-                    original(index);
+                    original(cx, index);
                 }
             });
 

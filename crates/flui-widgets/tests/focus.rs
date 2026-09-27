@@ -1123,6 +1123,7 @@ fn tab_traversal_follows_geometry_not_attach_order() {
 /// write the `Focus` opens from the writer source it acquired in
 /// `init_state`.
 mod event_cx {
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
@@ -1141,6 +1142,131 @@ mod event_cx {
             modifiers: Modifiers::default(),
             ..KeyEvent::default()
         }
+    }
+
+    #[test]
+    fn autofocus_writes_a_signal_from_its_lifecycle_callback() {
+        let node = FocusNode::with_debug_label("autofocus-signal");
+        let probe_node = Rc::clone(&node);
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            Focus::new(SizedBox::new(10.0, 10.0))
+                .focus_node(Rc::clone(&probe_node))
+                .autofocus(true)
+                .on_focus_change(move |cx, focused| count.set(cx, u32::from(focused)))
+        });
+        let mut harness = mount(probe.view());
+
+        assert!(node.has_primary_focus());
+        assert_eq!(probe.value(), Ok(1), "autofocus delivered a writable event");
+        harness.tick();
+        assert_eq!(probe.reads().last(), Some(&1));
+        node.unfocus();
+        assert_eq!(probe.value(), Ok(0), "the subsequent loss remains ordered");
+    }
+
+    #[test]
+    fn a_focus_request_before_attachment_writes_when_the_node_mounts() {
+        let node = FocusNode::with_debug_label("pending-focus-signal");
+        node.request_focus();
+        let probe_node = Rc::clone(&node);
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            Focus::new(SizedBox::new(10.0, 10.0))
+                .focus_node(Rc::clone(&probe_node))
+                .on_focus_change(move |cx, focused| count.set(cx, u32::from(focused)))
+        });
+        let mut harness = mount(probe.view());
+
+        assert!(node.has_primary_focus());
+        assert_eq!(
+            probe.value(),
+            Ok(1),
+            "attachment delivered the pending edge"
+        );
+        harness.tick();
+        assert_eq!(probe.reads().last(), Some(&1));
+    }
+
+    #[test]
+    fn enabling_autofocus_on_rebuild_writes_a_signal() {
+        let autofocus = Rc::new(Cell::new(false));
+        let configuration = Rc::clone(&autofocus);
+        let node = FocusNode::with_debug_label("updated-autofocus-signal");
+        let probe_node = Rc::clone(&node);
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            Focus::new(SizedBox::new(10.0, 10.0))
+                .focus_node(Rc::clone(&probe_node))
+                .autofocus(configuration.get())
+                .on_focus_change(move |cx, focused| count.set(cx, u32::from(focused)))
+        });
+        let mut harness = mount(probe.view());
+        assert_eq!(probe.value(), Ok(0));
+
+        autofocus.set(true);
+        harness.swap_root(probe.view());
+        assert!(node.has_primary_focus());
+        assert_eq!(probe.value(), Ok(1));
+        harness.tick();
+        assert_eq!(probe.reads().last(), Some(&1));
+    }
+
+    #[test]
+    fn replacing_a_focused_node_delivers_a_writable_loss_and_new_gain() {
+        let old_node = FocusNode::with_debug_label("old-signal-focus");
+        let new_node = FocusNode::with_debug_label("new-signal-focus");
+        let selected = Rc::new(RefCell::new(Rc::clone(&old_node)));
+        let configuration = Rc::clone(&selected);
+        let edges = Rc::new(RefCell::new(Vec::new()));
+        let recorded = Rc::clone(&edges);
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            let recorded = Rc::clone(&recorded);
+            Focus::new(SizedBox::new(10.0, 10.0))
+                .focus_node(Rc::clone(&configuration.borrow()))
+                .on_focus_change(move |cx, focused| {
+                    recorded.borrow_mut().push(focused);
+                    count.set(cx, u32::from(focused))
+                })
+        });
+        let mut harness = mount(probe.view());
+        old_node.request_focus();
+        assert_eq!(probe.value(), Ok(1));
+
+        *selected.borrow_mut() = Rc::clone(&new_node);
+        harness.swap_root(probe.view());
+        assert!(!old_node.has_focus());
+        assert_eq!(probe.value(), Ok(0), "replacement delivered its loss");
+        new_node.request_focus();
+        assert_eq!(probe.value(), Ok(1));
+        assert_eq!(*edges.borrow(), [true, false, true]);
+        old_node.request_focus();
+        assert_eq!(
+            *edges.borrow(),
+            [true, false, true],
+            "the retired node cannot notify its old widget"
+        );
+    }
+
+    #[test]
+    fn disabling_focus_on_rebuild_delivers_a_writable_loss() {
+        let enabled = Rc::new(Cell::new(true));
+        let configuration = Rc::clone(&enabled);
+        let node = FocusNode::with_debug_label("disabled-signal-focus");
+        let probe_node = Rc::clone(&node);
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            Focus::new(SizedBox::new(10.0, 10.0))
+                .focus_node(Rc::clone(&probe_node))
+                .can_request_focus(configuration.get())
+                .on_focus_change(move |cx, focused| count.set(cx, u32::from(focused)))
+        });
+        let mut harness = mount(probe.view());
+        node.request_focus();
+        assert_eq!(probe.value(), Ok(1));
+
+        enabled.set(false);
+        harness.swap_root(probe.view());
+        assert!(!node.has_focus());
+        assert_eq!(probe.value(), Ok(0), "reconfiguration delivered its loss");
+        harness.tick();
+        assert_eq!(probe.reads().last(), Some(&0));
     }
 
     #[test]

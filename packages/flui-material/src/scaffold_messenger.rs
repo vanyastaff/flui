@@ -126,11 +126,10 @@
 //!   [`ScaffoldMessengerState::init_state`] (ADR-0021) — the callback runs
 //!   after this frame's build/layout/paint have committed, its own reentrant
 //!   `show_snack_bar`/etc. call landing squarely in a safe, ordinary
-//!   event-handler-shaped window. If no `LocalPostFrameHandle` is available
-//!   (the messenger was never `attach`ed — a bare unit test constructing
-//!   [`ScaffoldMessengerHandle`] directly), the fire falls back to
-//!   synchronous, the same as `Direct`, rather than silently dropping the
-//!   callback.
+//!   event-handler-shaped window. If the owner-local lane is unavailable or
+//!   closed, completion is cancelled with a diagnostic; it never falls back
+//!   to executing arbitrary user code during build. Disposing the messenger
+//!   also cancels unfired callbacks, including ones already scheduled.
 //!
 //! State BOOKKEEPING (which entry is at the front, the recorded reason,
 //! whether the display timer is running) is safe to mutate from `build` —
@@ -201,7 +200,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -261,6 +260,7 @@ type ClosedCallbackSlot = Rc<RefCell<Option<Box<dyn FnOnce(SnackBarClosedReason)
 #[derive(Clone)]
 pub struct SnackBarController {
     on_closed: ClosedCallbackSlot,
+    messenger: Weak<MessengerCore>,
 }
 
 impl SnackBarController {
@@ -268,8 +268,22 @@ impl SnackBarController {
     /// (whatever the reason) — never for a queued entry silently dropped by
     /// [`ScaffoldMessengerHandle::clear_snack_bars`] (see that method's
     /// doc). A later call replaces an earlier, unfired callback.
-    pub fn on_closed(&self, callback: impl FnOnce(SnackBarClosedReason) + 'static) {
-        let _prev = self.on_closed.borrow_mut().replace(Box::new(callback));
+    /// The event context belongs to this messenger's presentation. Disposal
+    /// cancels callbacks that have not fired, including post-frame completions.
+    pub fn on_closed<R: EventOutcome>(
+        &self,
+        callback: impl FnOnce(&mut EventCx<'_>, SnackBarClosedReason) -> R + 'static,
+    ) {
+        let messenger = self.messenger.clone();
+        let _prev = self.on_closed.borrow_mut().replace(Box::new(move |reason| {
+            let Some(messenger) = messenger.upgrade() else {
+                return;
+            };
+            let writer = messenger.writer.borrow().clone();
+            if let Some(writer) = writer {
+                writer.write(|cx| callback(cx, reason).report());
+            }
+        }));
     }
 }
 
@@ -355,8 +369,9 @@ struct MessengerCore {
     /// Acquired in [`ScaffoldMessengerHandle::attach`] (`init_state`, per
     /// ADR-0021). `None` until then, or if no binding installed
     /// one — see the module docs' "Deferring `on_closed` out of the build
-    /// phase" section for the synchronous fallback that implies.
+    /// phase" section for cancellation when no lane is available.
     post_frame: RefCell<Option<LocalPostFrameHandle>>,
+    writer: RefCell<Option<WriterSource>>,
     queue: RefCell<VecDeque<Rc<QueuedEntry>>>,
     last_entry_status: Cell<AnimationStatus>,
     last_duration_status: Cell<AnimationStatus>,
@@ -438,6 +453,13 @@ impl MessengerCore {
             return;
         }
         self.advancing.set(true);
+        struct AdvanceGuard<'a>(&'a Cell<bool>);
+        impl Drop for AdvanceGuard<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let _advancing = AdvanceGuard(&self.advancing);
 
         self.cancel_display_timer();
         let popped = self.queue.borrow_mut().pop_front();
@@ -450,14 +472,13 @@ impl MessengerCore {
             let _ = self.entry_controller.forward();
         }
 
-        self.advancing.set(false);
         self.schedule_rebuild_on_scaffolds();
     }
 
     /// Fires `entry`'s `on_closed` per `origin` — immediately for
     /// [`ReconcileOrigin::Direct`], or deferred through [`Self::post_frame`]
-    /// for [`ReconcileOrigin::Build`] (falling back to immediate if no
-    /// [`LocalPostFrameHandle`] is available). See the module docs' "Deferring
+    /// for [`ReconcileOrigin::Build`]. Without a live post-frame lane the
+    /// callback is cancelled, never executed during build. See "Deferring
     /// `on_closed` out of the build phase" section.
     fn complete_entry(&self, entry: Rc<QueuedEntry>, origin: ReconcileOrigin) {
         if origin == ReconcileOrigin::Direct {
@@ -465,21 +486,18 @@ impl MessengerCore {
             return;
         }
         let Some(post_frame) = self.post_frame.borrow().clone() else {
-            entry.complete();
+            tracing::warn!("SnackBar on_closed cancelled: no owner-local post-frame lane");
+            entry.complete_silently();
             return;
         };
-        // `schedule_local` DROPS the callback without running it on error
-        // (per its own doc) — keep a fallback handle so a scheduling failure
-        // still completes the entry instead of silently losing the call.
-        let entry_for_fallback = Rc::clone(&entry);
+        let cancelled_entry = Rc::clone(&entry);
         let scheduled = post_frame.schedule_local(move |_timing| entry.complete());
         if let Err(error) = scheduled {
             tracing::warn!(
                 %error,
-                "SnackBar on_closed post-frame scheduling failed; firing immediately instead \
-                 of silently dropping it"
+                "SnackBar on_closed cancelled: owner-local post-frame lane is closed"
             );
-            entry_for_fallback.complete();
+            cancelled_entry.complete_silently();
         }
     }
 
@@ -618,6 +636,7 @@ impl ScaffoldMessengerHandle {
             duration_vsync_registration: RefCell::new(None),
             rebuild: RefCell::new(None),
             post_frame: RefCell::new(None),
+            writer: RefCell::new(None),
             queue: RefCell::new(VecDeque::new()),
             last_entry_status: Cell::new(AnimationStatus::Dismissed),
             last_duration_status: Cell::new(AnimationStatus::Dismissed),
@@ -634,6 +653,7 @@ impl ScaffoldMessengerHandle {
     /// the module docs' "Deferring `on_closed` out of the build phase"
     /// section for what the post-frame handle is for.
     pub(crate) fn attach(&self, ctx: &dyn LifecycleContext) {
+        *self.shared.writer.borrow_mut() = Some(ctx.writer_source());
         let rebuild = ctx.rebuild_handle();
         let rebuild_for_listener = rebuild.clone();
         self.shared
@@ -654,6 +674,12 @@ impl ScaffoldMessengerHandle {
 
     /// Unregisters from `Vsync` and disposes both controllers.
     pub(crate) fn detach(&self) {
+        self.shared.writer.borrow_mut().take();
+        self.shared.post_frame.borrow_mut().take();
+        let entries = std::mem::take(&mut *self.shared.queue.borrow_mut());
+        for entry in entries {
+            entry.complete_silently();
+        }
         self.shared.cancel_display_timer();
         if let Some(registration) = self.shared.entry_vsync_registration.borrow_mut().take()
             && let Some(vsync) = self.shared.vsync.borrow_mut().take()
@@ -754,7 +780,10 @@ impl ScaffoldMessengerHandle {
         }
         self.shared.reconcile(ReconcileOrigin::Direct);
 
-        SnackBarController { on_closed }
+        SnackBarController {
+            on_closed,
+            messenger: Rc::downgrade(&self.shared),
+        }
     }
 
     /// Removes the current snack bar (if any) by running its normal exit
@@ -948,6 +977,109 @@ mod tests {
         SnackBar::new(Text::new(label.to_string()))
     }
 
+    #[derive(Clone, StatelessView)]
+    struct CaptureMessenger {
+        captured: Rc<RefCell<Option<ScaffoldMessengerHandle>>>,
+    }
+
+    impl StatelessView for CaptureMessenger {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            *self.captured.borrow_mut() = ScaffoldMessengerScope::maybe_of(ctx);
+            flui_sdk::widgets::SizedBox::shrink()
+        }
+    }
+
+    fn mounted_handle() -> (
+        flui_widgets::testing::harness::Harness,
+        ScaffoldMessengerHandle,
+    ) {
+        let captured = Rc::new(RefCell::new(None));
+        let harness =
+            flui_widgets::testing::harness::mount(ScaffoldMessenger::new(CaptureMessenger {
+                captured: Rc::clone(&captured),
+            }));
+        let handle = captured.borrow().clone().expect("messenger mounted");
+        (harness, handle)
+    }
+
+    #[test]
+    fn disposal_cancels_a_completion_already_scheduled_after_build() {
+        let (mut harness, handle) = mounted_handle();
+        let calls = Rc::new(Cell::new(0));
+        let recorded = Rc::clone(&calls);
+        handle
+            .show_snack_bar(snack_bar("pending"))
+            .on_closed(move |_cx, _reason| recorded.set(recorded.get() + 1));
+        handle.shared.entry_controller.set_value(0.0);
+        handle.reconcile_after_tick_driven_settle();
+        assert_eq!(calls.get(), 0, "completion was deferred");
+
+        harness.swap_root(flui_sdk::widgets::SizedBox::shrink());
+        harness.tick();
+        assert_eq!(
+            calls.get(),
+            0,
+            "disposed messenger cannot deliver callbacks"
+        );
+        assert!(handle.shared.writer.borrow().is_none());
+    }
+
+    #[test]
+    fn a_missing_post_frame_lane_never_falls_back_to_build_time_dispatch() {
+        let (_harness, handle) = mounted_handle();
+        handle.shared.post_frame.borrow_mut().take();
+        let calls = Rc::new(Cell::new(0));
+        let recorded = Rc::clone(&calls);
+        handle
+            .show_snack_bar(snack_bar("no lane"))
+            .on_closed(move |_cx, _reason| recorded.set(recorded.get() + 1));
+        handle.shared.entry_controller.set_value(0.0);
+        handle.reconcile_after_tick_driven_settle();
+        assert_eq!(calls.get(), 0);
+        assert!(
+            handle.shared.queue.borrow().is_empty(),
+            "queue still advances"
+        );
+    }
+
+    #[test]
+    fn disposal_releases_queued_callback_captures() {
+        let (mut harness, handle) = mounted_handle();
+        let retained = Rc::new(());
+        let weak = Rc::downgrade(&retained);
+        handle
+            .show_snack_bar(snack_bar("queued"))
+            .on_closed(move |_cx, _reason| drop(retained));
+
+        harness.swap_root(flui_sdk::widgets::SizedBox::shrink());
+        assert!(weak.upgrade().is_none());
+        assert!(handle.shared.queue.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_panicking_completion_does_not_lock_future_queue_operations() {
+        fn panic_completion(_cx: &mut EventCx<'_>, _reason: SnackBarClosedReason) {
+            panic!("completion panic");
+        }
+        let (_harness, handle) = mounted_handle();
+        handle
+            .show_snack_bar(snack_bar("panic"))
+            .on_closed(panic_completion);
+        let completed = Rc::new(Cell::new(false));
+        let recorded = Rc::clone(&completed);
+        handle
+            .show_snack_bar(snack_bar("next"))
+            .on_closed(move |_cx, _reason| recorded.set(true));
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handle.remove_current_snack_bar();
+        }));
+        assert!(panic.is_err(), "the caller still observes its panic");
+        handle.remove_current_snack_bar();
+        assert!(completed.get(), "the next removal can enter the drain");
+        assert!(handle.shared.queue.borrow().is_empty());
+    }
+
     #[test]
     fn show_snack_bar_on_an_empty_queue_starts_entering() {
         let handle = ScaffoldMessengerHandle::new();
@@ -970,17 +1102,17 @@ mod tests {
 
     #[test]
     fn fifo_drain_shows_each_entry_once_in_order() {
-        let handle = ScaffoldMessengerHandle::new();
+        let (_harness, handle) = mounted_handle();
         let order = Rc::new(RefCell::new(Vec::new()));
 
         let order_a = Rc::clone(&order);
         handle
             .show_snack_bar(snack_bar("a"))
-            .on_closed(move |reason| order_a.borrow_mut().push(("a", reason)));
+            .on_closed(move |_cx, reason| order_a.borrow_mut().push(("a", reason)));
         let order_b = Rc::clone(&order);
         handle
             .show_snack_bar(snack_bar("b"))
-            .on_closed(move |reason| order_b.borrow_mut().push(("b", reason)));
+            .on_closed(move |_cx, reason| order_b.borrow_mut().push(("b", reason)));
 
         // "a" entering.
         assert_eq!(
@@ -1061,12 +1193,12 @@ mod tests {
     /// still-provisional record instead of letting remove overwrite it).
     #[test]
     fn hide_then_remove_mid_reverse_reports_remove() {
-        let handle = ScaffoldMessengerHandle::new();
+        let (_harness, handle) = mounted_handle();
         let reason = Rc::new(RefCell::new(None));
         let reason_for_cb = Rc::clone(&reason);
         handle
             .show_snack_bar(snack_bar("a"))
-            .on_closed(move |r| *reason_for_cb.borrow_mut() = Some(r));
+            .on_closed(move |_cx, r| *reason_for_cb.borrow_mut() = Some(r));
 
         handle.shared.entry_controller.set_value(1.0); // fully shown
         handle.shared.reconcile(ReconcileOrigin::Direct);
@@ -1109,17 +1241,17 @@ mod tests {
     /// for the direct (non-reentrant) red-check on that branch.
     #[test]
     fn remove_twice_rapidly_drains_both_entries() {
-        let handle = ScaffoldMessengerHandle::new();
+        let (_harness, handle) = mounted_handle();
         let closed = Rc::new(RefCell::new(0));
 
         let closed_a = Rc::clone(&closed);
         handle
             .show_snack_bar(snack_bar("a"))
-            .on_closed(move |_| *closed_a.borrow_mut() += 1);
+            .on_closed(move |_cx, _reason| *closed_a.borrow_mut() += 1);
         let closed_b = Rc::clone(&closed);
         handle
             .show_snack_bar(snack_bar("b"))
-            .on_closed(move |_| *closed_b.borrow_mut() += 1);
+            .on_closed(move |_cx, _reason| *closed_b.borrow_mut() += 1);
 
         handle.remove_current_snack_bar();
         handle.remove_current_snack_bar();
@@ -1202,14 +1334,14 @@ mod tests {
     /// of `Forward`.
     #[test]
     fn remove_current_reentrantly_from_on_closed_still_drains_the_queue() {
-        let handle = ScaffoldMessengerHandle::new();
+        let (_harness, handle) = mounted_handle();
         let order = Rc::new(RefCell::new(Vec::new()));
 
         let order_a = Rc::clone(&order);
         let handle_for_reentrant_call = handle.clone();
         handle
             .show_snack_bar(snack_bar("a"))
-            .on_closed(move |reason| {
+            .on_closed(move |_cx, reason| {
                 order_a.borrow_mut().push(("a", reason));
                 // Reentrant: fires while `entry_controller` is still
                 // `Dismissed` from THIS SAME `set_value` call, before the
@@ -1219,7 +1351,7 @@ mod tests {
         let order_b = Rc::clone(&order);
         handle
             .show_snack_bar(snack_bar("b"))
-            .on_closed(move |reason| order_b.borrow_mut().push(("b", reason)));
+            .on_closed(move |_cx, reason| order_b.borrow_mut().push(("b", reason)));
 
         handle.shared.entry_controller.set_value(1.0); // settle "a"'s entrance
         handle.shared.reconcile(ReconcileOrigin::Direct);
@@ -1261,18 +1393,18 @@ mod tests {
 
     #[test]
     fn clear_snack_bars_drops_queued_entries_silently_and_hides_the_current_one() {
-        let handle = ScaffoldMessengerHandle::new();
+        let (_harness, handle) = mounted_handle();
         let current_closed = Rc::new(RefCell::new(None));
         let queued_closed = Rc::new(RefCell::new(false));
 
         let current_closed_for_cb = Rc::clone(&current_closed);
         handle
             .show_snack_bar(snack_bar("current"))
-            .on_closed(move |reason| *current_closed_for_cb.borrow_mut() = Some(reason));
+            .on_closed(move |_cx, reason| *current_closed_for_cb.borrow_mut() = Some(reason));
         let queued_closed_for_cb = Rc::clone(&queued_closed);
         handle
             .show_snack_bar(snack_bar("queued"))
-            .on_closed(move |_| *queued_closed_for_cb.borrow_mut() = true);
+            .on_closed(move |_cx, _reason| *queued_closed_for_cb.borrow_mut() = true);
 
         handle.shared.entry_controller.set_value(1.0); // "current" fully shown
         handle.shared.reconcile(ReconcileOrigin::Direct);
@@ -1322,12 +1454,12 @@ mod tests {
     /// not `Timeout`.
     #[test]
     fn reason_is_recorded_once_under_racing_timeout_and_hide() {
-        let handle = ScaffoldMessengerHandle::new();
+        let (_harness, handle) = mounted_handle();
         let reason = Rc::new(RefCell::new(None));
         let reason_for_cb = Rc::clone(&reason);
         handle
             .show_snack_bar(snack_bar("a"))
-            .on_closed(move |r| *reason_for_cb.borrow_mut() = Some(r));
+            .on_closed(move |_cx, r| *reason_for_cb.borrow_mut() = Some(r));
 
         handle.shared.entry_controller.set_value(1.0); // fully shown, display timer starts
         handle.shared.reconcile(ReconcileOrigin::Direct);

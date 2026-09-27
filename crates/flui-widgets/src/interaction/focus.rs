@@ -384,9 +384,10 @@ impl Focus {
     /// dispatch's `&mut EventCx<'_>`, so it writes a signal directly
     /// (ADR-0086): `.on_focus_change(move |cx, focused| has_focus.set(cx, focused))`.
     ///
-    /// An `autofocus` request lands inside `init_state`, which runs while the
-    /// parent builds, so a write from the edge that request causes is refused
-    /// by the guard and reported.
+    /// Framework autofocus and reconfiguration run in lifecycle hooks outside
+    /// the signal build guard, so their focus edges can write too. An application
+    /// that explicitly requests focus inside its own `build` still has its
+    /// resulting signal writes refused by the guard.
     #[must_use]
     pub fn on_focus_change<F, R>(mut self, handler: F) -> Self
     where

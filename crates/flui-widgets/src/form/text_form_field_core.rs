@@ -125,7 +125,7 @@ impl TextFormFieldInput {
     /// The input's `on_changed`: a user edit is the field's `did_change`.
     pub fn on_changed(&self) -> impl Fn(&mut EventCx<'_>, &str) + 'static {
         let field = self.field.clone();
-        move |cx: &mut EventCx<'_>, text: &str| field.did_change(cx, text.to_owned()).report()
+        callback_ref(move |cx, text: &str| field.did_change(cx, text.to_owned()).report())
     }
 }
 

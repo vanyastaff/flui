@@ -1141,7 +1141,7 @@ fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
         let outcomes = Arc::clone(&outcomes_for_scope);
         let scope = PopScope::new(SizedBox::new(10.0, 10.0))
             .can_pop(!blocking_for_page.load(Ordering::SeqCst))
-            .on_pop_invoked(move |did_pop| outcomes.lock().push(did_pop));
+            .on_pop_invoked(move |_cx, did_pop| outcomes.lock().push(did_pop));
         scope.into_view().boxed()
     }));
     harness.tick();
@@ -1169,6 +1169,48 @@ fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
         [false, true],
         "the scope heard the successful pop"
     );
+}
+
+#[test]
+fn pop_scope_callback_writes_through_its_presentations_context() {
+    use flui_widgets::PopScope;
+    use std::cell::RefCell;
+
+    type Observation = Rc<RefCell<Option<(Signal<Vec<bool>>, flui_view::Reactive)>>>;
+    #[derive(Clone, StatefulView)]
+    struct PopProbe(Observation);
+    #[derive(Default)]
+    struct PopProbeState(Signal<Vec<bool>>);
+    impl StatefulView for PopProbe {
+        type State = PopProbeState;
+        fn create_state(&self) -> Self::State {
+            PopProbeState::default()
+        }
+    }
+    impl ViewState<PopProbe> for PopProbeState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            self.0 = ctx.signal(Vec::new());
+        }
+        fn build(&self, view: &PopProbe, ctx: &dyn BuildContext) -> impl IntoView {
+            *view.0.borrow_mut() = Some((self.0, ctx.reactive()));
+            let signal = self.0;
+            PopScope::new(SizedBox::square(10.0))
+                .can_pop(false)
+                .on_pop_invoked(move |cx, did_pop| signal.update(cx, |events| events.push(did_pop)))
+        }
+    }
+    let observation = Rc::new(RefCell::new(None));
+    let captured = observation.clone();
+    let (handle, mut harness) = navigator_with(&Built::default());
+    let _guarded = handle.push(PageRoute::<()>::new(move |_, _, _| {
+        PopProbe(captured.clone()).boxed()
+    }));
+    harness.tick();
+    assert!(handle.maybe_pop());
+    assert!(handle.pop());
+    let observed = observation.borrow();
+    let (signal, graph) = observed.as_ref().expect("mounted pop probe");
+    assert_eq!(signal.peek(graph, Clone::clone), Ok(vec![false, true]));
 }
 
 /// A disposed `PopScope` deregisters (`unregisterPopEntry`, `routes.dart:2126`):
@@ -1245,7 +1287,7 @@ fn pop_scope_callbacks_may_call_back_into_the_navigator() {
             let navigator = handle_for_scope.clone();
             PopScope::new(SizedBox::new(10.0, 10.0))
                 .can_pop(false)
-                .on_pop_invoked(move |_did_pop| {
+                .on_pop_invoked(move |_cx, _did_pop| {
                     // The re-entrant read that used to deadlock.
                     observed.lock().push(navigator.can_pop());
                 })
@@ -2090,7 +2132,7 @@ fn a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it
             let navigator = handle_for_scope.clone();
             let b = built_for_scope.clone();
             PopScope::new(SizedBox::new(10.0, 10.0))
-                .on_pop_invoked(move |did_pop| {
+                .on_pop_invoked(move |_cx, did_pop| {
                     // The re-entrant NAVIGATION, not just a read.
                     let pushed = navigator.push(page(&b, "/from-callback"));
                     log.lock().push(format!(

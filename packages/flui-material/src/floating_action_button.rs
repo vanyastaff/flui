@@ -82,7 +82,6 @@
 //!   constructor-level `Color?` fields; this V1 always resolves the M3
 //!   defaults.
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::foundation::{Listenable, ListenerId};
@@ -161,9 +160,8 @@ fn fab_shape() -> MaterialShape {
 /// use flui_material::FloatingActionButton;
 /// use flui_sdk::widgets::Text;
 ///
-/// let _fab = FloatingActionButton::new(Some(|| {}), Text::new("+"));
-/// let _disabled: flui_material::FloatingActionButton =
-///     FloatingActionButton::new(None::<fn()>, Text::new("+"));
+/// let _fab = FloatingActionButton::new(Text::new("+")).on_pressed(|_cx| {});
+/// let _disabled = FloatingActionButton::new(Text::new("+"));
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct FloatingActionButton {
@@ -173,16 +171,26 @@ pub struct FloatingActionButton {
 
 impl FloatingActionButton {
     /// A regular floating action button around `child` (typically an
-    /// [`Icon`](flui_sdk::widgets::Icon)). `on_pressed` being `None` disables the
+    /// [`Icon`](flui_sdk::widgets::Icon)). Without [`Self::on_pressed`] the
     /// button — Flutter parity: "If the `onPressed` callback is null, then
     /// the button will be disabled" (see the module docs' elevation-chain
     /// section for why that carries no visual indication here either).
     #[must_use]
-    pub fn new(on_pressed: Option<impl Fn() + 'static>, child: impl IntoView) -> Self {
+    pub fn new(child: impl IntoView) -> Self {
         Self {
-            on_pressed: on_pressed.map(|callback| Rc::new(callback) as PressCallback),
+            on_pressed: None,
             child: BoxedView(Box::new(child.into_view())),
         }
+    }
+
+    /// Enables the button and sets its event handler.
+    #[must_use]
+    pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_pressed = Some(crate::event_callback::press_callback(callback));
+        self
     }
 
     fn is_interactive(&self) -> bool {
@@ -370,7 +378,7 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
             .overlay_color(overlay_color)
             .states_controller(self.states.clone());
         if let Some(on_pressed) = view.on_pressed.clone() {
-            ink_well = ink_well.on_tap(move || on_pressed());
+            ink_well = ink_well.on_tap(move |cx| on_pressed(cx));
         }
 
         let constraints = BoxConstraints::tight(Size::new(px(FAB_SIZE), px(FAB_SIZE)));
@@ -395,14 +403,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_with_some_handler_is_interactive() {
-        let fab = FloatingActionButton::new(Some(|| {}), flui_sdk::widgets::SizedBox::shrink());
+    fn a_press_handler_enables_the_button() {
+        let fab =
+            FloatingActionButton::new(flui_sdk::widgets::SizedBox::shrink()).on_pressed(|_cx| {});
         assert!(fab.is_interactive());
     }
 
     #[test]
-    fn new_with_none_handler_is_not_interactive() {
-        let fab = FloatingActionButton::new(None::<fn()>, flui_sdk::widgets::SizedBox::shrink());
+    fn a_new_button_is_disabled() {
+        let fab = FloatingActionButton::new(flui_sdk::widgets::SizedBox::shrink());
         assert!(!fab.is_interactive());
     }
 
@@ -410,7 +419,7 @@ mod tests {
     fn debug_reports_whether_the_button_is_enabled_without_the_closure() {
         let debug = format!(
             "{:?}",
-            FloatingActionButton::new(Some(|| {}), flui_sdk::widgets::SizedBox::shrink())
+            FloatingActionButton::new(flui_sdk::widgets::SizedBox::shrink()).on_pressed(|_cx| {})
         );
         assert!(debug.contains("enabled: true"));
     }

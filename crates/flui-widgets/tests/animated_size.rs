@@ -20,7 +20,7 @@ use crate::common::{lay_out_animated, loose};
 use flui_animation::Vsync;
 use flui_types::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
-use flui_view::{IntoView, ViewState};
+use flui_view::{EventCx, IntoView, ViewState};
 use flui_widgets::{AnimatedSize, SizedBox, VsyncScope};
 use parking_lot::Mutex;
 
@@ -28,19 +28,21 @@ use parking_lot::Mutex;
 const FRAME: Duration = Duration::from_millis(20);
 const RUN: Duration = Duration::from_millis(100);
 
+type EndCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
+
 #[derive(Clone, StatefulView)]
 struct SizeProbe {
     vsync: Vsync,
     side: Arc<Mutex<f32>>,
     alignment: Arc<Mutex<Alignment>>,
-    on_end: Option<Rc<dyn Fn()>>,
+    on_end: Option<EndCallback>,
 }
 
 struct SizeProbeState {
     vsync: Vsync,
     side: Arc<Mutex<f32>>,
     alignment: Arc<Mutex<Alignment>>,
-    on_end: Option<Rc<dyn Fn()>>,
+    on_end: Option<EndCallback>,
 }
 
 impl StatefulView for SizeProbe {
@@ -64,7 +66,7 @@ impl ViewState<SizeProbe> for SizeProbeState {
             .alignment(alignment)
             .child(SizedBox::new(side, side));
         if let Some(on_end) = self.on_end.clone() {
-            animated = animated.on_end(move || on_end());
+            animated = animated.on_end(move |cx| on_end(cx));
         }
         VsyncScope::new(self.vsync.clone(), animated)
     }
@@ -226,7 +228,7 @@ fn animated_size_on_end_accepts_owner_local_rc_state() {
         vsync: vsync.clone(),
         side: Arc::clone(&side),
         alignment: Arc::new(Mutex::new(Alignment::CENTER)),
-        on_end: Some(Rc::new(move || {
+        on_end: Some(Rc::new(move |_cx| {
             calls_for_callback.set(calls_for_callback.get() + 1);
         })),
     };
@@ -246,4 +248,61 @@ fn animated_size_on_end_accepts_owner_local_rc_state() {
         1,
         "on_end fired from the owner plane and captured Rc<Cell<_>>"
     );
+}
+
+#[test]
+fn animated_size_completion_writes_a_signal_after_build() {
+    use flui_view::prelude::*;
+    use std::cell::RefCell;
+
+    type Observation = Rc<RefCell<Option<(Signal<u32>, flui_view::Reactive)>>>;
+    #[derive(Clone, StatefulView)]
+    struct CompletionProbe {
+        side: Arc<Mutex<f32>>,
+        observation: Observation,
+        vsync: Vsync,
+    }
+    #[derive(Default)]
+    struct CompletionState(Signal<u32>);
+    impl StatefulView for CompletionProbe {
+        type State = CompletionState;
+        fn create_state(&self) -> Self::State {
+            CompletionState::default()
+        }
+    }
+    impl ViewState<CompletionProbe> for CompletionState {
+        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+            self.0 = ctx.signal(0);
+        }
+        fn build(&self, view: &CompletionProbe, ctx: &dyn BuildContext) -> impl IntoView {
+            *view.observation.borrow_mut() = Some((self.0, ctx.reactive()));
+            let signal = self.0;
+            VsyncScope::new(
+                view.vsync.clone(),
+                AnimatedSize::new(RUN)
+                    .on_end(move |cx| signal.update(cx, |n| *n += 1))
+                    .child(SizedBox::square(*view.side.lock())),
+            )
+        }
+    }
+    let observation = Rc::new(RefCell::new(None));
+    let side = Arc::new(Mutex::new(20.0));
+    let vsync = Vsync::new();
+    let mut app = lay_out_animated(
+        CompletionProbe {
+            side: side.clone(),
+            observation: observation.clone(),
+            vsync: vsync.clone(),
+        },
+        loose(200.0),
+        vsync,
+    );
+    *side.lock() = 100.0;
+    app.pump();
+    for _ in 0..7 {
+        app.pump_for(FRAME);
+    }
+    let observed = observation.borrow();
+    let (signal, graph) = observed.as_ref().expect("mounted completion probe");
+    assert_eq!(signal.peek(graph, |value| *value), Ok(1));
 }

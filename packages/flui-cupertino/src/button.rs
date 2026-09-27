@@ -75,7 +75,7 @@ use crate::theme::CupertinoTheme;
 
 /// A user tap/long-press handler. `Rc`-based (owner-local, per ADR-0027) —
 /// matches `GestureDetector::on_tap`'s own callback shape.
-type ButtonCallback = Rc<dyn Fn()>;
+type ButtonCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
 
 /// `kFadeOutDuration` (`button.dart`, oracle tag `3.44.0`) — the press-in
 /// fade's duration.
@@ -303,8 +303,11 @@ impl CupertinoButton {
     /// Sets the tap handler. Presence of a tap or long-press handler is what
     /// makes this button [`Self::enabled`].
     #[must_use]
-    pub fn on_pressed(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_pressed = Some(Rc::new(callback));
+    pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_pressed = Some(Rc::new(move |cx| callback(cx).report()));
         self
     }
 
@@ -313,8 +316,11 @@ impl CupertinoButton {
     /// animation tied to it (matching the oracle: `LongPressGestureRecognizer`
     /// is a wholly separate recognizer from the tap-driven fade).
     #[must_use]
-    pub fn on_long_press(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_long_press = Some(Rc::new(callback));
+    pub fn on_long_press<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_long_press = Some(Rc::new(move |cx| callback(cx).report()));
         self
     }
 
@@ -623,18 +629,18 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                 let controller = self.controller.clone();
                 let rebuild = self.rebuild.clone();
                 let pressed_opacity = view.pressed_opacity;
-                gesture_detector = gesture_detector.on_tap(move |_cx| {
+                gesture_detector = gesture_detector.on_tap(move |cx| {
                     if let Some(controller) = &controller
                         && let Some(future) =
                             start_press_fade(controller, pressed_opacity, rebuild.as_ref())
                     {
                         chain_release_fade(controller, future);
                     }
-                    on_pressed();
+                    on_pressed(cx);
                 });
             }
             if let Some(on_long_press) = view.on_long_press.clone() {
-                gesture_detector = gesture_detector.on_long_press(move |_cx| on_long_press());
+                gesture_detector = gesture_detector.on_long_press(move |cx| on_long_press(cx));
             }
         }
 
@@ -740,7 +746,7 @@ mod tests {
     fn on_pressed_makes_the_button_enabled() {
         assert!(
             CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink())
-                .on_pressed(|| {})
+                .on_pressed(|_cx| {})
                 .enabled()
         );
     }
@@ -749,7 +755,7 @@ mod tests {
     fn on_long_press_alone_also_makes_the_button_enabled() {
         assert!(
             CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink())
-                .on_long_press(|| {})
+                .on_long_press(|_cx| {})
                 .enabled()
         );
     }
@@ -764,7 +770,7 @@ mod tests {
     fn debug_reports_style_size_and_enabled_without_the_closures() {
         let debug = format!(
             "{:?}",
-            CupertinoButton::filled(flui_sdk::widgets::SizedBox::shrink()).on_pressed(|| {})
+            CupertinoButton::filled(flui_sdk::widgets::SizedBox::shrink()).on_pressed(|_cx| {})
         );
         assert!(debug.contains("Filled"));
         assert!(debug.contains("enabled: true"));

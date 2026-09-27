@@ -12,11 +12,26 @@ use common::{lay_out, lay_out_animated, loose, tight};
 use flui_cupertino::{CupertinoButton, CupertinoButtonSize, CupertinoColors};
 use flui_sdk::animation::Vsync;
 use flui_sdk::types::platform::Brightness;
+use flui_sdk::view::SignalWriteExt;
 use flui_sdk::widgets::SizedBox;
 use flui_sdk::widgets::Text;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{MediaQuery, MediaQueryData};
 use flui_testing::a11y::Role;
+
+#[test]
+fn tap_callback_writes_a_signal_and_rebuilds_its_reader() {
+    let probe = common::SignalProbe::new(|signals| {
+        CupertinoButton::new(SizedBox::shrink())
+            .on_pressed(move |cx| signals.count.update(cx, |count| *count += 1))
+    });
+    let mut laid = lay_out(probe.view(), tight(100.0, 44.0));
+    laid.dispatch_pointer_down(50.0, 22.0);
+    laid.dispatch_pointer_up(50.0, 22.0);
+    assert_eq!(probe.value(), Ok(1));
+    laid.pump();
+    assert_eq!(probe.reads(), [0, 1]);
+}
 
 /// A tap on an enabled button reaches `on_pressed` — proving `GestureDetector`
 /// is actually wired, not merely constructed.
@@ -26,7 +41,8 @@ fn tap_fires_on_pressed() {
     let tapped_for_closure = Rc::clone(&tapped);
 
     let laid = lay_out(
-        CupertinoButton::new(SizedBox::shrink()).on_pressed(move || tapped_for_closure.set(true)),
+        CupertinoButton::new(SizedBox::shrink())
+            .on_pressed(move |_cx| tapped_for_closure.set(true)),
         tight(100.0, 44.0),
     );
 
@@ -65,7 +81,7 @@ fn per_size_minimum_geometry_reaches_the_mounted_render_tree() {
     let small = lay_out(
         CupertinoButton::new(SizedBox::shrink())
             .size_style(CupertinoButtonSize::Small)
-            .on_pressed(|| {}),
+            .on_pressed(|_cx| {}),
         loose(200.0),
     );
     assert_eq!(small.size(small.root()), common::size(28.0, 28.0));
@@ -73,13 +89,13 @@ fn per_size_minimum_geometry_reaches_the_mounted_render_tree() {
     let medium = lay_out(
         CupertinoButton::new(SizedBox::shrink())
             .size_style(CupertinoButtonSize::Medium)
-            .on_pressed(|| {}),
+            .on_pressed(|_cx| {}),
         loose(200.0),
     );
     assert_eq!(medium.size(medium.root()), common::size(32.0, 32.0));
 
     let large = lay_out(
-        CupertinoButton::new(SizedBox::shrink()).on_pressed(|| {}),
+        CupertinoButton::new(SizedBox::shrink()).on_pressed(|_cx| {}),
         loose(200.0),
     );
     assert_eq!(large.size(large.root()), common::size(44.0, 44.0));
@@ -97,7 +113,7 @@ fn explicit_minimum_size_zero_removes_the_floor() {
     let laid = lay_out(
         CupertinoButton::new(SizedBox::shrink())
             .minimum_size(0.0, 0.0)
-            .on_pressed(|| {}),
+            .on_pressed(|_cx| {}),
         loose(200.0),
     );
     assert_eq!(laid.size(laid.root()), common::size(40.0, 32.0));
@@ -124,7 +140,7 @@ fn press_opacity_fades_out_then_back_in_over_the_oracle_durations() {
     let mut laid = lay_out_animated(
         VsyncScope::new(
             vsync.clone(),
-            CupertinoButton::new(SizedBox::new(60.0, 40.0)).on_pressed(|| {}),
+            CupertinoButton::new(SizedBox::new(60.0, 40.0)).on_pressed(|_cx| {}),
         ),
         tight(60.0, 40.0),
         vsync,
@@ -214,7 +230,7 @@ fn background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme() 
             dark,
             CupertinoButton::new(SizedBox::shrink())
                 .color(CupertinoColors::SEPARATOR)
-                .on_pressed(|| {}),
+                .on_pressed(|_cx| {}),
         ),
         tight(100.0, 44.0),
     );
@@ -247,7 +263,7 @@ fn background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme() 
 #[test]
 fn cupertino_button_with_text_child_announces_one_labelled_button_node() {
     let mut laid = lay_out(
-        CupertinoButton::new(Text::new("Tap")).on_pressed(|| {}),
+        CupertinoButton::new(Text::new("Tap")).on_pressed(|_cx| {}),
         loose(200.0),
     );
     laid.enable_semantics();

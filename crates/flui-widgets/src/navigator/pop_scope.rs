@@ -38,7 +38,9 @@ use parking_lot::Mutex;
 
 /// Reports a pop attempt's outcome: `true` — the route is leaving; `false` —
 /// the pop was refused (a veto, this scope's or a sibling's).
-pub type PopInvokedCallback = Rc<dyn Fn(bool)>;
+pub type PopInvokedCallback = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
+
+type BoundPopCallback = Rc<dyn Fn(bool)>;
 
 // ============================================================================
 // The registry (route side)
@@ -47,7 +49,7 @@ pub type PopInvokedCallback = Rc<dyn Fn(bool)>;
 /// One mounted [`PopScope`]'s live state — Flutter's `PopEntry` (`routes.dart:2137`).
 struct PopEntry {
     can_pop: AtomicBool,
-    on_pop_invoked: Mutex<Option<PopInvokedCallback>>,
+    on_pop_invoked: Mutex<Option<BoundPopCallback>>,
 }
 
 /// Every [`PopScope`] mounted inside one route. The route's `ModalInner` owns
@@ -167,7 +169,7 @@ impl_inherited_view!(PopEntryScope);
 /// # use flui_widgets::prelude::*;
 /// let _ = PopScope::new(Text::new("unsaved changes"))
 ///     .can_pop(false)
-///     .on_pop_invoked(|did_pop| {
+///     .on_pop_invoked(|_cx, did_pop| {
 ///         if !did_pop {
 ///             // show the "discard changes?" dialog
 ///         }
@@ -202,8 +204,11 @@ impl PopScope {
     /// actually popped, `false` when a veto refused it — Flutter's
     /// `onPopInvokedWithResult` minus the result (`pop_scope.dart:106`).
     #[must_use]
-    pub fn on_pop_invoked(mut self, callback: impl Fn(bool) + 'static) -> Self {
-        self.on_pop_invoked = Some(Rc::new(callback));
+    pub fn on_pop_invoked<R: EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut EventCx<'_>, bool) -> R + 'static,
+    ) -> Self {
+        self.on_pop_invoked = Some(Rc::new(move |cx, did_pop| callback(cx, did_pop).report()));
         self
     }
 }
@@ -229,9 +234,11 @@ impl StatefulView for PopScope {
         PopScopeState {
             entry: Arc::new(PopEntry {
                 can_pop: AtomicBool::new(self.can_pop),
-                on_pop_invoked: Mutex::new(self.on_pop_invoked.clone()),
+                on_pop_invoked: Mutex::new(None),
             }),
             registry: None,
+            callback: self.on_pop_invoked.clone(),
+            writer: None,
         }
     }
 }
@@ -239,6 +246,8 @@ impl StatefulView for PopScope {
 /// The state behind [`PopScope`]. `pub` only because `StatefulView::State`
 /// requires it; not re-exported.
 pub struct PopScopeState {
+    callback: Option<PopInvokedCallback>,
+    writer: Option<WriterSource>,
     entry: Arc<PopEntry>,
     registry: Option<PopEntryRegistry>,
 }
@@ -256,6 +265,8 @@ impl ViewState<PopScope> for PopScopeState {
     /// ambient registry. A `PopScope` outside any route finds none and stays
     /// inert.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.writer = Some(ctx.writer_source());
+        self.install_callback();
         if let Some(registry) = ctx.get::<PopEntryScope, _>(|scope| scope.registry.clone()) {
             registry.register(Arc::clone(&self.entry));
             self.registry = Some(registry);
@@ -268,10 +279,8 @@ impl ViewState<PopScope> for PopScopeState {
         self.entry
             .can_pop
             .store(new_view.can_pop, Ordering::Relaxed);
-        self.entry
-            .on_pop_invoked
-            .lock()
-            .clone_from(&new_view.on_pop_invoked);
+        self.callback.clone_from(&new_view.on_pop_invoked);
+        self.install_callback();
     }
 
     /// `unregisterPopEntry` (`routes.dart:2126`).
@@ -283,5 +292,19 @@ impl ViewState<PopScope> for PopScopeState {
 
     fn build(&self, view: &PopScope, _ctx: &dyn BuildContext) -> impl IntoView {
         view.child.clone()
+    }
+}
+
+impl PopScopeState {
+    fn install_callback(&self) {
+        let writer = self
+            .writer
+            .clone()
+            .expect("BUG: PopScope initialized before callback installation");
+        let callback = self.callback.clone().map(|callback| {
+            Rc::new(move |did_pop| writer.write(|cx| callback(cx, did_pop))) as Rc<dyn Fn(bool)>
+        });
+        let previous = std::mem::replace(&mut *self.entry.on_pop_invoked.lock(), callback);
+        drop(previous);
     }
 }

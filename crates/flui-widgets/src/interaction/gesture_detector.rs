@@ -2,7 +2,7 @@
 //! double-tap, and pan/drag) from the raw pointer stream a [`Listener`] delivers.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
     sync::{
         Arc,
@@ -139,8 +139,8 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// [`WriterSource`] in `init_state` and opens one write per dispatch around
 /// the callback, so the gesture recognizers themselves do not change
 /// (ADR-0086 §4). A closure bound with `let` before it is passed needs
-/// [`callback`](flui_view::callback) or
-/// [`callback_with`](flui_view::callback_with) to fix its signature.
+/// [`callback`] or
+/// [`callback_with`] to fix its signature.
 ///
 /// # Arena acquisition
 ///
@@ -524,6 +524,8 @@ pub struct GestureDetectorState {
     /// Acquired first in `init_state`; every callback runs inside a write it
     /// opens (ADR-0086 §4). `None` only before `init_state` runs.
     writer: Option<WriterSource>,
+    /// Scheduled semantics delivery must not outlive this mounted detector.
+    mounted: Rc<Cell<bool>>,
 }
 
 /// The assistive-technology activations a detector has been asked for and
@@ -572,6 +574,7 @@ impl StatefulView for GestureDetector {
             rebuild: None,
             local_post_frame: None,
             writer: None,
+            mounted: Rc::new(Cell::new(false)),
         }
     }
 }
@@ -603,9 +606,9 @@ impl GestureDetectorState {
             if !requested {
                 continue;
             }
-            let Some(callback) = slot.borrow().clone() else {
+            if slot.borrow().is_none() {
                 continue;
-            };
+            }
             let Some(handle) = self.local_post_frame.as_ref() else {
                 tracing::warn!(
                     "GestureDetector: dropping an assistive-technology activation — \
@@ -618,9 +621,17 @@ impl GestureDetectorState {
                 .writer
                 .clone()
                 .expect("BUG: init_state acquires the writer source before the first build");
-            if let Err(error) =
-                handle.schedule_local(move |_timing| writer.write(|cx| callback(cx)))
-            {
+            let slot = Rc::clone(slot);
+            let mounted = Rc::clone(&self.mounted);
+            if let Err(error) = handle.schedule_local(move |_timing| {
+                if !mounted.get() {
+                    return;
+                }
+                let callback = slot.borrow().clone();
+                if let Some(callback) = callback {
+                    writer.write(|cx| callback(cx));
+                }
+            }) {
                 tracing::warn!(
                     ?error,
                     "GestureDetector: dropping an assistive-technology activation — \
@@ -659,6 +670,7 @@ impl GestureDetectorState {
 
 impl ViewState<GestureDetector> for GestureDetectorState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.mounted.set(true);
         let writer = ctx.writer_source();
         self.writer = Some(writer.clone());
         let arena = GestureArenaScope::of(ctx);
@@ -803,7 +815,6 @@ impl ViewState<GestureDetector> for GestureDetectorState {
 
     fn build(&self, view: &GestureDetector, _ctx: &dyn BuildContext) -> impl IntoView {
         assert_no_pan_horizontal_drag_conflict(view);
-        self.drain_semantics_requests();
 
         // Refresh the live callbacks the recognizers read, so a rebuild with new
         // closures is honored (the recognizers themselves persist).
@@ -835,6 +846,8 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             slot.cancel.clone_from(&view.on_horizontal_drag_cancel);
         }
 
+        self.drain_semantics_requests();
+
         // `init_state` runs exactly once before the first `build`, so the
         // recognizers are always present here.
         let recognizers = self
@@ -855,6 +868,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
     }
 
     fn dispose(&mut self) {
+        self.mounted.set(false);
         if let Some(recognizers) = self.recognizers.as_ref() {
             recognizers.tap.dispose();
             recognizers.long_press.dispose();
@@ -1101,6 +1115,56 @@ fn slot_is_some<T>(slot: &Rc<RefCell<Option<T>>>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[expect(
+        clippy::arc_with_non_send_sync,
+        reason = "ElementBuildContext's test seam accepts Arc over owner-local state"
+    )]
+    fn queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime() {
+        let tree = Arc::new(parking_lot::RwLock::new(flui_view::ElementTree::new()));
+        let owner = Arc::new(parking_lot::RwLock::new(flui_view::BuildOwner::new()));
+        let writer = flui_view::ElementBuildContext::new(
+            flui_foundation::ElementId::new(1),
+            0,
+            false,
+            tree,
+            owner,
+        )
+        .writer_source();
+        for change in ["replace", "remove", "dispose"] {
+            let scheduler = flui_scheduler::UpdateScheduler::new();
+            let lane = scheduler.new_local_post_frame_lane();
+            let calls = Rc::new(Cell::new(0));
+            let old_calls = Rc::clone(&calls);
+            let mut state = GestureDetector::new()
+                .on_tap(move |_cx| old_calls.set(1))
+                .create_state();
+            state.writer = Some(writer.clone());
+            state.local_post_frame = Some(lane.local_handle());
+            state.mounted.set(true);
+            state.semantics_requests.tap.store(true, Ordering::Release);
+            // Queue through the production semantics-to-post-frame bridge,
+            // then alter its target before the real scheduler delivers it.
+            state.drain_semantics_requests();
+            match change {
+                "replace" => {
+                    let new_calls = Rc::clone(&calls);
+                    *state.tap_slot.borrow_mut() =
+                        Some(event_callback(move |_cx| new_calls.set(2)));
+                }
+                "remove" => *state.tap_slot.borrow_mut() = None,
+                "dispose" => state.dispose(),
+                _ => unreachable!(),
+            }
+            scheduler.execute_frame_with_lane(&lane);
+            assert_eq!(
+                calls.get(),
+                if change == "replace" { 2 } else { 0 },
+                "{change}"
+            );
+        }
+    }
 
     #[test]
     fn on_horizontal_drag_builders_store_the_callback() {

@@ -170,7 +170,7 @@ fn a_themed_subtree_carries_both_the_elevated_button_and_app_bar_theme_simultane
                 Column::new(vec![
                     AppBar::new().title(Text::new("Title")).boxed(),
                     ElevatedButton::new(Text::new("Save"))
-                        .on_pressed(|| {})
+                        .on_pressed(|_cx| {})
                         .boxed(),
                 ]),
             ),

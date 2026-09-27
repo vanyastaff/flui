@@ -153,7 +153,7 @@ impl std::fmt::Debug for CupertinoTabBarItem {
 
 /// A user tap handler over a tab's index. `Rc`-based (owner-local, per
 /// ADR-0027) — matches `GestureDetector::on_tap`'s own callback shape.
-type TabTapCallback = Rc<dyn Fn(usize)>;
+type TabTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, usize)>;
 
 /// An iOS-style bottom tab bar. Flutter parity: `CupertinoTabBar`
 /// (`bottom_tab_bar.dart`, oracle tag `3.44.0`) — see the module docs for
@@ -224,8 +224,11 @@ impl CupertinoTabBar {
     /// Sets the tap handler, called with the tapped item's index. Flutter
     /// parity: `CupertinoTabBar.onTap`.
     #[must_use]
-    pub fn on_tap(mut self, on_tap: impl Fn(usize) + 'static) -> Self {
-        self.on_tap = Some(Rc::new(on_tap));
+    pub fn on_tap<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        on_tap: impl Fn(&mut flui_sdk::view::EventCx<'_>, usize) -> R + 'static,
+    ) -> Self {
+        self.on_tap = Some(Rc::new(move |cx, index| on_tap(cx, index).report()));
         self
     }
 
@@ -382,7 +385,7 @@ impl StatelessView for CupertinoTabBar {
 
                 let mut detector = GestureDetector::new().behavior(HitTestBehavior::Opaque);
                 if let Some(on_tap) = self.on_tap.clone() {
-                    detector = detector.on_tap(move |_cx| on_tap(index));
+                    detector = detector.on_tap(move |cx| on_tap(cx, index));
                 }
 
                 // `Semantics(selected: active, hint: localizations.tabSemanticsLabel(...), …)`

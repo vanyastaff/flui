@@ -8,7 +8,7 @@
 //!
 //! # Completion model
 //!
-//! `on_refresh` is a synchronous `Fn()`. The widget transitions to the
+//! `on_refresh` is a synchronous callback receiving `EventCx`. The widget transitions to the
 //! *refreshing* state on the same call stack as the pan-end event; the caller
 //! signals completion by calling [`RefreshController::finish`] on the
 //! [`RefreshController`] it provided.
@@ -46,7 +46,8 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_types::Color;
 use flui_view::prelude::StatefulView;
 use flui_view::{
-    BuildContext, BuildContextExt, Child, IntoView, LifecycleContext, ViewExt, ViewState,
+    BuildContext, BuildContextExt, Child, EventCx, EventOutcome, IntoView, LifecycleContext,
+    ViewExt, ViewState,
 };
 
 use crate::animated::VsyncScope;
@@ -250,7 +251,7 @@ impl RefreshController {
 /// RefreshIndicator::new()
 ///     .controller(refresh_ctrl.clone())
 ///     .scroll_controller(scroll_ctrl)
-///     .on_refresh(|| { /* start background work */ })
+///     .on_refresh(|_cx| { /* start background work */ })
 ///     .child(MyContent::new())
 /// // later, after the work is done: refresh_ctrl.finish()
 /// ```
@@ -261,7 +262,7 @@ pub struct RefreshIndicator {
     /// Caller handle for querying state and calling `finish()`.
     controller: RefreshController,
     /// Fired when the user releases after an over-threshold pull.
-    on_refresh: Rc<dyn Fn()>,
+    on_refresh: Rc<dyn Fn(&mut EventCx<'_>)>,
     /// Minimum overscroll distance (logical pixels) to trigger refresh.
     threshold_px: f32,
     /// Scroll boundary / fling behaviour.
@@ -286,7 +287,7 @@ impl Default for RefreshIndicator {
         Self {
             child: Child::empty(),
             controller: RefreshController::new(),
-            on_refresh: Rc::new(|| {}),
+            on_refresh: Rc::new(|_cx| {}),
             threshold_px: DEFAULT_THRESHOLD_PX,
             physics: Arc::new(ClampingScrollPhysics::default()),
             scroll_controller: ScrollController::new(),
@@ -334,8 +335,11 @@ impl RefreshIndicator {
     /// by calling [`RefreshController::finish`] on the controller provided to
     /// [`controller`](Self::controller).
     #[must_use]
-    pub fn on_refresh(mut self, f: impl Fn() + 'static) -> Self {
-        self.on_refresh = Rc::new(f);
+    pub fn on_refresh<R: EventOutcome>(
+        mut self,
+        f: impl Fn(&mut EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_refresh = Rc::new(move |cx| f(cx).report());
         self
     }
 
@@ -520,13 +524,13 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                             sc_update.set_pixels(clamped);
                         }
                     })
-                    .on_pan_end(move |_cx, details| {
+                    .on_pan_end(move |cx, details| {
                         let pull = rc_end.pull_distance_px();
                         if pull >= threshold_px {
                             // Sufficient overscroll: enter refreshing state and
                             // fire the caller's callback.
                             rc_end.begin_refresh();
-                            on_refresh_cb();
+                            on_refresh_cb(cx);
                         } else {
                             // Under-threshold pull: reset and start a normal fling.
                             rc_end.set_pull_distance_px(0.0);

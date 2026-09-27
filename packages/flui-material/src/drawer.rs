@@ -436,7 +436,8 @@ impl DrawerHandle {
 
 /// Signature for [`DrawerController::on_open_changed`] — Flutter's
 /// `DrawerCallback`.
-type DrawerCallback = Rc<dyn Fn(bool)>;
+type DrawerCallback = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
+type BoundDrawerCallback = Rc<dyn Fn(bool)>;
 
 /// Provides interactive behavior for [`Drawer`] content: open/close
 /// animation, edge-swipe-to-open, drag-to-close, and the scrim. Built by
@@ -503,8 +504,12 @@ impl DrawerController {
     /// Called whenever the drawer opens or closes — via drag, fling,
     /// `open()`/`close()`, or the scrim tap. Flutter parity: `drawerCallback`.
     #[must_use]
-    pub fn on_open_changed(mut self, callback: impl Fn(bool) + 'static) -> Self {
-        self.on_open_changed = Some(Rc::new(callback));
+    pub fn on_open_changed<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_open_changed = Some(crate::event_callback::value_callback(callback));
         self
     }
 
@@ -572,16 +577,22 @@ struct DrawerControllerCore {
     previously_opened: Cell<bool>,
     alignment: Cell<DrawerAlignment>,
     panel_width: Cell<f32>,
-    on_open_changed: RefCell<Option<DrawerCallback>>,
+    on_open_changed: RefCell<Option<BoundDrawerCallback>>,
 }
 
 impl DrawerControllerCore {
+    fn replace_callback(&self, callback: Option<BoundDrawerCallback>) {
+        let previous = self.on_open_changed.replace(callback);
+        drop(previous);
+    }
+
     fn is_dismissed(&self) -> bool {
         self.controller.status() == AnimationStatus::Dismissed
     }
 
     fn notify_open_changed(&self, opened: bool) {
-        if let Some(callback) = self.on_open_changed.borrow().clone() {
+        let callback = self.on_open_changed.borrow().clone();
+        if let Some(callback) = callback {
             callback(opened);
         }
     }
@@ -665,6 +676,7 @@ impl DrawerControllerCore {
 /// `crate::Scaffold` reaches this from outside the tree via [`GlobalKey`].
 pub struct DrawerControllerState {
     core: Rc<DrawerControllerCore>,
+    writer: Option<WriterSource>,
 }
 
 impl std::fmt::Debug for DrawerControllerState {
@@ -701,6 +713,7 @@ impl StatefulView for DrawerController {
             controller.set_value(1.0);
         }
         DrawerControllerState {
+            writer: None,
             core: Rc::new(DrawerControllerCore {
                 controller,
                 vsync: RefCell::new(None),
@@ -709,7 +722,7 @@ impl StatefulView for DrawerController {
                 previously_opened: Cell::new(false),
                 alignment: Cell::new(self.alignment),
                 panel_width: Cell::new(self.panel_width),
-                on_open_changed: RefCell::new(self.on_open_changed.clone()),
+                on_open_changed: RefCell::new(None),
             }),
         }
     }
@@ -717,6 +730,7 @@ impl StatefulView for DrawerController {
 
 impl ViewState<DrawerController> for DrawerControllerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.writer = Some(ctx.writer_source());
         let rebuild = ctx.rebuild_handle();
         let _prev = self.core.rebuild.borrow_mut().replace(rebuild.clone());
 
@@ -771,10 +785,14 @@ impl ViewState<DrawerController> for DrawerControllerState {
     fn build(&self, view: &DrawerController, ctx: &dyn BuildContext) -> impl IntoView {
         self.core.panel_width.set(view.panel_width);
         self.core.alignment.set(view.alignment);
-        self.core
-            .on_open_changed
-            .borrow_mut()
-            .clone_from(&view.on_open_changed);
+        let writer = self
+            .writer
+            .clone()
+            .expect("BUG: drawer lifecycle precedes build");
+        let callback = view.on_open_changed.clone().map(|callback| {
+            Rc::new(move |opened| writer.write(|cx| callback(cx, opened))) as Rc<dyn Fn(bool)>
+        });
+        self.core.replace_callback(callback);
 
         let media_query = MediaQuery::of(ctx);
         let side_inset = match view.alignment {
@@ -799,6 +817,8 @@ impl ViewState<DrawerController> for DrawerControllerState {
     }
 
     fn dispose(&mut self) {
+        self.core.replace_callback(None);
+        self.writer = None;
         if let (Some(vsync), Some(registration)) = (
             self.core.vsync.borrow_mut().take(),
             self.core.vsync_registration.borrow_mut().take(),
@@ -944,6 +964,31 @@ mod tests {
             panel_width: Cell::new(DEFAULT_DRAWER_WIDTH),
             on_open_changed: RefCell::new(None),
         })
+    }
+
+    #[test]
+    fn replacing_a_callback_drops_captures_without_holding_the_slot_borrow() {
+        struct Reenter(std::rc::Weak<DrawerControllerCore>);
+        impl Drop for Reenter {
+            fn drop(&mut self) {
+                self.0.upgrade().expect("core is retained").open();
+            }
+        }
+        let core = test_core();
+        let reenter = Reenter(Rc::downgrade(&core));
+        core.replace_callback(Some(Rc::new(move |_| {
+            let _keep_capture = &reenter;
+        })));
+        let calls = Rc::new(Cell::new(0));
+        let calls_in_callback = Rc::clone(&calls);
+        core.replace_callback(Some(Rc::new(move |_| {
+            calls_in_callback.set(calls_in_callback.get() + 1);
+        })));
+        assert_eq!(
+            calls.get(),
+            1,
+            "old capture can reach the installed callback"
+        );
     }
 
     // ------------------------------------------------------------------

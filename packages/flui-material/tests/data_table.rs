@@ -208,7 +208,7 @@ fn row_checkbox_tap_fires_on_select_changed_with_the_next_value() {
         vec![
             DataRow::new(vec![text_cell("Ada")])
                 .selected(false)
-                .on_select_changed(move |next| *recorder.borrow_mut() = Some(next)),
+                .on_select_changed(move |_cx, next| *recorder.borrow_mut() = Some(next)),
         ],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
@@ -240,7 +240,7 @@ fn row_tap_on_a_plain_data_cell_fires_on_select_changed_with_the_next_value() {
         vec![
             DataRow::new(vec![text_cell("Ada")])
                 .selected(false)
-                .on_select_changed(move |next| *recorder.borrow_mut() = Some(next)),
+                .on_select_changed(move |_cx, next| *recorder.borrow_mut() = Some(next)),
         ],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
@@ -275,11 +275,11 @@ fn data_cell_on_tap_fires_and_suppresses_the_row_selection_toggle() {
     let table = DataTable::new(
         vec![text_column("Name")],
         vec![
-            DataRow::new(vec![DataCell::new(Text::new("Ada")).on_tap(move || {
+            DataRow::new(vec![DataCell::new(Text::new("Ada")).on_tap(move |_cx| {
                 *cell_recorder.borrow_mut() += 1;
             })])
             .selected(false)
-            .on_select_changed(move |next| row_recorder.borrow_mut().push(next)),
+            .on_select_changed(move |_cx, next| row_recorder.borrow_mut().push(next)),
         ],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
@@ -310,7 +310,7 @@ fn heading_checkbox_selects_all_when_none_are_checked() {
     let make_row = |label: &str| {
         let recorder = Rc::clone(&log);
         let label = label.to_string();
-        DataRow::new(vec![text_cell(&label)]).on_select_changed(move |next| {
+        DataRow::new(vec![text_cell(&label)]).on_select_changed(move |_cx, next| {
             recorder.borrow_mut().push((label.clone(), next));
         })
     };
@@ -344,7 +344,7 @@ fn heading_checkbox_clears_all_when_every_row_is_checked() {
         let label = label.to_string();
         DataRow::new(vec![text_cell(&label)])
             .selected(true)
-            .on_select_changed(move |next| {
+            .on_select_changed(move |_cx, next| {
                 recorder.borrow_mut().push((label.clone(), next));
             })
     };
@@ -384,10 +384,12 @@ fn heading_checkbox_tap_selects_all_from_the_indeterminate_state() {
         vec![
             DataRow::new(vec![text_cell("Ada")])
                 .selected(true)
-                .on_select_changed(move |next| selected_recorder.borrow_mut().push(("Ada", next))),
+                .on_select_changed(move |_cx, next| {
+                    selected_recorder.borrow_mut().push(("Ada", next));
+                }),
             DataRow::new(vec![text_cell("Grace")])
                 .selected(false)
-                .on_select_changed(move |next| {
+                .on_select_changed(move |_cx, next| {
                     unselected_recorder.borrow_mut().push(("Grace", next));
                 }),
         ],
@@ -418,7 +420,7 @@ fn a_row_with_no_handler_swallows_a_checkbox_tap() {
         vec![text_column("Name")],
         vec![
             DataRow::new(vec![text_cell("Ada")])
-                .on_select_changed(move |next| recorder.borrow_mut().push(next)),
+                .on_select_changed(move |_cx, next| recorder.borrow_mut().push(next)),
             DataRow::new(vec![text_cell("Unselectable")]), // no on_select_changed
         ],
     );

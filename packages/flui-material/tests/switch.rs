@@ -48,7 +48,10 @@ fn themed(switch: Switch) -> Theme {
 
 #[test]
 fn mounting_a_switch_creates_a_semantics_annotated_tap_target() {
-    let laid = lay_out(themed(Switch::new(false).on_changed(|_| {})), constraints());
+    let laid = lay_out(
+        themed(Switch::new(false).on_changed(|_cx, _| {})),
+        constraints(),
+    );
 
     // The wrapper node is the Switch's own; its `GestureDetector` adds
     // a second, action-only annotation beneath it for assistive technology.
@@ -68,7 +71,7 @@ fn tap_fires_on_changed_with_the_flipped_value() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
-        themed(Switch::new(false).on_changed(move |next| {
+        themed(Switch::new(false).on_changed(move |_cx, next| {
             *recorder.borrow_mut() = Some(next);
         })),
         constraints(),
@@ -89,7 +92,7 @@ fn a_second_tap_after_rebuild_flips_back() {
     let observed: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
 
     let build = |value: bool, sink: Rc<RefCell<bool>>| {
-        themed(Switch::new(value).on_changed(move |next| {
+        themed(Switch::new(value).on_changed(move |_cx, next| {
             *sink.borrow_mut() = next;
         }))
     };
@@ -125,7 +128,7 @@ fn disabled_switch_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
 
     let mut laid_enabled = laid_disabled;
     let counter = Rc::clone(&taps);
-    laid_enabled.pump_widget(themed(Switch::new(false).on_changed(move |_| {
+    laid_enabled.pump_widget(themed(Switch::new(false).on_changed(move |_cx, _| {
         *counter.borrow_mut() += 1;
     })));
     laid_enabled.dispatch_pointer_down(TAP_TARGET_WIDTH / 2.0, TAP_TARGET_HEIGHT / 2.0);

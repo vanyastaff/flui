@@ -67,7 +67,7 @@ pub fn back_arrow_icon_data() -> IconData {
 /// use flui_material::BackButton;
 ///
 /// let _default = BackButton::new();
-/// let _overridden = BackButton::new().on_pressed(|| { /* custom pop */ });
+/// let _overridden = BackButton::new().on_pressed(|_cx| { /* custom pop */ });
 /// ```
 #[derive(Clone, Default, StatelessView)]
 pub struct BackButton {
@@ -93,8 +93,11 @@ impl BackButton {
 
     /// Replaces the default `maybe_pop` behavior with `callback`.
     #[must_use]
-    pub fn on_pressed(mut self, callback: impl Fn() + 'static) -> Self {
-        self.on_pressed = Some(std::rc::Rc::new(callback));
+    pub fn on_pressed<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>) -> R + 'static,
+    ) -> Self {
+        self.on_pressed = Some(crate::event_callback::press_callback(callback));
         self
     }
 }
@@ -105,9 +108,9 @@ impl StatelessView for BackButton {
         let mut button = IconButton::new(icon);
 
         if let Some(on_pressed) = self.on_pressed.clone() {
-            button = button.on_pressed(move || on_pressed());
+            button = button.on_pressed(move |cx| on_pressed(cx));
         } else if let Some(navigator) = NavigatorHandle::maybe_of(ctx) {
-            button = button.on_pressed(move || {
+            button = button.on_pressed(move |_cx| {
                 navigator.maybe_pop();
             });
         }
@@ -135,13 +138,13 @@ mod tests {
 
     #[test]
     fn on_pressed_sets_an_override() {
-        let button = BackButton::new().on_pressed(|| {});
+        let button = BackButton::new().on_pressed(|_cx| {});
         assert!(button.on_pressed.is_some());
     }
 
     #[test]
     fn debug_reports_whether_an_override_is_set_without_the_closure() {
-        let debug = format!("{:?}", BackButton::new().on_pressed(|| {}));
+        let debug = format!("{:?}", BackButton::new().on_pressed(|_cx| {}));
         assert!(debug.contains("has_override: true"));
     }
 }

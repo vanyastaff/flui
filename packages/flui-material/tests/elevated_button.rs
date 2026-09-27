@@ -43,7 +43,7 @@ fn tap_fires_on_pressed_and_the_button_mounts_a_material_surface() {
     let laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            ElevatedButton::new(Text::new("Save")).on_pressed(move || {
+            ElevatedButton::new(Text::new("Save")).on_pressed(move |_cx| {
                 counted.fetch_add(1, Ordering::SeqCst);
             }),
         ),
@@ -148,7 +148,7 @@ fn did_update_view_resyncs_disabled_when_the_press_handler_is_removed() {
     let mut laid = lay_out(
         Theme::new(
             theme.clone(),
-            ElevatedButton::new(Text::new("Save")).on_pressed(|| {}),
+            ElevatedButton::new(Text::new("Save")).on_pressed(|_cx| {}),
         ),
         tight(120.0, 48.0),
     );
@@ -210,7 +210,7 @@ fn elevated_button_theme_slot_reaches_the_mounted_materials_background_color() {
     let laid = lay_out(
         Theme::new(
             theme,
-            ElevatedButton::new(Text::new("Save")).on_pressed(|| {}),
+            ElevatedButton::new(Text::new("Save")).on_pressed(|_cx| {}),
         ),
         tight(120.0, 48.0),
     );
@@ -248,7 +248,7 @@ fn widget_level_style_wins_over_the_elevated_button_theme() {
         Theme::new(
             theme,
             ElevatedButton::new(Text::new("Save"))
-                .on_pressed(|| {})
+                .on_pressed(|_cx| {})
                 .style(ButtonStyle {
                     background_color: Some(WidgetStateProperty::all(Some(widget_background))),
                     ..Default::default()
@@ -304,7 +304,7 @@ fn elevated_button_with_text_child_announces_one_labelled_button_node() {
     let mut laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            ElevatedButton::new(Text::new("Increment")).on_pressed(|| {}),
+            ElevatedButton::new(Text::new("Increment")).on_pressed(|_cx| {}),
         ),
         tight(120.0, 48.0),
     );

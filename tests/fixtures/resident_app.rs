@@ -158,7 +158,7 @@ impl ViewState<Counter> for CounterState {
                 self.local.get(),
                 view.persistent.get()
             )),
-            ElevatedButton::new(Text::new("Increment")).on_pressed(move || {
+            ElevatedButton::new(Text::new("Increment")).on_pressed(move |_cx| {
                 local.set(local.get() + 1);
                 persistent.set(persistent.get() + 1);
                 println!(
@@ -169,7 +169,7 @@ impl ViewState<Counter> for CounterState {
                 );
                 rebuild.schedule(RebuildReason::StateChange);
             }),
-            ElevatedButton::new(Text::new("Quit application")).on_pressed(move || {
+            ElevatedButton::new(Text::new("Quit application")).on_pressed(move |_cx| {
                 handle.request_quit().expect("quit admitted");
             }),
         ])))

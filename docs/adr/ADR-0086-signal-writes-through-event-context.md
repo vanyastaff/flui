@@ -1,15 +1,14 @@
 # ADR-0086: Signal writes go through `EventCx` opened by a `WriterSource`
 
-- **Status:** Proposed; the pilot passed (§9) and acceptance is the owner's call. Landed:
-  `EventCx`, `Writer`, `WriterSource`, `LifecycleContext::writer_source`, `callback`, typed
-  `Signal` writes beside the transitional `&Reactive` target, and the pilot (`RawButton`,
-  counter, todo, the `flui create` counter); the rollback trigger was evaluated and not met
-  (§9). Not yet: `&Reactive` removal and both `reactive()` accessors (§8 step 3); setter
-  migration (§8 step 4 beyond the pilot), including keyboard activation and focus for
-  `RawButton`; listener and post-frame `cx` (§5); `UiCommand::SignalWrite` opening its write
+- **Status:** Proposed; the pilot passed (§9) and acceptance is the owner's call. Implemented:
+  `EventCx`, `Writer`, `WriterSource`, lifecycle and render-context writer acquisition,
+  callback inference helpers, typed `Signal` writes beside the transitional `&Reactive`
+  target, and the owner-local catalog migration described below. The rollback trigger
+  was evaluated and not met (§9). Outstanding: `&Reactive` removal and both `reactive()`
+  accessors (§8 step 3); the shared callback families and local-history contract listed
+  below; listener and post-frame `cx` (§5); `UiCommand::SignalWrite` opening its write
   through a `WriterSource` (the ADR-0074 §5.8 amendment; the command still runs
-  `FnOnce(&Reactive)`); `StateCell::schedule` refused during `build` (§7); `AnimatedSize` no
-  longer calling `on_end` from `build` (Verification).
+  `FnOnce(&Reactive)`); `StateCell::schedule` refused during `build` (§7).
 - **Date:** 2026-09-25
 - **Amends (on acceptance):** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 (the signatures of `set`,
   `update` and `set_if_changed`), §5.2 (the run-time guard stays authoritative; `Writer` narrows
@@ -55,7 +54,7 @@ line: the realm is already explicit for reads, and this record makes it explicit
 `mod.rs:578`); ADR-0078 §2 records the guard as the authoritative rule for this case. A test that
 never reaches the write never sees the error.
 
-Signals have no production users yet: no catalog crate, example or facade module creates one
+At the original census, signals had no production users: no catalog crate, example or facade module created one
 (`grep -rn "Signal<\|\.signal(" crates/flui-widgets/src packages/flui-material/src
 packages/flui-cupertino/src examples` is empty; the only users are tests and the
 `signals_rebuilds` bench). Changing the write signature now costs the catalog nothing it has
@@ -93,9 +92,10 @@ The gesture layer is already `!Send`: `TapCallback = Rc<dyn Fn(TapDetails)>`
 (`crates/flui-interaction/src/recognizers/tap.rs:91`) and the drag aliases
 (`crates/flui-interaction/src/recognizers/drag.rs:113-121`).
 
-One catalog callback is invoked from `build`: `AnimatedSize::build` delivers `on_end`
-(`crates/flui-widgets/src/animated/animated_size.rs:201-209`). A callback called from `build`
-cannot be handed a typed write capability, because `build` has none.
+At the original census, one catalog callback was invoked from `build`: `AnimatedSize::build` delivered `on_end`
+(`crates/flui-widgets/src/animated/animated_size.rs:201-209` in that revision).
+The owner-local migration now delivers it after the frame. A callback called
+from `build` cannot be handed a typed write capability, because `build` has none.
 
 `StateCell` is bound from `init_state` through `StateCell::bind(&self, ctx: &dyn
 LifecycleContext)` (`crates/flui-view/src/state_cell.rs:189`) and is unguarded while unbound by
@@ -169,6 +169,16 @@ source waits for the realm core in `flui-runtime`.
 `LifecycleContext` as ADR-0078 §1 prescribes; the open capability registry of
 [ADR-0084](ADR-0084-open-capability-seam-and-plugins.md) does not apply to it.
 
+*Amended 2026-09-27:* render views have no state lifecycle hook. Their
+`RenderObjectContext::writer_source()` supplies the same presentation-bound
+capability when they register owner-local pointer or hover handlers. Detached
+contexts return `None`. The build context gains no writer; the render object
+stores an interaction registration, not a reactive graph or an owner-local
+closure. `tests/writer_source.rs` exercises the mounted render-view path.
+`callback_with` and `callback_ref` fix inference for let-bound callbacks with
+owned and borrowed payloads, respectively; these helpers do not change dispatch
+or widen write authority.
+
 ### 4. The gesture arena does not change
 
 `GestureArenaMember` and the recognizer callback aliases (`tap.rs:91`, `drag.rs:113-121`) keep
@@ -235,6 +245,56 @@ EventCx<'_>)` — and a text form field's input forwards the `cx` its own `on_ch
 `did_change`; `flui migrate` rewrites the handle calls with the setters. The three `validator`
 setters (`FormField`, `RawTextFormField`, the Material `TextFormField`; not `on_*`, so outside
 the count) return a decision and are queries: they get no writer.
+
+### Owner-local catalog migration record
+
+The table in §6 is the original census, not a claim that every setter has been
+migrated. Reproduce the current setter inventory with
+`rg -n 'pub fn on_' crates/flui-widgets/src packages/flui-material/src packages/flui-cupertino/src`;
+the signatures and production dispatch sites decide the event/query classification.
+
+| Migrated family | Dispatch and ownership |
+|---|---|
+| GestureDetector, Listener, MouseRegion | Recognizer/pointer dispatch; the mounted presentation supplies the writer. Recognizer contracts are unchanged. |
+| Focus and editable text | Focus/key, IME and clipboard dispatch; lifecycle autofocus is outside the signal build guard. The focus regression tests include initial mount, reconfiguration and node replacement. |
+| Forms | `save`, `reset` and `did_change` validate owner identity and build phase before mutation, then forward the caller's context; validators remain queries. |
+| Material and Cupertino controls | Gesture contexts pass through composition; owner-local keyboard bridges acquire a source in lifecycle. Drawer callbacks use their mounted controller's source. |
+| ScaffoldMessenger completion | Direct removal stays synchronous; build-observed completion uses the existing local post-frame lane. Disposal cancels pending completion. No inline fallback during build. |
+| AnimatedSize and Dismissible | Build/layout-observed effects use local post-frame delivery. Dismissible's direct input-time dismissal remains synchronous. |
+| InteractiveViewer, RefreshIndicator, PopScope | Gesture/scroll/pop dispatch; query signatures stay unchanged, and owner-local bridges supply the writer where the lower-level protocol has no context. |
+
+The following remain explicit separate contracts, not adapters that silently
+manufacture an unrelated writer: `PageView::on_page_changed` is stored in a
+send-safe scroll listener; Draggable/DragTarget callbacks cross shared hit-test
+metadata; raw Semantics action handlers are send-safe. Their migrations must
+move callback ownership before removing `Send` bounds. `LocalHistoryEntry`
+is an unmounted navigation primitive whose removal also runs through navigator
+flush; its originating-context contract must be settled with that dispatch path.
+These boundaries follow §5 rather than weakening types or adding an ambient graph.
+
+`FloatingActionButton::new(child).on_pressed(callback)` replaces the optional
+generic constructor callback: nested `Some(closure)` prevented higher-ranked
+inference. The ordinary setter accepts an unannotated inline signal closure,
+pinned by its mounted integration test. No new dependency or executor is needed.
+
+**Ownership preflight.** Form handles return `Result<_, EventContextError>`:
+detached handles, foreign presentation contexts and calls during build are
+refused before mutation. A form preflights its field snapshot before visiting
+the first field. User callbacks remain arbitrary effects, so this is not
+transactional rollback if a callback panics or detaches later fields. Silently
+opening the target's writer for a foreign caller is rejected: cross-presentation
+commands need an explicit target and delivery contract.
+
+`EventCx` and its borrowed `Writer` implement the read-only `ReadGraph` face:
+`signal.peek(cx, ...)` sees current state without subscribing or invalidating
+an element. The context is a graph capability, not a physical event identifier,
+propagation state or async lifetime. Independently opened writer bridges must
+not be treated as one transaction merely because they share a graph.
+
+The [design challenge](../research/2026-09-27-event-context-design-review.md)
+records failure scenarios, rejected alternatives and remaining ownership and
+overload boundaries. The post-frame bridge does not settle the shared animation
+listener topology or promise bounded event latency.
 
 ### 7. `StateCell` and `RebuildHandle` stay run-time capabilities
 
@@ -413,8 +473,8 @@ Marked **(exists)** where the item is in the repository.
 - A test that a widget invoking a user callback synchronously inside its own `build`, through a
   captured `WriterSource`, is refused by the guard **(exists**:
   `flui-view/tests/writer_source.rs::a_callback_run_inside_its_widgets_build_is_refused_by_the_guard`**)**.
-- A test that `AnimatedSize` no longer calls `on_end` from `build`, which fails on today's code
-  (`animated_size.rs:201-209`).
+- A test that `AnimatedSize` no longer calls `on_end` from `build` **(exists**:
+  `crates/flui-widgets/tests/animated_size.rs::animated_size_completion_writes_a_signal_after_build`**)**.
 - A test that `StateCell::schedule` during `build` is refused.
 - ADR-0085's multi-presentation routing test, now written through `WriterSource`.
 - The completed §6 table, reproduced by its grep command, in the change that alters setter

@@ -40,9 +40,11 @@ fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
     let laid = lay_out(
         themed(
             ThemeData::light(),
-            ListTile::new().title(Text::new("Inbox")).on_tap(move || {
-                counted.fetch_add(1, Ordering::SeqCst);
-            }),
+            ListTile::new()
+                .title(Text::new("Inbox"))
+                .on_tap(move |_cx| {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }),
         ),
         tight(400.0, 56.0),
     );
@@ -80,7 +82,7 @@ fn disabled_tile_swallows_a_tap() {
             ListTile::new()
                 .title(Text::new("Inbox"))
                 .enabled(false)
-                .on_tap(move || {
+                .on_tap(move |_cx| {
                     counted.fetch_add(1, Ordering::SeqCst);
                 }),
         ),
@@ -270,9 +272,9 @@ fn a_radio_inside_a_list_tile_announces_as_a_radio_button() {
         themed(
             ThemeData::light(),
             ListTile::new()
-                .leading(Radio::new("spring", Some("spring")).on_changed(|_| {}))
+                .leading(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {}))
                 .title(Text::new("Spring"))
-                .on_tap(|| {}),
+                .on_tap(|_cx| {}),
         ),
         tight(400.0, 56.0),
     );
@@ -324,9 +326,9 @@ fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
             ThemeData::light(),
             MergeSemantics::new().child(
                 ListTile::new()
-                    .leading(Radio::new("spring", Some("spring")).on_changed(|_| {}))
+                    .leading(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {}))
                     .title(Text::new("Spring"))
-                    .on_tap(|| {}),
+                    .on_tap(|_cx| {}),
             ),
         ),
         tight(400.0, 56.0),

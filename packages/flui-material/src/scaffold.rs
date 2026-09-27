@@ -157,7 +157,6 @@
 //! together.
 
 use std::any::Any;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::foundation::ElementId;
@@ -229,8 +228,8 @@ pub struct Scaffold {
     background_color: Option<Color>,
     drawer: Option<Drawer>,
     end_drawer: Option<Drawer>,
-    on_drawer_changed: Option<Rc<dyn Fn(bool)>>,
-    on_end_drawer_changed: Option<Rc<dyn Fn(bool)>>,
+    on_drawer_changed: Option<crate::event_callback::ValueCallback<bool>>,
+    on_end_drawer_changed: Option<crate::event_callback::ValueCallback<bool>>,
     drawer_scrim_color: Option<Color>,
     drawer_edge_drag_width: Option<f32>,
     enable_open_drag_gesture: bool,
@@ -335,15 +334,23 @@ impl Scaffold {
 
     /// Called whenever the start-side drawer opens or closes.
     #[must_use]
-    pub fn on_drawer_changed(mut self, callback: impl Fn(bool) + 'static) -> Self {
-        self.on_drawer_changed = Some(Rc::new(callback));
+    pub fn on_drawer_changed<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_drawer_changed = Some(crate::event_callback::value_callback(callback));
         self
     }
 
     /// Called whenever the end-side drawer opens or closes.
     #[must_use]
-    pub fn on_end_drawer_changed(mut self, callback: impl Fn(bool) + 'static) -> Self {
-        self.on_end_drawer_changed = Some(Rc::new(callback));
+    pub fn on_end_drawer_changed<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, bool) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_end_drawer_changed = Some(crate::event_callback::value_callback(callback));
         self
     }
 
@@ -705,7 +712,7 @@ impl ScaffoldState {
         drawer: &Drawer,
         key: GlobalKey<DrawerControllerState>,
         is_open: bool,
-        on_changed: Option<Rc<dyn Fn(bool)>>,
+        on_changed: Option<crate::event_callback::ValueCallback<bool>>,
         view: &Scaffold,
     ) -> DrawerController {
         let handle = self.handle.clone();
@@ -724,11 +731,11 @@ impl ScaffoldState {
             .panel_width(drawer.configured_width())
             .is_open(is_open)
             .enable_open_drag_gesture(view.enable_open_drag_gesture)
-            .on_open_changed(move |opened| {
+            .on_open_changed(move |cx, opened| {
                 set_opened(&handle, opened);
                 rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
                 if let Some(callback) = &on_changed {
-                    callback(opened);
+                    callback(cx, opened);
                 }
             });
         if let Some(color) = view.drawer_scrim_color {

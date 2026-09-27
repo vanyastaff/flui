@@ -123,7 +123,6 @@
 //!   background paints invisibly, with no automatic correction.
 
 use std::cell::RefCell;
-use std::rc::Rc;
 
 use flui_sdk::foundation::ListenerId;
 use flui_sdk::types::styling::Color;
@@ -324,7 +323,7 @@ pub struct TabBar {
     tabs: Vec<Tab>,
     controller: Option<TabController>,
     indicator_weight: f32,
-    on_tap: Option<Rc<dyn Fn(usize)>>,
+    on_tap: Option<crate::event_callback::ValueCallback<usize>>,
 }
 
 impl TabBar {
@@ -352,8 +351,11 @@ impl TabBar {
     /// instead of) the default `controller.animate_to(index)` dispatch.
     /// Flutter parity: `TabBar.onTap`.
     #[must_use]
-    pub fn on_tap(mut self, callback: impl Fn(usize) + 'static) -> Self {
-        self.on_tap = Some(Rc::new(callback));
+    pub fn on_tap<R: flui_sdk::view::EventOutcome>(
+        mut self,
+        callback: impl Fn(&mut flui_sdk::view::EventCx<'_>, usize) -> R + 'static,
+    ) -> Self {
+        self.on_tap = Some(crate::event_callback::value_callback(callback));
         self
     }
 }
@@ -710,7 +712,7 @@ fn build_tab_cell(
     resolved: &ResolvedTabBarStyle,
     indicator_weight: f32,
     controller: &TabController,
-    on_tap: Option<&Rc<dyn Fn(usize)>>,
+    on_tap: Option<&crate::event_callback::ValueCallback<usize>>,
 ) -> BoxedView {
     let (label_color, label_style) = if selected {
         (resolved.label_color, resolved.label_style.clone())
@@ -739,10 +741,10 @@ fn build_tab_cell(
     let tap_callback = on_tap.cloned();
     let ink_well = InkWell::new(cell)
         .overlay_color(resolved.overlay_color.clone())
-        .on_tap(move || {
+        .on_tap(move |cx| {
             tap_controller.animate_to(index);
             if let Some(callback) = &tap_callback {
-                callback(index);
+                callback(cx, index);
             }
         });
 

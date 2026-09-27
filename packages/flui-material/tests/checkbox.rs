@@ -34,6 +34,7 @@ use std::rc::Rc;
 
 use common::{lay_out, size, tight};
 use flui_material::{Checkbox, Theme, ThemeData};
+use flui_sdk::view::SignalWriteExt;
 use flui_testing::a11y::{Role, Toggled};
 
 /// The checkbox's full tap target — Flutter parity: `kMinInteractiveDimension`
@@ -41,6 +42,22 @@ use flui_testing::a11y::{Role, Toggled};
 /// `Checkbox.build` always takes in this V1 (no `materialTapTargetSize`
 /// override yet).
 const TAP_TARGET: f32 = 48.0;
+
+#[test]
+fn a_toggle_passes_its_value_and_writer_to_the_callback() {
+    let probe = common::SignalProbe::new(|signals| {
+        themed(
+            Checkbox::new(false)
+                .on_changed(move |cx, next| signals.count.set(cx, u32::from(next == Some(true)))),
+        )
+    });
+    let mut laid = lay_out(probe.view(), constraints());
+    laid.dispatch_pointer_down(24.0, 24.0);
+    laid.dispatch_pointer_up(24.0, 24.0);
+    assert_eq!(probe.value(), Ok(1));
+    laid.pump();
+    assert_eq!(probe.reads(), [0, 1]);
+}
 
 fn constraints() -> flui_sdk::rendering::BoxConstraints {
     tight(TAP_TARGET, TAP_TARGET)
@@ -57,7 +74,7 @@ fn themed(checkbox: Checkbox) -> Theme {
 #[test]
 fn mounting_a_checkbox_creates_a_semantics_annotated_tap_target() {
     let laid = lay_out(
-        themed(Checkbox::new(false).on_changed(|_| {})),
+        themed(Checkbox::new(false).on_changed(|_cx, _| {})),
         constraints(),
     );
 
@@ -76,7 +93,7 @@ fn tap_fires_on_changed_with_the_next_value() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
-        themed(Checkbox::new(false).on_changed(move |next| {
+        themed(Checkbox::new(false).on_changed(move |_cx, next| {
             *recorder.borrow_mut() = Some(next);
         })),
         constraints(),
@@ -103,7 +120,7 @@ fn tristate_cycle_survives_a_rebuild_between_each_tap() {
     let observed: Rc<RefCell<Option<bool>>> = Rc::new(RefCell::new(None));
 
     let build = |value: Option<bool>, sink: Rc<RefCell<Option<bool>>>| {
-        themed(Checkbox::tristate(value).on_changed(move |next| {
+        themed(Checkbox::tristate(value).on_changed(move |_cx, next| {
             *sink.borrow_mut() = next;
         }))
     };
@@ -145,7 +162,7 @@ fn disabled_checkbox_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
 
     let mut laid_enabled = laid_disabled;
     let counter = Rc::clone(&taps);
-    laid_enabled.pump_widget(themed(Checkbox::new(false).on_changed(move |_| {
+    laid_enabled.pump_widget(themed(Checkbox::new(false).on_changed(move |_cx, _| {
         *counter.borrow_mut() += 1;
     })));
     laid_enabled.dispatch_pointer_down(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
@@ -162,7 +179,7 @@ fn disabled_checkbox_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
 /// AccessKit toggle state announced for that label.
 fn announced_toggled(checkbox: Checkbox, label: &str) -> Option<Toggled> {
     let mut laid = lay_out(
-        themed(checkbox.semantic_label(label).on_changed(|_| {})),
+        themed(checkbox.semantic_label(label).on_changed(|_cx, _| {})),
         constraints(),
     );
     laid.enable_semantics();
@@ -177,7 +194,7 @@ fn announced_toggled(checkbox: Checkbox, label: &str) -> Option<Toggled> {
 /// Every AccessKit role the tree exports for a mounted `Checkbox`.
 fn announced_roles(checkbox: Checkbox, label: &str) -> Vec<Role> {
     let mut laid = lay_out(
-        themed(checkbox.semantic_label(label).on_changed(|_| {})),
+        themed(checkbox.semantic_label(label).on_changed(|_cx, _| {})),
         constraints(),
     );
     laid.enable_semantics();

@@ -111,7 +111,7 @@ fn details_route() -> PageRoute<()> {
             Center::new().child(
                 Column::new(column![
                     Text::new(DETAILS_ROUTE_TEXT),
-                    CupertinoButton::new(Text::new(BACK_BUTTON_LABEL)).on_pressed(move || {
+                    CupertinoButton::new(Text::new(BACK_BUTTON_LABEL)).on_pressed(move |_cx| {
                         navigator_for_button.pop();
                     }),
                 ])
@@ -122,7 +122,7 @@ fn details_route() -> PageRoute<()> {
             CupertinoNavigationBar::new()
                 .middle(Text::new(DETAILS_NAV_TITLE))
                 .leading(
-                    CupertinoButton::new(Text::new(NAV_BACK_LABEL)).on_pressed(move || {
+                    CupertinoButton::new(Text::new(NAV_BACK_LABEL)).on_pressed(move |_cx| {
                         navigator_for_leading.pop();
                     }),
                 ),
@@ -175,7 +175,7 @@ fn home_page(ctx: &dyn BuildContext) -> BoxedView {
         Center::new().child(
             Column::new(column![
                 CupertinoButton::new(Text::new("Item 1")),
-                CupertinoButton::filled(Text::new(PUSH_BUTTON_LABEL)).on_pressed(move || {
+                CupertinoButton::filled(Text::new(PUSH_BUTTON_LABEL)).on_pressed(move |_cx| {
                     navigator.push(details_route());
                 }),
                 CupertinoButton::new(Text::new("Item 2")),
@@ -237,10 +237,12 @@ impl ViewState<SettingsTab> for SettingsTabState {
             Center::new().child(
                 Column::new(column![
                     Text::new(format!("Count: {}", self.count.get())),
-                    CupertinoButton::new(Text::new(INCREMENT_BUTTON_LABEL)).on_pressed(move || {
-                        count_for_tap.set(count_for_tap.get() + 1);
-                        rebuild.schedule(flui_view::RebuildReason::StateChange);
-                    }),
+                    CupertinoButton::new(Text::new(INCREMENT_BUTTON_LABEL)).on_pressed(
+                        move |_cx| {
+                            count_for_tap.set(count_for_tap.get() + 1);
+                            rebuild.schedule(flui_view::RebuildReason::StateChange);
+                        }
+                    ),
                 ])
                 .main_axis_alignment(MainAxisAlignment::Center),
             ),
