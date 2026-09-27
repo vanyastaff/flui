@@ -1,7 +1,9 @@
 //! Framework seams shared by the `flui-*` widget crates.
 //!
-//! **Only for crates in this workspace (`crates/flui-*`). No semver
-//! guarantees**: anything here may change or disappear in any release.
+//! **Only for crates in this workspace (`crates/flui-*`, and the official
+//! packages under `packages/`, which reach it as
+//! `flui_sdk::widgets::__private`). No semver guarantees**: anything here may
+//! change or disappear in any release.
 //! Applications, examples and third-party crates must not import it.
 //!
 //! Each item is widget-crate plumbing that a sibling crate (scrolling,

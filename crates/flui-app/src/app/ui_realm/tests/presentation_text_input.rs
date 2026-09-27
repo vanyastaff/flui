@@ -1,5 +1,6 @@
-use std::cell::RefCell;
-
+use flui_platform_api::text_store::{
+    InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
+};
 use flui_types::ImeEvent;
 use flui_types::geometry::Bounds;
 
@@ -20,23 +21,162 @@ fn test_constraints() -> BoxConstraints {
     BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
 }
 
-/// Attach records `set_ime_allowed(true)`; preedit/commit events
-/// routed through `handle_input_entered` reach the attached client
-/// with the exact delivered strings; detach from the still-active
-/// token records `set_ime_allowed(false)`.
+/// A client over a fresh in-memory store, and the store.
+fn in_memory_client(text: &str) -> (Rc<InMemoryTextStore>, flui_interaction::TextInputClient) {
+    let store = InMemoryTextStore::new(text);
+    let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.
+    (store, flui_interaction::TextInputClient::new(erased))
+}
+
+/// Asks `store` for an async read-write lock on every build, logging around
+/// it; the grant logs the scheduler phase it ran in, then runs `on_grant`.
+#[derive(Clone)]
+struct LockRequester {
+    store: Rc<dyn TextStore>,
+    scheduler: flui_scheduler::UpdateScheduler,
+    on_grant: Rc<dyn Fn()>,
+    log: Rc<std::cell::RefCell<Vec<&'static str>>>,
+    phases: Rc<std::cell::RefCell<Vec<SchedulerPhase>>>,
+    outcomes: Rc<std::cell::RefCell<Vec<Result<LockOutcome, TextStoreError>>>>,
+}
+
+impl flui_view::View for LockRequester {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for LockRequester {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.log.borrow_mut().push("build");
+        let (log, phases, scheduler, on_grant) = (
+            Rc::clone(&self.log),
+            Rc::clone(&self.phases),
+            self.scheduler.clone(),
+            Rc::clone(&self.on_grant),
+        );
+        let outcome = self.store.request_lock(
+            LockGrant::read_write(move |_| {
+                log.borrow_mut().push("grant");
+                phases.borrow_mut().push(scheduler.phase());
+                on_grant();
+            }),
+            LockTiming::Async,
+        );
+        self.outcomes.borrow_mut().push(outcome);
+        self.log.borrow_mut().push("build ends");
+        SizedBox::square(10.0)
+    }
+}
+
+/// A realm with a text-input presentation and a [`LockRequester`] as its
+/// root, after one frame driven the way the runners drive one
+/// (`UiRealm::drive_frame`).
+fn drive_one_frame_with(
+    on_grant: impl FnOnce(&UiRealm) -> Rc<dyn Fn()>,
+) -> (UiRealm, LockRequester) {
+    let (_fake, text_input) = headless_text_input();
+    let realm = UiRealm::for_test_with_text_input(Some(text_input));
+    let (concrete, client) = in_memory_client("abc");
+    let store: Rc<dyn TextStore> = concrete; // the requester asks through the erased contract, as an input method does.
+    let _token = realm
+        .text_input_handle()
+        .attach(client)
+        .expect("headless presentation supports text input");
+    let requester = LockRequester {
+        store,
+        scheduler: realm.scheduler().clone(),
+        on_grant: on_grant(&realm),
+        log: Rc::default(),
+        phases: Rc::default(),
+        outcomes: Rc::default(),
+    };
+    realm
+        .enter(|realm| realm.attach_root_widget(&requester))
+        .expect("attach succeeds");
+    assert!(
+        requester.log.borrow().is_empty(),
+        "attaching schedules the build; the frame runs it"
+    );
+    let now = flui_scheduler::Instant::now();
+    let _ = realm.drive_frame(now, || realm.draw_frame(test_constraints()));
+    (realm, requester)
+}
+
+/// A lock an input method asks for while the realm drives a frame waits
+/// for the whole drive to return (ADR-0027 §3), then runs once, with the
+/// scheduler back in `Idle`.
+///
+/// Red-check: drop the `TextCommitsClosed::close` guard from
+/// `UiRealm::drive_frame` — the grant runs inside `build` and the outcome is
+/// `Granted`; run the anchor inside the frame — the grant's phase is not
+/// `Idle`.
 #[test]
-fn attach_dispatch_and_active_detach_round_trip_through_the_platform() {
+fn a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns() {
+    let (_realm, requester) = drive_one_frame_with(|_| Rc::new(|| {}));
+
+    assert_eq!(
+        *requester.outcomes.borrow(),
+        [Ok(LockOutcome::Deferred)],
+        "a lock asked for inside the frame is queued, not granted"
+    );
+    assert_eq!(
+        *requester.log.borrow(),
+        ["build", "build ends", "grant"],
+        "the grant ran once, after the frame returned"
+    );
+    assert_eq!(
+        *requester.phases.borrow(),
+        [SchedulerPhase::Idle],
+        "the commit anchor runs outside the frame transaction"
+    );
+    assert_eq!(
+        requester
+            .store
+            .request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
+        Ok(LockOutcome::Granted),
+        "the drive reopened commits"
+    );
+}
+
+/// An edit a deferred grant makes at the anchor asks for a frame the way a
+/// field's rebuild does (`ensure_visual_update`), and gets one: at the
+/// anchor the scheduler is `Idle` and schedules it. Inside the frame the
+/// request is dropped, and the committed text would wait for an unrelated
+/// wake to be painted.
+///
+/// Red-check: run the anchor at the end of `draw_frame_entered` instead —
+/// `ensure_visual_update` returns `false` and no frame is scheduled.
+#[test]
+fn an_edit_made_at_the_commit_anchor_schedules_the_next_frame() {
+    let accepted = Rc::new(std::cell::Cell::new(None));
+    let seen = Rc::clone(&accepted);
+    let (realm, _requester) = drive_one_frame_with(move |realm| {
+        let scheduler = realm.scheduler().clone();
+        Rc::new(move || seen.set(Some(scheduler.ensure_visual_update())))
+    });
+
+    assert_eq!(accepted.get(), Some(true), "the frame request was accepted");
+    assert!(
+        realm.scheduler().is_frame_scheduled(),
+        "the edit's frame request outlived the frame its grant was queued in"
+    );
+}
+
+/// Attach records `set_ime_allowed(true)`; preedit/commit events
+/// routed through `handle_input_entered` are projected onto the
+/// attached client's store; detach from the still-active token records
+/// `set_ime_allowed(false)`.
+#[test]
+fn handle_input_entered_projects_ime_onto_the_attached_store() {
     let (fake, text_input) = headless_text_input();
 
     let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
     let handle = realm.text_input_handle();
 
-    let received = Rc::new(RefCell::new(Vec::new()));
-    let sink = Rc::clone(&received);
+    let (store, client) = in_memory_client("");
     let token = handle
-        .attach(Rc::new(move |event: &ImeEvent| {
-            sink.borrow_mut().push(event.clone());
-        }))
+        .attach(client)
         .expect("headless presentation supports text input");
 
     assert_eq!(
@@ -54,16 +194,11 @@ fn attach_dispatch_and_active_detach_round_trip_through_the_platform() {
     });
 
     assert_eq!(
-        received.borrow().as_slice(),
-        [
-            ImeEvent::Preedit {
-                text: "ni".to_string(),
-                cursor: Some((0, 2)),
-            },
-            ImeEvent::Commit("你好".to_string()),
-        ],
-        "handle_input_entered must deliver the exact ImeEvent payload to the attached client"
+        store.text(),
+        "你好",
+        "the commit replaces the preedit the same realm call projected"
     );
+    assert_eq!(store.composition(), None);
 
     assert_eq!(
         handle.detach(token).expect("presentation remains open"),
@@ -88,12 +223,12 @@ fn a_stale_detach_records_nothing_on_the_platform() {
     let handle = realm.text_input_handle();
 
     let token_a = handle
-        .attach(Rc::new(|_event: &ImeEvent| {}))
+        .attach(in_memory_client("").1)
         .expect("supported presentation");
     assert_eq!(fake.ime_allowed_calls(), vec![true]);
 
     let token_b = handle
-        .attach(Rc::new(|_event: &ImeEvent| {}))
+        .attach(in_memory_client("").1)
         .expect("supported presentation");
     assert_eq!(
         fake.ime_allowed_calls(),

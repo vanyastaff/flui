@@ -87,7 +87,7 @@ the go/no-go measurement in the ADR lands"; the facade's comment (`Cargo.toml:64
 - #1090 has landed (`588251a1c`): `FieldMask` (`crates/flui-view/src/view/inherited.rs:114`),
   `depend_on_field` (`crates/flui-view/src/context/build_context.rs:648`) and the acceptance
   tests `crates/flui-widgets/tests/media_query_fields.rs` and
-  `crates/flui-material/tests/theme_fields.rs`.
+  `packages/flui-material/tests/theme_fields.rs`.
 
 Both manifest comments therefore name a precondition that is already met or already decided.
 What remains open is ADR-0074 §5.5's second registry: field masks and signal readers are two
@@ -305,7 +305,7 @@ The go/no-go preconditions that the manifest comments name are met, with this ev
   (`crates/flui-view/src/view/inherited.rs:114`), `depend_on_field`
   (`crates/flui-view/src/context/build_context.rs:648`), and the acceptance tests
   `crates/flui-widgets/tests/media_query_fields.rs` and
-  `crates/flui-material/tests/theme_fields.rs`.
+  `packages/flui-material/tests/theme_fields.rs`.
 - **The measurement.** ADR-0074 §8.1 records it. The two frame-time misses (fan-out and append)
   are the cases ADR-0074 already bounds with §5.10's fan-out rule and `Memo<V>`.
 

@@ -1,0 +1,61 @@
+[package]
+publish = ["crates-io"]
+name = "flui-material"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Material Design theming foundation for FLUI — ColorScheme, Typography/TextTheme, ThemeData, and the Theme inherited widget"
+repository.workspace = true
+keywords = ["ui", "material", "theme", "flutter", "flui"]
+categories = ["gui"]
+# All root tests/*.rs files are compiled as modules of ONE integration-test
+# binary (tests/main.rs); the per-file auto-discovered targets each linked the
+# whole dependency stack. Targets that write process-global state stay separate.
+autotests = false
+
+# Dev-only files a `cargo package --list` sweep found leaking into the
+# published archive (internal architecture docs, criterion benches, etc.):
+exclude = ["/ARCHITECTURE.md"]
+
+[dependencies]
+# The package-author surface (ADR-0088 §4): the widget spine, the value types,
+# `Material`'s render object through `pipeline`, and the derives' runtime
+# paths. Material names no internal crate in a normal dependency.
+flui-sdk = { workspace = true }
+tracing = { workspace = true }
+
+# Test harnesses only; the library build never sees them. Tests name the
+# framework through `flui_sdk::` like any package, and these crates only for
+# what the SDK does not carry.
+[dev-dependencies]
+# `tests/common/mod.rs` re-exports the headless harness in
+# `flui_widgets::testing`; the dev-dependency turns on the feature that compiles
+# it (and, through it, `flui-rendering`'s and `flui-objects`' `testing`), so
+# the normal build never links the test driver.
+flui-widgets = { path = "../../crates/flui-widgets", version = "=0.2.0-dev", features = [
+    "testing",
+] }
+flui-testing = { workspace = true }
+# Key events (`events`, `testing::input::KeyEventBuilder`) and `FocusManager`,
+# which a few tests construct directly (`ink_well.rs`, `text_field.rs`).
+flui-interaction = { path = "../../crates/flui-interaction", version = "=0.2.0-dev", features = [
+    "testing",
+] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "material_it"
+path = "tests/main.rs"
+
+[package.metadata.flui]
+layer = 7
+tier = "pkg"
+tier-kind = "official"
+order = 1
+# The kind rule (ADR-0081 §3, ADR-0088 §2) replaces a dependents list: only
+# applications and official packages name this crate, and a core crate that
+# does lists the edge in its own `edge-exceptions` (the facade does).

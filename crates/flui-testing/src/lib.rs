@@ -101,6 +101,7 @@ pub mod bootstrap;
 pub mod fonts;
 pub mod log_capture;
 pub mod replay;
+pub mod text_store_kit;
 
 pub use a11y::{
     A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,

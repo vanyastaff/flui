@@ -288,6 +288,121 @@ fn internal_consumers_can_rename_direct_owning_crates() {
     );
 }
 
+/// A package on `flui-sdk` alone: every derive names the SDK's module path.
+/// `Diagnosticable` has no SDK path for its derive, so the consumer names it
+/// from `flui-macros` directly; its expansion still resolves through the SDK.
+const SDK_CONSUMER_SOURCE: &str = r#"
+use flui_sdk::animation::{Animatable, TwoWayConverter};
+use flui_sdk::foundation::Diagnosticable;
+use flui_sdk::view::prelude::{InheritedData, StatefulView, StatelessView};
+use flui_sdk::view::{BuildContext, IntoView, View, ViewState};
+use flui_sdk::widgets::Text;
+
+#[derive(Clone, StatelessView)]
+pub struct Greeting<T: View + Clone> {
+    pub child: T,
+}
+
+impl<T: View + Clone> StatelessView for Greeting<T> {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.child.clone()
+    }
+}
+
+#[derive(Clone, StatefulView)]
+pub struct Counter;
+
+pub struct CounterState;
+
+impl StatefulView for Counter {
+    type State = CounterState;
+
+    fn create_state(&self) -> Self::State {
+        CounterState
+    }
+}
+
+impl ViewState<Counter> for CounterState {
+    fn build(&self, _view: &Counter, _ctx: &dyn BuildContext) -> impl IntoView {
+        Text::new("SDK-only stateful widget")
+    }
+}
+
+#[derive(Clone, PartialEq, InheritedData)]
+pub struct Palette {
+    pub accent: u32,
+    pub dense: bool,
+}
+
+#[derive(Clone, Animatable)]
+pub struct Position {
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Debug, derive_support::Diagnosticable)]
+pub struct Details {
+    pub count: usize,
+}
+
+pub fn exercise_generated_impls() {
+    let view = Greeting {
+        child: Text::new("Hello"),
+    };
+    let _element = view.create_element();
+    let _stateful_element = Counter.create_element();
+    let palette = Palette { accent: 1, dense: false };
+    let _mask = palette.field_mask_diff(&Palette { accent: 2, dense: false });
+    let _field = Palette::FIELD_ACCENT;
+    let vector = Position { x: 1.0, y: 2.0 }.to_vector();
+    let _position = Position::from_vector(vector);
+    let _node = Details { count: 1 }.to_diagnostics_node();
+}
+"#;
+
+#[test]
+fn sdk_consumers_derive_through_the_sdk_even_beside_the_facade() {
+    let Some(root) = checkout_root() else { return };
+    let sdk = root.join("crates/flui-sdk");
+    let macros = root.join("crates/flui-macros");
+    for alias in ["flui_sdk", "sdk"] {
+        let mut dependencies = toml::Table::new();
+        dependencies.insert(alias.into(), dependency("flui-sdk", &sdk, false));
+        dependencies.insert(
+            "derive_support".into(),
+            dependency("flui-macros", &macros, false),
+        );
+        check_consumer(
+            dependencies,
+            &SDK_CONSUMER_SOURCE.replace("flui_sdk::", &format!("{alias}::")),
+            &format!("SDK-only package alias={alias}"),
+        );
+    }
+
+    // The facade as a dev-dependency (a package's tests and examples) must not
+    // capture the library build's expansion: `flui` is absent there.
+    let mut dependencies = toml::Table::new();
+    dependencies.insert("flui_sdk".into(), dependency("flui-sdk", &sdk, false));
+    dependencies.insert(
+        "derive_support".into(),
+        dependency("flui-macros", &macros, false),
+    );
+    let mut dev_dependencies = toml::Table::new();
+    dev_dependencies.insert("flui".into(), dependency("flui", root, false));
+    let output = run_consumer(
+        dependencies,
+        Some(dev_dependencies),
+        SDK_CONSUMER_SOURCE,
+        "check",
+    );
+    assert!(
+        output.status.success(),
+        "SDK package with the facade as a dev-dependency:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// `None` when there is no checkout to depend on — see [`checkout_root`].
 fn hot_reload_dependencies(include_layer: bool) -> Option<toml::Table> {
     let root = checkout_root()?;

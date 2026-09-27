@@ -14,10 +14,32 @@
 //! - One active client per presentation.
 //! - Attaching replaces the previous client.
 //! - Detach is token guarded: a stale token cannot close the replacement.
+//! - A client replaced or detached inside a frame transaction keeps its
+//!   store until that frame's commit anchor, where the grants it queued run.
 //! - The platform IME is enabled on the first attach and disabled on the active
 //!   detach or explicit owner close.
 //! - Platform events are demultiplexed to the presentation before
 //!   [`TextInputOwner::dispatch`] is called.
+//!
+//! # The client is a text store
+//!
+//! A client attaches a [`TextInputClient`], which carries the field's
+//! [`TextStore`] (ADR-0090). A push-model event (winit's [`ImeEvent`]) is
+//! projected onto that store as edits under a read-write lock
+//! ([`project_ime_event`]), so a field has one editing path whichever model
+//! its platform speaks.
+//!
+//! The owner also holds its presentation's frame transaction (ADR-0027 §3)
+//! as a [`CommitGate`], and installs that gate into every store it attaches
+//! ([`TextStore::set_commit_gate`]), so no store can miss it. While the gate
+//! is shut, a store refuses synchronous locks and queues asynchronous ones;
+//! the composition root opens it once the frame has returned and calls
+//! [`TextInputOwner::run_deferred_grants`].
+//!
+//! A platform backend cannot hold the store yet: `PlatformTextInput` is
+//! `Send + Sync` and the store is an owner-thread `Rc`, so the pull
+//! connection waits for ADR-0082's owner-thread capability split. Until
+//! then the only production caller is the push projection here.
 
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
@@ -25,6 +47,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use flui_platform_api::PlatformTextInput;
+use flui_platform_api::text_store::{CommitGate, TextStore, project_ime_event};
 use flui_types::ImeEvent;
 use flui_types::geometry::{Bounds, Pixels};
 
@@ -35,8 +58,43 @@ use flui_types::geometry::{Bounds, Pixels};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientToken(NonZeroU64);
 
-/// Owner-thread callback invoked for an IME event.
-pub type ImeEventCallback = Rc<dyn Fn(&ImeEvent)>;
+/// What a text field attaches: its store, and what to do when the platform
+/// (re)starts an input session.
+#[derive(Clone)]
+pub struct TextInputClient {
+    store: Rc<dyn TextStore>,
+    on_session_start: Option<Rc<dyn Fn()>>,
+}
+
+impl TextInputClient {
+    /// A client editing `store`.
+    #[must_use]
+    pub fn new(store: Rc<dyn TextStore>) -> Self {
+        Self {
+            store,
+            on_session_start: None,
+        }
+    }
+
+    /// Call `f` on every [`ImeEvent::Enabled`]: the platform started or
+    /// restarted an input session.
+    #[must_use]
+    pub fn on_session_start(self, f: impl Fn() + 'static) -> Self {
+        Self {
+            on_session_start: Some(Rc::new(f)),
+            ..self
+        }
+    }
+}
+
+impl std::fmt::Debug for TextInputClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TextInputClient")
+            .field("status", &self.store.status())
+            .field("on_session_start", &self.on_session_start.is_some())
+            .finish()
+    }
+}
 
 /// Result of a token-guarded detach.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,12 +129,27 @@ enum OwnerLifecycle {
 
 struct AttachedClient {
     token: ClientToken,
-    callback: ImeEventCallback,
+    client: TextInputClient,
 }
 
 struct OwnerState {
     lifecycle: OwnerLifecycle,
     active: Option<AttachedClient>,
+    /// Stores replaced or detached while the frame transaction was open.
+    /// A grant they queued then was the platform's answer to them, so it
+    /// runs at the anchor that closes this frame, not whenever the field is
+    /// next focused.
+    retired: Vec<Rc<dyn TextStore>>,
+}
+
+impl OwnerState {
+    /// `client` stops being the active one; keep its store for the anchor
+    /// if it may still hold grants queued behind the frame.
+    fn retire(&mut self, client: AttachedClient, transaction_open: bool) {
+        if transaction_open {
+            self.retired.push(client.client.store);
+        }
+    }
 }
 
 /// Direct owner of one presentation's platform text-input connection.
@@ -90,6 +163,10 @@ struct OwnerState {
 pub struct TextInputOwner {
     platform: Option<Arc<dyn PlatformTextInput>>, // direct OS text-input capability owned by one presentation; no intermediary.
     next_token: Cell<NonZeroU64>,
+    /// Shut while the presentation is inside a frame transaction, where text
+    /// stores may not commit (ADR-0027 §3); installed into every attached
+    /// store.
+    gate: CommitGate,
     state: RefCell<OwnerState>,
 }
 
@@ -102,9 +179,11 @@ impl TextInputOwner {
         Rc::new(Self {
             platform,
             next_token: Cell::new(NonZeroU64::MIN),
+            gate: CommitGate::new(),
             state: RefCell::new(OwnerState {
                 lifecycle: OwnerLifecycle::Open,
                 active: None,
+                retired: Vec::new(),
             }),
         })
     }
@@ -125,7 +204,7 @@ impl TextInputOwner {
         }
     }
 
-    fn attach(&self, callback: ImeEventCallback) -> Result<ClientToken, TextInputError> {
+    fn attach(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
         self.ensure_open()?;
         let platform = self.platform.as_ref().ok_or(TextInputError::Unsupported)?;
 
@@ -138,10 +217,17 @@ impl TextInputOwner {
         self.next_token.set(next);
         let token = ClientToken(current);
 
+        // Before the client is reachable through `dispatch`, so no lock is
+        // ever requested on a store that does not yet follow the frame.
+        client.store.set_commit_gate(self.gate.clone());
+        let transaction_open = self.is_transaction_open();
         let enable_platform = {
             let mut state = self.state.borrow_mut();
-            let enable_platform = state.active.is_none();
-            state.active = Some(AttachedClient { token, callback });
+            let replaced = state.active.replace(AttachedClient { token, client });
+            let enable_platform = replaced.is_none();
+            if let Some(replaced) = replaced {
+                state.retire(replaced, transaction_open);
+            }
             enable_platform
         };
 
@@ -156,14 +242,12 @@ impl TextInputOwner {
         self.ensure_open()?;
         let platform = self.platform.as_ref().ok_or(TextInputError::Unsupported)?;
 
+        let transaction_open = self.is_transaction_open();
         let detached = {
             let mut state = self.state.borrow_mut();
-            if state
-                .active
-                .as_ref()
-                .is_some_and(|client| client.token == token)
-            {
-                state.active = None;
+            let active = state.active.take_if(|client| client.token == token);
+            if let Some(active) = active {
+                state.retire(active, transaction_open);
                 true
             } else {
                 false
@@ -187,24 +271,94 @@ impl TextInputOwner {
         Ok(())
     }
 
-    /// Dispatch a platform event to the active client, if any.
+    /// Deliver a push-model platform event to the active client, if any.
     ///
-    /// The callback is cloned out before invocation so it may reentrantly
-    /// attach, detach, or close without colliding with a `RefCell` borrow.
+    /// [`ImeEvent::Enabled`] runs the client's session-start callback and
+    /// edits nothing; every other event is projected onto the client's store
+    /// ([`project_ime_event`]). A projection the store refuses is logged,
+    /// not propagated: the platform has no one to hand the error back to.
+    ///
+    /// The client is cloned out before use so the store's grant may
+    /// reentrantly attach, detach, or close without colliding with a
+    /// `RefCell` borrow.
     pub fn dispatch(&self, event: &ImeEvent) {
-        let callback = {
+        let client = {
             let state = self.state.borrow();
             if state.lifecycle == OwnerLifecycle::Closed {
                 return;
             }
-            state
+            state.active.as_ref().map(|active| active.client.clone())
+        };
+        let Some(client) = client else {
+            return;
+        };
+        if matches!(event, ImeEvent::Enabled) {
+            if let Some(on_session_start) = &client.on_session_start {
+                on_session_start();
+            }
+            return;
+        }
+        if let Err(error) = project_ime_event(&*client.store, event) {
+            tracing::warn!(
+                ?error,
+                "an IME event could not be applied to the text store"
+            );
+        }
+    }
+
+    /// Open or close this presentation's frame transaction: while it is
+    /// open, the gate every attached store follows is shut.
+    pub fn set_transaction_open(&self, open: bool) {
+        self.gate.set_open(!open);
+    }
+
+    /// Whether this presentation's frame transaction is open.
+    #[must_use]
+    pub fn is_transaction_open(&self) -> bool {
+        !self.gate.is_open()
+    }
+
+    /// Run the grants queued while commits were closed: first those of the
+    /// stores replaced or detached during the frame, in that order, then
+    /// the active client's. The composition root calls this once the frame
+    /// returns; returns how many ran.
+    pub fn run_deferred_grants(&self) -> usize {
+        if self.is_transaction_open() {
+            // Nothing could run, and the retired stores wait for the anchor
+            // that closes this transaction.
+            return 0;
+        }
+        let (retired, active) = {
+            let mut state = self.state.borrow_mut();
+            let active = state
                 .active
                 .as_ref()
-                .map(|client| Rc::clone(&client.callback))
+                .map(|active| Rc::clone(&active.client.store));
+            (std::mem::take(&mut state.retired), active)
         };
-        if let Some(callback) = callback {
-            callback(event);
-        }
+        retired
+            .iter()
+            .chain(active.as_ref())
+            .map(|store| store.run_deferred_grants())
+            .sum()
+    }
+
+    /// The active client's store: what a pull-model platform backend reads
+    /// and edits.
+    ///
+    /// Hidden rather than feature-gated (a feature would leak it into every
+    /// build that unifies it; `design/architecture.md` §5, rule 2): only tests and
+    /// the widget test harness call it until the Windows TSF backend, the
+    /// first platform consumer of the pull connection, does, and it is
+    /// documented then.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn active_store(&self) -> Option<Rc<dyn TextStore>> {
+        self.state
+            .borrow()
+            .active
+            .as_ref()
+            .map(|active| Rc::clone(&active.client.store))
     }
 
     /// Close this presentation's text-input owner.
@@ -219,6 +373,7 @@ impl TextInputOwner {
                 return;
             }
             state.lifecycle = OwnerLifecycle::Closed;
+            state.retired.clear();
             state.active.take().is_some()
         };
         if disable_platform && let Some(platform) = &self.platform {
@@ -250,6 +405,7 @@ impl std::fmt::Debug for TextInputOwner {
         f.debug_struct("TextInputOwner")
             .field("lifecycle", &state.lifecycle)
             .field("next_token", &self.next_token.get())
+            .field("transaction_open", &!self.gate.is_open())
             .field(
                 "active_token",
                 &state.active.as_ref().map(|client| client.token),
@@ -291,9 +447,20 @@ impl TextInputHandle {
         self.owner.upgrade().ok_or(TextInputError::OwnerGone)
     }
 
-    /// Attach `callback` as this presentation's active IME client.
-    pub fn attach(&self, callback: ImeEventCallback) -> Result<ClientToken, TextInputError> {
-        self.owner()?.attach(callback)
+    /// Attach `client` as this presentation's active IME client, installing
+    /// the presentation's commit gate into its store.
+    pub fn attach(&self, client: TextInputClient) -> Result<ClientToken, TextInputError> {
+        self.owner()?.attach(client)
+    }
+
+    /// Whether the presentation still takes text input.
+    ///
+    /// # Errors
+    ///
+    /// [`TextInputError::Closed`] or [`TextInputError::OwnerGone`] once the
+    /// presentation is closing or gone: a store then refuses every lock.
+    pub fn ensure_open(&self) -> Result<(), TextInputError> {
+        self.owner()?.ensure_open()
     }
 
     /// Detach `token` if it still names the active client.
@@ -319,6 +486,10 @@ impl std::fmt::Debug for TextInputHandle {
 mod tests {
     use std::cell::RefCell;
 
+    use flui_platform_api::text_store::{
+        InMemoryTextStore, LockGrant, LockTiming, Selection, TextStoreError, TextStoreStatus,
+        Utf16Offset,
+    };
     use flui_types::geometry::{Point, Size, px};
     use parking_lot::Mutex;
 
@@ -360,26 +531,28 @@ mod tests {
         (TextInputOwner::new(Some(capability)), recorder)
     }
 
+    fn client(store: &Rc<InMemoryTextStore>) -> TextInputClient {
+        let store: Rc<dyn TextStore> = store.clone(); // the owner holds the field's store through the erased contract.
+        TextInputClient::new(store)
+    }
+
+    fn empty_client() -> TextInputClient {
+        client(&InMemoryTextStore::new(""))
+    }
+
     #[test]
     fn attach_replaces_without_toggling_the_same_presentations_platform() {
         let (owner, platform) = owner_with_recorder();
-        let first_events = Rc::new(RefCell::new(Vec::new()));
-        let second_events = Rc::new(RefCell::new(Vec::new()));
+        let first_store = InMemoryTextStore::new("");
+        let second_store = InMemoryTextStore::new("");
 
-        let first_sink = Rc::clone(&first_events);
         let first = owner
             .handle()
-            .attach(Rc::new(move |event| {
-                first_sink.borrow_mut().push(event.clone());
-            }))
+            .attach(client(&first_store))
             .expect("supported presentation");
-
-        let second_sink = Rc::clone(&second_events);
         let second = owner
             .handle()
-            .attach(Rc::new(move |event| {
-                second_sink.borrow_mut().push(event.clone());
-            }))
+            .attach(client(&second_store))
             .expect("supported presentation");
 
         assert!(!owner.is_attached(first));
@@ -387,20 +560,158 @@ mod tests {
         assert_eq!(platform.calls(), [PlatformCall::Allowed(true)]);
 
         owner.dispatch(&ImeEvent::Commit("hello".to_owned()));
-        assert!(first_events.borrow().is_empty());
         assert_eq!(
-            second_events.borrow().as_slice(),
-            [ImeEvent::Commit("hello".to_owned())]
+            first_store.text(),
+            "",
+            "a replaced client receives no dispatch"
         );
+        assert_eq!(second_store.text(), "hello");
+    }
+
+    #[test]
+    fn dispatch_projects_preedit_and_commit_onto_the_active_store() {
+        let (owner, _) = owner_with_recorder();
+        let store = InMemoryTextStore::new("ab");
+        let _token = owner.handle().attach(client(&store)).expect("connection");
+
+        owner.dispatch(&ImeEvent::Preedit {
+            text: "にほ".to_owned(),
+            cursor: Some((3, 3)),
+        });
+        assert_eq!(store.text(), "abにほ");
+        assert_eq!(
+            store
+                .composition()
+                .map(|composition| composition.range.len()),
+            Some(2)
+        );
+        assert_eq!(store.selection(), Selection::collapsed(Utf16Offset::new(3)));
+
+        owner.dispatch(&ImeEvent::Commit("日本".to_owned()));
+        assert_eq!(store.text(), "ab日本");
+        assert_eq!(store.composition(), None);
+        assert_eq!(store.selection(), Selection::collapsed(Utf16Offset::new(4)));
+    }
+
+    #[test]
+    fn enabled_runs_on_session_start_and_edits_nothing() {
+        let (owner, _) = owner_with_recorder();
+        let store = InMemoryTextStore::new("ab");
+        let starts = Rc::new(Cell::new(0));
+        let counted = Rc::clone(&starts);
+        let _token = owner
+            .handle()
+            .attach(client(&store).on_session_start(move || counted.set(counted.get() + 1)))
+            .expect("connection");
+
+        owner.dispatch(&ImeEvent::Enabled);
+        owner.dispatch(&ImeEvent::Enabled);
+
+        assert_eq!(starts.get(), 2);
+        assert_eq!(store.text(), "ab");
+        assert_eq!(store.owner_notifications(), 0);
+    }
+
+    /// The reference store, attached as it is, with no wrapper reading the
+    /// owner: attaching installs the owner's gate, so the transaction holds
+    /// for a store whose author never looked at it.
+    #[test]
+    fn an_attached_store_follows_the_owners_frame_transaction() {
+        let (owner, _) = owner_with_recorder();
+        let store = InMemoryTextStore::new("");
+        let _token = owner.handle().attach(client(&store)).expect("connection");
+
+        owner.set_transaction_open(true);
+        assert!(owner.is_transaction_open());
+        owner.dispatch(&ImeEvent::Commit("東".to_owned()));
+        owner.dispatch(&ImeEvent::Commit("京".to_owned()));
+        assert_eq!(store.text(), "", "nothing commits inside the transaction");
+        let sync = store.request_lock(LockGrant::read(|_| {}), LockTiming::Sync);
+        assert_eq!(sync, Err(TextStoreError::SyncLockUnavailable));
+        assert_eq!(
+            owner.run_deferred_grants(),
+            0,
+            "still inside the transaction"
+        );
+
+        owner.set_transaction_open(false);
+        assert!(!owner.is_transaction_open());
+        assert_eq!(owner.run_deferred_grants(), 2);
+        assert_eq!(store.text(), "東京", "applied in arrival order");
+    }
+
+    /// Focus moving from one field to another inside a frame: the commit
+    /// the first field's store queued runs on that store at the anchor
+    /// closing the frame, not at its next key press or lock.
+    #[test]
+    fn a_grant_queued_by_a_replaced_or_detached_client_runs_at_the_anchor() {
+        let (owner, _) = owner_with_recorder();
+        let handle = owner.handle();
+        let (first, second, third) = (
+            InMemoryTextStore::new(""),
+            InMemoryTextStore::new(""),
+            InMemoryTextStore::new(""),
+        );
+        let _first = handle.attach(client(&first)).expect("connection");
+
+        owner.set_transaction_open(true);
+        owner.dispatch(&ImeEvent::Commit("東".to_owned()));
+        let second_token = handle.attach(client(&second)).expect("replacement");
+        owner.dispatch(&ImeEvent::Commit("京".to_owned()));
+        assert_eq!(handle.detach(second_token), Ok(DetachOutcome::Detached));
+        let _third = handle.attach(client(&third)).expect("another field");
+        assert_eq!(
+            owner.run_deferred_grants(),
+            0,
+            "an anchor attempted inside the transaction runs nothing and keeps the retired stores"
+        );
+        owner.set_transaction_open(false);
+
+        assert_eq!(owner.run_deferred_grants(), 2);
+        assert_eq!(first.text(), "東", "the replaced client's commit");
+        assert_eq!(second.text(), "京", "the detached client's commit");
+        assert_eq!(third.text(), "", "nothing reached the new client");
+        assert_eq!(
+            owner.run_deferred_grants(),
+            0,
+            "a retired store is drained once, then released"
+        );
+    }
+
+    #[test]
+    fn ensure_open_reports_a_closed_or_dropped_owner() {
+        let handle = {
+            let (owner, _) = owner_with_recorder();
+            owner.handle()
+        };
+        assert_eq!(handle.ensure_open(), Err(TextInputError::OwnerGone));
+
+        let (owner, _) = owner_with_recorder();
+        let handle = owner.handle();
+        assert_eq!(handle.ensure_open(), Ok(()));
+        owner.close();
+        assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
+    }
+
+    #[test]
+    fn active_store_names_the_attached_store() {
+        let (owner, _) = owner_with_recorder();
+        assert!(owner.active_store().is_none());
+        let store = InMemoryTextStore::new("ab");
+        let token = owner.handle().attach(client(&store)).expect("connection");
+        let active = owner.active_store().expect("attached");
+        assert_eq!(active.status(), TextStoreStatus::EDITABLE_SINGLE_LINE);
+        assert_eq!(owner.handle().detach(token), Ok(DetachOutcome::Detached));
+        assert!(owner.active_store().is_none());
     }
 
     #[test]
     fn stale_detach_cannot_disable_the_replacement_connection() {
         let (owner, platform) = owner_with_recorder();
         let handle = owner.handle();
-        let first = handle.attach(Rc::new(|_| {})).expect("first connection");
+        let first = handle.attach(empty_client()).expect("first connection");
         let second = handle
-            .attach(Rc::new(|_| {}))
+            .attach(empty_client())
             .expect("replacement connection");
 
         assert_eq!(
@@ -442,7 +753,7 @@ mod tests {
         let handle = owner.handle();
 
         assert_eq!(
-            handle.attach(Rc::new(|_| {})),
+            handle.attach(empty_client()),
             Err(TextInputError::Unsupported)
         );
         assert_eq!(
@@ -457,7 +768,7 @@ mod tests {
         let handle = owner.handle();
         owner.close();
 
-        assert_eq!(handle.attach(Rc::new(|_| {})), Err(TextInputError::Closed));
+        assert_eq!(handle.attach(empty_client()), Err(TextInputError::Closed));
         assert_eq!(
             handle.set_cursor_area(Bounds::default()),
             Err(TextInputError::Closed)
@@ -468,7 +779,7 @@ mod tests {
     fn explicit_close_disables_once_and_makes_handles_inert() {
         let (owner, platform) = owner_with_recorder();
         let handle = owner.handle();
-        let token = handle.attach(Rc::new(|_| {})).expect("connection");
+        let token = handle.attach(empty_client()).expect("connection");
 
         owner.close();
         owner.close();
@@ -478,7 +789,7 @@ mod tests {
             [PlatformCall::Allowed(true), PlatformCall::Allowed(false)]
         );
         assert_eq!(handle.detach(token), Err(TextInputError::Closed));
-        assert_eq!(handle.attach(Rc::new(|_| {})), Err(TextInputError::Closed));
+        assert_eq!(handle.attach(empty_client()), Err(TextInputError::Closed));
     }
 
     #[test]
@@ -489,7 +800,7 @@ mod tests {
         };
 
         assert_eq!(
-            handle.attach(Rc::new(|_| {})),
+            handle.attach(empty_client()),
             Err(TextInputError::OwnerGone)
         );
     }
@@ -498,5 +809,26 @@ mod tests {
     fn dispatch_with_no_active_client_is_a_no_op() {
         let (owner, _) = owner_with_recorder();
         owner.dispatch(&ImeEvent::Enabled);
+        owner.dispatch(&ImeEvent::Commit("x".to_owned()));
+        assert_eq!(owner.run_deferred_grants(), 0);
+    }
+
+    #[test]
+    fn a_session_start_callback_may_detach_reentrantly() {
+        let (owner, _) = owner_with_recorder();
+        let handle = owner.handle();
+        let token = Rc::new(RefCell::new(None));
+        let detach_handle = handle.clone();
+        let detach_token = Rc::clone(&token);
+        let attached = handle
+            .attach(empty_client().on_session_start(move || {
+                if let Some(token) = detach_token.borrow_mut().take() {
+                    let _ = detach_handle.detach(token);
+                }
+            }))
+            .expect("connection");
+        *token.borrow_mut() = Some(attached);
+        owner.dispatch(&ImeEvent::Enabled);
+        assert!(!owner.is_attached(attached));
     }
 }

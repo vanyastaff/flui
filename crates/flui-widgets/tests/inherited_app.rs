@@ -6,8 +6,8 @@
 //! the data provided by the ancestor into a shared cell during `build()`.
 //!
 //! The `Theme`/`ThemeData` analogue of these tests now lives in
-//! `flui-material` (`crates/flui-material/tests/theme.rs` and
-//! `crates/flui-material/tests/inherited_theme.rs`), since `Theme` moved
+//! `flui-material` (`packages/flui-material/tests/theme.rs` and
+//! `packages/flui-material/tests/inherited_theme.rs`), since `Theme` moved
 //! there — see that crate's docs.
 //!
 //! ## Correctness invariants tested

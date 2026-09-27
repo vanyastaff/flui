@@ -240,7 +240,7 @@ where
 
                     let now = web_time::Instant::now();
                     // UpdateScheduler callbacks and rendering share one realm entry.
-                    scheduler.drive_frame_with_lane(now, flui_scheduler::IdleDeadline::far_future(now), || {
+                    realm.drive_frame(now, || {
                         let mut slot = renderer_frame.lock();
                         let Some(r) = slot.as_mut() else {
                             return;
@@ -331,7 +331,7 @@ where
                                 }
                             });
                         }
-                    }, realm.local_post_frame_lane());
+                    });
                 })),
             );
         }));

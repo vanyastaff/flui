@@ -58,30 +58,32 @@ mod measured {
         ViewState as _, impl_animated_view as _, impl_inherited_view as _, impl_render_view as _,
         single_child_view_children as _,
     };
+    use flui_sdk::widgets::__private::{TextFormFieldConfig as _, TextFormFieldCore as _};
     use flui_sdk::widgets::animated::VsyncScope as _;
     use flui_sdk::widgets::icon::IconData as _;
     use flui_sdk::widgets::layout::PreferredSizeView as _;
     use flui_sdk::widgets::prelude::BoxConstraints as _;
     use flui_sdk::widgets::{
         Actions as _, ActivateIntent as _, Align as _, AnimatedBuilder as _, AppBuilder as _,
-        BoxedLocalizationsDelegate as _, ButtonActivateIntent as _, CallbackAction as _,
-        Center as _, ClipRect as _, ColoredBox as _, Column as _, ConstrainedBox as _,
-        Container as _, CrossAxisAlignment as _, CustomMultiChildLayout as _, CustomPaint as _,
-        CustomPainter as _, DecoratedBox as _, DefaultTextStyle as _, Directionality as _,
-        EditableText as _, Expanded as _, FadeTransition as _, Flexible as _,
-        FloatingHeaderSnapConfiguration as _, Focus as _, GestureDetector as _, HeroMode as _,
-        HitTestBehavior as _, Icon as _, IconData as _, IconTheme as _, IconThemeData as _,
-        InheritedTheme as _, IntrinsicWidth as _, LayoutId as _, MainAxisAlignment as _,
-        MainAxisSize as _, MediaQuery as _, MediaQueryData as _, MergeSemantics as _,
-        MouseRegion as _, MultiChildLayoutContext as _, MultiChildLayoutDelegate as _,
-        NavigatorHandle as _, NavigatorObserver as _, Offstage as _, Opacity as _, Padding as _,
-        PageRoute as _, PopupRoute as _, Positioned as _, PreferredSizeView as _,
-        RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _, Semantics as _,
-        SemanticsRole as _, SizedBox as _, SlideTransition as _, SliverPersistentHeader as _,
-        SliverPersistentHeaderDelegate as _, Stack as _, StackFit as _, SubmitCallback as _,
-        Table as _, TableCell as _, TableCellVerticalAlignment as _, TableColumnWidth as _,
-        TableRow as _, Text as _, TextEditingController as _, TickerMode as _, Transform as _,
-        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
+        AutovalidateMode as _, BoxedLocalizationsDelegate as _, ButtonActivateIntent as _,
+        CallbackAction as _, Center as _, ClipRect as _, ColoredBox as _, Column as _,
+        ConstrainedBox as _, Container as _, CrossAxisAlignment as _, CustomMultiChildLayout as _,
+        CustomPaint as _, CustomPainter as _, DecoratedBox as _, DefaultTextStyle as _,
+        Directionality as _, EditableText as _, Expanded as _, FadeTransition as _, Flexible as _,
+        FloatingHeaderSnapConfiguration as _, Focus as _, FormFieldHandle as _,
+        GestureDetector as _, HeroMode as _, HitTestBehavior as _, Icon as _, IconData as _,
+        IconTheme as _, IconThemeData as _, InheritedTheme as _, IntrinsicWidth as _,
+        LayoutId as _, MainAxisAlignment as _, MainAxisSize as _, MediaQuery as _,
+        MediaQueryData as _, MergeSemantics as _, MouseRegion as _, MultiChildLayoutContext as _,
+        MultiChildLayoutDelegate as _, NavigatorHandle as _, NavigatorObserver as _, Offstage as _,
+        Opacity as _, Padding as _, PageRoute as _, PopupRoute as _, Positioned as _,
+        PreferredSizeView as _, RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _,
+        Semantics as _, SemanticsRole as _, SizedBox as _, SlideTransition as _,
+        SliverPersistentHeader as _, SliverPersistentHeaderDelegate as _, Stack as _,
+        StackFit as _, SubmitCallback as _, Table as _, TableCell as _,
+        TableCellVerticalAlignment as _, TableColumnWidth as _, TableRow as _, Text as _,
+        TextEditingController as _, TickerMode as _, Transform as _, WidgetState as _,
+        WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
         WidgetStatesController as _, WidgetsApp as _,
     };
 }
