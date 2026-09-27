@@ -1,16 +1,20 @@
 # ADR-0086: Signal writes go through `EventCx` opened by a `WriterSource`
 
-- **Status:** Accepted (2026-09-26). Landed: `EventCx`, `Writer`, `WriterSource`,
-  `LifecycleContext::writer_source`, `callback`, typed `Signal` writes beside the transitional
-  `&Reactive` target, and the pilot (`RawButton`, counter, todo, the `flui create` counter); the
-  rollback trigger was evaluated and not met (§9). Not yet: `&Reactive` removal and both
-  `reactive()` accessors (§8 step 3), setter migration (§8 step 4 beyond the pilot), listener and
-  post-frame `cx` (§5).
+- **Status:** Proposed; the pilot passed (§9) and acceptance is the owner's call. Landed:
+  `EventCx`, `Writer`, `WriterSource`, `LifecycleContext::writer_source`, `callback`, typed
+  `Signal` writes beside the transitional `&Reactive` target, and the pilot (`RawButton`,
+  counter, todo, the `flui create` counter); the rollback trigger was evaluated and not met
+  (§9). Not yet: `&Reactive` removal and both `reactive()` accessors (§8 step 3); setter
+  migration (§8 step 4 beyond the pilot), including keyboard activation and focus for
+  `RawButton`; listener and post-frame `cx` (§5); `UiCommand::SignalWrite` opening its write
+  through a `WriterSource` (the ADR-0074 §5.8 amendment; the command still runs
+  `FnOnce(&Reactive)`); `StateCell::schedule` refused during `build` (§7); `AnimatedSize` no
+  longer calling `on_end` from `build` (Verification).
 - **Date:** 2026-09-25
-- **Amends:** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 (the signatures of `set`,
+- **Amends (on acceptance):** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 (the signatures of `set`,
   `update` and `set_if_changed`), §5.2 (the run-time guard stays authoritative; `Writer` narrows
   it and does not replace it), §5.8 (`UiCommand::SignalWrite` opens its write through the
-  realm's `WriterSource`); [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1 (one new
+  realm's `WriterSource`; pending, see Status); [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1 (one new
   `LifecycleContext` capability, `writer_source`)
 - **Related:** [ADR-0018](ADR-0018-async-builder-seam.md) (`RebuildHandle` stays a run-time
   capability), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §2 and §9 (UI callbacks are meant to
@@ -26,7 +30,8 @@
 
 **Owner decision (2026-09-25).** The owner chose the typed form: `&mut EventCx<'_>` on framework
 event callbacks through `WriterSource`, with the pilot and the rollback trigger of §8 as written.
-This settles the shape question for the pilot; the record stays Proposed until the pilot ships.
+This settles the shape question for the pilot; the record stays Proposed until the pilot ships
+and the owner accepts it.
 
 ## Context
 
@@ -61,7 +66,7 @@ already written against signals.
 The catalog has 105 public `on_*` setters:
 
 ```text
-grep -rhoE 'pub fn on_[a-z_]+' crates/flui-widgets/src crates/flui-material/src crates/flui-cupertino/src | wc -l   # 106
+grep -rhoE 'pub fn on_[a-z_]+' crates/flui-widgets/src crates/flui-material/src crates/flui-cupertino/src | wc -l   # 108
 ```
 
 (The one hit that is not a setter is `on_drag_start` in `navigator/back_gesture.rs`, the
@@ -312,10 +317,12 @@ examples crates/flui-cli/src/templates` finds nothing (no annotation), and `git 
 **Reported outside the trigger.**
 
 - *The transitional site*, the todo field's Enter handler on the unconverted
-  `RawTextField::on_submitted(Fn(&str))`: 9 lines of excess — a `writer: Option<WriterSource>`
+  `RawTextField::on_submitted(Fn(&str))`: 11 lines of excess — a `writer: Option<WriterSource>`
   field, its `None` in `create_state`, `self.writer = Some(ctx.writer_source())` in
-  `init_state`, a four-line `let writer = ..expect(..)` in `build`, and the call growing from one
-  line to three (`let _ = writer.write(|cx| add_item(cx, ..));`). It disappears when the setter
+  `init_state`, a four-line `let writer = ..expect(..)` in `build`, the call growing from one
+  line to five (`writer.write(|cx| add_item(cx, ..)).report();` in a block, as rustfmt lays it
+  out), and `EventOutcome` added to an existing `use`. `.report()` logs a refused write, as
+  `RawButton` does with a press's `Result`. It disappears when the setter
   itself takes `cx`.
 - *Moving state to `Signal`*: `#[derive(Default)]` on the state and `Signal::default()` in place
   of `StateCell::new(0)`/`StateHandle::new(..)`; net one line shorter in the counter.
@@ -349,8 +356,8 @@ inferred higher-ranked where `Fn(&mut EventCx<'_>) -> R` is expected (`RawButton
 `callback`, `WriterSource::write`).
 
 **Verdict.** The trigger did not fire: no converted site needs an annotation, and no converted
-site carries excess beyond passing `cx` to a helper. The typed shape stands; the record is
-Accepted.
+site carries excess beyond passing `cx` to a helper. The typed shape stands, and the record is
+ready for the owner to accept.
 
 ## Alternatives considered
 
