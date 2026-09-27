@@ -348,7 +348,7 @@ landed" once both report `Completed`, so the listener re-triggered a
 redundant zero-distance settle when the release it started reached its own
 end (no observable trace — same-status writes are deduplicated — but the
 wrong shape). It now chains the release on the press fade's own
-`TickerFuture` (`chain_release_fade`, `crates/flui-cupertino/src/button.rs`),
+`TickerFuture` (`chain_release_fade`, `packages/flui-cupertino/src/button.rs`),
 `Ok`-only and one-shot: Flutter's own `ticker.then(...)` shape.
 
 **`stop()`/`set_value` keep the bounds-first rule.**

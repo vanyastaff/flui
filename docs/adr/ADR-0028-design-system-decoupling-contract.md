@@ -6,13 +6,17 @@
   (`allowed-dependents`, `allowed-dev-dependents`) instead of a registry.
 - **Amended by:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (2026-09-26) —
   `flui-localizations` is deleted, so the exemption set is `flui-app` and the facade.
-- **Amended:** 2026-09-26 — Material's lists are replaced by the kind rule of
+- **Amended:** 2026-09-26 — both design systems' lists are replaced by the kind rule of
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) §3 and
   [ADR-0088](ADR-0088-official-packages-sdk-and-facade.md) §2, which `cargo xtask workspace`
-  checks: a crate that is not an application or an official package names `flui-material` only
-  through a named `edge-exceptions` entry (today only the facade's), and an official package,
-  Cupertino included, names it in no dependency kind without a declared exception (none exists).
-  Cupertino keeps its lists until it moves onto `flui-sdk`. The rule's shape below is
+  checks: a crate that is neither an application nor an official package names `flui-material`
+  or `flui-cupertino` only through a named `edge-exceptions` entry (today only the facade's
+  two), and neither design system names the other in any dependency kind without a declared
+  exception (none exists). So the Decision's enforcement sentence ("Both design systems list
+  exactly those two…") now reads "enforced by the kind rule", and the Consequence that the
+  exemption set is hard-coded now reads: a second crate that legitimately needs a design system
+  adds an `edge-exceptions` entry naming its exit ADR. The change narrows the exemption:
+  `flui-app` loses its blanket exemption, which no edge used. The rule's substance below is
   unchanged.
 - **Related:** ADR-0041 (the whole-workspace layer policy this rule is one part of)
 
