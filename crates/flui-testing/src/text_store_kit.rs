@@ -1,7 +1,7 @@
 //! The text-store conformance kit (ADR-0090 §4).
 //!
 //! Any crate with a text field that implements
-//! [`TextStore`](flui_platform_api::TextStore) runs this kit against it. The
+//! [`TextStore`] runs this kit against it. The
 //! kit behaves like a TSF-style input method: it asks for locks, reads and
 //! edits from the platform's side, and checks what it reads against what it
 //! wrote. It covers UTF-16 offsets across surrogate pairs and grapheme
@@ -24,7 +24,7 @@
 //! case never breaks a pinned downstream suite by surprise.
 //!
 //! [`InMemoryFixture`] runs the kit against
-//! [`InMemoryTextStore`](flui_platform_api::text_store::InMemoryTextStore),
+//! [`InMemoryTextStore`],
 //! the reference store, and is a worked example of a fixture.
 
 mod cases;
@@ -199,7 +199,7 @@ pub fn assert_conforms(fixture: &mut dyn TextStoreFixture, version: u32) {
 }
 
 /// The kit's fixture over
-/// [`InMemoryTextStore`](flui_platform_api::text_store::InMemoryTextStore).
+/// [`InMemoryTextStore`].
 #[derive(Debug)]
 pub struct InMemoryFixture {
     store: Rc<InMemoryTextStore>,
