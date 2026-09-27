@@ -343,11 +343,15 @@ impl TextInputOwner {
             .sum()
     }
 
-    /// The active client's store.
+    /// The active client's store: what a pull-model platform backend reads
+    /// and edits.
     ///
-    /// Test-only until the Windows TSF backend, the first platform consumer
-    /// of the pull connection, reads it.
-    #[cfg(any(test, feature = "testing"))]
+    /// Hidden rather than feature-gated (a feature would leak it into every
+    /// build that unifies it; `design/architecture.md` §5, rule 2): only tests and
+    /// the widget test harness call it until the Windows TSF backend, the
+    /// first platform consumer of the pull connection, does, and it is
+    /// documented then.
+    #[doc(hidden)]
     #[must_use]
     pub fn active_store(&self) -> Option<Rc<dyn TextStore>> {
         self.state
