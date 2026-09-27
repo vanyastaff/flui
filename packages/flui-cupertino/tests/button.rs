@@ -9,14 +9,14 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, loose, tight};
-use flui_animation::Vsync;
 use flui_cupertino::{CupertinoButton, CupertinoButtonSize, CupertinoColors};
+use flui_sdk::animation::Vsync;
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::widgets::SizedBox;
+use flui_sdk::widgets::Text;
+use flui_sdk::widgets::animated::VsyncScope;
+use flui_sdk::widgets::{MediaQuery, MediaQueryData};
 use flui_testing::a11y::Role;
-use flui_types::platform::Brightness;
-use flui_widgets::SizedBox;
-use flui_widgets::Text;
-use flui_widgets::animated::VsyncScope;
-use flui_widgets::{MediaQuery, MediaQueryData};
 
 /// A tap on an enabled button reaches `on_pressed` — proving `GestureDetector`
 /// is actually wired, not merely constructed.
@@ -238,7 +238,7 @@ fn background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme() 
 /// from `ButtonStyleButtonCore`'s `Semantics` wrapper
 /// (`packages/flui-material/src/button_style_button.rs`), proven here for
 /// `CupertinoButton`'s own pre-existing `Semantics::new().button(true)` wrap
-/// (`crates/flui-cupertino/src/button.rs`) now that `RenderParagraph`
+/// (`packages/flui-cupertino/src/button.rs`) now that `RenderParagraph`
 /// publishes a label for its child to merge up. Flutter parity:
 /// `CupertinoButton`'s `Semantics(button: true, child: ...)` never sets
 /// `enabled` either (`cupertino/button.dart`), so unlike the Material case

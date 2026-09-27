@@ -1015,7 +1015,7 @@ pub(super) mod tests {
     fn optional_dependency_edges_count() {
         // declared but feature-gated: the resolved graph would miss these
         assert!(
-            scope(&["crates/flui-cupertino/src/lib.rs"])
+            scope(&["packages/flui-cupertino/src/lib.rs"])
                 .packages
                 .contains(&"flui".to_owned())
         );

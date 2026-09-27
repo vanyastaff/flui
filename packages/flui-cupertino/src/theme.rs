@@ -21,11 +21,11 @@
 //! no dependency on `flui-material` and nothing here needs to change to
 //! support it later.
 
-use flui_types::Color;
-use flui_types::platform::Brightness;
-use flui_view::prelude::*;
-use flui_view::{BoxedView, InheritedView, impl_inherited_view};
-use flui_widgets::{InheritedTheme, MediaQuery};
+use flui_sdk::types::Color;
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
+use flui_sdk::widgets::{InheritedTheme, MediaQuery};
 
 use crate::colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 use crate::text_theme::CupertinoTextThemeData;
@@ -87,7 +87,7 @@ impl CupertinoThemeData {
     }
 
     /// Overrides [`Self::brightness`] instead of falling back to the ambient
-    /// [`MediaQueryData::platform_brightness`](flui_widgets::MediaQueryData::platform_brightness).
+    /// [`MediaQueryData::platform_brightness`](flui_sdk::widgets::MediaQueryData::platform_brightness).
     #[must_use]
     pub fn with_brightness(mut self, brightness: Brightness) -> Self {
         self.brightness = Some(brightness);
@@ -225,7 +225,7 @@ impl CupertinoThemeData {
 ///
 /// ```rust
 /// use flui_cupertino::{CupertinoTheme, CupertinoThemeData};
-/// use flui_widgets::SizedBox;
+/// use flui_sdk::widgets::SizedBox;
 ///
 /// let _themed = CupertinoTheme::new(CupertinoThemeData::default(), SizedBox::shrink());
 /// ```
@@ -261,7 +261,7 @@ impl CupertinoTheme {
     /// The brightness that descendant Cupertino widgets should use: the
     /// nearest ancestor [`CupertinoTheme`]'s explicit
     /// [`CupertinoThemeData::brightness`], falling back to
-    /// [`MediaQueryData::platform_brightness`](flui_widgets::MediaQueryData::platform_brightness). Returns `None` if neither is
+    /// [`MediaQueryData::platform_brightness`](flui_sdk::widgets::MediaQueryData::platform_brightness). Returns `None` if neither is
     /// available.
     ///
     /// Flutter parity: `CupertinoTheme.maybeBrightnessOf`.
@@ -324,7 +324,7 @@ impl InheritedTheme for CupertinoTheme {
 
 #[cfg(test)]
 mod tests {
-    use flui_widgets::SizedBox;
+    use flui_sdk::widgets::SizedBox;
 
     use super::*;
 

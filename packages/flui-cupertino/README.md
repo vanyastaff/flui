@@ -7,6 +7,9 @@ iOS-style (Cupertino) theming foundation for [FLUI](https://github.com/vanyastaf
 `CupertinoPageScaffold`, and `cupertino_page_route`. It is the Rust analog of
 `package:flutter/cupertino.dart`'s theming and widget surface.
 
+It is an official package (ADR-0088): its only FLUI dependency is `flui-sdk`, the
+package-author surface, the same one a third-party design system builds on.
+
 ## Enable via the `flui` facade
 
 `flui`'s default feature set is Material-only, so Cupertino needs an explicit opt-in:
@@ -30,13 +33,14 @@ on it via a git tag or path — see the [flui facade's README](../../README.md).
 
 ```rust
 use flui_cupertino::{CupertinoTheme, CupertinoThemeData};
-use flui_widgets::SizedBox;
+use flui_sdk::widgets::SizedBox;
 
 let _themed = CupertinoTheme::new(CupertinoThemeData::default(), SizedBox::shrink());
 ```
 
 ## See also
 
-- [`flui-material`](../../packages/flui-material) — the Material Design theming counterpart
-- [`flui-widgets`](../flui-widgets) — the design-neutral widget catalog this crate themes
+- [`flui-material`](../flui-material) — the Material Design theming counterpart
+- [`flui-widgets`](../../crates/flui-widgets) — the design-neutral widget catalog this crate themes
+- [`flui-sdk`](../../crates/flui-sdk) — the package-author surface this crate builds on
 - [`docs/adr/ADR-0042-theming-ownership.md`](../../docs/adr/ADR-0042-theming-ownership.md) — why theming lives in the catalog crates, not the facade

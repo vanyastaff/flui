@@ -25,11 +25,11 @@ use common::{lay_out, loose};
 use flui_cupertino::{
     CupertinoApp, CupertinoColor, CupertinoColors, CupertinoTheme, CupertinoThemeData,
 };
-use flui_types::Color;
-use flui_types::platform::Brightness;
-use flui_view::prelude::*;
-use flui_view::{BoxedView, RebuildHandle};
-use flui_widgets::{MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::types::Color;
+use flui_sdk::types::platform::Brightness;
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{BoxedView, RebuildHandle};
+use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
 
 fn media(brightness: Brightness) -> MediaQueryData {
     MediaQueryData {
@@ -199,7 +199,7 @@ impl BrightnessSource {
     fn set_brightness(&self, brightness: Brightness) {
         self.data.borrow_mut().platform_brightness = brightness;
         if let Some(handle) = self.rebuild.take() {
-            handle.schedule(flui_view::RebuildReason::StateChange);
+            handle.schedule(flui_sdk::view::RebuildReason::StateChange);
             self.rebuild.set(Some(handle));
         }
     }
@@ -218,8 +218,8 @@ impl std::fmt::Debug for BrightnessRoot {
 }
 
 impl View for BrightnessRoot {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
+    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::stateful(self)
     }
 }
 
@@ -227,7 +227,7 @@ struct BrightnessRootState {
     source: Rc<BrightnessSource>,
 }
 
-impl flui_view::StatefulView for BrightnessRoot {
+impl flui_sdk::view::StatefulView for BrightnessRoot {
     type State = BrightnessRootState;
 
     fn create_state(&self) -> Self::State {
@@ -237,7 +237,7 @@ impl flui_view::StatefulView for BrightnessRoot {
     }
 }
 
-impl flui_view::ViewState<BrightnessRoot> for BrightnessRootState {
+impl flui_sdk::view::ViewState<BrightnessRoot> for BrightnessRootState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.source.rebuild.set(Some(ctx.rebuild_handle()));
     }
