@@ -22,4 +22,6 @@ mod widgets_app;
 pub use inherited_theme::InheritedTheme;
 pub use media_query::{MediaQuery, MediaQueryData};
 pub use safe_area::SafeArea;
-pub use widgets_app::{AppBuilder, WidgetsApp, WidgetsAppState};
+pub use widgets_app::{
+    AppBuilder, AppForm, NavigatorForm, RouterForm, WidgetsApp, WidgetsAppState,
+};

@@ -9,8 +9,9 @@
   a literal segment wins over a parameter in the same place whatever the declaration order.
 - **`WidgetsApp::router(Router<R>)`** (`flui-widgets`): roots an app in a typed `Router`,
   which becomes the app's routing subtree and its only navigator, below `Localizations` and
-  the `builder` hook. `navigator` and `observer` on the router form fail a debug assertion and
-  are ignored in release builds.
+  the `builder` hook. It returns a `WidgetsApp<RouterForm>`, which has no `navigator` or
+  `observer` builder; `WidgetsApp` alone still names the navigator form
+  (`WidgetsApp<NavigatorForm>`), and the sealed `AppForm` trait bounds the two.
 - **`two_screens` example**: a derived route enum, `WidgetsApp::router`, and pages that push
   and pop through the `RouterHandle` they take in `init_state`
   (`cargo run --example two_screens`).

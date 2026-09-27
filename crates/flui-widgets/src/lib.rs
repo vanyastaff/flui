@@ -150,7 +150,8 @@ pub mod wrap;
 // implements. The Material `Theme`/`ThemeData` widget itself lives in
 // `flui-material` — see `app` module docs.
 pub use app::{
-    AppBuilder, InheritedTheme, MediaQuery, MediaQueryData, SafeArea, WidgetsApp, WidgetsAppState,
+    AppBuilder, AppForm, InheritedTheme, MediaQuery, MediaQueryData, NavigatorForm, RouterForm,
+    SafeArea, WidgetsApp, WidgetsAppState,
 };
 // `Brightness` is the value type `MediaQueryData` (and any theme's
 // brightness field) uses; re-exported here so callers need only

@@ -4,10 +4,12 @@
 //!
 //! # Parity oracle
 //!
-//! Flutter 3.44 `widgets/app.dart` `WidgetsApp.router`: the router is the
-//! routing subtree below `Localizations` and the `builder` hook, and it
-//! asserts that `navigatorKey` and `navigatorObservers` are not given with it.
-//! From memory of that release; not checked against a local clone.
+//! Flutter's `widgets/app.dart` `_WidgetsAppState.build`: the router forms
+//! mount `Router`/`Router.withConfig` as the routing subtree, bare, below
+//! `Localizations` and the `builder` hook; only the navigator form wraps its
+//! `Navigator` in a `FocusScope`. `WidgetsApp.router` asserts that
+//! `navigatorKey` and `navigatorObservers` are not given; here the router
+//! form has no such builders (the `routable_ui` compile-fail suite).
 
 use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -16,13 +18,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::Vsync;
+use flui_interaction::routing::FocusScopeNode;
 use flui_types::Color;
 use flui_types::platform::Locale;
 use flui_types::typography::TextDirection;
 use flui_widgets::prelude::*;
 use flui_widgets::{
-    ColoredBox, Directionality, Localizations, NavigatorHandle, NavigatorObserver, PageRoute,
-    RouterError, SizedBox, Text, VsyncScope, WidgetsApp,
+    AppForm, ColoredBox, Directionality, FocusScope, Localizations, NavigatorHandle,
+    NavigatorObserver, PageRoute, RouterError, SizedBox, Text, VsyncScope, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
@@ -49,6 +52,7 @@ struct Probe {
     inits: Rc<Cell<usize>>,
     direction: Rc<Cell<Option<TextDirection>>>,
     locale: Rc<RefCell<Option<Locale>>>,
+    focus_scope: Rc<RefCell<Option<Rc<FocusScopeNode>>>>,
 }
 
 impl Probe {
@@ -98,6 +102,7 @@ impl ViewState<Home> for HomeState {
     fn build(&self, _view: &Home, cx: &dyn BuildContext) -> impl IntoView {
         self.probe.direction.set(Directionality::maybe_of(cx));
         *self.probe.locale.borrow_mut() = Localizations::maybe_locale_of(cx);
+        *self.probe.focus_scope.borrow_mut() = Some(FocusScope::of(cx));
         let router = self.probe.handle();
         RawButton::new(ColoredBox::new(Color::rgb(10, 20, 30))).on_press(move |_cx| {
             router
@@ -122,12 +127,26 @@ fn router(probe: &Probe, version: u32, initial: &str) -> Router<AppRoute> {
     .expect("a known location")
 }
 
-fn mount(app: WidgetsApp, vsync: &Vsync) -> LaidOut {
+fn mount<F: AppForm>(app: WidgetsApp<F>, vsync: &Vsync) -> LaidOut {
     lay_out_animated(
         VsyncScope::new(vsync.clone(), app),
         tight(400.0, 400.0),
         vsync.clone(),
     )
+}
+
+/// How many focus scopes enclose the Home page's route scope.
+fn scopes_above_home(probe: &Probe) -> usize {
+    let scope = probe
+        .focus_scope
+        .borrow()
+        .clone()
+        .expect("the Home page was built");
+    scope
+        .as_focus_node()
+        .ancestors()
+        .filter(|node| node.as_scope().is_some())
+        .count()
 }
 
 /// Pump well past the 300 ms default transition.
@@ -234,6 +253,33 @@ fn widgets_app_router_pages_see_localizations_and_builder() {
 }
 
 #[test]
+fn widgets_app_router_adds_no_focus_scope_above_the_router() {
+    // A Router mounted with no app around it: the scopes above its page are
+    // the realm's and the page's own route scope's ancestors only.
+    let bare = Probe::default();
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(vsync.clone(), router(&bare, 1, "/")),
+        tight(400.0, 400.0),
+        vsync.clone(),
+    );
+    settle(&mut laid);
+    let bare_depth = scopes_above_home(&bare);
+    drop(laid);
+
+    let probe = Probe::default();
+    let vsync = Vsync::new();
+    let mut laid = mount(WidgetsApp::router(router(&probe, 1, "/")), &vsync);
+    settle(&mut laid);
+    assert_eq!(
+        scopes_above_home(&probe),
+        bare_depth,
+        "the app mounts its Router bare, as the oracle does; a FocusScope around it would \
+         add a scope"
+    );
+}
+
+#[test]
 fn rebuilt_widgets_app_router_keeps_its_stack() {
     let probe = Probe::default();
     let vsync = Vsync::new();
@@ -282,6 +328,8 @@ impl AttachCounter {
 }
 
 #[test]
+// The two forms are two view types, so the switch remounts the shell: the
+// navigator form's state is disposed, releasing its navigator and observers.
 fn switching_widgets_app_from_home_to_router_releases_the_navigator() {
     let handle = NavigatorHandle::new();
     let observer = Arc::new(AttachCounter::default());
@@ -309,7 +357,7 @@ fn switching_widgets_app_from_home_to_router_releases_the_navigator() {
     let nearest = probe.nearest.borrow().clone().expect("a navigator");
     assert!(!nearest.is_same(&handle));
 
-    // The shell let go of its navigator: switching back to the navigator
+    // The first shell let go of its navigator: switching back to the navigator
     // form with another handle mounts that one, not the first.
     let next = NavigatorHandle::new();
     laid.pump_widget(VsyncScope::new(
@@ -336,56 +384,4 @@ fn switching_widgets_app_from_home_to_router_releases_the_navigator() {
         1,
         "a registration left behind would attach the observer again"
     );
-}
-
-/// Builds `configure(WidgetsApp::router(..))` and mounts it: a debug build
-/// asserts while building the app; a release build ignores what was refused.
-/// Answers the mounted app, `None` when the build asserted.
-fn build_refused(configure: impl FnOnce(WidgetsApp) -> WidgetsApp) -> Option<(LaidOut, Probe)> {
-    let probe = Probe::default();
-    let built = catch_unwind(AssertUnwindSafe(|| {
-        configure(WidgetsApp::router(router(&probe, 1, "/")))
-    }));
-    assert_eq!(
-        built.is_err(),
-        cfg!(debug_assertions),
-        "a debug build asserts, a release build does not"
-    );
-    match built {
-        Err(payload) => {
-            let message = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .unwrap_or_default();
-            assert!(
-                message.contains("WidgetsApp::router takes no navigator handle or observers"),
-                "the assertion says why, got {message:?}"
-            );
-            None
-        }
-        Ok(app) => {
-            let vsync = Vsync::new();
-            let mut laid = mount(app, &vsync);
-            settle(&mut laid);
-            Some((laid, probe))
-        }
-    }
-}
-
-#[test]
-fn widgets_app_router_refuses_a_navigator_handle() {
-    let handle = NavigatorHandle::new();
-    if let Some((_laid, probe)) = build_refused(|app| app.navigator(handle.clone())) {
-        assert!(!handle.is_mounted(), "the handle was ignored");
-        assert_eq!(probe.handle().location().as_str(), "/");
-    }
-}
-
-#[test]
-fn widgets_app_router_refuses_observers() {
-    let observer = Arc::new(AttachCounter::default());
-    if let Some((_laid, probe)) = build_refused(|app| app.observer(observer.clone())) {
-        assert_eq!(observer.attaches(), 0, "the observer was ignored");
-        assert_eq!(probe.handle().location().as_str(), "/");
-    }
 }

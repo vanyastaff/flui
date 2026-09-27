@@ -2043,31 +2043,33 @@ through the controller (its "Character unit"). **Tests:**
 `text_store::platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps`,
 the kit's `selection_inside_a_grapheme_is_kept_exactly`.
 
-### 36. `WidgetsApp::router`: the Router is the app's routing subtree; navigator configuration is refused
+### 36. `WidgetsApp::router`: a bare Router as the routing subtree, and a form without navigator builders
 
-**Oracle:** Flutter's `WidgetsApp.router` (`widgets/app.dart`, 3.44, from
-memory; no local clone on this host) builds the `Router` as the app's routing
-subtree, below `Localizations` and the `builder` callback, and asserts that
+**Oracle:** Flutter's `_WidgetsAppState.build` (`widgets/app.dart`, checked
+against a local copy of the file) mounts `Router`/`Router.withConfig` as the
+routing subtree with no `FocusScope` around it, below `Localizations` and the
+`builder` callback; only the navigator form builds `FocusScope(autofocus:
+true, child: Navigator(...))`. `WidgetsApp.router` asserts that
 `navigatorKey` and `navigatorObservers` are not given with it.
 
 **Choice:** `WidgetsApp::router(Router<R>)` keeps the Router as a
-`BoxedView` and builds `FocusScope > Router` where the navigator form builds
-`FocusScope > Navigator`, under the same `builder`, `DefaultTextStyle` and
-`Localizations` bands. The app has no navigator of its own: the Router's is
-its root navigator, so the Router is the presentation's outermost one and owns
-its URL (ADR-0093 §2), and its facade refuses a stray page pushed through
-`NavigatorHandle::maybe_of_root`. A rebuilt app updates the boxed Router in
-place (same view type), so the stack and page state survive. `navigator` and
-`observer` on the router form fail a `debug_assert!` at construction and are
-logged and ignored in release builds, the same line as Flutter's asserts; a
-type-level split waits for the removal of the navigator form (ADR-0093 step
-7). An element updated from the home or navigator form to the router form
-releases its navigator (its observers leave the handle), so switching back
-installs the handle the new configuration names. **Tests:**
+`BoxedView` and mounts it bare, under the same `builder`, `DefaultTextStyle`
+and `Localizations` bands; each of its pages has its route's focus scope. The
+app has no navigator of its own: the Router's is its root navigator, and its
+facade refuses a stray page pushed through `NavigatorHandle::maybe_of_root`.
+A rebuilt app updates the boxed Router in place (same view type), so the
+stack and page state survive. Divergence: the routing form is a type
+parameter, not a run-time assertion. `router` returns a
+`WidgetsApp<RouterForm>` and `new`/`with_builder` a
+`WidgetsApp<NavigatorForm>` (the default, so `WidgetsApp` alone still names
+it); only the navigator form has `navigator` and `observer`, so the
+configuration Flutter asserts against does not compile. The two forms are two
+view types, so switching one to the other remounts the shell, and the
+navigator form's `dispose` releases its navigator and observers. Owning the
+presentation's URL waits for ADR-0093 step 3's `RouterScope`. **Tests:**
 `tests/widgets_app_router.rs`
 (`widgets_app_router_roots_the_app_in_its_router`,
+`widgets_app_router_adds_no_focus_scope_above_the_router`,
 `rebuilt_widgets_app_router_keeps_its_stack`,
-`switching_widgets_app_from_home_to_router_releases_the_navigator`,
-`widgets_app_router_refuses_a_navigator_handle`,
-`widgets_app_router_refuses_observers`, and the navigation and localization
-cases).
+`switching_widgets_app_from_home_to_router_releases_the_navigator`, and the
+navigation and localization cases); `tests/routable_ui/fail/router_app_takes_no_navigator.rs`.
