@@ -2,41 +2,31 @@
 //! Paired with the "Tutorial: counter → todo" page in the docs book
 //! (`book/src/getting-started/tutorial-todo.md`).
 //!
-//! The one piece of counter.rs's shape that does NOT carry over: a `Vec` is
-//! not `Copy`, so it can't live in a `StateCell<T>` (`T: Copy`). This
-//! example uses `StateHandle<Vec<Item>>` instead — same `bind(ctx)` in
-//! `init_state`, but reads go through `.with(|list| ...)` and mutation is
-//! in-place via `.update(|list| ...)` rather than `.get()`/`.set()`.
+//! The list lives in a `Signal<Vec<Item>>`, exactly like counter.rs's
+//! `Signal<usize>`: created in `init_state`, read in `build` with
+//! `items.with(ctx, |list| ...)` (which rebuilds this view when the list
+//! changes), and changed in place with `items.update(cx, |list| ...)` from a
+//! button's press. A `Signal` is `Copy`, so every row's closures capture it
+//! without a clone.
 //!
 //! No form/validation widget is used — a single field needs none (see
-//! `examples/form.rs` for `Form` and `TextFormField`).
-//! Adding an item is a plain `TextField` (Material's, not `flui-widgets`'
-//! theme-free one — see the import below): pressing Enter
-//! (`TextField::on_submitted`) or the "Add" button both call the same
-//! `add_item` helper, which pushes the item and clears the field
-//! (`TextEditingController::clear`).
+//! `examples/form.rs` for `Form` and `TextFormField`). Adding an item is a
+//! theme-free `RawTextField`: pressing Enter (`RawTextField::on_submitted`)
+//! or the "Add" button both call the same `add_item` helper, which pushes the
+//! item and clears the field (`TextEditingController::clear`).
 //!
-//! Run with: cargo run --example todo --features material
+//! `on_submitted` hands its callback the text but no `cx`, so the field's
+//! Enter handler opens its write through a `WriterSource` this view takes in
+//! `init_state`.
+//!
+//! Run with: cargo run --example todo
 
-use flui::material::{
-    Checkbox, ElevatedButton, IconButton, InputDecoration, TextField, Theme, ThemeData,
-};
 use flui::prelude::*;
-use flui::widgets::{Icon, IconData, SafeArea, column, row};
+use flui::view::SignalError;
+use flui::widgets::{SafeArea, column, row};
 
-/// Material Icons "delete" glyph — a real codepoint in the Material Icons
-/// font, but not one already used anywhere in this codebase (every existing
-/// `IconData::new(...)` call here is for a different glyph); the
-/// `IconData::new(cp).with_font_family("Material Icons")` *pattern* is
-/// copied from `examples/material_demo`'s icon-button helpers.
-fn delete_icon_data() -> IconData {
-    IconData::new(0xE872).with_font_family("Material Icons")
-}
-
-/// A visual approximation of Material's standard list-tile height, not a
-/// value read from this codebase — `ListView::new` requires a fixed item
-/// extent up front (see its doc comment) and this repo has no shared
-/// "list tile height" constant to reuse yet.
+/// The height of one row. `ListView::new` requires a fixed item extent up
+/// front (see its doc comment).
 const ITEM_EXTENT: f32 = 56.0;
 
 #[derive(Clone)]
@@ -46,24 +36,30 @@ struct Item {
     done: bool,
 }
 
-/// Shared by the "Add" button's `on_pressed` and the field's
+/// Shared by the "Add" button's `on_press` and the field's
 /// `on_submitted` — both end up here with the field's current text, so
 /// pressing Enter and clicking Add behave identically. Empty text is a
 /// no-op (nothing to add); otherwise the new item gets one past the
 /// highest existing id and the field clears itself for the next entry.
-fn add_item(items: &StateHandle<Vec<Item>>, field: &TextEditingController, text: &str) {
+fn add_item(
+    cx: &mut EventCx<'_>,
+    items: Signal<Vec<Item>>,
+    field: &TextEditingController,
+    text: &str,
+) -> Result<(), SignalError> {
     if text.is_empty() {
-        return;
+        return Ok(());
     }
-    items.update(|list| {
+    items.update(cx, |list| {
         let id = list.last().map_or(0, |it| it.id + 1);
         list.push(Item {
             id,
             text: text.to_string(),
             done: false,
         });
-    });
+    })?;
     field.clear();
+    Ok(())
 }
 
 #[derive(Clone, StatelessView)]
@@ -71,7 +67,7 @@ struct TodoApp;
 
 impl StatelessView for TodoApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        Theme::new(ThemeData::light(), SafeArea::new().child(TodoView))
+        SafeArea::new().child(TodoView)
     }
 }
 
@@ -79,8 +75,9 @@ impl StatelessView for TodoApp {
 struct TodoView;
 
 struct TodoState {
-    items: StateHandle<Vec<Item>>,
+    items: Signal<Vec<Item>>,
     new_item: TextEditingController,
+    writer: Option<WriterSource>,
 }
 
 impl StatefulView for TodoView {
@@ -88,39 +85,39 @@ impl StatefulView for TodoView {
 
     fn create_state(&self) -> Self::State {
         TodoState {
-            items: StateHandle::new(Vec::new()),
+            items: Signal::default(),
             new_item: TextEditingController::new(),
+            writer: None,
         }
     }
 }
 
 impl ViewState<TodoView> for TodoState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.items.bind(ctx);
+        self.items = ctx.signal(Vec::new());
+        self.writer = Some(ctx.writer_source());
     }
 
-    fn build(&self, _view: &TodoView, _ctx: &dyn BuildContext) -> impl IntoView {
-        let items = self.items.clone();
-        let new_item_field = self.new_item.clone();
+    fn build(&self, _view: &TodoView, ctx: &dyn BuildContext) -> impl IntoView {
+        let items = self.items;
 
-        let rows: Vec<BoxedView> = self.items.with(|list| {
+        let rows: Vec<BoxedView> = items.with(ctx, |list| {
             list.iter()
                 .map(|item| {
                     let id = item.id;
-                    let toggle_items = items.clone();
-                    let delete_items = items.clone();
+                    let mark = if item.done { "[x]" } else { "[ ]" };
 
                     Row::new(row![
-                        Checkbox::new(item.done).on_changed(move |next| {
-                            toggle_items.update(|list| {
+                        RawButton::new(Text::new(mark)).on_press(move |cx| {
+                            items.update(cx, |list| {
                                 if let Some(it) = list.iter_mut().find(|it| it.id == id) {
-                                    it.done = next.unwrap_or(false);
+                                    it.done = !it.done;
                                 }
-                            });
+                            })
                         }),
                         Text::new(item.text.clone()),
-                        IconButton::new(Icon::new(delete_icon_data())).on_pressed(move || {
-                            delete_items.update(|list| list.retain(|it| it.id != id));
+                        RawButton::new(Text::new("Delete")).on_press(move |cx| {
+                            items.update(cx, |list| list.retain(|it| it.id != id))
                         }),
                     ])
                     .boxed()
@@ -128,26 +125,26 @@ impl ViewState<TodoView> for TodoState {
                 .collect()
         });
 
-        let submit_items = items.clone();
+        let writer = self
+            .writer
+            .clone()
+            .expect("init_state acquires the writer source");
         let submit_field = self.new_item.clone();
-        let button_items = items;
         let button_field = self.new_item.clone();
 
         Column::new(column![
             Row::new(row![
-                TextField::new(new_item_field)
-                    .decoration(InputDecoration {
-                        label_text: Some("New item".to_string()),
-                        ..Default::default()
-                    })
-                    .on_submitted(move |text| add_item(&submit_items, &submit_field, text)),
-                ElevatedButton::new(Text::new("Add")).on_pressed(move || {
-                    let text = button_field.text();
-                    add_item(&button_items, &button_field, &text);
+                RawTextField::new(self.new_item.clone()).on_submitted(move |text| {
+                    let _ = writer.write(|cx| add_item(cx, items, &submit_field, text));
+                }),
+                RawButton::new(Text::new("Add")).on_press(move |cx| {
+                    add_item(cx, items, &button_field, &button_field.text())
                 }),
             ]),
             SizedBox::height(16.0),
-            ListView::new(ITEM_EXTENT, rows),
+            // A `Column` gives its children unbounded height; the list takes
+            // what is left, or its rows are laid out but never reachable.
+            Expanded::new(ListView::new(ITEM_EXTENT, rows)),
         ])
     }
 }

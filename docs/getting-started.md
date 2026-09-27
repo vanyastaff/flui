@@ -132,7 +132,7 @@ the process.
 
 | Example | Command | Purpose |
 |---------|---------|---------|
-| `counter` | `cargo run --example counter` | Minimal stateful app — one `StateCell` and a button (start here) |
+| `counter` | `cargo run --example counter` | Minimal stateful app — one `Signal` and a `RawButton` that writes it (start here) |
 | `widgets_gallery` | `cargo run --example widgets_gallery` | Widget catalog through `flui::prelude` + `run_app` |
 | `platform_window` | `cargo run --example platform_window` | Platform-layer smoke test (raw window, no widgets) |
 | `direct_render` | `cargo run --example direct_render` | Manual GPU pipeline driving |

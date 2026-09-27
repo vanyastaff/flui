@@ -771,24 +771,18 @@ name = "material_demo"
 path = "examples/material_demo/main.rs"
 required-features = ["material"]
 
-# `default = ["material"]` does not make this redundant: `cargo xtask facade-combos`
-# builds every isolated feature combination with `--no-default-features`, and
-# `counter.rs` uses `Theme`/`ThemeData`/`ElevatedButton` from the Material
-# catalog, so an isolated non-material build fails with E0433 without this.
 [[example]]
 name = "counter"
 path = "examples/counter.rs"
-required-features = ["material"]
 
-# Same reason as `counter.rs` above: `todo.rs` uses `Checkbox`/`ElevatedButton`/
-# `IconButton`/`TextField`/`Theme`/`ThemeData` from the Material catalog, so
-# an isolated non-material `cargo xtask facade-combos` build fails without this.
 [[example]]
 name = "todo"
 path = "examples/todo.rs"
-required-features = ["material"]
 
-# Same reason again: `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme`.
+# `default = ["material"]` does not make this redundant: `cargo xtask facade-combos`
+# builds every isolated feature combination with `--no-default-features`, and
+# `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme` from the Material
+# catalog, so an isolated non-material build fails with E0433 without this.
 [[example]]
 name = "form"
 path = "examples/form.rs"

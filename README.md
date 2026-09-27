@@ -95,7 +95,8 @@ An app is a `View` that builds other views — the widget layer drives the whole
 pipeline (element tree → render objects → layout → paint → `wgpu`). The
 minimal one is a piece of state and a button that updates it — the same
 `CounterView`/`CounterState` shape `flui create`'s `counter` template
-generates, kept in sync deliberately:
+generates, kept in sync deliberately. The count is a `Signal`, read in `build`
+and written by the button's press through the `cx` its callback receives:
 
 ```rust
 //! examples/counter.rs (excerpt)
@@ -107,37 +108,38 @@ struct CounterApp;
 
 impl StatelessView for CounterApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        Theme::new(ThemeData::light(), SafeArea::new().child(CounterView))
+        SafeArea::new().child(CounterView)
     }
 }
 
 #[derive(Clone, StatefulView)]
 struct CounterView;
 
+#[derive(Default)]
 struct CounterState {
-    count: StateCell<usize>,
+    count: Signal<usize>,
 }
 
 impl StatefulView for CounterView {
     type State = CounterState;
 
     fn create_state(&self) -> Self::State {
-        CounterState { count: StateCell::new(0) }
+        CounterState::default()
     }
 }
 
 impl ViewState<CounterView> for CounterState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count.bind(ctx);
+        self.count = ctx.signal(0);
     }
 
-    fn build(&self, _view: &CounterView, _ctx: &dyn BuildContext) -> impl IntoView {
-        let count = self.count.clone();
+    fn build(&self, _view: &CounterView, ctx: &dyn BuildContext) -> impl IntoView {
+        let count = self.count;
         Center::new().child(
             Column::new(column![
-                Text::new(self.count.get().to_string()),
-                ElevatedButton::new(Text::new("Increment"))
-                    .on_pressed(move || count.update(|n| n + 1)),
+                Text::new(count.get(ctx).to_string()),
+                RawButton::new(Text::new("Increment"))
+                    .on_press(move |cx| count.update(cx, |n| *n += 1)),
             ])
             .main_axis_alignment(MainAxisAlignment::Center),
         )
