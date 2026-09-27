@@ -6,6 +6,7 @@
 
 use std::sync::atomic::AtomicU32;
 use std::sync::mpsc;
+use std::{panic::AssertUnwindSafe, panic::catch_unwind};
 
 use flui_view::{Reactive, Signal, SignalError};
 
@@ -211,6 +212,132 @@ fn a_routed_write_requests_the_owning_presentations_frame() {
         "a routed write must request the owning presentation's frame, whose BuildOwner has \
          no wake hook of its own"
     );
+}
+
+#[test]
+fn a_panicking_routed_write_still_requests_its_owning_presentations_frame() {
+    let (wake, wake_count) = counting_wake();
+    let mut realm = new_runtime(wake).expect("runtime");
+    let a = realm.presentation_id();
+    let b = realm.install_second_presentation_for_test();
+    let graph_b = graph_of(&realm, b);
+    let signal = graph_b.signal(1u32);
+    let tail = graph_b.signal(0u32);
+    let builds_b = builds();
+    realm
+        .attach_root_widget_to_for_test(
+            b,
+            &Reader {
+                sig: signal,
+                builds: Arc::clone(&builds_b),
+            },
+        )
+        .expect("secondary root attaches");
+    let mut backend = ScriptedSink::always_presents();
+    realm.render_frame(&mut backend);
+    let _ = realm.take_redraw_request();
+    let _ = realm
+        .presentations
+        .get(b)
+        .expect("secondary installed")
+        .take_redraw_pending();
+
+    let sender = realm.command_sender();
+    sender
+        .send_signal_write(signal.detach(), move |signal, graph| {
+            let _ = signal.update(graph, |value| {
+                *value = 7;
+                panic!("command updater probe");
+            });
+        })
+        .expect("send");
+    sender
+        .send_signal_write(tail.detach(), move |tail, graph| {
+            tail.set(graph, 9).expect("tail signal remains live");
+        })
+        .expect("tail send");
+    let wakes_after_sends = wake_count.load(Ordering::Relaxed);
+    let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
+
+    let payload = outcome.expect_err("the command panic must resume");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"command updater probe")
+    );
+    assert_eq!(signal.peek(&graph_b, |value| *value), Ok(7));
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_sends + 1,
+        "the unwinding owner turn must re-arm a platform wake"
+    );
+    assert_eq!(
+        tail.peek(&graph_b, |value| *value),
+        Ok(0),
+        "the FIFO tail remains queued when the first command unwinds"
+    );
+    assert!(
+        realm.drain_owner_inbox(),
+        "the re-armed owner turn must observe redraw demand"
+    );
+    assert_eq!(
+        tail.peek(&graph_b, |value| *value),
+        Ok(9),
+        "the next owner turn drains the preserved FIFO tail"
+    );
+    assert!(
+        realm
+            .presentations
+            .get(b)
+            .expect("secondary installed")
+            .take_redraw_pending(),
+        "the addressed presentation must retain redraw demand"
+    );
+    assert!(
+        !realm
+            .presentations
+            .get(a)
+            .expect("primary installed")
+            .take_redraw_pending(),
+        "the sibling presentation stays untouched"
+    );
+
+    realm.render_frame(&mut backend);
+    assert_eq!(count(&builds_b), 2, "the partial commit becomes visible");
+}
+
+#[test]
+fn a_signal_write_panic_keeps_priority_over_its_rearmed_wake_panic() {
+    let panic_on_wake = Arc::new(AtomicBool::new(false));
+    let panic_on_wake_in_callback = Arc::clone(&panic_on_wake);
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        assert!(
+            !panic_on_wake_in_callback.load(Ordering::Relaxed),
+            "command wake probe"
+        );
+    });
+    let realm = new_runtime(wake).expect("runtime");
+    let graph = graph_of(&realm, realm.presentation_id());
+    let signal = graph.signal(1u32);
+    realm
+        .command_sender()
+        .send_signal_write(signal.detach(), move |signal, graph| {
+            let _ = signal.update(graph, |value| {
+                *value = 7;
+                panic!("command updater probe");
+            });
+        })
+        .expect("send while wake is healthy");
+    panic_on_wake.store(true, Ordering::Relaxed);
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
+
+    let payload = outcome.expect_err("the command panic must resume");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"command updater probe"),
+        "the secondary wake panic must not replace the updater panic"
+    );
+    assert_eq!(signal.peek(&graph, |value| *value), Ok(7));
 }
 
 /// The primary-graph case keeps working: a write to a signal the primary

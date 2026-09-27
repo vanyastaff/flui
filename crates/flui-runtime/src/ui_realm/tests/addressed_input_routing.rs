@@ -1,8 +1,18 @@
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use flui_interaction::events::{PointerType, make_down_event};
+use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_platform_api::text_store::{InMemoryTextStore, TextStore};
+use flui_platform_api::text_store::{
+    CommitGate, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
+    TextStoreObserver, TextStoreStatus,
+};
 use flui_types::ImeEvent;
 use flui_types::geometry::{Offset, Pixels};
+use flui_view::{Signal, SignalWriteExt};
+use flui_widgets::{Focus, SizedBox};
 
 use super::*;
 
@@ -13,6 +23,58 @@ fn headless_text_input() -> (
     let fake = Arc::new(flui_platform::FakeTextInput::new());
     let capability: Arc<dyn flui_platform::traits::PlatformTextInput> = fake.clone();
     (fake, capability)
+}
+
+#[derive(Clone)]
+struct PanickingKeyReader {
+    signal: Signal<u32>,
+    node: Rc<FocusNode>,
+}
+
+impl flui_view::View for PanickingKeyReader {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for PanickingKeyReader {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let _ = self.signal.get(ctx);
+        let signal = self.signal;
+        Focus::new(SizedBox::square(10.0))
+            .focus_node(Rc::clone(&self.node))
+            .on_key_event(move |cx, _event| {
+                let _ = signal.update(cx, |value| {
+                    *value = 7;
+                    panic!("keyboard updater probe");
+                });
+                KeyEventResult::Handled
+            })
+    }
+}
+
+struct PanickingTextStore;
+
+impl TextStore for PanickingTextStore {
+    fn status(&self) -> TextStoreStatus {
+        TextStoreStatus::EDITABLE_SINGLE_LINE
+    }
+
+    fn request_lock(
+        &self,
+        _grant: LockGrant,
+        _timing: LockTiming,
+    ) -> Result<LockOutcome, TextStoreError> {
+        panic!("IME store probe");
+    }
+
+    fn run_deferred_grants(&self) -> usize {
+        0
+    }
+
+    fn set_commit_gate(&self, _gate: CommitGate) {}
+
+    fn set_observer(&self, _observer: Option<Rc<dyn TextStoreObserver>>) {}
 }
 
 /// A pointer event addressed to B (the NON-primary presentation)
@@ -204,6 +266,54 @@ fn ime_event_addressed_to_b_does_not_reach_as_session() {
     );
 }
 
+#[test]
+fn panicking_ime_dispatch_preserves_addressed_redraw_demand() {
+    let (_fake_a, capability_a) = headless_text_input();
+    let (_fake_b, capability_b) = headless_text_input();
+    let mut realm = UiRealm::for_test_with_text_input(Some(capability_a));
+    let a_id = realm.presentation_id();
+    let window_b = crate::presentation::test_platform_window(Some(capability_b));
+    let presentation_b = realm.assemble_presentation(window_b);
+    let b_id = realm.install_presentation(presentation_b);
+    let store: Rc<dyn TextStore> = Rc::new(PanickingTextStore);
+    let _token = realm
+        .presentation_text_input_handle_for_test(b_id)
+        .attach(flui_interaction::TextInputClient::new(store))
+        .expect("B supports text input");
+    let _ = realm.take_redraw_request();
+    let _ = realm
+        .presentations
+        .get(b_id)
+        .expect("B installed")
+        .take_redraw_pending();
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        realm.enter(|realm| {
+            realm
+                .handle_input_addressed(b_id, PlatformInput::Ime(ImeEvent::Commit("x".to_owned())));
+        });
+    }));
+
+    let payload = outcome.expect_err("the IME panic must resume");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"IME store probe"));
+    assert!(
+        realm
+            .presentations
+            .get(b_id)
+            .expect("B installed")
+            .take_redraw_pending(),
+        "the addressed presentation retains redraw demand"
+    );
+    assert!(
+        !realm
+            .presentations
+            .get(a_id)
+            .expect("A installed")
+            .take_redraw_pending(),
+        "the sibling presentation stays untouched"
+    );
+}
+
 /// Keyboard input always routes to the realm's ACTIVE presentation
 /// (`FocusCoordinator`), never to whichever presentation an
 /// individual event happens to be stamped for — the race/stray-event
@@ -250,6 +360,145 @@ fn keyboard_routes_to_active_presentation_only() {
         b_presentation.take_redraw_pending(),
         "keyboard input must route to B, the ACTIVE presentation, regardless of which \
          presentation the event was stamped for"
+    );
+}
+
+#[test]
+fn panicking_keyboard_signal_update_preserves_active_redraw_demand() {
+    let mut realm = UiRealm::for_test();
+    let a_id = realm.presentation_id();
+    let b_id = realm.install_second_presentation_for_test();
+    let graph_b = realm
+        .presentation_widgets_for_test(b_id)
+        .with_build_owner(|owner| owner.reactive().clone());
+    let signal = graph_b.signal(1u32);
+    let node = FocusNode::with_debug_label("panicking-key-reader");
+    realm
+        .attach_root_widget_to_for_test(
+            b_id,
+            &PanickingKeyReader {
+                signal,
+                node: Rc::clone(&node),
+            },
+        )
+        .expect("B root attaches");
+    let mut backend = ScriptedSink::always_presents();
+    realm.render_frame(&mut backend);
+    realm.notify_presentation_focus_gained(b_id);
+    node.request_focus();
+    let _ = realm.take_redraw_request();
+    let _ = realm
+        .presentations
+        .get(b_id)
+        .expect("B installed")
+        .take_redraw_pending();
+
+    let key_event = KeyEventBuilder::new(flui_interaction::events::Code::KeyA).build();
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        realm.enter(|realm| {
+            realm.handle_input_addressed(a_id, PlatformInput::Keyboard(key_event));
+        });
+    }));
+
+    let payload = outcome.expect_err("the keyboard panic must resume");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"keyboard updater probe")
+    );
+    assert_eq!(signal.peek(&graph_b, |value| *value), Ok(7));
+    assert!(
+        realm
+            .presentations
+            .get(b_id)
+            .expect("B installed")
+            .take_redraw_pending(),
+        "the active presentation retains redraw demand"
+    );
+    assert!(
+        !realm
+            .presentations
+            .get(a_id)
+            .expect("A installed")
+            .take_redraw_pending(),
+        "the stamped sibling stays untouched"
+    );
+}
+
+#[test]
+fn panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake() {
+    let panic_on_wake = Arc::new(AtomicBool::new(false));
+    let wake_gate = Arc::clone(&panic_on_wake);
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        assert!(!wake_gate.load(Ordering::Acquire), "wake probe");
+    });
+    let mut realm = new_runtime(wake).expect("runtime");
+    let a_id = realm.presentation_id();
+    let b_id = realm.install_second_presentation_for_test();
+    let graph_b = realm
+        .presentation_widgets_for_test(b_id)
+        .with_build_owner(|owner| owner.reactive().clone());
+    let signal = graph_b.signal(1u32);
+    let node = FocusNode::with_debug_label("panicking-key-reader-with-panicking-wake");
+    realm
+        .attach_root_widget_to_for_test(
+            b_id,
+            &PanickingKeyReader {
+                signal,
+                node: Rc::clone(&node),
+            },
+        )
+        .expect("B root attaches");
+    let mut backend = ScriptedSink::always_presents();
+    realm.render_frame(&mut backend);
+    realm.notify_presentation_focus_gained(b_id);
+    node.request_focus();
+    let _ = realm.take_redraw_request();
+    let _ = realm
+        .presentations
+        .get(b_id)
+        .expect("B installed")
+        .take_redraw_pending();
+    panic_on_wake.store(true, Ordering::Release);
+
+    let key_event = KeyEventBuilder::new(flui_interaction::events::Code::KeyA).build();
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        realm.enter(|realm| {
+            realm.handle_input_addressed(a_id, PlatformInput::Keyboard(key_event));
+        });
+    }));
+
+    let payload = outcome.expect_err("the original keyboard panic must resume");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"keyboard updater probe"),
+        "the secondary wake panic must not replace the dispatch failure"
+    );
+    assert_eq!(signal.peek(&graph_b, |value| *value), Ok(7));
+    assert!(
+        realm
+            .presentations
+            .get(b_id)
+            .expect("B installed")
+            .take_redraw_pending(),
+        "the active presentation retains redraw demand"
+    );
+}
+
+#[test]
+fn a_panicking_wake_resumes_when_addressed_dispatch_succeeds() {
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| panic!("wake probe"));
+    let realm = new_runtime(wake).expect("runtime");
+    let presentation = realm.presentations.primary();
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        realm.finish_addressed_input_dispatch(presentation, Ok(()));
+    }));
+
+    let payload = outcome.expect_err("the wake panic must resume");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"wake probe"));
+    assert!(
+        presentation.take_redraw_pending(),
+        "redraw demand is durable before the wake runs"
     );
 }
 

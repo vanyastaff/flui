@@ -241,6 +241,21 @@ tick still precedes every presentation's build, which is the ordering the
 segment relies on. Moving the tick into begin frame is a separate change.
 Pinned by `pump_ticks_vsync_in_the_persistent_phase_not_among_transient_callbacks`.
 
+### Addressed dispatch retains redraw demand across unwind
+
+**Rule.** An owner-thread operation that may run user mutation follows
+`catch dispatch → request the resolved presentation's redraw → resume the
+original panic`. Graph-addressed `SignalWrite`, active-presentation keyboard
+dispatch and presentation-addressed IME dispatch all use this ordering, as the
+pointer path already did. A partial signal commit can therefore become visible
+on a later frame even when its callback unwinds; the operation never redirects
+demand to the primary or wakes an unrelated sibling.
+
+This is continuation safety, not rollback or callback isolation. The panic
+still leaves the dispatch boundary, and arbitrary external effects remain the
+application's responsibility. Pinned by the panicking secondary-presentation
+signal command and addressed keyboard/IME tests.
+
 `execution` has no Flutter counterpart to map: runtime and scheduling
 topology, including background execution, is outside Flutter's reference
 (ADR-0027), and ADR-0047 records its design.

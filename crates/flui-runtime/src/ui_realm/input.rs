@@ -62,7 +62,10 @@ impl FocusCoordinator {
     }
 }
 
-/// Moved here from the retired `AppBinding`, unchanged.
+/// Keep the earliest input-phase panic when cleanup or wake work also
+/// unwinds. Secondary panic payloads are intentionally leaked because their
+/// destructors are arbitrary user code and must not replace or abort the
+/// original failure while it is being resumed.
 pub(super) fn preserve_first_input_panic(
     first: &mut Option<Box<dyn std::any::Any + Send>>,
     candidate: Option<Box<dyn std::any::Any + Send>>,
@@ -74,12 +77,19 @@ pub(super) fn preserve_first_input_panic(
     if first.is_none() {
         *first = Some(candidate);
     } else {
-        tracing::error!(
-            phase,
-            "input phase panicked after an earlier phase; only the first panic is resumed"
-        );
+        let telemetry_panic = catch_unwind(AssertUnwindSafe(|| {
+            tracing::error!(
+                phase,
+                "input phase panicked after an earlier phase; only the first panic is resumed"
+            );
+        }))
+        .err();
         // A panic payload may itself panic while being dropped. Leaking only
-        // the secondary exceptional payload keeps the original failure stable.
+        // secondary exceptional payloads keeps the original failure stable,
+        // including when the tracing subscriber itself panics.
+        if let Some(payload) = telemetry_panic {
+            std::mem::forget(payload);
+        }
         std::mem::forget(candidate);
     }
 }
@@ -139,6 +149,29 @@ pub(super) fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
 }
 
 impl UiRealm {
+    /// Finish an addressed input dispatch without letting a secondary platform
+    /// wake panic replace the dispatch failure that caused the redraw request.
+    ///
+    /// The redraw flags are set before the wake runs, so even a panicking wake
+    /// leaves durable demand behind. When both phases panic, the dispatch
+    /// payload remains the first failure and the wake payload is discarded by
+    /// [`preserve_first_input_panic`].
+    pub(super) fn finish_addressed_input_dispatch(
+        &self,
+        presentation: &PresentationState,
+        dispatch: Result<(), Box<dyn std::any::Any + Send>>,
+    ) {
+        let mut first_panic = dispatch.err();
+        let wake_panic = catch_unwind(AssertUnwindSafe(|| {
+            self.request_redraw_for(presentation);
+        }))
+        .err();
+        preserve_first_input_panic(&mut first_panic, wake_panic, "redraw wake");
+        if let Some(payload) = first_panic {
+            resume_unwind(payload);
+        }
+    }
+
     // ========================================================================
     // Input dispatch (moved from the retired `AppBinding`)
     // ========================================================================
@@ -236,8 +269,10 @@ impl UiRealm {
             PlatformInput::Ime(ime_event) => {
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
-                presentation.text_input().dispatch(&ime_event);
-                self.request_redraw_for(presentation);
+                let dispatch = catch_unwind(AssertUnwindSafe(|| {
+                    presentation.text_input().dispatch(&ime_event);
+                }));
+                self.finish_addressed_input_dispatch(presentation, dispatch);
             }
             PlatformInput::Pointer(pointer_event) => {
                 let should_hold_pointer = presentation.frame_commit_state()
@@ -254,18 +289,17 @@ impl UiRealm {
                     return;
                 }
                 let dispatch = Self::dispatch_pointer_event_entered(presentation, &pointer_event);
-                self.request_redraw_for(presentation);
-                if let Err(payload) = dispatch {
-                    resume_unwind(payload);
-                }
+                self.finish_addressed_input_dispatch(presentation, dispatch);
             }
             PlatformInput::Keyboard(keyboard_event) => {
                 let clock = presentation.clock();
                 clock.stamp_input_epoch(clock.now());
-                presentation
-                    .focus_manager()
-                    .dispatch_key_event(&keyboard_event);
-                self.request_redraw_for(presentation);
+                let dispatch = catch_unwind(AssertUnwindSafe(|| {
+                    presentation
+                        .focus_manager()
+                        .dispatch_key_event(&keyboard_event);
+                }));
+                self.finish_addressed_input_dispatch(presentation, dispatch);
             }
             PlatformInput::DragDrop(drag_drop_event) => {
                 // Not stamped (see this method's own doc): this event is

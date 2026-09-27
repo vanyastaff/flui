@@ -1,11 +1,13 @@
 //! The owner inbox: `UiCommand`, `UiCommandSender`, and draining it on the owner thread.
 
 use super::UiRealm;
+use super::input::preserve_first_input_panic;
 use crossbeam_channel::{Sender, TrySendError};
 use flui_foundation::PresentationId;
 use flui_scheduler::SchedulerPhase;
 use flui_semantics::SemanticsActionRequest;
 use flui_widgets::NavigatorCommand;
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -436,11 +438,31 @@ impl UiRealm {
                         report.dropped_stale += 1;
                         continue;
                     };
-                    apply(&reactive);
+                    let outcome = catch_unwind(AssertUnwindSafe(|| apply(&reactive)));
                     // A secondary presentation's BuildOwner has no wake hook,
                     // so the owning presentation's frame is requested here.
+                    // Do it before resuming a command panic: a signal update
+                    // may have partially committed and already invalidated
+                    // this presentation's readers.
                     presentation.mark_redraw_pending();
                     self.redraw_pending.store(true, Ordering::Release);
+                    // The send wake is the owner turn currently unwinding.
+                    // Re-arm the platform so the remaining FIFO tail and a
+                    // partial commit cannot starve in an otherwise idle host.
+                    // An external wake panic must not replace the command's
+                    // original payload.
+                    if let Err(payload) = outcome {
+                        let wake_panic = catch_unwind(AssertUnwindSafe(|| (self.wake)())).err();
+                        let mut first_panic = Some(payload);
+                        preserve_first_input_panic(
+                            &mut first_panic,
+                            wake_panic,
+                            "signal-write redraw wake",
+                        );
+                        let payload = first_panic
+                            .expect("BUG: the original signal-write panic must be preserved");
+                        resume_unwind(payload);
+                    }
                     report.invoked += 1;
                 }
             }
