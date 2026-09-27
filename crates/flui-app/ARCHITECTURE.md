@@ -112,6 +112,17 @@ required. Scene migration and background owner waking remain explicit follow-ups
 
 ### UIKit process and session ownership
 
+The owner-only background turn is a typed `BackgroundPump`, not a captured
+callback: drain the addressed realm's owner inbox, then poll its async driver
+without a frame. Poll-generated commands remain for the next owner opportunity.
+It uses the existing exact-address close fence and finite FIFO budget; nested
+wakes enqueue rather than recursively poll. Background operations remain lossless
+and are not coalesced across other operations. This adds no public scheduling
+contract or driver registry; renderer-capturing frame callbacks still require
+registration-owned drivers before the owner host can move into the runtime.
+The dispatcher tests exercise inbox ordering, async polling and reentrant close
+admission through this same production operation.
+
 The UIKit runner starts services, execution pools and its development watcher
 once per process. Its private session controller installs a real realm only for
 a fresh scene session; reconnect selects the retained realm. Terminal discard

@@ -143,16 +143,7 @@ fn drive_owner() {
                     .unwrap_or_default()
             });
             for dispatcher in dispatchers {
-                let _ = dispatch_platform_realm(
-                    dispatcher,
-                    RealmTask::Pump(Box::new(|realm| {
-                        // An owner turn commits commands and polls the async driver;
-                        // it runs no frame, so it has no gate to feed the drain's
-                        // redraw report to.
-                        let _ = realm.enter(flui_runtime::ui_realm::UiRealm::drain_owner_inbox);
-                        realm.pump_background();
-                    })),
-                );
+                let _ = dispatch_platform_realm(dispatcher, RealmTask::BackgroundPump);
             }
         },
         || {

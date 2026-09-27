@@ -249,6 +249,9 @@ pub(in crate::app) enum RealmTask {
     )]
     Frame(Box<dyn FnOnce(&crate::app::ui_realm::UiRealm)>),
     Pump(Box<dyn FnOnce(&mut crate::app::ui_realm::UiRealm)>),
+    /// Commit the owner inbox, then poll async work without running a frame.
+    #[cfg(any(test, target_os = "ios"))]
+    BackgroundPump,
     ClosePresentation(flui_foundation::PresentationId),
 }
 
@@ -277,6 +280,10 @@ impl RealmTask {
         match self {
             Self::Event(event) => event.run(realm, presentation_id),
             Self::Frame(run) => run(realm),
+            #[cfg(any(test, target_os = "ios"))]
+            Self::BackgroundPump => unreachable!(
+                "BUG: background pumps require exclusive realm access in the dispatcher"
+            ),
             Self::Pump(_) => unreachable!(
                 "BUG: RealmTask::Pump reached RealmTask::run -- dispatch_platform_realm's drain \
                  loop must match this variant out before calling run, so it can hand the pump \
@@ -1555,6 +1562,13 @@ fn dispatch_platform_realm_now(
                 // Not entered here: the pump enters the realm itself, and a
                 // runner's pump closure enters it explicitly for its gate.
                 RealmTask::Pump(run) => run(&mut realm),
+                #[cfg(any(test, target_os = "ios"))]
+                RealmTask::BackgroundPump => {
+                    // There is no frame gate to consume the redraw report. Async
+                    // work may enqueue new commands for the next owner opportunity.
+                    let _ = realm.enter(crate::app::ui_realm::UiRealm::drain_owner_inbox);
+                    realm.pump_background();
+                }
                 other => realm.enter(|realm| other.run(realm, task_presentation_id)),
             }
             next = APP_RUNTIME.with(|slot| {
