@@ -3,7 +3,9 @@
 - **Status:** Proposed. First moves landed (2026-09-26): `flui-sdk` exists and
   `flui-foundation` carries the train guard `links = "flui_train"`; `flui-material` builds on
   `flui-sdk` alone from `packages/flui-material`, `flui-cupertino` builds on `flui-sdk` alone
-  from `packages/flui-cupertino`, and the FLUI derives resolve through the SDK first
+  from `packages/flui-cupertino`, and the FLUI derives resolve through the SDK first. On
+  2026-09-27 `flui-devtools` moved onto `flui-sdk` alone from `packages/flui-devtools`;
+  `flui-hot-reload` stays in `crates/` until the runtime hook of ADR-0094 exists (move 4)
   ([migration plan](../plans/2026-09-25-architecture-migration-plan.md)).
 - **Date:** 2026-09-25
 - **Supersedes in part (on acceptance):** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) — the
@@ -12,6 +14,11 @@
   ADR-0081 deleted that crate). Its decoupling rules (shared
   substrate below both, mechanism goes down, capability seams instead of platform branches, raw
   primitives, injected selection chrome, no god-widget entry point) stand.
+- **Supersedes in part (on acceptance):** [ADR-0040](ADR-0040-tree-observation-seam.md) §8 —
+  the devtools inspector's `flui-foundation`-only dependency and the observation-seam test's
+  place in `flui-testing`. The inspector reaches the seam through `flui-sdk`, and the test
+  lives in `packages/flui-devtools`; the seam itself, and the rule that no core crate names
+  devtools, stand.
 - **Amends (on acceptance):** the delivery-layer sentence of the product plan (the living plan linked from
   [`docs/ROADMAP.md`](../ROADMAP.md)), which puts official packages "in separate repositories,
   one release train"
@@ -109,14 +116,14 @@ already reads; no parallel allowlist is added, and an entry that admits nothing 
   is refused unless the dependent's `edge-exceptions` declares it, so ADR-0028's "Material and
   Cupertino do not depend on each other" holds without per-package lists. Until a package
   moves onto `flui-sdk` its internal-crate edges are `edge-exceptions` entries in its manifest
-  (`flui-devtools`' two, `flui-hot-reload`'s four); the list only shrinks,
+  (`flui-hot-reload`'s four; `flui-devtools`' two went when it moved); the list only shrinks,
   each package's entries go when it moves, and a member under `packages/` may list none.
 - **Reverse, strict from the start.** No core crate names an official package in any form:
   normal, optional, build or dev. Named exceptions, each with its reason and exit:
 
   | Edge | Reason | Exit |
   |---|---|---|
-  | `flui-testing` dev → `flui-devtools` | observation-seam test links both halves | the test moves into `flui-devtools` |
+  | `flui-testing` dev → `flui-devtools` | observation-seam test links both halves | expired: the test moved into `packages/flui-devtools` with move 4 |
   | `flui-app` optional → `flui-hot-reload` | reload driver | the change that moves `flui-hot-reload` into `packages/` ([ADR-0094](ADR-0094-hot-reload-through-subsecond.md) §2) |
   | `flui` optional → `flui-hot-reload` (`hot-reload` feature) | facade feature | the same change (ADR-0094 §2) |
   | `flui` dev → `flui-hot-reload` (`Cargo.toml:554`) | a root-package example and test that name it (`examples/scene_render.rs`, `tests/facade_consumer.rs`) | the same change; the example moves with the package |
@@ -163,7 +170,8 @@ already reads; no parallel allowlist is added, and an entry that admits nothing 
   JSON. More than about 30 items beyond the hooks means the sdk is becoming a second facade, and
   this decision is revisited. At creation `pipeline` holds three items (`PathClipConfiguration`,
   `RenderPhysicalShape`, `TranslationFraction`), counted from source, because the rustdoc JSON
-  tooling is not in place yet; the measurement is in `crates/flui-sdk/ARCHITECTURE.md`.
+  tooling is not in place yet; the measurement is in `crates/flui-sdk/ARCHITECTURE.md`. Move 4
+  adds `hooks` with one item (`FrameSnapshot`), outside the ceiling.
 - **Version.** The crate's own `version = "0.1.0-dev"`, not the workspace's; `cargo xtask
   workspace` refuses a `tier-kind = "evolving"` crate that inherits the version or has a major
   above 0.
@@ -234,7 +242,7 @@ Five moves, each of which leaves `main` green and merges on its own. The
 | 1. SDK and guard (in place) | `crates/flui-sdk` is created: tier K, `tier-kind = "evolving"`, `order = 6`, layer 6, `version = "0.1.0-dev"`, with the measured surface of §4 and no consumer yet. `flui-foundation` declares `links = "flui_train"` with a build script that does nothing else (§5). `cargo xtask workspace` requires an evolving crate's own `0.N` version and the guard on `flui-foundation` alone; `cargo xtask reach` states that `flui-foundation` is in the SDK's and the facade's builds | — |
 | 2. Material (in place) | `flui-material`'s nine internal normal dependencies become `flui-sdk` (plus `tracing`), its imports move to SDK paths, and it moves to `packages/flui-material` in the same change, with its dev-dependency paths rewritten. Done when no `flui_(widgets\|view\|types\|objects\|rendering\|foundation\|animation\|interaction\|scheduler\|painting)::` path is left in its `src`. Its examples stay with the facade until move 5. **Outcome:** done, with no change to the SDK's surface; the view, inherited and animation derives resolve through `flui-sdk` first, so a package on the SDK alone can use them (the `Diagnosticable` derive has no SDK path yet); the kind rule of §2 is checked, and Material's `allowed-dependents` lists are replaced by it. It landed ahead of the parity command of §3, which still waits | move 1; the `cargo package` parity command of §3 |
 | 3. Cupertino (in place) | The same for `flui-cupertino`, which moves to `packages/flui-cupertino`. **Outcome:** done, with no change to the SDK's surface: its normal dependencies are `flui-sdk` and `tracing`, and its six seeded internal-crate exceptions and `allowed-dependents` lists are gone | move 1; independent of move 2 |
-| 4. Devtools and hot reload | `flui-devtools` moves onto the SDK, which gains `hooks` for the observation seam (ADR-0040), and the observation-seam test moves into it, removing `flui-testing`'s dev edge. `flui-hot-reload` moves together with the `DevReloadHook` of ADR-0094 §2, which deletes the `flui-app` edge and the facade's `hot-reload` feature | move 1; `flui-view`'s `runtime-internals` feature replaced by a hidden module first |
+| 4. Devtools and hot reload | `flui-devtools` moves onto the SDK and the observation-seam test moves into it, removing `flui-testing`'s dev edge. `flui-hot-reload` moves together with the `DevReloadHook` of ADR-0094 §2, which deletes the `flui-app` edge and the facade's `hot-reload` feature. **Outcome for devtools:** done. Its normal dependencies are `flui-sdk` plus six third-party crates, and its two internal-crate exceptions are gone. The SDK gained `hooks` with one item, `FrameSnapshot`, which the timeline records; the facade has no scheduler module, so the item is Evolving. No public API produces a `FrameSnapshot` yet (only `flui-app`'s crate-private presentation calls `FrameClock::frames_since`), so the timeline bridge is reachable from tests only; a public snapshot source, a frame-telemetry capability on the realm or on `LifecycleContext`, is the follow-up, recorded in `docs/plans/2026-09-25-architecture-migration-plan.md`, and lands after the realm moves into `flui-runtime`. The observation seam (ADR-0040) needed no new item: `foundation::observe` and `foundation::RebuildReason` are Stable paths inside the whole `foundation` re-export, and putting them in `hooks` would break the facade-path rule of §4. The seam test and the observer-overhead bench moved from `flui-testing` to `packages/flui-devtools`. **Hot reload stays in `crates/`:** `flui-app` names it (its `hot-reload` feature, the presentation's `apply_hot_reload`, and the runner code that installs its drivers), and so does the facade; deleting those edges needs the runtime hook of ADR-0094 §1, which as specified cannot host the dlopen worker or the Android scene plugin without amending ADR-0094, and whose Subsecond path is blocked by ADR-0094 §5. Its imports (`flui_layer::Scene` in the plugin ABI, `PipelineOwner`, `WidgetsBinding`, `flui-view/runtime-internals`) are not package-author items: SDK re-exports would add Evolving surface for a path ADR-0094 deletes, and enabling `runtime-internals` from the SDK would leak it to every package. Its two `reach-exceptions` and six `globals` entries, all exiting through ADR-0094, are more than a member under `packages/` may carry | move 1; for hot reload also `flui-view`'s `runtime-internals` feature replaced by a hidden module, and the runtime hook of ADR-0094 |
 | 5. Facade | §6: `default = []`, no `material`/`cupertino` features, dependencies, `edge-exceptions`, re-exports or Material prelude half; `flui_material::prelude`; `flui create` adds `flui-material`, with a CLI test that checks the generated project; Material examples move to `packages/flui-material/examples`; `cargo xtask facade-combos` and the documents from the `rg` list of the Consequences are updated; the CI Material example build changes with the owner's sign-off | moves 2 and 3 |
 
 Material's and Cupertino's `allowed-dependents` lists were replaced in moves 2 and 3 by the kind
@@ -333,6 +341,16 @@ In place with moves 2 and 3:
 - **Derives through the SDK.** `sdk_consumers_derive_through_the_sdk_even_beside_the_facade` in
   `tests/facade_consumer.rs` builds a consumer on `flui-sdk` alone (plain and renamed) and one
   with the facade as a dev-dependency, each using the FLUI derives.
+
+In place with move 4 (devtools):
+
+- **Devtools on the SDK alone.** `devtools_builds_on_the_sdk_alone` in `tools/xtask` reads the
+  real metadata: the manifest is `packages/flui-devtools/Cargo.toml`, it lists no
+  `edge-exceptions`, and its normal and build dependencies are exactly `flui-sdk`,
+  `parking_lot`, `serde`, `serde_json`, `tracing`, `tracing-subscriber` and `web-time`. The
+  seeded exception set in `the_tiers_match_the_adr_0081_table` no longer holds devtools' or
+  `flui-testing`'s entries, and `crates/flui-sdk/tests/surface.rs` pins `hooks::FrameSnapshot`
+  and names the `foundation::observe` items.
 
 Not yet in place:
 

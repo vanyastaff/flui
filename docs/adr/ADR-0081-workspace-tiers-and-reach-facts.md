@@ -266,8 +266,8 @@ depend on an `official` package in any form — normal, build, dev or optional. 
 ADR-0028's `allowed-dependents` by kind instead of by a hard-coded exemption set. It is strict
 from the first day, with named, dated exceptions:
 
-- `flui-testing` dev -> `flui-devtools` (`crates/flui-testing/Cargo.toml:106`): exits when the
-  observation-seam test moves into `flui-devtools`;
+- `flui-testing` dev -> `flui-devtools`: exited when the observation-seam test moved into
+  `packages/flui-devtools` (ADR-0088 move 4);
 - `flui-app` optional -> `flui-hot-reload` (`crates/flui-app/Cargo.toml:65,108`), the facade's
   optional edge and `hot-reload` feature (`Cargo.toml:553,664`) and the facade's dev-dependency
   (`Cargo.toml:588`): exit in the change that moves `flui-hot-reload` into the official packages

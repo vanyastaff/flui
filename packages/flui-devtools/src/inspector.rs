@@ -1,16 +1,17 @@
 //! Counting/logging tree inspector — the first consumer of the ADR-0040
 //! observation seam.
 //!
-//! Proves the dependency-inverted observation seam end to end with only
-//! `flui-foundation` on the dependency list: install an
-//! [`InspectorCounters`] via `WidgetsBinding::install_tree_observer` and it
-//! tallies mounts, moves, rebuilds (with per-cause counts), and unmounts as
-//! the tree mutates. No tree access, no locks in the public surface.
+//! Proves the dependency-inverted observation seam end to end through
+//! `flui_sdk::foundation::observe`, with no tree access in its surface:
+//! install an [`InspectorCounters`] via
+//! `WidgetsBinding::install_tree_observer` and it tallies mounts, moves,
+//! rebuilds (with per-cause counts), and unmounts as the tree mutates. No
+//! locks in the public surface.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use flui_foundation::RebuildReason;
-use flui_foundation::observe::{
+use flui_sdk::foundation::RebuildReason;
+use flui_sdk::foundation::observe::{
     ElementMounted, ElementMoved, ElementRebuilt, ElementUnmounted, TreeObserver,
 };
 
@@ -150,7 +151,7 @@ impl InspectorSnapshot {
 mod tests {
     use std::any::TypeId;
 
-    use flui_foundation::{ElementId, RebuildReasons};
+    use flui_sdk::foundation::{ElementId, RebuildReasons};
 
     use super::*;
 

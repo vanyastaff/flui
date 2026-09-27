@@ -37,7 +37,7 @@
 
 use std::sync::Arc;
 
-use flui_scheduler::FrameSnapshot;
+use flui_sdk::hooks::FrameSnapshot;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -410,11 +410,14 @@ impl Timeline {
         });
     }
 
-    /// Record every produced-frame [`FrameSnapshot`] in `snapshots` (pulled
-    /// from a presentation's own `FrameClock::frames_since`) as one
+    /// Record every produced-frame [`FrameSnapshot`] in `snapshots` as one
     /// Chrome-trace-compatible timeline event per frame, each carrying its
     /// coalesced input ids and (present − arrival) latencies as trace args
     /// — issue #556's exportable, per-input-attributed frame telemetry.
+    ///
+    /// A presentation's frame clock produces the snapshots. That clock is
+    /// internal to the app host, and no public API hands its snapshots out
+    /// yet; the public source is the follow-up ADR-0088 names for move 4.
     /// Reuses this module's own [`Self::export_chrome_trace`] serializer;
     /// no second trace format exists anywhere in this crate.
     ///

@@ -2012,13 +2012,13 @@ dependencies = [
 name = "flui-devtools"
 version = "0.2.0-dev"
 dependencies = [
- "flui-foundation",
+ "criterion",
  "flui-log",
  "flui-objects",
  "flui-rendering",
  "flui-scheduler",
+ "flui-sdk",
  "flui-testing",
- "flui-view",
  "parking_lot",
  "serde",
  "serde_json",
@@ -2403,6 +2403,7 @@ dependencies = [
  "flui-objects",
  "flui-painting",
  "flui-rendering",
+ "flui-scheduler",
  "flui-types",
  "flui-view",
  "flui-widgets",
@@ -2432,9 +2433,7 @@ name = "flui-testing"
 version = "0.2.0-dev"
 dependencies = [
  "accesskit",
- "criterion",
  "flui-animation",
- "flui-devtools",
  "flui-foundation",
  "flui-interaction",
  "flui-objects",

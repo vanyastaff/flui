@@ -15,8 +15,8 @@ use std::time::Duration;
 use flui_devtools::profiler::{FramePhase, FrameStats};
 use flui_devtools::{FrameTimingLayer, Profiler};
 use flui_objects::RenderSizedBox;
+use flui_sdk::view::{RenderView, View};
 use flui_testing::{HeadlessBinding, MountOptions, MountOwners};
-use flui_view::{RenderView, View};
 use tracing::Dispatch;
 use tracing_subscriber::layer::SubscriberExt;
 
@@ -25,28 +25,28 @@ use tracing_subscriber::layer::SubscriberExt;
 struct Leaf;
 
 impl RenderView for Leaf {
-    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type Protocol = flui_sdk::rendering::BoxProtocol;
     type RenderObject = RenderSizedBox;
 
     fn create_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        _ctx: &flui_sdk::view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
         RenderSizedBox::shrink()
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        _ctx: &flui_sdk::view::RenderObjectContext<'_>,
         _render_object: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
+    ) -> flui_sdk::rendering::RenderUpdateImpact {
+        flui_sdk::rendering::RenderUpdateImpact::NONE
     }
 }
 
 impl View for Leaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::render_variable(self)
+    fn create_element(&self) -> flui_sdk::view::element::ElementKind {
+        flui_sdk::view::element::ElementKind::render_variable(self)
     }
 }
 

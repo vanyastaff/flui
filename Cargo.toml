@@ -41,6 +41,7 @@ members = [
     # Built on `flui-sdk` alone, as a third-party package would be.
     "packages/flui-material",  # Material Design: ColorScheme/TextTheme/ThemeData/Theme and the M3 widget catalog
     "packages/flui-cupertino", # iOS-style (Cupertino) theming and widget family
+    "packages/flui-devtools",  # Profiler / timeline / inspector counters
 
     # === Examples (platform-specific) ===
     # NOTE: Android examples are excluded from workspace.members because they
@@ -72,8 +73,7 @@ members = [
     "crates/flui-animation", # Animation system (ACTIVE)
 
     # === DX tooling ===
-    "crates/flui-devtools", # Profiler / timeline / inspector counters
-    "crates/flui-cli",      # `flui` CLI (create / run / build / doctor / devices); owns the build pipeline and the source watcher
+    "crates/flui-cli", # `flui` CLI (create / run / build / doctor / devices); owns the build pipeline and the source watcher
     # NOTE: there is deliberately NO signals crate. flui-reactivity (a signals/
     # hooks experiment) was removed 2026-07-28: it had zero consumers, could not
     # build even standalone (inherited workspace deps that were never declared),
