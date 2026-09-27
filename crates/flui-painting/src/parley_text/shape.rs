@@ -32,7 +32,12 @@ pub struct ParagraphSpec<'a> {
     pub max_width: Option<f32>,
     /// The line height in logical pixels; `None` is `1.2 × font_size`.
     pub line_height: Option<f32>,
-    /// The paragraph direction: lines align to its start edge.
+    /// The edge lines align to: `Ltr` aligns left, `Rtl` aligns right.
+    ///
+    /// It does not set the bidi base direction. Parley 0.11 takes that from
+    /// the paragraph's first strong character and has no way to override it,
+    /// so Latin-first text under `Rtl` is still ordered as an LTR paragraph
+    /// (flui-painting `ARCHITECTURE.md`, mapping decision 12).
     pub direction: TextDirection,
 }
 
@@ -194,4 +199,68 @@ fn properties(style: &TextStyle) -> Vec<StyleProperty<'static, SpanBrush>> {
         properties.push(StyleProperty::Brush(SpanBrush(Some(color))));
     }
     properties
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_types::typography::{TextDirection, TextStyle};
+
+    use super::{ParagraphLayout, ParagraphSpec};
+    use crate::text_layout::{FontCollection, TextContext};
+
+    const WIDTH: f32 = 400.0;
+
+    fn shaped(text: &str, direction: TextDirection) -> ParagraphLayout {
+        let spans: Vec<(String, Option<TextStyle>)> = vec![(text.to_owned(), None)];
+        TextContext::new(&FontCollection::new()).shape(&ParagraphSpec {
+            spans: &spans,
+            default_style: None,
+            font_size: 16.0,
+            max_width: Some(WIDTH),
+            line_height: None,
+            direction,
+        })
+    }
+
+    fn first_line_offset(paragraph: &ParagraphLayout) -> f32 {
+        paragraph
+            .layout
+            .get(0)
+            .expect("BUG: non-empty text lays out at least one line")
+            .metrics()
+            .offset
+    }
+
+    /// `Rtl` pushes a line to the right edge and nothing more: Parley 0.11
+    /// resolves the base direction from the first strong character, so a
+    /// Latin-first paragraph stays LTR under `Rtl` and a Hebrew-first one is
+    /// RTL under `Ltr`. SkParagraph would order the first as an RTL
+    /// paragraph; this pins the divergence until the base direction can be
+    /// set (ADR-0092 §10 step 5).
+    #[test]
+    fn rtl_aligns_lines_right_without_setting_the_base_direction() {
+        let ltr = shaped("abc 123 !", TextDirection::Ltr);
+        let rtl = shaped("abc 123 !", TextDirection::Rtl);
+
+        assert!(
+            first_line_offset(&ltr).abs() < f32::EPSILON,
+            "an Ltr line starts at the left edge, got {}",
+            first_line_offset(&ltr)
+        );
+        assert!(
+            first_line_offset(&rtl) > 0.0,
+            "an Rtl line is pushed toward the right edge, got {}",
+            first_line_offset(&rtl)
+        );
+        assert!(
+            !rtl.layout.is_rtl(),
+            "Latin-first text keeps an LTR base direction under Rtl"
+        );
+        assert!(
+            shaped("\u{05E9}\u{05DC}\u{05D5}\u{05DD} abc", TextDirection::Ltr)
+                .layout
+                .is_rtl(),
+            "Hebrew-first text takes an RTL base direction under Ltr"
+        );
+    }
 }

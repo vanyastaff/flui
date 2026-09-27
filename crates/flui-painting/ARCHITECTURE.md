@@ -473,6 +473,30 @@ and the cosmic-text font system. Locked by `two_realms_shape_in_parallel` and
 (`tests/text_context.rs`).
 
 
+### 12. `TextDirection` sets line alignment on the Parley path, not the base direction
+
+**Rule:** `ParagraphSpec::direction` aligns lines: `Ltr` to the left edge,
+`Rtl` to the right. The bidi base direction is Parley's own, taken from the
+paragraph's first strong character, so Latin-first text under `Rtl` is still
+ordered as an LTR paragraph, and Hebrew-first text under `Ltr` is ordered RTL.
+
+**Flutter:** `ParagraphStyle.textDirection` sets SkParagraph's base
+direction, which orders the runs and decides which side the start edge is.
+Recalled from Flutter's API, not checked against a clone.
+
+**Why:** Parley 0.11.1 has no way to set it: its analysis calls the bidi
+resolver with `None` for the base level (`analysis/mod.rs:539-546`), and
+neither the builder nor the layout exposes one. Right alignment is the part
+of `Rtl` that can be honoured today.
+
+**Accepted trade-off:** a right-to-left paragraph whose text starts with Latin
+or neutrals lays out its runs in the wrong order until the base direction can
+be set; that belongs to ADR-0092 §10 step 5, where editable text moves to
+Parley and its acceptance covers LTR, RTL and mixed bidi. No production path
+shapes through `ParagraphSpec` before then. Locked by
+`rtl_aligns_lines_right_without_setting_the_base_direction`
+(`src/parley_text/shape.rs`).
+
 ---
 
 ## Open items
