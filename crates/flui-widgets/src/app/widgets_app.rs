@@ -3,7 +3,8 @@
 //! Flutter parity: `widgets/app.dart` `WidgetsApp` (oracle tag `3.44.0`),
 //! scoped to what the widget layer owns in FLUI's realm model (ADR-0042 §5,
 //! ADR-0027). An application using `WidgetsApp` with neither `flui-material`
-//! nor `flui-cupertino` in its dependency graph gets navigation,
+//! nor `flui-cupertino` in its dependency graph gets navigation (a typed
+//! [`Router`] through [`WidgetsApp::router`], or a [`Navigator`]),
 //! localization (including the resolved
 //! [`Directionality`](crate::Directionality)), and an
 //! app-level builder hook; the design-system shells (`MaterialApp`,
@@ -44,7 +45,7 @@
 //!   exposed — a callback that only ever receives an empty platform list
 //!   would be dead API. Both arrive together when the platform layer
 //!   delivers locales.
-//! - **Named-route table / `Router`, at the *app* level.** The mechanism
+//! - **Named-route table, at the *app* level.** The mechanism
 //!   itself is ported — [`route`](NavigatorHandle::route),
 //!   [`on_generate_route`](NavigatorHandle::on_generate_route) and
 //!   [`on_unknown_route`](NavigatorHandle::on_unknown_route) carry Flutter's
@@ -57,8 +58,9 @@
 //!   forwarding lands, the reconciliation contract is already fixed: the app
 //!   builder replaces the table wholesale at mount, and the handle mutators
 //!   serve imperative or late registration (`ARCHITECTURE.md`,
-//!   `## Mapping decisions`). `Router` / Navigator 2.0 remains unported
-//!   entirely.
+//!   `## Mapping decisions`). New code roots the app in a typed
+//!   [`Router`] with [`WidgetsApp::router`] instead (ADR-0093); the
+//!   navigator form stays for code that has not moved.
 //! - **Restoration scope, `SharedAppData`, `NavigationNotification`,
 //!   shortcut/action overrides, performance overlay, debug banner.** Each
 //!   depends on infrastructure FLUI has not built (state restoration,
@@ -98,11 +100,12 @@ use crate::localization::{
     basic_locale_list_resolution,
 };
 use crate::navigator::{Navigator, NavigatorHandle, NavigatorObserver, RouteId, SimpleRoute};
+use crate::router::{Routable, Router};
 use crate::text::DefaultTextStyle;
 
 /// The app-level wrapping hook — the oracle's `TransitionBuilder`
 /// (`widgets/app.dart`, oracle tag `3.44.0`): receives the routing subtree
-/// (`Some` when the app has a navigator, `None` otherwise) and returns the
+/// (`Some` when the app has a router or a navigator, `None` otherwise) and returns the
 /// subtree to mount in its place. Runs below [`Localizations`], so it may
 /// read the resolved locale and ambient resources — see
 /// [`WidgetsApp::builder`].
@@ -125,8 +128,9 @@ pub type AppBuilder = Rc<dyn Fn(&dyn BuildContext, Option<BoxedView>) -> BoxedVi
 ///    set.
 /// 3. The [`builder`](Self::builder) hook — only when set; receives the
 ///    routing subtree as its child.
-/// 4. [`FocusScope`] > [`Navigator`] — the routing subtree, present when the
-///    app has a [`home`](Self::new) or a caller-supplied
+/// 4. The routing subtree: [`FocusScope`] > [`Router`] in the
+///    [`router`](Self::router) form; otherwise [`FocusScope`] > [`Navigator`],
+///    present when the app has a [`home`](Self::new) or a caller-supplied
 ///    [`navigator`](Self::navigator) handle.
 ///
 /// # Example
@@ -146,6 +150,9 @@ pub struct WidgetsApp {
     /// Observers registered on the navigator at mount (the oracle's
     /// `navigatorObservers`).
     observers: Vec<Arc<dyn NavigatorObserver>>,
+    /// The boxed [`Router`] of the router form: the app's whole routing
+    /// subtree, in place of `home` and `navigator`.
+    router: Option<BoxedView>,
     builder: Option<AppBuilder>,
     /// Explicit locale override (the oracle's `locale`), still resolved
     /// against [`supported_locales`](Self::supported_locales).
@@ -159,6 +166,7 @@ impl fmt::Debug for WidgetsApp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WidgetsApp")
             .field("has_home", &self.home.is_some())
+            .field("has_router", &self.router.is_some())
             .field("has_builder", &self.builder.is_some())
             .field("locale", &self.locale)
             .field("supported_locales", &self.supported_locales)
@@ -179,6 +187,7 @@ impl WidgetsApp {
             home: Some(home.into_view().boxed()),
             navigator: None,
             observers: Vec::new(),
+            router: None,
             builder: None,
             locale: None,
             supported_locales: vec![Locale::en_us()],
@@ -201,7 +210,55 @@ impl WidgetsApp {
             home: None,
             navigator: None,
             observers: Vec::new(),
+            router: None,
             builder: Some(Rc::new(builder)),
+            locale: None,
+            supported_locales: vec![Locale::en_us()],
+            localizations_delegates: Vec::new(),
+            text_style: None,
+        }
+    }
+
+    /// An app shell rooted in `router`: the [`Router`] is the app's routing
+    /// subtree, and, as the outermost `Router` of the presentation, it owns
+    /// the presentation's URL (ADR-0093 §2). Its pages sit below
+    /// [`Localizations`] and the [`builder`](Self::builder) hook, and the
+    /// router's navigator is the app's only one.
+    ///
+    /// The router form takes no [`navigator`](Self::navigator) handle and no
+    /// [`observer`](Self::observer): the Router owns its navigator. Those
+    /// builders assert on the router form in debug builds, as the oracle's
+    /// `WidgetsApp.router` asserts; release builds log `tracing::error!` and
+    /// ignore what they were given.
+    ///
+    /// ```
+    /// use flui_widgets::prelude::*;
+    /// use flui_widgets::{Router, Text, WidgetsApp};
+    ///
+    /// #[derive(Routable, Clone, PartialEq)]
+    /// enum AppRoute {
+    ///     #[route("/")]
+    ///     Home,
+    ///     #[route("/note/:id")]
+    ///     Note { id: u32 },
+    /// }
+    ///
+    /// let app = WidgetsApp::router(Router::new(AppRoute::Home, |route: &AppRoute, _cx| {
+    ///     match route {
+    ///         AppRoute::Home => Text::new("Home").into_view().boxed(),
+    ///         AppRoute::Note { id } => Text::new(format!("Note {id}")).into_view().boxed(),
+    ///     }
+    /// }));
+    /// # let _ = app;
+    /// ```
+    #[must_use]
+    pub fn router<R: Routable>(router: Router<R>) -> Self {
+        Self {
+            home: None,
+            navigator: None,
+            observers: Vec::new(),
+            router: Some(router.boxed()),
+            builder: None,
             locale: None,
             supported_locales: vec![Locale::en_us()],
             localizations_delegates: Vec::new(),
@@ -218,8 +275,16 @@ impl WidgetsApp {
     /// (FLUI's deep-link analog, several `seed_initial` calls) is mounted
     /// as-is. The oracle draws the same line by making `home` redundant when
     /// `onGenerateInitialRoutes` is specified.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, on an app built with [`router`](Self::router), whose
+    /// Router owns its navigator; release builds log and ignore the handle.
     #[must_use]
     pub fn navigator(mut self, handle: NavigatorHandle) -> Self {
+        if self.refuses_navigator_configuration("a navigator handle") {
+            return self;
+        }
         self.navigator = Some(handle);
         self
     }
@@ -230,8 +295,16 @@ impl WidgetsApp {
     /// Requires the app to have a navigator (a `home` or a
     /// [`navigator`](Self::navigator) handle) — the oracle asserts the same
     /// (`navigatorObservers` must stay empty in the builder-only form).
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, on an app built with [`router`](Self::router), whose
+    /// Router owns its navigator; release builds log and ignore the observer.
     #[must_use]
     pub fn observer(mut self, observer: Arc<dyn NavigatorObserver>) -> Self {
+        if self.refuses_navigator_configuration("an observer") {
+            return self;
+        }
         self.observers.push(observer);
         self
     }
@@ -307,6 +380,28 @@ impl WidgetsApp {
     pub fn text_style(mut self, style: TextStyle) -> Self {
         self.text_style = Some(style);
         self
+    }
+
+    /// Whether this is the router form, which refuses `what`: its Router owns
+    /// the navigator, so a navigator handle or an observer given with it
+    /// would be silently dead. Debug builds assert (the oracle's
+    /// `WidgetsApp.router` asserts the same); release builds report it, and
+    /// the caller ignores `what`.
+    fn refuses_navigator_configuration(&self, what: &str) -> bool {
+        let refused = self.router.is_some();
+        debug_assert!(
+            !refused,
+            "BUG: WidgetsApp::router takes no navigator handle or observers, and was given \
+             {what} — the Router owns its navigator (the oracle asserts the same for \
+             WidgetsApp.router)"
+        );
+        if refused {
+            tracing::error!(
+                "WidgetsApp::router given {what}; it is ignored, because the Router owns its \
+                 navigator"
+            );
+        }
+        refused
     }
 
     /// The oracle's locale resolution (`LocalizationsResolver`), minus the
@@ -410,6 +505,15 @@ impl StatefulView for WidgetsApp {
     type State = WidgetsAppState;
 
     fn create_state(&self) -> Self::State {
+        // The router form: `router` is the only constructor that sets it,
+        // and the navigator builders refuse to add to it.
+        if self.router.is_some() {
+            return WidgetsAppState {
+                navigator: None,
+                home_route: None,
+                registered_observers: Vec::new(),
+            };
+        }
         if self.home.is_some() || self.navigator.is_some() {
             WidgetsAppState::install_navigator(self)
         } else {
@@ -430,6 +534,20 @@ impl StatefulView for WidgetsApp {
 
 impl ViewState<WidgetsApp> for WidgetsAppState {
     fn did_update_view(&mut self, _old_view: &WidgetsApp, new_view: &WidgetsApp) {
+        // The router form: the Router is the routing subtree. A navigator
+        // this shell adopted in the home or navigator form is released — its
+        // observers leave the handle — and the next build mounts the Router
+        // in its place.
+        if new_view.router.is_some() {
+            if let Some(handle) = self.navigator.take() {
+                for observer in self.registered_observers.drain(..) {
+                    handle.remove_observer(&observer);
+                }
+            }
+            self.home_route = None;
+            return;
+        }
+
         match (&self.navigator, &new_view.navigator) {
             // Documented divergence (module docs): the mount-time handle
             // stays active; the oracle recreates the Navigator on a
@@ -507,10 +625,13 @@ impl ViewState<WidgetsApp> for WidgetsAppState {
         // The routing subtree: FocusScope > Navigator, the oracle's
         // `FocusScope(child: Navigator(...))` band (autofocus divergence in
         // the module docs).
-        let routing: Option<BoxedView> = self
-            .navigator
-            .as_ref()
-            .map(|handle| FocusScope::new(Navigator::new(handle.clone())).boxed());
+        // In the router form, FocusScope > Router, whose navigator is the
+        // app's only one.
+        let routing: Option<BoxedView> = match (&view.router, &self.navigator) {
+            (Some(router), _) => Some(FocusScope::new(router.clone()).boxed()),
+            (None, Some(handle)) => Some(FocusScope::new(Navigator::new(handle.clone())).boxed()),
+            (None, None) => None,
+        };
 
         // The oracle's `builder` band: when set, it supplies the subtree
         // (receiving the routing as its child); otherwise routing IS the
@@ -525,8 +646,9 @@ impl ViewState<WidgetsApp> for WidgetsAppState {
             .boxed(),
             (None, Some(routing)) => routing,
             (None, None) => unreachable!(
-                "BUG: WidgetsApp has no home, navigator, or builder; \
-                 WidgetsApp::new and WidgetsApp::with_builder each guarantee one"
+                "BUG: WidgetsApp has no home, router, navigator, or builder; \
+                 WidgetsApp::new, WidgetsApp::router and WidgetsApp::with_builder each \
+                 guarantee one"
             ),
         };
 

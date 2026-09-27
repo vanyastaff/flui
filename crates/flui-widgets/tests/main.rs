@@ -207,5 +207,7 @@ mod transition_route;
 mod visibility;
 #[path = "widgets_app.rs"]
 mod widgets_app;
+#[path = "widgets_app_router.rs"]
+mod widgets_app_router;
 #[path = "wrap.rs"]
 mod wrap;
