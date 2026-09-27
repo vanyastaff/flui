@@ -35,6 +35,11 @@ pub(super) struct Package {
     pub(super) member: bool,
     pub(super) features: BTreeMap<String, Vec<String>>,
     pub(super) deps: Vec<Edge>,
+    /// Keys declared only as dev-dependencies. A feature may forward to one
+    /// (`std = ["peniko/std"]` with `peniko` a dev-dependency, as Parley
+    /// does); Cargo applies that only where dev edges are built, so no
+    /// build this check resolves sees it.
+    pub(super) dev_only: BTreeSet<String>,
 }
 
 /// One declared dependency, resolved.
@@ -71,10 +76,17 @@ impl Graph {
         let mut packages = Vec::with_capacity(metadata.packages.len());
         for package in &metadata.packages {
             let mut deps = Vec::new();
+            let mut dev_keys = BTreeSet::new();
             // a package outside the resolve graph is in no build
             if let Some(node) = nodes.get(&package.id) {
                 for dependency in &package.dependencies {
                     if dependency.kind == DependencyKind::Development {
+                        dev_keys.insert(
+                            dependency
+                                .rename
+                                .clone()
+                                .unwrap_or_else(|| dependency.name.clone()),
+                        );
                         continue;
                     }
                     let extern_name = dependency
@@ -123,11 +135,13 @@ impl Graph {
                     }));
                 }
             }
+            dev_keys.retain(|key| !deps.iter().any(|edge: &Edge| edge.key == *key));
             packages.push(Package {
                 name: package.name.to_string(),
                 member: members.contains(&package.id),
                 features: package.features.clone(),
                 deps,
+                dev_only: dev_keys,
             });
         }
         Ok(Self::new(packages))
@@ -388,6 +402,9 @@ impl State<'_> {
                 strong,
             } => {
                 let package = &graph.packages[at];
+                if package.dev_only.contains(&key) {
+                    return Ok(());
+                }
                 ensure!(
                     package.deps.iter().any(|edge| edge.key == key),
                     "{} forwards `{feature}` to `{key}`, which is not one of its dependencies",

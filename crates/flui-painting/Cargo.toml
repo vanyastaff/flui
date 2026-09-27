@@ -43,14 +43,13 @@ unicode-script = { version = "=0.5.8" }
 # this is a direct edge onto the same copy, not a new one. See the
 # workspace-level comment on this dependency in the root `Cargo.toml`.
 unicode-segmentation = { workspace = true }
-# The Parley path's rasterizer (`parley_text`), behind the `parley` feature.
+# The Parley path (`parley_text`, `TextContext`), behind the `parley` feature:
+# swash rasterizes, Parley shapes over fontique's shared collection.
 swash = { workspace = true, optional = true }
+parley = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-# Shapes the glyphs `parley_text`'s oracle test rasterizes. A dev edge only:
-# production shaping stays on cosmic-text until ADR-0092 §10 step 4.
-parley = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for
 # this crate's own integration tests, so `tests/*.rs` can reach the harness.
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
@@ -74,10 +73,12 @@ bundled-fonts = []
 # enabled for this crate's dev targets via the self dev-dependency above.
 testing = []
 
-# parley: the Parley path's raster side (`parley_text`: `ParleyGlyphKey`,
-# `FontRegistry`, `SwashRasterizer`). Off by default, and no production caller
-# reaches it until ADR-0092 §10 step 3 puts shaped runs on the display list.
-parley = ["dep:swash"]
+# parley: the Parley path — shaping on a per-realm `TextContext` over the
+# app's `FontCollection`, and the raster side (`ParleyGlyphKey`,
+# `FontRegistry`, `SwashRasterizer`). Off by default; the cosmic-text path is
+# unchanged either way. No production caller until layout measures through the
+# realm's context at ADR-0092 §10 step 3.
+parley = ["dep:swash", "dep:parley"]
 
 [[test]]
 name = "painting_it"
@@ -93,6 +94,14 @@ path = "tests/font_registration.rs"
 [[test]]
 name = "parley_oracle"
 path = "tests/parley_oracle.rs"
+required-features = ["parley"]
+
+# Two realms' text contexts over one collection (ADR-0092 §10 step 2). Its own
+# binary, so its check that the Parley path never builds the process font
+# system holds under `cargo test` as well as nextest.
+[[test]]
+name = "text_context"
+path = "tests/text_context.rs"
 required-features = ["parley"]
 
 [lints]
@@ -114,5 +123,5 @@ order = 3
 globals = [
     { item = "decoration::WARN_CIRCLE_BORDER_RADIUS", grant = "ADR-0097", class = "diagnostic", reason = "warn-once gate for a circle with a border radius; no behavior reads it" },
     { item = "decoration::WARN_CIRCLE_NON_UNIFORM_BORDER", grant = "ADR-0097", class = "diagnostic", reason = "warn-once gate for a circle with a non-uniform border; no behavior reads it" },
-    { item = "text_layout::layout::FONT_SYSTEM", exit = "ADR-0092", reason = "one cosmic-text FontSystem shared by every realm" },
+    { item = "text_layout::layout::FONT_SYSTEM", exit = "ADR-0092", reason = "one cosmic-text FontSystem shared by every realm; leaves with cosmic-text at ADR-0092 §10 step 6" },
 ]

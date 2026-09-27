@@ -1,5 +1,8 @@
-//! Text shaping and layout over cosmic-text.
+//! Text shaping and layout over cosmic-text, and the Parley path's
+//! per-realm text context.
 //!
+//! - `context` — [`FontCollection`], the app's add-only font collection, and
+//!   [`TextContext`], the per-realm service built from it (ADR-0092 §2–§3).
 //! - `font_resolve` — picking a family the host actually carries.
 //! - `layout` — the process-wide font system, `TextLayout` (shape, truncate,
 //!   caret/hit-test/line queries), and the style → `Attrs` mapping.
@@ -7,10 +10,12 @@
 
 use flui_types::geometry::{Pixels, Size, px};
 
+mod context;
 pub(crate) mod font_resolve;
 pub(crate) mod glyphs;
 pub(crate) mod layout;
 
+pub use context::{FontCollection, TextContext};
 pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 pub(crate) use layout::paint_color;
 pub use layout::{ResolvedFont, Shaper, SharedFontSystem, TextLayout, shared_font_system};

@@ -42,9 +42,11 @@
 //! # Threading
 //!
 //! Every type here is `Send + Sync` value data; a `Canvas` is mutated through
-//! `&mut self` by one owner. The one shared resource is the font system
-//! behind [`SharedFontSystem`], taken for one shape at a time through
-//! [`SharedFontSystem::shape`].
+//! `&mut self` by one owner. On the cosmic-text path the one shared resource
+//! is the font system behind [`SharedFontSystem`], taken for one shape at a
+//! time through [`SharedFontSystem::shape`]. The Parley path has no shared
+//! lock: each realm shapes through its own [`TextContext`], used through
+//! `&mut`, over the app's [`FontCollection`].
 //!
 //! The paint vocabulary (`Paint`, `Shader`, `BlendMode`, …) is defined in
 //! `flui_types::painting` and re-exported here; a type error names the
@@ -72,7 +74,10 @@ pub mod table_border;
 pub mod text_layout;
 pub mod text_painter;
 
-// The Parley path's raster side (ADR-0092 §10 step 1); no production caller yet.
+// The Parley path: paragraph shaping and the raster side (ADR-0092 §10 step 1 and
+// step 2's flui-painting half). No production caller yet: the runtime building a
+// `FontCollection` and giving each realm a `TextContext` is step 2's other half,
+// and layout measuring through that context is step 3.
 #[cfg(feature = "parley")]
 pub mod parley_text;
 
@@ -91,8 +96,8 @@ pub use error::RegisterFontError;
 pub use cosmic_text::fontdb::Family;
 pub use table_border::paint_table_border;
 pub use text_layout::{
-    GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph, ResolvedFont, Shaper,
-    SharedFontSystem, TextLayout, TextLayoutResult, shared_font_system,
+    FontCollection, GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph, ResolvedFont,
+    Shaper, SharedFontSystem, TextContext, TextLayout, TextLayoutResult, shared_font_system,
 };
 pub use text_painter::{Invalidation, TextBaseline, TextPainter};
 

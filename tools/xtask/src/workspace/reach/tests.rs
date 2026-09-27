@@ -100,6 +100,20 @@ fn a_dev_dependency_reaches_nothing() {
     assert!(!names(&fixture, "k", "--all-features").contains("winit"));
 }
 
+/// Parley's `std = [.., "peniko/std", ..]` names `peniko`, a dev-dependency
+/// only: Cargo applies it where dev edges are built, and resolving a root
+/// with the feature on is neither an error nor an edge.
+#[test]
+fn a_feature_forwarded_to_a_dev_dependency_is_ignored() {
+    let fixture = base()
+        .member("k", "K", &json!(null))
+        .external("winit")
+        .feature("k", "std", &["winit/std"])
+        .dep("k", "winit", Dep::dev());
+    assert_eq!(findings(&fixture), []);
+    assert!(!names(&fixture, "k", "--features std").contains("winit"));
+}
+
 #[test]
 fn an_optional_dependency_reaches_only_under_a_feature_that_enables_it() {
     let fixture = base()

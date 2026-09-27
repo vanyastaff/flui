@@ -1,0 +1,17 @@
+# flui-painting's clippy configuration. clippy reads only the nearest
+# `clippy.toml`, so the workspace settings are repeated here; keep them in step
+# with the root file.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true
+
+# No FLUI lock on the text path (ADR-0092 §3): each realm shapes through its own
+# `TextContext` behind `&mut`. The cosmic-text path's shared `FontSystem` is the
+# one site, allowed by an `#[expect]` in `text_layout/layout.rs` until it leaves
+# at ADR-0092 §10 step 6.
+disallowed-types = [
+    { path = "parking_lot::Mutex", reason = "the text path takes no FLUI lock (ADR-0092 §3)" },
+    { path = "parking_lot::RwLock", reason = "the text path takes no FLUI lock (ADR-0092 §3)" },
+    { path = "std::sync::Mutex", reason = "the text path takes no FLUI lock (ADR-0092 §3)" },
+    { path = "std::sync::RwLock", reason = "the text path takes no FLUI lock (ADR-0092 §3)" },
+]
