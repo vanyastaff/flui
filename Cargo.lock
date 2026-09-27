@@ -2440,6 +2440,7 @@ dependencies = [
  "flui-interaction",
  "flui-objects",
  "flui-painting",
+ "flui-platform-api",
  "flui-rendering",
  "flui-scheduler",
  "flui-semantics",
