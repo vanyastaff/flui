@@ -137,14 +137,6 @@ impl UiRealm {
         // frame, on the right `UpdateScheduler` instance, is enforced by the
         // scheduler itself.
 
-        // The frame transaction (ADR-0027 §3) closes text-store commits: an
-        // input method's lock asked for from here on is refused (sync) or
-        // queued (async), and a push event is applied after the frame, so
-        // no platform edit lands in a tree mid-build/layout/paint. The guard
-        // reopens commits on every exit, the ADR-0048 unwind included; it
-        // runs no grants, which happen below only once the loop returned.
-        let commits_closed = TextCommitsClosed::close(self);
-
         let mut last_outcome = FramePaintOutcome::Idle;
         let mut producer = self.presentations.primary().id();
         // Whether ANY presentation's segment failed THIS pump (a pipeline
@@ -316,13 +308,39 @@ impl UiRealm {
             last_outcome = result;
             producer = presentation.id();
         }
+        (producer, last_outcome, any_failed)
+    }
+
+    /// Drive one frame on this realm's scheduler — begin frame, persistent
+    /// callbacks with `pipeline`, post-frame callbacks — as its
+    /// presentations' text-store transaction (ADR-0027 §3), then run the
+    /// commit anchor.
+    ///
+    /// Every presentation's commit gate is shut for the whole drive, so an
+    /// input method's lock asked for anywhere inside it (a build, a
+    /// post-frame callback, a nested platform pump) is refused (sync) or
+    /// queued (async), and no platform edit lands in a tree mid-frame. The
+    /// gates reopen on every exit, a panic's unwind included. The queued
+    /// grants run only after `drive_frame_with_lane` returned, with the
+    /// scheduler back in `Idle`: an edit a grant makes there marks the tree
+    /// dirty and schedules the next frame like any other owner-thread edit,
+    /// where the same edit inside the frame would have its visual-update
+    /// request dropped.
+    pub(crate) fn drive_frame<R>(&self, now: Instant, pipeline: impl FnOnce() -> R) -> R {
+        let commits_closed = TextCommitsClosed::close(self);
+        let result = self.scheduler.drive_frame_with_lane(
+            now,
+            flui_scheduler::IdleDeadline::far_future(now),
+            pipeline,
+            &self.local_post_frame,
+        );
         drop(commits_closed);
-        // The commit anchor: grants queued during the frame run now, each
-        // presentation's against its own attached store.
+        // The commit anchor: each presentation's queued grants, against the
+        // stores that queued them.
         for presentation in self.presentations.iter() {
             let _ran = presentation.text_input().run_deferred_grants();
         }
-        (producer, last_outcome, any_failed)
+        result
     }
 
     /// One presentation's build+layout+paint segment — moves VERBATIM from
@@ -1068,11 +1086,13 @@ impl UiRealm {
     }
 }
 
-/// Every presentation's text-store commits, closed for one frame.
+/// Every presentation's text-store commits, closed for one frame drive.
 ///
-/// Dropping it reopens them — on a normal return or while a segment's panic
-/// unwinds past the per-presentation boundary — and does nothing else: the
-/// queued grants run at the anchor after the frame, never from a destructor.
+/// Dropping it reopens them — on a normal return or while a panic unwinds
+/// out of the drive — and does nothing else: the queued grants run at the
+/// anchor after the drive, never from a destructor. Drives do not nest (the
+/// scheduler refuses a second begin-frame inside a frame), so there is no
+/// outer transaction to restore.
 struct TextCommitsClosed<'a> {
     realm: &'a UiRealm,
 }

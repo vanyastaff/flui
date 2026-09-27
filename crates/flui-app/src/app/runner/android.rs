@@ -453,29 +453,24 @@ where
                     // consults the hook every iteration and forces a
                     // dispatch once the deadline is due (`flui-platform`'s
                     // `platforms/android/mod.rs`).
-                    scheduler.drive_frame_with_lane(
-                        now,
-                        flui_scheduler::IdleDeadline::far_future(now),
-                        || {
-                            // Device-loss recovery around the frame, same
-                            // shape as the desktop path — see
-                            // `render_frame_with_device_recovery`.
-                            let Some(mut lane) = lane_frame.try_lock() else {
-                                tracing::error!(
-                                    "frame skipped: raster lane already held by an \
+                    realm.drive_frame(now, || {
+                        // Device-loss recovery around the frame, same
+                        // shape as the desktop path — see
+                        // `render_frame_with_device_recovery`.
+                        let Some(mut lane) = lane_frame.try_lock() else {
+                            tracing::error!(
+                                "frame skipped: raster lane already held by an \
                                      outer frame dispatch"
-                                );
-                                return;
-                            };
-                            let _ = render_frame_with_device_recovery(
-                                realm,
-                                &mut *lane,
-                                &device_recovery_backoff,
-                                now,
                             );
-                        },
-                        realm.local_post_frame_lane(),
-                    );
+                            return;
+                        };
+                        let _ = render_frame_with_device_recovery(
+                            realm,
+                            &mut *lane,
+                            &device_recovery_backoff,
+                            now,
+                        );
+                    });
                 })),
             );
         }));

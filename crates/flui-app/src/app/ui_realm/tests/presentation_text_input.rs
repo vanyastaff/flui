@@ -28,11 +28,15 @@ fn in_memory_client(text: &str) -> (Rc<InMemoryTextStore>, flui_interaction::Tex
     (store, flui_interaction::TextInputClient::new(erased))
 }
 
-/// Asks `store` for an async read lock on every build, logging around it.
+/// Asks `store` for an async read-write lock on every build, logging around
+/// it; the grant logs the scheduler phase it ran in, then runs `on_grant`.
 #[derive(Clone)]
 struct LockRequester {
     store: Rc<dyn TextStore>,
+    scheduler: flui_scheduler::UpdateScheduler,
+    on_grant: Rc<dyn Fn()>,
     log: Rc<std::cell::RefCell<Vec<&'static str>>>,
+    phases: Rc<std::cell::RefCell<Vec<SchedulerPhase>>>,
     outcomes: Rc<std::cell::RefCell<Vec<Result<LockOutcome, TextStoreError>>>>,
 }
 
@@ -45,9 +49,18 @@ impl flui_view::View for LockRequester {
 impl StatelessView for LockRequester {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         self.log.borrow_mut().push("build");
-        let log = Rc::clone(&self.log);
+        let (log, phases, scheduler, on_grant) = (
+            Rc::clone(&self.log),
+            Rc::clone(&self.phases),
+            self.scheduler.clone(),
+            Rc::clone(&self.on_grant),
+        );
         let outcome = self.store.request_lock(
-            LockGrant::read(move |_| log.borrow_mut().push("grant")),
+            LockGrant::read_write(move |_| {
+                log.borrow_mut().push("grant");
+                phases.borrow_mut().push(scheduler.phase());
+                on_grant();
+            }),
             LockTiming::Async,
         );
         self.outcomes.borrow_mut().push(outcome);
@@ -56,28 +69,28 @@ impl StatelessView for LockRequester {
     }
 }
 
-/// A lock an input method asks for while the realm draws a frame waits for
-/// the frame to return (ADR-0027 §3), then runs once.
-///
-/// Red-check: drop the `TextCommitsClosed::close` guard from
-/// `draw_frame_entered` — the grant runs inside `build` and the outcome is
-/// `Granted`.
-#[test]
-fn a_text_store_lock_requested_during_draw_frame_is_granted_after_it_returns() {
+/// A realm with a text-input presentation and a [`LockRequester`] as its
+/// root, after one frame driven the way the runners drive one
+/// (`UiRealm::drive_frame`).
+fn drive_one_frame_with(
+    on_grant: impl FnOnce(&UiRealm) -> Rc<dyn Fn()>,
+) -> (UiRealm, LockRequester) {
     let (_fake, text_input) = headless_text_input();
     let realm = UiRealm::for_test_with_text_input(Some(text_input));
-    let handle = realm.text_input_handle();
     let (concrete, client) = in_memory_client("abc");
     let store: Rc<dyn TextStore> = concrete; // the requester asks through the erased contract, as an input method does.
-    let _token = handle
+    let _token = realm
+        .text_input_handle()
         .attach(client)
         .expect("headless presentation supports text input");
     let requester = LockRequester {
         store,
+        scheduler: realm.scheduler().clone(),
+        on_grant: on_grant(&realm),
         log: Rc::default(),
+        phases: Rc::default(),
         outcomes: Rc::default(),
     };
-
     realm
         .enter(|realm| realm.attach_root_widget(&requester))
         .expect("attach succeeds");
@@ -85,7 +98,22 @@ fn a_text_store_lock_requested_during_draw_frame_is_granted_after_it_returns() {
         requester.log.borrow().is_empty(),
         "attaching schedules the build; the frame runs it"
     );
-    let _ = realm.draw_frame(test_constraints());
+    let now = flui_scheduler::Instant::now();
+    let _ = realm.drive_frame(now, || realm.draw_frame(test_constraints()));
+    (realm, requester)
+}
+
+/// A lock an input method asks for while the realm drives a frame waits
+/// for the whole drive to return (ADR-0027 §3), then runs once, with the
+/// scheduler back in `Idle`.
+///
+/// Red-check: drop the `TextCommitsClosed::close` guard from
+/// `UiRealm::drive_frame` — the grant runs inside `build` and the outcome is
+/// `Granted`; run the anchor inside the frame — the grant's phase is not
+/// `Idle`.
+#[test]
+fn a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns() {
+    let (_realm, requester) = drive_one_frame_with(|_| Rc::new(|| {}));
 
     assert_eq!(
         *requester.outcomes.borrow(),
@@ -98,11 +126,40 @@ fn a_text_store_lock_requested_during_draw_frame_is_granted_after_it_returns() {
         "the grant ran once, after the frame returned"
     );
     assert_eq!(
+        *requester.phases.borrow(),
+        [SchedulerPhase::Idle],
+        "the commit anchor runs outside the frame transaction"
+    );
+    assert_eq!(
         requester
             .store
             .request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
         Ok(LockOutcome::Granted),
-        "the frame reopened commits"
+        "the drive reopened commits"
+    );
+}
+
+/// An edit a deferred grant makes at the anchor asks for a frame the way a
+/// field's rebuild does (`ensure_visual_update`), and gets one: at the
+/// anchor the scheduler is `Idle` and schedules it. Inside the frame the
+/// request is dropped, and the committed text would wait for an unrelated
+/// wake to be painted.
+///
+/// Red-check: run the anchor at the end of `draw_frame_entered` instead —
+/// `ensure_visual_update` returns `false` and no frame is scheduled.
+#[test]
+fn an_edit_made_at_the_commit_anchor_schedules_the_next_frame() {
+    let accepted = Rc::new(std::cell::Cell::new(None));
+    let seen = Rc::clone(&accepted);
+    let (realm, _requester) = drive_one_frame_with(move |realm| {
+        let scheduler = realm.scheduler().clone();
+        Rc::new(move || seen.set(Some(scheduler.ensure_visual_update())))
+    });
+
+    assert_eq!(accepted.get(), Some(true), "the frame request was accepted");
+    assert!(
+        realm.scheduler().is_frame_scheduled(),
+        "the edit's frame request outlived the frame its grant was queued in"
     );
 }
 
