@@ -148,7 +148,9 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
---features flui/cupertino`, run as the two stages below.
+--features flui/cupertino,flui-painting/parley`, run as the two stages below.
+`flui-painting/parley` is on so the Parley raster path's oracle test runs until
+ADR-0092 §10 makes that path the default.
 Two choices in it differ from CI on purpose:
 
 - **One feature slice.** The facade's non-default catalog (`cupertino`)
@@ -728,11 +730,12 @@ drive an interaction through it, and assert the result — using only
 that reason: those crates' own tests can see implementation details this one
 must not use.
 
-The tree under test is the CLI `counter` template's own shape (`Center` →
-`Column` → prompt `Text` / count `Text` / `ElevatedButton`, a `StateCell`
-bound in `init_state`) — see `crates/flui-cli/src/templates/counter.rs` for
-the generator and `crates/flui-view/src/state_cell.rs` for the state
-primitive. Five steps, each backed by a documented, facade-reachable API:
+The tree under test is a Material counter (`Center` → `Column` → prompt
+`Text` / count `Text` / `ElevatedButton`, a `StateCell` bound in
+`init_state`), the shape the CLI `counter` template
+(`crates/flui-cli/src/templates/counter.rs`) has with Material in place of
+its `RawButton` and `Signal` — see `crates/flui-view/src/state_cell.rs` for
+the state primitive. Five steps, each backed by a documented, facade-reachable API:
 
 | Step | What it does | API |
 |------|--------------|-----|
@@ -764,8 +767,9 @@ create` scaffolds was not screen-reader accessible out of the box.
 text direction (an empty paragraph publishes nothing — a recorded mapping
 decision in `crates/flui-objects/ARCHITECTURE.md`), and `ButtonStyleButtonCore`
 wraps every button it composes in `Semantics(container, button, enabled)`.
-The test mounts the template's tree exactly and queries `"Increment"` from
-the framework's own node.
+The test mounts that Material tree and queries `"Increment"` from the
+framework's own node; the template itself now uses `RawButton`, which
+publishes the same `Semantics(container, button, enabled)` node.
 
 The second test, `missing_label_query_reports_the_search_and_the_available_labels`,
 is the acceptance criterion's "actionable command failures" half: it queries

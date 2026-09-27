@@ -195,7 +195,7 @@ either.
   boundary, including inside a grapheme cluster (TSF and AppKit address scalars); a tap or an
   arrow key still snaps to graphemes, as the controller always has. Pinned by the kit's `selection_inside_a_grapheme_is_kept_exactly` and
   `platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps`
-  (`flui-widgets/ARCHITECTURE.md` Mapping decision #34).
+  (`flui-widgets/ARCHITECTURE.md` Mapping decision #35).
 - **Obscured means protected.** An obscured field reports `status().protected`: text reads
   return `Protected`, while edits, selection and geometry (through the mask) work. Pinned by
   `obscured_editable_text_conforms_to_kit_v1`.

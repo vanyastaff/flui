@@ -2469,7 +2469,7 @@ mod text_store {
         assert_eq!(read(&store, |session| session.document_len()), at(17));
     }
 
-    /// A platform session is one change to the field (Mapping decision #33):
+    /// A platform session is one change to the field (Mapping decision #34):
     /// three edits, one listener notification, one `on_changed`.
     #[test]
     fn a_three_edit_session_calls_on_changed_once() {
@@ -2509,7 +2509,7 @@ mod text_store {
 
     /// A platform selection is kept at any scalar boundary; a tap still
     /// snaps to a grapheme. The divergence ARCHITECTURE.md's Mapping
-    /// decision #34 records.
+    /// decision #35 records.
     #[test]
     fn platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps() {
         let controller = TextEditingController::with_text(CORPUS);

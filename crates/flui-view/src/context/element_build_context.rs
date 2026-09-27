@@ -616,6 +616,9 @@ impl LifecycleContext for ElementBuildContext {
         // across the returned handle's lifetime.
         self.owner.read().rebuild_handle(self.element_id)
     }
+    fn writer_source(&self) -> crate::WriterSource {
+        crate::WriterSource::new(self.reads.graph().clone())
+    }
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
         self.owner.read().async_driver().cloned()
     }
@@ -1045,6 +1048,9 @@ impl BuildContext for BuildCtx<'_> {
 impl LifecycleContext for BuildCtx<'_> {
     fn rebuild_handle(&self) -> crate::RebuildHandle {
         self.rebuild.clone()
+    }
+    fn writer_source(&self) -> crate::WriterSource {
+        crate::WriterSource::new(self.capabilities.reads.graph().clone())
     }
     fn async_driver(&self) -> Option<flui_scheduler::AsyncDriver> {
         self.capabilities.async_driver.clone()
