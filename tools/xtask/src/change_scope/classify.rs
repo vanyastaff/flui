@@ -7,7 +7,9 @@
 //!   standalone crate (its own `[workspace]`, outside every member's graph);
 //!   nothing in the workspace compiles.
 //! - `packages`: the changed packages plus every workspace package declaring a
-//!   dependency on them (normal, dev, build, optional, target-specific; transitively).
+//!   dependency on them (normal, build, optional, target-specific; transitively),
+//!   and then the dev-dependents of all of those. A dev edge is the last hop: the
+//!   dev-dependent's tests link the change, its library does not.
 //! - `full`: something every package depends on changed, or a file nobody here
 //!   can attribute: the whole workspace.
 //!
@@ -311,8 +313,14 @@ pub(super) struct Workspace {
     pub(super) packages: BTreeMap<String, Package>,
     /// Package name -> the path prefixes it owns, in metadata order.
     owned: Vec<(String, Vec<String>)>,
-    /// Package name -> the workspace packages declaring a dependency on it.
+    /// Package name -> the workspace packages declaring a normal or build
+    /// dependency on it: their libraries contain it, so their dependents are
+    /// affected in turn.
     dependents: BTreeMap<String, BTreeSet<String>>,
+    /// Package name -> the workspace packages declaring it as a
+    /// dev-dependency: their tests link it, their libraries do not, so the
+    /// change stops there (unless they also have a normal edge to it).
+    dev_dependents: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// `path` relative to `root`, `/`-separated; `None` outside it.
@@ -371,6 +379,7 @@ impl Workspace {
         let mut owned = Vec::new();
         let mut dependents: BTreeMap<String, BTreeSet<String>> =
             names.iter().map(|n| (n.clone(), BTreeSet::new())).collect();
+        let mut dev_dependents = dependents.clone();
         for p in &packages {
             let dir = p
                 .manifest_path
@@ -402,8 +411,12 @@ impl Workspace {
             }
             for d in &p.dependencies {
                 if names.contains(&d.name) && d.name != p.name && d.path.is_some() {
-                    dependents
-                        .entry(d.name.clone())
+                    let map = if d.kind.as_deref() == Some("dev") {
+                        &mut dev_dependents
+                    } else {
+                        &mut dependents
+                    };
+                    map.entry(d.name.clone())
                         .or_default()
                         .insert(p.name.clone());
                 }
@@ -414,7 +427,31 @@ impl Workspace {
             packages,
             owned,
             dependents,
+            dev_dependents,
         }
+    }
+
+    /// `seeds` plus every package a change to them can affect: the packages
+    /// depending on them through normal and build edges, transitively, and
+    /// then the dev-dependents of all of those. A dev-dependent is the last
+    /// hop, because its library does not contain the dependency.
+    fn affected(&self, seeds: &BTreeSet<String>) -> BTreeSet<String> {
+        let mut scope = seeds.clone();
+        let mut todo: Vec<String> = seeds.iter().cloned().collect();
+        while let Some(pkg) = todo.pop() {
+            for user in self.dependents.get(&pkg).into_iter().flatten() {
+                if scope.insert(user.clone()) {
+                    todo.push(user.clone());
+                }
+            }
+        }
+        let tests: Vec<String> = scope
+            .iter()
+            .flat_map(|pkg| self.dev_dependents.get(pkg).into_iter().flatten())
+            .cloned()
+            .collect();
+        scope.extend(tests);
+        scope
     }
 
     /// The package owning `path`: the longest matching prefix wins.
@@ -689,15 +726,7 @@ pub(super) fn classify(repo: &Repo, files: &[String]) -> anyhow::Result<Scope> {
         scope.standalone = standalone;
         return Ok(scope);
     }
-    let mut scope = seeds.clone();
-    let mut todo: Vec<String> = seeds.iter().cloned().collect();
-    while let Some(pkg) = todo.pop() {
-        for user in ws.dependents.get(&pkg).into_iter().flatten() {
-            if scope.insert(user.clone()) {
-                todo.push(user.clone());
-            }
-        }
-    }
+    let scope = ws.affected(&seeds);
     let seed_list: Vec<String> = seeds.into_iter().collect();
     let reason = format!(
         "changed: {}; plus {} dependents",
@@ -1009,6 +1038,22 @@ pub(super) mod tests {
         assert_eq!(s.mode, Mode::Packages);
         assert!(s.packages.contains(&"flui".to_owned())); // the facade depends on it
         assert!(!s.packages.contains(&"flui-types".to_owned())); // a dependency, not a dependent
+    }
+
+    #[test]
+    fn a_dev_dependent_is_the_last_hop() {
+        // Material → the facade (optional normal) → flui-sdk, whose tests
+        // dev-depend on the facade. Cupertino's library links flui-sdk's
+        // library, which does not contain Material, so it stays out.
+        let s = scope(&["packages/flui-material/src/lib.rs"]);
+        assert!(s.packages.contains(&"flui-sdk".to_owned()));
+        assert!(!s.packages.contains(&"flui-cupertino".to_owned()));
+        // A dev-dependent is still in scope: flui-view's tests use flui-testing.
+        assert!(
+            scope(&["crates/flui-testing/src/lib.rs"])
+                .packages
+                .contains(&"flui-view".to_owned())
+        );
     }
 
     #[test]
