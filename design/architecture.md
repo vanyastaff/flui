@@ -205,7 +205,7 @@ intent (§10.4).
 lives in `flui-view` (`crates/flui-view/src/context/build_context.rs:377`) and cannot name a type
 from `flui-runtime`. So the *type* stays low and the runtime owns the *instance*: `AsyncDriver`
 stays in `flui-scheduler` (returned at `build_context.rs:406`), `GlobalKeyScope` in `flui-view`,
-`FontContext` in `flui-painting`.
+`TextContext` in `flui-painting`.
 
 ### 3.2 Stability kinds
 
@@ -237,7 +237,7 @@ inline test modules are large.
 | flui-tree | 2, 6.9k | — | **Deleted 2026-09-26** (ADR-0081); markers merged into foundation | The `TreeRead`/`TreeNav`/`TreeWrite` traits had eight implementations, all on the layer, render and semantics trees, and no generic consumer; the call sites became inherent methods on those trees. |
 | flui-platform | 2, 46.3k | H / internal | **Split**: contracts to `flui-platform-api`, backends stay | Its only production import below the app is `crates/flui-interaction/src/text_input.rs:27`. Delete the no-op `desktop = ["dep:winit"]` feature (`crates/flui-platform/Cargo.toml:303`, zero `feature = "desktop"` sites in `src/`) and `LinuxPlatform` (`crates/flui-platform/src/platforms/linux/mod.rs:108`, whose methods are `unimplemented!`). `PlatformAccessibility` stays here, with its only consumer. |
 | flui-scheduler | 2, 20.6k | S / internal | Keep, lighten | An owner-local core with a `Send` waker instead of the mutexes inside the scheduler. `AsyncDriver` and `Spawner` stay here as `!Send` types. `TIME_DILATION` (`crates/flui-scheduler/src/config.rs:43`) becomes a property of each presentation's clock. |
-| flui-painting | 2, 7.0k | S / internal | Keep | `FONT_SYSTEM` (`crates/flui-painting/src/text_layout/layout.rs:124`) becomes an injected per-realm `FontContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
+| flui-painting | 2, 7.0k | S / internal | Keep | `FONT_SYSTEM` (`crates/flui-painting/src/text_layout/layout.rs:124`) becomes an injected per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
 | flui-interaction | 2, 40.3k | S / internal | Keep | Depends on `flui-platform-api` instead of `flui-platform`. The gesture arena keeps its shape ([ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md)). |
 | flui-assets | 2, 5.1k | S / internal | Keep, detach from the runtime | Delete `AssetRegistry::global()` (`crates/flui-assets/src/registry/mod.rs:83`) and its own tokio runtime (`crates/flui-assets/src/registry/bridge.rs:66`). |
 | flui-log | 2, 3.7k | S / internal | Keep | Linked only by composition roots; merging it into the app closes no exit criterion. |
@@ -463,7 +463,7 @@ packages, same run).
 App (flui-app runners) ── one OS-trampoline host cell (P3's named exception)
  └─ OwnerHost (flui-runtime)
      ├─ Realm (!Send): reactive graph, GlobalKey scope, capability registry, focus coordinator,
-     │                 scheduler core, Spawner, FontContext, image-cache handle, observer
+     │                 scheduler core, Spawner, TextContext, image-cache handle, observer
      │   └─ Presentation × N: element tree + BuildOwner, PipelineOwner, frame clock (demand mask),
      │                        vsync, semantics host → frame sink
      └─ Shared engine services: GpuContext, font Collection { shared: true }
@@ -541,7 +541,7 @@ The known entries, each with its exit:
 | Global | Where | Exit |
 |---|---|---|
 | `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:46` | Stays: the one named trampoline cell. |
-| `FONT_SYSTEM` | `crates/flui-painting/src/text_layout/layout.rs:124` | Per-realm `FontContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
+| `FONT_SYSTEM` | `crates/flui-painting/src/text_layout/layout.rs:124` | Per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
 | `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43` | Presentation clock property ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). |
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | Subsecond runtime hook ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). |
 | `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Realm-owned GlobalKey scope ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) removes its `ManuallyDrop` form). |
