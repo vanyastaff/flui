@@ -61,6 +61,34 @@ the dispatch layer moves there too.
 
 ## Mapping decisions
 
+### Lifecycle observations are typed and lossless
+
+Desktop primary and secondary windows and UIKit submit their initial execution,
+focus and visibility as one `WindowSnapshot` event after registering callbacks.
+The queue entry supplies its exact presentation incarnation; the payload cannot
+capture a different target. Android host lifecycle callbacks use the existing
+`Lifecycle` event. These paths no longer allocate arbitrary realm closures.
+
+Snapshots and lifecycle transitions stay lossless and ordered. A suspended or
+unfocused observation can cancel pointer sequences and notify lifecycle listeners;
+retaining only the newest observation would erase those effects. This is why
+[Tokio watch](https://docs.rs/tokio/latest/tokio/sync/watch/index.html), which retains
+only the latest value, is not a replacement for this part of the queue.
+Existing `VecDeque` storage and incarnation/close admission remain sufficient;
+no new channel or scheduling abstraction is needed for these events.
+
+`queued_window_snapshots_preserve_transitions_and_address_the_sibling` drives
+the production FIFO with suspension followed by resumption and observes both on
+the addressed sibling. `admitted_close_refuses_a_later_typed_window_snapshot`
+pins terminal admission. This preserves the existing lifecycle behavior; it
+introduces no new Flutter divergence.
+
+This narrows the arbitrary-operation surface but does not complete ADR-0083's
+closed owner vocabulary or bound lossless queue memory. Backend frame pumps still
+capture renderer, recovery and pacing state. Their replacement needs
+registration-lifetime host drivers and explicit wake admission before extraction
+into the runtime; those host resources must not become runtime dependencies.
+
 ### Owner work yields between finite batches
 
 The owner-local cross-realm FIFO is cooperative: one logical operation is

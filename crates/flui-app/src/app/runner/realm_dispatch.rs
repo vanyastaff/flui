@@ -134,6 +134,20 @@ pub(in crate::app) enum PlatformToUi {
     /// `AppLifecycleState` derivation below, alongside
     /// [`WindowVisibility`](Self::WindowVisibility).
     WindowFocus(bool),
+    /// One atomic observation after callback registration. Keep this lossless:
+    /// a suspended or unfocused snapshot can cancel active input sequences.
+    #[cfg_attr(
+        all(not(test), any(target_arch = "wasm32", target_os = "android")),
+        expect(
+            dead_code,
+            reason = "desktop and UIKit seed batched window observations"
+        )
+    )]
+    WindowSnapshot {
+        execution: flui_platform::WindowExecutionState,
+        focused: bool,
+        visible: bool,
+    },
     /// Reversible native execution eligibility for one presentation.
     #[cfg_attr(
         any(target_arch = "wasm32", target_os = "android"),
@@ -241,10 +255,10 @@ pub(in crate::app) enum PlatformToUi {
 pub(in crate::app) enum RealmTask {
     Event(PlatformToUi),
     #[cfg_attr(
-        all(target_arch = "wasm32", not(test)),
+        all(not(any(target_os = "android", target_os = "ios")), not(test)),
         expect(
             dead_code,
-            reason = "the web runner wakes frames with `Pump`; native runners build `Frame`"
+            reason = "only mobile surface restoration still submits a repaint closure"
         )
     )]
     Frame(Box<dyn FnOnce(&crate::app::ui_realm::UiRealm)>),
@@ -380,6 +394,11 @@ impl PlatformToUi {
                 realm.request_redraw();
             }
             Self::WindowFocus(focused) => realm.update_window_focus(presentation_id, focused),
+            Self::WindowSnapshot {
+                execution,
+                focused,
+                visible,
+            } => realm.synchronize_window_snapshot(presentation_id, execution, focused, visible),
             Self::WindowExecution(state) => realm.update_window_execution(presentation_id, state),
             Self::WindowHover(inside) => {
                 realm.handle_window_hover_addressed(presentation_id, inside);

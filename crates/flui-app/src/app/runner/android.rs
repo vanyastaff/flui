@@ -535,9 +535,7 @@ where
             };
             let _ = dispatch_platform_realm(
                 realm_dispatch,
-                RealmTask::Frame(Box::new(move |realm| {
-                    realm.update_host_lifecycle(target);
-                })),
+                RealmTask::Event(PlatformToUi::Lifecycle(target)),
             );
         }));
 

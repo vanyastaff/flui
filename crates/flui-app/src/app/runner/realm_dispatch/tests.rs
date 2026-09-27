@@ -303,6 +303,114 @@ fn window_execution_is_local_reversible_and_cannot_override_host_or_terminal_sto
 }
 
 #[test]
+fn queued_window_snapshots_preserve_transitions_and_address_the_sibling() {
+    with_quit_notification_loop(|_, _| {
+        let a = install_test_realm();
+        let b = install_presentation_alongside(a, test_presentation_window())
+            .expect("shared presentation");
+        resume_for_quit(a);
+        let checked = Rc::new(Cell::new(false));
+        let checked_in_task = Rc::clone(&checked);
+        dispatch_platform_realm(
+            a,
+            RealmTask::Frame(Box::new(move |realm| {
+                let history = Rc::new(RefCell::new(Vec::new()));
+                let observed = Rc::clone(&history);
+                let handle = realm
+                    .presentation_widgets_for_test(b.address.presentation_id)
+                    .lifecycle_source()
+                    .handle();
+                let (_, subscription) = handle
+                    .subscribe(move |state| observed.borrow_mut().push(state))
+                    .expect("subscription");
+                let original_a = realm
+                    .presentation_widgets_for_test(a.address.presentation_id)
+                    .lifecycle_source()
+                    .current();
+                for execution in [
+                    flui_platform::WindowExecutionState::Suspended,
+                    flui_platform::WindowExecutionState::Running,
+                ] {
+                    dispatch_platform_realm(
+                        b,
+                        RealmTask::Event(PlatformToUi::WindowSnapshot {
+                            execution,
+                            focused: false,
+                            visible: true,
+                        }),
+                    )
+                    .expect("queued observation");
+                }
+                dispatch_platform_realm(
+                    b,
+                    RealmTask::Frame(Box::new(move |realm| {
+                        let _subscription = subscription;
+                        let history = history.borrow();
+                        let paused = history
+                            .iter()
+                            .position(|state| *state == AppLifecycleState::Paused)
+                            .expect("suspension must remain observable");
+                        assert!(
+                            history
+                                .iter()
+                                .skip(paused + 1)
+                                .any(|state| *state == AppLifecycleState::Inactive),
+                            "the later running observation must follow suspension"
+                        );
+                        assert!(!history.contains(&AppLifecycleState::Resumed));
+                        assert_eq!(
+                            handle.snapshot().expect("live"),
+                            Some(AppLifecycleState::Inactive)
+                        );
+                        assert_eq!(
+                            realm
+                                .presentation_widgets_for_test(a.address.presentation_id)
+                                .lifecycle_source()
+                                .current(),
+                            original_a,
+                            "an unfocused sibling snapshot must not change the primary"
+                        );
+                        checked_in_task.set(true);
+                    })),
+                )
+                .expect("queued verification");
+            })),
+        )
+        .expect("dispatch and drain");
+        assert!(
+            checked.get(),
+            "the production FIFO executed the observations"
+        );
+    });
+}
+
+#[test]
+fn admitted_close_refuses_a_later_typed_window_snapshot() {
+    with_quit_notification_loop(|_, _| {
+        let dispatcher = install_test_realm();
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| {
+                close_presentation(dispatcher, dispatcher.address.presentation_id)
+                    .expect("admitted close");
+                assert_eq!(
+                    dispatch_platform_realm(
+                        dispatcher,
+                        RealmTask::Event(PlatformToUi::WindowSnapshot {
+                            execution: flui_platform::WindowExecutionState::Running,
+                            focused: true,
+                            visible: true,
+                        }),
+                    ),
+                    Err(RealmDispatchError::PresentationClosing)
+                );
+            })),
+        )
+        .expect("drain terminal operation");
+    });
+}
+
+#[test]
 fn window_execution_snapshot_notifies_paused_without_transient_resumed() {
     with_quit_notification_loop(|_, _| {
         let a = install_test_realm();
