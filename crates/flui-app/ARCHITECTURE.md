@@ -11,13 +11,32 @@ the dispatch layer moves there too.
 
 - **The engine stays here.** The realm renders through a
   `flui_runtime::sink::FrameSink` and names no engine type. This crate's two
-  sinks are `RasterLane<B>` (the desktop and Android runners, ADR-0045) and
-  `DirectSink` (the web runner), and `raster_lane::RealmRaster` is the one
-  place a realm is rendered through either: `render_frame_on_lane` and
-  `render_frame_entered`. `DirectSink` alone maps `EngineError`s to
+  sinks are `RasterLane<B>` (the desktop, Android and iOS runners, ADR-0045)
+  and `DirectSink` (the web runner). `DirectSink` alone maps `EngineError`s to
   `SubmitVerdict`s for the web runner (pinned by
   `direct_sink_classifies_each_engine_outcome`); the realm's own tests script
-  verdicts and never reach it.
+  verdicts and never reach it. `raster_lane::RealmRaster` renders a realm's
+  draw step over a `DirectSink` for this crate's tests only.
+- **A runner's frame is gate → pump → pacing.** Each runner's frame wake is a
+  `RealmTask::Pump`: one `UiRealm::enter` holds the owner-inbox drain
+  (`UiRealm::drain_owner_inbox`), the pre-frame runner work and the wake gate
+  (`wake_action`, `frame_is_dirty`, `FallbackGate`, ADR-0058), which stays per
+  backend here; the render arm calls `UiRealm::pump` (ADR-0083 §1), the
+  background arm `UiRealm::pump_background`; the pacing after it only reads
+  flags. No runner drives scheduler phases itself (pinned by
+  `runner_frame_ordering`'s source scan over every runner file, `ios.rs`
+  included).
+- **Device recovery brackets the pump.** On desktop, Android and iOS,
+  `pump_with_device_recovery` runs its pre-frame recovery attempt before the
+  pump's begin frame and its post-frame attempt after the post-frame
+  callbacks; only `mark_primary_needs_full_repaint` touches the tree, and it
+  lands before the pipeline that repaints. The pump's frame timestamp is the
+  wake's own `now`. Pinned by the `device_recovery_tests`.
+- **Web runs no frame before its renderer exists.** The web renderer arrives
+  asynchronously; until it does, a render wake returns without pumping, so no
+  begin, draw or post-frame callback runs, and the realm stays dirty for the
+  first animation frame after it arrives. wasm-only: CI's `wasm-check` and
+  `wasm-test` compile it; nothing on this host runs it.
 - **A window reaches a realm with its bridge.** `runner::presentation_window`
   reads a host window's accessibility bridge once and pairs it with the
   window in a `PresentationWindow` (pinned by

@@ -8,7 +8,9 @@
   those moves placed (the presentation lanes, the frame sink seam, `PerformanceStats`,
   `ExecutionServices`, and the realm core: `UiRealm`, `PresentationState`, the presentation
   forest, the per-presentation lifecycle, frame-failure reporting and its ADR-0048
-  containment); the rest of it and §2–§5 remain Proposed.
+  containment); §1's frame transaction is accepted as `UiRealm::pump`, which every runner
+  drives (the first half of move 5), with the same CI wait for its Android, iOS and wasm sites;
+  the rest of it and §2–§5 remain Proposed.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md)
   (the paragraph "No `flui-runtime` without two consumers")
@@ -95,15 +97,19 @@ before `flui-testing` and `flui-sdk`. It owns:
 - the realm (`UiRealm`, its command vocabulary and dispatcher) and each presentation's
   `PresentationState` (moved from `flui-app`);
 - **the frame transaction**: one method per realm,
-  `Realm::pump(&mut self, clock: &mut dyn FrameClockSource, sink: &mut dyn FrameSink) -> FrameOutcome`,
-  whose phase order keeps the scheduler's Flutter-shaped frame (ADR-0021): apply input → begin
+  `UiRealm::pump(&mut self, clock: &mut dyn FrameClockSource, sink: &mut dyn FrameSink) -> FrameOutcome`,
+  whose phase order keeps the scheduler's Flutter-shaped frame (ADR-0021): apply commands → begin
   frame (`handle_begin_frame`, `scheduler.rs:1274`: transient callbacks, so animation tickers
   advance, then the microtask flush) → draw frame (`handle_draw_frame`, `scheduler.rs:1422`:
   persistent callbacks and the priority task queue) → drain build → run effects (the phase
   ADR-0075 reserves; empty until that record is accepted) → layout → compositing → paint →
   semantics → produce the `SceneSnapshot` → end frame (`end_frame_with_lane`,
   `scheduler.rs:1552`, which runs the post-frame callbacks of both queues). The
-  per-presentation panic boundary of ADR-0048 moves with it unchanged;
+  per-presentation panic boundary of ADR-0048 moves with it unchanged. The clock is read once
+  per pump and every phase sees that timestamp, the realm's `Vsync` controllers included.
+  Whether a wake becomes a frame stays the runner's per-backend wake gate (ADR-0058); a wake
+  with frames disabled calls `UiRealm::pump_background` (clear the frame latch, then poll the
+  async driver) and runs no frame;
 - `ExecutionServices` and the realm's instances of runtime-owned capabilities
   (`AsyncDriver`/`Spawner` instances, the registry of ADR-0084);
 - `OwnerHost`: the loop-scoped host of realms that replaces `AppRuntime`'s realm slot.
@@ -150,7 +156,7 @@ for the `Send` removal.
 ### 4. `flui-testing` runs the product transaction
 
 `flui-testing` moves above `flui-runtime` (tier K, after it). `HeadlessBinding::pump_frame` and its
-private `run_pipeline` are deleted; the headless driver calls `Realm::pump` with a manual clock
+private `run_pipeline` are deleted; the headless driver calls `UiRealm::pump` with a manual clock
 and a headless sink. `pump_presentation`/`pump_all` become thin loops over the same call.
 `flui_widgets::testing` is absorbed into `flui-testing`.
 
@@ -177,7 +183,7 @@ empty.
 ### 5. The two-consumer condition is met
 
 ADR-0041's gate asked for two entry points driving one core: `flui-runtime` has two drivers of
-one `Realm::pump`, the platform runners in `flui-app` and the headless driver in `flui-testing`.
+one `UiRealm::pump`, the platform runners in `flui-app` and the headless driver in `flui-testing`.
 ADR-0037 §12 asked for a deep, policy-free abstraction with *two production consumers*; the
 runtime has one production consumer (`flui-app`), since the headless driver is test
 infrastructure. This record therefore amends ADR-0037 §12: a runtime crate is justified by one
@@ -196,7 +202,7 @@ the platform backend and the raster owner remain the three owners of ADR-0037 §
   ADR-0017 §3 and the ADR-0003 fixpoint stay and the phase order above keeps between-pass
   servicing. A superseding ADR needs the four conditions recorded there.
 - **Realm concurrency.** One owner thread hosting isolated realms is ADR-0091's decision.
-- **A public embedder API.** `Realm` and `OwnerHost` are `pub` in `flui-runtime` because
+- **A public embedder API.** `UiRealm` and `OwnerHost` are `pub` in `flui-runtime` because
   `flui-app` and `flui-testing` are separate crates, but the crate's kind is `internal`; a
   supported embedder surface is still designed separately, as ADR-0027 §9 says.
 
@@ -231,8 +237,10 @@ the platform backend and the raster owner remain the three owners of ADR-0037 §
 - ADR-0043's "`BuildOwner` and `WidgetsBinding` are public surface … consumed by
   `flui-hot-reload`" narrows: the frame entry of `WidgetsBinding` moves under `__runtime`.
 - Material and Cupertino tests that use `flui_widgets::testing` switch to `flui-testing`.
-- Rollback for the series: the old driver can be kept behind a feature for one minor while the
-  runners move; it is removed before the next release.
+- Rollback for the series: each move is one self-contained revert. No feature keeps the old
+  driver: `UiRealm::pump` is the same `drive_frame_with_lane` around the same `render_frame`,
+  and a second frame body in every runner would bring back the two-driver drift this record
+  removes.
 
 ## Migration
 
@@ -245,7 +253,7 @@ The crate is created first and filled in five moves, each independently mergeabl
 | 2. Frame sink (done) | `FrameSink` and `SubmitVerdict` (engine-free; they name only `flui_layer::Scene`) move to `flui_runtime::sink`, and `PerformanceStats` to `flui_runtime::performance_stats` (it is fed while the layer tree is built, not at submit); `RasterLane<B>` and `DirectSink` stay in `flui-app` and implement the trait | move 1 |
 | 3. Execution (done) | `ExecutionServices` (ADR-0047) moves to `flui_runtime::execution`; `flui-app` re-exports `ComputeJob`, `DeterministicExecutors`, `HostComputePool`, `HostExecutors`, `HostIoPool`, `IoFuture` and `SpawnError`, so their public paths do not change. `allowed-dependents = ["flui-app"]` on the runtime keeps ADR-0047's invariant true now that the services are `pub`: only a host crate (one of the runtime's `allowed-dependents`) constructs `ExecutionServices`, and no other workspace crate reaches the pools | move 1 |
 | 4. Realm core (moved; acceptance waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `ui_realm` (with `attach`, whose root wrappers are `flui-widgets`'), `presentation`, `presentation_forest`, `lifecycle_state`, `frame_failure`, `media_query_root` (with its window constructor: it names only `PlatformWindow`, and its only callers are `PresentationState`'s constructors), `renderer_binding` (`RenderingFlutterBinding`) and the realm's `RealmServices`/`next_identity`; the ADR-0048 `catch_unwind` moves unchanged. The realm renders through `UiRealm::render_frame(&mut impl FrameSink)` and names no engine type: `flui-app`'s `RealmRaster` trait keeps the engine-backed entry points (`render_frame_entered` over a `DirectSink`, `render_frame_on_lane`). The realm tests move with a headless sink (`flui_runtime::testing::ScriptedSink`, under `test-support`), and `UiRealm::enter_for_close` is deleted. Items `flui-app` calls in production are `pub`; items only its tests call are `pub` under `test-support`. Three names the realm used that no runtime edge may carry moved down first: `PlatformAccessibility` to `flui-semantics` (ADR-0082 §2, amended), `REDACTED_VALUE` to `flui_foundation::diagnostics` (only composition roots may depend on `flui-log`), and the hot-reload tier, which the realm now takes as `flui_runtime::reload::ReloadTier` and `flui-app` translates from `flui-hot-reload`'s | `PlatformWindow` in `flui-platform-api` (ADR-0082 §3, second change), since `PresentationState` and `UiRealm` name it; moves 2 and 3 |
-| 5. Transaction | `Realm::pump` absorbs the runners' `drive_frame_with_lane` calls; `OwnerHost` replaces `AppRuntime`'s realm slot and is §3's one trampoline cell; the production part of `realm_dispatch.rs` moves; the two verification tests below land. Rollback: a `legacy-frame-driver` cargo feature on `flui-app` for one minor | move 4 |
+| 5. Transaction (the pump has moved; acceptance of its Android, iOS and wasm sites waits on CI's `cross-typecheck`, `wasm-check` and `wasm-test`) | `UiRealm::pump` absorbs the runners' `drive_frame_with_lane` calls: every runner's frame wake is its gate, then the pump, then its pacing; the device-recovery wrapper brackets the whole pump; the background arm is `UiRealm::pump_background`; `flui-app`'s `RealmRaster` is test-only. Then `OwnerHost` replaces `AppRuntime`'s realm slot and is §3's one trampoline cell, and the production part of `realm_dispatch.rs` moves. The two verification tests below land in `flui-runtime` until `flui-testing` drives the pump (§4). Rollback: revert (no `legacy-frame-driver` feature, see `## Consequences`) | move 4 |
 
 §2 (sealing the entry points), §4 (`flui-testing` above the runtime, taking an `order` after it)
 and the widgets' inline test modules follow move 5.
@@ -280,19 +288,25 @@ test that failed before the fix:
 
 ## Verification
 
-Only the first exists: both crates are tier K, and `cargo xtask reach` checks them on every
-change.
+The first exists: both crates are tier K, and `cargo xtask reach` checks them on every change.
+The pump tests exist in `flui-runtime` (`ui_realm/tests/pump_transaction.rs`, driven through
+`flui_runtime::testing::ScriptedSink` and `ManualClock`); they move to `flui-testing` once it
+drives the pump (§4), since `flui-testing` still sits below the runtime and its
+`HeadlessBinding` hosts no realm.
 
 - `cargo xtask reach` (ADR-0081): `flui-runtime` and `flui-testing` reach none of the K set.
 - `cargo xtask frame-entry --self-test` (if option 2 of §2 is used): a planted call to
   `drive_frame_with_lane` in `flui-widgets` fails the gate.
-- A test in `flui-testing` that fails when a phase is missing from `Realm::pump`: a post-frame
-  callback registered during build observes this frame's committed layout, driven through the
-  headless sink.
+- A test that fails when a phase is missing from `UiRealm::pump`: a post-frame callback observes
+  this frame's committed layout, driven through the headless sink
+  (`pump_post_frame_callback_observes_this_frames_committed_layout`).
 - The ADR-0075 acceptance test, once that record is accepted: an effect runs under the product
   frame driven by the runner's code path, not only under the harness.
 - A grep-free structural check: a `reach-forbid` fact (ADR-0081 §2) that `flui-testing` is
   absent from `flui-widgets`' normal closure with all features. (`cargo tree -i` cannot state it:
   it errors on an absent package.)
 - A test that fails when the begin-frame phase is skipped: an animation controller driven through
-  `Realm::pump` with a manual clock advances its value between two frames.
+  `UiRealm::pump` with a manual clock advances its value between two frames
+  (`pump_advances_a_scheduler_ticker_between_two_pumps`); and one that fails when the pump does
+  not publish its clock: a `Vsync` controller lands exactly halfway after two pumps 50 ms apart
+  on the manual clock (`pump_ticks_vsync_controllers_at_the_frame_clocks_time`).

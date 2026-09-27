@@ -491,12 +491,15 @@ App (flui-app runners) ── one OS-trampoline host cell (P3's named exception)
 
 ### 8.3 One frame transaction
 
-`Realm::pump(&mut self, clock: &mut dyn FrameClockSource, sink: &mut dyn FrameSink) -> FrameOutcome`
-fixes the order: apply input → begin frame (transient callbacks, so tickers advance, then
+`UiRealm::pump(&mut self, clock: &mut dyn FrameClockSource, sink: &mut dyn FrameSink) -> FrameOutcome`
+fixes the order: apply commands → begin frame (transient callbacks, so tickers advance, then
 microtasks) → draw frame (persistent callbacks) → drain build → effects (the ADR-0075 slot) →
 layout → compositing → paint (retained layers) → semantics (incremental) → layer diff → damage →
-`SceneSnapshot` → end frame (post-frame callbacks). `flui-app` drives it with platform clocks and
-the raster lane, and `flui-testing` with a manual clock and a headless or CPU sink
+`SceneSnapshot` → end frame (post-frame callbacks). Every phase sees the one timestamp the clock
+returns, the realm's `Vsync` controllers included. The runner's per-backend wake gate decides
+whether a wake becomes a pump at all (ADR-0058), and a wake with frames disabled runs
+`UiRealm::pump_background` instead. `flui-app` drives the pump with platform clocks and the
+raster lane, and `flui-testing` is to drive it with a manual clock and a headless or CPU sink
 ([ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md), which amends
 ADR-0037 §12: one production consumer plus the test driver).
 
