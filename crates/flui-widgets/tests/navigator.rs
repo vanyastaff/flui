@@ -1729,7 +1729,7 @@ fn a_focus_listener_may_call_back_into_the_navigator_during_a_transition() {
             let navigator = navigator.clone();
             Focus::new(Box2::new(10.0, 10.0))
                 .focus_node(Rc::clone(&field_for_page))
-                .on_focus_change(move |_focused| {
+                .on_focus_change(move |_cx, _focused| {
                     // The re-entrant read that deadlocks under the lock.
                     observed.lock().push(navigator.can_pop());
                 })

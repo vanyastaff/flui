@@ -647,7 +647,7 @@ impl<T: Clone + 'static> ViewState<FormField<T>> for FormFieldState<T> {
             .can_request_focus(false)
             .include_semantics(false)
             .debug_label("FormField")
-            .on_focus_change(move |focused| {
+            .on_focus_change(move |_cx, focused| {
                 if !focused && inner.validates_on_unfocus() {
                     inner.run_validate();
                 }

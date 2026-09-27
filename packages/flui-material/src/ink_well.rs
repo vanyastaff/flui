@@ -447,7 +447,7 @@ impl ViewState<InkWell> for InkWellState {
         let focus_states = self.states.clone();
         let mut focus = Focus::new(overlay_content(view, resolved_overlay))
             .can_request_focus(enabled)
-            .on_focus_change(move |has_focus| {
+            .on_focus_change(move |_cx, has_focus| {
                 focus_states.update(WidgetState::Focused, has_focus);
             });
         if let Some(node) = &view.focus_node {

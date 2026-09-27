@@ -68,7 +68,7 @@ impl StatelessView for Host {
             .autofocus(self.autofocus);
         if let Some(handler) = &self.on_focus_change {
             let handler = Rc::clone(handler);
-            focus = focus.on_focus_change(move |focused| handler(focused));
+            focus = focus.on_focus_change(move |cx, focused| handler(cx, focused));
         }
         FocusScope::with_external_node(Rc::clone(&self.scope), focus)
             .into_view()
@@ -297,7 +297,9 @@ fn on_focus_change_reports_gain_and_loss() {
         scope: Rc::clone(&scope),
         node: Rc::clone(&node),
         autofocus: false,
-        on_focus_change: Some(Rc::new(move |focused| recorded.borrow_mut().push(focused))),
+        on_focus_change: Some(Rc::new(move |_cx, focused| {
+            recorded.borrow_mut().push(focused);
+        })),
     });
     let manager = harness.focus_manager();
 
@@ -382,11 +384,12 @@ impl StatelessView for Configurable {
             focus = focus.skip_traversal(skip);
         }
         if let Some(handler) = &self.on_key_event {
-            focus = focus.on_key_event(Rc::clone(handler));
+            let handler = Rc::clone(handler);
+            focus = focus.on_key_event(move |_cx, event| handler(event));
         }
         if let Some(handler) = &self.on_focus_change {
             let handler = Rc::clone(handler);
-            focus = focus.on_focus_change(move |focused| handler(focused));
+            focus = focus.on_focus_change(move |cx, focused| handler(cx, focused));
         }
         FocusScope::with_external_node(Rc::clone(&self.scope), focus)
             .into_view()
@@ -549,7 +552,7 @@ fn a_source_of_truth_external_node_is_never_reconfigured() {
             .can_request_focus(true)
             .skip_traversal(false)
             .descendants_are_focusable(true)
-            .on_key_event(Rc::new(|_| KeyEventResult::Ignored)),
+            .on_key_event(|_cx, _| KeyEventResult::Ignored),
     );
     let key = KeyEvent {
         state: KeyState::Down,
@@ -731,7 +734,9 @@ fn a_rebuild_swaps_the_on_focus_change_handler() {
         can_request_focus: None,
         skip_traversal: None,
         on_key_event: None,
-        on_focus_change: Some(Rc::new(move |focused| first_rec.borrow_mut().push(focused))),
+        on_focus_change: Some(Rc::new(move |_cx, focused| {
+            first_rec.borrow_mut().push(focused);
+        })),
     });
     let manager = harness.focus_manager();
 
@@ -743,7 +748,7 @@ fn a_rebuild_swaps_the_on_focus_change_handler() {
         can_request_focus: None,
         skip_traversal: None,
         on_key_event: None,
-        on_focus_change: Some(Rc::new(move |focused| {
+        on_focus_change: Some(Rc::new(move |_cx, focused| {
             second_rec.borrow_mut().push(focused);
         })),
     });
@@ -1112,4 +1117,91 @@ fn tab_traversal_follows_geometry_not_attach_order() {
     assert!(a.has_primary_focus(), "then the middle again");
 
     manager.unfocus();
+}
+
+/// Event context (ADR-0086): the focus edge and the key handler run inside a
+/// write the `Focus` opens from the writer source it acquired in
+/// `init_state`.
+mod event_cx {
+    use std::rc::Rc;
+
+    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
+    use flui_interaction::routing::{FocusNode, KeyEventResult};
+    use flui_view::prelude::*;
+    use flui_widgets::SizedBox;
+    use flui_widgets::interaction::Focus;
+
+    use crate::common::harness::mount;
+    use crate::common::{ProbeSignals, SignalProbe};
+
+    fn key_a() -> KeyEvent {
+        KeyEvent {
+            state: KeyState::Down,
+            key: Key::Character("a".into()),
+            modifiers: Modifiers::default(),
+            ..KeyEvent::default()
+        }
+    }
+
+    #[test]
+    fn a_focus_edge_writes_a_signal_and_rebuilds_its_reader() {
+        let node = FocusNode::with_debug_label("probe");
+        let probe_node = Rc::clone(&node);
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            Focus::new(SizedBox::new(10.0, 10.0))
+                .focus_node(Rc::clone(&probe_node))
+                .on_focus_change(move |cx, focused| count.set(cx, u32::from(focused)))
+        });
+        let mut harness = mount(probe.view());
+
+        node.request_focus();
+        assert_eq!(probe.value(), Ok(1), "the gained edge wrote");
+        harness.tick();
+        assert_eq!(probe.reads().last(), Some(&1), "the reader rebuilt");
+
+        node.unfocus();
+        assert_eq!(probe.value(), Ok(0), "the lost edge wrote");
+    }
+
+    #[test]
+    fn a_key_handler_writes_a_signal_and_keeps_its_decision() {
+        let node = FocusNode::with_debug_label("probe");
+        let probe_node = Rc::clone(&node);
+        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+            Focus::new(SizedBox::new(10.0, 10.0))
+                .focus_node(Rc::clone(&probe_node))
+                .on_key_event(move |cx, _event| {
+                    count.update(cx, |n| *n += 1).report();
+                    KeyEventResult::Handled
+                })
+        });
+        let harness = mount(probe.view());
+        node.request_focus();
+
+        assert!(
+            harness.focus_manager().dispatch_key_event(&key_a()),
+            "the handler's Handled consumed the key"
+        );
+        assert_eq!(probe.value(), Ok(1));
+    }
+
+    #[test]
+    fn a_refused_write_in_a_focus_edge_is_reported_not_panicked() {
+        let node = FocusNode::with_debug_label("probe");
+        let probe_node = Rc::clone(&node);
+        let probe = SignalProbe::new(move |ProbeSignals { released, .. }| {
+            Focus::new(SizedBox::new(10.0, 10.0))
+                .focus_node(Rc::clone(&probe_node))
+                .on_focus_change(move |cx, _focused| released.set(cx, 1))
+        });
+        let _harness = mount(probe.view());
+
+        let (_, log) = flui_testing::log_capture::capture(|| node.request_focus());
+
+        assert!(
+            log.contains("an event callback's signal write was refused"),
+            "the refusal is logged at the dispatch boundary: {log}"
+        );
+        assert_eq!(probe.value(), Ok(0));
+    }
 }
