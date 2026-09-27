@@ -661,14 +661,11 @@ where
     let visible = window.is_visible();
     let _ = dispatch_platform_realm(
         realm_dispatch,
-        RealmTask::Frame(Box::new(move |realm| {
-            realm.synchronize_window_snapshot(
-                realm_dispatch.address.presentation_id,
-                execution,
-                focused,
-                visible,
-            );
-        })),
+        RealmTask::Event(PlatformToUi::WindowSnapshot {
+            execution,
+            focused,
+            visible,
+        }),
     );
 
     window.on_hover_status_change(Box::new(move |is_hovered| {
