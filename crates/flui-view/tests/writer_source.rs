@@ -183,3 +183,115 @@ fn the_test_context_writer_source_targets_the_owner_graph() {
     assert_eq!(ctx.writer_source().write(|cx| sig.set(cx, 2)), Ok(()));
     assert_eq!(sig.peek(owner.read().reactive(), |v| *v), Ok(2));
 }
+
+/// What the render-view probe hands back to the test.
+#[derive(Default)]
+struct RenderSeen {
+    /// The signal the parent minted in `init_state`.
+    count: Cell<Option<Signal<u32>>>,
+    /// Every value the parent's `build` read, in order.
+    reads: RefCell<Vec<u32>>,
+    /// What the leaf's render-object context returned from `writer_source`.
+    source: RefCell<Option<Option<WriterSource>>>,
+}
+
+/// A render leaf that keeps the writer source its render-object context
+/// hands out, as a `Listener` or a `MouseRegion` does for its callbacks.
+#[derive(Clone)]
+struct SourceLeaf {
+    seen: Rc<RenderSeen>,
+}
+
+impl RenderView for SourceLeaf {
+    type Protocol = BoxProtocol;
+    type RenderObject = RenderSizedBox;
+
+    fn create_render_object(&self, ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
+        *self.seen.source.borrow_mut() = Some(ctx.writer_source());
+        RenderSizedBox::shrink()
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &RenderObjectContext<'_>,
+        _render_object: &mut Self::RenderObject,
+    ) -> RenderUpdateImpact {
+        RenderUpdateImpact::NONE
+    }
+}
+
+impl View for SourceLeaf {
+    fn create_element(&self) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+}
+
+/// Mints a signal in `init_state`, reads it in `build`, and builds a
+/// [`SourceLeaf`] below itself.
+#[derive(Clone, StatefulView)]
+struct RenderSourceProbe {
+    seen: Rc<RenderSeen>,
+}
+
+#[derive(Default)]
+struct RenderSourceProbeState {
+    count: Signal<u32>,
+}
+
+impl StatefulView for RenderSourceProbe {
+    type State = RenderSourceProbeState;
+
+    fn create_state(&self) -> Self::State {
+        RenderSourceProbeState::default()
+    }
+}
+
+impl ViewState<RenderSourceProbe> for RenderSourceProbeState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.count = ctx.signal(0);
+    }
+
+    fn build(&self, view: &RenderSourceProbe, ctx: &dyn BuildContext) -> impl IntoView {
+        view.seen.count.set(Some(self.count));
+        view.seen.reads.borrow_mut().push(self.count.get(ctx));
+        SourceLeaf {
+            seen: Rc::clone(&view.seen),
+        }
+    }
+}
+
+/// A render view has no `init_state`; the context that creates its render
+/// object hands it the owner's writer source instead, and a write through it
+/// lands in the owner's graph and rebuilds the reader.
+#[test]
+fn a_render_object_context_writer_source_writes_the_owner_graph() {
+    let seen = Rc::new(RenderSeen::default());
+    let root = RenderSourceProbe {
+        seen: Rc::clone(&seen),
+    };
+    let mut binding = HeadlessBinding::new();
+    binding.mount_root(
+        &root,
+        MountOwners::fresh(),
+        MountOptions::tight(100.0, 100.0),
+    );
+    binding.pump_frame(FRAME);
+    let count = seen.count.get().expect("the probe built");
+    let writer = seen
+        .source
+        .borrow()
+        .clone()
+        .expect("the leaf created its render object")
+        .expect("a mounted render view has a writer source");
+
+    assert_eq!(writer.write(|cx| count.set(cx, 4)), Ok(()));
+    let graph = binding.reactive().expect("tree-bound");
+    assert_eq!(count.peek(&graph, |v| *v), Ok(4));
+    binding.pump_frame(FRAME);
+    assert_eq!(*seen.reads.borrow(), [0, 4], "the reader rebuilt once");
+}
+
+#[test]
+fn a_detached_render_object_context_has_no_writer_source() {
+    assert!(RenderObjectContext::detached().writer_source().is_none());
+}

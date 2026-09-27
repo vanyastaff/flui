@@ -254,6 +254,62 @@ where
     f
 }
 
+/// [`callback`] for an event callback that also receives a value: a
+/// `let`-bound closure shaped `|cx, details| ..`.
+///
+/// The value is passed by value (`DragUpdateDetails`, `bool`, a `DeviceId`).
+/// For a borrowed argument (`&str`, `&KeyEvent`), use [`callback_ref`].
+///
+/// ```
+/// use flui_view::{Signal, SignalError, SignalWriteExt, WriterSource, callback_with};
+///
+/// fn wire(source: &WriterSource, a: Signal<u32>, b: Signal<u32>) -> Result<(), SignalError> {
+///     let moved = callback_with(move |cx, delta: u32| {
+///         a.update(cx, |n| *n += delta)?;
+///         b.set(cx, delta)
+///     });
+///     source.write(|cx| moved(cx, 4))
+/// }
+/// ```
+pub fn callback_with<A, F, R>(f: F) -> F
+where
+    F: Fn(&mut EventCx<'_>, A) -> R + 'static,
+    R: EventOutcome,
+{
+    f
+}
+
+/// [`callback`] for an event callback that also receives a borrowed value: a
+/// `let`-bound closure shaped `|cx, text| ..` where `text: &str`.
+///
+/// [`callback_with`] cannot express it, because its argument type is one
+/// fixed type and a borrowed argument has to accept every lifetime.
+///
+/// ```
+/// use flui_view::{Signal, SignalError, SignalWriteExt, WriterSource, callback_ref};
+///
+/// fn wire(
+///     source: &WriterSource,
+///     text: Signal<String>,
+///     edits: Signal<u32>,
+/// ) -> Result<(), SignalError> {
+///     let changed = callback_ref(move |cx, value: &str| {
+///         text.set(cx, value.to_owned())?;
+///         edits.update(cx, |n| *n += 1)
+///     });
+///     let typed = String::from("hello");
+///     source.write(|cx| changed(cx, &typed))
+/// }
+/// ```
+pub fn callback_ref<T, F, R>(f: F) -> F
+where
+    T: ?Sized,
+    F: for<'a> Fn(&mut EventCx<'_>, &'a T) -> R + 'static,
+    R: EventOutcome,
+{
+    f
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

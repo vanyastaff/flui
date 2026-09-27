@@ -350,7 +350,7 @@ mod tests {
             ),
             "the error view must own a render node so a failed subtree still has size and paint"
         );
-        let ctx = crate::RenderObjectContext::new(None);
+        let ctx = crate::RenderObjectContext::new(None, None);
         let render_object =
             <ErrorView as crate::view::RenderView>::create_render_object(&view, &ctx);
         assert_eq!(render_object.message(), "boom");

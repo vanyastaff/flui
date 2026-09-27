@@ -223,7 +223,7 @@ pub use owner::{
 pub use reactive::{
     EventCx, EventOutcome, Reactive, ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal,
     SignalError, SignalSender, SignalSlot, SignalWriteExt, SlotInfo, WriteTarget, Writer,
-    WriterSource, callback,
+    WriterSource, callback, callback_ref, callback_with,
 };
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
@@ -278,9 +278,11 @@ pub mod prelude {
     // opaque, so that reaches nothing but a signal read.
     pub use crate::reactive::SignalWriteExt;
     // The write capability an event callback receives, the handle it writes,
-    // the source a widget opens it from, and the helper that fixes a
-    // `let`-bound callback's signature (ADR-0086).
-    pub use crate::reactive::{EventCx, Signal, WriterSource, callback};
+    // the source a widget opens it from, the outcome a callback reports, and
+    // the helpers that fix a `let`-bound callback's signature (ADR-0086).
+    pub use crate::reactive::{
+        EventCx, EventOutcome, Signal, WriterSource, callback, callback_ref, callback_with,
+    };
     pub use crate::{
         binding::{
             AppExitResponse, AppLifecycleState, PredictiveBackEvent, RouteInformation,

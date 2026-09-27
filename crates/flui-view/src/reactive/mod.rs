@@ -83,7 +83,9 @@ use smallvec::SmallVec;
 use crate::owner::ExternalBuildScheduler;
 
 mod writer;
-pub use writer::{EventCx, EventOutcome, WriteTarget, Writer, WriterSource, callback};
+pub use writer::{
+    EventCx, EventOutcome, WriteTarget, Writer, WriterSource, callback, callback_ref, callback_with,
+};
 
 /// Process-wide counter that gives every [`Reactive`] graph a distinct id, so
 /// a [`SignalSlot`] is meaningful only against the graph that minted it. Id 0
