@@ -17,18 +17,26 @@
 //!   every store embeds to decide when a grant runs.
 //! - [`TextStore`] and [`TextStoreObserver`]: the field side and the
 //!   platform side of the connection.
+//! - [`project_ime_event`]: a push-model [`ImeEvent`](flui_types::ImeEvent)
+//!   (winit) applied as store edits, so there is one editing path.
+//! - [`InMemoryTextStore`]: a complete store over a `String`, the
+//!   conformance kit's reference and a backend test's field.
 //!
 //! Stores are owner-thread objects (`Rc<dyn TextStore>`, not `Send`).
 
+mod in_memory;
 mod lock;
+mod projection;
 mod session;
 mod store;
 pub mod utf16;
 
+pub use in_memory::InMemoryTextStore;
 pub use lock::{
     DEFERRED_LOCK_CAPACITY, EditBody, LockArbiter, LockGrant, LockKind, LockOutcome, LockTiming,
     ReadBody, TextStoreError,
 };
+pub use projection::project_ime_event;
 pub use session::{
     Composition, PointMode, RangeRect, Selection, TextChange, TextStoreEdit, TextStoreRead,
     TextStoreStatus,

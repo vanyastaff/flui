@@ -34,6 +34,9 @@ parking_lot = { workspace = true }
 # feature on.
 raw-window-handle = { workspace = true, features = ["alloc"] }
 thiserror = { workspace = true }
+# An edit the `ImeEvent` projection could not apply, reported where a
+# deferred grant has no caller left to return an error to.
+tracing = { workspace = true }
 # The W3C pointer/keyboard vocabulary `PlatformInput` wraps. Re-exporting its
 # types is ADR-0089 debt: own types replace them before the first release.
 ui-events = { workspace = true }
