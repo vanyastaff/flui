@@ -926,7 +926,9 @@ runs `checks`, `plan` and the `ci` aggregator:
 
 - **Fast lane**: `fast-lane` runs clippy and nextest over the changed crates and
   every workspace crate that declares a dependency on them, including optional,
-  dev and target-specific dependencies. It also checks the code a Linux build
+  dev and target-specific dependencies. Normal and build edges are followed
+  transitively; a dev edge is the last hop, because the dev-dependent's library
+  does not contain the change. It also checks the code a Linux build
   never compiles:
   - clippy on the other targets for `flui-platform`'s backends, the
     `flui-app`/`flui` Android runner and `flui-cli` on Windows, when they are
