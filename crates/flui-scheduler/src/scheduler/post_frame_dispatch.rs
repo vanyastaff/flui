@@ -32,23 +32,35 @@ impl UpdateScheduler {
         lane: Option<&LocalPostFrameLane>,
         timing: &FrameTiming,
     ) -> std::thread::Result<()> {
-        let mut callbacks: Vec<PendingPostFrame> = {
+        let (mut callbacks, shared_callbacks, local_callbacks) = {
             let _registration = self.inner.callbacks.post_frame_registration.lock();
             let mut cbs = self.inner.callbacks.post_frame.lock();
             let mut snapshot: Vec<_> = cbs.drain(..).map(PendingPostFrame::Shared).collect();
+            let shared_callbacks = snapshot.len();
+            let mut local_callbacks = 0;
             if let Some(lane) = lane
                 && let Ok(local_entries) = lane.take_queue_for(self)
             {
+                local_callbacks = local_entries.len();
                 snapshot.extend(local_entries.into_iter().map(PendingPostFrame::Local));
             }
-            snapshot
+            (snapshot, shared_callbacks, local_callbacks)
         };
-
         callbacks.sort_unstable_by_key(|entry| entry.id().get());
         // Keep the iterator outside the unwind boundary: the panicking
         // entry is consumed, but its uninvoked siblings remain owned here.
         let mut callbacks = callbacks.into_iter();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // A subscriber is arbitrary user code and may panic. Keep this
+            // event inside the same recovery boundary as callback delivery so
+            // such a panic restores the still-unconsumed batch instead of
+            // dropping it after the queues have already been drained.
+            tracing::debug!(
+                shared_callbacks,
+                local_callbacks,
+                total_callbacks = callbacks.len(),
+                "draining post-frame callback batch"
+            );
             for entry in callbacks.by_ref() {
                 if self.inner.callbacks.cancelled.contains_key(&entry.id()) {
                     continue;

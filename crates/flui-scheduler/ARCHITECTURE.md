@@ -20,6 +20,15 @@ work precedes work registered reentrantly by the failed callback. Cancellation
 records remain intact on the failed drain, including records belonging to other
 callback queues. No user callback or captured destructor runs under a queue guard.
 
+After the shared and owner-local queues have been snapshotted, but before their
+entries are sorted or invoked, the dispatcher emits one debug event with
+`shared_callbacks`, `local_callbacks`, and `total_callbacks`. These are queue
+work-item counts for diagnosing post-frame amplification; they are only a lower
+bound on retained memory because an opaque callback's captured bytes cannot be
+measured. Nested registrations therefore appear in the next frame's event, and
+a panic-restored tail appears again in the retry frame's event. Observability
+does not impose a capacity, coalesce commands, or alter delivery order.
+
 This extends the existing pre-pipeline recovery invariant to the post-frame
 snapshot. It does not catch-and-continue individual callbacks, request another
 frame, or promise that a platform host survives an application panic. A direct

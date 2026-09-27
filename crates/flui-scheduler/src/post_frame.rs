@@ -322,6 +322,70 @@ mod tests {
     assert_not_impl_any!(LocalPostFrameLane: Send, Sync);
     assert_not_impl_any!(LocalPostFrameHandle: Send, Sync);
 
+    struct PanickingSubscriber;
+
+    impl tracing::Subscriber for PanickingSubscriber {
+        fn register_callsite(
+            &self,
+            _metadata: &'static tracing::Metadata<'static>,
+        ) -> tracing::subscriber::Interest {
+            tracing::subscriber::Interest::sometimes()
+        }
+
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, _event: &tracing::Event<'_>) {
+            panic!("subscriber failure");
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    fn assert_batch_depth(
+        log: &flui_testing::log_capture::CapturedLog,
+        shared: usize,
+        local: usize,
+        total: usize,
+    ) {
+        let records: Vec<_> = log
+            .records()
+            .iter()
+            .filter(|record| record.message == "draining post-frame callback batch")
+            .collect();
+        assert_eq!(records.len(), 1, "exactly one batch trace: {log}");
+        let record = records[0];
+        assert_eq!(
+            record
+                .field("shared_callbacks")
+                .and_then(|value| value.parse().ok()),
+            Some(shared)
+        );
+        assert_eq!(
+            record
+                .field("local_callbacks")
+                .and_then(|value| value.parse().ok()),
+            Some(local)
+        );
+        assert_eq!(
+            record
+                .field("total_callbacks")
+                .and_then(|value| value.parse().ok()),
+            Some(total)
+        );
+    }
+
     #[test]
     fn mixed_shared_and_local_callbacks_keep_total_registration_order() {
         let scheduler = UpdateScheduler::new();
@@ -340,9 +404,11 @@ mod tests {
         scheduler.add_post_frame_callback(Box::new(move |_| {
             shared.lock().expect("log mutex").push(3);
         }));
-        scheduler.execute_frame_with_lane(&lane);
+        let (_frame, batch_log) =
+            flui_testing::log_capture::capture(|| scheduler.execute_frame_with_lane(&lane));
 
         assert_eq!(*log.lock().expect("log mutex"), [1, 2, 3]);
+        assert_batch_depth(&batch_log, 2, 1, 3);
     }
 
     /// `pending_len` counts what is queued on the handle's own lane, drops
@@ -431,10 +497,14 @@ mod tests {
                 }));
             })
             .expect("lane is alive");
-        scheduler.execute_frame_with_lane(&lane);
+        let (_first_frame, first_batch) =
+            flui_testing::log_capture::capture(|| scheduler.execute_frame_with_lane(&lane));
         assert_eq!(fired.load(std::sync::atomic::Ordering::SeqCst), 0);
-        scheduler.execute_frame_with_lane(&lane);
+        assert_batch_depth(&first_batch, 0, 1, 1);
+        let (_second_frame, second_batch) =
+            flui_testing::log_capture::capture(|| scheduler.execute_frame_with_lane(&lane));
         assert_eq!(fired.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_batch_depth(&second_batch, 1, 0, 1);
     }
 
     /// Two lanes on the same scheduler, both with handles held concurrently:
@@ -672,15 +742,21 @@ mod tests {
             })
             .expect("lane alive");
 
-        assert!(
-            catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame_with_lane(&lane))).is_err()
-        );
+        let (panicked, first_batch) = flui_testing::log_capture::capture(|| {
+            catch_unwind(AssertUnwindSafe(|| {
+                scheduler.execute_frame_with_lane(&lane)
+            }))
+        });
+        assert!(panicked.is_err());
+        assert_batch_depth(&first_batch, 1, 2, 3);
         assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
         assert!(
             log.lock().expect("log").is_empty(),
             "the poisoned frame stops delivery"
         );
-        scheduler.execute_frame_with_lane(&lane);
+        let (_retry_frame, retry_batch) =
+            flui_testing::log_capture::capture(|| scheduler.execute_frame_with_lane(&lane));
+        assert_batch_depth(&retry_batch, 1, 2, 3);
         assert_eq!(
             *log.lock().expect("log"),
             [1, 2, 3],
@@ -690,6 +766,42 @@ mod tests {
             panic_calls.get(),
             1,
             "the callback that already ran is not retried"
+        );
+    }
+
+    #[test]
+    fn tracing_panic_restores_the_entire_uninvoked_batch() {
+        let scheduler = UpdateScheduler::new();
+        let lane = scheduler.new_local_post_frame_lane();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let shared_log = Arc::clone(&log);
+        scheduler.add_post_frame_callback(Box::new(move |_| {
+            shared_log.lock().expect("log").push(1);
+        }));
+        let local_log = Arc::clone(&log);
+        lane.local_handle()
+            .schedule_local(move |_| {
+                local_log.lock().expect("log").push(2);
+            })
+            .expect("lane alive");
+
+        flui_testing::disarm_interest_cache();
+        let panicked = tracing::subscriber::with_default(PanickingSubscriber, || {
+            catch_unwind(AssertUnwindSafe(|| {
+                scheduler.execute_frame_with_lane(&lane)
+            }))
+        });
+        assert!(panicked.is_err());
+        assert!(
+            log.lock().expect("log").is_empty(),
+            "subscriber panic precedes callback delivery"
+        );
+
+        scheduler.execute_frame_with_lane(&lane);
+        assert_eq!(
+            *log.lock().expect("log"),
+            [1, 2],
+            "the complete shared/local batch is retried in registration order"
         );
     }
 
