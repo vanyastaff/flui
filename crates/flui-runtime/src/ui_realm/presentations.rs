@@ -280,7 +280,7 @@ impl UiRealm {
     /// the same total order as the shared queue — drain-by-parameter, the
     /// same reason [`Self::scheduler`] exists rather than a process-global
     /// lookup.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn local_post_frame_lane(&self) -> &flui_scheduler::LocalPostFrameLane {
         &self.local_post_frame

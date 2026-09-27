@@ -326,7 +326,7 @@ impl UiRealm {
     /// dirty and schedules the next frame like any other owner-thread edit,
     /// where the same edit inside the frame would have its visual-update
     /// request dropped.
-    pub(crate) fn drive_frame<R>(&self, now: Instant, pipeline: impl FnOnce() -> R) -> R {
+    pub fn drive_frame<R>(&self, now: Instant, pipeline: impl FnOnce() -> R) -> R {
         let commits_closed = TextCommitsClosed::close(self);
         let result = self.scheduler.drive_frame_with_lane(
             now,

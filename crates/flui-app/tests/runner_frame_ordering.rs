@@ -183,8 +183,8 @@ fn every_runner_frame_site_uses_the_shared_drive_frame_helper() {
     );
 }
 
-/// The realm's frame module, home of `UiRealm::drive_frame`.
-const REALM_FRAME_SOURCE: &str = include_str!("../src/app/ui_realm/frame.rs");
+/// The realm's frame module in `flui-runtime`, home of `UiRealm::drive_frame`.
+const REALM_FRAME_SOURCE: &str = include_str!("../../flui-runtime/src/ui_realm/frame.rs");
 
 /// Every `WakeAction::PumpAsync` arm (desktop, Android, web) must actually
 /// pump the async driver, and must consume the `frame_scheduled` latch
