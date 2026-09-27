@@ -1,0 +1,15 @@
+error[E0593]: closure is expected to take 1 argument, but it takes 0 arguments
+ --> tests/ui/unit_closure_where_event_cx_expected.rs:7:18
+  |
+7 |       let _press = callback(move || {
+  |                    ^        ------- takes 0 arguments
+  |  __________________|
+  | |
+8 | |         let _ = count;
+9 | |     });
+  | |______^ expected closure that takes 1 argument
+  |
+help: consider changing the closure to take and ignore the expected argument
+  |
+7 |     let _press = callback(move |_| {
+  |                                 +

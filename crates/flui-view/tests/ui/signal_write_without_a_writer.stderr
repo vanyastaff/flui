@@ -1,0 +1,15 @@
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+ --> tests/ui/signal_write_without_a_writer.rs:7:19
+  |
+7 |     let _ = count.set(1);
+  |                   ^^^ - argument #1 of type `&_` is missing
+  |
+note: method defined here
+ --> src/reactive/mod.rs
+  |
+  |     fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError>;
+  |        ^^^
+help: provide the argument
+  |
+7 |     let _ = count.set(/* w */, 1);
+  |                       ++++++++

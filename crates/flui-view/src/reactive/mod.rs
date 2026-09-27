@@ -82,9 +82,16 @@ use smallvec::SmallVec;
 
 use crate::owner::ExternalBuildScheduler;
 
+mod writer;
+pub use writer::{EventCx, EventOutcome, WriteTarget, Writer, WriterSource, callback};
+
 /// Process-wide counter that gives every [`Reactive`] graph a distinct id, so
-/// a [`SignalSlot`] is meaningful only against the graph that minted it.
+/// a [`SignalSlot`] is meaningful only against the graph that minted it. Id 0
+/// is never handed out: it names the unbound handle [`Signal::default`].
 static NEXT_GRAPH_ID: AtomicU32 = AtomicU32::new(1);
+
+/// The graph id of an unbound [`Signal::default`] handle.
+const UNBOUND_GRAPH: u32 = 0;
 
 struct Node {
     generation: u32,
@@ -159,8 +166,15 @@ impl Reactive {
     /// frame-request callback changes).
     #[must_use]
     pub fn new() -> Self {
+        // Skip the unbound id if the counter ever wraps.
+        let id = loop {
+            let id = NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed);
+            if id != UNBOUND_GRAPH {
+                break id;
+            }
+        };
         Self {
-            id: NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed),
+            id,
             inner: Rc::new(RefCell::new(Inner::default())),
         }
     }
@@ -220,6 +234,9 @@ impl Reactive {
     }
 
     fn check(&self, inner: &Inner, slot: SignalSlot) -> Result<(), SignalError> {
+        if slot.graph() == UNBOUND_GRAPH {
+            return Err(SignalError::Unbound);
+        }
         if slot.graph() != self.id {
             return Err(SignalError::ForeignGraph {
                 index: slot.index(),
@@ -636,7 +653,13 @@ mod sealed {
 impl<T: 'static> sealed::Sealed for Signal<T> {}
 
 /// The write side of a [`Signal`]: `set`, `update` and `set_if_changed`
-/// against the graph that minted it (ADR-0085 §2).
+/// against the graph that minted it (ADR-0085 §2), through a [`WriteTarget`]
+/// (ADR-0086).
+///
+/// In an event callback the target is the `&mut EventCx<'_>` the callback
+/// receives: `move |cx| count.update(cx, |n| *n += 1)`. Passing `cx` reborrows
+/// it, so the same `cx` serves several writes. `build` has no write target;
+/// [`Reactive`] still is one until ADR-0086 §8 step 3 removes it.
 ///
 /// An extension trait because [`Signal`] lives in `flui-foundation`, which
 /// cannot name [`Reactive`]. It is sealed: the handles of this graph are the
@@ -648,15 +671,20 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     /// # Errors
     ///
     /// [`SignalError::WrittenDuringBuild`] from inside a `build`, plus the
-    /// handle errors of [`Signal::try_with`].
-    fn set(self, r: &Reactive, value: T) -> Result<(), SignalError>;
+    /// handle errors of [`Signal::try_with`] and [`SignalError::Unbound`] for
+    /// a [`Signal::default`] handle.
+    fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError>;
 
     /// Mutate in place and mark every reader.
     ///
     /// # Errors
     ///
     /// As [`SignalWriteExt::set`].
-    fn update<R>(self, r: &Reactive, f: impl FnOnce(&mut T) -> R) -> Result<R, SignalError>;
+    fn update<W: WriteTarget + ?Sized, R>(
+        self,
+        w: &W,
+        f: impl FnOnce(&mut T) -> R,
+    ) -> Result<R, SignalError>;
 
     /// Replace the value only if it differs; an equal write marks nobody.
     /// Returns whether a write happened.
@@ -664,24 +692,30 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     /// # Errors
     ///
     /// As [`SignalWriteExt::set`].
-    fn set_if_changed(self, r: &Reactive, value: T) -> Result<bool, SignalError>
+    fn set_if_changed<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<bool, SignalError>
     where
         T: PartialEq;
 }
 
 impl<T: 'static> SignalWriteExt<T> for Signal<T> {
-    fn set(self, r: &Reactive, value: T) -> Result<(), SignalError> {
-        r.write(self.slot(), |slot: &mut T| *slot = value)
+    fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError> {
+        w.graph(writer::sealed::Token::new())
+            .write(self.slot(), |slot: &mut T| *slot = value)
     }
 
-    fn update<R>(self, r: &Reactive, f: impl FnOnce(&mut T) -> R) -> Result<R, SignalError> {
-        r.write(self.slot(), f)
+    fn update<W: WriteTarget + ?Sized, R>(
+        self,
+        w: &W,
+        f: impl FnOnce(&mut T) -> R,
+    ) -> Result<R, SignalError> {
+        w.graph(writer::sealed::Token::new()).write(self.slot(), f)
     }
 
-    fn set_if_changed(self, r: &Reactive, value: T) -> Result<bool, SignalError>
+    fn set_if_changed<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<bool, SignalError>
     where
         T: PartialEq,
     {
+        let r = w.graph(writer::sealed::Token::new());
         r.refuse_if_building(self.slot())?;
         if r.read(self.slot(), |current: &T| *current == value)? {
             return Ok(false);

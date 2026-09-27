@@ -79,3 +79,5 @@ mod trybuild_ui;
 mod view_element_conversion_tests;
 #[path = "view_reconcile_match.rs"]
 mod view_reconcile_match;
+#[path = "writer_source.rs"]
+mod writer_source;

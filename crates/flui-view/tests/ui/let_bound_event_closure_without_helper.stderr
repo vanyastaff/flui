@@ -1,0 +1,21 @@
+error[E0631]: type mismatch in closure arguments
+  --> tests/ui/let_bound_event_closure_without_helper.rs:10:26
+   |
+ 9 |     let press = move |cx| count.set(cx, 1);
+   |                 --------- found signature defined here
+10 |     let _ = source.write(press);
+   |                    ----- ^^^^^ expected due to this
+   |                    |
+   |                    required by a bound introduced by this call
+   |
+   = note: expected closure signature `for<'a, 'b> fn(&'a mut EventCx<'b>) -> _`
+              found closure signature `fn(&_) -> _`
+note: required by a bound in `flui_view::WriterSource::write`
+  --> src/reactive/writer.rs
+   |
+   |     pub fn write<R>(&self, f: impl FnOnce(&mut EventCx<'_>) -> R) -> R {
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `WriterSource::write`
+help: consider wrapping the function in a closure
+   |
+10 |     let _ = source.write(|arg0: &mut EventCx<'_>| press(&*arg0));
+   |                          ++++++++++++++++++++++++      ++++++++
