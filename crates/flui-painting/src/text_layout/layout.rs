@@ -3,6 +3,11 @@
 //!
 //! The font system is taken per shape, never on the per-command path.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "the cosmic-text path's shared FontSystem; leaves at ADR-0092 §10 step 6"
+)]
+
 use std::sync::{Arc, OnceLock};
 
 use cosmic_text::fontdb::Family;
