@@ -290,8 +290,9 @@ test that failed before the fix:
 
 The first exists: both crates are tier K, and `cargo xtask reach` checks them on every change.
 The pump tests exist in `flui-runtime` (`ui_realm/tests/pump_transaction.rs`, driven through
-`flui_runtime::testing::ScriptedSink` and `ManualClock`); they move to `flui-testing` once it
-drives the pump (§4), since `flui-testing` still sits below the runtime and its
+`flui_runtime::testing::ScriptedSink` and `flui_foundation::ManualClock`, the virtual clock
+`flui-testing` already runs on, which implements `FrameClockSource` under `test-support`); they
+move to `flui-testing` once it drives the pump (§4), since `flui-testing` still sits below the runtime and its
 `HeadlessBinding` hosts no realm.
 
 - `cargo xtask reach` (ADR-0081): `flui-runtime` and `flui-testing` reach none of the K set.

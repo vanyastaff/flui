@@ -13,7 +13,7 @@ use flui_foundation::notifier::Listenable as _;
 use flui_types::geometry::px;
 
 use super::*;
-use crate::testing::ManualClock;
+use flui_foundation::ManualClock;
 
 /// A post-frame callback scheduled on the realm's owner-local lane runs once,
 /// after the pipeline, and sees the layout this same pump committed.
