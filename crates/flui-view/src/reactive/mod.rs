@@ -84,7 +84,8 @@ use crate::owner::ExternalBuildScheduler;
 
 mod writer;
 pub use writer::{
-    EventCx, EventOutcome, WriteTarget, Writer, WriterSource, callback, callback_ref, callback_with,
+    EventContextError, EventCx, EventError, EventOutcome, WriteTarget, Writer, WriterSource,
+    callback, callback_ref, callback_with,
 };
 
 /// Process-wide counter that gives every [`Reactive`] graph a distinct id, so

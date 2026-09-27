@@ -221,9 +221,9 @@ pub use owner::{
 };
 // Ergonomic local-state cells built on `RebuildHandle` (see `state_cell.rs`).
 pub use reactive::{
-    EventCx, EventOutcome, Reactive, ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal,
-    SignalError, SignalSender, SignalSlot, SignalWriteExt, SlotInfo, WriteTarget, Writer,
-    WriterSource, callback, callback_ref, callback_with,
+    EventContextError, EventCx, EventError, EventOutcome, Reactive, ReadGraph, ReadScope,
+    ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot, SignalWriteExt, SlotInfo,
+    WriteTarget, Writer, WriterSource, callback, callback_ref, callback_with,
 };
 pub use state_cell::{StateCell, StateHandle};
 pub use tree::{ElementNode, ElementTree};
@@ -281,7 +281,8 @@ pub mod prelude {
     // the source a widget opens it from, the outcome a callback reports, and
     // the helpers that fix a `let`-bound callback's signature (ADR-0086).
     pub use crate::reactive::{
-        EventCx, EventOutcome, Signal, WriterSource, callback, callback_ref, callback_with,
+        EventContextError, EventCx, EventError, EventOutcome, Signal, WriterSource, callback,
+        callback_ref, callback_with,
     };
     pub use crate::{
         binding::{
