@@ -669,6 +669,10 @@ it, and the sinks that subscribe real elements are private to `flui-view`. A sco
 `SignalError::TypeMismatch`, never a panic; a `ReadGraph` that returns `Ok` without calling the
 reader is refused as `Released`; a refused read subscribes nobody. `Signal<T>` is
 `!Send + !Sync` (realm-affine); `SignalSender<T>` is `Send + Sync` and carries only the slot.
+For a valid read, a panic from the user closure keeps chronological priority over
+loan finalization, subscription, returned-value destruction, and panic-payload
+destruction. Cleanup is contained before `resume_unwind`; this is required because
+both `T` and the closure's `R` may have arbitrary user-defined destructors.
 
 **Why here.** An item added to this module re-checks every crate above foundation, so the module
 stays small and changes rarely; the graph, which changes often, stays in `flui-view` (ADR-0085 §6

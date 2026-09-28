@@ -30,11 +30,18 @@ poisoning, тихим partial commit и partial commit с invalidation.
 Обычный signal update имеет контракт **commit-on-unwind, notify-after-commit, resume-panic**.
 Partial value сохраняется, весь reader set сначала атомарно попадает в rebuild inbox, затем один
 wake просит frame, после чего исходная panic возобновляется. Telemetry выполняется после durable
-enqueue. Rollback произвольного `T` и внешних эффектов не обещается; poisoning не вводится.
+enqueue. Если wake паникует, общий inbox сохраняет wake debt: первый следующий вызов через handle
+с hook повторяет wake даже для уже занятых ids. Rollback произвольного `T` и внешних эффектов не
+обещается; poisoning не вводится.
 
 Валидное типизированное чтение регистрируется после освобождения graph loan, но до возобновления
 panic из пользовательской read closure. Поэтому first build после recovery сохраняет dependency
 без требования reentrant `ReadGraph` и может быть повторён следующим write.
+
+Перед `resume_unwind` реализация перечисляет все живые owned-значения и выполняет потенциально
+паникующий cleanup под отдельным containment. Первый по времени panic сохраняет приоритет над
+`Drop` значения signal, результата read и вторичных panic payload; иначе пользовательский
+деструктор мог заменить исходную причину или привести к abort из-за двойной panic.
 
 ## Масштабирование и границы
 
@@ -42,3 +49,16 @@ Batch enqueue берёт inbox lock один раз на весь reader set и 
 остаётся `O(readers)`, как требует precise invalidation. Широковещательное состояние для сотен
 ячеек остаётся задачей `InheritedView` с field masks по ADR-0074. Транзакции, poisoning и rollback
 не добавляются без реального доменного потребителя.
+
+## Почему первоначальное ревью пропустило дефекты
+
+Ревью проверяло названные фазы (`updater`, enqueue, wake, telemetry), но не составляло inventory
+всех owned-значений, остающихся живыми в каждой точке `resume_unwind`. Тесты возвращали `Copy`
+значения и поэтому не атаковали destructor результата или loaned `T`. Кроме того, durable enqueue
+ошибочно приняли за progress guarantee: тест заканчивался сразу после panicking wake и не проходил
+последовательность «panic перехвачен → hook восстановлен → тот же id записан снова».
+
+Для следующих unwind-sensitive изменений обязательна матрица: panic каждой фазы отдельно, две
+panic одновременно, user-defined panicking `Drop` для каждого generic owned value и повторная
+операция после containment. Для отложенной доставки отдельно проверяются durability, liveness,
+несколько handles над общим состоянием и handle без hook, который не имеет права погасить debt.

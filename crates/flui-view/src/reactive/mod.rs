@@ -90,6 +90,8 @@ pub use flui_foundation::read_scope::{
 use flui_foundation::{ElementId, RebuildReason};
 use smallvec::SmallVec;
 
+#[cfg(test)]
+use crate::owner::ExternalBuildInbox;
 use crate::owner::ExternalBuildScheduler;
 
 mod writer;
@@ -578,9 +580,23 @@ impl Reactive {
                 index: slot.index(),
                 expected: type_name::<T>(),
             })?;
-        let result = f(typed);
-        drop(loan);
-        Ok(result)
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(typed)));
+        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
+        match outcome {
+            Ok(result) => match finalized {
+                Ok(()) => Ok(result),
+                Err(payload) => {
+                    discard_secondary(result);
+                    std::panic::resume_unwind(payload)
+                }
+            },
+            Err(payload) => {
+                if let Err(secondary) = finalized {
+                    discard_panic_payload(secondary);
+                }
+                std::panic::resume_unwind(payload)
+            }
+        }
     }
 
     /// The type is checked before anything is marked, so a write through a
@@ -601,24 +617,32 @@ impl Reactive {
                 expected: type_name::<T>(),
             })?;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(typed)));
-        drop(loan);
+        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
+        let invalidated =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.mark(slot)));
         match outcome {
-            Ok(result) => {
-                self.mark(slot);
-                Ok(result)
-            }
+            Ok(result) => match finalized {
+                Ok(()) => match invalidated {
+                    Ok(()) => Ok(result),
+                    Err(payload) => {
+                        discard_secondary(result);
+                        std::panic::resume_unwind(payload)
+                    }
+                },
+                Err(payload) => {
+                    discard_secondary(result);
+                    if let Err(secondary) = invalidated {
+                        discard_panic_payload(secondary);
+                    }
+                    std::panic::resume_unwind(payload)
+                }
+            },
             Err(payload) => {
-                // Invalidation is best-effort recovery for an already
-                // panicking updater. The durable enqueue happens before its
-                // wake and telemetry, so a secondary panic cannot hide the
-                // committed value from a prefix of readers. Preserve the
-                // user's original payload; forgetting a secondary payload
-                // avoids running an arbitrary panicking destructor while the
-                // original unwind is resumed.
-                if let Err(secondary) =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.mark(slot)))
-                {
-                    std::mem::forget(secondary);
+                if let Err(secondary) = finalized {
+                    discard_panic_payload(secondary);
+                }
+                if let Err(secondary) = invalidated {
+                    discard_panic_payload(secondary);
                 }
                 std::panic::resume_unwind(payload)
             }
@@ -640,11 +664,37 @@ impl ReadGraph for Reactive {
         read: &mut dyn FnMut(&dyn Any),
     ) -> Result<(), SignalError> {
         let loan = self.loan(slot)?;
-        if let Some(value) = loan.value.as_deref() {
-            read(value);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Some(value) = loan.value.as_deref() {
+                read(value);
+            }
+        }));
+        let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
+        match outcome {
+            Ok(()) => match finalized {
+                Ok(()) => Ok(()),
+                Err(payload) => std::panic::resume_unwind(payload),
+            },
+            Err(payload) => {
+                if let Err(secondary) = finalized {
+                    discard_panic_payload(secondary);
+                }
+                std::panic::resume_unwind(payload)
+            }
         }
-        drop(loan);
-        Ok(())
+    }
+}
+
+fn discard_secondary<T>(value: T) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
+        discard_panic_payload(payload);
+    }
+}
+
+fn discard_panic_payload(payload: Box<dyn Any + Send>) {
+    if let Err(tertiary) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
+    {
+        std::mem::forget(tertiary);
     }
 }
 
@@ -790,11 +840,7 @@ impl ReaderSink for ElementReads {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
-
-    use flui_foundation::RebuildReasons;
-    use parking_lot::Mutex;
 
     use super::*;
 
@@ -804,6 +850,14 @@ mod tests {
     static_assertions::assert_impl_all!(ElementReads: ReaderSink);
 
     struct PanickingSubscriber;
+
+    struct DropBomb(&'static str);
+
+    impl Drop for DropBomb {
+        fn drop(&mut self) {
+            std::panic::panic_any(self.0);
+        }
+    }
 
     impl tracing::Subscriber for PanickingSubscriber {
         fn register_callsite(
@@ -837,14 +891,14 @@ mod tests {
         fn exit(&self, _span: &tracing::span::Id) {}
     }
 
-    fn graph_with_inbox() -> (Reactive, Arc<Mutex<HashMap<ElementId, RebuildReasons>>>) {
-        let inbox = Arc::new(Mutex::new(HashMap::new()));
+    fn graph_with_inbox() -> (Reactive, Arc<ExternalBuildInbox>) {
+        let inbox = Arc::new(ExternalBuildInbox::default());
         let reactive = Reactive::new();
         reactive.set_scheduler(ExternalBuildScheduler::from_parts(Arc::clone(&inbox), None));
         (reactive, inbox)
     }
 
-    fn scheduled(inbox: &Mutex<HashMap<ElementId, RebuildReasons>>) -> Vec<ElementId> {
+    fn scheduled(inbox: &ExternalBuildInbox) -> Vec<ElementId> {
         let mut ids: Vec<_> = inbox.lock().keys().copied().collect();
         ids.sort();
         ids
@@ -1082,6 +1136,66 @@ mod tests {
     }
 
     #[test]
+    fn updater_panic_keeps_priority_over_a_released_values_destructor_panic() {
+        let (r, _) = graph_with_inbox();
+        let signal = r.signal(DropBomb("value destructor probe"));
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = signal.update(&r, |_| {
+                r.release(signal.slot());
+                panic!("updater probe");
+            });
+        }));
+
+        let payload = outcome.expect_err("the updater panic must resume");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"updater probe"),
+            "the released value's destructor panic must remain secondary"
+        );
+    }
+
+    #[test]
+    fn reader_panic_keeps_priority_over_a_released_values_destructor_panic() {
+        let (r, _) = graph_with_inbox();
+        let signal = r.signal(DropBomb("value destructor probe"));
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = signal.peek(&r, |_| {
+                r.release(signal.slot());
+                panic!("reader probe");
+            });
+        }));
+
+        let payload = outcome.expect_err("the reader panic must resume");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"reader probe"),
+            "the released value's destructor panic must remain secondary"
+        );
+    }
+
+    #[test]
+    fn loan_finalization_panic_keeps_priority_over_the_read_results_destructor() {
+        let (r, _) = graph_with_inbox();
+        let signal = r.signal(DropBomb("value destructor probe"));
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = signal.peek(&r, |_| {
+                r.release(signal.slot());
+                DropBomb("read result destructor probe")
+            });
+        }));
+
+        let payload = outcome.expect_err("loan finalization must resume");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"value destructor probe"),
+            "the unreadable result's destructor panic must remain secondary"
+        );
+    }
+
+    #[test]
     fn a_handle_from_another_graph_is_refused_not_read() {
         let (a_graph, _) = graph_with_inbox();
         let (b_graph, _) = graph_with_inbox();
@@ -1166,11 +1280,21 @@ mod tests {
 
     #[test]
     fn a_panicking_frame_wake_observes_the_complete_reader_batch() {
-        let inbox = Arc::new(Mutex::new(HashMap::new()));
+        let inbox = Arc::new(ExternalBuildInbox::default());
+        let wake_panics = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let wake_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let wake_panics_in_callback = Arc::clone(&wake_panics);
+        let wake_calls_in_callback = Arc::clone(&wake_calls);
         let r = Reactive::new();
         r.set_scheduler(ExternalBuildScheduler::from_parts(
             Arc::clone(&inbox),
-            Some(Arc::new(|| panic!("wake probe"))),
+            Some(Arc::new(move || {
+                wake_calls_in_callback.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                assert!(
+                    !wake_panics_in_callback.load(std::sync::atomic::Ordering::Relaxed),
+                    "wake probe"
+                );
+            })),
         ));
         let signal = r.signal(0u8);
         let readers = [ElementId::new(1), ElementId::new(2)];
@@ -1183,11 +1307,25 @@ mod tests {
         assert!(outcome.is_err());
         assert_eq!(scheduled(&inbox), readers);
         assert_eq!(signal.peek(&r, |value| *value), Ok(1));
+
+        wake_panics.store(false, std::sync::atomic::Ordering::Relaxed);
+        signal.set(&r, 2).expect("the recovered wake is retried");
+        assert_eq!(
+            wake_calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "an occupied durable batch still retries a previously failed wake"
+        );
+        signal.set(&r, 3).expect("the paid wake debt stays paid");
+        assert_eq!(
+            wake_calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "an occupied batch without wake debt remains coalesced"
+        );
     }
 
     #[test]
     fn updater_panic_keeps_priority_over_a_secondary_wake_panic() {
-        let inbox = Arc::new(Mutex::new(HashMap::new()));
+        let inbox = Arc::new(ExternalBuildInbox::default());
         let r = Reactive::new();
         r.set_scheduler(ExternalBuildScheduler::from_parts(
             Arc::clone(&inbox),

@@ -354,40 +354,93 @@ fn read_typed<T: 'static, R>(
     }
     let mut f = Some(f);
     let mut out: Option<Result<std::thread::Result<R>, SignalError>> = None;
-    graph.read_erased(slot, &mut |value: &dyn Any| {
-        let Some(f) = f.take() else {
-            return;
-        };
-        out = Some(match value.downcast_ref::<T>() {
-            Some(typed) => Ok(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                || f(typed),
-            ))),
-            None => Err(SignalError::TypeMismatch {
-                index: slot.index,
-                expected: type_name::<T>(),
-            }),
-        });
-    })?;
-    let outcome = out.unwrap_or(Err(SignalError::Released {
-        index: slot.index,
-        generation: slot.generation,
-    }))?;
+    let graph_outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        graph.read_erased(slot, &mut |value: &dyn Any| {
+            let Some(f) = f.take() else {
+                return;
+            };
+            out = Some(match value.downcast_ref::<T>() {
+                Some(typed) => Ok(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || f(typed),
+                ))),
+                None => Err(SignalError::TypeMismatch {
+                    index: slot.index,
+                    expected: type_name::<T>(),
+                }),
+            });
+        })
+    }));
+    let outcome = match out {
+        Some(Ok(Err(payload))) => {
+            if let Err(secondary) = graph_outcome {
+                discard_panic_payload(secondary);
+            }
+            Err(payload)
+        }
+        Some(Ok(Ok(result))) => match graph_outcome {
+            Ok(Ok(())) => Ok(result),
+            Ok(Err(error)) => {
+                discard_secondary(result);
+                return Err(error);
+            }
+            Err(payload) => {
+                discard_secondary(result);
+                std::panic::resume_unwind(payload)
+            }
+        },
+        Some(Err(read_error)) => match graph_outcome {
+            Ok(Ok(())) => return Err(read_error),
+            Ok(Err(graph_error)) => return Err(graph_error),
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+        None => match graph_outcome {
+            Ok(Ok(())) => {
+                return Err(SignalError::Released {
+                    index: slot.index,
+                    generation: slot.generation,
+                });
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+    };
     let subscription = sink.map(|sink| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sink.subscribe(slot)))
     });
-    match (outcome, subscription) {
-        (Ok(result), None | Some(Ok(()))) => Ok(result),
-        (Ok(_), Some(Err(payload))) | (Err(payload), None | Some(Ok(()))) => {
+    match outcome {
+        Ok(result) => match subscription {
+            None | Some(Ok(())) => Ok(result),
+            Some(Err(payload)) => {
+                // `R` is arbitrary user-owned state. Dispose it before
+                // resuming the subscription panic, but do not let its
+                // destructor replace that earlier failure.
+                discard_secondary(result);
+                std::panic::resume_unwind(payload)
+            }
+        },
+        Err(payload) => {
+            if let Some(Err(secondary)) = subscription {
+                discard_panic_payload(secondary);
+            }
             std::panic::resume_unwind(payload)
         }
-        (Err(payload), Some(Err(secondary))) => {
-            // A dependency-recording failure must not replace the user
-            // closure's original panic. The secondary payload is exceptional
-            // and may itself panic on drop, so do not run its destructor while
-            // resuming the first unwind.
-            std::mem::forget(secondary);
-            std::panic::resume_unwind(payload)
-        }
+    }
+}
+
+/// Drop a value while another failure already has chronological priority.
+fn discard_secondary<T>(value: T) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
+        discard_panic_payload(payload);
+    }
+}
+
+/// Dispose a secondary panic payload without risking a double-panic abort.
+fn discard_panic_payload(payload: Box<dyn Any + Send>) {
+    if let Err(tertiary) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
+    {
+        // There is no safe destructor path left: dropping `tertiary` could
+        // panic while the earlier failure is about to be resumed.
+        std::mem::forget(tertiary);
     }
 }
 
@@ -590,6 +643,24 @@ mod tests {
         }
     }
 
+    struct PanicSwallowingGraph(OneSlot);
+
+    impl ReadGraph for PanicSwallowingGraph {
+        fn graph_id(&self) -> u32 {
+            self.0.graph_id()
+        }
+
+        fn read_erased(
+            &self,
+            slot: SignalSlot,
+            read: &mut dyn FnMut(&dyn Any),
+        ) -> Result<(), SignalError> {
+            self.0.read_erased(slot, &mut |value| {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(value)));
+            })
+        }
+    }
+
     #[derive(Default)]
     struct Recorder(RefCell<Vec<SignalSlot>>);
 
@@ -616,6 +687,14 @@ mod tests {
     impl ReaderSink for PanickingSink {
         fn subscribe(&self, _slot: SignalSlot) {
             panic!("subscription probe");
+        }
+    }
+
+    struct DropBomb(&'static str);
+
+    impl Drop for DropBomb {
+        fn drop(&mut self) {
+            panic!("{}", self.0);
         }
     }
 
@@ -847,6 +926,41 @@ mod tests {
             payload.downcast_ref::<&str>(),
             Some(&"reader probe"),
             "a secondary subscription panic must not replace the user failure"
+        );
+    }
+
+    #[test]
+    fn a_graph_cannot_swallow_the_user_read_panic() {
+        let graph = PanicSwallowingGraph(OneSlot::new(1, 7u32));
+        let signal = Signal::<u32>::from_slot(graph.0.slot());
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = signal.peek(&graph, |_| panic!("reader probe"));
+        }));
+
+        let payload = outcome.expect_err("the captured user panic must resume");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"reader probe"));
+    }
+
+    #[test]
+    fn subscription_panic_keeps_priority_over_the_read_results_destructor_panic() {
+        let graph = OneSlot::new(1, 7u32);
+        let sink = PanickingSink;
+        let cx = Cx {
+            graph: &graph,
+            sink: Some(&sink),
+        };
+        let signal = Signal::<u32>::from_slot(graph.slot());
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            signal.with(&cx, |_| DropBomb("read result destructor probe"));
+        }));
+
+        let payload = outcome.expect_err("the subscription panic must resume");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"subscription probe"),
+            "the read result's destructor panic must remain secondary"
         );
     }
 

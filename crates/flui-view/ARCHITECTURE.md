@@ -321,14 +321,20 @@ partial value committed while the slot remains live. Before the original panic r
 reader is inserted into the external rebuild inbox as one durable batch. The
 batch releases its lock before requesting one frame; a panicking wake therefore
 cannot expose only a prefix of the reader set. Signal telemetry runs only after
-that enqueue. If invalidation itself panics while an updater panic is already
-being handled, the updater's original payload keeps priority.
+that enqueue. A failed wake leaves debt on the shared inbox; the next hooked
+scheduler call retries it even when every id is already queued. The same debt
+also covers direct `BuildOwner`/`ElementOwner` scheduling. If invalidation or
+loan finalization panics while an updater panic is already being handled, the
+updater's original payload keeps priority.
 
 A valid typed read releases the graph's value loan, then subscribes before a
 panic from its user closure resumes. A recovered first build that panics in
 `Signal::with` therefore retains the dependency needed for a later write to
 retry it without requiring a reentrant `ReadGraph`. Foreign, stale, unbound and
-type-mismatched reads still subscribe nobody.
+type-mismatched reads still subscribe nobody. Before any caught panic resumes,
+every still-owned generic result and cleanup payload is explicitly disposed
+under containment, so a user-defined panicking destructor cannot replace the
+chronologically first panic or turn recovery into a double-panic abort.
 
 **Not promised.** `update(&mut T)` is not a transaction and cannot roll back an
 arbitrary `T` or external effects. Code requiring atomic domain changes prepares

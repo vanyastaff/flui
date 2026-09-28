@@ -49,7 +49,9 @@ use parking_lot::Mutex;
 use flui_objects::BuildDuringLayoutCell;
 
 use super::RebuildReason;
-use super::build_owner::{DirtyElement, ExternalBuildScheduler, InactiveElement};
+use super::build_owner::{
+    DirtyElement, ExternalBuildInbox, ExternalBuildScheduler, InactiveElement,
+};
 use super::global_key_registry::GlobalKeyRegistry;
 use super::global_key_reservations::GlobalKeyReservations;
 use super::global_key_scope::{self, GlobalKeyScope, OwnerTag};
@@ -183,7 +185,7 @@ pub struct ElementOwner<'a> {
     /// Reference to `BuildOwner::external_inbox`, so an element can capture a
     /// clone at mount (via [`Self::external_scheduler`]) for its mark-dirty
     /// callback to push onto from outside a frame.
-    pub(crate) external_inbox: &'a Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
+    pub(crate) external_inbox: &'a Arc<ExternalBuildInbox>,
 
     /// The realm's tree-observer slot (ADR-0040), threaded to the tree
     /// primitives so mount/move/unmount facts are emitted at their funnels.
@@ -397,23 +399,23 @@ impl ElementOwner<'_> {
     ///
     /// Pushed onto the depth-sorted heap so parents rebuild before
     /// children. Reentrant scheduling accumulates the additional cause without
-    /// adding a second heap entry. Fires `on_build_scheduled` only for a fresh
-    /// entry so the binding requests one visual update per element burst.
+    /// adding a second heap entry. Fires `on_build_scheduled` for a fresh
+    /// entry, or retries a wake that panicked after an earlier commit.
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize, reason: RebuildReason) {
-        match self.dirty_reasons.entry(id) {
+        let newly_queued = match self.dirty_reasons.entry(id) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(RebuildReasons::from_reason(reason));
                 self.dirty_elements
                     .push(Reverse(DirtyElement::new(id, depth)));
-
-                if let Some(callback) = self.on_build_scheduled {
-                    callback();
-                }
+                true
             }
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 entry.get_mut().insert(reason);
+                false
             }
-        }
+        };
+        self.external_inbox
+            .request_frame_if_needed(newly_queued, self.on_build_scheduled);
     }
 
     /// Build an owned [`ExternalBuildScheduler`] for an element to capture at

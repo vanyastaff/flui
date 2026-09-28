@@ -12,7 +12,10 @@ use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use flui_foundation::{ElementId, RebuildReasons, RenderId, ViewKey};
@@ -55,6 +58,42 @@ thread_local! {
 /// nothing beyond its own first-time absorb.
 const MAX_MID_DRAIN_ABSORBS: usize = 16;
 
+/// Shared external work and wake-retry state for one build owner.
+#[derive(Default)]
+pub(crate) struct ExternalBuildInbox {
+    pending: Mutex<HashMap<ElementId, RebuildReasons>>,
+    /// A committed batch whose frame wake panicked still needs delivery.
+    wake_debt: AtomicBool,
+}
+
+impl ExternalBuildInbox {
+    pub(crate) fn lock(&self) -> parking_lot::MutexGuard<'_, HashMap<ElementId, RebuildReasons>> {
+        self.pending.lock()
+    }
+
+    /// Request a frame for fresh work or retry a wake that previously
+    /// panicked after work was committed. Handles without a hook leave debt
+    /// untouched for a later handle that can actually pay it.
+    pub(crate) fn request_frame_if_needed(
+        &self,
+        has_fresh_work: bool,
+        request_frame: Option<&(dyn Fn() + Send + Sync)>,
+    ) {
+        let Some(request_frame) = request_frame else {
+            return;
+        };
+        let owed_retry = self.wake_debt.swap(false, Ordering::AcqRel);
+        if !has_fresh_work && !owed_retry {
+            return;
+        }
+        let wake = std::panic::catch_unwind(std::panic::AssertUnwindSafe(request_frame));
+        if let Err(payload) = wake {
+            self.wake_debt.store(true, Ordering::Release);
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
 /// A cloneable, owned handle that lets a listener callback — an animation tick
 /// fired *outside* any frame, with no `&mut BuildOwner` in scope — enqueue an
 /// element for the next [`BuildOwner::build_scope`] drain and request a frame.
@@ -79,7 +118,7 @@ const MAX_MID_DRAIN_ABSORBS: usize = 16;
 pub(crate) struct ExternalBuildScheduler {
     /// Shared inbox drained by `build_scope`; one accumulated cause set per
     /// element.
-    inbox: Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
+    inbox: Arc<ExternalBuildInbox>,
     /// Frame-request hook (the binding's `on_build_scheduled`), so a tick
     /// between frames asks the platform for a new frame. `None` in headless
     /// tests, which drive `build_scope` directly.
@@ -122,15 +161,14 @@ impl ExternalBuildScheduler {
             }
             any_newly_queued
         };
-        if any_newly_queued && let Some(request_frame) = &self.request_frame {
-            request_frame();
-        }
+        self.inbox
+            .request_frame_if_needed(any_newly_queued, self.request_frame.as_deref());
     }
 
     /// Build a scheduler from the shared inbox + frame-request handle. Used by
     /// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler).
     pub(crate) fn from_parts(
-        inbox: Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
+        inbox: Arc<ExternalBuildInbox>,
         request_frame: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Self {
         Self {
@@ -146,7 +184,10 @@ impl std::fmt::Debug for ExternalBuildScheduler {
         // `{:?}` while the inbox is already held (e.g. instrumenting the drain)
         // would otherwise deadlock silently.
         f.debug_struct("ExternalBuildScheduler")
-            .field("pending", &self.inbox.try_lock().map(|set| set.len()))
+            .field(
+                "pending",
+                &self.inbox.pending.try_lock().map(|set| set.len()),
+            )
             .field("has_request_frame", &self.request_frame.is_some())
             .finish()
     }
@@ -220,12 +261,12 @@ pub(crate) struct BuildDrainResult {
 /// same shape). Holds a cloned `Arc`, not a borrow of `BuildOwner`, so it can
 /// coexist with `&mut self` calls elsewhere in the loop.
 struct CappedLeftoverGuard {
-    inbox: Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
+    inbox: Arc<ExternalBuildInbox>,
     leftover: HashMap<ElementId, RebuildReasons>,
 }
 
 impl CappedLeftoverGuard {
-    fn new(inbox: Arc<Mutex<HashMap<ElementId, RebuildReasons>>>) -> Self {
+    fn new(inbox: Arc<ExternalBuildInbox>) -> Self {
         Self {
             inbox,
             leftover: HashMap::new(),
@@ -514,7 +555,7 @@ pub struct BuildOwner {
     /// [`Self::drain_build_scope`] — not only once at frame start — where
     /// each id's tree depth is looked up (issue #1180). Shared (`Arc`) so
     /// the listener callbacks and the owner reference the same queue.
-    pub(crate) external_inbox: Arc<Mutex<HashMap<ElementId, RebuildReasons>>>,
+    pub(crate) external_inbox: Arc<ExternalBuildInbox>,
 
     /// Remaining RE-ENTRY mid-drain absorb budget for the current frame
     /// (issue #1180, [`MAX_MID_DRAIN_ABSORBS`]). Reset at every
@@ -754,7 +795,7 @@ impl BuildOwner {
             #[cfg(debug_assertions)]
             scope_depth: 0,
             on_build_scheduled: None,
-            external_inbox: Arc::new(Mutex::new(HashMap::new())),
+            external_inbox: Arc::new(ExternalBuildInbox::default()),
             mid_drain_absorbs_left: MAX_MID_DRAIN_ABSORBS,
             mid_drain_cap_streak: false,
             built_this_frame: HashSet::new(),
@@ -1022,20 +1063,20 @@ impl BuildOwner {
     /// only knows the sibling slot index (e.g. `setState` via
     /// `ElementCore::schedule_self_build`) cannot mis-order the drain.
     pub fn schedule_build_for(&mut self, id: ElementId, depth: usize, reason: RebuildReason) {
-        match self.dirty_reasons.entry(id) {
+        let newly_queued = match self.dirty_reasons.entry(id) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(RebuildReasons::from_reason(reason));
                 self.dirty_elements
                     .push(Reverse(DirtyElement::new(id, depth)));
-
-                if let Some(callback) = self.on_build_scheduled.as_deref() {
-                    callback();
-                }
+                true
             }
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 entry.get_mut().insert(reason);
+                false
             }
-        }
+        };
+        self.external_inbox
+            .request_frame_if_needed(newly_queued, self.on_build_scheduled.as_deref());
     }
 
     /// Mark every live element dirty so the next [`build_scope`](Self::build_scope)
@@ -2968,6 +3009,67 @@ mod tests {
     /// A render-family leaf view with no child views.
     #[derive(Clone)]
     struct TestView;
+
+    #[test]
+    fn wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it() {
+        let inbox = Arc::new(ExternalBuildInbox::default());
+        let wake_panics = Arc::new(AtomicBool::new(true));
+        let wake_calls = Arc::new(AtomicUsize::new(0));
+        let callback_panics = Arc::clone(&wake_panics);
+        let callback_calls = Arc::clone(&wake_calls);
+        let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            callback_calls.fetch_add(1, Ordering::Relaxed);
+            assert!(!callback_panics.load(Ordering::Relaxed), "wake probe");
+        });
+        let failing =
+            ExternalBuildScheduler::from_parts(Arc::clone(&inbox), Some(Arc::clone(&callback)));
+        let no_hook = ExternalBuildScheduler::from_parts(Arc::clone(&inbox), None);
+        let recovered = ExternalBuildScheduler::from_parts(Arc::clone(&inbox), Some(callback));
+        let element = ElementId::new(1);
+
+        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            failing.schedule(element, RebuildReason::SignalChange);
+        }));
+        assert!(first.is_err());
+        no_hook.schedule(element, RebuildReason::StateChange);
+
+        wake_panics.store(false, Ordering::Relaxed);
+        recovered.schedule(element, RebuildReason::DependencyChange);
+        recovered.schedule(element, RebuildReason::StateChange);
+        assert_eq!(
+            wake_calls.load(Ordering::Relaxed),
+            2,
+            "the second hooked handle pays shared debt exactly once"
+        );
+
+        inbox.lock().clear();
+        recovered.schedule(element, RebuildReason::StateChange);
+        assert_eq!(wake_calls.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn direct_build_scheduling_retries_a_failed_wake() {
+        let mut owner = BuildOwner::new();
+        let wake_panics = Arc::new(AtomicBool::new(true));
+        let wake_calls = Arc::new(AtomicUsize::new(0));
+        let callback_panics = Arc::clone(&wake_panics);
+        let callback_calls = Arc::clone(&wake_calls);
+        owner.set_on_build_scheduled(move || {
+            callback_calls.fetch_add(1, Ordering::Relaxed);
+            assert!(!callback_panics.load(Ordering::Relaxed), "wake probe");
+        });
+        let element = ElementId::new(1);
+
+        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            owner.schedule_build_for(element, 0, RebuildReason::StateChange);
+        }));
+        assert!(first.is_err());
+
+        wake_panics.store(false, Ordering::Relaxed);
+        owner.schedule_build_for(element, 0, RebuildReason::DependencyChange);
+        owner.schedule_build_for(element, 0, RebuildReason::StateChange);
+        assert_eq!(wake_calls.load(Ordering::Relaxed), 2);
+    }
 
     impl crate::RenderView for TestView {
         type Protocol = BoxProtocol;

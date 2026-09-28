@@ -422,14 +422,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
-    use flui_foundation::{ElementId, RebuildReason, RebuildReasons};
-    use parking_lot::Mutex;
+    use flui_foundation::{ElementId, RebuildReason};
 
     use super::*;
-    use crate::owner::ExternalBuildScheduler;
+    use crate::owner::{ExternalBuildInbox, ExternalBuildScheduler};
     use crate::reactive::{Signal, SignalWriteExt};
 
     static_assertions::assert_impl_all!(WriterSource: Clone);
@@ -464,14 +462,14 @@ mod tests {
         assert_eq!(source.write(|cx| source.check_context(cx)), Ok(()));
     }
 
-    fn graph_with_inbox() -> (Reactive, Arc<Mutex<HashMap<ElementId, RebuildReasons>>>) {
-        let inbox = Arc::new(Mutex::new(HashMap::new()));
+    fn graph_with_inbox() -> (Reactive, Arc<ExternalBuildInbox>) {
+        let inbox = Arc::new(ExternalBuildInbox::default());
         let reactive = Reactive::new();
         reactive.set_scheduler(ExternalBuildScheduler::from_parts(Arc::clone(&inbox), None));
         (reactive, inbox)
     }
 
-    fn scheduled(inbox: &Mutex<HashMap<ElementId, RebuildReasons>>) -> Vec<ElementId> {
+    fn scheduled(inbox: &ExternalBuildInbox) -> Vec<ElementId> {
         let mut ids: Vec<_> = inbox.lock().keys().copied().collect();
         ids.sort();
         ids

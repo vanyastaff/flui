@@ -45,6 +45,8 @@ pub use rebuild_handle::RebuildHandle;
 pub use flui_foundation::{RebuildReason, RebuildReasons};
 // Internal scheduling handle — `pub(crate)`: captured by `ElementCore` at mount,
 // no public consumer. See `ExternalBuildScheduler`.
+#[cfg(test)]
+pub(crate) use build_owner::ExternalBuildInbox;
 pub(crate) use build_owner::ExternalBuildScheduler;
 pub use element_owner::ElementOwner;
 // Build-time live-tree handle carried on `ElementOwner` during a
