@@ -3125,6 +3125,8 @@ mod tests {
             }
         }
 
+        struct AggregatePayload(DropBomb, DropBomb);
+
         let inbox = Arc::new(ExternalBuildInbox::default());
         let scheduler_slot: Arc<Mutex<Option<ExternalBuildScheduler>>> = Arc::new(Mutex::new(None));
         let callback_slot = Arc::clone(&scheduler_slot);
@@ -3142,7 +3144,7 @@ mod tests {
                         reentrant.schedule(ElementId::new(1), RebuildReason::DependencyChange);
                         panic!("primary wake panic");
                     }
-                    2 => std::panic::panic_any(DropBomb),
+                    2 => std::panic::panic_any(AggregatePayload(DropBomb, DropBomb)),
                     _ => panic!("unexpected extra wake"),
                 },
             );

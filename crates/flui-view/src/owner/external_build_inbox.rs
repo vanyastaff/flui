@@ -3,7 +3,10 @@
 use std::{
     any::Any,
     collections::{HashMap, HashSet},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use flui_foundation::{ElementId, RebuildReasons};
@@ -16,19 +19,19 @@ struct WakeState {
 }
 
 fn discard_panic_payload(payload: Box<dyn Any + Send>) {
-    if let Err(drop_panic) =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
-    {
-        std::mem::forget(drop_panic);
-    }
+    // A panic payload is opaque and may itself be an aggregate with several
+    // panicking destructors. Dropping it while another panic has priority can
+    // abort before the primary payload resumes, so retain it.
+    std::mem::forget(payload);
 }
+
+type WakeToken = Arc<AtomicBool>;
 
 /// Shared external work and wake-retry state for one build owner.
 #[derive(Default)]
 pub(crate) struct ExternalBuildInbox {
     pending: Mutex<HashMap<ElementId, RebuildReasons>>,
-    requested_wake: AtomicUsize,
-    delivered_wake: AtomicUsize,
+    current_wake: Mutex<Option<WakeToken>>,
     wake_state: Mutex<WakeState>,
 }
 
@@ -41,19 +44,18 @@ impl ExternalBuildInbox {
         self.pending.try_lock().map(|pending| pending.len())
     }
 
-    fn request_generation(&self) -> usize {
-        let previous = self
-            .requested_wake
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |generation| {
-                generation.checked_add(1)
-            })
-            .expect("BUG: external build wake generation exhausted");
-        previous + 1
+    fn request_token(&self) -> WakeToken {
+        let token = Arc::new(AtomicBool::new(false));
+        *self.current_wake.lock() = Some(Arc::clone(&token));
+        token
     }
 
-    fn pending_generation(&self) -> Option<usize> {
-        let requested = self.requested_wake.load(Ordering::Acquire);
-        (self.delivered_wake.load(Ordering::Acquire) < requested).then_some(requested)
+    fn pending_token(&self) -> Option<WakeToken> {
+        self.current_wake
+            .lock()
+            .as_ref()
+            .filter(|token| !token.load(Ordering::Acquire))
+            .cloned()
     }
 
     /// Request a frame for fresh work or retry a wake that previously
@@ -61,7 +63,7 @@ impl ExternalBuildInbox {
     ///
     /// Calls never wait behind an arbitrary external wake hook. Concurrent
     /// callers may race delivery, and each successful hook acknowledges only
-    /// the work generation captured before that hook began. A same-thread
+    /// the work token captured before that hook began. A same-thread
     /// reentrant caller cannot invoke the hook recursively, so its outer call
     /// makes at most one compensating attempt before returning or resuming the
     /// first panic.
@@ -73,10 +75,8 @@ impl ExternalBuildInbox {
         let Some(request_frame) = request_frame else {
             return;
         };
-        if has_fresh_work {
-            self.request_generation();
-        }
-        let Some(mut generation) = self.pending_generation() else {
+        let requested = has_fresh_work.then(|| self.request_token());
+        let Some(mut token) = requested.or_else(|| self.pending_token()) else {
             return;
         };
 
@@ -100,7 +100,7 @@ impl ExternalBuildInbox {
 
             match wake {
                 Ok(()) => {
-                    self.delivered_wake.fetch_max(generation, Ordering::Release);
+                    token.store(true, Ordering::Release);
                 }
                 Err(payload) => {
                     if first_panic.is_none() {
@@ -112,11 +112,11 @@ impl ExternalBuildInbox {
             }
 
             let compensation = (reentered && may_compensate)
-                .then(|| self.pending_generation())
+                .then(|| self.pending_token())
                 .flatten();
-            if let Some(pending_generation) = compensation {
+            if let Some(pending_token) = compensation {
                 may_compensate = false;
-                generation = pending_generation;
+                token = pending_token;
                 continue;
             }
 

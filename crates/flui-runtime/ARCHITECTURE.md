@@ -252,15 +252,19 @@ on a later frame even when its callback unwinds; the operation never redirects
 demand to the primary or wakes an unrelated sibling.
 
 The `SignalWrite` command callback is `FnMut`, although it is invoked at most
-once. Its envelope stays owned outside the caught invocation and is destroyed
-under a separate containment boundary, so a panicking capture destructor
-cannot double-panic during callback unwind and bypass redraw/rearm recovery.
+once. Its envelope stays owned outside the caught invocation. Redraw demand is
+durable before a successful callback's captures are destroyed; a callback
+panic retains the opaque envelope. A stale command likewise rearms an existing
+FIFO tail before destroying its envelope. This prevents framework state from
+being stranded even though Rust cannot recover from two panicking field
+destructors inside one aggregate's generated drop glue.
 
 Every command and input-redraw wake has realm-scoped delivery debt shared by
-the realm and every `UiCommandSender`. Monotonic requested/delivered generations, rather than a
-boolean latch, prevent an older overlapping successful wake from erasing a
-newer failed delivery. Later command ingress or a completed owner-inbox drain
-retries the newest unacknowledged generation; no retry is promised without a
+the realm and every `UiCommandSender`. Replaceable identity tokens, rather than
+a boolean latch or finite integer generation, prevent an older overlapping
+successful wake from erasing a newer failed delivery and cannot saturate on
+32-bit targets. Later command ingress or a completed owner-inbox drain retries
+the newest unacknowledged token; no retry is promised without a
 later host opportunity. A send refused because the bounded inbox is full is
 also a host opportunity: it retries existing debt before returning the rejected
 command, because otherwise no successful ingress could reach the wake path.

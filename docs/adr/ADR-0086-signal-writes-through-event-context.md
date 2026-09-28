@@ -11,9 +11,9 @@
   `FnMut(&Reactive)`); `StateCell::schedule` refused during `build` (§7).
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-28 — the transitional `SignalWrite` callback is a retained `FnMut`
-  envelope invoked at most once; success disposes captures normally, while callback panic retains
-  the opaque bundle because aggregate drop glue cannot be made recovery-safe. The planned `WriterSource`
-  migration preserves that ownership contract.
+  envelope invoked at most once; success disposes captures after redraw demand is durable, while
+  callback panic retains the opaque bundle because aggregate drop glue cannot be made
+  recovery-safe. The planned `WriterSource` migration preserves that ownership contract.
 - **Amends (on acceptance):** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 (the signatures of `set`,
   `update` and `set_if_changed`), §5.2 (the run-time guard stays authoritative; `Writer` narrows
   it and does not replace it), §5.8 (`UiCommand::SignalWrite` opens its write through the

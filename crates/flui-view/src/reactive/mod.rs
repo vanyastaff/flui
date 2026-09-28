@@ -581,37 +581,34 @@ impl Reactive {
                 expected: type_name::<T>(),
             })?;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(typed)));
-        let disposed = if outcome.is_err() {
-            // An opaque closure can contain several hostile destructors. Its
-            // aggregate drop glue cannot be contained once a callback panic
-            // already has priority, so retain it on this exceptional path.
-            std::mem::forget(f);
-            Ok(())
-        } else {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)))
-        };
         let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
         match outcome {
-            Ok(result) => match disposed {
-                Ok(()) => match finalized {
-                    Ok(()) => Ok(result),
+            Ok(result) => {
+                // Restore the loan before destroying the opaque capture
+                // bundle. Generated closure drop glue can abort when two
+                // captured fields panic; it must not strand the slot. A
+                // contained capture panic keeps the pre-existing phase
+                // priority over a loan-finalization panic.
+                let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
+                match disposed {
                     Err(payload) => {
+                        if let Err(secondary) = finalized {
+                            discard_panic_payload(secondary);
+                        }
                         discard_secondary(result);
                         std::panic::resume_unwind(payload)
                     }
-                },
-                Err(payload) => {
-                    discard_secondary(result);
-                    if let Err(secondary) = finalized {
-                        discard_panic_payload(secondary);
-                    }
-                    std::panic::resume_unwind(payload)
+                    Ok(()) => match finalized {
+                        Ok(()) => Ok(result),
+                        Err(payload) => {
+                            discard_secondary(result);
+                            std::panic::resume_unwind(payload)
+                        }
+                    },
                 }
-            },
+            }
             Err(payload) => {
-                if let Err(secondary) = disposed {
-                    discard_panic_payload(secondary);
-                }
+                std::mem::forget(f);
                 if let Err(secondary) = finalized {
                     discard_panic_payload(secondary);
                 }
@@ -641,52 +638,46 @@ impl Reactive {
         // `f` must remain outside the caught invocation: consuming a `FnOnce`
         // there would destroy its captures while the updater panic is still
         // unwinding, and a panicking capture destructor would abort the
-        // process before `catch_unwind` can return. A successful updater is
-        // disposed separately; a panicking updater's opaque bundle is retained.
-        let disposed = if outcome.is_err() {
-            // See `read`: generic aggregate capture destruction is not
-            // unwind-safe after the updater itself has already panicked.
-            std::mem::forget(f);
-            Ok(())
-        } else {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)))
-        };
+        // process before `catch_unwind` can return. A panicking updater's
+        // opaque bundle is retained; a successful updater is destroyed only
+        // after loan restoration and invalidation are durable.
         let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
         let invalidated =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.mark(slot)));
         match outcome {
-            Ok(result) => match disposed {
-                Ok(()) => match finalized {
-                    Ok(()) => match invalidated {
-                        Ok(()) => Ok(result),
-                        Err(payload) => {
-                            discard_secondary(result);
-                            std::panic::resume_unwind(payload)
-                        }
-                    },
-                    Err(payload) => {
-                        discard_secondary(result);
-                        if let Err(secondary) = invalidated {
-                            discard_panic_payload(secondary);
-                        }
-                        std::panic::resume_unwind(payload)
-                    }
-                },
-                Err(payload) => {
+            Ok(result) => {
+                if let Err(payload) = finalized {
+                    std::mem::forget(f);
                     discard_secondary(result);
-                    if let Err(secondary) = finalized {
-                        discard_panic_payload(secondary);
-                    }
                     if let Err(secondary) = invalidated {
                         discard_panic_payload(secondary);
                     }
                     std::panic::resume_unwind(payload)
                 }
-            },
-            Err(payload) => {
-                if let Err(secondary) = disposed {
-                    discard_panic_payload(secondary);
+                // All graph protocol state is durable before user captures
+                // are destroyed. Even uncontainable aggregate drop glue can
+                // no longer bypass loan restoration or reader invalidation.
+                let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
+                match disposed {
+                    Ok(()) => Ok(result),
+                    Err(payload) => {
+                        if let Err(secondary) = invalidated {
+                            discard_panic_payload(secondary);
+                        }
+                        discard_secondary(result);
+                        std::panic::resume_unwind(payload)
+                    }
                 }
+                .and_then(|result| match invalidated {
+                    Ok(()) => Ok(result),
+                    Err(payload) => {
+                        discard_secondary(result);
+                        std::panic::resume_unwind(payload)
+                    }
+                })
+            }
+            Err(payload) => {
+                std::mem::forget(f);
                 if let Err(secondary) = finalized {
                     discard_panic_payload(secondary);
                 }
@@ -887,8 +878,10 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
             })?;
 
         // `replace` commits without running either destructor. Returning the
-        // loan, retiring the old value, and invalidating readers are distinct
-        // phases so two hostile `Drop` implementations cannot double-panic.
+        // loan, invalidating readers, and retiring the old value are distinct
+        // phases. Protocol state is complete before opaque aggregate drop
+        // glue runs: Rust cannot generically contain two field destructors
+        // that panic while their aggregate is being destroyed.
         let retired = std::mem::replace(
             typed,
             pending
@@ -896,16 +889,27 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
                 .expect("BUG: a signal replacement is consumed only once"),
         );
         let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
-        let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(retired)));
         let invalidated =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| graph.mark(slot)));
 
         let mut first = None;
         retain_first_panic(&mut first, finalized);
-        retain_first_panic(&mut first, disposed);
-        retain_first_panic(&mut first, invalidated);
         if let Some(payload) = first {
+            discard_secondary(retired);
+            if let Err(secondary) = invalidated {
+                discard_panic_payload(secondary);
+            }
             std::panic::resume_unwind(payload);
+        }
+        let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(retired)));
+        if let Err(payload) = disposed {
+            if let Err(secondary) = invalidated {
+                discard_panic_payload(secondary);
+            }
+            std::panic::resume_unwind(payload)
+        }
+        if let Err(payload) = invalidated {
+            std::panic::resume_unwind(payload)
         }
         Ok(())
     }
@@ -1637,6 +1641,38 @@ mod tests {
             .set(&r, 2)
             .expect("the signal remains usable after both contained panics");
         assert_eq!(signal.peek(&r, |value| *value), Ok(2));
+    }
+
+    #[test]
+    fn successful_updater_finalizes_and_invalidates_before_destroying_captures() {
+        let (r, inbox) = graph_with_inbox();
+        let signal = r.signal(0u8);
+        let reader = ElementId::new(1);
+        r.register_element_reader(signal.slot(), reader);
+        let capture = DropBomb("successful updater capture destructor probe");
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            signal.update(&r, move |value| {
+                let _capture_stays_owned_by_the_updater = &capture;
+                *value = 1;
+            })
+        }));
+
+        let payload = outcome.expect_err("capture destruction must still propagate");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"successful updater capture destructor probe")
+        );
+        assert_eq!(
+            signal.peek(&r, |value| *value),
+            Ok(1),
+            "the loan must be restored before capture destruction"
+        );
+        assert_eq!(
+            scheduled(&inbox),
+            vec![reader],
+            "reader invalidation must be durable before capture destruction"
+        );
     }
 
     #[test]

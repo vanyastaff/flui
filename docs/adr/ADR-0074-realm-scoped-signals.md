@@ -5,9 +5,9 @@
   not part of this decision; they are designed in [ADR-0075](ADR-0075-derived-state-and-effects.md).
 - **Date:** 2026-09-22
 - **Revised:** 2026-09-28 — read, update and cross-thread command callbacks are retained
-  `FnMut` values invoked at most once. Their opaque capture bundles are destroyed after success
-  but deliberately leaked after callback panic, because aggregate drop glue cannot be made safe
-  by an outer unwind boundary.
+  `FnMut` values invoked at most once. Their opaque capture bundles are destroyed after successful
+  framework finalization but deliberately leaked after callback panic, because aggregate drop glue
+  cannot be made safe by an outer unwind boundary.
 - **Supersedes:** the signals clause of FOUNDATIONS C1 (now §7's wording) and ADR-0008's
   "signals-as-default are rejected" (ADR-0008 has since been retired).
 - **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
@@ -195,12 +195,14 @@ signal.set(v)                         // owner thread, outside build
   validation but before its user panic escapes, so first-build recovery retains a path for a later
   write without imposing a reentrant `ReadGraph` contract.
 - **Replacement teardown is phased.** `set` commits the replacement without invoking either
-  value's destructor, returns the value loan, destroys the retired value under its own unwind
-  boundary, and then durably invalidates readers even if that destruction failed.
+  value's destructor, returns the value loan, durably invalidates readers, and only then destroys
+  the retired value under its own unwind boundary.
   `set_if_changed` keeps the proposed value
   outside the equality comparison's unwind boundary. Thus the first destructor or comparison
-  panic keeps priority, a committed replacement remains observable, and a second panicking
-  destructor cannot abort the process during recovery.
+  panic keeps priority and a committed replacement remains observable. Rust cannot generically
+  recover when two fields panic inside one aggregate's generated drop glue; the framework instead
+  completes its own loan/invalidation protocol before such opaque destruction begins, and retains
+  opaque values when another panic already has priority.
 - Writes during a drain (e.g. from `did_update_view`) fall into the mid-drain absorb path.
 
 ### 5.4 Effects

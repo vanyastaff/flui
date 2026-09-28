@@ -9,7 +9,7 @@ use flui_semantics::SemanticsActionRequest;
 use flui_widgets::NavigatorCommand;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Errors returned by [`UiCommandSender`] sends.
 ///
@@ -146,36 +146,43 @@ pub struct DrainReport {
 // Sender
 // ---------------------------------------------------------------------------
 
-/// Monotonic delivery generations for coalesced platform wakes.
+/// Identity tokens for coalesced platform wakes.
 ///
 /// A boolean is insufficient because senders are concurrent: an older wake
 /// may return successfully after a newer wake panics, and must not clear the
-/// newer demand. `delivered` therefore advances only through the generation
-/// captured by that successful call.
-#[derive(Debug, Default)]
+/// newer demand. Each request therefore replaces the current token; a wake
+/// can acknowledge only the exact token it captured. Unlike an integer
+/// generation, token identity cannot saturate on 32-bit targets.
+#[derive(Default)]
 pub(super) struct WakeDebt {
-    requested: AtomicUsize,
-    delivered: AtomicUsize,
+    current: parking_lot::Mutex<Option<Arc<AtomicBool>>>,
+}
+
+impl std::fmt::Debug for WakeDebt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WakeDebt")
+            .field("pending", &self.pending_token().is_some())
+            .finish()
+    }
 }
 
 impl WakeDebt {
-    fn request(&self) -> usize {
-        let previous = self
-            .requested
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |generation| {
-                generation.checked_add(1)
-            })
-            .expect("BUG: platform wake generation exhausted");
-        previous + 1
+    fn request(&self) -> Arc<AtomicBool> {
+        let token = Arc::new(AtomicBool::new(false));
+        *self.current.lock() = Some(Arc::clone(&token));
+        token
     }
 
-    fn pending_generation(&self) -> Option<usize> {
-        let requested = self.requested.load(Ordering::Acquire);
-        (self.delivered.load(Ordering::Acquire) < requested).then_some(requested)
+    fn pending_token(&self) -> Option<Arc<AtomicBool>> {
+        self.current
+            .lock()
+            .as_ref()
+            .filter(|token| !token.load(Ordering::Acquire))
+            .cloned()
     }
 
-    fn acknowledge(&self, generation: usize) {
-        self.delivered.fetch_max(generation, Ordering::Release);
+    fn acknowledge(token: &AtomicBool) {
+        token.store(true, Ordering::Release);
     }
 }
 
@@ -190,8 +197,8 @@ pub struct UiCommandSender {
     pub(super) tx: Sender<UiCommand>,
     pub(super) capacity: usize,
     pub(super) redraw_pending: Arc<AtomicBool>,
-    /// A platform wake accepted each command/redraw generation only once its
-    /// delivery generation catches up. A panicking wake leaves debt so the
+    /// A platform wake accepts each command/redraw token only once that exact
+    /// token is acknowledged. A panicking wake leaves debt so the
     /// next command ingress or completed owner-inbox drain retries delivery
     /// instead of mistaking durable queue/dirty flags for event-loop progress.
     pub(super) wake_debt: Arc<WakeDebt>,
@@ -217,7 +224,7 @@ impl std::fmt::Debug for UiCommandSender {
                 "redraw_pending",
                 &self.redraw_pending.load(Ordering::Relaxed),
             )
-            .field("wake_debt", &self.wake_debt.pending_generation())
+            .field("wake_debt", &self.wake_debt.pending_token().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -326,7 +333,7 @@ impl UiCommandSender {
         // wake; a pending frame absorbs repeated wakes anyway, this just
         // skips redundant platform calls.
         if !self.redraw_pending.swap(true, Ordering::AcqRel)
-            || self.wake_debt.pending_generation().is_some()
+            || self.wake_debt.pending_token().is_some()
         {
             self.wake_owner();
         }
@@ -372,27 +379,27 @@ impl UiCommandSender {
     /// Deliver one platform wake while retaining failed-delivery debt.
     ///
     /// The demand itself is already durable in the inbox/redraw flags. This
-    /// generation pair records the fact that the host has not yet accepted
-    /// the owner turn needed to observe that demand. Only a normally returning
-    /// wake acknowledges its captured generation; unwinding therefore leaves
+    /// identity token records that the host has not yet accepted the owner
+    /// turn needed to observe that demand. Only a normally returning wake
+    /// acknowledges its captured token; unwinding therefore leaves
     /// the next ingress or owner boundary responsible for retrying it.
     pub(super) fn wake_owner(&self) {
-        let generation = self.wake_debt.request();
-        self.deliver_wake(generation);
+        let token = self.wake_debt.request();
+        self.deliver_wake(token);
     }
 
-    fn deliver_wake(&self, generation: usize) {
+    fn deliver_wake(&self, token: Arc<AtomicBool>) {
         let outcome = catch_unwind(AssertUnwindSafe(|| (self.wake)()));
         match outcome {
-            Ok(()) => self.wake_debt.acknowledge(generation),
+            Ok(()) => WakeDebt::acknowledge(&token),
             Err(payload) => resume_unwind(payload),
         }
     }
 
     /// Retry a wake that a prior owner-turn rearm failed to deliver.
     fn retry_wake_debt(&self) {
-        if let Some(generation) = self.wake_debt.pending_generation() {
-            self.deliver_wake(generation);
+        if let Some(token) = self.wake_debt.pending_token() {
+            self.deliver_wake(token);
         }
     }
 }
@@ -521,11 +528,6 @@ impl UiRealm {
                 },
                 UiCommand::SignalWrite { target, mut apply } => {
                     let Some((presentation, reactive)) = self.signal_graph_for(target) else {
-                        // Dispose the user envelope before diagnostics, with
-                        // both phases contained. There is no earlier panic on
-                        // this stale-command path, so its destructor remains
-                        // the primary failure if it unwinds.
-                        let disposed = catch_unwind(AssertUnwindSafe(|| drop(apply)));
                         let diagnosed = catch_unwind(AssertUnwindSafe(|| {
                             tracing::warn!(
                                 target: "flui::signals",
@@ -536,15 +538,34 @@ impl UiRealm {
                                  handle belongs to another realm)"
                             );
                         }));
-                        let mut stale_panic = disposed.err();
-                        preserve_first_input_panic(
-                            &mut stale_panic,
-                            diagnosed.err(),
-                            "stale signal-write diagnostics",
-                        );
                         report.dropped_stale += 1;
-                        if let Some(payload) = stale_panic {
+                        if let Err(payload) = diagnosed {
+                            // Diagnostics failed before the opaque envelope
+                            // could be retired. Retain it so aggregate drop
+                            // glue cannot replace that panic.
+                            std::mem::forget(apply);
                             self.rearm_after_signal_command_panic(payload);
+                        }
+
+                        // The stale envelope can contain several hostile
+                        // captured destructors. Ensure an already-queued FIFO
+                        // tail has a future owner turn before its opaque drop
+                        // glue runs; two field panics cannot be contained by
+                        // an outer catch in Rust.
+                        if !self.rx.is_empty()
+                            && let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                                self.sender_prototype.wake_owner();
+                            }))
+                        {
+                            std::mem::forget(apply);
+                            self.rearm_after_signal_command_panic(payload);
+                        }
+                        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(apply))) {
+                            // Any pre-existing tail was rearmed before opaque
+                            // destruction began; with no tail there is no
+                            // owner work to rearm. Preserve the destructor
+                            // panic without issuing a redundant wake.
+                            resume_unwind(payload);
                         }
                         continue;
                     };
@@ -553,21 +574,6 @@ impl UiRealm {
                     // Consuming a boxed `FnOnce` there would destroy captures
                     // during a callback unwind, where a panicking destructor
                     // would abort before redraw and wake recovery can run.
-                    let disposed = if outcome.is_err() {
-                        // Once the callback has panicked, destroying an opaque
-                        // aggregate capture bundle can abort inside generated
-                        // drop glue before any outer catch regains control.
-                        std::mem::forget(apply);
-                        Ok(())
-                    } else {
-                        catch_unwind(AssertUnwindSafe(|| drop(apply)))
-                    };
-                    let mut command_panic = outcome.err();
-                    preserve_first_input_panic(
-                        &mut command_panic,
-                        disposed.err(),
-                        "signal-write capture disposal",
-                    );
                     // A secondary presentation's BuildOwner has no wake hook,
                     // so the owning presentation's frame is requested here.
                     // Do it before resuming a command panic: a signal update
@@ -575,6 +581,17 @@ impl UiRealm {
                     // this presentation's readers.
                     presentation.mark_redraw_pending();
                     self.redraw_pending.store(true, Ordering::Release);
+                    let command_panic = match outcome {
+                        Err(payload) => {
+                            // Once the callback has panicked, destroying an
+                            // opaque aggregate capture bundle can abort inside
+                            // generated drop glue before any outer catch
+                            // regains control.
+                            std::mem::forget(apply);
+                            Some(payload)
+                        }
+                        Ok(()) => catch_unwind(AssertUnwindSafe(|| drop(apply))).err(),
+                    };
                     // The send wake is the owner turn currently unwinding.
                     // Re-arm the platform so the remaining FIFO tail and a
                     // partial commit cannot starve in an otherwise idle host.

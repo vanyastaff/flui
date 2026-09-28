@@ -324,19 +324,19 @@ cannot expose only a prefix of the reader set. Signal telemetry runs only after
 that enqueue. A failed wake leaves debt on the shared inbox; the next hooked
 scheduler call retries it even when every id is already queued. Concurrent
 callers never wait behind the external hook: they may race delivery, and a
-successful hook acknowledges only the work generation captured before that
-hook began. A reentrant schedule cannot call the hook recursively and receives
+successful hook acknowledges only the identity token captured before that
+hook began. Fresh work replaces the token, so an older success cannot erase a
+newer failure and there is no finite counter to exhaust on 32-bit targets. A
+reentrant schedule cannot call the hook recursively and receives
 one compensating attempt from its outer call. The same debt also covers direct
 `BuildOwner`/`ElementOwner` scheduling. If invalidation or
 loan finalization panics while an updater panic is already being handled, the
 updater's original payload keeps priority.
 
 `set` commits its replacement without running either value's destructor, then
-returns the loan, retires the old value, and invalidates readers as separate
-contained phases. A panicking old-value destructor therefore observes an
-already-readable replacement but cannot prevent its readers from being
-scheduled; a later wake or value-destructor panic cannot replace it or abort
-over it.
+returns the loan and invalidates readers before retiring the old value. A
+panicking old-value destructor therefore observes an already-readable
+replacement and cannot prevent its readers from being scheduled.
 `set_if_changed` likewise keeps its proposed value outside the equality
 comparison's unwind boundary, so a panicking `PartialEq` remains the primary
 failure and commits nothing even when the proposed value's destructor panics.
@@ -347,7 +347,8 @@ The updater is `FnMut`, although the graph calls it exactly once. Keeping the
   capture destructors during the updater's unwind, where a second panic aborts the
   process before the graph can finalize the loan or invalidate readers. This is an
   exceptional-path leak: aggregate closure drop glue cannot be decomposed or made
-  safe by an outer `catch_unwind`; successful callbacks still destroy captures.
+  safe by an outer `catch_unwind`; successful callbacks still destroy captures,
+  but only after loan restoration and reader invalidation are durable.
 
 A valid typed read releases the graph's value loan, then subscribes before a
 panic from its user closure resumes. A recovered first build that panics in
@@ -368,6 +369,14 @@ existing rebuild inbox and never invokes signal readers inline. An explicit
 `Reactive::release` of that same slot from inside its closure remains
 authoritative: it destroys the loaned value and reader set, so no commit
 survives to invalidate.
+
+Rust also provides no generic way to recover from aggregate drop glue when two
+fields both panic: the second panic occurs while the first is unwinding and the
+process aborts before an outer `catch_unwind` can observe either payload. FLUI
+therefore completes its own loan/invalidation/wake protocol before destroying a
+successful callback or retired value, and retains opaque values once another
+panic already has priority. It does not promise process recovery from two
+simultaneously panicking destructors inside one user-owned aggregate.
 
 Pinned by the reactive graph unit tests for replacement/equality/destructor and
 updater/wake/telemetry panics,
