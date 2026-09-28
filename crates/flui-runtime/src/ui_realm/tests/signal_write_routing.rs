@@ -379,11 +379,12 @@ fn signal_command_panic_keeps_priority_over_its_captures_destructor_panic() {
     let realm = new_runtime(wake).expect("runtime");
     let graph = graph_of(&realm, realm.presentation_id());
     let signal = graph.signal(1u32);
-    let capture = DropBomb;
+    let first_capture = DropBomb;
+    let second_capture = DropBomb;
     realm
         .command_sender()
         .send_signal_write(signal.detach(), move |signal, graph| {
-            let _capture_stays_owned_by_the_command = &capture;
+            let _capture_bundle_stays_owned_by_the_command = (&first_capture, &second_capture);
             let _ = signal.update(graph, |value| {
                 *value = 7;
                 panic!("command callback probe");

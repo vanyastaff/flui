@@ -677,7 +677,13 @@ destructors. The public `try_with`/`with`/`peek` reader is therefore `FnMut`, al
 it is called at most once. This deliberately rejects an `FnOnce` reader that consumes
 a capture: `call_once` would transfer the captures into the caught invocation, where a
 panicking capture destructor could abort the process while the reader panic unwinds,
-before containment regains control.
+before containment regains control. After a reader or graph panic, the retained opaque
+callback envelope and any later opaque result or panic payload are deliberately leaked:
+Rust drop glue can destroy a second captured field while the first field's destructor is
+unwinding, so no generic `catch_unwind` wrapper can safely retire that aggregate. Normal
+reads still destroy the callback and result normally. This exceptional-path leak is the
+strongest continuation-safe contract available without constraining public callback and
+result types to destructor-free values.
 
 **Why here.** An item added to this module re-checks every crate above foundation, so the module
 stays small and changes rarely; the graph, which changes often, stays in `flui-view` (ADR-0085 §6

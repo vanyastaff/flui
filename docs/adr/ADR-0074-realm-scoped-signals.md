@@ -5,8 +5,9 @@
   not part of this decision; they are designed in [ADR-0075](ADR-0075-derived-state-and-effects.md).
 - **Date:** 2026-09-22
 - **Revised:** 2026-09-28 — read, update and cross-thread command callbacks are retained
-  `FnMut` values invoked at most once, so their captures can be destroyed outside the callback
-  unwind boundary under separate panic containment.
+  `FnMut` values invoked at most once. Their opaque capture bundles are destroyed after success
+  but deliberately leaked after callback panic, because aggregate drop glue cannot be made safe
+  by an outer unwind boundary.
 - **Supersedes:** the signals clause of FOUNDATIONS C1 (now §7's wording) and ADR-0008's
   "signals-as-default are rejected" (ADR-0008 has since been retired).
 - **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)

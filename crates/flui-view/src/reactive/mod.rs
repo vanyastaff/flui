@@ -581,7 +581,15 @@ impl Reactive {
                 expected: type_name::<T>(),
             })?;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(typed)));
-        let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
+        let disposed = if outcome.is_err() {
+            // An opaque closure can contain several hostile destructors. Its
+            // aggregate drop glue cannot be contained once a callback panic
+            // already has priority, so retain it on this exceptional path.
+            std::mem::forget(f);
+            Ok(())
+        } else {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)))
+        };
         let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
         match outcome {
             Ok(result) => match disposed {
@@ -633,9 +641,16 @@ impl Reactive {
         // `f` must remain outside the caught invocation: consuming a `FnOnce`
         // there would destroy its captures while the updater panic is still
         // unwinding, and a panicking capture destructor would abort the
-        // process before `catch_unwind` can return. Dispose the updater as its
-        // own contained phase instead.
-        let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
+        // process before `catch_unwind` can return. A successful updater is
+        // disposed separately; a panicking updater's opaque bundle is retained.
+        let disposed = if outcome.is_err() {
+            // See `read`: generic aggregate capture destruction is not
+            // unwind-safe after the updater itself has already panicked.
+            std::mem::forget(f);
+            Ok(())
+        } else {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)))
+        };
         let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
         let invalidated =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.mark(slot)));
@@ -720,16 +735,14 @@ impl ReadGraph for Reactive {
 }
 
 fn discard_secondary<T>(value: T) {
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value))) {
-        discard_panic_payload(payload);
-    }
+    // `T` may be an aggregate whose second field panics while the first
+    // field's destructor is already unwinding. No outer catch can contain
+    // that generated drop glue, so exceptional-path retirement must leak it.
+    std::mem::forget(value);
 }
 
 fn discard_panic_payload(payload: Box<dyn Any + Send>) {
-    if let Err(tertiary) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(payload)))
-    {
-        std::mem::forget(tertiary);
-    }
+    std::mem::forget(payload);
 }
 
 fn retain_first_panic(first: &mut Option<Box<dyn Any + Send>>, outcome: std::thread::Result<()>) {
@@ -795,8 +808,10 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     /// The replacement is committed before the retired value is destroyed.
     /// Reader invalidation still runs after a contained destructor failure,
     /// so a panicking `T::drop` cannot hide the committed value from existing
-    /// readers. Retired and pending values are destroyed under separate panic
-    /// containment; the chronologically first panic keeps priority.
+    /// readers. A retired value gets its own panic boundary; pending values
+    /// that remain after an earlier panic are retained because opaque
+    /// aggregate drop glue cannot be contained generically. The
+    /// chronologically first panic keeps priority.
     ///
     /// # Errors
     ///
@@ -814,8 +829,9 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     /// commit to invalidate. This method does not provide transactional
     /// rollback. The updater is accepted as [`FnMut`] even though it is
     /// invoked exactly once: retaining it across the protected invocation
-    /// lets capture destruction be contained separately from an updater
-    /// panic.
+    /// lets successful capture destruction happen separately, while a panic
+    /// retains the opaque capture bundle instead of risking aggregate drop
+    /// glue during recovery.
     ///
     /// # Errors
     ///
@@ -828,7 +844,7 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
 
     /// Replace the value only if it differs; an equal write marks nobody.
     /// Returns whether a write happened. A comparison panic commits nothing;
-    /// the proposed value is then destroyed under separate containment so its
+    /// the proposed value is then retained on that exceptional path so its
     /// destructor cannot replace or double-panic over the comparison failure.
     ///
     /// # Errors
@@ -1147,7 +1163,7 @@ mod tests {
     }
 
     #[test]
-    fn equality_panic_keeps_priority_over_the_pending_values_destructor() {
+    fn equality_panic_retains_the_opaque_pending_value() {
         let (r, inbox) = graph_with_inbox();
         let current_armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let pending_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -1173,8 +1189,8 @@ mod tests {
         let payload = outcome.expect_err("the equality panic must resume");
         assert_eq!(payload.downcast_ref::<&str>(), Some(&"comparison probe"));
         assert!(
-            !pending_armed.load(std::sync::atomic::Ordering::Relaxed),
-            "the refused replacement is destroyed under its own containment"
+            pending_armed.load(std::sync::atomic::Ordering::Relaxed),
+            "the pending value is retained because opaque aggregate drop glue cannot be contained"
         );
         assert_eq!(signal.peek(&r, |value| value.name), Ok("current value"));
         assert!(
@@ -1594,11 +1610,12 @@ mod tests {
         let signal = r.signal(0u8);
         let reader = ElementId::new(1);
         r.register_element_reader(signal.slot(), reader);
-        let capture = DropBomb("updater capture destructor probe");
+        let first_capture = DropBomb("first updater capture destructor probe");
+        let second_capture = DropBomb("second updater capture destructor probe");
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             signal.update(&r, move |value| {
-                let _capture_stays_owned_by_the_updater = &capture;
+                let _capture_bundle_stays_owned_by_the_updater = (&first_capture, &second_capture);
                 *value = 1;
                 panic!("updater probe");
             })

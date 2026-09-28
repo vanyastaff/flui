@@ -342,19 +342,21 @@ comparison's unwind boundary, so a panicking `PartialEq` remains the primary
 failure and commits nothing even when the proposed value's destructor panics.
 
 The updater is `FnMut`, although the graph calls it exactly once. Keeping the
-closure owned outside the caught invocation lets the graph dispose its captures
-under a separate containment boundary; consuming an `FnOnce` would instead run
-capture destructors during the updater's unwind, where a second panic aborts the
-process before the graph can finalize the loan or invalidate readers.
+  closure owned outside the caught invocation lets the graph retain its opaque
+  capture bundle when the updater panics; consuming an `FnOnce` would instead run
+  capture destructors during the updater's unwind, where a second panic aborts the
+  process before the graph can finalize the loan or invalidate readers. This is an
+  exceptional-path leak: aggregate closure drop glue cannot be decomposed or made
+  safe by an outer `catch_unwind`; successful callbacks still destroy captures.
 
 A valid typed read releases the graph's value loan, then subscribes before a
 panic from its user closure resumes. A recovered first build that panics in
 `Signal::with` therefore retains the dependency needed for a later write to
 retry it without requiring a reentrant `ReadGraph`. Foreign, stale, unbound and
 type-mismatched reads still subscribe nobody. Before any caught panic resumes,
-every still-owned generic result and cleanup payload is explicitly disposed
-under containment, so a user-defined panicking destructor cannot replace the
-chronologically first panic or turn recovery into a double-panic abort.
+  every still-owned opaque callback, generic result and cleanup payload is
+  deliberately retained, so generated aggregate drop glue cannot replace the
+  chronologically first panic or turn recovery into a double-panic abort.
 Typed reader closures follow the same `FnMut`-called-once rule so their captures
 remain available to that cleanup boundary.
 

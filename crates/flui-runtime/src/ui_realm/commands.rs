@@ -351,19 +351,12 @@ impl UiCommandSender {
                 // any outstanding delivery debt before returning its payload.
                 let wake = catch_unwind(AssertUnwindSafe(|| self.retry_wake_debt()));
                 if let Err(wake_payload) = wake {
-                    // The rejected command is no longer recoverable when the
-                    // wake unwinds. Dispose it under separate containment so
-                    // a hostile capture cannot double-panic over the wake.
-                    let disposed = catch_unwind(AssertUnwindSafe(|| drop(rejected))).err();
-                    let mut first_panic = Some(wake_payload);
-                    preserve_first_input_panic(
-                        &mut first_panic,
-                        disposed,
-                        "full-inbox rejected command disposal",
-                    );
-                    resume_unwind(
-                        first_panic.expect("BUG: the full-inbox wake panic must be preserved"),
-                    );
+                    // The rejected command is opaque and may contain several
+                    // hostile capture destructors. Aggregate drop glue cannot
+                    // be contained after the wake already panicked, so retain
+                    // this exceptional-path envelope and resume the wake.
+                    std::mem::forget(rejected);
+                    resume_unwind(wake_payload);
                 }
                 Err(CommandSendError::ChannelFull {
                     capacity: self.capacity,
@@ -383,7 +376,7 @@ impl UiCommandSender {
     /// the owner turn needed to observe that demand. Only a normally returning
     /// wake acknowledges its captured generation; unwinding therefore leaves
     /// the next ingress or owner boundary responsible for retrying it.
-    fn wake_owner(&self) {
+    pub(super) fn wake_owner(&self) {
         let generation = self.wake_debt.request();
         self.deliver_wake(generation);
     }
@@ -529,9 +522,9 @@ impl UiRealm {
                 UiCommand::SignalWrite { target, mut apply } => {
                     let Some((presentation, reactive)) = self.signal_graph_for(target) else {
                         // Dispose the user envelope before diagnostics, with
-                        // both phases contained. A panicking subscriber must
-                        // not start unwinding while a hostile capture is still
-                        // waiting to be dropped.
+                        // both phases contained. There is no earlier panic on
+                        // this stale-command path, so its destructor remains
+                        // the primary failure if it unwinds.
                         let disposed = catch_unwind(AssertUnwindSafe(|| drop(apply)));
                         let diagnosed = catch_unwind(AssertUnwindSafe(|| {
                             tracing::warn!(
@@ -560,7 +553,15 @@ impl UiRealm {
                     // Consuming a boxed `FnOnce` there would destroy captures
                     // during a callback unwind, where a panicking destructor
                     // would abort before redraw and wake recovery can run.
-                    let disposed = catch_unwind(AssertUnwindSafe(|| drop(apply)));
+                    let disposed = if outcome.is_err() {
+                        // Once the callback has panicked, destroying an opaque
+                        // aggregate capture bundle can abort inside generated
+                        // drop glue before any outer catch regains control.
+                        std::mem::forget(apply);
+                        Ok(())
+                    } else {
+                        catch_unwind(AssertUnwindSafe(|| drop(apply)))
+                    };
                     let mut command_panic = outcome.err();
                     preserve_first_input_panic(
                         &mut command_panic,

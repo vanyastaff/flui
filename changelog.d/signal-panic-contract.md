@@ -1,6 +1,6 @@
 ### Changed
 
-- Signal read, update, and cross-thread command callbacks now use `FnMut` (still invoked at most once), so their captured state remains outside the unwind boundary and can be destroyed under panic containment.
+- Signal read, update, and cross-thread command callbacks now use `FnMut` (still invoked at most once), so their captured state remains outside the unwind boundary; successful callbacks destroy it normally, while panic recovery retains opaque capture bundles that Rust cannot safely dismantle generically.
 
 ### Fixed
 

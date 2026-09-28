@@ -1,6 +1,6 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_interaction::events::{PointerType, make_down_event};
 use flui_interaction::routing::{FocusNode, KeyEventResult};
@@ -427,8 +427,11 @@ fn panicking_keyboard_signal_update_preserves_active_redraw_demand() {
 #[test]
 fn panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake() {
     let panic_on_wake = Arc::new(AtomicBool::new(false));
+    let wake_attempts = Arc::new(AtomicUsize::new(0));
     let wake_gate = Arc::clone(&panic_on_wake);
+    let attempts = Arc::clone(&wake_attempts);
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        attempts.fetch_add(1, Ordering::AcqRel);
         assert!(!wake_gate.load(Ordering::Acquire), "wake probe");
     });
     let mut realm = new_runtime(wake).expect("runtime");
@@ -482,6 +485,18 @@ fn panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake() {
             .take_redraw_pending(),
         "the active presentation retains redraw demand"
     );
+
+    let attempts_after_failure = wake_attempts.load(Ordering::Acquire);
+    panic_on_wake.store(false, Ordering::Release);
+    assert_eq!(realm.drain_commands(), DrainReport::default());
+    assert_eq!(
+        wake_attempts.load(Ordering::Acquire),
+        attempts_after_failure + 1,
+        "the next owner boundary must retry the failed input-redraw wake"
+    );
+    assert!(realm.needs_redraw(), "the committed redraw demand survives");
+    realm.render_frame(&mut backend);
+    assert_eq!(signal.peek(&graph_b, |value| *value), Ok(7));
 }
 
 #[test]

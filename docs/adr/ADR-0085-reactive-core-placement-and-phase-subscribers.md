@@ -7,8 +7,8 @@
   with the drivers, `RebuildSink`, `ScopeRef::detached` and `SignalError::NoGraph` moved to §6
   step 2 and `SignalWriteExt` sealed)
 - **Revised:** 2026-09-28 — read and graph-routed command callbacks use retained `FnMut`
-  envelopes invoked at most once, allowing capture destruction to run under a distinct panic
-  boundary.
+  envelopes invoked at most once. Success destroys captures normally; callback panic retains the
+  opaque bundle because aggregate drop glue cannot be made safe by another unwind boundary.
 - **Amends (on acceptance):** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 ("`Reactive` … lives beside
   `BuildOwner`", "reachable as `cx.reactive()`"), §5.2 (reads take `&dyn BuildContext`; now any
   `&S` where `S: ReadScope`), and the `signals` feature named in its Status line

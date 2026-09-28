@@ -256,8 +256,8 @@ once. Its envelope stays owned outside the caught invocation and is destroyed
 under a separate containment boundary, so a panicking capture destructor
 cannot double-panic during callback unwind and bypass redraw/rearm recovery.
 
-The rearm itself has realm-scoped delivery debt shared by every
-`UiCommandSender`. Monotonic requested/delivered generations, rather than a
+Every command and input-redraw wake has realm-scoped delivery debt shared by
+the realm and every `UiCommandSender`. Monotonic requested/delivered generations, rather than a
 boolean latch, prevent an older overlapping successful wake from erasing a
 newer failed delivery. Later command ingress or a completed owner-inbox drain
 retries the newest unacknowledged generation; no retry is promised without a
