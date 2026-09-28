@@ -9,7 +9,7 @@ use flui_semantics::SemanticsActionRequest;
 use flui_widgets::NavigatorCommand;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Errors returned by [`UiCommandSender`] sends.
 ///
@@ -146,6 +146,39 @@ pub struct DrainReport {
 // Sender
 // ---------------------------------------------------------------------------
 
+/// Monotonic delivery generations for coalesced platform wakes.
+///
+/// A boolean is insufficient because senders are concurrent: an older wake
+/// may return successfully after a newer wake panics, and must not clear the
+/// newer demand. `delivered` therefore advances only through the generation
+/// captured by that successful call.
+#[derive(Debug, Default)]
+pub(super) struct WakeDebt {
+    requested: AtomicUsize,
+    delivered: AtomicUsize,
+}
+
+impl WakeDebt {
+    fn request(&self) -> usize {
+        let previous = self
+            .requested
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |generation| {
+                generation.checked_add(1)
+            })
+            .expect("BUG: platform wake generation exhausted");
+        previous + 1
+    }
+
+    fn pending_generation(&self) -> Option<usize> {
+        let requested = self.requested.load(Ordering::Acquire);
+        (self.delivered.load(Ordering::Acquire) < requested).then_some(requested)
+    }
+
+    fn acknowledge(&self, generation: usize) {
+        self.delivered.fetch_max(generation, Ordering::Release);
+    }
+}
+
 /// Cross-thread capability into a [`UiRealm`]'s inbox.
 ///
 /// `Clone + Send + Sync`. A sender can enqueue a command and wake the owner;
@@ -157,6 +190,11 @@ pub struct UiCommandSender {
     pub(super) tx: Sender<UiCommand>,
     pub(super) capacity: usize,
     pub(super) redraw_pending: Arc<AtomicBool>,
+    /// A platform wake accepted each command/redraw generation only once its
+    /// delivery generation catches up. A panicking wake leaves debt so the
+    /// next command ingress or completed owner-inbox drain retries delivery
+    /// instead of mistaking durable queue/dirty flags for event-loop progress.
+    pub(super) wake_debt: Arc<WakeDebt>,
     /// The presentation this sender stamps onto every presentation-scoped
     /// command it sends (set once, at [`UiRealm::construct`]). For the
     /// eventual element forest, senders become vended per-presentation with
@@ -179,6 +217,7 @@ impl std::fmt::Debug for UiCommandSender {
                 "redraw_pending",
                 &self.redraw_pending.load(Ordering::Relaxed),
             )
+            .field("wake_debt", &self.wake_debt.pending_generation())
             .finish_non_exhaustive()
     }
 }
@@ -286,8 +325,10 @@ impl UiCommandSender {
         // `swap` (not store) so only the first request in a burst pays the
         // wake; a pending frame absorbs repeated wakes anyway, this just
         // skips redundant platform calls.
-        if !self.redraw_pending.swap(true, Ordering::AcqRel) {
-            (self.wake)();
+        if !self.redraw_pending.swap(true, Ordering::AcqRel)
+            || self.wake_debt.pending_generation().is_some()
+        {
+            self.wake_owner();
         }
     }
 
@@ -300,7 +341,7 @@ impl UiCommandSender {
     pub(super) fn send(&self, command: UiCommand) -> Result<(), CommandSendError> {
         match self.tx.try_send(command) {
             Ok(()) => {
-                (self.wake)();
+                self.wake_owner();
                 Ok(())
             }
             Err(TrySendError::Full(rejected)) => Err(CommandSendError::ChannelFull {
@@ -310,6 +351,33 @@ impl UiCommandSender {
             Err(TrySendError::Disconnected(rejected)) => {
                 Err(CommandSendError::OwnerGone { rejected })
             }
+        }
+    }
+
+    /// Deliver one platform wake while retaining failed-delivery debt.
+    ///
+    /// The demand itself is already durable in the inbox/redraw flags. This
+    /// generation pair records the fact that the host has not yet accepted
+    /// the owner turn needed to observe that demand. Only a normally returning
+    /// wake acknowledges its captured generation; unwinding therefore leaves
+    /// the next ingress or owner boundary responsible for retrying it.
+    fn wake_owner(&self) {
+        let generation = self.wake_debt.request();
+        self.deliver_wake(generation);
+    }
+
+    fn deliver_wake(&self, generation: usize) {
+        let outcome = catch_unwind(AssertUnwindSafe(|| (self.wake)()));
+        match outcome {
+            Ok(()) => self.wake_debt.acknowledge(generation),
+            Err(payload) => resume_unwind(payload),
+        }
+    }
+
+    /// Retry a wake that a prior owner-turn rearm failed to deliver.
+    fn retry_wake_debt(&self) {
+        if let Some(generation) = self.wake_debt.pending_generation() {
+            self.deliver_wake(generation);
         }
     }
 }
@@ -452,7 +520,10 @@ impl UiRealm {
                     // An external wake panic must not replace the command's
                     // original payload.
                     if let Err(payload) = outcome {
-                        let wake_panic = catch_unwind(AssertUnwindSafe(|| (self.wake)())).err();
+                        let wake_panic = catch_unwind(AssertUnwindSafe(|| {
+                            self.sender_prototype.wake_owner();
+                        }))
+                        .err();
                         let mut first_panic = Some(payload);
                         preserve_first_input_panic(
                             &mut first_panic,
@@ -467,6 +538,12 @@ impl UiRealm {
                 }
             }
         }
+        // A prior rearm wake may have panicked after leaving queue/redraw
+        // demand durable. This completed owner boundary has made progress;
+        // retry the delivery now so any work enqueued during this turn still
+        // receives a future opportunity. A second wake panic deliberately
+        // escapes with the debt still armed for a later ingress/boundary.
+        self.sender_prototype.retry_wake_debt();
         report
     }
 }

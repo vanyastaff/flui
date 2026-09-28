@@ -322,10 +322,20 @@ reader is inserted into the external rebuild inbox as one durable batch. The
 batch releases its lock before requesting one frame; a panicking wake therefore
 cannot expose only a prefix of the reader set. Signal telemetry runs only after
 that enqueue. A failed wake leaves debt on the shared inbox; the next hooked
-scheduler call retries it even when every id is already queued. The same debt
-also covers direct `BuildOwner`/`ElementOwner` scheduling. If invalidation or
+scheduler call retries it even when every id is already queued. Concurrent
+callers never wait behind the external hook: they may race delivery, and a
+successful hook acknowledges only the work generation captured before that
+hook began. A reentrant schedule cannot call the hook recursively and receives
+one compensating attempt from its outer call. The same debt also covers direct
+`BuildOwner`/`ElementOwner` scheduling. If invalidation or
 loan finalization panics while an updater panic is already being handled, the
 updater's original payload keeps priority.
+
+The updater is `FnMut`, although the graph calls it exactly once. Keeping the
+closure owned outside the caught invocation lets the graph dispose its captures
+under a separate containment boundary; consuming an `FnOnce` would instead run
+capture destructors during the updater's unwind, where a second panic aborts the
+process before the graph can finalize the loan or invalidate readers.
 
 A valid typed read releases the graph's value loan, then subscribes before a
 panic from its user closure resumes. A recovered first build that panics in
@@ -335,6 +345,8 @@ type-mismatched reads still subscribe nobody. Before any caught panic resumes,
 every still-owned generic result and cleanup payload is explicitly disposed
 under containment, so a user-defined panicking destructor cannot replace the
 chronologically first panic or turn recovery into a double-panic abort.
+Typed reader closures follow the same `FnMut`-called-once rule so their captures
+remain available to that cleanup boundary.
 
 **Not promised.** `update(&mut T)` is not a transaction and cannot roll back an
 arbitrary `T` or external effects. Code requiring atomic domain changes prepares

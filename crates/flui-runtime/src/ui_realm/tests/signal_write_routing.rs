@@ -306,20 +306,24 @@ fn a_panicking_routed_write_still_requests_its_owning_presentations_frame() {
 }
 
 #[test]
-fn a_signal_write_panic_keeps_priority_over_its_rearmed_wake_panic() {
+fn a_failed_signal_write_rearm_retries_at_the_next_owner_boundary() {
     let panic_on_wake = Arc::new(AtomicBool::new(false));
     let panic_on_wake_in_callback = Arc::clone(&panic_on_wake);
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let wake_count_in_callback = Arc::clone(&wake_count);
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        wake_count_in_callback.fetch_add(1, Ordering::Relaxed);
         assert!(
-            !panic_on_wake_in_callback.load(Ordering::Relaxed),
+            !panic_on_wake_in_callback.swap(false, Ordering::Relaxed),
             "command wake probe"
         );
     });
     let realm = new_runtime(wake).expect("runtime");
     let graph = graph_of(&realm, realm.presentation_id());
     let signal = graph.signal(1u32);
-    realm
-        .command_sender()
+    let tail = graph.signal(0u32);
+    let sender = realm.command_sender();
+    sender
         .send_signal_write(signal.detach(), move |signal, graph| {
             let _ = signal.update(graph, |value| {
                 *value = 7;
@@ -327,6 +331,12 @@ fn a_signal_write_panic_keeps_priority_over_its_rearmed_wake_panic() {
             });
         })
         .expect("send while wake is healthy");
+    sender
+        .send_signal_write(tail.detach(), move |tail, graph| {
+            tail.set(graph, 9).expect("tail signal remains live");
+        })
+        .expect("tail send while wake is healthy");
+    let wakes_after_sends = wake_count.load(Ordering::Relaxed);
     panic_on_wake.store(true, Ordering::Relaxed);
 
     let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
@@ -338,6 +348,95 @@ fn a_signal_write_panic_keeps_priority_over_its_rearmed_wake_panic() {
         "the secondary wake panic must not replace the updater panic"
     );
     assert_eq!(signal.peek(&graph, |value| *value), Ok(7));
+    assert_eq!(
+        tail.peek(&graph, |value| *value),
+        Ok(0),
+        "the callback panic leaves the FIFO tail queued"
+    );
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_sends + 1,
+        "the first rearm attempt reaches the hook and fails"
+    );
+
+    assert!(
+        realm.drain_owner_inbox(),
+        "the next owner boundary must preserve the partial commit's redraw demand"
+    );
+    assert_eq!(
+        tail.peek(&graph, |value| *value),
+        Ok(9),
+        "the next owner boundary drains the preserved FIFO tail"
+    );
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_sends + 2,
+        "the completed owner boundary must pay the failed wake debt"
+    );
+
+    let wakes_after_recovery = wake_count.load(Ordering::Relaxed);
+    assert_eq!(realm.drain_commands(), DrainReport::default());
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_recovery,
+        "a successful retry clears the debt instead of waking every boundary"
+    );
+}
+
+#[test]
+fn an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt() {
+    let first_started = Arc::new(std::sync::Barrier::new(2));
+    let release_first = Arc::new(std::sync::Barrier::new(2));
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let first_started_in_wake = Arc::clone(&first_started);
+    let release_first_in_wake = Arc::clone(&release_first);
+    let wake_count_in_callback = Arc::clone(&wake_count);
+    let wake: Arc<dyn Fn() + Send + Sync> =
+        Arc::new(
+            move || match wake_count_in_callback.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    first_started_in_wake.wait();
+                    release_first_in_wake.wait();
+                }
+                1 => panic!("newer wake probe"),
+                _ => {}
+            },
+        );
+    let realm = new_runtime(wake).expect("runtime");
+    let first_sender = realm.command_sender();
+    let second_sender = first_sender.clone();
+
+    let first = std::thread::spawn(move || first_sender.request_redraw());
+    first_started.wait();
+    let second = std::thread::spawn(move || {
+        catch_unwind(AssertUnwindSafe(|| second_sender.request_redraw()))
+    });
+    let second_outcome = second
+        .join()
+        .expect("second sender contains its wake panic");
+    assert!(second_outcome.is_err(), "the newer wake must fail");
+    release_first.wait();
+    first.join().expect("older wake eventually succeeds");
+    assert_eq!(wake_count.load(Ordering::SeqCst), 2);
+
+    assert_eq!(realm.drain_commands(), DrainReport::default());
+    assert_eq!(
+        wake_count.load(Ordering::SeqCst),
+        3,
+        "the older success acknowledges only its own generation; the next owner boundary must \
+         retry the newer failed generation"
+    );
+    assert!(
+        realm.take_redraw_request(),
+        "the overlapping requests retain their coalesced redraw demand"
+    );
+
+    assert_eq!(realm.drain_commands(), DrainReport::default());
+    assert_eq!(
+        wake_count.load(Ordering::SeqCst),
+        3,
+        "the successful retry clears the newer generation"
+    );
 }
 
 /// The primary-graph case keeps working: a write to a signal the primary

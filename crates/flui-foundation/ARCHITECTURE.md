@@ -672,7 +672,12 @@ reader is refused as `Released`; a refused read subscribes nobody. `Signal<T>` i
 For a valid read, a panic from the user closure keeps chronological priority over
 loan finalization, subscription, returned-value destruction, and panic-payload
 destruction. Cleanup is contained before `resume_unwind`; this is required because
-both `T` and the closure's `R` may have arbitrary user-defined destructors.
+`T`, the closure's captures, and the closure's `R` may have arbitrary user-defined
+destructors. The public `try_with`/`with`/`peek` reader is therefore `FnMut`, although
+it is called at most once. This deliberately rejects an `FnOnce` reader that consumes
+a capture: `call_once` would transfer the captures into the caught invocation, where a
+panicking capture destructor could abort the process while the reader panic unwinds,
+before containment regains control.
 
 **Why here.** An item added to this module re-checks every crate above foundation, so the module
 stays small and changes rarely; the graph, which changes often, stays in `flui-view` (ADR-0085 §6

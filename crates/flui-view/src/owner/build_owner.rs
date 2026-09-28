@@ -12,10 +12,7 @@ use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap, HashSet},
     rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
 };
 
 use flui_foundation::{ElementId, RebuildReasons, RenderId, ViewKey};
@@ -37,6 +34,8 @@ use crate::{
     view::View,
 };
 
+pub(crate) use super::external_build_inbox::ExternalBuildInbox;
+
 #[cfg(test)]
 thread_local! {
     static LAYOUT_SCOPE_CLASSIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -57,42 +56,6 @@ thread_local! {
 /// a downward notification (parent notifies a descendant below it) costs
 /// nothing beyond its own first-time absorb.
 const MAX_MID_DRAIN_ABSORBS: usize = 16;
-
-/// Shared external work and wake-retry state for one build owner.
-#[derive(Default)]
-pub(crate) struct ExternalBuildInbox {
-    pending: Mutex<HashMap<ElementId, RebuildReasons>>,
-    /// A committed batch whose frame wake panicked still needs delivery.
-    wake_debt: AtomicBool,
-}
-
-impl ExternalBuildInbox {
-    pub(crate) fn lock(&self) -> parking_lot::MutexGuard<'_, HashMap<ElementId, RebuildReasons>> {
-        self.pending.lock()
-    }
-
-    /// Request a frame for fresh work or retry a wake that previously
-    /// panicked after work was committed. Handles without a hook leave debt
-    /// untouched for a later handle that can actually pay it.
-    pub(crate) fn request_frame_if_needed(
-        &self,
-        has_fresh_work: bool,
-        request_frame: Option<&(dyn Fn() + Send + Sync)>,
-    ) {
-        let Some(request_frame) = request_frame else {
-            return;
-        };
-        let owed_retry = self.wake_debt.swap(false, Ordering::AcqRel);
-        if !has_fresh_work && !owed_retry {
-            return;
-        }
-        let wake = std::panic::catch_unwind(std::panic::AssertUnwindSafe(request_frame));
-        if let Err(payload) = wake {
-            self.wake_debt.store(true, Ordering::Release);
-            std::panic::resume_unwind(payload);
-        }
-    }
-}
 
 /// A cloneable, owned handle that lets a listener callback — an animation tick
 /// fired *outside* any frame, with no `&mut BuildOwner` in scope — enqueue an
@@ -128,11 +91,12 @@ pub(crate) struct ExternalBuildScheduler {
 impl ExternalBuildScheduler {
     /// Enqueue `id` for the next `build_scope` drain and request a frame.
     ///
-    /// Deduplicating: a repeat tick for an id already queued is a no-op and does
-    /// NOT re-request a frame, so a burst of ticks for one element costs one
-    /// inbox slot and one frame request. Thread-safe: the inbox lock is held
-    /// only for the insert and released before `request_frame` runs (no lock
-    /// across the platform wake).
+    /// Deduplicating: a repeat tick for an id already queued consumes no extra
+    /// inbox slot. With healthy delivery a burst still costs one frame request;
+    /// while that delivery is in flight or owed, a concurrent caller may race
+    /// or retry it so a failed wake cannot strand the batch. Thread-safe: the
+    /// inbox lock is held only for the insert and released before
+    /// `request_frame` runs (no lock across the platform wake).
     pub(crate) fn schedule(&self, id: ElementId, reason: RebuildReason) {
         self.schedule_many(std::iter::once(id), reason);
     }
@@ -184,10 +148,7 @@ impl std::fmt::Debug for ExternalBuildScheduler {
         // `{:?}` while the inbox is already held (e.g. instrumenting the drain)
         // would otherwise deadlock silently.
         f.debug_struct("ExternalBuildScheduler")
-            .field(
-                "pending",
-                &self.inbox.pending.try_lock().map(|set| set.len()),
-            )
+            .field("pending", &self.inbox.try_len())
             .field("has_request_frame", &self.request_frame.is_some())
             .finish()
     }
@@ -2991,7 +2952,7 @@ fn notify_detached(observer: &dyn flui_foundation::observe::TreeObserver) {
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use flui_foundation::panic::payload_text;
     use flui_objects::RenderSizedBox;
@@ -3045,6 +3006,160 @@ mod tests {
         inbox.lock().clear();
         recovered.schedule(element, RebuildReason::StateChange);
         assert_eq!(wake_calls.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake() {
+        let inbox = Arc::new(ExternalBuildInbox::default());
+        let wake_calls = Arc::new(AtomicUsize::new(0));
+        let entered_second_wake = Arc::new(std::sync::Barrier::new(2));
+        let release_second_wake = Arc::new(std::sync::Barrier::new(2));
+        let callback_calls = Arc::clone(&wake_calls);
+        let callback_entered = Arc::clone(&entered_second_wake);
+        let callback_release = Arc::clone(&release_second_wake);
+        let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let call = callback_calls.fetch_add(1, Ordering::Relaxed) + 1;
+            match call {
+                1 => panic!("initial wake probe"),
+                2 => {
+                    callback_entered.wait();
+                    callback_release.wait();
+                    panic!("racing wake probe");
+                }
+                3 => {}
+                _ => panic!("unexpected duplicate wake"),
+            }
+        });
+        let scheduler = ExternalBuildScheduler::from_parts(inbox, Some(callback));
+        let element = ElementId::new(1);
+
+        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.schedule(element, RebuildReason::SignalChange);
+        }));
+        assert!(first.is_err());
+
+        let retrying_scheduler = scheduler.clone();
+        let retrying = std::thread::spawn(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                retrying_scheduler.schedule(element, RebuildReason::StateChange);
+            }))
+        });
+        entered_second_wake.wait();
+
+        let racing_scheduler = scheduler.clone();
+        let racing = std::thread::spawn(move || {
+            racing_scheduler.schedule(element, RebuildReason::DependencyChange);
+        });
+        release_second_wake.wait();
+        assert!(retrying.join().expect("retry thread joins").is_err());
+        racing.join().expect("racing thread joins");
+        assert_eq!(
+            wake_calls.load(Ordering::Relaxed),
+            3,
+            "the same-id schedule racing the failed retry must receive one compensating wake"
+        );
+
+        scheduler.schedule(element, RebuildReason::StateChange);
+        assert_eq!(
+            wake_calls.load(Ordering::Relaxed),
+            3,
+            "a successful compensating wake clears the shared debt"
+        );
+    }
+
+    #[test]
+    fn same_id_schedule_never_waits_behind_an_external_wake_hook() {
+        let inbox = Arc::new(ExternalBuildInbox::default());
+        let wake_calls = Arc::new(AtomicUsize::new(0));
+        let entered_wake = Arc::new(std::sync::Barrier::new(2));
+        let release_wake = Arc::new(std::sync::Barrier::new(2));
+        let callback_calls = Arc::clone(&wake_calls);
+        let callback_entered = Arc::clone(&entered_wake);
+        let callback_release = Arc::clone(&release_wake);
+        let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let call = callback_calls.fetch_add(1, Ordering::Relaxed) + 1;
+            match call {
+                1 => {
+                    callback_entered.wait();
+                    callback_release.wait();
+                }
+                2 => {}
+                _ => panic!("unexpected extra wake"),
+            }
+        });
+        let scheduler = ExternalBuildScheduler::from_parts(inbox, Some(callback));
+
+        let waking_scheduler = scheduler.clone();
+        let waking = std::thread::spawn(move || {
+            waking_scheduler.schedule(ElementId::new(1), RebuildReason::StateChange);
+        });
+        entered_wake.wait();
+
+        let racing_scheduler = scheduler.clone();
+        let racing = std::thread::spawn(move || {
+            racing_scheduler.schedule(ElementId::new(1), RebuildReason::DependencyChange);
+        });
+        racing.join().expect("racing thread joins");
+        assert_eq!(
+            wake_calls.load(Ordering::Relaxed),
+            2,
+            "the racing caller must deliver independently instead of waiting behind user code"
+        );
+        release_wake.wait();
+        waking.join().expect("waking thread joins");
+
+        assert_eq!(
+            wake_calls.load(Ordering::Relaxed),
+            2,
+            "both successful deliveries acknowledge the same pending generation"
+        );
+    }
+
+    #[test]
+    fn reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics() {
+        struct DropBomb;
+
+        impl Drop for DropBomb {
+            fn drop(&mut self) {
+                panic!("secondary payload drop");
+            }
+        }
+
+        let inbox = Arc::new(ExternalBuildInbox::default());
+        let scheduler_slot: Arc<Mutex<Option<ExternalBuildScheduler>>> = Arc::new(Mutex::new(None));
+        let callback_slot = Arc::clone(&scheduler_slot);
+        let wake_calls = Arc::new(AtomicUsize::new(0));
+        let callback_calls = Arc::clone(&wake_calls);
+        let callback: Arc<dyn Fn() + Send + Sync> =
+            Arc::new(
+                move || match callback_calls.fetch_add(1, Ordering::Relaxed) + 1 {
+                    1 => {
+                        let reentrant = callback_slot
+                            .lock()
+                            .as_ref()
+                            .cloned()
+                            .expect("scheduler installed");
+                        reentrant.schedule(ElementId::new(1), RebuildReason::DependencyChange);
+                        panic!("primary wake panic");
+                    }
+                    2 => std::panic::panic_any(DropBomb),
+                    _ => panic!("unexpected extra wake"),
+                },
+            );
+        let scheduler = ExternalBuildScheduler::from_parts(inbox, Some(callback));
+        *scheduler_slot.lock() = Some(scheduler.clone());
+
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.schedule(ElementId::new(1), RebuildReason::StateChange);
+        }))
+        .expect_err("the primary wake panic must resume");
+        scheduler_slot.lock().take();
+
+        assert_eq!(
+            failure.downcast_ref::<&'static str>(),
+            Some(&"primary wake panic")
+        );
+        assert_eq!(wake_calls.load(Ordering::Relaxed), 2);
     }
 
     #[test]

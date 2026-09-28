@@ -569,7 +569,7 @@ impl Reactive {
     fn read<T: 'static, R>(
         &self,
         slot: SignalSlot,
-        f: impl FnOnce(&T) -> R,
+        mut f: impl FnMut(&T) -> R,
     ) -> Result<R, SignalError> {
         let loan = self.loan(slot)?;
         let typed = loan
@@ -581,16 +581,29 @@ impl Reactive {
                 expected: type_name::<T>(),
             })?;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(typed)));
+        let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
         let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
         match outcome {
-            Ok(result) => match finalized {
-                Ok(()) => Ok(result),
+            Ok(result) => match disposed {
+                Ok(()) => match finalized {
+                    Ok(()) => Ok(result),
+                    Err(payload) => {
+                        discard_secondary(result);
+                        std::panic::resume_unwind(payload)
+                    }
+                },
                 Err(payload) => {
                     discard_secondary(result);
+                    if let Err(secondary) = finalized {
+                        discard_panic_payload(secondary);
+                    }
                     std::panic::resume_unwind(payload)
                 }
             },
             Err(payload) => {
+                if let Err(secondary) = disposed {
+                    discard_panic_payload(secondary);
+                }
                 if let Err(secondary) = finalized {
                     discard_panic_payload(secondary);
                 }
@@ -604,7 +617,7 @@ impl Reactive {
     fn write<T: 'static, R>(
         &self,
         slot: SignalSlot,
-        f: impl FnOnce(&mut T) -> R,
+        mut f: impl FnMut(&mut T) -> R,
     ) -> Result<R, SignalError> {
         self.refuse_if_building(slot)?;
         let mut loan = self.loan(slot)?;
@@ -617,20 +630,38 @@ impl Reactive {
                 expected: type_name::<T>(),
             })?;
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(typed)));
+        // `f` must remain outside the caught invocation: consuming a `FnOnce`
+        // there would destroy its captures while the updater panic is still
+        // unwinding, and a panicking capture destructor would abort the
+        // process before `catch_unwind` can return. Dispose the updater as its
+        // own contained phase instead.
+        let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(f)));
         let finalized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(loan)));
         let invalidated =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.mark(slot)));
         match outcome {
-            Ok(result) => match finalized {
-                Ok(()) => match invalidated {
-                    Ok(()) => Ok(result),
+            Ok(result) => match disposed {
+                Ok(()) => match finalized {
+                    Ok(()) => match invalidated {
+                        Ok(()) => Ok(result),
+                        Err(payload) => {
+                            discard_secondary(result);
+                            std::panic::resume_unwind(payload)
+                        }
+                    },
                     Err(payload) => {
                         discard_secondary(result);
+                        if let Err(secondary) = invalidated {
+                            discard_panic_payload(secondary);
+                        }
                         std::panic::resume_unwind(payload)
                     }
                 },
                 Err(payload) => {
                     discard_secondary(result);
+                    if let Err(secondary) = finalized {
+                        discard_panic_payload(secondary);
+                    }
                     if let Err(secondary) = invalidated {
                         discard_panic_payload(secondary);
                     }
@@ -638,6 +669,9 @@ impl Reactive {
                 }
             },
             Err(payload) => {
+                if let Err(secondary) = disposed {
+                    discard_panic_payload(secondary);
+                }
                 if let Err(secondary) = finalized {
                     discard_panic_payload(secondary);
                 }
@@ -762,7 +796,10 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     /// `f` explicitly releases this same slot. Release is authoritative: it
     /// destroys the loaned value and reader set, so there is no surviving
     /// commit to invalidate. This method does not provide transactional
-    /// rollback.
+    /// rollback. The updater is accepted as [`FnMut`] even though it is
+    /// invoked exactly once: retaining it across the protected invocation
+    /// lets capture destruction be contained separately from an updater
+    /// panic.
     ///
     /// # Errors
     ///
@@ -770,7 +807,7 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
     fn update<W: WriteTarget + ?Sized, R>(
         self,
         w: &W,
-        f: impl FnOnce(&mut T) -> R,
+        f: impl FnMut(&mut T) -> R,
     ) -> Result<R, SignalError>;
 
     /// Replace the value only if it differs; an equal write marks nobody.
@@ -786,14 +823,19 @@ pub trait SignalWriteExt<T: 'static>: Copy + sealed::Sealed {
 
 impl<T: 'static> SignalWriteExt<T> for Signal<T> {
     fn set<W: WriteTarget + ?Sized>(self, w: &W, value: T) -> Result<(), SignalError> {
+        let mut value = Some(value);
         w.graph(writer::sealed::Token::new())
-            .write(self.slot(), |slot: &mut T| *slot = value)
+            .write(self.slot(), move |slot: &mut T| {
+                *slot = value
+                    .take()
+                    .expect("BUG: a signal updater is invoked only once");
+            })
     }
 
     fn update<W: WriteTarget + ?Sized, R>(
         self,
         w: &W,
-        f: impl FnOnce(&mut T) -> R,
+        f: impl FnMut(&mut T) -> R,
     ) -> Result<R, SignalError> {
         w.graph(writer::sealed::Token::new()).write(self.slot(), f)
     }
@@ -1348,6 +1390,40 @@ mod tests {
         assert_eq!(payload.downcast_ref::<&str>(), Some(&"updater probe"));
         assert_eq!(scheduled(&inbox), readers);
         assert_eq!(signal.peek(&r, |value| *value), Ok(1));
+    }
+
+    #[test]
+    fn updater_panic_keeps_priority_over_its_captures_destructor_panic() {
+        let (r, inbox) = graph_with_inbox();
+        let signal = r.signal(0u8);
+        let reader = ElementId::new(1);
+        r.register_element_reader(signal.slot(), reader);
+        let capture = DropBomb("updater capture destructor probe");
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            signal.update(&r, move |value| {
+                let _capture_stays_owned_by_the_updater = &capture;
+                *value = 1;
+                panic!("updater probe");
+            })
+        }));
+
+        let payload = outcome.expect_err("the updater panic must resume");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"updater probe"),
+            "the capture destructor panic must remain secondary"
+        );
+        assert_eq!(signal.peek(&r, |value| *value), Ok(1));
+        assert_eq!(
+            scheduled(&inbox),
+            vec![reader],
+            "the partially committed update must still invalidate its reader"
+        );
+        signal
+            .set(&r, 2)
+            .expect("the signal remains usable after both contained panics");
+        assert_eq!(signal.peek(&r, |value| *value), Ok(2));
     }
 
     #[test]

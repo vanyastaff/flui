@@ -251,6 +251,13 @@ pointer path already did. A partial signal commit can therefore become visible
 on a later frame even when its callback unwinds; the operation never redirects
 demand to the primary or wakes an unrelated sibling.
 
+The rearm itself has realm-scoped delivery debt shared by every
+`UiCommandSender`. Monotonic requested/delivered generations, rather than a
+boolean latch, prevent an older overlapping successful wake from erasing a
+newer failed delivery. Later command ingress or a completed owner-inbox drain
+retries the newest unacknowledged generation; no retry is promised without a
+later host opportunity.
+
 This is continuation safety, not rollback or callback isolation. The panic
 still leaves the dispatch boundary, and arbitrary external effects remain the
 application's responsibility. Pinned by the panicking secondary-presentation

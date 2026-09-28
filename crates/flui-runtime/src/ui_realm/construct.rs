@@ -1,6 +1,6 @@
 //! `UiRealm` construction, identity, and frame-failure reporting.
 
-use super::commands::UiCommandSender;
+use super::commands::{UiCommandSender, WakeDebt};
 use super::input::FocusCoordinator;
 use super::presentation_lifecycle::HostLifecycle;
 use super::{DEFAULT_COMMAND_CAPACITY, UiRealm, UiRealmError};
@@ -135,6 +135,7 @@ impl UiRealm {
     ) -> Result<Self, UiRealmError> {
         let (tx, rx) = bounded(capacity);
         let redraw_pending = Arc::new(AtomicBool::new(false));
+        let command_wake_debt = Arc::new(WakeDebt::default());
         let RealmServices {
             local_post_frame,
             async_driver,
@@ -179,6 +180,7 @@ impl UiRealm {
                     tx: tx.clone(),
                     capacity,
                     redraw_pending: Arc::clone(&redraw_pending),
+                    wake_debt: Arc::clone(&command_wake_debt),
                     presentation_id,
                     wake: Arc::clone(&wake),
                 },
@@ -206,6 +208,7 @@ impl UiRealm {
                 tx,
                 capacity,
                 redraw_pending: Arc::clone(&redraw_pending),
+                wake_debt: command_wake_debt,
                 presentation_id,
                 wake,
             },
