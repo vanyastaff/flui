@@ -12,13 +12,12 @@ use std::fmt;
 use super::{
     Offset, Point, Size, Vec2,
     traits::{FloatUnit, NumericUnit, Unit},
-    units::Pixels,
 };
 
 /// An axis-aligned rectangle.
 ///
 /// Generic over unit type `T`. Common usage:
-/// - `Rect<f32>` - Raw coordinates (GPU-ready)
+/// - `Rect<f64>` - Raw coordinates (GPU-ready)
 /// - `Rect<Pixels>` - Logical pixel coordinates
 ///
 /// Defined by minimum and maximum corner points. The rectangle is valid when
@@ -43,7 +42,7 @@ use super::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct Rect<T: Unit = Pixels> {
+pub struct Rect<T: Unit = f64> {
     /// Minimum corner (top-left in screen coordinates).
     pub min: Point<T>,
     /// Maximum corner (bottom-right in screen coordinates).
@@ -76,7 +75,7 @@ impl<T: NumericUnit> Rect<T> {
     }
 }
 
-impl Rect<Pixels> {
+impl Rect<f64> {
     /// Empty rectangle at origin.
     pub const ZERO: Self = Self {
         min: Point::ZERO,
@@ -154,7 +153,7 @@ where
 
 impl<T: NumericUnit> Rect<T>
 where
-    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Div<f32, Output = T>,
+    T: std::ops::Add<Output = T> + std::ops::Sub<Output = T> + std::ops::Div<f64, Output = T>,
 {
     /// Creates a rectangle centered at a point with given size.
     #[inline]
@@ -172,14 +171,14 @@ where
 // Pixels-specific Constructors
 // ============================================================================
 
-impl Rect<Pixels> {
+impl Rect<f64> {
     /// Creates a rectangle from raw coordinates.
     ///
     /// Note: Does not normalize — if `x0 > x1` or `y0 > y1`, the rect is
     /// inverted.
     #[inline]
     #[must_use]
-    pub const fn new(x0: Pixels, y0: Pixels, x1: Pixels, y1: Pixels) -> Self {
+    pub const fn new(x0: f64, y0: f64, x1: f64, y1: f64) -> Self {
         Self {
             min: Point::new(x0, y0),
             max: Point::new(x1, y1),
@@ -189,28 +188,28 @@ impl Rect<Pixels> {
     /// Creates a rectangle from x, y, width, height.
     #[inline]
     #[must_use]
-    pub fn from_xywh(x: Pixels, y: Pixels, width: Pixels, height: Pixels) -> Self {
+    pub fn from_xywh(x: f64, y: f64, width: f64, height: f64) -> Self {
         Self::new(x, y, x + width, y + height)
     }
 
     /// Creates a rectangle from left, top, right, bottom (Flutter-style).
     #[inline]
     #[must_use]
-    pub const fn from_ltrb(left: Pixels, top: Pixels, right: Pixels, bottom: Pixels) -> Self {
+    pub const fn from_ltrb(left: f64, top: f64, right: f64, bottom: f64) -> Self {
         Self::new(left, top, right, bottom)
     }
 
     /// Creates a rectangle from left, top, width, height (Flutter-style).
     #[inline]
     #[must_use]
-    pub fn from_ltwh(left: Pixels, top: Pixels, width: Pixels, height: Pixels) -> Self {
+    pub fn from_ltwh(left: f64, top: f64, width: f64, height: f64) -> Self {
         Self::new(left, top, left + width, top + height)
     }
 
     /// Creates a rectangle from center point with width and height.
     #[inline]
     #[must_use]
-    pub fn from_center(center: Offset<Pixels>, width: Pixels, height: Pixels) -> Self {
+    pub fn from_center(center: Offset<f64>, width: f64, height: f64) -> Self {
         let half_width = width / 2.0;
         let half_height = height / 2.0;
         Self::new(
@@ -332,8 +331,8 @@ where
     /// ```
     /// use flui_geometry::{Rect, px};
     ///
-    /// let rect = Rect::from_xywh(px(0.0), px(0.0), px(200.0), px(100.0));
-    /// assert_eq!(rect.shortest_side(), px(100.0));
+    /// let rect = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
+    /// assert_eq!(rect.shortest_side(), 100.0);
     /// ```
     #[inline]
     #[must_use]
@@ -344,21 +343,21 @@ where
 
 impl<T: NumericUnit> Rect<T>
 where
-    T: Into<f32> + std::ops::Sub<Output = T>,
+    T: Into<f64> + std::ops::Sub<Output = T>,
 {
     /// Area of the rectangle.
     #[inline]
     #[must_use]
-    pub fn area(&self) -> f32 {
-        let w: f32 = self.width().into();
-        let h: f32 = self.height().into();
+    pub fn area(&self) -> f64 {
+        let w: f64 = self.width().into();
+        let h: f64 = self.height().into();
         w * h
     }
 }
 
 impl<T: NumericUnit> Rect<T>
 where
-    T: std::ops::Add<Output = T> + std::ops::Div<f32, Output = T>,
+    T: std::ops::Add<Output = T> + std::ops::Div<f64, Output = T>,
 {
     /// Center point of the rectangle.
     #[inline]
@@ -426,21 +425,21 @@ where
 
 impl<T: NumericUnit> Rect<T>
 where
-    T: Into<f32> + std::ops::Sub<Output = T>,
+    T: Into<f64> + std::ops::Sub<Output = T>,
 {
     /// Checks if the rectangle has zero or negative area.
     #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        let w: f32 = self.width().into();
-        let h: f32 = self.height().into();
+        let w: f64 = self.width().into();
+        let h: f64 = self.height().into();
         w <= 0.0 || h <= 0.0
     }
 }
 
 impl<T: NumericUnit> Rect<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     /// Checks if all coordinates are finite (not infinity or NaN).
     #[inline]
@@ -509,11 +508,11 @@ where
 // Pixels-specific Containment (Offset)
 // ============================================================================
 
-impl Rect<Pixels> {
+impl Rect<f64> {
     /// Checks if the given offset is inside the rectangle (inclusive).
     #[inline]
     #[must_use]
-    pub fn contains_offset(&self, offset: Offset<Pixels>) -> bool {
+    pub fn contains_offset(&self, offset: Offset<f64>) -> bool {
         offset.dx >= self.min.x
             && offset.dx <= self.max.x
             && offset.dy >= self.min.y
@@ -670,20 +669,20 @@ where
 
 impl<T: NumericUnit> Rect<T>
 where
-    T: Into<f32> + FloatUnit,
+    T: Into<f64> + FloatUnit,
 {
     /// Scales the rectangle from origin.
     #[inline]
     #[must_use]
-    pub fn scale_from_origin(&self, factor: f32) -> Self {
+    pub fn scale_from_origin(&self, factor: f64) -> Self {
         Self {
             min: Point::new(
-                T::from_f32(self.min.x.into() * factor),
-                T::from_f32(self.min.y.into() * factor),
+                T::from_f64(self.min.x.into() * factor),
+                T::from_f64(self.min.y.into() * factor),
             ),
             max: Point::new(
-                T::from_f32(self.max.x.into() * factor),
-                T::from_f32(self.max.y.into() * factor),
+                T::from_f64(self.max.x.into() * factor),
+                T::from_f64(self.max.y.into() * factor),
             ),
         }
     }
@@ -691,12 +690,12 @@ where
     /// Scales the rectangle from its center.
     #[inline]
     #[must_use]
-    pub fn scale_from_center(&self, factor: f32) -> Self
+    pub fn scale_from_center(&self, factor: f64) -> Self
     where
         T: std::ops::Add<Output = T>
             + std::ops::Sub<Output = T>
-            + std::ops::Div<f32, Output = T>
-            + std::ops::Mul<f32, Output = T>,
+            + std::ops::Div<f64, Output = T>
+            + std::ops::Mul<f64, Output = T>,
     {
         Self::from_center_size(self.center(), self.size() * factor)
     }
@@ -718,11 +717,11 @@ where
 // Pixels-specific Transformations (Offset)
 // ============================================================================
 
-impl Rect<Pixels> {
+impl Rect<f64> {
     /// Translates the rectangle by an offset.
     #[inline]
     #[must_use]
-    pub fn translate_offset(&self, offset: Offset<Pixels>) -> Self {
+    pub fn translate_offset(&self, offset: Offset<f64>) -> Self {
         self.translate(Vec2::new(offset.dx, offset.dy))
     }
 }
@@ -731,7 +730,7 @@ impl Rect<Pixels> {
 // Rounding Operations (Pixels only)
 // ============================================================================
 
-impl Rect<Pixels> {
+impl Rect<f64> {
     /// Rounds all coordinates to the nearest integer.
     #[inline]
     #[must_use]
@@ -794,78 +793,15 @@ impl Rect<Pixels> {
 
 impl<T: NumericUnit> Rect<T>
 where
-    T: Into<f32> + FloatUnit,
+    T: Into<f64> + FloatUnit,
 {
     /// Linear interpolation between two rectangles.
     #[inline]
     #[must_use]
-    pub fn lerp(self, other: Self, t: f32) -> Self {
+    pub fn lerp(self, other: Self, t: f64) -> Self {
         Self {
             min: self.min.lerp(other.min, t),
             max: self.max.lerp(other.max, t),
-        }
-    }
-}
-
-// ============================================================================
-// Type-safe scale conversions with ScaleFactor
-// ============================================================================
-
-impl Rect<Pixels> {
-    /// Type-safe scale conversion to DevicePixels.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{DevicePixels, Pixels, Rect, ScaleFactor, px};
-    ///
-    /// let logical = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(200.0));
-    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
-    /// let device = logical.scale_with(scale);
-    /// assert_eq!(device.origin().x.get(), 20);
-    /// assert_eq!(device.size().width.get(), 200);
-    /// ```
-    #[must_use]
-    #[inline]
-    pub fn scale_with(
-        self,
-        scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>,
-    ) -> Rect<super::units::DevicePixels> {
-        Rect {
-            min: self.min.scale_with(scale),
-            max: self.max.scale_with(scale),
-        }
-    }
-}
-
-impl Rect<super::units::DevicePixels> {
-    /// Converts to logical pixels using a type-safe scale factor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{
-    ///     DevicePixels, Pixels, Point, Rect, ScaleFactor, Size, device_px, px,
-    /// };
-    ///
-    /// let device = Rect::from_origin_size(
-    ///     Point::new(device_px(20), device_px(40)),
-    ///     Size::new(device_px(200), device_px(400)),
-    /// );
-    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
-    /// let logical = device.unscale(scale);
-    /// assert_eq!(logical.origin().x, px(10.0));
-    /// assert_eq!(logical.size().width, px(100.0));
-    /// ```
-    #[must_use]
-    #[inline]
-    pub fn unscale(
-        self,
-        scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>,
-    ) -> Rect<Pixels> {
-        Rect {
-            min: self.min.unscale(scale),
-            max: self.max.unscale(scale),
         }
     }
 }
@@ -876,12 +812,12 @@ impl Rect<super::units::DevicePixels> {
 
 impl<T: NumericUnit> Rect<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
-    /// Converts to `Rect<Pixels>` with f32 values.
+    /// Converts to `Rect<Pixels>` with f64 values.
     #[inline]
     #[must_use]
-    pub fn to_f32(&self) -> Rect<Pixels> {
+    pub fn to_f32(&self) -> Rect<f64> {
         Rect {
             min: self.min.to_f32(),
             max: self.max.to_f32(),
@@ -891,12 +827,12 @@ where
 
 impl<T: Unit> Rect<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     /// Converts to array `[x0, y0, x1, y1]` for GPU usage.
     #[inline]
     #[must_use]
-    pub fn to_array(&self) -> [f32; 4] {
+    pub fn to_array(&self) -> [f64; 4] {
         [
             self.min.x.into(),
             self.min.y.into(),
@@ -927,7 +863,7 @@ where
     }
 }
 
-impl fmt::Display for Rect<Pixels> {
+impl fmt::Display for Rect<f64> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.format_display(f)
@@ -941,9 +877,8 @@ impl fmt::Display for Rect<Pixels> {
 /// Shorthand for `Rect::from_xywh(x, y, w, h)`.
 #[inline]
 #[must_use]
-pub fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<Pixels> {
-    use super::units::px;
-    Rect::from_xywh(px(x), px(y), px(w), px(h))
+pub fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect<f64> {
+    Rect::from_xywh(x, y, w, h)
 }
 
 // ============================================================================
@@ -953,31 +888,28 @@ pub fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Pixels, point, px, size};
+    use crate::{point, size};
 
     #[test]
     fn test_construction() {
-        let r = Rect::new(px(10.0), px(20.0), px(110.0), px(70.0));
-        assert_eq!(r.left(), px(10.0));
-        assert_eq!(r.top(), px(20.0));
-        assert_eq!(r.right(), px(110.0));
-        assert_eq!(r.bottom(), px(70.0));
+        let r = Rect::new(10.0, 20.0, 110.0, 70.0);
+        assert_eq!(r.left(), 10.0);
+        assert_eq!(r.top(), 20.0);
+        assert_eq!(r.right(), 110.0);
+        assert_eq!(r.bottom(), 70.0);
 
-        let r2 = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let r2 = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
         assert_eq!(r, r2);
 
-        let r3 = Rect::from_ltrb(px(10.0), px(20.0), px(110.0), px(70.0));
+        let r3 = Rect::from_ltrb(10.0, 20.0, 110.0, 70.0);
         assert_eq!(r, r3);
     }
 
     #[test]
     fn test_generic_construction() {
-        let r = Rect::<Pixels>::from_origin_size(
-            Point::new(px(10.0), px(20.0)),
-            Size::new(px(100.0), px(50.0)),
-        );
-        assert_eq!(r.left(), px(10.0));
-        assert_eq!(r.width(), px(100.0));
+        let r = Rect::<f64>::from_origin_size(Point::new(10.0, 20.0), Size::new(100.0, 50.0));
+        assert_eq!(r.left(), 10.0);
+        assert_eq!(r.width(), 100.0);
     }
 
     #[test]
@@ -992,16 +924,16 @@ mod tests {
     fn test_from_center_size() {
         let r = Rect::from_center_size(point(50.0, 50.0), size(20.0, 10.0));
         assert_eq!(r.center(), point(50.0, 50.0));
-        assert_eq!(r.width(), px(20.0));
-        assert_eq!(r.height(), px(10.0));
+        assert_eq!(r.width(), 20.0);
+        assert_eq!(r.height(), 10.0);
     }
 
     #[test]
     fn test_accessors() {
-        let r = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let r = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
 
-        assert_eq!(r.width(), px(100.0));
-        assert_eq!(r.height(), px(50.0));
+        assert_eq!(r.width(), 100.0);
+        assert_eq!(r.height(), 50.0);
         assert_eq!(r.size(), size(100.0, 50.0));
         assert_eq!(r.area(), 5000.0);
         assert_eq!(r.origin(), point(10.0, 20.0));
@@ -1015,10 +947,10 @@ mod tests {
 
     #[test]
     fn test_validation() {
-        assert!(!Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(50.0)).is_empty());
+        assert!(!Rect::from_xywh(0.0, 0.0, 100.0, 50.0).is_empty());
         assert!(Rect::ZERO.is_empty());
-        assert!(Rect::from_xywh(px(0.0), px(0.0), px(0.0), px(50.0)).is_empty());
-        assert!(Rect::from_xywh(px(0.0), px(0.0), px(-10.0), px(50.0)).is_empty());
+        assert!(Rect::from_xywh(0.0, 0.0, 0.0, 50.0).is_empty());
+        assert!(Rect::from_xywh(0.0, 0.0, -10.0, 50.0).is_empty());
 
         assert!(Rect::ZERO.is_finite());
         assert!(!Rect::EVERYTHING.is_finite());
@@ -1026,7 +958,7 @@ mod tests {
 
     #[test]
     fn test_contains() {
-        let r = Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(100.0));
+        let r = Rect::from_xywh(10.0, 10.0, 100.0, 100.0);
 
         assert!(r.contains(point(50.0, 50.0)));
         assert!(r.contains(point(10.0, 10.0))); // on edge
@@ -1037,9 +969,9 @@ mod tests {
 
     #[test]
     fn test_contains_rect() {
-        let outer = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
-        let inner = Rect::from_xywh(px(25.0), px(25.0), px(50.0), px(50.0));
-        let outside = Rect::from_xywh(px(200.0), px(200.0), px(50.0), px(50.0));
+        let outer = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let inner = Rect::from_xywh(25.0, 25.0, 50.0, 50.0);
+        let outside = Rect::from_xywh(200.0, 200.0, 50.0, 50.0);
 
         assert!(outer.contains_rect(&inner));
         assert!(!inner.contains_rect(&outer));
@@ -1048,9 +980,9 @@ mod tests {
 
     #[test]
     fn test_overlaps() {
-        let r1 = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
-        let r2 = Rect::from_xywh(px(50.0), px(50.0), px(100.0), px(100.0));
-        let r3 = Rect::from_xywh(px(200.0), px(200.0), px(50.0), px(50.0));
+        let r1 = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let r2 = Rect::from_xywh(50.0, 50.0, 100.0, 100.0);
+        let r3 = Rect::from_xywh(200.0, 200.0, 50.0, 50.0);
 
         assert!(r1.overlaps(&r2));
         assert!(r2.overlaps(&r1));
@@ -1074,8 +1006,8 @@ mod tests {
     /// which the local `.flutter` clone does not include.
     #[test]
     fn an_empty_rect_never_overlaps_itself() {
-        let empty = Rect::from_xywh(px(10.0), px(10.0), px(0.0), px(50.0));
-        let straddling = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let empty = Rect::from_xywh(10.0, 10.0, 0.0, 50.0);
+        let straddling = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
 
         assert!(
             !empty.overlaps(&empty),
@@ -1091,67 +1023,52 @@ mod tests {
 
     #[test]
     fn test_intersect() {
-        let r1 = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
-        let r2 = Rect::from_xywh(px(50.0), px(50.0), px(100.0), px(100.0));
+        let r1 = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let r2 = Rect::from_xywh(50.0, 50.0, 100.0, 100.0);
 
         let intersection = r1.intersect(&r2).unwrap();
-        assert_eq!(
-            intersection,
-            Rect::from_xywh(px(50.0), px(50.0), px(50.0), px(50.0))
-        );
+        assert_eq!(intersection, Rect::from_xywh(50.0, 50.0, 50.0, 50.0));
 
-        let r3 = Rect::from_xywh(px(200.0), px(200.0), px(50.0), px(50.0));
+        let r3 = Rect::from_xywh(200.0, 200.0, 50.0, 50.0);
         assert!(r1.intersect(&r3).is_none());
     }
 
     #[test]
     fn test_union() {
-        let r1 = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
-        let r2 = Rect::from_xywh(px(25.0), px(25.0), px(50.0), px(50.0));
+        let r1 = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        let r2 = Rect::from_xywh(25.0, 25.0, 50.0, 50.0);
 
         let union = r1.union(&r2);
-        assert_eq!(union, Rect::from_xywh(px(0.0), px(0.0), px(75.0), px(75.0)));
+        assert_eq!(union, Rect::from_xywh(0.0, 0.0, 75.0, 75.0));
     }
 
     #[test]
     fn test_union_pt() {
-        let r = Rect::from_xywh(px(10.0), px(10.0), px(50.0), px(50.0));
+        let r = Rect::from_xywh(10.0, 10.0, 50.0, 50.0);
         let expanded = r.union_pt(point(100.0, 100.0));
         assert_eq!(expanded.max, point(100.0, 100.0));
     }
 
     #[test]
     fn test_transformations() {
-        let r = Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(50.0));
+        let r = Rect::from_xywh(10.0, 10.0, 100.0, 50.0);
 
-        let inflated = r.inflate(px(5.0), px(5.0));
-        assert_eq!(
-            inflated,
-            Rect::from_xywh(px(5.0), px(5.0), px(110.0), px(60.0))
-        );
+        let inflated = r.inflate(5.0, 5.0);
+        assert_eq!(inflated, Rect::from_xywh(5.0, 5.0, 110.0, 60.0));
 
-        let inset = r.inset(px(5.0));
-        assert_eq!(
-            inset,
-            Rect::from_xywh(px(15.0), px(15.0), px(90.0), px(40.0))
-        );
+        let inset = r.inset(5.0);
+        assert_eq!(inset, Rect::from_xywh(15.0, 15.0, 90.0, 40.0));
 
-        let translated = r.translate(Vec2::new(px(10.0), px(20.0)));
-        assert_eq!(
-            translated,
-            Rect::from_xywh(px(20.0), px(30.0), px(100.0), px(50.0))
-        );
+        let translated = r.translate(Vec2::new(10.0, 20.0));
+        assert_eq!(translated, Rect::from_xywh(20.0, 30.0, 100.0, 50.0));
 
         let scaled = r.scale_from_origin(2.0);
-        assert_eq!(
-            scaled,
-            Rect::from_xywh(px(20.0), px(20.0), px(200.0), px(100.0))
-        );
+        assert_eq!(scaled, Rect::from_xywh(20.0, 20.0, 200.0, 100.0));
     }
 
     #[test]
     fn test_with_origin_size() {
-        let r = Rect::from_xywh(px(10.0), px(10.0), px(100.0), px(50.0));
+        let r = Rect::from_xywh(10.0, 10.0, 100.0, 50.0);
 
         let moved = r.with_origin(point(20.0, 20.0));
         assert_eq!(moved.origin(), point(20.0, 20.0));
@@ -1164,7 +1081,7 @@ mod tests {
 
     #[test]
     fn test_rounding() {
-        let r = Rect::new(px(10.3), px(20.7), px(110.5), px(71.3));
+        let r = Rect::new(10.3, 20.7, 110.5, 71.3);
 
         let rounded = r.round();
         assert_eq!(rounded.min, point(10.0, 21.0));
@@ -1181,14 +1098,11 @@ mod tests {
 
     #[test]
     fn test_lerp() {
-        let r1 = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
-        let r2 = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(200.0));
+        let r1 = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let r2 = Rect::from_xywh(100.0, 100.0, 200.0, 200.0);
 
         let mid = r1.lerp(r2, 0.5);
-        assert_eq!(
-            mid,
-            Rect::from_xywh(px(50.0), px(50.0), px(150.0), px(150.0))
-        );
+        assert_eq!(mid, Rect::from_xywh(50.0, 50.0, 150.0, 150.0));
     }
 
     #[test]
@@ -1199,7 +1113,7 @@ mod tests {
 
     #[test]
     fn test_display() {
-        let r = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let r = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
         let s = format!("{r}");
         assert!(s.contains("10"));
         assert!(s.contains("20"));
@@ -1211,16 +1125,13 @@ mod tests {
     fn test_convenience_fn() {
         assert_eq!(
             rect(10.0, 20.0, 100.0, 50.0),
-            Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0))
+            Rect::from_xywh(10.0, 20.0, 100.0, 50.0)
         );
     }
 
     #[test]
     fn test_to_f32() {
-        let r = Rect::<Pixels>::from_origin_size(
-            Point::new(px(10.0), px(20.0)),
-            Size::new(px(100.0), px(50.0)),
-        );
+        let r = Rect::<f64>::from_origin_size(Point::new(10.0, 20.0), Size::new(100.0, 50.0));
         let f = r.to_f32();
         assert_eq!(f.min, point(10.0, 20.0));
         assert_eq!(f.max, point(110.0, 70.0));
@@ -1244,22 +1155,22 @@ mod tests {
 
     #[test]
     fn test_default() {
-        let r: Rect<Pixels> = Rect::default();
+        let r: Rect<f64> = Rect::default();
         assert_eq!(r.min, Point::ORIGIN);
         assert_eq!(r.max, Point::ORIGIN);
     }
 
     #[test]
     fn construction_and_side_by_side_queries() {
-        let ltrb = |l, t, r, b| Rect::from_ltrb(px(l), px(t), px(r), px(b));
+        let ltrb = |l, t, r, b| Rect::from_ltrb(l, t, r, b);
         assert_eq!(
-            Rect::from_ltwh(px(1.0), px(2.0), px(10.0), px(20.0)),
+            Rect::from_ltwh(1.0, 2.0, 10.0, 20.0),
             ltrb(1.0, 2.0, 11.0, 22.0)
         );
         let r = ltrb(0.0, 0.0, 10.0, 10.0);
-        assert_eq!(r.expand(px(2.0)), ltrb(-2.0, -2.0, 12.0, 12.0));
+        assert_eq!(r.expand(2.0), ltrb(-2.0, -2.0, 12.0, 12.0));
         assert_eq!(
-            r.union_pt(Point::new(px(-1.0), px(20.0))),
+            r.union_pt(Point::new(-1.0, 20.0)),
             ltrb(-1.0, 0.0, 10.0, 20.0)
         );
 
@@ -1275,21 +1186,5 @@ mod tests {
         let b = ltrb(1.0, 0.0, 11.0, 9.0);
         assert_eq!(a.intersect(&b), Some(ltrb(1.0, 2.0, 10.0, 9.0)));
         assert_eq!(b.intersect(&a), Some(ltrb(1.0, 2.0, 10.0, 9.0)));
-    }
-
-    #[test]
-    fn scale_with_and_unscale() {
-        use crate::{DevicePixels, ScaleFactor, device_px};
-        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
-        let device = Rect::from_ltrb(px(10.0), px(-4.2), px(12.0), px(3.0)).scale_with(scale);
-        let expect = Rect::from_min_max(
-            Point::new(device_px(20), device_px(-8)),
-            Point::new(device_px(24), device_px(6)),
-        );
-        assert_eq!(device, expect);
-        assert_eq!(
-            expect.unscale(scale),
-            Rect::from_ltrb(px(10.0), px(-4.0), px(12.0), px(3.0))
-        );
     }
 }

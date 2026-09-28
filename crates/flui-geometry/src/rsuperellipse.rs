@@ -11,7 +11,7 @@
 //! RSuperellipse improves this by using circular arcs at corners,
 //! creating softer transitions that match Apple's design language.
 
-use super::{Pixels, Radius, Rect, px};
+use super::{Radius, Rect};
 
 /// A rounded superellipse (squircle) with independent corner radii.
 ///
@@ -23,21 +23,21 @@ use super::{Pixels, Radius, Rect, px};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RSuperellipse {
     /// The bounding rectangle.
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
     /// Top-left corner radius.
-    tl_radius: Radius<Pixels>,
+    tl_radius: Radius<f64>,
     /// Top-right corner radius.
-    tr_radius: Radius<Pixels>,
+    tr_radius: Radius<f64>,
     /// Bottom-right corner radius.
-    br_radius: Radius<Pixels>,
+    br_radius: Radius<f64>,
     /// Bottom-left corner radius.
-    bl_radius: Radius<Pixels>,
+    bl_radius: Radius<f64>,
 }
 
 impl RSuperellipse {
     /// A zero-sized superellipse at the origin.
     pub const ZERO: Self = Self {
-        rect: Rect::from_ltrb(px(0.0), px(0.0), px(0.0), px(0.0)),
+        rect: Rect::from_ltrb(0.0, 0.0, 0.0, 0.0),
         tl_radius: Radius::ZERO,
         tr_radius: Radius::ZERO,
         br_radius: Radius::ZERO,
@@ -52,13 +52,7 @@ impl RSuperellipse {
     /// radius for all corners.
     #[inline]
     #[must_use]
-    pub fn from_ltrb_r(
-        left: Pixels,
-        top: Pixels,
-        right: Pixels,
-        bottom: Pixels,
-        radius: Radius<Pixels>,
-    ) -> Self {
+    pub fn from_ltrb_r(left: f64, top: f64, right: f64, bottom: f64, radius: Radius<f64>) -> Self {
         Self {
             rect: Rect::from_ltrb(left, top, right, bottom),
             tl_radius: radius,
@@ -72,14 +66,7 @@ impl RSuperellipse {
     /// x and y radii for all corners.
     #[inline]
     #[must_use]
-    pub fn from_ltrb_xy(
-        left: Pixels,
-        top: Pixels,
-        right: Pixels,
-        bottom: Pixels,
-        rx: Pixels,
-        ry: Pixels,
-    ) -> Self {
+    pub fn from_ltrb_xy(left: f64, top: f64, right: f64, bottom: f64, rx: f64, ry: f64) -> Self {
         let radius = Radius::new(rx, ry);
         Self::from_ltrb_r(left, top, right, bottom, radius)
     }
@@ -89,14 +76,14 @@ impl RSuperellipse {
     #[expect(clippy::too_many_arguments)]
     #[inline]
     pub fn from_ltrb_and_corners(
-        left: Pixels,
-        top: Pixels,
-        right: Pixels,
-        bottom: Pixels,
-        tl: Radius<Pixels>,
-        tr: Radius<Pixels>,
-        br: Radius<Pixels>,
-        bl: Radius<Pixels>,
+        left: f64,
+        top: f64,
+        right: f64,
+        bottom: f64,
+        tl: Radius<f64>,
+        tr: Radius<f64>,
+        br: Radius<f64>,
+        bl: Radius<f64>,
     ) -> Self {
         Self {
             rect: Rect::from_ltrb(left, top, right, bottom),
@@ -111,7 +98,7 @@ impl RSuperellipse {
     /// for all corners.
     #[inline]
     #[must_use]
-    pub fn from_rect_and_radius(rect: Rect<Pixels>, radius: Radius<Pixels>) -> Self {
+    pub fn from_rect_and_radius(rect: Rect<f64>, radius: Radius<f64>) -> Self {
         Self {
             rect,
             tl_radius: radius,
@@ -126,11 +113,11 @@ impl RSuperellipse {
     #[inline]
     #[must_use]
     pub fn from_rect_and_corners(
-        rect: Rect<Pixels>,
-        tl: Radius<Pixels>,
-        tr: Radius<Pixels>,
-        br: Radius<Pixels>,
-        bl: Radius<Pixels>,
+        rect: Rect<f64>,
+        tl: Radius<f64>,
+        tr: Radius<f64>,
+        br: Radius<f64>,
+        bl: Radius<f64>,
     ) -> Self {
         Self {
             rect,
@@ -145,7 +132,7 @@ impl RSuperellipse {
     /// for all corners.
     #[inline]
     #[must_use]
-    pub fn from_rect_circular(rect: Rect<Pixels>, radius: Pixels) -> Self {
+    pub fn from_rect_circular(rect: Rect<f64>, radius: f64) -> Self {
         Self::from_rect_and_radius(rect, Radius::circular(radius))
     }
 
@@ -156,77 +143,77 @@ impl RSuperellipse {
     /// Returns the bounding rectangle.
     #[inline]
     #[must_use]
-    pub fn outer_rect(&self) -> Rect<Pixels> {
+    pub fn outer_rect(&self) -> Rect<f64> {
         self.rect
     }
 
     /// Returns the left edge x-coordinate.
     #[inline]
     #[must_use]
-    pub fn left(&self) -> Pixels {
+    pub fn left(&self) -> f64 {
         self.rect.left()
     }
 
     /// Returns the top edge y-coordinate.
     #[inline]
     #[must_use]
-    pub fn top(&self) -> Pixels {
+    pub fn top(&self) -> f64 {
         self.rect.top()
     }
 
     /// Returns the right edge x-coordinate.
     #[inline]
     #[must_use]
-    pub fn right(&self) -> Pixels {
+    pub fn right(&self) -> f64 {
         self.rect.right()
     }
 
     /// Returns the bottom edge y-coordinate.
     #[inline]
     #[must_use]
-    pub fn bottom(&self) -> Pixels {
+    pub fn bottom(&self) -> f64 {
         self.rect.bottom()
     }
 
     /// Returns the width of the bounding rectangle.
     #[inline]
     #[must_use]
-    pub fn width(&self) -> Pixels {
+    pub fn width(&self) -> f64 {
         self.rect.width()
     }
 
     /// Returns the height of the bounding rectangle.
     #[inline]
     #[must_use]
-    pub fn height(&self) -> Pixels {
+    pub fn height(&self) -> f64 {
         self.rect.height()
     }
 
     /// Returns the top-left corner radius.
     #[inline]
     #[must_use]
-    pub fn tl_radius(&self) -> Radius<Pixels> {
+    pub fn tl_radius(&self) -> Radius<f64> {
         self.tl_radius
     }
 
     /// Returns the top-right corner radius.
     #[inline]
     #[must_use]
-    pub fn tr_radius(&self) -> Radius<Pixels> {
+    pub fn tr_radius(&self) -> Radius<f64> {
         self.tr_radius
     }
 
     /// Returns the bottom-right corner radius.
     #[inline]
     #[must_use]
-    pub fn br_radius(&self) -> Radius<Pixels> {
+    pub fn br_radius(&self) -> Radius<f64> {
         self.br_radius
     }
 
     /// Returns the bottom-left corner radius.
     #[inline]
     #[must_use]
-    pub fn bl_radius(&self) -> Radius<Pixels> {
+    pub fn bl_radius(&self) -> Radius<f64> {
         self.bl_radius
     }
 
@@ -277,7 +264,7 @@ impl RSuperellipse {
     /// side, so the result avoids all four corner regions.
     #[inline]
     #[must_use]
-    pub fn safe_inner_rect(&self) -> Rect<Pixels> {
+    pub fn safe_inner_rect(&self) -> Rect<f64> {
         // Use the maximum corner radii to determine safe insets
         let inset_left = self.tl_radius.x.max(self.bl_radius.x);
         let inset_right = self.tr_radius.x.max(self.br_radius.x);
@@ -298,7 +285,7 @@ impl RSuperellipse {
     /// corner radii); the left and right edges match the bounding rectangle.
     #[inline]
     #[must_use]
-    pub fn wide_middle_rect(&self) -> Rect<Pixels> {
+    pub fn wide_middle_rect(&self) -> Rect<f64> {
         let inset_top = self.tl_radius.y.max(self.tr_radius.y);
         let inset_bottom = self.bl_radius.y.max(self.br_radius.y);
 
@@ -316,7 +303,7 @@ impl RSuperellipse {
     /// corner radii); the top and bottom edges match the bounding rectangle.
     #[inline]
     #[must_use]
-    pub fn tall_middle_rect(&self) -> Rect<Pixels> {
+    pub fn tall_middle_rect(&self) -> Rect<f64> {
         let inset_left = self.tl_radius.x.max(self.bl_radius.x);
         let inset_right = self.tr_radius.x.max(self.br_radius.x);
 
@@ -336,7 +323,7 @@ impl RSuperellipse {
     /// grown by the same amount.
     #[inline]
     #[must_use]
-    pub fn inflate(&self, delta: Pixels) -> Self {
+    pub fn inflate(&self, delta: f64) -> Self {
         Self {
             rect: self.rect.inflate(delta, delta),
             tl_radius: Radius::new(self.tl_radius.x + delta, self.tl_radius.y + delta),
@@ -350,7 +337,7 @@ impl RSuperellipse {
     /// shrunk by the same amount.
     #[inline]
     #[must_use]
-    pub fn deflate(&self, delta: Pixels) -> Self {
+    pub fn deflate(&self, delta: f64) -> Self {
         self.inflate(-delta)
     }
 
@@ -360,7 +347,7 @@ impl RSuperellipse {
     /// Edge coordinates are scaled about the origin, not the shape's center.
     #[inline]
     #[must_use]
-    pub fn scale(&self, factor: f32) -> Self {
+    pub fn scale(&self, factor: f64) -> Self {
         Self {
             rect: Rect::from_ltrb(
                 self.rect.left() * factor,
@@ -381,16 +368,16 @@ impl RSuperellipse {
 
     #[inline]
     #[expect(dead_code, clippy::unused_self)] // Helper for future contains() implementation
-    fn point_in_corner(&self, dx: f32, dy: f32, radius: Radius<Pixels>) -> bool {
+    fn point_in_corner(&self, dx: f64, dy: f64, radius: Radius<f64>) -> bool {
         // Superellipse exponent (2.5 approximates iOS squircle)
-        const N: f32 = 2.5;
+        const N: f64 = 2.5;
 
-        if radius.x <= px(0.0) || radius.y <= px(0.0) {
+        if radius.x <= 0.0 || radius.y <= 0.0 {
             return true; // Sharp corner, already passed bbox check
         }
 
-        let nx = (dx.abs() / radius.x.0).powf(N);
-        let ny = (dy.abs() / radius.y.0).powf(N);
+        let nx = (dx.abs() / radius.x).powf(N);
+        let ny = (dy.abs() / radius.y).powf(N);
 
         nx + ny <= 1.0
     }
@@ -405,7 +392,7 @@ impl RSuperellipse {
     /// component-wise.
     #[inline]
     #[must_use]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
         Self {
             rect: Rect::lerp(a.rect, b.rect, t),
             tl_radius: Radius::lerp(a.tl_radius, b.tl_radius, t),
@@ -416,9 +403,9 @@ impl RSuperellipse {
     }
 }
 
-impl From<Rect<Pixels>> for RSuperellipse {
+impl From<Rect<f64>> for RSuperellipse {
     /// Creates a superellipse with zero radii (plain rectangle).
-    fn from(rect: Rect<Pixels>) -> Self {
+    fn from(rect: Rect<f64>) -> Self {
         Self::from_rect_and_radius(rect, Radius::ZERO)
     }
 }

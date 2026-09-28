@@ -17,7 +17,7 @@
 //!
 //! ```rust,ignore
 //! use flui_geometry::{Transform, Matrix4, Offset};
-//! use std::f32::consts::PI;
+//! use std::f64::consts::PI;
 //!
 //! // Translation - move by offset
 //! let t = Transform::translate(50.0, 100.0);
@@ -154,16 +154,16 @@
 //!
 //! // Text on curved path (with rotation and offset)
 //! for (i, ch) in text.chars().enumerate() {
-//!     let angle = i as f32 * 0.1;
+//!     let angle = i as f64 * 0.1;
 //!     let t = Transform::rotate(angle)
-//!         .then(Transform::translate(i as f32 * 10.0, curve_height));
+//!         .then(Transform::translate(i as f64 * 10.0, curve_height));
 //!     // Draw character with transform
 //! }
 //! ```
 
-use std::f32::consts::PI;
+use std::f64::consts::PI;
 
-use super::{Matrix4, Offset, Pixels};
+use super::{Matrix4, Offset};
 
 /// High-level 2D transformation API
 ///
@@ -194,29 +194,29 @@ pub enum Transform {
     /// Translation by (x, y) offset
     Translate {
         /// X-axis translation offset
-        x: f32,
+        x: f64,
         /// Y-axis translation offset
-        y: f32,
+        y: f64,
     },
 
     /// Rotation by angle in radians (counter-clockwise)
     Rotate {
         /// Rotation angle in radians (counter-clockwise)
-        angle: f32,
+        angle: f64,
     },
 
     /// Uniform scale (same factor for X and Y)
     Scale {
         /// Scale factor (applies to both X and Y axes)
-        factor: f32,
+        factor: f64,
     },
 
     /// Non-uniform scale (different factors for X and Y)
     ScaleXY {
         /// X-axis scale factor
-        x: f32,
+        x: f64,
         /// Y-axis scale factor
-        y: f32,
+        y: f64,
     },
 
     /// Skew transform (shear along X and Y axes)
@@ -226,9 +226,9 @@ pub enum Transform {
     /// - Perspective: `Skew { x: 0.3, y: 0.3 }`
     Skew {
         /// Skew angle along X-axis in radians (horizontal shear)
-        x: f32,
+        x: f64,
         /// Skew angle along Y-axis in radians (vertical shear)
-        y: f32,
+        y: f64,
     },
 
     /// Rotation around a specific pivot point
@@ -236,11 +236,11 @@ pub enum Transform {
     /// Equivalent to: translate(-pivot) → rotate(angle) → translate(pivot)
     RotateAround {
         /// Rotation angle in radians (counter-clockwise)
-        angle: f32,
+        angle: f64,
         /// Pivot point X coordinate
-        pivot_x: f32,
+        pivot_x: f64,
         /// Pivot point Y coordinate
-        pivot_y: f32,
+        pivot_y: f64,
     },
 
     /// Scale around a specific pivot point
@@ -248,13 +248,13 @@ pub enum Transform {
     /// Equivalent to: translate(-pivot) → scale(x, y) → translate(pivot)
     ScaleAround {
         /// X-axis scale factor
-        x: f32,
+        x: f64,
         /// Y-axis scale factor
-        y: f32,
+        y: f64,
         /// Pivot point X coordinate
-        pivot_x: f32,
+        pivot_x: f64,
         /// Pivot point Y coordinate
-        pivot_y: f32,
+        pivot_y: f64,
     },
 
     /// Composition of multiple transforms (applied in order)
@@ -274,22 +274,22 @@ impl Transform {
 
     /// Create a translation transform
     #[inline]
-    pub fn translate(x: f32, y: f32) -> Self {
+    pub fn translate(x: f64, y: f64) -> Self {
         Self::Translate { x, y }
     }
 
     /// Create a translation transform from an Offset
     #[inline]
-    pub fn translate_offset(offset: Offset<Pixels>) -> Self {
+    pub fn translate_offset(offset: Offset<f64>) -> Self {
         Self::Translate {
-            x: offset.dx.0,
-            y: offset.dy.0,
+            x: offset.dx,
+            y: offset.dy,
         }
     }
 
     /// Create a rotation transform (angle in radians, counter-clockwise)
     #[inline]
-    pub fn rotate(angle: f32) -> Self {
+    pub fn rotate(angle: f64) -> Self {
         Self::Rotate { angle }
     }
 
@@ -303,13 +303,13 @@ impl Transform {
     /// let t = Transform::rotate_radians(Radians::from_degrees(45.0));
     /// ```
     #[inline]
-    pub fn rotate_radians(angle: crate::Radians) -> Self {
-        Self::Rotate { angle: angle.0 }
+    pub fn rotate_radians(angle: f64) -> Self {
+        Self::Rotate { angle }
     }
 
     /// Create a rotation transform (angle in degrees, counter-clockwise)
     #[inline]
-    pub fn rotate_degrees(degrees: f32) -> Self {
+    pub fn rotate_degrees(degrees: f64) -> Self {
         Self::Rotate {
             angle: degrees * PI / 180.0,
         }
@@ -317,13 +317,13 @@ impl Transform {
 
     /// Create a uniform scale transform (same factor for X and Y)
     #[inline]
-    pub fn scale(factor: f32) -> Self {
+    pub fn scale(factor: f64) -> Self {
         Self::Scale { factor }
     }
 
     /// Create a non-uniform scale transform (different factors for X and Y)
     #[inline]
-    pub fn scale_xy(x: f32, y: f32) -> Self {
+    pub fn scale_xy(x: f64, y: f64) -> Self {
         Self::ScaleXY { x, y }
     }
 
@@ -331,13 +331,13 @@ impl Transform {
     ///
     /// Angles in radians. For italic text, use `skew(0.2, 0.0)`.
     #[inline]
-    pub fn skew(x: f32, y: f32) -> Self {
+    pub fn skew(x: f64, y: f64) -> Self {
         Self::Skew { x, y }
     }
 
     /// Create a rotation around a pivot point
     #[inline]
-    pub fn rotate_around(angle: f32, pivot_x: f32, pivot_y: f32) -> Self {
+    pub fn rotate_around(angle: f64, pivot_x: f64, pivot_y: f64) -> Self {
         Self::RotateAround {
             angle,
             pivot_x,
@@ -355,9 +355,9 @@ impl Transform {
     /// let t = Transform::rotate_around_radians(Radians::from_degrees(45.0), 100.0, 100.0);
     /// ```
     #[inline]
-    pub fn rotate_around_radians(angle: crate::Radians, pivot_x: f32, pivot_y: f32) -> Self {
+    pub fn rotate_around_radians(angle: f64, pivot_x: f64, pivot_y: f64) -> Self {
         Self::RotateAround {
-            angle: angle.0,
+            angle,
             pivot_x,
             pivot_y,
         }
@@ -365,7 +365,7 @@ impl Transform {
 
     /// Create a scale around a pivot point
     #[inline]
-    pub fn scale_around(x: f32, y: f32, pivot_x: f32, pivot_y: f32) -> Self {
+    pub fn scale_around(x: f64, y: f64, pivot_x: f64, pivot_y: f64) -> Self {
         Self::ScaleAround {
             x,
             y,
@@ -579,7 +579,7 @@ impl Transform {
             Transform::Rotate { angle } => Some(Transform::Rotate { angle: -angle }),
 
             Transform::Scale { factor } => {
-                if factor.abs() < f32::EPSILON {
+                if factor.abs() < f64::EPSILON {
                     None
                 } else {
                     Some(Transform::Scale {
@@ -589,7 +589,7 @@ impl Transform {
             }
 
             Transform::ScaleXY { x, y } => {
-                if x.abs() < f32::EPSILON || y.abs() < f32::EPSILON {
+                if x.abs() < f64::EPSILON || y.abs() < f64::EPSILON {
                     None
                 } else {
                     Some(Transform::ScaleXY {
@@ -631,7 +631,7 @@ impl Transform {
     /// // Apply via painter: translate(tx, ty) → rotate(rotation) → scale(sx, sy)
     /// ```
     #[inline]
-    pub fn decompose(&self) -> (f32, f32, f32, f32, f32) {
+    pub fn decompose(&self) -> (f64, f64, f64, f64, f64) {
         let matrix: Matrix4 = self.clone().into();
 
         // Extract translation from matrix (m[12], m[13] are 2D translation)
@@ -652,14 +652,14 @@ impl Transform {
         // Extract scale from column vectors
         let sx = (a * a + b * b).sqrt();
         let det = a * d - b * c;
-        let sy = if sx > f32::EPSILON {
+        let sy = if sx > f64::EPSILON {
             det / sx
         } else {
             (c * c + d * d).sqrt()
         };
 
         // Extract rotation from normalized column vector
-        let rotation = if sx > f32::EPSILON {
+        let rotation = if sx > f64::EPSILON {
             b.atan2(a) // Rotation angle in radians
         } else {
             0.0
@@ -683,9 +683,9 @@ impl From<Matrix4> for Transform {
 }
 
 /// Convert Offset to Transform (creates Translation)
-impl From<Offset<Pixels>> for Transform {
-    fn from(offset: Offset<Pixels>) -> Self {
-        Transform::translate(offset.dx.0, offset.dy.0)
+impl From<Offset<f64>> for Transform {
+    fn from(offset: Offset<f64>) -> Self {
+        Transform::translate(offset.dx, offset.dy)
     }
 }
 
@@ -721,7 +721,6 @@ impl From<&Transform> for Matrix4 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::px;
 
     #[test]
     fn test_identity() {
@@ -772,8 +771,8 @@ mod tests {
         // Check skew matrix structure
         assert_eq!(matrix.m[0], 1.0); // No scaling on X
         assert_eq!(matrix.m[5], 1.0); // No scaling on Y
-        assert!((matrix.m[1] - 0.2f32.tan()).abs() < 0.001); // tan(x) in m[0][1]
-        assert!((matrix.m[4] - 0.3f32.tan()).abs() < 0.001); // tan(y) in m[1][0]
+        assert!((matrix.m[1] - 0.2_f64.tan()).abs() < 0.001); // tan(x) in m[0][1]
+        assert!((matrix.m[4] - 0.3_f64.tan()).abs() < 0.001); // tan(y) in m[1][0]
     }
 
     #[test]
@@ -863,7 +862,7 @@ mod tests {
 
     #[test]
     fn test_from_offset() {
-        let offset = Offset::new(px(10.0), px(20.0));
+        let offset = Offset::new(10.0, 20.0);
         let transform = Transform::from(offset);
 
         if let Transform::Translate { x, y } = transform {

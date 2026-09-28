@@ -52,7 +52,7 @@ impl<T: Unit> RelativeRect<T> {
 
 impl<T: NumericUnit> RelativeRect<T>
 where
-    T: Add<Output = T> + Sub<Output = T> + Mul<f32, Output = T>,
+    T: Add<Output = T> + Sub<Output = T> + Mul<f64, Output = T>,
 {
     /// Creates a relative rect for a child at `offset` with the given `size`
     /// inside a parent of size `parent`.

@@ -46,34 +46,27 @@ impl QuarterTurns {
 
     /// Returns the rotation angle in degrees (0.0, 90.0, 180.0, or 270.0).
     #[must_use]
-    pub const fn degrees(self) -> f32 {
-        (self as i32 * 90) as f32
+    pub const fn degrees(self) -> f64 {
+        (self as i32 * 90) as f64
     }
 
-    /// Returns the rotation angle in radians as a raw `f32`.
+    /// Returns the rotation angle in radians as a raw `f64`.
     #[must_use]
-    pub fn radians(self) -> f32 {
+    pub fn radians(self) -> f64 {
         self.degrees().to_radians()
     }
 
-    /// Returns the rotation angle as a typed [`Radians`](crate::Radians) value.
+    /// Returns the rotation angle in radians (same as [`Self::radians`]).
     #[must_use]
-    pub fn to_radians(self) -> crate::Radians {
-        crate::radians(self.radians())
+    pub fn to_radians(self) -> f64 {
+        self.radians()
     }
 }
 
 // Conversions
-impl From<QuarterTurns> for f32 {
+impl From<QuarterTurns> for f64 {
     #[inline]
     fn from(turns: QuarterTurns) -> Self {
         turns.radians()
-    }
-}
-
-impl From<QuarterTurns> for crate::Radians {
-    #[inline]
-    fn from(turns: QuarterTurns) -> Self {
-        turns.to_radians()
     }
 }

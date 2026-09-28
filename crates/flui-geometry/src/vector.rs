@@ -12,9 +12,9 @@
 //! ```text
 //! Vec2 + Vec2 = Vec2  (add displacements)
 //! Vec2 - Vec2 = Vec2  (subtract displacements)
-//! Vec2 * f32  = Vec2  (scale)
-//! Vec2 · Vec2 = f32   (dot product)
-//! Vec2 × Vec2 = f32   (2D cross product)
+//! Vec2 * f64  = Vec2  (scale)
+//! Vec2 · Vec2 = f64   (dot product)
+//! Vec2 × Vec2 = f64   (2D cross product)
 //! ```
 use std::{
     fmt::{self, Display},
@@ -22,7 +22,7 @@ use std::{
 };
 
 use super::{
-    Pixels, Point, px,
+    Point,
     traits::{Along, Axis, FloatUnit, NumericUnit, Unit},
 };
 
@@ -40,8 +40,8 @@ use super::{
 /// ```
 /// use flui_geometry::{Vec2, px, Pixels};
 ///
-/// let velocity = Vec2::<Pixels>::new(px(10.0), px(5.0));
-/// let normalized = Vec2::<Pixels>::new(px(0.6), px(0.8));
+/// let velocity = Vec2::<Pixels>::new(10.0, 5.0);
+/// let normalized = Vec2::<Pixels>::new(0.6, 0.8);
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Vec2<T: Unit> {
@@ -52,42 +52,42 @@ pub struct Vec2<T: Unit> {
 }
 
 // ============================================================================
-// Constants (f32 only for backwards compatibility)
+// Constants (f64 only for backwards compatibility)
 // ============================================================================
 
-impl Vec2<Pixels> {
+impl Vec2<f64> {
     /// Zero vector (0, 0).
-    pub const ZERO: Self = Self::new(px(0.0), px(0.0));
+    pub const ZERO: Self = Self::new(0.0, 0.0);
 
     /// All ones (1, 1).
-    pub const ONE: Self = Self::new(px(1.0), px(1.0));
+    pub const ONE: Self = Self::new(1.0, 1.0);
 
     /// Unit vector pointing right (+X).
-    pub const X: Self = Self::new(px(1.0), px(0.0));
+    pub const X: Self = Self::new(1.0, 0.0);
 
     /// Unit vector pointing up (+Y).
-    pub const Y: Self = Self::new(px(0.0), px(1.0));
+    pub const Y: Self = Self::new(0.0, 1.0);
 
     /// Negative X unit vector.
-    pub const NEG_X: Self = Self::new(px(-1.0), px(0.0));
+    pub const NEG_X: Self = Self::new(-1.0, 0.0);
 
     /// Negative Y unit vector.
-    pub const NEG_Y: Self = Self::new(px(0.0), px(-1.0));
+    pub const NEG_Y: Self = Self::new(0.0, -1.0);
 
     /// Vector with positive infinity components.
-    pub const INFINITY: Self = Self::new(px(f32::INFINITY), px(f32::INFINITY));
+    pub const INFINITY: Self = Self::new(f64::INFINITY, f64::INFINITY);
 
     /// Vector with negative infinity components.
-    pub const NEG_INFINITY: Self = Self::new(px(f32::NEG_INFINITY), px(f32::NEG_INFINITY));
+    pub const NEG_INFINITY: Self = Self::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
 
     /// Vector with NaN components.
-    pub const NAN: Self = Self::new(px(f32::NAN), px(f32::NAN));
+    pub const NAN: Self = Self::new(f64::NAN, f64::NAN);
 
     /// Checks if two vectors are approximately equal within epsilon tolerance.
     #[inline]
     #[must_use]
     pub fn approx_eq(self, other: Self) -> bool {
-        (self.x - other.x).abs() < px(f32::EPSILON) && (self.y - other.y).abs() < px(f32::EPSILON)
+        (self.x - other.x).abs() < f64::EPSILON && (self.y - other.y).abs() < f64::EPSILON
     }
 
     /// Checks if the vector contains finite values (not NaN or infinity).
@@ -100,14 +100,14 @@ impl Vec2<Pixels> {
     /// Computes the Manhattan distance (L1 norm).
     #[inline]
     #[must_use]
-    pub fn manhattan_length(self) -> Pixels {
+    pub fn manhattan_length(self) -> f64 {
         self.x.abs() + self.y.abs()
     }
 
     /// Computes the Chebyshev distance (infinity norm).
     #[inline]
     #[must_use]
-    pub fn chebyshev_length(self) -> Pixels {
+    pub fn chebyshev_length(self) -> f64 {
         self.x.abs().max(self.y.abs())
     }
 }
@@ -133,7 +133,7 @@ impl<T: Unit> Vec2<T> {
 }
 
 // ============================================================================
-// Array/Tuple Constructors (NumericUnit with Into<f32> + From<f32>)
+// Array/Tuple Constructors (NumericUnit with Into<f64> + From<f64>)
 // ============================================================================
 
 impl<T: NumericUnit> Vec2<T>
@@ -143,30 +143,30 @@ where
     /// Creates a vector from a two-element array.
     #[inline]
     #[must_use]
-    pub fn from_array(a: [f32; 2]) -> Self {
-        Self::new(T::from_f32(a[0]), T::from_f32(a[1]))
+    pub fn from_array(a: [f64; 2]) -> Self {
+        Self::new(T::from_f64(a[0]), T::from_f64(a[1]))
     }
 
     /// Creates a vector from a tuple.
     #[inline]
     #[must_use]
-    pub fn from_tuple(t: (f32, f32)) -> Self {
-        Self::new(T::from_f32(t.0), T::from_f32(t.1))
+    pub fn from_tuple(t: (f64, f64)) -> Self {
+        Self::new(T::from_f64(t.0), T::from_f64(t.1))
     }
 }
 
 // ============================================================================
-// Angle Constructors (f32 only)
+// Angle Constructors (f64 only)
 // ============================================================================
 
-impl Vec2<Pixels> {
+impl Vec2<f64> {
     /// Creates a unit vector from an angle in radians.
     ///
     /// - `angle = 0` → `(1, 0)` (pointing right)
     #[inline]
     #[must_use]
-    pub fn from_angle(angle: f32) -> Self {
-        Self::new(px(angle.cos()), px(angle.sin()))
+    pub fn from_angle(angle: f64) -> Self {
+        Self::new(angle.cos(), angle.sin())
     }
 
     /// Creates a unit vector from an angle (type-safe version).
@@ -175,14 +175,14 @@ impl Vec2<Pixels> {
     ///
     /// ```rust
     /// use flui_geometry::{Vec2, radians, Radians};
-    /// use std::f32::consts::PI;
+    /// use std::f64::consts::PI;
     ///
     /// let v = Vec2::from_radians(Radians::from_degrees(90.0));
     /// assert!((v.y.get() - 1.0).abs() < 0.001);
     #[inline]
     #[must_use]
-    pub fn from_radians(angle: crate::Radians) -> Self {
-        Self::from_angle(angle.0)
+    pub fn from_radians(angle: f64) -> Self {
+        Self::from_angle(angle)
     }
 }
 
@@ -225,19 +225,19 @@ impl<T: Unit> Vec2<T> {
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     /// Converts the vector to a two-element array.
     #[inline]
     #[must_use]
-    pub fn to_array(self) -> [f32; 2] {
+    pub fn to_array(self) -> [f64; 2] {
         [self.x.into(), self.y.into()]
     }
 
     /// Converts the vector to a tuple.
     #[inline]
     #[must_use]
-    pub fn to_tuple(self) -> (f32, f32) {
+    pub fn to_tuple(self) -> (f64, f64) {
         (self.x.into(), self.y.into())
     }
 
@@ -263,11 +263,11 @@ impl<T: Unit> Vec2<T> {
     /// ```
     /// use flui_geometry::{PixelDelta, Pixels, Vec2, delta_px, px};
     ///
-    /// let logical = Vec2::<Pixels>::new(px(10.0), px(20.0));
+    /// let logical = Vec2::<Pixels>::new(10.0, 20.0);
     /// // Pixels: Into<PixelDelta> is implemented.
     /// let delta: Vec2<PixelDelta> = logical.cast();
-    /// assert_eq!(delta.x, delta_px(10.0));
-    /// assert_eq!(delta.y, delta_px(20.0));
+    /// assert_eq!(delta.x, 10.0);
+    /// assert_eq!(delta.y, 20.0);
     /// ```
     #[inline]
     #[must_use]
@@ -284,15 +284,15 @@ impl<T: Unit> Vec2<T> {
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     /// Converts the vector to use Pixels unit type.
     #[inline]
     #[must_use]
-    pub fn to_f32(self) -> Vec2<Pixels> {
+    pub fn to_f32(self) -> Vec2<f64> {
         Vec2 {
-            x: px(self.x.into()),
-            y: px(self.y.into()),
+            x: self.x.into(),
+            y: self.y.into(),
         }
     }
 }
@@ -303,33 +303,33 @@ where
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32> + FloatUnit,
+    T: Into<f64> + FloatUnit,
 {
     /// Returns the length (magnitude) of the vector.
     #[inline]
     #[must_use]
-    pub fn length(self) -> f32 {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+    pub fn length(self) -> f64 {
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
         x.hypot(y)
     }
 
     /// Returns the squared length of the vector.
     #[inline]
     #[must_use]
-    pub fn length_squared(self) -> f32 {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+    pub fn length_squared(self) -> f64 {
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
         x * x + y * y
     }
 
     /// Returns a normalized (unit length) vector.
     #[inline]
     #[must_use]
-    pub fn try_normalize(self) -> Option<Vec2<Pixels>> {
+    pub fn try_normalize(self) -> Option<Vec2<f64>> {
         let len = self.length();
-        if len > f32::EPSILON {
-            Some(Vec2::new(px(self.x.into() / len), px(self.y.into() / len)))
+        if len > f64::EPSILON {
+            Some(Vec2::new(self.x.into() / len, self.y.into() / len))
         } else {
             None
         }
@@ -339,14 +339,14 @@ where
     /// length is near zero.
     #[inline]
     #[must_use]
-    pub fn normalize(self) -> Vec2<Pixels> {
+    pub fn normalize(self) -> Vec2<f64> {
         self.try_normalize().unwrap_or(Vec2::ZERO)
     }
 
     /// Returns a normalized vector, or a fallback if length is near zero.
     #[inline]
     #[must_use]
-    pub fn normalize_or(self, fallback: Vec2<Pixels>) -> Vec2<Pixels> {
+    pub fn normalize_or(self, fallback: Vec2<f64>) -> Vec2<f64> {
         self.try_normalize().unwrap_or(fallback)
     }
 
@@ -364,7 +364,7 @@ where
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     /// Dot product with another vector.
     ///
@@ -373,11 +373,11 @@ where
     /// - `a · b = 0` when perpendicular
     #[inline]
     #[must_use]
-    pub fn dot(self, other: Self) -> f32 {
-        let x1: f32 = self.x.into();
-        let y1: f32 = self.y.into();
-        let x2: f32 = other.x.into();
-        let y2: f32 = other.y.into();
+    pub fn dot(self, other: Self) -> f64 {
+        let x1: f64 = self.x.into();
+        let y1: f64 = self.y.into();
+        let x2: f64 = other.x.into();
+        let y2: f64 = other.y.into();
         x1 * x2 + y1 * y2
     }
 
@@ -387,24 +387,24 @@ where
     /// plane.
     #[inline]
     #[must_use]
-    pub fn cross(self, other: Self) -> f32 {
-        let x1: f32 = self.x.into();
-        let y1: f32 = self.y.into();
-        let x2: f32 = other.x.into();
-        let y2: f32 = other.y.into();
+    pub fn cross(self, other: Self) -> f64 {
+        let x1: f64 = self.x.into();
+        let y1: f64 = self.y.into();
+        let x2: f64 = other.x.into();
+        let y2: f64 = other.y.into();
         x1 * y2 - y1 * x2
     }
 }
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32> + FloatUnit,
+    T: Into<f64> + FloatUnit,
 {
     /// Returns a perpendicular vector (rotated 90° counter-clockwise).
     #[inline]
     #[must_use]
     pub fn perp(self) -> Self {
-        Self::new(T::from_f32(-(self.y.into())), T::from_f32(self.x.into()))
+        Self::new(T::from_f64(-(self.y.into())), T::from_f64(self.x.into()))
     }
 
     /// Linear interpolation between two vectors.
@@ -413,15 +413,15 @@ where
     /// - `t = 0.5` → midpoint
     #[inline]
     #[must_use]
-    pub fn lerp(self, other: Self, t: f32) -> Self {
-        let x1: f32 = self.x.into();
-        let y1: f32 = self.y.into();
-        let x2: f32 = other.x.into();
-        let y2: f32 = other.y.into();
+    pub fn lerp(self, other: Self, t: f64) -> Self {
+        let x1: f64 = self.x.into();
+        let y1: f64 = self.y.into();
+        let x2: f64 = other.x.into();
+        let y2: f64 = other.y.into();
 
         Self::new(
-            T::from_f32(x1 + (x2 - x1) * t),
-            T::from_f32(y1 + (y2 - y1) * t),
+            T::from_f64(x1 + (x2 - x1) * t),
+            T::from_f64(y1 + (y2 - y1) * t),
         )
     }
 
@@ -430,11 +430,11 @@ where
     #[must_use]
     pub fn project(self, onto: Self) -> Self {
         let len_sq = onto.length_squared();
-        if len_sq > f32::EPSILON {
+        if len_sq > f64::EPSILON {
             let scale = self.dot(onto) / len_sq;
             Self::new(
-                T::from_f32(onto.x.into() * scale),
-                T::from_f32(onto.y.into() * scale),
+                T::from_f64(onto.x.into() * scale),
+                T::from_f64(onto.y.into() * scale),
             )
         } else {
             Self::new(T::zero(), T::zero())
@@ -446,14 +446,14 @@ where
     #[must_use]
     pub fn reflect(self, normal: Self) -> Self {
         let dot = self.dot(normal);
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        let nx: f32 = normal.x.into();
-        let ny: f32 = normal.y.into();
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
+        let nx: f64 = normal.x.into();
+        let ny: f64 = normal.y.into();
 
         Self::new(
-            T::from_f32(x - nx * (2.0 * dot)),
-            T::from_f32(y - ny * (2.0 * dot)),
+            T::from_f64(x - nx * (2.0 * dot)),
+            T::from_f64(y - ny * (2.0 * dot)),
         )
     }
 }
@@ -464,14 +464,14 @@ where
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     /// Returns the angle from the positive X axis in radians.
     #[inline]
     #[must_use]
-    pub fn angle(self) -> f32 {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+    pub fn angle(self) -> f64 {
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
         y.atan2(x)
     }
 
@@ -483,30 +483,30 @@ where
     ///
     /// ```rust
     /// use flui_geometry::{Vec2, Radians, px};
-    /// use std::f32::consts::PI;
+    /// use std::f64::consts::PI;
     ///
-    /// let v = Vec2::new(px(0.0), px(1.0));
+    /// let v = Vec2::new(0.0, 1.0);
     /// let angle = v.angle_radians();
     /// assert!((angle.0 - PI / 2.0).abs() < 0.001);
     /// ```
     #[inline]
     #[must_use]
-    pub fn angle_radians(self) -> crate::Radians {
-        crate::radians(self.angle())
+    pub fn angle_radians(self) -> f64 {
+        self.angle()
     }
 }
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32> + FloatUnit,
+    T: Into<f64> + FloatUnit,
 {
     /// Returns the angle between this vector and another in radians.
     #[inline]
     #[must_use]
-    pub fn angle_between(self, other: Self) -> f32 {
+    pub fn angle_between(self, other: Self) -> f64 {
         let dot = self.dot(other);
         let mags = self.length() * other.length();
-        if mags > f32::EPSILON {
+        if mags > f64::EPSILON {
             (dot / mags).clamp(-1.0, 1.0).acos()
         } else {
             0.0
@@ -521,29 +521,29 @@ where
     ///
     /// ```rust
     /// use flui_geometry::{Vec2, Radians, px};
-    /// use std::f32::consts::PI;
+    /// use std::f64::consts::PI;
     ///
-    /// let v1 = Vec2::new(px(1.0), px(0.0));
-    /// let v2 = Vec2::new(px(0.0), px(1.0));
+    /// let v1 = Vec2::new(1.0, 0.0);
+    /// let v2 = Vec2::new(0.0, 1.0);
     /// let angle = v1.angle_between_radians(v2);
     /// assert!((angle.0 - PI / 2.0).abs() < 0.001);
     /// ```
     #[inline]
     #[must_use]
-    pub fn angle_between_radians(self, other: Self) -> crate::Radians {
-        crate::radians(self.angle_between(other))
+    pub fn angle_between_radians(self, other: Self) -> f64 {
+        self.angle_between(other)
     }
     /// Rotates the vector by an angle in radians (counter-clockwise).
     #[inline]
     #[must_use]
-    pub fn rotate(self, angle: f32) -> Self {
+    pub fn rotate(self, angle: f64) -> Self {
         let (sin, cos) = angle.sin_cos();
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
 
         Self::new(
-            T::from_f32(x * cos - y * sin),
-            T::from_f32(x * sin + y * cos),
+            T::from_f64(x * cos - y * sin),
+            T::from_f64(x * sin + y * cos),
         )
     }
 
@@ -553,16 +553,16 @@ where
     ///
     /// ```rust
     /// use flui_geometry::{Vec2, Radians, px};
-    /// use std::f32::consts::PI;
+    /// use std::f64::consts::PI;
     ///
-    /// let v = Vec2::new(px(1.0), px(0.0));
+    /// let v = Vec2::new(1.0, 0.0);
     /// let rotated = v.rotate_radians(Radians::from_degrees(90.0));
     /// assert!((rotated.y.get() - 1.0).abs() < 0.001);
     /// ```
     #[inline]
     #[must_use]
-    pub fn rotate_radians(self, angle: crate::Radians) -> Self {
-        self.rotate(angle.0)
+    pub fn rotate_radians(self, angle: f64) -> Self {
+        self.rotate(angle)
     }
 }
 
@@ -572,67 +572,67 @@ where
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32> + FloatUnit,
+    T: Into<f64> + FloatUnit,
 {
     /// Returns a vector with the minimum components from two vectors.
     #[inline]
     #[must_use]
     pub fn min(self, other: Self) -> Self {
-        let x1: f32 = self.x.into();
-        let y1: f32 = self.y.into();
-        let x2: f32 = other.x.into();
-        let y2: f32 = other.y.into();
+        let x1: f64 = self.x.into();
+        let y1: f64 = self.y.into();
+        let x2: f64 = other.x.into();
+        let y2: f64 = other.y.into();
 
-        Self::new(T::from_f32(x1.min(x2)), T::from_f32(y1.min(y2)))
+        Self::new(T::from_f64(x1.min(x2)), T::from_f64(y1.min(y2)))
     }
 
     /// Returns a vector with the maximum components from two vectors.
     #[inline]
     #[must_use]
     pub fn max(self, other: Self) -> Self {
-        let x1: f32 = self.x.into();
-        let y1: f32 = self.y.into();
-        let x2: f32 = other.x.into();
-        let y2: f32 = other.y.into();
+        let x1: f64 = self.x.into();
+        let y1: f64 = self.y.into();
+        let x2: f64 = other.x.into();
+        let y2: f64 = other.y.into();
 
-        Self::new(T::from_f32(x1.max(x2)), T::from_f32(y1.max(y2)))
+        Self::new(T::from_f64(x1.max(x2)), T::from_f64(y1.max(y2)))
     }
 
     /// Clamps each component between corresponding min and max values.
     #[inline]
     #[must_use]
     pub fn clamp(self, min: Self, max: Self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        let min_x: f32 = min.x.into();
-        let min_y: f32 = min.y.into();
-        let max_x: f32 = max.x.into();
-        let max_y: f32 = max.y.into();
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
+        let min_x: f64 = min.x.into();
+        let min_y: f64 = min.y.into();
+        let max_x: f64 = max.x.into();
+        let max_y: f64 = max.y.into();
 
         Self::new(
-            T::from_f32(x.clamp(min_x, max_x)),
-            T::from_f32(y.clamp(min_y, max_y)),
+            T::from_f64(x.clamp(min_x, max_x)),
+            T::from_f64(y.clamp(min_y, max_y)),
         )
     }
 
     /// Clamps the vector's length to a specified range.
     #[inline]
     #[must_use]
-    pub fn clamp_length(self, min: f32, max: f32) -> Self {
+    pub fn clamp_length(self, min: f64, max: f64) -> Self {
         let len = self.length();
-        if len < f32::EPSILON {
+        if len < f64::EPSILON {
             Self::new(T::zero(), T::zero())
         } else if len < min {
             let scale = min / len;
             Self::new(
-                T::from_f32(self.x.into() * scale),
-                T::from_f32(self.y.into() * scale),
+                T::from_f64(self.x.into() * scale),
+                T::from_f64(self.y.into() * scale),
             )
         } else if len > max {
             let scale = max / len;
             Self::new(
-                T::from_f32(self.x.into() * scale),
-                T::from_f32(self.y.into() * scale),
+                T::from_f64(self.x.into() * scale),
+                T::from_f64(self.y.into() * scale),
             )
         } else {
             self
@@ -643,35 +643,35 @@ where
     #[inline]
     #[must_use]
     pub fn abs(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from_f32(x.abs()), T::from_f32(y.abs()))
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
+        Self::new(T::from_f64(x.abs()), T::from_f64(y.abs()))
     }
 
     /// Returns a vector with the sign of each component (-1, 0, or 1).
     #[inline]
     #[must_use]
     pub fn signum(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from_f32(x.signum()), T::from_f32(y.signum()))
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
+        Self::new(T::from_f64(x.signum()), T::from_f64(y.signum()))
     }
 
     /// Returns the minimum component value.
     #[inline]
     #[must_use]
-    pub fn min_element(self) -> f32 {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+    pub fn min_element(self) -> f64 {
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
         x.min(y)
     }
 
     /// Returns the maximum component value.
     #[inline]
     #[must_use]
-    pub fn max_element(self) -> f32 {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+    pub fn max_element(self) -> f64 {
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
         x.max(y)
     }
 }
@@ -682,42 +682,42 @@ where
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32> + FloatUnit,
+    T: Into<f64> + FloatUnit,
 {
     /// Rounds each component to the nearest integer.
     #[inline]
     #[must_use]
     pub fn round(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from_f32(x.round()), T::from_f32(y.round()))
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
+        Self::new(T::from_f64(x.round()), T::from_f64(y.round()))
     }
 
     /// Rounds each component up to the nearest integer.
     #[inline]
     #[must_use]
     pub fn ceil(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from_f32(x.ceil()), T::from_f32(y.ceil()))
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
+        Self::new(T::from_f64(x.ceil()), T::from_f64(y.ceil()))
     }
 
     /// Rounds each component down to the nearest integer.
     #[inline]
     #[must_use]
     pub fn floor(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from_f32(x.floor()), T::from_f32(y.floor()))
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
+        Self::new(T::from_f64(x.floor()), T::from_f64(y.floor()))
     }
 
     /// Truncates each component toward zero.
     #[inline]
     #[must_use]
     pub fn trunc(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from_f32(x.trunc()), T::from_f32(y.trunc()))
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
+        Self::new(T::from_f64(x.trunc()), T::from_f64(y.trunc()))
     }
 
     /// Expands each component away from zero (ceil for positive, floor for
@@ -725,12 +725,12 @@ where
     #[inline]
     #[must_use]
     pub fn expand(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
 
         Self::new(
-            T::from_f32(if x >= 0.0 { x.ceil() } else { x.floor() }),
-            T::from_f32(if y >= 0.0 { y.ceil() } else { y.floor() }),
+            T::from_f64(if x >= 0.0 { x.ceil() } else { x.floor() }),
+            T::from_f64(if y >= 0.0 { y.ceil() } else { y.floor() }),
         )
     }
 
@@ -738,9 +738,9 @@ where
     #[inline]
     #[must_use]
     pub fn fract(self) -> Self {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
-        Self::new(T::from_f32(x.fract()), T::from_f32(y.fract()))
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
+        Self::new(T::from_f64(x.fract()), T::from_f64(y.fract()))
     }
 }
 
@@ -750,14 +750,14 @@ where
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     /// Checks if all components are finite (not infinity or NaN).
     #[inline]
     #[must_use]
     pub fn is_finite(self) -> bool {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
         x.is_finite() && y.is_finite()
     }
 
@@ -765,21 +765,21 @@ where
     #[inline]
     #[must_use]
     pub fn is_nan(self) -> bool {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
         x.is_nan() || y.is_nan()
     }
 }
 
 impl<T: NumericUnit> Vec2<T>
 where
-    T: Into<f32> + FloatUnit,
+    T: Into<f64> + FloatUnit,
 {
     /// Checks if the vector is approximately zero (length near zero).
     #[inline]
     #[must_use]
     pub fn is_zero(self) -> bool {
-        self.length_squared() < f32::EPSILON * f32::EPSILON
+        self.length_squared() < f64::EPSILON * f64::EPSILON
     }
 }
 
@@ -825,16 +825,16 @@ impl<T: NumericUnit> SubAssign for Vec2<T> {
 // Operators: Scalar multiplication/division
 // ============================================================================
 
-impl<T: NumericUnit + Mul<f32, Output = T>> Mul<f32> for Vec2<T> {
+impl<T: NumericUnit + Mul<f64, Output = T>> Mul<f64> for Vec2<T> {
     type Output = Self;
 
     #[inline]
-    fn mul(self, rhs: f32) -> Self {
+    fn mul(self, rhs: f64) -> Self {
         Self::new(self.x * rhs, self.y * rhs)
     }
 }
 
-impl<T: NumericUnit + Mul<f32, Output = T>> Mul<Vec2<T>> for f32 {
+impl<T: NumericUnit + Mul<f64, Output = T>> Mul<Vec2<T>> for f64 {
     type Output = Vec2<T>;
 
     #[inline]
@@ -843,26 +843,26 @@ impl<T: NumericUnit + Mul<f32, Output = T>> Mul<Vec2<T>> for f32 {
     }
 }
 
-impl<T: NumericUnit + Mul<f32, Output = T>> MulAssign<f32> for Vec2<T> {
+impl<T: NumericUnit + Mul<f64, Output = T>> MulAssign<f64> for Vec2<T> {
     #[inline]
-    fn mul_assign(&mut self, rhs: f32) {
+    fn mul_assign(&mut self, rhs: f64) {
         self.x = self.x * rhs;
         self.y = self.y * rhs;
     }
 }
 
-impl<T: NumericUnit + Div<f32, Output = T>> Div<f32> for Vec2<T> {
+impl<T: NumericUnit + Div<f64, Output = T>> Div<f64> for Vec2<T> {
     type Output = Self;
 
     #[inline]
-    fn div(self, rhs: f32) -> Self {
+    fn div(self, rhs: f64) -> Self {
         Self::new(self.x / rhs, self.y / rhs)
     }
 }
 
-impl<T: NumericUnit + Div<f32, Output = T>> DivAssign<f32> for Vec2<T> {
+impl<T: NumericUnit + Div<f64, Output = T>> DivAssign<f64> for Vec2<T> {
     #[inline]
-    fn div_assign(&mut self, rhs: f32) {
+    fn div_assign(&mut self, rhs: f64) {
         self.x = self.x / rhs;
         self.y = self.y / rhs;
     }
@@ -881,29 +881,29 @@ impl<T: NumericUnit + Neg<Output = T>> Neg for Vec2<T> {
 // Conversions
 // ============================================================================
 
-impl<T: NumericUnit> From<(f32, f32)> for Vec2<T>
+impl<T: NumericUnit> From<(f64, f64)> for Vec2<T>
 where
     T: FloatUnit,
 {
     #[inline]
-    fn from((x, y): (f32, f32)) -> Self {
-        Self::new(T::from_f32(x), T::from_f32(y))
+    fn from((x, y): (f64, f64)) -> Self {
+        Self::new(T::from_f64(x), T::from_f64(y))
     }
 }
 
-impl<T: NumericUnit> From<[f32; 2]> for Vec2<T>
+impl<T: NumericUnit> From<[f64; 2]> for Vec2<T>
 where
     T: FloatUnit,
 {
     #[inline]
-    fn from([x, y]: [f32; 2]) -> Self {
-        Self::new(T::from_f32(x), T::from_f32(y))
+    fn from([x, y]: [f64; 2]) -> Self {
+        Self::new(T::from_f64(x), T::from_f64(y))
     }
 }
 
-impl<T: NumericUnit> From<Vec2<T>> for (f32, f32)
+impl<T: NumericUnit> From<Vec2<T>> for (f64, f64)
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     #[inline]
     fn from(v: Vec2<T>) -> Self {
@@ -911,9 +911,9 @@ where
     }
 }
 
-impl<T: NumericUnit> From<Vec2<T>> for [f32; 2]
+impl<T: NumericUnit> From<Vec2<T>> for [f64; 2]
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     #[inline]
     fn from(v: Vec2<T>) -> Self {
@@ -934,12 +934,12 @@ impl<T: Unit> From<Point<T>> for Vec2<T> {
 
 impl<T: NumericUnit> Display for Vec2<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let x: f32 = self.x.into();
-        let y: f32 = self.y.into();
+        let x: f64 = self.x.into();
+        let y: f64 = self.y.into();
         write!(f, "({x}, {y})")
     }
 }
@@ -956,14 +956,14 @@ impl<T: Unit> Default for Vec2<T> {
 }
 
 // ============================================================================
-// Convenience function (f32 only for backwards compatibility)
+// Convenience function (f64 only for backwards compatibility)
 // ============================================================================
 
 /// Convenience function to create a Pixels vector from x and y floats.
 #[inline]
 #[must_use]
-pub const fn vec2(x: f32, y: f32) -> Vec2<Pixels> {
-    Vec2::new(px(x), px(y))
+pub const fn vec2(x: f64, y: f64) -> Vec2<f64> {
+    Vec2::new(x, y)
 }
 
 // ============================================================================
@@ -1049,7 +1049,7 @@ where
     T: super::traits::ApproxEq,
 {
     #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+    fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
         self.x.approx_eq_eps(&other.x, epsilon) && self.y.approx_eq_eps(&other.y, epsilon)
     }
 }
@@ -1115,229 +1115,223 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::f32::consts::PI;
+    use std::f64::consts::PI;
 
     use super::*;
 
     #[test]
     fn test_construction() {
-        let v = Vec2::new(px(3.0), px(4.0));
-        assert_eq!(v.x, px(3.0));
-        assert_eq!(v.y, px(4.0));
+        let v = Vec2::new(3.0, 4.0);
+        assert_eq!(v.x, 3.0);
+        assert_eq!(v.y, 4.0);
 
-        assert_eq!(Vec2::splat(px(5.0)), Vec2::new(px(5.0), px(5.0)));
-        assert_eq!(
-            Vec2::<Pixels>::from([1.0, 2.0]),
-            Vec2::new(px(1.0), px(2.0))
-        );
-        assert_eq!(
-            Vec2::<Pixels>::from((3.0, 4.0)),
-            Vec2::new(px(3.0), px(4.0))
-        );
+        assert_eq!(Vec2::splat(5.0), Vec2::new(5.0, 5.0));
+        assert_eq!(Vec2::<f64>::from([1.0, 2.0]), Vec2::new(1.0, 2.0));
+        assert_eq!(Vec2::<f64>::from((3.0, 4.0)), Vec2::new(3.0, 4.0));
     }
 
     #[test]
     fn test_constants() {
-        assert_eq!(Vec2::<Pixels>::ZERO, Vec2::new(px(0.0), px(0.0)));
-        assert_eq!(Vec2::<Pixels>::ONE, Vec2::new(px(1.0), px(1.0)));
-        assert_eq!(Vec2::<Pixels>::X, Vec2::new(px(1.0), px(0.0)));
-        assert_eq!(Vec2::<Pixels>::Y, Vec2::new(px(0.0), px(1.0)));
+        assert_eq!(Vec2::<f64>::ZERO, Vec2::new(0.0, 0.0));
+        assert_eq!(Vec2::<f64>::ONE, Vec2::new(1.0, 1.0));
+        assert_eq!(Vec2::<f64>::X, Vec2::new(1.0, 0.0));
+        assert_eq!(Vec2::<f64>::Y, Vec2::new(0.0, 1.0));
     }
 
     #[test]
     fn test_length() {
-        let v = Vec2::new(px(3.0), px(4.0));
+        let v = Vec2::new(3.0, 4.0);
         assert_eq!(v.length(), 5.0);
         assert_eq!(v.length_squared(), 25.0);
     }
 
     #[test]
     fn test_normalize() {
-        let v = Vec2::new(px(3.0), px(4.0));
+        let v = Vec2::new(3.0, 4.0);
         let n = v.normalize();
         assert!((n.length() - 1.0).abs() < 1e-6);
-        assert!((n.x.0 - 0.6).abs() < 1e-6);
-        assert!((n.y.0 - 0.8).abs() < 1e-6);
+        assert!((n.x - 0.6).abs() < 1e-6);
+        assert!((n.y - 0.8).abs() < 1e-6);
 
-        assert_eq!(Vec2::<Pixels>::ZERO.normalize(), Vec2::<Pixels>::ZERO);
-        assert!(Vec2::<Pixels>::X.is_normalized());
+        assert_eq!(Vec2::<f64>::ZERO.normalize(), Vec2::<f64>::ZERO);
+        assert!(Vec2::<f64>::X.is_normalized());
     }
 
     #[test]
     fn test_dot_cross() {
-        let v1 = Vec2::new(px(2.0), px(3.0));
-        let v2 = Vec2::new(px(4.0), px(5.0));
+        let v1 = Vec2::new(2.0, 3.0);
+        let v2 = Vec2::new(4.0, 5.0);
 
         assert_eq!(v1.dot(v2), 23.0); // 2*4 + 3*5
         assert_eq!(v1.cross(v2), -2.0); // 2*5 - 3*4
 
         // Perpendicular vectors
-        assert_eq!(Vec2::<Pixels>::X.dot(Vec2::<Pixels>::Y), 0.0);
-        assert_eq!(Vec2::<Pixels>::X.cross(Vec2::<Pixels>::Y), 1.0);
+        assert_eq!(Vec2::<f64>::X.dot(Vec2::<f64>::Y), 0.0);
+        assert_eq!(Vec2::<f64>::X.cross(Vec2::<f64>::Y), 1.0);
     }
 
     #[test]
     fn test_perp() {
-        let v = Vec2::new(px(1.0), px(0.0));
-        assert_eq!(v.perp(), Vec2::new(px(0.0), px(1.0)));
+        let v = Vec2::new(1.0, 0.0);
+        assert_eq!(v.perp(), Vec2::new(0.0, 1.0));
         assert_eq!(v.dot(v.perp()), 0.0);
     }
 
     #[test]
     fn test_lerp() {
-        let v1 = Vec2::<Pixels>::ZERO;
-        let v2 = Vec2::new(px(10.0), px(20.0));
+        let v1 = Vec2::<f64>::ZERO;
+        let v2 = Vec2::new(10.0, 20.0);
 
         assert_eq!(v1.lerp(v2, 0.0), v1);
-        assert_eq!(v1.lerp(v2, 0.5), Vec2::new(px(5.0), px(10.0)));
+        assert_eq!(v1.lerp(v2, 0.5), Vec2::new(5.0, 10.0));
         assert_eq!(v1.lerp(v2, 1.0), v2);
     }
 
     #[test]
     fn test_angle() {
-        assert_eq!(Vec2::<Pixels>::X.angle(), 0.0);
-        assert!((Vec2::<Pixels>::Y.angle() - PI / 2.0).abs() < 1e-6);
-        assert!((Vec2::<Pixels>::NEG_X.angle() - PI).abs() < 1e-6);
+        assert_eq!(Vec2::<f64>::X.angle(), 0.0);
+        assert!((Vec2::<f64>::Y.angle() - PI / 2.0).abs() < 1e-6);
+        assert!((Vec2::<f64>::NEG_X.angle() - PI).abs() < 1e-6);
     }
 
     #[test]
     fn test_from_angle() {
-        let v = Vec2::<Pixels>::from_angle(PI / 4.0);
-        let sqrt2_2 = std::f32::consts::FRAC_1_SQRT_2;
-        assert!((v.x.0 - sqrt2_2).abs() < 1e-6);
-        assert!((v.y.0 - sqrt2_2).abs() < 1e-6);
+        let v = Vec2::<f64>::from_angle(PI / 4.0);
+        let sqrt2_2 = std::f64::consts::FRAC_1_SQRT_2;
+        assert!((v.x - sqrt2_2).abs() < 1e-6);
+        assert!((v.y - sqrt2_2).abs() < 1e-6);
     }
 
     #[test]
     fn test_rotate() {
-        let v = Vec2::<Pixels>::X;
+        let v = Vec2::<f64>::X;
         let rotated = v.rotate(PI / 2.0);
-        assert!((rotated.x.0).abs() < 1e-6);
-        assert!((rotated.y.0 - 1.0).abs() < 1e-6);
+        assert!((rotated.x).abs() < 1e-6);
+        assert!((rotated.y - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_project_reflect() {
-        let v = Vec2::new(px(3.0), px(4.0));
-        let onto = Vec2::<Pixels>::X;
-        assert_eq!(v.project(onto), Vec2::new(px(3.0), px(0.0)));
+        let v = Vec2::new(3.0, 4.0);
+        let onto = Vec2::<f64>::X;
+        assert_eq!(v.project(onto), Vec2::new(3.0, 0.0));
 
-        let incoming = Vec2::new(px(1.0), px(-1.0));
-        let normal = Vec2::<Pixels>::Y;
+        let incoming = Vec2::new(1.0, -1.0);
+        let normal = Vec2::<f64>::Y;
         let reflected = incoming.reflect(normal);
-        assert!((reflected.x.0 - 1.0).abs() < 1e-6);
-        assert!((reflected.y.0 - 1.0).abs() < 1e-6);
+        assert!((reflected.x - 1.0).abs() < 1e-6);
+        assert!((reflected.y - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_min_max_clamp() {
-        let v1 = Vec2::new(px(5.0), px(15.0));
-        let v2 = Vec2::new(px(10.0), px(8.0));
+        let v1 = Vec2::new(5.0, 15.0);
+        let v2 = Vec2::new(10.0, 8.0);
 
-        assert_eq!(v1.min(v2), Vec2::new(px(5.0), px(8.0)));
-        assert_eq!(v1.max(v2), Vec2::new(px(10.0), px(15.0)));
+        assert_eq!(v1.min(v2), Vec2::new(5.0, 8.0));
+        assert_eq!(v1.max(v2), Vec2::new(10.0, 15.0));
 
-        let v = Vec2::new(px(15.0), px(-5.0));
-        let clamped = v.clamp(Vec2::<Pixels>::ZERO, Vec2::splat(px(10.0)));
-        assert_eq!(clamped, Vec2::new(px(10.0), px(0.0)));
+        let v = Vec2::new(15.0, -5.0);
+        let clamped = v.clamp(Vec2::<f64>::ZERO, Vec2::splat(10.0));
+        assert_eq!(clamped, Vec2::new(10.0, 0.0));
     }
 
     #[test]
     fn test_clamp_length() {
-        let v = Vec2::new(px(3.0), px(4.0)); // length = 5
+        let v = Vec2::new(3.0, 4.0); // length = 5
 
         let clamped_max = v.clamp_length(0.0, 2.0);
         assert!((clamped_max.length() - 2.0).abs() < 1e-6);
 
-        let clamped_min = Vec2::new(px(0.3), px(0.4)).clamp_length(5.0, 10.0);
+        let clamped_min = Vec2::new(0.3, 0.4).clamp_length(5.0, 10.0);
         assert!((clamped_min.length() - 5.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_component_ops() {
-        let v = Vec2::new(px(-3.0), px(4.0));
-        assert_eq!(v.abs(), Vec2::new(px(3.0), px(4.0)));
-        assert_eq!(v.signum(), Vec2::new(px(-1.0), px(1.0)));
+        let v = Vec2::new(-3.0, 4.0);
+        assert_eq!(v.abs(), Vec2::new(3.0, 4.0));
+        assert_eq!(v.signum(), Vec2::new(-1.0, 1.0));
         assert_eq!(v.min_element(), -3.0);
         assert_eq!(v.max_element(), 4.0);
     }
 
     #[test]
     fn test_rounding() {
-        let v = Vec2::new(px(10.6), px(-3.3));
-        assert_eq!(v.round(), Vec2::new(px(11.0), px(-3.0)));
-        assert_eq!(v.ceil(), Vec2::new(px(11.0), px(-3.0)));
-        assert_eq!(v.floor(), Vec2::new(px(10.0), px(-4.0)));
-        assert_eq!(v.trunc(), Vec2::new(px(10.0), px(-3.0)));
-        assert_eq!(v.expand(), Vec2::new(px(11.0), px(-4.0)));
+        let v = Vec2::new(10.6, -3.3);
+        assert_eq!(v.round(), Vec2::new(11.0, -3.0));
+        assert_eq!(v.ceil(), Vec2::new(11.0, -3.0));
+        assert_eq!(v.floor(), Vec2::new(10.0, -4.0));
+        assert_eq!(v.trunc(), Vec2::new(10.0, -3.0));
+        assert_eq!(v.expand(), Vec2::new(11.0, -4.0));
     }
 
     #[test]
     fn test_validation() {
-        assert!(Vec2::new(px(1.0), px(2.0)).is_finite());
-        assert!(!Vec2::<Pixels>::INFINITY.is_finite());
-        assert!(Vec2::<Pixels>::NAN.is_nan());
-        assert!(Vec2::<Pixels>::ZERO.is_zero());
-        assert!(!Vec2::<Pixels>::ONE.is_zero());
+        assert!(Vec2::new(1.0, 2.0).is_finite());
+        assert!(!Vec2::<f64>::INFINITY.is_finite());
+        assert!(Vec2::<f64>::NAN.is_nan());
+        assert!(Vec2::<f64>::ZERO.is_zero());
+        assert!(!Vec2::<f64>::ONE.is_zero());
     }
 
     #[test]
     fn test_operators() {
-        let v1 = Vec2::new(px(10.0), px(20.0));
-        let v2 = Vec2::new(px(5.0), px(8.0));
+        let v1 = Vec2::new(10.0, 20.0);
+        let v2 = Vec2::new(5.0, 8.0);
 
-        assert_eq!(v1 + v2, Vec2::new(px(15.0), px(28.0)));
-        assert_eq!(v1 - v2, Vec2::new(px(5.0), px(12.0)));
-        assert_eq!(v1 * 2.0, Vec2::new(px(20.0), px(40.0)));
-        assert_eq!(2.0 * v1, Vec2::new(px(20.0), px(40.0)));
-        assert_eq!(v1 / 2.0, Vec2::new(px(5.0), px(10.0)));
-        assert_eq!(-v1, Vec2::new(px(-10.0), px(-20.0)));
+        assert_eq!(v1 + v2, Vec2::new(15.0, 28.0));
+        assert_eq!(v1 - v2, Vec2::new(5.0, 12.0));
+        assert_eq!(v1 * 2.0, Vec2::new(20.0, 40.0));
+        assert_eq!(2.0 * v1, Vec2::new(20.0, 40.0));
+        assert_eq!(v1 / 2.0, Vec2::new(5.0, 10.0));
+        assert_eq!(-v1, Vec2::new(-10.0, -20.0));
     }
 
     #[test]
     fn test_assign_operators() {
-        let mut v = Vec2::new(px(10.0), px(20.0));
+        let mut v = Vec2::new(10.0, 20.0);
 
-        v += Vec2::new(px(5.0), px(5.0));
-        assert_eq!(v, Vec2::new(px(15.0), px(25.0)));
+        v += Vec2::new(5.0, 5.0);
+        assert_eq!(v, Vec2::new(15.0, 25.0));
 
-        v -= Vec2::new(px(5.0), px(5.0));
-        assert_eq!(v, Vec2::new(px(10.0), px(20.0)));
+        v -= Vec2::new(5.0, 5.0);
+        assert_eq!(v, Vec2::new(10.0, 20.0));
 
         v *= 2.0;
-        assert_eq!(v, Vec2::new(px(20.0), px(40.0)));
+        assert_eq!(v, Vec2::new(20.0, 40.0));
 
         v /= 2.0;
-        assert_eq!(v, Vec2::new(px(10.0), px(20.0)));
+        assert_eq!(v, Vec2::new(10.0, 20.0));
     }
 
     #[test]
     fn test_conversions() {
-        let v = Vec2::new(px(10.0), px(20.0));
+        let v = Vec2::new(10.0, 20.0);
 
-        let from_tuple = Vec2::<Pixels>::from((10.0, 20.0));
-        let from_array = Vec2::<Pixels>::from([10.0, 20.0]);
+        let from_tuple = Vec2::<f64>::from((10.0, 20.0));
+        let from_array = Vec2::<f64>::from([10.0, 20.0]);
         assert_eq!(from_tuple, v);
         assert_eq!(from_array, v);
 
-        let to_tuple: (f32, f32) = v.into();
-        let to_array: [f32; 2] = v.into();
+        let to_tuple: (f64, f64) = v.into();
+        let to_array: [f64; 2] = v.into();
         assert_eq!(to_tuple, (10.0, 20.0));
         assert_eq!(to_array, [10.0, 20.0]);
 
-        let p = Point::new(px(5.0), px(10.0));
-        let v_from_p: Vec2<Pixels> = p.into();
-        assert_eq!(v_from_p, Vec2::new(px(5.0), px(10.0)));
+        let p = Point::new(5.0, 10.0);
+        let v_from_p: Vec2<f64> = p.into();
+        assert_eq!(v_from_p, Vec2::new(5.0, 10.0));
     }
 
     #[test]
     fn test_display() {
-        assert_eq!(format!("{}", Vec2::new(px(10.5), px(20.5))), "(10.5, 20.5)");
+        assert_eq!(format!("{}", Vec2::new(10.5, 20.5)), "(10.5, 20.5)");
     }
 
     #[test]
     fn test_convenience_fn() {
-        assert_eq!(vec2(1.0, 2.0), Vec2::new(px(1.0), px(2.0)));
+        assert_eq!(vec2(1.0, 2.0), Vec2::new(1.0, 2.0));
     }
 }
 
@@ -1348,63 +1342,62 @@ mod tests {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::{Pixels, px};
 
     #[test]
     fn test_vec2_new() {
-        let v = Vec2::<Pixels>::new(px(3.0), px(4.0));
-        assert_eq!(v.x.get(), 3.0);
-        assert_eq!(v.y.get(), 4.0);
+        let v = Vec2::<f64>::new(3.0, 4.0);
+        assert_eq!(v.x, 3.0);
+        assert_eq!(v.y, 4.0);
     }
 
     #[test]
     fn test_vec2_length() {
-        let v = Vec2::<Pixels>::new(px(3.0), px(4.0));
+        let v = Vec2::<f64>::new(3.0, 4.0);
         assert_eq!(v.length(), 5.0);
         assert_eq!(v.length_squared(), 25.0);
     }
 
     #[test]
     fn test_vec2_normalize() {
-        let v = Vec2::<Pixels>::new(px(3.0), px(4.0));
+        let v = Vec2::<f64>::new(3.0, 4.0);
         let n = v.normalize();
         assert!((n.length() - 1.0).abs() < 0.001);
     }
 
     #[test]
     fn test_vec2_dot_cross() {
-        let v1 = Vec2::<Pixels>::new(px(1.0), px(0.0));
-        let v2 = Vec2::<Pixels>::new(px(0.0), px(1.0));
+        let v1 = Vec2::<f64>::new(1.0, 0.0);
+        let v2 = Vec2::<f64>::new(0.0, 1.0);
         assert_eq!(v1.dot(v2), 0.0);
         assert_eq!(v1.cross(v2), 1.0);
     }
 
     #[test]
     fn test_vec2_arithmetic() {
-        let v1 = Vec2::<Pixels>::new(px(10.0), px(20.0));
-        let v2 = Vec2::<Pixels>::new(px(5.0), px(10.0));
+        let v1 = Vec2::<f64>::new(10.0, 20.0);
+        let v2 = Vec2::<f64>::new(5.0, 10.0);
 
         let v3 = v1 + v2;
-        assert_eq!(v3.x.get(), 15.0);
+        assert_eq!(v3.x, 15.0);
 
         let v4 = v1 * 2.0;
-        assert_eq!(v4.x.get(), 20.0);
+        assert_eq!(v4.x, 20.0);
     }
 
     #[test]
     fn test_vec2_cast() {
-        let px_vec = Vec2::<Pixels>::new(px(10.0), px(20.0));
-        let f32_vec: Vec2<Pixels> = px_vec.cast();
-        assert_eq!(f32_vec.x.get(), 10.0);
-        assert_eq!(f32_vec.y.get(), 20.0);
+        let px_vec = Vec2::<f64>::new(10.0, 20.0);
+        let f32_vec: Vec2<f64> = px_vec.cast();
+        assert_eq!(f32_vec.x, 10.0);
+        assert_eq!(f32_vec.y, 20.0);
     }
 
     #[test]
     fn test_vec2_rotate() {
-        let v = Vec2::<Pixels>::new(px(1.0), px(0.0));
-        let rotated = v.rotate(std::f32::consts::PI / 2.0);
-        assert!((rotated.x.0).abs() < 0.001);
-        assert!((rotated.y.0 - 1.0).abs() < 0.001);
+        let v = Vec2::<f64>::new(1.0, 0.0);
+        let rotated = v.rotate(std::f64::consts::PI / 2.0);
+        assert!((rotated.x).abs() < 0.001);
+        assert!((rotated.y - 1.0).abs() < 0.001);
     }
 
     #[test]
@@ -1412,97 +1405,94 @@ mod typed_tests {
         use crate::{Along, ApproxEq, Axis, Double, Half, Sign};
 
         // Test Along trait
-        let v = Vec2::<Pixels>::new(px(10.0), px(20.0));
-        assert_eq!(v.along(Axis::Horizontal).0, 10.0);
-        assert_eq!(v.along(Axis::Vertical).0, 20.0);
+        let v = Vec2::<f64>::new(10.0, 20.0);
+        assert_eq!(v.along(Axis::Horizontal), 10.0);
+        assert_eq!(v.along(Axis::Vertical), 20.0);
 
-        let modified = v.apply_along(Axis::Horizontal, |x| px(x.0 * 2.0));
-        assert_eq!(modified.x.0, 20.0);
-        assert_eq!(modified.y.0, 20.0);
+        let modified = v.apply_along(Axis::Horizontal, |x| x * 2.0);
+        assert_eq!(modified.x, 20.0);
+        assert_eq!(modified.y, 20.0);
 
         // Test Half trait
         let half_v = v.half();
-        assert_eq!(half_v.x.0, 5.0);
-        assert_eq!(half_v.y.0, 10.0);
+        assert_eq!(half_v.x, 5.0);
+        assert_eq!(half_v.y, 10.0);
 
         // Test negation (using std::ops::Neg)
         let neg_v = -v;
-        assert_eq!(neg_v.x.0, -10.0);
-        assert_eq!(neg_v.y.0, -20.0);
+        assert_eq!(neg_v.x, -10.0);
+        assert_eq!(neg_v.y, -20.0);
 
         // Test IsZero trait
-        let zero = Vec2::<Pixels>::new(px(0.0), px(0.0));
+        let zero = Vec2::<f64>::new(0.0, 0.0);
         assert!(zero.is_zero());
         assert!(!v.is_zero());
 
         // Test Double trait
         let doubled = v.double();
-        assert_eq!(doubled.x.0, 20.0);
-        assert_eq!(doubled.y.0, 40.0);
+        assert_eq!(doubled.x, 20.0);
+        assert_eq!(doubled.y, 40.0);
 
         // Test ApproxEq trait
-        let v2 = Vec2::<Pixels>::new(px(10.0 + 1e-8), px(20.0 - 1e-8));
+        let v2 = Vec2::<f64>::new(10.0 + 1e-8, 20.0 - 1e-8);
         assert!(v.approx_eq_eps(&v2, 1e-6));
 
         // Test Sign trait
-        let v_f32 = Vec2::<Pixels>::new(px(-10.0), px(20.0));
-        let signum_v: Vec2<Pixels> = Sign::signum(v_f32);
-        assert_eq!(signum_v.x.get(), -1.0);
-        assert_eq!(signum_v.y.get(), 1.0);
+        let v_f32 = Vec2::<f64>::new(-10.0, 20.0);
+        let signum_v: Vec2<f64> = Sign::signum(v_f32);
+        assert_eq!(signum_v.x, -1.0);
+        assert_eq!(signum_v.y, 1.0);
     }
 
     #[test]
     fn test_vec2_swap() {
-        let v = Vec2::<Pixels>::new(px(10.0), px(20.0));
+        let v = Vec2::<f64>::new(10.0, 20.0);
         let swapped = v.swap();
-        assert_eq!(swapped.x.get(), 20.0);
-        assert_eq!(swapped.y.get(), 10.0);
+        assert_eq!(swapped.x, 20.0);
+        assert_eq!(swapped.y, 10.0);
     }
 
     #[test]
     fn test_vec2_map() {
-        let v = Vec2::<Pixels>::new(px(2.0), px(3.0));
+        let v = Vec2::<f64>::new(2.0, 3.0);
         let mapped = v.map(|c| c * 2.0);
-        assert_eq!(mapped.x.get(), 4.0);
-        assert_eq!(mapped.y.get(), 6.0);
+        assert_eq!(mapped.x, 4.0);
+        assert_eq!(mapped.y, 6.0);
     }
 
     #[test]
     fn test_vec2_distance_metrics() {
-        let v = Vec2::<Pixels>::new(px(3.0), px(4.0));
-        assert_eq!(v.manhattan_length(), px(7.0)); // |3| + |4|
-        assert_eq!(v.chebyshev_length(), px(4.0)); // max(|3|, |4|)
+        let v = Vec2::<f64>::new(3.0, 4.0);
+        assert_eq!(v.manhattan_length(), 7.0); // |3| + |4|
+        assert_eq!(v.chebyshev_length(), 4.0); // max(|3|, |4|)
         assert_eq!(v.length(), 5.0); // sqrt(3^2 + 4^2)
     }
 
     #[test]
     fn test_vec2_sum_iterator() {
         let vectors = vec![
-            Vec2::<Pixels>::new(px(1.0), px(2.0)),
-            Vec2::<Pixels>::new(px(3.0), px(4.0)),
-            Vec2::<Pixels>::new(px(5.0), px(6.0)),
+            Vec2::<f64>::new(1.0, 2.0),
+            Vec2::<f64>::new(3.0, 4.0),
+            Vec2::<f64>::new(5.0, 6.0),
         ];
-        let total: Vec2<Pixels> = vectors.iter().sum();
-        assert_eq!(total.x.get(), 9.0);
-        assert_eq!(total.y.get(), 12.0);
+        let total: Vec2<f64> = vectors.iter().sum();
+        assert_eq!(total.x, 9.0);
+        assert_eq!(total.y, 12.0);
 
-        let total_owned: Vec2<Pixels> = vectors.into_iter().sum();
-        assert_eq!(total_owned.x.get(), 9.0);
-        assert_eq!(total_owned.y.get(), 12.0);
+        let total_owned: Vec2<f64> = vectors.into_iter().sum();
+        assert_eq!(total_owned.x, 9.0);
+        assert_eq!(total_owned.y, 12.0);
     }
 
     #[test]
     fn test_vec2_is_valid() {
-        assert!(Vec2::<Pixels>::new(px(1.0), px(2.0)).is_valid());
-        assert!(!Vec2::<Pixels>::INFINITY.is_valid());
-        assert!(!Vec2::<Pixels>::NAN.is_valid());
+        assert!(Vec2::<f64>::new(1.0, 2.0).is_valid());
+        assert!(!Vec2::<f64>::INFINITY.is_valid());
+        assert!(!Vec2::<f64>::NAN.is_valid());
     }
 
     #[test]
     fn to_array_keeps_the_order() {
-        assert_eq!(
-            Vec2::new(crate::px(1.0), crate::px(2.0)).to_array(),
-            [1.0, 2.0]
-        );
+        assert_eq!(Vec2::new(1.0, 2.0).to_array(), [1.0, 2.0]);
     }
 }

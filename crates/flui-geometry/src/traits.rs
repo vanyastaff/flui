@@ -8,8 +8,6 @@ use std::{
     ops::{Add, Mul, Neg, Sub},
 };
 
-use super::{DevicePixels, PixelDelta, Pixels, Radians, Rems};
-
 // ============================================================================
 // AXIS - 2D cartesian axes
 // ============================================================================
@@ -66,48 +64,32 @@ impl Axis {
 }
 
 // ============================================================================
-// UNIT - Marker trait for unit types
+// UNIT - the scalar a geometry type is built from
 // ============================================================================
 
-/// Marker trait for all unit types (Pixels, DevicePixels, etc.).
+/// The scalar a geometry type is built from: `f64` for logical coordinates, `f32` for the
+/// display list and GPU, `i32` for the device-pixel grid.
 ///
-/// This trait enables generic geometry types to work with different
-/// coordinate systems in a type-safe manner.
-///
-/// **Note:** This trait requires `Eq` and `Hash` to prevent using raw
-/// floating-point types (like `f32`) which don't implement these traits due to
-/// NaN semantics. Use wrapper types like `Pixels` instead, which implement `Eq`
-/// and `Hash` manually.
-pub trait Unit:
-    Copy + Clone + Debug + Default + PartialEq + Eq + PartialOrd + std::hash::Hash
-{
-    /// The underlying scalar type (f32, i32, etc.)
-    type Scalar: Copy;
-
-    /// Returns the zero value for this unit
+/// There are no unit wrappers (ADR-0098). The scalar alone keeps logical (`f64`) and device
+/// (`i32`) values apart, and float types are neither `Eq` nor `Hash`, so neither is any
+/// geometry type built from them.
+pub trait Unit: Copy + Clone + Debug + Default + PartialEq + PartialOrd {
+    /// Returns zero.
     fn zero() -> Self {
         Self::default()
     }
 
-    /// Returns the one value for this unit (useful for scaling)
+    /// Returns one.
     fn one() -> Self;
 
-    /// Minimum representable value
+    /// Minimum representable value.
     const MIN: Self;
 
-    /// Maximum representable value
+    /// Maximum representable value.
     const MAX: Self;
 }
 
-/// Units that support arithmetic operations.
-///
-/// This trait enables math operations on unit types while maintaining
-/// type safety. All operations preserve the unit type.
-///
-/// **Note:** This trait requires standard operator traits (`Add`, `Sub`)
-/// and provides additional utility methods (`abs`, `min`, `max`) for common
-/// operations. Prefer using operators directly for clarity; utility methods are
-/// provided for generic programming contexts.
+/// A scalar with arithmetic.
 pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
     /// Returns the absolute value.
     fn abs(self) -> Self;
@@ -119,39 +101,83 @@ pub trait NumericUnit: Unit + Add<Output = Self> + Sub<Output = Self> {
     fn max(self, other: Self) -> Self;
 }
 
-// Note: f32 impl removed - f32 cannot implement Unit due to Eq + Hash
-// requirements. Use wrapper types like Pixels, PixelDelta, etc. instead.
-
-/// A unit that can bridge to and from a raw `f32` for floating-point math.
-///
-/// Generic geometry routines (Bézier evaluation, line/segment math, shape
-/// scaling) need to drop into scalar arithmetic and lift the result back into
-/// the unit. [`FloatUnit::from_f32`] is the blessed constructor for that — it
-/// is a named method rather than `From<f32>` on purpose, so the public unit
-/// barrier stays closed: there is intentionally no implicit `f32 -> Pixels`
-/// coercion (`.into()`), yet generic math still has an explicit way back.
-///
-/// `Into<f32>` is a supertrait, giving the matching extraction direction.
-pub trait FloatUnit: Unit + Into<f32> {
-    /// Lifts a raw `f32` into this unit.
-    fn from_f32(value: f32) -> Self;
+/// A floating-point scalar, convertible to and from `f64` for shared math.
+pub trait FloatUnit: NumericUnit + Into<f64> {
+    /// Converts from `f64`, rounding to the nearest representable value.
+    fn from_f64(value: f64) -> Self;
 }
 
-/// Implements [`FloatUnit`] for an `f32`-backed unit type.
-macro_rules! impl_float_unit {
+macro_rules! impl_float_scalar {
     ($($ty:ty),+) => {
         $(
-            impl FloatUnit for $ty {
+            impl Unit for $ty {
+                fn one() -> Self {
+                    1.0
+                }
+                const MIN: Self = <$ty>::MIN;
+                const MAX: Self = <$ty>::MAX;
+            }
+
+            impl NumericUnit for $ty {
                 #[inline]
-                fn from_f32(value: f32) -> Self {
-                    Self(value)
+                fn abs(self) -> Self {
+                    <$ty>::abs(self)
+                }
+
+                #[inline]
+                fn min(self, other: Self) -> Self {
+                    <$ty>::min(self, other)
+                }
+
+                #[inline]
+                fn max(self, other: Self) -> Self {
+                    <$ty>::max(self, other)
                 }
             }
         )+
     };
 }
 
-impl_float_unit!(Pixels, Radians, PixelDelta);
+impl_float_scalar!(f32, f64);
+
+impl Unit for i32 {
+    fn one() -> Self {
+        1
+    }
+    const MIN: Self = i32::MIN;
+    const MAX: Self = i32::MAX;
+}
+
+impl NumericUnit for i32 {
+    #[inline]
+    fn abs(self) -> Self {
+        i32::abs(self)
+    }
+
+    #[inline]
+    fn min(self, other: Self) -> Self {
+        std::cmp::Ord::min(self, other)
+    }
+
+    #[inline]
+    fn max(self, other: Self) -> Self {
+        std::cmp::Ord::max(self, other)
+    }
+}
+
+impl FloatUnit for f32 {
+    #[inline]
+    fn from_f64(value: f64) -> Self {
+        value as f32
+    }
+}
+
+impl FloatUnit for f64 {
+    #[inline]
+    fn from_f64(value: f64) -> Self {
+        value
+    }
+}
 
 // ============================================================================
 // ALONG - Axis-based value access
@@ -198,8 +224,8 @@ pub trait Along {
 /// ```rust
 /// use flui_geometry::{Half, Pixels, px};
 ///
-/// let width = px(100.0);
-/// assert_eq!(width.half(), px(50.0));
+/// let width = 100.0;
+/// assert_eq!(width.half(), 50.0);
 /// ```
 pub trait Half {
     /// Returns half of this value.
@@ -222,25 +248,10 @@ impl Half for f64 {
 }
 
 /// Implements `Half` for an f32-backed unit type.
-macro_rules! impl_half_f32_unit {
-    ($($ty:ty),+) => {
-        $(
-            impl Half for $ty {
-                #[inline]
-                fn half(self) -> Self {
-                    Self(self.get() * 0.5)
-                }
-            }
-        )+
-    };
-}
-
-impl_half_f32_unit!(Pixels, Rems, Radians, PixelDelta);
-
-impl Half for DevicePixels {
+impl Half for i32 {
     #[inline]
     fn half(self) -> Self {
-        DevicePixels(self.get() / 2)
+        self / 2
     }
 }
 
@@ -258,8 +269,8 @@ impl Half for DevicePixels {
 /// ```rust
 /// use flui_geometry::{Double, Pixels, px};
 ///
-/// let width = px(50.0);
-/// assert_eq!(width.double(), px(100.0));
+/// let width = 50.0;
+/// assert_eq!(width.double(), 100.0);
 /// ```
 pub trait Double {
     /// Returns double of this value.
@@ -282,25 +293,10 @@ impl Double for f64 {
 }
 
 /// Implements `Double` for an f32-backed unit type.
-macro_rules! impl_double_f32_unit {
-    ($($ty:ty),+) => {
-        $(
-            impl Double for $ty {
-                #[inline]
-                fn double(self) -> Self {
-                    Self(self.get() * 2.0)
-                }
-            }
-        )+
-    };
-}
-
-impl_double_f32_unit!(Pixels, Rems, Radians, PixelDelta);
-
-impl Double for DevicePixels {
+impl Double for i32 {
     #[inline]
     fn double(self) -> Self {
-        DevicePixels(self.get() * 2)
+        self * 2
     }
 }
 
@@ -318,8 +314,8 @@ impl Double for DevicePixels {
 /// ```rust
 /// use flui_geometry::{IsZero, Pixels, px};
 ///
-/// assert!(px(0.0).is_zero());
-/// assert!(!px(1.0).is_zero());
+/// assert!(0.0.is_zero());
+/// assert!(!1.0.is_zero());
 /// ```
 pub trait IsZero {
     /// Returns true if this value is zero.
@@ -354,29 +350,6 @@ impl IsZero for usize {
     }
 }
 
-/// Implements `IsZero` for an f32-backed unit type (uses epsilon comparison).
-macro_rules! impl_is_zero_f32_unit {
-    ($($ty:ty),+) => {
-        $(
-            impl IsZero for $ty {
-                #[inline]
-                fn is_zero(&self) -> bool {
-                    self.get().abs() < f32::EPSILON
-                }
-            }
-        )+
-    };
-}
-
-impl_is_zero_f32_unit!(Pixels, Rems, Radians, PixelDelta);
-
-impl IsZero for DevicePixels {
-    #[inline]
-    fn is_zero(&self) -> bool {
-        self.get() == 0
-    }
-}
-
 // ============================================================================
 // SIGN - Sign operations
 // ============================================================================
@@ -395,7 +368,7 @@ impl IsZero for DevicePixels {
 /// ```rust
 /// use flui_geometry::{Pixels, Sign, px};
 ///
-/// let value = px(100.0);
+/// let value = 100.0;
 ///
 /// // Inherent method signum_raw() returns f32
 /// let sign_f32: f32 = value.signum_raw();
@@ -409,14 +382,14 @@ impl IsZero for DevicePixels {
 /// ```rust
 /// use flui_geometry::{Pixels, Sign, px};
 ///
-/// let positive = px(100.0);
+/// let positive = 100.0;
 /// assert!(positive.is_positive());
 /// assert!(!positive.is_negative());
-/// assert_eq!(Sign::signum(positive), px(1.0));
+/// assert_eq!(Sign::signum(positive), 1.0);
 ///
-/// let negative = px(-50.0);
+/// let negative = -50.0;
 /// assert!(negative.is_negative());
-/// assert_eq!(Sign::signum(negative), px(-1.0));
+/// assert_eq!(Sign::signum(negative), -1.0);
 /// ```
 pub trait Sign: Neg<Output = Self> + Sized {
     /// Returns true if the value is positive.
@@ -495,49 +468,6 @@ impl Sign for i32 {
     }
 }
 
-/// Implements `Sign` for an f32-backed unit type.
-macro_rules! impl_sign_f32_unit {
-    ($($ty:ty),+) => {
-        $(
-            impl Sign for $ty {
-                #[inline]
-                fn is_positive(&self) -> bool {
-                    self.get() > 0.0
-                }
-
-                #[inline]
-                fn is_negative(&self) -> bool {
-                    self.get() < 0.0
-                }
-
-                #[inline]
-                fn signum(self) -> Self {
-                    Self(self.get().signum())
-                }
-            }
-        )+
-    };
-}
-
-impl_sign_f32_unit!(Pixels, Rems, Radians, PixelDelta);
-
-impl Sign for DevicePixels {
-    #[inline]
-    fn is_positive(&self) -> bool {
-        self.get() > 0
-    }
-
-    #[inline]
-    fn is_negative(&self) -> bool {
-        self.get() < 0
-    }
-
-    #[inline]
-    fn signum(self) -> Self {
-        DevicePixels(self.get().signum())
-    }
-}
-
 // ============================================================================
 // APPROXEQ - Approximate equality for floating-point values
 // ============================================================================
@@ -553,18 +483,18 @@ impl Sign for DevicePixels {
 /// ```rust
 /// use flui_geometry::{ApproxEq, Pixels, px};
 ///
-/// let a = px(100.0);
-/// let b = px(100.0 + 1e-8); // Very close but not exactly equal
+/// let a = 100.0;
+/// let b = (100.0 + 1e-8); // Very close but not exactly equal
 ///
 /// assert!(a.approx_eq(&b));
 /// assert!(a.approx_eq_eps(&b, 1e-6));
 ///
-/// let c = px(100.1);
+/// let c = 100.1;
 /// assert!(!a.approx_eq(&c));
 /// ```
 pub trait ApproxEq {
     /// Default epsilon for approximate equality.
-    const DEFAULT_EPSILON: f32 = 1e-6;
+    const DEFAULT_EPSILON: f64 = 1e-6;
 
     /// Returns true if self and other are approximately equal using the default
     /// epsilon.
@@ -574,43 +504,27 @@ pub trait ApproxEq {
 
     /// Returns true if self and other are approximately equal using the given
     /// epsilon.
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool;
+    fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool;
 }
 
 impl ApproxEq for f32 {
     #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-        (self - other).abs() < epsilon
+    fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
+        f64::from((self - other).abs()) < epsilon
     }
 }
 
 impl ApproxEq for f64 {
     #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-        (self - other).abs() < epsilon as f64
+    fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
+        (self - other).abs() < epsilon
     }
 }
 
-/// Implements `ApproxEq` for an f32-backed unit type.
-macro_rules! impl_approx_eq_f32_unit {
-    ($($ty:ty),+) => {
-        $(
-            impl ApproxEq for $ty {
-                #[inline]
-                fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-                    (self.get() - other.get()).abs() < epsilon
-                }
-            }
-        )+
-    };
-}
-
-impl_approx_eq_f32_unit!(Pixels, Rems, Radians, PixelDelta);
-
-impl ApproxEq for DevicePixels {
+impl ApproxEq for i32 {
     #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
-        (self.get() - other.get()).abs() <= epsilon as i32
+    fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
+        f64::from((self - other).abs()) <= epsilon
     }
 }
 
@@ -629,22 +543,22 @@ impl ApproxEq for DevicePixels {
 /// ```rust
 /// use flui_geometry::{GeometryOps, Pixels, px};
 ///
-/// let a = px(-100.0);
-/// assert_eq!(a.abs(), px(100.0));
+/// let a = -100.0;
+/// assert_eq!(a.abs(), 100.0);
 ///
-/// let b = px(50.0);
-/// let c = px(150.0);
-/// assert_eq!(b.min(c), px(50.0));
-/// assert_eq!(b.max(c), px(150.0));
-/// assert_eq!(b.clamp(px(60.0), px(140.0)), px(60.0));
+/// let b = 50.0;
+/// let c = 150.0;
+/// assert_eq!(b.min(c), 50.0);
+/// assert_eq!(b.max(c), 150.0);
+/// assert_eq!(b.clamp(60.0, 140.0), 60.0);
 ///
 /// // Linear interpolation
-/// let start = px(0.0);
-/// let end = px(100.0);
-/// assert_eq!(start.lerp(end, 0.5), px(50.0));
+/// let start = 0.0;
+/// let end = 100.0;
+/// assert_eq!(start.lerp(end, 0.5), 50.0);
 ///
 /// // Safe interpolation with clamping
-/// assert_eq!(start.saturating_lerp(end, 1.5), px(100.0));
+/// assert_eq!(start.saturating_lerp(end, 1.5), 100.0);
 /// ```
 pub trait GeometryOps: NumericUnit {
     /// Clamps the value between min and max.
@@ -656,7 +570,7 @@ pub trait GeometryOps: NumericUnit {
     /// When `t = 1.0`, returns `other`.
     /// Values between interpolate linearly.
     /// Values outside [0.0, 1.0] extrapolate beyond the range.
-    fn lerp(self, other: Self, t: f32) -> Self;
+    fn lerp(self, other: Self, t: f64) -> Self;
 
     /// Safe linear interpolation with clamping to [0.0, 1.0] range.
     ///
@@ -667,32 +581,32 @@ pub trait GeometryOps: NumericUnit {
     /// ```rust
     /// use flui_geometry::{GeometryOps, Pixels, px};
     ///
-    /// let start = px(0.0);
-    /// let end = px(100.0);
+    /// let start = 0.0;
+    /// let end = 100.0;
     ///
     /// // t clamped to [0.0, 1.0]
-    /// assert_eq!(start.saturating_lerp(end, 1.5), px(100.0));
-    /// assert_eq!(start.saturating_lerp(end, -0.5), px(0.0));
+    /// assert_eq!(start.saturating_lerp(end, 1.5), 100.0);
+    /// assert_eq!(start.saturating_lerp(end, -0.5), 0.0);
     /// ```
-    fn saturating_lerp(self, other: Self, t: f32) -> Self;
+    fn saturating_lerp(self, other: Self, t: f64) -> Self;
 }
 
 impl<T> GeometryOps for T
 where
-    T: NumericUnit + Mul<f32, Output = T>,
+    T: FloatUnit + Mul<Output = T>,
 {
     #[inline]
     fn clamp(self, min: Self, max: Self) -> Self {
-        self.max(min).min(max)
+        NumericUnit::min(NumericUnit::max(self, min), max)
     }
 
     #[inline]
-    fn lerp(self, other: Self, t: f32) -> Self {
-        self + (other - self) * t
+    fn lerp(self, other: Self, t: f64) -> Self {
+        self + (other - self) * T::from_f64(t)
     }
 
     #[inline]
-    fn saturating_lerp(self, other: Self, t: f32) -> Self {
+    fn saturating_lerp(self, other: Self, t: f64) -> Self {
         let clamped_t = t.clamp(0.0, 1.0);
         self.lerp(other, clamped_t)
     }

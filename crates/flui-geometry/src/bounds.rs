@@ -13,13 +13,13 @@
 //! use flui_geometry::{Bounds, Point, Size, Pixels, DevicePixels, px, device_px};
 //!
 //! let ui_bounds = Bounds::<Pixels>::new(
-//!     Point::new(px(10.0), px(20.0)),
-//!     Size::new(px(100.0), px(50.0))
+//!     Point::new(10.0, 20.0),
+//!     Size::new(100.0, 50.0)
 //! );
 //!
 //! let device_bounds = Bounds::<DevicePixels>::new(
-//!     Point::new(device_px(80), device_px(160)),
-//!     Size::new(device_px(800), device_px(400))
+//!     Point::new(80, 160),
+//!     Size::new(800, 400)
 //! );
 //!
 //! // These are different types - can't accidentally mix them!
@@ -52,7 +52,7 @@ use std::{
 };
 
 use super::{
-    Corner, Edges, Pixels, Point, Rect, Size,
+    Corner, Edges, Point, Rect, Size,
     traits::{NumericUnit, Unit},
 };
 
@@ -172,7 +172,7 @@ where
 
 impl<T: Unit> Bounds<T>
 where
-    T: Add<T, Output = T> + Sub<T, Output = T> + Div<f32, Output = T>,
+    T: Add<T, Output = T> + Sub<T, Output = T> + Div<f64, Output = T>,
 {
     /// Creates bounds centered at the given point with the specified size.
     #[inline]
@@ -269,7 +269,7 @@ where
     #[must_use]
     pub fn center(&self) -> Point<T>
     where
-        T: Div<f32, Output = T>,
+        T: Div<f64, Output = T>,
     {
         Point::new(
             self.origin.x + self.size.width / 2.0,
@@ -552,10 +552,10 @@ where
 }
 
 // ============================================================================
-// f32-specific Display
+// f64-specific Display
 // ============================================================================
 
-impl Display for Bounds<Pixels> {
+impl Display for Bounds<f64> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -568,7 +568,7 @@ impl Display for Bounds<Pixels> {
 }
 
 // ============================================================================
-// Conversions (f32 only)
+// Conversions (f64 only)
 // ============================================================================
 
 impl<T: NumericUnit> From<Rect<T>> for Bounds<T>
@@ -595,11 +595,11 @@ impl<T: Unit + NumericUnit> From<Bounds<T>> for Rect<T> {
 // Specialized implementations for Pixels
 // ============================================================================
 
-impl Bounds<super::units::Pixels> {
+impl Bounds<f64> {
     /// Scales the bounds by a factor.
     #[inline]
     #[must_use]
-    pub fn scale(&self, factor: f32) -> Bounds<super::units::Pixels> {
+    pub fn scale(&self, factor: f64) -> Bounds<f64> {
         Bounds {
             origin: self.origin.scale(factor),
             size: self.size.scale(factor),
@@ -626,7 +626,7 @@ where
     T: super::traits::ApproxEq,
 {
     #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+    fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
         self.origin.approx_eq_eps(&other.origin, epsilon)
             && self.size.width.approx_eq_eps(&other.size.width, epsilon)
             && self.size.height.approx_eq_eps(&other.size.height, epsilon)
@@ -664,19 +664,16 @@ impl<T: Unit> Bounds<T> {
         }
     }
 
-    /// Converts the bounds to f32-based Pixels.
+    /// Converts the bounds to f64-based Pixels.
     #[inline]
     #[must_use]
-    pub fn to_f32(self) -> Bounds<Pixels>
+    pub fn to_f32(self) -> Bounds<f64>
     where
-        T: Into<f32>,
+        T: Into<f64>,
     {
         Bounds {
-            origin: Point::new(Pixels(self.origin.x.into()), Pixels(self.origin.y.into())),
-            size: Size::new(
-                Pixels(self.size.width.into()),
-                Pixels(self.size.height.into()),
-            ),
+            origin: Point::new(self.origin.x.into(), self.origin.y.into()),
+            size: Size::new(self.size.width.into(), self.size.height.into()),
         }
     }
 }
@@ -692,6 +689,6 @@ impl<T: Unit> Bounds<T> {
 /// [`edges()`](crate::edges()).
 #[inline]
 #[must_use]
-pub fn bounds(origin: Point<Pixels>, size: Size<Pixels>) -> Bounds<Pixels> {
+pub fn bounds(origin: Point<f64>, size: Size<f64>) -> Bounds<f64> {
     Bounds::new(origin, size)
 }

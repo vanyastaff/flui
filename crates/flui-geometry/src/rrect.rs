@@ -3,7 +3,7 @@
 //! API design inspired by Flutter and kurbo.
 
 use super::{
-    Pixels, Point, Rect, Size, px,
+    Point, Rect, Size,
     traits::{NumericUnit, Unit},
 };
 
@@ -37,12 +37,9 @@ impl<T: Unit> Radius<T> {
 // Pixels-specific Constants
 // ============================================================================
 
-impl Radius<Pixels> {
+impl Radius<f64> {
     /// A zero radius constant.
-    pub const ZERO: Self = Self {
-        x: Pixels::ZERO,
-        y: Pixels::ZERO,
-    };
+    pub const ZERO: Self = Self { x: 0.0, y: 0.0 };
 }
 
 // ============================================================================
@@ -93,19 +90,19 @@ impl<T: Unit> Radius<T> {
 
 impl<T: NumericUnit> Radius<T>
 where
-    T: std::ops::Mul<f32, Output = T>,
+    T: std::ops::Mul<f64, Output = T>,
 {
     /// Scales this radius by a factor.
     #[inline]
     #[must_use]
-    pub fn scale(&self, factor: f32) -> Self {
+    pub fn scale(&self, factor: f64) -> Self {
         Self::new(self.x * factor, self.y * factor)
     }
 
     /// Linearly interpolates between two radii.
     #[inline]
     #[must_use]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
         Self::new(a.x * (1.0 - t) + b.x * t, a.y * (1.0 - t) + b.y * t)
     }
 }
@@ -133,19 +130,19 @@ impl<T: Unit> Default for Radius<T> {
 }
 
 /// A rounded rectangle with independent corner radii.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RRect {
     /// The base rectangle.
-    pub rect: Rect<Pixels>,
+    pub rect: Rect<f64>,
     /// Top-left corner radius.
-    pub top_left: Radius<Pixels>,
+    pub top_left: Radius<f64>,
     /// Top-right corner radius.
-    pub top_right: Radius<Pixels>,
+    pub top_right: Radius<f64>,
     /// Bottom-right corner radius.
-    pub bottom_right: Radius<Pixels>,
+    pub bottom_right: Radius<f64>,
     /// Bottom-left corner radius.
-    pub bottom_left: Radius<Pixels>,
+    pub bottom_left: Radius<f64>,
 }
 
 // ============================================================================
@@ -157,11 +154,11 @@ impl RRect {
     #[inline]
     #[must_use]
     pub const fn new(
-        rect: Rect<Pixels>,
-        top_left: Radius<Pixels>,
-        top_right: Radius<Pixels>,
-        bottom_right: Radius<Pixels>,
-        bottom_left: Radius<Pixels>,
+        rect: Rect<f64>,
+        top_left: Radius<f64>,
+        top_right: Radius<f64>,
+        bottom_right: Radius<f64>,
+        bottom_left: Radius<f64>,
     ) -> Self {
         Self {
             rect,
@@ -175,32 +172,28 @@ impl RRect {
     /// Creates a rounded rectangle with the same radius for all corners.
     #[inline]
     #[must_use]
-    pub const fn from_rect_and_radius(rect: Rect<Pixels>, radius: Radius<Pixels>) -> Self {
+    pub const fn from_rect_and_radius(rect: Rect<f64>, radius: Radius<f64>) -> Self {
         Self::new(rect, radius, radius, radius, radius)
     }
 
     /// Creates a rounded rectangle with a circular radius for all corners.
     #[inline]
     #[must_use]
-    pub const fn from_rect_circular(rect: Rect<Pixels>, radius: Pixels) -> Self {
+    pub const fn from_rect_circular(rect: Rect<f64>, radius: f64) -> Self {
         Self::from_rect_and_radius(rect, Radius::circular(radius))
     }
 
     /// Creates a rounded rectangle with an elliptical radius for all corners.
     #[inline]
     #[must_use]
-    pub const fn from_rect_elliptical(
-        rect: Rect<Pixels>,
-        radius_x: Pixels,
-        radius_y: Pixels,
-    ) -> Self {
+    pub const fn from_rect_elliptical(rect: Rect<f64>, radius_x: f64, radius_y: f64) -> Self {
         Self::from_rect_and_radius(rect, Radius::elliptical(radius_x, radius_y))
     }
 
     /// Creates a rounded rectangle with separate x and y radii for all corners.
     #[inline]
     #[must_use]
-    pub const fn from_rect_xy(rect: Rect<Pixels>, radius_x: Pixels, radius_y: Pixels) -> Self {
+    pub const fn from_rect_xy(rect: Rect<f64>, radius_x: f64, radius_y: f64) -> Self {
         Self::from_rect_elliptical(rect, radius_x, radius_y)
     }
 
@@ -208,11 +201,11 @@ impl RRect {
     #[inline]
     #[must_use]
     pub const fn from_rect_and_corners(
-        rect: Rect<Pixels>,
-        top_left: Radius<Pixels>,
-        top_right: Radius<Pixels>,
-        bottom_right: Radius<Pixels>,
-        bottom_left: Radius<Pixels>,
+        rect: Rect<f64>,
+        top_left: Radius<f64>,
+        top_right: Radius<f64>,
+        bottom_right: Radius<f64>,
+        bottom_left: Radius<f64>,
     ) -> Self {
         Self::new(rect, top_left, top_right, bottom_right, bottom_left)
     }
@@ -220,20 +213,14 @@ impl RRect {
     /// Creates a rounded rectangle from position, size, and circular radius.
     #[inline]
     #[must_use]
-    pub fn from_xywh_circular(
-        x: Pixels,
-        y: Pixels,
-        width: Pixels,
-        height: Pixels,
-        radius: Pixels,
-    ) -> Self {
+    pub fn from_xywh_circular(x: f64, y: f64, width: f64, height: f64, radius: f64) -> Self {
         Self::from_rect_circular(Rect::from_xywh(x, y, width, height), radius)
     }
 
     /// Creates a rounded rectangle from a plain rectangle (no rounding).
     #[inline]
     #[must_use]
-    pub const fn from_rect(rect: Rect<Pixels>) -> Self {
+    pub const fn from_rect(rect: Rect<f64>) -> Self {
         Self::from_rect_and_radius(rect, Radius::ZERO)
     }
 }
@@ -246,63 +233,63 @@ impl RRect {
     /// Returns the left edge x-coordinate.
     #[inline]
     #[must_use]
-    pub fn left(&self) -> Pixels {
+    pub fn left(&self) -> f64 {
         self.rect.left()
     }
 
     /// Returns the top edge y-coordinate.
     #[inline]
     #[must_use]
-    pub fn top(&self) -> Pixels {
+    pub fn top(&self) -> f64 {
         self.rect.top()
     }
 
     /// Returns the right edge x-coordinate.
     #[inline]
     #[must_use]
-    pub fn right(&self) -> Pixels {
+    pub fn right(&self) -> f64 {
         self.rect.right()
     }
 
     /// Returns the bottom edge y-coordinate.
     #[inline]
     #[must_use]
-    pub fn bottom(&self) -> Pixels {
+    pub fn bottom(&self) -> f64 {
         self.rect.bottom()
     }
 
     /// Returns the width of the rectangle.
     #[inline]
     #[must_use]
-    pub fn width(&self) -> Pixels {
+    pub fn width(&self) -> f64 {
         self.rect.width()
     }
 
     /// Returns the height of the rectangle.
     #[inline]
     #[must_use]
-    pub fn height(&self) -> Pixels {
+    pub fn height(&self) -> f64 {
         self.rect.height()
     }
 
     /// Returns the size of the rectangle.
     #[inline]
     #[must_use]
-    pub fn size(&self) -> Size<Pixels> {
+    pub fn size(&self) -> Size<f64> {
         self.rect.size()
     }
 
     /// Returns the center point of the rectangle.
     #[inline]
     #[must_use]
-    pub fn center(&self) -> Point<Pixels> {
+    pub fn center(&self) -> Point<f64> {
         self.rect.center()
     }
 
     /// Returns the bounding rectangle (without rounded corners).
     #[inline]
     #[must_use]
-    pub const fn bounding_rect(&self) -> Rect<Pixels> {
+    pub const fn bounding_rect(&self) -> Rect<f64> {
         self.rect
     }
 }
@@ -358,7 +345,7 @@ impl RRect {
     /// Returns the maximum radius value across all corners.
     #[inline]
     #[must_use]
-    pub fn max_radius(&self) -> Pixels {
+    pub fn max_radius(&self) -> f64 {
         let max_x = self
             .top_left
             .x
@@ -377,21 +364,20 @@ impl RRect {
     /// Computes the area of the rounded rectangle.
     #[inline]
     #[must_use]
-    pub fn area(&self) -> Pixels {
+    pub fn area(&self) -> f64 {
         if self.is_rect() {
-            return px(self.rect.area());
+            return self.rect.area();
         }
 
         let rect_area = self.rect.area();
-        let corner_cutout = |r: Radius<Pixels>| -> Pixels {
-            px(r.x.get() * r.y.get() * (1.0 - std::f32::consts::FRAC_PI_4))
-        };
+        let corner_cutout =
+            |r: Radius<f64>| -> f64 { r.x * r.y * (1.0 - std::f64::consts::FRAC_PI_4) };
 
-        px(rect_area
-            - corner_cutout(self.top_left).0
-            - corner_cutout(self.top_right).0
-            - corner_cutout(self.bottom_right).0
-            - corner_cutout(self.bottom_left).0)
+        rect_area
+            - corner_cutout(self.top_left)
+            - corner_cutout(self.top_right)
+            - corner_cutout(self.bottom_right)
+            - corner_cutout(self.bottom_left)
     }
 }
 
@@ -409,7 +395,7 @@ impl RRect {
     /// Scales all corner radii by a factor.
     #[inline]
     #[must_use]
-    pub fn scale_radii(&self, factor: f32) -> Self {
+    pub fn scale_radii(&self, factor: f64) -> Self {
         Self::new(
             self.rect,
             self.top_left.scale(factor),
@@ -425,7 +411,7 @@ impl RRect {
     /// Mirrors [`Rect::translate_offset`] (Flutter `RRect.shift`).
     #[inline]
     #[must_use]
-    pub fn translate_offset(&self, offset: crate::Offset<Pixels>) -> Self {
+    pub fn translate_offset(&self, offset: crate::Offset<f64>) -> Self {
         Self {
             rect: self.rect.translate_offset(offset),
             ..*self
@@ -444,12 +430,9 @@ impl RRect {
     /// axis's radius squares the corner off on that axis alone.
     #[inline]
     #[must_use]
-    pub fn inflate(&self, delta: Pixels) -> Self {
-        let grow = |radius: Radius<Pixels>| {
-            Radius::new(
-                (radius.x + delta).max(Pixels::ZERO),
-                (radius.y + delta).max(Pixels::ZERO),
-            )
+    pub fn inflate(&self, delta: f64) -> Self {
+        let grow = |radius: Radius<f64>| {
+            Radius::new((radius.x + delta).max(0.0), (radius.y + delta).max(0.0))
         };
         Self::new(
             self.rect.inflate(delta, delta),
@@ -464,7 +447,7 @@ impl RRect {
     /// [`Self::inflate`], of which this is the negation.
     #[inline]
     #[must_use]
-    pub fn inset(&self, delta: Pixels) -> Self {
+    pub fn inset(&self, delta: f64) -> Self {
         self.inflate(-delta)
     }
 
@@ -489,17 +472,12 @@ impl RRect {
     /// corner's ellipse. A corner with a zero radius on either axis is a
     /// square corner.
     #[must_use]
-    pub fn contains(&self, point: Point<Pixels>) -> bool {
+    pub fn contains(&self, point: Point<f64>) -> bool {
         if !self.rect.contains(point) {
             return false;
         }
-        let (x, y) = (point.x.get(), point.y.get());
-        let (left, top, right, bottom) = (
-            self.left().get(),
-            self.top().get(),
-            self.right().get(),
-            self.bottom().get(),
-        );
+        let (x, y) = (point.x, point.y);
+        let (left, top, right, bottom) = (self.left(), self.top(), self.right(), self.bottom());
         // Each corner: (its ellipse centre, its radii, whether `point` is in
         // its radius box). Only the box `point` falls in can exclude it.
         let corners = [
@@ -507,33 +485,33 @@ impl RRect {
                 self.top_left,
                 left,
                 top,
-                x < left + self.top_left.x.get(),
-                y < top + self.top_left.y.get(),
+                x < left + self.top_left.x,
+                y < top + self.top_left.y,
             ),
             (
                 self.top_right,
                 right,
                 top,
-                x > right - self.top_right.x.get(),
-                y < top + self.top_right.y.get(),
+                x > right - self.top_right.x,
+                y < top + self.top_right.y,
             ),
             (
                 self.bottom_right,
                 right,
                 bottom,
-                x > right - self.bottom_right.x.get(),
-                y > bottom - self.bottom_right.y.get(),
+                x > right - self.bottom_right.x,
+                y > bottom - self.bottom_right.y,
             ),
             (
                 self.bottom_left,
                 left,
                 bottom,
-                x < left + self.bottom_left.x.get(),
-                y > bottom - self.bottom_left.y.get(),
+                x < left + self.bottom_left.x,
+                y > bottom - self.bottom_left.y,
             ),
         ];
         for (radius, edge_x, edge_y, in_x, in_y) in corners {
-            let (rx, ry) = (radius.x.get(), radius.y.get());
+            let (rx, ry) = (radius.x, radius.y);
             if !(in_x && in_y) || rx <= 0.0 || ry <= 0.0 {
                 continue;
             }
@@ -552,7 +530,7 @@ impl RRect {
     /// Returns the center points of each corner's radius.
     #[inline]
     #[must_use]
-    pub fn corner_centers(&self) -> [Point<Pixels>; 4] {
+    pub fn corner_centers(&self) -> [Point<f64>; 4] {
         [
             Point::new(self.left() + self.top_left.x, self.top() + self.top_left.y),
             Point::new(
@@ -573,7 +551,7 @@ impl RRect {
     /// Linearly interpolates between two rounded rectangles.
     #[inline]
     #[must_use]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
         Self::new(
             a.rect.lerp(b.rect, t),
             Radius::lerp(a.top_left, b.top_left, t),
@@ -588,8 +566,8 @@ impl RRect {
 // Conversions
 // ============================================================================
 
-impl From<Rect<Pixels>> for RRect {
-    fn from(rect: Rect<Pixels>) -> Self {
+impl From<Rect<f64>> for RRect {
+    fn from(rect: Rect<f64>) -> Self {
         Self::from_rect(rect)
     }
 }
@@ -606,16 +584,13 @@ mod tests {
     #[test]
     fn translate_offset_moves_rect_and_keeps_radii() {
         let rrect = RRect::from_rect_and_radius(
-            Rect::from_origin_size(Point::ZERO, Size::new(px(40.0), px(40.0))),
-            Radius::circular(px(8.0)),
+            Rect::from_origin_size(Point::ZERO, Size::new(40.0, 40.0)),
+            Radius::circular(8.0),
         );
-        let moved = rrect.translate_offset(Offset::new(px(70.0), px(10.0)));
+        let moved = rrect.translate_offset(Offset::new(70.0, 10.0));
         assert_eq!(
             moved.rect,
-            Rect::from_origin_size(
-                Point::new(px(70.0), px(10.0)),
-                Size::new(px(40.0), px(40.0)),
-            ),
+            Rect::from_origin_size(Point::new(70.0, 10.0), Size::new(40.0, 40.0),),
         );
         assert_eq!(moved.top_left, rrect.top_left);
         assert_eq!(moved.bottom_right, rrect.bottom_right);
@@ -628,49 +603,43 @@ mod tests {
         // corners are already the full half-side, so it is a circle -- and it
         // has to stay one after inflating.
         let rrect = RRect::from_rect_and_radius(
-            Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
-            Radius::circular(px(20.0)),
+            Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
+            Radius::circular(20.0),
         );
-        let bigger = rrect.inflate(px(5.0));
+        let bigger = rrect.inflate(5.0);
 
-        assert_eq!(
-            bigger.rect,
-            Rect::from_ltrb(px(-5.0), px(-5.0), px(45.0), px(45.0))
-        );
-        assert_eq!(bigger.top_left, Radius::circular(px(25.0)));
-        assert_eq!(bigger.bottom_right, Radius::circular(px(25.0)));
+        assert_eq!(bigger.rect, Rect::from_ltrb(-5.0, -5.0, 45.0, 45.0));
+        assert_eq!(bigger.top_left, Radius::circular(25.0));
+        assert_eq!(bigger.bottom_right, Radius::circular(25.0));
     }
 
     #[test]
     fn inset_shrinks_the_radii_and_clamps_them_at_zero() {
         let rrect = RRect::from_rect_and_radius(
-            Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
-            Radius::circular(px(6.0)),
+            Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
+            Radius::circular(6.0),
         );
 
         // The common case: an inner ring for a 2 px border.
-        let inner = rrect.inset(px(2.0));
-        assert_eq!(
-            inner.rect,
-            Rect::from_ltrb(px(2.0), px(2.0), px(38.0), px(38.0))
-        );
-        assert_eq!(inner.top_left, Radius::circular(px(4.0)));
+        let inner = rrect.inset(2.0);
+        assert_eq!(inner.rect, Rect::from_ltrb(2.0, 2.0, 38.0, 38.0));
+        assert_eq!(inner.top_left, Radius::circular(4.0));
 
         // Past the radius the corner squares off rather than inverting.
-        let squared = rrect.inset(px(10.0));
-        assert_eq!(squared.top_left, Radius::circular(px(0.0)));
-        assert_eq!(squared.bottom_left, Radius::circular(px(0.0)));
+        let squared = rrect.inset(10.0);
+        assert_eq!(squared.top_left, Radius::circular(0.0));
+        assert_eq!(squared.bottom_left, Radius::circular(0.0));
     }
 
     #[test]
     fn inset_clamps_each_radius_axis_independently() {
         let rrect = RRect::from_rect_and_radius(
-            Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
-            Radius::elliptical(px(9.0), px(3.0)),
+            Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
+            Radius::elliptical(9.0, 3.0),
         );
 
         // Only the y axis reaches the clamp.
-        let squared = rrect.inset(px(5.0));
-        assert_eq!(squared.top_left, Radius::elliptical(px(4.0), px(0.0)));
+        let squared = rrect.inset(5.0);
+        assert_eq!(squared.top_left, Radius::elliptical(4.0, 0.0));
     }
 }

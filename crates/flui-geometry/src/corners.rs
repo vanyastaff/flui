@@ -9,7 +9,7 @@
 /// Generic over type `T` to support various value types.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Corners<T = f32> {
+pub struct Corners<T = f64> {
     /// The top-left corner value.
     pub top_left: T,
     /// The top-right corner value.
@@ -184,16 +184,16 @@ impl<T> Corners<T> {
 // Specialized implementations for Pixels
 // ============================================================================
 
-impl Corners<super::units::Pixels> {
+impl Corners<f64> {
     /// Scales these corner values by the given factor.
     #[inline]
     #[must_use]
-    pub fn scale(&self, factor: f32) -> Corners<super::units::Pixels> {
+    pub fn scale(&self, factor: f64) -> Corners<f64> {
         Corners {
-            top_left: self.top_left.scale(factor),
-            top_right: self.top_right.scale(factor),
-            bottom_right: self.bottom_right.scale(factor),
-            bottom_left: self.bottom_left.scale(factor),
+            top_left: self.top_left * factor,
+            top_right: self.top_right * factor,
+            bottom_right: self.bottom_right * factor,
+            bottom_left: self.bottom_left * factor,
         }
     }
 }
@@ -255,7 +255,7 @@ impl<T: Clone> super::traits::Along for Corners<T> {
 mod tests {
     use super::*;
     use crate::traits::{Along, Axis};
-    use crate::{Corner, Radius, px};
+    use crate::{Corner, Radius};
 
     const ALL: [Corner; 4] = [
         Corner::TopLeft,
@@ -313,8 +313,8 @@ mod tests {
 
     #[test]
     fn scale_multiplies_each_corner() {
-        let k = corners(px(1.0), px(2.0), px(3.0), px(4.0));
-        assert_eq!(k.scale(1.5), corners(px(1.5), px(3.0), px(4.5), px(6.0)));
+        let k = corners(1.0, 2.0, 3.0, 4.0);
+        assert_eq!(k.scale(1.5), corners(1.5, 3.0, 4.5, 6.0));
     }
 
     /// Horizontal is the top pair, vertical the left pair.
@@ -358,17 +358,11 @@ mod tests {
 
     #[test]
     fn radius_constructors() {
-        assert_eq!(Radius::circular(px(3.0)), Radius::new(px(3.0), px(3.0)));
-        assert_eq!(
-            Radius::elliptical(px(3.0), px(5.0)),
-            Radius {
-                x: px(3.0),
-                y: px(5.0)
-            }
-        );
+        assert_eq!(Radius::circular(3.0), Radius::new(3.0, 3.0));
+        assert_eq!(Radius::elliptical(3.0, 5.0), Radius { x: 3.0, y: 5.0 });
         assert_eq!(Radius::<crate::Pixels>::zero(), Radius::ZERO);
         assert!(Radius::ZERO.is_zero());
-        assert!(!Radius::new(px(0.0), px(1.0)).is_zero());
-        assert!(!Radius::new(px(1.0), px(0.0)).is_zero());
+        assert!(!Radius::new(0.0, 1.0).is_zero());
+        assert!(!Radius::new(1.0, 0.0).is_zero());
     }
 }

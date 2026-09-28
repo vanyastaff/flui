@@ -10,7 +10,7 @@
 use std::fmt;
 
 use super::{
-    Pixels, Point, Vec2, px,
+    Point, Vec2,
     traits::{FloatUnit, NumericUnit, Unit},
 };
 
@@ -89,19 +89,19 @@ impl<T: Unit> Line<T> {
 
 impl<T: NumericUnit> Line<T>
 where
-    T: Into<f32> + FloatUnit + std::ops::Sub<Output = T>,
+    T: Into<f64> + FloatUnit + std::ops::Sub<Output = T>,
 {
     /// Returns the length of the line segment.
     #[inline]
     #[must_use]
-    pub fn length(&self) -> f32 {
+    pub fn length(&self) -> f64 {
         self.p0.distance(self.p1)
     }
 
     /// Returns the squared length of the line segment (faster than length).
     #[inline]
     #[must_use]
-    pub fn length_squared(&self) -> f32 {
+    pub fn length_squared(&self) -> f64 {
         self.p0.distance_squared(self.p1)
     }
 
@@ -118,7 +118,7 @@ where
     /// Returns the normalized direction vector of the line segment.
     #[inline]
     #[must_use]
-    pub fn direction(&self) -> Vec2<Pixels> {
+    pub fn direction(&self) -> Vec2<f64> {
         self.to_vec().normalize_or(Vec2::ZERO)
     }
 
@@ -132,7 +132,7 @@ where
     /// Evaluates a point along the line segment at parameter t ∈ [0, 1].
     #[inline]
     #[must_use]
-    pub fn eval(&self, t: f32) -> Point<T> {
+    pub fn eval(&self, t: f64) -> Point<T> {
         self.p0.lerp(self.p1, t)
     }
 }
@@ -143,7 +143,7 @@ where
 
 impl<T: NumericUnit> Line<T>
 where
-    T: Into<f32> + FloatUnit + PartialEq + std::ops::Sub<Output = T> + Clone + fmt::Debug + Default,
+    T: Into<f64> + FloatUnit + PartialEq + std::ops::Sub<Output = T> + Clone + fmt::Debug + Default,
 {
     /// Returns true if the line segment has zero length (both points are
     /// equal).
@@ -158,9 +158,9 @@ where
     #[inline]
     #[must_use]
     pub fn is_horizontal(&self) -> bool {
-        let y0: f32 = self.p0.y.into();
-        let y1: f32 = self.p1.y.into();
-        (y0 - y1).abs() < f32::EPSILON
+        let y0: f64 = self.p0.y.into();
+        let y1: f64 = self.p1.y.into();
+        (y0 - y1).abs() < f64::EPSILON
     }
 
     /// Returns true if the line segment is vertical (x-coordinates are equal
@@ -168,9 +168,9 @@ where
     #[inline]
     #[must_use]
     pub fn is_vertical(&self) -> bool {
-        let x0: f32 = self.p0.x.into();
-        let x1: f32 = self.p1.x.into();
-        (x0 - x1).abs() < f32::EPSILON
+        let x0: f64 = self.p0.x.into();
+        let x1: f64 = self.p1.x.into();
+        (x0 - x1).abs() < f64::EPSILON
     }
 
     /// Returns the nearest point on the line segment to the given point.
@@ -181,21 +181,21 @@ where
     #[must_use]
     pub fn nearest_point(&self, point: Point<T>) -> Point<T>
     where
-        T: Into<f32> + Copy,
+        T: Into<f64> + Copy,
     {
-        // Extract f32 values for calculation
-        let px: f32 = point.x.into();
-        let py: f32 = point.y.into();
-        let p0x: f32 = self.p0.x.into();
-        let p0y: f32 = self.p0.y.into();
-        let p1x: f32 = self.p1.x.into();
-        let p1y: f32 = self.p1.y.into();
+        // Extract f64 values for calculation
+        let px: f64 = point.x.into();
+        let py: f64 = point.y.into();
+        let p0x: f64 = self.p0.x.into();
+        let p0y: f64 = self.p0.y.into();
+        let p1x: f64 = self.p1.x.into();
+        let p1y: f64 = self.p1.y.into();
 
         let dx = p1x - p0x;
         let dy = p1y - p0y;
         let length_sq = dx * dx + dy * dy;
 
-        if length_sq < f32::EPSILON {
+        if length_sq < f64::EPSILON {
             return self.p0;
         }
 
@@ -209,7 +209,7 @@ where
     /// Returns the shortest distance from a point to the line segment.
     #[inline]
     #[must_use]
-    pub fn distance_to_point(&self, point: Point<T>) -> f32 {
+    pub fn distance_to_point(&self, point: Point<T>) -> f64 {
         point.distance(self.nearest_point(point))
     }
 
@@ -217,7 +217,7 @@ where
     /// than distance_to_point).
     #[inline]
     #[must_use]
-    pub fn distance_squared_to_point(&self, point: Point<T>) -> f32 {
+    pub fn distance_squared_to_point(&self, point: Point<T>) -> f64 {
         point.distance_squared(self.nearest_point(point))
     }
 
@@ -225,7 +225,7 @@ where
     /// the line segment.
     #[inline]
     #[must_use]
-    pub fn is_point_near(&self, point: Point<T>, tolerance: f32) -> bool {
+    pub fn is_point_near(&self, point: Point<T>, tolerance: f64) -> bool {
         self.distance_squared_to_point(point) <= tolerance * tolerance
     }
 }
@@ -236,7 +236,7 @@ where
 
 impl<T: NumericUnit> Line<T>
 where
-    T: Into<f32> + FloatUnit,
+    T: Into<f64> + FloatUnit,
 {
     /// Translates the line segment by the given offset vector.
     #[inline]
@@ -254,7 +254,7 @@ where
     /// - `t = 1.0` returns `other`
     #[inline]
     #[must_use]
-    pub fn lerp(self, other: Self, t: f32) -> Self {
+    pub fn lerp(self, other: Self, t: f64) -> Self {
         Self {
             p0: self.p0.lerp(other.p0, t),
             p1: self.p1.lerp(other.p1, t),
@@ -268,12 +268,12 @@ where
 
 impl<T: NumericUnit> Line<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     /// Converts the line segment to use `Pixels` units.
     #[inline]
     #[must_use]
-    pub fn to_f32(&self) -> Line<Pixels> {
+    pub fn to_f32(&self) -> Line<f64> {
         Line {
             p0: self.p0.to_f32(),
             p1: self.p1.to_f32(),
@@ -283,13 +283,13 @@ where
 
 impl<T: Unit> Line<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
     /// Converts the line segment to an array `[x0, y0, x1, y1]` for GPU
     /// buffers.
     #[inline]
     #[must_use]
-    pub fn to_array(&self) -> [f32; 4] {
+    pub fn to_array(&self) -> [f64; 4] {
         [
             self.p0.x.into(),
             self.p0.y.into(),
@@ -300,10 +300,10 @@ where
 }
 
 // ============================================================================
-// Intersections (f32 only - complex math)
+// Intersections (f64 only - complex math)
 // ============================================================================
 
-impl Line<Pixels> {
+impl Line<f64> {
     /// Computes the intersection point of this line with another line segment.
     ///
     /// Returns `Some(point)` if the lines intersect, `None` otherwise.
@@ -311,16 +311,16 @@ impl Line<Pixels> {
     /// operations.
     #[inline]
     #[must_use]
-    pub fn intersect_segment(&self, other: &Line<Pixels>) -> Option<Point<Pixels>> {
-        let p0_x = self.p0.x.0;
-        let p0_y = self.p0.y.0;
-        let p1_x = self.p1.x.0;
-        let p1_y = self.p1.y.0;
+    pub fn intersect_segment(&self, other: &Line<f64>) -> Option<Point<f64>> {
+        let p0_x = self.p0.x;
+        let p0_y = self.p0.y;
+        let p1_x = self.p1.x;
+        let p1_y = self.p1.y;
 
-        let p2_x = other.p0.x.0;
-        let p2_y = other.p0.y.0;
-        let p3_x = other.p1.x.0;
-        let p3_y = other.p1.y.0;
+        let p2_x = other.p0.x;
+        let p2_y = other.p0.y;
+        let p3_x = other.p1.x;
+        let p3_y = other.p1.y;
 
         let s1_x = p1_x - p0_x;
         let s1_y = p1_y - p0_y;
@@ -329,7 +329,7 @@ impl Line<Pixels> {
 
         let denom = -s2_x * s1_y + s1_x * s2_y;
 
-        if denom.abs() < f32::EPSILON {
+        if denom.abs() < f64::EPSILON {
             return None; // Lines are parallel or coincident
         }
 
@@ -337,7 +337,7 @@ impl Line<Pixels> {
         let t = (s2_x * (p0_y - p2_y) - s2_y * (p0_x - p2_x)) / denom;
 
         if (0.0..=1.0).contains(&s) && (0.0..=1.0).contains(&t) {
-            Some(Point::new(px(p0_x + t * s1_x), px(p0_y + t * s1_y)))
+            Some(Point::new(p0_x + t * s1_x, p0_y + t * s1_y))
         } else {
             None
         }
@@ -363,7 +363,7 @@ where
     T: super::traits::ApproxEq,
 {
     #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+    fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
         self.p0.approx_eq_eps(&other.p0, epsilon) && self.p1.approx_eq_eps(&other.p1, epsilon)
     }
 }
@@ -394,7 +394,7 @@ impl<T: Unit> Line<T> {
     }
 }
 
-impl Line<Pixels> {
+impl Line<f64> {
     /// A zero-length line at the origin.
     pub const ZERO: Self = Self {
         p0: Point::ORIGIN,
@@ -411,7 +411,7 @@ impl Line<Pixels> {
     /// Linearly interpolates between two line segments (alias for `lerp`).
     #[inline]
     #[must_use]
-    pub fn lerp_line(&self, other: &Self, t: f32) -> Self {
+    pub fn lerp_line(&self, other: &Self, t: f64) -> Self {
         Self {
             p0: self.p0.lerp(other.p0, t),
             p1: self.p1.lerp(other.p1, t),
@@ -441,7 +441,7 @@ impl Line<Pixels> {
     /// Extends the line segment in both directions by the specified amount.
     #[inline]
     #[must_use]
-    pub fn extend(&self, amount: f32) -> Self {
+    pub fn extend(&self, amount: f64) -> Self {
         let dir = self.direction();
         Self {
             p0: self.p0 - dir * amount,
@@ -452,7 +452,7 @@ impl Line<Pixels> {
     /// Shrinks the line segment from both ends by the specified amount.
     #[inline]
     #[must_use]
-    pub fn shrink(&self, amount: f32) -> Self {
+    pub fn shrink(&self, amount: f64) -> Self {
         self.extend(-amount)
     }
 }

@@ -32,13 +32,13 @@
 //! let scale = Matrix4::scaling(2.0, 2.0, 1.0);
 //!
 //! // Rotation (around Z axis for 2D)
-//! let rotate = Matrix4::rotation_z(std::f32::consts::PI / 4.0); // 45 degrees
+//! let rotate = Matrix4::rotation_z(std::f64::consts::PI / 4.0); // 45 degrees
 //!
 //! // Combine transformations (right-to-left application)
 //! let combined = translate * rotate * scale;
 //!
 //! // Transform a point
-//! let (x, y) = combined.transform_point(px(1.0), px(0.0));
+//! let (x, y) = combined.transform_point(1.0, 0.0);
 //! ```
 //!
 //! ## Advanced Operations
@@ -76,7 +76,7 @@
 //! *m.get_mut(0, 3) = 10.0; // Set translation
 //!
 //! // Zero-copy conversions
-//! let array: [f32; 16] = m.into();
+//! let array: [f64; 16] = m.into();
 //! let m2 = Matrix4::from(array);
 //! ```
 //!
@@ -101,9 +101,8 @@ use std::{
     ops::{Index, IndexMut, Mul, MulAssign},
 };
 
-use glam::Mat4;
+use glam::DMat4;
 
-use super::Pixels;
 use crate::Rect;
 
 /// A 4x4 transformation matrix stored in column-major order.
@@ -125,27 +124,37 @@ use crate::Rect;
 #[repr(C)]
 pub struct Matrix4 {
     /// Matrix elements in column-major order (16 floats)
-    pub m: [f32; 16],
+    pub m: [f64; 16],
 }
 
 impl Matrix4 {
-    /// Borrows the column-major storage as a `glam::Mat4` for delegated math.
+    /// Borrows the column-major storage as a `glam::DMat4` for delegated math.
     ///
     /// Both types are column-major, so this is a direct reinterpret of the 16
     /// floats (Option D backend).
     #[inline]
     #[must_use]
-    fn to_glam(self) -> Mat4 {
-        Mat4::from_cols_array(&self.m)
+    fn to_glam(self) -> DMat4 {
+        DMat4::from_cols_array(&self.m)
     }
 
-    /// Wraps a `glam::Mat4` result back into the column-major storage.
+    /// Wraps a `glam::DMat4` result back into the column-major storage.
     #[inline]
     #[must_use]
-    fn from_glam(m: Mat4) -> Self {
+    fn from_glam(m: DMat4) -> Self {
         Self {
             m: m.to_cols_array(),
         }
+    }
+
+    /// The column-major elements narrowed to `f32`, for upload to the GPU.
+    ///
+    /// The framework keeps transforms in `f64`; this is the one narrowing point for a
+    /// matrix on its way to a shader (ADR-0098 §2).
+    #[inline]
+    #[must_use]
+    pub fn to_cols_array_f32(&self) -> [f32; 16] {
+        self.m.map(|v| v as f32)
     }
 
     /// Interpolates toward `other` by decomposing both matrices into
@@ -163,10 +172,10 @@ impl Matrix4 {
     /// preserved, exactly as in Flutter.
     #[inline]
     #[must_use]
-    pub fn lerp(self, other: Self, t: f32) -> Self {
+    pub fn lerp(self, other: Self, t: f64) -> Self {
         let (scale_a, rot_a, trans_a) = self.to_glam().to_scale_rotation_translation();
         let (scale_b, rot_b, trans_b) = other.to_glam().to_scale_rotation_translation();
-        Self::from_glam(Mat4::from_scale_rotation_translation(
+        Self::from_glam(DMat4::from_scale_rotation_translation(
             scale_a.lerp(scale_b, t),
             rot_a.slerp(rot_b, t),
             trans_a.lerp(trans_b, t),
@@ -212,22 +221,22 @@ impl Matrix4 {
     /// (0-indexed).
     #[expect(clippy::too_many_arguments)]
     pub fn new(
-        m00: f32,
-        m01: f32,
-        m02: f32,
-        m03: f32,
-        m10: f32,
-        m11: f32,
-        m12: f32,
-        m13: f32,
-        m20: f32,
-        m21: f32,
-        m22: f32,
-        m23: f32,
-        m30: f32,
-        m31: f32,
-        m32: f32,
-        m33: f32,
+        m00: f64,
+        m01: f64,
+        m02: f64,
+        m03: f64,
+        m10: f64,
+        m11: f64,
+        m12: f64,
+        m13: f64,
+        m20: f64,
+        m21: f64,
+        m22: f64,
+        m23: f64,
+        m30: f64,
+        m31: f64,
+        m32: f64,
+        m33: f64,
     ) -> Self {
         Self {
             m: [
@@ -250,7 +259,7 @@ impl Matrix4 {
     ///
     /// For 2D transformations, use `z = 0.0`.
     #[inline]
-    pub fn translation(x: f32, y: f32, z: f32) -> Self {
+    pub fn translation(x: f64, y: f64, z: f64) -> Self {
         Self::new(
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, x, y, z, 1.0,
         )
@@ -260,7 +269,7 @@ impl Matrix4 {
     ///
     /// For 2D transformations, use `z = 1.0`.
     #[inline]
-    pub fn scaling(x: f32, y: f32, z: f32) -> Self {
+    pub fn scaling(x: f64, y: f64, z: f64) -> Self {
         Self::new(
             x, 0.0, 0.0, 0.0, 0.0, y, 0.0, 0.0, 0.0, 0.0, z, 0.0, 0.0, 0.0, 0.0, 1.0,
         )
@@ -270,7 +279,7 @@ impl Matrix4 {
     ///
     /// Angle is in radians. Positive values rotate counter-clockwise.
     #[inline]
-    pub fn rotation_z(angle: f32) -> Self {
+    pub fn rotation_z(angle: f64) -> Self {
         let (sin, cos) = angle.sin_cos();
         Self::new(
             cos, sin, 0.0, 0.0, -sin, cos, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -279,8 +288,8 @@ impl Matrix4 {
 
     /// Creates a rotation matrix around the Z axis (type-safe version).
     #[inline]
-    pub fn rotation_z_radians(angle: crate::Radians) -> Self {
-        Self::rotation_z(angle.0)
+    pub fn rotation_z_radians(angle: f64) -> Self {
+        Self::rotation_z(angle)
     }
 
     /// Creates a rotation matrix around the X axis.
@@ -288,7 +297,7 @@ impl Matrix4 {
     /// Angle is in radians. Positive values rotate counter-clockwise when
     /// looking down the axis.
     #[inline]
-    pub fn rotation_x(angle: f32) -> Self {
+    pub fn rotation_x(angle: f64) -> Self {
         let (sin, cos) = angle.sin_cos();
         Self::new(
             1.0, 0.0, 0.0, 0.0, 0.0, cos, sin, 0.0, 0.0, -sin, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -297,8 +306,8 @@ impl Matrix4 {
 
     /// Creates a rotation matrix around the X axis (type-safe version).
     #[inline]
-    pub fn rotation_x_radians(angle: crate::Radians) -> Self {
-        Self::rotation_x(angle.0)
+    pub fn rotation_x_radians(angle: f64) -> Self {
+        Self::rotation_x(angle)
     }
 
     /// Creates a rotation matrix around the Y axis.
@@ -306,7 +315,7 @@ impl Matrix4 {
     /// Angle is in radians. Positive values rotate counter-clockwise when
     /// looking down the axis.
     #[inline]
-    pub fn rotation_y(angle: f32) -> Self {
+    pub fn rotation_y(angle: f64) -> Self {
         let (sin, cos) = angle.sin_cos();
         Self::new(
             cos, 0.0, -sin, 0.0, 0.0, 1.0, 0.0, 0.0, sin, 0.0, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -315,8 +324,8 @@ impl Matrix4 {
 
     /// Creates a rotation matrix around the Y axis (type-safe version).
     #[inline]
-    pub fn rotation_y_radians(angle: crate::Radians) -> Self {
-        Self::rotation_y(angle.0)
+    pub fn rotation_y_radians(angle: f64) -> Self {
+        Self::rotation_y(angle)
     }
 
     /// Creates a 2D skew (shear) matrix.
@@ -324,7 +333,7 @@ impl Matrix4 {
     /// - `skew_x`: Skew angle along the X axis (in radians)
     /// - `skew_y`: Skew angle along the Y axis (in radians)
     #[inline]
-    pub fn skew_2d(skew_x: f32, skew_y: f32) -> Self {
+    pub fn skew_2d(skew_x: f64, skew_y: f64) -> Self {
         let tan_x = skew_x.tan();
         let tan_y = skew_y.tan();
 
@@ -335,7 +344,7 @@ impl Matrix4 {
 
     /// Alias for `skew_2d`.
     #[inline]
-    pub fn skew(skew_x: f32, skew_y: f32) -> Self {
+    pub fn skew(skew_x: f64, skew_y: f64) -> Self {
         Self::skew_2d(skew_x, skew_y)
     }
 
@@ -347,7 +356,7 @@ impl Matrix4 {
     }
 
     /// Returns whether this is an identity matrix with custom epsilon.
-    pub fn is_identity_with_epsilon(&self, epsilon: f32) -> bool {
+    pub fn is_identity_with_epsilon(&self, epsilon: f64) -> bool {
         for i in 0..16 {
             if (self.m[i] - Self::IDENTITY.m[i]).abs() > epsilon {
                 return false;
@@ -370,7 +379,7 @@ impl Matrix4 {
     /// A translation along z also returns `None` — the result is a 2D offset,
     /// and there is no honest way to express a z component in one.
     #[must_use]
-    pub fn as_translation(&self) -> Option<(f32, f32)> {
+    pub fn as_translation(&self) -> Option<(f64, f64)> {
         // Column-major: columns 0..2 must be the identity basis, the
         // perspective row zero, and the translation column's z entry zero.
         let is_identity_basis = self.m[0] == 1.0
@@ -392,10 +401,10 @@ impl Matrix4 {
     }
 
     /// Returns whether this matrix represents only a translation, using
-    /// `f32::EPSILON` as the comparison tolerance.
+    /// `f64::EPSILON` as the comparison tolerance.
     #[inline]
     pub fn is_translation_only(&self) -> bool {
-        self.is_translation_only_with_epsilon(f32::EPSILON)
+        self.is_translation_only_with_epsilon(f64::EPSILON)
     }
 
     /// Returns whether this matrix represents only a translation with custom
@@ -403,7 +412,7 @@ impl Matrix4 {
     ///
     /// Checks that the 3x3 upper-left submatrix is identity (within epsilon)
     /// and the perspective row is [0, 0, 0, 1].
-    pub fn is_translation_only_with_epsilon(&self, epsilon: f32) -> bool {
+    pub fn is_translation_only_with_epsilon(&self, epsilon: f64) -> bool {
         // Column-major layout:
         // m[0..3]   = column 0 (should be [1, 0, 0, 0])
         // m[4..7]   = column 1 (should be [0, 1, 0, 0])
@@ -430,13 +439,13 @@ impl Matrix4 {
 
     /// Extracts the translation component (x, y, z) from the matrix.
     #[inline]
-    pub fn translation_component(&self) -> (f32, f32, f32) {
+    pub fn translation_component(&self) -> (f64, f64, f64) {
         (self.m[12], self.m[13], self.m[14])
     }
 
     /// Sets the translation component without affecting other transformations.
     #[inline]
-    pub fn set_translation(&mut self, x: f32, y: f32, z: f32) {
+    pub fn set_translation(&mut self, x: f64, y: f64, z: f64) {
         self.m[12] = x;
         self.m[13] = y;
         self.m[14] = z;
@@ -444,42 +453,42 @@ impl Matrix4 {
 
     /// Applies a translation to this matrix (modifies in place).
     #[inline]
-    pub fn translate(&mut self, x: f32, y: f32, z: f32) {
+    pub fn translate(&mut self, x: f64, y: f64, z: f64) {
         *self = Matrix4::translation(x, y, z) * *self;
     }
 
     /// Applies a scaling to this matrix (modifies in place).
     #[inline]
-    pub fn scale(&mut self, x: f32, y: f32, z: f32) {
+    pub fn scale(&mut self, x: f64, y: f64, z: f64) {
         *self = Matrix4::scaling(x, y, z) * *self;
     }
 
     /// Applies a Z-axis rotation to this matrix (modifies in place).
     #[inline]
-    pub fn rotate_z(&mut self, angle: f32) {
+    pub fn rotate_z(&mut self, angle: f64) {
         *self = Matrix4::rotation_z(angle) * *self;
     }
 
     /// Applies a Z-axis rotation to this matrix (type-safe version, modifies in
     /// place).
     #[inline]
-    pub fn rotate_z_radians(&mut self, angle: crate::Radians) {
-        self.rotate_z(angle.0);
+    pub fn rotate_z_radians(&mut self, angle: f64) {
+        self.rotate_z(angle);
     }
 
     /// Transforms a 2D point (x, y) by this matrix.
     ///
     /// Uses homogeneous coordinates: (x, y, 0, 1) → (x', y', z', w')
     /// Returns (x'/w', y'/w').
-    pub fn transform_point(&self, x: Pixels, y: Pixels) -> (Pixels, Pixels) {
-        let x_out = self.m[0] * x.0 + self.m[4] * y.0 + self.m[12];
-        let y_out = self.m[1] * x.0 + self.m[5] * y.0 + self.m[13];
-        let w_out = self.m[3] * x.0 + self.m[7] * y.0 + self.m[15];
+    pub fn transform_point(&self, x: f64, y: f64) -> (f64, f64) {
+        let x_out = self.m[0] * x + self.m[4] * y + self.m[12];
+        let y_out = self.m[1] * x + self.m[5] * y + self.m[13];
+        let w_out = self.m[3] * x + self.m[7] * y + self.m[15];
 
-        if w_out.abs() > f32::EPSILON {
-            (Pixels(x_out / w_out), Pixels(y_out / w_out))
+        if w_out.abs() > f64::EPSILON {
+            ((x_out / w_out), (y_out / w_out))
         } else {
-            (Pixels(x_out), Pixels(y_out))
+            (x_out, y_out)
         }
     }
 
@@ -488,7 +497,7 @@ impl Matrix4 {
     ///
     /// Transforms all four corners and computes the axis-aligned bounding box.
     #[must_use]
-    pub fn transform_rect(&self, rect: &Rect<Pixels>) -> Rect<Pixels> {
+    pub fn transform_rect(&self, rect: &Rect<f64>) -> Rect<f64> {
         // Transform all four corners
         let (x0, y0) = self.transform_point(rect.min.x, rect.min.y); // Top-left
         let (x1, y1) = self.transform_point(rect.max.x, rect.min.y); // Top-right
@@ -506,7 +515,7 @@ impl Matrix4 {
 
     /// Returns the matrix as a column-major array (zero-copy).
     #[must_use]
-    pub const fn to_col_major_array(&self) -> [f32; 16] {
+    pub const fn to_col_major_array(&self) -> [f64; 16] {
         self.m
     }
 
@@ -538,7 +547,7 @@ impl Matrix4 {
 
     /// Converts the matrix to a 2D array in row-major order.
     #[must_use]
-    pub fn to_row_major_2d(&self) -> [[f32; 4]; 4] {
+    pub fn to_row_major_2d(&self) -> [[f64; 4]; 4] {
         [
             [self.m[0], self.m[4], self.m[8], self.m[12]],
             [self.m[1], self.m[5], self.m[9], self.m[13]],
@@ -549,7 +558,7 @@ impl Matrix4 {
 
     /// Converts the matrix to a 2D array in column-major order.
     #[must_use]
-    pub fn to_col_major_2d(&self) -> [[f32; 4]; 4] {
+    pub fn to_col_major_2d(&self) -> [[f64; 4]; 4] {
         [
             [self.m[0], self.m[1], self.m[2], self.m[3]],
             [self.m[4], self.m[5], self.m[6], self.m[7]],
@@ -563,7 +572,7 @@ impl Matrix4 {
     /// # Panics
     /// Panics if row or column is >= 4.
     #[must_use]
-    pub fn get(&self, row: usize, col: usize) -> f32 {
+    pub fn get(&self, row: usize, col: usize) -> f64 {
         assert!(row < 4 && col < 4, "Matrix index out of bounds");
         self.m[col * 4 + row]
     }
@@ -574,7 +583,7 @@ impl Matrix4 {
     /// # Panics
     /// Panics if row or column is >= 4.
     #[inline]
-    pub fn get_mut(&mut self, row: usize, col: usize) -> &mut f32 {
+    pub fn get_mut(&mut self, row: usize, col: usize) -> &mut f64 {
         assert!(row < 4 && col < 4, "Matrix index out of bounds");
         &mut self.m[col * 4 + row]
     }
@@ -582,7 +591,7 @@ impl Matrix4 {
     /// Returns whether this matrix has an inverse.
     ///
     /// This is exactly the predicate [`try_inverse`](Self::try_inverse) gates
-    /// success on -- `determinant().abs() >= f32::EPSILON` -- computed
+    /// success on -- `determinant().abs() >= f64::EPSILON` -- computed
     /// without building the full inverse. `try_inverse` is defined in terms
     /// of this method, so the cheap probe and the real inversion can never
     /// disagree about a borderline (near-singular) matrix.
@@ -590,7 +599,7 @@ impl Matrix4 {
     /// Prefer this over `try_inverse().is_some()` when the inverse itself is
     /// discarded: callers on a hot path (e.g. once per hit-test entry per
     /// pointer event) that only need a well-formedness check should not pay
-    /// for `glam::Mat4::inverse()`.
+    /// for `glam::DMat4::inverse()`.
     ///
     /// # Examples
     ///
@@ -605,10 +614,10 @@ impl Matrix4 {
     /// ```
     #[must_use]
     pub fn is_invertible(&self) -> bool {
-        // `glam::Mat4::inverse` returns a matrix of NaNs/inf for a
+        // `glam::DMat4::inverse` returns a matrix of NaNs/inf for a
         // non-invertible matrix rather than signalling, so this (and
         // `try_inverse`, below) gate on the determinant explicitly.
-        self.to_glam().determinant().abs() >= f32::EPSILON
+        self.to_glam().determinant().abs() >= f64::EPSILON
     }
 
     /// Attempts to invert this matrix.
@@ -640,7 +649,7 @@ impl Matrix4 {
     }
 
     /// Returns the determinant of this matrix.
-    pub fn determinant(&self) -> f32 {
+    pub fn determinant(&self) -> f64 {
         self.to_glam().determinant()
     }
 }
@@ -667,7 +676,7 @@ impl Matrix4 {
     ///
     /// Returns true if all elements differ by at most `epsilon`.
     #[must_use]
-    pub fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+    pub fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
         for i in 0..16 {
             if (self.m[i] - other.m[i]).abs() > epsilon {
                 return false;
@@ -686,7 +695,7 @@ impl Matrix4 {
 /// Matrix multiplication: `C = A * B`.
 ///
 /// Matrices are applied right-to-left: `A * B` transforms first by `B`, then by
-/// `A`. Delegates to `glam::Mat4`'s SIMD-accelerated column-major product
+/// `A`. Delegates to `glam::DMat4`'s SIMD-accelerated column-major product
 /// (Option D — replaces the hand-rolled scalar/SSE/NEON paths).
 impl Mul for Matrix4 {
     type Output = Self;
@@ -713,7 +722,7 @@ impl MulAssign for Matrix4 {
 /// assert_eq!(m[5], 1.0); // m11
 /// ```
 impl Index<usize> for Matrix4 {
-    type Output = f32;
+    type Output = f64;
 
     #[inline]
     fn index(&self, index: usize) -> &Self::Output {
@@ -731,15 +740,15 @@ impl IndexMut<usize> for Matrix4 {
 }
 
 /// Construct from column-major array.
-impl From<[f32; 16]> for Matrix4 {
+impl From<[f64; 16]> for Matrix4 {
     #[inline]
-    fn from(m: [f32; 16]) -> Self {
+    fn from(m: [f64; 16]) -> Self {
         Self { m }
     }
 }
 
 /// Convert to column-major array (zero-copy).
-impl From<Matrix4> for [f32; 16] {
+impl From<Matrix4> for [f64; 16] {
     #[inline]
     fn from(matrix: Matrix4) -> Self {
         matrix.m
@@ -747,8 +756,8 @@ impl From<Matrix4> for [f32; 16] {
 }
 
 /// Construct from column-major 2D array.
-impl From<[[f32; 4]; 4]> for Matrix4 {
-    fn from(arr: [[f32; 4]; 4]) -> Self {
+impl From<[[f64; 4]; 4]> for Matrix4 {
+    fn from(arr: [[f64; 4]; 4]) -> Self {
         Self {
             m: [
                 arr[0][0], arr[0][1], arr[0][2], arr[0][3], arr[1][0], arr[1][1], arr[1][2],
@@ -760,7 +769,7 @@ impl From<[[f32; 4]; 4]> for Matrix4 {
 }
 
 /// Convert to column-major 2D array.
-impl From<Matrix4> for [[f32; 4]; 4] {
+impl From<Matrix4> for [[f64; 4]; 4] {
     #[inline]
     fn from(matrix: Matrix4) -> Self {
         matrix.to_col_major_2d()
@@ -768,17 +777,17 @@ impl From<Matrix4> for [[f32; 4]; 4] {
 }
 
 /// Borrow as slice for efficient read access.
-impl AsRef<[f32; 16]> for Matrix4 {
+impl AsRef<[f64; 16]> for Matrix4 {
     #[inline]
-    fn as_ref(&self) -> &[f32; 16] {
+    fn as_ref(&self) -> &[f64; 16] {
         &self.m
     }
 }
 
 /// Mutably borrow as slice for efficient write access.
-impl AsMut<[f32; 16]> for Matrix4 {
+impl AsMut<[f64; 16]> for Matrix4 {
     #[inline]
-    fn as_mut(&mut self) -> &mut [f32; 16] {
+    fn as_mut(&mut self) -> &mut [f64; 16] {
         &mut self.m
     }
 }
@@ -816,7 +825,7 @@ impl<'de> serde::Deserialize<'de> for Matrix4 {
     where
         D: serde::Deserializer<'de>,
     {
-        let m = <[f32; 16]>::deserialize(deserializer)?;
+        let m = <[f64; 16]>::deserialize(deserializer)?;
         Ok(Self { m })
     }
 }
@@ -826,17 +835,17 @@ mod glam_backend_tests {
     use super::*;
 
     #[test]
-    fn matrix4_is_pod_64_bytes() {
-        // The column-major [f32; 16] storage is Pod, so the engine can upload a
-        // Matrix4 to a wgpu buffer via `bytemuck::cast_slice` with no shim.
-        assert_eq!(std::mem::size_of::<Matrix4>(), 64);
+    fn gpu_upload_narrows_the_f64_storage_to_f32_column_major() {
+        // The framework keeps f64; the GPU takes f32, narrowed once at upload.
         assert_eq!(
             std::mem::size_of::<Matrix4>(),
-            16 * std::mem::size_of::<f32>()
+            16 * std::mem::size_of::<f64>()
         );
         let m = Matrix4::translation(3.0, 4.0, 5.0);
-        let bytes: &[u8] = bytemuck::bytes_of(&m);
-        assert_eq!(bytes.len(), 64);
+        let cols = m.to_cols_array_f32();
+        assert_eq!(&cols[12..15], &[3.0_f32, 4.0, 5.0]);
+        assert_eq!(cols[0], 1.0_f32);
+        assert_eq!(bytemuck::bytes_of(&cols).len(), 64);
     }
 
     #[test]
@@ -852,10 +861,10 @@ mod glam_backend_tests {
         let a = Matrix4::scaling(2.0, 3.0, 1.0);
         let b = Matrix4::translation(5.0, 7.0, 0.0);
         let c = a * b; // apply b first, then a
-        let (x, y) = c.transform_point(Pixels(1.0), Pixels(1.0));
+        let (x, y) = c.transform_point(1.0, 1.0);
         // b: (1,1)->(6,8); a: scale -> (12, 24)
-        assert!((x.0 - 12.0).abs() < 1e-5, "x={}", x.0);
-        assert!((y.0 - 24.0).abs() < 1e-5, "y={}", y.0);
+        assert!((x - 12.0).abs() < 1e-5, "x={}", x);
+        assert!((y - 24.0).abs() < 1e-5, "y={}", y);
     }
 
     #[test]
@@ -878,15 +887,15 @@ mod glam_backend_tests {
 
     #[test]
     fn is_invertible_matches_try_inverse_at_the_epsilon_boundary() {
-        // A scale just above f32::EPSILON must read as invertible; a scale
+        // A scale just above f64::EPSILON must read as invertible; a scale
         // just below it must read as singular -- `is_invertible` and
         // `try_inverse` must never disagree, even this close to the
         // threshold they share.
-        let just_above = Matrix4::scaling(f32::EPSILON * 2.0, 1.0, 1.0);
+        let just_above = Matrix4::scaling(f64::EPSILON * 2.0, 1.0, 1.0);
         assert!(just_above.is_invertible());
         assert!(just_above.try_inverse().is_some());
 
-        let just_below = Matrix4::scaling(f32::EPSILON * 0.5, 1.0, 1.0);
+        let just_below = Matrix4::scaling(f64::EPSILON * 0.5, 1.0, 1.0);
         assert!(!just_below.is_invertible());
         assert!(just_below.try_inverse().is_none());
     }

@@ -32,10 +32,6 @@ glam = { workspace = true, features = ["mint"] }
 # Pod/Zeroable derives for zero-copy GPU upload (Matrix4 + future vertex structs).
 bytemuck = { workspace = true }
 
-# kurbo: f64 Bézier/curve math for the painting layer. The bridge
-# (src/bridges/kurbo.rs) is gated behind `feature = "kurbo"`.
-kurbo = { version = "0.13", optional = true }
-
 [dev-dependencies]
 
 [features]
@@ -48,11 +44,8 @@ serde = ["dep:serde"]
 # this feature flag is kept for API compat (flui-types/mint forwards here).
 mint = []
 
-# kurbo interop bridge (flui-geometry/src/bridges/kurbo.rs) — gates Core.2.
-kurbo = ["dep:kurbo"]
-
 # Enable all features
-full = ["serde", "mint", "kurbo"]
+full = ["serde", "mint"]
 
 [package.metadata.docs.rs]
 all-features = true

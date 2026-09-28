@@ -12,16 +12,16 @@ pub enum GeometryError {
     #[error("Invalid coordinates: ({x}, {y}) - must be finite")]
     InvalidCoordinates {
         /// X coordinate
-        x: f32,
+        x: f64,
         /// Y coordinate
-        y: f32,
+        y: f64,
     },
 
     /// Invalid numeric value (NaN or infinite).
     #[error("Invalid value: {value} - must be finite")]
     InvalidValue {
         /// The invalid value
-        value: f32,
+        value: f64,
         /// Context about what the value represents
         context: &'static str,
     },
@@ -30,11 +30,11 @@ pub enum GeometryError {
     #[error("{context}: {value} is out of range [{min}, {max}]")]
     OutOfRange {
         /// The invalid value
-        value: f32,
+        value: f64,
         /// Minimum allowed value
-        min: f32,
+        min: f64,
         /// Maximum allowed value
-        max: f32,
+        max: f64,
         /// Context about what the value represents
         context: &'static str,
     },
@@ -48,7 +48,7 @@ pub enum GeometryError {
         /// Name of the dimension (e.g., "width", "height", "radius")
         dimension: &'static str,
         /// The invalid value
-        value: f32,
+        value: f64,
     },
 
     /// Zero dimension value where non-zero is required.
@@ -62,9 +62,9 @@ pub enum GeometryError {
     #[error("Invalid size: {width}×{height} - {reason}")]
     InvalidSize {
         /// Width value
-        width: f32,
+        width: f64,
         /// Height value
-        height: f32,
+        height: f64,
         /// Reason for invalidity
         reason: &'static str,
     },
@@ -109,9 +109,9 @@ pub enum GeometryError {
     #[error("Point ({x}, {y}) is outside bounds")]
     PointOutOfBounds {
         /// X coordinate
-        x: f32,
+        x: f64,
         /// Y coordinate
-        y: f32,
+        y: f64,
     },
 
     /// Degenerate geometric shape (zero area, collinear points, etc.).
@@ -132,14 +132,14 @@ pub enum GeometryError {
     #[error("Invalid rotation angle: {angle} radians")]
     InvalidAngle {
         /// The invalid angle value
-        angle: f32,
+        angle: f64,
     },
 
     /// Invalid scale factor.
     #[error("Invalid scale factor: {factor} - {reason}")]
     InvalidScale {
         /// The invalid scale factor
-        factor: f32,
+        factor: f64,
         /// Reason for invalidity
         reason: &'static str,
     },
@@ -151,11 +151,11 @@ pub enum GeometryError {
     #[error("Invalid parameter t = {t} (expected range [{min}, {max}])")]
     InvalidParameter {
         /// The parameter value
-        t: f32,
+        t: f64,
         /// Expected minimum
-        min: f32,
+        min: f64,
         /// Expected maximum
-        max: f32,
+        max: f64,
     },
 
     /// Not enough control points for the operation.
@@ -194,19 +194,19 @@ impl GeometryError {
 
     /// Creates an invalid coordinates error.
     #[inline]
-    pub fn invalid_coords(x: f32, y: f32) -> Self {
+    pub fn invalid_coords(x: f64, y: f64) -> Self {
         Self::InvalidCoordinates { x, y }
     }
 
     /// Creates an invalid value error.
     #[inline]
-    pub fn invalid_value(value: f32, context: &'static str) -> Self {
+    pub fn invalid_value(value: f64, context: &'static str) -> Self {
         Self::InvalidValue { value, context }
     }
 
     /// Creates an out of range error.
     #[inline]
-    pub fn out_of_range(value: f32, min: f32, max: f32, context: &'static str) -> Self {
+    pub fn out_of_range(value: f64, min: f64, max: f64, context: &'static str) -> Self {
         Self::OutOfRange {
             value,
             min,
@@ -217,7 +217,7 @@ impl GeometryError {
 
     /// Creates a negative dimension error.
     #[inline]
-    pub fn negative_dimension(dimension: &'static str, value: f32) -> Self {
+    pub fn negative_dimension(dimension: &'static str, value: f64) -> Self {
         Self::NegativeDimension { dimension, value }
     }
 
@@ -229,7 +229,7 @@ impl GeometryError {
 
     /// Creates an invalid size error.
     #[inline]
-    pub fn invalid_size(width: f32, height: f32, reason: &'static str) -> Self {
+    pub fn invalid_size(width: f64, height: f64, reason: &'static str) -> Self {
         Self::InvalidSize {
             width,
             height,
@@ -245,7 +245,7 @@ impl GeometryError {
 
     /// Creates an invalid parameter error for t in [0, 1].
     #[inline]
-    pub fn invalid_t(t: f32) -> Self {
+    pub fn invalid_t(t: f64) -> Self {
         Self::InvalidParameter {
             t,
             min: 0.0,
@@ -255,19 +255,19 @@ impl GeometryError {
 
     /// Creates an invalid parameter error with custom range.
     #[inline]
-    pub fn invalid_param(t: f32, min: f32, max: f32) -> Self {
+    pub fn invalid_param(t: f64, min: f64, max: f64) -> Self {
         Self::InvalidParameter { t, min, max }
     }
 
     /// Creates an invalid scale error.
     #[inline]
-    pub fn invalid_scale(factor: f32, reason: &'static str) -> Self {
+    pub fn invalid_scale(factor: f64, reason: &'static str) -> Self {
         Self::InvalidScale { factor, reason }
     }
 
     /// Creates a point out of bounds error.
     #[inline]
-    pub fn point_out_of_bounds(x: f32, y: f32) -> Self {
+    pub fn point_out_of_bounds(x: f64, y: f64) -> Self {
         Self::PointOutOfBounds { x, y }
     }
 

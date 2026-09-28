@@ -11,7 +11,7 @@ use std::ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign};
 /// Generic over type `T` to support various value types.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Edges<T = f32> {
+pub struct Edges<T = f64> {
     /// The top edge value.
     pub top: T,
     /// The right edge value.
@@ -151,13 +151,13 @@ impl<T> Edges<T> {
 // Specialized implementations for Pixels
 // ============================================================================
 
-impl Edges<super::units::Pixels> {
+impl Edges<f64> {
     /// Edge insets with all sides set to zero.
     pub const ZERO: Self = Self {
-        top: super::units::Pixels(0.0),
-        right: super::units::Pixels(0.0),
-        bottom: super::units::Pixels(0.0),
-        left: super::units::Pixels(0.0),
+        top: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+        left: 0.0,
     };
 
     /// Create edge insets with only the left side set.
@@ -167,54 +167,50 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, px};
     ///
-    /// let insets = Edges::only_left(px(10.0));
-    /// assert_eq!(insets.left, px(10.0));
-    /// assert_eq!(insets.top, px(0.0));
+    /// let insets = Edges::only_left(10.0);
+    /// assert_eq!(insets.left, 10.0);
+    /// assert_eq!(insets.top, 0.0);
     /// ```
     #[inline]
-    pub fn only_left(value: super::units::Pixels) -> Self {
-        use super::units::px;
+    pub fn only_left(value: f64) -> Self {
         Self {
-            top: px(0.0),
-            right: px(0.0),
-            bottom: px(0.0),
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
             left: value,
         }
     }
 
     /// Create edge insets with only the top side set.
     #[inline]
-    pub fn only_top(value: super::units::Pixels) -> Self {
-        use super::units::px;
+    pub fn only_top(value: f64) -> Self {
         Self {
             top: value,
-            right: px(0.0),
-            bottom: px(0.0),
-            left: px(0.0),
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
         }
     }
 
     /// Create edge insets with only the right side set.
     #[inline]
-    pub fn only_right(value: super::units::Pixels) -> Self {
-        use super::units::px;
+    pub fn only_right(value: f64) -> Self {
         Self {
-            top: px(0.0),
+            top: 0.0,
             right: value,
-            bottom: px(0.0),
-            left: px(0.0),
+            bottom: 0.0,
+            left: 0.0,
         }
     }
 
     /// Create edge insets with only the bottom side set.
     #[inline]
-    pub fn only_bottom(value: super::units::Pixels) -> Self {
-        use super::units::px;
+    pub fn only_bottom(value: f64) -> Self {
         Self {
-            top: px(0.0),
-            right: px(0.0),
+            top: 0.0,
+            right: 0.0,
             bottom: value,
-            left: px(0.0),
+            left: 0.0,
         }
     }
 
@@ -226,14 +222,14 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, Size, px};
     ///
-    /// let insets = Edges::new(px(10.0), px(20.0), px(30.0), px(40.0));
+    /// let insets = Edges::new(10.0, 20.0, 30.0, 40.0);
     /// let size = insets.total_size();
-    /// assert_eq!(size.width, px(60.0)); // left + right = 40 + 20
-    /// assert_eq!(size.height, px(40.0)); // top + bottom = 10 + 30
+    /// assert_eq!(size.width, 60.0); // left + right = 40 + 20
+    /// assert_eq!(size.height, 40.0); // top + bottom = 10 + 30
     /// ```
     #[must_use]
     #[inline]
-    pub fn total_size(&self) -> super::Size<super::units::Pixels> {
+    pub fn total_size(&self) -> super::Size<f64> {
         super::Size::new(self.horizontal_total(), self.vertical_total())
     }
 
@@ -244,14 +240,14 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, Offset, px};
     ///
-    /// let insets = Edges::new(px(10.0), px(20.0), px(30.0), px(40.0));
+    /// let insets = Edges::new(10.0, 20.0, 30.0, 40.0);
     /// let offset = insets.top_left();
-    /// assert_eq!(offset.dx, px(40.0)); // left
-    /// assert_eq!(offset.dy, px(10.0)); // top
+    /// assert_eq!(offset.dx, 40.0); // left
+    /// assert_eq!(offset.dy, 10.0); // top
     /// ```
     #[must_use]
     #[inline]
-    pub fn top_left(&self) -> super::Offset<super::units::Pixels> {
+    pub fn top_left(&self) -> super::Offset<f64> {
         super::Offset::new(self.left, self.top)
     }
 
@@ -262,14 +258,14 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, Offset, px};
     ///
-    /// let insets = Edges::new(px(10.0), px(20.0), px(30.0), px(40.0));
+    /// let insets = Edges::new(10.0, 20.0, 30.0, 40.0);
     /// let offset = insets.bottom_right();
-    /// assert_eq!(offset.dx, px(20.0)); // right
-    /// assert_eq!(offset.dy, px(30.0)); // bottom
+    /// assert_eq!(offset.dx, 20.0); // right
+    /// assert_eq!(offset.dy, 30.0); // bottom
     /// ```
     #[must_use]
     #[inline]
-    pub fn bottom_right(&self) -> super::Offset<super::units::Pixels> {
+    pub fn bottom_right(&self) -> super::Offset<f64> {
         super::Offset::new(self.right, self.bottom)
     }
 
@@ -283,17 +279,13 @@ impl Edges<super::units::Pixels> {
     /// let zero_insets = Edges::ZERO;
     /// assert!(zero_insets.is_zero());
     ///
-    /// let non_zero = Edges::all(px(10.0));
+    /// let non_zero = Edges::all(10.0);
     /// assert!(!non_zero.is_zero());
     /// ```
     #[must_use]
     #[inline]
     pub fn is_zero(&self) -> bool {
-        use super::units::px;
-        self.left == px(0.0)
-            && self.top == px(0.0)
-            && self.right == px(0.0)
-            && self.bottom == px(0.0)
+        self.left == 0.0 && self.top == 0.0 && self.right == 0.0 && self.bottom == 0.0
     }
 
     /// Check if all edge values are non-negative.
@@ -303,22 +295,19 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, px};
     ///
-    /// let positive = Edges::all(px(10.0));
+    /// let positive = Edges::all(10.0);
     /// assert!(positive.is_non_negative());
     ///
-    /// let negative = Edges::new(px(-5.0), px(10.0), px(10.0), px(10.0));
+    /// let negative = Edges::new(-5.0, 10.0, 10.0, 10.0);
     /// assert!(!negative.is_non_negative());
     /// ```
     #[must_use]
     #[inline]
     pub const fn is_non_negative(&self) -> bool {
-        // Compared as raw `f32` rather than through `PartialOrd` on `Pixels`,
+        // Compared as raw `f64` rather than through `PartialOrd` on `Pixels`,
         // because a trait-method call is not permitted in a `const fn` — and
         // being const lets `const fn` constructors assert this invariant.
-        self.left.get() >= 0.0
-            && self.top.get() >= 0.0
-            && self.right.get() >= 0.0
-            && self.bottom.get() >= 0.0
+        self.left >= 0.0 && self.top >= 0.0 && self.right >= 0.0 && self.bottom >= 0.0
     }
 
     /// Clamp all edge values to be non-negative.
@@ -328,50 +317,33 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, px};
     ///
-    /// let insets = Edges::new(px(-5.0), px(10.0), px(-3.0), px(20.0));
+    /// let insets = Edges::new(-5.0, 10.0, -3.0, 20.0);
     /// let clamped = insets.clamp_non_negative();
-    /// assert_eq!(clamped.top, px(0.0));
-    /// assert_eq!(clamped.right, px(10.0));
-    /// assert_eq!(clamped.bottom, px(0.0));
-    /// assert_eq!(clamped.left, px(20.0));
+    /// assert_eq!(clamped.top, 0.0);
+    /// assert_eq!(clamped.right, 10.0);
+    /// assert_eq!(clamped.bottom, 0.0);
+    /// assert_eq!(clamped.left, 20.0);
     /// ```
     #[must_use]
     #[inline]
     pub fn clamp_non_negative(&self) -> Self {
-        use super::units::px;
         Self {
-            top: if self.top.get() < 0.0 {
-                px(0.0)
-            } else {
-                self.top
-            },
-            right: if self.right.get() < 0.0 {
-                px(0.0)
-            } else {
-                self.right
-            },
-            bottom: if self.bottom.get() < 0.0 {
-                px(0.0)
-            } else {
-                self.bottom
-            },
-            left: if self.left.get() < 0.0 {
-                px(0.0)
-            } else {
-                self.left
-            },
+            top: if self.top < 0.0 { 0.0 } else { self.top },
+            right: if self.right < 0.0 { 0.0 } else { self.right },
+            bottom: if self.bottom < 0.0 { 0.0 } else { self.bottom },
+            left: if self.left < 0.0 { 0.0 } else { self.left },
         }
     }
 
     /// Scales all edges by the given factor.
     #[must_use]
     #[inline]
-    pub fn scale(&self, factor: f32) -> Edges<super::units::Pixels> {
+    pub fn scale(&self, factor: f64) -> Edges<f64> {
         Edges {
-            top: self.top.scale(factor),
-            right: self.right.scale(factor),
-            bottom: self.bottom.scale(factor),
-            left: self.left.scale(factor),
+            top: self.top * factor,
+            right: self.right * factor,
+            bottom: self.bottom * factor,
+            left: self.left * factor,
         }
     }
 
@@ -384,20 +356,17 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, Point, Rect, px};
     ///
-    /// let insets = Edges::all(px(10.0));
-    /// let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    /// let insets = Edges::all(10.0);
+    /// let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     /// let inflated = insets.inflate_rect(rect);
-    /// assert_eq!(inflated.left(), px(-10.0));
-    /// assert_eq!(inflated.top(), px(-10.0));
-    /// assert_eq!(inflated.right(), px(110.0));
-    /// assert_eq!(inflated.bottom(), px(110.0));
+    /// assert_eq!(inflated.left(), -10.0);
+    /// assert_eq!(inflated.top(), -10.0);
+    /// assert_eq!(inflated.right(), 110.0);
+    /// assert_eq!(inflated.bottom(), 110.0);
     /// ```
     #[must_use]
     #[inline]
-    pub fn inflate_rect(
-        &self,
-        rect: super::Rect<super::units::Pixels>,
-    ) -> super::Rect<super::units::Pixels> {
+    pub fn inflate_rect(&self, rect: super::Rect<f64>) -> super::Rect<f64> {
         super::Rect::from_min_max(
             super::Point::new(rect.min.x - self.left, rect.min.y - self.top),
             super::Point::new(rect.max.x + self.right, rect.max.y + self.bottom),
@@ -413,20 +382,17 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, Point, Rect, px};
     ///
-    /// let insets = Edges::all(px(10.0));
-    /// let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    /// let insets = Edges::all(10.0);
+    /// let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     /// let deflated = insets.deflate_rect(rect);
-    /// assert_eq!(deflated.left(), px(10.0));
-    /// assert_eq!(deflated.top(), px(10.0));
-    /// assert_eq!(deflated.right(), px(90.0));
-    /// assert_eq!(deflated.bottom(), px(90.0));
+    /// assert_eq!(deflated.left(), 10.0);
+    /// assert_eq!(deflated.top(), 10.0);
+    /// assert_eq!(deflated.right(), 90.0);
+    /// assert_eq!(deflated.bottom(), 90.0);
     /// ```
     #[must_use]
     #[inline]
-    pub fn deflate_rect(
-        &self,
-        rect: super::Rect<super::units::Pixels>,
-    ) -> super::Rect<super::units::Pixels> {
+    pub fn deflate_rect(&self, rect: super::Rect<f64>) -> super::Rect<f64> {
         super::Rect::from_min_max(
             super::Point::new(rect.min.x + self.left, rect.min.y + self.top),
             super::Point::new(rect.max.x - self.right, rect.max.y - self.bottom),
@@ -451,12 +417,12 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, RRect, Radius, Rect, px};
     ///
-    /// let rect = Rect::from_ltrb(px(10.0), px(10.0), px(90.0), px(90.0));
-    /// let rrect = RRect::from_rect_circular(rect, px(8.0));
-    /// let inflated = Edges::all(px(4.0)).inflate_rrect(rrect);
+    /// let rect = Rect::from_ltrb(10.0, 10.0, 90.0, 90.0);
+    /// let rrect = RRect::from_rect_circular(rect, 8.0);
+    /// let inflated = Edges::all(4.0).inflate_rrect(rrect);
     ///
-    /// assert_eq!(inflated.rect.left(), px(6.0));
-    /// assert_eq!(inflated.top_left, Radius::circular(px(12.0)));
+    /// assert_eq!(inflated.rect.left(), 6.0);
+    /// assert_eq!(inflated.top_left, Radius::circular(12.0));
     /// ```
     #[must_use]
     #[inline]
@@ -485,17 +451,17 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, RRect, Radius, Rect, px};
     ///
-    /// let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
-    /// let rrect = RRect::from_rect_circular(rect, px(8.0));
-    /// let deflated = Edges::all(px(3.0)).deflate_rrect(rrect);
+    /// let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
+    /// let rrect = RRect::from_rect_circular(rect, 8.0);
+    /// let deflated = Edges::all(3.0).deflate_rrect(rrect);
     ///
-    /// assert_eq!(deflated.rect.left(), px(3.0));
-    /// assert_eq!(deflated.top_left, Radius::circular(px(5.0)));
+    /// assert_eq!(deflated.rect.left(), 3.0);
+    /// assert_eq!(deflated.top_left, Radius::circular(5.0));
     ///
     /// // An inset past the radius squares the corner off; it never goes
     /// // negative.
-    /// let squared = Edges::all(px(20.0)).deflate_rrect(rrect);
-    /// assert_eq!(squared.top_left, Radius::circular(px(0.0)));
+    /// let squared = Edges::all(20.0).deflate_rrect(rrect);
+    /// assert_eq!(squared.top_left, Radius::circular(0.0));
     /// ```
     #[must_use]
     #[inline]
@@ -518,18 +484,15 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, Size, px};
     ///
-    /// let insets = Edges::all(px(10.0));
-    /// let size = Size::new(px(100.0), px(100.0));
+    /// let insets = Edges::all(10.0);
+    /// let size = Size::new(100.0, 100.0);
     /// let inflated = insets.inflate_size(size);
-    /// assert_eq!(inflated.width, px(120.0)); // 100 + 10 + 10
-    /// assert_eq!(inflated.height, px(120.0)); // 100 + 10 + 10
+    /// assert_eq!(inflated.width, 120.0); // 100 + 10 + 10
+    /// assert_eq!(inflated.height, 120.0); // 100 + 10 + 10
     /// ```
     #[must_use]
     #[inline]
-    pub fn inflate_size(
-        &self,
-        size: super::Size<super::units::Pixels>,
-    ) -> super::Size<super::units::Pixels> {
+    pub fn inflate_size(&self, size: super::Size<f64>) -> super::Size<f64> {
         super::Size::new(
             size.width + self.left + self.right,
             size.height + self.top + self.bottom,
@@ -545,18 +508,15 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, Size, px};
     ///
-    /// let insets = Edges::all(px(10.0));
-    /// let size = Size::new(px(100.0), px(100.0));
+    /// let insets = Edges::all(10.0);
+    /// let size = Size::new(100.0, 100.0);
     /// let deflated = insets.deflate_size(size);
-    /// assert_eq!(deflated.width, px(80.0)); // 100 - 10 - 10
-    /// assert_eq!(deflated.height, px(80.0)); // 100 - 10 - 10
+    /// assert_eq!(deflated.width, 80.0); // 100 - 10 - 10
+    /// assert_eq!(deflated.height, 80.0); // 100 - 10 - 10
     /// ```
     #[must_use]
     #[inline]
-    pub fn deflate_size(
-        &self,
-        size: super::Size<super::units::Pixels>,
-    ) -> super::Size<super::units::Pixels> {
+    pub fn deflate_size(&self, size: super::Size<f64>) -> super::Size<f64> {
         super::Size::new(
             size.width - self.left - self.right,
             size.height - self.top - self.bottom,
@@ -570,10 +530,10 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, px};
     ///
-    /// let insets = Edges::new(px(10.0), px(20.0), px(30.0), px(40.0));
+    /// let insets = Edges::new(10.0, 20.0, 30.0, 40.0);
     /// let flipped = insets.flip_horizontal();
-    /// assert_eq!(flipped.left, px(20.0));
-    /// assert_eq!(flipped.right, px(40.0));
+    /// assert_eq!(flipped.left, 20.0);
+    /// assert_eq!(flipped.right, 40.0);
     /// ```
     #[must_use]
     #[inline]
@@ -593,10 +553,10 @@ impl Edges<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Edges, px};
     ///
-    /// let insets = Edges::new(px(10.0), px(20.0), px(30.0), px(40.0));
+    /// let insets = Edges::new(10.0, 20.0, 30.0, 40.0);
     /// let flipped = insets.flip_vertical();
-    /// assert_eq!(flipped.top, px(30.0));
-    /// assert_eq!(flipped.bottom, px(10.0));
+    /// assert_eq!(flipped.top, 30.0);
+    /// assert_eq!(flipped.bottom, 10.0);
     /// ```
     #[must_use]
     #[inline]
@@ -615,15 +575,8 @@ impl Edges<super::units::Pixels> {
 /// The two axes clamp independently: an inset large enough to square off a
 /// corner horizontally does not also flatten it vertically.
 #[inline]
-fn offset_radius(
-    radius: super::rrect::Radius<super::units::Pixels>,
-    dx: super::units::Pixels,
-    dy: super::units::Pixels,
-) -> super::rrect::Radius<super::units::Pixels> {
-    super::rrect::Radius::new(
-        (radius.x + dx).max(super::units::Pixels::ZERO),
-        (radius.y + dy).max(super::units::Pixels::ZERO),
-    )
+fn offset_radius(radius: super::rrect::Radius<f64>, dx: f64, dy: f64) -> super::rrect::Radius<f64> {
+    super::rrect::Radius::new((radius.x + dx).max(0.0), (radius.y + dy).max(0.0))
 }
 
 // Arithmetic operators
@@ -722,34 +675,20 @@ where
 // From implementations for Edges<Pixels>
 // ============================================================================
 
-impl From<super::units::Pixels> for Edges<super::units::Pixels> {
-    fn from(value: super::units::Pixels) -> Self {
+impl From<f64> for Edges<f64> {
+    fn from(value: f64) -> Self {
         Self::all(value)
     }
 }
 
-impl From<(super::units::Pixels, super::units::Pixels)> for Edges<super::units::Pixels> {
-    fn from((vertical, horizontal): (super::units::Pixels, super::units::Pixels)) -> Self {
+impl From<(f64, f64)> for Edges<f64> {
+    fn from((vertical, horizontal): (f64, f64)) -> Self {
         Self::symmetric(vertical, horizontal)
     }
 }
 
-impl
-    From<(
-        super::units::Pixels,
-        super::units::Pixels,
-        super::units::Pixels,
-        super::units::Pixels,
-    )> for Edges<super::units::Pixels>
-{
-    fn from(
-        (top, right, bottom, left): (
-            super::units::Pixels,
-            super::units::Pixels,
-            super::units::Pixels,
-            super::units::Pixels,
-        ),
-    ) -> Self {
+impl From<(f64, f64, f64, f64)> for Edges<f64> {
+    fn from((top, right, bottom, left): (f64, f64, f64, f64)) -> Self {
         Self::new(top, right, bottom, left)
     }
 }
@@ -802,15 +741,15 @@ impl<T: Clone> super::traits::Along for Edges<T> {
 mod tests {
     use super::*;
     use crate::traits::{Along, Axis};
-    use crate::{Offset, Pixels, RRect, Radius, Rect, Size, px};
+    use crate::{Offset, RRect, Radius, Rect, Size};
 
     /// Distinct values in `(top, right, bottom, left)` order.
     fn distinct() -> Edges<i32> {
         edges(1, 2, 3, 4)
     }
 
-    fn px_edges(top: f32, right: f32, bottom: f32, left: f32) -> Edges<Pixels> {
-        Edges::new(px(top), px(right), px(bottom), px(left))
+    fn px_edges(top: f64, right: f64, bottom: f64, left: f64) -> Edges<f64> {
+        Edges::new(top, right, bottom, left)
     }
 
     #[test]
@@ -822,18 +761,15 @@ mod tests {
         assert_eq!(Edges::symmetric(1, 2), edges(1, 2, 1, 2));
         assert_eq!(Edges::horizontal(7), edges(0, 7, 0, 7));
         assert_eq!(Edges::vertical(7), edges(7, 0, 7, 0));
-        assert_eq!(Edges::only_top(px(7.0)), px_edges(7.0, 0.0, 0.0, 0.0));
-        assert_eq!(Edges::only_right(px(7.0)), px_edges(0.0, 7.0, 0.0, 0.0));
-        assert_eq!(Edges::only_bottom(px(7.0)), px_edges(0.0, 0.0, 7.0, 0.0));
-        assert_eq!(Edges::only_left(px(7.0)), px_edges(0.0, 0.0, 0.0, 7.0));
-        assert_eq!(Edges::<Pixels>::ZERO, Edges::default());
-        assert_eq!(Edges::from(px(7.0)), Edges::all(px(7.0)));
+        assert_eq!(Edges::only_top(7.0), px_edges(7.0, 0.0, 0.0, 0.0));
+        assert_eq!(Edges::only_right(7.0), px_edges(0.0, 7.0, 0.0, 0.0));
+        assert_eq!(Edges::only_bottom(7.0), px_edges(0.0, 0.0, 7.0, 0.0));
+        assert_eq!(Edges::only_left(7.0), px_edges(0.0, 0.0, 0.0, 7.0));
+        assert_eq!(Edges::<f64>::ZERO, Edges::default());
+        assert_eq!(Edges::from(7.0), Edges::all(7.0));
+        assert_eq!(Edges::from((1.0, 2.0)), Edges::symmetric(1.0, 2.0));
         assert_eq!(
-            Edges::from((px(1.0), px(2.0))),
-            Edges::symmetric(px(1.0), px(2.0))
-        );
-        assert_eq!(
-            Edges::from((px(1.0), px(2.0), px(3.0), px(4.0))),
+            Edges::from((1.0, 2.0, 3.0, 4.0)),
             px_edges(1.0, 2.0, 3.0, 4.0)
         );
     }
@@ -843,9 +779,9 @@ mod tests {
         let e = distinct();
         assert_eq!((e.horizontal_total(), e.vertical_total()), (6, 4));
         let p = px_edges(1.0, 2.0, 4.0, 8.0);
-        assert_eq!(p.total_size(), Size::new(px(10.0), px(5.0)));
-        assert_eq!(p.top_left(), Offset::new(px(8.0), px(1.0)));
-        assert_eq!(p.bottom_right(), Offset::new(px(2.0), px(4.0)));
+        assert_eq!(p.total_size(), Size::new(10.0, 5.0));
+        assert_eq!(p.top_left(), Offset::new(8.0, 1.0));
+        assert_eq!(p.bottom_right(), Offset::new(2.0, 4.0));
     }
 
     #[test]
@@ -863,8 +799,8 @@ mod tests {
     /// One side at a time, so each term of the conjunction decides.
     #[test]
     fn zero_and_sign_queries_check_each_side() {
-        assert!(Edges::<Pixels>::ZERO.is_zero());
-        assert!(Edges::<Pixels>::ZERO.is_non_negative());
+        assert!(Edges::<f64>::ZERO.is_zero());
+        assert!(Edges::<f64>::ZERO.is_non_negative());
         for i in 0..4 {
             let mut one = [0.0; 4];
             one[i] = 1.0;
@@ -891,20 +827,20 @@ mod tests {
     #[test]
     fn inflate_and_deflate_move_each_side_by_its_inset() {
         let p = px_edges(1.0, 2.0, 4.0, 8.0);
-        let rect = Rect::from_ltrb(px(10.0), px(20.0), px(110.0), px(220.0));
+        let rect = Rect::from_ltrb(10.0, 20.0, 110.0, 220.0);
         assert_eq!(
             p.inflate_rect(rect),
-            Rect::from_ltrb(px(2.0), px(19.0), px(112.0), px(224.0))
+            Rect::from_ltrb(2.0, 19.0, 112.0, 224.0)
         );
         assert_eq!(
             p.deflate_rect(rect),
-            Rect::from_ltrb(px(18.0), px(21.0), px(108.0), px(216.0))
+            Rect::from_ltrb(18.0, 21.0, 108.0, 216.0)
         );
         assert_eq!(p.deflate_rect(p.inflate_rect(rect)), rect);
 
-        let size = Size::new(px(100.0), px(200.0));
-        assert_eq!(p.inflate_size(size), Size::new(px(110.0), px(205.0)));
-        assert_eq!(p.deflate_size(size), Size::new(px(90.0), px(195.0)));
+        let size = Size::new(100.0, 200.0);
+        assert_eq!(p.inflate_size(size), Size::new(110.0, 205.0));
+        assert_eq!(p.deflate_size(size), Size::new(90.0, 195.0));
     }
 
     /// Each corner radius moves by the two insets that meet at it, and
@@ -912,23 +848,23 @@ mod tests {
     #[test]
     fn rrect_radii_follow_their_adjacent_insets() {
         let p = px_edges(1.0, 2.0, 4.0, 8.0);
-        let rect = Rect::from_ltrb(px(10.0), px(20.0), px(110.0), px(220.0));
-        let r = Radius::circular(px(5.0));
+        let rect = Rect::from_ltrb(10.0, 20.0, 110.0, 220.0);
+        let r = Radius::circular(5.0);
         let rrect = RRect::from_rect_and_corners(rect, r, r, r, r);
 
         let out = p.inflate_rrect(rrect);
         assert_eq!(out.rect, p.inflate_rect(rect));
-        assert_eq!(out.top_left, Radius::new(px(13.0), px(6.0)));
-        assert_eq!(out.top_right, Radius::new(px(7.0), px(6.0)));
-        assert_eq!(out.bottom_right, Radius::new(px(7.0), px(9.0)));
-        assert_eq!(out.bottom_left, Radius::new(px(13.0), px(9.0)));
+        assert_eq!(out.top_left, Radius::new(13.0, 6.0));
+        assert_eq!(out.top_right, Radius::new(7.0, 6.0));
+        assert_eq!(out.bottom_right, Radius::new(7.0, 9.0));
+        assert_eq!(out.bottom_left, Radius::new(13.0, 9.0));
 
         let inner = p.deflate_rrect(rrect);
         assert_eq!(inner.rect, p.deflate_rect(rect));
-        assert_eq!(inner.top_left, Radius::new(px(0.0), px(4.0)));
-        assert_eq!(inner.top_right, Radius::new(px(3.0), px(4.0)));
-        assert_eq!(inner.bottom_right, Radius::new(px(3.0), px(1.0)));
-        assert_eq!(inner.bottom_left, Radius::new(px(0.0), px(1.0)));
+        assert_eq!(inner.top_left, Radius::new(0.0, 4.0));
+        assert_eq!(inner.top_right, Radius::new(3.0, 4.0));
+        assert_eq!(inner.bottom_right, Radius::new(3.0, 1.0));
+        assert_eq!(inner.bottom_left, Radius::new(0.0, 1.0));
     }
 
     #[test]

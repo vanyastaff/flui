@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::{
-    Pixels, Point, Vec2, px,
+    Point, Vec2,
     traits::{Along, Axis, FloatUnit, Half, IsZero, NumericUnit, Unit},
 };
 
@@ -24,13 +24,13 @@ use super::{
 /// ```
 /// use flui_geometry::{Pixels, Size, px};
 ///
-/// let ui_size = Size::<Pixels>::new(px(800.0), px(600.0));
+/// let ui_size = Size::<Pixels>::new(800.0, 600.0);
 /// assert_eq!(ui_size.area(), 480_000.0);
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct Size<T: Unit = Pixels> {
+pub struct Size<T: Unit = f64> {
     /// Width dimension.
     pub width: T,
     /// Height dimension.
@@ -38,18 +38,18 @@ pub struct Size<T: Unit = Pixels> {
 }
 
 // ============================================================================
-// Constants (f32 only for backwards compatibility)
+// Constants (f64 only for backwards compatibility)
 // ============================================================================
 
-impl Size<Pixels> {
+impl Size<f64> {
     /// Zero size (0, 0).
-    pub const ZERO: Self = Self::new(px(0.0), px(0.0));
+    pub const ZERO: Self = Self::new(0.0, 0.0);
 
     /// Infinite size.
-    pub const INFINITY: Self = Self::new(px(f32::INFINITY), px(f32::INFINITY));
+    pub const INFINITY: Self = Self::new(f64::INFINITY, f64::INFINITY);
 
     /// NaN size.
-    pub const NAN: Self = Self::new(px(f32::NAN), px(f32::NAN));
+    pub const NAN: Self = Self::new(f64::NAN, f64::NAN);
 }
 
 // ============================================================================
@@ -91,9 +91,9 @@ impl<T: Unit> Size<T> {
     /// ```
     /// use flui_geometry::{Pixels, Size, px};
     ///
-    /// let s = Size::<Pixels>::square(px(10.0));
-    /// assert_eq!(s.width, px(10.0));
-    /// assert_eq!(s.height, px(10.0));
+    /// let s = Size::<Pixels>::square(10.0);
+    /// assert_eq!(s.width, 10.0);
+    /// assert_eq!(s.height, 10.0);
     /// ```
     #[inline]
     #[must_use]
@@ -113,10 +113,10 @@ impl<T: NumericUnit> Size<T> {
     /// ```
     /// use flui_geometry::{Pixels, Size, px};
     ///
-    /// let s1 = Size::<Pixels>::new(px(100.0), px(50.0));
-    /// let s2 = Size::<Pixels>::new(px(80.0), px(60.0));
+    /// let s1 = Size::<Pixels>::new(100.0, 50.0);
+    /// let s2 = Size::<Pixels>::new(80.0, 60.0);
     /// let result = s1.min(s2);
-    /// assert_eq!(result, Size::<Pixels>::new(px(80.0), px(50.0)));
+    /// assert_eq!(result, Size::<Pixels>::new(80.0, 50.0));
     /// ```
     #[inline]
     #[must_use]
@@ -134,10 +134,10 @@ impl<T: NumericUnit> Size<T> {
     /// ```
     /// use flui_geometry::{Pixels, Size, px};
     ///
-    /// let s1 = Size::<Pixels>::new(px(100.0), px(50.0));
-    /// let s2 = Size::<Pixels>::new(px(80.0), px(60.0));
+    /// let s1 = Size::<Pixels>::new(100.0, 50.0);
+    /// let s2 = Size::<Pixels>::new(80.0, 60.0);
     /// let result = s1.max(s2);
-    /// assert_eq!(result, Size::<Pixels>::new(px(100.0), px(60.0)));
+    /// assert_eq!(result, Size::<Pixels>::new(100.0, 60.0));
     /// ```
     #[inline]
     #[must_use]
@@ -151,7 +151,7 @@ impl<T: NumericUnit> Size<T> {
 
 impl<T: NumericUnit> Size<T>
 where
-    T: Into<f32> + FloatUnit,
+    T: Into<f64> + FloatUnit,
 {
     /// Returns true if width or height is zero.
     ///
@@ -160,10 +160,10 @@ where
     /// ```
     /// use flui_geometry::{Pixels, Size, px};
     ///
-    /// let s1 = Size::<Pixels>::new(px(0.0), px(10.0));
+    /// let s1 = Size::<Pixels>::new(0.0, 10.0);
     /// assert!(s1.is_empty());
     ///
-    /// let s2 = Size::<Pixels>::new(px(10.0), px(10.0));
+    /// let s2 = Size::<Pixels>::new(10.0, 10.0);
     /// assert!(!s2.is_empty());
     /// ```
     #[inline]
@@ -182,14 +182,14 @@ where
     /// ```
     /// use flui_geometry::{Pixels, Size, px};
     ///
-    /// let s = Size::<Pixels>::new(px(10.0), px(20.0));
+    /// let s = Size::<Pixels>::new(10.0, 20.0);
     /// assert_eq!(s.area(), 200.0);
     /// ```
     #[inline]
     #[must_use]
-    pub fn area(self) -> f32 {
-        let w: f32 = self.width.into();
-        let h: f32 = self.height.into();
+    pub fn area(self) -> f64 {
+        let w: f64 = self.width.into();
+        let h: f64 = self.height.into();
         w * h
     }
 
@@ -202,14 +202,14 @@ where
     /// ```
     /// use flui_geometry::{Pixels, Size, px};
     ///
-    /// let s = Size::<Pixels>::new(px(16.0), px(9.0));
+    /// let s = Size::<Pixels>::new(16.0, 9.0);
     /// assert!((s.aspect_ratio() - 1.777).abs() < 0.01);
     /// ```
     #[inline]
     #[must_use]
-    pub fn aspect_ratio(self) -> f32 {
-        let w: f32 = self.width.into();
-        let h: f32 = self.height.into();
+    pub fn aspect_ratio(self) -> f64 {
+        let w: f64 = self.width.into();
+        let h: f64 = self.height.into();
         if h == 0.0 { 0.0 } else { w / h }
     }
 
@@ -220,9 +220,9 @@ where
     /// ```
     /// use flui_geometry::{Pixels, Point, Size, px};
     ///
-    /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
+    /// let s = Size::<Pixels>::new(100.0, 200.0);
     /// let c = s.center();
-    /// assert_eq!(c, Point::<Pixels>::new(px(50.0), px(100.0)));
+    /// assert_eq!(c, Point::<Pixels>::new(50.0, 100.0));
     /// ```
     #[inline]
     #[must_use]
@@ -247,17 +247,17 @@ where
     /// ```
     /// use flui_geometry::{Pixels, Point, Size, px};
     ///
-    /// let s = Size::<Pixels>::new(px(10.0), px(20.0));
-    /// assert!(s.contains(Point::<Pixels>::new(px(5.0), px(10.0))));
-    /// assert!(!s.contains(Point::<Pixels>::new(px(15.0), px(10.0))));
+    /// let s = Size::<Pixels>::new(10.0, 20.0);
+    /// assert!(s.contains(Point::<Pixels>::new(5.0, 10.0)));
+    /// assert!(!s.contains(Point::<Pixels>::new(15.0, 10.0)));
     /// ```
     #[inline]
     #[must_use]
     pub fn contains(self, point: Point<T>) -> bool {
-        let w: f32 = self.width.into();
-        let h: f32 = self.height.into();
-        let x: f32 = point.x.into();
-        let y: f32 = point.y.into();
+        let w: f64 = self.width.into();
+        let h: f64 = self.height.into();
+        let x: f64 = point.x.into();
+        let y: f64 = point.y.into();
 
         x >= 0.0 && x <= w && y >= 0.0 && y <= h
     }
@@ -275,9 +275,9 @@ impl<T: Unit> Size<T> {
     /// ```
     /// use flui_geometry::{Pixels, Size, px};
     ///
-    /// let size_px = Size::new(px(100.0), px(200.0));
+    /// let size_px = Size::new(100.0, 200.0);
     /// let size_f32: Size<Pixels> = size_px.cast();
-    /// assert_eq!(size_f32.width, px(100.0));
+    /// assert_eq!(size_f32.width, 100.0);
     /// ```
     #[inline]
     #[must_use]
@@ -294,25 +294,25 @@ impl<T: Unit> Size<T> {
 
 impl<T: NumericUnit> Size<T>
 where
-    T: Into<f32>,
+    T: Into<f64>,
 {
-    /// Converts to a size with f32 components.
+    /// Converts to a size with f64 components.
     ///
     /// # Examples
     ///
     /// ```
     /// use flui_geometry::{Size, px};
     ///
-    /// let size = Size::new(px(100.0), px(200.0));
+    /// let size = Size::new(100.0, 200.0);
     /// let f32_size = size.to_f32();
-    /// assert_eq!(f32_size.width, px(100.0));
+    /// assert_eq!(f32_size.width, 100.0);
     /// ```
     #[inline]
     #[must_use]
-    pub fn to_f32(self) -> Size<Pixels> {
+    pub fn to_f32(self) -> Size<f64> {
         Size {
-            width: px(self.width.into()),
-            height: px(self.height.into()),
+            width: self.width.into(),
+            height: self.height.into(),
         }
     }
 
@@ -323,12 +323,12 @@ where
     /// ```
     /// use flui_geometry::{Pixels, Size, px};
     ///
-    /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
+    /// let s = Size::<Pixels>::new(100.0, 200.0);
     /// assert_eq!(s.to_array(), [100.0, 200.0]);
     /// ```
     #[inline]
     #[must_use]
-    pub fn to_array(self) -> [f32; 2] {
+    pub fn to_array(self) -> [f64; 2] {
         [self.width.into(), self.height.into()]
     }
 
@@ -339,9 +339,9 @@ where
     /// ```
     /// use flui_geometry::{Pixels, Size, Vec2, px};
     ///
-    /// let s = Size::<Pixels>::new(px(100.0), px(200.0));
+    /// let s = Size::<Pixels>::new(100.0, 200.0);
     /// let v = s.to_vec2();
-    /// assert_eq!(v, Vec2::<Pixels>::new(px(100.0), px(200.0)));
+    /// assert_eq!(v, Vec2::<Pixels>::new(100.0, 200.0));
     /// ```
     #[inline]
     #[must_use]
@@ -416,28 +416,28 @@ impl<T: Unit> Size<T> {
 }
 
 // ============================================================================
-// f32-specific operations
+// f64-specific operations
 // ============================================================================
 
-impl Size<Pixels> {
+impl Size<f64> {
     /// Checks if width or height is zero or negative.
     #[inline]
     #[must_use]
     pub fn is_zero_area(self) -> bool {
-        self.width <= px(0.0) || self.height <= px(0.0)
+        self.width <= 0.0 || self.height <= 0.0
     }
 
     /// Returns the smaller of width or height.
     #[inline]
     #[must_use]
-    pub fn min_side(self) -> Pixels {
+    pub fn min_side(self) -> f64 {
         self.width.min(self.height)
     }
 
     /// Returns the larger of width or height.
     #[inline]
     #[must_use]
-    pub fn max_side(self) -> Pixels {
+    pub fn max_side(self) -> f64 {
         self.width.max(self.height)
     }
 
@@ -481,12 +481,12 @@ impl Size<Pixels> {
     #[must_use]
     pub fn expand(self) -> Self {
         Self::new(
-            if self.width >= px(0.0) {
+            if self.width >= 0.0 {
                 self.width.ceil()
             } else {
                 self.width.floor()
             },
-            if self.height >= px(0.0) {
+            if self.height >= 0.0 {
                 self.height.ceil()
             } else {
                 self.height.floor()
@@ -512,13 +512,13 @@ impl Size<Pixels> {
     #[inline]
     #[must_use]
     pub fn is_positive(self) -> bool {
-        self.width > px(0.0) && self.height > px(0.0)
+        self.width > 0.0 && self.height > 0.0
     }
 
     /// Linearly interpolates between two sizes.
     #[inline]
     #[must_use]
-    pub fn lerp(self, other: Self, t: f32) -> Self {
+    pub fn lerp(self, other: Self, t: f64) -> Self {
         Self::new(
             self.width + (other.width - self.width) * t,
             self.height + (other.height - self.height) * t,
@@ -554,7 +554,7 @@ impl Size<Pixels> {
     /// Adjusts height to match the given aspect ratio (width / height).
     #[inline]
     #[must_use]
-    pub fn with_aspect_ratio(self, ratio: f32) -> Self {
+    pub fn with_aspect_ratio(self, ratio: f64) -> Self {
         if ratio <= 0.0 {
             self
         } else {
@@ -565,15 +565,15 @@ impl Size<Pixels> {
     /// Computes the perimeter (2 * (width + height)).
     #[inline]
     #[must_use]
-    pub fn perimeter(self) -> Pixels {
+    pub fn perimeter(self) -> f64 {
         (self.width + self.height) * 2.0
     }
 
     /// Computes the diagonal length (Pythagorean theorem).
     #[inline]
     #[must_use]
-    pub fn diagonal(self) -> Pixels {
-        px(self.width.get().hypot(self.height.get()))
+    pub fn diagonal(self) -> f64 {
+        self.width.hypot(self.height)
     }
 
     /// Returns a size scaled uniformly to the given maximum dimension.
@@ -581,21 +581,21 @@ impl Size<Pixels> {
     /// Scales uniformly to fit within the given maximum dimension.
     #[inline]
     #[must_use]
-    pub fn scale_to_max(self, max: f32) -> Self {
-        let w = self.width.get();
-        let h = self.height.get();
+    pub fn scale_to_max(self, max: f64) -> Self {
+        let w = self.width;
+        let h = self.height;
         if w <= 0.0 || h <= 0.0 || max <= 0.0 {
             return Self::ZERO;
         }
         let scale = (max / w).min(max / h);
-        Self::new(px(w * scale), px(h * scale))
+        Self::new(w * scale, h * scale)
     }
 
     /// Checks if the size is valid (finite and non-negative).
     #[inline]
     #[must_use]
     pub fn is_valid(self) -> bool {
-        self.is_finite() && self.width >= px(0.0) && self.height >= px(0.0)
+        self.is_finite() && self.width >= 0.0 && self.height >= 0.0
     }
 
     /// Returns a size with absolute values of both dimensions.
@@ -610,66 +610,6 @@ impl Size<Pixels> {
     #[must_use]
     pub fn signum(self) -> Self {
         Self::new(self.width.signum(), self.height.signum())
-    }
-}
-
-// ============================================================================
-// Type-safe scale conversions with ScaleFactor
-// ============================================================================
-
-impl Size<Pixels> {
-    /// Type-safe scale conversion to DevicePixels.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{DevicePixels, Pixels, ScaleFactor, Size, device_px, px};
-    ///
-    /// let logical = Size::new(px(100.0), px(200.0));
-    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
-    /// let device = logical.scale_with(scale);
-    /// assert_eq!(device.width.get(), 200);
-    /// assert_eq!(device.height.get(), 400);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn scale_with(
-        self,
-        scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>,
-    ) -> Size<super::units::DevicePixels> {
-        use super::units::device_px;
-        Size {
-            width: device_px((self.width.get() * scale.get()).round() as i32),
-            height: device_px((self.height.get() * scale.get()).round() as i32),
-        }
-    }
-}
-
-impl Size<super::units::DevicePixels> {
-    /// Converts to logical pixels using a type-safe scale factor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_geometry::{DevicePixels, Pixels, ScaleFactor, Size, device_px, px};
-    ///
-    /// let device = Size::new(device_px(200), device_px(400));
-    /// let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
-    /// let logical = device.unscale(scale);
-    /// assert_eq!(logical.width, px(100.0));
-    /// assert_eq!(logical.height, px(200.0));
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn unscale(
-        self,
-        scale: super::units::ScaleFactor<Pixels, super::units::DevicePixels>,
-    ) -> Size<Pixels> {
-        let inverse = scale.inverse();
-        Size {
-            width: px(self.width.get() as f32 * inverse.get()),
-            height: px(self.height.get() as f32 * inverse.get()),
-        }
     }
 }
 
@@ -793,10 +733,10 @@ where
     }
 }
 
-// Reverse multiplication for f32 * Size
-impl<T: NumericUnit> Mul<Size<T>> for f32
+// Reverse multiplication for f64 * Size
+impl<T: NumericUnit> Mul<Size<T>> for f64
 where
-    T: Mul<f32, Output = T>,
+    T: Mul<f64, Output = T>,
 {
     type Output = Size<T>;
 
@@ -807,34 +747,34 @@ where
 }
 
 // ============================================================================
-// Conversions for f32 (backwards compatibility)
+// Conversions for f64 (backwards compatibility)
 // ============================================================================
 
-impl From<(Pixels, Pixels)> for Size<Pixels> {
+impl From<(f64, f64)> for Size<f64> {
     #[inline]
-    fn from((width, height): (Pixels, Pixels)) -> Self {
+    fn from((width, height): (f64, f64)) -> Self {
         Self::new(width, height)
     }
 }
 
-impl From<[Pixels; 2]> for Size<Pixels> {
+impl From<[f64; 2]> for Size<f64> {
     #[inline]
-    fn from([width, height]: [Pixels; 2]) -> Self {
+    fn from([width, height]: [f64; 2]) -> Self {
         Self::new(width, height)
     }
 }
 
-impl From<Size<Pixels>> for (f32, f32) {
+impl From<Size<f64>> for (f64, f64) {
     #[inline]
-    fn from(s: Size<Pixels>) -> Self {
-        (s.width.0, s.height.0)
+    fn from(s: Size<f64>) -> Self {
+        (s.width, s.height)
     }
 }
 
-impl From<Size<Pixels>> for [f32; 2] {
+impl From<Size<f64>> for [f64; 2] {
     #[inline]
-    fn from(s: Size<Pixels>) -> Self {
-        [s.width.0, s.height.0]
+    fn from(s: Size<f64>) -> Self {
+        [s.width, s.height]
     }
 }
 
@@ -864,14 +804,14 @@ impl<T: Unit> Default for Size<T> {
 }
 
 // ============================================================================
-// Convenience function (f32 only)
+// Convenience function (f64 only)
 // ============================================================================
 
 /// Convenience function to create a Pixels size from width and height floats.
 #[inline]
 #[must_use]
-pub const fn size(width: f32, height: f32) -> Size<Pixels> {
-    Size::new(px(width), px(height))
+pub const fn size(width: f64, height: f64) -> Size<f64> {
+    Size::new(width, height)
 }
 
 // ============================================================================
@@ -955,7 +895,7 @@ where
     T: super::traits::ApproxEq,
 {
     #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+    fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
         self.width.approx_eq_eps(&other.width, epsilon)
             && self.height.approx_eq_eps(&other.height, epsilon)
     }
@@ -993,7 +933,7 @@ where
 // Specialized implementations for Pixels
 // ============================================================================
 
-impl Size<super::units::Pixels> {
+impl Size<f64> {
     /// Scales the size by a given factor.
     ///
     /// # Examples
@@ -1001,15 +941,15 @@ impl Size<super::units::Pixels> {
     /// ```
     /// use flui_geometry::{Size, px};
     ///
-    /// let size = Size::new(px(100.0), px(200.0));
+    /// let size = Size::new(100.0, 200.0);
     /// let scaled = size.scale(2.0); // 2x Retina display
     /// ```
     #[inline]
     #[must_use]
-    pub fn scale(self, factor: f32) -> Size<super::units::Pixels> {
+    pub fn scale(self, factor: f64) -> Size<f64> {
         Size {
-            width: self.width.scale(factor),
-            height: self.height.scale(factor),
+            width: self.width * factor,
+            height: self.height * factor,
         }
     }
 }
@@ -1021,30 +961,29 @@ impl Size<super::units::Pixels> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::px;
 
     #[test]
     fn test_construction() {
-        let s = Size::new(px(800.0), px(600.0));
-        assert_eq!(s.width, px(800.0));
-        assert_eq!(s.height, px(600.0));
+        let s = Size::new(800.0, 600.0);
+        assert_eq!(s.width, 800.0);
+        assert_eq!(s.height, 600.0);
 
-        assert_eq!(Size::splat(px(10.0)), Size::new(px(10.0), px(10.0)));
+        assert_eq!(Size::splat(10.0), Size::new(10.0, 10.0));
     }
 
     #[test]
     fn test_constants() {
-        assert_eq!(Size::ZERO, Size::new(px(0.0), px(0.0)));
+        assert_eq!(Size::ZERO, Size::new(0.0, 0.0));
         assert!(Size::INFINITY.width.is_infinite());
         assert!(Size::NAN.is_nan());
     }
 
     #[test]
     fn test_dimensions() {
-        let s = Size::new(px(100.0), px(50.0));
+        let s = Size::new(100.0, 50.0);
         assert_eq!(s.area(), 5000.0);
-        assert_eq!(s.min_side(), px(50.0));
-        assert_eq!(s.max_side(), px(100.0));
+        assert_eq!(s.min_side(), 50.0);
+        assert_eq!(s.max_side(), 100.0);
         assert_eq!(s.aspect_ratio(), 2.0);
     }
 
@@ -1052,134 +991,131 @@ mod tests {
     fn test_zero_checks() {
         assert!(Size::ZERO.is_zero());
         assert!(Size::ZERO.is_zero_area());
-        assert!(Size::new(px(0.0), px(100.0)).is_zero_area());
-        assert!(Size::new(px(-5.0), px(100.0)).is_zero_area());
-        assert!(!Size::new(px(10.0), px(20.0)).is_zero_area());
+        assert!(Size::new(0.0, 100.0).is_zero_area());
+        assert!(Size::new(-5.0, 100.0).is_zero_area());
+        assert!(!Size::new(10.0, 20.0).is_zero_area());
     }
 
     #[test]
     fn test_min_max_clamp() {
-        let s1 = Size::new(px(100.0), px(50.0));
-        let s2 = Size::new(px(80.0), px(60.0));
+        let s1 = Size::new(100.0, 50.0);
+        let s2 = Size::new(80.0, 60.0);
 
-        assert_eq!(s1.min(s2), Size::new(px(80.0), px(50.0)));
-        assert_eq!(s1.max(s2), Size::new(px(100.0), px(60.0)));
+        assert_eq!(s1.min(s2), Size::new(80.0, 50.0));
+        assert_eq!(s1.max(s2), Size::new(100.0, 60.0));
 
-        let s = Size::new(px(150.0), px(30.0));
-        let clamped = s.clamp(Size::splat(px(50.0)), Size::splat(px(100.0)));
-        assert_eq!(clamped, Size::new(px(100.0), px(50.0)));
+        let s = Size::new(150.0, 30.0);
+        let clamped = s.clamp(Size::splat(50.0), Size::splat(100.0));
+        assert_eq!(clamped, Size::new(100.0, 50.0));
     }
 
     #[test]
     fn test_transpose() {
-        let s = Size::new(px(100.0), px(50.0));
-        assert_eq!(s.transpose(), Size::new(px(50.0), px(100.0)));
+        let s = Size::new(100.0, 50.0);
+        assert_eq!(s.transpose(), Size::new(50.0, 100.0));
     }
 
     #[test]
     fn test_rounding() {
-        let s = Size::new(px(10.6), px(20.3));
-        assert_eq!(s.round(), Size::new(px(11.0), px(20.0)));
-        assert_eq!(s.ceil(), Size::new(px(11.0), px(21.0)));
-        assert_eq!(s.floor(), Size::new(px(10.0), px(20.0)));
+        let s = Size::new(10.6, 20.3);
+        assert_eq!(s.round(), Size::new(11.0, 20.0));
+        assert_eq!(s.ceil(), Size::new(11.0, 21.0));
+        assert_eq!(s.floor(), Size::new(10.0, 20.0));
     }
 
     #[test]
     fn test_validation() {
-        assert!(Size::new(px(10.0), px(20.0)).is_finite());
+        assert!(Size::new(10.0, 20.0).is_finite());
         assert!(!Size::INFINITY.is_finite());
         assert!(Size::NAN.is_nan());
-        assert!(Size::new(px(10.0), px(20.0)).is_positive());
-        assert!(!Size::new(px(-5.0), px(20.0)).is_positive());
+        assert!(Size::new(10.0, 20.0).is_positive());
+        assert!(!Size::new(-5.0, 20.0).is_positive());
     }
 
     #[test]
     fn test_lerp() {
         let a = Size::ZERO;
-        let b = Size::new(px(100.0), px(200.0));
+        let b = Size::new(100.0, 200.0);
 
         assert_eq!(a.lerp(b, 0.0), a);
-        assert_eq!(a.lerp(b, 0.5), Size::new(px(50.0), px(100.0)));
+        assert_eq!(a.lerp(b, 0.5), Size::new(50.0, 100.0));
         assert_eq!(a.lerp(b, 1.0), b);
     }
 
     #[test]
     fn test_fit_fill() {
-        let image = Size::new(px(1920.0), px(1080.0)); // 16:9
-        let bounds = Size::new(px(800.0), px(600.0)); // 4:3
+        let image = Size::new(1920.0, 1080.0); // 16:9
+        let bounds = Size::new(800.0, 600.0); // 4:3
 
         let fitted = image.fit_within(bounds);
-        assert!(fitted.width <= bounds.width + px(0.01));
-        assert!(fitted.height <= bounds.height + px(0.01));
+        assert!(fitted.width <= bounds.width + 0.01);
+        assert!(fitted.height <= bounds.height + 0.01);
 
         let filled = image.fill_bounds(bounds);
-        assert!(filled.width >= bounds.width - px(0.01));
-        assert!(filled.height >= bounds.height - px(0.01));
+        assert!(filled.width >= bounds.width - 0.01);
+        assert!(filled.height >= bounds.height - 0.01);
     }
 
     #[test]
     fn test_aspect_ratio_set() {
-        let s = Size::new(px(1920.0), px(0.0));
+        let s = Size::new(1920.0, 0.0);
         let adjusted = s.with_aspect_ratio(16.0 / 9.0);
-        assert_eq!(adjusted.width, px(1920.0));
-        assert!((adjusted.height - px(1080.0)).get().abs() < 0.1);
+        assert_eq!(adjusted.width, 1920.0);
+        assert!((adjusted.height - 1080.0).abs() < 0.1);
     }
 
     #[test]
     fn test_operators() {
-        let s1 = Size::new(px(100.0), px(50.0));
-        let s2 = Size::new(px(30.0), px(20.0));
+        let s1 = Size::new(100.0, 50.0);
+        let s2 = Size::new(30.0, 20.0);
 
-        assert_eq!(s1 + s2, Size::new(px(130.0), px(70.0)));
-        assert_eq!(s1 - s2, Size::new(px(70.0), px(30.0)));
-        assert_eq!(s1 * 2.0, Size::new(px(200.0), px(100.0)));
-        assert_eq!(2.0 * s1, Size::new(px(200.0), px(100.0)));
-        assert_eq!(s1 / 2.0, Size::new(px(50.0), px(25.0)));
+        assert_eq!(s1 + s2, Size::new(130.0, 70.0));
+        assert_eq!(s1 - s2, Size::new(70.0, 30.0));
+        assert_eq!(s1 * 2.0, Size::new(200.0, 100.0));
+        assert_eq!(2.0 * s1, Size::new(200.0, 100.0));
+        assert_eq!(s1 / 2.0, Size::new(50.0, 25.0));
     }
 
     #[test]
     fn test_assign_operators() {
-        let mut s = Size::new(px(100.0), px(50.0));
+        let mut s = Size::new(100.0, 50.0);
 
-        s += Size::new(px(10.0), px(5.0));
-        assert_eq!(s, Size::new(px(110.0), px(55.0)));
+        s += Size::new(10.0, 5.0);
+        assert_eq!(s, Size::new(110.0, 55.0));
 
-        s -= Size::new(px(10.0), px(5.0));
-        assert_eq!(s, Size::new(px(100.0), px(50.0)));
+        s -= Size::new(10.0, 5.0);
+        assert_eq!(s, Size::new(100.0, 50.0));
 
         s *= 2.0;
-        assert_eq!(s, Size::new(px(200.0), px(100.0)));
+        assert_eq!(s, Size::new(200.0, 100.0));
 
         s /= 2.0;
-        assert_eq!(s, Size::new(px(100.0), px(50.0)));
+        assert_eq!(s, Size::new(100.0, 50.0));
     }
 
     #[test]
     fn test_conversions() {
-        let s = Size::new(px(100.0), px(50.0));
+        let s = Size::new(100.0, 50.0);
 
-        let from_tuple: Size<Pixels> = (px(100.0), px(50.0)).into();
-        let from_array: Size<Pixels> = [px(100.0), px(50.0)].into();
+        let from_tuple: Size<f64> = (100.0, 50.0).into();
+        let from_array: Size<f64> = [100.0, 50.0].into();
         assert_eq!(from_tuple, s);
         assert_eq!(from_array, s);
 
-        let to_tuple: (f32, f32) = s.into();
-        let to_array: [f32; 2] = s.into();
+        let to_tuple: (f64, f64) = s.into();
+        let to_array: [f64; 2] = s.into();
         assert_eq!(to_tuple, (100.0, 50.0));
         assert_eq!(to_array, [100.0, 50.0]);
     }
 
     #[test]
     fn test_display() {
-        assert_eq!(
-            format!("{}", Size::new(px(800.0), px(600.0))),
-            "800px×600px"
-        );
+        assert_eq!(format!("{}", Size::new(800.0, 600.0)), "800×600");
     }
 
     #[test]
     fn test_convenience_fn() {
-        assert_eq!(size(100.0, 50.0), Size::new(px(100.0), px(50.0)));
+        assert_eq!(size(100.0, 50.0), Size::new(100.0, 50.0));
     }
 }
 
@@ -1190,104 +1126,103 @@ mod tests {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
-    use crate::{Pixels, px};
 
     #[test]
     fn test_size_new() {
-        let s = Size::<Pixels>::new(px(100.0), px(200.0));
-        assert_eq!(s.width.get(), 100.0);
-        assert_eq!(s.height.get(), 200.0);
+        let s = Size::<f64>::new(100.0, 200.0);
+        assert_eq!(s.width, 100.0);
+        assert_eq!(s.height, 200.0);
     }
 
     #[test]
     fn test_size_square() {
-        let s = Size::square(px(10.0));
-        assert_eq!(s.width, px(10.0));
-        assert_eq!(s.height, px(10.0));
+        let s = Size::square(10.0);
+        assert_eq!(s.width, 10.0);
+        assert_eq!(s.height, 10.0);
     }
 
     #[test]
     fn test_size_area_aspect() {
-        let s = Size::new(px(10.0), px(20.0));
+        let s = Size::new(10.0, 20.0);
         assert_eq!(s.area(), 200.0);
         assert_eq!(s.aspect_ratio(), 0.5);
     }
 
     #[test]
     fn test_size_is_empty() {
-        let s1 = Size::new(px(0.0), px(10.0));
+        let s1 = Size::new(0.0, 10.0);
         assert!(s1.is_empty());
 
-        let s2 = Size::new(px(10.0), px(10.0));
+        let s2 = Size::new(10.0, 10.0);
         assert!(!s2.is_empty());
     }
 
     #[test]
     fn test_size_contains() {
-        let s = Size::new(px(10.0), px(20.0));
-        let p1 = Point::new(px(5.0), px(10.0));
+        let s = Size::new(10.0, 20.0);
+        let p1 = Point::new(5.0, 10.0);
         assert!(s.contains(p1));
 
-        let p2 = Point::new(px(15.0), px(10.0));
+        let p2 = Point::new(15.0, 10.0);
         assert!(!s.contains(p2));
     }
 
     #[test]
     fn test_size_arithmetic() {
-        let s1 = Size::<Pixels>::new(px(10.0), px(20.0));
-        let s2 = Size::<Pixels>::new(px(5.0), px(10.0));
+        let s1 = Size::<f64>::new(10.0, 20.0);
+        let s2 = Size::<f64>::new(5.0, 10.0);
 
         let s3 = s1 + s2;
-        assert_eq!(s3.width.get(), 15.0);
+        assert_eq!(s3.width, 15.0);
 
         let s4 = s1 * 2.0;
-        assert_eq!(s4.width.get(), 20.0);
+        assert_eq!(s4.width, 20.0);
     }
 
     #[test]
     fn test_size_center() {
-        let s = Size::new(px(100.0), px(200.0));
+        let s = Size::new(100.0, 200.0);
         let c = s.center();
-        assert_eq!(c.x, px(50.0));
-        assert_eq!(c.y, px(100.0));
+        assert_eq!(c.x, 50.0);
+        assert_eq!(c.y, 100.0);
     }
 
     #[test]
     fn test_size_conversions() {
-        let s = Size::<Pixels>::new(px(100.0), px(200.0));
+        let s = Size::<f64>::new(100.0, 200.0);
         let arr = s.to_array();
         assert_eq!(arr, [100.0, 200.0]);
 
         let v = s.to_vec2();
-        assert_eq!(v.x.get(), 100.0);
-        assert_eq!(v.y.get(), 200.0);
+        assert_eq!(v.x, 100.0);
+        assert_eq!(v.y, 200.0);
     }
 
     #[test]
     fn test_from_point_vec2() {
-        let p = Point::new(px(10.0), px(20.0));
-        let s: Size<Pixels> = p.into();
-        assert_eq!(s.width, px(10.0));
-        assert_eq!(s.height, px(20.0));
+        let p = Point::new(10.0, 20.0);
+        let s: Size<f64> = p.into();
+        assert_eq!(s.width, 10.0);
+        assert_eq!(s.height, 20.0);
 
-        let v = Vec2::new(px(30.0), px(40.0));
-        let s2: Size<Pixels> = v.into();
-        assert_eq!(s2.width, px(30.0));
-        assert_eq!(s2.height, px(40.0));
+        let v = Vec2::new(30.0, 40.0);
+        let s2: Size<f64> = v.into();
+        assert_eq!(s2.width, 30.0);
+        assert_eq!(s2.height, 40.0);
     }
 
     #[test]
     fn test_size_min_max_generic() {
-        let s1 = Size::<Pixels>::new(px(100.0), px(50.0));
-        let s2 = Size::<Pixels>::new(px(80.0), px(60.0));
+        let s1 = Size::<f64>::new(100.0, 50.0);
+        let s2 = Size::<f64>::new(80.0, 60.0);
 
         let min = s1.min(s2);
-        assert_eq!(min.width.get(), 80.0);
-        assert_eq!(min.height.get(), 50.0);
+        assert_eq!(min.width, 80.0);
+        assert_eq!(min.height, 50.0);
 
         let max = s1.max(s2);
-        assert_eq!(max.width.get(), 100.0);
-        assert_eq!(max.height.get(), 60.0);
+        assert_eq!(max.width, 100.0);
+        assert_eq!(max.height, 60.0);
     }
 
     #[test]
@@ -1295,101 +1230,91 @@ mod typed_tests {
         use crate::{Along, ApproxEq, Axis, Double, Half};
 
         // Test Along trait
-        let s = Size::<Pixels>::new(px(100.0), px(200.0));
-        assert_eq!(s.along(Axis::Horizontal).0, 100.0);
-        assert_eq!(s.along(Axis::Vertical).0, 200.0);
+        let s = Size::<f64>::new(100.0, 200.0);
+        assert_eq!(s.along(Axis::Horizontal), 100.0);
+        assert_eq!(s.along(Axis::Vertical), 200.0);
 
-        let modified = s.apply_along(Axis::Horizontal, |w| px(w.0 * 2.0));
-        assert_eq!(modified.width.0, 200.0);
-        assert_eq!(modified.height.0, 200.0);
+        let modified = s.apply_along(Axis::Horizontal, |w| w * 2.0);
+        assert_eq!(modified.width, 200.0);
+        assert_eq!(modified.height, 200.0);
 
         // Test Half trait
         let half_s = s.half();
-        assert_eq!(half_s.width.0, 50.0);
-        assert_eq!(half_s.height.0, 100.0);
+        assert_eq!(half_s.width, 50.0);
+        assert_eq!(half_s.height, 100.0);
 
         // Test IsZero trait
-        let zero = Size::<Pixels>::new(px(0.0), px(0.0));
+        let zero = Size::<f64>::new(0.0, 0.0);
         assert!(zero.is_zero());
         assert!(!s.is_zero());
 
         // Test Double trait
         let doubled = s.double();
-        assert_eq!(doubled.width.0, 200.0);
-        assert_eq!(doubled.height.0, 400.0);
+        assert_eq!(doubled.width, 200.0);
+        assert_eq!(doubled.height, 400.0);
 
         // Test ApproxEq trait
-        let s2 = Size::<Pixels>::new(px(100.0 + 1e-8), px(200.0 - 1e-8));
+        let s2 = Size::<f64>::new(100.0 + 1e-8, 200.0 - 1e-8);
         assert!(s.approx_eq_eps(&s2, 1e-6));
     }
 
     #[test]
     fn test_size_abs_signum() {
         // Test abs and signum methods with Pixels
-        let s_px = Size::new(px(-10.0), px(20.0));
+        let s_px = Size::new(-10.0, 20.0);
         let abs_s = s_px.abs();
-        assert_eq!(abs_s.width, px(10.0));
-        assert_eq!(abs_s.height, px(20.0));
+        assert_eq!(abs_s.width, 10.0);
+        assert_eq!(abs_s.height, 20.0);
 
         let signum_s = s_px.signum();
-        assert_eq!(signum_s.width, px(-1.0));
-        assert_eq!(signum_s.height, px(1.0));
+        assert_eq!(signum_s.width, -1.0);
+        assert_eq!(signum_s.height, 1.0);
     }
 
     #[test]
     fn test_size_swap() {
-        let s = Size::new(px(100.0), px(50.0));
+        let s = Size::new(100.0, 50.0);
         let swapped = s.swap();
-        assert_eq!(swapped.width, px(50.0));
-        assert_eq!(swapped.height, px(100.0));
+        assert_eq!(swapped.width, 50.0);
+        assert_eq!(swapped.height, 100.0);
     }
 
     #[test]
     fn test_size_perimeter_diagonal() {
-        let s = Size::new(px(3.0), px(4.0));
-        assert_eq!(s.perimeter(), px(14.0));
-        assert_eq!(s.diagonal(), px(5.0)); // 3-4-5 triangle
+        let s = Size::new(3.0, 4.0);
+        assert_eq!(s.perimeter(), 14.0);
+        assert_eq!(s.diagonal(), 5.0); // 3-4-5 triangle
     }
 
     #[test]
     fn test_size_scale_to_max() {
-        let s = Size::new(px(200.0), px(100.0));
+        let s = Size::new(200.0, 100.0);
         let scaled = s.scale_to_max(50.0);
-        assert_eq!(scaled.width, px(50.0));
-        assert_eq!(scaled.height, px(25.0));
+        assert_eq!(scaled.width, 50.0);
+        assert_eq!(scaled.height, 25.0);
     }
 
     #[test]
     fn test_size_is_valid() {
-        assert!(Size::new(px(10.0), px(20.0)).is_valid());
-        assert!(!Size::new(px(-10.0), px(20.0)).is_valid());
-        assert!(!Size::<Pixels>::INFINITY.is_valid());
-        assert!(!Size::<Pixels>::NAN.is_valid());
+        assert!(Size::new(10.0, 20.0).is_valid());
+        assert!(!Size::new(-10.0, 20.0).is_valid());
+        assert!(!Size::<f64>::INFINITY.is_valid());
+        assert!(!Size::<f64>::NAN.is_valid());
     }
 
     #[test]
     fn test_size_sum_iterator() {
         let sizes = vec![
-            Size::new(px(10.0), px(20.0)),
-            Size::new(px(30.0), px(40.0)),
-            Size::new(px(50.0), px(60.0)),
+            Size::new(10.0, 20.0),
+            Size::new(30.0, 40.0),
+            Size::new(50.0, 60.0),
         ];
-        let total: Size<Pixels> = sizes.iter().sum();
-        assert_eq!(total.width, px(90.0));
-        assert_eq!(total.height, px(120.0));
+        let total: Size<f64> = sizes.iter().sum();
+        assert_eq!(total.width, 90.0);
+        assert_eq!(total.height, 120.0);
 
-        let total_owned: Size<Pixels> = sizes.into_iter().sum();
-        assert_eq!(total_owned.width, px(90.0));
-        assert_eq!(total_owned.height, px(120.0));
-    }
-
-    #[test]
-    fn scale_with_and_unscale() {
-        use crate::{DevicePixels, ScaleFactor, device_px};
-        let scale = ScaleFactor::<Pixels, DevicePixels>::new(2.0);
-        let device = Size::new(px(10.0), px(4.2)).scale_with(scale);
-        assert_eq!(device, Size::new(device_px(20), device_px(8)));
-        let back = Size::new(device_px(21), device_px(7)).unscale(scale);
-        assert_eq!(back, Size::new(px(10.5), px(3.5)));
+        let total_owned: Size<f64> = sizes.into_iter().sum();
+        assert_eq!(total_owned.width, 90.0);
+        assert_eq!(total_owned.height, 120.0);
     }
 }
