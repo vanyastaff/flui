@@ -3,7 +3,7 @@
 //! This module contains types for representing axes, directions, and
 //! orientation, similar to Flutter's axis system.
 
-use crate::{Size, geometry::Pixels};
+use crate::Size;
 
 /// The two cardinal directions in two dimensions.
 ///
@@ -75,16 +75,16 @@ impl Axis {
     /// ```
     /// use flui_types::{Axis, Size, geometry::px};
     ///
-    /// let size = Size::new(px(100.0), px(50.0));
+    /// let size = Size::new(100.0, 50.0);
     /// assert_eq!(Axis::Horizontal.select_size(size), 100.0);
     /// assert_eq!(Axis::Vertical.select_size(size), 50.0);
     /// ```
     #[inline]
     #[must_use]
-    pub const fn select_size(self, size: Size<Pixels>) -> f32 {
+    pub const fn select_size(self, size: Size<f64>) -> f64 {
         match self {
-            Axis::Horizontal => size.width.0,
-            Axis::Vertical => size.height.0,
+            Axis::Horizontal => size.width,
+            Axis::Vertical => size.height,
         }
     }
 
@@ -95,15 +95,15 @@ impl Axis {
     /// ```
     /// use flui_types::{Axis, Size, geometry::px};
     ///
-    /// assert_eq!(Axis::Horizontal.make_size(100.0), Size::new(px(100.0), px(0.0)));
-    /// assert_eq!(Axis::Vertical.make_size(100.0), Size::new(px(0.0), px(100.0)));
+    /// assert_eq!(Axis::Horizontal.make_size(100.0), Size::new(100.0, 0.0));
+    /// assert_eq!(Axis::Vertical.make_size(100.0), Size::new(0.0, 100.0));
     /// ```
     #[inline]
     #[must_use]
-    pub const fn make_size(self, value: f32) -> Size<Pixels> {
+    pub const fn make_size(self, value: f64) -> Size<f64> {
         match self {
-            Axis::Horizontal => Size::new(Pixels(value), Pixels(0.0)),
-            Axis::Vertical => Size::new(Pixels(0.0), Pixels(value)),
+            Axis::Horizontal => Size::new(value, 0.0),
+            Axis::Vertical => Size::new(0.0, value),
         }
     }
 
@@ -119,19 +119,19 @@ impl Axis {
     ///
     /// assert_eq!(
     ///     Axis::Horizontal.make_size_with_cross(100.0, 50.0),
-    ///     Size::new(px(100.0), px(50.0))
+    ///     Size::new(100.0, 50.0)
     /// );
     /// assert_eq!(
     ///     Axis::Vertical.make_size_with_cross(100.0, 50.0),
-    ///     Size::new(px(50.0), px(100.0))
+    ///     Size::new(50.0, 100.0)
     /// );
     /// ```
     #[inline]
     #[must_use]
-    pub const fn make_size_with_cross(self, main: f32, cross: f32) -> Size<Pixels> {
+    pub const fn make_size_with_cross(self, main: f64, cross: f64) -> Size<f64> {
         match self {
-            Axis::Horizontal => Size::new(Pixels(main), Pixels(cross)),
-            Axis::Vertical => Size::new(Pixels(cross), Pixels(main)),
+            Axis::Horizontal => Size::new(main, cross),
+            Axis::Vertical => Size::new(cross, main),
         }
     }
 
@@ -145,13 +145,13 @@ impl Axis {
     /// ```
     /// use flui_types::{Axis, Size, geometry::px};
     ///
-    /// let size = Size::new(px(100.0), px(50.0));
-    /// assert_eq!(Axis::Horizontal.flip_size(size), Size::new(px(100.0), px(50.0)));
-    /// assert_eq!(Axis::Vertical.flip_size(size), Size::new(px(50.0), px(100.0)));
+    /// let size = Size::new(100.0, 50.0);
+    /// assert_eq!(Axis::Horizontal.flip_size(size), Size::new(100.0, 50.0));
+    /// assert_eq!(Axis::Vertical.flip_size(size), Size::new(50.0, 100.0));
     /// ```
     #[inline]
     #[must_use]
-    pub const fn flip_size(self, size: Size<Pixels>) -> Size<Pixels> {
+    pub const fn flip_size(self, size: Size<f64>) -> Size<f64> {
         match self {
             Axis::Horizontal => size,
             Axis::Vertical => Size::new(size.height, size.width),
@@ -165,13 +165,13 @@ impl Axis {
     /// ```
     /// use flui_types::{Axis, Size, geometry::px};
     ///
-    /// let size = Size::new(px(100.0), px(50.0));
+    /// let size = Size::new(100.0, 50.0);
     /// assert_eq!(Axis::Horizontal.main_size(size), 100.0);
     /// assert_eq!(Axis::Vertical.main_size(size), 50.0);
     /// ```
     #[inline]
     #[must_use]
-    pub const fn main_size(self, size: Size<Pixels>) -> f32 {
+    pub const fn main_size(self, size: Size<f64>) -> f64 {
         self.select_size(size)
     }
 
@@ -182,13 +182,13 @@ impl Axis {
     /// ```
     /// use flui_types::{Axis, Size, geometry::px};
     ///
-    /// let size = Size::new(px(100.0), px(50.0));
+    /// let size = Size::new(100.0, 50.0);
     /// assert_eq!(Axis::Horizontal.cross_size(size), 50.0);
     /// assert_eq!(Axis::Vertical.cross_size(size), 100.0);
     /// ```
     #[inline]
     #[must_use]
-    pub const fn cross_size(self, size: Size<Pixels>) -> f32 {
+    pub const fn cross_size(self, size: Size<f64>) -> f64 {
         self.opposite().select_size(size)
     }
 }
@@ -323,7 +323,7 @@ impl AxisDirection {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn sign(self) -> f32 {
+    pub const fn sign(self) -> f64 {
         if self.is_positive() { 1.0 } else { -1.0 }
     }
 
@@ -405,17 +405,17 @@ impl Orientation {
     /// use flui_types::{Size, geometry::px, layout::Orientation};
     ///
     /// assert_eq!(
-    ///     Orientation::from_size(Size::new(px(100.0), px(200.0))),
+    ///     Orientation::from_size(Size::new(100.0, 200.0)),
     ///     Orientation::Portrait
     /// );
     /// assert_eq!(
-    ///     Orientation::from_size(Size::new(px(200.0), px(100.0))),
+    ///     Orientation::from_size(Size::new(200.0, 100.0)),
     ///     Orientation::Landscape
     /// );
     /// ```
     #[inline]
     #[must_use]
-    pub fn from_size(size: Size<Pixels>) -> Self {
+    pub fn from_size(size: Size<f64>) -> Self {
         if size.height > size.width {
             Orientation::Portrait
         } else {
@@ -542,7 +542,6 @@ impl VerticalDirection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::units::px;
 
     #[test]
     #[inline]
@@ -562,7 +561,7 @@ mod tests {
     #[test]
     #[inline]
     fn test_axis_size_operations() {
-        let size = Size::new(px(100.0), px(50.0));
+        let size = Size::new(100.0, 50.0);
 
         assert_eq!(Axis::Horizontal.select_size(size), 100.0);
         assert_eq!(Axis::Vertical.select_size(size), 50.0);
@@ -577,37 +576,25 @@ mod tests {
     #[test]
     #[inline]
     fn test_axis_make_size() {
-        assert_eq!(
-            Axis::Horizontal.make_size(100.0),
-            Size::new(px(100.0), px(0.0))
-        );
-        assert_eq!(
-            Axis::Vertical.make_size(100.0),
-            Size::new(px(0.0), px(100.0))
-        );
+        assert_eq!(Axis::Horizontal.make_size(100.0), Size::new(100.0, 0.0));
+        assert_eq!(Axis::Vertical.make_size(100.0), Size::new(0.0, 100.0));
 
         assert_eq!(
             Axis::Horizontal.make_size_with_cross(100.0, 50.0),
-            Size::new(px(100.0), px(50.0))
+            Size::new(100.0, 50.0)
         );
         assert_eq!(
             Axis::Vertical.make_size_with_cross(100.0, 50.0),
-            Size::new(px(50.0), px(100.0))
+            Size::new(50.0, 100.0)
         );
     }
 
     #[test]
     #[inline]
     fn test_axis_flip_size() {
-        let size = Size::new(px(100.0), px(50.0));
-        assert_eq!(
-            Axis::Horizontal.flip_size(size),
-            Size::new(px(100.0), px(50.0))
-        );
-        assert_eq!(
-            Axis::Vertical.flip_size(size),
-            Size::new(px(50.0), px(100.0))
-        );
+        let size = Size::new(100.0, 50.0);
+        assert_eq!(Axis::Horizontal.flip_size(size), Size::new(100.0, 50.0));
+        assert_eq!(Axis::Vertical.flip_size(size), Size::new(50.0, 100.0));
     }
 
     #[test]
@@ -691,16 +678,16 @@ mod tests {
     #[inline]
     fn test_orientation_from_size() {
         assert_eq!(
-            Orientation::from_size(Size::new(px(100.0), px(200.0))),
+            Orientation::from_size(Size::new(100.0, 200.0)),
             Orientation::Portrait
         );
         assert_eq!(
-            Orientation::from_size(Size::new(px(200.0), px(100.0))),
+            Orientation::from_size(Size::new(200.0, 100.0)),
             Orientation::Landscape
         );
         // Tie goes to landscape
         assert_eq!(
-            Orientation::from_size(Size::new(px(100.0), px(100.0))),
+            Orientation::from_size(Size::new(100.0, 100.0)),
             Orientation::Landscape
         );
     }

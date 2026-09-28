@@ -17,16 +17,16 @@ use crate::styling::Color;
 
 impl Lerp for Color {
     #[inline]
-    fn lerp_to(&self, other: &Self, t: f32) -> Self {
+    fn lerp_to(&self, other: &Self, t: f64) -> Self {
         // The `Lerp` contract is no-clamp: `t` may fall outside [0, 1] so
         // overshoot curves (elastic/back) propagate through `Tween<Color>`.
         // Delegating to `Color::lerp` (which clamps `t`) would flatten that
         // overshoot — the very thing the no-clamp tween path restores — so the
         // channels are interpolated directly here. `t` is NOT clamped; the
-        // channel *values* still saturate into [0, 255] (the `f32 as u8` cast
+        // channel *values* still saturate into [0, 255] (the `f64 as u8` cast
         // saturates). Round, not truncate, to avoid biasing each channel down.
         let lerp_channel =
-            |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t).round() as u8;
+            |a: u8, b: u8| (f64::from(a) + (f64::from(b) - f64::from(a)) * t).round() as u8;
         Color::rgba(
             lerp_channel(self.r, other.r),
             lerp_channel(self.g, other.g),
@@ -38,7 +38,7 @@ impl Lerp for Color {
 
 impl Lerp for Alignment {
     #[inline]
-    fn lerp_to(&self, other: &Self, t: f32) -> Self {
+    fn lerp_to(&self, other: &Self, t: f64) -> Self {
         Alignment::lerp(*self, *other, t)
     }
 }

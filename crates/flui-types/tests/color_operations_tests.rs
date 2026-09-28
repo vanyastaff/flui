@@ -74,7 +74,7 @@ fn lighten_white_and_darken_black_are_fixed_points() {
 #[case::zero(0.0, 0)]
 #[case::clamped_high(2.0, 255)]
 #[case::clamped_low(-1.0, 0)]
-fn with_opacity_sets_only_alpha(#[case] opacity: f32, #[case] alpha: u8) {
+fn with_opacity_sets_only_alpha(#[case] opacity: f64, #[case] alpha: u8) {
     let c = Color::rgba(100, 150, 200, 7);
     assert_eq!(c.with_opacity(opacity), Color::rgba(100, 150, 200, alpha));
 }

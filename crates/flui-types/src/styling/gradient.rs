@@ -31,7 +31,7 @@ impl Gradient {
 
     /// Returns the color stops in this gradient, if any.
     #[inline]
-    pub fn stops(&self) -> Option<&[f32]> {
+    pub fn stops(&self) -> Option<&[f64]> {
         match self {
             Gradient::Linear(g) => g.stops.as_deref(),
             Gradient::Radial(g) => g.stops.as_deref(),
@@ -44,7 +44,7 @@ impl Gradient {
     /// Returns `None` if the gradients are of different kinds, or either
     /// side cannot be sampled (see [`LinearGradient::lerp`]).
     #[inline]
-    pub fn lerp(a: &Self, b: &Self, t: f32) -> Option<Self> {
+    pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
         let t = t.clamp(0.0, 1.0);
         match (a, b) {
             (Gradient::Linear(a), Gradient::Linear(b)) => {
@@ -79,7 +79,7 @@ pub struct LinearGradient {
     /// gradient.
     ///
     /// If None, the colors are evenly spaced.
-    pub stops: Option<Vec<f32>>,
+    pub stops: Option<Vec<f64>>,
 
     /// How this gradient should tile the plane beyond the region defined by
     /// begin and end.
@@ -93,7 +93,7 @@ impl LinearGradient {
         begin: Alignment,
         end: Alignment,
         colors: Vec<Color>,
-        stops: Option<Vec<f32>>,
+        stops: Option<Vec<f64>>,
         tile_mode: TileMode,
     ) -> Self {
         Self {
@@ -191,7 +191,7 @@ impl LinearGradient {
     /// Returns `None` if either side has no colours, or explicit stops
     /// that do not match its colours one for one.
     #[inline]
-    pub fn lerp(a: &Self, b: &Self, t: f32) -> Option<Self> {
+    pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
         // Flutter returns `a` when both are the same object; equal values
         // are the closest this has to identity.
         if a == b {
@@ -223,14 +223,14 @@ pub struct RadialGradient {
 
     /// The radius of the gradient, as a fraction of the shortest side of the
     /// paint box.
-    pub radius: f32,
+    pub radius: f64,
 
     /// The colors the gradient should obtain at each of the stops.
     pub colors: Vec<Color>,
 
     /// A list of values from 0.0 to 1.0 that denote fractions along the
     /// gradient.
-    pub stops: Option<Vec<f32>>,
+    pub stops: Option<Vec<f64>>,
 
     /// How this gradient should tile the plane beyond the region defined by
     /// center and radius.
@@ -244,7 +244,7 @@ pub struct RadialGradient {
 
     /// The radius of the focal point of gradient, as a fraction of the shortest
     /// side.
-    pub focal_radius: Option<f32>,
+    pub focal_radius: Option<f64>,
 }
 
 impl RadialGradient {
@@ -252,12 +252,12 @@ impl RadialGradient {
     #[inline]
     pub fn new(
         center: Alignment,
-        radius: f32,
+        radius: f64,
         colors: Vec<Color>,
-        stops: Option<Vec<f32>>,
+        stops: Option<Vec<f64>>,
         tile_mode: TileMode,
         focal: Option<Alignment>,
-        focal_radius: Option<f32>,
+        focal_radius: Option<f64>,
     ) -> Self {
         Self {
             center,
@@ -272,7 +272,7 @@ impl RadialGradient {
 
     /// Creates a simple radial gradient centered in the box.
     #[inline]
-    pub fn centered(radius: f32, colors: Vec<Color>) -> Self {
+    pub fn centered(radius: f64, colors: Vec<Color>) -> Self {
         Self::new(
             Alignment::CENTER,
             radius,
@@ -321,7 +321,7 @@ impl RadialGradient {
     /// it toward `Alignment(0, 0)` instead (`AlignmentGeometry.lerp` with a
     /// null end), which jumps whenever that center is anywhere else.
     #[inline]
-    pub fn lerp(a: &Self, b: &Self, t: f32) -> Option<Self> {
+    pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
         // Flutter returns `a` when both are the same object; equal values
         // are the closest this has to identity.
         if a == b {
@@ -369,16 +369,16 @@ pub struct SweepGradient {
 
     /// A list of values from 0.0 to 1.0 that denote fractions along the
     /// gradient.
-    pub stops: Option<Vec<f32>>,
+    pub stops: Option<Vec<f64>>,
 
     /// How this gradient should tile the plane beyond the region.
     pub tile_mode: TileMode,
 
     /// The angle in radians at which stop 0.0 of the gradient is placed.
-    pub start_angle: f32,
+    pub start_angle: f64,
 
     /// The angle in radians at which stop 1.0 of the gradient is placed.
-    pub end_angle: f32,
+    pub end_angle: f64,
 }
 
 impl SweepGradient {
@@ -387,10 +387,10 @@ impl SweepGradient {
     pub fn new(
         center: Alignment,
         colors: Vec<Color>,
-        stops: Option<Vec<f32>>,
+        stops: Option<Vec<f64>>,
         tile_mode: TileMode,
-        start_angle: f32,
-        end_angle: f32,
+        start_angle: f64,
+        end_angle: f64,
     ) -> Self {
         Self {
             center,
@@ -412,7 +412,7 @@ impl SweepGradient {
             None,
             TileMode::Clamp,
             0.0,
-            std::f32::consts::TAU,
+            std::f64::consts::TAU,
         )
     }
 
@@ -420,7 +420,7 @@ impl SweepGradient {
     /// `SweepGradient.lerp`. Colours and stops combine as in
     /// [`LinearGradient::lerp`]; the angles never go below zero.
     #[inline]
-    pub fn lerp(a: &Self, b: &Self, t: f32) -> Option<Self> {
+    pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
         // Flutter returns `a` when both are the same object; equal values
         // are the closest this has to identity.
         if a == b {
@@ -443,14 +443,14 @@ impl SweepGradient {
     }
 }
 
-fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
+fn lerp_f32(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }
 
 /// Flutter's `Gradient._impliedStops`: the explicit stops, or the colours
 /// spread evenly from 0 to 1. `None` for stops that do not pair one for
 /// one with the colours, or no colours at all.
-fn implied_stops(colors: &[Color], stops: Option<&[f32]>) -> Option<Vec<f32>> {
+fn implied_stops(colors: &[Color], stops: Option<&[f64]>) -> Option<Vec<f64>> {
     match stops {
         _ if colors.is_empty() => None,
         Some(stops) if stops.len() != colors.len() => None,
@@ -458,16 +458,16 @@ fn implied_stops(colors: &[Color], stops: Option<&[f32]>) -> Option<Vec<f32>> {
         None if colors.len() == 1 => Some(vec![0.0]),
         None => {
             #[expect(clippy::cast_precision_loss)] // a colour count
-            let separation = 1.0 / (colors.len() - 1) as f32;
+            let separation = 1.0 / (colors.len() - 1) as f64;
             #[expect(clippy::cast_precision_loss)]
-            Some((0..colors.len()).map(|i| i as f32 * separation).collect())
+            Some((0..colors.len()).map(|i| i as f64 * separation).collect())
         }
     }
 }
 
 /// Flutter's gradient `_sample`: the colour at `t` along `colors` placed at
 /// `stops`, holding the end colours beyond the first and last stop.
-fn sample(colors: &[Color], stops: &[f32], t: f32) -> Color {
+fn sample(colors: &[Color], stops: &[f64], t: f64) -> Color {
     let (first, last) = (stops[0], stops[stops.len() - 1]);
     if t <= first {
         return colors[0];
@@ -489,14 +489,14 @@ fn sample(colors: &[Color], stops: &[f32], t: f32) -> Color {
 /// Flutter's `_interpolateColorsAndStops`: a stop wherever either gradient
 /// has one, coloured by lerping both gradients sampled there.
 fn interpolate_colors_and_stops(
-    (a_colors, a_stops): (&[Color], Option<&[f32]>),
-    (b_colors, b_stops): (&[Color], Option<&[f32]>),
-    t: f32,
-) -> Option<(Vec<Color>, Vec<f32>)> {
+    (a_colors, a_stops): (&[Color], Option<&[f64]>),
+    (b_colors, b_stops): (&[Color], Option<&[f64]>),
+    t: f64,
+) -> Option<(Vec<Color>, Vec<f64>)> {
     let a_stops = implied_stops(a_colors, a_stops)?;
     let b_stops = implied_stops(b_colors, b_stops)?;
-    let mut stops: Vec<f32> = a_stops.iter().chain(&b_stops).copied().collect();
-    stops.sort_by(f32::total_cmp);
+    let mut stops: Vec<f64> = a_stops.iter().chain(&b_stops).copied().collect();
+    stops.sort_by(f64::total_cmp);
     stops.dedup();
     let colors = stops
         .iter()
@@ -518,7 +518,7 @@ pub trait GradientTransform: std::fmt::Debug {
     /// Transform the gradient according to this transformation.
     ///
     /// Returns a transformation matrix that should be applied to the gradient.
-    fn transform(&self) -> [[f32; 3]; 3];
+    fn transform(&self) -> [[f64; 3]; 3];
 }
 
 /// A gradient transform that rotates the gradient by a fixed angle, similar
@@ -527,20 +527,20 @@ pub trait GradientTransform: std::fmt::Debug {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GradientRotation {
     /// The angle in radians to rotate the gradient.
-    pub radians: f32,
+    pub radians: f64,
 }
 
 impl GradientRotation {
     /// Creates a new gradient rotation.
     #[inline]
-    pub const fn new(radians: f32) -> Self {
+    pub const fn new(radians: f64) -> Self {
         Self { radians }
     }
 }
 
 impl GradientTransform for GradientRotation {
     #[inline]
-    fn transform(&self) -> [[f32; 3]; 3] {
+    fn transform(&self) -> [[f64; 3]; 3] {
         let cos = self.radians.cos();
         let sin = self.radians.sin();
 
@@ -560,7 +560,7 @@ mod tests {
         vec![Color::rgb(100, 50, 250), Color::rgb(0, 0, 0)]
     }
 
-    fn linear(colors: Vec<Color>, stops: [f32; 2], tile_mode: TileMode) -> LinearGradient {
+    fn linear(colors: Vec<Color>, stops: [f64; 2], tile_mode: TileMode) -> LinearGradient {
         LinearGradient::new(
             Alignment::TOP_LEFT,
             Alignment::CENTER,
@@ -570,7 +570,7 @@ mod tests {
         )
     }
 
-    fn radial(radius: f32, stops: [f32; 2], focal: f32) -> RadialGradient {
+    fn radial(radius: f64, stops: [f64; 2], focal: f64) -> RadialGradient {
         RadialGradient::new(
             Alignment::new(focal, 0.0),
             radius,
@@ -586,7 +586,7 @@ mod tests {
         )
     }
 
-    fn sweep(start: f32, end: f32) -> SweepGradient {
+    fn sweep(start: f64, end: f64) -> SweepGradient {
         SweepGradient::new(
             Alignment::CENTER,
             two(),
@@ -867,14 +867,14 @@ mod tests {
                 None,
                 clamp,
                 0.0,
-                std::f32::consts::TAU
+                std::f64::consts::TAU
             )
         );
     }
 
     #[test]
     fn rotation_matrix() {
-        let m = GradientRotation::new(std::f32::consts::FRAC_PI_2).transform();
+        let m = GradientRotation::new(std::f64::consts::FRAC_PI_2).transform();
         let expected = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
         for (row, want) in m.iter().zip(expected) {
             for (x, w) in row.iter().zip(want) {

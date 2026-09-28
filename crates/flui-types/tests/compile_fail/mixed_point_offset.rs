@@ -1,14 +1,12 @@
-//! Compile-fail test: Attempting to mix Point<Pixels> with Offset<DevicePixels> should fail
+//! Compile-fail test: a logical point (`f64`) cannot be moved by a device-pixel offset (`i32`).
 //!
-//! This test verifies type-safe Point operations prevent cross-unit mixing.
+//! The scalar alone keeps logical and device-pixel geometry apart (ADR-0098 §5).
 
-use flui_types::geometry::{Pixels, DevicePixels, Point, Offset};
+use flui_types::geometry::{Offset, Point};
 
 fn main() {
-    let point = Point::new(Pixels(10.0), Pixels(20.0));
-    let offset = Offset::new(DevicePixels(5), DevicePixels(10));
+    let point = Point::new(10.0, 20.0);
+    let offset = Offset::new(5, 10);
 
-    // This should fail to compile - cannot add Offset<DevicePixels> to Point<Pixels>
     let _result = point + offset;
-    //~^ ERROR: the trait bound `Point<Pixels>: Add<Offset<DevicePixels>>` is not satisfied
 }

@@ -1,7 +1,7 @@
 //! Shader types for painting.
 
 use crate::{
-    geometry::{Offset, Pixels, px},
+    geometry::{Offset, px},
     painting::{BlurStyle, TileMode},
     styling::Color,
 };
@@ -18,7 +18,7 @@ use crate::{
 ///
 /// let shader = Shader::linear_gradient(
 ///     flui_types::geometry::Offset::ZERO,
-///     flui_types::geometry::Offset::new(px(100.0), px(100.0)),
+///     flui_types::geometry::Offset::new(100.0, 100.0),
 ///     vec![Color::RED, Color::BLUE],
 ///     None,
 ///     flui_types::painting::TileMode::Clamp,
@@ -31,13 +31,13 @@ pub enum Shader {
     /// A linear gradient shader.
     LinearGradient {
         /// The starting point of the gradient.
-        from: Offset<Pixels>,
+        from: Offset<f64>,
         /// The ending point of the gradient.
-        to: Offset<Pixels>,
+        to: Offset<f64>,
         /// The colors in the gradient.
         colors: Vec<Color>,
         /// Optional color stops (0.0 to 1.0).
-        stops: Option<Vec<f32>>,
+        stops: Option<Vec<f64>>,
         /// How to tile the gradient.
         tile_mode: TileMode,
     },
@@ -45,35 +45,35 @@ pub enum Shader {
     /// A radial gradient shader.
     RadialGradient {
         /// The center of the gradient.
-        center: Offset<Pixels>,
+        center: Offset<f64>,
         /// The radius of the gradient.
-        radius: f32,
+        radius: f64,
         /// The colors in the gradient.
         colors: Vec<Color>,
         /// Optional color stops (0.0 to 1.0).
-        stops: Option<Vec<f32>>,
+        stops: Option<Vec<f64>>,
         /// How to tile the gradient.
         tile_mode: TileMode,
         /// Optional focal point.
-        focal: Option<Offset<Pixels>>,
+        focal: Option<Offset<f64>>,
         /// Optional focal radius.
-        focal_radius: Option<f32>,
+        focal_radius: Option<f64>,
     },
 
     /// A sweep (angular/conic) gradient shader.
     SweepGradient {
         /// The center of the gradient.
-        center: Offset<Pixels>,
+        center: Offset<f64>,
         /// The colors in the gradient.
         colors: Vec<Color>,
         /// Optional color stops (0.0 to 1.0).
-        stops: Option<Vec<f32>>,
+        stops: Option<Vec<f64>>,
         /// How to tile the gradient.
         tile_mode: TileMode,
         /// The starting angle in radians.
-        start_angle: f32,
+        start_angle: f64,
         /// The ending angle in radians.
-        end_angle: f32,
+        end_angle: f64,
     },
 
     /// A solid color shader (useful for masks and testing).
@@ -91,10 +91,10 @@ impl Shader {
     #[inline]
     #[must_use]
     pub fn linear_gradient(
-        from: Offset<Pixels>,
-        to: Offset<Pixels>,
+        from: Offset<f64>,
+        to: Offset<f64>,
         colors: Vec<Color>,
-        stops: Option<Vec<f32>>,
+        stops: Option<Vec<f64>>,
         tile_mode: TileMode,
     ) -> Self {
         Shader::LinearGradient {
@@ -110,13 +110,13 @@ impl Shader {
     #[inline]
     #[must_use]
     pub fn radial_gradient(
-        center: Offset<Pixels>,
-        radius: f32,
+        center: Offset<f64>,
+        radius: f64,
         colors: Vec<Color>,
-        stops: Option<Vec<f32>>,
+        stops: Option<Vec<f64>>,
         tile_mode: TileMode,
-        focal: Option<Offset<Pixels>>,
-        focal_radius: Option<f32>,
+        focal: Option<Offset<f64>>,
+        focal_radius: Option<f64>,
     ) -> Self {
         Shader::RadialGradient {
             center,
@@ -133,12 +133,12 @@ impl Shader {
     #[inline]
     #[must_use]
     pub fn sweep_gradient(
-        center: Offset<Pixels>,
+        center: Offset<f64>,
         colors: Vec<Color>,
-        stops: Option<Vec<f32>>,
+        stops: Option<Vec<f64>>,
         tile_mode: TileMode,
-        start_angle: f32,
-        end_angle: f32,
+        start_angle: f64,
+        end_angle: f64,
     ) -> Self {
         Shader::SweepGradient {
             center,
@@ -181,13 +181,13 @@ impl Shader {
     ///
     /// let shader = Shader::simple_linear(
     ///     Offset::ZERO,
-    ///     Offset::new(px(100.0), px(0.0)),
+    ///     Offset::new(100.0, 0.0),
     ///     vec![Color::RED, Color::BLUE],
     /// );
     /// ```
     #[inline]
     #[must_use]
-    pub fn simple_linear(from: Offset<Pixels>, to: Offset<Pixels>, colors: Vec<Color>) -> Self {
+    pub fn simple_linear(from: Offset<f64>, to: Offset<f64>, colors: Vec<Color>) -> Self {
         Self::linear_gradient(from, to, colors, None, TileMode::Clamp)
     }
 
@@ -208,14 +208,14 @@ impl Shader {
     /// };
     ///
     /// let shader = Shader::simple_radial(
-    ///     Offset::new(px(50.0), px(50.0)),
+    ///     Offset::new(50.0, 50.0),
     ///     25.0,
     ///     vec![Color::RED, Color::BLUE],
     /// );
     /// ```
     #[inline]
     #[must_use]
-    pub fn simple_radial(center: Offset<Pixels>, radius: f32, colors: Vec<Color>) -> Self {
+    pub fn simple_radial(center: Offset<f64>, radius: f64, colors: Vec<Color>) -> Self {
         Self::radial_gradient(center, radius, colors, None, TileMode::Clamp, None, None)
     }
 
@@ -237,20 +237,20 @@ impl Shader {
     /// };
     ///
     /// let shader = Shader::simple_sweep(
-    ///     Offset::new(px(50.0), px(50.0)),
+    ///     Offset::new(50.0, 50.0),
     ///     vec![Color::RED, Color::GREEN, Color::BLUE],
     /// );
     /// ```
     #[inline]
     #[must_use]
-    pub fn simple_sweep(center: Offset<Pixels>, colors: Vec<Color>) -> Self {
+    pub fn simple_sweep(center: Offset<f64>, colors: Vec<Color>) -> Self {
         Self::sweep_gradient(
             center,
             colors,
             None,
             TileMode::Clamp,
             0.0,
-            std::f32::consts::TAU,
+            std::f64::consts::TAU,
         )
     }
 
@@ -303,13 +303,13 @@ impl Shader {
     /// - `vec4<f32>` color (16 bytes)
     #[must_use]
     #[inline]
-    pub fn to_mask_uniform_data(&self, bounds: crate::geometry::Rect<Pixels>) -> Vec<u8> {
+    pub fn to_mask_uniform_data(&self, bounds: crate::geometry::Rect<f64>) -> Vec<u8> {
         fn color_to_f32x4(c: &Color) -> [f32; 4] {
             [
-                c.r as f32 / 255.0,
-                c.g as f32 / 255.0,
-                c.b as f32 / 255.0,
-                c.a as f32 / 255.0,
+                f32::from(c.r) / 255.0,
+                f32::from(c.g) / 255.0,
+                f32::from(c.b) / 255.0,
+                f32::from(c.a) / 255.0,
             ]
         }
 
@@ -318,21 +318,21 @@ impl Shader {
                 from, to, colors, ..
             } => {
                 let mut data = Vec::with_capacity(48);
-                let w: f32 = bounds.width().0;
-                let h: f32 = bounds.height().0;
-                let bx: f32 = bounds.left().0;
-                let by: f32 = bounds.top().0;
+                let w: f64 = bounds.width();
+                let h: f64 = bounds.height();
+                let bx: f64 = bounds.left();
+                let by: f64 = bounds.top();
 
                 // Normalize to 0.0-1.0 relative to bounds
-                let sx = if w > 0.0 { (from.dx.0 - bx) / w } else { 0.0 };
-                let sy = if h > 0.0 { (from.dy.0 - by) / h } else { 0.0 };
-                let ex = if w > 0.0 { (to.dx.0 - bx) / w } else { 0.0 };
-                let ey = if h > 0.0 { (to.dy.0 - by) / h } else { 0.0 };
+                let sx = if w > 0.0 { (from.dx - bx) / w } else { 0.0 };
+                let sy = if h > 0.0 { (from.dy - by) / h } else { 0.0 };
+                let ex = if w > 0.0 { (to.dx - bx) / w } else { 0.0 };
+                let ey = if h > 0.0 { (to.dy - by) / h } else { 0.0 };
 
-                data.extend_from_slice(&sx.to_le_bytes());
-                data.extend_from_slice(&sy.to_le_bytes());
-                data.extend_from_slice(&ex.to_le_bytes());
-                data.extend_from_slice(&ey.to_le_bytes());
+                data.extend_from_slice(&(sx as f32).to_le_bytes());
+                data.extend_from_slice(&(sy as f32).to_le_bytes());
+                data.extend_from_slice(&(ex as f32).to_le_bytes());
+                data.extend_from_slice(&(ey as f32).to_le_bytes());
 
                 let c0 = colors.first().map_or([0.0, 0.0, 0.0, 1.0], color_to_f32x4);
                 for v in &c0 {
@@ -353,21 +353,21 @@ impl Shader {
                 ..
             } => {
                 let mut data = Vec::with_capacity(48);
-                let w: f32 = bounds.width().0;
-                let h: f32 = bounds.height().0;
-                let bx: f32 = bounds.left().0;
-                let by: f32 = bounds.top().0;
+                let w: f64 = bounds.width();
+                let h: f64 = bounds.height();
+                let bx: f64 = bounds.left();
+                let by: f64 = bounds.top();
 
-                let cx = if w > 0.0 { (center.dx.0 - bx) / w } else { 0.5 };
-                let cy = if h > 0.0 { (center.dy.0 - by) / h } else { 0.5 };
+                let cx = if w > 0.0 { (center.dx - bx) / w } else { 0.5 };
+                let cy = if h > 0.0 { (center.dy - by) / h } else { 0.5 };
                 // Normalize radius relative to average of width/height
-                let avg = f32::midpoint(w, h);
+                let avg = f64::midpoint(w, h);
                 let nr = if avg > 0.0 { *radius / avg } else { 0.5 };
 
-                data.extend_from_slice(&cx.to_le_bytes());
-                data.extend_from_slice(&cy.to_le_bytes());
-                data.extend_from_slice(&nr.to_le_bytes());
-                data.extend_from_slice(&0.0f32.to_le_bytes()); // padding
+                data.extend_from_slice(&(cx as f32).to_le_bytes());
+                data.extend_from_slice(&(cy as f32).to_le_bytes());
+                data.extend_from_slice(&(nr as f32).to_le_bytes());
+                data.extend_from_slice(&0.0_f32.to_le_bytes()); // padding
 
                 let c0 = colors.first().map_or([0.0, 0.0, 0.0, 1.0], color_to_f32x4);
                 for v in &c0 {
@@ -392,7 +392,7 @@ impl Shader {
             // SweepGradient: 48-byte layout matching sweep_gradient.wgsl Uniforms:
             //   offset  0: center     vec2<f32>  (8 bytes)
             //   offset  8: start_angle f32       (4 bytes)
-            //   offset 12: end_angle   f32       (4 bytes)
+            //   offset 12: end_angle f32       (4 bytes)
             //   offset 16: start_color vec4<f32> (16 bytes)
             //   offset 32: end_color   vec4<f32> (16 bytes)
             Shader::SweepGradient {
@@ -403,20 +403,20 @@ impl Shader {
                 ..
             } => {
                 let mut data = Vec::with_capacity(48);
-                let w: f32 = bounds.width().0;
-                let h: f32 = bounds.height().0;
-                let bx: f32 = bounds.left().0;
-                let by: f32 = bounds.top().0;
+                let w: f64 = bounds.width();
+                let h: f64 = bounds.height();
+                let bx: f64 = bounds.left();
+                let by: f64 = bounds.top();
 
                 // Normalize center to 0.0-1.0 relative to bounds (mirrors the
                 // radial gradient arm).
-                let cx = if w > 0.0 { (center.dx.0 - bx) / w } else { 0.5 };
-                let cy = if h > 0.0 { (center.dy.0 - by) / h } else { 0.5 };
+                let cx = if w > 0.0 { (center.dx - bx) / w } else { 0.5 };
+                let cy = if h > 0.0 { (center.dy - by) / h } else { 0.5 };
 
-                data.extend_from_slice(&cx.to_le_bytes()); // center.x
-                data.extend_from_slice(&cy.to_le_bytes()); // center.y
-                data.extend_from_slice(&start_angle.to_le_bytes()); // start_angle
-                data.extend_from_slice(&end_angle.to_le_bytes()); // end_angle
+                data.extend_from_slice(&(cx as f32).to_le_bytes()); // center.x
+                data.extend_from_slice(&(cy as f32).to_le_bytes()); // center.y
+                data.extend_from_slice(&(*start_angle as f32).to_le_bytes()); // start_angle
+                data.extend_from_slice(&(*end_angle as f32).to_le_bytes()); // end_angle
 
                 let c0 = colors.first().map_or([0.0, 0.0, 0.0, 1.0], color_to_f32x4);
                 for v in &c0 {
@@ -433,7 +433,7 @@ impl Shader {
             // Image shaders fall back to opaque white (no mask effect)
             _ => {
                 let mut data = Vec::with_capacity(16);
-                for v in &[1.0f32, 1.0, 1.0, 1.0] {
+                for v in &[1.0_f32, 1.0, 1.0, 1.0] {
                     data.extend_from_slice(&v.to_le_bytes());
                 }
                 data
@@ -463,7 +463,7 @@ pub struct ImageShader {
     pub tile_mode_y: TileMode,
 
     /// Optional transformation matrix (3x3).
-    pub transform: Option<[[f32; 3]; 3]>,
+    pub transform: Option<[[f64; 3]; 3]>,
 
     /// Optional filter quality.
     pub filter_quality: Option<crate::painting::FilterQuality>,
@@ -485,7 +485,7 @@ impl ImageShader {
     /// Creates a new image shader with a transformation matrix.
     #[inline]
     #[must_use]
-    pub const fn with_transform(mut self, transform: [[f32; 3]; 3]) -> Self {
+    pub const fn with_transform(mut self, transform: [[f64; 3]; 3]) -> Self {
         self.transform = Some(transform);
         self
     }
@@ -537,49 +537,49 @@ pub struct MaskFilter {
     /// The standard deviation of the Gaussian blur.
     ///
     /// This is the blur radius in logical pixels.
-    pub sigma: f32,
+    pub sigma: f64,
 }
 
 impl MaskFilter {
     /// Creates a new blur mask filter.
     #[inline]
     #[must_use]
-    pub const fn blur(style: BlurStyle, sigma: f32) -> Self {
+    pub const fn blur(style: BlurStyle, sigma: f64) -> Self {
         Self { style, sigma }
     }
 
     /// Creates a normal blur with the given sigma.
     #[inline]
     #[must_use]
-    pub const fn normal(sigma: f32) -> Self {
+    pub const fn normal(sigma: f64) -> Self {
         Self::blur(BlurStyle::Normal, sigma)
     }
 
     /// Creates a solid blur with the given sigma.
     #[inline]
     #[must_use]
-    pub const fn solid(sigma: f32) -> Self {
+    pub const fn solid(sigma: f64) -> Self {
         Self::blur(BlurStyle::Solid, sigma)
     }
 
     /// Creates an outer blur with the given sigma.
     #[inline]
     #[must_use]
-    pub const fn outer(sigma: f32) -> Self {
+    pub const fn outer(sigma: f64) -> Self {
         Self::blur(BlurStyle::Outer, sigma)
     }
 
     /// Creates an inner blur with the given sigma.
     #[inline]
     #[must_use]
-    pub const fn inner(sigma: f32) -> Self {
+    pub const fn inner(sigma: f64) -> Self {
         Self::blur(BlurStyle::Inner, sigma)
     }
 
     /// Returns the blur radius (approximately 2 * sigma).
     #[inline]
     #[must_use]
-    pub const fn blur_radius(&self) -> f32 {
+    pub const fn blur_radius(&self) -> f64 {
         self.sigma * 2.0
     }
 
@@ -609,7 +609,7 @@ mod tests {
     fn test_shader_linear_gradient() {
         let shader = Shader::linear_gradient(
             Offset::ZERO,
-            Offset::new(px(100.0), px(100.0)),
+            Offset::new(100.0, 100.0),
             vec![Color::RED, Color::BLUE],
             None,
             TileMode::Clamp,
@@ -620,7 +620,7 @@ mod tests {
                 from, to, colors, ..
             } => {
                 assert_eq!(from, Offset::ZERO);
-                assert_eq!(to, Offset::new(px(100.0), px(100.0)));
+                assert_eq!(to, Offset::new(100.0, 100.0));
                 assert_eq!(colors.len(), 2);
             }
             _ => panic!("Wrong shader type"),
@@ -630,7 +630,7 @@ mod tests {
     #[test]
     fn test_shader_radial_gradient() {
         let shader = Shader::radial_gradient(
-            Offset::new(px(50.0), px(50.0)),
+            Offset::new(50.0, 50.0),
             25.0,
             vec![Color::RED, Color::BLUE],
             None,
@@ -646,7 +646,7 @@ mod tests {
                 colors,
                 ..
             } => {
-                assert_eq!(center, Offset::new(px(50.0), px(50.0)));
+                assert_eq!(center, Offset::new(50.0, 50.0));
                 assert_eq!(radius, 25.0);
                 assert_eq!(colors.len(), 2);
             }
@@ -657,12 +657,12 @@ mod tests {
     #[test]
     fn test_shader_sweep_gradient() {
         let shader = Shader::sweep_gradient(
-            Offset::new(px(50.0), px(50.0)),
+            Offset::new(50.0, 50.0),
             vec![Color::RED, Color::BLUE],
             None,
             TileMode::Clamp,
             0.0,
-            std::f32::consts::TAU,
+            std::f64::consts::TAU,
         );
 
         match shader {
@@ -673,10 +673,10 @@ mod tests {
                 end_angle,
                 ..
             } => {
-                assert_eq!(center, Offset::new(px(50.0), px(50.0)));
+                assert_eq!(center, Offset::new(50.0, 50.0));
                 assert_eq!(colors.len(), 2);
                 assert_eq!(start_angle, 0.0);
-                assert_eq!(end_angle, std::f32::consts::TAU);
+                assert_eq!(end_angle, std::f64::consts::TAU);
             }
             _ => panic!("Wrong shader type"),
         }
@@ -755,11 +755,11 @@ mod tests {
 
     /// SweepGradient must produce exactly 48 bytes — the size that
     /// `shaders/masks/sweep_gradient.wgsl` Uniforms expects:
-    ///   offset  0: center     vec2<f32>   (8 bytes)
-    ///   offset  8: start_angle f32        (4 bytes)
-    ///   offset 12: end_angle   f32        (4 bytes)
-    ///   offset 16: start_color vec4<f32>  (16 bytes)
-    ///   offset 32: end_color   vec4<f32>  (16 bytes)
+    ///   offset  0: center     vec2<f64>   (8 bytes)
+    ///   offset  8: start_angle f64        (4 bytes)
+    ///   offset 12: end_angle   f64        (4 bytes)
+    ///   offset 16: start_color vec4<f64>  (16 bytes)
+    ///   offset 32: end_color   vec4<f64>  (16 bytes)
     ///
     /// Before the fix the `_` fallback arm emitted only 16 bytes, causing a
     /// wgpu uniform-size mismatch and garbage rendering.
@@ -768,14 +768,14 @@ mod tests {
         use crate::geometry::{Offset, Rect, px};
 
         let shader = Shader::sweep_gradient(
-            Offset::new(px(50.0), px(50.0)),
+            Offset::new(50.0, 50.0),
             vec![Color::RED, Color::BLUE],
             None,
             TileMode::Clamp,
             0.0,
-            std::f32::consts::TAU,
+            std::f64::consts::TAU,
         );
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let data = shader.to_mask_uniform_data(bounds);
         assert_eq!(
             data.len(),
@@ -789,20 +789,17 @@ mod tests {
     fn linear_and_radial_gradient_mask_uniform_are_48_bytes() {
         use crate::geometry::{Offset, Rect, px};
 
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
 
         let linear = Shader::simple_linear(
-            Offset::new(px(0.0), px(0.0)),
-            Offset::new(px(100.0), px(0.0)),
+            Offset::new(0.0, 0.0),
+            Offset::new(100.0, 0.0),
             vec![Color::RED, Color::BLUE],
         );
         assert_eq!(linear.to_mask_uniform_data(bounds).len(), 48);
 
-        let radial = Shader::simple_radial(
-            Offset::new(px(50.0), px(50.0)),
-            50.0,
-            vec![Color::RED, Color::BLUE],
-        );
+        let radial =
+            Shader::simple_radial(Offset::new(50.0, 50.0), 50.0, vec![Color::RED, Color::BLUE]);
         assert_eq!(radial.to_mask_uniform_data(bounds).len(), 48);
     }
 
@@ -812,7 +809,7 @@ mod tests {
         use crate::geometry::{Rect, px};
 
         let shader = Shader::solid(Color::RED);
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         assert_eq!(shader.to_mask_uniform_data(bounds).len(), 16);
     }
 
@@ -823,14 +820,14 @@ mod tests {
 
         // Center at (50, 50) in a 100x100 bounds starting at (0,0) → normalized (0.5, 0.5)
         let shader = Shader::sweep_gradient(
-            Offset::new(px(50.0), px(50.0)),
+            Offset::new(50.0, 50.0),
             vec![Color::RED, Color::BLUE],
             None,
             TileMode::Clamp,
             0.0,
-            std::f32::consts::TAU,
+            std::f64::consts::TAU,
         );
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let data = shader.to_mask_uniform_data(bounds);
 
         let cx = f32::from_le_bytes(data[0..4].try_into().unwrap());
@@ -852,13 +849,13 @@ mod tests {
                 .collect()
         }
 
-        fn off(x: f32, y: f32) -> Offset<Pixels> {
-            Offset::new(px(x), px(y))
+        fn off(x: f64, y: f64) -> Offset<f64> {
+            Offset::new(x, y)
         }
 
         /// A 200×100 box at (100, 50).
-        fn bounds() -> Rect<Pixels> {
-            Rect::from_ltrb(px(100.0), px(50.0), px(300.0), px(150.0))
+        fn bounds() -> Rect<f64> {
+            Rect::from_ltrb(100.0, 50.0, 300.0, 150.0)
         }
 
         const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
@@ -920,7 +917,7 @@ mod tests {
         /// sweep); one color is used for both ends; none is opaque black.
         #[test]
         fn degenerate_boxes_and_color_lists() {
-            let empty = Rect::from_ltrb(px(10.0), px(10.0), px(10.0), px(10.0));
+            let empty = Rect::from_ltrb(10.0, 10.0, 10.0, 10.0);
             let linear = Shader::simple_linear(off(1.0, 2.0), off(3.0, 4.0), vec![Color::RED]);
             let v = floats(&linear.to_mask_uniform_data(empty));
             assert_eq!(v[..4], [0.0; 4]);
@@ -939,7 +936,7 @@ mod tests {
             assert_eq!(v[..4], [0.5, 0.5, 0.0, std::f32::consts::TAU]);
             assert_eq!(v[8..12], BLUE);
             // Only one axis collapsed still normalizes the other.
-            let flat = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(0.0));
+            let flat = Rect::from_ltrb(0.0, 0.0, 100.0, 0.0);
             let v = floats(
                 &Shader::simple_linear(off(25.0, 9.0), off(75.0, 9.0), vec![])
                     .to_mask_uniform_data(flat),

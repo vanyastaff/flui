@@ -10,10 +10,7 @@
 //! (matching the oracle, which only rounds a uniform outer edge); see
 //! `flui_painting::paint_table_border`.
 
-use crate::{
-    geometry::Pixels,
-    styling::{BorderRadius, BorderRadiusExt, BorderSide},
-};
+use crate::styling::{BorderRadius, BorderRadiusExt, BorderSide};
 
 /// Border specification for a `Table`/`RenderTable`: four outer sides plus
 /// two interior sides (between rows, between columns).
@@ -21,22 +18,22 @@ use crate::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TableBorder {
     /// The top side of the outer border.
-    pub top: BorderSide<Pixels>,
+    pub top: BorderSide<f64>,
 
     /// The right side of the outer border.
-    pub right: BorderSide<Pixels>,
+    pub right: BorderSide<f64>,
 
     /// The bottom side of the outer border.
-    pub bottom: BorderSide<Pixels>,
+    pub bottom: BorderSide<f64>,
 
     /// The left side of the outer border.
-    pub left: BorderSide<Pixels>,
+    pub left: BorderSide<f64>,
 
     /// The interior side drawn between rows.
-    pub horizontal_inside: BorderSide<Pixels>,
+    pub horizontal_inside: BorderSide<f64>,
 
     /// The interior side drawn between columns.
-    pub vertical_inside: BorderSide<Pixels>,
+    pub vertical_inside: BorderSide<f64>,
 
     /// Corner rounding for the outer border.
     ///
@@ -61,12 +58,12 @@ impl TableBorder {
     /// Creates a border with explicit per-side styling.
     #[inline]
     pub const fn new(
-        top: BorderSide<Pixels>,
-        right: BorderSide<Pixels>,
-        bottom: BorderSide<Pixels>,
-        left: BorderSide<Pixels>,
-        horizontal_inside: BorderSide<Pixels>,
-        vertical_inside: BorderSide<Pixels>,
+        top: BorderSide<f64>,
+        right: BorderSide<f64>,
+        bottom: BorderSide<f64>,
+        left: BorderSide<f64>,
+        horizontal_inside: BorderSide<f64>,
+        vertical_inside: BorderSide<f64>,
     ) -> Self {
         Self {
             top,
@@ -81,7 +78,7 @@ impl TableBorder {
 
     /// A uniform border: every side (outer and interior) uses `side`.
     #[inline]
-    pub const fn all(side: BorderSide<Pixels>) -> Self {
+    pub const fn all(side: BorderSide<f64>) -> Self {
         Self {
             top: side,
             right: side,
@@ -96,7 +93,7 @@ impl TableBorder {
     /// A border where every outer side uses `outside` and every interior side
     /// uses `inside`.
     #[inline]
-    pub const fn symmetric(inside: BorderSide<Pixels>, outside: BorderSide<Pixels>) -> Self {
+    pub const fn symmetric(inside: BorderSide<f64>, outside: BorderSide<f64>) -> Self {
         Self {
             top: outside,
             right: outside,
@@ -141,7 +138,7 @@ impl TableBorder {
     /// delegates the outer edge to the same uniform/non-uniform logic
     /// `paint_box_decoration`'s border already uses).
     #[must_use]
-    pub fn outer_border(&self) -> crate::styling::Border<Pixels> {
+    pub fn outer_border(&self) -> crate::styling::Border<f64> {
         crate::styling::Border {
             top: Some(self.top),
             right: Some(self.right),
@@ -163,13 +160,10 @@ impl Default for TableBorder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        geometry::px,
-        styling::{BorderStyle, Color},
-    };
+    use crate::styling::{BorderStyle, Color};
 
-    fn solid(width: f32) -> BorderSide<Pixels> {
-        BorderSide::new(Color::BLACK, px(width), BorderStyle::Solid)
+    fn solid(width: f64) -> BorderSide<f64> {
+        BorderSide::new(Color::BLACK, width, BorderStyle::Solid)
     }
 
     #[test]
@@ -204,7 +198,7 @@ mod tests {
         assert!(border.outer_border().is_uniform());
     }
 
-    fn sides(b: &TableBorder) -> [BorderSide<Pixels>; 6] {
+    fn sides(b: &TableBorder) -> [BorderSide<f64>; 6] {
         [
             b.top,
             b.right,
@@ -217,12 +211,12 @@ mod tests {
 
     #[test]
     fn new_places_each_side() {
-        let s: [BorderSide<Pixels>; 6] = std::array::from_fn(|i| solid(i as f32 + 1.0));
+        let s: [BorderSide<f64>; 6] = std::array::from_fn(|i| solid(i as f64 + 1.0));
         let b = TableBorder::new(s[0], s[1], s[2], s[3], s[4], s[5]);
         assert_eq!(sides(&b), s);
         assert_eq!(b.border_radius, BorderRadius::ZERO);
-        let rounded = b.with_border_radius(BorderRadius::circular(px(4.0)));
-        assert_eq!(rounded.border_radius, BorderRadius::circular(px(4.0)));
+        let rounded = b.with_border_radius(BorderRadius::circular(4.0));
+        assert_eq!(rounded.border_radius, BorderRadius::circular(4.0));
         let outer = b.outer_border();
         assert_eq!(
             [outer.top, outer.right, outer.bottom, outer.left],
@@ -240,12 +234,12 @@ mod tests {
         // Neither the radius nor a side's stroke alignment is part of it.
         assert!(
             TableBorder::all(base)
-                .with_border_radius(BorderRadius::circular(px(2.0)))
+                .with_border_radius(BorderRadius::circular(2.0))
                 .is_uniform()
         );
         let variants = [
             base.with_color(Color::RED),
-            base.with_width(px(2.0)),
+            base.with_width(2.0),
             base.with_style(BorderStyle::None),
         ];
         for odd in variants {

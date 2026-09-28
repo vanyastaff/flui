@@ -15,12 +15,12 @@ pub struct FractionalOffset {
     /// The distance fraction in the horizontal direction.
     ///
     /// A value of 0.0 corresponds to the left edge, 1.0 to the right edge.
-    pub dx: f32,
+    pub dx: f64,
 
     /// The distance fraction in the vertical direction.
     ///
     /// A value of 0.0 corresponds to the top edge, 1.0 to the bottom edge.
-    pub dy: f32,
+    pub dy: f64,
 }
 
 impl FractionalOffset {
@@ -55,7 +55,7 @@ impl FractionalOffset {
     /// vertical fractions.
     #[must_use]
     #[inline]
-    pub const fn new(dx: f32, dy: f32) -> Self {
+    pub const fn new(dx: f64, dy: f64) -> Self {
         Self { dx, dy }
     }
 
@@ -87,7 +87,7 @@ impl FractionalOffset {
     /// matching `Alignment::lerp`.
     #[must_use]
     #[inline]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
         Self {
             dx: a.dx + (b.dx - a.dx) * t,
             dy: a.dy + (b.dy - a.dy) * t,
@@ -138,11 +138,11 @@ impl std::ops::Sub for FractionalOffset {
     }
 }
 
-impl std::ops::Mul<f32> for FractionalOffset {
+impl std::ops::Mul<f64> for FractionalOffset {
     type Output = Self;
 
     #[inline]
-    fn mul(self, factor: f32) -> Self {
+    fn mul(self, factor: f64) -> Self {
         Self {
             dx: self.dx * factor,
             dy: self.dy * factor,
@@ -150,11 +150,11 @@ impl std::ops::Mul<f32> for FractionalOffset {
     }
 }
 
-impl std::ops::Div<f32> for FractionalOffset {
+impl std::ops::Div<f64> for FractionalOffset {
     type Output = Self;
 
     #[inline]
-    fn div(self, divisor: f32) -> Self {
+    fn div(self, divisor: f64) -> Self {
         Self {
             dx: self.dx / divisor,
             dy: self.dy / divisor,
@@ -176,7 +176,7 @@ mod tests {
     use super::*;
     use crate::layout::Alignment;
 
-    fn xy(f: FractionalOffset) -> (f32, f32) {
+    fn xy(f: FractionalOffset) -> (f64, f64) {
         (f.dx, f.dy)
     }
 
@@ -194,7 +194,7 @@ mod tests {
             FractionalOffset::BOTTOM_RIGHT,
         ];
         for (i, f) in grid.into_iter().enumerate() {
-            assert_eq!(xy(f), ((i % 3) as f32 * 0.5, (i / 3) as f32 * 0.5), "#{i}");
+            assert_eq!(xy(f), ((i % 3) as f64 * 0.5, (i / 3) as f64 * 0.5), "#{i}");
         }
     }
 
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn is_finite() {
         assert!(FractionalOffset::new(0.25, 1.0).is_finite());
-        assert!(!FractionalOffset::new(f32::NAN, 0.0).is_finite());
-        assert!(!FractionalOffset::new(0.0, f32::INFINITY).is_finite());
+        assert!(!FractionalOffset::new(f64::NAN, 0.0).is_finite());
+        assert!(!FractionalOffset::new(0.0, f64::INFINITY).is_finite());
     }
 }

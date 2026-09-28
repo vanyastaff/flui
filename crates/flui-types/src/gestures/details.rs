@@ -9,7 +9,7 @@
 //! knows about.
 
 use super::{pointer::PointerDeviceKind, velocity::Velocity};
-use crate::geometry::{Offset, Pixels};
+use crate::geometry::Offset;
 
 // ============================================================================
 // Tap Gesture Details
@@ -21,10 +21,10 @@ use crate::geometry::{Offset, Pixels};
 /// might begin a tap.
 pub struct TapDownDetails {
     /// The global position where the tap occurred
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
 
     /// The local position where the tap occurred
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
 
     /// The kind of device that triggered the tap
     pub kind: PointerDeviceKind,
@@ -33,7 +33,7 @@ pub struct TapDownDetails {
 impl TapDownDetails {
     /// Creates new tap down details
     #[inline]
-    pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
+    pub const fn new(global_position: Offset<f64>, local_position: Offset<f64>) -> Self {
         Self {
             global_position,
             local_position,
@@ -55,10 +55,10 @@ impl TapDownDetails {
 /// stopped contacting the screen.
 pub struct TapUpDetails {
     /// The global position where the tap ended
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
 
     /// The local position where the tap ended
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
 
     /// The kind of device that triggered the tap
     pub kind: PointerDeviceKind,
@@ -67,7 +67,7 @@ pub struct TapUpDetails {
 impl TapUpDetails {
     /// Creates new tap up details
     #[inline]
-    pub const fn new(global_position: Offset<Pixels>, local_position: Offset<Pixels>) -> Self {
+    pub const fn new(global_position: Offset<f64>, local_position: Offset<f64>) -> Self {
         Self {
             global_position,
             local_position,
@@ -93,26 +93,26 @@ impl TapUpDetails {
 /// while the long press is held, carrying offsets from the press origin.
 pub struct LongPressMoveUpdateDetails {
     /// The global position of the pointer
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
 
     /// The local position of the pointer
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
 
     /// The distance moved since the last update
-    pub offset_from_origin: Offset<Pixels>,
+    pub offset_from_origin: Offset<f64>,
 
     /// The total distance moved since the long press started
-    pub local_offset_from_origin: Offset<Pixels>,
+    pub local_offset_from_origin: Offset<f64>,
 }
 
 impl LongPressMoveUpdateDetails {
     /// Creates new long press move update details
     #[inline]
     pub const fn new(
-        global_position: Offset<Pixels>,
-        local_position: Offset<Pixels>,
-        offset_from_origin: Offset<Pixels>,
-        local_offset_from_origin: Offset<Pixels>,
+        global_position: Offset<f64>,
+        local_position: Offset<f64>,
+        offset_from_origin: Offset<f64>,
+        local_offset_from_origin: Offset<f64>,
     ) -> Self {
         Self {
             global_position,
@@ -129,10 +129,10 @@ impl LongPressMoveUpdateDetails {
 /// press has stopped contacting the screen.
 pub struct LongPressEndDetails {
     /// The global position where the long press ended
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
 
     /// The local position where the long press ended
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
 
     /// The velocity when the long press ended
     pub velocity: Velocity,
@@ -142,8 +142,8 @@ impl LongPressEndDetails {
     /// Creates new long press end details
     #[inline]
     pub const fn new(
-        global_position: Offset<Pixels>,
-        local_position: Offset<Pixels>,
+        global_position: Offset<f64>,
+        local_position: Offset<f64>,
         velocity: Velocity,
     ) -> Self {
         Self {
@@ -164,26 +164,26 @@ impl LongPressEndDetails {
 /// pressure-sensitive screen, along with its position.
 pub struct ForcePressDetails {
     /// The global position of the pointer
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
 
     /// The local position of the pointer
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
 
     /// The pressure of the touch (0.0 to 1.0)
-    pub pressure: f32,
+    pub pressure: f64,
 
     /// The maximum pressure the device can detect
-    pub max_pressure: f32,
+    pub max_pressure: f64,
 }
 
 impl ForcePressDetails {
     /// Creates new force press details
     #[inline]
     pub const fn new(
-        global_position: Offset<Pixels>,
-        local_position: Offset<Pixels>,
-        pressure: f32,
-        max_pressure: f32,
+        global_position: Offset<f64>,
+        local_position: Offset<f64>,
+        pressure: f64,
+        max_pressure: f64,
     ) -> Self {
         Self {
             global_position,
@@ -195,7 +195,7 @@ impl ForcePressDetails {
 
     /// Returns the normalized pressure (0.0 to 1.0)
     #[inline]
-    pub fn normalized_pressure(&self) -> f32 {
+    pub fn normalized_pressure(&self) -> f64 {
         if self.max_pressure > 0.0 {
             (self.pressure / self.max_pressure).clamp(0.0, 1.0)
         } else {

@@ -2,7 +2,7 @@
 
 use crate::{
     geometry::{
-        Offset, Pixels,
+        Offset,
         traits::{NumericUnit, Unit},
     },
     styling::Color,
@@ -21,7 +21,7 @@ use crate::{
 ///     styling::{Color, Shadow},
 /// };
 ///
-/// let shadow = Shadow::new(Color::BLACK, Offset::new(px(2.0), px(2.0)), px(4.0));
+/// let shadow = Shadow::new(Color::BLACK, Offset::new(2.0, 2.0), 4.0);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -78,30 +78,30 @@ impl<T: Unit> Shadow<T> {
     }
 }
 
-impl Shadow<Pixels> {
+impl Shadow<f64> {
     /// Converts a blur radius in pixels to sigma units for use in Gaussian
     /// blur.
     ///
     /// This follows the same conversion that Flutter uses.
     #[inline]
-    pub fn convert_radius_to_sigma(radius: Pixels) -> f32 {
-        radius.0 * 0.57735 + 0.5
+    pub fn convert_radius_to_sigma(radius: f64) -> f64 {
+        radius * 0.57735 + 0.5
     }
 
     /// The standard deviation of the Gaussian blur to apply to the shadow.
     #[inline]
-    pub fn blur_sigma(&self) -> f32 {
+    pub fn blur_sigma(&self) -> f64 {
         Self::convert_radius_to_sigma(self.blur_radius)
     }
 }
 
 impl<T: NumericUnit> Shadow<T>
 where
-    T: std::ops::Mul<f32, Output = T>,
+    T: std::ops::Mul<f64, Output = T>,
 {
     /// Linearly interpolate between two shadows.
     #[inline]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self {
             color: Color::lerp(a.color, b.color, t),
@@ -118,7 +118,7 @@ where
     /// color and has its geometry scaled by `1 - t` (from `a`) or `t` (from
     /// `b`).
     #[inline]
-    pub fn lerp_list(a: &[Self], b: &[Self], t: f32) -> Vec<Self> {
+    pub fn lerp_list(a: &[Self], b: &[Self], t: f64) -> Vec<Self> {
         let t = t.clamp(0.0, 1.0);
         let common = a.len().min(b.len());
         a.iter()
@@ -131,7 +131,7 @@ where
 
     /// Scales the shadow's offset and blur radius by the given factor.
     #[inline]
-    pub fn scale(&self, factor: f32) -> Self {
+    pub fn scale(&self, factor: f64) -> Self {
         Self {
             offset: self.offset * factor,
             blur_radius: self.blur_radius * factor,
@@ -170,17 +170,17 @@ impl<T: Unit> Default for Shadow<T> {
 /// // Standard drop shadow
 /// let shadow = BoxShadow::new(
 ///     Color::BLACK.with_alpha(76),
-///     Offset::new(px(0.0), px(4.0)),
-///     px(8.0),
-///     px(2.0),
+///     Offset::new(0.0, 4.0),
+///     8.0,
+///     2.0,
 /// );
 ///
 /// // Inner shadow (like CSS inset)
 /// let inner = BoxShadow::inner(
 ///     Color::BLACK.with_alpha(51),
-///     Offset::new(px(0.0), px(2.0)),
-///     px(4.0),
-///     px(0.0),
+///     Offset::new(0.0, 2.0),
+///     4.0,
+///     0.0,
 /// );
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -293,28 +293,28 @@ impl<T: Unit> BoxShadow<T> {
     }
 }
 
-impl BoxShadow<Pixels> {
+impl BoxShadow<f64> {
     /// Converts a blur radius in pixels to sigma units for use in Gaussian
     /// blur.
     #[inline]
-    pub fn convert_radius_to_sigma(radius: Pixels) -> f32 {
-        Shadow::<Pixels>::convert_radius_to_sigma(radius)
+    pub fn convert_radius_to_sigma(radius: f64) -> f64 {
+        Shadow::<f64>::convert_radius_to_sigma(radius)
     }
 
     /// The standard deviation of the Gaussian blur to apply to the shadow.
     #[inline]
-    pub fn blur_sigma(&self) -> f32 {
+    pub fn blur_sigma(&self) -> f64 {
         Self::convert_radius_to_sigma(self.blur_radius)
     }
 }
 
 impl<T: NumericUnit> BoxShadow<T>
 where
-    T: std::ops::Mul<f32, Output = T>,
+    T: std::ops::Mul<f64, Output = T>,
 {
     /// Linearly interpolate between two box shadows.
     #[inline]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self {
             color: Color::lerp(a.color, b.color, t),
@@ -333,7 +333,7 @@ where
     /// its color and has its geometry scaled by `1 - t` (from `a`) or `t`
     /// (from `b`).
     #[inline]
-    pub fn lerp_list(a: &[Self], b: &[Self], t: f32) -> Vec<Self> {
+    pub fn lerp_list(a: &[Self], b: &[Self], t: f64) -> Vec<Self> {
         let t = t.clamp(0.0, 1.0);
         let common = a.len().min(b.len());
         a.iter()
@@ -347,7 +347,7 @@ where
     /// Scales the shadow's offset, blur radius, and spread radius by the given
     /// factor.
     #[inline]
-    pub fn scale(&self, factor: f32) -> Self {
+    pub fn scale(&self, factor: f64) -> Self {
         Self {
             offset: self.offset * factor,
             blur_radius: self.blur_radius * factor,
@@ -404,155 +404,129 @@ pub enum ShadowQuality {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
 
     #[test]
     fn test_shadow_new() {
-        let shadow = Shadow::new(Color::BLACK, Offset::new(px(2.0), px(3.0)), px(4.0));
+        let shadow = Shadow::new(Color::BLACK, Offset::new(2.0, 3.0), 4.0);
         assert_eq!(shadow.color, Color::BLACK);
-        assert_eq!(shadow.offset, Offset::new(px(2.0), px(3.0)));
-        assert_eq!(shadow.blur_radius, px(4.0));
+        assert_eq!(shadow.offset, Offset::new(2.0, 3.0));
+        assert_eq!(shadow.blur_radius, 4.0);
     }
 
     #[test]
     fn test_shadow_blur_sigma() {
-        let shadow = Shadow::new(Color::BLACK, Offset::new(px(0.0), px(0.0)), px(10.0));
+        let shadow = Shadow::new(Color::BLACK, Offset::new(0.0, 0.0), 10.0);
         let sigma = shadow.blur_sigma();
         assert!((sigma - 6.2735).abs() < 0.001);
     }
 
     #[test]
     fn test_shadow_with_methods() {
-        let shadow = Shadow::<Pixels>::default();
+        let shadow = Shadow::<f64>::default();
 
         let colored = shadow.with_color(Color::RED);
         assert_eq!(colored.color, Color::RED);
 
-        let offset = shadow.with_offset(Offset::new(px(5.0), px(5.0)));
-        assert_eq!(offset.offset, Offset::new(px(5.0), px(5.0)));
+        let offset = shadow.with_offset(Offset::new(5.0, 5.0));
+        assert_eq!(offset.offset, Offset::new(5.0, 5.0));
 
-        let blurred = shadow.with_blur_radius(px(10.0));
-        assert_eq!(blurred.blur_radius, px(10.0));
+        let blurred = shadow.with_blur_radius(10.0);
+        assert_eq!(blurred.blur_radius, 10.0);
     }
 
     #[test]
     fn test_shadow_lerp() {
-        let a = Shadow::new(Color::BLACK, Offset::new(px(0.0), px(0.0)), px(0.0));
-        let b = Shadow::new(Color::WHITE, Offset::new(px(10.0), px(10.0)), px(10.0));
+        let a = Shadow::new(Color::BLACK, Offset::new(0.0, 0.0), 0.0);
+        let b = Shadow::new(Color::WHITE, Offset::new(10.0, 10.0), 10.0);
 
         let mid = Shadow::lerp(a, b, 0.5);
-        assert_eq!(mid.offset, Offset::new(px(5.0), px(5.0)));
-        assert_eq!(mid.blur_radius, px(5.0));
+        assert_eq!(mid.offset, Offset::new(5.0, 5.0));
+        assert_eq!(mid.blur_radius, 5.0);
     }
 
     #[test]
     fn test_shadow_lerp_list() {
-        let a = vec![Shadow::new(
-            Color::BLACK,
-            Offset::new(px(0.0), px(0.0)),
-            px(0.0),
-        )];
+        let a = vec![Shadow::new(Color::BLACK, Offset::new(0.0, 0.0), 0.0)];
         let b = vec![
-            Shadow::new(Color::WHITE, Offset::new(px(10.0), px(10.0)), px(10.0)),
-            Shadow::new(Color::RED, Offset::new(px(5.0), px(5.0)), px(5.0)),
+            Shadow::new(Color::WHITE, Offset::new(10.0, 10.0), 10.0),
+            Shadow::new(Color::RED, Offset::new(5.0, 5.0), 5.0),
         ];
 
         let result = Shadow::lerp_list(&a, &b, 0.5);
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].offset, Offset::new(px(5.0), px(5.0)));
+        assert_eq!(result[0].offset, Offset::new(5.0, 5.0));
     }
 
     #[test]
     fn test_shadow_scale() {
-        let shadow = Shadow::new(Color::BLACK, Offset::new(px(2.0), px(2.0)), px(4.0));
+        let shadow = Shadow::new(Color::BLACK, Offset::new(2.0, 2.0), 4.0);
         let scaled = shadow.scale(2.0);
-        assert_eq!(scaled.offset, Offset::new(px(4.0), px(4.0)));
-        assert_eq!(scaled.blur_radius, px(8.0));
+        assert_eq!(scaled.offset, Offset::new(4.0, 4.0));
+        assert_eq!(scaled.blur_radius, 8.0);
     }
 
     #[test]
     fn test_box_shadow_new() {
-        let shadow = BoxShadow::new(
-            Color::BLACK,
-            Offset::new(px(2.0), px(3.0)),
-            px(4.0),
-            px(1.0),
-        );
+        let shadow = BoxShadow::new(Color::BLACK, Offset::new(2.0, 3.0), 4.0, 1.0);
         assert_eq!(shadow.color, Color::BLACK);
-        assert_eq!(shadow.offset, Offset::new(px(2.0), px(3.0)));
-        assert_eq!(shadow.blur_radius, px(4.0));
-        assert_eq!(shadow.spread_radius, px(1.0));
+        assert_eq!(shadow.offset, Offset::new(2.0, 3.0));
+        assert_eq!(shadow.blur_radius, 4.0);
+        assert_eq!(shadow.spread_radius, 1.0);
     }
 
     #[test]
     fn test_box_shadow_with_methods() {
-        let shadow = BoxShadow::<Pixels>::default();
+        let shadow = BoxShadow::<f64>::default();
 
-        let spread = shadow.with_spread_radius(px(5.0));
-        assert_eq!(spread.spread_radius, px(5.0));
+        let spread = shadow.with_spread_radius(5.0);
+        assert_eq!(spread.spread_radius, 5.0);
     }
 
     #[test]
     fn test_box_shadow_lerp() {
-        let a = BoxShadow::new(
-            Color::BLACK,
-            Offset::new(px(0.0), px(0.0)),
-            px(0.0),
-            px(0.0),
-        );
-        let b = BoxShadow::new(
-            Color::WHITE,
-            Offset::new(px(10.0), px(10.0)),
-            px(10.0),
-            px(5.0),
-        );
+        let a = BoxShadow::new(Color::BLACK, Offset::new(0.0, 0.0), 0.0, 0.0);
+        let b = BoxShadow::new(Color::WHITE, Offset::new(10.0, 10.0), 10.0, 5.0);
 
         let mid = BoxShadow::lerp(a, b, 0.5);
-        assert_eq!(mid.offset, Offset::new(px(5.0), px(5.0)));
-        assert_eq!(mid.blur_radius, px(5.0));
-        assert_eq!(mid.spread_radius, px(2.5));
+        assert_eq!(mid.offset, Offset::new(5.0, 5.0));
+        assert_eq!(mid.blur_radius, 5.0);
+        assert_eq!(mid.spread_radius, 2.5);
     }
 
     #[test]
     fn test_box_shadow_scale() {
-        let shadow = BoxShadow::new(
-            Color::BLACK,
-            Offset::new(px(2.0), px(2.0)),
-            px(4.0),
-            px(2.0),
-        );
+        let shadow = BoxShadow::new(Color::BLACK, Offset::new(2.0, 2.0), 4.0, 2.0);
         let scaled = shadow.scale(2.0);
-        assert_eq!(scaled.offset, Offset::new(px(4.0), px(4.0)));
-        assert_eq!(scaled.blur_radius, px(8.0));
-        assert_eq!(scaled.spread_radius, px(4.0));
+        assert_eq!(scaled.offset, Offset::new(4.0, 4.0));
+        assert_eq!(scaled.blur_radius, 8.0);
+        assert_eq!(scaled.spread_radius, 4.0);
     }
 
     #[test]
     fn test_box_shadow_to_shadow() {
-        let box_shadow =
-            BoxShadow::new(Color::RED, Offset::new(px(1.0), px(2.0)), px(3.0), px(4.0));
+        let box_shadow = BoxShadow::new(Color::RED, Offset::new(1.0, 2.0), 3.0, 4.0);
         let shadow = box_shadow.to_shadow();
         assert_eq!(shadow.color, Color::RED);
-        assert_eq!(shadow.offset, Offset::new(px(1.0), px(2.0)));
-        assert_eq!(shadow.blur_radius, px(3.0));
+        assert_eq!(shadow.offset, Offset::new(1.0, 2.0));
+        assert_eq!(shadow.blur_radius, 3.0);
     }
 
     #[test]
     fn test_shadow_to_box_shadow() {
-        let shadow = Shadow::new(Color::BLUE, Offset::new(px(5.0), px(6.0)), px(7.0));
-        let box_shadow: BoxShadow<Pixels> = shadow.into();
+        let shadow = Shadow::new(Color::BLUE, Offset::new(5.0, 6.0), 7.0);
+        let box_shadow: BoxShadow<f64> = shadow.into();
         assert_eq!(box_shadow.color, Color::BLUE);
-        assert_eq!(box_shadow.offset, Offset::new(px(5.0), px(6.0)));
-        assert_eq!(box_shadow.blur_radius, px(7.0));
-        assert_eq!(box_shadow.spread_radius, px(0.0));
+        assert_eq!(box_shadow.offset, Offset::new(5.0, 6.0));
+        assert_eq!(box_shadow.blur_radius, 7.0);
+        assert_eq!(box_shadow.spread_radius, 0.0);
     }
 
-    fn boxed(color: Color, v: f32) -> BoxShadow<Pixels> {
-        BoxShadow::new(color, Offset::new(px(v), px(v)), px(v), px(v))
+    fn boxed(color: Color, v: f64) -> BoxShadow<f64> {
+        BoxShadow::new(color, Offset::new(v, v), v, v)
     }
 
-    fn plain(color: Color, v: f32) -> Shadow<Pixels> {
-        Shadow::new(color, Offset::new(px(v), px(v)), px(v))
+    fn plain(color: Color, v: f64) -> Shadow<f64> {
+        Shadow::new(color, Offset::new(v, v), v)
     }
 
     /// Pairs lerp; a shadow only one list has keeps its color and scales
@@ -576,7 +550,7 @@ mod tests {
         let b = [plain(Color::WHITE, 4.0)];
         assert_eq!(Shadow::lerp_list(&a, &b, 0.25)[1], plain(Color::RED, 6.0));
         assert_eq!(Shadow::lerp_list(&b, &a, 0.25)[1], plain(Color::RED, 2.0));
-        assert!(Shadow::<Pixels>::lerp_list(&[], &[], 0.5).is_empty());
+        assert!(Shadow::<f64>::lerp_list(&[], &[], 0.5).is_empty());
     }
 
     /// `t` clamps, colors lerp, and `inset` switches at exactly 0.5.
@@ -603,16 +577,16 @@ mod tests {
             Color::rgb(100, 50, 25)
         );
         // Geometry weights each side by its share of t.
-        let from = Shadow::new(Color::BLACK, Offset::new(px(4.0), px(8.0)), px(4.0));
-        let to = Shadow::new(Color::BLACK, Offset::new(px(8.0), px(0.0)), px(8.0));
+        let from = Shadow::new(Color::BLACK, Offset::new(4.0, 8.0), 4.0);
+        let to = Shadow::new(Color::BLACK, Offset::new(8.0, 0.0), 8.0);
         let quarter = Shadow::lerp(from, to, 0.25);
         assert_eq!(
             (quarter.offset, quarter.blur_radius),
-            (Offset::new(px(5.0), px(6.0)), px(5.0))
+            (Offset::new(5.0, 6.0), 5.0)
         );
         // A plain shadow becomes an outer box shadow with no spread.
         let boxed = BoxShadow::from(from);
-        assert_eq!((boxed.spread_radius, boxed.inset), (px(0.0), false));
+        assert_eq!((boxed.spread_radius, boxed.inset), (0.0, false));
         assert_eq!(
             (boxed.color, boxed.offset, boxed.blur_radius),
             (from.color, from.offset, from.blur_radius)
@@ -622,18 +596,18 @@ mod tests {
     /// Flutter's `radius * 0.57735 + 0.5`.
     #[test]
     fn blur_sigma_and_quality() {
-        assert!((Shadow::<Pixels>::convert_radius_to_sigma(px(10.0)) - 6.2735).abs() < 1e-4);
+        assert!((Shadow::<f64>::convert_radius_to_sigma(10.0) - 6.2735).abs() < 1e-4);
         assert!((plain(Color::BLACK, 10.0).blur_sigma() - 6.2735).abs() < 1e-4);
         assert!((boxed(Color::BLACK, 10.0).blur_sigma() - 6.2735).abs() < 1e-4);
         assert_eq!(ShadowQuality::default(), ShadowQuality::Medium);
         assert_eq!(
-            BoxShadow::<Pixels>::default(),
-            BoxShadow::new(Color::BLACK, Offset::ZERO, px(0.0), px(0.0))
+            BoxShadow::<f64>::default(),
+            BoxShadow::new(Color::BLACK, Offset::ZERO, 0.0, 0.0)
         );
         assert_eq!(
-            Shadow::<Pixels>::default(),
-            Shadow::new(Color::BLACK, Offset::ZERO, px(0.0))
+            Shadow::<f64>::default(),
+            Shadow::new(Color::BLACK, Offset::ZERO, 0.0)
         );
-        assert!(BoxShadow::inner(Color::BLACK, Offset::ZERO, px(1.0), px(1.0)).inset);
+        assert!(BoxShadow::inner(Color::BLACK, Offset::ZERO, 1.0, 1.0).inset);
     }
 }

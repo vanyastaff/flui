@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use crate::geometry::{Offset, Pixels};
+use crate::geometry::Offset;
 
 /// A velocity in two dimensions
 ///
@@ -29,8 +29,8 @@ use crate::geometry::{Offset, Pixels};
 /// ```
 /// use flui_types::{Offset, geometry::px, gestures::Velocity};
 ///
-/// let velocity = Velocity::new(Offset::new(px(100.0), px(50.0)));
-/// assert_eq!(velocity.pixels_per_second, Offset::new(px(100.0), px(50.0)));
+/// let velocity = Velocity::new(Offset::new(100.0, 50.0));
+/// assert_eq!(velocity.pixels_per_second, Offset::new(100.0, 50.0));
 ///
 /// // Get magnitude (speed)
 /// let speed = velocity.magnitude();
@@ -43,7 +43,7 @@ use crate::geometry::{Offset, Pixels};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Velocity {
     /// The number of pixels per second of velocity in the x and y directions
-    pub pixels_per_second: Offset<Pixels>,
+    pub pixels_per_second: Offset<f64>,
 }
 
 impl Velocity {
@@ -59,13 +59,13 @@ impl Velocity {
     /// ```
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
-    /// let velocity = Velocity::new(Offset::new(px(100.0), px(-50.0)));
-    /// assert_eq!(velocity.pixels_per_second.dx, px(100.0));
-    /// assert_eq!(velocity.pixels_per_second.dy, px(-50.0));
+    /// let velocity = Velocity::new(Offset::new(100.0, -50.0));
+    /// assert_eq!(velocity.pixels_per_second.dx, 100.0);
+    /// assert_eq!(velocity.pixels_per_second.dy, -50.0);
     /// ```
     #[inline]
     #[must_use]
-    pub const fn new(pixels_per_second: Offset<Pixels>) -> Self {
+    pub const fn new(pixels_per_second: Offset<f64>) -> Self {
         Self { pixels_per_second }
     }
 
@@ -77,13 +77,13 @@ impl Velocity {
     /// use flui_types::{geometry::px, gestures::Velocity};
     ///
     /// let velocity = Velocity::from_components(100.0, 50.0);
-    /// assert_eq!(velocity.pixels_per_second.dx, px(100.0));
-    /// assert_eq!(velocity.pixels_per_second.dy, px(50.0));
+    /// assert_eq!(velocity.pixels_per_second.dx, 100.0);
+    /// assert_eq!(velocity.pixels_per_second.dy, 50.0);
     /// ```
     #[inline]
     #[must_use]
-    pub fn from_components(dx: f32, dy: f32) -> Self {
-        Self::new(Offset::new(Pixels(dx), Pixels(dy)))
+    pub fn from_components(dx: f64, dy: f64) -> Self {
+        Self::new(Offset::new(dx, dy))
     }
 
     /// Creates a velocity from magnitude and direction
@@ -105,7 +105,7 @@ impl Velocity {
     /// ```
     #[inline]
     #[must_use]
-    pub fn from_direction(magnitude: f32, direction: f32) -> Self {
+    pub fn from_direction(magnitude: f64, direction: f64) -> Self {
         Self::new(Offset::from_direction(direction, magnitude))
     }
 
@@ -123,7 +123,7 @@ impl Velocity {
     ///
     /// // Moved 100px right and 50px down in 100ms
     /// let velocity =
-    ///     Velocity::from_offset_over_duration(Offset::new(px(100.0), px(50.0)), Duration::from_millis(100));
+    ///     Velocity::from_offset_over_duration(Offset::new(100.0, 50.0), Duration::from_millis(100));
     ///
     /// // Velocity should be 1000px/s right, 500px/s down
     /// assert!((velocity.dx() - 1000.0).abs() < 0.1);
@@ -131,8 +131,8 @@ impl Velocity {
     /// ```
     #[inline]
     #[must_use]
-    pub fn from_offset_over_duration(offset: Offset<Pixels>, duration: Duration) -> Self {
-        let seconds = duration.as_secs_f32();
+    pub fn from_offset_over_duration(offset: Offset<f64>, duration: Duration) -> Self {
+        let seconds = duration.as_secs_f64();
         if seconds == 0.0 {
             return Self::ZERO;
         }
@@ -148,13 +148,13 @@ impl Velocity {
     /// ```
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
-    /// let velocity = Velocity::new(Offset::new(px(3.0), px(4.0)));
+    /// let velocity = Velocity::new(Offset::new(3.0, 4.0));
     /// assert_eq!(velocity.magnitude(), 5.0);
     /// ```
     #[inline]
     #[must_use]
-    pub fn magnitude(&self) -> f32 {
-        self.pixels_per_second.distance().0
+    pub fn magnitude(&self) -> f64 {
+        self.pixels_per_second.distance()
     }
 
     /// Returns the direction of the velocity in radians
@@ -164,19 +164,19 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use std::f32::consts::PI;
+    /// use std::f64::consts::PI;
     ///
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
-    /// let velocity = Velocity::new(Offset::new(px(1.0), px(0.0)));
+    /// let velocity = Velocity::new(Offset::new(1.0, 0.0));
     /// assert!((velocity.direction() - 0.0).abs() < 0.01);
     ///
-    /// let velocity_up = Velocity::new(Offset::new(px(0.0), px(1.0)));
+    /// let velocity_up = Velocity::new(Offset::new(0.0, 1.0));
     /// assert!((velocity_up.direction() - PI / 2.0).abs() < 0.01);
     /// ```
     #[inline]
     #[must_use]
-    pub fn direction(&self) -> f32 {
+    pub fn direction(&self) -> f64 {
         self.pixels_per_second.direction()
     }
 
@@ -188,7 +188,7 @@ impl Velocity {
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
     /// assert!(Velocity::ZERO.is_zero());
-    /// assert!(!Velocity::new(Offset::new(px(1.0), px(0.0))).is_zero());
+    /// assert!(!Velocity::new(Offset::new(1.0, 0.0)).is_zero());
     /// ```
     #[inline]
     #[must_use]
@@ -203,10 +203,10 @@ impl Velocity {
     /// ```
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
-    /// let valid = Velocity::new(Offset::new(px(100.0), px(50.0)));
+    /// let valid = Velocity::new(Offset::new(100.0, 50.0));
     /// assert!(valid.is_finite());
     ///
-    /// let invalid = Velocity::new(Offset::new(px(f32::NAN), px(50.0)));
+    /// let invalid = Velocity::new(Offset::new((f64::NAN), 50.0));
     /// assert!(!invalid.is_finite());
     /// ```
     #[inline]
@@ -225,13 +225,13 @@ impl Velocity {
     /// ```
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
-    /// let velocity = Velocity::new(Offset::new(px(100.0), px(0.0)));
+    /// let velocity = Velocity::new(Offset::new(100.0, 0.0));
     /// let clamped = velocity.clamp_magnitude(0.0, 50.0);
     /// assert_eq!(clamped.magnitude(), 50.0);
     /// ```
     #[must_use]
     #[inline]
-    pub fn clamp_magnitude(&self, min: f32, max: f32) -> Self {
+    pub fn clamp_magnitude(&self, min: f64, max: f64) -> Self {
         let magnitude = self.magnitude();
         if magnitude == 0.0 {
             return *self;
@@ -253,9 +253,9 @@ impl Velocity {
     /// ```
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
-    /// let velocity = Velocity::new(Offset::new(px(100.0), px(-50.0)));
+    /// let velocity = Velocity::new(Offset::new(100.0, -50.0));
     /// let negated = velocity.negate();
-    /// assert_eq!(negated.pixels_per_second, Offset::new(px(-100.0), px(50.0)));
+    /// assert_eq!(negated.pixels_per_second, Offset::new(-100.0, 50.0));
     /// ```
     #[inline]
     #[must_use]
@@ -270,13 +270,13 @@ impl Velocity {
     /// ```
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
-    /// let velocity = Velocity::new(Offset::new(px(100.0), px(50.0)));
+    /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
     /// let scaled = velocity.scale(0.5);
-    /// assert_eq!(scaled.pixels_per_second, Offset::new(px(50.0), px(25.0)));
+    /// assert_eq!(scaled.pixels_per_second, Offset::new(50.0, 25.0));
     /// ```
     #[inline]
     #[must_use]
-    pub fn scale(&self, factor: f32) -> Self {
+    pub fn scale(&self, factor: f64) -> Self {
         Self::new(self.pixels_per_second * factor)
     }
 
@@ -291,14 +291,14 @@ impl Velocity {
     ///
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
-    /// let velocity = Velocity::new(Offset::new(px(100.0), px(0.0)));
+    /// let velocity = Velocity::new(Offset::new(100.0, 0.0));
     /// let distance = velocity.distance_over_duration(Duration::from_secs(1));
-    /// assert_eq!(distance, Offset::new(px(100.0), px(0.0)));
+    /// assert_eq!(distance, Offset::new(100.0, 0.0));
     /// ```
     #[must_use]
     #[inline]
-    pub fn distance_over_duration(&self, duration: Duration) -> Offset<Pixels> {
-        let seconds = duration.as_secs_f32();
+    pub fn distance_over_duration(&self, duration: Duration) -> Offset<f64> {
+        let seconds = duration.as_secs_f64();
         self.pixels_per_second * seconds
     }
 
@@ -309,13 +309,13 @@ impl Velocity {
     /// ```
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
-    /// let velocity = Velocity::new(Offset::new(px(100.0), px(50.0)));
+    /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
     /// assert_eq!(velocity.dx(), 100.0);
     /// ```
     #[inline]
     #[must_use]
-    pub fn dx(&self) -> f32 {
-        self.pixels_per_second.dx.0
+    pub fn dx(&self) -> f64 {
+        self.pixels_per_second.dx
     }
 
     /// Returns the vertical (y) component of velocity
@@ -325,13 +325,13 @@ impl Velocity {
     /// ```
     /// use flui_types::{Offset, geometry::px, gestures::Velocity};
     ///
-    /// let velocity = Velocity::new(Offset::new(px(100.0), px(50.0)));
+    /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
     /// assert_eq!(velocity.dy(), 50.0);
     /// ```
     #[inline]
     #[must_use]
-    pub fn dy(&self) -> f32 {
-        self.pixels_per_second.dy.0
+    pub fn dy(&self) -> f64 {
+        self.pixels_per_second.dy
     }
 }
 
@@ -355,13 +355,13 @@ impl Default for Velocity {
 /// use flui_types::{Offset, geometry::px, gestures::VelocityEstimate};
 ///
 /// let estimate = VelocityEstimate::new(
-///     Offset::new(px(100.0), px(50.0)),
-///     Offset::new(px(200.0), px(-100.0)),
+///     Offset::new(100.0, 50.0),
+///     Offset::new(200.0, -100.0),
 ///     Duration::from_millis(16),
 ///     1.0,
 /// );
 ///
-/// assert_eq!(estimate.pixels_per_second, Offset::new(px(200.0), px(-100.0)));
+/// assert_eq!(estimate.pixels_per_second, Offset::new(200.0, -100.0));
 /// assert_eq!(estimate.confidence, 1.0);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -371,15 +371,15 @@ pub struct VelocityEstimate {
     pub duration: Duration,
 
     /// The offset at which the velocity was estimated
-    pub offset: Offset<Pixels>,
+    pub offset: Offset<f64>,
 
     /// The velocity in pixels per second
-    pub pixels_per_second: Offset<Pixels>,
+    pub pixels_per_second: Offset<f64>,
 
     /// A value between 0.0 and 1.0 indicating confidence in the estimate
     ///
     /// A value of 1.0 indicates high confidence, 0.0 indicates low confidence.
-    pub confidence: f32,
+    pub confidence: f64,
 }
 
 impl VelocityEstimate {
@@ -393,8 +393,8 @@ impl VelocityEstimate {
     /// use flui_types::{Offset, geometry::px, gestures::VelocityEstimate};
     ///
     /// let estimate = VelocityEstimate::new(
-    ///     Offset::new(px(100.0), px(50.0)),
-    ///     Offset::new(px(200.0), px(-100.0)),
+    ///     Offset::new(100.0, 50.0),
+    ///     Offset::new(200.0, -100.0),
     ///     Duration::from_millis(16),
     ///     0.95,
     /// );
@@ -402,10 +402,10 @@ impl VelocityEstimate {
     #[inline]
     #[must_use]
     pub const fn new(
-        offset: Offset<Pixels>,
-        pixels_per_second: Offset<Pixels>,
+        offset: Offset<f64>,
+        pixels_per_second: Offset<f64>,
         duration: Duration,
-        confidence: f32,
+        confidence: f64,
     ) -> Self {
         Self {
             duration,
@@ -426,12 +426,12 @@ impl VelocityEstimate {
     ///
     /// let estimate = VelocityEstimate::new(
     ///     Offset::ZERO,
-    ///     Offset::new(px(200.0), px(-100.0)),
+    ///     Offset::new(200.0, -100.0),
     ///     Duration::from_millis(16),
     ///     0.95,
     /// );
     /// let velocity = estimate.velocity();
-    /// assert_eq!(velocity.pixels_per_second, Offset::new(px(200.0), px(-100.0)));
+    /// assert_eq!(velocity.pixels_per_second, Offset::new(200.0, -100.0));
     /// ```
     #[inline]
     #[must_use]
@@ -470,8 +470,8 @@ impl VelocityEstimate {
     /// use flui_types::{Offset, geometry::px, gestures::VelocityEstimate};
     ///
     /// let valid = VelocityEstimate::new(
-    ///     Offset::new(px(100.0), px(50.0)),
-    ///     Offset::new(px(200.0), px(-100.0)),
+    ///     Offset::new(100.0, 50.0),
+    ///     Offset::new(200.0, -100.0),
     ///     Duration::from_millis(16),
     ///     0.95,
     /// );
@@ -500,8 +500,8 @@ impl VelocityEstimate {
     /// use flui_types::{Offset, geometry::px, gestures::VelocityEstimate};
     ///
     /// let valid = VelocityEstimate::new(
-    ///     Offset::new(px(100.0), px(50.0)),
-    ///     Offset::new(px(200.0), px(-100.0)),
+    ///     Offset::new(100.0, 50.0),
+    ///     Offset::new(200.0, -100.0),
     ///     Duration::from_millis(16),
     ///     0.95,
     /// );
@@ -532,7 +532,7 @@ impl VelocityEstimate {
     ///
     /// let estimate = VelocityEstimate::new(
     ///     Offset::ZERO,
-    ///     Offset::new(px(3.0), px(4.0)),
+    ///     Offset::new(3.0, 4.0),
     ///     Duration::from_millis(16),
     ///     0.95,
     /// );
@@ -540,7 +540,7 @@ impl VelocityEstimate {
     /// ```
     #[inline]
     #[must_use]
-    pub fn magnitude(&self) -> f32 {
+    pub fn magnitude(&self) -> f64 {
         self.velocity().magnitude()
     }
 }
@@ -548,7 +548,6 @@ impl VelocityEstimate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::units::px;
 
     #[test]
     fn test_velocity_zero() {
@@ -559,51 +558,50 @@ mod tests {
 
     #[test]
     fn test_velocity_new() {
-        let velocity = Velocity::new(Offset::new(px(100.0), px(-50.0)));
-        assert_eq!(velocity.pixels_per_second.dx, px(100.0));
-        assert_eq!(velocity.pixels_per_second.dy, px(-50.0));
+        let velocity = Velocity::new(Offset::new(100.0, -50.0));
+        assert_eq!(velocity.pixels_per_second.dx, 100.0);
+        assert_eq!(velocity.pixels_per_second.dy, -50.0);
     }
 
     #[test]
     fn test_velocity_magnitude() {
-        let velocity = Velocity::new(Offset::new(px(3.0), px(4.0)));
+        let velocity = Velocity::new(Offset::new(3.0, 4.0));
         assert_eq!(velocity.magnitude(), 5.0);
 
-        let velocity2 = Velocity::new(Offset::new(px(100.0), px(0.0)));
+        let velocity2 = Velocity::new(Offset::new(100.0, 0.0));
         assert_eq!(velocity2.magnitude(), 100.0);
     }
 
     #[test]
     fn test_velocity_direction() {
-        use std::f32::consts::PI;
+        use std::f64::consts::PI;
 
-        let velocity_right = Velocity::new(Offset::new(px(1.0), px(0.0)));
+        let velocity_right = Velocity::new(Offset::new(1.0, 0.0));
         assert!((velocity_right.direction() - 0.0).abs() < 0.01);
 
-        let velocity_up = Velocity::new(Offset::new(px(0.0), px(1.0)));
+        let velocity_up = Velocity::new(Offset::new(0.0, 1.0));
         assert!((velocity_up.direction() - PI / 2.0).abs() < 0.01);
 
-        let velocity_left = Velocity::new(Offset::new(px(-1.0), px(0.0)));
+        let velocity_left = Velocity::new(Offset::new(-1.0, 0.0));
         assert!((velocity_left.direction() - PI).abs() < 0.01);
     }
 
     #[test]
     fn test_velocity_clamp_magnitude() {
-        let velocity = Velocity::new(Offset::new(px(100.0), px(0.0)));
+        let velocity = Velocity::new(Offset::new(100.0, 0.0));
 
         // Clamp to smaller magnitude
         let clamped = velocity.clamp_magnitude(0.0, 50.0);
         assert_eq!(clamped.magnitude(), 50.0);
-        assert_eq!(clamped.pixels_per_second.dx, px(50.0));
-        assert_eq!(clamped.pixels_per_second.dy, px(0.0));
+        assert_eq!(clamped.pixels_per_second.dx, 50.0);
+        assert_eq!(clamped.pixels_per_second.dy, 0.0);
 
         // Already within range
         let unclamped = velocity.clamp_magnitude(0.0, 200.0);
         assert_eq!(unclamped.magnitude(), 100.0);
 
         // Clamp to minimum
-        let clamped_min =
-            Velocity::new(Offset::new(px(10.0), px(0.0))).clamp_magnitude(50.0, 100.0);
+        let clamped_min = Velocity::new(Offset::new(10.0, 0.0)).clamp_magnitude(50.0, 100.0);
         assert_eq!(clamped_min.magnitude(), 50.0);
     }
 
@@ -623,17 +621,14 @@ mod tests {
     #[test]
     fn test_velocity_estimate_new() {
         let estimate = VelocityEstimate::new(
-            Offset::new(px(100.0), px(50.0)),
-            Offset::new(px(200.0), px(-100.0)),
+            Offset::new(100.0, 50.0),
+            Offset::new(200.0, -100.0),
             Duration::from_millis(16),
             0.95,
         );
 
-        assert_eq!(estimate.offset, Offset::new(px(100.0), px(50.0)));
-        assert_eq!(
-            estimate.pixels_per_second,
-            Offset::new(px(200.0), px(-100.0))
-        );
+        assert_eq!(estimate.offset, Offset::new(100.0, 50.0));
+        assert_eq!(estimate.pixels_per_second, Offset::new(200.0, -100.0));
         assert_eq!(estimate.duration, Duration::from_millis(16));
         assert_eq!(estimate.confidence, 0.95);
     }
@@ -641,17 +636,14 @@ mod tests {
     #[test]
     fn test_velocity_estimate_velocity() {
         let estimate = VelocityEstimate::new(
-            Offset::new(px(100.0), px(50.0)),
-            Offset::new(px(200.0), px(-100.0)),
+            Offset::new(100.0, 50.0),
+            Offset::new(200.0, -100.0),
             Duration::from_millis(16),
             0.95,
         );
 
         let velocity = estimate.velocity();
-        assert_eq!(
-            velocity.pixels_per_second,
-            Offset::new(px(200.0), px(-100.0))
-        );
+        assert_eq!(velocity.pixels_per_second, Offset::new(200.0, -100.0));
     }
 
     #[test]
@@ -665,35 +657,32 @@ mod tests {
         assert!(!unreliable.is_reliable());
     }
 
-    fn v(dx: f32, dy: f32) -> Velocity {
+    fn v(dx: f64, dy: f64) -> Velocity {
         Velocity::from_components(dx, dy)
     }
 
     #[test]
     fn constructors() {
-        assert_eq!(
-            v(3.0, -4.0).pixels_per_second,
-            Offset::new(px(3.0), px(-4.0))
-        );
+        assert_eq!(v(3.0, -4.0).pixels_per_second, Offset::new(3.0, -4.0));
         let east = Velocity::from_direction(10.0, 0.0);
         assert!(
             (east.dx() - 10.0).abs() < 1e-5 && east.dy().abs() < 1e-5,
             "{east:?}"
         );
-        let south = Velocity::from_direction(10.0, std::f32::consts::FRAC_PI_2);
+        let south = Velocity::from_direction(10.0, std::f64::consts::FRAC_PI_2);
         assert!(
             south.dx().abs() < 1e-5 && (south.dy() - 10.0).abs() < 1e-5,
             "{south:?}"
         );
         assert_eq!(
             Velocity::from_offset_over_duration(
-                Offset::new(px(100.0), px(50.0)),
+                Offset::new(100.0, 50.0),
                 Duration::from_millis(500)
             ),
             v(200.0, 100.0)
         );
         assert_eq!(
-            Velocity::from_offset_over_duration(Offset::new(px(100.0), px(50.0)), Duration::ZERO),
+            Velocity::from_offset_over_duration(Offset::new(100.0, 50.0), Duration::ZERO),
             Velocity::ZERO
         );
     }
@@ -706,7 +695,7 @@ mod tests {
         assert_eq!(vel.scale(2.0), v(6.0, -8.0));
         assert_eq!(
             v(100.0, 50.0).distance_over_duration(Duration::from_millis(500)),
-            Offset::new(px(50.0), px(25.0))
+            Offset::new(50.0, 25.0)
         );
     }
 
@@ -715,14 +704,14 @@ mod tests {
         assert!(Velocity::ZERO.is_zero());
         assert!(!v(1.0, 0.0).is_zero());
         assert!(v(1.0, 2.0).is_finite());
-        assert!(!v(f32::NAN, 0.0).is_finite());
-        assert!(!v(0.0, f32::INFINITY).is_finite());
+        assert!(!v(f64::NAN, 0.0).is_finite());
+        assert!(!v(0.0, f64::INFINITY).is_finite());
     }
 
-    fn estimate(confidence: f32) -> VelocityEstimate {
+    fn estimate(confidence: f64) -> VelocityEstimate {
         VelocityEstimate::new(
-            Offset::new(px(1.0), px(2.0)),
-            Offset::new(px(3.0), px(4.0)),
+            Offset::new(1.0, 2.0),
+            Offset::new(3.0, 4.0),
             Duration::from_millis(16),
             confidence,
         )
@@ -739,7 +728,7 @@ mod tests {
             (1.0, true),
             (-0.01, false),
             (1.01, false),
-            (f32::NAN, false),
+            (f64::NAN, false),
         ] {
             assert_eq!(
                 estimate(confidence).is_valid(),
@@ -752,26 +741,26 @@ mod tests {
 
     #[test]
     fn estimate_is_finite_checks_every_field() {
-        let nan = px(f32::NAN);
+        let nan = f64::NAN;
         assert!(estimate(0.5).is_finite());
         for broken in [
             VelocityEstimate {
-                offset: Offset::new(nan, px(0.0)),
+                offset: Offset::new(nan, 0.0),
                 ..estimate(0.5)
             },
             VelocityEstimate {
-                offset: Offset::new(px(0.0), nan),
+                offset: Offset::new(0.0, nan),
                 ..estimate(0.5)
             },
             VelocityEstimate {
-                pixels_per_second: Offset::new(nan, px(0.0)),
+                pixels_per_second: Offset::new(nan, 0.0),
                 ..estimate(0.5)
             },
             VelocityEstimate {
-                pixels_per_second: Offset::new(px(0.0), nan),
+                pixels_per_second: Offset::new(0.0, nan),
                 ..estimate(0.5)
             },
-            estimate(f32::NAN),
+            estimate(f64::NAN),
         ] {
             assert!(!broken.is_finite(), "{broken:?}");
             assert!(!broken.is_valid(), "{broken:?}");

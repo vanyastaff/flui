@@ -7,12 +7,11 @@
 //! `..Default::default()`) is rejected too, which is the part that is easy to
 //! assume still works.
 
-use flui_types::geometry::Pixels;
 use flui_types::styling::{BoxDecoration, Color};
 
 fn main() {
     // Spelling out every field: rejected outright.
-    let _explicit = BoxDecoration::<Pixels> {
+    let _explicit = BoxDecoration::<f64> {
         color: Some(Color::RED),
         image: None,
         border: None,
@@ -23,7 +22,7 @@ fn main() {
     };
 
     // Functional update from a legally-built value: also rejected.
-    let _updated = BoxDecoration::<Pixels> {
+    let _updated = BoxDecoration::<f64> {
         color: Some(Color::RED),
         ..BoxDecoration::new()
     };

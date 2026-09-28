@@ -16,16 +16,16 @@ use super::{Simulation, Tolerance};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GravitySimulation {
     /// The acceleration due to gravity (in pixels per second squared)
-    acceleration: f32,
+    acceleration: f64,
 
     /// The starting position
-    start: f32,
+    start: f64,
 
     /// The ending position (where the simulation should stop)
-    end: f32,
+    end: f64,
 
     /// The initial velocity
-    initial_velocity: f32,
+    initial_velocity: f64,
 
     /// The tolerance for this simulation
     tolerance: Tolerance,
@@ -59,7 +59,7 @@ impl GravitySimulation {
     /// travel).
     #[must_use]
     #[inline]
-    pub fn new(acceleration: f32, start: f32, end: f32, velocity: f32) -> Self {
+    pub fn new(acceleration: f64, start: f64, end: f64, velocity: f64) -> Self {
         Self {
             acceleration,
             start,
@@ -83,14 +83,14 @@ impl GravitySimulation {
     /// squared.
     #[must_use]
     #[inline]
-    pub fn acceleration(&self) -> f32 {
+    pub fn acceleration(&self) -> f64 {
         self.acceleration
     }
 
     /// Returns the starting position, in logical pixels.
     #[must_use]
     #[inline]
-    pub fn start(&self) -> f32 {
+    pub fn start(&self) -> f64 {
         self.start
     }
 
@@ -98,14 +98,14 @@ impl GravitySimulation {
     /// in logical pixels.
     #[must_use]
     #[inline]
-    pub fn end(&self) -> f32 {
+    pub fn end(&self) -> f64 {
         self.end
     }
 
     /// Returns the initial velocity, in logical pixels per second.
     #[must_use]
     #[inline]
-    pub fn initial_velocity(&self) -> f32 {
+    pub fn initial_velocity(&self) -> f64 {
         self.initial_velocity
     }
 
@@ -130,7 +130,7 @@ impl GravitySimulation {
     /// negligible acceleration the linear case `t = (end − start)/v₀` is used.
     #[must_use]
     #[inline]
-    pub fn time_at_end(&self) -> Option<f32> {
+    pub fn time_at_end(&self) -> Option<f64> {
         let distance = self.end - self.start;
 
         // Using quadratic formula: position = start + velocity*t + 0.5*acceleration*t^2
@@ -171,19 +171,19 @@ impl GravitySimulation {
 
 impl Simulation for GravitySimulation {
     #[inline]
-    fn position(&self, time: f32) -> f32 {
+    fn position(&self, time: f64) -> f64 {
         // position = start + velocity*t + 0.5*acceleration*t^2
         self.start + self.initial_velocity * time + 0.5 * self.acceleration * time * time
     }
 
     #[inline]
-    fn velocity(&self, time: f32) -> f32 {
+    fn velocity(&self, time: f64) -> f64 {
         // velocity = initial_velocity + acceleration*t
         self.initial_velocity + self.acceleration * time
     }
 
     #[inline]
-    fn is_done(&self, time: f32) -> bool {
+    fn is_done(&self, time: f64) -> bool {
         let pos = self.position(time);
 
         // Check if we've reached or passed the end position
@@ -217,7 +217,7 @@ mod tests {
     use super::*;
 
     #[track_caller]
-    fn assert_approx(actual: f32, expected: f32) {
+    fn assert_approx(actual: f64, expected: f64) {
         assert!(
             (actual - expected).abs() <= 1e-4,
             "expected {expected}, got {actual}"
@@ -348,7 +348,7 @@ mod tests {
         assert!(sim(0.0, 0.0, -10.5, -2.0).is_done(5.0));
         // x = -t² is at -6 at t = √6: short of -9.5 + 0.5, however the
         // bound is formed.
-        assert!(!sim(-2.0, 0.0, -9.5, 0.0).is_done(6.0_f32.sqrt()));
+        assert!(!sim(-2.0, 0.0, -9.5, 0.0).is_done(6.0_f64.sqrt()));
         // At rest: exactly the tolerance away is not done, and being past
         // the end does not count as arriving.
         assert!(!sim(0.0, 3.0, 3.5, 0.0).is_done(1.0));
@@ -375,7 +375,7 @@ mod tests {
             Tolerance::DEFAULT
         );
         assert!(sim.is_valid());
-        let nan = f32::NAN;
+        let nan = f64::NAN;
         for broken in [
             GravitySimulation::new(nan, 2.0, 3.0, 4.0),
             GravitySimulation::new(1.0, nan, 3.0, 4.0),

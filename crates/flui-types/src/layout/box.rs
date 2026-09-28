@@ -1,9 +1,9 @@
 //! Box layout types - fit and shape
 
-use crate::geometry::{Pixels, Size};
+use crate::geometry::Size;
 
 /// Epsilon for safe float comparisons (Rust 1.91.0 strict arithmetic)
-const EPSILON: f32 = 1e-6;
+const EPSILON: f64 = 1e-6;
 
 /// How a box should inscribe into another box.
 ///
@@ -159,11 +159,11 @@ impl BoxFit {
     /// leading guard — there is no meaningful fit to compute.
     #[must_use]
     #[inline]
-    pub fn apply(self, input_size: Size<Pixels>, output_size: Size<Pixels>) -> FittedSizes {
-        if input_size.width <= Pixels::ZERO
-            || input_size.height <= Pixels::ZERO
-            || output_size.width <= Pixels::ZERO
-            || output_size.height <= Pixels::ZERO
+    pub fn apply(self, input_size: Size<f64>, output_size: Size<f64>) -> FittedSizes {
+        if input_size.width <= 0.0
+            || input_size.height <= 0.0
+            || output_size.width <= 0.0
+            || output_size.height <= 0.0
         {
             return FittedSizes {
                 source: Size::ZERO,
@@ -308,11 +308,11 @@ impl BoxFit {
     /// cover" comments).
     #[inline]
     fn cover_source(
-        input_size: Size<Pixels>,
-        output_size: Size<Pixels>,
-        input_aspect_ratio: f32,
-        output_aspect_ratio: f32,
-    ) -> Size<Pixels> {
+        input_size: Size<f64>,
+        output_size: Size<f64>,
+        input_aspect_ratio: f64,
+        output_aspect_ratio: f64,
+    ) -> Size<f64> {
         if output_aspect_ratio > input_aspect_ratio {
             Size::new(
                 input_size.width,
@@ -397,28 +397,28 @@ impl BoxShape {
 ///     layout::{BoxFit, FittedSizes},
 /// };
 ///
-/// let input = Size::new(px(200.0), px(100.0));
-/// let output = Size::new(px(100.0), px(100.0));
+/// let input = Size::new(200.0, 100.0);
+/// let output = Size::new(100.0, 100.0);
 /// let fitted = BoxFit::Contain.apply(input, output);
 ///
-/// assert_eq!(fitted.destination.width, px(100.0));
-/// assert_eq!(fitted.destination.height, px(50.0));
+/// assert_eq!(fitted.destination.width, 100.0);
+/// assert_eq!(fitted.destination.height, 50.0);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FittedSizes {
     /// The size of the part of the input to show on the output.
-    pub source: Size<Pixels>,
+    pub source: Size<f64>,
 
     /// The size of the part of the output on which to show the input.
-    pub destination: Size<Pixels>,
+    pub destination: Size<f64>,
 }
 
 impl FittedSizes {
     /// Creates a new fitted sizes struct.
     #[inline]
     #[must_use]
-    pub const fn new(source: Size<Pixels>, destination: Size<Pixels>) -> Self {
+    pub const fn new(source: Size<f64>, destination: Size<f64>) -> Self {
         Self {
             source,
             destination,
@@ -428,8 +428,8 @@ impl FittedSizes {
     /// Returns the scale factor from source to destination.
     #[inline]
     #[must_use]
-    pub fn scale_factor(&self) -> f32 {
-        if self.source.width.abs() > Pixels(EPSILON) {
+    pub fn scale_factor(&self) -> f64 {
+        if self.source.width.abs() > EPSILON {
             self.destination.width / self.source.width
         } else {
             1.0
@@ -454,10 +454,9 @@ impl FittedSizes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
 
-    fn size(w: f32, h: f32) -> Size<Pixels> {
-        Size::new(px(w), px(h))
+    fn size(w: f64, h: f64) -> Size<f64> {
+        Size::new(w, h)
     }
 
     /// Every predicate for every variant:

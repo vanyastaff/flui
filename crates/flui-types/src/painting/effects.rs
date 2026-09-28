@@ -50,28 +50,28 @@ pub enum BlurMode {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ColorAdjustment {
     /// Adjust brightness (-1.0 to 1.0, 0.0 = no change)
-    Brightness(f32),
+    Brightness(f64),
 
     /// Adjust contrast (0.0 to 2.0, 1.0 = no change)
-    Contrast(f32),
+    Contrast(f64),
 
     /// Adjust saturation (0.0 to 2.0, 1.0 = no change, 0.0 = grayscale)
-    Saturation(f32),
+    Saturation(f64),
 
     /// Rotate hue (0.0 to 360.0 degrees)
-    HueRotate(f32),
+    HueRotate(f64),
 
     /// Convert to grayscale (0.0 = no effect, 1.0 = full grayscale)
-    Grayscale(f32),
+    Grayscale(f64),
 
     /// Apply sepia tone (0.0 = no effect, 1.0 = full sepia)
-    Sepia(f32),
+    Sepia(f64),
 
     /// Invert colors (0.0 = no effect, 1.0 = full inversion)
-    Invert(f32),
+    Invert(f64),
 
     /// Adjust opacity (0.0 = transparent, 1.0 = opaque)
-    Opacity(f32),
+    Opacity(f64),
 
     /// Custom 5×4 color matrix transformation
     Matrix(ColorMatrix),
@@ -111,13 +111,13 @@ pub enum ColorAdjustment {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ColorMatrix {
     /// Matrix values in row-major order: [r0-r4, g0-g4, b0-b4, a0-a4]
-    pub values: [f32; 20],
+    pub values: [f64; 20],
 }
 
 impl ColorMatrix {
     /// Create a new color matrix from values.
     #[inline]
-    pub const fn new(values: [f32; 20]) -> Self {
+    pub const fn new(values: [f64; 20]) -> Self {
         Self { values }
     }
 
@@ -166,7 +166,7 @@ impl ColorMatrix {
     ///
     /// * `amount` - Brightness adjustment (-1.0 to 1.0, 0.0 = no change)
     #[inline]
-    pub fn brightness(amount: f32) -> Self {
+    pub fn brightness(amount: f64) -> Self {
         Self::new([
             1.0, 0.0, 0.0, 0.0, amount, // R
             0.0, 1.0, 0.0, 0.0, amount, // G
@@ -181,7 +181,7 @@ impl ColorMatrix {
     ///
     /// * `amount` - Contrast multiplier (0.0 to 2.0, 1.0 = no change)
     #[inline]
-    pub fn contrast(amount: f32) -> Self {
+    pub fn contrast(amount: f64) -> Self {
         let offset = 0.5 * (1.0 - amount);
 
         Self::new([
@@ -199,7 +199,7 @@ impl ColorMatrix {
     /// * `amount` - Saturation multiplier (0.0 to 2.0, 1.0 = no change, 0.0 =
     ///   grayscale)
     #[inline]
-    pub fn saturation(amount: f32) -> Self {
+    pub fn saturation(amount: f64) -> Self {
         let r = 0.2126 * (1.0 - amount);
         let g = 0.7152 * (1.0 - amount);
         let b = 0.0722 * (1.0 - amount);
@@ -234,8 +234,8 @@ impl ColorMatrix {
     ///
     /// * `degrees` - Hue rotation in degrees (0.0 to 360.0)
     #[inline]
-    pub fn hue_rotate(degrees: f32) -> Self {
-        let radians = degrees * std::f32::consts::PI / 180.0;
+    pub fn hue_rotate(degrees: f64) -> Self {
+        let radians = degrees * std::f64::consts::PI / 180.0;
         let cos = radians.cos();
         let sin = radians.sin();
 
@@ -285,7 +285,7 @@ impl ColorMatrix {
     /// Used to lower a layer's group opacity via the color-matrix GPU pass
     /// without touching hue or saturation.
     #[inline]
-    pub fn opacity(opacity: f32) -> Self {
+    pub fn opacity(opacity: f64) -> Self {
         Self::new([
             1.0, 0.0, 0.0, 0.0, 0.0, // R
             0.0, 1.0, 0.0, 0.0, 0.0, // G
@@ -302,9 +302,9 @@ impl ColorMatrix {
     /// Used by `ColorAdjustment::to_color_matrix` for the strength-parameterised
     /// Grayscale/Sepia/Invert variants.
     #[inline]
-    pub fn lerp_from_identity(other: &ColorMatrix, t: f32) -> Self {
+    pub fn lerp_from_identity(other: &ColorMatrix, t: f64) -> Self {
         let identity = ColorMatrix::identity();
-        let mut values = [0.0f32; 20];
+        let mut values = [0.0_f64; 20];
         for (i, v) in values.iter_mut().enumerate() {
             *v = identity.values[i] + (other.values[i] - identity.values[i]) * t;
         }
@@ -321,7 +321,7 @@ impl ColorMatrix {
     ///
     /// Transformed color as [r, g, b, a]
     #[inline]
-    pub fn apply(&self, color: [f32; 4]) -> [f32; 4] {
+    pub fn apply(&self, color: [f64; 4]) -> [f64; 4] {
         let [r, g, b, a] = color;
 
         [
@@ -429,7 +429,7 @@ impl ColorAdjustment {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StrokeOptions {
     /// Stroke width in pixels
-    pub width: f32,
+    pub width: f64,
 
     /// Line cap style
     pub cap: StrokeCap,
@@ -438,13 +438,13 @@ pub struct StrokeOptions {
     pub join: StrokeJoin,
 
     /// Miter limit for miter joins (only used when join is Miter)
-    pub miter_limit: f32,
+    pub miter_limit: f64,
 
     /// Optional dash pattern (alternating dash/gap lengths)
-    pub dash_pattern: Option<Arc<Vec<f32>>>,
+    pub dash_pattern: Option<Arc<Vec<f64>>>,
 
     /// Offset into the dash pattern
-    pub dash_offset: f32,
+    pub dash_offset: f64,
 }
 
 impl Default for StrokeOptions {
@@ -472,7 +472,7 @@ impl StrokeOptions {
     /// Set stroke width.
     #[inline]
     #[must_use]
-    pub fn with_width(mut self, width: f32) -> Self {
+    pub fn with_width(mut self, width: f64) -> Self {
         self.width = width;
         self
     }
@@ -496,7 +496,7 @@ impl StrokeOptions {
     /// Set miter limit.
     #[inline]
     #[must_use]
-    pub fn with_miter_limit(mut self, miter_limit: f32) -> Self {
+    pub fn with_miter_limit(mut self, miter_limit: f64) -> Self {
         self.miter_limit = miter_limit;
         self
     }
@@ -504,7 +504,7 @@ impl StrokeOptions {
     /// Set dash pattern.
     #[inline]
     #[must_use]
-    pub fn with_dash_pattern(mut self, pattern: Vec<f32>) -> Self {
+    pub fn with_dash_pattern(mut self, pattern: Vec<f64>) -> Self {
         self.dash_pattern = Some(Arc::new(pattern));
         self
     }
@@ -512,7 +512,7 @@ impl StrokeOptions {
     /// Set dash offset.
     #[inline]
     #[must_use]
-    pub fn with_dash_offset(mut self, offset: f32) -> Self {
+    pub fn with_dash_offset(mut self, offset: f64) -> Self {
         self.dash_offset = offset;
         self
     }
@@ -567,9 +567,9 @@ pub enum ImageFilter {
     /// Similar to CSS `blur()` function.
     Blur {
         /// Horizontal blur radius (sigma)
-        sigma_x: f32,
+        sigma_x: f64,
         /// Vertical blur radius (sigma)
-        sigma_y: f32,
+        sigma_y: f64,
     },
 
     /// Dilate (expand bright areas) with specified radius.
@@ -577,7 +577,7 @@ pub enum ImageFilter {
     /// Morphological dilation operation - grows bright regions.
     Dilate {
         /// Dilation radius in pixels
-        radius: f32,
+        radius: f64,
     },
 
     /// Erode (expand dark areas) with specified radius.
@@ -585,7 +585,7 @@ pub enum ImageFilter {
     /// Morphological erosion operation - shrinks bright regions.
     Erode {
         /// Erosion radius in pixels
-        radius: f32,
+        radius: f64,
     },
 
     /// 5x4 color matrix transformation.
@@ -617,11 +617,11 @@ pub enum ImageFilter {
     #[cfg(debug_assertions)]
     OverflowIndicator {
         /// Horizontal overflow in pixels
-        overflow_h: f32,
+        overflow_h: f64,
         /// Vertical overflow in pixels
-        overflow_v: f32,
+        overflow_v: f64,
         /// Container size
-        container_size: crate::Size<Pixels>,
+        container_size: crate::Size<f64>,
     },
 }
 
@@ -629,7 +629,7 @@ impl ImageFilter {
     /// Create a blur filter with the same sigma for both axes.
     #[inline]
     #[must_use]
-    pub fn blur(sigma: f32) -> Self {
+    pub fn blur(sigma: f64) -> Self {
         Self::Blur {
             sigma_x: sigma,
             sigma_y: sigma,
@@ -639,21 +639,21 @@ impl ImageFilter {
     /// Create a blur filter with different horizontal and vertical sigma.
     #[inline]
     #[must_use]
-    pub fn blur_directional(sigma_x: f32, sigma_y: f32) -> Self {
+    pub fn blur_directional(sigma_x: f64, sigma_y: f64) -> Self {
         Self::Blur { sigma_x, sigma_y }
     }
 
     /// Create a dilate filter with specified radius.
     #[inline]
     #[must_use]
-    pub fn dilate(radius: f32) -> Self {
+    pub fn dilate(radius: f64) -> Self {
         Self::Dilate { radius }
     }
 
     /// Create an erode filter with specified radius.
     #[inline]
     #[must_use]
-    pub fn erode(radius: f32) -> Self {
+    pub fn erode(radius: f64) -> Self {
         Self::Erode { radius }
     }
 
@@ -682,9 +682,9 @@ impl ImageFilter {
     #[inline]
     #[must_use]
     pub fn overflow_indicator(
-        overflow_h: f32,
-        overflow_v: f32,
-        container_size: crate::Size<Pixels>,
+        overflow_h: f64,
+        overflow_v: f64,
+        container_size: crate::Size<f64>,
     ) -> Self {
         Self::OverflowIndicator {
             overflow_h,
@@ -966,7 +966,7 @@ mod tests {
         let invert_out = ColorMatrix::invert().apply([0.8, 0.4, 0.2, 1.0]);
         let half_out = half.apply([0.8, 0.4, 0.2, 1.0]);
         for i in 0..4 {
-            let expected_mid = f32::midpoint(identity_out[i], invert_out[i]);
+            let expected_mid = f64::midpoint(identity_out[i], invert_out[i]);
             assert!(
                 (half_out[i] - expected_mid).abs() < 1e-5,
                 "channel {i}: expected mid {expected_mid:.6}, got {:.6}",
@@ -976,7 +976,7 @@ mod tests {
     }
 
     #[track_caller]
-    fn assert_rgba(actual: [f32; 4], expected: [f32; 4]) {
+    fn assert_rgba(actual: [f64; 4], expected: [f64; 4]) {
         for (a, e) in actual.iter().zip(expected) {
             assert!((a - e).abs() < 1e-4, "{actual:?} vs {expected:?}");
         }

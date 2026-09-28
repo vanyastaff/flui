@@ -193,7 +193,7 @@ impl Color {
     /// assert_eq!(half.a, 128); // 127.5 rounds up
     /// ```
     #[inline]
-    pub fn with_opacity(&self, opacity: f32) -> Self {
+    pub fn with_opacity(&self, opacity: f64) -> Self {
         #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         // 0..=255 after the clamp
         let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -251,7 +251,9 @@ impl Color {
     /// assert!(purple.r > 0 && purple.b > 0);
     /// ```
     #[inline]
-    pub fn lerp(a: Color, b: Color, t: f32) -> Color {
+    pub fn lerp(a: Color, b: Color, t: f64) -> Color {
+        // Colour channels interpolate in f32; the animation parameter arrives as f64.
+        let t = t as f32;
         #[cfg(all(feature = "simd", target_arch = "x86_64", target_feature = "sse2"))]
         {
             Self::lerp_simd_sse(a, b, t)
@@ -914,7 +916,7 @@ impl Color {
         }
 
         let local_t = (t - stop1) / range;
-        Color::lerp(color1, color2, local_t)
+        Color::lerp(color1, color2, f64::from(local_t))
     }
 
     /// Blends each color over the given background.
@@ -1310,7 +1312,7 @@ impl crate::geometry::ApproxEq for Color {
     /// Default epsilon for color comparison (1/255 ≈ 0.004).
     ///
     /// This allows for 1 unit difference in u8 color channels.
-    const DEFAULT_EPSILON: f32 = 1.0 / 255.0;
+    const DEFAULT_EPSILON: f64 = 1.0 / 255.0;
 
     /// Compares colors in normalized f32 space with epsilon tolerance.
     ///
@@ -1330,12 +1332,12 @@ impl crate::geometry::ApproxEq for Color {
     /// assert!(c1.approx_eq(&c3)); // Within default epsilon
     /// ```
     #[inline]
-    fn approx_eq_eps(&self, other: &Self, epsilon: f32) -> bool {
+    fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
         // Distances are taken in 8-bit units before normalizing: subtracting
         // two normalized channels can land just above `n / 255` (4/255 - 3/255
         // does in f32), which would reject a one-unit difference at the
         // default epsilon.
-        let within = |x: u8, y: u8| f32::from(x.abs_diff(y)) / 255.0 <= epsilon;
+        let within = |x: u8, y: u8| f64::from(x.abs_diff(y)) / 255.0 <= epsilon;
         within(self.r, other.r)
             && within(self.g, other.g)
             && within(self.b, other.b)

@@ -13,7 +13,7 @@
 //! - Color: RGBA colors with blending
 
 use flui_types::{
-    geometry::{Edges, Point, Rect, Size, px},
+    geometry::{Edges, Point, Rect, Size},
     styling::Color,
 };
 
@@ -22,8 +22,8 @@ fn main() {
 
     // 1. Working with Pixels
     println!("1. Pixels:");
-    let width = px(100.0);
-    let height = px(50.0);
+    let width = 100.0;
+    let height = 50.0;
     println!("   Width: {width:?}");
     println!("   Height: {height:?}");
     println!("   Sum: {:?}", width + height);
@@ -32,15 +32,15 @@ fn main() {
     // 2. Creating Points
     println!("2. Points:");
     let origin = Point::ZERO;
-    let position = Point::new(px(100.0), px(200.0));
+    let position = Point::new(100.0, 200.0);
     println!("   Origin: {origin:?}");
     println!("   Position: {position:?}");
     println!("   Distance: {:?}\n", origin.distance(position));
 
     // 3. Working with Rectangles
     println!("3. Rectangles:");
-    let rect1 = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
-    let rect2 = Rect::from_xywh(px(50.0), px(50.0), px(100.0), px(100.0));
+    let rect1 = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let rect2 = Rect::from_xywh(50.0, 50.0, 100.0, 100.0);
 
     println!("   Rect1: {rect1:?}");
     println!("   Rect2: {rect2:?}");
@@ -52,12 +52,12 @@ fn main() {
     let union = rect1.union(&rect2);
     println!("   Union: {union:?}");
 
-    let center_point = Point::new(px(75.0), px(75.0));
+    let center_point = Point::new(75.0, 75.0);
     println!("   Contains center: {}\n", rect1.contains(center_point));
 
     // 4. Working with Sizes
     println!("4. Sizes:");
-    let size = Size::new(px(800.0), px(600.0));
+    let size = Size::new(800.0, 600.0);
     println!("   Size: {size:?}");
     println!("   Area: {:?}", size.area());
     println!("   Aspect ratio: {:.2}\n", size.aspect_ratio());
@@ -87,13 +87,13 @@ fn main() {
     // 6. Practical Example: Button Layout
     println!("6. Practical Example - Button Layout:");
 
-    let button_size = Size::new(px(120.0), px(40.0));
-    let button_position = Point::new(px(20.0), px(20.0));
+    let button_size = Size::new(120.0, 40.0);
+    let button_position = Point::new(20.0, 20.0);
     let button_rect = Rect::from_origin_size(button_position, button_size);
 
     println!("   Button bounds: {button_rect:?}");
 
-    let padding = Edges::all(px(10.0));
+    let padding = Edges::all(10.0);
     let content_rect = padding.deflate_rect(button_rect);
     println!("   Content area (with padding): {content_rect:?}");
 
@@ -104,14 +104,14 @@ fn main() {
     println!("   Hover color: {}", hover_color.to_hex());
 
     // Hit testing
-    let click_point = Point::new(px(60.0), px(40.0));
+    let click_point = Point::new(60.0, 40.0);
     let is_clicked = button_rect.contains(click_point);
     println!("   Click at {click_point:?} hits button: {is_clicked}\n");
 
     // 7. Type Safety Example
     println!("7. Type Safety:");
     println!("   The type system prevents mixing incompatible units.");
-    println!("   For example, you cannot directly add Pixels and DevicePixels.");
+    println!("   For example, you cannot directly add f64 and i32.");
     println!(
         "   You must explicitly convert between units using to_pixels() or to_device_pixels()."
     );

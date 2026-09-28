@@ -1,21 +1,13 @@
-warning: unused import: `Size`
- --> tests/compile_fail/mixed_rect_ops.rs:5:63
-  |
-5 | use flui_types::geometry::{Pixels, DevicePixels, Rect, Point, Size};
-  |                                                               ^^^^
-  |
-  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
-
 error[E0308]: mismatched types
-  --> tests/compile_fail/mixed_rect_ops.rs:19:48
+  --> tests/compile_fail/mixed_rect_ops.rs:12:48
    |
-19 |     let _intersection = rect_logical.intersect(&rect_device);
-   |                                      --------- ^^^^^^^^^^^^ expected `&Rect`, found `&Rect<DevicePixels>`
+12 |     let _intersection = rect_logical.intersect(&rect_device);
+   |                                      --------- ^^^^^^^^^^^^ expected `&Rect<{float}>`, found `&Rect<i32>`
    |                                      |
    |                                      arguments to this method are incorrect
    |
-   = note: expected reference `&Rect<flui_types::Pixels>`
-              found reference `&Rect<DevicePixels>`
+   = note: expected reference `&Rect<{float}>`
+              found reference `&Rect<i32>`
 note: method defined here
   --> $WORKSPACE/crates/flui-geometry/src/rect.rs
    |

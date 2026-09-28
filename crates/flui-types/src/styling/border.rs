@@ -1,10 +1,7 @@
 //! Border types for styling
 
 use crate::{
-    geometry::{
-        Pixels,
-        traits::{NumericUnit, Unit},
-    },
+    geometry::traits::{NumericUnit, Unit},
     styling::Color,
 };
 
@@ -51,10 +48,10 @@ impl BorderStyle {
 /// };
 ///
 /// // Simple solid border
-/// let side = BorderSide::new(Color::BLACK, px(2.0), BorderStyle::Solid);
+/// let side = BorderSide::new(Color::BLACK, 2.0, BorderStyle::Solid);
 ///
 /// // With custom stroke alignment (centered on border)
-/// let side = BorderSide::with_stroke_align(Color::RED, px(1.0), BorderStyle::Solid, 0.5);
+/// let side = BorderSide::with_stroke_align(Color::RED, 1.0, BorderStyle::Solid, 0.5);
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -72,7 +69,7 @@ pub struct BorderSide<T: Unit> {
     ///
     /// Values typically range from 0.0 (inside) to 1.0 (outside).
     /// 0.5 represents the stroke centered on the border.
-    pub stroke_align: f32,
+    pub stroke_align: f64,
 }
 
 impl<T: Unit> BorderSide<T> {
@@ -99,7 +96,7 @@ impl<T: Unit> BorderSide<T> {
         color: Color,
         width: T,
         style: BorderStyle,
-        stroke_align: f32,
+        stroke_align: f64,
     ) -> Self {
         Self {
             color,
@@ -140,7 +137,7 @@ impl<T: Unit> BorderSide<T> {
 
     /// Creates a copy of this border side with the given stroke alignment.
     #[inline]
-    pub const fn with_stroke_alignment(self, stroke_align: f32) -> Self {
+    pub const fn with_stroke_alignment(self, stroke_align: f64) -> Self {
         Self {
             stroke_align,
             ..self
@@ -148,13 +145,13 @@ impl<T: Unit> BorderSide<T> {
     }
 }
 
-impl BorderSide<Pixels> {
+impl BorderSide<f64> {
     /// A hairline border side (width = 0.0).
     ///
     /// This is the default border side, with black color.
     pub const HAIRLINE: Self = Self {
         color: Color::BLACK,
-        width: Pixels::ZERO,
+        width: 0.0,
         style: BorderStyle::Solid,
         stroke_align: 0.0,
     };
@@ -162,7 +159,7 @@ impl BorderSide<Pixels> {
     /// A border side with no border.
     pub const NONE: Self = Self {
         color: Color::BLACK,
-        width: Pixels::ZERO,
+        width: 0.0,
         style: BorderStyle::None,
         stroke_align: 0.0,
     };
@@ -173,14 +170,13 @@ impl BorderSide<Pixels> {
     /// 0.
     #[inline]
     pub fn is_visible(&self) -> bool {
-        use crate::geometry::px;
-        self.style.is_solid() && self.width > px(0.0)
+        self.style.is_solid() && self.width > 0.0
     }
 }
 
 impl<T: NumericUnit> BorderSide<T>
 where
-    T: std::ops::Mul<f32, Output = T>,
+    T: std::ops::Mul<f64, Output = T>,
 {
     /// Linearly interpolate between two border sides (Flutter's
     /// `BorderSide.lerp`, `t` clamped to `0..=1`).
@@ -189,7 +185,7 @@ where
     /// made fully transparent and the result is `Solid`, so a border fades
     /// in or out instead of vanishing at `t = 0.5`.
     #[inline]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
         let t = t.clamp(0.0, 1.0);
         if t == 0.0 {
             return a;
@@ -225,7 +221,7 @@ where
 
     /// Scale the width of this border side by the given factor.
     #[inline]
-    pub fn scale(&self, factor: f32) -> Self {
+    pub fn scale(&self, factor: f64) -> Self {
         Self {
             width: self.width * factor,
             ..*self
@@ -282,10 +278,9 @@ impl BorderPosition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
 
-    fn solid(color: Color, width: f32) -> BorderSide<Pixels> {
-        BorderSide::new(color, px(width), BorderStyle::Solid)
+    fn solid(color: Color, width: f64) -> BorderSide<f64> {
+        BorderSide::new(color, width, BorderStyle::Solid)
     }
 
     #[test]
@@ -299,15 +294,15 @@ mod tests {
         let side = solid(Color::RED, 2.0);
         assert_eq!(side.stroke_align, 0.0);
         assert_eq!(
-            BorderSide::with_stroke_align(Color::RED, px(2.0), BorderStyle::Solid, 1.0),
+            BorderSide::with_stroke_align(Color::RED, 2.0, BorderStyle::Solid, 1.0),
             side.with_stroke_alignment(1.0)
         );
         assert_eq!(side.with_color(Color::BLUE).color, Color::BLUE);
-        assert_eq!(side.with_width(px(5.0)).width, px(5.0));
+        assert_eq!(side.with_width(5.0).width, 5.0);
         assert_eq!(side.with_style(BorderStyle::None).style, BorderStyle::None);
-        assert_eq!(side.scale(1.5).width, px(3.0));
-        assert_eq!(BorderSide::<Pixels>::none(), BorderSide::NONE);
-        assert_eq!(BorderSide::<Pixels>::default(), BorderSide::HAIRLINE);
+        assert_eq!(side.scale(1.5).width, 3.0);
+        assert_eq!(BorderSide::<f64>::none(), BorderSide::NONE);
+        assert_eq!(BorderSide::<f64>::default(), BorderSide::HAIRLINE);
     }
 
     /// Visible means solid and wider than zero.
@@ -346,7 +341,7 @@ mod tests {
         assert_eq!(BorderSide::lerp(BorderSide::none(), red, 0.25), faded);
 
         // A different stroke alignment alone also takes the fading path.
-        let inside = BorderSide::<Pixels>::none();
+        let inside = BorderSide::<f64>::none();
         let outside = inside.with_stroke_alignment(1.0);
         let mid = BorderSide::lerp(inside, outside, 0.5);
         assert_eq!(
@@ -365,7 +360,7 @@ mod tests {
             BorderSide::none()
         );
         // Two `None` sides stay `None`.
-        let hidden = |w| BorderSide::none().with_width(px(w));
+        let hidden = |w| BorderSide::none().with_width(w);
         assert_eq!(
             BorderSide::lerp(hidden(2.0), hidden(6.0), 0.5).style,
             BorderStyle::None

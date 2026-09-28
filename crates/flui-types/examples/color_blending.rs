@@ -84,7 +84,7 @@ fn color_mixing_example() {
 
     println!("   Mixing red and blue:");
     for i in 0..=10 {
-        let t = i as f32 / 10.0;
+        let t = f64::from(i) / 10.0;
         let mixed = Color::lerp(red, blue, t);
         println!(
             "   t={:.1}: {} (R:{}, G:{}, B:{})",
@@ -183,7 +183,7 @@ fn gradient_example() {
 
     println!("   Start: {}", start_color.to_hex());
     for i in 1..=4 {
-        let t = i as f32 / 5.0;
+        let t = f64::from(i) / 5.0;
         let gradient_color = Color::lerp(start_color, end_color, t);
         println!("   {}%: {}", (t * 100.0) as i32, gradient_color.to_hex());
     }

@@ -38,26 +38,26 @@ pub struct DashPattern {
     /// Must contain an even number of entries. If an odd number is provided,
     /// the pattern is conceptually repeated to make it even (e.g., `[5, 3, 2]`
     /// becomes `[5, 3, 2, 5, 3, 2]`).
-    pub intervals: Vec<f32>,
+    pub intervals: Vec<f64>,
 
     /// Starting offset into the pattern.
     ///
     /// A phase of 0.0 starts at the beginning of the first dash.
     /// Positive values shift the pattern forward along the path.
-    pub phase: f32,
+    pub phase: f64,
 }
 
 impl DashPattern {
     /// Creates a new dash pattern with the given intervals and phase.
     #[must_use]
     #[inline]
-    pub fn new(intervals: Vec<f32>, phase: f32) -> Self {
+    pub fn new(intervals: Vec<f64>, phase: f64) -> Self {
         Self { intervals, phase }
     }
 
     /// Returns the total length of one cycle of the dash pattern.
     #[must_use]
-    pub fn cycle_length(&self) -> f32 {
+    pub fn cycle_length(&self) -> f64 {
         self.intervals.iter().sum()
     }
 
@@ -82,7 +82,7 @@ pub struct Paint {
     pub color: Color,
 
     /// Stroke width (only used for stroke style).
-    pub stroke_width: f32,
+    pub stroke_width: f64,
 
     /// Stroke cap style.
     pub stroke_cap: StrokeCap,
@@ -127,7 +127,7 @@ impl Paint {
     /// Creates a stroke paint with the given color and width.
     #[must_use]
     #[inline]
-    pub fn stroke(color: Color, width: f32) -> Self {
+    pub fn stroke(color: Color, width: f64) -> Self {
         debug_assert!(
             width >= 0.0 && !width.is_nan(),
             "Stroke width must be non-negative and not NaN, got: {width}",
@@ -171,7 +171,7 @@ impl Paint {
     /// Sets the stroke width.
     #[must_use]
     #[inline]
-    pub fn with_stroke_width(mut self, width: f32) -> Self {
+    pub fn with_stroke_width(mut self, width: f64) -> Self {
         debug_assert!(
             width >= 0.0 && !width.is_nan(),
             "Stroke width must be non-negative and not NaN, got: {width}",
@@ -242,7 +242,7 @@ impl Paint {
     /// ```
     #[must_use]
     #[inline]
-    pub fn with_dash(mut self, intervals: Vec<f32>, phase: f32) -> Self {
+    pub fn with_dash(mut self, intervals: Vec<f64>, phase: f64) -> Self {
         self.dash_pattern = Some(DashPattern::new(intervals, phase));
         self
     }
@@ -285,7 +285,7 @@ impl Paint {
     /// Returns the effective stroke width (0 for fill).
     #[must_use]
     #[inline]
-    pub const fn effective_stroke_width(&self) -> f32 {
+    pub const fn effective_stroke_width(&self) -> f64 {
         match self.style {
             PaintStyle::Stroke => self.stroke_width,
             PaintStyle::Fill => 0.0,
@@ -321,7 +321,7 @@ impl Paint {
     /// Sets the opacity (0.0 to 1.0).
     #[must_use]
     #[inline]
-    pub fn with_opacity(mut self, opacity: f32) -> Self {
+    pub fn with_opacity(mut self, opacity: f64) -> Self {
         self.color = self.color.with_opacity(opacity);
         self
     }
@@ -397,7 +397,7 @@ impl PaintBuilder {
     /// Sets the stroke width.
     #[must_use]
     #[inline]
-    pub const fn stroke_width(mut self, width: f32) -> Self {
+    pub const fn stroke_width(mut self, width: f64) -> Self {
         self.paint.stroke_width = width;
         self
     }
@@ -445,7 +445,7 @@ impl PaintBuilder {
     /// Sets the dash pattern.
     #[must_use]
     #[inline]
-    pub fn dash(mut self, intervals: Vec<f32>, phase: f32) -> Self {
+    pub fn dash(mut self, intervals: Vec<f64>, phase: f64) -> Self {
         self.paint.dash_pattern = Some(DashPattern::new(intervals, phase));
         self
     }

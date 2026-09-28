@@ -45,7 +45,7 @@ impl DeviceOrientation {
     /// and `LandscapeRight` 270°.
     #[must_use]
     #[inline]
-    pub const fn rotation_degrees(&self) -> f32 {
+    pub const fn rotation_degrees(&self) -> f64 {
         match self {
             Self::PortraitUp => 0.0,
             Self::LandscapeLeft => 90.0,
@@ -60,7 +60,7 @@ impl DeviceOrientation {
     /// to radians.
     #[must_use]
     #[inline]
-    pub fn rotation_radians(&self) -> f32 {
+    pub fn rotation_radians(&self) -> f64 {
         self.rotation_degrees().to_radians()
     }
 
@@ -153,8 +153,8 @@ mod tests {
     #[test]
     fn rotations_follow_the_degree_table() {
         for (i, o) in ALL.iter().enumerate() {
-            assert_eq!(o.rotation_degrees(), i as f32 * 90.0, "{o:?}");
-            assert!((o.rotation_radians() - (i as f32 * 90.0).to_radians()).abs() < 1e-6);
+            assert_eq!(o.rotation_degrees(), i as f64 * 90.0, "{o:?}");
+            assert!((o.rotation_radians() - (i as f64 * 90.0).to_radians()).abs() < 1e-6);
             assert_eq!(
                 o.rotate_counter_clockwise().as_str(),
                 ALL[(i + 1) % 4].as_str()

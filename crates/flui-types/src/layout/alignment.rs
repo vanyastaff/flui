@@ -5,7 +5,7 @@
 
 use std::ops::{Add, Neg};
 
-use crate::geometry::{Offset, Pixels, Rect, Size};
+use crate::geometry::{Offset, Rect, Size};
 
 /// How much space a flex container should occupy in its main axis.
 ///
@@ -122,7 +122,7 @@ impl MainAxisAlignment {
     /// assert_eq!(between, 50.0); // 100 / 2 gaps
     /// ```
     #[inline]
-    pub fn calculate_spacing(self, available_space: f32, child_count: usize) -> (f32, f32) {
+    pub fn calculate_spacing(self, available_space: f64, child_count: usize) -> (f64, f64) {
         if child_count == 0 {
             return (0.0, 0.0);
         }
@@ -135,16 +135,16 @@ impl MainAxisAlignment {
                 if child_count == 1 {
                     (0.0, 0.0)
                 } else {
-                    let spacing = available_space / (child_count - 1) as f32;
+                    let spacing = available_space / (child_count - 1) as f64;
                     (0.0, spacing)
                 }
             }
             MainAxisAlignment::SpaceAround => {
-                let spacing = available_space / child_count as f32;
+                let spacing = available_space / child_count as f64;
                 (spacing / 2.0, spacing)
             }
             MainAxisAlignment::SpaceEvenly => {
-                let spacing = available_space / (child_count + 1) as f32;
+                let spacing = available_space / (child_count + 1) as f64;
                 (spacing, spacing)
             }
         }
@@ -219,10 +219,10 @@ impl CrossAxisAlignment {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Alignment {
     /// Horizontal alignment: -1.0 = left, 0.0 = center, 1.0 = right
-    pub x: f32,
+    pub x: f64,
 
     /// Vertical alignment: -1.0 = top, 0.0 = center, 1.0 = bottom
-    pub y: f32,
+    pub y: f64,
 }
 
 impl Alignment {
@@ -238,7 +238,7 @@ impl Alignment {
     /// assert_eq!(alignment.y, -0.5);
     /// ```
     #[inline]
-    pub const fn new(x: f32, y: f32) -> Self {
+    pub const fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
 
@@ -277,7 +277,7 @@ impl Alignment {
     /// (elastic, back) propagate through `Tween<Alignment>` without flattening.
     #[must_use]
     #[inline]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
         Self::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
     }
 
@@ -299,15 +299,15 @@ impl Alignment {
     /// use flui_types::{Alignment, Offset, Size, geometry::px};
     ///
     /// // Center: free space 100×50 → offset (50, 25)
-    /// let offset = Alignment::CENTER.along_size(Size::new(px(100.0), px(50.0)));
-    /// assert_eq!(offset, Offset::new(px(50.0), px(25.0)));
+    /// let offset = Alignment::CENTER.along_size(Size::new(100.0, 50.0));
+    /// assert_eq!(offset, Offset::new(50.0, 25.0));
     /// ```
     #[must_use]
     #[inline]
-    pub fn along_size(self, free_space: Size<Pixels>) -> Offset<Pixels> {
+    pub fn along_size(self, free_space: Size<f64>) -> Offset<f64> {
         Offset::new(
-            free_space.width * f32::midpoint(1.0, self.x),
-            free_space.height * f32::midpoint(1.0, self.y),
+            free_space.width * f64::midpoint(1.0, self.x),
+            free_space.height * f64::midpoint(1.0, self.y),
         )
     }
 
@@ -331,15 +331,15 @@ impl Alignment {
     /// ```
     /// use flui_types::{Alignment, Rect, geometry::px};
     ///
-    /// let rect = flui_types::Rect::from_ltwh(px(10.0), px(20.0), px(100.0), px(200.0));
+    /// let rect = flui_types::Rect::from_ltwh(10.0, 20.0, 100.0, 200.0);
     /// // Center of a 100×200 rect anchored at (10, 20) is (60, 120).
     /// let center = Alignment::CENTER.align_within(rect);
-    /// assert_eq!(center.dx, px(60.0));
-    /// assert_eq!(center.dy, px(120.0));
+    /// assert_eq!(center.dx, 60.0);
+    /// assert_eq!(center.dy, 120.0);
     /// ```
     #[must_use]
     #[inline]
-    pub fn align_within(self, rect: Rect<Pixels>) -> Offset<Pixels> {
+    pub fn align_within(self, rect: Rect<f64>) -> Offset<f64> {
         let half_width = rect.width() * 0.5;
         let half_height = rect.height() * 0.5;
         let center_x = rect.left() + half_width;
@@ -358,9 +358,9 @@ impl Default for Alignment {
     }
 }
 
-impl From<(f32, f32)> for Alignment {
+impl From<(f64, f64)> for Alignment {
     #[inline]
-    fn from((x, y): (f32, f32)) -> Self {
+    fn from((x, y): (f64, f64)) -> Self {
         Alignment::new(x, y)
     }
 }
@@ -393,15 +393,15 @@ impl Neg for Alignment {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AlignmentDirectional {
     /// Start alignment: -1.0 = start edge, 0.0 = center, 1.0 = end edge
-    pub start: f32,
+    pub start: f64,
     /// Vertical alignment: -1.0 = top, 0.0 = center, 1.0 = bottom
-    pub y: f32,
+    pub y: f64,
 }
 
 impl AlignmentDirectional {
     /// Create a new directional alignment.
     #[inline]
-    pub const fn new(start: f32, y: f32) -> Self {
+    pub const fn new(start: f64, y: f64) -> Self {
         Self { start, y }
     }
 
@@ -453,7 +453,7 @@ impl AlignmentDirectional {
     /// so overshoot animation curves propagate without flattening.
     #[must_use]
     #[inline]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
         Self::new(a.start + (b.start - a.start) * t, a.y + (b.y - a.y) * t)
     }
 }
@@ -535,26 +535,25 @@ impl Default for AlignmentGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
 
     // ---- along_size tests (pre-existing) ----
 
     #[test]
     fn along_size_center_returns_half_free_space() {
-        let offset = Alignment::CENTER.along_size(Size::new(px(100.0), px(50.0)));
-        assert_eq!(offset, Offset::new(px(50.0), px(25.0)));
+        let offset = Alignment::CENTER.along_size(Size::new(100.0, 50.0));
+        assert_eq!(offset, Offset::new(50.0, 25.0));
     }
 
     #[test]
     fn along_size_top_left_returns_zero_offset() {
-        let offset = Alignment::TOP_LEFT.along_size(Size::new(px(100.0), px(50.0)));
-        assert_eq!(offset, Offset::new(px(0.0), px(0.0)));
+        let offset = Alignment::TOP_LEFT.along_size(Size::new(100.0, 50.0));
+        assert_eq!(offset, Offset::new(0.0, 0.0));
     }
 
     #[test]
     fn along_size_bottom_right_returns_full_free_space() {
-        let offset = Alignment::BOTTOM_RIGHT.along_size(Size::new(px(100.0), px(50.0)));
-        assert_eq!(offset, Offset::new(px(100.0), px(50.0)));
+        let offset = Alignment::BOTTOM_RIGHT.along_size(Size::new(100.0, 50.0));
+        assert_eq!(offset, Offset::new(100.0, 50.0));
     }
 
     // ---- lerp tests (migrated from painting::alignment) ----
@@ -599,50 +598,50 @@ mod tests {
 
     #[test]
     fn align_within_corner_constants_match_rect_corners() {
-        let r = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(200.0));
-        assert_eq!(Alignment::TOP_LEFT.align_within(r).dx, px(0.0));
-        assert_eq!(Alignment::TOP_LEFT.align_within(r).dy, px(0.0));
-        assert_eq!(Alignment::BOTTOM_RIGHT.align_within(r).dx, px(100.0));
-        assert_eq!(Alignment::BOTTOM_RIGHT.align_within(r).dy, px(200.0));
-        assert_eq!(Alignment::CENTER.align_within(r).dx, px(50.0));
-        assert_eq!(Alignment::CENTER.align_within(r).dy, px(100.0));
+        let r = Rect::from_ltwh(0.0, 0.0, 100.0, 200.0);
+        assert_eq!(Alignment::TOP_LEFT.align_within(r).dx, 0.0);
+        assert_eq!(Alignment::TOP_LEFT.align_within(r).dy, 0.0);
+        assert_eq!(Alignment::BOTTOM_RIGHT.align_within(r).dx, 100.0);
+        assert_eq!(Alignment::BOTTOM_RIGHT.align_within(r).dy, 200.0);
+        assert_eq!(Alignment::CENTER.align_within(r).dx, 50.0);
+        assert_eq!(Alignment::CENTER.align_within(r).dy, 100.0);
     }
 
     #[test]
     fn align_within_handles_offset_rect() {
         // 200×100 rect anchored at (10, 20).
-        let r = Rect::from_ltwh(px(10.0), px(20.0), px(200.0), px(100.0));
-        assert_eq!(Alignment::TOP_LEFT.align_within(r).dx, px(10.0));
-        assert_eq!(Alignment::TOP_LEFT.align_within(r).dy, px(20.0));
-        assert_eq!(Alignment::CENTER.align_within(r).dx, px(110.0));
-        assert_eq!(Alignment::CENTER.align_within(r).dy, px(70.0));
+        let r = Rect::from_ltwh(10.0, 20.0, 200.0, 100.0);
+        assert_eq!(Alignment::TOP_LEFT.align_within(r).dx, 10.0);
+        assert_eq!(Alignment::TOP_LEFT.align_within(r).dy, 20.0);
+        assert_eq!(Alignment::CENTER.align_within(r).dx, 110.0);
+        assert_eq!(Alignment::CENTER.align_within(r).dy, 70.0);
     }
 
     #[test]
     fn align_within_accepts_values_outside_unit_range() {
         // Off-rectangle anchor — a follower-layer use case.
         // x=2.0 on a 100-wide rect: cx=50, result = 50 + 50*2.0 = 150.
-        let r = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let r = Rect::from_ltwh(0.0, 0.0, 100.0, 100.0);
         let a = Alignment::new(2.0, 0.0);
-        assert_eq!(a.align_within(r).dx, px(150.0));
+        assert_eq!(a.align_within(r).dx, 150.0);
     }
 
     #[test]
     fn align_within_edge_midpoint_constants_lie_on_correct_edge() {
-        let r = Rect::from_ltwh(px(0.0), px(0.0), px(100.0), px(200.0));
+        let r = Rect::from_ltwh(0.0, 0.0, 100.0, 200.0);
         // CENTER_LEFT: x=-1 → left edge; y=0 → vertical center.
-        assert_eq!(Alignment::CENTER_LEFT.align_within(r).dx, px(0.0));
-        assert_eq!(Alignment::CENTER_LEFT.align_within(r).dy, px(100.0));
+        assert_eq!(Alignment::CENTER_LEFT.align_within(r).dx, 0.0);
+        assert_eq!(Alignment::CENTER_LEFT.align_within(r).dy, 100.0);
         // TOP_CENTER: x=0 → horizontal center; y=-1 → top edge.
-        assert_eq!(Alignment::TOP_CENTER.align_within(r).dx, px(50.0));
-        assert_eq!(Alignment::TOP_CENTER.align_within(r).dy, px(0.0));
+        assert_eq!(Alignment::TOP_CENTER.align_within(r).dx, 50.0);
+        assert_eq!(Alignment::TOP_CENTER.align_within(r).dy, 0.0);
     }
 
     #[test]
     fn alignment_is_copy_and_lightweight() {
         const fn requires_copy<T: Copy>() {}
         requires_copy::<Alignment>();
-        assert_eq!(std::mem::size_of::<Alignment>(), 8);
+        assert_eq!(std::mem::size_of::<Alignment>(), 16);
     }
 
     /// `align_within` on a zero-origin rect of size = `free_space` must return
@@ -652,9 +651,8 @@ mod tests {
     /// `align_within` to the same formula as `along_size`.
     #[test]
     fn align_within_and_along_size_agree_on_free_space() {
-        let free_space = Size::new(px(120.0), px(80.0));
-        let zero_origin_rect =
-            Rect::from_ltwh(px(0.0), px(0.0), free_space.width, free_space.height);
+        let free_space = Size::new(120.0, 80.0);
+        let zero_origin_rect = Rect::from_ltwh(0.0, 0.0, free_space.width, free_space.height);
         for alignment in [
             Alignment::TOP_LEFT,
             Alignment::TOP_CENTER,
@@ -703,7 +701,7 @@ mod tests {
         ];
         // Row-major over y then x, each in -1, 0, 1.
         for (i, (a, d)) in absolute.iter().zip(directional).enumerate() {
-            let expected = ((i % 3) as f32 - 1.0, (i / 3) as f32 - 1.0);
+            let expected = ((i % 3) as f64 - 1.0, (i / 3) as f64 - 1.0);
             assert_eq!((a.x, a.y), expected, "{a:?}");
             assert_eq!((d.start, d.y), expected, "{d:?}");
         }

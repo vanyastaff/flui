@@ -16,13 +16,13 @@ pub enum TableColumnWidth {
     /// Fixed width in logical pixels.
     ///
     /// The column will always be exactly this width regardless of content.
-    Fixed(f32),
+    Fixed(f64),
 
     /// Flexible width with flex factor.
     ///
     /// Similar to `Flex` widget - distributes remaining space proportionally.
     /// A column with `Flex(2.0)` will be twice as wide as one with `Flex(1.0)`.
-    Flex(f32),
+    Flex(f64),
 
     /// Intrinsic width based on cell contents, with an optional flex factor.
     ///
@@ -37,14 +37,14 @@ pub enum TableColumnWidth {
     Intrinsic {
         /// Optional flex factor for distributing leftover space;
         /// `None` means the column never takes extra space.
-        flex: Option<f32>,
+        flex: Option<f64>,
     },
 
     /// Fraction of available width (0.0-1.0).
     ///
     /// For example, `Fraction(0.25)` means 25% of the table's available width.
     /// Values are clamped to the 0.0-1.0 range.
-    Fraction(f32),
+    Fraction(f64),
 
     /// The larger of two column-width specs, evaluated independently.
     ///

@@ -80,7 +80,7 @@ impl Brightness {
     /// stays legible against dark surfaces.
     #[must_use]
     #[inline]
-    pub const fn shadow_opacity(&self) -> f32 {
+    pub const fn shadow_opacity(&self) -> f64 {
         match self {
             Self::Light => 0.2,
             Self::Dark => 0.4,

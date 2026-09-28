@@ -17,13 +17,13 @@ use super::{Simulation, Tolerance};
 pub struct FrictionSimulation {
     /// Exponential decay rate k (NOT Flutter's drag coefficient cₓ; k = −ln(cₓ)).
     /// Higher = faster decay.
-    decay_rate: f32,
+    decay_rate: f64,
 
     /// The starting position
-    position_at_zero: f32,
+    position_at_zero: f64,
 
     /// The initial velocity in pixels per second
-    velocity_at_zero: f32,
+    velocity_at_zero: f64,
 
     /// The tolerance for this simulation
     tolerance: Tolerance,
@@ -55,7 +55,7 @@ impl FrictionSimulation {
     /// `packages/flutter/lib/src/physics/friction_simulation.dart`, line 40.
     #[must_use]
     #[inline]
-    pub fn new(decay_rate: f32, position: f32, velocity: f32) -> Self {
+    pub fn new(decay_rate: f64, position: f64, velocity: f64) -> Self {
         Self {
             decay_rate,
             position_at_zero: position,
@@ -79,21 +79,21 @@ impl FrictionSimulation {
     /// mean stronger friction.
     #[must_use]
     #[inline]
-    pub fn decay_rate(&self) -> f32 {
+    pub fn decay_rate(&self) -> f64 {
         self.decay_rate
     }
 
     /// Returns the position at `t = 0`, in logical pixels.
     #[must_use]
     #[inline]
-    pub fn start_position(&self) -> f32 {
+    pub fn start_position(&self) -> f64 {
         self.position_at_zero
     }
 
     /// Returns the velocity at `t = 0`, in logical pixels per second.
     #[must_use]
     #[inline]
-    pub fn initial_velocity(&self) -> f32 {
+    pub fn initial_velocity(&self) -> f64 {
         self.velocity_at_zero
     }
 
@@ -101,7 +101,7 @@ impl FrictionSimulation {
     /// `x₀ + v₀/k`, in logical pixels.
     #[must_use]
     #[inline]
-    pub fn final_position(&self) -> f32 {
+    pub fn final_position(&self) -> f64 {
         self.position_at_zero + self.velocity_at_zero / self.decay_rate
     }
 
@@ -120,19 +120,19 @@ impl FrictionSimulation {
     /// Returns the time, in seconds, at which the velocity decays to
     /// `target_velocity`.
     ///
-    /// Returns `Some(f32::INFINITY)` for a target of exactly `0.0` (the decay
+    /// Returns `Some(f64::INFINITY)` for a target of exactly `0.0` (the decay
     /// only reaches zero asymptotically), and `None` when the target is
     /// unreachable: its magnitude exceeds the initial speed, or its sign
     /// differs from the initial velocity's.
     #[must_use]
     #[inline]
-    pub fn time_to_velocity(&self, target_velocity: f32) -> Option<f32> {
+    pub fn time_to_velocity(&self, target_velocity: f64) -> Option<f64> {
         if self.decay_rate <= 0.0 || target_velocity.abs() > self.velocity_at_zero.abs() {
             return None;
         }
 
         if target_velocity == 0.0 {
-            return Some(f32::INFINITY);
+            return Some(f64::INFINITY);
         }
 
         // v(t) = v₀ * e^(-k*t)
@@ -152,7 +152,7 @@ impl FrictionSimulation {
     /// travel (`final_position` minus the start position) instead.
     #[must_use]
     #[inline]
-    pub fn distance_to_velocity(&self, target_velocity: f32) -> f32 {
+    pub fn distance_to_velocity(&self, target_velocity: f64) -> f64 {
         if let Some(time) = self.time_to_velocity(target_velocity) {
             self.position(time) - self.position_at_zero
         } else {
@@ -166,25 +166,25 @@ impl FrictionSimulation {
     /// Its sign always opposes the current velocity (friction decelerates).
     #[must_use]
     #[inline]
-    pub fn deceleration(&self, time: f32) -> f32 {
+    pub fn deceleration(&self, time: f64) -> f64 {
         -self.decay_rate * self.velocity(time)
     }
 }
 
 impl Simulation for FrictionSimulation {
     #[inline]
-    fn position(&self, time: f32) -> f32 {
+    fn position(&self, time: f64) -> f64 {
         self.position_at_zero
             + self.velocity_at_zero * (1.0 - (-self.decay_rate * time).exp()) / self.decay_rate
     }
 
     #[inline]
-    fn velocity(&self, time: f32) -> f32 {
+    fn velocity(&self, time: f64) -> f64 {
         self.velocity_at_zero * (-self.decay_rate * time).exp()
     }
 
     #[inline]
-    fn is_done(&self, time: f32) -> bool {
+    fn is_done(&self, time: f64) -> bool {
         self.velocity(time).abs() < self.tolerance.velocity
     }
 
@@ -209,7 +209,7 @@ pub struct BoundedFrictionSimulation {
     friction: FrictionSimulation,
 
     /// The boundary position
-    boundary: f32,
+    boundary: f64,
 
     /// Whether we're going in the positive direction
     positive_direction: bool,
@@ -242,7 +242,7 @@ impl BoundedFrictionSimulation {
     /// consistent intentional divergence across both FLUI physics layers.
     #[must_use]
     #[inline]
-    pub fn new(decay_rate: f32, position: f32, velocity: f32, boundary: f32) -> Self {
+    pub fn new(decay_rate: f64, position: f64, velocity: f64, boundary: f64) -> Self {
         Self {
             friction: FrictionSimulation::new(decay_rate, position, velocity),
             boundary,
@@ -262,7 +262,7 @@ impl BoundedFrictionSimulation {
     /// Returns the boundary position, in logical pixels.
     #[must_use]
     #[inline]
-    pub fn boundary(&self) -> f32 {
+    pub fn boundary(&self) -> f64 {
         self.boundary
     }
 
@@ -292,7 +292,7 @@ impl BoundedFrictionSimulation {
     /// When this is `true`, `velocity` reports `0.0`.
     #[must_use]
     #[inline]
-    pub fn is_at_boundary(&self, time: f32) -> bool {
+    pub fn is_at_boundary(&self, time: f64) -> bool {
         let pos = self.friction.position(time);
         if self.positive_direction {
             pos >= self.boundary
@@ -312,7 +312,7 @@ impl BoundedFrictionSimulation {
 
 impl Simulation for BoundedFrictionSimulation {
     #[inline]
-    fn position(&self, time: f32) -> f32 {
+    fn position(&self, time: f64) -> f64 {
         let pos = self.friction.position(time);
         if self.positive_direction {
             pos.min(self.boundary)
@@ -322,7 +322,7 @@ impl Simulation for BoundedFrictionSimulation {
     }
 
     #[inline]
-    fn velocity(&self, time: f32) -> f32 {
+    fn velocity(&self, time: f64) -> f64 {
         if self.is_at_boundary(time) {
             0.0
         } else {
@@ -331,7 +331,7 @@ impl Simulation for BoundedFrictionSimulation {
     }
 
     #[inline]
-    fn is_done(&self, time: f32) -> bool {
+    fn is_done(&self, time: f64) -> bool {
         self.is_at_boundary(time) || self.friction.is_done(time)
     }
 
@@ -346,7 +346,7 @@ mod tests {
     use super::*;
 
     #[track_caller]
-    fn assert_approx(actual: f32, expected: f32) {
+    fn assert_approx(actual: f64, expected: f64) {
         assert!(
             (actual - expected).abs() <= 1e-3,
             "expected {expected}, got {actual}"
@@ -402,10 +402,10 @@ mod tests {
         let s = FrictionSimulation::new(2.0, 0.0, 100.0);
         assert_approx(
             s.time_to_velocity(50.0).unwrap(),
-            std::f32::consts::LN_2 / 2.0,
+            std::f64::consts::LN_2 / 2.0,
         );
         assert_eq!(s.time_to_velocity(100.0), Some(0.0));
-        assert_eq!(s.time_to_velocity(0.0), Some(f32::INFINITY));
+        assert_eq!(s.time_to_velocity(0.0), Some(f64::INFINITY));
         assert_eq!(s.time_to_velocity(150.0), None); // faster than it ever goes
         assert_eq!(s.time_to_velocity(-50.0), None); // the wrong direction
         assert_eq!(
@@ -434,11 +434,11 @@ mod tests {
             (2.0, 3.0, 4.0)
         );
         assert!(s.is_valid());
-        let nan = f32::NAN;
+        let nan = f64::NAN;
         for broken in [
             FrictionSimulation::new(0.0, 3.0, 4.0),
             FrictionSimulation::new(-1.0, 3.0, 4.0),
-            FrictionSimulation::new(f32::INFINITY, 3.0, 4.0),
+            FrictionSimulation::new(f64::INFINITY, 3.0, 4.0),
             FrictionSimulation::new(2.0, nan, 4.0),
             FrictionSimulation::new(2.0, 3.0, nan),
             FrictionSimulation::new(2.0, 3.0, 4.0).with_tolerance(Tolerance::new(-1.0, 0.0, 0.0)),
@@ -488,7 +488,7 @@ mod tests {
 
         let tol = Tolerance::new(0.25, 0.5, 0.75);
         assert_eq!(forward.with_tolerance(tol).tolerance(), tol);
-        assert!(!BoundedFrictionSimulation::new(2.0, 0.0, 100.0, f32::NAN).is_valid());
+        assert!(!BoundedFrictionSimulation::new(2.0, 0.0, 100.0, f64::NAN).is_valid());
         assert!(!BoundedFrictionSimulation::new(0.0, 0.0, 100.0, 40.0).is_valid());
     }
 }

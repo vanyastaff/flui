@@ -32,7 +32,7 @@ pub struct DecorationImage {
     /// The opacity to apply to the image.
     ///
     /// 0.0 = fully transparent, 1.0 = fully opaque.
-    pub opacity: f32,
+    pub opacity: f64,
 
     /// A color filter to apply to the image before painting it.
     pub color_filter: Option<ColorFilter>,
@@ -82,7 +82,7 @@ impl DecorationImage {
     /// 1.0 = fully opaque).
     #[must_use]
     #[inline]
-    pub const fn with_opacity(mut self, opacity: f32) -> Self {
+    pub const fn with_opacity(mut self, opacity: f64) -> Self {
         self.opacity = opacity;
         self
     }
@@ -108,7 +108,7 @@ pub trait Decoration: std::fmt::Debug {
     }
 
     /// Linearly interpolate between two decorations.
-    fn lerp_decoration(a: &Self, b: &Self, t: f32) -> Option<Self>
+    fn lerp_decoration(a: &Self, b: &Self, t: f64) -> Option<Self>
     where
         Self: Sized;
 }
@@ -143,7 +143,7 @@ pub trait Decoration: std::fmt::Debug {
 ///     .set_color(Some(Color::WHITE))
 ///     .set_border(Some(Border::all(BorderSide::new(
 ///         Color::BLACK,
-///         px(2.0),
+///         2.0,
 ///         BorderStyle::Solid,
 ///     ))));
 /// ```
@@ -295,7 +295,7 @@ impl<T: Unit> BoxDecoration<T> {
 
 impl<T: NumericUnit> BoxDecoration<T>
 where
-    T: std::ops::Mul<f32, Output = T>,
+    T: std::ops::Mul<f64, Output = T>,
 {
     /// Linearly interpolate between two box decorations, following
     /// Flutter's `BoxDecoration.lerp`.
@@ -306,7 +306,7 @@ where
     /// list scales its geometry (by `1 - t` for `a`'s, `t` for `b`'s). The
     /// image and shape are not interpolated and switch at `t = 0.5`.
     #[inline]
-    pub fn lerp(a: &Self, b: &Self, t: f32) -> Self {
+    pub fn lerp(a: &Self, b: &Self, t: f64) -> Self {
         let t = t.clamp(0.0, 1.0);
         if t == 0.0 {
             return a.clone();
@@ -335,7 +335,7 @@ where
             (None, Some(radius)) => Some(BorderRadius::lerp(zero, radius, t)),
             (None, None) => None,
         };
-        let scale_shadows = |shadows: &[BoxShadow<T>], factor: f32| {
+        let scale_shadows = |shadows: &[BoxShadow<T>], factor: f64| {
             shadows.iter().map(|shadow| shadow.scale(factor)).collect()
         };
         let box_shadow = match (&a.box_shadow, &b.box_shadow) {
@@ -377,20 +377,20 @@ where
 
 /// Flutter's `Color.lerp(null, color, factor)`: the alpha scaled by
 /// `factor`, rounded to 8 bits.
-fn scale_alpha(color: Color, factor: f32) -> Color {
+fn scale_alpha(color: Color, factor: f64) -> Color {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "clamped to 0..=255 first"
     )]
-    let alpha = (f32::from(color.a) * factor).clamp(0.0, 255.0).round() as u8;
+    let alpha = (f64::from(color.a) * factor).clamp(0.0, 255.0).round() as u8;
     color.with_alpha(alpha)
 }
 
 /// Flutter's `Border.scale`: every side's width scaled by `factor`.
-fn scale_border<T>(border: Border<T>, factor: f32) -> Border<T>
+fn scale_border<T>(border: Border<T>, factor: f64) -> Border<T>
 where
-    T: NumericUnit + std::ops::Mul<f32, Output = T>,
+    T: NumericUnit + std::ops::Mul<f64, Output = T>,
 {
     let side = |side: Option<crate::styling::BorderSide<T>>| side.map(|s| s.scale(factor));
     Border::new(
@@ -402,7 +402,7 @@ where
 }
 
 /// Flutter's `Gradient.scale`: every color's alpha scaled by `factor`.
-fn scale_gradient(gradient: &Gradient, factor: f32) -> Gradient {
+fn scale_gradient(gradient: &Gradient, factor: f64) -> Gradient {
     let mut scaled = gradient.clone();
     let colors = match &mut scaled {
         Gradient::Linear(g) => &mut g.colors,
@@ -424,7 +424,7 @@ impl<T: Unit> Default for BoxDecoration<T> {
 
 impl<T: NumericUnit> Decoration for BoxDecoration<T>
 where
-    T: std::ops::Mul<f32, Output = T>,
+    T: std::ops::Mul<f64, Output = T>,
 {
     #[inline]
     fn is_complex(&self) -> bool {
@@ -432,7 +432,7 @@ where
     }
 
     #[inline]
-    fn lerp_decoration(a: &Self, b: &Self, t: f32) -> Option<Self> {
+    fn lerp_decoration(a: &Self, b: &Self, t: f64) -> Option<Self> {
         Some(BoxDecoration::lerp(a, b, t))
     }
 }
@@ -440,7 +440,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::Pixels;
 
     /// `BoxDecoration::lerp`'s `shape` field is NOT interpolated (Flutter
     /// parity, `box_decoration.dart:209-211,314`): it switches discretely
@@ -450,8 +449,8 @@ mod tests {
     /// without any test failing.
     #[test]
     fn lerp_shape_switches_discretely_at_the_midpoint() {
-        let a = BoxDecoration::<Pixels>::new().set_shape(BoxShape::Rectangle);
-        let b = BoxDecoration::<Pixels>::new().set_shape(BoxShape::Circle);
+        let a = BoxDecoration::<f64>::new().set_shape(BoxShape::Rectangle);
+        let b = BoxDecoration::<f64>::new().set_shape(BoxShape::Circle);
 
         // t < 0.5: `a`'s shape.
         assert_eq!(BoxDecoration::lerp(&a, &b, 0.0).shape, BoxShape::Rectangle);
@@ -491,22 +490,22 @@ mod tests {
             "gradient": null
         }"#;
 
-        let decoration: BoxDecoration<crate::geometry::Pixels> =
+        let decoration: BoxDecoration<crate::geometry::f64> =
             serde_json::from_str(legacy).expect("a pre-shape payload must still deserialize");
         assert_eq!(decoration.shape, BoxShape::Rectangle);
     }
 
-    use crate::geometry::{Offset, px};
+    use crate::geometry::Offset;
     use crate::styling::{BorderSide, BorderStyle, LinearGradient};
 
-    type Deco = BoxDecoration<Pixels>;
+    type Deco = BoxDecoration<f64>;
 
-    fn side(width: f32) -> BorderSide<Pixels> {
-        BorderSide::new(Color::RED, px(width), BorderStyle::Solid)
+    fn side(width: f64) -> BorderSide<f64> {
+        BorderSide::new(Color::RED, width, BorderStyle::Solid)
     }
 
-    fn shadow(v: f32) -> BoxShadow<Pixels> {
-        BoxShadow::new(Color::BLACK, Offset::new(px(v), px(v)), px(v), px(v))
+    fn shadow(v: f64) -> BoxShadow<f64> {
+        BoxShadow::new(Color::BLACK, Offset::new(v, v), v, v)
     }
 
     fn gradient() -> Gradient {
@@ -517,7 +516,7 @@ mod tests {
     fn full() -> Deco {
         Deco::with_color(Color::rgb(200, 100, 50))
             .set_border(Some(crate::styling::Border::all(side(4.0))))
-            .set_border_radius(Some(BorderRadius::circular(px(8.0))))
+            .set_border_radius(Some(BorderRadius::circular(8.0)))
             .set_box_shadow(Some(vec![shadow(4.0)]))
             .set_gradient(Some(gradient()))
     }
@@ -538,21 +537,21 @@ mod tests {
     #[test]
     fn one_sided_fields_fade_toward_nothing() {
         for (a, b, t, factor) in [
-            (full(), Deco::new(), 0.5_f32, 0.5_f32),
+            (full(), Deco::new(), 0.5_f64, 0.5_f64),
             (full(), Deco::new(), 0.25, 0.75),
             (full(), Deco::new(), 0.75, 0.25),
             (Deco::new(), full(), 0.25, 0.25),
             (Deco::new(), full(), 0.75, 0.75),
         ] {
             let mid = Deco::lerp(&a, &b, t);
-            let alpha = (255.0_f32 * factor).round() as u8;
+            let alpha = (255.0_f64 * factor).round() as u8;
             assert_eq!(mid.color, Some(Color::rgba(200, 100, 50, alpha)), "t = {t}");
             let border = mid.border.expect("scaled border");
             assert_eq!(border.top, Some(side(4.0 * factor)), "t = {t}");
             assert_eq!(border.left, Some(side(4.0 * factor)), "t = {t}");
             assert_eq!(
                 mid.border_radius,
-                Some(BorderRadius::circular(px(8.0 * factor)))
+                Some(BorderRadius::circular(8.0 * factor))
             );
             assert_eq!(mid.box_shadow, Some(vec![shadow(4.0 * factor)]));
             let colors = mid.gradient.expect("scaled gradient").colors().to_vec();
@@ -567,14 +566,14 @@ mod tests {
     fn two_sided_fields_lerp() {
         let a = Deco::with_color(Color::rgb(0, 0, 0))
             .set_border(Some(crate::styling::Border::all(side(2.0))))
-            .set_border_radius(Some(BorderRadius::circular(px(2.0))))
+            .set_border_radius(Some(BorderRadius::circular(2.0)))
             .set_box_shadow(Some(vec![shadow(2.0)]))
             .set_gradient(Some(gradient()));
         let b = full();
         let mid = Deco::lerp(&a, &b, 0.5);
         assert_eq!(mid.color, Some(Color::rgb(100, 50, 25)));
         assert_eq!(mid.border.and_then(|b| b.top), Some(side(3.0)));
-        assert_eq!(mid.border_radius, Some(BorderRadius::circular(px(5.0))));
+        assert_eq!(mid.border_radius, Some(BorderRadius::circular(5.0)));
         assert_eq!(mid.box_shadow, Some(vec![shadow(3.0)]));
         assert_eq!(mid.gradient, Some(gradient()));
         assert_eq!(Deco::lerp(&Deco::new(), &Deco::new(), 0.5), Deco::new());

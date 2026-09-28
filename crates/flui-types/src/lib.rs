@@ -163,40 +163,14 @@ pub mod prelude {
 pub mod size_assertions {
     use core::mem::size_of;
 
-    // Core geometry types - must be small enough to pass by value efficiently
-    const _: () = assert!(
-        size_of::<crate::Pixels>() <= 4,
-        "Pixels should be 4 bytes (f32)"
-    );
-    const _: () = assert!(
-        size_of::<crate::Point<crate::Pixels>>() <= 8,
-        "Point<Pixels> should be ≤8 bytes (2×f32)"
-    );
-    const _: () = assert!(
-        size_of::<crate::Size<crate::Pixels>>() <= 8,
-        "Size<Pixels> should be ≤8 bytes (2×f32)"
-    );
-    const _: () = assert!(
-        size_of::<crate::Rect<crate::Pixels>>() <= 16,
-        "Rect<Pixels> should be ≤16 bytes (4×f32)"
-    );
-    const _: () = assert!(
-        size_of::<crate::Offset<crate::Pixels>>() <= 8,
-        "Offset<Pixels> should be ≤8 bytes (2×f32)"
-    );
+    // Geometry values are plain f64 fields (ADR-0098): no padding, no wrapper overhead.
+    const _: () = assert!(size_of::<crate::Point>() == 16, "Point is 2×f64");
+    const _: () = assert!(size_of::<crate::Size>() == 16, "Size is 2×f64");
+    const _: () = assert!(size_of::<crate::Rect>() == 32, "Rect is 4×f64");
+    const _: () = assert!(size_of::<crate::Offset>() == 16, "Offset is 2×f64");
+    const _: () = assert!(size_of::<crate::Matrix4>() == 128, "Matrix4 is 16×f64");
+    const _: () = assert!(size_of::<crate::EdgeInsets>() == 32, "EdgeInsets is 4×f64");
 
     // Color types - single cache line
     const _: () = assert!(size_of::<crate::Color>() == 4, "Color is four u8 channels");
-
-    // Matrix - should fit in 64 bytes (single cache line)
-    const _: () = assert!(
-        size_of::<crate::Matrix4>() <= 64,
-        "Matrix4 should be ≤64 bytes (16×f32)"
-    );
-
-    // Edges - layout padding/margins
-    const _: () = assert!(
-        size_of::<crate::Edges<crate::Pixels>>() <= 16,
-        "Edges<Pixels> should be ≤16 bytes (4×f32)"
-    );
 }

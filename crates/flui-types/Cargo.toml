@@ -98,9 +98,6 @@ harness = false
 name = "color_bench"
 harness = false
 
-[[bench]]
-name = "conversions_bench"
-harness = false
 
 [lints]
 workspace = true

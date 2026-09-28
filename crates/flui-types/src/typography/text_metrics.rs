@@ -1,7 +1,7 @@
 //! Text metrics types.
 
 use super::TextAffinity;
-use crate::geometry::{Pixels, Rect};
+use crate::geometry::Rect;
 
 /// Position within text with directional affinity.
 ///
@@ -335,7 +335,7 @@ impl Default for TextSelection {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextBox {
     /// Bounding rectangle.
-    pub rect: Rect<Pixels>,
+    pub rect: Rect<f64>,
     /// Text direction for this box.
     pub direction: super::TextDirection,
 }
@@ -344,7 +344,7 @@ impl TextBox {
     /// Creates a new text box.
     #[must_use]
     #[inline]
-    pub const fn new(rect: Rect<Pixels>, direction: super::TextDirection) -> Self {
+    pub const fn new(rect: Rect<f64>, direction: super::TextDirection) -> Self {
         Self { rect, direction }
     }
 
@@ -353,9 +353,9 @@ impl TextBox {
     #[inline]
     pub fn start(&self) -> f64 {
         if self.direction.is_ltr() {
-            self.rect.left().0 as f64
+            self.rect.left() as f64
         } else {
-            self.rect.right().0 as f64
+            self.rect.right() as f64
         }
     }
 
@@ -364,16 +364,16 @@ impl TextBox {
     #[inline]
     pub fn end(&self) -> f64 {
         if self.direction.is_ltr() {
-            self.rect.right().0 as f64
+            self.rect.right() as f64
         } else {
-            self.rect.left().0 as f64
+            self.rect.left() as f64
         }
     }
 
     /// Returns the bounding rectangle.
     #[must_use]
     #[inline]
-    pub const fn rect(&self) -> &Rect<Pixels> {
+    pub const fn rect(&self) -> &Rect<f64> {
         &self.rect
     }
 
@@ -388,14 +388,14 @@ impl TextBox {
     #[must_use]
     #[inline]
     pub fn width(&self) -> f64 {
-        self.rect.width().0 as f64
+        self.rect.width() as f64
     }
 
     /// Returns the height of the text box.
     #[must_use]
     #[inline]
     pub fn height(&self) -> f64 {
-        self.rect.height().0 as f64
+        self.rect.height() as f64
     }
 }
 
@@ -411,7 +411,7 @@ pub struct GlyphInfo {
     /// Unicode code point.
     pub code_point: char,
     /// Bounding rectangle.
-    pub bounds: Rect<Pixels>,
+    pub bounds: Rect<f64>,
     /// Advance width.
     pub advance: f64,
 }
@@ -420,7 +420,7 @@ impl GlyphInfo {
     /// Creates new glyph info.
     #[must_use]
     #[inline]
-    pub fn new(glyph_id: u32, code_point: char, bounds: Rect<Pixels>, advance: f64) -> Self {
+    pub fn new(glyph_id: u32, code_point: char, bounds: Rect<f64>, advance: f64) -> Self {
         Self {
             glyph_id,
             code_point,
@@ -446,7 +446,7 @@ impl GlyphInfo {
     /// Returns the glyph bounds.
     #[must_use]
     #[inline]
-    pub const fn bounds(&self) -> &Rect<Pixels> {
+    pub const fn bounds(&self) -> &Rect<f64> {
         &self.bounds
     }
 
@@ -461,14 +461,14 @@ impl GlyphInfo {
     #[must_use]
     #[inline]
     pub fn width(&self) -> f64 {
-        self.bounds.width().0 as f64
+        self.bounds.width() as f64
     }
 
     /// Returns the glyph height.
     #[must_use]
     #[inline]
     pub fn height(&self) -> f64 {
-        self.bounds.height().0 as f64
+        self.bounds.height() as f64
     }
 }
 
@@ -618,7 +618,7 @@ impl LineMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::px;
+
     use crate::typography::TextDirection;
     use proptest::prelude::*;
 
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn text_box_edges_follow_direction() {
-        let rect = Rect::from_ltrb(px(10.0), px(20.0), px(50.0), px(35.0));
+        let rect = Rect::from_ltrb(10.0, 20.0, 50.0, 35.0);
         let ltr = TextBox::new(rect, TextDirection::Ltr);
         let rtl = TextBox::new(rect, TextDirection::Rtl);
         assert_eq!((ltr.start(), ltr.end()), (10.0, 50.0));
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn glyph_info() {
-        let bounds = Rect::from_ltrb(px(1.0), px(2.0), px(9.0), px(14.0));
+        let bounds = Rect::from_ltrb(1.0, 2.0, 9.0, 14.0);
         let g = GlyphInfo::new(7, 'x', bounds, 8.5);
         assert_eq!(
             (g.glyph_id(), g.code_point(), *g.bounds(), g.advance()),

@@ -52,7 +52,7 @@ impl TextAlign {
     /// call `resolve` first for RTL-aware alignment.
     #[must_use]
     #[inline]
-    pub const fn horizontal_factor(&self) -> f32 {
+    pub const fn horizontal_factor(&self) -> f64 {
         match self {
             Self::Left | Self::Justify | Self::Start => 0.0,
             Self::Center => 0.5,
@@ -78,7 +78,7 @@ impl TextAlignVertical {
     /// Returns the vertical alignment factor: 0.0 (top), 0.5 (center), or 1.0 (bottom).
     #[must_use]
     #[inline]
-    pub const fn vertical_factor(&self) -> f32 {
+    pub const fn vertical_factor(&self) -> f64 {
         match self {
             Self::Top => 0.0,
             Self::Center => 0.5,

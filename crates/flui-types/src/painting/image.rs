@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::{
-    geometry::{Pixels, Size, px},
+    geometry::{Size, px},
     painting::{BlendMode, effects::ColorMatrix},
     styling::Color,
 };
@@ -153,8 +153,8 @@ impl Image {
     /// Returns the size of the image.
     #[inline]
     #[must_use]
-    pub fn size(&self) -> Size<Pixels> {
-        Size::new(px(self.width as f32), px(self.height as f32))
+    pub fn size(&self) -> Size<f64> {
+        Size::new((self.width as f64), (self.height as f64))
     }
 
     /// Returns a reference to the pixel data.
@@ -255,11 +255,11 @@ impl Image {
     /// ```
     #[inline]
     #[must_use]
-    pub fn aspect_ratio(&self) -> f32 {
+    pub fn aspect_ratio(&self) -> f64 {
         if self.height == 0 {
             0.0
         } else {
-            self.width as f32 / self.height as f32
+            self.width as f64 / self.height as f64
         }
     }
 }
@@ -323,17 +323,17 @@ pub enum ImageRepeat {
 /// };
 ///
 /// let config = ImageConfiguration::new()
-///     .with_size(Size::new(px(100.0), px(100.0)))
+///     .with_size(Size::new(100.0, 100.0))
 ///     .with_device_pixel_ratio(2.0);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ImageConfiguration {
     /// The size at which the image will be rendered.
-    pub size: Option<Size<Pixels>>,
+    pub size: Option<Size<f64>>,
 
     /// The device pixel ratio where the image will be shown.
-    pub device_pixel_ratio: Option<f32>,
+    pub device_pixel_ratio: Option<f64>,
 
     /// The platform the image is being rendered on.
     pub platform: Option<String>,
@@ -354,7 +354,7 @@ impl ImageConfiguration {
     /// Creates a configuration with the given size.
     #[inline]
     #[must_use]
-    pub const fn with_size(mut self, size: Size<Pixels>) -> Self {
+    pub const fn with_size(mut self, size: Size<f64>) -> Self {
         self.size = Some(size);
         self
     }
@@ -362,7 +362,7 @@ impl ImageConfiguration {
     /// Creates a configuration with the given device pixel ratio.
     #[inline]
     #[must_use]
-    pub const fn with_device_pixel_ratio(mut self, ratio: f32) -> Self {
+    pub const fn with_device_pixel_ratio(mut self, ratio: f64) -> Self {
         self.device_pixel_ratio = Some(ratio);
         self
     }
@@ -378,7 +378,7 @@ impl ImageConfiguration {
     /// Returns the effective device pixel ratio (defaults to 1.0).
     #[inline]
     #[must_use]
-    pub const fn effective_device_pixel_ratio(&self) -> f32 {
+    pub const fn effective_device_pixel_ratio(&self) -> f64 {
         match self.device_pixel_ratio {
             Some(ratio) => ratio,
             None => 1.0,
@@ -388,10 +388,10 @@ impl ImageConfiguration {
     /// Returns the logical size in physical pixels.
     #[inline]
     #[must_use]
-    pub fn physical_size(&self) -> Option<Size<Pixels>> {
+    pub fn physical_size(&self) -> Option<Size<f64>> {
         self.size.map(|s| {
             let ratio = self.effective_device_pixel_ratio();
-            Size::new(px(s.width.get() * ratio), px(s.height.get() * ratio))
+            Size::new((s.width * ratio), (s.height * ratio))
         })
     }
 }
@@ -422,7 +422,7 @@ impl Default for ImageConfiguration {
 /// ## Copy semantics
 ///
 /// `ColorFilter` is `Copy`: all variants are plain-old-data.  `Matrix`
-/// wraps `ColorMatrix` (a `[f32;20]` newtype) which also derives `Copy`.
+/// wraps `ColorMatrix` (a `[f64;20]` newtype) which also derives `Copy`.
 ///
 /// ## Stability
 ///
@@ -478,12 +478,12 @@ impl ColorFilter {
 
     /// Creates a color filter that applies a 5×4 matrix transformation.
     ///
-    /// The `matrix` argument is the row-major `[f32; 20]` array (rows R/G/B/A,
+    /// The `matrix` argument is the row-major `[f64; 20]` array (rows R/G/B/A,
     /// each row has 4 multipliers then an additive offset).  Internally the
     /// array is wrapped in [`ColorMatrix`] to keep the IR uniform.
     #[inline]
     #[must_use]
-    pub const fn matrix(matrix: [f32; 20]) -> Self {
+    pub const fn matrix(matrix: [f64; 20]) -> Self {
         ColorFilter::Matrix(ColorMatrix::new(matrix))
     }
 
@@ -615,8 +615,8 @@ mod tests {
 
     #[test]
     fn test_box_fit_fill() {
-        let input = Size::new(px(200.0), px(100.0));
-        let output = Size::new(px(100.0), px(200.0));
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 200.0);
         let fitted = BoxFit::Fill.apply(input, output);
 
         assert_eq!(fitted.source, input);
@@ -625,13 +625,13 @@ mod tests {
 
     #[test]
     fn test_box_fit_contain() {
-        let input = Size::new(px(200.0), px(100.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::Contain.apply(input, output);
 
         assert_eq!(fitted.source, input);
-        assert_eq!(fitted.destination.width, px(100.0));
-        assert_eq!(fitted.destination.height, px(50.0));
+        assert_eq!(fitted.destination.width, 100.0);
+        assert_eq!(fitted.destination.height, 50.0);
     }
 
     /// Flutter parity: `applyBoxFit(BoxFit.cover, ...)` (`box_fit.dart`,
@@ -644,11 +644,11 @@ mod tests {
     /// bug this test previously encoded and asserted as correct).
     #[test]
     fn test_box_fit_cover() {
-        let input = Size::new(px(100.0), px(200.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(100.0, 200.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::Cover.apply(input, output);
 
-        assert_eq!(fitted.source, Size::new(px(100.0), px(100.0)));
+        assert_eq!(fitted.source, Size::new(100.0, 100.0));
         assert_eq!(fitted.destination, output);
     }
 
@@ -659,11 +659,11 @@ mod tests {
     /// full `100` height.
     #[test]
     fn test_box_fit_cover_crops_width_when_input_is_wider() {
-        let input = Size::new(px(200.0), px(100.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::Cover.apply(input, output);
 
-        assert_eq!(fitted.source, Size::new(px(100.0), px(100.0)));
+        assert_eq!(fitted.source, Size::new(100.0, 100.0));
         assert_eq!(fitted.destination, output);
     }
 
@@ -672,13 +672,13 @@ mod tests {
     /// letterbox math): destination `height = 100 * 100/200 = 50`.
     #[test]
     fn test_box_fit_fit_width() {
-        let input = Size::new(px(200.0), px(100.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::FitWidth.apply(input, output);
 
         assert_eq!(fitted.source, input, "the contain-like branch never crops");
-        assert_eq!(fitted.destination.width, px(100.0));
-        assert_eq!(fitted.destination.height, px(50.0));
+        assert_eq!(fitted.destination.width, 100.0);
+        assert_eq!(fitted.destination.height, 50.0);
     }
 
     /// `FitWidth`'s "like Cover" branch (`outputAspect > inputAspect`): a
@@ -687,11 +687,11 @@ mod tests {
     /// `Cover` would for this input/output pair.
     #[test]
     fn test_box_fit_fit_width_crops_when_output_is_proportionally_wider() {
-        let input = Size::new(px(100.0), px(200.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(100.0, 200.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::FitWidth.apply(input, output);
 
-        assert_eq!(fitted.source, Size::new(px(100.0), px(100.0)));
+        assert_eq!(fitted.source, Size::new(100.0, 100.0));
         assert_eq!(fitted.destination, output);
     }
 
@@ -700,13 +700,13 @@ mod tests {
     /// `width = 100 * 100/200 = 50`.
     #[test]
     fn test_box_fit_fit_height() {
-        let input = Size::new(px(100.0), px(200.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(100.0, 200.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::FitHeight.apply(input, output);
 
         assert_eq!(fitted.source, input, "the contain-like branch never crops");
-        assert_eq!(fitted.destination.width, px(50.0));
-        assert_eq!(fitted.destination.height, px(100.0));
+        assert_eq!(fitted.destination.width, 50.0);
+        assert_eq!(fitted.destination.height, 100.0);
     }
 
     /// `FitHeight`'s "like Cover" branch (`outputAspect <= inputAspect`): a
@@ -714,11 +714,11 @@ mod tests {
     /// `100 * 100/100 = 100` and fills the destination exactly.
     #[test]
     fn test_box_fit_fit_height_crops_when_output_is_proportionally_narrower() {
-        let input = Size::new(px(200.0), px(100.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::FitHeight.apply(input, output);
 
-        assert_eq!(fitted.source, Size::new(px(100.0), px(100.0)));
+        assert_eq!(fitted.source, Size::new(100.0, 100.0));
         assert_eq!(fitted.destination, output);
     }
 
@@ -729,11 +729,11 @@ mod tests {
     /// width axis overflows; the height axis already fit).
     #[test]
     fn test_box_fit_none() {
-        let input = Size::new(px(200.0), px(100.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::None.apply(input, output);
 
-        assert_eq!(fitted.source, Size::new(px(100.0), px(100.0)));
+        assert_eq!(fitted.source, Size::new(100.0, 100.0));
         assert_eq!(fitted.destination, fitted.source);
     }
 
@@ -743,8 +743,8 @@ mod tests {
     /// `RenderFittedBox`'s alignment computes separately).
     #[test]
     fn test_box_fit_none_keeps_a_smaller_input_unchanged() {
-        let input = Size::new(px(40.0), px(30.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(40.0, 30.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::None.apply(input, output);
 
         assert_eq!(fitted.source, input);
@@ -756,8 +756,8 @@ mod tests {
     /// no meaningful fit to compute.
     #[test]
     fn test_box_fit_degenerate_input_size_returns_zero() {
-        let zero_width = Size::new(px(0.0), px(50.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let zero_width = Size::new(0.0, 50.0);
+        let output = Size::new(100.0, 100.0);
         for fit in [
             BoxFit::Fill,
             BoxFit::Contain,
@@ -775,19 +775,19 @@ mod tests {
 
     #[test]
     fn test_box_fit_scale_down_shrinks() {
-        let input = Size::new(px(200.0), px(200.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(200.0, 200.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::ScaleDown.apply(input, output);
 
         assert_eq!(fitted.source, input, "ScaleDown never crops the source");
-        assert_eq!(fitted.destination.width, px(100.0));
-        assert_eq!(fitted.destination.height, px(100.0));
+        assert_eq!(fitted.destination.width, 100.0);
+        assert_eq!(fitted.destination.height, 100.0);
     }
 
     #[test]
     fn test_box_fit_scale_down_no_shrink() {
-        let input = Size::new(px(50.0), px(50.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(50.0, 50.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::ScaleDown.apply(input, output);
 
         assert_eq!(fitted.source, input);
@@ -803,12 +803,12 @@ mod tests {
     /// so the second step rescales to `(100, 100/4 = 25)`.
     #[test]
     fn test_box_fit_scale_down_wide_aspect_shrinks_via_the_width_step() {
-        let input = Size::new(px(400.0), px(100.0));
-        let output = Size::new(px(100.0), px(100.0));
+        let input = Size::new(400.0, 100.0);
+        let output = Size::new(100.0, 100.0);
         let fitted = BoxFit::ScaleDown.apply(input, output);
 
         assert_eq!(fitted.source, input);
-        assert_eq!(fitted.destination, Size::new(px(100.0), px(25.0)));
+        assert_eq!(fitted.destination, Size::new(100.0, 25.0));
     }
 
     #[test]
@@ -833,17 +833,17 @@ mod tests {
     #[test]
     fn test_image_configuration_builder() {
         let config = ImageConfiguration::new()
-            .with_size(Size::new(px(100.0), px(100.0)))
+            .with_size(Size::new(100.0, 100.0))
             .with_device_pixel_ratio(2.0);
 
-        assert_eq!(config.size, Some(Size::new(px(100.0), px(100.0))));
+        assert_eq!(config.size, Some(Size::new(100.0, 100.0)));
         assert_eq!(config.device_pixel_ratio, Some(2.0));
     }
 
     #[test]
     fn test_fitted_sizes_new() {
-        let source = Size::new(px(100.0), px(100.0));
-        let destination = Size::new(px(50.0), px(50.0));
+        let source = Size::new(100.0, 100.0);
+        let destination = Size::new(50.0, 50.0);
         let fitted = FittedSizes::new(source, destination);
 
         assert_eq!(fitted.source, source);
@@ -867,7 +867,7 @@ mod tests {
     fn test_color_filter_matrix() {
         use crate::painting::effects::ColorMatrix;
 
-        let raw = [0.0f32; 20];
+        let raw = [0.0_f64; 20];
         let filter = ColorFilter::matrix(raw);
 
         match filter {
@@ -953,13 +953,13 @@ mod tests {
 
     #[test]
     fn image_configuration() {
-        let size = Size::new(px(10.0), px(4.0));
+        let size = Size::new(10.0, 4.0);
         let config = ImageConfiguration::new()
             .with_size(size)
             .with_device_pixel_ratio(2.5)
             .with_platform("android".to_string());
         assert_eq!(config.effective_device_pixel_ratio(), 2.5);
-        assert_eq!(config.physical_size(), Some(Size::new(px(25.0), px(10.0))));
+        assert_eq!(config.physical_size(), Some(Size::new(25.0, 10.0)));
         assert_eq!(config.platform.as_deref(), Some("android"));
         let plain = ImageConfiguration::new().with_size(size);
         assert_eq!(plain.effective_device_pixel_ratio(), 1.0);

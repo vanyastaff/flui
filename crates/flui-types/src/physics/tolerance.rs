@@ -16,17 +16,17 @@ pub struct Tolerance {
     /// The minimum distance between samples to consider them different
     ///
     /// Default: 0.001 (1/1000th of a pixel)
-    pub distance: f32,
+    pub distance: f64,
 
     /// The minimum velocity to consider the simulation still moving
     ///
     /// Default: 0.001 (pixels per second)
-    pub velocity: f32,
+    pub velocity: f64,
 
     /// The minimum time difference to consider significant
     ///
     /// Default: 0.001 (1 millisecond)
-    pub time: f32,
+    pub time: f64,
 }
 
 impl Tolerance {
@@ -64,7 +64,7 @@ impl Tolerance {
     /// (logical pixels per second), and time (seconds) epsilons.
     #[must_use]
     #[inline]
-    pub const fn new(distance: f32, velocity: f32, time: f32) -> Self {
+    pub const fn new(distance: f64, velocity: f64, time: f64) -> Self {
         Self {
             distance,
             velocity,
@@ -90,7 +90,7 @@ impl Tolerance {
     /// below the distance epsilon.
     #[must_use]
     #[inline]
-    pub fn is_distance_within(&self, distance: f32) -> bool {
+    pub fn is_distance_within(&self, distance: f64) -> bool {
         distance.abs() < self.distance
     }
 
@@ -98,7 +98,7 @@ impl Tolerance {
     /// below the velocity epsilon.
     #[must_use]
     #[inline]
-    pub fn is_velocity_within(&self, velocity: f32) -> bool {
+    pub fn is_velocity_within(&self, velocity: f64) -> bool {
         velocity.abs() < self.velocity
     }
 
@@ -106,7 +106,7 @@ impl Tolerance {
     /// the time epsilon.
     #[must_use]
     #[inline]
-    pub fn is_time_within(&self, time: f32) -> bool {
+    pub fn is_time_within(&self, time: f64) -> bool {
         time.abs() < self.time
     }
 
@@ -116,7 +116,7 @@ impl Tolerance {
     /// `1.0` to tighten it.
     #[must_use]
     #[inline]
-    pub fn scale(self, factor: f32) -> Self {
+    pub fn scale(self, factor: f64) -> Self {
         Self {
             distance: self.distance * factor,
             velocity: self.velocity * factor,
@@ -128,7 +128,7 @@ impl Tolerance {
     /// default time epsilon (`0.001` seconds).
     #[must_use]
     #[inline]
-    pub const fn from_distance_velocity(distance: f32, velocity: f32) -> Self {
+    pub const fn from_distance_velocity(distance: f64, velocity: f64) -> Self {
         Self {
             distance,
             velocity,
@@ -171,15 +171,15 @@ mod tests {
         assert!(Tolerance::ZERO.is_valid());
         for broken in [
             Tolerance {
-                distance: f32::NAN,
+                distance: f64::NAN,
                 ..t
             },
             Tolerance {
-                velocity: f32::INFINITY,
+                velocity: f64::INFINITY,
                 ..t
             },
             Tolerance {
-                time: f32::NAN,
+                time: f64::NAN,
                 ..t
             },
         ] {
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn within_checks_are_strict_on_magnitude() {
         let t = Tolerance::new(1.0, 2.0, 3.0);
-        let checks: [fn(&Tolerance, f32) -> bool; 3] = [
+        let checks: [fn(&Tolerance, f64) -> bool; 3] = [
             Tolerance::is_distance_within,
             Tolerance::is_velocity_within,
             Tolerance::is_time_within,

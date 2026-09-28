@@ -34,13 +34,13 @@ pub enum SpringType {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpringDescription {
     /// The mass of the spring (must be positive)
-    pub mass: f32,
+    pub mass: f64,
 
     /// The stiffness constant (must be positive)
-    pub stiffness: f32,
+    pub stiffness: f64,
 
     /// The damping coefficient (must be non-negative)
-    pub damping: f32,
+    pub damping: f64,
 }
 
 impl SpringDescription {
@@ -51,7 +51,7 @@ impl SpringDescription {
     /// stiffness are positive, damping is non-negative, and all are finite.
     #[must_use]
     #[inline]
-    pub const fn new(mass: f32, stiffness: f32, damping: f32) -> Self {
+    pub const fn new(mass: f64, stiffness: f64, damping: f64) -> Self {
         Self {
             mass,
             stiffness,
@@ -65,7 +65,7 @@ impl SpringDescription {
     /// to rest as fast as possible without oscillating.
     #[must_use]
     #[inline]
-    pub fn with_critical_damping(mass: f32, stiffness: f32) -> Self {
+    pub fn with_critical_damping(mass: f64, stiffness: f64) -> Self {
         let damping = 2.0 * (mass * stiffness).sqrt();
         Self {
             mass,
@@ -146,7 +146,7 @@ impl SpringDescription {
     /// (though `spring_type` classifies via the discriminant, not this value).
     #[must_use]
     #[inline]
-    pub fn damping_ratio(&self) -> f32 {
+    pub fn damping_ratio(&self) -> f64 {
         let critical_damping = 2.0 * (self.mass * self.stiffness).sqrt();
         self.damping / critical_damping
     }
@@ -155,7 +155,7 @@ impl SpringDescription {
     /// radians per second.
     #[must_use]
     #[inline]
-    pub fn natural_frequency(&self) -> f32 {
+    pub fn natural_frequency(&self) -> f64 {
         (self.stiffness / self.mass).sqrt()
     }
 
@@ -167,7 +167,7 @@ impl SpringDescription {
     /// radicand is clamped to zero, so this returns `0.0`.
     #[must_use]
     #[inline]
-    pub fn damped_frequency(&self) -> f32 {
+    pub fn damped_frequency(&self) -> f64 {
         let w0 = self.natural_frequency();
         let zeta = self.damping_ratio();
         w0 * (1.0 - zeta * zeta).max(0.0).sqrt()
@@ -177,10 +177,10 @@ impl SpringDescription {
     /// spring does not oscillate (damped frequency is zero, i.e. ζ ≥ 1).
     #[must_use]
     #[inline]
-    pub fn period(&self) -> Option<f32> {
+    pub fn period(&self) -> Option<f64> {
         let wd = self.damped_frequency();
         if wd > 0.0 {
-            Some(2.0 * std::f32::consts::PI / wd)
+            Some(2.0 * std::f64::consts::PI / wd)
         } else {
             None
         }
@@ -203,7 +203,7 @@ impl SpringDescription {
     /// stiffness — the damping at which ζ = 1.
     #[must_use]
     #[inline]
-    pub fn critical_damping(&self) -> f32 {
+    pub fn critical_damping(&self) -> f64 {
         2.0 * (self.mass * self.stiffness).sqrt()
     }
 }
@@ -223,13 +223,13 @@ pub struct SpringSimulation {
     spring: SpringDescription,
 
     /// The starting position
-    start: f32,
+    start: f64,
 
     /// The ending position (equilibrium point)
-    end: f32,
+    end: f64,
 
     /// The initial velocity
-    initial_velocity: f32,
+    initial_velocity: f64,
 
     /// The tolerance for this simulation
     tolerance: Tolerance,
@@ -241,7 +241,7 @@ impl SpringSimulation {
     /// per second), using the default tolerance.
     #[must_use]
     #[inline]
-    pub fn new(spring: SpringDescription, start: f32, end: f32, velocity: f32) -> Self {
+    pub fn new(spring: SpringDescription, start: f64, end: f64, velocity: f64) -> Self {
         Self {
             spring,
             start,
@@ -271,21 +271,21 @@ impl SpringSimulation {
     /// Returns the starting position, in logical pixels.
     #[must_use]
     #[inline]
-    pub fn start(&self) -> f32 {
+    pub fn start(&self) -> f64 {
         self.start
     }
 
     /// Returns the equilibrium (target) position, in logical pixels.
     #[must_use]
     #[inline]
-    pub fn end(&self) -> f32 {
+    pub fn end(&self) -> f64 {
         self.end
     }
 
     /// Returns the initial velocity, in logical pixels per second.
     #[must_use]
     #[inline]
-    pub fn initial_velocity(&self) -> f32 {
+    pub fn initial_velocity(&self) -> f64 {
         self.initial_velocity
     }
 
@@ -303,14 +303,15 @@ impl SpringSimulation {
 
     /// Calculate position for an underdamped spring
     #[inline]
-    fn position_underdamped(&self, time: f32) -> f32 {
+    fn position_underdamped(&self, time: f64) -> f64 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
         let c = self.spring.damping;
 
         let w0 = (k / m).sqrt();
         let zeta = c / (2.0 * (m * k).sqrt());
-        let wd = w0 * (1.0 - zeta * zeta).sqrt();
+        // From the discriminant the classifier used, so the branch and the root agree.
+        let wd = (4.0 * m * k - c * c).sqrt() / (2.0 * m);
 
         let a = self.start - self.end;
         let b = (self.initial_velocity + zeta * w0 * a) / wd;
@@ -321,14 +322,15 @@ impl SpringSimulation {
 
     /// Calculate velocity for an underdamped spring
     #[inline]
-    fn velocity_underdamped(&self, time: f32) -> f32 {
+    fn velocity_underdamped(&self, time: f64) -> f64 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
         let c = self.spring.damping;
 
         let w0 = (k / m).sqrt();
         let zeta = c / (2.0 * (m * k).sqrt());
-        let wd = w0 * (1.0 - zeta * zeta).sqrt();
+        // From the discriminant the classifier used, so the branch and the root agree.
+        let wd = (4.0 * m * k - c * c).sqrt() / (2.0 * m);
 
         let a = self.start - self.end;
         let b = (self.initial_velocity + zeta * w0 * a) / wd;
@@ -342,7 +344,7 @@ impl SpringSimulation {
 
     /// Calculate position for a critically damped spring
     #[inline]
-    fn position_critical(&self, time: f32) -> f32 {
+    fn position_critical(&self, time: f64) -> f64 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
         let w0 = (k / m).sqrt();
@@ -356,7 +358,7 @@ impl SpringSimulation {
 
     /// Calculate velocity for a critically damped spring
     #[inline]
-    fn velocity_critical(&self, time: f32) -> f32 {
+    fn velocity_critical(&self, time: f64) -> f64 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
         let w0 = (k / m).sqrt();
@@ -370,15 +372,14 @@ impl SpringSimulation {
 
     /// Calculate position for an overdamped spring
     #[inline]
-    fn position_overdamped(&self, time: f32) -> f32 {
+    fn position_overdamped(&self, time: f64) -> f64 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
         let c = self.spring.damping;
 
-        let w0 = (k / m).sqrt();
-        let zeta = c / (2.0 * (m * k).sqrt());
-        let r = -w0 * (zeta - (zeta * zeta - 1.0).sqrt());
-        let s = -w0 * (zeta + (zeta * zeta - 1.0).sqrt());
+        // Roots of m·x² + c·x + k from the discriminant the classifier used.
+        let r = (-c + (c * c - 4.0 * m * k).sqrt()) / (2.0 * m);
+        let s = (-c - (c * c - 4.0 * m * k).sqrt()) / (2.0 * m);
 
         let a = self.start - self.end;
         let b = (
@@ -391,15 +392,14 @@ impl SpringSimulation {
 
     /// Calculate velocity for an overdamped spring
     #[inline]
-    fn velocity_overdamped(&self, time: f32) -> f32 {
+    fn velocity_overdamped(&self, time: f64) -> f64 {
         let m = self.spring.mass;
         let k = self.spring.stiffness;
         let c = self.spring.damping;
 
-        let w0 = (k / m).sqrt();
-        let zeta = c / (2.0 * (m * k).sqrt());
-        let r = -w0 * (zeta - (zeta * zeta - 1.0).sqrt());
-        let s = -w0 * (zeta + (zeta * zeta - 1.0).sqrt());
+        // Roots of m·x² + c·x + k from the discriminant the classifier used.
+        let r = (-c + (c * c - 4.0 * m * k).sqrt()) / (2.0 * m);
+        let s = (-c - (c * c - 4.0 * m * k).sqrt()) / (2.0 * m);
 
         let a = self.start - self.end;
         let b = (
@@ -413,7 +413,7 @@ impl SpringSimulation {
 
 impl Simulation for SpringSimulation {
     #[inline]
-    fn position(&self, time: f32) -> f32 {
+    fn position(&self, time: f64) -> f64 {
         match self.spring.spring_type() {
             SpringType::Critical => self.position_critical(time),
             SpringType::Underdamped => self.position_underdamped(time),
@@ -422,7 +422,7 @@ impl Simulation for SpringSimulation {
     }
 
     #[inline]
-    fn velocity(&self, time: f32) -> f32 {
+    fn velocity(&self, time: f64) -> f64 {
         match self.spring.spring_type() {
             SpringType::Critical => self.velocity_critical(time),
             SpringType::Underdamped => self.velocity_underdamped(time),
@@ -431,7 +431,7 @@ impl Simulation for SpringSimulation {
     }
 
     #[inline]
-    fn is_done(&self, time: f32) -> bool {
+    fn is_done(&self, time: f64) -> bool {
         let pos = self.position(time);
         let vel = self.velocity(time);
 
@@ -448,9 +448,9 @@ impl Simulation for SpringSimulation {
 mod tests {
     use super::*;
 
-    /// Assert two f32 values are within `epsilon` of each other.
+    /// Assert two f64 values are within `epsilon` of each other.
     #[track_caller]
-    fn assert_approx(actual: f32, expected: f32, epsilon: f32) {
+    fn assert_approx(actual: f64, expected: f64, epsilon: f64) {
         assert!(
             (actual - expected).abs() <= epsilon,
             "expected {expected} ± {epsilon}, got {actual}"
@@ -497,9 +497,9 @@ mod tests {
         // NEW discriminant code:   Δ = 4mk(ζ²−1) < 0            → Underdamped (correct).
         //
         // This test FAILS on the old tolerance-band code.
-        let mass = 0.4_f32;
-        let stiffness = 0.4_f32;
-        let ratio = 1.0_f32 - 5e-4;
+        let mass = 0.4_f64;
+        let stiffness = 0.4_f64;
+        let ratio = 1.0_f64 - 5e-4;
         let damping = ratio * 2.0 * (mass * stiffness).sqrt();
         let spring = SpringDescription::new(mass, stiffness, damping);
         assert!(
@@ -516,9 +516,9 @@ mod tests {
         // NEW discriminant code:   Δ = 4mk(ζ²−1) > 0            → Overdamped (correct).
         //
         // This test FAILS on the old tolerance-band code.
-        let mass = 0.4_f32;
-        let stiffness = 0.4_f32;
-        let ratio = 1.0_f32 + 5e-4;
+        let mass = 0.4_f64;
+        let stiffness = 0.4_f64;
+        let ratio = 1.0_f64 + 5e-4;
         let damping = ratio * 2.0 * (mass * stiffness).sqrt();
         let spring = SpringDescription::new(mass, stiffness, damping);
         assert!(
@@ -563,8 +563,8 @@ mod tests {
         // ζ = 1 − 1e−3: Underdamped after fix, but x(0.4) must still ≈ 0.0616.
         // Verifies the formulas are continuous at the critical-damping boundary.
         // Reference: Flutter's regression test (spring_simulation_test.dart:59).
-        let mass = 0.4_f32;
-        let stiffness = 0.4_f32;
+        let mass = 0.4_f64;
+        let stiffness = 0.4_f64;
         let damping = (1.0 - 1e-3) * 2.0 * (mass * stiffness).sqrt();
         let spring = SpringDescription::new(mass, stiffness, damping);
         let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
@@ -576,8 +576,8 @@ mod tests {
     fn spring_slightly_overdamped_continuous_with_critical() {
         // ζ = 1 + 1e−3: Overdamped after fix, x(0.4) must still ≈ 0.0616.
         // Reference: Flutter's regression test (spring_simulation_test.dart:50).
-        let mass = 0.4_f32;
-        let stiffness = 0.4_f32;
+        let mass = 0.4_f64;
+        let stiffness = 0.4_f64;
         let damping = (1.0 + 1e-3) * 2.0 * (mass * stiffness).sqrt();
         let spring = SpringDescription::new(mass, stiffness, damping);
         let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
@@ -591,7 +591,7 @@ mod tests {
         let spring = SpringDescription::new(1.0, 300.0, 10.0); // bouncy preset
         let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
         // Position must exceed 1.0 at some point (overshoot) to confirm oscillation.
-        let overshoot = (0..200).any(|i| sim.position(i as f32 * 0.01) > 1.001);
+        let overshoot = (0..200).any(|i| sim.position(i as f64 * 0.01) > 1.001);
         assert!(overshoot, "underdamped spring must overshoot its target");
     }
 
@@ -600,7 +600,7 @@ mod tests {
         // An overdamped spring (ζ ≈ 1.5) must not overshoot.
         let spring = SpringDescription::new(1.0, 100.0, 30.0); // soft preset
         let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
-        let overshoot = (0..500).any(|i| sim.position(i as f32 * 0.01) > 1.0 + 1e-3);
+        let overshoot = (0..500).any(|i| sim.position(i as f64 * 0.01) > 1.0 + 1e-3);
         assert!(!overshoot, "overdamped spring must not overshoot");
     }
 
@@ -646,7 +646,7 @@ mod tests {
         for (name, spring) in regimes() {
             let (m, k, c) = (spring.mass, spring.stiffness, spring.damping);
             let s = sim(spring);
-            for t in [0.05_f32, 0.2, 0.5] {
+            for t in [0.05_f64, 0.2, 0.5] {
                 let dx = (s.position(t + h) - s.position(t - h)) / (2.0 * h);
                 assert!(
                     (dx - s.velocity(t)).abs() < 0.02,
@@ -686,10 +686,10 @@ mod tests {
         assert_approx(under.natural_frequency(), 10.0, 1e-5);
         assert_approx(under.critical_damping(), 20.0, 1e-5);
         assert_approx(under.damping_ratio(), 0.2, 1e-6);
-        assert_approx(under.damped_frequency(), 10.0 * 0.96_f32.sqrt(), 1e-4);
+        assert_approx(under.damped_frequency(), 10.0 * 0.96_f64.sqrt(), 1e-4);
         assert_approx(
             under.period().unwrap(),
-            std::f32::consts::TAU / (10.0 * 0.96_f32.sqrt()),
+            std::f64::consts::TAU / (10.0 * 0.96_f64.sqrt()),
             1e-4,
         );
         let over = SpringDescription::new(1.0, 100.0, 50.0);
@@ -711,7 +711,7 @@ mod tests {
         ));
         let stiff = SpringDescription::stiff();
         assert_approx(stiff.damping_ratio(), 1.0, 1e-5);
-        assert_approx(stiff.damping, 2.0 * 500.0_f32.sqrt(), 1e-4);
+        assert_approx(stiff.damping, 2.0 * 500.0_f64.sqrt(), 1e-4);
         // Whichever closed form rounding picks for the critical preset, it
         // still starts right and settles.
         let s = SpringSimulation::new(stiff, 3.0, 1.0, -2.0);
@@ -726,14 +726,14 @@ mod tests {
         assert_eq!(s.spring().stiffness, 2.0);
         assert!(s.is_valid() && s.spring().is_valid());
         assert!(SpringDescription::new(1.0, 2.0, 0.0).is_valid());
-        let nan = f32::NAN;
+        let nan = f64::NAN;
         for spring in [
             SpringDescription::new(0.0, 2.0, 3.0),
             SpringDescription::new(1.0, 0.0, 3.0),
             SpringDescription::new(1.0, 2.0, -1.0),
-            SpringDescription::new(f32::INFINITY, 2.0, 3.0),
-            SpringDescription::new(1.0, f32::INFINITY, 3.0),
-            SpringDescription::new(1.0, 2.0, f32::INFINITY),
+            SpringDescription::new(f64::INFINITY, 2.0, 3.0),
+            SpringDescription::new(1.0, f64::INFINITY, 3.0),
+            SpringDescription::new(1.0, 2.0, f64::INFINITY),
         ] {
             assert!(!spring.is_valid(), "{spring:?}");
         }

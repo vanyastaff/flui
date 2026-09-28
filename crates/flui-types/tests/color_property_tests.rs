@@ -98,7 +98,7 @@ proptest! {
     /// `lerp` returns its first argument at `t <= 0` and its second at
     /// `t >= 1` (`t` is clamped), and a color lerped with itself is itself.
     #[test]
-    fn prop_lerp_endpoints_and_identity(a in arb_color(), b in arb_color(), t in 0.0f32..=1.0, beyond in 0.0f32..=10.0) {
+    fn prop_lerp_endpoints_and_identity(a in arb_color(), b in arb_color(), t in 0.0f64..=1.0, beyond in 0.0f64..=10.0) {
         prop_assert_eq!(Color::lerp(a, b, 0.0), a);
         prop_assert_eq!(Color::lerp(a, b, -beyond), a);
         prop_assert_eq!(Color::lerp(a, b, 1.0), b);
@@ -109,7 +109,7 @@ proptest! {
     /// Every channel of `lerp(a, b, t)` lies between the same channel of
     /// `a` and `b`.
     #[test]
-    fn prop_lerp_channels_stay_between_endpoints(a in arb_color(), b in arb_color(), t in 0.0f32..=1.0) {
+    fn prop_lerp_channels_stay_between_endpoints(a in arb_color(), b in arb_color(), t in 0.0f64..=1.0) {
         let m = Color::lerp(a, b, t);
         for (x, lo, hi) in [(m.r, a.r, b.r), (m.g, a.g, b.g), (m.b, a.b, b.b), (m.a, a.a, b.a)] {
             prop_assert!(lo.min(hi) <= x && x <= lo.max(hi));

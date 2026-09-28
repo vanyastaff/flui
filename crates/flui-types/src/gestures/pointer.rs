@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use crate::geometry::{Offset, Pixels};
+use crate::geometry::Offset;
 
 /// A pair of local and global offsets
 ///
@@ -17,21 +17,21 @@ use crate::geometry::{Offset, Pixels};
 /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
 ///
 /// let pair = OffsetPair::new(
-///     Offset::new(px(10.0), px(20.0)),   // local
-///     Offset::new(px(100.0), px(200.0)), // global
+///     Offset::new(10.0, 20.0),   // local
+///     Offset::new(100.0, 200.0), // global
 /// );
 ///
-/// assert_eq!(pair.local, Offset::new(px(10.0), px(20.0)));
-/// assert_eq!(pair.global, Offset::new(px(100.0), px(200.0)));
+/// assert_eq!(pair.local, Offset::new(10.0, 20.0));
+/// assert_eq!(pair.global, Offset::new(100.0, 200.0));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OffsetPair {
     /// The local offset (relative to the target widget)
-    pub local: Offset<Pixels>,
+    pub local: Offset<f64>,
 
     /// The global offset (relative to the screen/window)
-    pub global: Offset<Pixels>,
+    pub global: Offset<f64>,
 }
 
 impl OffsetPair {
@@ -49,13 +49,13 @@ impl OffsetPair {
     /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
     ///
     /// let pair = OffsetPair::new(
-    ///     Offset::new(px(10.0), px(20.0)),
-    ///     Offset::new(px(100.0), px(200.0)),
+    ///     Offset::new(10.0, 20.0),
+    ///     Offset::new(100.0, 200.0),
     /// );
     /// ```
     #[inline]
     #[must_use]
-    pub const fn new(local: Offset<Pixels>, global: Offset<Pixels>) -> Self {
+    pub const fn new(local: Offset<f64>, global: Offset<f64>) -> Self {
         Self { local, global }
     }
 
@@ -66,12 +66,12 @@ impl OffsetPair {
     /// ```
     /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
     ///
-    /// let pair = OffsetPair::from_offset(Offset::new(px(50.0), px(75.0)));
+    /// let pair = OffsetPair::from_offset(Offset::new(50.0, 75.0));
     /// assert_eq!(pair.local, pair.global);
     /// ```
     #[inline]
     #[must_use]
-    pub const fn from_offset(offset: Offset<Pixels>) -> Self {
+    pub const fn from_offset(offset: Offset<f64>) -> Self {
         Self {
             local: offset,
             global: offset,
@@ -88,15 +88,15 @@ impl OffsetPair {
     /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
     ///
     /// let pair = OffsetPair::new(
-    ///     Offset::new(px(10.0), px(20.0)),
-    ///     Offset::new(px(100.0), px(200.0)),
+    ///     Offset::new(10.0, 20.0),
+    ///     Offset::new(100.0, 200.0),
     /// );
     /// let delta = pair.delta();
-    /// assert_eq!(delta, Offset::new(px(90.0), px(180.0)));
+    /// assert_eq!(delta, Offset::new(90.0, 180.0));
     /// ```
     #[inline]
     #[must_use]
-    pub fn delta(&self) -> Offset<Pixels> {
+    pub fn delta(&self) -> Offset<f64> {
         self.global - self.local
     }
 
@@ -108,14 +108,14 @@ impl OffsetPair {
     /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
     ///
     /// let valid = OffsetPair::new(
-    ///     Offset::new(px(10.0), px(20.0)),
-    ///     Offset::new(px(100.0), px(200.0)),
+    ///     Offset::new(10.0, 20.0),
+    ///     Offset::new(100.0, 200.0),
     /// );
     /// assert!(valid.is_finite());
     ///
     /// let invalid = OffsetPair::new(
-    ///     Offset::new(px(f32::NAN), px(20.0)),
-    ///     Offset::new(px(100.0), px(200.0)),
+    ///     Offset::new((f64::NAN), 20.0),
+    ///     Offset::new(100.0, 200.0),
     /// );
     /// assert!(!invalid.is_finite());
     /// ```
@@ -181,12 +181,12 @@ pub enum PointerDeviceKind {
 ///
 /// let data = PointerData::new(
 ///     Duration::from_millis(100),
-///     Offset::new(px(100.0), px(200.0)),
+///     Offset::new(100.0, 200.0),
 ///     0,
 ///     PointerDeviceKind::Touch,
 /// );
 ///
-/// assert_eq!(data.position, Offset::new(px(100.0), px(200.0)));
+/// assert_eq!(data.position, Offset::new(100.0, 200.0));
 /// assert_eq!(data.pointer, 0);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -196,10 +196,10 @@ pub struct PointerData {
     pub time_stamp: Duration,
 
     /// The position of the pointer in global coordinates
-    pub position: Offset<Pixels>,
+    pub position: Offset<f64>,
 
     /// The delta since the last update
-    pub delta: Offset<Pixels>,
+    pub delta: Offset<f64>,
 
     /// Unique identifier for the pointer
     pub pointer: i32,
@@ -211,44 +211,44 @@ pub struct PointerData {
     ///
     /// 0.0 means no pressure, 1.0 means maximum pressure.
     /// May be 0.0 if the device doesn't support pressure.
-    pub pressure: f32,
+    pub pressure: f64,
 
     /// The minimum pressure the device can detect
-    pub pressure_min: f32,
+    pub pressure_min: f64,
 
     /// The maximum pressure the device can detect
-    pub pressure_max: f32,
+    pub pressure_max: f64,
 
     /// The distance of the pointer from the screen (hover distance)
     ///
     /// Only available for some devices like styluses.
     /// 0.0 means touching the screen.
-    pub distance: f32,
+    pub distance: f64,
 
     /// The maximum distance the device can detect
-    pub distance_max: f32,
+    pub distance_max: f64,
 
     /// The radius of the touch area (major axis)
-    pub radius_major: f32,
+    pub radius_major: f64,
 
     /// The radius of the touch area (minor axis)
-    pub radius_minor: f32,
+    pub radius_minor: f64,
 
     /// The minimum radius the device can detect
-    pub radius_min: f32,
+    pub radius_min: f64,
 
     /// The maximum radius the device can detect
-    pub radius_max: f32,
+    pub radius_max: f64,
 
     /// The orientation of the touch ellipse
     ///
     /// In radians, from -π to π.
-    pub orientation: f32,
+    pub orientation: f64,
 
     /// The tilt of the stylus
     ///
     /// In radians, from 0 (perpendicular) to π/2 (flat).
-    pub tilt: f32,
+    pub tilt: f64,
 
     /// Opaque platform-specific data
     pub platform_data: i64,
@@ -279,7 +279,7 @@ impl PointerData {
     ///
     /// let data = PointerData::new(
     ///     Duration::from_millis(100),
-    ///     Offset::new(px(100.0), px(200.0)),
+    ///     Offset::new(100.0, 200.0),
     ///     0,
     ///     PointerDeviceKind::Touch,
     /// );
@@ -288,7 +288,7 @@ impl PointerData {
     #[inline]
     pub fn new(
         time_stamp: Duration,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         pointer: i32,
         device_kind: PointerDeviceKind,
     ) -> Self {
@@ -319,7 +319,7 @@ impl PointerData {
     /// Builder method to set pressure
     #[inline]
     #[must_use]
-    pub fn with_pressure(mut self, pressure: f32, min: f32, max: f32) -> Self {
+    pub fn with_pressure(mut self, pressure: f64, min: f64, max: f64) -> Self {
         self.pressure = pressure;
         self.pressure_min = min;
         self.pressure_max = max;
@@ -329,7 +329,7 @@ impl PointerData {
     /// Builder method to set distance
     #[inline]
     #[must_use]
-    pub fn with_distance(mut self, distance: f32, max: f32) -> Self {
+    pub fn with_distance(mut self, distance: f64, max: f64) -> Self {
         self.distance = distance;
         self.distance_max = max;
         self
@@ -338,7 +338,7 @@ impl PointerData {
     /// Builder method to set radius
     #[inline]
     #[must_use]
-    pub fn with_radius(mut self, major: f32, minor: f32, min: f32, max: f32) -> Self {
+    pub fn with_radius(mut self, major: f64, minor: f64, min: f64, max: f64) -> Self {
         self.radius_major = major;
         self.radius_minor = minor;
         self.radius_min = min;
@@ -349,7 +349,7 @@ impl PointerData {
     /// Builder method to set orientation
     #[inline]
     #[must_use]
-    pub fn with_orientation(mut self, orientation: f32) -> Self {
+    pub fn with_orientation(mut self, orientation: f64) -> Self {
         self.orientation = orientation;
         self
     }
@@ -357,7 +357,7 @@ impl PointerData {
     /// Builder method to set tilt
     #[inline]
     #[must_use]
-    pub fn with_tilt(mut self, tilt: f32) -> Self {
+    pub fn with_tilt(mut self, tilt: f64) -> Self {
         self.tilt = tilt;
         self
     }
@@ -365,7 +365,7 @@ impl PointerData {
     /// Builder method to set delta
     #[inline]
     #[must_use]
-    pub fn with_delta(mut self, delta: Offset<Pixels>) -> Self {
+    pub fn with_delta(mut self, delta: Offset<f64>) -> Self {
         self.delta = delta;
         self
     }
@@ -455,7 +455,7 @@ impl PointerData {
     /// ```
     #[inline]
     #[must_use]
-    pub fn normalized_pressure(&self) -> f32 {
+    pub fn normalized_pressure(&self) -> f64 {
         let range = self.pressure_max - self.pressure_min;
         if range > 0.0 {
             ((self.pressure - self.pressure_min) / range).clamp(0.0, 1.0)
@@ -487,7 +487,7 @@ impl PointerData {
     /// ```
     #[inline]
     #[must_use]
-    pub fn normalized_distance(&self) -> f32 {
+    pub fn normalized_distance(&self) -> f64 {
         if self.distance_max > 0.0 {
             (self.distance / self.distance_max).clamp(0.0, 1.0)
         } else {
@@ -521,8 +521,8 @@ impl PointerData {
     /// ```
     #[inline]
     #[must_use]
-    pub fn touch_area(&self) -> f32 {
-        std::f32::consts::PI * self.radius_major * self.radius_minor
+    pub fn touch_area(&self) -> f64 {
+        std::f64::consts::PI * self.radius_major * self.radius_minor
     }
 
     /// Returns whether all numeric values are finite
@@ -540,7 +540,7 @@ impl PointerData {
     ///
     /// let valid = PointerData::new(
     ///     Duration::from_millis(100),
-    ///     Offset::new(px(100.0), px(200.0)),
+    ///     Offset::new(100.0, 200.0),
     ///     0,
     ///     PointerDeviceKind::Touch,
     /// );
@@ -587,29 +587,25 @@ impl PointerData {
     ///     0,
     ///     PointerDeviceKind::Touch,
     /// )
-    /// .with_delta(Offset::new(px(3.0), px(4.0)));
+    /// .with_delta(Offset::new(3.0, 4.0));
     /// assert_eq!(data.speed(), 5.0);
     /// ```
     #[inline]
     #[must_use]
-    pub fn speed(&self) -> f32 {
-        self.delta.distance().0
+    pub fn speed(&self) -> f64 {
+        self.delta.distance()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::units::px;
 
     #[test]
     fn test_offset_pair_new() {
-        let pair = OffsetPair::new(
-            Offset::new(px(10.0), px(20.0)),
-            Offset::new(px(100.0), px(200.0)),
-        );
-        assert_eq!(pair.local, Offset::new(px(10.0), px(20.0)));
-        assert_eq!(pair.global, Offset::new(px(100.0), px(200.0)));
+        let pair = OffsetPair::new(Offset::new(10.0, 20.0), Offset::new(100.0, 200.0));
+        assert_eq!(pair.local, Offset::new(10.0, 20.0));
+        assert_eq!(pair.global, Offset::new(100.0, 200.0));
     }
 
     #[test]
@@ -621,7 +617,7 @@ mod tests {
 
     #[test]
     fn test_offset_pair_from_offset() {
-        let offset = Offset::new(px(50.0), px(75.0));
+        let offset = Offset::new(50.0, 75.0);
         let pair = OffsetPair::from_offset(offset);
         assert_eq!(pair.local, offset);
         assert_eq!(pair.global, offset);
@@ -636,13 +632,13 @@ mod tests {
     fn test_pointer_data_new() {
         let data = PointerData::new(
             Duration::from_millis(100),
-            Offset::new(px(100.0), px(200.0)),
+            Offset::new(100.0, 200.0),
             0,
             PointerDeviceKind::Touch,
         );
 
         assert_eq!(data.time_stamp, Duration::from_millis(100));
-        assert_eq!(data.position, Offset::new(px(100.0), px(200.0)));
+        assert_eq!(data.position, Offset::new(100.0, 200.0));
         assert_eq!(data.pointer, 0);
         assert_eq!(data.device_kind, PointerDeviceKind::Touch);
         assert_eq!(data.delta, Offset::ZERO);
@@ -654,7 +650,7 @@ mod tests {
     fn test_pointer_data_builder() {
         let data = PointerData::new(
             Duration::from_millis(100),
-            Offset::new(px(100.0), px(200.0)),
+            Offset::new(100.0, 200.0),
             0,
             PointerDeviceKind::Stylus,
         )
@@ -663,7 +659,7 @@ mod tests {
         .with_radius(10.0, 5.0, 2.0, 20.0)
         .with_orientation(0.5)
         .with_tilt(0.3)
-        .with_delta(Offset::new(px(2.0), px(3.0)))
+        .with_delta(Offset::new(2.0, 3.0))
         .with_buttons(1);
 
         assert_eq!(data.pressure, 0.8);
@@ -679,7 +675,7 @@ mod tests {
         );
         assert_eq!(data.orientation, 0.5);
         assert_eq!(data.tilt, 0.3);
-        assert_eq!(data.delta, Offset::new(px(2.0), px(3.0)));
+        assert_eq!(data.delta, Offset::new(2.0, 3.0));
         assert_eq!(data.buttons, 1);
     }
 
@@ -710,19 +706,16 @@ mod tests {
 
     #[test]
     fn offset_pair_delta_and_finiteness() {
-        let pair = OffsetPair::new(
-            Offset::new(px(10.0), px(20.0)),
-            Offset::new(px(100.0), px(250.0)),
-        );
-        assert_eq!(pair.delta(), Offset::new(px(90.0), px(230.0)));
+        let pair = OffsetPair::new(Offset::new(10.0, 20.0), Offset::new(100.0, 250.0));
+        assert_eq!(pair.delta(), Offset::new(90.0, 230.0));
         assert!(pair.is_finite());
 
-        let nan = px(f32::NAN);
+        let nan = f64::NAN;
         for broken in [
-            OffsetPair::new(Offset::new(nan, px(0.0)), Offset::ZERO),
-            OffsetPair::new(Offset::new(px(0.0), nan), Offset::ZERO),
-            OffsetPair::new(Offset::ZERO, Offset::new(nan, px(0.0))),
-            OffsetPair::new(Offset::ZERO, Offset::new(px(0.0), nan)),
+            OffsetPair::new(Offset::new(nan, 0.0), Offset::ZERO),
+            OffsetPair::new(Offset::new(0.0, nan), Offset::ZERO),
+            OffsetPair::new(Offset::ZERO, Offset::new(nan, 0.0)),
+            OffsetPair::new(Offset::ZERO, Offset::new(0.0, nan)),
         ] {
             assert!(!broken.is_finite(), "{broken:?}");
         }
@@ -781,20 +774,20 @@ mod tests {
     fn touch_area_and_speed() {
         let data = touch()
             .with_radius(10.0, 5.0, 0.0, 20.0)
-            .with_delta(Offset::new(px(3.0), px(4.0)));
-        assert!((data.touch_area() - 50.0 * std::f32::consts::PI).abs() < 1e-4);
+            .with_delta(Offset::new(3.0, 4.0));
+        assert!((data.touch_area() - 50.0 * std::f64::consts::PI).abs() < 1e-4);
         assert_eq!(data.speed(), 5.0);
     }
 
     /// Every numeric field participates: one non-finite field is enough.
     #[test]
     fn pointer_data_is_finite_checks_every_field() {
-        let nan = f32::NAN;
+        let nan = f64::NAN;
         let nan_offset = |x: bool| {
             if x {
-                Offset::new(px(nan), px(0.0))
+                Offset::new(nan, 0.0)
             } else {
-                Offset::new(px(0.0), px(nan))
+                Offset::new(0.0, nan)
             }
         };
         assert!(touch().is_finite());

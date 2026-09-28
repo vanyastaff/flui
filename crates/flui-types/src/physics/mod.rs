@@ -43,11 +43,11 @@ pub use tolerance::Tolerance;
 pub trait Simulation {
     /// Returns the position at `time` seconds, in logical pixels.
     #[must_use]
-    fn position(&self, time: f32) -> f32;
+    fn position(&self, time: f64) -> f64;
 
     /// Returns the velocity at `time` seconds, in logical pixels per second.
     #[must_use]
-    fn velocity(&self, time: f32) -> f32;
+    fn velocity(&self, time: f64) -> f64;
 
     /// Returns whether the simulation has settled at `time` seconds.
     ///
@@ -55,7 +55,7 @@ pub trait Simulation {
     /// means (position and/or velocity within [`Tolerance`]) is defined by
     /// each implementation.
     #[must_use]
-    fn is_done(&self, time: f32) -> bool;
+    fn is_done(&self, time: f64) -> bool;
 
     /// Returns the tolerance used to decide when this simulation is done.
     ///
@@ -78,17 +78,17 @@ pub struct ClampedSimulation<S: Simulation> {
     pub simulation: S,
 
     /// The minimum allowed position
-    pub min: f32,
+    pub min: f64,
 
     /// The maximum allowed position
-    pub max: f32,
+    pub max: f64,
 }
 
 impl<S: Simulation> ClampedSimulation<S> {
     /// Creates a clamped simulation wrapping `simulation`, limiting its
     /// position to `[min, max]`.
     #[must_use]
-    pub fn new(simulation: S, min: f32, max: f32) -> Self {
+    pub fn new(simulation: S, min: f64, max: f64) -> Self {
         Self {
             simulation,
             min,
@@ -98,13 +98,13 @@ impl<S: Simulation> ClampedSimulation<S> {
 
     /// Returns the minimum allowed position, in logical pixels.
     #[must_use]
-    pub fn min(&self) -> f32 {
+    pub fn min(&self) -> f64 {
         self.min
     }
 
     /// Returns the maximum allowed position, in logical pixels.
     #[must_use]
-    pub fn max(&self) -> f32 {
+    pub fn max(&self) -> f64 {
         self.max
     }
 
@@ -125,7 +125,7 @@ impl<S: Simulation> ClampedSimulation<S> {
     ///
     /// When this is `true`, `velocity` reports `0.0`.
     #[must_use]
-    pub fn is_at_boundary(&self, time: f32) -> bool {
+    pub fn is_at_boundary(&self, time: f64) -> bool {
         let unclamped_pos = self.simulation.position(time);
         unclamped_pos <= self.min || unclamped_pos >= self.max
     }
@@ -133,12 +133,12 @@ impl<S: Simulation> ClampedSimulation<S> {
 
 impl<S: Simulation> Simulation for ClampedSimulation<S> {
     #[inline]
-    fn position(&self, time: f32) -> f32 {
+    fn position(&self, time: f64) -> f64 {
         self.simulation.position(time).clamp(self.min, self.max)
     }
 
     #[inline]
-    fn velocity(&self, time: f32) -> f32 {
+    fn velocity(&self, time: f64) -> f64 {
         if self.is_at_boundary(time) {
             0.0
         } else {
@@ -147,7 +147,7 @@ impl<S: Simulation> Simulation for ClampedSimulation<S> {
     }
 
     #[inline]
-    fn is_done(&self, time: f32) -> bool {
+    fn is_done(&self, time: f64) -> bool {
         self.simulation.is_done(time)
     }
 
@@ -166,13 +166,13 @@ mod tests {
     struct Linear;
 
     impl Simulation for Linear {
-        fn position(&self, time: f32) -> f32 {
+        fn position(&self, time: f64) -> f64 {
             10.0 * time
         }
-        fn velocity(&self, _time: f32) -> f32 {
+        fn velocity(&self, _time: f64) -> f64 {
             10.0
         }
-        fn is_done(&self, time: f32) -> bool {
+        fn is_done(&self, time: f64) -> bool {
             time >= 5.0
         }
         fn tolerance(&self) -> Tolerance {

@@ -19,20 +19,20 @@ use crate::{
 /// };
 ///
 /// // All sides the same
-/// let border = Border::all(BorderSide::new(Color::BLACK, px(2.0), BorderStyle::Solid));
+/// let border = Border::all(BorderSide::new(Color::BLACK, 2.0, BorderStyle::Solid));
 ///
 /// // Symmetric horizontal/vertical
 /// let border = Border::symmetric(
-///     Some(BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid)), // left/right
-///     Some(BorderSide::new(Color::GRAY, px(2.0), BorderStyle::Solid)),  // top/bottom
+///     Some(BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid)), // left/right
+///     Some(BorderSide::new(Color::GRAY, 2.0, BorderStyle::Solid)),  // top/bottom
 /// );
 ///
 /// // Custom per-side
 /// let border = Border::new(
-///     Some(BorderSide::new(Color::RED, px(2.0), BorderStyle::Solid)), // top
-///     Some(BorderSide::new(Color::BLUE, px(2.0), BorderStyle::Solid)), // right
-///     Some(BorderSide::new(Color::GREEN, px(2.0), BorderStyle::Solid)), // bottom
-///     Some(BorderSide::new(Color::YELLOW, px(2.0), BorderStyle::Solid)), // left
+///     Some(BorderSide::new(Color::RED, 2.0, BorderStyle::Solid)), // top
+///     Some(BorderSide::new(Color::BLUE, 2.0, BorderStyle::Solid)), // right
+///     Some(BorderSide::new(Color::GREEN, 2.0, BorderStyle::Solid)), // bottom
+///     Some(BorderSide::new(Color::YELLOW, 2.0, BorderStyle::Solid)), // left
 /// );
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -134,11 +134,11 @@ impl<T: Unit> Default for Border<T> {
 
 impl<T: NumericUnit> Border<T>
 where
-    T: std::ops::Mul<f32, Output = T>,
+    T: std::ops::Mul<f64, Output = T>,
 {
     /// Linearly interpolates between two borders.
     #[inline]
-    pub fn lerp(a: Self, b: Self, t: f32) -> Self {
+    pub fn lerp(a: Self, b: Self, t: f64) -> Self {
         Self {
             top: match (a.top, b.top) {
                 (Some(a_side), Some(b_side)) => Some(BorderSide::lerp(a_side, b_side, t)),
@@ -180,7 +180,7 @@ where
 ///     styling::{BorderDirectional, BorderSide, BorderStyle, Color},
 /// };
 ///
-/// let border = BorderDirectional::all(BorderSide::new(Color::BLACK, px(2.0), BorderStyle::Solid));
+/// let border = BorderDirectional::all(BorderSide::new(Color::BLACK, 2.0, BorderStyle::Solid));
 ///
 /// // Resolve to physical border based on text direction
 /// let ltr_border = border.resolve(true); // left-to-right
@@ -291,14 +291,14 @@ impl<T: Unit> BoxBorder<T> for Border<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{Pixels, px};
+
     use crate::styling::{BorderStyle, Color};
 
-    fn side(width: f32) -> BorderSide<Pixels> {
-        BorderSide::new(Color::BLACK, px(width), BorderStyle::Solid)
+    fn side(width: f64) -> BorderSide<f64> {
+        BorderSide::new(Color::BLACK, width, BorderStyle::Solid)
     }
 
-    fn sides(b: Border<Pixels>) -> [Option<BorderSide<Pixels>>; 4] {
+    fn sides(b: Border<f64>) -> [Option<BorderSide<f64>>; 4] {
         [b.top, b.right, b.bottom, b.left]
     }
 
@@ -316,14 +316,14 @@ mod tests {
             [Some(r), Some(t), Some(r), Some(t)]
         );
         assert_eq!(sides(Border::none()), [None; 4]);
-        assert_eq!(Border::<Pixels>::default(), Border::none());
+        assert_eq!(Border::<f64>::default(), Border::none());
     }
 
     #[test]
     fn is_none_and_is_uniform() {
         let s = side(1.0);
-        assert!(Border::<Pixels>::none().is_none());
-        assert!(Border::<Pixels>::none().is_uniform());
+        assert!(Border::<f64>::none().is_none());
+        assert!(Border::<f64>::none().is_uniform());
         assert!(Border::all(s).is_uniform() && !Border::all(s).is_none());
         assert!(BoxBorder::is_uniform(&Border::all(s)));
         for i in 0..4 {
@@ -383,11 +383,11 @@ mod tests {
             BorderDirectional::new(Some(s), Some(s), Some(s), Some(s))
         );
         assert_eq!(
-            BorderDirectional::<Pixels>::default(),
+            BorderDirectional::<f64>::default(),
             BorderDirectional::new(None, None, None, None)
         );
         assert_eq!(
-            BorderDirectional::<Pixels>::none(),
+            BorderDirectional::<f64>::none(),
             BorderDirectional::default()
         );
     }
