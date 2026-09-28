@@ -24,11 +24,11 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use flui_interaction::PointerDeviceKind;
 use flui_interaction::processing::{
     ImpulseVelocityTracker, IosFlingVelocityTracker, OneEuroFilter2D, VelocityTracker,
 };
 use flui_types::geometry::Offset;
-use flui_types::gestures::PointerDeviceKind;
 
 /// Build a deterministic linear swipe: `samples` positions equally spaced
 /// over `duration_ms`, with `dx` advancing `slope_px_per_s` per second.

@@ -8,8 +8,9 @@
 //! (`Instant`), neither of which this dependency-free vocabulary crate
 //! knows about.
 
-use super::{pointer::PointerDeviceKind, velocity::Velocity};
-use crate::geometry::Offset;
+use flui_foundation::geometry::Offset;
+
+use crate::{PointerDeviceKind, Velocity};
 
 // ============================================================================
 // Tap Gesture Details

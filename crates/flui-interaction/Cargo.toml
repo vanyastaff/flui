@@ -20,6 +20,7 @@ keywords = ["gui", "ui", "events", "gestures", "interaction"]
 autotests = false
 
 [dependencies]
+serde = { workspace = true, optional = true }
 # Flui dependencies
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
@@ -115,8 +116,8 @@ default = []
 # Auto-enabled in test builds via `cfg(any(test, feature = "testing"))`.
 testing = []
 
-# Serialization support (if needed in the future)
-serde = ["flui-types/serde"]
+# Serialize the gesture values (details, velocity, pointer device kind).
+serde = ["dep:serde", "flui-types/serde"]
 
 [lints]
 workspace = true

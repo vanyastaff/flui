@@ -96,13 +96,11 @@
 // Geometry values live in `flui_foundation::geometry` (ADR-0098).
 pub use flui_foundation::geometry;
 
-pub mod gestures;
 pub mod layout;
 // `Lerp` impls for Color/Alignment/BorderRadius (trait impls are globally
 // visible; the module needs no public surface).
 mod lerp_impls;
 pub mod painting;
-pub mod physics;
 pub mod styling;
 pub mod typography;
 

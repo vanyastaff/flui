@@ -188,10 +188,13 @@ pub mod events;
 
 pub mod binding;
 pub mod clipboard;
+pub mod details;
+pub mod device_kind;
 pub mod observability;
 pub mod pan_zoom;
 pub mod settings;
 pub mod text_input;
+pub mod velocity;
 
 // ============================================================================
 // Re-exports: IDs
@@ -209,6 +212,11 @@ pub use arena::{
 // ============================================================================
 pub use binding::{GestureBinding, InvalidSamplingWindow, ResamplingModeChangeError};
 pub use clipboard::ClipboardHandle;
+pub use details::{
+    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
+    TapUpDetails,
+};
+pub use device_kind::PointerDeviceKind;
 // The monotonic clock primitive now lives in `flui-foundation`; re-exported here
 // because the gesture arena's public API takes a `MonotonicClock` (and tests /
 // the headless binding construct `ManualClock`/`SystemClock` against the arena).
@@ -224,7 +232,7 @@ pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event
 // Trackpad pan/zoom module — canonical public entry point for the
 // Flutter-aligned `PointerPanZoomEvent` type and its W3C conversion helpers
 // (`from_w3c_event`, `convert_gesture`). Re-exported at the crate root so
-// `use flui_interaction::PointerPanZoomEvent` is the single import path.
+// `use crate::PointerPanZoomEvent` is the single import path.
 pub use pan_zoom::{PointerPanZoomEvent, convert_gesture, from_w3c_event};
 // ============================================================================
 // Re-exports: Geometry from flui_types

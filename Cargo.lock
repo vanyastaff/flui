@@ -2117,6 +2117,7 @@ dependencies = [
  "flui-types",
  "parking_lot",
  "proptest",
+ "serde",
  "smallvec",
  "static_assertions",
  "thiserror 2.0.20",

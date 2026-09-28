@@ -493,7 +493,7 @@ impl TapAndDragGestureRecognizer {
                     };
                     let Some(initial) = initial_opt else {
                         tracing::warn!(
-                            target: "flui_interaction::tap_and_drag",
+                            target: "crate::tap_and_drag",
                             "drag_state.initial unset in handle_move; \
                              add_pointer must be called before any move event"
                         );

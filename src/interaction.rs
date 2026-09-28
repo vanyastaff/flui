@@ -34,7 +34,7 @@ pub use flui_interaction::{
     TapDragStartDetails, TapDragUpDetails, TapDragUpdateDetails, TapGestureRecognizer,
     VerticalDragGestureRecognizer,
 };
-pub use flui_types::gestures::{
+pub use flui_interaction::{
     ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
     TapUpDetails, Velocity, VelocityEstimate,
 };

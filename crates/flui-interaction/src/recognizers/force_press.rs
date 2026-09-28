@@ -12,7 +12,8 @@
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use flui_types::{Offset, gestures::ForcePressDetails};
+use crate::ForcePressDetails;
+use flui_types::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
