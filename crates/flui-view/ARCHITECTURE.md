@@ -331,6 +331,16 @@ one compensating attempt from its outer call. The same debt also covers direct
 loan finalization panics while an updater panic is already being handled, the
 updater's original payload keeps priority.
 
+`set` commits its replacement without running either value's destructor, then
+returns the loan, retires the old value, and invalidates readers as separate
+contained phases. A panicking old-value destructor therefore observes an
+already-readable replacement but cannot prevent its readers from being
+scheduled; a later wake or value-destructor panic cannot replace it or abort
+over it.
+`set_if_changed` likewise keeps its proposed value outside the equality
+comparison's unwind boundary, so a panicking `PartialEq` remains the primary
+failure and commits nothing even when the proposed value's destructor panics.
+
 The updater is `FnMut`, although the graph calls it exactly once. Keeping the
 closure owned outside the caught invocation lets the graph dispose its captures
 under a separate containment boundary; consuming an `FnOnce` would instead run
@@ -357,7 +367,8 @@ existing rebuild inbox and never invokes signal readers inline. An explicit
 authoritative: it destroys the loaned value and reader set, so no commit
 survives to invalidate.
 
-Pinned by the reactive graph unit tests for updater/wake/telemetry panics,
+Pinned by the reactive graph unit tests for replacement/equality/destructor and
+updater/wake/telemetry panics,
 `flui-foundation`'s subscribe-before-unwind test, and
 `tests/signal_reads.rs` for mounted partial-commit and first-build recovery.
 

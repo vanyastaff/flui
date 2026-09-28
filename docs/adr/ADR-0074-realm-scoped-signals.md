@@ -193,6 +193,13 @@ signal.set(v)                         // owner thread, outside build
   separate transaction primitive. A valid typed read records its dependency after graph/type
   validation but before its user panic escapes, so first-build recovery retains a path for a later
   write without imposing a reentrant `ReadGraph` contract.
+- **Replacement teardown is phased.** `set` commits the replacement without invoking either
+  value's destructor, returns the value loan, destroys the retired value under its own unwind
+  boundary, and then durably invalidates readers even if that destruction failed.
+  `set_if_changed` keeps the proposed value
+  outside the equality comparison's unwind boundary. Thus the first destructor or comparison
+  panic keeps priority, a committed replacement remains observable, and a second panicking
+  destructor cannot abort the process during recovery.
 - Writes during a drain (e.g. from `did_update_view`) fall into the mid-drain absorb path.
 
 ### 5.4 Effects
