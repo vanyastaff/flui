@@ -401,7 +401,15 @@ fn read_typed<T: 'static, R>(
                 });
             }
             Ok(Err(error)) => return Err(error),
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => {
+                // The graph failed before consuming `f`. Dispose the unread
+                // closure while the graph panic is contained so captured
+                // user state cannot double-panic during `resume_unwind`.
+                if let Some(unread) = f.take() {
+                    discard_secondary(unread);
+                }
+                std::panic::resume_unwind(payload)
+            }
         },
     };
     let subscription = sink.map(|sink| {
@@ -658,6 +666,22 @@ mod tests {
             self.0.read_erased(slot, &mut |value| {
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(value)));
             })
+        }
+    }
+
+    struct PreReadPanickingGraph(u32);
+
+    impl ReadGraph for PreReadPanickingGraph {
+        fn graph_id(&self) -> u32 {
+            self.0
+        }
+
+        fn read_erased(
+            &self,
+            _slot: SignalSlot,
+            _read: &mut dyn FnMut(&dyn Any),
+        ) -> Result<(), SignalError> {
+            panic!("graph probe");
         }
     }
 
@@ -940,6 +964,26 @@ mod tests {
 
         let payload = outcome.expect_err("the captured user panic must resume");
         assert_eq!(payload.downcast_ref::<&str>(), Some(&"reader probe"));
+    }
+
+    #[test]
+    fn graph_panic_keeps_priority_over_the_unread_closures_destructor_panic() {
+        let graph = PreReadPanickingGraph(1);
+        let signal = Signal::<u32>::from_slot(SignalSlot::new(graph.graph_id(), 0, 0));
+        let captured = DropBomb("unread closure destructor probe");
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = signal.peek(&graph, move |_| {
+                let _ = &captured;
+            });
+        }));
+
+        let payload = outcome.expect_err("the graph panic must resume");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"graph probe"),
+            "the unread closure's destructor panic must remain secondary"
+        );
     }
 
     #[test]

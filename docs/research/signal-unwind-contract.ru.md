@@ -59,6 +59,7 @@ Batch enqueue берёт inbox lock один раз на весь reader set и 
 последовательность «panic перехвачен → hook восстановлен → тот же id записан снова».
 
 Для следующих unwind-sensitive изменений обязательна матрица: panic каждой фазы отдельно, две
-panic одновременно, user-defined panicking `Drop` для каждого generic owned value и повторная
-операция после containment. Для отложенной доставки отдельно проверяются durability, liveness,
-несколько handles над общим состоянием и handle без hook, который не имеет права погасить debt.
+panic одновременно, user-defined panicking `Drop` для каждого generic owned value (включая
+невызванные closures и захваченные ими значения) и повторная операция после containment. Для
+отложенной доставки отдельно проверяются durability, liveness, несколько handles над общим
+состоянием и handle без hook, который не имеет права погасить debt.
