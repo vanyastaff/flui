@@ -319,22 +319,22 @@ fn test_window_lifecycle_contract() {
 
             tracing::info!(
                 "Window sizes - Logical: {}x{}, Physical: {}x{}, Scale: {}",
-                logical_size.width.0,
-                logical_size.height.0,
-                physical_size.width.0,
-                physical_size.height.0,
+                logical_size.width,
+                logical_size.height,
+                physical_size.width,
+                physical_size.height,
                 scale_factor
             );
 
             // Logical size must be positive
             assert!(
-                logical_size.width.0 > 0.0 && logical_size.height.0 > 0.0,
+                logical_size.width > 0.0 && logical_size.height > 0.0,
                 "Logical size must be positive"
             );
 
             // Physical size must be positive
             assert!(
-                physical_size.width.0 > 0 && physical_size.height.0 > 0,
+                physical_size.width > 0 && physical_size.height > 0,
                 "Physical size must be positive"
             );
 
@@ -342,18 +342,18 @@ fn test_window_lifecycle_contract() {
             assert!(scale_factor > 0.0, "Scale factor must be positive");
 
             // Contract 5: Scale factor relationship (physical = logical * scale)
-            let expected_physical_width = (logical_size.width.0 * scale_factor as f64) as i32;
-            let expected_physical_height = (logical_size.height.0 * scale_factor as f64) as i32;
+            let expected_physical_width = (logical_size.width * scale_factor as f64) as i32;
+            let expected_physical_height = (logical_size.height * scale_factor as f64) as i32;
 
-            let width_diff = (physical_size.width.0 - expected_physical_width).abs();
-            let height_diff = (physical_size.height.0 - expected_physical_height).abs();
+            let width_diff = (physical_size.width - expected_physical_width).abs();
+            let height_diff = (physical_size.height - expected_physical_height).abs();
 
             tracing::info!(
                 "Scale relationship - Expected physical: {}x{}, Actual: {}x{}, Diff: {}x{}",
                 expected_physical_width,
                 expected_physical_height,
-                physical_size.width.0,
-                physical_size.height.0,
+                physical_size.width,
+                physical_size.height,
                 width_diff,
                 height_diff
             );
@@ -393,13 +393,13 @@ fn test_window_lifecycle_contract() {
 
                     let size2 = window2.logical_size();
                     assert!(
-                        size2.width.0 > 0.0 && size2.height.0 > 0.0,
+                        size2.width > 0.0 && size2.height > 0.0,
                         "Second window must have valid size"
                     );
 
                     // Windows must be independent (different sizes)
                     assert!(
-                        (logical_size.width.0 - size2.width.0).abs() > 1.0,
+                        (logical_size.width - size2.width).abs() > 1.0,
                         "Windows should have different sizes"
                     );
                 }
@@ -453,10 +453,10 @@ fn test_display_enumeration_contract() {
             "Display {}: scale={}, bounds={}x{}+{}+{}",
             idx + 1,
             scale,
-            bounds.size.width.0,
-            bounds.size.height.0,
-            bounds.origin.x.0,
-            bounds.origin.y.0
+            bounds.size.width,
+            bounds.size.height,
+            bounds.origin.x,
+            bounds.origin.y
         );
 
         // Contract: Scale factor must be positive and reasonable
@@ -467,7 +467,7 @@ fn test_display_enumeration_contract() {
 
         // Contract: Display bounds must be valid
         assert!(
-            bounds.size.width.0 > 0 && bounds.size.height.0 > 0,
+            bounds.size.width > 0 && bounds.size.height > 0,
             "Display size must be positive"
         );
     }
@@ -513,11 +513,8 @@ fn test_window_options_default_contract() {
         !options.title.is_empty(),
         "Default title should not be empty"
     );
-    assert!(options.size.width.0 > 0.0, "Default width must be positive");
-    assert!(
-        options.size.height.0 > 0.0,
-        "Default height must be positive"
-    );
+    assert!(options.size.width > 0.0, "Default width must be positive");
+    assert!(options.size.height > 0.0, "Default height must be positive");
     assert!(options.resizable, "Default should be resizable");
     assert!(options.visible, "Default should be visible");
     assert!(options.decorated, "Default should be decorated");

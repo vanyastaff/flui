@@ -128,7 +128,7 @@ mod tests {
         }
         fn build(&self, view: &Probe, _: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
             view.model.set(view.model.get() + 1);
-            flui_widgets::SizedBox::new(self.local.get() as f32, 20.0)
+            flui_widgets::SizedBox::new(self.local.get() as f64, 20.0)
         }
         fn dispose(&mut self) {
             self.disposed.set(self.disposed.get() + 1);

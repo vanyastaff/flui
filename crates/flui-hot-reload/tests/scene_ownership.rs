@@ -18,7 +18,7 @@ impl Drop for Payload {
     }
 }
 
-fn build_scene(_: f32, _: f32) -> Scene {
+fn build_scene(_: f64, _: f64) -> Scene {
     Scene::new(LayerTree::new(Layer::AnnotatedRegion(
         AnnotatedRegionLayer::sized_by_parent(Arc::new(Payload)),
     )))

@@ -239,8 +239,7 @@ impl MountedDemo {
                 .into_iter()
                 .filter(|&id| {
                     inspect::box_geometry(owner, id).is_some_and(|size| {
-                        width_range.contains(&size.width.get())
-                            && height_range.contains(&size.height.get())
+                        width_range.contains(&size.width) && height_range.contains(&size.height)
                     })
                 })
                 .collect();
@@ -273,7 +272,7 @@ impl MountedDemo {
                 .into_iter()
                 .filter(|&id| {
                     inspect::box_geometry(owner, id)
-                        .is_some_and(|size| (size.height.get() - tree::LIST_BOX_HEIGHT).abs() < 1.0)
+                        .is_some_and(|size| (size.height - tree::LIST_BOX_HEIGHT).abs() < 1.0)
                 })
                 .collect();
             match matches.as_slice() {
@@ -302,8 +301,8 @@ impl MountedDemo {
             .expect("the list box must have box geometry after the bootstrap frame");
         let top_left = self.absolute_position(list_box);
         (
-            top_left.dx.get() + size.width.get() / 2.0,
-            top_left.dy.get() + size.height.get() / 2.0,
+            ((top_left.dx + size.width / 2.0) as f32),
+            ((top_left.dy + size.height / 2.0) as f32),
         )
     }
 
@@ -319,8 +318,8 @@ impl MountedDemo {
             let mut current = id;
             loop {
                 if let Some(offset) = inspect::render_offset(owner, current) {
-                    x += offset.dx.get();
-                    y += offset.dy.get();
+                    x += ((offset.dx) as f32);
+                    y += ((offset.dy) as f32);
                 }
                 match render_tree.parent(current) {
                     Some(parent) => current = parent,
@@ -333,7 +332,7 @@ impl MountedDemo {
 }
 
 fn offset(x: f32, y: f32) -> Offset {
-    Offset::new(px(x), px(y))
+    Offset::new(px(f64::from(x)), px(f64::from(y)))
 }
 
 /// The part of `type_name` before its first `<`, if any — the base name
@@ -381,7 +380,7 @@ fn tapping_the_plus_button_updates_the_rendered_counter_text() {
         .find_text("+")
         .expect("the '+' button's Text must be in the render tree");
     let tap_at = demo.absolute_position(plus);
-    demo.tap(tap_at.dx.get() + 1.0, tap_at.dy.get() + 1.0);
+    demo.tap(((tap_at.dx + 1.0) as f32), ((tap_at.dy + 1.0) as f32));
 
     // The tap's on_tap handler scheduled a rebuild via `StateCell::update`;
     // the next pump drains it.
@@ -398,7 +397,7 @@ fn tapping_the_plus_button_updates_the_rendered_counter_text() {
 
     // A second tap keeps incrementing — proves the element (and its bound
     // `StateCell`) survives across rebuilds rather than being torn down.
-    demo.tap(tap_at.dx.get() + 1.0, tap_at.dy.get() + 1.0);
+    demo.tap(((tap_at.dx + 1.0) as f32), ((tap_at.dy + 1.0) as f32));
     demo.pump(Duration::ZERO);
     assert!(
         demo.find_text("Count: 2").is_some(),
@@ -469,10 +468,10 @@ fn dragging_inside_the_list_box_scrolls_its_items() {
     // scroll axis, so an increasing offset must move content UP (a smaller
     // `dy`) — the standard scroll convention, matching `Scrollable`'s own
     // pan-update wiring in `scrollable.rs`.
-    let moved_up_by = offset_before.dy.get() - offset_after.dy.get();
+    let moved_up_by = offset_before.dy - offset_after.dy;
 
     assert!(
-        (moved_up_by - expected_scroll_delta).abs() < 1.0,
+        (moved_up_by - f64::from(expected_scroll_delta)).abs() < 1.0,
         "dragging a lone recognizer up by {expected_scroll_delta}px must move item 0's paint \
          position up by the same amount: \
          before={offset_before:?}, after={offset_after:?}, moved_up_by={moved_up_by}"
@@ -506,7 +505,7 @@ fn dragging_down_at_the_top_of_the_list_does_not_scroll_past_zero() {
 
     let offset_after = demo.absolute_position(item0);
     assert!(
-        (offset_after.dy.get() - offset_before.dy.get()).abs() < 1.0,
+        (offset_after.dy - offset_before.dy).abs() < 1.0,
         "dragging down at the top of the list (offset already 0) must not move item 0 at all — \
          jump_to's lower clamp must hold: before={offset_before:?}, after={offset_after:?}"
     );
@@ -526,8 +525,7 @@ fn tapping_the_animated_box_interpolates_width_to_the_expanded_target() {
         .pipeline_owner
         .with(|owner| inspect::box_geometry(owner, box_id))
         .expect("the animated box must have box geometry after the bootstrap frame")
-        .width
-        .get();
+        .width;
     assert!(
         (width_at_rest - tree::COLLAPSED_WIDTH).abs() < 0.5,
         "the animated box starts at its collapsed width, got {width_at_rest}"
@@ -536,7 +534,7 @@ fn tapping_the_animated_box_interpolates_width_to_the_expanded_target() {
     // Tap the box (Opaque hit-test behavior, so any point inside its bounds
     // works) to toggle `expanded` and retarget the controller.
     let tap_at = demo.absolute_position(box_id);
-    demo.tap(tap_at.dx.get() + 2.0, tap_at.dy.get() + 2.0);
+    demo.tap(((tap_at.dx + 2.0) as f32), ((tap_at.dy + 2.0) as f32));
     demo.pump(Duration::ZERO); // the detection frame: rebuild + retarget, t = 0
 
     let box_id = demo.animated_box_render_id();
@@ -544,8 +542,7 @@ fn tapping_the_animated_box_interpolates_width_to_the_expanded_target() {
         .pipeline_owner
         .with(|owner| inspect::box_geometry(owner, box_id))
         .expect("geometry after retarget")
-        .width
-        .get();
+        .width;
     assert!(
         (width_after_retarget - tree::COLLAPSED_WIDTH).abs() < 0.5,
         "the detection frame (t=0) must still show the collapsed width, got {width_after_retarget}"
@@ -563,8 +560,7 @@ fn tapping_the_animated_box_interpolates_width_to_the_expanded_target() {
             .pipeline_owner
             .with(|owner| inspect::box_geometry(owner, id))
             .expect("geometry mid-flight")
-            .width
-            .get();
+            .width;
         samples.push(width);
     }
 
@@ -619,7 +615,10 @@ fn tapping_the_details_button_pushes_a_route_that_hides_the_home_route_from_hit_
         .find_text(tree::DETAILS_BUTTON_LABEL)
         .expect("the 'View details' button must be in the render tree");
     let details_tap_at = demo.absolute_position(details_button);
-    demo.tap(details_tap_at.dx.get() + 1.0, details_tap_at.dy.get() + 1.0);
+    demo.tap(
+        ((details_tap_at.dx + 1.0) as f32),
+        ((details_tap_at.dy + 1.0) as f32),
+    );
     demo.pump(Duration::ZERO);
 
     assert!(
@@ -634,7 +633,10 @@ fn tapping_the_details_button_pushes_a_route_that_hides_the_home_route_from_hit_
     // A tap at the "+" button's old screen position must not reach it: the
     // details `PageRoute` is opaque, so `RenderTheater`'s skip_count now
     // excludes the home route from hit-testing (`overlay/mod.rs::onstage_plan`).
-    demo.tap(plus_tap_at.dx.get() + 1.0, plus_tap_at.dy.get() + 1.0);
+    demo.tap(
+        ((plus_tap_at.dx + 1.0) as f32),
+        ((plus_tap_at.dy + 1.0) as f32),
+    );
     demo.pump(Duration::ZERO);
     assert!(
         demo.find_text("Count: 0").is_some(),
@@ -656,9 +658,15 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         .find_text("+")
         .expect("the '+' button's Text must be in the render tree");
     let plus_tap_at = demo.absolute_position(plus);
-    demo.tap(plus_tap_at.dx.get() + 1.0, plus_tap_at.dy.get() + 1.0);
+    demo.tap(
+        ((plus_tap_at.dx + 1.0) as f32),
+        ((plus_tap_at.dy + 1.0) as f32),
+    );
     demo.pump(Duration::ZERO);
-    demo.tap(plus_tap_at.dx.get() + 1.0, plus_tap_at.dy.get() + 1.0);
+    demo.tap(
+        ((plus_tap_at.dx + 1.0) as f32),
+        ((plus_tap_at.dy + 1.0) as f32),
+    );
     demo.pump(Duration::ZERO);
     assert!(
         demo.find_text("Count: 2").is_some(),
@@ -669,7 +677,10 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         .find_text(tree::DETAILS_BUTTON_LABEL)
         .expect("the 'View details' button must be in the render tree");
     let details_tap_at = demo.absolute_position(details_button);
-    demo.tap(details_tap_at.dx.get() + 1.0, details_tap_at.dy.get() + 1.0);
+    demo.tap(
+        ((details_tap_at.dx + 1.0) as f32),
+        ((details_tap_at.dy + 1.0) as f32),
+    );
     demo.pump(Duration::ZERO);
     assert!(demo.find_text(tree::DETAILS_ROUTE_TEXT).is_some());
 
@@ -677,7 +688,10 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         .find_text(tree::BACK_BUTTON_LABEL)
         .expect("the back button must be in the render tree while the details route is on top");
     let back_tap_at = demo.absolute_position(back);
-    demo.tap(back_tap_at.dx.get() + 1.0, back_tap_at.dy.get() + 1.0);
+    demo.tap(
+        ((back_tap_at.dx + 1.0) as f32),
+        ((back_tap_at.dy + 1.0) as f32),
+    );
     demo.pump(Duration::ZERO);
 
     assert!(
@@ -709,7 +723,10 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
     );
 
     // The home route's own hit-testing must be restored, too.
-    demo.tap(plus_tap_at.dx.get() + 1.0, plus_tap_at.dy.get() + 1.0);
+    demo.tap(
+        ((plus_tap_at.dx + 1.0) as f32),
+        ((plus_tap_at.dy + 1.0) as f32),
+    );
     demo.pump(Duration::ZERO);
     assert!(
         demo.find_text("Count: 3").is_some(),

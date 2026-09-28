@@ -54,20 +54,20 @@ fn main() -> anyhow::Result<()> {
         // Physical (device pixel) information
         tracing::info!(
             "  Physical Resolution: {}x{} pixels",
-            bounds.size.width.0,
-            bounds.size.height.0
+            bounds.size.width,
+            bounds.size.height
         );
         tracing::info!(
             "  Physical Position: ({}, {})",
-            bounds.origin.x.0,
-            bounds.origin.y.0
+            bounds.origin.x,
+            bounds.origin.y
         );
 
         // Logical (DPI-independent) information
         tracing::info!(
             "  Logical Size: {:.0}x{:.0} pt",
-            logical_size.width.0,
-            logical_size.height.0
+            logical_size.width,
+            logical_size.height
         );
 
         // DPI scaling
@@ -92,14 +92,14 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("  Refresh Rate: {:.0} Hz", refresh);
 
         // Usable area (excluding taskbar/menu bar)
-        let taskbar_width = bounds.size.width.0 - usable_bounds.size.width.0;
-        let taskbar_height = bounds.size.height.0 - usable_bounds.size.height.0;
+        let taskbar_width = bounds.size.width - usable_bounds.size.width;
+        let taskbar_height = bounds.size.height - usable_bounds.size.height;
 
         if taskbar_width > 0 || taskbar_height > 0 {
             tracing::info!(
                 "  Usable Area: {}x{} pixels",
-                usable_bounds.size.width.0,
-                usable_bounds.size.height.0
+                usable_bounds.size.width,
+                usable_bounds.size.height
             );
             tracing::info!(
                 "    → System UI takes {}x{} pixels",
@@ -112,13 +112,13 @@ fn main() -> anyhow::Result<()> {
 
         // Display capabilities
         let diagonal_inches = calculate_diagonal_inches(
-            bounds.size.width.0 as f64,
-            bounds.size.height.0 as f64,
+            bounds.size.width as f64,
+            bounds.size.height as f64,
             effective_dpi,
         );
         tracing::info!("  Estimated Size: {:.1}\"", diagonal_inches);
 
-        let aspect_ratio = bounds.size.width.0 as f64 / bounds.size.height.0 as f64;
+        let aspect_ratio = bounds.size.width as f64 / bounds.size.height as f64;
         tracing::info!("  Aspect Ratio: {:.2}:1", aspect_ratio);
 
         // Common aspect ratios
@@ -147,10 +147,10 @@ fn main() -> anyhow::Result<()> {
             |(min_x, max_x, min_y, max_y), d| {
                 let bounds = d.bounds();
                 (
-                    min_x.min(bounds.origin.x.0),
-                    max_x.max(bounds.origin.x.0 + bounds.size.width.0),
-                    min_y.min(bounds.origin.y.0),
-                    max_y.max(bounds.origin.y.0 + bounds.size.height.0),
+                    min_x.min(bounds.origin.x),
+                    max_x.max(bounds.origin.x + bounds.size.width),
+                    min_y.min(bounds.origin.y),
+                    max_y.max(bounds.origin.y + bounds.size.height),
                 )
             },
         );
@@ -168,12 +168,12 @@ fn main() -> anyhow::Result<()> {
         // Analyze arrangement
         let horizontal_arrangement = displays.iter().all(|d| {
             let bounds = d.bounds();
-            bounds.origin.y.0 == 0
+            bounds.origin.y == 0
         });
 
         let vertical_arrangement = displays.iter().all(|d| {
             let bounds = d.bounds();
-            bounds.origin.x.0 == 0
+            bounds.origin.x == 0
         });
 
         if horizontal_arrangement {

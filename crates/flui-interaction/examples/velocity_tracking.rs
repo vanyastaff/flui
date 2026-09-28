@@ -11,10 +11,7 @@
 use std::time::{Duration, Instant};
 
 use flui_interaction::processing::VelocityTracker;
-use flui_types::{
-    geometry::{Offset, f64},
-    gestures::PointerDeviceKind,
-};
+use flui_types::{geometry::Offset, gestures::PointerDeviceKind};
 
 fn main() {
     let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);

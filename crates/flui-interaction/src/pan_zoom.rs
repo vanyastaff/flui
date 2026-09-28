@@ -375,7 +375,7 @@ mod tests {
         // Rotate = π/4 → rotation = π/4
         let gesture = make_gesture(
             1,
-            PointerGesture::Rotate(core::f64::consts::FRAC_PI_4),
+            PointerGesture::Rotate(((core::f64::consts::FRAC_PI_4) as f32)),
             0.0,
             0.0,
         );

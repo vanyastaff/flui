@@ -26,13 +26,13 @@ use flui_view::prelude::*;
 /// Wraps [`RenderColoredBox`] from the rendering layer.
 #[derive(Clone)]
 struct ColoredBoxView {
-    color: [f32; 4],
-    width: f32,
-    height: f32,
+    color: [f64; 4],
+    width: f64,
+    height: f64,
 }
 
 impl ColoredBoxView {
-    fn new(color: [f32; 4], width: f32, height: f32) -> Self {
+    fn new(color: [f64; 4], width: f64, height: f64) -> Self {
         Self {
             color,
             width,

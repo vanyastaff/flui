@@ -1138,7 +1138,7 @@ impl LaidOut {
                 .painter()
                 .get_boxes_for_selection(0, text_len)
                 .first()
-                .map(|text_box| text_box.rect.left().get())
+                .map(|text_box| text_box.rect.left())
                 .expect("a laid-out non-empty paragraph has at least one selection box")
         })
     }

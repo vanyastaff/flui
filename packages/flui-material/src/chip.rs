@@ -1551,32 +1551,32 @@ mod tests {
 
         let epsilon = 0.01;
         assert!(
-            (bounds.min_x().get() - expected_min_x).abs() < epsilon,
+            (bounds.min_x() - expected_min_x).abs() < epsilon,
             "min x: got {}, expected {expected_min_x}",
-            bounds.min_x().get()
+            bounds.min_x()
         );
         assert!(
-            (bounds.max_x().get() - expected_max_x).abs() < epsilon,
+            (bounds.max_x() - expected_max_x).abs() < epsilon,
             "max x: got {}, expected {expected_max_x}",
-            bounds.max_x().get()
+            bounds.max_x()
         );
         assert!(
-            (bounds.min_y().get() - expected_min_y).abs() < epsilon,
+            (bounds.min_y() - expected_min_y).abs() < epsilon,
             "min y: got {}, expected {expected_min_y}",
-            bounds.min_y().get()
+            bounds.min_y()
         );
         assert!(
-            (bounds.max_y().get() - expected_max_y).abs() < epsilon,
+            (bounds.max_y() - expected_max_y).abs() < epsilon,
             "max y: got {}, expected {expected_max_y}",
-            bounds.max_y().get()
+            bounds.max_y()
         );
 
         // The whole mark must stay strictly inside the cell — never
         // touching the full-cell edges the pre-fix version reached.
-        assert!(bounds.max_x().get() < cell);
-        assert!(bounds.max_y().get() < cell);
-        assert!(bounds.min_x().get() > 0.0);
-        assert!(bounds.min_y().get() > 0.0);
+        assert!(bounds.max_x() < cell);
+        assert!(bounds.max_y() < cell);
+        assert!(bounds.min_x() > 0.0);
+        assert!(bounds.min_y() > 0.0);
     }
 
     #[test]

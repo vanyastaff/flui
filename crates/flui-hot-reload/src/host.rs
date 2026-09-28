@@ -22,7 +22,7 @@ use flui_layer::Scene;
 use crate::dynlib::{self, DynLib};
 
 /// Function pointer: `flui_scene_build(width, height) -> *mut c_void`
-type BuildSceneFn = unsafe extern "C" fn(f32, f32) -> *mut std::ffi::c_void;
+type BuildSceneFn = unsafe extern "C" fn(f64, f64) -> *mut std::ffi::c_void;
 
 /// Function pointer: `flui_scene_version() -> u32`
 type SceneVersionFn = extern "C" fn() -> u32;
@@ -274,7 +274,7 @@ impl ScenePlugin {
     /// obligation applies only to a `Some` return — a `None` (skipped frame)
     /// owns nothing.
     #[expect(unsafe_code)]
-    pub unsafe fn build_scene(&self, width: f32, height: f32) -> Option<Scene> {
+    pub unsafe fn build_scene(&self, width: f64, height: f64) -> Option<Scene> {
         // SAFETY: `build_fn`/`free_fn` were resolved from the `DynLib` this
         // struct owns, which outlives the call. The plugin macro returns
         // `Box::into_raw(Box::new(scene))`, so a non-null `ptr` addresses one

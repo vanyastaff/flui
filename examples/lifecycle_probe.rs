@@ -95,7 +95,7 @@ mod probe {
     struct Witness {
         frames: AtomicU64,
         /// `(max_width, max_height)` in logical pixels.
-        constraints: Mutex<Option<(f32, f32)>>,
+        constraints: Mutex<Option<(f64, f64)>>,
     }
 
     /// What a frame-counting phase must satisfy.

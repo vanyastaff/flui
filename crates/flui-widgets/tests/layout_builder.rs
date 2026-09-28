@@ -34,10 +34,7 @@ fn recorder(
 ) -> impl Fn(&dyn BuildContext, BoxConstraints) -> SizedBox + Send + Sync + 'static {
     move |_ctx, constraints| {
         log.lock().push(constraints);
-        SizedBox::new(
-            constraints.max_width.get() / 2.0,
-            constraints.max_height.get() / 2.0,
-        )
+        SizedBox::new(constraints.max_width / 2.0, constraints.max_height / 2.0)
     }
 }
 

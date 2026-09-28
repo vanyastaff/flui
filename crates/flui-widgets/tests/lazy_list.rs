@@ -1367,8 +1367,7 @@ fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state() {
             laid.find_text("row1")
                 .expect("row 1 must be resident at its new index"),
         )
-        .dy
-        .get();
+        .dy;
     assert!(
         (0.0..200.0).contains(&top),
         "row 1 is on screen at its new index; top={top}"
@@ -1395,7 +1394,6 @@ fn lazy_list_view_builder_keyed_swap_within_the_band_preserves_state_without_a_c
     let top_of = |laid: &LaidOut, id: u32| {
         laid.absolute_offset(laid.find_text(&format!("row{id}")).expect("resident"))
             .dy
-            .get()
     };
     let (y11, y13) = (top_of(&laid, 11), top_of(&laid, 13));
 
@@ -1593,8 +1591,7 @@ fn lazy_list_view_builder_preserves_a_global_keyed_item_grafted_to_another_list(
     assert_eq!(log.lock().as_slice(), ["init"]);
     let first_top = laid
         .absolute_offset(laid.find_text("keyed").expect("keyed item"))
-        .dy
-        .get();
+        .dy;
 
     // Move the keyed item from the first list to the second.
     keyed_in_second.store(true, Ordering::SeqCst);
@@ -1612,8 +1609,7 @@ fn lazy_list_view_builder_preserves_a_global_keyed_item_grafted_to_another_list(
     );
     let second_top = laid
         .absolute_offset(laid.find_text("keyed").expect("keyed item"))
-        .dy
-        .get();
+        .dy;
     assert!(
         second_top > first_top,
         "the item now sits in the second list"

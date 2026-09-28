@@ -1124,7 +1124,7 @@ mod tests {
         let state = recognizer.gesture_state.lock();
         let focal = ScaleGestureRecognizer::calculate_focal_point(&state.pointers);
         assert!(
-            (focal.dx.0 - SEPARATION / 2.0).abs() < 0.01,
+            (focal.dx - SEPARATION / 2.0).abs() < 0.01,
             "premise: a symmetric pinch leaves the focal point where it was, \
              so only the span arm can have accepted"
         );

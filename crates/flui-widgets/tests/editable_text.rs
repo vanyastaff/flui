@@ -2539,8 +2539,8 @@ mod text_store {
         .expect("laid out")
         .bounds;
         let (x, y) = (
-            (rect.origin.x + rect.size.width / 2.0).get(),
-            (rect.origin.y + rect.size.height / 2.0).get(),
+            (rect.origin.x + rect.size.width / 2.0),
+            (rect.origin.y + rect.size.height / 2.0),
         );
         harness.dispatch_pointer_down(x, y);
         harness.dispatch_pointer_up(x, y);

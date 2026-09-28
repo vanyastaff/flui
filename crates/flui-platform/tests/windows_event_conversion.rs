@@ -130,13 +130,13 @@ mod tests {
         // Verify window size matches requested size
         let physical_size = window.physical_size();
         let scale_factor = window.scale_factor();
-        let logical_width = (physical_size.width.0 as f64) / scale_factor;
-        let logical_height = (physical_size.height.0 as f64) / scale_factor;
+        let logical_width = (physical_size.width as f64) / scale_factor;
+        let logical_height = (physical_size.height as f64) / scale_factor;
 
         tracing::info!(
             "Window size: physical={}x{}, logical={:.0}x{:.0}, scale={}",
-            physical_size.width.0,
-            physical_size.height.0,
+            physical_size.width,
+            physical_size.height,
             logical_width,
             logical_height,
             scale_factor
@@ -289,22 +289,22 @@ mod tests {
         );
 
         // Verify coordinate system consistency
-        let expected_logical_width = (physical_size.width.0 as f64) / scale_factor;
-        let expected_logical_height = (physical_size.height.0 as f64) / scale_factor;
-        let width_diff = (logical_size.width.0 - expected_logical_width as f64).abs();
-        let height_diff = (logical_size.height.0 - expected_logical_height as f64).abs();
+        let expected_logical_width = (physical_size.width as f64) / scale_factor;
+        let expected_logical_height = (physical_size.height as f64) / scale_factor;
+        let width_diff = (logical_size.width - expected_logical_width as f64).abs();
+        let height_diff = (logical_size.height - expected_logical_height as f64).abs();
 
         assert!(
             width_diff < 2.0,
             "Logical width mismatch: expected {}, got {}",
             expected_logical_width,
-            logical_size.width.0
+            logical_size.width
         );
         assert!(
             height_diff < 2.0,
             "Logical height mismatch: expected {}, got {}",
             expected_logical_height,
-            logical_size.height.0
+            logical_size.height
         );
 
         tracing::info!("✓ Windows event pipeline integration verified");

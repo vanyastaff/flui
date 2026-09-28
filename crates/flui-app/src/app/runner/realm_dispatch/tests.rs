@@ -28,7 +28,7 @@ use crate::app::{AppConfig, FrameFailureDetail};
 
 static_assertions::assert_impl_all!(PlatformToUi: Send);
 
-fn down_input(offset: f32) -> PlatformInput {
+fn down_input(offset: f64) -> PlatformInput {
     PlatformInput::Pointer(make_down_event(
         Offset::new(offset, offset),
         PointerType::Mouse,
@@ -1925,7 +1925,7 @@ fn surface_applier_panic_is_caught_and_the_applier_still_applies_next_time() {
         );
     });
 
-    let resize_event = |side: f32| {
+    let resize_event = |side: f64| {
         RealmTask::Event(PlatformToUi::Resized {
             size: flui_types::Size::new((side), (side)),
             scale_factor: 1.0,

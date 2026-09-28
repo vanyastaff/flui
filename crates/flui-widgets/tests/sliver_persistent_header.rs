@@ -462,7 +462,7 @@ fn a_min_sizing_child_survives_the_child_driven_paint_boundary() {
     let header = *laid
         .find_all_by_render_type("RenderSliverPinnedPersistentHeader")
         .iter()
-        .min_by(|a, b| laid.offset(**a).dy.get().total_cmp(&laid.offset(**b).dy))
+        .min_by(|a, b| laid.offset(**a).dy.total_cmp(&laid.offset(**b).dy))
         .expect("two pinned headers are mounted");
     // Premise: below the boundary the header's paint is capped by the
     // remaining room (600 − 550 = 50), not the child.

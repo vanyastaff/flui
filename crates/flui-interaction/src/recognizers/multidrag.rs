@@ -1193,7 +1193,7 @@ mod tests {
         let recorded = *first.lock();
         let recorded = recorded.expect("first update fired");
         assert!(
-            recorded.dx.0.abs() > 18.0,
+            recorded.dx.abs() > 18.0,
             "expected first update to carry ≥slop delta, got {recorded:?}"
         );
     }

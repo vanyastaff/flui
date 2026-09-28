@@ -102,9 +102,9 @@ fn demo_columns() -> [FilterColumn; 5] {
 /// - For filtered columns: `push_color_filter(filter)` + `add_canvas(shapes_canvas)` + `pop()`
 /// - `pop()` — close root offset layer
 /// - `build()` — consume builder, returns root `LayerId`
-fn build_color_filter_scene(viewport_width: f32, viewport_height: f32) -> Scene {
+fn build_color_filter_scene(viewport_width: f64, viewport_height: f64) -> Scene {
     let columns = demo_columns();
-    let column_count = columns.len() as f32;
+    let column_count = columns.len() as f64;
     let column_width = viewport_width / column_count;
 
     let tree = {
@@ -123,7 +123,7 @@ fn build_color_filter_scene(viewport_width: f32, viewport_height: f32) -> Scene 
 
         // One column per filter.
         for (col_index, column_spec) in columns.iter().enumerate() {
-            let x_offset = col_index as f32 * column_width;
+            let x_offset = col_index as f64 * column_width;
 
             // Draw the content canvas for this column (shapes + divider).
             let shapes_canvas = build_column_canvas(x_offset, column_width, viewport_height);
@@ -167,7 +167,7 @@ fn build_color_filter_scene(viewport_width: f32, viewport_height: f32) -> Scene 
 /// Each column contains a coral rectangle, a teal rectangle, a white accent
 /// square, and a yellow strip — the same geometry as `filter_demo.rs` so the
 /// color-filter effect is visually comparable.
-fn build_column_canvas(x_offset: f32, column_width: f32, viewport_height: f32) -> CanvasLayer {
+fn build_column_canvas(x_offset: f64, column_width: f64, viewport_height: f64) -> CanvasLayer {
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 
@@ -270,7 +270,7 @@ fn main() {
         .expect("failed to create GPU renderer");
 
     let physical = window.physical_size();
-    renderer.resize(physical.width.0 as u32, physical.height.0 as u32);
+    renderer.resize(physical.width as u32, physical.height as u32);
 
     tracing::info!(
         adapter = renderer.capabilities().adapter_name,
@@ -285,8 +285,8 @@ fn main() {
     let window_for_frame = window.clone();
     window.on_request_frame(Box::new(move || {
         let size = window_for_frame.physical_size();
-        let viewport_width = size.width.0 as f32;
-        let viewport_height = size.height.0 as f32;
+        let viewport_width = size.width as f64;
+        let viewport_height = size.height as f64;
 
         let scene = build_color_filter_scene(viewport_width, viewport_height);
 
@@ -299,8 +299,8 @@ fn main() {
     // Resize callback: update the renderer's surface dimensions.
     let renderer_for_resize = Arc::clone(&renderer);
     window.on_resize(Box::new(move |new_size, scale_factor| {
-        let surface_width = (new_size.width.0 * scale_factor) as u32;
-        let surface_height = (new_size.height.0 * scale_factor) as u32;
+        let surface_width = (new_size.width * scale_factor) as u32;
+        let surface_height = (new_size.height * scale_factor) as u32;
         renderer_for_resize
             .lock()
             .unwrap()

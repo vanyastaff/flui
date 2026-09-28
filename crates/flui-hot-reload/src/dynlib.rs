@@ -11,7 +11,7 @@
 //! use std::path::Path;
 //!
 //! let lib = DynLib::open(Path::new("libplugin.so")).expect("failed to load");
-//! let build_fn: extern "C" fn(f32, f32) -> *mut std::ffi::c_void = unsafe {
+//! let build_fn: extern "C" fn(f64, f64) -> *mut std::ffi::c_void = unsafe {
 //!     let ptr = lib.symbol("flui_scene_build").expect("symbol not found");
 //!     std::mem::transmute(ptr)
 //! };

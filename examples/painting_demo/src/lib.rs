@@ -276,16 +276,16 @@ use flui_types::geometry::{Offset, Pixels, Point, RRect, Rect, px};
 use flui_types::painting::{Paint, Shader, path::Path};
 use flui_types::styling::Color;
 
-fn pt(x: f32, y: f32) -> Point<f64> {
-    Point::new(x, y)
+fn pt(x: f64, y: f64) -> Point<f64> {
+    Point::new(f64::from(x), f64::from(y))
 }
 
-fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<f64> {
-    Rect::from_xywh(x, y, w, h)
+fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect<f64> {
+    Rect::from_xywh(x, f64::from(y), f64::from(w), f64::from(h))
 }
 
-fn ofs(dx: f32, dy: f32) -> Offset<f64> {
-    Offset::new(dx, dy)
+fn ofs(dx: f64, dy: f64) -> Offset<f64> {
+    Offset::new(f64::from(dx), f64::from(dy))
 }
 
 // ============================================================
@@ -293,7 +293,7 @@ fn ofs(dx: f32, dy: f32) -> Offset<f64> {
 // ============================================================
 
 /// 1. Basic filled rectangles
-fn draw_basic_shapes(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_basic_shapes(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let colors = [
@@ -307,14 +307,14 @@ fn draw_basic_shapes(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
     let label_paint = Paint::fill(Color::WHITE);
     for (i, (color, name)) in colors.iter().enumerate() {
-        let x = 30.0 + i as f32 * 190.0;
+        let x = 30.0 + i as f64 * 190.0;
         painter.draw_rect(rect(x, y, 170.0, 90.0), &Paint::fill(*color));
         painter.draw_text(name, pt(x + 55.0, y + 100.0), 14.0, &label_paint);
     }
 }
 
 /// 2. Rounded rects with varying radii
-fn draw_rounded_rects(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_rounded_rects(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let radii = [5.0, 15.0, 30.0, 50.0];
@@ -327,7 +327,7 @@ fn draw_rounded_rects(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
     let label_paint = Paint::fill(Color::WHITE);
     for (i, (radius, color)) in radii.iter().zip(colors.iter()).enumerate() {
-        let x = 30.0 + i as f32 * 280.0;
+        let x = 30.0 + i as f64 * 280.0;
         let rrect = RRect::from_rect_circular(rect(x, y, 250.0, 80.0), (*radius));
         painter.draw_rrect(rrect, &Paint::fill(*color));
         painter.draw_text(
@@ -340,7 +340,7 @@ fn draw_rounded_rects(painter: &mut flui_engine::WgpuPainter, y: f32) {
 }
 
 /// 3. Circles and ovals
-fn draw_circles_and_ovals(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_circles_and_ovals(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     // Filled circles
@@ -351,13 +351,13 @@ fn draw_circles_and_ovals(painter: &mut flui_engine::WgpuPainter, y: f32) {
         Color::rgba(255, 200, 50, 255),
     ];
     for (i, color) in circle_colors.iter().enumerate() {
-        let cx = 90.0 + i as f32 * 130.0;
+        let cx = 90.0 + i as f64 * 130.0;
         painter.draw_circle(pt(cx, y + 55.0), 50.0, &Paint::fill(*color));
     }
 
     // Stroked circles over filled ones
     for (i, color) in circle_colors.iter().enumerate() {
-        let cx = 90.0 + i as f32 * 130.0;
+        let cx = 90.0 + i as f64 * 130.0;
         painter.draw_circle(pt(cx, y + 55.0), 50.0, &Paint::stroke(*color, 2.0));
     }
 
@@ -368,13 +368,13 @@ fn draw_circles_and_ovals(painter: &mut flui_engine::WgpuPainter, y: f32) {
         Color::rgba(200, 100, 255, 200),
     ];
     for (i, color) in oval_colors.iter().enumerate() {
-        let x = 600.0 + i as f32 * 200.0;
+        let x = 600.0 + i as f64 * 200.0;
         painter.draw_oval(rect(x, y + 5.0, 170.0, 100.0), &Paint::fill(*color));
     }
 }
 
 /// 4. Lines and stroked shapes
-fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     // Lines of varying widths
@@ -388,7 +388,7 @@ fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, y: f32) {
     ];
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
     for (i, (w, color)) in widths.iter().zip(line_colors.iter()).enumerate() {
-        let ly = y + i as f32 * 18.0;
+        let ly = y + i as f64 * 18.0;
         painter.draw_line(pt(30.0, ly), pt(500.0, ly), &Paint::stroke(*color, *w));
         painter.draw_text(&format!("{w}px"), pt(510.0, ly - 6.0), 12.0, &label_paint);
     }
@@ -413,10 +413,10 @@ fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, y: f32) {
 }
 
 /// 5. Dashed lines
-fn draw_dashed_lines(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_dashed_lines(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
-    let patterns: &[(&[f32], &str)] = &[
+    let patterns: &[(&[f64], &str)] = &[
         (&[10.0, 5.0], "10-5"),
         (&[20.0, 10.0], "20-10"),
         (&[5.0, 5.0, 15.0, 5.0], "5-5-15-5"),
@@ -425,7 +425,7 @@ fn draw_dashed_lines(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
     for (i, (intervals, name)) in patterns.iter().enumerate() {
-        let ly = y + i as f32 * 18.0;
+        let ly = y + i as f64 * 18.0;
         let dash_paint =
             Paint::stroke(Color::rgba(200, 200, 255, 255), 2.0).with_dash(intervals.to_vec(), 0.0);
         painter.draw_line(pt(30.0, ly), pt(600.0, ly), &dash_paint);
@@ -434,7 +434,7 @@ fn draw_dashed_lines(painter: &mut flui_engine::WgpuPainter, y: f32) {
 }
 
 /// 6. Paths & polygons (star, triangle, pentagon, custom bezier)
-fn draw_paths(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_paths(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -480,14 +480,14 @@ fn draw_paths(painter: &mut flui_engine::WgpuPainter, y: f32) {
 }
 
 /// 7. Arcs
-fn draw_arcs(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_arcs(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
-    use std::f32::consts::{FRAC_PI_2, PI, TAU};
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
 
     // Pie slices (use_center = true)
-    let arc_data: &[(f32, f32, Color, &str)] = &[
+    let arc_data: &[(f64, f64, Color, &str)] = &[
         (0.0, FRAC_PI_2, Color::rgba(255, 80, 80, 220), "90 deg"),
         (0.0, PI, Color::rgba(80, 255, 80, 220), "180 deg"),
         (PI * 0.25, PI, Color::rgba(80, 80, 255, 220), "45-225 deg"),
@@ -495,23 +495,35 @@ fn draw_arcs(painter: &mut flui_engine::WgpuPainter, y: f32) {
     ];
 
     for (i, (start, sweep, color, name)) in arc_data.iter().enumerate() {
-        let x = 80.0 + i as f32 * 200.0;
+        let x = 80.0 + i as f64 * 200.0;
         let r = rect(x - 50.0, y, 100.0, 100.0);
-        painter.draw_arc(r, *start, *sweep, true, &Paint::fill(*color));
+        painter.draw_arc(
+            r,
+            ((*start) as f32),
+            ((*sweep) as f32),
+            true,
+            &Paint::fill(*color),
+        );
         painter.draw_text(name, pt(x - 25.0, y + 110.0), 12.0, &label_paint);
     }
 
     // Open arcs (use_center = false)
     for (i, (start, sweep, color, _)) in arc_data.iter().enumerate() {
-        let x = 880.0 + i as f32 * 80.0;
+        let x = 880.0 + i as f64 * 80.0;
         let r = rect(x - 30.0, y + 10.0, 60.0, 60.0);
-        painter.draw_arc(r, *start, *sweep, false, &Paint::stroke(*color, 3.0));
+        painter.draw_arc(
+            r,
+            ((*start) as f32),
+            ((*sweep) as f32),
+            false,
+            &Paint::stroke(*color, 3.0),
+        );
     }
     painter.draw_text("Open arcs", pt(870.0, y + 110.0), 12.0, &label_paint);
 }
 
 /// 8. Gradients
-fn draw_gradients(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_gradients(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -603,7 +615,7 @@ fn draw_gradients(painter: &mut flui_engine::WgpuPainter, y: f32) {
 }
 
 /// 9. Transforms
-fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -632,7 +644,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f32) {
     for (i, color) in rot_colors.iter().enumerate() {
         painter.save();
         painter.translate(ofs(center_x, center_y));
-        painter.rotate(i as f32 * std::f32::consts::PI / 6.0);
+        painter.rotate(((i as f64 * std::f64::consts::PI / 6.0) as f32));
         painter.draw_rect(rect(-50.0, -15.0, 100.0, 30.0), &Paint::fill(*color));
         painter.restore();
     }
@@ -641,9 +653,9 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f32) {
     // Scale
     painter.save();
     painter.translate(ofs(500.0, y + 70.0));
-    for (i, s) in [0.5_f32, 0.75, 1.0, 1.25].iter().enumerate() {
+    for (i, s) in [0.5_f64, 0.75, 1.0, 1.25].iter().enumerate() {
         painter.save();
-        painter.scale(*s, *s);
+        painter.scale(((*s) as f32), ((*s) as f32));
         let alpha = 100 + i as u8 * 40;
         painter.draw_rect(
             rect(-30.0, -20.0, 60.0, 40.0),
@@ -674,13 +686,13 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f32) {
         &Paint::stroke(Color::GRAY, 1.0),
     );
     painter.save();
-    painter.rotate(std::f32::consts::FRAC_PI_4);
+    painter.rotate(((std::f64::consts::FRAC_PI_4) as f32));
     painter.draw_rect(
         rect(-35.0, -35.0, 70.0, 70.0),
         &Paint::fill(Color::rgba(150, 100, 255, 180)),
     );
     painter.save();
-    painter.rotate(std::f32::consts::FRAC_PI_4);
+    painter.rotate(((std::f64::consts::FRAC_PI_4) as f32));
     painter.draw_rect(
         rect(-20.0, -20.0, 40.0, 40.0),
         &Paint::fill(Color::rgba(255, 100, 150, 180)),
@@ -692,7 +704,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f32) {
 }
 
 /// 10. Clipping
-fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -729,7 +741,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f32) {
         flui_types::painting::Clip::HardEdge,
     );
     for i in 0..8 {
-        let cx = 300.0 + i as f32 * 30.0;
+        let cx = 300.0 + i as f64 * 30.0;
         let color = Color::rgba(
             (i * 35) as u8,
             (255 - i * 30) as u8,
@@ -784,7 +796,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f32) {
 }
 
 /// 11. Double rounded rect
-fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -831,7 +843,7 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f32) {
 }
 
 /// 12. Text rendering
-fn draw_text(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_text(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let sizes = [12.0, 16.0, 20.0, 28.0, 36.0];
@@ -844,12 +856,12 @@ fn draw_text(painter: &mut flui_engine::WgpuPainter, y: f32) {
             size,
             &paint,
         );
-        text_y += size + 8.0;
+        text_y += f64::from(size + 8.0);
     }
 }
 
 /// 13. Opacity & blending
-fn draw_opacity(painter: &mut flui_engine::WgpuPainter, y: f32) {
+fn draw_opacity(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // The `Painter` trait was deleted; methods are inherent on `WgpuPainter`
 
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
@@ -857,7 +869,7 @@ fn draw_opacity(painter: &mut flui_engine::WgpuPainter, y: f32) {
     // Decreasing alpha rectangles
     let alphas = [200, 150, 100, 50];
     for (i, alpha) in alphas.iter().enumerate() {
-        let x = 30.0 + i as f32 * 60.0;
+        let x = 30.0 + i as f64 * 60.0;
         let color = Color::rgba(255, 50, 50, *alpha);
         painter.draw_rect(rect(x, y, 120.0, 80.0), &Paint::fill(color));
     }
@@ -889,8 +901,8 @@ fn draw_opacity(painter: &mut flui_engine::WgpuPainter, y: f32) {
 
     // Alpha gradient bars
     for i in 0..10 {
-        let x = 600.0 + i as f32 * 50.0;
-        let alpha = ((i + 1) as f32 * 25.5) as u8;
+        let x = 600.0 + i as f64 * 50.0;
+        let alpha = ((i + 1) as f64 * 25.5) as u8;
         painter.draw_rect(
             rect(x, y, 45.0, 80.0),
             &Paint::fill(Color::rgba(100, 200, 255, alpha)),
@@ -903,26 +915,23 @@ fn draw_opacity(painter: &mut flui_engine::WgpuPainter, y: f32) {
 // Geometry helpers
 // ============================================================
 
-fn make_star(center: Point<f64>, outer_r: f32, inner_r: f32, points: usize) -> Path {
+fn make_star(center: Point<f64>, outer_r: f64, inner_r: f64, points: usize) -> Path {
     let mut pts = Vec::with_capacity(points * 2);
     for i in 0..(points * 2) {
-        let angle = (i as f32) * std::f32::consts::PI / points as f32 - std::f32::consts::FRAC_PI_2;
+        let angle = (i as f64) * std::f64::consts::PI / points as f64 - std::f64::consts::FRAC_PI_2;
         let r = if i % 2 == 0 { outer_r } else { inner_r };
-        pts.push(pt(
-            center.x.0 + angle.cos() * r,
-            center.y.0 + angle.sin() * r,
-        ));
+        pts.push(pt(center.x + angle.cos() * r, center.y + angle.sin() * r));
     }
     Path::polygon(&pts)
 }
 
-fn make_regular_polygon(center: Point<f64>, radius: f32, sides: usize) -> Path {
+fn make_regular_polygon(center: Point<f64>, radius: f64, sides: usize) -> Path {
     let mut pts = Vec::with_capacity(sides);
     for i in 0..sides {
-        let angle = (i as f32) * std::f32::consts::TAU / sides as f32 - std::f32::consts::FRAC_PI_2;
+        let angle = (i as f64) * std::f64::consts::TAU / sides as f64 - std::f64::consts::FRAC_PI_2;
         pts.push(pt(
-            center.x.0 + angle.cos() * radius,
-            center.y.0 + angle.sin() * radius,
+            center.x + angle.cos() * radius,
+            center.y + angle.sin() * radius,
         ));
     }
     Path::polygon(&pts)

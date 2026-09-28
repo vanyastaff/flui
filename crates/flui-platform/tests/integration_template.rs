@@ -113,12 +113,12 @@ fn test_window_handle_compatibility() {
             let logical_size = window.logical_size();
             tracing::info!(
                 "Window size: {}x{}",
-                logical_size.width.0,
-                logical_size.height.0
+                logical_size.width,
+                logical_size.height
             );
 
             assert!(
-                logical_size.width.0 > 0.0 && logical_size.height.0 > 0.0,
+                logical_size.width > 0.0 && logical_size.height > 0.0,
                 "Window must have valid size"
             );
         }

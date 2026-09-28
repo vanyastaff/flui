@@ -2026,8 +2026,8 @@ mod tests {
         let called_clone = called.clone();
 
         window.on_resize(Box::new(move |size, _scale| {
-            assert_eq!(size.width.0, 1024.0);
-            assert_eq!(size.height.0, 768.0);
+            assert_eq!(size.width, 1024.0);
+            assert_eq!(size.height, 768.0);
             called_clone.store(true, Ordering::SeqCst);
         }));
 
@@ -2524,13 +2524,13 @@ mod tests {
         );
 
         let bounds = window.bounds();
-        assert_eq!(bounds.size.width.0, 800.0);
-        assert_eq!(bounds.size.height.0, 600.0);
+        assert_eq!(bounds.size.width, 800.0);
+        assert_eq!(bounds.size.height, 600.0);
 
         assert_eq!(window.content_size(), Size::new(800.0, 600.0));
 
         match window.window_bounds() {
-            WindowBounds::Windowed(b) => assert_eq!(b.size.width.0, 800.0),
+            WindowBounds::Windowed(b) => assert_eq!(b.size.width, 800.0),
             _ => panic!("Expected Windowed"),
         }
     }

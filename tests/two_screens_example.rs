@@ -31,7 +31,7 @@ fn settle(app: &mut LaidOut) {
 
 fn laid_out(app: &LaidOut, text: &str) -> bool {
     app.find_text(text)
-        .is_some_and(|id| app.try_size(id).is_some_and(|size| size.width.get() > 0.0))
+        .is_some_and(|id| app.try_size(id).is_some_and(|size| size.width > 0.0))
 }
 
 /// Tap the middle of the text `label`.
@@ -41,8 +41,8 @@ fn tap(app: &mut LaidOut, label: &str) {
         .unwrap_or_else(|| panic!("{label:?} is on screen"));
     let origin = app.absolute_offset(id);
     let size = app.size(id);
-    let x = origin.dx.get() + size.width.get() / 2.0;
-    let y = origin.dy.get() + size.height.get() / 2.0;
+    let x = origin.dx + size.width / 2.0;
+    let y = origin.dy + size.height / 2.0;
     app.dispatch_pointer_down(x, y);
     app.dispatch_pointer_up(x, y);
     settle(app);

@@ -109,7 +109,7 @@ pub const ITEM_LABEL_PREFIX: &str = "Item ";
 /// Fixed per-card row height — the list rides `ListView::new` (a
 /// `SliverFixedExtentList`), matching `vertical_slice_demo`'s own static-list
 /// choice.
-pub const ITEM_EXTENT: f32 = 72.0;
+pub const ITEM_EXTENT: f64 = 72.0;
 
 /// The app bar's title.
 pub const APP_TITLE: &str = "Material Demo";

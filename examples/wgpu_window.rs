@@ -73,8 +73,8 @@ impl GpuState {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
-            width: size.width.0 as u32,
-            height: size.height.0 as u32,
+            width: size.width as u32,
+            height: size.height as u32,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -208,8 +208,8 @@ fn main() {
     // Register resize callback
     let gpu_for_resize = Arc::clone(&gpu);
     window.on_resize(Box::new(move |size, scale_factor| {
-        let width = (size.width.0 * scale_factor) as u32;
-        let height = (size.height.0 * scale_factor) as u32;
+        let width = (size.width * scale_factor) as u32;
+        let height = (size.height * scale_factor) as u32;
         gpu_for_resize.lock().unwrap().resize(width, height);
     }));
 

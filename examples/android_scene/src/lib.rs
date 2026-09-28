@@ -4,7 +4,7 @@
 //! The host app detects file changes and reloads automatically — no app restart needed.
 //!
 //! Uses the `scene_plugin!` macro from `flui-hot-reload` to generate the FFI wrappers.
-//! The user just writes a normal `fn(f32, f32) -> Scene`.
+//! The user just writes a normal `fn(f64, f64) -> Scene`.
 
 use flui_hot_reload::scene_plugin;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
@@ -12,7 +12,7 @@ use flui_types::geometry::{px, Rect};
 use flui_types::painting::Paint;
 use flui_types::styling::Color;
 
-fn my_scene(width: f32, height: f32) -> Scene {
+fn my_scene(width: f64, height: f64) -> Scene {
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 

@@ -1063,7 +1063,7 @@ mod tests {
         );
         let (local_x, local_y) = transform.transform_point(0.0, 0.0);
         assert_eq!(
-            (local_x.0, local_y.0),
+            (local_x, local_y),
             (10.0, 20.0),
             "the composed matrix must actually map the origin to (10, 20)"
         );

@@ -646,12 +646,12 @@ fn controller_collects_matching_tags_and_records_one_manifest() {
     assert_eq!(manifest.direction, Some(FlightDirection::Push));
 
     assert_eq!(
-        (manifest.from_rect.width().0, manifest.from_rect.height().0),
+        (manifest.from_rect.width(), manifest.from_rect.height()),
         (30.0, 20.0),
         "the source hero, in the source route's space"
     );
     assert_eq!(
-        (manifest.to_rect.width().0, manifest.to_rect.height().0),
+        (manifest.to_rect.width(), manifest.to_rect.height()),
         (60.0, 45.0),
         "the destination hero, in the destination route's space"
     );
@@ -659,8 +659,8 @@ fn controller_collects_matching_tags_and_records_one_manifest() {
 
     // Both heroes are centred in their own 800x600 route, so neither sits at the
     // origin — which is what a swapped `transform_to` would produce.
-    assert!(manifest.from_rect.min.x.0 > 0.0 && manifest.from_rect.min.y.0 > 0.0);
-    assert!(manifest.to_rect.min.x.0 > 0.0 && manifest.to_rect.min.y.0 > 0.0);
+    assert!(manifest.from_rect.min.x > 0.0 && manifest.from_rect.min.y > 0.0);
+    assert!(manifest.to_rect.min.x > 0.0 && manifest.to_rect.min.y > 0.0);
 }
 
 /// `HeroController.didChangeTop`'s own guard (`heroes.dart:861`): "Don't

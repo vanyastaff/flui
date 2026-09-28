@@ -690,12 +690,9 @@ mod tests {
             builder: Rc::new(move |_ctx, constraints: BoxConstraints| {
                 log.lock().push(constraints);
                 // Flutter's builder returns SizedBox(biggest/2).
-                FixedBox(
-                    constraints.max_width.get() / 2.0,
-                    constraints.max_height.get() / 2.0,
-                )
-                .into_view()
-                .boxed()
+                FixedBox(constraints.max_width / 2.0, constraints.max_height / 2.0)
+                    .into_view()
+                    .boxed()
             }),
         };
 
@@ -856,7 +853,7 @@ mod tests {
         let view = LayoutBuilder {
             builder: Rc::new(move |_ctx, constraints: BoxConstraints| {
                 calls_for_builder.fetch_add(1, Ordering::Relaxed);
-                if constraints.max_width.get() > 100.0 {
+                if constraints.max_width > 100.0 {
                     FixedBox(30.0, 30.0).into_view().boxed()
                 } else {
                     TightBox(15.0).into_view().boxed()

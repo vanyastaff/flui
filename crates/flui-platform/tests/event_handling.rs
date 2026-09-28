@@ -69,8 +69,8 @@ fn test_mouse_click_pointer_event() {
     // (Full pointer event testing requires actual OS events or mocking)
     let logical_size = window.logical_size();
     tracing::info!("Window logical size: {:?}", logical_size);
-    assert!(logical_size.width.0 > 0.0);
-    assert!(logical_size.height.0 > 0.0);
+    assert!(logical_size.width > 0.0);
+    assert!(logical_size.height > 0.0);
 
     // Test: Verify logical coordinates are used (not physical pixels)
     let scale_factor = window.scale_factor();
@@ -202,14 +202,14 @@ fn test_window_resize_event() {
     // divide by scale_factor.
 
     let scale_factor = window.scale_factor();
-    let logical_width = (initial_size.width.0 as f64) / (scale_factor as f64);
-    let logical_height = (initial_size.height.0 as f64) / (scale_factor as f64);
+    let logical_width = (initial_size.width as f64) / (scale_factor as f64);
+    let logical_height = (initial_size.height as f64) / (scale_factor as f64);
 
     tracing::info!("Logical size: {}x{}", logical_width, logical_height);
     tracing::info!(
         "Physical size: {}x{}",
-        initial_size.width.0,
-        initial_size.height.0
+        initial_size.width,
+        initial_size.height
     );
     tracing::info!("Scale factor: {}", scale_factor);
 

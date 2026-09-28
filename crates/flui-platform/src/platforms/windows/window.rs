@@ -2230,7 +2230,7 @@ mod tests {
 
         let window = result.unwrap();
         assert!(!window.hwnd().is_invalid());
-        assert_eq!(window.logical_size().width.0, 800.0);
+        assert_eq!(window.logical_size().width, 800.0);
     }
 }
 

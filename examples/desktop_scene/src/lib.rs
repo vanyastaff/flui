@@ -30,7 +30,7 @@ use flui_types::{
     styling::Color,
 };
 
-fn my_scene(width: f32, height: f32) -> Scene {
+fn my_scene(width: f64, height: f64) -> Scene {
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 

@@ -268,7 +268,7 @@ mod tests {
 
         // Free axis returns distance
         let dist = Helper::primary_delta(delta, DragAxis::Free);
-        assert!((dist - delta.distance().get()).abs() < 0.001);
+        assert!((dist - delta.distance()).abs() < 0.001);
     }
 
     #[test]

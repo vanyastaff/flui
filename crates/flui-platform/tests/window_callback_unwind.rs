@@ -149,11 +149,8 @@ fn nested_resize_is_drained_after_outer_callback_returns() {
     let widths = Arc::new(Mutex::new(Vec::new()));
     let callback_widths = Arc::clone(&widths);
     *callbacks.on_resize.lock() = Some(Box::new(move |size, scale| {
-        callback_widths
-            .lock()
-            .expect("width lock")
-            .push(size.width.0);
-        if size.width.0 == 100.0 {
+        callback_widths.lock().expect("width lock").push(size.width);
+        if size.width == 100.0 {
             weak_callbacks
                 .upgrade()
                 .expect("callbacks alive")

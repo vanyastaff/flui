@@ -189,7 +189,7 @@ fn capture<V: IntoView + 'static>(
     let mounted = binding.mount_root(
         &scoped_root,
         MountOwners::fresh(),
-        MountOptions::tight(width as f32, height as f32),
+        MountOptions::tight(width as f64, height as f64),
     );
     assert!(
         mounted.painted,

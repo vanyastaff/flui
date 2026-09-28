@@ -87,11 +87,11 @@ fn test_platform_event_contract() {
     );
 
     // Verify coordinate conversion is consistent
-    let expected_logical_width = (physical_size.width.0 as f64) / scale_factor;
-    let expected_logical_height = (physical_size.height.0 as f64) / scale_factor;
+    let expected_logical_width = (physical_size.width as f64) / scale_factor;
+    let expected_logical_height = (physical_size.height as f64) / scale_factor;
 
-    let width_diff = (logical_size.width.0 - expected_logical_width as f64).abs();
-    let height_diff = (logical_size.height.0 - expected_logical_height as f64).abs();
+    let width_diff = (logical_size.width - expected_logical_width as f64).abs();
+    let height_diff = (logical_size.height - expected_logical_height as f64).abs();
 
     assert!(
         width_diff < 2.0,
@@ -233,19 +233,19 @@ fn test_cross_platform_event_consistency() {
     // 3. Report valid scale factor (> 0.0)
     // 4. Support the same PlatformWindow API
 
-    assert!(physical_size.width.0 > 0, "Invalid physical width");
-    assert!(physical_size.height.0 > 0, "Invalid physical height");
-    assert!(logical_size.width.0 > 0.0, "Invalid logical width");
-    assert!(logical_size.height.0 > 0.0, "Invalid logical height");
+    assert!(physical_size.width > 0, "Invalid physical width");
+    assert!(physical_size.height > 0, "Invalid physical height");
+    assert!(logical_size.width > 0.0, "Invalid logical width");
+    assert!(logical_size.height > 0.0, "Invalid logical height");
     assert!(scale_factor > 0.0, "Invalid scale factor");
     assert!(scale_factor <= 3.0, "Unrealistic scale factor");
 
     // Verify coordinate conversion consistency
-    let computed_logical_width = (physical_size.width.0 as f64) / scale_factor;
-    let computed_logical_height = (physical_size.height.0 as f64) / scale_factor;
+    let computed_logical_width = (physical_size.width as f64) / scale_factor;
+    let computed_logical_height = (physical_size.height as f64) / scale_factor;
 
-    let width_error = (logical_size.width.0 - computed_logical_width as f64).abs();
-    let height_error = (logical_size.height.0 - computed_logical_height as f64).abs();
+    let width_error = (logical_size.width - computed_logical_width as f64).abs();
+    let height_error = (logical_size.height - computed_logical_height as f64).abs();
 
     tracing::info!(
         "Coordinate conversion errors: width={:.2}, height={:.2}",
@@ -391,8 +391,8 @@ fn test_event_handling_performance_baseline() {
         let scale = window.scale_factor();
         tracing::info!("Window {}: size={:?}, scale={}", i, size, scale);
 
-        assert!(size.width.0 > 0);
-        assert!(size.height.0 > 0);
+        assert!(size.width > 0);
+        assert!(size.height > 0);
         assert!(scale > 0.0);
     }
 

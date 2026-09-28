@@ -35,8 +35,8 @@ fn test_window_modes() {
             let initial_size = window.logical_size();
             tracing::info!(
                 "Initial size: {}x{}",
-                initial_size.width.0,
-                initial_size.height.0
+                initial_size.width,
+                initial_size.height
             );
 
             // TODO: Once window.set_mode() is implemented, test:
@@ -49,7 +49,7 @@ fn test_window_modes() {
 
             // For now, verify window exists and has valid size
             assert!(
-                initial_size.width.0 > 0.0 && initial_size.height.0 > 0.0,
+                initial_size.width > 0.0 && initial_size.height > 0.0,
                 "Window should have valid size"
             );
 
@@ -92,7 +92,7 @@ fn test_windows_mode_transitions() {
 
             // Windows-specific: Verify window is in Normal mode initially
             let size = window.logical_size();
-            assert!(size.width.0 > 0.0 && size.height.0 > 0.0);
+            assert!(size.width > 0.0 && size.height > 0.0);
 
             // TODO: Test Windows-specific mode transitions:
             // - WS_MAXIMIZE style for Maximized

@@ -55,7 +55,7 @@ fn demo_slivers() -> Vec<BoxedView> {
 /// The screenshot tree: the demo slivers at a FIXED programmatic offset —
 /// `CustomScrollView`'s offset mode carries no gestures by design (see its
 /// module doc), which is exactly right for a deterministic capture.
-pub fn tree(offset: f32) -> impl IntoView {
+pub fn tree(offset: f64) -> impl IntoView {
     Theme::new(
         ThemeData::light(),
         MediaQuery::new(

@@ -50,7 +50,7 @@ use flui_types::{
 };
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
-fn build_test_scene(width: f32, height: f32) -> Scene {
+fn build_test_scene(width: f64, height: f64) -> Scene {
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 
@@ -143,7 +143,7 @@ fn main() {
         .expect("Failed to create GPU renderer");
 
     let phys = window.physical_size();
-    renderer.resize(phys.width.0 as u32, phys.height.0 as u32);
+    renderer.resize(phys.width as u32, phys.height as u32);
 
     tracing::info!(
         "GPU: {} ({:?})",
@@ -159,8 +159,8 @@ fn main() {
     let hot_reload_frame = hot_reload.clone();
     window.on_request_frame(Box::new(move || {
         let size = window_for_frame.physical_size();
-        let w = size.width.0 as f32;
-        let h = size.height.0 as f32;
+        let w = size.width as f64;
+        let h = size.height as f64;
 
         // If hot-reload is enabled, poll for plugin updates and use plugin scene
         let scene = if let Some(ref hr) = hot_reload_frame {
@@ -188,8 +188,8 @@ fn main() {
     // Register resize callback
     let renderer_resize = Arc::clone(&renderer);
     window.on_resize(Box::new(move |size, scale_factor| {
-        let w = (size.width.0 * scale_factor) as u32;
-        let h = (size.height.0 * scale_factor) as u32;
+        let w = (size.width * scale_factor) as u32;
+        let h = (size.height * scale_factor) as u32;
         renderer_resize.lock().unwrap().resize(w, h);
     }));
 

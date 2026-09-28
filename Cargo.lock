@@ -2082,7 +2082,6 @@ version = "0.2.0-dev"
 dependencies = [
  "bytemuck",
  "glam",
- "kurbo",
  "serde",
  "thiserror 2.0.20",
 ]

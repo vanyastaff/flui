@@ -63,13 +63,13 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("Window created:");
     tracing::info!(
         "  - Physical size: {}x{} px",
-        physical_size.width.0,
-        physical_size.height.0
+        physical_size.width,
+        physical_size.height
     );
     tracing::info!(
         "  - Logical size: {:.0}x{:.0} pt",
-        logical_size.width.0,
-        logical_size.height.0
+        logical_size.width,
+        logical_size.height
     );
     tracing::info!("  - Scale factor: {:.2}x", scale_factor);
 

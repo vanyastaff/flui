@@ -280,21 +280,21 @@ impl AppConfig {
     /// Set the initial window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
-        self.size = Size::new((width as f32), (height as f32));
+        self.size = Size::new((width as f64), (height as f64));
         self
     }
 
     /// Set the minimum window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_min_size(mut self, width: u32, height: u32) -> Self {
-        self.min_size = Some(Size::new((width as f32), (height as f32)));
+        self.min_size = Some(Size::new((width as f64), (height as f64)));
         self
     }
 
     /// Set the maximum window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
-        self.max_size = Some(Size::new((width as f32), (height as f32)));
+        self.max_size = Some(Size::new((width as f64), (height as f64)));
         self
     }
 

@@ -258,7 +258,7 @@ fn the_from_hero_is_hidden_for_the_whole_flight() {
     assert_eq!(
         from_hero
             .placeholder_size()
-            .map(|size| (size.width.0, size.height.0)),
+            .map(|size| (size.width, size.height)),
         Some((30.0, 20.0)),
         "frozen at its committed size"
     );
@@ -297,7 +297,7 @@ fn the_to_hero_placeholder_drops_its_child_during_the_flight() {
     assert_eq!(
         to_hero
             .placeholder_size()
-            .map(|size| (size.width.0, size.height.0)),
+            .map(|size| (size.width, size.height)),
         Some((60.0, 45.0))
     );
     assert!(
@@ -528,7 +528,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
     let target_before = flight.target_rect();
     let begin_before = flight.begin_rect();
     assert_eq!(
-        (target_before.width().0, target_before.height().0),
+        (target_before.width(), target_before.height()),
         (60.0, 45.0)
     );
 
@@ -543,7 +543,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
 
     let target_after = flight.target_rect();
     assert_eq!(
-        (target_after.min_y() - target_before.min_y()).0,
+        (target_after.min_y() - target_before.min_y()),
         50.0,
         "a 100px spacer above a centred column moves its second child down by 50px, \
          and the tween followed it"
@@ -554,7 +554,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
         "nothing moved it horizontally"
     );
     assert_eq!(
-        (target_after.width().0, target_after.height().0),
+        (target_after.width(), target_after.height()),
         (60.0, 45.0),
         "the end size is untouched (though the frozen placeholder makes that \
          unobservable today — see the docs above)"
@@ -568,7 +568,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
 }
 
 fn rect_origin(rect: Rect) -> (f64, f64) {
-    (rect.min_x().0, rect.min_y().0)
+    (rect.min_x(), rect.min_y())
 }
 
 // ============================================================================
@@ -627,18 +627,18 @@ fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
     // destination *origin* after the swap, so compare on size, which it preserves.
     assert_eq!(
         (
-            pop_flight.begin_rect().width().0,
-            pop_flight.begin_rect().height().0
+            pop_flight.begin_rect().width(),
+            pop_flight.begin_rect().height()
         ),
-        (push_end.width().0, push_end.height().0),
+        (push_end.width(), push_end.height()),
         "the tween now begins where the push was heading"
     );
     assert_eq!(
         (
-            pop_flight.target_rect().width().0,
-            pop_flight.target_rect().height().0
+            pop_flight.target_rect().width(),
+            pop_flight.target_rect().height()
         ),
-        (push_begin.width().0, push_begin.height().0),
+        (push_begin.width(), push_begin.height()),
         "and ends where the push began"
     );
 }
@@ -1078,7 +1078,7 @@ fn a_same_direction_divert_transfers_the_placeholders() {
     let c_hero = hero_of(&navigator, 3, "shared");
 
     assert_eq!(
-        b_hero.placeholder_size().map(|s| (s.width.0, s.height.0)),
+        b_hero.placeholder_size().map(|s| (s.width, s.height)),
         Some((60.0, 45.0)),
         "B is now the flight's source, frozen at its size"
     );
@@ -1087,7 +1087,7 @@ fn a_same_direction_divert_transfers_the_placeholders() {
         "and keeps its child offstage — it is the *from* hero of a push"
     );
     assert_eq!(
-        c_hero.placeholder_size().map(|s| (s.width.0, s.height.0)),
+        c_hero.placeholder_size().map(|s| (s.width, s.height)),
         Some((90.0, 70.0)),
         "C is the new destination, a bare hole"
     );
@@ -1331,10 +1331,10 @@ fn hero_page_with(
 /// All four extents of `actual` match `expected` to within a thousandth of a pixel.
 fn assert_rect_close(actual: Rect, expected: Rect, what: &str) {
     for (got, want, edge) in [
-        (actual.min_x().0, expected.min_x().0, "left"),
-        (actual.min_y().0, expected.min_y().0, "top"),
-        (actual.width().0, expected.width().0, "width"),
-        (actual.height().0, expected.height().0, "height"),
+        (actual.min_x(), expected.min_x(), "left"),
+        (actual.min_y(), expected.min_y(), "top"),
+        (actual.width(), expected.width(), "width"),
+        (actual.height(), expected.height(), "height"),
     ] {
         assert!(
             (got - want).abs() < 1e-3,

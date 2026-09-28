@@ -70,7 +70,7 @@ impl raw_window_handle::HasDisplayHandle for AndroidWindowHandle {
 }
 
 /// Build a fallback scene with colored rectangles (used when no plugin is loaded).
-fn build_test_scene(width: f32, height: f32) -> Scene {
+fn build_test_scene(width: f64, height: f64) -> Scene {
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 
@@ -284,8 +284,8 @@ fn android_main(app: AndroidApp) {
         // Poll for plugin hot-reload (handles mtime check + unload/reload)
         if resumed {
             if let Some(native_window) = app.native_window() {
-                let w = native_window.width() as f32;
-                let h = native_window.height() as f32;
+                let w = native_window.width() as f64;
+                let h = native_window.height() as f64;
                 if hot_reload.poll(w, h).is_some() {
                     needs_render = true;
                 }
@@ -296,8 +296,8 @@ fn android_main(app: AndroidApp) {
         if needs_render {
             if let Some(ref renderer_mutex) = renderer {
                 if let Some(native_window) = app.native_window() {
-                    let w = native_window.width() as f32;
-                    let h = native_window.height() as f32;
+                    let w = native_window.width() as f64;
+                    let h = native_window.height() as f64;
 
                     let scene = hot_reload.build_scene_or(w, h, build_test_scene);
 

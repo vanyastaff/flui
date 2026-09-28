@@ -109,10 +109,10 @@ const IDLE_SECONDS: f64 = 5.0;
 /// over, so scrolling stays a real, sustained layout/paint workload.
 const ROW_COUNT: usize = 2_000;
 /// Per-row extent estimate fed to `ListView::builder`'s virtualizer.
-const ROW_EXTENT_ESTIMATE: f32 = 64.0;
+const ROW_EXTENT_ESTIMATE: f64 = 64.0;
 /// Scroll offset moved per tick — a deliberately brisk pace so a 20 s phase
 /// covers many screens of content, bouncing at both ends.
-const SCROLL_STEP_PX: f32 = 18.0;
+const SCROLL_STEP_PX: f64 = 18.0;
 /// The repeating text the `type` phase inserts one character at a time.
 const TYPE_SEQUENCE: &str = "The quick brown fox ";
 
@@ -189,7 +189,7 @@ struct TickState {
     last_tick_at: Option<Instant>,
     deltas_in_phase: Vec<Duration>,
     type_ticks: u64,
-    scroll_direction: f32,
+    scroll_direction: f64,
 }
 
 impl TickState {

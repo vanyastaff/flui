@@ -283,7 +283,7 @@ where
 
     // 3. Mount the root widget at the LOGICAL size; the paint root's DPR
     // transform maps to physical.
-    let scale_factor = window.scale_factor() as f32;
+    let scale_factor = window.scale_factor() as f64;
     let wake = runtime_wake_callback();
     let ui_realm = match crate::app::ui_realm::UiRealm::new(
         Arc::clone(&wake),

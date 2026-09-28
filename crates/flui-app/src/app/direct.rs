@@ -90,7 +90,7 @@ use super::AppConfig;
 /// application entry point — see the module docs.
 pub fn run_direct(
     config: AppConfig,
-    render_fn: impl FnMut(&mut SceneBuilder, f32, f32) + Send + 'static,
+    render_fn: impl FnMut(&mut SceneBuilder, f64, f64) + Send + 'static,
 ) -> anyhow::Result<()> {
     // Managed startup, same contract as `run_app`: install FLUI's default
     // backend only into an empty slot. The historical code called
@@ -121,7 +121,7 @@ pub fn run_direct(
     /// function's own `Result` return is `run_direct`'s answer).
     fn bootstrap_direct<F>(config: AppConfig, render_fn: F) -> anyhow::Result<()>
     where
-        F: FnMut(&mut SceneBuilder, f32, f32) + Send + 'static,
+        F: FnMut(&mut SceneBuilder, f64, f64) + Send + 'static,
     {
         fn owner_platform_installed<R>(f: impl FnOnce(&flui_platform::OwnerPlatform) -> R) -> R {
             crate::app::runner::with_owner_platform(f)
@@ -154,7 +154,7 @@ pub fn run_direct(
                 return Err(anyhow::anyhow!(e).context("GPU initialization failed"));
             }
         };
-        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+        renderer.resize(phys_size.width as u32, phys_size.height as u32);
 
         tracing::info!(
             gpu = %renderer.capabilities().adapter_name,
@@ -184,7 +184,7 @@ pub fn run_direct(
             let mut builder = SceneBuilder::new();
             {
                 let mut rfn = render_fn_frame.lock();
-                rfn(&mut builder, w as f32, h as f32);
+                rfn(&mut builder, w as f64, h as f64);
             }
             let scene = Scene::new(builder.build());
 
@@ -229,8 +229,8 @@ pub fn run_direct(
         // 5. Register resize callback
         let renderer_resize = Arc::clone(&renderer);
         window.on_resize(Box::new(move |size, scale_factor| {
-            let w = (size.width.0 * scale_factor) as u32;
-            let h = (size.height.0 * scale_factor) as u32;
+            let w = (size.width * scale_factor) as u32;
+            let h = (size.height * scale_factor) as u32;
             if w > 0 && h > 0 {
                 renderer_resize.lock().resize(w, h);
                 tracing::debug!("Window resized to {}x{} (scale: {})", w, h, scale_factor);

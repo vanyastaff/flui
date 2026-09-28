@@ -495,7 +495,7 @@ fn custom_placeholder_preserves_hero_child_state_through_push_and_pop() {
     }
 
     fn hold_space(size: Size) -> impl IntoView {
-        SizedBox::new(size.width.0, size.height.0).child(ColoredBox::new(Color::GREEN))
+        SizedBox::new(size.width, size.height).child(ColoredBox::new(Color::GREEN))
     }
 
     let creations = Arc::new(AtomicUsize::new(0));
@@ -696,7 +696,7 @@ fn a_custom_placeholder_is_shown_during_the_flight() {
                     .child(
                         Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0)).placeholder(
                             |size| {
-                                SizedBox::new(size.width.0, size.height.0)
+                                SizedBox::new(size.width, size.height)
                                     .child(ColoredBox::new(Color::GREEN))
                             },
                         ),

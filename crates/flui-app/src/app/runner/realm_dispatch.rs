@@ -18,7 +18,7 @@ use crate::app::runtime::RealmSlot;
 /// declaration reads plainly instead of spelling out the boxed closure type
 /// inline. `pub(in crate::app)` (rather than private) so [`RealmSlot`]'s struct
 /// definition in the sibling `runtime` module can name this type.
-pub(in crate::app) type SurfaceApplier = Box<dyn FnMut(flui_types::Size<f64>, f32)>;
+pub(in crate::app) type SurfaceApplier = Box<dyn FnMut(flui_types::Size<f64>, f64)>;
 
 /// Restores a taken [`SurfaceApplier`] back into its realm's slot in
 /// [`APP_RUNTIME`]'s registry when dropped — including during an unwinding
@@ -40,7 +40,7 @@ struct SurfaceApplierRestoreGuard {
 }
 
 impl SurfaceApplierRestoreGuard {
-    fn call(&mut self, size: flui_types::Size<f64>, scale_factor: f32) {
+    fn call(&mut self, size: flui_types::Size<f64>, scale_factor: f64) {
         if let Some(applier) = self.applier.as_mut() {
             applier(size, scale_factor);
         }
@@ -125,7 +125,7 @@ pub(in crate::app) enum PlatformToUi {
     Input(flui_platform::traits::PlatformInput),
     Resized {
         size: flui_types::Size<f64>,
-        scale_factor: f32,
+        scale_factor: f64,
     },
     /// Window focus changed (winit's `WindowEvent::Focused`, or the
     /// equivalent per-backend signal; same source as the deleted `Active`
@@ -471,7 +471,7 @@ impl PlatformToUi {
 /// entire lifetime with nothing ever pointing at why.
 pub(super) fn install_surface_applier(
     realm_id: RealmId,
-    applier: impl FnMut(flui_types::Size<f64>, f32) + 'static,
+    applier: impl FnMut(flui_types::Size<f64>, f64) + 'static,
 ) {
     APP_RUNTIME.with(|slot| {
         if let Some(realm_slot) = slot.borrow_mut().realms.get_mut(&realm_id) {

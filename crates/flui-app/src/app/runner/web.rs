@@ -116,7 +116,7 @@ where
         // 3. Mount root widget at the LOGICAL size; the paint root's DPR
         // transform maps to the physical canvas. `UiRealm::new` applies the
         // DPR to the freshly built pipeline before returning.
-        let scale_factor = window.scale_factor() as f32;
+        let scale_factor = window.scale_factor() as f64;
         let wake = runtime_wake_callback();
         let ui_realm = match crate::app::ui_realm::UiRealm::new(
             Arc::clone(&wake),
@@ -145,8 +145,8 @@ where
         let attach = ui_realm.enter(|realm| {
             realm.attach_root_widget_with_size(
                 &root,
-                logical.width.0 as f32,
-                logical.height.0 as f32,
+                logical.width.0 as f64,
+                logical.height.0 as f64,
             )
         });
         if let Err(e) = attach {

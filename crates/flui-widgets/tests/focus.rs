@@ -1098,11 +1098,11 @@ fn tab_traversal_follows_geometry_not_attach_order() {
     let manager = harness.focus_manager();
 
     assert_eq!(
-        b.rect().min_y().0,
+        b.rect().min_y(),
         0.0,
         "sanity: the provider measures committed layout"
     );
-    assert_eq!(a.rect().min_y().0, 50.0);
+    assert_eq!(a.rect().min_y(), 50.0);
 
     a.request_focus();
 

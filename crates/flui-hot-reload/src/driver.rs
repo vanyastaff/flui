@@ -101,7 +101,7 @@ impl HotReloadDriver {
     /// Returns `Some(Scene)` when a reload happened (caller should re-render).
     /// Returns `None` when no update was detected or the poll interval hasn't
     /// elapsed.
-    pub fn poll(&mut self, width: f32, height: f32) -> Option<Scene> {
+    pub fn poll(&mut self, width: f64, height: f64) -> Option<Scene> {
         if self.last_poll.elapsed() < self.poll_interval {
             return None;
         }
@@ -160,7 +160,7 @@ impl HotReloadDriver {
     /// the obligations the caller must establish about host/plugin agreement
     /// and about dropping the `Scene` before the library is unloaded.
     #[expect(unsafe_code)]
-    pub unsafe fn build_scene(&self, width: f32, height: f32) -> Option<Scene> {
+    pub unsafe fn build_scene(&self, width: f64, height: f64) -> Option<Scene> {
         // SAFETY: the caller of this fn has assumed the same obligations.
         self.plugin
             .as_ref()
@@ -201,9 +201,9 @@ impl HotReloadDriver {
     ///
     /// Forwards [`Self::build_scene`]'s contract unchanged.
     #[expect(unsafe_code)]
-    pub unsafe fn build_scene_or<F>(&self, width: f32, height: f32, fallback: F) -> Scene
+    pub unsafe fn build_scene_or<F>(&self, width: f64, height: f64, fallback: F) -> Scene
     where
-        F: FnOnce(f32, f32) -> Scene,
+        F: FnOnce(f64, f64) -> Scene,
     {
         // SAFETY: the caller of this fn has assumed the same obligations.
         unsafe { self.build_scene(width, height) }.unwrap_or_else(|| fallback(width, height))

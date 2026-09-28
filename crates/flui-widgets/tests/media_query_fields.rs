@@ -31,7 +31,7 @@ impl StatelessView for SizeReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.set(self.builds.get() + 1);
         let size = MediaQuery::size_of(ctx).expect("MediaQuery ancestor");
-        SizedBox::new(size.width.0 / 100.0, 1.0)
+        SizedBox::new(size.width / 100.0, 1.0)
     }
 }
 
@@ -85,11 +85,7 @@ impl StatelessView for SwitchingReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.set(self.builds.get() + 1);
         let side = if self.read_size.get() {
-            MediaQuery::size_of(ctx)
-                .expect("MediaQuery ancestor")
-                .width
-                .0
-                / 100.0
+            MediaQuery::size_of(ctx).expect("MediaQuery ancestor").width / 100.0
         } else {
             MediaQuery::text_scale_factor_of(ctx).expect("MediaQuery ancestor")
         };
@@ -109,7 +105,7 @@ impl StatelessView for FailingSizeReader {
         self.builds.set(self.builds.get() + 1);
         assert!(!self.fail.get(), "test-induced build failure");
         let size = MediaQuery::size_of(ctx).expect("MediaQuery ancestor");
-        SizedBox::new(size.width.0 / 100.0, 1.0)
+        SizedBox::new(size.width / 100.0, 1.0)
     }
 }
 
@@ -125,7 +121,7 @@ impl StatelessView for DroppingReader {
         self.builds.set(self.builds.get() + 1);
         if self.reads.get() {
             let size = MediaQuery::size_of(ctx).expect("MediaQuery ancestor");
-            SizedBox::new(size.width.0 / 100.0, 1.0)
+            SizedBox::new(size.width / 100.0, 1.0)
         } else {
             SizedBox::new(1.0, 1.0)
         }
@@ -157,19 +153,13 @@ impl StatefulView for LifecycleReader {
 
 impl ViewState<LifecycleReader> for LifecycleReaderState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.width = MediaQuery::size_of(ctx)
-            .expect("MediaQuery ancestor")
-            .width
-            .0;
+        self.width = MediaQuery::size_of(ctx).expect("MediaQuery ancestor").width;
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let dc = &self.view.dependency_changes;
         dc.set(dc.get() + 1);
-        self.width = MediaQuery::size_of(ctx)
-            .expect("MediaQuery ancestor")
-            .width
-            .0;
+        self.width = MediaQuery::size_of(ctx).expect("MediaQuery ancestor").width;
     }
 
     fn build(&self, _view: &LifecycleReader, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -187,9 +177,8 @@ struct EmptyMaskReader {
 impl StatelessView for EmptyMaskReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.set(self.builds.get() + 1);
-        let width =
-            MediaQuery::depend_on_fields(ctx, flui_view::FieldMask::NONE, |d| d.size.width.0)
-                .expect("MediaQuery ancestor");
+        let width = MediaQuery::depend_on_fields(ctx, flui_view::FieldMask::NONE, |d| d.size.width)
+            .expect("MediaQuery ancestor");
         SizedBox::new(width / 100.0, 1.0)
     }
 }

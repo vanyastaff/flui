@@ -22,7 +22,7 @@ const WIDTH: f32 = 480.0;
 fn mount() -> LaidOut {
     lay_out(
         MediaQuery::new(MediaQueryData::default(), todo::TodoApp),
-        tight(WIDTH, 640.0),
+        tight(f64::from(WIDTH), 640.0),
     )
 }
 
@@ -43,8 +43,8 @@ fn tap_field(app: &mut LaidOut) {
     let field = field(app);
     let offset = app.absolute_offset(field);
     let size = app.size(field);
-    let x = offset.dx.get() + size.width.get() / 2.0;
-    let y = offset.dy.get() + size.height.get() / 2.0;
+    let x = offset.dx + size.width / 2.0;
+    let y = offset.dy + size.height / 2.0;
     app.dispatch_pointer_down(x, y);
     app.dispatch_pointer_up(x, y);
     app.tick();
@@ -61,14 +61,14 @@ fn type_text(app: &LaidOut, text: &str) {
 fn the_new_item_field_takes_the_rows_remaining_width() {
     let app = mount();
 
-    let width = app.size(field(&app)).width.get();
+    let width = app.size(field(&app)).width;
     let add = app.size(app.find_text("Add").expect("the Add button's label"));
     let label = app.size(app.find_text("New item").expect("the field's label"));
     assert!(
-        width > WIDTH / 2.0,
+        width > f64::from(WIDTH / 2.0),
         "the empty field is {width}px wide in a {WIDTH}px row (label {}px, Add {}px)",
-        label.width.get(),
-        add.width.get(),
+        label.width,
+        add.width,
     );
 }
 

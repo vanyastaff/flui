@@ -69,19 +69,19 @@ use flui_widgets::{AnimatedContainer, column, row};
 /// animated box's collapsed/expanded constants below) so the acceptance test
 /// can distinguish the tree's several `RenderConstrainedBox` nodes by
 /// committed size instead of a duplicated magic number.
-pub const LIST_BOX_HEIGHT: f32 = 200.0;
+pub const LIST_BOX_HEIGHT: f64 = 200.0;
 /// Per-row height of the list.
-pub const LIST_ITEM_EXTENT: f32 = 32.0;
+pub const LIST_ITEM_EXTENT: f64 = 32.0;
 /// Row count: `LIST_ITEM_COUNT * LIST_ITEM_EXTENT` (768px) overflows
 /// `LIST_BOX_HEIGHT` (200px), so the list is genuinely scrollable.
 pub const LIST_ITEM_COUNT: usize = 24;
 
 /// The animated box's width/height at rest (`expanded == false`).
-pub const COLLAPSED_WIDTH: f32 = 96.0;
-pub const COLLAPSED_HEIGHT: f32 = 64.0;
+pub const COLLAPSED_WIDTH: f64 = 96.0;
+pub const COLLAPSED_HEIGHT: f64 = 64.0;
 /// The animated box's width/height target once expanded.
-pub const EXPANDED_WIDTH: f32 = 220.0;
-pub const EXPANDED_HEIGHT: f32 = 140.0;
+pub const EXPANDED_WIDTH: f64 = 220.0;
+pub const EXPANDED_HEIGHT: f64 = 140.0;
 /// How long the animated box takes to reach a new target.
 pub const ANIMATION_DURATION: Duration = Duration::from_millis(240);
 
@@ -126,7 +126,7 @@ pub struct DemoRoot {
     /// [`DemoHomeState::create_state`] writes into that controller before the
     /// first layout, so constructing a `DemoRoot` with a nonzero offset does
     /// not start the list at zero.
-    pub scroll_offset: StateCell<f32>,
+    pub scroll_offset: StateCell<f64>,
     /// How many times [`DemoHomeState::create_state`] has run — a discriminator,
     /// not app-visible data. `count`/`expanded`/`scroll_offset` are [`StateCell`]s
     /// shared with the seed closure below, so they read back correctly whether
@@ -216,7 +216,7 @@ impl ViewState<DemoRoot> for DemoRootState {
 struct DemoHome {
     count: StateCell<i32>,
     expanded: StateCell<bool>,
-    scroll_offset: StateCell<f32>,
+    scroll_offset: StateCell<f64>,
     navigator: NavigatorHandle,
     /// Incremented once per [`DemoHomeState::create_state`] call — see the
     /// field doc on [`DemoRoot::home_create_count`], which owns the storage
@@ -234,7 +234,7 @@ struct DemoHome {
 struct DemoHomeState {
     count: StateCell<i32>,
     expanded: StateCell<bool>,
-    scroll_offset: StateCell<f32>,
+    scroll_offset: StateCell<f64>,
     navigator: NavigatorHandle,
     /// The list's live scroll position — injected directly into the
     /// `ListView` (`ListView::position`), so `RenderViewport`'s own layout

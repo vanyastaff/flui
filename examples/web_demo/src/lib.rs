@@ -36,8 +36,8 @@ pub fn start() {
     web_sys::console::log_1(
         &format!(
             "Window created: {}x{} (scale: {})",
-            window.logical_size().width.0,
-            window.logical_size().height.0,
+            window.logical_size().width,
+            window.logical_size().height,
             window.scale_factor()
         )
         .into(),
@@ -100,11 +100,7 @@ pub fn start() {
     // Register resize callback
     window.on_resize(Box::new(|size, scale| {
         web_sys::console::log_1(
-            &format!(
-                "Resize: {}x{} (scale: {scale})",
-                size.width.0, size.height.0
-            )
-            .into(),
+            &format!("Resize: {}x{} (scale: {scale})", size.width, size.height).into(),
         );
     }));
 

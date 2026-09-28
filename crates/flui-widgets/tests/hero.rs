@@ -156,7 +156,7 @@ fn duplicate_tags_in_one_route_log_and_drop_the_second() {
         .with(|owner| owner.box_size(winner.render_id().expect("attached")))
         .expect("laid out");
     assert_eq!(
-        (winner_size.width.0, winner_size.height.0),
+        (winner_size.width, winner_size.height),
         (30.0, 20.0),
         "the FIRST hero kept the tag; last-wins would measure the 11x12 one"
     );
@@ -240,7 +240,7 @@ fn start_flight_makes_the_hero_show_a_placeholder_of_the_measured_size() {
 
     assert_eq!(hero.placeholder_size(), None, "not in flight");
     let before = hero_box_size(&harness, &hero);
-    assert_eq!((before.width.0, before.height.0), (30.0, 20.0));
+    assert_eq!((before.width, before.height), (30.0, 20.0));
 
     let captured = hero.start_flight(true).expect("committed layout to freeze");
     assert_eq!(captured, before);
@@ -401,15 +401,12 @@ fn hero_bounding_box_is_taken_in_the_ancestors_coordinate_space() {
 
     // Relative, because `Center` puts the Column wherever it likes on an 800x600 root.
     assert_eq!(
-        (second_rect.min.y - first_rect.min.y).0,
+        (second_rect.min.y - first_rect.min.y),
         20.0,
         "the second hero sits below the first, past its 20px height"
     );
-    assert_eq!((first_rect.width().0, first_rect.height().0), (30.0, 20.0));
-    assert_eq!(
-        (second_rect.width().0, second_rect.height().0),
-        (11.0, 12.0)
-    );
+    assert_eq!((first_rect.width(), first_rect.height()), (30.0, 20.0));
+    assert_eq!((second_rect.width(), second_rect.height()), (11.0, 12.0));
     assert!(first_rect.is_finite() && second_rect.is_finite());
 }
 
