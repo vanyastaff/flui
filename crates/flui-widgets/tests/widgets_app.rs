@@ -6,7 +6,7 @@ use std::any::TypeId;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use flui_types::platform::Locale;
+use flui_platform_api::Locale;
 use flui_types::typography::{TextDirection, TextStyle};
 use flui_view::BoxedView;
 use flui_view::prelude::*;

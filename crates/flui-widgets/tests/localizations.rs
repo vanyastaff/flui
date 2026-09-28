@@ -5,7 +5,7 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use flui_types::platform::Locale;
+use flui_platform_api::Locale;
 use flui_types::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_widgets::localization::{

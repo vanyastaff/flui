@@ -38,7 +38,7 @@
 //! use std::sync::{Arc, Mutex};
 //!
 //! use flui_platform_api::{PlatformHaptics, PlatformTextInput};
-//! use flui_types::HapticFeedback;
+//! use flui_platform_api::HapticFeedback;
 //! use flui_types::geometry::{Bounds, Point, Size};
 //!
 //! #[derive(Default)]
@@ -86,30 +86,40 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+mod brightness;
 mod clipboard;
 pub mod data_transfer;
 mod display;
+mod haptic_feedback;
 mod haptics;
+mod ime;
 mod input;
+mod locale;
 mod platform_window;
+mod target_platform;
 mod text_input;
 pub mod text_store;
 mod window;
 
+pub use brightness::Brightness;
 pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 /// The pointer-cursor shape [`PlatformWindow::set_cursor`] takes: the
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
 pub use display::{DisplayId, PlatformDisplay};
+pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
+pub use ime::ImeEvent;
 pub use input::{
     DispatchEventResult, DragDropEvent, Key, KeyboardEvent, Modifiers, PlatformInput,
     PointerButton, PointerButtons, PointerEvent, PointerId, PointerType, PointerUpdate,
     ScrollDelta, delta_offset_from_coords, device_to_logical, logical_to_device,
     offset_from_coords,
 };
+pub use locale::Locale;
 pub use platform_window::PlatformWindow;
+pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreObserver, TextStoreRead};
 pub use window::{

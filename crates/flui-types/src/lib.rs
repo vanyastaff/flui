@@ -97,15 +97,12 @@
 pub use flui_foundation::geometry;
 
 pub mod gestures;
-pub mod haptics;
-pub mod ime;
 pub mod layout;
 // `Lerp` impls for Color/Alignment/BorderRadius (trait impls are globally
 // visible; the module needs no public surface).
 mod lerp_impls;
 pub mod painting;
 pub mod physics;
-pub mod platform;
 pub mod styling;
 pub mod typography;
 
@@ -114,8 +111,6 @@ pub mod typography;
 
 // Re-exports for convenience - Most commonly used types
 pub use geometry::{EdgeInsets, Edges, Matrix4, Offset, Point, RRect, Rect, Size};
-pub use haptics::HapticFeedback;
-pub use ime::ImeEvent;
 pub use layout::{Alignment, Axis};
 pub use styling::{Color, Oklab};
 

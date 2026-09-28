@@ -24,7 +24,7 @@
 //!   a `Commit`.
 //! * **B — protocol conformance.** `setMarkedText:selectedRange:
 //!   replacementRange:` must dispatch one `Preedit` whose `cursor` is a *byte*
-//!   range — AppKit speaks UTF-16 and [`flui_types::ImeEvent`] speaks bytes, and
+//!   range — AppKit speaks UTF-16 and [`flui_platform_api::ImeEvent`] speaks bytes, and
 //!   the composition below is multi-byte, so a UTF-16 offset reaching the wire
 //!   unchanged would be visible here. `hasMarkedText` and `markedRange` must
 //!   answer while it composes, and `insertText:replacementRange:` must dispatch
@@ -108,7 +108,7 @@ mod appkit_ime_probe {
     use flui_platform::{
         DispatchEventResult, Platform, PlatformTextInput, PlatformWindow, WindowOptions,
     };
-    use flui_types::ImeEvent;
+    use flui_platform_api::ImeEvent;
     use flui_types::geometry::{Bounds, Point, Size};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2::{ClassType, msg_send};

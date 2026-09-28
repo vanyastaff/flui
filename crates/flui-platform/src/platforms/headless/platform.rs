@@ -14,11 +14,9 @@ use std::{
 
 use cursor_icon::CursorIcon;
 use flui_foundation::{ClaimSlot, claim_slot};
+use flui_platform_api::HapticFeedback;
 use flui_platform_api::InMemoryClipboard;
-use flui_types::{
-    HapticFeedback,
-    geometry::{Bounds, Point, Size},
-};
+use flui_types::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 
 use crate::{

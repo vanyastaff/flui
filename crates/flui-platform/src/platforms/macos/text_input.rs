@@ -43,7 +43,8 @@ use objc2::runtime::{AnyObject, Bool, ClassBuilder, Protocol, Sel};
 use objc2::{msg_send, sel};
 use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
 
-use flui_types::{ImeEvent, geometry::Bounds};
+use flui_platform_api::ImeEvent;
+use flui_types::geometry::Bounds;
 
 use super::view::{ViewContext, get_context as get_view_context};
 use super::window::route_on_owner;
@@ -159,7 +160,7 @@ fn byte_offset_of_utf16_boundary(text: &str, units: usize) -> Option<usize> {
 /// encoding of the same text.
 ///
 /// AppKit speaks UTF-16 (`NSRange`, `NSTextInputClient`'s `selectedRange`),
-/// `flui_types::ImeEvent` speaks bytes, and the two diverge at the first
+/// `flui_platform_api::ImeEvent` speaks bytes, and the two diverge at the first
 /// non-BMP or multi-byte character. Returns `None` when the range runs past the
 /// end of `text` or either end falls inside a surrogate pair — a range no byte
 /// offset can express, and one the caller must not round to a nearby boundary
@@ -336,7 +337,7 @@ extern "C-unwind" fn set_marked_text(
 /// `unmarkText` — the composition was abandoned; nothing is committed.
 ///
 /// Announced as an empty `Preedit`, the vocabulary's own spelling of "the
-/// composition ended" (`flui_types::ImeEvent`'s type-level doc: a cancelled
+/// composition ended" (`flui_platform_api::ImeEvent`'s type-level doc: a cancelled
 /// composition arrives as `Preedit { text: "", cursor: None }` with no
 /// following `Commit`/`Disabled`). Emitting nothing here would be the
 /// previously-shipped bug class that doc records from the other side: a client

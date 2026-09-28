@@ -25,8 +25,8 @@ use common::{lay_out, loose};
 use flui_cupertino::{
     CupertinoApp, CupertinoColor, CupertinoColors, CupertinoTheme, CupertinoThemeData,
 };
+use flui_sdk::platform::Brightness;
 use flui_sdk::types::Color;
-use flui_sdk::types::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};

@@ -135,7 +135,7 @@ impl Locale {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::platform::Locale;
+    /// use flui_platform_api::Locale;
     ///
     /// let locale = Locale::new("en", Some("US"));
     /// assert_eq!(locale.language(), "en");
@@ -151,7 +151,7 @@ impl Locale {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::platform::Locale;
+    /// use flui_platform_api::Locale;
     ///
     /// let locale = Locale::with_script("zh", Some("CN"), Some("Hans"));
     /// assert_eq!(locale.language(), "zh");

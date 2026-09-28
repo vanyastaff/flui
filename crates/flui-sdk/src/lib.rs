@@ -28,6 +28,11 @@ pub use flui_types as types;
 pub use flui_view as view;
 pub use flui_widgets as widgets;
 
+/// Platform values: brightness and locale.
+pub mod platform {
+    pub use flui_platform_api::{Brightness, Locale};
+}
+
 /// Gesture details and focus, at the paths `flui::interaction` uses.
 pub mod interaction {
     pub use flui_interaction::DragDownDetails;

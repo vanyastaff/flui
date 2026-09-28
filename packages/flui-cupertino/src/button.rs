@@ -55,9 +55,9 @@ use flui_sdk::animation::{
     Animation, AnimationController, Curves, FloatTween, TickerFuture, UpdateScheduler, Vsync,
     VsyncRegistration,
 };
+use flui_sdk::platform::Brightness;
 use flui_sdk::types::geometry::EdgeInsets;
 use flui_sdk::types::layout::Alignment;
-use flui_sdk::types::platform::Brightness;
 use flui_sdk::types::styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
 use flui_sdk::types::typography::TextStyle;
 use flui_sdk::view::RebuildHandle;

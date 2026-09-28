@@ -11,7 +11,7 @@ use std::time::Duration;
 use common::{lay_out, lay_out_animated, loose, tight};
 use flui_cupertino::{CupertinoButton, CupertinoButtonSize, CupertinoColors};
 use flui_sdk::animation::Vsync;
-use flui_sdk::types::platform::Brightness;
+use flui_sdk::platform::Brightness;
 use flui_sdk::view::SignalWriteExt;
 use flui_sdk::widgets::SizedBox;
 use flui_sdk::widgets::Text;

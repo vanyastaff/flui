@@ -21,7 +21,7 @@
 
 use std::time::Duration;
 
-use flui_types::platform::TargetPlatform;
+use flui_platform_api::TargetPlatform;
 use ui_events::pointer::PointerType;
 
 /// Default touch slop for touch devices (18 logical pixels).

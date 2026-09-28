@@ -1031,7 +1031,7 @@ fn the_root_media_query_republishes_a_brightness_change() {
 
     #[derive(Clone)]
     struct BrightnessProbe {
-        seen: std::rc::Rc<Cell<Option<flui_types::platform::Brightness>>>,
+        seen: std::rc::Rc<Cell<Option<flui_platform_api::Brightness>>>,
     }
     impl flui_view::View for BrightnessProbe {
         fn create_element(&self) -> flui_view::element::ElementKind {
@@ -1060,14 +1060,14 @@ fn the_root_media_query_republishes_a_brightness_change() {
     let _ = realm.draw_frame(coexistence_constraints());
     assert_eq!(
         seen.get(),
-        Some(flui_types::platform::Brightness::Light),
+        Some(flui_platform_api::Brightness::Light),
         "the first build reads the installed root MediaQuery (default light)"
     );
 
     // The appearance arm's write side: mutate the shared source and pump.
     seen.set(None);
     realm.media_query().update(|data| {
-        data.platform_brightness = flui_types::platform::Brightness::Dark;
+        data.platform_brightness = flui_platform_api::Brightness::Dark;
     });
     assert!(
         realm.presentations.primary().widgets().has_pending_builds(),
@@ -1078,7 +1078,7 @@ fn the_root_media_query_republishes_a_brightness_change() {
     let _ = realm.draw_frame(coexistence_constraints());
     assert_eq!(
         seen.get(),
-        Some(flui_types::platform::Brightness::Dark),
+        Some(flui_platform_api::Brightness::Dark),
         "an appearance change republishes through the root on the next frame"
     );
 }

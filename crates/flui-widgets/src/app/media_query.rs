@@ -17,8 +17,8 @@
 //! that lives above this layer.
 
 use flui_foundation::geometry::EdgeInsets;
+use flui_platform_api::Brightness;
 use flui_types::Size;
-use flui_types::platform::Brightness;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
 

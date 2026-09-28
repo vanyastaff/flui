@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use flui_interaction::events::{PointerType, make_down_event};
 use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_interaction::testing::input::KeyEventBuilder;
+use flui_platform_api::ImeEvent;
 use flui_platform_api::text_store::{
     CommitGate, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
     TextStoreObserver, TextStoreStatus,
 };
-use flui_types::ImeEvent;
 use flui_types::geometry::Offset;
 use flui_view::{Signal, SignalWriteExt};
 use flui_widgets::{Focus, SizedBox};

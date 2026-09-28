@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use flui_animation::Vsync;
 use flui_interaction::routing::FocusScopeNode;
+use flui_platform_api::Locale;
 use flui_types::Color;
-use flui_types::platform::Locale;
 use flui_types::typography::TextDirection;
 use flui_widgets::prelude::*;
 use flui_widgets::{

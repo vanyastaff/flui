@@ -3,8 +3,8 @@
 //!
 //! Flutter parity: `cupertino/colors.dart` (oracle tag `3.44.0`).
 
+use flui_sdk::platform::Brightness;
 use flui_sdk::types::Color;
-use flui_sdk::types::platform::Brightness;
 use flui_sdk::view::prelude::BuildContext;
 
 // =============================================================================

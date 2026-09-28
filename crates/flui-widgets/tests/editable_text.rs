@@ -125,7 +125,7 @@ fn re_enabling_a_disabled_field_restores_explicit_node_focusability() {
 // the platform event has been demultiplexed to its presentation.
 // ------------------------------------------------------------------
 
-fn dispatch_ime(harness: &crate::common::harness::Harness, event: &flui_types::ImeEvent) {
+fn dispatch_ime(harness: &crate::common::harness::Harness, event: &flui_platform_api::ImeEvent) {
     harness.dispatch_ime(event);
 }
 
@@ -305,7 +305,7 @@ fn enter_while_composing_is_ignored_and_does_not_submit() {
         ),
     );
     focus_node.request_focus();
-    harness.dispatch_ime(&flui_types::ImeEvent::Preedit {
+    harness.dispatch_ime(&flui_platform_api::ImeEvent::Preedit {
         text: "に".to_owned(),
         cursor: None,
     });
@@ -525,7 +525,10 @@ fn a_focus_request_queued_before_mount_attaches_the_ime_client() {
         1,
         "attach fulfills the queued focus only after the IME listener exists"
     );
-    dispatch_ime(&harness, &flui_types::ImeEvent::Commit("x".to_owned()));
+    dispatch_ime(
+        &harness,
+        &flui_platform_api::ImeEvent::Commit("x".to_owned()),
+    );
     assert_eq!(controller.text(), "x");
 }
 
@@ -558,7 +561,10 @@ fn swapping_a_focused_node_restarts_exactly_one_ime_session() {
         [true, false, true],
         "the old focused node detaches once and its queued replacement attaches once"
     );
-    dispatch_ime(&harness, &flui_types::ImeEvent::Commit("z".to_owned()));
+    dispatch_ime(
+        &harness,
+        &flui_platform_api::ImeEvent::Commit("z".to_owned()),
+    );
     assert_eq!(controller.text(), "z");
 }
 
@@ -610,7 +616,10 @@ fn swapping_the_controller_retargets_paint_ime_and_keys_to_the_replacement() {
     );
 
     // IME input follows the swap.
-    dispatch_ime(&harness, &flui_types::ImeEvent::Commit("z".to_owned()));
+    dispatch_ime(
+        &harness,
+        &flui_platform_api::ImeEvent::Commit("z".to_owned()),
+    );
     assert_eq!(
         replacement.text(),
         "replacementz",
@@ -747,7 +756,7 @@ fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller() {
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "ni".to_string(),
             cursor: Some((0, 2)),
         },
@@ -769,12 +778,15 @@ fn commit_replaces_the_composing_region_through_the_attached_client() {
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "ni".to_string(),
             cursor: Some((2, 2)),
         },
     );
-    dispatch_ime(&harness, &flui_types::ImeEvent::Commit("你".to_string()));
+    dispatch_ime(
+        &harness,
+        &flui_platform_api::ImeEvent::Commit("你".to_string()),
+    );
 
     assert_eq!(controller.text(), "你");
     assert!(
@@ -799,7 +811,7 @@ fn character_key_during_active_composition_does_not_double_insert() {
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "n".to_string(),
             cursor: Some((1, 1)),
         },
@@ -918,14 +930,14 @@ fn disabled_mid_preedit_strips_the_composing_slice_through_the_attached_client()
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "wor".to_string(),
             cursor: Some((3, 3)),
         },
     );
     assert_eq!(controller.text(), "Hello wor");
 
-    dispatch_ime(&harness, &flui_types::ImeEvent::Disabled);
+    dispatch_ime(&harness, &flui_platform_api::ImeEvent::Disabled);
 
     assert_eq!(
         controller.text(),
@@ -1144,7 +1156,7 @@ fn ime_enabled_event_clears_the_dedupe_cache_and_forces_a_resend() {
         "precondition: an unchanged frame must dedupe before Enabled fires"
     );
 
-    dispatch_ime(&harness, &flui_types::ImeEvent::Enabled);
+    dispatch_ime(&harness, &flui_platform_api::ImeEvent::Enabled);
     harness.tick();
 
     assert_eq!(
@@ -1934,7 +1946,7 @@ fn preedit_cursor_none_while_focused_hides_the_caret_and_starts_the_underline() 
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "ni".to_string(),
             cursor: None,
         },
@@ -1964,7 +1976,7 @@ fn preedit_cursor_some_while_focused_keeps_the_caret_visible() {
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "ni".to_string(),
             cursor: Some((2, 2)),
         },
@@ -1997,7 +2009,7 @@ fn commit_removes_the_underline_and_restores_the_caret() {
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "ni".to_string(),
             cursor: None,
         },
@@ -2008,7 +2020,10 @@ fn commit_removes_the_underline_and_restores_the_caret() {
         "precondition: caret hidden while composing"
     );
 
-    dispatch_ime(&harness, &flui_types::ImeEvent::Commit("你".to_string()));
+    dispatch_ime(
+        &harness,
+        &flui_platform_api::ImeEvent::Commit("你".to_string()),
+    );
     harness.tick();
 
     assert!(
@@ -2041,7 +2056,7 @@ fn disabled_removes_the_underline_and_restores_the_caret() {
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "wor".to_string(),
             cursor: None,
         },
@@ -2049,7 +2064,7 @@ fn disabled_removes_the_underline_and_restores_the_caret() {
     harness.tick();
     assert!(!show_caret_flag(&harness));
 
-    dispatch_ime(&harness, &flui_types::ImeEvent::Disabled);
+    dispatch_ime(&harness, &flui_platform_api::ImeEvent::Disabled);
     harness.tick();
 
     assert!(composing_rect(&harness).is_none());
@@ -2070,7 +2085,7 @@ fn empty_preedit_cancels_the_composition_through_the_attached_client() {
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "nihao".to_string(),
             cursor: Some((5, 5)),
         },
@@ -2080,7 +2095,7 @@ fn empty_preedit_cancels_the_composition_through_the_attached_client() {
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: String::new(),
             cursor: None,
         },
@@ -2118,7 +2133,7 @@ fn empty_preedit_with_no_composition_preserves_selection_through_attached_client
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: String::new(),
             cursor: None,
         },
@@ -2154,7 +2169,7 @@ fn unfocus_mid_composition_stops_passing_the_composing_range() {
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "ni".to_string(),
             cursor: Some((2, 2)),
         },
@@ -2195,7 +2210,7 @@ fn caret_navigation_restores_the_caret_through_the_key_handler_while_composing()
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "def".to_string(),
             cursor: None,
         },
@@ -2242,7 +2257,7 @@ fn cursor_area_loop_prefers_the_composing_rect_and_falls_back_to_the_caret_rect_
 
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: "ni".to_string(),
             cursor: Some((2, 2)),
         },
@@ -2267,7 +2282,7 @@ fn cursor_area_loop_prefers_the_composing_rect_and_falls_back_to_the_caret_rect_
     // Cancel the composition — `Preedit("")`, winit's own signal.
     dispatch_ime(
         &harness,
-        &flui_types::ImeEvent::Preedit {
+        &flui_platform_api::ImeEvent::Preedit {
             text: String::new(),
             cursor: None,
         },
@@ -2314,7 +2329,10 @@ fn on_changed_reports_user_edits_but_not_the_callers_own() {
     keys.dispatch_key_event(&character_key_event('a'));
     keys.dispatch_key_event(&character_key_event('b'));
     keys.dispatch_key_event(&named_key_event(NamedKey::Backspace, Modifiers::empty()));
-    dispatch_ime(&harness, &flui_types::ImeEvent::Commit("c".to_string()));
+    dispatch_ime(
+        &harness,
+        &flui_platform_api::ImeEvent::Commit("c".to_string()),
+    );
     assert_eq!(*changes.borrow(), ["a", "ab", "a", "ac"]);
 
     keys.dispatch_key_event(&named_key_event(NamedKey::ArrowLeft, Modifiers::empty()));
@@ -2675,7 +2693,10 @@ mod text_store {
         let (harness, _focus) = focused(&controller);
 
         harness.set_transaction_open(true);
-        dispatch_ime(&harness, &flui_types::ImeEvent::Commit("A".to_owned()));
+        dispatch_ime(
+            &harness,
+            &flui_platform_api::ImeEvent::Commit("A".to_owned()),
+        );
         assert_eq!(controller.text(), "", "the commit waits for the anchor");
         harness.set_transaction_open(false);
 
@@ -2762,7 +2783,10 @@ mod event_cx {
         });
 
         harness.set_transaction_open(true);
-        dispatch_ime(&harness, &flui_types::ImeEvent::Commit("abc".to_owned()));
+        dispatch_ime(
+            &harness,
+            &flui_platform_api::ImeEvent::Commit("abc".to_owned()),
+        );
         assert_eq!(probe.value(), Ok(0), "the commit waits for the frame");
         harness.tick();
 

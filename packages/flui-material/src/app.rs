@@ -60,8 +60,8 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_sdk::platform::{Brightness, Locale};
 use flui_sdk::types::Color;
-use flui_sdk::types::platform::{Brightness, Locale};
 use flui_sdk::types::typography::{FontWeight, TextStyle};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;

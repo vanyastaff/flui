@@ -46,9 +46,9 @@ use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
+use flui_platform_api::ImeEvent;
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::text_store::{CommitGate, TextStore, project_ime_event};
-use flui_types::ImeEvent;
 use flui_types::geometry::Bounds;
 
 /// Identity returned by [`TextInputHandle::attach`].

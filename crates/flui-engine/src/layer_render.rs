@@ -1023,7 +1023,8 @@ mod tests {
     #[test]
     fn test_shader_mask_layer_saves_and_clips() {
         use flui_types::{
-            painting::BlendMode as TBlendMode, painting::Shader as TShader, styling::Color,
+            painting::{BlendMode as TBlendMode, Shader as TShader},
+            styling::Color,
         };
 
         let mut renderer = MockRenderer::new();

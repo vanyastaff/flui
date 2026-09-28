@@ -14,8 +14,10 @@ use flui_rendering::{
 };
 use flui_types::{
     Axis, Offset, Size,
-    layout::AxisDirection,
-    layout::AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
+    layout::{
+        AxisDirection,
+        AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
+    },
 };
 
 /// Maps a [`TextBaseline`] kind into compact per-kind storage.

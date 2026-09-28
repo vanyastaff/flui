@@ -15,7 +15,6 @@ use flui_foundation::{
     ChangeNotifier, DiagnosticLevel, Diagnosticable, DiagnosticsBuilder, DiagnosticsNode,
     ElementId, Key, LayerId, Listenable, ListenerId, RenderId, SemanticsId, ValueNotifier, ViewId,
 };
-use flui_types::platform::TargetPlatform;
 
 // ============================================================================
 // ID System Integration Tests
@@ -316,23 +315,6 @@ fn test_diagnostics_builder_usage() {
 // the workspace already uses `anyhow` / `thiserror` directly). The
 // pre-cycle `test_error_context_chaining` and `test_error_recovery` tests
 // exercised the deleted types and were removed alongside the source.
-
-// ============================================================================
-// Platform Integration Tests
-// ============================================================================
-
-/// Test platform detection via the canonical type in `flui-types`.
-#[test]
-fn test_platform_detection() {
-    let platform = TargetPlatform::current();
-
-    // Platform should have a non-empty static string identifier.
-    let platform_str = platform.as_str();
-    assert!(!platform_str.is_empty());
-
-    // Default matches current.
-    assert_eq!(TargetPlatform::default(), platform);
-}
 
 // ============================================================================
 // Combined Feature Integration Tests

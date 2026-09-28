@@ -9,7 +9,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_types::ImeEvent;
+use crate::ImeEvent;
 
 use super::lock::{LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::session::{Composition, Selection, TextStoreEdit};

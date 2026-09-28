@@ -39,7 +39,7 @@ use flui_material::{
     AppBar, AppBarThemeData, ButtonStyle, ColorSchemeOverrides, ElevatedButton,
     ElevatedButtonThemeData, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_sdk::types::platform::Brightness;
+use flui_sdk::platform::Brightness;
 use flui_sdk::types::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{

@@ -957,7 +957,7 @@ impl TextEditingController {
     ///
     /// [`EditableText`](super::EditableText)'s key handler consults this to
     /// implement the suppression contract
-    /// ([`flui_types::ImeEvent`]'s doc): suppress `Key::Character` insertion
+    /// ([`flui_platform_api::ImeEvent`]'s doc): suppress `Key::Character` insertion
     /// **only** while this is `true` — a field must not swallow plain
     /// typing for the rest of a focus session just because IME composition
     /// happened once.

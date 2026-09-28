@@ -413,10 +413,10 @@ impl PlatformToUi {
                 use flui_platform::WindowAppearance;
                 let brightness = match appearance {
                     WindowAppearance::Dark | WindowAppearance::VibrantDark => {
-                        flui_types::platform::Brightness::Dark
+                        flui_platform_api::Brightness::Dark
                     }
                     WindowAppearance::Light | WindowAppearance::VibrantLight => {
-                        flui_types::platform::Brightness::Light
+                        flui_platform_api::Brightness::Light
                     }
                 };
                 if let Some(source) = realm.media_query_for(presentation_id) {

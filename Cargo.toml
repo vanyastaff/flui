@@ -650,6 +650,7 @@ workspace = true
 # (ADR-0028, `cargo xtask workspace`).
 [dependencies]
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
+flui-platform-api = { workspace = true }
 flui-types = { path = "crates/flui-types", version = "=0.2.0-dev" }
 flui-foundation = { path = "crates/flui-foundation", version = "=0.2.0-dev" }
 flui-view = { path = "crates/flui-view", version = "=0.2.0-dev" }

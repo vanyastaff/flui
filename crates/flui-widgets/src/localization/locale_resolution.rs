@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use flui_types::platform::Locale;
+use flui_platform_api::Locale;
 
 /// Composite lookup keys, built once per `supported_locales` entry so the
 /// resolution loop below is a hash lookup per preferred locale rather than a

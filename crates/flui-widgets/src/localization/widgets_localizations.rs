@@ -15,7 +15,7 @@ use flui_types::typography::TextDirection;
 ///
 /// A `WidgetsLocalizations` implementation is what a [`LocalizationsDelegate`]
 /// (see the sibling `localizations` module) produces for a given
-/// [`Locale`](flui_types::platform::Locale); [`Localizations::of`] retrieves
+/// [`Locale`](flui_platform_api::Locale); [`Localizations::of`] retrieves
 /// it by (trait-object) type from the ambient scope.
 ///
 /// [`LocalizationsDelegate`]: crate::LocalizationsDelegate

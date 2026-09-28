@@ -27,8 +27,8 @@ use flui_material::{
     ColorSchemeOverrides, MaterialApp, ScaffoldMessengerScope, Theme, ThemeData,
     ThemeDataOverrides, ThemeMode,
 };
+use flui_sdk::platform::Brightness;
 use flui_sdk::types::Color;
-use flui_sdk::types::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::{Localizations, MediaQuery, MediaQueryData, SizedBox};

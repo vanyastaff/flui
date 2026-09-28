@@ -229,7 +229,7 @@ pub use pan_zoom::{PointerPanZoomEvent, convert_gesture, from_w3c_event};
 // ============================================================================
 // Re-exports: Geometry from flui_types
 // ============================================================================
-pub use flui_types::ImeEvent;
+pub use flui_platform_api::ImeEvent;
 pub use flui_types::geometry::{Offset, Rect};
 pub use ids::{FocusNodeId, HandlerId, PointerId};
 // ============================================================================

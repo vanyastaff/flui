@@ -358,7 +358,7 @@ impl Harness {
     }
 
     /// Deliver an IME event to this harness's active text client.
-    pub fn dispatch_ime(&self, event: &flui_types::ImeEvent) {
+    pub fn dispatch_ime(&self, event: &flui_platform_api::ImeEvent) {
         self.text_input_owner
             .as_ref()
             .expect("dispatch_ime requires mount_with_ime")

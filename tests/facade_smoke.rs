@@ -88,7 +88,7 @@ fn cupertino_module_resolves_through_the_facade() {
 /// global one (Arabic resolves right-to-left), not the always-LTR default.
 #[test]
 fn global_widgets_localizations_resolve_through_flui_widgets() {
-    use flui::types::platform::Locale;
+    use flui::platform::Locale;
     use flui::types::typography::TextDirection;
     use flui::widgets::{GlobalWidgetsLocalizationsDelegate, LocalizationsDelegate};
 
@@ -142,6 +142,6 @@ fn material_app_shell_resolves_through_the_facade() {
 #[test]
 fn cupertino_app_shell_resolves_through_the_facade() {
     let theme = flui::cupertino::CupertinoThemeData::new()
-        .with_brightness(flui::types::platform::Brightness::Dark);
+        .with_brightness(flui::platform::Brightness::Dark);
     let _app = flui::cupertino::CupertinoApp::new(SizedBox::shrink()).theme(theme);
 }

@@ -156,7 +156,7 @@ pub use app::{
 // `Brightness` is the value type `MediaQueryData` (and any theme's
 // brightness field) uses; re-exported here so callers need only
 // `use flui_widgets::Brightness`.
-pub use flui_types::platform::Brightness;
+pub use flui_platform_api::Brightness;
 // Ambient direction + localized-resource infrastructure — see
 // `localization`'s module docs for the sync-only-v1 divergences from the
 // Flutter oracle.
@@ -397,6 +397,7 @@ pub mod prelude {
     };
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
+    pub use flui_platform_api::Locale;
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::{
         CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch, PointerEvent,
@@ -404,7 +405,6 @@ pub mod prelude {
     pub use flui_rendering::view::ScrollPosition;
     pub use flui_types::layout::{Axis, AxisDirection, BoxFit};
     pub use flui_types::painting::Clip;
-    pub use flui_types::platform::Locale;
     pub use flui_types::typography::TextBaseline;
     pub use flui_types::{Alignment, Color};
 }

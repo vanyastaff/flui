@@ -1,7 +1,5 @@
 //! [`Brightness`] — light/dark theme preference.
 
-use crate::styling::Color;
-
 /// Whether the ambient theme is visually light or dark.
 ///
 /// Mirrors Flutter's `Brightness` enum. Used by `MediaQueryData`
@@ -41,52 +39,6 @@ impl Brightness {
         }
     }
 
-    /// Returns the default background color for this brightness:
-    /// white for `Light`, near-black for `Dark`.
-    #[must_use]
-    #[inline]
-    pub const fn background_color(&self) -> Color {
-        match self {
-            Self::Light => Color::rgba(255, 255, 255, 255), // White
-            Self::Dark => Color::rgba(18, 18, 18, 255),     // Near black
-        }
-    }
-
-    /// Returns the default foreground (text) color for this brightness:
-    /// black for `Light`, white for `Dark`.
-    #[must_use]
-    #[inline]
-    pub const fn foreground_color(&self) -> Color {
-        match self {
-            Self::Light => Color::rgba(0, 0, 0, 255),      // Black
-            Self::Dark => Color::rgba(255, 255, 255, 255), // White
-        }
-    }
-
-    /// Returns the default surface color (cards, sheets) for this
-    /// brightness: white for `Light`, dark gray for `Dark`.
-    #[must_use]
-    #[inline]
-    pub const fn surface_color(&self) -> Color {
-        match self {
-            Self::Light => Color::rgba(255, 255, 255, 255), // White
-            Self::Dark => Color::rgba(30, 30, 30, 255),     // Dark gray
-        }
-    }
-
-    /// Returns the default shadow opacity for this brightness.
-    ///
-    /// Dark themes use a stronger shadow (0.4 vs 0.2) so elevation
-    /// stays legible against dark surfaces.
-    #[must_use]
-    #[inline]
-    pub const fn shadow_opacity(&self) -> f64 {
-        match self {
-            Self::Light => 0.2,
-            Self::Dark => 0.4,
-        }
-    }
-
     /// Parses a brightness from `"light"` or `"dark"`, case-insensitively.
     ///
     /// Returns `None` for unrecognized input.
@@ -121,14 +73,6 @@ mod tests {
         let (l, d) = (Brightness::Light, Brightness::Dark);
         assert_eq!((l.is_light(), l.is_dark(), l.invert()), (true, false, d));
         assert_eq!((d.is_light(), d.is_dark(), d.invert()), (false, true, l));
-
-        assert_eq!(l.background_color(), Color::WHITE);
-        assert_eq!(d.background_color(), Color::rgb(18, 18, 18));
-        assert_eq!(l.foreground_color(), Color::BLACK);
-        assert_eq!(d.foreground_color(), Color::WHITE);
-        assert_eq!(l.surface_color(), Color::WHITE);
-        assert_eq!(d.surface_color(), Color::rgb(30, 30, 30));
-        assert_eq!((l.shadow_opacity(), d.shadow_opacity()), (0.2, 0.4));
     }
 
     #[test]

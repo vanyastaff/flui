@@ -112,10 +112,10 @@ pub enum PlatformInput {
     /// Keyboard event
     Keyboard(KeyboardEvent),
 
-    /// IME composition/commit event. See [`flui_types::ImeEvent`] for the
+    /// IME composition/commit event. See [`flui_platform_api::ImeEvent`] for the
     /// vocabulary and [`crate::PlatformTextInput`] for the
     /// window-side capability this pairs with.
-    Ime(flui_types::ImeEvent),
+    Ime(crate::ImeEvent),
 
     /// System drag-and-drop (ADR-0038). Deliberately NOT a pointer event:
     /// during an external drag the OS owns the cursor, and the gesture-arena
@@ -144,7 +144,7 @@ impl PlatformInput {
 
     /// Extract the IME event if this is an IME composition/commit input.
     #[inline]
-    pub fn as_ime(&self) -> Option<&flui_types::ImeEvent> {
+    pub fn as_ime(&self) -> Option<&crate::ImeEvent> {
         match self {
             PlatformInput::Ime(event) => Some(event),
             PlatformInput::Pointer(_) | PlatformInput::Keyboard(_) | PlatformInput::DragDrop(_) => {

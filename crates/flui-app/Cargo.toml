@@ -78,6 +78,7 @@ debug-overlay = []
 performance-overlay = []
 
 [dependencies]
+flui-platform-api = { workspace = true }
 # Core FLUI crates
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["runtime-internals"] }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }

@@ -21,8 +21,8 @@
 //! no dependency on `flui-material` and nothing here needs to change to
 //! support it later.
 
+use flui_sdk::platform::Brightness;
 use flui_sdk::types::Color;
-use flui_sdk::types::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
 use flui_sdk::widgets::{InheritedTheme, MediaQuery};

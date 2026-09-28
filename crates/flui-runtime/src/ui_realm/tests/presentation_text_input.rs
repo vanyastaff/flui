@@ -1,7 +1,7 @@
+use flui_platform_api::ImeEvent;
 use flui_platform_api::text_store::{
     InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
 };
-use flui_types::ImeEvent;
 use flui_types::geometry::Bounds;
 
 use super::*;

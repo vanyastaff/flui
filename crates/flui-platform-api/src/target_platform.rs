@@ -18,7 +18,7 @@
 //! # Example
 //!
 //! ```
-//! use flui_types::platform::TargetPlatform;
+//! use flui_platform_api::TargetPlatform;
 //!
 //! let platform = TargetPlatform::current();
 //! assert!(!platform.as_str().is_empty());

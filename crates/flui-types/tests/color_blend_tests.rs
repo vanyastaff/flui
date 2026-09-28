@@ -6,7 +6,7 @@
 //! sides perform the same operations, only in swapped order), so none needs
 //! a tolerance except the luminosity checks, which go through u8 rounding.
 
-use flui_types::painting::BlendMode::{self, *};
+use flui_types::painting::{BlendMode, BlendMode::*};
 use flui_types::styling::Color;
 use proptest::prelude::*;
 use rstest::rstest;

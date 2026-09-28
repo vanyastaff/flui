@@ -5,8 +5,8 @@ use crate::common;
 
 use common::{lay_out, tight};
 use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem, CupertinoTheme, CupertinoThemeData};
+use flui_sdk::platform::Brightness;
 use flui_sdk::types::Size;
-use flui_sdk::types::platform::Brightness;
 use flui_sdk::widgets::{Icon, IconData, MediaQuery, MediaQueryData, PreferredSizeView};
 
 fn two_items() -> Vec<CupertinoTabBarItem> {

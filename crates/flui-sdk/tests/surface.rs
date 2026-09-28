@@ -36,13 +36,13 @@ mod measured {
     use flui_sdk::pipeline::{
         PathClipConfiguration as _, RenderPhysicalShape as _, TranslationFraction as _,
     };
+    use flui_sdk::platform::{Brightness as _, Locale as _};
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderUpdateImpact as _,
     };
     use flui_sdk::types::geometry::{EdgeInsets as _, RRect as _, Radius as _};
     use flui_sdk::types::layout::Alignment as _;
     use flui_sdk::types::painting::{Clip as _, Paint as _, Path as _};
-    use flui_sdk::types::platform::{Brightness as _, Locale as _};
     use flui_sdk::types::styling::{
         Border as _, BorderRadius as _, BorderRadiusExt as _, BorderSide as _, BorderStyle as _,
         BoxDecoration as _, Color as _,

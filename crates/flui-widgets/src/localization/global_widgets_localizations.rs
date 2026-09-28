@@ -8,7 +8,7 @@
 //! `flutter_localizations/lib/src/l10n/generated_widgets_localizations.dart`
 //! (oracle tag `3.44.0`).
 
-use flui_types::platform::Locale;
+use flui_platform_api::Locale;
 use flui_types::typography::TextDirection;
 
 use super::{

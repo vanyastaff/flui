@@ -27,6 +27,7 @@ workspace = true
 # what `flui-material`, `flui-cupertino` and `flui-devtools` import outside
 # their tests; see ARCHITECTURE.md for how it was measured.
 [dependencies]
+flui-platform-api = { workspace = true }
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }

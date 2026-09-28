@@ -3,8 +3,8 @@
 //! Flutter parity: `material/theme_data.dart` `ThemeData` (oracle tag
 //! `3.44.0`).
 
+use flui_sdk::platform::Brightness;
 use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::platform::Brightness;
 use flui_sdk::types::styling::{BorderRadius, BorderSide, BoxDecoration, Color};
 use flui_sdk::types::typography::TextStyle;
 use flui_sdk::widgets::WidgetStateProperty;

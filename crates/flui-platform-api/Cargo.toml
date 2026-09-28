@@ -34,6 +34,8 @@ parking_lot = { workspace = true }
 # feature on.
 raw-window-handle = { workspace = true, features = ["alloc"] }
 thiserror = { workspace = true }
+# `Locale` and the other platform values serialize under the `serde` feature.
+serde = { workspace = true, optional = true }
 # An edit the `ImeEvent` projection could not apply, reported where a
 # deferred grant has no caller left to return an error to.
 tracing = { workspace = true }
@@ -44,6 +46,13 @@ ui-events = { workspace = true }
 [dev-dependencies]
 # Pins that the lock arbiter and the reference store are owner-thread only.
 static_assertions = { workspace = true }
+# `Locale` tag round-trips.
+proptest = "1.5"
+serde_json = { workspace = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
 
 [package.metadata.docs.rs]
 all-features = true

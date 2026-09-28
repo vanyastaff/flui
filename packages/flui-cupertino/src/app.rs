@@ -41,7 +41,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_sdk::types::platform::Locale;
+use flui_sdk::platform::Locale;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
@@ -61,7 +61,7 @@ use crate::theme::{CupertinoTheme, CupertinoThemeData};
 ///
 /// ```rust,ignore
 /// use flui_cupertino::{CupertinoApp, CupertinoThemeData};
-/// use flui_sdk::types::platform::Brightness;
+/// use flui_sdk::platform::Brightness;
 ///
 /// flui::run_app(
 ///     CupertinoApp::new(MyHome::new())

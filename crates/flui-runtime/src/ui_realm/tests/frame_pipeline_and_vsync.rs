@@ -447,7 +447,7 @@ fn pointer_input_is_dropped_while_suspended_but_keyboard_flows() {
     // (unlike the pointer early-return above) always requests a
     // redraw.
     realm.enter(|realm| {
-        realm.handle_input_entered(PlatformInput::Ime(flui_types::ImeEvent::Commit(
+        realm.handle_input_entered(PlatformInput::Ime(flui_platform_api::ImeEvent::Commit(
             "suspended-ime".to_string(),
         )));
     });
@@ -503,7 +503,7 @@ fn all_input_dropped_after_close() {
     );
 
     realm.enter(|realm| {
-        realm.handle_input_entered(PlatformInput::Ime(flui_types::ImeEvent::Commit(
+        realm.handle_input_entered(PlatformInput::Ime(flui_platform_api::ImeEvent::Commit(
             "closed-ime".to_string(),
         )));
     });
@@ -533,7 +533,7 @@ fn input_lifecycle_gate_is_exhaustive_and_explicit() {
     ));
     let keyboard =
         PlatformInput::Keyboard(KeyEventBuilder::new(flui_interaction::events::Code::KeyA).build());
-    let ime = PlatformInput::Ime(flui_types::ImeEvent::Commit("x".to_string()));
+    let ime = PlatformInput::Ime(flui_platform_api::ImeEvent::Commit("x".to_string()));
     let drag_drop = PlatformInput::DragDrop(DragDropEvent::Exited {
         id: flui_foundation::DataTransferId::new(1),
     });

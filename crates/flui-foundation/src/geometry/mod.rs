@@ -17,6 +17,19 @@
 
 // Math-crate idiom: single-letter coordinate names are the domain's vocabulary.
 #![expect(clippy::many_single_char_names)]
+// The crate root re-enables all of `clippy::pedantic`; value types follow the workspace's
+// relaxations instead: exact float comparison is how the tests pin results, and builder-style
+// value methods are pure by construction.
+#![expect(
+    clippy::float_cmp,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    clippy::doc_markdown,
+    clippy::similar_names,
+    clippy::cast_possible_truncation,
+    clippy::missing_errors_doc,
+    reason = "the workspace-wide relaxations, restored under the crate root's `clippy::pedantic`"
+)]
 #![deny(missing_docs)]
 
 pub mod bounds;

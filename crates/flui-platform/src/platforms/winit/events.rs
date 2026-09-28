@@ -335,23 +335,23 @@ pub fn mouse_wheel_event(
     PlatformInput::Pointer(event)
 }
 
-/// Convert winit's `Ime` event to [`flui_types::ImeEvent`].
+/// Convert winit's `Ime` event to [`flui_platform_api::ImeEvent`].
 ///
 /// A pure, unit-tested mapping: winit's `Ime` enum is already
-/// [`flui_types::ImeEvent`]'s reference shape (see that type's module doc),
+/// [`flui_platform_api::ImeEvent`]'s reference shape (see that type's module doc),
 /// so this is a direct variant-for-variant translation with no coordinate
 /// or encoding conversion.
 pub fn ime_event(event: &winit::event::Ime) -> PlatformInput {
     use winit::event::Ime;
 
     let ime_event = match event {
-        Ime::Enabled => flui_types::ImeEvent::Enabled,
-        Ime::Preedit(text, cursor) => flui_types::ImeEvent::Preedit {
+        Ime::Enabled => flui_platform_api::ImeEvent::Enabled,
+        Ime::Preedit(text, cursor) => flui_platform_api::ImeEvent::Preedit {
             text: text.clone(),
             cursor: *cursor,
         },
-        Ime::Commit(text) => flui_types::ImeEvent::Commit(text.clone()),
-        Ime::Disabled => flui_types::ImeEvent::Disabled,
+        Ime::Commit(text) => flui_platform_api::ImeEvent::Commit(text.clone()),
+        Ime::Disabled => flui_platform_api::ImeEvent::Disabled,
     };
 
     PlatformInput::Ime(ime_event)
@@ -743,7 +743,7 @@ mod pointer_translation_tests {
 
 #[cfg(test)]
 mod ime_tests {
-    use flui_types::ImeEvent;
+    use flui_platform_api::ImeEvent;
     use winit::event::Ime;
 
     use super::ime_event;

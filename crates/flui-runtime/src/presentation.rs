@@ -17,6 +17,7 @@ use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer};
+use flui_platform_api::HapticFeedback;
 #[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::{Clipboard, CursorError, CursorIcon, PlatformWindow};
@@ -33,7 +34,6 @@ use flui_semantics::{
     AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_args_for,
     semantics_action_for,
 };
-use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding, binding::FramePhaseMarker};
 use web_time::{Duration, Instant};
 

@@ -25,7 +25,7 @@
 //! populate them, and dropping them would silently fail parity assertions
 //! against `color_scheme_test.dart`.
 
-use flui_sdk::types::platform::Brightness;
+use flui_sdk::platform::Brightness;
 use flui_sdk::types::styling::Color;
 
 /// The full set of Material 3 color roles
