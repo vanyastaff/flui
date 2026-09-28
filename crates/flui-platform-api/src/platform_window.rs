@@ -781,8 +781,8 @@ mod tests {
 
         fn physical_size(&self) -> Size<i32> {
             Size::new(
-                (self.size.width * self.scale_factor as f64) as i32,
-                (self.size.height * self.scale_factor as f64) as i32,
+                (self.size.width * self.scale_factor) as i32,
+                (self.size.height * self.scale_factor) as i32,
             )
         }
 

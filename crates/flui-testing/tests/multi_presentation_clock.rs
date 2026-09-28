@@ -122,8 +122,8 @@ fn two_presentations_at_independent_scripted_cadences_tick_and_advance_independe
         "sanity: 100 frames at 144Hz must cover less virtual time than 100 at 60Hz"
     );
 
-    let a_expected = (a_elapsed / 5.0).min(1.0) as f64;
-    let b_expected = (b_elapsed / 5.0).min(1.0) as f64;
+    let a_expected = (a_elapsed / 5.0).min(1.0);
+    let b_expected = (b_elapsed / 5.0).min(1.0);
     // Tolerance wider than a bare rounding epsilon: the detection tick anchors
     // `t = 0` on the FIRST observed instant rather than true zero (one frame's
     // worth of slack), and `Duration::from_nanos(1_000_000_000 / rate)` itself

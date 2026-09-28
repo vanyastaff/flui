@@ -970,7 +970,7 @@ fn finish_open_secondary_window(
             .map_err(mount_error)?
         }
         WindowPolicy::SeparateRealms => {
-            let scale_factor = window.scale_factor() as f64;
+            let scale_factor = window.scale_factor();
             let wake = runtime_wake_callback();
             let ui_realm = crate::app::ui_realm::UiRealm::new(
                 Arc::clone(&wake),

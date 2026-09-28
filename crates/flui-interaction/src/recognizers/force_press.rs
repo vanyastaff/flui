@@ -519,12 +519,12 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 self.handle_down(position, f64::from(data.state.pressure));
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 self.handle_move(
                     position,
                     f64::from(data.current.pressure),
@@ -533,7 +533,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 self.handle_up(position);
             }
             PointerEvent::Cancel(_) => {

@@ -125,7 +125,7 @@ impl Icon {
     fn style_for(&self, icon: &IconData, size: f64, theme: &IconThemeData) -> TextStyle {
         TextStyle {
             color: self.color.or(theme.color),
-            font_size: Some(f64::from(size)),
+            font_size: Some(size),
             font_family: icon.font_family.clone(),
             font_family_fallback: icon.font_family_fallback.clone(),
             height: Some(1.0),

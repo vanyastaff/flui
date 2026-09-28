@@ -279,9 +279,9 @@ impl SpringDescription {
 /// extreme but finite springs keep a usable slow root (see [`OverdampedSolution`]).
 #[inline]
 fn spring_discriminant(spring: SpringDescription) -> f64 {
-    let mass = f64::from(spring.mass);
-    let stiffness = f64::from(spring.stiffness);
-    let damping = f64::from(spring.damping);
+    let mass = spring.mass;
+    let stiffness = spring.stiffness;
+    let damping = spring.damping;
     damping * damping - 4.0 * mass * stiffness
 }
 
@@ -485,10 +485,8 @@ struct CriticalSolution {
 
 impl CriticalSolution {
     fn new(spring: SpringDescription, distance: f64, velocity: f64) -> Self {
-        let mass = f64::from(spring.mass);
-        let damping = f64::from(spring.damping);
-        let distance = f64::from(distance);
-        let velocity = f64::from(velocity);
+        let mass = spring.mass;
+        let damping = spring.damping;
         let r = -damping / (2.0 * mass);
         let c1 = distance;
         let c2 = velocity - (r * distance);
@@ -496,16 +494,13 @@ impl CriticalSolution {
     }
 
     fn x(&self, time: f64) -> f64 {
-        let time = f64::from(time);
-        let x = (self.c1 + self.c2 * time) * (self.r * time).exp();
-        x as f64
+        (self.c1 + self.c2 * time) * (self.r * time).exp()
     }
 
     fn dx(&self, time: f64) -> f64 {
-        let time = f64::from(time);
         let power = (self.r * time).exp();
-        let dx = self.r * (self.c1 + self.c2 * time) * power + self.c2 * power;
-        dx as f64
+
+        self.r * (self.c1 + self.c2 * time) * power + self.c2 * power
     }
 }
 
@@ -525,11 +520,9 @@ struct OverdampedSolution {
 
 impl OverdampedSolution {
     fn new(spring: SpringDescription, distance: f64, velocity: f64) -> Self {
-        let mass = f64::from(spring.mass);
-        let stiffness = f64::from(spring.stiffness);
-        let damping = f64::from(spring.damping);
-        let distance = f64::from(distance);
-        let velocity = f64::from(velocity);
+        let mass = spring.mass;
+        let stiffness = spring.stiffness;
+        let damping = spring.damping;
 
         let cmk = damping * damping - 4.0 * mass * stiffness;
         // Fast (more negative) root: both terms share sign, so no cancellation.
@@ -542,16 +535,11 @@ impl OverdampedSolution {
     }
 
     fn x(&self, time: f64) -> f64 {
-        let time = f64::from(time);
-        let x = self.c1 * (self.r1 * time).exp() + self.c2 * (self.r2 * time).exp();
-        x as f64
+        self.c1 * (self.r1 * time).exp() + self.c2 * (self.r2 * time).exp()
     }
 
     fn dx(&self, time: f64) -> f64 {
-        let time = f64::from(time);
-        let dx =
-            self.c1 * self.r1 * (self.r1 * time).exp() + self.c2 * self.r2 * (self.r2 * time).exp();
-        dx as f64
+        self.c1 * self.r1 * (self.r1 * time).exp() + self.c2 * self.r2 * (self.r2 * time).exp()
     }
 }
 
@@ -569,11 +557,9 @@ struct UnderdampedSolution {
 
 impl UnderdampedSolution {
     fn new(spring: SpringDescription, distance: f64, velocity: f64) -> Self {
-        let mass = f64::from(spring.mass);
-        let stiffness = f64::from(spring.stiffness);
-        let damping = f64::from(spring.damping);
-        let distance = f64::from(distance);
-        let velocity = f64::from(velocity);
+        let mass = spring.mass;
+        let stiffness = spring.stiffness;
+        let damping = spring.damping;
 
         let w = (4.0 * mass * stiffness - damping * damping).sqrt() / (2.0 * mass);
         let r = -(damping / (2.0 * mass));
@@ -583,20 +569,16 @@ impl UnderdampedSolution {
     }
 
     fn x(&self, time: f64) -> f64 {
-        let time = f64::from(time);
-        let x = (self.r * time).exp()
-            * (self.c1 * (self.w * time).cos() + self.c2 * (self.w * time).sin());
-        x as f64
+        (self.r * time).exp() * (self.c1 * (self.w * time).cos() + self.c2 * (self.w * time).sin())
     }
 
     fn dx(&self, time: f64) -> f64 {
-        let time = f64::from(time);
         let power = (self.r * time).exp();
         let cosine = (self.w * time).cos();
         let sine = (self.w * time).sin();
-        let dx = power * (self.c2 * self.w * cosine - self.c1 * self.w * sine)
-            + self.r * power * (self.c2 * sine + self.c1 * cosine);
-        dx as f64
+
+        power * (self.c2 * self.w * cosine - self.c1 * self.w * sine)
+            + self.r * power * (self.c2 * sine + self.c1 * cosine)
     }
 }
 

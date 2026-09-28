@@ -22,7 +22,7 @@ const WIDTH: f64 = 480.0;
 fn mount() -> LaidOut {
     lay_out(
         MediaQuery::new(MediaQueryData::default(), todo::TodoApp),
-        tight(f64::from(WIDTH), 640.0),
+        tight(WIDTH, 640.0),
     )
 }
 
@@ -65,7 +65,7 @@ fn the_new_item_field_takes_the_rows_remaining_width() {
     let add = app.size(app.find_text("Add").expect("the Add button's label"));
     let label = app.size(app.find_text("New item").expect("the field's label"));
     assert!(
-        width > f64::from(WIDTH / 2.0),
+        width > (WIDTH / 2.0),
         "the empty field is {width}px wide in a {WIDTH}px row (label {}px, Add {}px)",
         label.width,
         add.width,

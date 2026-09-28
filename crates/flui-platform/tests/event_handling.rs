@@ -202,8 +202,8 @@ fn test_window_resize_event() {
     // divide by scale_factor.
 
     let scale_factor = window.scale_factor();
-    let logical_width = (initial_size.width as f64) / (scale_factor as f64);
-    let logical_height = (initial_size.height as f64) / (scale_factor as f64);
+    let logical_width = (initial_size.width as f64) / scale_factor;
+    let logical_height = (initial_size.height as f64) / scale_factor;
 
     tracing::info!("Logical size: {}x{}", logical_width, logical_height);
     tracing::info!(
@@ -437,7 +437,7 @@ fn test_event_coordinate_system() {
 
     // Verify coordinate conversion
     let physical_x = 1920;
-    let logical_x = (physical_x as f64) / (scale_factor as f64);
+    let logical_x = (physical_x as f64) / scale_factor;
     tracing::info!("Physical {} -> Logical {}", physical_x, logical_x);
 
     // With scale_factor = 2.0:

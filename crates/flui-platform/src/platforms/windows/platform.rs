@@ -1141,7 +1141,7 @@ impl WindowsPlatform {
                     if let Some(ctx) = ctx {
                         ctx.dispatch_event(WindowEvent::ScaleFactorChanged {
                             window_id: ctx.window_id,
-                            scale_factor: new_scale as f64,
+                            scale_factor: new_scale,
                         });
 
                         // Update context scale factor through the shared

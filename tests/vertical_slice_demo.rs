@@ -300,8 +300,8 @@ impl MountedDemo {
             .expect("the list box must have box geometry after the bootstrap frame");
         let top_left = self.absolute_position(list_box);
         (
-            ((top_left.dx + size.width / 2.0) as f64),
-            ((top_left.dy + size.height / 2.0) as f64),
+            (top_left.dx + size.width / 2.0),
+            (top_left.dy + size.height / 2.0),
         )
     }
 
@@ -317,8 +317,8 @@ impl MountedDemo {
             let mut current = id;
             loop {
                 if let Some(offset) = inspect::render_offset(owner, current) {
-                    x += (offset.dx) as f64;
-                    y += (offset.dy) as f64;
+                    x += offset.dx;
+                    y += offset.dy;
                 }
                 match render_tree.parent(current) {
                     Some(parent) => current = parent,
@@ -331,7 +331,7 @@ impl MountedDemo {
 }
 
 fn offset(x: f64, y: f64) -> Offset {
-    Offset::new(f64::from(x), f64::from(y))
+    Offset::new(x, y)
 }
 
 /// The part of `type_name` before its first `<`, if any — the base name
@@ -379,7 +379,7 @@ fn tapping_the_plus_button_updates_the_rendered_counter_text() {
         .find_text("+")
         .expect("the '+' button's Text must be in the render tree");
     let tap_at = demo.absolute_position(plus);
-    demo.tap((tap_at.dx + 1.0) as f64, (tap_at.dy + 1.0) as f64);
+    demo.tap(tap_at.dx + 1.0, tap_at.dy + 1.0);
 
     // The tap's on_tap handler scheduled a rebuild via `StateCell::update`;
     // the next pump drains it.
@@ -396,7 +396,7 @@ fn tapping_the_plus_button_updates_the_rendered_counter_text() {
 
     // A second tap keeps incrementing — proves the element (and its bound
     // `StateCell`) survives across rebuilds rather than being torn down.
-    demo.tap((tap_at.dx + 1.0) as f64, (tap_at.dy + 1.0) as f64);
+    demo.tap(tap_at.dx + 1.0, tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
     assert!(
         demo.find_text("Count: 2").is_some(),
@@ -470,7 +470,7 @@ fn dragging_inside_the_list_box_scrolls_its_items() {
     let moved_up_by = offset_before.dy - offset_after.dy;
 
     assert!(
-        (moved_up_by - f64::from(expected_scroll_delta)).abs() < 1.0,
+        (moved_up_by - expected_scroll_delta).abs() < 1.0,
         "dragging a lone recognizer up by {expected_scroll_delta}px must move item 0's paint \
          position up by the same amount: \
          before={offset_before:?}, after={offset_after:?}, moved_up_by={moved_up_by}"
@@ -533,7 +533,7 @@ fn tapping_the_animated_box_interpolates_width_to_the_expanded_target() {
     // Tap the box (Opaque hit-test behavior, so any point inside its bounds
     // works) to toggle `expanded` and retarget the controller.
     let tap_at = demo.absolute_position(box_id);
-    demo.tap((tap_at.dx + 2.0) as f64, (tap_at.dy + 2.0) as f64);
+    demo.tap(tap_at.dx + 2.0, tap_at.dy + 2.0);
     demo.pump(Duration::ZERO); // the detection frame: rebuild + retarget, t = 0
 
     let box_id = demo.animated_box_render_id();
@@ -614,10 +614,7 @@ fn tapping_the_details_button_pushes_a_route_that_hides_the_home_route_from_hit_
         .find_text(tree::DETAILS_BUTTON_LABEL)
         .expect("the 'View details' button must be in the render tree");
     let details_tap_at = demo.absolute_position(details_button);
-    demo.tap(
-        (details_tap_at.dx + 1.0) as f64,
-        (details_tap_at.dy + 1.0) as f64,
-    );
+    demo.tap(details_tap_at.dx + 1.0, details_tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
 
     assert!(
@@ -632,7 +629,7 @@ fn tapping_the_details_button_pushes_a_route_that_hides_the_home_route_from_hit_
     // A tap at the "+" button's old screen position must not reach it: the
     // details `PageRoute` is opaque, so `RenderTheater`'s skip_count now
     // excludes the home route from hit-testing (`overlay/mod.rs::onstage_plan`).
-    demo.tap((plus_tap_at.dx + 1.0) as f64, (plus_tap_at.dy + 1.0) as f64);
+    demo.tap(plus_tap_at.dx + 1.0, plus_tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
     assert!(
         demo.find_text("Count: 0").is_some(),
@@ -654,9 +651,9 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         .find_text("+")
         .expect("the '+' button's Text must be in the render tree");
     let plus_tap_at = demo.absolute_position(plus);
-    demo.tap((plus_tap_at.dx + 1.0) as f64, (plus_tap_at.dy + 1.0) as f64);
+    demo.tap(plus_tap_at.dx + 1.0, plus_tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
-    demo.tap((plus_tap_at.dx + 1.0) as f64, (plus_tap_at.dy + 1.0) as f64);
+    demo.tap(plus_tap_at.dx + 1.0, plus_tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
     assert!(
         demo.find_text("Count: 2").is_some(),
@@ -667,10 +664,7 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         .find_text(tree::DETAILS_BUTTON_LABEL)
         .expect("the 'View details' button must be in the render tree");
     let details_tap_at = demo.absolute_position(details_button);
-    demo.tap(
-        (details_tap_at.dx + 1.0) as f64,
-        (details_tap_at.dy + 1.0) as f64,
-    );
+    demo.tap(details_tap_at.dx + 1.0, details_tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
     assert!(demo.find_text(tree::DETAILS_ROUTE_TEXT).is_some());
 
@@ -678,7 +672,7 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         .find_text(tree::BACK_BUTTON_LABEL)
         .expect("the back button must be in the render tree while the details route is on top");
     let back_tap_at = demo.absolute_position(back);
-    demo.tap((back_tap_at.dx + 1.0) as f64, (back_tap_at.dy + 1.0) as f64);
+    demo.tap(back_tap_at.dx + 1.0, back_tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
 
     assert!(
@@ -710,7 +704,7 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
     );
 
     // The home route's own hit-testing must be restored, too.
-    demo.tap((plus_tap_at.dx + 1.0) as f64, (plus_tap_at.dy + 1.0) as f64);
+    demo.tap(plus_tap_at.dx + 1.0, plus_tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
     assert!(
         demo.find_text("Count: 3").is_some(),

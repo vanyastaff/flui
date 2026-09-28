@@ -863,8 +863,8 @@ mod glam_backend_tests {
         let c = a * b; // apply b first, then a
         let (x, y) = c.transform_point(1.0, 1.0);
         // b: (1,1)->(6,8); a: scale -> (12, 24)
-        assert!((x - 12.0).abs() < 1e-5, "x={}", x);
-        assert!((y - 24.0).abs() < 1e-5, "y={}", y);
+        assert!((x - 12.0).abs() < 1e-5, "x={x}");
+        assert!((y - 24.0).abs() < 1e-5, "y={y}");
     }
 
     #[test]

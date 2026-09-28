@@ -767,7 +767,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn scale_factor(&self) -> f64 {
-        self.state.lock().scale_factor as f64
+        self.state.lock().scale_factor
     }
 
     fn request_redraw(&self) {

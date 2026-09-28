@@ -353,9 +353,9 @@ impl TextBox {
     #[inline]
     pub fn start(&self) -> f64 {
         if self.direction.is_ltr() {
-            self.rect.left() as f64
+            self.rect.left()
         } else {
-            self.rect.right() as f64
+            self.rect.right()
         }
     }
 
@@ -364,9 +364,9 @@ impl TextBox {
     #[inline]
     pub fn end(&self) -> f64 {
         if self.direction.is_ltr() {
-            self.rect.right() as f64
+            self.rect.right()
         } else {
-            self.rect.left() as f64
+            self.rect.left()
         }
     }
 
@@ -388,14 +388,14 @@ impl TextBox {
     #[must_use]
     #[inline]
     pub fn width(&self) -> f64 {
-        self.rect.width() as f64
+        self.rect.width()
     }
 
     /// Returns the height of the text box.
     #[must_use]
     #[inline]
     pub fn height(&self) -> f64 {
-        self.rect.height() as f64
+        self.rect.height()
     }
 }
 
@@ -461,14 +461,14 @@ impl GlyphInfo {
     #[must_use]
     #[inline]
     pub fn width(&self) -> f64 {
-        self.bounds.width() as f64
+        self.bounds.width()
     }
 
     /// Returns the glyph height.
     #[must_use]
     #[inline]
     pub fn height(&self) -> f64 {
-        self.bounds.height() as f64
+        self.bounds.height()
     }
 }
 

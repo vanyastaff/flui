@@ -779,8 +779,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                             },
                         );
                     }
-                    #[expect(clippy::cast_possible_truncation)] // per-tick factors are near 1.0
-                    let scale_change = scale as f64;
+                    let scale_change = scale;
                     let value_before_zoom = controller_pinch.value();
                     if scale_enabled
                         && scale_change != 1.0

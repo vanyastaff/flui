@@ -460,7 +460,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                 // For now, we'll track via primary pointer
                 if let Some(pointer) = self.state.primary_pointer() {
                     let pos = data.current.position;
-                    let position = Offset::new(pos.x as f64, pos.y as f64);
+                    let position = Offset::new(pos.x, pos.y);
                     self.handle_pointer_move(pointer, position, data.pointer.pointer_type);
                 }
             }

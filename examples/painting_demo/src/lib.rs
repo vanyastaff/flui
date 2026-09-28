@@ -277,15 +277,15 @@ use flui_types::painting::{Paint, Shader, path::Path};
 use flui_types::styling::Color;
 
 fn pt(x: f64, y: f64) -> Point<f64> {
-    Point::new(f64::from(x), f64::from(y))
+    Point::new(x, y)
 }
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect<f64> {
-    Rect::from_xywh(x, f64::from(y), f64::from(w), f64::from(h))
+    Rect::from_xywh(x, y, w, h)
 }
 
 fn ofs(dx: f64, dy: f64) -> Offset<f64> {
-    Offset::new(f64::from(dx), f64::from(dy))
+    Offset::new(dx, dy)
 }
 
 // ============================================================

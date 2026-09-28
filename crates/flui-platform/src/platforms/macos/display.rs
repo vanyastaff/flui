@@ -37,7 +37,7 @@ impl MacOSDisplay {
         // NSScreen frames are in points (logical units, bottom-left origin);
         // the PlatformDisplay contract wants device pixels, so scale by
         // `backingScaleFactor` before converting.
-        let to_device = |points: f64| ((points * scale).round() as i32);
+        let to_device = |points: f64| (points * scale).round() as i32;
 
         let bounds = Bounds {
             origin: Point::new(to_device(frame.origin.x), to_device(frame.origin.y)),

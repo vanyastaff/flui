@@ -441,23 +441,12 @@ fn single_item_virtualizer() {
 /// ~0.0012 px between neighbours. A coarse grid would quietly narrow these
 /// tests to whole-pixel cases, which is the opposite of what a geometry
 /// property suite is for.
-///
-/// The arithmetic runs in `f64` because `f64: From<u32>` is exact for every
-/// step index, where `f64: From<u32>` does not exist at all. Only the final
-/// narrowing is lossy, and that is the point — the value has to land in the
-/// target type.
 fn extent_in(lo: f64, hi: f64) -> impl proptest::strategy::Strategy<Value = f64> {
     const STEPS: u32 = 1 << 24;
     use proptest::strategy::Strategy as _;
     (0u32..=STEPS).prop_map(move |n| {
         let t = f64::from(n) / f64::from(STEPS);
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "narrowing to the target type is the purpose; the \
-                      arithmetic above is exact in f64"
-        )]
-        let v = (f64::from(lo) + t * (f64::from(hi) - f64::from(lo))) as f64;
-        v
+        lo + t * (hi - lo)
     })
 }
 

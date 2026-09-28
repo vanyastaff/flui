@@ -243,7 +243,7 @@ fn simulate_advances_layout_across_ticks() {
     let child = run.id("child");
     let pad = run.root();
     let reports = run.simulate([0.25, 0.5, 1.0], |t, run| {
-        let padding = 5.0 + 50.0 * t as f64;
+        let padding = 5.0 + 50.0 * t;
         run.update::<RenderPadding>(pad, |p| {
             assert_eq!(
                 p.set_padding(EdgeInsets::all(padding)),

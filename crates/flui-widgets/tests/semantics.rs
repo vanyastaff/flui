@@ -297,7 +297,7 @@ fn scrolling_republishes_the_semantics_rects() {
             .unwrap_or_else(|e| panic!("expected one {label}: {e}"))
             .bounds()
             .expect("a laid-out row carries bounds")
-            .y0 as f64
+            .y0
     };
 
     let before = top_of(&laid, "row 1");

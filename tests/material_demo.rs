@@ -59,7 +59,7 @@ const ROOT_WIDTH: f64 = 480.0;
 const ROOT_HEIGHT: f64 = 800.0;
 
 fn root_constraints() -> BoxConstraints {
-    BoxConstraints::tight(Size::new(f64::from(ROOT_WIDTH), f64::from(ROOT_HEIGHT)))
+    BoxConstraints::tight(Size::new(ROOT_WIDTH, ROOT_HEIGHT))
 }
 
 /// Everything the test needs to drive and inspect the mounted demo tree.
@@ -180,8 +180,8 @@ impl MountedDemo {
         let position = self.absolute_position(id);
         let size = self.size(id);
         self.tap(
-            (position.dx + size.width / 2.0) as f64,
-            (position.dy + size.height / 2.0) as f64,
+            position.dx + size.width / 2.0,
+            position.dy + size.height / 2.0,
         );
     }
 
@@ -335,8 +335,8 @@ impl MountedDemo {
                 if let Some(offset) =
                     flui_rendering::testing::inspect::render_offset(owner, current)
                 {
-                    x += (offset.dx) as f64;
-                    y += (offset.dy) as f64;
+                    x += offset.dx;
+                    y += offset.dy;
                 }
                 match render_tree.parent(current) {
                     Some(parent) => current = parent,
@@ -349,7 +349,7 @@ impl MountedDemo {
 }
 
 fn offset(x: f64, y: f64) -> Offset {
-    Offset::new(f64::from(x), f64::from(y))
+    Offset::new(x, y)
 }
 
 /// Spin until `Instant::now()` returns a value strictly greater than the one
@@ -456,18 +456,16 @@ fn scaffold_mounts_with_app_bar_at_top_and_fab_at_the_end_float_position() {
     // — see `scaffold.rs`'s `ScaffoldLayoutDelegate::perform_layout` for the
     // exact formula this pins.
     const FAB_MARGIN: f64 = 16.0;
-    let expected_x =
-        ROOT_WIDTH - FAB_MARGIN - ((flui_material::floating_action_button::FAB_SIZE) as f64);
-    let expected_y =
-        ROOT_HEIGHT - FAB_MARGIN - ((flui_material::floating_action_button::FAB_SIZE) as f64);
+    let expected_x = ROOT_WIDTH - FAB_MARGIN - (flui_material::floating_action_button::FAB_SIZE);
+    let expected_y = ROOT_HEIGHT - FAB_MARGIN - (flui_material::floating_action_button::FAB_SIZE);
     assert!(
-        (fab_position.dx - f64::from(expected_x)).abs() < 1.0,
+        (fab_position.dx - expected_x).abs() < 1.0,
         "the FAB must float {FAB_MARGIN}px from the trailing edge, expected x={expected_x}, got \
          x={}",
         fab_position.dx,
     );
     assert!(
-        (fab_position.dy - f64::from(expected_y)).abs() < 1.0,
+        (fab_position.dy - expected_y).abs() < 1.0,
         "the FAB must float {FAB_MARGIN}px from the bottom edge, expected y={expected_y}, got \
          y={}",
         fab_position.dy,
@@ -515,10 +513,7 @@ fn tapping_the_fab_opens_the_dialog_and_hides_the_page_beneath_from_hit_testing(
     // itself (popping the dialog) rather than falling through to the covered
     // home route beneath it — proof the home route is genuinely
     // un-hit-testable, not merely that this one tap happened to miss it.
-    demo.tap(
-        (settings_position.dx + 1.0) as f64,
-        (settings_position.dy + 1.0) as f64,
-    );
+    demo.tap(settings_position.dx + 1.0, settings_position.dy + 1.0);
     demo.pump(Duration::ZERO);
     assert!(
         demo.find_text(tree::SETTINGS_ROUTE_TITLE).is_none(),
@@ -849,7 +844,7 @@ fn dragging_inside_the_list_scrolls_its_items() {
     let moved_up_by = offset_before.dy - offset_after.dy;
 
     assert!(
-        (moved_up_by - f64::from(expected_scroll_delta)).abs() < 1.0,
+        (moved_up_by - expected_scroll_delta).abs() < 1.0,
         "dragging up {expected_scroll_delta}px worth of post-slop deltas must move item 0's \
          paint position up by the same amount (the slop-crossing move's delta is swallowed): \
          before={offset_before:?}, after={offset_after:?}, moved_up_by={moved_up_by}"
@@ -938,11 +933,11 @@ fn the_counters_state_survives_switching_away_and_back() {
     // `tests/vertical_slice_demo.rs`'s `tapping_the_plus_button_updates_the_rendered_counter_text`
     // already established for its own repeatedly-tapped counter button.
     let tap_at = demo.absolute_position(increment);
-    demo.tap((tap_at.dx + 1.0) as f64, (tap_at.dy + 1.0) as f64);
+    demo.tap(tap_at.dx + 1.0, tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
-    demo.tap((tap_at.dx + 1.0) as f64, (tap_at.dy + 1.0) as f64);
+    demo.tap(tap_at.dx + 1.0, tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
-    demo.tap((tap_at.dx + 1.0) as f64, (tap_at.dy + 1.0) as f64);
+    demo.tap(tap_at.dx + 1.0, tap_at.dy + 1.0);
     demo.pump(Duration::ZERO);
 
     assert!(
@@ -1013,7 +1008,7 @@ fn the_app_bar_height_is_toolbar_plus_the_mounted_tab_bars_height() {
     let matches = demo
         .find_all_by_render_type("RenderConstrainedBox")
         .into_iter()
-        .filter(|&id| demo.size(id).height == f64::from(EXPECTED_HEIGHT))
+        .filter(|&id| demo.size(id).height == EXPECTED_HEIGHT)
         .count();
     assert!(
         matches > 0,

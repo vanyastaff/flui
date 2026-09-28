@@ -70,11 +70,11 @@ pub trait PlatformDisplay: Send + Sync {
     /// factor.
     fn logical_size(&self) -> Size<f64> {
         let bounds = self.bounds();
-        let scale = self.scale_factor() as f64;
+        let scale = self.scale_factor();
 
         // Convert DevicePixels to Pixels by dividing by scale factor
-        let device_width: i32 = bounds.size.width.into();
-        let device_height: i32 = bounds.size.height.into();
+        let device_width: i32 = bounds.size.width;
+        let device_height: i32 = bounds.size.height;
 
         Size::new(device_width as f64 / scale, device_height as f64 / scale)
     }

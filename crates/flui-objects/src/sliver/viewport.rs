@@ -978,8 +978,6 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         paint_extent: f64,
         size: Size,
     ) -> Offset {
-        let layout_offset = layout_offset;
-        let paint_extent = paint_extent;
         match growth_direction.apply_to_axis_direction(self.axis_direction) {
             TopToBottom => Offset::new(0.0, layout_offset),
             BottomToTop => Offset::new(0.0, size.height - layout_offset - paint_extent),
@@ -1710,8 +1708,6 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
         paint_extent: f64,
         size: Size,
     ) -> Offset {
-        let layout_offset = layout_offset;
-        let paint_extent = paint_extent;
         match growth_direction.apply_to_axis_direction(self.axis_direction) {
             TopToBottom => Offset::new(0.0, layout_offset),
             BottomToTop => Offset::new(0.0, size.height - layout_offset - paint_extent),

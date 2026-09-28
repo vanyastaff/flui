@@ -135,10 +135,7 @@ fn logical_cursor_point(
     position: winit::dpi::PhysicalPosition<f64>,
     scale_factor: f64,
 ) -> Point<f64> {
-    Point::new(
-        (position.x / scale_factor) as f64,
-        (position.y / scale_factor) as f64,
-    )
+    Point::new(position.x / scale_factor, position.y / scale_factor)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1101,7 +1098,7 @@ impl ApplicationHandler for WinitApp {
 
                 // Dispatch per-window resize callback
                 if let Some(ref win) = window {
-                    let scale = win.scale_factor() as f64;
+                    let scale = win.scale_factor();
                     let logical = Size::new(
                         physical_size.width as f64 / scale,
                         physical_size.height as f64 / scale,

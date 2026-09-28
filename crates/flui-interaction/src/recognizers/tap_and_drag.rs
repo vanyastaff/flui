@@ -432,13 +432,13 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         match event {
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 let kind = data.pointer.pointer_type;
                 self.handle_move(position, global_position, kind);
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 self.handle_up(position, global_position, data.pointer.pointer_type);
             }
             PointerEvent::Cancel(info) => {

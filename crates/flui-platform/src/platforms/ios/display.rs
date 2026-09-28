@@ -67,7 +67,7 @@ impl IOSDisplay {
 /// The `(points, scale)` → device-pixel conversion, free-standing so it can
 /// be tested without a display. `CGRect`/`CGSize` are plain C structs.
 pub(super) fn device_bounds_from_points(bounds: NSRect, scale: f64) -> Bounds<i32> {
-    let to_device = |points: f64| ((points * scale).round() as i32);
+    let to_device = |points: f64| (points * scale).round() as i32;
     Bounds {
         origin: Point::new(to_device(bounds.origin.x), to_device(bounds.origin.y)),
         size: Size::new(to_device(bounds.size.width), to_device(bounds.size.height)),

@@ -308,14 +308,9 @@ impl FluiView {
         let bounds = self.bounds();
         let insets = self.safeAreaInsets();
         let next = WindowMetrics {
-            size: Size::new((bounds.size.width as f64), (bounds.size.height as f64)),
+            size: Size::new(bounds.size.width, bounds.size.height),
             scale: self.contentScaleFactor(),
-            safe_area: EdgeInsets::new(
-                (insets.top as f64),
-                (insets.right as f64),
-                (insets.bottom as f64),
-                (insets.left as f64),
-            ),
+            safe_area: EdgeInsets::new(insets.top, insets.right, insets.bottom, insets.left),
         };
         if self.ivars().sampling.get() != admission
             || next.size.width <= 0.0
@@ -329,7 +324,7 @@ impl FluiView {
         };
         if previous.size != next.size || previous.scale != next.scale {
             self.callbacks()
-                .dispatch_metrics_resize(next.size, next.scale as f64);
+                .dispatch_metrics_resize(next.size, next.scale);
         }
         if self.ivars().sampling.get() != admission {
             // The resize dispatch above retired this view, so this snapshot's
@@ -761,8 +756,8 @@ impl PlatformWindow for IOSWindow {
     fn physical_size(&self) -> Size<i32> {
         let metrics = *self.metrics.lock();
         Size::new(
-            ((f64::from(metrics.size.width) * metrics.scale).round() as i32),
-            ((f64::from(metrics.size.height) * metrics.scale).round() as i32),
+            (metrics.size.width * metrics.scale).round() as i32,
+            (metrics.size.height * metrics.scale).round() as i32,
         )
     }
 

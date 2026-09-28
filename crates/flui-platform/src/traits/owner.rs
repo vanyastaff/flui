@@ -503,6 +503,10 @@ impl PlatformProxy {
     ///
     /// # Errors
     /// See [`ProxySendError`].
+    #[expect(
+        clippy::result_large_err,
+        reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
+    )]
     pub fn open_window(
         &self,
         options: WindowOptions,
@@ -828,6 +832,10 @@ pub(crate) trait ProxyTransport: Send + Sync {
     }
 
     /// Enqueues a window-open request from a worker thread.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the rejection hands the caller's options back for a retry; a window open is not a hot path"
+    )]
     fn open_window(
         &self,
         options: WindowOptions,

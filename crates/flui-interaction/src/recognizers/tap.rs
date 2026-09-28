@@ -743,13 +743,13 @@ impl GestureRecognizer for TapGestureRecognizer {
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 let button = Self::down_button(event);
                 self.handle_tap_down(position, global_position, data.pointer.pointer_type, button);
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 let pointer_type = data.pointer.pointer_type;
                 // Check if moved too far (slop detection)
                 if self.check_slop(position) {
@@ -761,7 +761,7 @@ impl GestureRecognizer for TapGestureRecognizer {
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 let button = Self::up_button(event);
                 self.handle_tap_up(position, global_position, data.pointer.pointer_type, button);
             }

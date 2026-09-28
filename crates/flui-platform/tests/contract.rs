@@ -342,8 +342,8 @@ fn test_window_lifecycle_contract() {
             assert!(scale_factor > 0.0, "Scale factor must be positive");
 
             // Contract 5: Scale factor relationship (physical = logical * scale)
-            let expected_physical_width = (logical_size.width * scale_factor as f64) as i32;
-            let expected_physical_height = (logical_size.height * scale_factor as f64) as i32;
+            let expected_physical_width = (logical_size.width * scale_factor) as i32;
+            let expected_physical_height = (logical_size.height * scale_factor) as i32;
 
             let width_diff = (physical_size.width - expected_physical_width).abs();
             let height_diff = (physical_size.height - expected_physical_height).abs();

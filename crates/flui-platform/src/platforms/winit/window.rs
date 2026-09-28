@@ -66,8 +66,8 @@ impl PlatformTextInput for WinitTextInput {
         use winit::dpi::{LogicalPosition, LogicalSize};
 
         self.window.set_ime_cursor_area(
-            LogicalPosition::new(f64::from(area.origin.x), f64::from(area.origin.y)),
-            LogicalSize::new(f64::from(area.size.width), f64::from(area.size.height)),
+            LogicalPosition::new(area.origin.x, area.origin.y),
+            LogicalSize::new(area.size.width, area.size.height),
         );
     }
 }
@@ -160,7 +160,7 @@ impl PlatformWindow for WinitWindow {
 
     fn logical_size(&self) -> Size<f64> {
         let size = self.window.inner_size();
-        let scale = self.window.scale_factor() as f64;
+        let scale = self.window.scale_factor();
         Size::new(size.width as f64 / scale, size.height as f64 / scale)
     }
 

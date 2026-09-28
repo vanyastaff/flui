@@ -169,7 +169,7 @@ impl RenderBox for RenderErrorBox {
             // the text from release `ErrorWidget`s.
             let style = TextStyle::new()
                 .with_color(DEBUG_TEXT)
-                .with_font_size(f64::from(DEBUG_FONT_SIZE))
+                .with_font_size(DEBUG_FONT_SIZE)
                 .with_font_family("monospace");
             let layout = TextLayout::new(
                 &self.message,

@@ -265,7 +265,7 @@ impl PointerEventData {
         let (position, time_stamp, buttons) = if let Some(s) = state {
             let pos = s.position;
             (
-                Offset::new(pos.x as f64, pos.y as f64),
+                Offset::new(pos.x, pos.y),
                 s.time, // time is already u64 nanoseconds
                 s.buttons,
             )
@@ -471,7 +471,7 @@ impl PointerEventExt for PointerEvent {
     fn position(&self) -> Offset<f64> {
         if let Some(state) = get_pointer_state(self) {
             let pos = state.position;
-            Offset::new(pos.x as f64, pos.y as f64)
+            Offset::new(pos.x, pos.y)
         } else {
             Offset::ZERO
         }
@@ -529,7 +529,7 @@ impl ScrollEventData {
     /// pages into pixels.
     pub fn delta_to_offset(delta: &ScrollDelta) -> Offset<f64> {
         match delta {
-            ScrollDelta::PixelDelta(pos) => Offset::new(pos.x as f64, pos.y as f64),
+            ScrollDelta::PixelDelta(pos) => Offset::new(pos.x, pos.y),
             ScrollDelta::LineDelta(x, y) => {
                 // One wheel line = 53 logical pixels — the exact factor
                 // Flutter's Linux embedder applies to GTK scroll units
@@ -550,7 +550,7 @@ impl From<&PointerScrollEvent> for ScrollEventData {
     fn from(event: &PointerScrollEvent) -> Self {
         let pos = event.state.position;
         Self {
-            position: Offset::new(pos.x as f64, pos.y as f64),
+            position: Offset::new(pos.x, pos.y),
             delta: Self::delta_to_offset(&event.delta),
             modifiers: event.state.modifiers,
         }
@@ -596,7 +596,7 @@ pub fn make_down_event_for_id(
         },
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::from(PointerButton::Primary),
             modifiers: Modifiers::empty(),
             count: 1,
@@ -643,7 +643,7 @@ pub fn make_up_event_for_id(
         },
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::new(),
             modifiers: Modifiers::empty(),
             count: 1,
@@ -684,7 +684,7 @@ pub fn make_move_event_for_id(
         },
         current: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::from(PointerButton::Primary),
             modifiers: Modifiers::empty(),
             count: 0,
@@ -761,7 +761,7 @@ pub fn make_down_event_for_id_with_button(
         },
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::from(button),
             modifiers: Modifiers::empty(),
             count: 1,
@@ -812,7 +812,7 @@ pub fn make_up_event_for_id_with_button(
         },
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::new(),
             modifiers: Modifiers::empty(),
             count: 1,
@@ -852,7 +852,7 @@ pub fn make_move_event_with_button(
         },
         current: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::from(button),
             modifiers: Modifiers::empty(),
             count: 0,
@@ -891,7 +891,7 @@ pub fn make_pinch_gesture_event(position: Offset<f64>, fraction: f64) -> Pointer
         gesture: PointerGesture::Pinch(fraction as f32),
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::new(),
             modifiers: Modifiers::empty(),
             count: 0,
@@ -931,13 +931,10 @@ pub fn make_scroll_event_with_modifiers(
             pointer_type: PointerType::Mouse,
             persistent_device_id: None,
         },
-        delta: ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(
-            delta.dx as f64,
-            delta.dy as f64,
-        )),
+        delta: ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(delta.dx, delta.dy)),
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(position.dx as f64, position.dy as f64),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::new(),
             modifiers,
             count: 0,
@@ -1013,7 +1010,7 @@ pub fn make_pointer_event(kind: PointerEventKind, data: PointerEventData) -> Poi
 
     let state = PointerState {
         time: data.time_stamp,
-        position: dpi::PhysicalPosition::new(data.position.dx as f64, data.position.dy as f64),
+        position: dpi::PhysicalPosition::new(data.position.dx, data.position.dy),
         buttons: data.buttons,
         modifiers: Modifiers::empty(),
         count: 1,

@@ -5539,9 +5539,7 @@ fn harness_fitted_box_cover_crops_the_source_and_offsets_the_transform() {
     assert!(
         (x - 100.0).abs() < 1e-3 && (y - 100.0).abs() < 1e-3,
         "the crop window's center (50, 25) must map to the box's own center \
-         (100, 100), got ({}, {})",
-        x,
-        y,
+         (100, 100), got ({x}, {y})",
     );
 }
 
@@ -14758,9 +14756,7 @@ fn harness_transform_to_through_a_path_clip_runs_no_registered_clipper() {
 fn assert_transform_point(x: f64, y: f64, expected_x: f64, expected_y: f64, what: &str) {
     assert!(
         (x - expected_x).abs() < 1e-4 && (y - expected_y).abs() < 1e-4,
-        "{what}: expected ({expected_x}, {expected_y}), got ({}, {})",
-        x,
-        y,
+        "{what}: expected ({expected_x}, {expected_y}), got ({x}, {y})",
     );
 }
 

@@ -447,7 +447,7 @@ impl Platform for AndroidPlatform {
                             tracing::info!("Android: Window resized");
                             if let Some(ref w) = *platform.window.lock() {
                                 let size = w.logical_size();
-                                let scale = w.scale_factor() as f64;
+                                let scale = w.scale_factor();
                                 w.callbacks().dispatch_resize(size, scale);
                                 w.request_redraw();
                             }

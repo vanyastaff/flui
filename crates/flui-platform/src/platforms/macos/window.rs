@@ -335,7 +335,7 @@ impl MacOSWindow {
             // Convert logical size to NSRect
             let frame = NSRect::new(
                 NSPoint::new(0.0, 0.0),
-                NSSize::new(options.size.width as f64, options.size.height as f64),
+                NSSize::new(options.size.width, options.size.height),
             );
 
             // Build window style mask
@@ -405,11 +405,11 @@ impl MacOSWindow {
 
             // Apply size constraints
             if let Some(min) = options.min_size {
-                let ns_size = NSSize::new(min.width as f64, min.height as f64);
+                let ns_size = NSSize::new(min.width, min.height);
                 let _: () = msg_send![ns_window, setMinSize: ns_size];
             }
             if let Some(max) = options.max_size {
-                let ns_size = NSSize::new(max.width as f64, max.height as f64);
+                let ns_size = NSSize::new(max.width, max.height);
                 let _: () = msg_send![ns_window, setMaxSize: ns_size];
             }
 
@@ -460,7 +460,7 @@ impl MacOSWindow {
                 ns_window,
                 state: Arc::new(Mutex::new(MacOSWindowState {
                     bounds: Bounds {
-                        origin: Point::new((frame.origin.x as f64), (frame.origin.y as f64)),
+                        origin: Point::new(frame.origin.x, frame.origin.y),
                         size: options.size,
                     },
                     scale_factor: scale,
@@ -955,10 +955,10 @@ impl PlatformWindow for MacOSWindow {
     fn physical_size(&self) -> Size<i32> {
         let state = self.state.lock();
         let logical = state.bounds.size;
-        let scale = state.scale_factor as f64;
+        let scale = state.scale_factor;
         Size::new(
-            ((logical.width * scale).round() as i32),
-            ((logical.height * scale).round() as i32),
+            (logical.width * scale).round() as i32,
+            (logical.height * scale).round() as i32,
         )
     }
 
@@ -1230,7 +1230,7 @@ impl PlatformWindow for MacOSWindow {
             // using `contentRectForFrameRect:`), so resize the content, not
             // the frame — on decorated windows a frame-sized `setFrame:`
             // would shrink the content by the titlebar height.
-            let ns_size = NSSize::new(size.width as f64, size.height as f64);
+            let ns_size = NSSize::new(size.width, size.height);
             let _: () = msg_send![self.ns_window, setContentSize: ns_size];
 
             // Update state
@@ -1575,10 +1575,7 @@ impl WindowTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             let frame: NSRect = msg_send![this.ns_window, frame];
-            let new_frame = NSRect::new(
-                NSPoint::new(position.x as f64, position.y as f64),
-                frame.size,
-            );
+            let new_frame = NSRect::new(NSPoint::new(position.x, position.y), frame.size);
             let _: () = msg_send![this.ns_window, setFrame: new_frame display: YES];
 
             // Update state
@@ -1843,7 +1840,7 @@ impl WindowTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             if let Some(size) = size {
-                let ns_size = NSSize::new(size.width as f64, size.height as f64);
+                let ns_size = NSSize::new(size.width, size.height);
                 let _: () = msg_send![this.ns_window, setMinSize: ns_size];
             } else {
                 // Set to zero to remove constraint
@@ -1866,7 +1863,7 @@ impl WindowTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             if let Some(size) = size {
-                let ns_size = NSSize::new(size.width as f64, size.height as f64);
+                let ns_size = NSSize::new(size.width, size.height);
                 let _: () = msg_send![this.ns_window, setMaxSize: ns_size];
             } else {
                 // Set to max to remove constraint
@@ -1878,7 +1875,7 @@ impl WindowTrait for MacOSWindow {
 
     fn scale_factor(&self) -> f64 {
         let state = self.state.lock();
-        state.scale_factor as f64
+        state.scale_factor
     }
 
     fn raw_window_handle(&self) -> CrossRawWindowHandle {
@@ -2194,24 +2191,24 @@ impl MacOSWindowExtTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             let clamped_alpha = alpha.clamp(0.0, 1.0);
-            let _: () = msg_send![this.ns_window, setAlphaValue: clamped_alpha as f64];
+            let _: () = msg_send![this.ns_window, setAlphaValue: clamped_alpha];
             tracing::debug!("Set window alpha: {}", clamped_alpha);
         });
     }
 
     fn backing_scale_factor(&self) -> f64 {
         let state = self.state.lock();
-        state.scale_factor as f64
+        state.scale_factor
     }
 
     fn convert_point_from_backing(&self, point: Point<f64>) -> Point<f64> {
         let scale = self.backing_scale_factor();
-        Point::new((point.x / scale), (point.y / scale))
+        Point::new(point.x / scale, point.y / scale)
     }
 
     fn convert_point_to_backing(&self, point: Point<f64>) -> Point<f64> {
         let scale = self.backing_scale_factor();
-        Point::new((point.x * scale), (point.y * scale))
+        Point::new(point.x * scale, point.y * scale)
     }
 }
 
@@ -2490,8 +2487,8 @@ impl MacOSWindow {
             let content_rect: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
 
             let new_size = Size::new(
-                (content_rect.size.width as f64),
-                (content_rect.size.height as f64),
+                content_rect.size.width as f64,
+                content_rect.size.height as f64,
             );
 
             // Update state
@@ -2514,7 +2511,7 @@ impl MacOSWindow {
         unsafe {
             let frame: NSRect = msg_send![self.ns_window, frame];
 
-            let new_origin = Point::new((frame.origin.x as f64), (frame.origin.y as f64));
+            let new_origin = Point::new(frame.origin.x as f64, frame.origin.y as f64);
 
             // Update state
             {
@@ -2692,7 +2689,7 @@ impl MacOSWindow {
 
             // A scale change invalidates layout: notify as a resize
             if changed {
-                self.callbacks.dispatch_resize(size, new_scale as f64);
+                self.callbacks.dispatch_resize(size, new_scale);
             }
         }
     }

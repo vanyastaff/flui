@@ -868,8 +868,8 @@ pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4)
     use ui_events::pointer::{PointerButtonEvent, PointerScrollEvent, PointerUpdate};
 
     let transform_position = |pos: dpi::PhysicalPosition<f64>| -> dpi::PhysicalPosition<f64> {
-        let (x, y) = transform.transform_point(pos.x as f64, pos.y as f64);
-        dpi::PhysicalPosition::new(x as f64, y as f64)
+        let (x, y) = transform.transform_point(pos.x, pos.y);
+        dpi::PhysicalPosition::new(x, y)
     };
 
     match event {

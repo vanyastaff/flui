@@ -321,7 +321,7 @@ impl RawInputHandler {
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 let device_kind = data.pointer.pointer_type;
 
                 // Start tracking
@@ -344,7 +344,7 @@ impl RawInputHandler {
 
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 let device_kind = data.pointer.pointer_type;
 
                 let delta = {
@@ -378,7 +378,7 @@ impl RawInputHandler {
 
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 let device_kind = data.pointer.pointer_type;
 
                 let delta = {

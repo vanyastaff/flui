@@ -647,8 +647,8 @@ impl Path {
                         &mut subpath_open,
                     );
                     // Ellipse test
-                    let cx = (rect.left() + rect.right()) * 0.5;
-                    let cy = (rect.top() + rect.bottom()) * 0.5;
+                    let cx = f64::midpoint(rect.left(), rect.right());
+                    let cy = f64::midpoint(rect.top(), rect.bottom());
                     let rx = rect.width() * 0.5;
                     let ry = rect.height() * 0.5;
                     let dx = (point.x - cx) / rx;
@@ -751,8 +751,8 @@ impl Path {
                         &mut subpath_start,
                         &mut subpath_open,
                     );
-                    let cx = (rect.left() + rect.right()) * 0.5;
-                    let cy = (rect.top() + rect.bottom()) * 0.5;
+                    let cx = f64::midpoint(rect.left(), rect.right());
+                    let cy = f64::midpoint(rect.top(), rect.bottom());
                     let rx = rect.width() * 0.5;
                     let ry = rect.height() * 0.5;
                     let dx = (point.x - cx) / rx;
@@ -894,8 +894,8 @@ impl Path {
     /// vocabulary.
     #[inline]
     fn eval_arc(rect: Rect<f64>, angle: f64) -> Point<f64> {
-        let cx = (rect.left() + rect.right()) * 0.5;
-        let cy = (rect.top() + rect.bottom()) * 0.5;
+        let cx = f64::midpoint(rect.left(), rect.right());
+        let cy = f64::midpoint(rect.top(), rect.bottom());
         let rx = rect.width() * 0.5;
         let ry = rect.height() * 0.5;
         Point::new(cx + rx * angle.cos(), cy + ry * angle.sin())

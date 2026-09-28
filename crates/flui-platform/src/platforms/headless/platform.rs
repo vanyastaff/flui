@@ -1019,7 +1019,7 @@ impl MockWindow {
     /// Fires the registered `on_resize` callback.
     pub fn simulate_resize(&self, width: f64, height: f64) {
         let size = Size::new(width, height);
-        let scale = self.state.lock().scale_factor as f64;
+        let scale = self.state.lock().scale_factor;
         self.state.lock().bounds.size = size;
         self.callbacks.dispatch_resize(size, scale);
     }
@@ -1035,7 +1035,7 @@ impl MockWindow {
             state.scale_factor = scale_factor;
             state.bounds.size
         };
-        self.callbacks.dispatch_resize(size, scale_factor as f64);
+        self.callbacks.dispatch_resize(size, scale_factor);
     }
 
     /// Simulate focus change for testing.
@@ -1147,8 +1147,8 @@ impl PlatformWindow for MockWindow {
     fn physical_size(&self) -> Size<i32> {
         let state = self.state.lock();
         Size::new(
-            (state.bounds.size.width * state.scale_factor as f64) as i32,
-            (state.bounds.size.height * state.scale_factor as f64) as i32,
+            (state.bounds.size.width * state.scale_factor) as i32,
+            (state.bounds.size.height * state.scale_factor) as i32,
         )
     }
 

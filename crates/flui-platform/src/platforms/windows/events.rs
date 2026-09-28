@@ -163,7 +163,7 @@ fn pointer_state_at(
         orientation: PointerOrientation::default(),
         pressure: pressure as f32,
         tangential_pressure: 0.0,
-        scale_factor: scale_factor as f64,
+        scale_factor,
     };
     (state, modifiers)
 }

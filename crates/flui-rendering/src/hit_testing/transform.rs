@@ -58,7 +58,7 @@ impl MatrixTransformPart {
     /// Returns the equivalent matrix for this transform part.
     pub fn to_matrix(&self) -> Matrix4 {
         match self {
-            Self::Offset(offset) => Matrix4::translation(offset.dx.into(), offset.dy.into(), 0.0),
+            Self::Offset(offset) => Matrix4::translation(offset.dx, offset.dy, 0.0),
             Self::Matrix(m) => *m,
         }
     }

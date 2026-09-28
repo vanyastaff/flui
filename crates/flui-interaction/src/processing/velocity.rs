@@ -359,8 +359,8 @@ impl VelocityTracker {
 
             oldest = sample;
             ts[n] = -age_ms; // Negative: we go back from the newest sample.
-            xs[n] = sample.position.dx as f64;
-            ys[n] = sample.position.dy as f64;
+            xs[n] = sample.position.dx;
+            ys[n] = sample.position.dy;
             ws[n] = 1.0; // Uniform weights — Flutter's `PolynomialFitLeastSquares`.
             n += 1;
 
@@ -439,12 +439,9 @@ impl VelocityTracker {
         match (x_fit, y_fit) {
             (Some(xf), Some(yf)) => Some(VelocityEstimate::new(
                 newest.position - oldest.position,
-                Offset::new(
-                    (xf.coefficients[1] * 1000.0) as f64,
-                    (yf.coefficients[1] * 1000.0) as f64,
-                ),
+                Offset::new(xf.coefficients[1] * 1000.0, yf.coefficients[1] * 1000.0),
                 newest.time.saturating_duration_since(oldest.time),
-                (xf.confidence * yf.confidence) as f64,
+                xf.confidence * yf.confidence,
             )),
             // Numerical failure on one axis — keep going with zero on that
             // axis and the other axis's confidence. Rare; happens on
@@ -649,7 +646,7 @@ impl IosFlingVelocityTracker {
         let v = |offset: isize| self.two_sample_velocity_at_f64(offset);
         let dx = v(-2).0 * self.weights[0] + v(-1).0 * self.weights[1] + v(0).0 * self.weights[2];
         let dy = v(-2).1 * self.weights[0] + v(-1).1 * self.weights[1] + v(0).1 * self.weights[2];
-        Offset::new(dx as f64, dy as f64)
+        Offset::new(dx, dy)
     }
 
     /// The 2-point velocity at the given offset from the newest sample,
@@ -671,8 +668,8 @@ impl IosFlingVelocityTracker {
         }
         let dt_ms = dt_us as f64 / 1000.0;
         // (end - start) is in pixels; divide by dt_ms to get px/ms; × 1000 = px/s.
-        let dx_px_s = (end.position.dx - start.position.dx) as f64 * 1000.0 / dt_ms;
-        let dy_px_s = (end.position.dy - start.position.dy) as f64 * 1000.0 / dt_ms;
+        let dx_px_s = (end.position.dx - start.position.dx) * 1000.0 / dt_ms;
+        let dy_px_s = (end.position.dy - start.position.dy) * 1000.0 / dt_ms;
         (dx_px_s, dy_px_s)
     }
 
@@ -1293,23 +1290,12 @@ mod tests {
     /// ~0.0012 px between neighbours. A coarse grid would quietly narrow these
     /// tests to whole-pixel cases, which is the opposite of what a geometry
     /// property suite is for.
-    ///
-    /// The arithmetic runs in `f64` because `f64: From<u32>` is exact for every
-    /// step index, where `f64: From<u32>` does not exist at all. Only the final
-    /// narrowing is lossy, and that is the point — the value has to land in the
-    /// target type.
     fn float_in(lo: f64, hi: f64) -> impl proptest::strategy::Strategy<Value = f64> {
         const STEPS: u32 = 1 << 24;
         use proptest::strategy::Strategy as _;
         (0u32..=STEPS).prop_map(move |n| {
             let t = f64::from(n) / f64::from(STEPS);
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "narrowing to the target type is the purpose; the \
-                          arithmetic above is exact in f64"
-            )]
-            let v = (f64::from(lo) + t * (f64::from(hi) - f64::from(lo))) as f64;
-            v
+            lo + t * (hi - lo)
         })
     }
 

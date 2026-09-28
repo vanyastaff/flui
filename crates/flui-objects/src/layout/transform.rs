@@ -326,8 +326,8 @@ impl RenderTransform {
         let origin = self.compute_origin(size);
 
         // Translate to origin, apply transform, translate back
-        let to_origin = Matrix4::translation((-origin.dx).into(), (-origin.dy).into(), 0.0);
-        let from_origin = Matrix4::translation(origin.dx.into(), origin.dy.into(), 0.0);
+        let to_origin = Matrix4::translation(-origin.dx, -origin.dy, 0.0);
+        let from_origin = Matrix4::translation(origin.dx, origin.dy, 0.0);
 
         from_origin * self.transform * to_origin
     }

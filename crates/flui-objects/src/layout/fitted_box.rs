@@ -772,9 +772,7 @@ mod tests {
         assert!(
             (x - 100.0).abs() < 1e-4 && (y - 100.0).abs() < 1e-4,
             "child-local (50, 25) (the crop window's center) must map to the \
-             box's own center (100, 100), got ({}, {})",
-            x,
-            y,
+             box's own center (100, 100), got ({x}, {y})",
         );
     }
 

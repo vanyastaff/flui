@@ -161,12 +161,12 @@ impl flui_foundation::Diagnosticable for RenderLimitedBox {
         builder.add(
             "max_width",
             self.max_width
-                .map_or_else(|| "unset".to_string(), |v| format!("{}", v)),
+                .map_or_else(|| "unset".to_string(), |v| format!("{v}")),
         );
         builder.add(
             "max_height",
             self.max_height
-                .map_or_else(|| "unset".to_string(), |v| format!("{}", v)),
+                .map_or_else(|| "unset".to_string(), |v| format!("{v}")),
         );
     }
 }

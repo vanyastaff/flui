@@ -772,7 +772,6 @@ impl RenderBox for RenderTable {
                             .and_then(|kind| ctx.child_distance_to_actual_baseline(idx, kind));
                         match baseline {
                             Some(distance) => {
-                                let distance = distance;
                                 before_baseline = before_baseline.max(distance);
                                 after_baseline = after_baseline.max(size.height - distance);
                                 baselines[x] = distance;

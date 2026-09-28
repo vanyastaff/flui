@@ -94,10 +94,6 @@ mod gpu_tests {
         )
     }
 
-    fn px(physical_pixels: f32) -> f64 {
-        f64::from(physical_pixels)
-    }
-
     fn full_surface_bounds() -> Rect<f64> {
         Rect::from_xywh(
             0.0,

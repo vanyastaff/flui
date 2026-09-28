@@ -114,7 +114,7 @@ impl TextPainter {
     ) -> (LayoutMetrics, TextLayout) {
         let font_size = text
             .style()
-            .and_then(|s| s.font_size.map(|f| f as f64))
+            .and_then(|s| s.font_size)
             .unwrap_or(DEFAULT_FONT_SIZE);
 
         let scaled_font_size = font_size * self.text_scale_factor;
@@ -191,7 +191,7 @@ impl TextPainter {
 
         let font_size = text
             .style()
-            .and_then(|s| s.font_size.map(|f| f as f64))
+            .and_then(|s| s.font_size)
             .unwrap_or(DEFAULT_FONT_SIZE);
         let scaled_font_size = font_size * self.text_scale_factor;
         let direction = self.text_direction.unwrap_or(TextDirection::Ltr);
@@ -457,7 +457,7 @@ pub(crate) fn collect_styled_spans(
             if let Some(style) = &mut effective {
                 // Scale font_size to device pixels.
                 if let Some(size) = style.font_size {
-                    style.font_size = Some(size * f64::from(scale));
+                    style.font_size = Some(size * scale);
                 }
                 // Scale letter_spacing by the same DPR factor so that
                 // `from_spans` can compute the EM ratio as
@@ -465,7 +465,7 @@ pub(crate) fn collect_styled_spans(
                 // Without this scaling, at DPR=2 a 2px spacing on a 16px
                 // font yields 2/32=0.0625 EM instead of the correct 0.125 EM.
                 if let Some(spacing) = style.letter_spacing {
-                    style.letter_spacing = Some(spacing * f64::from(scale));
+                    style.letter_spacing = Some(spacing * scale);
                 }
             }
             out.push((text.clone(), effective));

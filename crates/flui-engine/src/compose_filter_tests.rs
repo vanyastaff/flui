@@ -93,10 +93,6 @@ mod gpu_tests {
         WgpuPainter::with_shared_device(device, queue, SURFACE_FORMAT, (SURFACE_W, SURFACE_H))
     }
 
-    fn px(v: f32) -> f64 {
-        f64::from(v)
-    }
-
     fn full_surface_rect() -> Rect<f64> {
         Rect::from_xywh(
             0.0,

@@ -458,10 +458,10 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     }
 
     node.set_bounds(Rect {
-        x0: f64::from(data.rect.left()),
-        y0: f64::from(data.rect.top()),
-        x1: f64::from(data.rect.right()),
-        y1: f64::from(data.rect.bottom()),
+        x0: data.rect.left(),
+        y0: data.rect.top(),
+        x1: data.rect.right(),
+        y1: data.rect.bottom(),
     });
 
     if let Some(position) = data.scroll_position {

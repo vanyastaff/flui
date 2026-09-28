@@ -21,7 +21,7 @@ fn baselines_come_from_the_shaper() {
     // alphabetic baseline are the SAME shaped quantity.
     let first_line = &lines[0];
     assert!(
-        (first_line.baseline - f64::from(metrics.alphabetic_baseline)).abs() < 1e-3,
+        (first_line.baseline - metrics.alphabetic_baseline).abs() < 1e-3,
         "line metrics and layout metrics must agree on the baseline"
     );
     // Ascent + descent tile the line box exactly (they are line-box
@@ -36,7 +36,7 @@ fn baselines_come_from_the_shaper() {
     // Sanity: the baseline sits strictly inside the line box, and the
     // ideographic baseline is at or below the alphabetic one.
     assert!(metrics.alphabetic_baseline > 0.0);
-    assert!(f64::from(metrics.alphabetic_baseline) < first_line.height + 1e-3);
+    assert!(metrics.alphabetic_baseline < first_line.height + 1e-3);
     assert!(metrics.ideographic_baseline >= metrics.alphabetic_baseline);
 }
 

@@ -101,11 +101,11 @@ impl PlatformWindow for AndroidWindow {
 
     fn logical_size(&self) -> Size<f64> {
         let (w, h) = self.native_size();
-        let scale = self.scale_factor() as f64;
+        let scale = self.scale_factor();
         if scale > 0.0 {
-            Size::new((w as f64 / scale), (h as f64 / scale))
+            Size::new(w as f64 / scale, h as f64 / scale)
         } else {
-            Size::new((w as f64), (h as f64))
+            Size::new(w as f64, h as f64)
         }
     }
 

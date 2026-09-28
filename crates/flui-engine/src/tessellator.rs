@@ -1504,10 +1504,6 @@ mod tests {
     use super::*;
     use flui_types::geometry::{Radius, rrect::RRect};
 
-    fn px(v: f32) -> f64 {
-        f64::from(v)
-    }
-
     // `test_tessellate_rect` and `test_tessellate_rounded_rect` were
     // removed alongside the methods they exercised. No production code
     // called them, and their assertions (`!vertices.is_empty()` etc.)

@@ -121,7 +121,7 @@ where
     // physical surface. `UiRealm::new` applies the DPR to the freshly
     // built pipeline before returning, so the RenderView configuration
     // and the first frame agree on the scale from construction.
-    let scale_factor = window.scale_factor() as f64;
+    let scale_factor = window.scale_factor();
     let wake = runtime_wake_callback();
     let ui_realm = match crate::app::ui_realm::UiRealm::new(
         Arc::clone(&wake),
@@ -700,7 +700,7 @@ where
         realm_dispatch,
         RealmTask::Event(PlatformToUi::Resized {
             size: window.logical_size(),
-            scale_factor: window.scale_factor() as f64,
+            scale_factor: window.scale_factor(),
         }),
     );
 

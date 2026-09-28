@@ -35,7 +35,7 @@ impl LimitedBox {
     }
 
     fn cap(value: f64) -> Option<f64> {
-        value.is_finite().then(|| value)
+        value.is_finite().then_some(value)
     }
 }
 

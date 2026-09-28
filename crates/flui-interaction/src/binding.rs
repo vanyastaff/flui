@@ -282,7 +282,7 @@ const MAX_SIMULTANEOUS_POINTERS: usize = 32;
 const fn px_f32(v: f64) -> f64 {
     // f64 → f64 is intentionally lossy at extreme values; for
     // pointer coordinates the dynamic range fits in `f64` exactly.
-    v as f64
+    v
 }
 
 /// Central coordinator for gesture event handling.

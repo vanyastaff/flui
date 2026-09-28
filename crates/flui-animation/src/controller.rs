@@ -23,7 +23,7 @@ const BOUND_EPSILON: f64 = 1e-6;
 /// are f64; the sub-microsecond precision lost here is irrelevant to rendering.
 #[inline]
 fn narrow_f32(x: f64) -> f64 {
-    x as f64
+    x
 }
 
 /// Default spring for fling animations.
@@ -1440,7 +1440,7 @@ impl AnimationController {
         // Every degenerate case has returned: a `RepeatRun` is constructed
         // only here, so `period_ns > 0` holds by construction for every live
         // run and nothing downstream needs to guard it again.
-        let ratio = (f64::from(v) - f64::from(lo)) / (f64::from(hi) - f64::from(lo));
+        let ratio = (v - lo) / (hi - lo);
         let initial_ns = (ratio * period_ns as f64).round() as u128;
         let run = RepeatRun {
             reverse,
@@ -2404,8 +2404,7 @@ impl AnimationControllerInner {
         if !range.is_finite() || range <= 0.0 {
             return base;
         }
-        let fraction =
-            f64::from(((self.target_value - self.start_value).abs() / range).clamp(0.0, 1.0));
+        let fraction = ((self.target_value - self.start_value).abs() / range).clamp(0.0, 1.0);
         if !fraction.is_finite() {
             return base;
         }

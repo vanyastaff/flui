@@ -269,8 +269,8 @@ impl PointerEventResampler {
                     let t = t.clamp(0.0, 1.0);
 
                     let interpolated_pos = Offset::new(
-                        last_pos.dx + (next_pos.dx - last_pos.dx) * t as f64,
-                        last_pos.dy + (next_pos.dy - last_pos.dy) * t as f64,
+                        last_pos.dx + (next_pos.dx - last_pos.dx) * t,
+                        last_pos.dy + (next_pos.dy - last_pos.dy) * t,
                     );
 
                     // Only emit if position actually changed
@@ -281,8 +281,8 @@ impl PointerEventResampler {
                         let mut interpolated = next_event.event.clone();
                         if let PointerEvent::Move(update) = &mut interpolated {
                             update.current.position = dpi::PhysicalPosition::new(
-                                f64::from(interpolated_pos.dx),
-                                f64::from(interpolated_pos.dy),
+                                interpolated_pos.dx,
+                                interpolated_pos.dy,
                             );
                         }
                         inner.last_position = Some(interpolated_pos);

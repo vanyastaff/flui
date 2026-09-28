@@ -485,10 +485,10 @@ extern "C-unwind" fn first_rect_for_character_range(
             NSRange::new(state.marked_range.0, state.marked_range.1)
         };
         let view_bounds: NSRect = msg_send![this, bounds];
-        let flipped_y = view_bounds.size.height - (area.origin.y + area.size.height) as f64;
+        let flipped_y = view_bounds.size.height - (area.origin.y + area.size.height);
         let window_rect = NSRect::new(
-            NSPoint::new(area.origin.x as f64, flipped_y),
-            NSSize::new(area.size.width as f64, area.size.height as f64),
+            NSPoint::new(area.origin.x, flipped_y),
+            NSSize::new(area.size.width, area.size.height),
         );
         let window: *mut AnyObject = msg_send![this, window];
         if window.is_null() {

@@ -669,7 +669,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
             PointerEvent::Move(data) => {
                 let pointer = crate::events::extract_pointer_id(event);
                 let pos = data.current.position;
-                let position = Offset::new(pos.x as f64, pos.y as f64);
+                let position = Offset::new(pos.x, pos.y);
                 self.handle_pointer_move(pointer, position, data.pointer.pointer_type);
             }
             PointerEvent::Up(_) => {

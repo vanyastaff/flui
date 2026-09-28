@@ -13,8 +13,6 @@ pub fn child_paint_offset(
     layout_offset: f64,
     child_main_extent: f64,
 ) -> Offset {
-    let layout_offset = layout_offset;
-    let child_main_extent = child_main_extent;
     let child_main_axis_position = layout_offset - constraints.scroll_offset;
     let main_axis_delta = if right_way_up(constraints.axis_direction, constraints.growth_direction)
     {

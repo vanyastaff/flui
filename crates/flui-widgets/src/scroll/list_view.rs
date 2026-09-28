@@ -384,7 +384,7 @@ mod tests {
                 .position(position)
         );
         assert!(
-            position_debug.contains("offset_source: Position(") && !position_debug.contains("("),
+            position_debug.contains("offset_source: Position(") && !position_debug.contains('('),
             "the last call (.position) must win over an earlier .offset call, got: \
              {position_debug}",
         );

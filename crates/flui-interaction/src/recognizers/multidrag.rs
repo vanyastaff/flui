@@ -630,7 +630,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             _ => return,
         };
         // Position is `PhysicalPosition<f64>`; convert to Offset<Pixels>.
-        let position = Offset::new(position.x as f64, position.y as f64);
+        let position = Offset::new(position.x, position.y);
         // The only point at which the untransformed position exists at all.
         let global_position = dispatch.global.position();
         match event {
@@ -1123,7 +1123,6 @@ mod tests {
             }
         }));
         // `with_on_start` returns a new Arc; use that one for events.
-        let rec2 = rec2;
 
         // Add two pointers.
         rec2.add_pointer(pointer_id(1), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));

@@ -70,7 +70,7 @@ fn px_f32(v: f64) -> f64 {
     // f64 → f64 is intentionally lossy at extreme values; for pointer
     // coordinates the dynamic range fits in `f64` exactly. This is the
     // single canonical W3C→flui downcast site for pointer positions.
-    v as f64
+    v
 }
 
 // ============================================================================
