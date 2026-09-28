@@ -305,10 +305,17 @@ impl Pixels {
 
     /// Returns the raw bits of the underlying f32.
     ///
-    /// Useful for hashing and bitwise comparisons.
+    /// Distinguishes `0.0` from `-0.0`, which compare equal; hash with
+    /// [`Pixels::canonical_bits`] instead.
     #[inline]
     pub fn to_bits(self) -> u32 {
         self.0.to_bits()
+    }
+
+    /// The bits a hash stores for this value; see [`canonical_bits`].
+    #[inline]
+    pub fn canonical_bits(self) -> u32 {
+        canonical_bits(self.0)
     }
 
     /// Rounds to the nearest integer and returns it as `i32`.
@@ -588,10 +595,27 @@ impl Ord for Pixels {
     }
 }
 
-// Hashing (using to_bits for proper NaN handling)
+/// The bits a hash stores for a float: `-0.0` as `+0.0`, every NaN as one
+/// NaN, every other value unchanged.
+///
+/// `f32` equality treats `0.0` and `-0.0` as equal while their bit patterns
+/// differ, so a `Hash` over `to_bits` breaks `a == b ⇒ hash(a) == hash(b)`
+/// for any type whose `PartialEq` compares the floats. Hashing these bits
+/// keeps the two in agreement. NaN never equals itself, so folding the NaN
+/// payloads costs nothing and keeps keys built from NaN stable.
+#[inline]
+pub fn canonical_bits(value: f32) -> u32 {
+    if value.is_nan() {
+        f32::NAN.to_bits()
+    } else {
+        // `-0.0 + 0.0` is `+0.0`; every other value is unchanged.
+        (value + 0.0).to_bits()
+    }
+}
+
 impl std::hash::Hash for Pixels {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
+        canonical_bits(self.0).hash(state);
     }
 }
 
@@ -946,7 +970,7 @@ impl Ord for PixelDelta {
 
 impl std::hash::Hash for PixelDelta {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
+        canonical_bits(self.0).hash(state);
     }
 }
 
@@ -1643,10 +1667,9 @@ impl Ord for Radians {
     }
 }
 
-// Hashing (using to_bits for proper NaN handling)
 impl std::hash::Hash for Radians {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
+        canonical_bits(self.0).hash(state);
     }
 }
 
@@ -1825,6 +1848,62 @@ impl DevicePixels {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn hash_of(value: &impl std::hash::Hash) -> u64 {
+        use std::hash::Hasher;
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn canonical_bits_are_equal_exactly_when_the_floats_are_equal_or_both_nan() {
+        let values = [
+            0.0_f32,
+            -0.0,
+            1.0,
+            -1.0,
+            f32::MIN_POSITIVE,
+            f32::from_bits(1),
+            f32::from_bits(0x8000_0001),
+            f32::MAX,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            -f32::NAN,
+            f32::from_bits(0x7fc0_0001),
+        ];
+        for a in values {
+            for b in values {
+                let same_value = a == b || (a.is_nan() && b.is_nan());
+                assert_eq!(
+                    canonical_bits(a) == canonical_bits(b),
+                    same_value,
+                    "{a:?} ({:#x}) vs {b:?} ({:#x})",
+                    a.to_bits(),
+                    b.to_bits()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_units_equal_across_the_sign_of_zero_hash_equal() {
+        assert_eq!(px(0.0), px(-0.0));
+        assert_eq!(hash_of(&px(0.0)), hash_of(&px(-0.0)));
+        assert_eq!(px(0.0).canonical_bits(), px(-0.0).canonical_bits());
+        assert_eq!(hash_of(&PixelDelta(0.0)), hash_of(&PixelDelta(-0.0)));
+        assert_eq!(hash_of(&Radians(0.0)), hash_of(&Radians(-0.0)));
+        assert_eq!(
+            hash_of(&crate::length::Rems(0.0)),
+            hash_of(&crate::length::Rems(-0.0))
+        );
+        assert_eq!(
+            hash_of(&crate::length::Percentage(0.0)),
+            hash_of(&crate::length::Percentage(-0.0))
+        );
+    }
 
     // ========================================================================
     // ScaleFactor Tests

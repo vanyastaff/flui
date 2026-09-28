@@ -2,6 +2,8 @@
 
 use std::hash::{Hash, Hasher};
 
+use flui_types::geometry::canonical_bits;
+
 use super::base::ParentData;
 
 // ============================================================================
@@ -94,7 +96,7 @@ impl ParentData for SliverParentData {}
 impl Hash for SliverParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Hash offset as bits to avoid float precision issues
-        self.layout_offset.to_bits().hash(state);
+        canonical_bits(self.layout_offset).hash(state);
     }
 }
 

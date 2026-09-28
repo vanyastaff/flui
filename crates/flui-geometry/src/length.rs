@@ -229,11 +229,10 @@ impl Ord for Rems {
     }
 }
 
-// Hashing (using to_bits for proper NaN handling)
 impl std::hash::Hash for Rems {
     #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
+        crate::units::canonical_bits(self.0).hash(state);
     }
 }
 
@@ -483,7 +482,7 @@ impl Ord for Percentage {
 impl std::hash::Hash for Percentage {
     #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.to_bits().hash(state);
+        crate::units::canonical_bits(self.0).hash(state);
     }
 }
 

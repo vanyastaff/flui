@@ -55,11 +55,12 @@ pub struct BoxConstraints {
 
 impl Hash for BoxConstraints {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash as bit patterns (NaN-safe)
-        self.min_width.to_bits().hash(state);
-        self.max_width.to_bits().hash(state);
-        self.min_height.to_bits().hash(state);
-        self.max_height.to_bits().hash(state);
+        // Canonical bits, so constraints equal under `PartialEq` (`0.0` and
+        // `-0.0`) hash equal.
+        self.min_width.canonical_bits().hash(state);
+        self.max_width.canonical_bits().hash(state);
+        self.min_height.canonical_bits().hash(state);
+        self.max_height.canonical_bits().hash(state);
     }
 }
 
@@ -918,6 +919,25 @@ mod tests {
         set.insert(c1);
         assert!(set.contains(&c2));
         assert!(!set.contains(&c3));
+    }
+
+    fn hash_of(value: &impl Hash) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn equal_constraints_hash_equal_across_the_sign_of_zero() {
+        let positive = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(50.0));
+        let negative = BoxConstraints::new(px(-0.0), px(100.0), px(-0.0), px(50.0));
+
+        assert_eq!(positive, negative);
+        assert_eq!(hash_of(&positive), hash_of(&negative));
+
+        let mut set = HashSet::new();
+        set.insert(positive);
+        assert!(set.contains(&negative));
     }
 
     #[test]

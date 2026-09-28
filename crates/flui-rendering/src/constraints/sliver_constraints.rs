@@ -9,7 +9,7 @@ use std::{
 };
 
 use flui_types::{
-    geometry::px,
+    geometry::{canonical_bits, px},
     layout::{Axis, AxisDirection},
 };
 
@@ -95,15 +95,16 @@ impl Hash for SliverConstraints {
         self.user_scroll_direction.hash(state);
         self.cross_axis_direction.hash(state);
 
-        // Hash floats as bit patterns (NaN-safe)
-        self.scroll_offset.to_bits().hash(state);
-        self.preceding_scroll_extent.to_bits().hash(state);
-        self.overlap.to_bits().hash(state);
-        self.remaining_paint_extent.to_bits().hash(state);
-        self.cross_axis_extent.to_bits().hash(state);
-        self.viewport_main_axis_extent.to_bits().hash(state);
-        self.remaining_cache_extent.to_bits().hash(state);
-        self.cache_origin.to_bits().hash(state);
+        // Canonical bits, so constraints equal under `PartialEq` (`0.0` and
+        // `-0.0`) hash equal.
+        canonical_bits(self.scroll_offset).hash(state);
+        canonical_bits(self.preceding_scroll_extent).hash(state);
+        canonical_bits(self.overlap).hash(state);
+        canonical_bits(self.remaining_paint_extent).hash(state);
+        canonical_bits(self.cross_axis_extent).hash(state);
+        canonical_bits(self.viewport_main_axis_extent).hash(state);
+        canonical_bits(self.remaining_cache_extent).hash(state);
+        canonical_bits(self.cache_origin).hash(state);
     }
 }
 

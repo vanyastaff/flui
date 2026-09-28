@@ -104,8 +104,8 @@ impl ParentData for TableCellParentData {}
 
 impl Hash for TableCellParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        self.offset.dx.canonical_bits().hash(state);
+        self.offset.dy.canonical_bits().hash(state);
         self.x.hash(state);
         self.y.hash(state);
         self.vertical_alignment.hash(state);
@@ -189,8 +189,8 @@ impl ParentData for TextParentData {}
 
 impl Hash for TextParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        self.offset.dx.canonical_bits().hash(state);
+        self.offset.dy.canonical_bits().hash(state);
         self.container.hash(state);
         self.span.hash(state);
     }

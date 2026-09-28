@@ -225,8 +225,9 @@ pub struct BoxLayout;
 
 /// Cache key for BoxConstraints.
 ///
-/// Uses integer representation of floats (bits) for reliable hashing.
-/// This handles -0.0/+0.0 and provides exact equality.
+/// Keys on the exact bit pattern of each bound, so `0.0` and `-0.0` give
+/// different keys: at worst a recomputation, never an alias to a wrong
+/// cached value. Equality and hashing are both over the bits, so they agree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 // The `_bits` postfix is load-bearing: each field is the `f32::to_bits` image
 // of the same-named `BoxConstraints` field, and dropping it would suggest the

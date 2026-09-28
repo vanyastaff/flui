@@ -266,8 +266,8 @@ pub use transform2d::Transform2D;
 // UNIT TYPES
 // =============================================================================
 pub use units::{
-    DevicePixels, ParseLengthError, PixelDelta, Pixels, Radians, ScaleFactor, delta_px, device_px,
-    px, radians,
+    DevicePixels, ParseLengthError, PixelDelta, Pixels, Radians, ScaleFactor, canonical_bits,
+    delta_px, device_px, px, radians,
 };
 /// Generic 2D vector (displacement) with unit-safe coordinates.
 ///

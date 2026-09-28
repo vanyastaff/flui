@@ -117,7 +117,10 @@ pub struct SliverLayout;
 
 /// Cache key for SliverConstraints.
 ///
-/// Uses integer representation of floats (bits) for reliable hashing.
+/// Keys on the exact bit pattern of each extent, like
+/// [`BoxConstraintsCacheKey`](super::BoxConstraintsCacheKey): `0.0` and
+/// `-0.0` give different keys, which costs a recomputation and never
+/// aliases a wrong cached value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SliverConstraintsCacheKey {
     axis_direction: u8,
@@ -1277,6 +1280,48 @@ mod tests {
         let negative_cross: SliverHitTestCtx<'_, Leaf, SliverParentData> =
             SliverHitTestCtx::new(MainAxisPosition::new(10.0, -0.1));
         assert!(!negative_cross.is_hit(bounds));
+    }
+
+    fn hash_of(value: &impl std::hash::Hash) -> u64 {
+        use std::hash::Hasher;
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn sliver_values_equal_across_the_sign_of_zero_hash_equal() {
+        use flui_types::layout::AxisDirection;
+
+        use crate::{constraints::GrowthDirection, view::ScrollDirection};
+
+        let constraints = |zero: f32| {
+            SliverConstraints::new(
+                AxisDirection::TopToBottom,
+                GrowthDirection::Forward,
+                ScrollDirection::Idle,
+                zero,
+                zero,
+                zero,
+                100.0,
+                300.0,
+                AxisDirection::LeftToRight,
+                100.0,
+                120.0,
+                zero,
+            )
+        };
+        let (positive, negative) = (constraints(0.0), constraints(-0.0));
+        assert_eq!(positive, negative);
+        assert_eq!(hash_of(&positive), hash_of(&negative));
+
+        let (positive, negative) = (
+            SliverGeometry::new(0.0, 0.0, 0.0),
+            SliverGeometry::new(-0.0, -0.0, -0.0),
+        );
+        assert_eq!(positive, negative);
+        assert_eq!(hash_of(&positive), hash_of(&negative));
     }
 
     #[test]

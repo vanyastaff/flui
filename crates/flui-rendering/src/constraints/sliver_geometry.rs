@@ -8,6 +8,8 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+use flui_types::geometry::canonical_bits;
+
 const PRECISION_ERROR_TOLERANCE: f32 = flui_foundation::EPSILON_F32;
 
 /// Layout output describing space occupied by a sliver.
@@ -76,26 +78,28 @@ pub struct SliverGeometry {
 
 impl Hash for SliverGeometry {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.scroll_extent.to_bits().hash(state);
-        self.paint_extent.to_bits().hash(state);
-        self.paint_origin.to_bits().hash(state);
-        self.layout_extent.to_bits().hash(state);
-        self.max_paint_extent.to_bits().hash(state);
-        self.max_scroll_obstruction_extent.to_bits().hash(state);
+        // Canonical bits, so geometry equal under `PartialEq` (`0.0` and
+        // `-0.0`) hashes equal.
+        canonical_bits(self.scroll_extent).hash(state);
+        canonical_bits(self.paint_extent).hash(state);
+        canonical_bits(self.paint_origin).hash(state);
+        canonical_bits(self.layout_extent).hash(state);
+        canonical_bits(self.max_paint_extent).hash(state);
+        canonical_bits(self.max_scroll_obstruction_extent).hash(state);
 
         if let Some(extent) = self.cross_axis_extent {
-            extent.to_bits().hash(state);
+            canonical_bits(extent).hash(state);
         }
 
-        self.hit_test_extent.to_bits().hash(state);
+        canonical_bits(self.hit_test_extent).hash(state);
         self.visible.hash(state);
         self.has_visual_overflow.hash(state);
 
         if let Some(correction) = self.scroll_offset_correction {
-            correction.to_bits().hash(state);
+            canonical_bits(correction).hash(state);
         }
 
-        self.cache_extent.to_bits().hash(state);
+        canonical_bits(self.cache_extent).hash(state);
     }
 }
 

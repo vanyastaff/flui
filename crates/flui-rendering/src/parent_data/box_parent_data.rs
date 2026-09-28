@@ -87,9 +87,10 @@ impl ParentData for BoxParentData {}
 // Hash implementation for caching layout results
 impl Hash for BoxParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash offset components as bits to avoid float precision issues
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        // Canonical bits, so offsets equal under `PartialEq` (`0.0` and
+        // `-0.0`) hash equal.
+        self.offset.dx.canonical_bits().hash(state);
+        self.offset.dy.canonical_bits().hash(state);
     }
 }
 

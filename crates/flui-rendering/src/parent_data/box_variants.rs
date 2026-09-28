@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 
 // Re-export RenderId for convenience
 use flui_foundation::RenderId;
-use flui_types::{Matrix4, Offset};
+use flui_types::{Matrix4, Offset, geometry::canonical_bits};
 
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
@@ -67,8 +67,8 @@ impl ParentData for ContainerBoxParentData {}
 
 impl Hash for ContainerBoxParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        self.offset.dx.canonical_bits().hash(state);
+        self.offset.dy.canonical_bits().hash(state);
         self.container.hash(state);
     }
 }
@@ -166,8 +166,8 @@ impl ParentData for FlexParentData {}
 
 impl Hash for FlexParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        self.offset.dx.canonical_bits().hash(state);
+        self.offset.dy.canonical_bits().hash(state);
         self.container.hash(state);
         self.flex.hash(state);
         self.fit.hash(state);
@@ -291,15 +291,15 @@ impl ParentData for StackParentData {}
 
 impl Hash for StackParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        self.offset.dx.canonical_bits().hash(state);
+        self.offset.dy.canonical_bits().hash(state);
         self.container.hash(state);
 
         // Hash Option<f32> values
         let hash_opt_f32 = |value: Option<f32>, state: &mut H| match value {
             Some(v) => {
                 true.hash(state);
-                v.to_bits().hash(state);
+                canonical_bits(v).hash(state);
             }
             None => false.hash(state),
         };
@@ -436,8 +436,8 @@ impl ParentData for ListWheelParentData {}
 
 impl Hash for ListWheelParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        self.offset.dx.canonical_bits().hash(state);
+        self.offset.dy.canonical_bits().hash(state);
         self.container.hash(state);
         self.index.hash(state);
     }
@@ -504,8 +504,8 @@ impl ParentData for MultiChildLayoutParentData {}
 
 impl Hash for MultiChildLayoutParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        self.offset.dx.canonical_bits().hash(state);
+        self.offset.dy.canonical_bits().hash(state);
         self.container.hash(state);
         self.id.hash(state);
     }

@@ -4,7 +4,7 @@
 use std::hash::{Hash, Hasher};
 
 use flui_foundation::RenderId;
-use flui_types::Offset;
+use flui_types::{Offset, geometry::canonical_bits};
 
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
@@ -61,7 +61,7 @@ impl ParentData for SliverLogicalParentData {}
 
 impl Hash for SliverLogicalParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.layout_offset.to_bits().hash(state);
+        canonical_bits(self.layout_offset).hash(state);
     }
 }
 
@@ -245,7 +245,7 @@ impl Default for SliverMultiBoxAdaptorParentData {
 
 impl Hash for SliverMultiBoxAdaptorParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.layout_offset.to_bits().hash(state);
+        canonical_bits(self.layout_offset).hash(state);
         self.index.hash(state);
     }
 }
@@ -307,7 +307,7 @@ impl Default for TreeSliverNodeParentData {
 
 impl Hash for TreeSliverNodeParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.layout_offset.to_bits().hash(state);
+        canonical_bits(self.layout_offset).hash(state);
         self.index.hash(state);
         self.depth.hash(state);
     }
@@ -362,7 +362,7 @@ impl ParentData for SliverLogicalContainerParentData {}
 
 impl Hash for SliverLogicalContainerParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.layout_offset.to_bits().hash(state);
+        canonical_bits(self.layout_offset).hash(state);
         self.container.hash(state);
     }
 }
@@ -415,8 +415,8 @@ impl ParentData for SliverPhysicalParentData {}
 
 impl Hash for SliverPhysicalParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.paint_offset.dx.to_bits().hash(state);
-        self.paint_offset.dy.to_bits().hash(state);
+        self.paint_offset.dx.canonical_bits().hash(state);
+        self.paint_offset.dy.canonical_bits().hash(state);
     }
 }
 
@@ -469,8 +469,8 @@ impl ParentData for SliverPhysicalContainerParentData {}
 
 impl Hash for SliverPhysicalContainerParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.paint_offset.dx.to_bits().hash(state);
-        self.paint_offset.dy.to_bits().hash(state);
+        self.paint_offset.dx.canonical_bits().hash(state);
+        self.paint_offset.dy.canonical_bits().hash(state);
         self.container.hash(state);
     }
 }
