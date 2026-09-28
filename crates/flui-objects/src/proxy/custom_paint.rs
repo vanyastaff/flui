@@ -25,7 +25,7 @@ use std::sync::Arc;
 use flui_foundation::ListenerId;
 use flui_foundation::Single;
 use flui_painting::Canvas;
-use flui_types::{Offset, Pixels, Size};
+use flui_types::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -276,12 +276,8 @@ fn paint_with_painter(canvas: &mut Canvas, size: Size, painter: &dyn CustomPaint
 /// Childless intrinsic answer for one axis: the preferred extent when
 /// finite, else `0.0` (Flutter `computeMinIntrinsicWidth` et al., oracle
 /// L513-543 — the same formula serves min and max on both axes).
-fn finite_extent_or_zero(extent: Pixels) -> f32 {
-    if extent.is_finite() {
-        extent.get()
-    } else {
-        0.0
-    }
+fn finite_extent_or_zero(extent: f64) -> f64 {
+    if extent.is_finite() { extent } else { 0.0 }
 }
 
 impl flui_foundation::Diagnosticable for RenderCustomPaint {
@@ -331,7 +327,7 @@ impl RenderBox for RenderCustomPaint {
         }
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() > 0 {
             ctx.child_min_intrinsic_width(0, height)
         } else {
@@ -339,7 +335,7 @@ impl RenderBox for RenderCustomPaint {
         }
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() > 0 {
             ctx.child_max_intrinsic_width(0, height)
         } else {
@@ -347,7 +343,7 @@ impl RenderBox for RenderCustomPaint {
         }
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() > 0 {
             ctx.child_min_intrinsic_height(0, width)
         } else {
@@ -355,7 +351,7 @@ impl RenderBox for RenderCustomPaint {
         }
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() > 0 {
             ctx.child_max_intrinsic_height(0, width)
         } else {
@@ -435,7 +431,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_rendering::context::intrinsics_test_support::{leaf_dry_layout, leaf_intrinsics};
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -731,48 +726,48 @@ mod tests {
     fn set_preferred_size_reports_change_flag() {
         let mut node = RenderCustomPaint::new(None, None, Size::ZERO);
         assert_eq!(
-            node.set_preferred_size(Size::new(px(10.0), px(10.0))),
+            node.set_preferred_size(Size::new(10.0, 10.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT,
         );
         assert_eq!(
-            node.set_preferred_size(Size::new(px(10.0), px(10.0))),
+            node.set_preferred_size(Size::new(10.0, 10.0)),
             flui_rendering::RenderUpdateImpact::NONE,
         );
     }
 
     #[test]
     fn dry_layout_childless_constrains_to_preferred_size() {
-        let node = RenderCustomPaint::new(None, None, Size::new(px(20.0), px(30.0)));
-        let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+        let node = RenderCustomPaint::new(None, None, Size::new(20.0, 30.0));
+        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
         let size = leaf_dry_layout(|ctx| node.compute_dry_layout(constraints, ctx));
-        assert_eq!(size, Size::new(px(20.0), px(30.0)));
+        assert_eq!(size, Size::new(20.0, 30.0));
     }
 
     #[test]
     fn dry_layout_childless_clamps_oversized_preferred_size() {
-        let node = RenderCustomPaint::new(None, None, Size::new(px(2000.0), px(100.0)));
-        let constraints = BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0));
+        let node = RenderCustomPaint::new(None, None, Size::new(2000.0, 100.0));
+        let constraints = BoxConstraints::new(0.0, 800.0, 0.0, 600.0);
         let size = leaf_dry_layout(|ctx| node.compute_dry_layout(constraints, ctx));
-        assert_eq!(size, Size::new(px(800.0), px(100.0)));
+        assert_eq!(size, Size::new(800.0, 100.0));
     }
 
     #[test]
     fn intrinsics_childless_use_preferred_size_when_finite() {
-        let node = RenderCustomPaint::new(None, None, Size::new(px(20.0), px(30.0)));
+        let node = RenderCustomPaint::new(None, None, Size::new(20.0, 30.0));
         assert_eq!(
-            leaf_intrinsics(|ctx| node.compute_min_intrinsic_width(f32::INFINITY, ctx)),
+            leaf_intrinsics(|ctx| node.compute_min_intrinsic_width(f64::INFINITY, ctx)),
             20.0
         );
         assert_eq!(
-            leaf_intrinsics(|ctx| node.compute_max_intrinsic_width(f32::INFINITY, ctx)),
+            leaf_intrinsics(|ctx| node.compute_max_intrinsic_width(f64::INFINITY, ctx)),
             20.0
         );
         assert_eq!(
-            leaf_intrinsics(|ctx| node.compute_min_intrinsic_height(f32::INFINITY, ctx)),
+            leaf_intrinsics(|ctx| node.compute_min_intrinsic_height(f64::INFINITY, ctx)),
             30.0
         );
         assert_eq!(
-            leaf_intrinsics(|ctx| node.compute_max_intrinsic_height(f32::INFINITY, ctx)),
+            leaf_intrinsics(|ctx| node.compute_max_intrinsic_height(f64::INFINITY, ctx)),
             30.0
         );
     }
@@ -781,11 +776,11 @@ mod tests {
     fn intrinsics_childless_infinite_preferred_size_reports_zero() {
         let node = RenderCustomPaint::new(None, None, Size::INFINITY);
         assert_eq!(
-            leaf_intrinsics(|ctx| node.compute_min_intrinsic_width(f32::INFINITY, ctx)),
+            leaf_intrinsics(|ctx| node.compute_min_intrinsic_width(f64::INFINITY, ctx)),
             0.0
         );
         assert_eq!(
-            leaf_intrinsics(|ctx| node.compute_min_intrinsic_height(f32::INFINITY, ctx)),
+            leaf_intrinsics(|ctx| node.compute_min_intrinsic_height(f64::INFINITY, ctx)),
             0.0
         );
     }

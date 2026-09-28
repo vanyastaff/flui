@@ -58,7 +58,7 @@ use flui_rendering::{
     testing::{box_node, tree},
     traits::RenderBox,
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 // ============================================================================
 // Driver widget
@@ -87,7 +87,7 @@ impl RenderBox for IntrinsicQueryingDriver {
         // which calls build_intrinsic_child_parent_data for its N children.
         // black_box prevents the compiler from eliding the query or sinking it
         // past the layout call.
-        let _max_width = black_box(ctx.child_max_intrinsic_width(0, black_box(f32::INFINITY)));
+        let _max_width = black_box(ctx.child_max_intrinsic_width(0, black_box(f64::INFINITY)));
         let constraints = *ctx.constraints();
         ctx.layout_child(0, constraints);
         constraints.smallest()
@@ -108,7 +108,7 @@ impl RenderBox for IntrinsicQueryingDriver {
 
 /// Tight 500 × 100 constraints used by this bench (wide row, shallow height).
 fn bench_constraints() -> BoxConstraints {
-    BoxConstraints::tight(Size::new(px(500.0), px(100.0)))
+    BoxConstraints::tight(Size::new(500.0, 100.0))
 }
 
 /// Build: `IntrinsicQueryingDriver` -> `RenderFlex::row()` -> `child_count`

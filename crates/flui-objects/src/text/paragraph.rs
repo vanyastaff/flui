@@ -74,7 +74,7 @@ impl RenderParagraph {
 
     /// Sets the accessibility text scale factor (builder form).
     #[must_use]
-    pub fn with_text_scale_factor(mut self, factor: f32) -> Self {
+    pub fn with_text_scale_factor(mut self, factor: f64) -> Self {
         self.painter.set_text_scale_factor(factor);
         self
     }
@@ -136,13 +136,13 @@ impl RenderParagraph {
     /// `widthMatters = softWrap || overflow == ellipsis`). A no-wrap label
     /// still needs the finite width so its ellipsis truncation can trigger;
     /// only a no-wrap, no-ellipsis paragraph lays out at unbounded width.
-    fn layout_max_width(&self, constraints: &BoxConstraints) -> f32 {
+    fn layout_max_width(&self, constraints: &BoxConstraints) -> f64 {
         let width_matters = self.soft_wrap || self.painter.ellipsis().is_some();
-        let max = constraints.max_width.get();
+        let max = constraints.max_width;
         if width_matters && max.is_finite() {
             max
         } else {
-            f32::INFINITY
+            f64::INFINITY
         }
     }
 }
@@ -209,7 +209,7 @@ impl RenderBox for RenderParagraph {
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         let max_width = self.layout_max_width(&constraints);
-        self.painter.layout(constraints.min_width.get(), max_width);
+        self.painter.layout(constraints.min_width, max_width);
         // The text's own size, then clamped into the box constraints
         // (Flutter `size = constraints.constrain(textPainter.size)`).
         constraints.constrain(self.painter.size())
@@ -221,9 +221,7 @@ impl RenderBox for RenderParagraph {
         _ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> Size {
         let max_width = self.layout_max_width(&constraints);
-        let text_size = self
-            .painter
-            .dry_size(constraints.min_width.get(), max_width);
+        let text_size = self.painter.dry_size(constraints.min_width, max_width);
         constraints.constrain(text_size)
     }
 
@@ -232,36 +230,36 @@ impl RenderBox for RenderParagraph {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         _ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         let max_width = self.layout_max_width(&constraints);
         let painter_baseline = match baseline {
             TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
             TextBaseline::Ideographic => PainterBaseline::Ideographic,
         };
         self.painter
-            .dry_baseline(constraints.min_width.get(), max_width, painter_baseline)
+            .dry_baseline(constraints.min_width, max_width, painter_baseline)
     }
 
     // Width intrinsics ignore the height extent (text width does not depend on
     // available height); height intrinsics lay the text out at the given width.
 
-    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter.min_intrinsic_width()
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter.max_intrinsic_width()
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter.intrinsic_height(width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter.intrinsic_height(width)
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         // Map the render-side baseline enum onto the painting-side one (two
         // parallel definitions, consolidation tracked). Valid only after
         // `perform_layout` populated the painter's cache; the baseline phase
@@ -329,7 +327,7 @@ fn semantics_text_direction(direction: TextDirection) -> flui_rendering::semanti
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{geometry::px, typography::TextSpan};
+    use flui_types::typography::TextSpan;
 
     use super::*;
     use flui_rendering::context::intrinsics_test_support::{
@@ -353,8 +351,8 @@ mod tests {
     #[test]
     fn max_intrinsic_width_bounds_min_intrinsic_width() {
         let p = para("hello world wrapping example");
-        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f32::INFINITY, c));
-        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f32::INFINITY, c));
+        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f64::INFINITY, c));
+        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f64::INFINITY, c));
         assert!(max > 0.0, "single-line width must be positive, got {max}");
         assert!(
             min > 0.0 && min <= max,
@@ -367,10 +365,10 @@ mod tests {
         let p = RenderParagraph::new(TextSpan::new("a WWWWWWWWWW"), TextDirection::Ltr)
             .with_max_lines(Some(1));
         let uncapped = para("a WWWWWWWWWW");
-        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f32::INFINITY, c));
-        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f32::INFINITY, c));
+        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f64::INFINITY, c));
+        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f64::INFINITY, c));
         let uncapped_min =
-            leaf_intrinsics(|c| uncapped.compute_min_intrinsic_width(f32::INFINITY, c));
+            leaf_intrinsics(|c| uncapped.compute_min_intrinsic_width(f64::INFINITY, c));
         assert!(
             min > 0.0,
             "RenderParagraph min intrinsic must stay positive under max_lines, got {min}"
@@ -390,8 +388,8 @@ mod tests {
         )
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_string()));
-        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f32::INFINITY, c));
-        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f32::INFINITY, c));
+        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f64::INFINITY, c));
+        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f64::INFINITY, c));
         assert!(min > 0.0 && min <= max);
     }
 
@@ -399,16 +397,10 @@ mod tests {
     fn narrow_constraints_wrap_taller_and_no_wider_than_single_line() {
         let p = para("a b c d e f g h i j k l m n");
         let wide = leaf_dry_layout(|c| {
-            p.compute_dry_layout(
-                BoxConstraints::new(px(0.0), px(10_000.0), px(0.0), px(10_000.0)),
-                c,
-            )
+            p.compute_dry_layout(BoxConstraints::new(0.0, 10_000.0, 0.0, 10_000.0), c)
         });
         let narrow = leaf_dry_layout(|c| {
-            p.compute_dry_layout(
-                BoxConstraints::new(px(0.0), px(30.0), px(0.0), px(10_000.0)),
-                c,
-            )
+            p.compute_dry_layout(BoxConstraints::new(0.0, 30.0, 0.0, 10_000.0), c)
         });
         assert!(
             narrow.height > wide.height,
@@ -425,7 +417,7 @@ mod tests {
     #[test]
     fn dry_baseline_is_available_without_layout() {
         let p = para("hello");
-        let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
         let dry =
             leaf_dry_baseline(|c| p.compute_dry_baseline(constraints, TextBaseline::Alphabetic, c));
         assert!(
@@ -444,7 +436,7 @@ mod tests {
     #[test]
     fn intrinsic_height_is_finite_at_infinite_width() {
         let p = para("hello world");
-        let h = leaf_intrinsics(|c| p.compute_max_intrinsic_height(f32::INFINITY, c));
+        let h = leaf_intrinsics(|c| p.compute_max_intrinsic_height(f64::INFINITY, c));
         assert!(
             h.is_finite() && h > 0.0,
             "height at unbounded width must be finite, got {h}",
@@ -463,18 +455,15 @@ mod tests {
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_string()));
 
-        let full = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f32::INFINITY, c));
+        let full = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f64::INFINITY, c));
         let dry = leaf_dry_layout(|c| {
-            p.compute_dry_layout(
-                BoxConstraints::new(px(0.0), px(60.0), px(0.0), px(10_000.0)),
-                c,
-            )
+            p.compute_dry_layout(BoxConstraints::new(0.0, 60.0, 0.0, 10_000.0), c)
         });
         assert!(
-            dry.width.get() < full,
+            dry.width < full,
             "ellipsized width {} must be less than the untruncated single-line width {full} \
              (the finite max width must reach the painter despite soft_wrap=false)",
-            dry.width.get(),
+            dry.width,
         );
     }
 

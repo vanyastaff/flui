@@ -13,10 +13,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use web_time::Instant;
 
-use flui_types::{
-    Offset,
-    geometry::{PixelDelta, Pixels},
-};
+use flui_types::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
@@ -55,9 +52,9 @@ pub enum DragStartBehavior {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragDownDetails {
     /// Global position where pointer contacted the screen
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Local position (relative to widget)
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -66,9 +63,9 @@ pub struct DragDownDetails {
 #[derive(Debug, Clone)]
 pub struct DragStartDetails {
     /// Global position where drag started
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Local position (relative to widget)
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Pointer device kind
     pub kind: PointerType,
     /// When the drag started
@@ -79,16 +76,16 @@ pub struct DragStartDetails {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DragUpdateDetails {
     /// Current global position
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Current local position
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Delta since last update
-    pub delta: Offset<PixelDelta>,
+    pub delta: Offset<f64>,
     /// `delta` projected onto the recognizer's primary axis. Flutter parity:
     /// `DragUpdateDetails.primaryDelta` — "the amount the pointer has moved
     /// along the primary axis **since the previous call to onUpdate**", i.e.
     /// per-event, not cumulative since the drag started.
-    pub primary_delta: f32,
+    pub primary_delta: f64,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -99,11 +96,11 @@ pub struct DragEndDetails {
     /// Velocity at end of drag (pixels per second)
     pub velocity: Velocity,
     /// Final global position
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Final local position
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Primary velocity (axis-aligned)
-    pub primary_velocity: f32,
+    pub primary_velocity: f64,
 }
 
 // Re-export Velocity from the velocity module
@@ -199,20 +196,20 @@ struct DragState {
     start_time: Option<Instant>,
     /// Position reported in [`DragStartDetails`] — depends on
     /// `start_behavior` (down position or slop-crossing position).
-    start_position: Option<Offset<Pixels>>,
+    start_position: Option<Offset<f64>>,
     /// The same contact as `start_position`, in the root's space.
     ///
     /// Stored rather than derived: dispatch localises the event before a
     /// recognizer sees it, so the global position exists only at the moment
     /// the event arrives (issue #908).
-    start_global_position: Option<Offset<Pixels>>,
+    start_global_position: Option<Offset<f64>>,
     /// The contact position at Down, in the root's space — the global
     /// counterpart of the shared state's `initial_position`.
-    down_global_position: Option<Offset<Pixels>>,
+    down_global_position: Option<Offset<f64>>,
     /// Last update position
-    last_position: Option<Offset<Pixels>>,
+    last_position: Option<Offset<f64>>,
     /// The same contact as `last_position`, in the root's space.
-    last_global_position: Option<Offset<Pixels>>,
+    last_global_position: Option<Offset<f64>>,
     /// Last update time (for velocity calculation)
     last_time: Option<Instant>,
     /// Device kind captured at Down, needed when arena acceptance arrives
@@ -325,7 +322,7 @@ impl DragGestureRecognizer {
     /// The kind split itself lives in [`GestureSettings::hit_slop`] and
     /// [`GestureSettings::pan_slop_for`] — this method picks the tier and
     /// then applies FLUI's per-axis narrowing on top.
-    fn min_drag_distance(&self, kind: PointerType) -> f32 {
+    fn min_drag_distance(&self, kind: PointerType) -> f64 {
         let s = self.settings.lock();
         match self.axis {
             // PanGestureRecognizer resolves through `computePanSlop`, which is
@@ -344,7 +341,7 @@ impl DragGestureRecognizer {
     }
 
     /// Get the minimum fling velocity from settings
-    fn min_fling_velocity(&self) -> f32 {
+    fn min_fling_velocity(&self) -> f64 {
         self.settings.lock().min_fling_velocity()
     }
 
@@ -393,12 +390,7 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer down - start tracking
-    fn handle_down(
-        &self,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
-        kind: PointerType,
-    ) {
+    fn handle_down(&self, position: Offset<f64>, global_position: Offset<f64>, kind: PointerType) {
         // Read the arena's clock, not the OS clock directly: production binds
         // it to `SystemClock` (so this is `Instant::now()` either way), but a
         // headless frame driver binds it to a `ManualClock` it advances
@@ -432,12 +424,7 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer move - check slop and start/update drag
-    fn handle_move(
-        &self,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
-        kind: PointerType,
-    ) {
+    fn handle_move(&self, position: Offset<f64>, global_position: Offset<f64>, kind: PointerType) {
         let mut state = self.drag_state.lock();
 
         match state.state {
@@ -479,7 +466,7 @@ impl DragGestureRecognizer {
                     // every update after the first report the wrong
                     // magnitude (and, once the drag reverses direction, the
                     // wrong sign) for any drag with 3+ move events.
-                    let primary_delta = self.calculate_primary_delta(delta.to_pixels());
+                    let primary_delta = self.calculate_primary_delta(delta);
 
                     drop(state); // Release lock before calling callback
 
@@ -547,9 +534,9 @@ impl DragGestureRecognizer {
             // deliberately emits no synthetic first update.
             let initial_update = (self.start_behavior == DragStartBehavior::Down)
                 .then(|| self.project_delta(accepted_position - initial))
-                .filter(|delta| delta.dx.0 != 0.0 || delta.dy.0 != 0.0)
+                .filter(|delta| delta.dx != 0.0 || delta.dy != 0.0)
                 .map(|delta| {
-                    let corrected_position = initial + delta.to_pixels();
+                    let corrected_position = initial + delta;
                     // `corrected_position` is SYNTHESIZED — the down anchor
                     // plus an axis-projected delta — so it has no global
                     // counterpart a recognizer can compute: mapping a local
@@ -562,7 +549,7 @@ impl DragGestureRecognizer {
                     DragUpdateDetails {
                         global_position: accepted_global,
                         local_position: corrected_position,
-                        primary_delta: self.calculate_primary_delta(delta.to_pixels()),
+                        primary_delta: self.calculate_primary_delta(delta),
                         delta,
                         kind,
                     }
@@ -581,12 +568,7 @@ impl DragGestureRecognizer {
     }
 
     /// Handle pointer up - end drag
-    fn handle_up(
-        &self,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
-        _kind: PointerType,
-    ) {
+    fn handle_up(&self, position: Offset<f64>, global_position: Offset<f64>, _kind: PointerType) {
         let mut state = self.drag_state.lock();
 
         if state.state == DragPhase::Started {
@@ -668,41 +650,40 @@ impl DragGestureRecognizer {
     ///
     /// Flutter's horizontal and vertical recognizers report an axis-pure
     /// `DragUpdateDetails.delta`; only a pan recognizer retains both axes.
-    fn project_delta(&self, delta: Offset<Pixels>) -> Offset<PixelDelta> {
+    fn project_delta(&self, delta: Offset<f64>) -> Offset<f64> {
         match self.axis {
-            DragAxis::Vertical => Offset::new(PixelDelta(0.0), PixelDelta(delta.dy.0)),
-            DragAxis::Horizontal => Offset::new(PixelDelta(delta.dx.0), PixelDelta(0.0)),
+            DragAxis::Vertical => Offset::new(0.0, delta.dy),
+            DragAxis::Horizontal => Offset::new(delta.dx, 0.0),
             DragAxis::Free => delta.to_delta(),
         }
     }
 
     /// Calculate primary delta based on axis
-    fn calculate_primary_delta(&self, delta: Offset<Pixels>) -> f32 {
+    fn calculate_primary_delta(&self, delta: Offset<f64>) -> f64 {
         match self.axis {
-            DragAxis::Vertical => delta.dy.0,
-            DragAxis::Horizontal => delta.dx.0,
-            DragAxis::Free => delta.distance().0,
+            DragAxis::Vertical => delta.dy,
+            DragAxis::Horizontal => delta.dx,
+            DragAxis::Free => delta.distance(),
         }
     }
 
     /// Calculate primary velocity based on axis
-    fn calculate_primary_velocity(&self, velocity: Offset<Pixels>) -> f32 {
+    fn calculate_primary_velocity(&self, velocity: Offset<f64>) -> f64 {
         match self.axis {
-            DragAxis::Vertical => velocity.dy.0,
-            DragAxis::Horizontal => velocity.dx.0,
-            DragAxis::Free => velocity.distance().0,
+            DragAxis::Vertical => velocity.dy,
+            DragAxis::Horizontal => velocity.dx,
+            DragAxis::Free => velocity.distance(),
         }
     }
 
     /// Check if velocity is sufficient for a fling gesture
     pub fn is_fling(&self, velocity: &Velocity) -> bool {
-        use flui_types::geometry::px;
         let speed = velocity.pixels_per_second.distance();
-        speed >= px(self.min_fling_velocity())
+        speed >= self.min_fling_velocity()
     }
 
     /// Extract position and pointer type from a PointerEvent
-    fn extract_event_data(event: &PointerEvent) -> (Offset<Pixels>, PointerType) {
+    fn extract_event_data(event: &PointerEvent) -> (Offset<f64>, PointerType) {
         let position = event.position();
         let pointer_type = match event {
             PointerEvent::Down(e) | PointerEvent::Up(e) => e.pointer.pointer_type,
@@ -721,8 +702,8 @@ impl GestureRecognizer for DragGestureRecognizer {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: PointerId,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
     ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
@@ -885,11 +866,7 @@ mod tests {
             .with_on_start(move |_| *callback_starts.lock() += 1);
         let pointer = PointerId::PRIMARY;
 
-        recognizer.add_pointer(
-            pointer,
-            Offset::new(Pixels(10.0), Pixels(20.0)),
-            Offset::new(Pixels(10.0), Pixels(20.0)),
-        );
+        recognizer.add_pointer(pointer, Offset::new(10.0, 20.0), Offset::new(10.0, 20.0));
         arena.close(pointer);
         assert_eq!(
             *starts.lock(),
@@ -927,7 +904,7 @@ mod tests {
             .with_on_cancel(move || *callback_cancels.lock() += 1);
         let accepted = Arc::new(Mutex::new(0_u32));
         let pointer = PointerId::PRIMARY;
-        let position = Offset::new(Pixels(10.0), Pixels(20.0));
+        let position = Offset::new(10.0, 20.0);
 
         recognizer.add_pointer(pointer, position, position);
         arena.add(pointer, Arc::new(Winner(Arc::clone(&accepted))));
@@ -955,8 +932,8 @@ mod tests {
             .with_on_cancel(|| panic!("drag cancel panic"));
         recognizer.add_pointer(
             PointerId::PRIMARY,
-            Offset::new(Pixels(1.0), Pixels(2.0)),
-            Offset::new(Pixels(1.0), Pixels(2.0)),
+            Offset::new(1.0, 2.0),
+            Offset::new(1.0, 2.0),
         );
         arena.close(PointerId::PRIMARY);
 
@@ -989,14 +966,14 @@ mod tests {
             });
 
         let pointer = PointerId::PRIMARY;
-        let start_pos = Offset::new(Pixels(100.0), Pixels(100.0));
+        let start_pos = Offset::new(100.0, 100.0);
 
         // Start tracking
         recognizer.add_pointer(pointer, start_pos, start_pos);
         close_with_competitor(&arena, pointer);
 
         // Move vertically beyond slop
-        let moved_pos = Offset::new(Pixels(100.0), Pixels(130.0)); // 30px down
+        let moved_pos = Offset::new(100.0, 130.0); // 30px down
         let move_event = make_move_event(moved_pos, PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&move_event));
 
@@ -1004,7 +981,7 @@ mod tests {
         assert!(*started.lock());
 
         // Move more
-        let moved_pos2 = Offset::new(Pixels(100.0), Pixels(150.0));
+        let moved_pos2 = Offset::new(100.0, 150.0);
         let move_event2 = make_move_event(moved_pos2, PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&move_event2));
 
@@ -1036,8 +1013,8 @@ mod tests {
         let pointer = PointerId::PRIMARY;
         recognizer.add_pointer(
             pointer,
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(100.0, 100.0),
+            Offset::new(100.0, 100.0),
         );
         close_with_competitor(&arena, pointer);
         (recognizer, arena, pointer)
@@ -1054,7 +1031,7 @@ mod tests {
         // 10px down: above the mouse precise slop (1.0px) but below the
         // touch slop (18.0px) the old, kind-blind code always applied
         // regardless of the pointer's actual kind — the defect this closes.
-        let moved = Offset::new(Pixels(100.0), Pixels(110.0));
+        let moved = Offset::new(100.0, 110.0);
         recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
             moved,
             PointerType::Mouse,
@@ -1078,7 +1055,7 @@ mod tests {
             *started_clone.lock() = true;
         });
 
-        let moved = Offset::new(Pixels(100.0), Pixels(110.0));
+        let moved = Offset::new(100.0, 110.0);
         recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
             moved,
             PointerType::Touch,
@@ -1094,8 +1071,8 @@ mod tests {
     fn mouse_precise_slop_boundary_holds_from_both_sides() {
         // Both sides of `kPrecisePointerHitSlop` (1.0px) for a mouse
         // pointer: 0.9px must not cross it, 1.1px must.
-        let below = Offset::new(Pixels(100.0), Pixels(100.9));
-        let above = Offset::new(Pixels(100.0), Pixels(101.1));
+        let below = Offset::new(100.0, 100.9);
+        let above = Offset::new(100.0, 101.1);
 
         for (moved, should_start, label) in [(below, false, "0.9px"), (above, true, "1.1px")] {
             let started = Arc::new(Mutex::new(false));
@@ -1128,15 +1105,15 @@ mod tests {
         let dt = std::time::Duration::from_millis(33);
         for i in 0..=3 {
             let t = start_time + dt * i;
-            let pos = Offset::new(Pixels(i as f32 * 33.0), Pixels(0.0));
+            let pos = Offset::new((i as f64 * 33.0), 0.0);
             tracker.add_position(t, pos);
         }
 
         let velocity = tracker.get_velocity();
 
         // Should be approximately 1000 px/s horizontally
-        assert!(velocity.pixels_per_second.dx > Pixels(900.0));
-        assert!(velocity.pixels_per_second.dx < Pixels(1100.0));
+        assert!(velocity.pixels_per_second.dx > 900.0);
+        assert!(velocity.pixels_per_second.dx < 1100.0);
     }
 
     // ========================================================================
@@ -1151,7 +1128,7 @@ mod tests {
     #[test]
     fn drag_start_behavior_down_uses_down_position() {
         let arena = GestureArena::new();
-        let start_reported = Arc::new(Mutex::new(None::<Offset<Pixels>>));
+        let start_reported = Arc::new(Mutex::new(None::<Offset<f64>>));
 
         let start_clone = start_reported.clone();
         let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
@@ -1161,13 +1138,12 @@ mod tests {
             });
 
         let pointer = PointerId::PRIMARY;
-        let down_pos = Offset::new(Pixels(50.0), Pixels(50.0));
+        let down_pos = Offset::new(50.0, 50.0);
         recognizer.add_pointer(pointer, down_pos, down_pos);
         close_with_competitor(&arena, pointer);
 
         // Cross slop with one big move (50→80 → 30px travel).
-        let move_event =
-            make_move_event(Offset::new(Pixels(80.0), Pixels(80.0)), PointerType::Touch);
+        let move_event = make_move_event(Offset::new(80.0, 80.0), PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&move_event));
 
         // With `Down` behavior, the reported start position is the down
@@ -1178,7 +1154,7 @@ mod tests {
     #[test]
     fn drag_start_behavior_start_uses_slop_crossing_position() {
         let arena = GestureArena::new();
-        let start_reported = Arc::new(Mutex::new(None::<Offset<Pixels>>));
+        let start_reported = Arc::new(Mutex::new(None::<Offset<f64>>));
 
         let start_clone = start_reported.clone();
         let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
@@ -1189,11 +1165,11 @@ mod tests {
             });
 
         let pointer = PointerId::PRIMARY;
-        let down_pos = Offset::new(Pixels(50.0), Pixels(50.0));
+        let down_pos = Offset::new(50.0, 50.0);
         recognizer.add_pointer(pointer, down_pos, down_pos);
         close_with_competitor(&arena, pointer);
 
-        let crossing_pos = Offset::new(Pixels(80.0), Pixels(80.0));
+        let crossing_pos = Offset::new(80.0, 80.0);
         let move_event = make_move_event(crossing_pos, PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&move_event));
 
@@ -1219,12 +1195,12 @@ mod tests {
             });
 
         let pointer = PointerId::PRIMARY;
-        let down = Offset::new(Pixels(10.0), Pixels(20.0));
+        let down = Offset::new(10.0, 20.0);
         recognizer.add_pointer(pointer, down, down);
         close_with_competitor(&arena, pointer);
 
         recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(Pixels(40.0), Pixels(70.0)),
+            Offset::new(40.0, 70.0),
             PointerType::Touch,
         )));
 
@@ -1233,13 +1209,13 @@ mod tests {
         assert_eq!(reported.len(), 1);
         assert_eq!(
             reported[0].delta,
-            Offset::new(PixelDelta(30.0), PixelDelta(0.0)),
+            Offset::new(30.0, 0.0),
             "a horizontal recognizer must flush only the pending x component"
         );
         assert_eq!(reported[0].primary_delta, 30.0);
         assert_eq!(
             reported[0].local_position,
-            Offset::new(Pixels(40.0), Pixels(20.0)),
+            Offset::new(40.0, 20.0),
             "the initial Down-behavior update reports the axis-corrected \
              position in the recognizer's own space"
         );
@@ -1256,7 +1232,7 @@ mod tests {
         // move event's own position, unprojected.
         assert_eq!(
             reported[0].global_position,
-            Offset::new(Pixels(40.0), Pixels(70.0)),
+            Offset::new(40.0, 70.0),
             "the global half reports the observed contact, not the projection"
         );
     }
@@ -1289,14 +1265,14 @@ mod tests {
 
         // The node sits at (150, 150) in the root's space, so a contact at
         // global (160, 160) is local (10, 10).
-        let offset = Offset::new(Pixels(150.0), Pixels(150.0));
-        let down_local = Offset::new(Pixels(10.0), Pixels(10.0));
+        let offset = Offset::new(150.0, 150.0);
+        let down_local = Offset::new(10.0, 10.0);
         let pointer = PointerId::PRIMARY;
         recognizer.add_pointer(pointer, down_local, down_local + offset);
         close_with_competitor(&arena, pointer);
 
         // Drag well past slop, in both spaces at once.
-        let move_local = Offset::new(Pixels(60.0), Pixels(10.0));
+        let move_local = Offset::new(60.0, 10.0);
         let move_global = move_local + offset;
         recognizer.handle_event(PointerDispatch {
             local: &make_move_event(move_local, PointerType::Touch),
@@ -1337,11 +1313,7 @@ mod tests {
             .with_on_cancel(move || *cancels_for_callback.lock() += 1);
         let pointer = PointerId::PRIMARY;
 
-        recognizer.add_pointer(
-            pointer,
-            Offset::new(Pixels(5.0), Pixels(5.0)),
-            Offset::new(Pixels(5.0), Pixels(5.0)),
-        );
+        recognizer.add_pointer(pointer, Offset::new(5.0, 5.0), Offset::new(5.0, 5.0));
         arena.close(pointer);
         assert_eq!(arena.drain_deferred_resolutions(), 1);
         recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
@@ -1368,22 +1340,16 @@ mod tests {
                 });
 
         let pointer = PointerId::PRIMARY;
-        recognizer.add_pointer(
-            pointer,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        recognizer.add_pointer(pointer, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         close_with_competitor(&arena, pointer);
 
         // 20px vertical move — under 25px vertical slop, no start yet.
-        let move_event =
-            make_move_event(Offset::new(Pixels(0.0), Pixels(20.0)), PointerType::Touch);
+        let move_event = make_move_event(Offset::new(0.0, 20.0), PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&move_event));
         assert!(!*started.lock());
 
         // 30px vertical move — crosses 25px slop, drag starts.
-        let move_event2 =
-            make_move_event(Offset::new(Pixels(0.0), Pixels(30.0)), PointerType::Touch);
+        let move_event2 = make_move_event(Offset::new(0.0, 30.0), PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&move_event2));
         assert!(*started.lock());
     }
@@ -1405,23 +1371,17 @@ mod tests {
                 });
 
         let pointer = PointerId::PRIMARY;
-        recognizer.add_pointer(
-            pointer,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        recognizer.add_pointer(pointer, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         close_with_competitor(&arena, pointer);
 
         // Move 50px down, 5px right — horizontal projection (5px) is under
         // the 10px horizontal slop, no start.
-        let move_event =
-            make_move_event(Offset::new(Pixels(5.0), Pixels(50.0)), PointerType::Touch);
+        let move_event = make_move_event(Offset::new(5.0, 50.0), PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&move_event));
         assert!(!*started.lock());
 
         // Move 15px right — crosses 10px slop on horizontal axis.
-        let move_event2 =
-            make_move_event(Offset::new(Pixels(15.0), Pixels(50.0)), PointerType::Touch);
+        let move_event2 = make_move_event(Offset::new(15.0, 50.0), PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&move_event2));
         assert!(*started.lock());
     }
@@ -1435,7 +1395,7 @@ mod tests {
         // update; any later update, or a reversal in direction, reported the
         // wrong magnitude (or wrong sign).
         let arena = GestureArena::new();
-        let reported = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let reported = Arc::new(Mutex::new(Vec::<f64>::new()));
         let reported_clone = reported.clone();
 
         let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
@@ -1444,16 +1404,12 @@ mod tests {
             });
 
         let pointer = PointerId::PRIMARY;
-        recognizer.add_pointer(
-            pointer,
-            Offset::new(Pixels(5.0), Pixels(400.0)),
-            Offset::new(Pixels(5.0), Pixels(400.0)),
-        );
+        recognizer.add_pointer(pointer, Offset::new(5.0, 400.0), Offset::new(5.0, 400.0));
         close_with_competitor(&arena, pointer);
 
         // Cross slop (down=5 -> 30, no update fires — start only).
         recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(Pixels(30.0), Pixels(400.0)),
+            Offset::new(30.0, 400.0),
             PointerType::Touch,
         )));
         assert!(
@@ -1463,7 +1419,7 @@ mod tests {
 
         // First real update: 30 -> 185, delta = +155.
         recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(Pixels(185.0), Pixels(400.0)),
+            Offset::new(185.0, 400.0),
             PointerType::Touch,
         )));
         assert_eq!(*reported.lock(), vec![155.0]);
@@ -1471,7 +1427,7 @@ mod tests {
         // Second update reverses direction: 185 -> 150, delta = -35.
         // Cumulative-since-start would report 150 - 30 = 120 instead.
         recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(Pixels(150.0), Pixels(400.0)),
+            Offset::new(150.0, 400.0),
             PointerType::Touch,
         )));
         assert_eq!(*reported.lock(), vec![155.0, -35.0]);
@@ -1479,7 +1435,7 @@ mod tests {
         // Third update returns to the slop-crossing position: 150 -> 30,
         // delta = -120. Cumulative-since-start would report 30 - 30 = 0.
         recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(Pixels(30.0), Pixels(400.0)),
+            Offset::new(30.0, 400.0),
             PointerType::Touch,
         )));
         assert_eq!(*reported.lock(), vec![155.0, -35.0, -120.0]);

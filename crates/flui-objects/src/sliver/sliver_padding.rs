@@ -36,7 +36,7 @@
 //!   remain test-friendly.
 
 use flui_foundation::Single;
-use flui_types::{Axis, EdgeInsets, Offset, Pixels, geometry::px, layout::AxisDirection};
+use flui_types::{Axis, EdgeInsets, Offset, layout::AxisDirection};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry},
@@ -87,8 +87,8 @@ impl RenderSliverPadding {
 
     /// Creates a sliver-padding render object with all sides equal.
     #[must_use]
-    pub fn all(value: f32) -> Self {
-        Self::new(EdgeInsets::all(px(value)))
+    pub fn all(value: f64) -> Self {
+        Self::new(EdgeInsets::all(value))
     }
 
     /// Creates a sliver-padding render object with symmetric horizontal /
@@ -99,8 +99,8 @@ impl RenderSliverPadding {
     /// [`EdgeInsets::symmetric`] whose signature is
     /// `(vertical, horizontal)`.
     #[must_use]
-    pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
-        Self::new(EdgeInsets::symmetric(px(vertical), px(horizontal)))
+    pub fn symmetric(horizontal: f64, vertical: f64) -> Self {
+        Self::new(EdgeInsets::symmetric(vertical, horizontal))
     }
 
     /// Returns the current padding.
@@ -151,23 +151,23 @@ impl RenderSliverPadding {
     /// * `main_total` — `before + after`.
     /// * `cross_total` — total padding on the cross axis.
     #[inline]
-    fn resolve(&self, constraints: &SliverConstraints) -> (f32, f32, f32, f32) {
+    fn resolve(&self, constraints: &SliverConstraints) -> (f64, f64, f64, f64) {
         let main = match constraints.axis() {
-            Axis::Vertical => self.padding.vertical_total().get(),
-            Axis::Horizontal => self.padding.horizontal_total().get(),
+            Axis::Vertical => self.padding.vertical_total(),
+            Axis::Horizontal => self.padding.horizontal_total(),
         };
         let cross = match constraints.axis() {
-            Axis::Vertical => self.padding.horizontal_total().get(),
-            Axis::Horizontal => self.padding.vertical_total().get(),
+            Axis::Vertical => self.padding.horizontal_total(),
+            Axis::Horizontal => self.padding.vertical_total(),
         };
         let (before, after) = match constraints
             .growth_direction
             .apply_to_axis_direction(constraints.axis_direction)
         {
-            AxisDirection::TopToBottom => (self.padding.top.get(), self.padding.bottom.get()),
-            AxisDirection::BottomToTop => (self.padding.bottom.get(), self.padding.top.get()),
-            AxisDirection::LeftToRight => (self.padding.left.get(), self.padding.right.get()),
-            AxisDirection::RightToLeft => (self.padding.right.get(), self.padding.left.get()),
+            AxisDirection::TopToBottom => (self.padding.top, self.padding.bottom),
+            AxisDirection::BottomToTop => (self.padding.bottom, self.padding.top),
+            AxisDirection::LeftToRight => (self.padding.left, self.padding.right),
+            AxisDirection::RightToLeft => (self.padding.right, self.padding.left),
         };
         (before, after, main, cross)
     }
@@ -177,7 +177,7 @@ impl RenderSliverPadding {
     /// `self`. Mirrors the trait default in
     /// [`RenderSliver::calculate_paint_offset`].
     #[inline]
-    fn paint_offset(constraints: &SliverConstraints, from: f32, to: f32) -> f32 {
+    fn paint_offset(constraints: &SliverConstraints, from: f64, to: f64) -> f64 {
         debug_assert!(
             from <= to,
             "paint_offset: from ({from}) must be <= to ({to})"
@@ -190,7 +190,7 @@ impl RenderSliverPadding {
     /// Sliver `calculateCacheOffset` inlined as a pure function. Mirrors
     /// the trait default in [`RenderSliver::calculate_cache_offset`].
     #[inline]
-    fn cache_offset(constraints: &SliverConstraints, from: f32, to: f32) -> f32 {
+    fn cache_offset(constraints: &SliverConstraints, from: f64, to: f64) -> f64 {
         debug_assert!(
             from <= to,
             "cache_offset: from ({from}) must be <= to ({to})"
@@ -320,29 +320,25 @@ impl RenderSliverPadding {
         let calculated_offset = match effective_axis_direction {
             AxisDirection::BottomToTop => Self::paint_offset(
                 parent,
-                self.padding.bottom.get() + child_geometry.scroll_extent,
-                self.padding.vertical_total().get() + child_geometry.scroll_extent,
+                self.padding.bottom + child_geometry.scroll_extent,
+                self.padding.vertical_total() + child_geometry.scroll_extent,
             ),
             AxisDirection::RightToLeft => Self::paint_offset(
                 parent,
-                self.padding.right.get() + child_geometry.scroll_extent,
-                self.padding.horizontal_total().get() + child_geometry.scroll_extent,
+                self.padding.right + child_geometry.scroll_extent,
+                self.padding.horizontal_total() + child_geometry.scroll_extent,
             ),
-            AxisDirection::LeftToRight => Self::paint_offset(parent, 0.0, self.padding.left.get()),
-            AxisDirection::TopToBottom => Self::paint_offset(parent, 0.0, self.padding.top.get()),
+            AxisDirection::LeftToRight => Self::paint_offset(parent, 0.0, self.padding.left),
+            AxisDirection::TopToBottom => Self::paint_offset(parent, 0.0, self.padding.top),
         };
 
         let cross_before = match axis {
-            Axis::Horizontal => self.padding.top.get(),
-            Axis::Vertical => self.padding.left.get(),
+            Axis::Horizontal => self.padding.top,
+            Axis::Vertical => self.padding.left,
         };
         let paint_offset = match axis {
-            Axis::Horizontal => {
-                Offset::new(Pixels::new(calculated_offset), Pixels::new(cross_before))
-            }
-            Axis::Vertical => {
-                Offset::new(Pixels::new(cross_before), Pixels::new(calculated_offset))
-            }
+            Axis::Horizontal => Offset::new(calculated_offset, cross_before),
+            Axis::Vertical => Offset::new(cross_before, calculated_offset),
         };
 
         (geometry, paint_offset)
@@ -400,7 +396,7 @@ impl RenderSliver for RenderSliverPadding {
         &self,
         constraints: &SliverConstraints,
         _child: &dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         let (before, _, _, _) = self.resolve(constraints);
         Self::paint_offset(constraints, 0.0, before)
     }
@@ -409,7 +405,7 @@ impl RenderSliver for RenderSliverPadding {
         &self,
         constraints: &SliverConstraints,
         _child: &dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         // This MATCHES the reference; there is no LTR assumption to remove.
         //
         // An earlier TODO here claimed `RenderSliverPadding.childCrossAxisPosition`
@@ -428,8 +424,8 @@ impl RenderSliver for RenderSliverPadding {
         // If a directional inset type ever lands, the resolution belongs at its
         // construction site, not in this method.
         match constraints.axis() {
-            Axis::Vertical => self.padding.left.get(),
-            Axis::Horizontal => self.padding.top.get(),
+            Axis::Vertical => self.padding.left,
+            Axis::Horizontal => self.padding.top,
         }
     }
 
@@ -437,7 +433,7 @@ impl RenderSliver for RenderSliverPadding {
         &self,
         constraints: &SliverConstraints,
         _child: &dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         let (before, _, _, _) = self.resolve(constraints);
         Some(before)
     }
@@ -456,7 +452,6 @@ impl RenderSliver for RenderSliverPadding {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
     use flui_rendering::constraints::GrowthDirection;
@@ -469,10 +464,10 @@ mod tests {
     /// and the provided scroll/paint extents — keeps each test focused
     /// on the fields it cares about.
     fn vertical_constraints(
-        scroll_offset: f32,
-        remaining_paint_extent: f32,
-        remaining_cache_extent: f32,
-        cross_axis_extent: f32,
+        scroll_offset: f64,
+        remaining_paint_extent: f64,
+        remaining_cache_extent: f64,
+        cross_axis_extent: f64,
     ) -> SliverConstraints {
         use flui_types::layout::AxisDirection;
 
@@ -497,10 +492,10 @@ mod tests {
     /// Builds a child sliver geometry with explicit fields for the
     /// composition test.
     fn child_geom(
-        scroll_extent: f32,
-        paint_extent: f32,
-        layout_extent: f32,
-        cache_extent: f32,
+        scroll_extent: f64,
+        paint_extent: f64,
+        layout_extent: f64,
+        cache_extent: f64,
     ) -> SliverGeometry {
         SliverGeometry {
             scroll_extent,
@@ -525,9 +520,9 @@ mod tests {
     #[test]
     fn all_constructor_sets_uniform_padding() {
         let p = RenderSliverPadding::all(8.0);
-        assert_eq!(p.padding(), EdgeInsets::all(px(8.0)));
-        assert_eq!(p.padding().horizontal_total(), px(16.0));
-        assert_eq!(p.padding().vertical_total(), px(16.0));
+        assert_eq!(p.padding(), EdgeInsets::all(8.0));
+        assert_eq!(p.padding().horizontal_total(), 16.0);
+        assert_eq!(p.padding().vertical_total(), 16.0);
     }
 
     #[test]
@@ -536,41 +531,41 @@ mod tests {
         // left+right = 40 (matches EdgeInsets::symmetric(vertical=10,
         // horizontal=20)).
         let p = RenderSliverPadding::symmetric(20.0, 10.0);
-        assert_eq!(p.padding().horizontal_total(), px(40.0));
-        assert_eq!(p.padding().vertical_total(), px(20.0));
+        assert_eq!(p.padding().horizontal_total(), 40.0);
+        assert_eq!(p.padding().vertical_total(), 20.0);
     }
 
     #[test]
     fn default_is_zero_padding() {
         let p = RenderSliverPadding::default();
-        assert_eq!(p.padding(), EdgeInsets::all(px(0.0)));
+        assert_eq!(p.padding(), EdgeInsets::all(0.0));
     }
 
     #[test]
     fn set_padding_returns_change_flag() {
         let mut p = RenderSliverPadding::all(4.0);
         assert_eq!(
-            p.set_padding(EdgeInsets::all(px(4.0))),
+            p.set_padding(EdgeInsets::all(4.0)),
             flui_rendering::RenderUpdateImpact::NONE
         );
         assert_eq!(
-            p.set_padding(EdgeInsets::all(px(5.0))),
+            p.set_padding(EdgeInsets::all(5.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
-        assert_eq!(p.padding(), EdgeInsets::all(px(5.0)));
+        assert_eq!(p.padding(), EdgeInsets::all(5.0));
     }
 
     #[test]
     fn zero_padding_is_accepted() {
         // The invariant is non-*negative*, not positive: zero on every side is
         // the identity padding and must not trip the guard.
-        let mut p = RenderSliverPadding::new(EdgeInsets::all(px(0.0)));
+        let mut p = RenderSliverPadding::new(EdgeInsets::all(0.0));
         assert_eq!(
-            p.set_padding(EdgeInsets::all(px(1.0))),
+            p.set_padding(EdgeInsets::all(1.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
         assert_eq!(
-            p.set_padding(EdgeInsets::all(px(0.0))),
+            p.set_padding(EdgeInsets::all(0.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
     }
@@ -582,7 +577,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "non-negative")]
     fn new_rejects_a_negative_inset() {
-        let _ = RenderSliverPadding::new(EdgeInsets::new(px(-1.0), px(0.0), px(0.0), px(0.0)));
+        let _ = RenderSliverPadding::new(EdgeInsets::new(-1.0, 0.0, 0.0, 0.0));
     }
 
     #[cfg(debug_assertions)]
@@ -590,7 +585,7 @@ mod tests {
     #[should_panic(expected = "non-negative")]
     fn set_padding_rejects_a_negative_inset() {
         let mut p = RenderSliverPadding::all(4.0);
-        let _ = p.set_padding(EdgeInsets::new(px(0.0), px(0.0), px(0.0), px(-2.0)));
+        let _ = p.set_padding(EdgeInsets::new(0.0, 0.0, 0.0, -2.0));
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -629,10 +624,10 @@ mod tests {
     #[test]
     fn resolve_picks_per_axis_padding_correctly() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(5.0),
-            bottom: px(20.0),
-            left: px(3.0),
+            top: 10.0,
+            right: 5.0,
+            bottom: 20.0,
+            left: 3.0,
         });
 
         // Vertical down scroll: main = top+bottom = 30, cross = left+right = 8.
@@ -685,10 +680,10 @@ mod tests {
     #[test]
     fn child_constraints_deflate_cross_axis_and_extend_preceding() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(5.0),
-            bottom: px(20.0),
-            left: px(3.0),
+            top: 10.0,
+            right: 5.0,
+            bottom: 20.0,
+            left: 3.0,
         });
         let parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
         let cc = p.child_constraints(&parent);
@@ -706,10 +701,10 @@ mod tests {
     #[test]
     fn child_constraints_reduce_positive_overlap_by_before_paint_padding() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(0.0),
-            bottom: px(0.0),
-            left: px(0.0),
+            top: 10.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
         });
         let mut parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
         parent.overlap = 30.0;
@@ -725,10 +720,10 @@ mod tests {
     #[test]
     fn child_constraints_use_effective_growth_direction_for_before_padding() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(0.0),
-            bottom: px(20.0),
-            left: px(0.0),
+            top: 10.0,
+            right: 0.0,
+            bottom: 20.0,
+            left: 0.0,
         });
         let mut parent = vertical_constraints(15.0, 200.0, 200.0, 300.0);
         parent.growth_direction = GrowthDirection::Reverse;
@@ -773,10 +768,10 @@ mod tests {
     #[test]
     fn padded_geometry_matches_flutter_formula() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(0.0),
-            bottom: px(20.0),
-            left: px(0.0),
+            top: 10.0,
+            right: 0.0,
+            bottom: 20.0,
+            left: 0.0,
         });
         let parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
         let child = child_geom(100.0, 80.0, 80.0, 80.0);
@@ -801,17 +796,17 @@ mod tests {
 
         // Vertical axis: paint_offset.x = cross_before (left = 0),
         // paint_offset.y = before_pad_paint (10).
-        assert_eq!(paint_offset.dx, px(0.0));
-        assert_eq!(paint_offset.dy, px(10.0));
+        assert_eq!(paint_offset.dx, 0.0);
+        assert_eq!(paint_offset.dy, 10.0);
     }
 
     #[test]
     fn padded_geometry_hit_test_extent_pairs_main_padding_with_paint_extent() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(0.0),
-            bottom: px(20.0),
-            left: px(0.0),
+            top: 10.0,
+            right: 0.0,
+            bottom: 20.0,
+            left: 0.0,
         });
         let parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
         let mut child = child_geom(100.0, 40.0, 40.0, 40.0);
@@ -829,10 +824,10 @@ mod tests {
     #[test]
     fn padded_geometry_cache_extent_adds_padding_cache_to_child_cache_extent() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(0.0),
-            bottom: px(20.0),
-            left: px(0.0),
+            top: 10.0,
+            right: 0.0,
+            bottom: 20.0,
+            left: 0.0,
         });
         let parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
         let child = child_geom(100.0, 80.0, 80.0, 5.0);
@@ -853,10 +848,10 @@ mod tests {
 
         // Horizontal scroll → cross axis is vertical → cross-before = top.
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(7.0),
-            right: px(20.0),
-            bottom: px(0.0),
-            left: px(10.0),
+            top: 7.0,
+            right: 20.0,
+            bottom: 0.0,
+            left: 10.0,
         });
         let parent = SliverConstraints::new(
             AxisDirection::LeftToRight,
@@ -878,17 +873,17 @@ mod tests {
 
         // Horizontal axis: paint_offset.x = before_pad_paint (left = 10),
         // paint_offset.y = cross_before (top = 7).
-        assert_eq!(paint_offset.dx, px(10.0));
-        assert_eq!(paint_offset.dy, px(7.0));
+        assert_eq!(paint_offset.dx, 10.0);
+        assert_eq!(paint_offset.dy, 7.0);
     }
 
     #[test]
     fn padded_geometry_with_partially_scrolled_leading_padding() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(0.0),
-            bottom: px(20.0),
-            left: px(0.0),
+            top: 10.0,
+            right: 0.0,
+            bottom: 20.0,
+            left: 0.0,
         });
         let parent = vertical_constraints(5.0, 200.0, 200.0, 300.0);
         let child = child_geom(100.0, 80.0, 80.0, 80.0);
@@ -897,17 +892,17 @@ mod tests {
 
         assert_eq!(geom.paint_extent, 105.0);
         assert_eq!(geom.layout_extent, 105.0);
-        assert_eq!(paint_offset.dy, px(5.0));
-        assert_eq!(paint_offset.dx, px(0.0));
+        assert_eq!(paint_offset.dy, 5.0);
+        assert_eq!(paint_offset.dx, 0.0);
     }
 
     #[test]
     fn padded_geometry_reverse_growth_child_paint_offset() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(0.0),
-            bottom: px(20.0),
-            left: px(0.0),
+            top: 10.0,
+            right: 0.0,
+            bottom: 20.0,
+            left: 0.0,
         });
         let mut parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
         parent.growth_direction = GrowthDirection::Reverse;
@@ -917,7 +912,7 @@ mod tests {
 
         // Reverse vertical growth uses bottom padding as leading; child is
         // positioned from the trailing end of the padded scroll extent.
-        assert_eq!(paint_offset.dy, px(10.0));
+        assert_eq!(paint_offset.dy, 10.0);
     }
 
     #[test]
@@ -934,10 +929,10 @@ mod tests {
     #[test]
     fn child_constraints_negative_overlap_passthrough() {
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(0.0),
-            bottom: px(0.0),
-            left: px(0.0),
+            top: 10.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
         });
         let mut parent = vertical_constraints(0.0, 200.0, 200.0, 300.0);
         parent.overlap = -12.0;
@@ -954,10 +949,10 @@ mod tests {
         use flui_rendering::traits::{RenderObject, RenderSliver};
 
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(0.0),
-            bottom: px(20.0),
-            left: px(3.0),
+            top: 10.0,
+            right: 0.0,
+            bottom: 20.0,
+            left: 3.0,
         });
         let constraints = vertical_constraints(5.0, 200.0, 200.0, 300.0);
         let child = NoopSliver;
@@ -987,10 +982,10 @@ mod tests {
         use flui_rendering::traits::{RenderObject, RenderSliver};
 
         let p = RenderSliverPadding::new(EdgeInsets {
-            top: px(10.0),
-            right: px(0.0),
-            bottom: px(20.0),
-            left: px(3.0),
+            top: 10.0,
+            right: 0.0,
+            bottom: 20.0,
+            left: 3.0,
         });
         let mut constraints = vertical_constraints(5.0, 200.0, 200.0, 300.0);
         constraints.growth_direction = GrowthDirection::Reverse;

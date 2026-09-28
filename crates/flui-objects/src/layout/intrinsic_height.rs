@@ -21,7 +21,7 @@
 //! the appropriate context channel — dry ≡ committed.
 
 use flui_foundation::Single;
-use flui_types::{Offset, Size, geometry::px};
+use flui_types::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -72,7 +72,7 @@ impl RenderIntrinsicHeight {
     /// for all three compute passes; only the ctx type differs.
     fn child_constraints(
         constraints: BoxConstraints,
-        mut intrinsic: impl FnMut(IntrinsicDimension, f32) -> f32,
+        mut intrinsic: impl FnMut(IntrinsicDimension, f64) -> f64,
     ) -> BoxConstraints {
         // Height axis — proxy_box.dart:816-819
         let height = if constraints.has_tight_height() {
@@ -81,10 +81,7 @@ impl RenderIntrinsicHeight {
         } else {
             // Raw query arg: constraints.max_width, not computed/snapped.
             // tighten will clamp to [min_height, max_height].
-            px(intrinsic(
-                IntrinsicDimension::MaxHeight,
-                constraints.max_width.get(),
-            ))
+            intrinsic(IntrinsicDimension::MaxHeight, constraints.max_width)
         };
         // Width axis: None = keep incoming width range.
         constraints.tighten(None, Some(height))
@@ -134,7 +131,7 @@ impl RenderBox for RenderIntrinsicHeight {
     // Width queries delegate to child; height queries use the tightened-height
     // child constraints to get the accurate value.
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -145,24 +142,24 @@ impl RenderBox for RenderIntrinsicHeight {
         let height = if height.is_finite() {
             height
         } else {
-            ctx.child_max_intrinsic_height(0, f32::INFINITY)
+            ctx.child_max_intrinsic_height(0, f64::INFINITY)
         };
         ctx.child_min_intrinsic_width(0, height)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         let height = if height.is_finite() {
             height
         } else {
-            ctx.child_max_intrinsic_height(0, f32::INFINITY)
+            ctx.child_max_intrinsic_height(0, f64::INFINITY)
         };
         ctx.child_max_intrinsic_width(0, height)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -171,7 +168,7 @@ impl RenderBox for RenderIntrinsicHeight {
         ctx.child_max_intrinsic_height(0, width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -202,7 +199,7 @@ impl RenderBox for RenderIntrinsicHeight {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -222,21 +219,20 @@ impl RenderBox for RenderIntrinsicHeight {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::geometry::px;
 
-    fn bc(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
-        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
+        BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
     #[test]
     fn child_constraints_tight_height_not_queried() {
         // When incoming height is tight, the closure must NOT be called.
-        let constraints = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
+        let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
         let child_c = RenderIntrinsicHeight::child_constraints(constraints, |_, _| {
             panic!("intrinsic queried on tight height")
         });
         assert!(child_c.has_tight_height());
-        assert_eq!(child_c.min_height, px(50.0));
+        assert_eq!(child_c.min_height, 50.0);
     }
 
     #[test]
@@ -245,7 +241,7 @@ mod tests {
         let constraints = bc(0.0, 200.0, 20.0, 80.0);
         let child_c = RenderIntrinsicHeight::child_constraints(constraints, |_, _| 150.0);
         assert!(child_c.has_tight_height());
-        assert_eq!(child_c.min_height, px(80.0));
+        assert_eq!(child_c.min_height, 80.0);
     }
 
     #[test]
@@ -254,14 +250,14 @@ mod tests {
         let constraints = bc(0.0, 200.0, 20.0, 80.0);
         let child_c = RenderIntrinsicHeight::child_constraints(constraints, |_, _| 60.0);
         assert!(child_c.has_tight_height());
-        assert_eq!(child_c.min_height, px(60.0));
+        assert_eq!(child_c.min_height, 60.0);
     }
 
     #[test]
     fn child_constraints_height_raw_arg_is_max_width() {
         // The height query arg must be constraints.max_width (raw).
         let constraints = bc(0.0, 120.0, 0.0, 200.0);
-        let mut saw_extent = f32::NAN;
+        let mut saw_extent = f64::NAN;
         RenderIntrinsicHeight::child_constraints(constraints, |dim, extent| {
             assert_eq!(dim, IntrinsicDimension::MaxHeight);
             saw_extent = extent;

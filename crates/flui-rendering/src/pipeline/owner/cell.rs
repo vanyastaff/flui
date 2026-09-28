@@ -285,7 +285,7 @@ mod tests {
     // raw `layout_dirty_root` call the older `subtree_arena` walks use.
 
     use flui_foundation::Exact;
-    use flui_types::{Color, Point, Rect, Size, geometry::px};
+    use flui_types::{Color, Point, Rect, Size};
 
     use crate::{
         constraints::BoxConstraints,
@@ -360,7 +360,7 @@ mod tests {
             .insert_child_render_object(
                 root,
                 Box::new(FrameLeaf {
-                    size: Size::new(px(10.0), px(10.0)),
+                    size: Size::new(10.0, 10.0),
                 }),
             )
             .expect("first leaf child insert");
@@ -368,12 +368,12 @@ mod tests {
             .insert_child_render_object(
                 root,
                 Box::new(FrameLeaf {
-                    size: Size::new(px(10.0), px(10.0)),
+                    size: Size::new(10.0, 10.0),
                 }),
             )
             .expect("second leaf child insert");
         owner.set_root_id(Some(root));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(20.0), px(20.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(20.0, 20.0))));
 
         let cell = PipelineCell::new(owner);
 

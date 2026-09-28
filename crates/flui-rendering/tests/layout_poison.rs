@@ -35,7 +35,7 @@ use flui_rendering::{
     testing::{FrameRun, Probe, RenderTester, box_node, sliver_node},
     traits::{HitTestOutcome, RenderBox, RenderObject, RenderSliver},
 };
-use flui_types::{Matrix4, Size, geometry::px};
+use flui_types::{Matrix4, Size};
 
 // ============================================================================
 // FlakyLeaf — a leaf render object that fails layout on demand
@@ -78,7 +78,7 @@ impl RenderObject<BoxProtocol> for FlakyLeaf {
                 FailMode::Retriable => RenderError::invalid_constraints("transient failure"),
             });
         }
-        Ok(Size::new(px(40.0), px(40.0)))
+        Ok(Size::new(40.0, 40.0))
     }
 
     fn paint_raw(
@@ -123,10 +123,7 @@ fn mount_failing(mode: FailMode) -> (FrameRun, RenderId, RenderId, Arc<AtomicUsi
         ),
     )
     .with_constraints(flui_rendering::constraints::BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
+        0.0, 200.0, 0.0, 200.0,
     ))
     .run_frame();
     let leaf = run.id("leaf");
@@ -205,12 +202,12 @@ fn fresh_invalidation_lifts_poison_and_layout_recovers() {
     );
     assert_eq!(
         run.box_geometry(leaf),
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
         "the recovered leaf lays out at its real size",
     );
     assert_eq!(
         run.box_geometry(root),
-        Size::new(px(50.0), px(50.0)),
+        Size::new(50.0, 50.0),
         "the parent reflows around the recovered child (40 + 2×5 padding)",
     );
 
@@ -244,7 +241,7 @@ fn single_transient_failure_does_not_poison() {
     run.update::<FlakyLeaf>(leaf, |leaf| leaf.fail = false);
     run.pump();
     assert_eq!(attempts.load(Ordering::Relaxed), 3);
-    assert_eq!(run.box_geometry(leaf), Size::new(px(40.0), px(40.0)));
+    assert_eq!(run.box_geometry(leaf), Size::new(40.0, 40.0));
     run.pump_idle_frames(2);
 }
 
@@ -308,10 +305,7 @@ fn structural_failure_at_dirty_root_poisons_and_bounds_retries() {
     }));
     owner.set_root_id(Some(root));
     owner.set_root_constraints(Some(flui_rendering::constraints::BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
+        0.0, 200.0, 0.0, 200.0,
     )));
 
     // Frame 1: the first structural failure surfaces the error AND
@@ -416,7 +410,7 @@ impl RenderBox for IntrinsicProbingParent {
         let probed = ctx.child_intrinsic(0, IntrinsicDimension::MinWidth, 100.0);
         let child_size = ctx.layout_child(0, *ctx.constraints());
         let width = if probed > 0.0 {
-            px(probed)
+            probed
         } else {
             child_size.width
         };
@@ -444,17 +438,17 @@ impl RenderObject<BoxProtocol> for CountingIntrinsicBox {
         &mut self,
         _ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
-        Ok(Size::new(px(40.0), px(40.0)))
+        Ok(Size::new(40.0, 40.0))
     }
 
     fn intrinsic_raw(
         &self,
         dimension: IntrinsicDimension,
-        extent: f32,
+        extent: f64,
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
-        child_query: &mut dyn FnMut(usize, IntrinsicDimension, f32) -> f32,
-    ) -> f32 {
+        child_query: &mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
+    ) -> f64 {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         if self.fail {
             child_query(0, dimension, extent)
@@ -501,7 +495,7 @@ fn mount_failing_intrinsic() -> (FrameRun, RenderId, RenderId, Arc<AtomicUsize>)
             .child(sliver_node(StubLeafSliver)),
         ),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
     .run_frame();
     let measured = run.id("measured");
     let root = run.root();
@@ -577,7 +571,7 @@ fn fresh_invalidation_lifts_intrinsic_poison_and_recovers() {
     );
     assert_eq!(
         run.box_geometry(root),
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
         "the parent sizes itself from the recovered 40px intrinsic",
     );
 
@@ -623,12 +617,7 @@ fn transient_intrinsic_failure_does_not_poison() {
         .expect("measured in tree")
         .add_child(RenderId::new(999));
     owner.set_root_id(Some(parent));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     // Frame 1: the probe fails once (retriable) — no poison.
     let (o, result) = owner.run_frame();
@@ -759,7 +748,7 @@ impl RenderObject<BoxProtocol> for UnboundedHatingLeaf {
         if ctx.constraints().max_width.is_infinite() {
             return Err(RenderError::unbounded_constraint("UnboundedHatingLeaf"));
         }
-        Ok(Size::new(px(40.0), px(40.0)))
+        Ok(Size::new(40.0, 40.0))
     }
 
     fn paint_raw(
@@ -805,9 +794,9 @@ impl RenderObject<BoxProtocol> for WidthSwitchParent {
         ctx: &mut <BoxProtocol as flui_rendering::protocol::Protocol>::LayoutCtxErased<'_>,
     ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
         let child_constraints = if self.unbounded {
-            BoxConstraints::new(px(0.0), px(f32::INFINITY), px(0.0), px(200.0))
+            BoxConstraints::new(0.0, f64::INFINITY, 0.0, 200.0)
         } else {
-            BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0))
+            BoxConstraints::new(0.0, 200.0, 0.0, 200.0)
         };
         let size = ctx.layout_child(0, child_constraints);
         Ok(size)
@@ -854,7 +843,7 @@ fn constraints_change_grants_poisoned_node_one_fresh_attempt() {
                 .label("leaf"),
             ),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
     .run_frame();
     let parent = run.id("parent");
     let leaf = run.id("leaf");
@@ -888,7 +877,7 @@ fn constraints_change_grants_poisoned_node_one_fresh_attempt() {
     );
     assert_eq!(
         run.box_geometry(leaf),
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
         "the leaf recovers under valid constraints",
     );
 
@@ -912,7 +901,7 @@ fn constraint_independent_poison_stays_skipped_under_new_constraints() {
             .label("leaf"),
         ),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
     .run_frame();
     let root = run.root();
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
@@ -924,12 +913,7 @@ fn constraint_independent_poison_stays_skipped_under_new_constraints() {
     // input-independent failure. That attempt fails again and the node
     // re-poisons — exactly one bounded retry per resize, not a storm.
     run.owner_mut()
-        .set_root_constraints(Some(BoxConstraints::new(
-            px(0.0),
-            px(150.0),
-            px(0.0),
-            px(150.0),
-        )));
+        .set_root_constraints(Some(BoxConstraints::new(0.0, 150.0, 0.0, 150.0)));
     run.pump();
     assert_eq!(
         attempts.load(Ordering::Relaxed),
@@ -941,12 +925,7 @@ fn constraint_independent_poison_stays_skipped_under_new_constraints() {
     // A second resize to yet another size grants one more attempt
     // (inputs changed again) — still failing, still bounded.
     run.owner_mut()
-        .set_root_constraints(Some(BoxConstraints::new(
-            px(0.0),
-            px(100.0),
-            px(0.0),
-            px(100.0),
-        )));
+        .set_root_constraints(Some(BoxConstraints::new(0.0, 100.0, 0.0, 100.0)));
     run.pump();
     assert_eq!(attempts.load(Ordering::Relaxed), 3);
 
@@ -1064,8 +1043,8 @@ fn node(run: &FrameRun, id: RenderId) -> &RenderNode {
 ///   completely different reason (a second real attempt, not a skip).
 #[test]
 fn a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero() {
-    let s1 = Size::new(px(30.0), px(40.0));
-    let s2 = Size::new(px(50.0), px(60.0));
+    let s1 = Size::new(30.0, 40.0);
+    let s2 = Size::new(50.0, 60.0);
 
     let calls = Arc::new(AtomicUsize::new(0));
     let panic = Arc::new(AtomicBool::new(false));
@@ -1083,14 +1062,14 @@ fn a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero() {
             ),
         ),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
     .run_frame();
     let parent = run.id("parent");
     let leaf = run.id("leaf");
 
     // Pass 1: the leaf lays out cleanly and commits S1.
     assert_eq!(node(&run, leaf).geometry_box(), Some(s1));
-    assert_eq!(run.box_geometry(parent), Size::new(px(40.0), px(50.0)));
+    assert_eq!(run.box_geometry(parent), Size::new(40.0, 50.0));
     assert_eq!(calls.load(Ordering::Relaxed), 1);
     assert!(!node(&run, parent).geometry_degraded());
 
@@ -1111,7 +1090,7 @@ fn a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero() {
     assert!(run.owner().is_layout_poisoned(leaf));
     assert_eq!(calls.load(Ordering::Relaxed), 2);
     assert!(node(&run, parent).geometry_degraded());
-    assert_eq!(run.box_geometry(parent), Size::new(px(10.0), px(10.0)));
+    assert_eq!(run.box_geometry(parent), Size::new(10.0, 10.0));
 
     // Pass 3: fix the condition (the leaf would now succeed at S2 if
     // re-attempted) but re-invalidate only the PARENT — not the leaf (that
@@ -1134,7 +1113,7 @@ fn a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero() {
         "the poisoned leaf's stand-in is its last committed size, not the \
          value it would produce now if re-attempted",
     );
-    assert_eq!(run.box_geometry(parent), Size::new(px(40.0), px(50.0)));
+    assert_eq!(run.box_geometry(parent), Size::new(40.0, 50.0));
     assert!(node(&run, parent).geometry_degraded());
     assert!(run.owner().is_layout_poisoned(leaf));
 }
@@ -1151,7 +1130,7 @@ fn a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero() {
 fn a_leaf_that_never_committed_stands_in_with_zero() {
     let calls = Arc::new(AtomicUsize::new(0));
     let panic = Arc::new(AtomicBool::new(true));
-    let size_on_success = Arc::new(Mutex::new(Size::new(px(30.0), px(40.0))));
+    let size_on_success = Arc::new(Mutex::new(Size::new(30.0, 40.0)));
 
     let mut run = RenderTester::mount(
         box_node(RenderPadding::all(5.0)).label("root").child(
@@ -1165,7 +1144,7 @@ fn a_leaf_that_never_committed_stands_in_with_zero() {
             ),
         ),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
     .run_frame();
     let parent = run.id("parent");
     let leaf = run.id("leaf");
@@ -1173,7 +1152,7 @@ fn a_leaf_that_never_committed_stands_in_with_zero() {
     // Pass 1: the leaf fails its very first-ever attempt — nothing has
     // committed, so there is nothing to retain.
     assert_eq!(node(&run, leaf).geometry_box(), None);
-    assert_eq!(run.box_geometry(parent), Size::new(px(10.0), px(10.0)));
+    assert_eq!(run.box_geometry(parent), Size::new(10.0, 10.0));
     assert!(node(&run, parent).geometry_degraded());
     assert_eq!(calls.load(Ordering::Relaxed), 1);
     assert!(run.owner().is_layout_poisoned(leaf));
@@ -1189,7 +1168,7 @@ fn a_leaf_that_never_committed_stands_in_with_zero() {
         1,
         "the poisoned leaf must not be re-attempted",
     );
-    assert_eq!(run.box_geometry(parent), Size::new(px(10.0), px(10.0)));
+    assert_eq!(run.box_geometry(parent), Size::new(10.0, 10.0));
     assert!(node(&run, parent).geometry_degraded());
     assert_eq!(node(&run, leaf).geometry_box(), None);
 }

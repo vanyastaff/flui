@@ -20,7 +20,7 @@ use flui_rendering::{
     constraints::BoxConstraints, hit_testing::HitTestResult, pipeline::PipelineOwner,
     storage::IntrinsicDimension,
 };
-use flui_types::{Offset, Size, geometry::px};
+use flui_types::{Offset, Size};
 
 use crate::common::BoxedRenderObject;
 
@@ -45,12 +45,7 @@ fn deep_chain_survives_layout_paint_and_hit_walks() {
     owner.set_root_id(Some(root));
     // Loose constraints big enough that 2500 nested 1px paddings leave
     // room for the 10×10 leaf.
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(6000.0),
-        px(0.0),
-        px(6000.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 6000.0, 0.0, 6000.0)));
 
     let (owner, result) = owner.run_frame();
     let tree = result
@@ -61,7 +56,7 @@ fn deep_chain_survives_layout_paint_and_hit_walks() {
     // Hit straight through all 2500 paddings into the leaf
     // (leaf-first path, paddings are hit-transparent).
     let mut hits = HitTestResult::new();
-    let offset = px(DEPTH as f32) + px(5.0);
+    let offset = (DEPTH as f64) + 5.0;
     owner.hit_test(Offset::new(offset, offset), &mut hits);
     assert_eq!(
         hits.path().first().map(|e| e.target),
@@ -145,7 +140,7 @@ fn deep_chain_survives_subtree_disposal() {
 #[cfg_attr(miri, ignore = "plain-recursion fallback; depth covered natively")]
 fn deep_chain_survives_intrinsic_and_dry_layout_queries() {
     let mut owner = PipelineOwner::new();
-    let loose = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
+    let loose = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
     let root = owner.insert(Box::new(RenderConstrainedBox::new(loose)) as BoxedRenderObject);
     let mut parent = root;
     for _ in 1..DEPTH {
@@ -170,14 +165,11 @@ fn deep_chain_survives_intrinsic_and_dry_layout_queries() {
     // What matters here is that child-forwarding recursion reaches the
     // leaf through 2500 levels without exhausting the stack.
     let size = owner
-        .box_dry_layout(
-            root,
-            BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0)),
-        )
+        .box_dry_layout(root, BoxConstraints::new(0.0, 100.0, 0.0, 100.0))
         .expect("deep dry-layout query must not error");
     assert_eq!(
         size,
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
         "the chain must forward the leaf's dry layout answer unchanged",
     );
 }

@@ -16,7 +16,7 @@ use flui_rendering::{
     traits::RenderSliver,
     view::{ScrollableViewportOffset, SliverPaintOrder, ViewportOffset},
 };
-use flui_types::{Offset, Size, geometry::px, layout::AxisDirection};
+use flui_types::{Offset, Size, layout::AxisDirection};
 
 use crate::common::{BoxedSliverObject, laid_out_tight_100x100 as laid_out};
 
@@ -29,16 +29,16 @@ fn render_offset(
 
 fn hits(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    cross: f32,
-    main: f32,
+    cross: f64,
+    main: f64,
 ) -> Vec<flui_foundation::RenderId> {
     hits_at(owner, cross, main)
 }
 
 fn hits_at(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    x: f32,
-    y: f32,
+    x: f64,
+    y: f64,
 ) -> Vec<flui_foundation::RenderId> {
     inspect::hit_path(owner, x, y)
 }
@@ -80,18 +80,18 @@ fn fixed_sliver_from_owner(
 
 #[derive(Debug)]
 struct FixedSliver {
-    scroll_extent: f32,
-    paint_extent: f32,
-    layout_extent: Option<f32>,
+    scroll_extent: f64,
+    paint_extent: f64,
+    layout_extent: Option<f64>,
     /// Cross-axis extent captured at layout, read by the `&self`-only
     /// `hit_test_self` (the sliver hit-test context does not carry it).
-    cross_axis_extent: f32,
+    cross_axis_extent: f64,
     /// When `Some`, updated each layout with the child's growth direction.
     recorded_growth_direction: Option<GrowthDirection>,
 }
 
 impl FixedSliver {
-    fn new(scroll_extent: f32) -> Self {
+    fn new(scroll_extent: f64) -> Self {
         Self {
             scroll_extent,
             paint_extent: scroll_extent,
@@ -101,14 +101,14 @@ impl FixedSliver {
         }
     }
 
-    fn recording_growth(scroll_extent: f32) -> Self {
+    fn recording_growth(scroll_extent: f64) -> Self {
         Self {
             recorded_growth_direction: Some(GrowthDirection::Forward),
             ..Self::new(scroll_extent)
         }
     }
 
-    fn with_extents(scroll_extent: f32, paint_extent: f32, layout_extent: f32) -> Self {
+    fn with_extents(scroll_extent: f64, paint_extent: f64, layout_extent: f64) -> Self {
         Self {
             scroll_extent,
             paint_extent,
@@ -160,7 +160,7 @@ impl RenderSliver for FixedSliver {
         self.hit_test_self(ctx.main_axis(), ctx.cross_axis())
     }
 
-    fn hit_test_self(&self, main: f32, cross: f32) -> bool {
+    fn hit_test_self(&self, main: f64, cross: f64) -> bool {
         cross >= 0.0 && cross < self.cross_axis_extent && main >= 0.0
     }
 }
@@ -189,7 +189,7 @@ impl RenderSliver for InvisibleHitSliver {
         }
     }
 
-    fn hit_test_self(&self, main: f32, cross: f32) -> bool {
+    fn hit_test_self(&self, main: f64, cross: f64) -> bool {
         // The geometry's hit_test_extent is the fixed 100.0 this double reports.
         (0.0..100.0).contains(&main) && cross >= 0.0
     }
@@ -197,16 +197,16 @@ impl RenderSliver for InvisibleHitSliver {
 
 #[derive(Debug)]
 struct MainAxisBandSliver {
-    extent: f32,
-    hit_start: f32,
-    hit_end: f32,
+    extent: f64,
+    hit_start: f64,
+    hit_end: f64,
     /// Cross-axis extent captured at layout, read by the `&self`-only
     /// `hit_test_self` (the sliver hit-test context does not carry it).
-    cross_axis_extent: f32,
+    cross_axis_extent: f64,
 }
 
 impl MainAxisBandSliver {
-    fn new(extent: f32, hit_start: f32, hit_end: f32) -> Self {
+    fn new(extent: f64, hit_start: f64, hit_end: f64) -> Self {
         Self {
             extent,
             hit_start,
@@ -241,7 +241,7 @@ impl RenderSliver for MainAxisBandSliver {
         }
     }
 
-    fn hit_test_self(&self, main: f32, cross: f32) -> bool {
+    fn hit_test_self(&self, main: f64, cross: f64) -> bool {
         main >= self.hit_start
             && main < self.hit_end
             && cross >= 0.0
@@ -251,23 +251,23 @@ impl RenderSliver for MainAxisBandSliver {
 
 #[derive(Debug)]
 struct GeometrySliver {
-    scroll_extent: f32,
-    paint_origin: f32,
-    paint_extent: f32,
-    layout_extent: f32,
-    hit_test_extent: f32,
+    scroll_extent: f64,
+    paint_origin: f64,
+    paint_extent: f64,
+    layout_extent: f64,
+    hit_test_extent: f64,
     /// Cross-axis extent captured at layout, read by the `&self`-only
     /// `hit_test_self` (the sliver hit-test context does not carry it).
-    cross_axis_extent: f32,
+    cross_axis_extent: f64,
 }
 
 impl GeometrySliver {
     fn new(
-        scroll_extent: f32,
-        paint_origin: f32,
-        paint_extent: f32,
-        layout_extent: f32,
-        hit_test_extent: f32,
+        scroll_extent: f64,
+        paint_origin: f64,
+        paint_extent: f64,
+        layout_extent: f64,
+        hit_test_extent: f64,
     ) -> Self {
         Self {
             scroll_extent,
@@ -304,19 +304,19 @@ impl RenderSliver for GeometrySliver {
         }
     }
 
-    fn hit_test_self(&self, main: f32, cross: f32) -> bool {
+    fn hit_test_self(&self, main: f64, cross: f64) -> bool {
         main >= 0.0 && main < self.hit_test_extent && cross >= 0.0 && cross < self.cross_axis_extent
     }
 }
 
 #[derive(Debug)]
 struct CorrectingSliver {
-    correction: f32,
+    correction: f64,
     corrected: bool,
 }
 
 impl CorrectingSliver {
-    fn new(correction: f32) -> Self {
+    fn new(correction: f64) -> Self {
         Self {
             correction,
             corrected: false,
@@ -358,12 +358,12 @@ impl RenderSliver for CorrectingSliver {
 
 #[derive(Debug)]
 struct CountingSliver {
-    scroll_extent: f32,
+    scroll_extent: f64,
     layouts: Arc<AtomicUsize>,
 }
 
 impl CountingSliver {
-    fn new(scroll_extent: f32, layouts: Arc<AtomicUsize>) -> Self {
+    fn new(scroll_extent: f64, layouts: Arc<AtomicUsize>) -> Self {
         Self {
             scroll_extent,
             layouts,
@@ -405,15 +405,15 @@ impl RenderSliver for CountingSliver {
 
 #[derive(Debug)]
 struct OutOfBandSliver {
-    scroll_extent: f32,
-    max_scroll_obstruction_extent: f32,
+    scroll_extent: f64,
+    max_scroll_obstruction_extent: f64,
     has_visual_overflow: bool,
 }
 
 impl OutOfBandSliver {
     fn new(
-        scroll_extent: f32,
-        max_scroll_obstruction_extent: f32,
+        scroll_extent: f64,
+        max_scroll_obstruction_extent: f64,
         has_visual_overflow: bool,
     ) -> Self {
         Self {
@@ -454,14 +454,14 @@ impl RenderSliver for OutOfBandSliver {
 
 #[derive(Debug)]
 struct DynamicOutOfBandSliver {
-    scroll_extent: f32,
+    scroll_extent: f64,
     max_scroll_obstruction_extent: Arc<AtomicUsize>,
     has_visual_overflow: Arc<AtomicBool>,
 }
 
 impl DynamicOutOfBandSliver {
     fn new(
-        scroll_extent: f32,
+        scroll_extent: f64,
         max_scroll_obstruction_extent: Arc<AtomicUsize>,
         has_visual_overflow: Arc<AtomicBool>,
     ) -> Self {
@@ -492,7 +492,7 @@ impl RenderSliver for DynamicOutOfBandSliver {
             layout_extent: paint_extent,
             max_paint_extent: self.scroll_extent,
             max_scroll_obstruction_extent: self.max_scroll_obstruction_extent.load(Ordering::SeqCst)
-                as f32,
+                as f64,
             hit_test_extent: paint_extent,
             cache_extent,
             visible: paint_extent > 0.0,
@@ -544,18 +544,18 @@ fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
         })
         .expect("root is RenderViewport");
 
-    assert_eq!(laid_out_size, Size::new(px(100.0), px(100.0)));
+    assert_eq!(laid_out_size, Size::new(100.0, 100.0));
     assert_eq!(viewport.offset().viewport_dimension(), 100.0);
     assert_eq!(viewport.offset().max_scroll_extent(), 60.0);
     assert_eq!(viewport.offset().pixels(), 40.0);
     assert_eq!(
         render_offset(&owner, first_id),
-        Offset::new(px(0.0), px(0.0)),
+        Offset::new(0.0, 0.0),
         "first forward sliver paints at the viewport origin when scroll_offset is consumed by constraints",
     );
     assert_eq!(
         render_offset(&owner, second_id),
-        Offset::new(px(0.0), px(30.0)),
+        Offset::new(0.0, 30.0),
         "second sliver advances by first.layout_extent after the first sliver consumes 40px of scroll",
     );
 }
@@ -774,42 +774,42 @@ fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
         (
             AxisDirection::TopToBottom,
             GrowthDirection::Forward,
-            Offset::new(px(0.0), px(0.0)),
+            Offset::new(0.0, 0.0),
         ),
         (
             AxisDirection::TopToBottom,
             GrowthDirection::Reverse,
-            Offset::new(px(0.0), px(60.0)),
+            Offset::new(0.0, 60.0),
         ),
         (
             AxisDirection::BottomToTop,
             GrowthDirection::Forward,
-            Offset::new(px(0.0), px(60.0)),
+            Offset::new(0.0, 60.0),
         ),
         (
             AxisDirection::BottomToTop,
             GrowthDirection::Reverse,
-            Offset::new(px(0.0), px(0.0)),
+            Offset::new(0.0, 0.0),
         ),
         (
             AxisDirection::LeftToRight,
             GrowthDirection::Forward,
-            Offset::new(px(0.0), px(0.0)),
+            Offset::new(0.0, 0.0),
         ),
         (
             AxisDirection::LeftToRight,
             GrowthDirection::Reverse,
-            Offset::new(px(60.0), px(0.0)),
+            Offset::new(60.0, 0.0),
         ),
         (
             AxisDirection::RightToLeft,
             GrowthDirection::Forward,
-            Offset::new(px(60.0), px(0.0)),
+            Offset::new(60.0, 0.0),
         ),
         (
             AxisDirection::RightToLeft,
             GrowthDirection::Reverse,
-            Offset::new(px(0.0), px(0.0)),
+            Offset::new(0.0, 0.0),
         ),
     ];
 
@@ -908,10 +908,7 @@ fn viewport_reverse_section_passes_reverse_growth_to_slivers() {
         GrowthDirection::Reverse,
         "reverse-side viewport children must receive GrowthDirection::Reverse",
     );
-    assert_eq!(
-        render_offset(&owner, sliver_id),
-        Offset::new(px(0.0), px(60.0))
-    );
+    assert_eq!(render_offset(&owner, sliver_id), Offset::new(0.0, 60.0));
 }
 
 // Under FLUI's old `center_sliver_index`, `Some(1)` meant "children [0,1)
@@ -966,8 +963,8 @@ fn viewport_center_partition_lays_out_forward_then_reverse() {
 
     assert_eq!(rev.last_growth_direction(), GrowthDirection::Reverse);
     assert_eq!(fwd.last_growth_direction(), GrowthDirection::Forward);
-    assert_eq!(render_offset(&owner, s0), Offset::new(px(0.0), px(20.0)));
-    assert_eq!(render_offset(&owner, s1), Offset::new(px(0.0), px(50.0)));
+    assert_eq!(render_offset(&owner, s0), Offset::new(0.0, 20.0));
+    assert_eq!(render_offset(&owner, s1), Offset::new(0.0, 50.0));
 }
 
 // A lone reverse sliver (FLUI's old `center_sliver_index(Some(0))` == "all
@@ -1034,26 +1031,26 @@ fn viewport_hit_test_maps_each_axis_direction_into_sliver_main_axis() {
         (
             AxisDirection::TopToBottom,
             None,
-            Offset::new(px(10.0), px(10.0)),
-            Offset::new(px(10.0), px(30.0)),
+            Offset::new(10.0, 10.0),
+            Offset::new(10.0, 30.0),
         ),
         (
             AxisDirection::BottomToTop,
             None,
-            Offset::new(px(10.0), px(90.0)),
-            Offset::new(px(10.0), px(70.0)),
+            Offset::new(10.0, 90.0),
+            Offset::new(10.0, 70.0),
         ),
         (
             AxisDirection::LeftToRight,
             None,
-            Offset::new(px(10.0), px(10.0)),
-            Offset::new(px(30.0), px(10.0)),
+            Offset::new(10.0, 10.0),
+            Offset::new(30.0, 10.0),
         ),
         (
             AxisDirection::RightToLeft,
             None,
-            Offset::new(px(90.0), px(10.0)),
-            Offset::new(px(70.0), px(10.0)),
+            Offset::new(90.0, 10.0),
+            Offset::new(70.0, 10.0),
         ),
     ];
     // `Some(1)` + `anchor: 1.0`, not `Some(0)`: a lone reverse-growth sliver
@@ -1069,26 +1066,26 @@ fn viewport_hit_test_maps_each_axis_direction_into_sliver_main_axis() {
         (
             AxisDirection::TopToBottom,
             Some(1),
-            Offset::new(px(10.0), px(90.0)),
-            Offset::new(px(10.0), px(70.0)),
+            Offset::new(10.0, 90.0),
+            Offset::new(10.0, 70.0),
         ),
         (
             AxisDirection::BottomToTop,
             Some(1),
-            Offset::new(px(10.0), px(10.0)),
-            Offset::new(px(10.0), px(30.0)),
+            Offset::new(10.0, 10.0),
+            Offset::new(10.0, 30.0),
         ),
         (
             AxisDirection::LeftToRight,
             Some(1),
-            Offset::new(px(90.0), px(10.0)),
-            Offset::new(px(70.0), px(10.0)),
+            Offset::new(90.0, 10.0),
+            Offset::new(70.0, 10.0),
         ),
         (
             AxisDirection::RightToLeft,
             Some(1),
-            Offset::new(px(10.0), px(10.0)),
-            Offset::new(px(30.0), px(10.0)),
+            Offset::new(10.0, 10.0),
+            Offset::new(30.0, 10.0),
         ),
     ];
 
@@ -1133,12 +1130,12 @@ fn viewport_hit_test_maps_each_axis_direction_into_sliver_main_axis() {
         let owner = laid_out(owner, root_id);
 
         assert_eq!(
-            hits_at(&owner, hit_position.dx.get(), hit_position.dy.get()),
+            hits_at(&owner, hit_position.dx, hit_position.dy),
             vec![sliver_id, root_id],
             "{axis_direction:?} center={center:?} must map the leading hit band into sliver main-axis space",
         );
         assert!(
-            hits_at(&owner, miss_position.dx.get(), miss_position.dy.get()).is_empty(),
+            hits_at(&owner, miss_position.dx, miss_position.dy).is_empty(),
             "{axis_direction:?} center={center:?} must miss outside the sliver's leading hit band",
         );
     }
@@ -1166,7 +1163,7 @@ fn viewport_hit_testing_tracks_paint_origin_and_hit_test_extent() {
 
     assert_eq!(
         render_offset(&owner, sliver_id),
-        Offset::new(px(0.0), px(20.0)),
+        Offset::new(0.0, 20.0),
         "paint_origin shifts the physical sliver paint offset",
     );
     assert_eq!(
@@ -1353,7 +1350,7 @@ fn viewport_hit_test_flips_reverse_axis_into_sliver_main_axis() {
 
     assert_eq!(
         render_offset(&owner, sliver_id),
-        Offset::new(px(0.0), px(60.0)),
+        Offset::new(0.0, 60.0),
         "bottom-to-top viewport paints the first 40px sliver at the bottom edge",
     );
     assert_eq!(

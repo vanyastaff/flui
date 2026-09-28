@@ -83,7 +83,7 @@ impl Default for SemanticsBuilder {
 ///
 /// #[derive(Debug)]
 /// struct CheckerboardPainter {
-///     cell_size: f32,
+///     cell_size: f64,
 /// }
 ///
 /// impl CustomPainter for CheckerboardPainter {

@@ -24,7 +24,7 @@ use flui_rendering::{
     storage::IntrinsicDimension,
     traits::RenderBox,
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 use crate::common::BoxedRenderObject;
 
@@ -56,14 +56,14 @@ impl RenderBox for CountingLeaf {
     type ParentData = flui_rendering::parent_data::BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
-        ctx.constraints().constrain(Size::new(px(40.0), px(40.0)))
+        ctx.constraints().constrain(Size::new(40.0, 40.0))
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         false
     }
 
-    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_runs.fetch_add(1, Ordering::Relaxed);
         40.0
     }
@@ -74,7 +74,7 @@ impl RenderBox for CountingLeaf {
         _ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> Size {
         self.dry_runs.fetch_add(1, Ordering::Relaxed);
-        constraints.constrain(Size::new(px(40.0), px(40.0)))
+        constraints.constrain(Size::new(40.0, 40.0))
     }
 }
 
@@ -114,8 +114,8 @@ impl RenderBox for CountingRoot {
         false
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        let mut max = 0.0f32;
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        let mut max = 0.0_f64;
         for i in 0..ctx.child_count() {
             max = max.max(ctx.child_min_intrinsic_width(i, height));
         }
@@ -152,10 +152,7 @@ fn fixture() -> Fixture {
         .insert_child_render_object(
             root,
             Box::new(RenderConstrainedBox::new(BoxConstraints::new(
-                px(0.0),
-                px(500.0),
-                px(0.0),
-                px(500.0),
+                0.0, 500.0, 0.0, 500.0,
             ))),
         )
         .expect("mid insert");
@@ -169,7 +166,7 @@ fn fixture() -> Fixture {
         )
         .expect("leaf insert");
     owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(300.0), px(300.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(300.0, 300.0))));
 
     Fixture {
         owner,
@@ -345,14 +342,14 @@ fn cached_intrinsics_escalate_past_the_boundary() {
 fn dry_layout_flows_through_real_objects_and_memoizes() {
     let mut f = fixture();
 
-    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
     let size = f
         .owner
         .box_dry_layout(f.mid, constraints)
         .expect("dry layout");
     assert_eq!(
         size,
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
         "ConstrainedBox forwards the leaf's 40×40 dry size through its \
          loose additional constraints"
     );
@@ -362,12 +359,12 @@ fn dry_layout_flows_through_real_objects_and_memoizes() {
         .owner
         .box_dry_layout(f.mid, constraints)
         .expect("dry layout re-query");
-    assert_eq!(size, Size::new(px(40.0), px(40.0)));
+    assert_eq!(size, Size::new(40.0, 40.0));
     assert_eq!(f.dry_runs.load(Ordering::Relaxed), 1, "memoized");
 
     // Different constraints are a different key.
     f.owner
-        .box_dry_layout(f.mid, BoxConstraints::tight(Size::new(px(80.0), px(80.0))))
+        .box_dry_layout(f.mid, BoxConstraints::tight(Size::new(80.0, 80.0)))
         .expect("dry layout new key");
     assert_eq!(f.dry_runs.load(Ordering::Relaxed), 2);
 }
@@ -394,7 +391,7 @@ fn dry_baseline_flows_through_padding_and_memoizes() {
         )
         .expect("text child");
 
-    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
     let leaf_baseline = owner
         .box_dry_baseline(text_id, constraints, TextBaseline::Alphabetic)
         .expect("leaf dry baseline")
@@ -438,7 +435,7 @@ fn passthrough_proxy_forwards_intrinsics_and_dry_layout() {
         )
         .expect("leaf under opacity");
 
-    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
 
     let width = owner
         .box_intrinsic_dimension(proxy_id, IntrinsicDimension::MinWidth, 100.0)
@@ -454,7 +451,7 @@ fn passthrough_proxy_forwards_intrinsics_and_dry_layout() {
         .expect("proxy dry layout");
     assert_eq!(
         size,
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
         "opacity must forward child dry layout"
     );
     assert_eq!(dry_runs.load(Ordering::Relaxed), 1);
@@ -503,8 +500,7 @@ fn sized_box_reports_fixed_intrinsics_and_dry_layout() {
     use flui_objects::RenderSizedBox;
 
     let mut owner = PipelineOwner::new();
-    let sized_id =
-        owner.insert(Box::new(RenderSizedBox::fixed(px(80.0), px(30.0))) as BoxedRenderObject);
+    let sized_id = owner.insert(Box::new(RenderSizedBox::fixed(80.0, 30.0)) as BoxedRenderObject);
 
     let width = owner
         .box_intrinsic_dimension(sized_id, IntrinsicDimension::MinWidth, 0.0)
@@ -512,10 +508,7 @@ fn sized_box_reports_fixed_intrinsics_and_dry_layout() {
     assert_eq!(width, 80.0);
 
     let size = owner
-        .box_dry_layout(
-            sized_id,
-            BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)),
-        )
+        .box_dry_layout(sized_id, BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
         .expect("sized dry layout");
-    assert_eq!(size, Size::new(px(80.0), px(30.0)));
+    assert_eq!(size, Size::new(80.0, 30.0));
 }

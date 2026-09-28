@@ -2,7 +2,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use flui_types::geometry::canonical_bits;
+use flui_types::geometry::canonical_bits_f64;
 
 use super::base::ParentData;
 
@@ -38,13 +38,13 @@ pub struct SliverParentData {
     ///
     /// This is the distance from the start of the parent sliver's
     /// scroll extent to the start of this child's scroll extent.
-    pub layout_offset: f32,
+    pub layout_offset: f64,
 }
 
 impl SliverParentData {
     /// Create parent data with specific layout offset.
     #[inline]
-    pub const fn new(layout_offset: f32) -> Self {
+    pub const fn new(layout_offset: f64) -> Self {
         Self { layout_offset }
     }
 
@@ -56,7 +56,7 @@ impl SliverParentData {
 
     /// Builder: set layout offset (consumes self).
     #[inline]
-    pub const fn with_layout_offset(mut self, offset: f32) -> Self {
+    pub const fn with_layout_offset(mut self, offset: f64) -> Self {
         self.layout_offset = offset;
         self
     }
@@ -96,7 +96,7 @@ impl ParentData for SliverParentData {}
 impl Hash for SliverParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Hash offset as bits to avoid float precision issues
-        canonical_bits(self.layout_offset).hash(state);
+        canonical_bits_f64(self.layout_offset).hash(state);
     }
 }
 
@@ -106,8 +106,8 @@ impl Eq for SliverParentData {}
 // CONVERSIONS
 // ============================================================================
 
-impl From<f32> for SliverParentData {
-    fn from(offset: f32) -> Self {
+impl From<f64> for SliverParentData {
+    fn from(offset: f64) -> Self {
         Self::new(offset)
     }
 }

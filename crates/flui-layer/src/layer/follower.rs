@@ -2,7 +2,7 @@
 //! [`LeaderLayer`](super::LeaderLayer) elsewhere in the tree.
 
 use flui_types::{
-    geometry::{Offset, Pixels, Size},
+    geometry::{Offset, Size},
     painting::Alignment,
 };
 
@@ -22,11 +22,11 @@ use crate::LayerLink;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FollowerLayer {
     link: LayerLink,
-    target_offset: Offset<Pixels>,
+    target_offset: Offset<f64>,
     show_when_unlinked: bool,
     leader_anchor: Alignment,
     follower_anchor: Alignment,
-    size: Size<Pixels>,
+    size: Size<f64>,
 }
 
 impl FollowerLayer {
@@ -48,7 +48,7 @@ impl FollowerLayer {
     /// `linkedOffset`); also the paint-origin-relative position when unlinked.
     #[inline]
     #[must_use]
-    pub fn with_target_offset(mut self, offset: Offset<Pixels>) -> Self {
+    pub fn with_target_offset(mut self, offset: Offset<f64>) -> Self {
         self.target_offset = offset;
         self
     }
@@ -80,7 +80,7 @@ impl FollowerLayer {
     /// The follower's extent, which its own anchor aligns within.
     #[inline]
     #[must_use]
-    pub fn with_size(mut self, size: Size<Pixels>) -> Self {
+    pub fn with_size(mut self, size: Size<f64>) -> Self {
         self.size = size;
         self
     }
@@ -93,7 +93,7 @@ impl FollowerLayer {
 
     /// See [`Self::with_target_offset`].
     #[inline]
-    pub fn target_offset(&self) -> Offset<Pixels> {
+    pub fn target_offset(&self) -> Offset<f64> {
         self.target_offset
     }
 
@@ -117,7 +117,7 @@ impl FollowerLayer {
 
     /// See [`Self::with_size`].
     #[inline]
-    pub fn size(&self) -> Size<Pixels> {
+    pub fn size(&self) -> Size<f64> {
         self.size
     }
 
@@ -128,9 +128,9 @@ impl FollowerLayer {
     /// `follower_anchor` within this layer's own `size`.
     pub fn calculate_offset(
         &self,
-        leader_offset: Offset<Pixels>,
-        leader_size: Size<Pixels>,
-    ) -> Offset<Pixels> {
+        leader_offset: Offset<f64>,
+        leader_size: Size<f64>,
+    ) -> Offset<f64> {
         leader_offset + self.leader_anchor.along_size(leader_size) + self.target_offset
             - self.follower_anchor.along_size(self.size)
     }
@@ -138,7 +138,6 @@ impl FollowerLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -146,29 +145,26 @@ mod tests {
     fn builders_set_every_field() {
         let link = LayerLink::new();
         let layer = FollowerLayer::new(link)
-            .with_target_offset(Offset::new(px(10.0), px(20.0)))
+            .with_target_offset(Offset::new(10.0, 20.0))
             .with_show_when_unlinked(false)
             .with_leader_anchor(Alignment::BOTTOM_CENTER)
             .with_follower_anchor(Alignment::TOP_CENTER)
-            .with_size(Size::new(px(80.0), px(40.0)));
+            .with_size(Size::new(80.0, 40.0));
         assert_eq!(layer.link(), link);
-        assert_eq!(layer.target_offset(), Offset::new(px(10.0), px(20.0)));
+        assert_eq!(layer.target_offset(), Offset::new(10.0, 20.0));
         assert!(!layer.show_when_unlinked());
         assert_eq!(layer.leader_anchor(), Alignment::BOTTOM_CENTER);
         assert_eq!(layer.follower_anchor(), Alignment::TOP_CENTER);
-        assert_eq!(layer.size(), Size::new(px(80.0), px(40.0)));
+        assert_eq!(layer.size(), Size::new(80.0, 40.0));
     }
 
     #[test]
     fn default_anchors_align_top_left_corners() {
         let follower = FollowerLayer::new(LayerLink::new())
-            .with_target_offset(Offset::new(px(0.0), px(10.0)))
-            .with_size(Size::new(px(80.0), px(40.0)));
-        let offset = follower.calculate_offset(
-            Offset::new(px(100.0), px(100.0)),
-            Size::new(px(50.0), px(30.0)),
-        );
-        assert_eq!(offset, Offset::new(px(100.0), px(110.0)));
+            .with_target_offset(Offset::new(0.0, 10.0))
+            .with_size(Size::new(80.0, 40.0));
+        let offset = follower.calculate_offset(Offset::new(100.0, 100.0), Size::new(50.0, 30.0));
+        assert_eq!(offset, Offset::new(100.0, 110.0));
     }
 
     #[test]
@@ -176,24 +172,21 @@ mod tests {
         let follower = FollowerLayer::new(LayerLink::new())
             .with_leader_anchor(Alignment::BOTTOM_CENTER)
             .with_follower_anchor(Alignment::TOP_CENTER)
-            .with_target_offset(Offset::new(px(0.0), px(5.0)))
-            .with_size(Size::new(px(80.0), px(40.0)));
-        let offset = follower.calculate_offset(
-            Offset::new(px(100.0), px(100.0)),
-            Size::new(px(50.0), px(30.0)),
-        );
+            .with_target_offset(Offset::new(0.0, 5.0))
+            .with_size(Size::new(80.0, 40.0));
+        let offset = follower.calculate_offset(Offset::new(100.0, 100.0), Size::new(50.0, 30.0));
         // Leader bottom-center (25,30) + leader offset (100,100) + gap (0,5)
         // - follower top-center (40,0).
-        assert_eq!(offset, Offset::new(px(85.0), px(135.0)));
+        assert_eq!(offset, Offset::new(85.0, 135.0));
     }
 
     #[test]
     fn off_rectangle_anchors_are_legal() {
         let follower = FollowerLayer::new(LayerLink::new())
             .with_leader_anchor(Alignment::new(2.0, 0.0))
-            .with_size(Size::new(px(10.0), px(10.0)));
-        let offset = follower.calculate_offset(Offset::ZERO, Size::new(px(10.0), px(10.0)));
+            .with_size(Size::new(10.0, 10.0));
+        let offset = follower.calculate_offset(Offset::ZERO, Size::new(10.0, 10.0));
         // x: 10 * (1 + 2)/2 = 15, minus the follower's top-left (0).
-        assert_eq!(offset, Offset::new(px(15.0), px(5.0)));
+        assert_eq!(offset, Offset::new(15.0, 5.0));
     }
 }

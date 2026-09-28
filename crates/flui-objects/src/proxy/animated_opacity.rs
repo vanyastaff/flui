@@ -1,6 +1,6 @@
 //! `RenderAnimatedOpacity` — applies a continuously-animated transparency to
 //! a single child, driven by an injected, hot-swappable
-//! [`ProxyAnimation<f32>`].
+//! [`ProxyAnimation<f64>`].
 //!
 //! # Flutter equivalence
 //!
@@ -45,7 +45,7 @@
 //! configuration change that swaps to a new controller/curve calls
 //! `didUpdateAnimation`, which re-subscribes the tick listener to the new
 //! animation. This render object never sees that swap: it is handed a
-//! [`ProxyAnimation<f32>`] once, at construction, and listens to that SAME
+//! [`ProxyAnimation<f64>`] once, at construction, and listens to that SAME
 //! proxy for its entire lifetime. The `AnimatedOpacity` widget's state (`
 //! flui-widgets/src/animated/animated_opacity.rs`) owns the proxy and, on
 //! retarget, swaps its *parent* animation (`ProxyAnimation::set_parent`) —
@@ -75,7 +75,7 @@ use flui_rendering::{
 /// child.
 ///
 /// Unlike [`RenderOpacity`](crate::RenderOpacity), the alpha is not set
-/// directly — it tracks an injected, composed [`ProxyAnimation<f32>`] (curve
+/// directly — it tracks an injected, composed [`ProxyAnimation<f64>`] (curve
 /// and retarget algebra owned by the calling widget) and updates itself on
 /// every animation tick via a listener registered in
 /// [`attach`](RenderBox::attach). See the module docs for the exact
@@ -91,10 +91,10 @@ use flui_rendering::{
 pub struct RenderAnimatedOpacity {
     /// The composed animation driving alpha, injected at construction and
     /// listened to for this object's entire lifetime. A
-    /// [`ProxyAnimation<f32>`] so the owning widget can hot-swap the
+    /// [`ProxyAnimation<f64>`] so the owning widget can hot-swap the
     /// *parent* it wraps (retarget) without this render object ever seeing a
     /// new listenable — see the module docs' *Retargeting* section.
-    animation: ProxyAnimation<f32>,
+    animation: ProxyAnimation<f64>,
     /// Alpha cache (`0..=255`), shared with the tick listener closure via
     /// `Arc` so both the listener (running off the owning thread, per
     /// [`RenderInvalidationHandle`]'s cross-thread contract) and
@@ -120,13 +120,13 @@ pub struct RenderAnimatedOpacity {
 
 impl RenderAnimatedOpacity {
     /// Creates a render object driven by `animation`, an already-composed
-    /// [`ProxyAnimation<f32>`] (curve and controller ownership live entirely
+    /// [`ProxyAnimation<f64>`] (curve and controller ownership live entirely
     /// on the widget side — this object never constructs either, matching
     /// [`RenderAnimatedSize::new`](crate::RenderAnimatedSize::new)'s
     /// already-built-controller shape one level further: it does not even
     /// see the controller, only the composed value stream).
     #[must_use]
-    pub fn new(animation: ProxyAnimation<f32>, always_include_semantics: bool) -> Self {
+    pub fn new(animation: ProxyAnimation<f64>, always_include_semantics: bool) -> Self {
         let alpha = Arc::new(AtomicU8::new(Self::opacity_to_alpha(animation.value())));
         Self {
             animation,
@@ -144,7 +144,7 @@ impl RenderAnimatedOpacity {
         self.alpha.load(Ordering::Relaxed)
     }
 
-    /// The composed animation's raw `f32` value, bypassing the `u8` alpha
+    /// The composed animation's raw `f64` value, bypassing the `u8` alpha
     /// cache's `1/255` quantization. Test/harness accessor — production
     /// paint/compositing decisions read [`alpha`](Self::alpha)/
     /// [`paint_effects`](RenderBox::paint_effects), which are correctly
@@ -152,7 +152,7 @@ impl RenderAnimatedOpacity {
     /// sub-`1/255` tolerances need the un-rounded value.
     #[inline]
     #[must_use]
-    pub fn opacity_value(&self) -> f32 {
+    pub fn opacity_value(&self) -> f64 {
         self.animation.value()
     }
 
@@ -165,7 +165,7 @@ impl RenderAnimatedOpacity {
 
     /// Converts opacity (`0.0..=1.0`) to alpha (`0..=255`).
     #[inline]
-    fn opacity_to_alpha(opacity: f32) -> u8 {
+    fn opacity_to_alpha(opacity: f64) -> u8 {
         (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
     }
 
@@ -202,7 +202,7 @@ impl RenderAnimatedOpacity {
     /// listener closure (called with cloned copies, since the closure must
     /// be `'static` and cannot borrow `self`) share one implementation.
     fn recompute_alpha(
-        animation: &ProxyAnimation<f32>,
+        animation: &ProxyAnimation<f64>,
         alpha: &AtomicU8,
         handle: &RenderInvalidationHandle,
     ) -> bool {
@@ -290,7 +290,7 @@ impl std::fmt::Debug for RenderAnimatedOpacity {
 
 impl flui_foundation::Diagnosticable for RenderAnimatedOpacity {
     fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
-        properties.add_default_double("opacity", f32::from(self.alpha()) / 255.0, 1.0, None);
+        properties.add_default_double("opacity", f64::from(self.alpha()) / 255.0, 1.0, None);
         properties.add_flag(
             "always_include_semantics",
             self.always_include_semantics,
@@ -412,14 +412,14 @@ mod tests {
         AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
     }
 
-    fn render_at(opacity: f32) -> RenderAnimatedOpacity {
+    fn render_at(opacity: f64) -> RenderAnimatedOpacity {
         RenderAnimatedOpacity::new(proxy_at(opacity), false)
     }
 
-    fn proxy_at(opacity: f32) -> ProxyAnimation<f32> {
+    fn proxy_at(opacity: f64) -> ProxyAnimation<f64> {
         let c = controller(100);
         c.set_value(opacity);
-        let parent: Arc<dyn Animation<f32>> = Arc::new(c);
+        let parent: Arc<dyn Animation<f64>> = Arc::new(c);
         ProxyAnimation::new(parent)
     }
 

@@ -34,7 +34,7 @@ use flui_rendering::{
     traits::{RenderBox, RenderObject, RenderSliver},
     view::ScrollDirection,
 };
-use flui_types::{Size, geometry::px, layout::AxisDirection};
+use flui_types::{Size, layout::AxisDirection};
 
 use crate::common::fresh_layout_pipeline;
 
@@ -82,7 +82,7 @@ impl RenderSliver for StubLeafSliver {
         ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
     ) -> SliverGeometry {
         let constraints = *ctx.constraints();
-        let paint = 200.0_f32.min(constraints.remaining_paint_extent);
+        let paint = 200.0_f64.min(constraints.remaining_paint_extent);
         SliverGeometry {
             scroll_extent: 200.0,
             paint_extent: paint,
@@ -161,7 +161,7 @@ fn cross_protocol_box_parent_lays_out_leaf_sliver_child() {
         .insert_sliver_child(parent_id, sliver_obj)
         .expect("tree must accept a Sliver child under a Box parent");
 
-    let box_constraints = BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0));
+    let box_constraints = BoxConstraints::new(0.0, 800.0, 0.0, 600.0);
     let result = pipeline.layout_dirty_root(parent_id, box_constraints);
     assert!(
         result.is_ok(),
@@ -227,7 +227,7 @@ fn cross_protocol_box_parent_lays_out_sliver_padding_with_leaf_child() {
         .insert_sliver_child(padding_id, leaf_obj)
         .expect("tree must accept a leaf Sliver child under RenderSliverPadding");
 
-    let box_constraints = BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0));
+    let box_constraints = BoxConstraints::new(0.0, 800.0, 0.0, 600.0);
     let result = pipeline.layout_dirty_root(parent_id, box_constraints);
     assert!(
         result.is_ok(),
@@ -307,7 +307,7 @@ fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_poisons() {
         .insert_box_child(parent_id, box_child)
         .expect("tree must accept a Box child");
 
-    let box_constraints = BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0));
+    let box_constraints = BoxConstraints::new(0.0, 800.0, 0.0, 600.0);
 
     // The parent's perform_layout returns Ok, so layout_dirty_root itself
     // returns Ok.  Only the descendant-error flag prevents NEEDS_LAYOUT

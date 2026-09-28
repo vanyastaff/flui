@@ -20,7 +20,7 @@ use flui_objects::{
 };
 use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::testing::{ParentDataSeed, Probe, RenderTester, box_node, sliver_node};
-use flui_types::{Size, geometry::px, layout::AxisDirection};
+use flui_types::{Size, layout::AxisDirection};
 
 fn header(title: &str) {
     println!("\n========== {title} ==========");
@@ -42,7 +42,7 @@ fn box_full_frame() {
             .child(box_node(RenderColoredBox::green(60.0, 40.0)).label("green"))
             .child(box_node(RenderColoredBox::blue(20.0, 40.0)).label("blue")),
     )
-    .with_size(Size::new(px(300.0), px(100.0)))
+    .with_size(Size::new(300.0, 100.0))
     .run_frame();
 
     println!("{}", run.report());
@@ -65,7 +65,7 @@ fn box_layout_only() {
         box_node(RenderPadding::all(8.0))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("inner")),
     )
-    .with_size(Size::new(px(200.0), px(200.0)))
+    .with_size(Size::new(200.0, 200.0))
     .run_layout();
 
     let inner = run.id("inner");
@@ -108,7 +108,7 @@ fn sliver_layout_only() {
                 ),
         ),
     )
-    .with_size(Size::new(px(300.0), px(100.0)))
+    .with_size(Size::new(300.0, 100.0))
     .run_layout();
 
     let list = run.id("list");

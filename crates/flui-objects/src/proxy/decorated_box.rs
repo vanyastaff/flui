@@ -10,7 +10,7 @@
 
 use flui_foundation::Single;
 use flui_painting::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
-use flui_types::{Offset, Pixels, Point, Rect, Size, styling::BoxDecoration};
+use flui_types::{Offset, Point, Rect, Size, styling::BoxDecoration};
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
@@ -33,7 +33,7 @@ pub enum DecorationPosition {
 #[derive(Debug, Clone)]
 pub struct RenderDecoratedBox {
     /// What to paint.
-    decoration: BoxDecoration<Pixels>,
+    decoration: BoxDecoration<f64>,
     /// Behind or in front of the child.
     position: DecorationPosition,
     /// Whether the decoration's background edges are anti-aliased. Flutter
@@ -46,7 +46,7 @@ pub struct RenderDecoratedBox {
 
 impl RenderDecoratedBox {
     /// Creates a decorated box painting `decoration` behind the child.
-    pub fn new(decoration: BoxDecoration<Pixels>) -> Self {
+    pub fn new(decoration: BoxDecoration<f64>) -> Self {
         Self {
             decoration,
             position: DecorationPosition::Background,
@@ -83,7 +83,7 @@ impl RenderDecoratedBox {
     }
 
     /// The current decoration.
-    pub fn decoration(&self) -> &BoxDecoration<Pixels> {
+    pub fn decoration(&self) -> &BoxDecoration<f64> {
         &self.decoration
     }
 
@@ -91,7 +91,7 @@ impl RenderDecoratedBox {
     /// responsible for the repaint mark.
     pub fn set_decoration(
         &mut self,
-        decoration: BoxDecoration<Pixels>,
+        decoration: BoxDecoration<f64>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.decoration == decoration {
             return flui_rendering::RenderUpdateImpact::NONE;

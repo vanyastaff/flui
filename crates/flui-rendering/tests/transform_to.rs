@@ -19,7 +19,7 @@ use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::prelude::*;
 use flui_rendering::testing::{Probe, RenderTester, box_node};
 use flui_rendering::traits::PaintEffects;
-use flui_types::{Matrix4, Offset, Point, Size, geometry::px};
+use flui_types::{Matrix4, Offset, Point, Size};
 
 /// A leaf of fixed size.
 #[derive(Debug, Default)]
@@ -29,7 +29,7 @@ impl RenderBox for FixedBox {
     type Arity = Leaf;
     type ParentData = BoxParentData;
     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        Size::new(px(20.0), px(20.0))
+        Size::new(20.0, 20.0)
     }
     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
 }
@@ -83,7 +83,7 @@ impl RenderBox for MatrixBox {
 /// moves with the box's size, so a wrong size yields a wrong-but-plausible matrix
 /// rather than an obviously broken one.
 #[derive(Debug)]
-struct CenterScaleBox(f32);
+struct CenterScaleBox(f64);
 impl flui_foundation::Diagnosticable for CenterScaleBox {}
 impl RenderBox for CenterScaleBox {
     type Arity = Single;
@@ -98,7 +98,7 @@ impl RenderBox for CenterScaleBox {
         ctx.paint_child();
     }
     fn paint_effects(&self, size: Size) -> PaintEffects {
-        let (cx, cy) = (size.width.0 / 2.0, size.height.0 / 2.0);
+        let (cx, cy) = (size.width / 2.0, size.height / 2.0);
         PaintEffects::NONE.with_transform(
             Matrix4::translation(cx, cy, 0.0)
                 * Matrix4::scaling(self.0, self.0, 1.0)
@@ -107,17 +107,17 @@ impl RenderBox for CenterScaleBox {
     }
 }
 
-fn tight(w: f32, h: f32) -> BoxConstraints {
-    BoxConstraints::tight(Size::new(px(w), px(h)))
+fn tight(w: f64, h: f64) -> BoxConstraints {
+    BoxConstraints::tight(Size::new(w, h))
 }
 
-fn point(x: f32, y: f32) -> Point {
-    Point::new(px(x), px(y))
+fn point(x: f64, y: f64) -> Point {
+    Point::new(x, y)
 }
 
 fn assert_point_eq(actual: Point, expected: Point) {
     assert!(
-        (actual.x.0 - expected.x.0).abs() < 1e-4 && (actual.y.0 - expected.y.0).abs() < 1e-4,
+        (actual.x - expected.x).abs() < 1e-4 && (actual.y - expected.y).abs() < 1e-4,
         "expected {expected:?}, got {actual:?}"
     );
 }
@@ -128,10 +128,10 @@ fn assert_point_eq(actual: Point, expected: Point) {
 #[test]
 fn transform_to_accumulates_offsets_through_a_plain_chain() {
     let run = RenderTester::mount(
-        box_node(OffsetBox(Offset::new(px(10.0), px(5.0))))
+        box_node(OffsetBox(Offset::new(10.0, 5.0)))
             .label("outer")
             .child(
-                box_node(OffsetBox(Offset::new(px(3.0), px(7.0))))
+                box_node(OffsetBox(Offset::new(3.0, 7.0)))
                     .label("inner")
                     .child(box_node(FixedBox).label("leaf")),
             ),
@@ -147,11 +147,11 @@ fn transform_to_accumulates_offsets_through_a_plain_chain() {
         .expect("leaf is a descendant of outer");
 
     // The leaf's local origin sits at (10+3, 5+7) in `outer`'s space.
-    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    let (x, y) = transform.transform_point(0.0, 0.0);
     assert_point_eq(Point::new(x, y), point(13.0, 12.0));
 
     // And a point inside the leaf shifts by the same amount.
-    let (x, y) = transform.transform_point(px(2.0), px(1.0));
+    let (x, y) = transform.transform_point(2.0, 1.0);
     assert_point_eq(Point::new(x, y), point(15.0, 13.0));
 }
 
@@ -179,7 +179,7 @@ fn transform_to_respects_a_render_transform_ancestor() {
     let scale = Matrix4::scaling(2.0, 3.0, 1.0);
     let run = RenderTester::mount(
         box_node(MatrixBox(scale)).label("scaler").child(
-            box_node(OffsetBox(Offset::new(px(4.0), px(6.0))))
+            box_node(OffsetBox(Offset::new(4.0, 6.0)))
                 .label("offset")
                 .child(box_node(FixedBox).label("leaf")),
         ),
@@ -193,7 +193,7 @@ fn transform_to_respects_a_render_transform_ancestor() {
         .expect("descendant");
 
     // Local (1, 1) in the leaf → (4+1, 6+1) under `offset` → scaled by (2, 3).
-    let (x, y) = transform.transform_point(px(1.0), px(1.0));
+    let (x, y) = transform.transform_point(1.0, 1.0);
     assert_point_eq(Point::new(x, y), point(10.0, 21.0));
 }
 
@@ -206,7 +206,7 @@ fn transform_to_composes_ancestor_before_descendant() {
 
     let scale_outside = RenderTester::mount(
         box_node(MatrixBox(scale)).label("top").child(
-            box_node(OffsetBox(Offset::new(px(5.0), px(0.0))))
+            box_node(OffsetBox(Offset::new(5.0, 0.0)))
                 .label("mid")
                 .child(box_node(FixedBox).label("leaf")),
         ),
@@ -215,7 +215,7 @@ fn transform_to_composes_ancestor_before_descendant() {
     .run_layout();
 
     let scale_inside = RenderTester::mount(
-        box_node(OffsetBox(Offset::new(px(5.0), px(0.0))))
+        box_node(OffsetBox(Offset::new(5.0, 0.0)))
             .label("top")
             .child(
                 box_node(MatrixBox(scale))
@@ -236,10 +236,10 @@ fn transform_to_composes_ancestor_before_descendant() {
         .expect("descendant");
 
     // scale(offset(0)) = 2 * 5 = 10;  offset(scale(0)) = 5 + 0 = 5.
-    let (x, _) = outside.transform_point(px(0.0), px(0.0));
-    assert!((x.0 - 10.0).abs() < 1e-4, "scale outside: got {x:?}");
-    let (x, _) = inside.transform_point(px(0.0), px(0.0));
-    assert!((x.0 - 5.0).abs() < 1e-4, "scale inside: got {x:?}");
+    let (x, _) = outside.transform_point(0.0, 0.0);
+    assert!((x - 10.0).abs() < 1e-4, "scale outside: got {x:?}");
+    let (x, _) = inside.transform_point(0.0, 0.0);
+    assert!((x - 5.0).abs() < 1e-4, "scale inside: got {x:?}");
 }
 
 /// `None` means "the question was malformed", not "no transform". A sibling is
@@ -248,7 +248,7 @@ fn transform_to_composes_ancestor_before_descendant() {
 #[test]
 fn transform_to_returns_none_when_ancestor_is_not_an_ancestor() {
     let run = RenderTester::mount(
-        box_node(OffsetBox(Offset::new(px(1.0), px(1.0))))
+        box_node(OffsetBox(Offset::new(1.0, 1.0)))
             .label("root")
             .child(
                 box_node(OffsetBox(Offset::ZERO)).label("branch").child(
@@ -285,7 +285,7 @@ fn transform_to_returns_none_when_ancestor_is_not_an_ancestor() {
 #[test]
 fn local_to_global_is_no_longer_identity() {
     let run = RenderTester::mount(
-        box_node(OffsetBox(Offset::new(px(30.0), px(40.0))))
+        box_node(OffsetBox(Offset::new(30.0, 40.0)))
             .label("root")
             .child(box_node(FixedBox).label("leaf")),
     )
@@ -324,7 +324,7 @@ fn global_to_local_inverts_local_to_global() {
         box_node(MatrixBox(Matrix4::scaling(2.0, 4.0, 1.0)))
             .label("root")
             .child(
-                box_node(OffsetBox(Offset::new(px(7.0), px(11.0))))
+                box_node(OffsetBox(Offset::new(7.0, 11.0)))
                     .label("mid")
                     .child(box_node(FixedBox).label("leaf")),
             ),
@@ -383,14 +383,8 @@ fn box_size_reads_committed_geometry() {
     .run_layout();
 
     let owner = run.owner();
-    assert_eq!(
-        owner.box_size(run.id("root")),
-        Some(Size::new(px(100.0), px(60.0)))
-    );
-    assert_eq!(
-        owner.box_size(run.id("leaf")),
-        Some(Size::new(px(20.0), px(20.0)))
-    );
+    assert_eq!(owner.box_size(run.id("root")), Some(Size::new(100.0, 60.0)));
+    assert_eq!(owner.box_size(run.id("leaf")), Some(Size::new(20.0, 20.0)));
 }
 
 /// **Before the first layout there is no answer, and `transform_to` must say so.**
@@ -442,7 +436,7 @@ fn transform_to_before_layout_returns_none() {
         Size::ZERO,
         &mut degenerate,
     );
-    let (x, y) = degenerate.transform_point(px(0.0), px(0.0));
+    let (x, y) = degenerate.transform_point(0.0, 0.0);
     assert_point_eq(Point::new(x, y), point(0.0, 0.0));
 
     // A node's own space maps to itself regardless — no step runs, no size needed.
@@ -468,6 +462,6 @@ fn transform_to_answers_once_layout_has_committed_geometry() {
 
     // ×2 about the centre of a 20×20 box: the origin lands at (-10, -10), not at
     // (0, 0) as the zero-size substitution would have said.
-    let (x, y) = transform.transform_point(px(0.0), px(0.0));
+    let (x, y) = transform.transform_point(0.0, 0.0);
     assert_point_eq(Point::new(x, y), point(-10.0, -10.0));
 }

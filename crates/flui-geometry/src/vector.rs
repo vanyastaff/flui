@@ -178,7 +178,7 @@ impl Vec2<f64> {
     /// use std::f64::consts::PI;
     ///
     /// let v = Vec2::from_radians(Radians::from_degrees(90.0));
-    /// assert!((v.y.get() - 1.0).abs() < 0.001);
+    /// assert!((v.y - 1.0).abs() < 0.001);
     #[inline]
     #[must_use]
     pub fn from_radians(angle: f64) -> Self {
@@ -557,7 +557,7 @@ where
     ///
     /// let v = Vec2::new(1.0, 0.0);
     /// let rotated = v.rotate_radians(Radians::from_degrees(90.0));
-    /// assert!((rotated.y.get() - 1.0).abs() < 0.001);
+    /// assert!((rotated.y - 1.0).abs() < 0.001);
     /// ```
     #[inline]
     #[must_use]

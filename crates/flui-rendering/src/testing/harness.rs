@@ -21,7 +21,7 @@
 
 use flui_foundation::RenderId;
 use flui_layer::LayerTree;
-use flui_types::{Rect, Size, geometry::px};
+use flui_types::{Rect, Size};
 
 use crate::{
     constraints::BoxConstraints,
@@ -39,7 +39,7 @@ use crate::{
 /// `0..=800 x 0..=600` box, large enough that most trees lay out at their
 /// natural size.
 fn default_constraints() -> BoxConstraints {
-    BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0))
+    BoxConstraints::new(0.0, 800.0, 0.0, 600.0)
 }
 
 /// Marks `id` for repaint: compositing bits (layer structure may change when
@@ -460,13 +460,13 @@ impl FrameRun {
     /// # use flui_foundation::Leaf;
     /// # use flui_types::{Size, geometry::px};
     /// # #[derive(Debug, Default)]
-    /// # struct FixedBox(f32);
+    /// # struct FixedBox(f64);
     /// # impl flui_foundation::Diagnosticable for FixedBox {}
     /// # impl RenderBox for FixedBox {
     /// #     type Arity = Leaf;
     /// #     type ParentData = BoxParentData;
     /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-    /// #         Size::new(px(self.0), px(self.0))
+    /// #         Size::new((self.0), (self.0))
     /// #     }
     /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
     /// # }
@@ -474,12 +474,12 @@ impl FrameRun {
     ///     .run_frame();
     /// let root = run.id("root");
     /// run.simulate([0.0, 0.5, 1.0], |t, run| {
-    ///     let side = 40.0 + 20.0 * t as f32;
+    ///     let side = 40.0 + 20.0 * t as f64;
     ///     run.update::<FixedBox>(root, |b| b.0 = side);
     /// });
     /// assert_eq!(
     ///     run.box_geometry(root),
-    ///     Size::new(px(60.0), px(60.0)),
+    ///     Size::new(60.0, 60.0),
     /// );
     /// ```
     pub fn simulate<I, F>(&mut self, ticks: I, mut on_tick: F) -> Vec<FrameReport>
@@ -497,7 +497,7 @@ impl FrameRun {
 
     /// Alpha of the first opacity layer in the most recent frame, if any.
     #[must_use]
-    pub fn opacity_alpha(&self) -> Option<f32> {
+    pub fn opacity_alpha(&self) -> Option<f64> {
         self.layer_tree
             .as_ref()
             .and_then(inspect::first_opacity_alpha)
@@ -537,13 +537,13 @@ impl FrameRun {
     /// # use flui_foundation::Leaf;
     /// # use flui_types::{Size, geometry::px};
     /// # #[derive(Debug, Default)]
-    /// # struct FixedBox(f32);
+    /// # struct FixedBox(f64);
     /// # impl flui_foundation::Diagnosticable for FixedBox {}
     /// # impl RenderBox for FixedBox {
     /// #     type Arity = Leaf;
     /// #     type ParentData = BoxParentData;
     /// #     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-    /// #         Size::new(px(self.0), px(self.0))
+    /// #         Size::new((self.0), (self.0))
     /// #     }
     /// #     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
     /// # }
@@ -554,7 +554,7 @@ impl FrameRun {
     /// run.pump();
     /// assert_eq!(
     ///     run.box_geometry(root),
-    ///     Size::new(px(60.0), px(60.0)),
+    ///     Size::new(60.0, 60.0),
     /// );
     /// ```
     pub fn update<T: 'static>(&mut self, id: RenderId, edit: impl FnOnce(&mut T)) {

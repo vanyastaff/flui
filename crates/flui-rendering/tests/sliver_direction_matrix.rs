@@ -8,7 +8,7 @@ use flui_rendering::{
     traits::RenderSliver,
     view::ScrollDirection,
 };
-use flui_types::{Size, geometry::px, layout::AxisDirection::*};
+use flui_types::{Size, layout::AxisDirection::*};
 
 struct DirectionProbe {
     constraints: flui_rendering::constraints::SliverConstraints,
@@ -78,56 +78,56 @@ fn sliver_direction_matrix_eight_by_three() {
             TopToBottom,
             GrowthDirection::Forward,
             TopToBottom,
-            Size::new(px(40.0), px(25.0)),
+            Size::new(40.0, 25.0),
             true,
         ),
         (
             TopToBottom,
             GrowthDirection::Reverse,
             BottomToTop,
-            Size::new(px(40.0), px(-25.0)),
+            Size::new(40.0, -25.0),
             false,
         ),
         (
             BottomToTop,
             GrowthDirection::Forward,
             BottomToTop,
-            Size::new(px(40.0), px(-25.0)),
+            Size::new(40.0, -25.0),
             false,
         ),
         (
             BottomToTop,
             GrowthDirection::Reverse,
             TopToBottom,
-            Size::new(px(40.0), px(25.0)),
+            Size::new(40.0, 25.0),
             true,
         ),
         (
             LeftToRight,
             GrowthDirection::Forward,
             LeftToRight,
-            Size::new(px(25.0), px(40.0)),
+            Size::new(25.0, 40.0),
             true,
         ),
         (
             LeftToRight,
             GrowthDirection::Reverse,
             RightToLeft,
-            Size::new(px(-25.0), px(40.0)),
+            Size::new(-25.0, 40.0),
             false,
         ),
         (
             RightToLeft,
             GrowthDirection::Forward,
             RightToLeft,
-            Size::new(px(-25.0), px(40.0)),
+            Size::new(-25.0, 40.0),
             false,
         ),
         (
             RightToLeft,
             GrowthDirection::Reverse,
             LeftToRight,
-            Size::new(px(25.0), px(40.0)),
+            Size::new(25.0, 40.0),
             true,
         ),
     ];

@@ -41,7 +41,7 @@
 //!  ├── flags: AtomicRenderFlags (lock-free, &self mutation)
 //!  ├── geometry: Option<ProtocolGeometry<P>> (&mut self set/clear; Flutter parity)
 //!  ├── constraints: Option<ProtocolConstraints<P>> (&mut self set/clear)
-//!  └── offset: AtomicOffset (lock-free atomic updates)
+//!  └── offset: OffsetCell (lock-free atomic updates)
 //! ```
 //!
 //! # Performance Notes
@@ -110,7 +110,7 @@ pub use layout_cache::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
 #[cfg(test)]
 mod tests;
 
-use offset::AtomicOffset;
+use offset::OffsetCell;
 
 // ============================================================================
 // TYPE ALIASES
@@ -145,7 +145,7 @@ pub type SliverRenderState = RenderState<SliverProtocol>;
 /// [AtomicRenderFlags: 4 bytes]        - Hot path, always accessible
 /// [Option<Geometry>: 0-N bytes]        - Set/cleared each layout pass
 /// [Option<Constraints>: 0-N bytes]     - Set/cleared each layout pass
-/// [AtomicOffset: 8 bytes]             - Lock-free f32 pair
+/// [OffsetCell: 8 bytes]             - Lock-free f64 pair
 /// ```
 ///
 /// Total: ≈44-60 bytes depending on protocol geometry size
@@ -196,7 +196,7 @@ pub struct RenderState<P: Protocol> {
     /// Offset relative to parent (atomic for lock-free updates).
     ///
     /// Set by parent during layout, read during paint and hit testing.
-    offset: AtomicOffset,
+    offset: OffsetCell,
 
     /// Bumped every time this node is laid out for real — past the
     /// short-circuit, so a node whose cached geometry was reused does not
@@ -305,7 +305,7 @@ impl<P: Protocol> RenderState<P> {
             flags: AtomicRenderFlags::new(RenderFlags::NEEDS_LAYOUT | RenderFlags::NEEDS_PAINT),
             geometry: None,
             constraints: None,
-            offset: AtomicOffset::new(flui_types::Offset::ZERO),
+            offset: OffsetCell::new(flui_types::Offset::ZERO),
             layout_generation: AtomicU64::new(1),
             placed_generation: AtomicU64::new(1),
             placed_by: AtomicU64::new(0),
@@ -332,7 +332,7 @@ impl<P: Protocol> RenderState<P> {
             flags: AtomicRenderFlags::new(flags),
             geometry: None,
             constraints: None,
-            offset: AtomicOffset::new(flui_types::Offset::ZERO),
+            offset: OffsetCell::new(flui_types::Offset::ZERO),
             layout_generation: AtomicU64::new(1),
             placed_generation: AtomicU64::new(1),
             placed_by: AtomicU64::new(0),
@@ -447,7 +447,7 @@ where
             flags: AtomicRenderFlags::new(self.flags.load()),
             geometry: self.geometry.clone(),
             constraints: self.constraints.clone(),
-            offset: AtomicOffset::new(self.offset.load()),
+            offset: OffsetCell::new(self.offset.load()),
             layout_generation: AtomicU64::new(self.layout_generation.load(Ordering::Relaxed)),
             placed_generation: AtomicU64::new(self.placed_generation.load(Ordering::Relaxed)),
             placed_by: AtomicU64::new(self.placed_by.load(Ordering::Relaxed)),

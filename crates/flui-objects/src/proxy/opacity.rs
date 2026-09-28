@@ -31,7 +31,7 @@ use flui_rendering::{
 #[derive(Debug, Clone)]
 pub struct RenderOpacity {
     /// Opacity value (0.0 = transparent, 1.0 = opaque).
-    opacity: f32,
+    opacity: f64,
     /// Alpha as u8 (0-255) for efficient layer operations.
     alpha: u8,
     /// Whether we have a child.
@@ -49,7 +49,7 @@ impl RenderOpacity {
     ///
     /// * `opacity` - Opacity value (0.0 = transparent, 1.0 = opaque). Values
     ///   outside [0.0, 1.0] are clamped.
-    pub fn new(opacity: f32) -> Self {
+    pub fn new(opacity: f64) -> Self {
         let clamped = opacity.clamp(0.0, 1.0);
         Self {
             opacity: clamped,
@@ -70,7 +70,7 @@ impl RenderOpacity {
     }
 
     /// Returns the current opacity value.
-    pub fn opacity(&self) -> f32 {
+    pub fn opacity(&self) -> f64 {
         self.opacity
     }
 
@@ -79,9 +79,9 @@ impl RenderOpacity {
     /// # Arguments
     ///
     /// * `opacity` - Opacity value (0.0 = transparent, 1.0 = opaque).
-    pub fn set_opacity(&mut self, opacity: f32) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_opacity(&mut self, opacity: f64) -> flui_rendering::RenderUpdateImpact {
         let clamped = opacity.clamp(0.0, 1.0);
-        if (self.opacity - clamped).abs() <= f32::EPSILON {
+        if (self.opacity - clamped).abs() <= f64::EPSILON {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         let old_needs_compositing = self.needs_compositing();
@@ -171,7 +171,7 @@ impl RenderOpacity {
     }
 
     /// Converts opacity (0.0-1.0) to alpha (0-255).
-    fn opacity_to_alpha(opacity: f32) -> u8 {
+    fn opacity_to_alpha(opacity: f64) -> u8 {
         (opacity * 255.0).round() as u8
     }
 }
@@ -257,25 +257,25 @@ mod tests {
     #[test]
     fn test_opacity_new() {
         let opacity = RenderOpacity::new(0.5);
-        assert!((opacity.opacity() - 0.5).abs() < f32::EPSILON);
+        assert!((opacity.opacity() - 0.5).abs() < f64::EPSILON);
         assert_eq!(opacity.alpha(), 128); // 0.5 * 255 ≈ 128
     }
 
     #[test]
     fn test_opacity_clamp() {
         let opacity = RenderOpacity::new(1.5);
-        assert!((opacity.opacity() - 1.0).abs() < f32::EPSILON);
+        assert!((opacity.opacity() - 1.0).abs() < f64::EPSILON);
         assert_eq!(opacity.alpha(), 255);
 
         let opacity = RenderOpacity::new(-0.5);
-        assert!((opacity.opacity() - 0.0).abs() < f32::EPSILON);
+        assert!((opacity.opacity() - 0.0).abs() < f64::EPSILON);
         assert_eq!(opacity.alpha(), 0);
     }
 
     #[test]
     fn test_opacity_opaque() {
         let opacity = RenderOpacity::opaque();
-        assert!((opacity.opacity() - 1.0).abs() < f32::EPSILON);
+        assert!((opacity.opacity() - 1.0).abs() < f64::EPSILON);
         assert_eq!(opacity.alpha(), 255);
         assert!(!opacity.needs_compositing());
     }
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn test_opacity_transparent() {
         let opacity = RenderOpacity::transparent();
-        assert!((opacity.opacity() - 0.0).abs() < f32::EPSILON);
+        assert!((opacity.opacity() - 0.0).abs() < f64::EPSILON);
         assert_eq!(opacity.alpha(), 0);
         // Flutter: alwaysNeedsCompositing => alpha > 0, so alpha=0 must NOT
         // need compositing (the subtree is skipped entirely).
@@ -301,7 +301,7 @@ mod tests {
              implies PAINT) and the layer-update bit rides along; the owner applies \
              paint first, so the weaker mark refuses itself",
         );
-        assert!((opacity.opacity() - 0.25).abs() < f32::EPSILON);
+        assert!((opacity.opacity() - 0.25).abs() < f64::EPSILON);
         assert_eq!(opacity.alpha(), 64); // 0.25 * 255 ≈ 64
     }
 
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn test_default() {
         let opacity = RenderOpacity::default();
-        assert!((opacity.opacity() - 1.0).abs() < f32::EPSILON);
+        assert!((opacity.opacity() - 1.0).abs() < f64::EPSILON);
     }
 
     // alpha=0 must return None from paint_effects's opacity (no layer), not

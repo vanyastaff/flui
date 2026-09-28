@@ -490,8 +490,8 @@ mod tests {
     /// points, which is the opposite of what it should be exercised on.
     ///
     /// No narrowing cast here: `f64: From<u32>` is exact for every step index,
-    /// so the whole computation stays in the target type. (The `f32` siblings
-    /// of this helper do need one — `f32: From<u32>` does not exist.)
+    /// so the whole computation stays in the target type. (The `f64` siblings
+    /// of this helper do need one — `f64: From<u32>` does not exist.)
     fn float_in(lo: f64, hi: f64) -> impl proptest::strategy::Strategy<Value = f64> {
         use proptest::strategy::Strategy as _;
         const STEPS: u32 = 1 << 24;

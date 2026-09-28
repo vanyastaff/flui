@@ -37,7 +37,7 @@
 //! arena.add(pointer_id, Arc::new(recognizer));
 //! ```
 
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 
 use crate::ids::PointerId;
 
@@ -144,7 +144,7 @@ pub trait CustomHitTestable: Send + Sync {
     /// * `result` - Accumulator for hit test results
     fn perform_hit_test(
         &self,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         result: &mut crate::routing::HitTestResult,
     ) -> bool;
 

@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::LayerId;
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 
 use crate::LayerTree;
 
@@ -76,7 +76,7 @@ impl LayerLink {
 pub fn resolve_follower_offset(
     tree: &LayerTree,
     follower_layer_id: LayerId,
-) -> Option<Offset<Pixels>> {
+) -> Option<Offset<f64>> {
     let follower = tree.get_layer(follower_layer_id)?.as_follower()?;
     let unlinked_fallback = || {
         follower
@@ -125,7 +125,7 @@ pub fn resolve_follower_offset(
 /// `ancestor`.
 ///
 /// [`Layer::local_translation`]: crate::Layer::local_translation
-fn translation_through(tree: &LayerTree, start: LayerId, ancestor: LayerId) -> Offset<Pixels> {
+fn translation_through(tree: &LayerTree, start: LayerId, ancestor: LayerId) -> Offset<f64> {
     let mut sum = Offset::ZERO;
     for id in tree.ancestors(start) {
         if let Some(layer) = tree.get_layer(id) {
@@ -140,25 +140,25 @@ fn translation_through(tree: &LayerTree, start: LayerId, ancestor: LayerId) -> O
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::{Size, px};
+    use flui_types::geometry::Size;
 
     use super::*;
     use crate::{FollowerLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer, TransformLayer};
 
-    fn offset(dx: f32, dy: f32) -> Layer {
-        Layer::from(OffsetLayer::new(Offset::new(px(dx), px(dy))))
+    fn offset(dx: f64, dy: f64) -> Layer {
+        Layer::from(OffsetLayer::new(Offset::new(dx, dy)))
     }
 
-    fn leader(link: LayerLink, dx: f32, dy: f32) -> Layer {
+    fn leader(link: LayerLink, dx: f64, dy: f64) -> Layer {
         Layer::from(LeaderLayer::with_offset(
             link,
-            Size::new(px(20.0), px(20.0)),
-            Offset::new(px(dx), px(dy)),
+            Size::new(20.0, 20.0),
+            Offset::new(dx, dy),
         ))
     }
 
     fn follower(link: LayerLink) -> FollowerLayer {
-        FollowerLayer::new(link).with_size(Size::new(px(10.0), px(10.0)))
+        FollowerLayer::new(link).with_size(Size::new(10.0, 10.0))
     }
 
     #[test]
@@ -172,7 +172,7 @@ mod tests {
 
         assert_eq!(
             resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(px(30.0), px(40.0)))
+            Some(Offset::new(30.0, 40.0))
         );
     }
 
@@ -192,7 +192,7 @@ mod tests {
         // Leader absolute (105,5) minus the follower's pushed position (0,200).
         assert_eq!(
             resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(px(105.0), px(-195.0)))
+            Some(Offset::new(105.0, -195.0))
         );
     }
 
@@ -212,7 +212,7 @@ mod tests {
 
         assert_eq!(
             resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(px(105.0), px(-195.0)))
+            Some(Offset::new(105.0, -195.0))
         );
     }
 
@@ -228,17 +228,14 @@ mod tests {
         let _ = tree.push_child(root, leader(link, 30.0, 40.0));
         let branch = tree.push_child(
             root,
-            Layer::from(OpacityLayer::with_offset(
-                0.5,
-                Offset::new(px(10.0), px(20.0)),
-            )),
+            Layer::from(OpacityLayer::with_offset(0.5, Offset::new(10.0, 20.0))),
         );
         let follower = follower(link);
         let follower_id = tree.push_child(branch, Layer::from(follower));
 
         assert_eq!(
             resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(px(20.0), px(20.0)))
+            Some(Offset::new(20.0, 20.0))
         );
     }
 
@@ -265,13 +262,13 @@ mod tests {
         let link = LayerLink::new();
         let follower = FollowerLayer::new(link)
             .with_show_when_unlinked(true)
-            .with_target_offset(Offset::new(px(7.0), px(9.0)));
+            .with_target_offset(Offset::new(7.0, 9.0));
         let tree = LayerTree::new(Layer::from(follower));
         let follower_id = tree.root();
 
         assert_eq!(
             resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(px(7.0), px(9.0)))
+            Some(Offset::new(7.0, 9.0))
         );
     }
 
@@ -292,14 +289,14 @@ mod tests {
         let link = LayerLink::new();
         let follower = FollowerLayer::new(link)
             .with_show_when_unlinked(true)
-            .with_target_offset(Offset::new(px(3.0), px(4.0)));
+            .with_target_offset(Offset::new(3.0, 4.0));
         let mut tree = LayerTree::new(Layer::from(follower));
         let follower_id = tree.root();
         let _ = tree.push_child(follower_id, leader(link, 50.0, 50.0));
 
         assert_eq!(
             resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(px(3.0), px(4.0)))
+            Some(Offset::new(3.0, 4.0))
         );
     }
 }

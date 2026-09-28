@@ -11,7 +11,6 @@ use flui_rendering::{
 };
 use flui_types::{
     Offset, Size,
-    geometry::px,
     styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color},
 };
 
@@ -47,7 +46,7 @@ fn fixture(position: DecorationPosition) -> (PipelineOwner, flui_foundation::Ren
     let decorated = owner.insert(Box::new(
         RenderDecoratedBox::new(
             BoxDecoration::with_color(Color::RED)
-                .set_border_radius(Some(BorderRadius::circular(px(20.0)))),
+                .set_border_radius(Some(BorderRadius::circular(20.0))),
         )
         .with_position(position),
     ) as BoxedRenderObject);
@@ -55,7 +54,7 @@ fn fixture(position: DecorationPosition) -> (PipelineOwner, flui_foundation::Ren
         .insert_child_render_object(decorated, Box::new(RenderColoredBox::blue(40.0, 40.0)))
         .expect("child insert");
     owner.set_root_id(Some(decorated));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
     (owner, decorated)
 }
 
@@ -88,11 +87,10 @@ fn foreground_decoration_paints_after_the_child() {
 fn childless_fixture() -> (PipelineOwner, flui_foundation::RenderId) {
     let mut owner = PipelineOwner::new();
     let decorated = owner.insert(Box::new(RenderDecoratedBox::new(
-        BoxDecoration::with_color(Color::RED)
-            .set_border_radius(Some(BorderRadius::circular(px(20.0)))),
+        BoxDecoration::with_color(Color::RED).set_border_radius(Some(BorderRadius::circular(20.0))),
     )) as BoxedRenderObject);
     owner.set_root_id(Some(decorated));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
     (owner, decorated)
 }
 
@@ -104,9 +102,9 @@ fn hit_test_excludes_the_rounded_corner() {
     let (owner, decorated) = childless_fixture();
     let (owner, _) = owner.run_frame();
 
-    let hit_at = |x: f32, y: f32| {
+    let hit_at = |x: f64, y: f64| {
         let mut result = HitTestResult::new();
-        owner.hit_test(Offset::new(px(x), px(y)), &mut result);
+        owner.hit_test(Offset::new(x, y), &mut result);
         result.path().last().map(|entry| entry.target)
     };
 
@@ -140,7 +138,7 @@ fn child_is_hit_in_the_rounded_corner_cutout() {
     let (owner, _) = owner.run_frame();
 
     let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(px(2.0), px(2.0)), &mut result);
+    owner.hit_test(Offset::new(2.0, 2.0), &mut result);
     assert_eq!(
         result.path().last().map(|entry| entry.target),
         Some(decorated),

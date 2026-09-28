@@ -56,7 +56,7 @@ use flui_rendering::{
 #[derive(Debug, Clone)]
 pub struct RenderSliverOpacity {
     /// Opacity in `[0.0, 1.0]`.
-    opacity: f32,
+    opacity: f64,
     /// Cached alpha as `u8` (0..=255) for efficient layer operations.
     alpha: u8,
     /// When `true`, always report an opacity effect from `paint_effects`,
@@ -68,7 +68,7 @@ pub struct RenderSliverOpacity {
 impl RenderSliverOpacity {
     /// Creates a sliver-opacity render object with the given opacity
     /// (clamped to `[0, 1]`).
-    pub fn new(opacity: f32) -> Self {
+    pub fn new(opacity: f64) -> Self {
         let clamped = opacity.clamp(0.0, 1.0);
         Self {
             opacity: clamped,
@@ -93,7 +93,7 @@ impl RenderSliverOpacity {
 
     /// Returns the current opacity in `[0.0, 1.0]`.
     #[inline]
-    pub fn opacity(&self) -> f32 {
+    pub fn opacity(&self) -> f64 {
         self.opacity
     }
 
@@ -139,9 +139,9 @@ impl RenderSliverOpacity {
 
     /// Updates the opacity (clamped to `[0, 1]`) and reports its exact pipeline
     /// impact.
-    pub fn set_opacity(&mut self, opacity: f32) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_opacity(&mut self, opacity: f64) -> flui_rendering::RenderUpdateImpact {
         let clamped = opacity.clamp(0.0, 1.0);
-        if (self.opacity - clamped).abs() <= f32::EPSILON {
+        if (self.opacity - clamped).abs() <= f64::EPSILON {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         let old_needs_compositing = self.needs_compositing();
@@ -233,7 +233,7 @@ impl RenderSliverOpacity {
 
     /// Converts opacity (`0.0..=1.0`) to alpha (`0..=255`).
     #[inline]
-    fn opacity_to_alpha(opacity: f32) -> u8 {
+    fn opacity_to_alpha(opacity: f64) -> u8 {
         (opacity * 255.0).round() as u8
     }
 }
@@ -336,9 +336,9 @@ mod tests {
 
     #[test]
     fn new_clamps_to_unit_interval() {
-        assert!((RenderSliverOpacity::new(0.5).opacity() - 0.5).abs() < f32::EPSILON);
-        assert!((RenderSliverOpacity::new(1.5).opacity() - 1.0).abs() < f32::EPSILON);
-        assert!((RenderSliverOpacity::new(-0.5).opacity() - 0.0).abs() < f32::EPSILON);
+        assert!((RenderSliverOpacity::new(0.5).opacity() - 0.5).abs() < f64::EPSILON);
+        assert!((RenderSliverOpacity::new(1.5).opacity() - 1.0).abs() < f64::EPSILON);
+        assert!((RenderSliverOpacity::new(-0.5).opacity() - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn default_is_opaque() {
         let o = RenderSliverOpacity::default();
-        assert!((o.opacity() - 1.0).abs() < f32::EPSILON);
+        assert!((o.opacity() - 1.0).abs() < f64::EPSILON);
         assert_eq!(o.alpha(), 255);
     }
 

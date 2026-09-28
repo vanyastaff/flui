@@ -11,7 +11,6 @@ use flui_foundation::Diagnosticable;
 use flui_foundation::Single;
 use flui_types::{
     Offset,
-    geometry::px,
     layout::AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
 };
 
@@ -95,7 +94,7 @@ impl RenderSliver for RenderSliverFillRemaining {
         &self,
         constraints: &SliverConstraints,
         _child: &dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         -constraints.scroll_offset
     }
 
@@ -184,7 +183,7 @@ impl RenderSliver for RenderSliverFillRemainingAndOverscroll {
         &self,
         constraints: &SliverConstraints,
         _child: &dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         -constraints.scroll_offset
     }
 
@@ -265,7 +264,7 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
         &self,
         constraints: &SliverConstraints,
         _child: &dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         -constraints.scroll_offset
     }
 
@@ -281,7 +280,7 @@ impl RenderSliver for RenderSliverFillRemainingWithScrollable {
 fn child_max_intrinsic_main_extent(
     ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
     constraints: &SliverConstraints,
-) -> f32 {
+) -> f64 {
     match constraints.axis_direction.axis() {
         flui_types::layout::Axis::Horizontal => {
             ctx.box_child_max_intrinsic_width(0, constraints.cross_axis_extent)
@@ -301,21 +300,21 @@ fn child_paint_offset(constraints: &SliverConstraints, geometry: &SliverGeometry
 fn child_paint_offset_for_extent(
     constraints: &SliverConstraints,
     geometry: &SliverGeometry,
-    child_main_extent: f32,
+    child_main_extent: f64,
 ) -> Offset {
     match constraints
         .growth_direction
         .apply_to_axis_direction(constraints.axis_direction)
     {
-        TopToBottom => Offset::new(px(0.0), px(-constraints.scroll_offset)),
-        LeftToRight => Offset::new(px(-constraints.scroll_offset), px(0.0)),
+        TopToBottom => Offset::new(0.0, -constraints.scroll_offset),
+        LeftToRight => Offset::new(-constraints.scroll_offset, 0.0),
         BottomToTop => Offset::new(
-            px(0.0),
-            px(geometry.paint_extent + constraints.scroll_offset - child_main_extent),
+            0.0,
+            geometry.paint_extent + constraints.scroll_offset - child_main_extent,
         ),
         RightToLeft => Offset::new(
-            px(geometry.paint_extent + constraints.scroll_offset - child_main_extent),
-            px(0.0),
+            geometry.paint_extent + constraints.scroll_offset - child_main_extent,
+            0.0,
         ),
     }
 }

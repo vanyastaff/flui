@@ -23,7 +23,7 @@ use flui_rendering::{
         tree,
     },
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 /// A `Single`-arity proxy whose `paint_effects` panics while `armed`. Shared
 /// by every test in this module that poisons through a descriptor build
@@ -118,7 +118,7 @@ fn mount(
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let fx = registry.get("fx").expect("fx is labelled");
     (owner, fx)
 }
@@ -425,7 +425,7 @@ fn a_panicking_path_clipper_poisons_the_frame_on_both_arms() {
             ),
         );
         owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
         let fx = registry.get("fx").expect("fx is labelled");
 
         let (owner, result) = owner.run_frame();

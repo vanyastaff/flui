@@ -88,7 +88,7 @@ use std::{
 
 use dashmap::DashMap;
 use flui_foundation::MonotonicClock;
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 use smallvec::SmallVec;
 use ui_events::pointer::{PointerEvent, PointerType};
 
@@ -259,13 +259,13 @@ impl Drop for AllPointerTeardownGuard<'_> {
     }
 }
 
-/// Truncate a `f64` to `f32` for pointer position conversion.
+/// Truncate a `f64` to `f64` for pointer position conversion.
 ///
-/// Lossless for any screen-pixel coordinate: a `f32` mantissa rounds
+/// Lossless for any screen-pixel coordinate: a `f64` mantissa rounds
 /// at ~7 decimal digits and physical pointer positions are reported
-/// in device pixels (≤ 2^23 ≈ 8M), so `f64 → f32` is exact in that
+/// in device pixels (≤ 2^23 ≈ 8M), so `f64 → f64` is exact in that
 /// range. Used at the W3C→flui boundary where upstream carries `f64`
-/// physical pixels and our `Offset<Pixels>` stores `f32`.
+/// physical pixels and our `Offset<Pixels>` stores `f64`.
 ///
 /// Upper bound on simultaneously-tracked pointers.
 ///
@@ -279,10 +279,10 @@ const MAX_SIMULTANEOUS_POINTERS: usize = 32;
 /// duplicated here to keep the binding module's hot path free of
 /// cross-module indirection.
 #[inline]
-const fn px_f32(v: f64) -> Pixels {
-    // f64 → f32 is intentionally lossy at extreme values; for
-    // pointer coordinates the dynamic range fits in `f32` exactly.
-    Pixels(v as f32)
+const fn px_f32(v: f64) -> f64 {
+    // f64 → f64 is intentionally lossy at extreme values; for
+    // pointer coordinates the dynamic range fits in `f64` exactly.
+    v as f64
 }
 
 /// Central coordinator for gesture event handling.
@@ -555,7 +555,7 @@ impl GestureBinding {
     /// ```
     pub fn handle_pointer_event<F>(&self, event: &PointerEvent, hit_test_fn: F)
     where
-        F: FnOnce(Offset<Pixels>) -> HitTestResult,
+        F: FnOnce(Offset<f64>) -> HitTestResult,
     {
         self.handle_pointer_event_kernel(event, hit_test_fn);
     }
@@ -959,7 +959,7 @@ impl GestureBinding {
 
     fn handle_pointer_event_kernel<F>(&self, event: &PointerEvent, hit_test_fn: F)
     where
-        F: FnOnce(Offset<Pixels>) -> HitTestResult,
+        F: FnOnce(Offset<f64>) -> HitTestResult,
     {
         let pointer_id = Self::extract_pointer_id(event);
         if self.tearing_down_all_pointers.get()
@@ -1727,7 +1727,7 @@ mod tests {
         let first = Arc::new(CountingArenaMember::default());
         let second = Arc::new(CountingArenaMember::default());
 
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Touch);
         binding.handle_pointer_event(&down, |_| {
             binding.arena().add(pointer, first.clone());
             binding.arena().add(pointer, second.clone());
@@ -1827,7 +1827,7 @@ mod tests {
         let binding = GestureBinding::new();
         set_resampling(&binding, true);
         // Seed a resampler via the Down path so the DashMap is non-empty.
-        let down = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
         assert!(binding.active_resampler_count() >= 1);
 
@@ -1842,7 +1842,7 @@ mod tests {
     fn down_creates_per_pointer_resampler() {
         let binding = GestureBinding::new();
         set_resampling(&binding, true);
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
         // 1 active resampler for the primary pointer.
         assert_eq!(binding.active_resampler_count(), 1);
@@ -1860,7 +1860,7 @@ mod tests {
         assert_eq!(binding.active_pointer_count(), MAX_SIMULTANEOUS_POINTERS);
 
         // A brand-new pointer beyond the cap must be refused, not tracked.
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Touch);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
         assert_eq!(
             binding.active_pointer_count(),
@@ -1873,9 +1873,9 @@ mod tests {
     fn up_removes_per_pointer_resampler() {
         let binding = GestureBinding::new();
         set_resampling(&binding, true);
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
-        let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        let up = make_up_event(Offset::new(5.0, 5.0), PointerType::Mouse);
         binding.handle_pointer_event(&up, |_| HitTestResult::new());
         assert_eq!(binding.active_resampler_count(), 0);
     }
@@ -1887,10 +1887,10 @@ mod tests {
         // already exists but stays empty for this move). On flush
         // the direct dispatch path drains the queue.
         let binding = GestureBinding::new();
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
 
-        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let mv = make_move_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         binding.handle_pointer_event(&mv, |_| HitTestResult::new());
 
         // Coalesced queue has the move; resampler exists but is
@@ -1924,10 +1924,7 @@ mod tests {
             .pointer_router()
             .add_route(PointerId::PRIMARY, Rc::clone(&handler));
 
-        for position in [
-            Offset::new(Pixels(10.0), Pixels(20.0)),
-            Offset::new(Pixels(30.0), Pixels(40.0)),
-        ] {
+        for position in [Offset::new(10.0, 20.0), Offset::new(30.0, 40.0)] {
             let hit_tests_for_move = Rc::clone(&hit_tests);
             binding.handle_pointer_event(
                 &make_move_event(position, PointerType::Mouse),
@@ -1980,10 +1977,8 @@ mod tests {
                 .expect("register hover target");
 
             for coordinate in [10.0, 30.0] {
-                let pointer_move = make_move_event(
-                    Offset::new(Pixels(coordinate), Pixels(5.0)),
-                    PointerType::Mouse,
-                );
+                let pointer_move =
+                    make_move_event(Offset::new(coordinate, 5.0), PointerType::Mouse);
                 binding.handle_pointer_event(&pointer_move, |_| hit_result(target));
             }
 
@@ -2030,11 +2025,8 @@ mod tests {
             } else {
                 first_pointer
             };
-            let down = make_down_event_for_id(
-                replacement,
-                Offset::new(Pixels(50.0), Pixels(50.0)),
-                PointerType::Mouse,
-            );
+            let down =
+                make_down_event_for_id(replacement, Offset::new(50.0, 50.0), PointerType::Mouse);
             callback_binding.handle_pointer_event(&down, |_| HitTestResult::new());
         });
         binding
@@ -2047,7 +2039,7 @@ mod tests {
         for (pointer, coordinate) in [(first_pointer, 10.0), (second_pointer, 20.0)] {
             let pointer_move = make_move_event_for_id(
                 pointer,
-                Offset::new(Pixels(coordinate), Pixels(coordinate)),
+                Offset::new(coordinate, coordinate),
                 PointerType::Mouse,
             );
             binding.handle_pointer_event(&pointer_move, |_| HitTestResult::new());
@@ -2090,15 +2082,14 @@ mod tests {
             if callback_queued_replacement.replace(true) {
                 return;
             }
-            let replacement =
-                make_move_event(Offset::new(Pixels(20.0), Pixels(20.0)), PointerType::Mouse);
+            let replacement = make_move_event(Offset::new(20.0, 20.0), PointerType::Mouse);
             callback_binding.handle_pointer_event(&replacement, |_| HitTestResult::new());
         });
         binding
             .pointer_router()
             .add_route(PointerId::PRIMARY, Rc::clone(&handler));
 
-        let first = make_move_event(Offset::new(Pixels(10.0), Pixels(10.0)), PointerType::Mouse);
+        let first = make_move_event(Offset::new(10.0, 10.0), PointerType::Mouse);
         binding.handle_pointer_event(&first, |_| HitTestResult::new());
 
         assert_eq!(binding.flush_pending_moves(), 1);
@@ -2155,7 +2146,7 @@ mod tests {
             let down_target_id = RenderId::new(1);
             let mut down_result = HitTestResult::new();
             down_result.add(HitTestEntry::new(down_target_id).pointer_target(pointer_target));
-            let position = Offset::new(Pixels(10.0), Pixels(10.0));
+            let position = Offset::new(10.0, 10.0);
             binding.handle_pointer_event(&make_down_event(position, PointerType::Mouse), |_| {
                 down_result
             });
@@ -2227,13 +2218,13 @@ mod tests {
             .pointer_router()
             .add_route(PointerId::PRIMARY, Rc::clone(&handler));
 
-        let down = make_down_event(Offset::new(Pixels(1.0), Pixels(2.0)), PointerType::Touch);
+        let down = make_down_event(Offset::new(1.0, 2.0), PointerType::Touch);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
-        let move_event = make_move_event(Offset::new(Pixels(3.0), Pixels(4.0)), PointerType::Touch);
+        let move_event = make_move_event(Offset::new(3.0, 4.0), PointerType::Touch);
         binding.handle_pointer_event(&move_event, |_| HitTestResult::new());
         assert_eq!(events.borrow().as_slice(), ["down"]);
 
-        let up = make_up_event(Offset::new(Pixels(5.0), Pixels(6.0)), PointerType::Touch);
+        let up = make_up_event(Offset::new(5.0, 6.0), PointerType::Touch);
         binding.handle_pointer_event(&up, |_| HitTestResult::new());
 
         assert_eq!(events.borrow().as_slice(), ["down", "move", "up"]);
@@ -2248,12 +2239,12 @@ mod tests {
 
         let binding = GestureBinding::new();
         let old_member = Arc::new(CountingArenaMember::default());
-        let down = make_down_event(Offset::new(Pixels(1.0), Pixels(2.0)), PointerType::Touch);
+        let down = make_down_event(Offset::new(1.0, 2.0), PointerType::Touch);
         binding.handle_pointer_event(&down, |_| {
             binding.arena().add(PointerId::PRIMARY, old_member.clone());
             HitTestResult::new()
         });
-        let move_event = make_move_event(Offset::new(Pixels(3.0), Pixels(4.0)), PointerType::Touch);
+        let move_event = make_move_event(Offset::new(3.0, 4.0), PointerType::Touch);
         binding.handle_pointer_event(&move_event, |_| HitTestResult::new());
         assert_eq!(binding.pending_move_count(), 1);
 
@@ -2292,8 +2283,7 @@ mod tests {
                 {
                     observations.set(observations.get() + 1);
                 }
-                let down =
-                    make_down_event(Offset::new(Pixels(9.0), Pixels(9.0)), PointerType::Touch);
+                let down = make_down_event(Offset::new(9.0, 9.0), PointerType::Touch);
                 let reentrant_calls = Rc::clone(&reentrant_calls);
                 binding_from_route.handle_pointer_event(&down, move |_| {
                     reentrant_calls.set(reentrant_calls.get() + 1);
@@ -2305,11 +2295,11 @@ mod tests {
             .pointer_router()
             .add_route(PointerId::PRIMARY, Rc::clone(&handler));
 
-        let down = make_down_event(Offset::new(Pixels(1.0), Pixels(2.0)), PointerType::Touch);
+        let down = make_down_event(Offset::new(1.0, 2.0), PointerType::Touch);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
-        let move_event = make_move_event(Offset::new(Pixels(3.0), Pixels(4.0)), PointerType::Touch);
+        let move_event = make_move_event(Offset::new(3.0, 4.0), PointerType::Touch);
         binding.handle_pointer_event(&move_event, |_| HitTestResult::new());
-        let up = make_up_event(Offset::new(Pixels(5.0), Pixels(6.0)), PointerType::Touch);
+        let up = make_up_event(Offset::new(5.0, 6.0), PointerType::Touch);
         binding.handle_pointer_event(&up, |_| HitTestResult::new());
 
         assert_eq!(detached_observations.get(), 2);
@@ -2326,10 +2316,10 @@ mod tests {
         // contact moves.
         let binding = GestureBinding::new();
         set_resampling(&binding, true);
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
 
-        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let mv = make_move_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         binding.handle_pointer_event(&mv, |_| HitTestResult::new());
 
         assert_eq!(binding.active_resampler_count(), 1);
@@ -2351,9 +2341,9 @@ mod tests {
     fn lifecycle_pause_clears_resamplers_and_pending_moves() {
         let binding = GestureBinding::new();
         set_resampling(&binding, true);
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
-        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let mv = make_move_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         binding.handle_pointer_event(&mv, |_| HitTestResult::new());
 
         assert!(binding.active_resampler_count() >= 1);
@@ -2369,10 +2359,10 @@ mod tests {
     fn flush_pending_moves_with_resampling_off_dispatches_directly() {
         // Off-path moves dispatch on flush.
         let binding = GestureBinding::new();
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
 
-        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let mv = make_move_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         binding.handle_pointer_event(&mv, |_| HitTestResult::new());
 
         let processed = binding.flush_pending_moves();
@@ -2389,10 +2379,10 @@ mod tests {
         // No direct queue mirrors the sequence-owned resampler.
         let binding = GestureBinding::new();
         set_resampling(&binding, true);
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
 
-        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let mv = make_move_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         binding.handle_pointer_event(&mv, |_| HitTestResult::new());
 
         let _ = binding.flush_pending_moves();
@@ -2420,7 +2410,7 @@ mod tests {
         let sample_time = Instant::now()
             .checked_sub(Duration::from_secs(1))
             .expect("test sample time remains representable");
-        let position = Offset::new(Pixels(8.0), Pixels(13.0));
+        let position = Offset::new(8.0, 13.0);
         binding.handle_pointer_event(&make_down_event(position, PointerType::Touch), |_| {
             HitTestResult::new()
         });
@@ -2473,7 +2463,7 @@ mod tests {
             .pointer_router()
             .add_route(PointerId::PRIMARY, Rc::clone(&observer));
 
-        let position = Offset::new(Pixels(8.0), Pixels(13.0));
+        let position = Offset::new(8.0, 13.0);
         binding.handle_pointer_event(&make_down_event(position, PointerType::Touch), |_| {
             HitTestResult::new()
         });
@@ -2529,7 +2519,7 @@ mod tests {
             .pointer_router()
             .add_route(pointer, Rc::clone(&handler));
 
-        let position = Offset::new(Pixels(1.0), Pixels(1.0));
+        let position = Offset::new(1.0, 1.0);
         binding.handle_pointer_event(&make_down_event(position, PointerType::Touch), |_| {
             HitTestResult::new()
         });
@@ -2576,26 +2566,23 @@ mod tests {
                 return;
             }
 
-            let up = make_up_event(Offset::new(Pixels(10.0), Pixels(10.0)), PointerType::Touch);
+            let up = make_up_event(Offset::new(10.0, 10.0), PointerType::Touch);
             callback_binding.handle_pointer_event(&up, |_| HitTestResult::new());
 
-            let down = make_down_event(Offset::new(Pixels(90.0), Pixels(90.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(90.0, 90.0), PointerType::Touch);
             callback_binding.handle_pointer_event(&down, |_| HitTestResult::new());
-            let next_move =
-                make_move_event(Offset::new(Pixels(99.0), Pixels(99.0)), PointerType::Touch);
+            let next_move = make_move_event(Offset::new(99.0, 99.0), PointerType::Touch);
             callback_binding.handle_pointer_event(&next_move, |_| HitTestResult::new());
         });
         binding
             .pointer_router()
             .add_route(PointerId::PRIMARY, Rc::clone(&handler));
 
-        let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Touch);
+        let down = make_down_event(Offset::new(0.0, 0.0), PointerType::Touch);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
         for coordinate in [10.0, 20.0] {
-            let pointer_move = make_move_event(
-                Offset::new(Pixels(coordinate), Pixels(coordinate)),
-                PointerType::Touch,
-            );
+            let pointer_move =
+                make_move_event(Offset::new(coordinate, coordinate), PointerType::Touch);
             binding.handle_pointer_event(&pointer_move, |_| HitTestResult::new());
         }
 
@@ -2623,7 +2610,7 @@ mod tests {
         // flush when resampling is enabled.
         let binding = GestureBinding::new();
         set_resampling(&binding, true);
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
 
         let tracked = binding
@@ -2643,9 +2630,9 @@ mod tests {
         binding.set_sampling_clock(SamplingClock::Fixed {
             period: Duration::from_millis(8),
         });
-        let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
         binding.handle_pointer_event(&down, |_| HitTestResult::new());
-        let mv = make_move_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let mv = make_move_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         binding.handle_pointer_event(&mv, |_| HitTestResult::new());
 
         let dispatched = binding.flush_pending_moves();
@@ -2710,7 +2697,7 @@ mod tests {
             });
             let observed_hit_tests = Rc::clone(&hit_tests);
             binding.handle_pointer_event(&event, move |position| {
-                assert_eq!(position, Offset::new(Pixels(42.0), Pixels(24.0)));
+                assert_eq!(position, Offset::new(42.0, 24.0));
                 observed_hit_tests.set(observed_hit_tests.get() + 1);
                 result
             });
@@ -2746,11 +2733,8 @@ mod tests {
 
     impl Drop for ReenterDownOnDrop {
         fn drop(&mut self) {
-            let down = make_down_event_for_id(
-                self.pointer,
-                Offset::new(Pixels(12.0), Pixels(12.0)),
-                PointerType::Touch,
-            );
+            let down =
+                make_down_event_for_id(self.pointer, Offset::new(12.0, 12.0), PointerType::Touch);
             self.binding
                 .handle_pointer_event(&down, |_| HitTestResult::new());
         }
@@ -2777,7 +2761,7 @@ mod tests {
                 .expect("register");
             let result = hit_result(target);
 
-            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             binding.handle_pointer_event(&down, |_| result.clone());
             assert_eq!(&*delivered.borrow(), &["down"]);
 
@@ -2785,20 +2769,19 @@ mod tests {
             // route cached at Down keeps its strong handler cell.
             handle.unregister_pointer(target).expect("unregister");
 
-            let mv = make_move_event(Offset::new(Pixels(9.0), Pixels(9.0)), PointerType::Mouse);
+            let mv = make_move_event(Offset::new(9.0, 9.0), PointerType::Mouse);
             binding.handle_pointer_event(&mv, |_| HitTestResult::new());
             binding.flush_pending_moves();
             assert_eq!(&*delivered.borrow(), &["down", "move"]);
 
-            let up = make_up_event(Offset::new(Pixels(9.0), Pixels(9.0)), PointerType::Mouse);
+            let up = make_up_event(Offset::new(9.0, 9.0), PointerType::Mouse);
             binding.handle_pointer_event(&up, |_| HitTestResult::new());
             assert_eq!(&*delivered.borrow(), &["down", "move", "up"]);
             assert!(!binding.has_hit_test(PointerId::PRIMARY));
 
             // A fresh Down on the removed target is a typed miss: nothing is
             // delivered and nothing panics.
-            let second_down =
-                make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let second_down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             binding.handle_pointer_event(&second_down, |_| hit_result(target));
             assert_eq!(&*delivered.borrow(), &["down", "move", "up"]);
         });
@@ -2819,7 +2802,7 @@ mod tests {
                 .expect("register");
             let result = hit_result(target);
 
-            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             binding.handle_pointer_event(&down, |_| result.clone());
             handle.unregister_pointer(target).expect("unregister");
             assert!(
@@ -2878,7 +2861,7 @@ mod tests {
             let result = hit_result(target);
 
             // A hover move teaches the mouse tracker this device's position.
-            let hover_position = Offset::new(Pixels(30.0), Pixels(40.0));
+            let hover_position = Offset::new(30.0, 40.0);
             let mv = make_move_event(hover_position, PointerType::Mouse);
             binding.handle_pointer_event(&mv, |_| result.clone());
 
@@ -2946,7 +2929,7 @@ mod tests {
                 .expect("register");
             let result = hit_result(target);
 
-            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Touch);
             let binding_for_down = Rc::clone(&binding);
             let member = arena_member.clone();
             binding.handle_pointer_event(&down, move |_| {
@@ -2974,7 +2957,7 @@ mod tests {
             // The pointer keeps moving after defocus: with the sequence
             // gone this is a hover (fresh hit test, ephemeral dispatch) —
             // the dead sequence's route must not receive it as a drag.
-            let mv = make_move_event(Offset::new(Pixels(9.0), Pixels(9.0)), PointerType::Touch);
+            let mv = make_move_event(Offset::new(9.0, 9.0), PointerType::Touch);
             binding.handle_pointer_event(&mv, |_| HitTestResult::new());
             binding.flush_pending_moves();
             assert_eq!(
@@ -3020,12 +3003,11 @@ mod tests {
 
             // PRIMARY sorts before pointer 2, so the panicking handler runs
             // first — the arrangement the loop must survive.
-            let first_down =
-                make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+            let first_down = make_down_event(Offset::new(5.0, 5.0), PointerType::Touch);
             binding.handle_pointer_event(&first_down, |_| hit_result(panicking));
             let second_down = make_down_event_for_id(
                 PointerId::new(2).expect("nonzero pointer id"),
-                Offset::new(Pixels(50.0), Pixels(50.0)),
+                Offset::new(50.0, 50.0),
                 PointerType::Touch,
             );
             binding.handle_pointer_event(&second_down, |_| hit_result(second));
@@ -3075,7 +3057,7 @@ mod tests {
                 .expect("register");
             let result = hit_result(target);
 
-            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             binding.handle_pointer_event(&down, |_| result);
 
             binding.handle_pointer_event(&make_boundary_event(false), |_| {
@@ -3083,7 +3065,7 @@ mod tests {
             });
             assert_eq!(&*log.borrow(), &["down", "leave"]);
 
-            let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let up = make_up_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             binding.handle_pointer_event(&up, |_| HitTestResult::new());
         });
     }
@@ -3115,14 +3097,14 @@ mod tests {
             result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(panicking));
             result.add(HitTestEntry::new(RenderId::new(2)).pointer_target(later));
 
-            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             binding.handle_pointer_event(&down, |_| result.clone());
             assert_eq!(later_deliveries.get(), 1);
             handle
                 .unregister_pointer(panicking)
                 .expect("route owns the panicking cell now");
 
-            let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let up = make_up_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 binding.handle_pointer_event(&up, |_| HitTestResult::new());
             }));
@@ -3174,7 +3156,7 @@ mod tests {
                 .expect("register hit target");
             let result = hit_result(target);
 
-            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Touch);
             binding.handle_pointer_event(&down, |_| result);
 
             assert_eq!(
@@ -3185,7 +3167,7 @@ mod tests {
             assert_eq!(binding.drain_deferred_arena_resolutions(), 1);
             assert_eq!(&*log.lock(), &["hit", "router", "arena"]);
 
-            let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+            let up = make_up_event(Offset::new(5.0, 5.0), PointerType::Touch);
             binding.handle_pointer_event(&up, |_| HitTestResult::new());
             binding
                 .pointer_router()
@@ -3219,7 +3201,7 @@ mod tests {
                 })
                 .expect("register hit target");
             let result = hit_result(target);
-            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             binding.handle_pointer_event(&down, |_| result);
             handle
                 .unregister_pointer(target)
@@ -3253,7 +3235,7 @@ mod tests {
             });
             binding.pointer_router().add_global_handler(global);
 
-            let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let up = make_up_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 binding.handle_pointer_event(&up, |_| HitTestResult::new());
             }));
@@ -3295,13 +3277,13 @@ mod tests {
                 })
                 .expect("register target");
             let result = hit_result(target);
-            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             binding.handle_pointer_event(&down, |_| result);
             handle
                 .unregister_pointer(target)
                 .expect("cached route owns the target");
 
-            let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Mouse);
+            let up = make_up_event(Offset::new(5.0, 5.0), PointerType::Mouse);
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 binding.handle_pointer_event(&up, |_| HitTestResult::new());
             }));
@@ -3327,30 +3309,18 @@ mod tests {
             let first_target = handle.register_pointer(|_| {}).expect("first target");
             let second_target = handle.register_pointer(|_| {}).expect("second target");
 
-            let first_down = make_down_event_for_id(
-                first_pointer,
-                Offset::new(Pixels(1.0), Pixels(1.0)),
-                PointerType::Touch,
-            );
+            let first_down =
+                make_down_event_for_id(first_pointer, Offset::new(1.0, 1.0), PointerType::Touch);
             binding.handle_pointer_event(&first_down, |_| hit_result(first_target));
-            let second_down = make_down_event_for_id(
-                second_pointer,
-                Offset::new(Pixels(2.0), Pixels(2.0)),
-                PointerType::Touch,
-            );
+            let second_down =
+                make_down_event_for_id(second_pointer, Offset::new(2.0, 2.0), PointerType::Touch);
             binding.handle_pointer_event(&second_down, |_| hit_result(second_target));
 
-            let first_move = make_move_event_for_id(
-                first_pointer,
-                Offset::new(Pixels(3.0), Pixels(3.0)),
-                PointerType::Touch,
-            );
+            let first_move =
+                make_move_event_for_id(first_pointer, Offset::new(3.0, 3.0), PointerType::Touch);
             binding.handle_pointer_event(&first_move, |_| HitTestResult::new());
-            let second_move = make_move_event_for_id(
-                second_pointer,
-                Offset::new(Pixels(4.0), Pixels(4.0)),
-                PointerType::Touch,
-            );
+            let second_move =
+                make_move_event_for_id(second_pointer, Offset::new(4.0, 4.0), PointerType::Touch);
             binding.handle_pointer_event(&second_move, |_| HitTestResult::new());
 
             // Match the callback roles to the map's actual drain order so the
@@ -3397,8 +3367,8 @@ mod tests {
             assert!(binding.pending_moves.is_empty());
 
             for (pointer, position) in [
-                (first_pointer, Offset::new(Pixels(3.0), Pixels(3.0))),
-                (second_pointer, Offset::new(Pixels(4.0), Pixels(4.0))),
+                (first_pointer, Offset::new(3.0, 3.0)),
+                (second_pointer, Offset::new(4.0, 4.0)),
             ] {
                 let up = make_up_event_for_id(pointer, position, PointerType::Touch);
                 binding.handle_pointer_event(&up, |_| HitTestResult::new());
@@ -3446,7 +3416,7 @@ mod tests {
                 })
                 .expect("register old target");
             let old_result = hit_result(old_target);
-            let down = make_down_event(Offset::new(Pixels(3.0), Pixels(3.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(3.0, 3.0), PointerType::Touch);
             entry_point.dispatch(&binding, &down, &old_result);
             handle
                 .unregister_pointer(old_target)
@@ -3489,7 +3459,7 @@ mod tests {
             handle
                 .unregister_pointer(new_target)
                 .expect("new cached route retains the replacement target");
-            let up = make_up_event(Offset::new(Pixels(3.0), Pixels(3.0)), PointerType::Touch);
+            let up = make_up_event(Offset::new(3.0, 3.0), PointerType::Touch);
             entry_point.dispatch(&binding, &up, &HitTestResult::new());
             assert_eq!(
                 target_deliveries.get(),
@@ -3535,10 +3505,9 @@ mod tests {
                 .arena()
                 .add(PointerId::PRIMARY, Arc::new(CountingArenaMember::default()));
 
-            let down = make_down_event(Offset::new(Pixels(4.0), Pixels(4.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(4.0, 4.0), PointerType::Touch);
             binding.handle_pointer_event(&down, |_| hit_result(target));
-            let move_event =
-                make_move_event(Offset::new(Pixels(8.0), Pixels(8.0)), PointerType::Touch);
+            let move_event = make_move_event(Offset::new(8.0, 8.0), PointerType::Touch);
             binding.handle_pointer_event(&move_event, |_| HitTestResult::new());
             handle
                 .unregister_pointer(target)
@@ -3576,10 +3545,9 @@ mod tests {
             binding
                 .arena()
                 .add(PointerId::PRIMARY, Arc::new(CountingArenaMember::default()));
-            let down = make_down_event(Offset::new(Pixels(4.0), Pixels(4.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(4.0, 4.0), PointerType::Touch);
             binding.handle_pointer_event(&down, |_| hit_result(target));
-            let move_event =
-                make_move_event(Offset::new(Pixels(8.0), Pixels(8.0)), PointerType::Touch);
+            let move_event = make_move_event(Offset::new(8.0, 8.0), PointerType::Touch);
             binding.handle_pointer_event(&move_event, |_| HitTestResult::new());
             handle
                 .unregister_pointer(target)
@@ -3630,17 +3598,11 @@ mod tests {
                     .add(pointer, Arc::new(CountingArenaMember::default()));
             }
 
-            let first_down = make_down_event_for_id(
-                first_pointer,
-                Offset::new(Pixels(1.0), Pixels(1.0)),
-                PointerType::Touch,
-            );
+            let first_down =
+                make_down_event_for_id(first_pointer, Offset::new(1.0, 1.0), PointerType::Touch);
             binding.handle_pointer_event(&first_down, |_| hit_result(first_target));
-            let later_down = make_down_event_for_id(
-                later_pointer,
-                Offset::new(Pixels(2.0), Pixels(2.0)),
-                PointerType::Touch,
-            );
+            let later_down =
+                make_down_event_for_id(later_pointer, Offset::new(2.0, 2.0), PointerType::Touch);
             binding.handle_pointer_event(&later_down, |_| hit_result(later_target));
 
             let first_token = binding
@@ -3663,7 +3625,7 @@ mod tests {
             for (pointer, coordinate) in [(first_pointer, 5.0), (later_pointer, 6.0)] {
                 let move_event = make_move_event_for_id(
                     pointer,
-                    Offset::new(Pixels(coordinate), Pixels(coordinate)),
+                    Offset::new(coordinate, coordinate),
                     PointerType::Touch,
                 );
                 binding.handle_pointer_event(&move_event, |_| HitTestResult::new());
@@ -3712,7 +3674,7 @@ mod tests {
                     let _keep_owner_alive = &owner;
                 })
                 .expect("register target");
-            let down = make_down_event(Offset::new(Pixels(2.0), Pixels(2.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(2.0, 2.0), PointerType::Touch);
             binding.handle_pointer_event(&down, |_| hit_result(target));
             handle
                 .unregister_pointer(target)
@@ -3776,7 +3738,7 @@ mod tests {
                 .arena()
                 .add(PointerId::PRIMARY, Arc::new(CountingArenaMember::default()));
 
-            let down = make_down_event(Offset::new(Pixels(7.0), Pixels(7.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(7.0, 7.0), PointerType::Touch);
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 binding.handle_pointer_event(&down, |_| result);
             }));
@@ -3793,7 +3755,7 @@ mod tests {
             handle
                 .unregister_pointer(later_target)
                 .expect("unregister later target");
-            let up = make_up_event(Offset::new(Pixels(7.0), Pixels(7.0)), PointerType::Touch);
+            let up = make_up_event(Offset::new(7.0, 7.0), PointerType::Touch);
             binding.handle_pointer_event(&up, |_| HitTestResult::new());
             assert_eq!(later_target_deliveries.get(), 2);
             assert_eq!(binding.active_pointer_count(), 0);
@@ -3857,7 +3819,7 @@ mod tests {
                 .arena()
                 .add(PointerId::PRIMARY, Arc::new(CountingArenaMember::default()));
 
-            let down = make_down_event(Offset::new(Pixels(7.0), Pixels(7.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(7.0, 7.0), PointerType::Touch);
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 binding.handle_pointer_event(&down, |_| result);
             }));
@@ -3941,7 +3903,7 @@ mod tests {
                 .arena()
                 .add(PointerId::PRIMARY, Arc::new(CountingArenaMember::default()));
 
-            let down = make_down_event(Offset::new(Pixels(9.0), Pixels(9.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(9.0, 9.0), PointerType::Touch);
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 binding.handle_pointer_event(&down, |_| result);
             }));
@@ -3955,7 +3917,7 @@ mod tests {
             handle
                 .unregister_pointer(target)
                 .expect("unregister target");
-            let up = make_up_event(Offset::new(Pixels(9.0), Pixels(9.0)), PointerType::Touch);
+            let up = make_up_event(Offset::new(9.0, 9.0), PointerType::Touch);
             binding.handle_pointer_event(&up, |_| HitTestResult::new());
             assert_eq!(hit_deliveries.get(), 2);
             assert_eq!(later_router_deliveries.get(), 2);
@@ -4011,7 +3973,7 @@ mod tests {
                 .arena()
                 .add(PointerId::PRIMARY, Arc::new(CountingArenaMember::default()));
 
-            let down = make_down_event(Offset::new(Pixels(6.0), Pixels(6.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(6.0, 6.0), PointerType::Touch);
             binding.handle_pointer_event(&down, |_| result);
             assert!(did_unregister.get());
             assert_eq!(later_deliveries.get(), 1);
@@ -4020,7 +3982,7 @@ mod tests {
             handle
                 .unregister_pointer(later_target)
                 .expect("unregister later target");
-            let up = make_up_event(Offset::new(Pixels(6.0), Pixels(6.0)), PointerType::Touch);
+            let up = make_up_event(Offset::new(6.0, 6.0), PointerType::Touch);
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 binding.handle_pointer_event(&up, |_| HitTestResult::new());
             }));
@@ -4054,14 +4016,14 @@ mod tests {
                 .expect("register hit target");
             let result = hit_result(target);
 
-            let down = make_down_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(5.0, 5.0), PointerType::Touch);
             entry_point.dispatch(&binding, &down, &result);
             handle
                 .unregister_pointer(target)
                 .expect("cached route owns the target");
             assert!(!handler_dropped.get());
 
-            let up = make_up_event(Offset::new(Pixels(5.0), Pixels(5.0)), PointerType::Touch);
+            let up = make_up_event(Offset::new(5.0, 5.0), PointerType::Touch);
             let unwind = catch_unwind(AssertUnwindSafe(|| {
                 entry_point.dispatch(&binding, &up, &HitTestResult::new());
             }));

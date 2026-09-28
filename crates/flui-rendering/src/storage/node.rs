@@ -969,7 +969,7 @@ impl RenderNode {
 #[cfg(test)]
 mod tests {
     use flui_foundation::Leaf;
-    use flui_types::{Size, geometry::px};
+    use flui_types::Size;
 
     use super::*;
     use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
@@ -986,7 +986,7 @@ mod tests {
         type ParentData = BoxParentData;
 
         fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            Size::new(px(100.0), px(50.0))
+            Size::new(100.0, 50.0)
         }
 
         fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}

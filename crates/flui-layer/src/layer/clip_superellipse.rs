@@ -1,7 +1,7 @@
 //! `ClipSuperellipseLayer` — clips its subtree to an iOS-style squircle.
 
 use flui_types::{
-    geometry::{Pixels, RSuperellipse, Rect},
+    geometry::{RSuperellipse, Rect},
     painting::Clip,
 };
 
@@ -33,12 +33,12 @@ use flui_types::{
 ///
 /// // Create superellipse with 20px corner radius
 /// let squircle = RSuperellipse::from_rect_circular(
-///     Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-///     px(20.0),
+///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+///     20.0,
 /// );
 /// let layer = ClipSuperellipseLayer::new(squircle, Clip::AntiAlias);
 ///
-/// assert_eq!(layer.clip_superellipse().width(), px(100.0));
+/// assert_eq!(layer.clip_superellipse().width(), 100.0);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipSuperellipseLayer {
@@ -85,7 +85,7 @@ impl ClipSuperellipseLayer {
 
     /// The clip shape's bounding box.
     #[inline]
-    pub fn bounds(&self) -> Rect<Pixels> {
+    pub fn bounds(&self) -> Rect<f64> {
         self.clip_superellipse.outer_rect()
     }
 
@@ -98,29 +98,24 @@ impl ClipSuperellipseLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
     #[test]
     fn test_clip_superellipse_layer_new() {
-        let squircle = RSuperellipse::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-            px(20.0),
-        );
+        let squircle =
+            RSuperellipse::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 20.0);
         let layer = ClipSuperellipseLayer::new(squircle, Clip::AntiAlias);
 
-        assert_eq!(layer.clip_superellipse().width(), px(100.0));
-        assert_eq!(layer.clip_superellipse().height(), px(100.0));
+        assert_eq!(layer.clip_superellipse().width(), 100.0);
+        assert_eq!(layer.clip_superellipse().height(), 100.0);
         assert_eq!(layer.clip_behavior(), Clip::AntiAlias);
     }
 
     #[test]
     fn test_clip_superellipse_layer_anti_alias() {
-        let squircle = RSuperellipse::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
-            px(10.0),
-        );
+        let squircle =
+            RSuperellipse::from_rect_circular(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), 10.0);
         let layer = ClipSuperellipseLayer::anti_alias(squircle);
 
         assert_eq!(layer.clip_behavior(), Clip::AntiAlias);
@@ -129,10 +124,8 @@ mod tests {
 
     #[test]
     fn test_clip_superellipse_layer_hard_edge() {
-        let squircle = RSuperellipse::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
-            px(10.0),
-        );
+        let squircle =
+            RSuperellipse::from_rect_circular(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), 10.0);
         let layer = ClipSuperellipseLayer::hard_edge(squircle);
 
         assert_eq!(layer.clip_behavior(), Clip::HardEdge);
@@ -141,17 +134,15 @@ mod tests {
 
     #[test]
     fn test_clip_superellipse_layer_bounds() {
-        let squircle = RSuperellipse::from_rect_circular(
-            Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)),
-            px(15.0),
-        );
+        let squircle =
+            RSuperellipse::from_rect_circular(Rect::from_xywh(10.0, 20.0, 100.0, 50.0), 15.0);
         let layer = ClipSuperellipseLayer::new(squircle, Clip::AntiAlias);
 
         let bounds = layer.bounds();
-        assert_eq!(bounds.left(), px(10.0));
-        assert_eq!(bounds.top(), px(20.0));
-        assert_eq!(bounds.width(), px(100.0));
-        assert_eq!(bounds.height(), px(50.0));
+        assert_eq!(bounds.left(), 10.0);
+        assert_eq!(bounds.top(), 20.0);
+        assert_eq!(bounds.width(), 100.0);
+        assert_eq!(bounds.height(), 50.0);
 
         assert_eq!(layer.bounds(), bounds);
     }

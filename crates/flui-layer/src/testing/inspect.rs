@@ -78,7 +78,7 @@ pub fn diagnostics_tree(tree: &LayerTree) -> DiagnosticsNode {
 
 /// The alpha of the first `Opacity` layer.
 #[must_use]
-pub fn first_opacity_alpha(tree: &LayerTree) -> Option<f32> {
+pub fn first_opacity_alpha(tree: &LayerTree) -> Option<f64> {
     find_first(tree, |layer| match layer {
         Layer::Opacity(opacity) => Some(opacity.alpha()),
         _ => None,
@@ -143,7 +143,7 @@ pub fn has_picture_layer(tree: &LayerTree) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{Matrix4, geometry::px, painting::Clip};
+    use flui_types::{Matrix4, painting::Clip};
 
     use super::*;
     use crate::{
@@ -224,8 +224,8 @@ mod tests {
     fn clip_collectors_return_every_clip_in_pre_order() {
         let mut tree = LayerTree::new(offset());
         let root = tree.root();
-        let outer_rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
-        let inner_rect = Rect::from_xywh(px(10.0), px(10.0), px(50.0), px(50.0));
+        let outer_rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let inner_rect = Rect::from_xywh(10.0, 10.0, 50.0, 50.0);
         let outer = tree.push_child(
             root,
             Layer::from(ClipRectLayer::new(outer_rect, Clip::HardEdge)),
@@ -234,7 +234,7 @@ mod tests {
             outer,
             Layer::from(ClipRectLayer::new(inner_rect, Clip::HardEdge)),
         );
-        let rrect = RRect::from_rect_circular(outer_rect, px(8.0));
+        let rrect = RRect::from_rect_circular(outer_rect, 8.0);
         let _ = tree.push_child(
             inner,
             Layer::from(ClipRRectLayer::new(rrect, Clip::AntiAlias)),
@@ -250,6 +250,6 @@ mod tests {
         assert_eq!(clip_rrects(&tree), vec![rrect]);
         let paths = clip_paths(&tree);
         assert_eq!(paths.len(), 1);
-        assert!(paths[0].contains(flui_types::geometry::Point::new(px(15.0), px(15.0))));
+        assert!(paths[0].contains(flui_types::geometry::Point::new(15.0, 15.0)));
     }
 }

@@ -6,7 +6,7 @@
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
-use flui_types::{Offset, Pixels, Point, Rect, Size, painting::Image};
+use flui_types::{Offset, Point, Rect, Size, painting::Image};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -59,7 +59,7 @@ impl ImageAlignment {
     /// Calculates the offset for the given image and container size.
     fn offset(&self, image_size: Size, container_size: Size) -> Offset {
         let x = match self {
-            Self::TopLeft | Self::Left | Self::BottomLeft => Pixels::ZERO,
+            Self::TopLeft | Self::Left | Self::BottomLeft => 0.0,
             Self::Top | Self::Center | Self::Bottom => {
                 (container_size.width - image_size.width) * 0.5
             }
@@ -69,7 +69,7 @@ impl ImageAlignment {
         };
 
         let y = match self {
-            Self::TopLeft | Self::Top | Self::TopRight => Pixels::ZERO,
+            Self::TopLeft | Self::Top | Self::TopRight => 0.0,
             Self::Left | Self::Center | Self::Right => {
                 (container_size.height - image_size.height) * 0.5
             }
@@ -103,13 +103,13 @@ pub struct RenderImage {
     /// Optional forced logical width. Folded into the constraints during
     /// sizing (Flutter `RenderImage.width`); `None` means derive from the
     /// image aspect.
-    width: Option<Pixels>,
+    width: Option<f64>,
     /// Optional forced logical height (Flutter `RenderImage.height`).
-    height: Option<Pixels>,
+    height: Option<f64>,
     /// Number of image pixels per logical pixel (Flutter `RenderImage.scale`).
     /// The intrinsic size is divided by this to get the logical aspect source,
     /// so a 2x asset renders at half its pixel dimensions.
-    scale: f32,
+    scale: f64,
     /// How to fit the image into available space. Affects paint only (where
     /// the image is fitted into the laid-out box), not the box size — matching
     /// Flutter, whose `_sizeForConstraints` never reads `fit`.
@@ -155,17 +155,17 @@ impl RenderImage {
     }
 
     /// Returns the forced logical width, if set.
-    pub fn width(&self) -> Option<Pixels> {
+    pub fn width(&self) -> Option<f64> {
         self.width
     }
 
     /// Returns the forced logical height, if set.
-    pub fn height(&self) -> Option<Pixels> {
+    pub fn height(&self) -> Option<f64> {
         self.height
     }
 
     /// Returns the image-pixels-per-logical-pixel scale.
-    pub fn scale(&self) -> f32 {
+    pub fn scale(&self) -> f64 {
         self.scale
     }
 
@@ -219,7 +219,7 @@ impl RenderImage {
     }
 
     /// Sets the forced logical width (`None` to derive from the image aspect).
-    pub fn set_width(&mut self, width: Option<Pixels>) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_width(&mut self, width: Option<f64>) -> flui_rendering::RenderUpdateImpact {
         if self.width == width {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
@@ -228,7 +228,7 @@ impl RenderImage {
     }
 
     /// Sets the forced logical height (`None` to derive from the image aspect).
-    pub fn set_height(&mut self, height: Option<Pixels>) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_height(&mut self, height: Option<f64>) -> flui_rendering::RenderUpdateImpact {
         if self.height == height {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
@@ -239,7 +239,7 @@ impl RenderImage {
     /// Sets the image-pixels-per-logical-pixel scale. A non-finite or
     /// non-positive value is rejected (the previous scale is kept) because it
     /// would make the logical aspect source NaN or zero.
-    pub fn set_scale(&mut self, scale: f32) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_scale(&mut self, scale: f64) -> flui_rendering::RenderUpdateImpact {
         if !scale.is_finite() || scale <= 0.0 || self.scale == scale {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
@@ -264,14 +264,14 @@ impl RenderImage {
         // against, so a high-DPI asset paints at its logical size — without the
         // divide, `ImageFit::None`/`ScaleDown` would draw a 2x asset at its full
         // pixel size and overflow its laid-out box.
-        let iw = self.intrinsic_size.width.get() / self.scale;
-        let ih = self.intrinsic_size.height.get() / self.scale;
+        let iw = self.intrinsic_size.width / self.scale;
+        let ih = self.intrinsic_size.height / self.scale;
         if iw <= 0.0 || ih <= 0.0 {
             return None;
         }
 
-        let bw = box_size.width.get();
-        let bh = box_size.height.get();
+        let bw = box_size.width;
+        let bh = box_size.height;
 
         // Determine the painted (scaled) size of the image content.
         let (pw, ph) = match self.fit {
@@ -292,7 +292,7 @@ impl RenderImage {
             ImageFit::None => (iw, ih),
         };
 
-        let painted = Size::new(Pixels::new(pw), Pixels::new(ph));
+        let painted = Size::new(pw, ph);
         let origin = self.alignment.offset(painted, box_size);
         Some(Rect::from_origin_size(
             Point::new(origin.dx, origin.dy),
@@ -324,10 +324,10 @@ impl RenderImage {
         let folded = constraints.tighten(self.width, self.height);
 
         let aspect = Size::new(
-            Pixels::new(self.intrinsic_size.width.get() / self.scale),
-            Pixels::new(self.intrinsic_size.height.get() / self.scale),
+            self.intrinsic_size.width / self.scale,
+            self.intrinsic_size.height / self.scale,
         );
-        if aspect.width.get() <= 0.0 || aspect.height.get() <= 0.0 {
+        if aspect.width <= 0.0 || aspect.height <= 0.0 {
             return folded.smallest();
         }
         folded.constrain_size_and_attempt_to_preserve_aspect_ratio(aspect)
@@ -390,60 +390,44 @@ impl RenderBox for RenderImage {
 
     fn compute_min_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         if self.width.is_none() && self.height.is_none() {
             return 0.0;
         }
-        self.compute_size(&BoxConstraints::tight_for_finite(
-            Pixels::INFINITY,
-            Pixels::new(height),
-        ))
-        .width
-        .get()
+        self.compute_size(&BoxConstraints::tight_for_finite(f64::INFINITY, height))
+            .width
     }
 
     fn compute_max_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        self.compute_size(&BoxConstraints::tight_for_finite(
-            Pixels::INFINITY,
-            Pixels::new(height),
-        ))
-        .width
-        .get()
+    ) -> f64 {
+        self.compute_size(&BoxConstraints::tight_for_finite(f64::INFINITY, height))
+            .width
     }
 
     fn compute_min_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         if self.width.is_none() && self.height.is_none() {
             return 0.0;
         }
-        self.compute_size(&BoxConstraints::tight_for_finite(
-            Pixels::new(width),
-            Pixels::INFINITY,
-        ))
-        .height
-        .get()
+        self.compute_size(&BoxConstraints::tight_for_finite(width, f64::INFINITY))
+            .height
     }
 
     fn compute_max_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        self.compute_size(&BoxConstraints::tight_for_finite(
-            Pixels::new(width),
-            Pixels::INFINITY,
-        ))
-        .height
-        .get()
+    ) -> f64 {
+        self.compute_size(&BoxConstraints::tight_for_finite(width, f64::INFINITY))
+            .height
     }
 
     /// Dry layout is the exact box size `perform_layout` commits — both go
@@ -459,13 +443,12 @@ impl RenderBox for RenderImage {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
     #[test]
     fn test_render_image_creation() {
-        let intrinsic = Size::new(px(100.0), px(200.0));
+        let intrinsic = Size::new(100.0, 200.0);
         let image = RenderImage::new(intrinsic, ImageFit::Contain, ImageAlignment::Center);
 
         assert_eq!(image.intrinsic_size, intrinsic);
@@ -476,15 +459,15 @@ mod tests {
     #[test]
     fn test_image_fit_contain_shrinks_width() {
         let image = RenderImage::new(
-            Size::new(px(200.0), px(100.0)),
+            Size::new(200.0, 100.0),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
         let constraints = BoxConstraints {
-            min_width: Pixels::ZERO,
-            max_width: px(100.0),
-            min_height: Pixels::ZERO,
-            max_height: px(100.0),
+            min_width: 0.0,
+            max_width: 100.0,
+            min_height: 0.0,
+            max_height: 100.0,
         };
 
         let computed = image.compute_size(&constraints);
@@ -494,69 +477,69 @@ mod tests {
         assert!(computed.height <= constraints.max_height);
         // Check aspect ratio preserved: width/height = 200/100 = 2/1
         let expected_height = computed.width * 0.5; // height = width / 2
-        assert!((computed.height.get() - expected_height.get()).abs() < 0.01);
+        assert!((computed.height - expected_height).abs() < 0.01);
     }
 
     #[test]
     fn test_image_fit_fill_stretches() {
         let image = RenderImage::new(
-            Size::new(px(100.0), px(100.0)),
+            Size::new(100.0, 100.0),
             ImageFit::Fill,
             ImageAlignment::Center,
         );
         let constraints = BoxConstraints {
-            min_width: px(200.0),
-            max_width: px(200.0),
-            min_height: px(150.0),
-            max_height: px(150.0),
+            min_width: 200.0,
+            max_width: 200.0,
+            min_height: 150.0,
+            max_height: 150.0,
         };
 
         let computed = image.compute_size(&constraints);
-        assert_eq!(computed.width, px(200.0));
-        assert_eq!(computed.height, px(150.0));
+        assert_eq!(computed.width, 200.0);
+        assert_eq!(computed.height, 150.0);
     }
 
     #[test]
     fn test_image_fit_none_constrains() {
         let image = RenderImage::new(
-            Size::new(px(50.0), px(50.0)),
+            Size::new(50.0, 50.0),
             ImageFit::None,
             ImageAlignment::Center,
         );
         let constraints = BoxConstraints {
-            min_width: Pixels::ZERO,
-            max_width: px(100.0),
-            min_height: Pixels::ZERO,
-            max_height: px(100.0),
+            min_width: 0.0,
+            max_width: 100.0,
+            min_height: 0.0,
+            max_height: 100.0,
         };
 
         let computed = image.compute_size(&constraints);
         // None fit: show at natural size (50x50), which fits in constraints
-        assert_eq!(computed.width, px(50.0));
-        assert_eq!(computed.height, px(50.0));
+        assert_eq!(computed.width, 50.0);
+        assert_eq!(computed.height, 50.0);
     }
 
     #[test]
     fn test_image_alignment_center_offset() {
         let alignment = ImageAlignment::Center;
-        let image_size = Size::new(px(50.0), px(50.0));
-        let container_size = Size::new(px(100.0), px(100.0));
+        let image_size = Size::new(50.0, 50.0);
+        let container_size = Size::new(100.0, 100.0);
 
         let offset = alignment.offset(image_size, container_size);
         // Center alignment should place image at (25, 25) in container
-        assert_eq!(offset.dx, px(25.0));
-        assert_eq!(offset.dy, px(25.0));
+        assert_eq!(offset.dx, 25.0);
+        assert_eq!(offset.dy, 25.0);
     }
 
     #[test]
     fn test_image_alignment_top_left() {
         let alignment = ImageAlignment::TopLeft;
-        let image_size = Size::new(px(50.0), px(50.0));
-        let container_size = Size::new(px(100.0), px(100.0));
+        let image_size = Size::new(50.0, 50.0);
+        let container_size = Size::new(100.0, 100.0);
 
         let offset = alignment.offset(image_size, container_size);
-        assert_eq!(offset.dx, Pixels::ZERO);
-        assert_eq!(offset.dy, Pixels::ZERO);
+        assert_eq!(offset.dx, 0.0);
+        assert_eq!(offset.dy, 0.0);
     }
 
     fn test_image_2x2() -> Image {
@@ -568,14 +551,14 @@ mod tests {
     fn test_from_image_derives_intrinsic_size() {
         let image =
             RenderImage::from_image(test_image_2x2(), ImageFit::Contain, ImageAlignment::Center);
-        assert_eq!(image.intrinsic_size, Size::new(px(2.0), px(2.0)));
+        assert_eq!(image.intrinsic_size, Size::new(2.0, 2.0));
         assert!(image.image().is_some());
     }
 
     #[test]
     fn test_set_image_updates_intrinsic_size() {
         let mut image = RenderImage::new(
-            Size::new(px(10.0), px(10.0)),
+            Size::new(10.0, 10.0),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
@@ -585,7 +568,7 @@ mod tests {
             image.set_image(Some(test_image_2x2())),
             flui_rendering::RenderUpdateImpact::LAYOUT,
         );
-        assert_eq!(image.intrinsic_size, Size::new(px(2.0), px(2.0)));
+        assert_eq!(image.intrinsic_size, Size::new(2.0, 2.0));
         assert!(image.image().is_some());
 
         assert_eq!(
@@ -594,13 +577,13 @@ mod tests {
         );
         assert!(image.image().is_none());
         // Clearing the image leaves the last intrinsic size unchanged.
-        assert_eq!(image.intrinsic_size, Size::new(px(2.0), px(2.0)));
+        assert_eq!(image.intrinsic_size, Size::new(2.0, 2.0));
     }
 
     #[test]
     fn configuration_setters_report_exact_independent_impacts() {
         let mut image = RenderImage::new(
-            Size::new(px(10.0), px(20.0)),
+            Size::new(10.0, 20.0),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
@@ -617,9 +600,7 @@ mod tests {
             flui_rendering::RenderUpdateImpact::PAINT,
         );
         assert_eq!(
-            image.set_width(Some(px(30.0)))
-                | image.set_height(Some(px(40.0)))
-                | image.set_scale(2.0),
+            image.set_width(Some(30.0)) | image.set_height(Some(40.0)) | image.set_scale(2.0),
             flui_rendering::RenderUpdateImpact::LAYOUT,
         );
     }
@@ -629,35 +610,35 @@ mod tests {
         // Intrinsic 2:1 (200x100) in a 100x100 box → contain gives 100x50
         // centered vertically at y=25.
         let image = RenderImage::new(
-            Size::new(px(200.0), px(100.0)),
+            Size::new(200.0, 100.0),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
 
         let rect = image
-            .paint_rect_in(Size::new(px(100.0), px(100.0)))
+            .paint_rect_in(Size::new(100.0, 100.0))
             .expect("paint rect");
-        assert_eq!(rect.size().width, px(100.0));
-        assert_eq!(rect.size().height, px(50.0));
-        assert_eq!(rect.origin().x, Pixels::ZERO);
-        assert_eq!(rect.origin().y, px(25.0));
+        assert_eq!(rect.size().width, 100.0);
+        assert_eq!(rect.size().height, 50.0);
+        assert_eq!(rect.origin().x, 0.0);
+        assert_eq!(rect.origin().y, 25.0);
     }
 
     #[test]
     fn test_compute_paint_rect_fill_matches_box() {
         let image = RenderImage::new(
-            Size::new(px(50.0), px(50.0)),
+            Size::new(50.0, 50.0),
             ImageFit::Fill,
             ImageAlignment::TopLeft,
         );
 
         let rect = image
-            .paint_rect_in(Size::new(px(120.0), px(80.0)))
+            .paint_rect_in(Size::new(120.0, 80.0))
             .expect("paint rect");
-        assert_eq!(rect.size().width, px(120.0));
-        assert_eq!(rect.size().height, px(80.0));
-        assert_eq!(rect.origin().x, Pixels::ZERO);
-        assert_eq!(rect.origin().y, Pixels::ZERO);
+        assert_eq!(rect.size().width, 120.0);
+        assert_eq!(rect.size().height, 80.0);
+        assert_eq!(rect.origin().x, 0.0);
+        assert_eq!(rect.origin().y, 0.0);
     }
 
     #[test]
@@ -665,48 +646,44 @@ mod tests {
         // Intrinsic 1:2 (100x200) covered into 100x100 box → scale by max
         // (1.0 vs 0.5) = 1.0, painted 100x200, overflowing height (cropped).
         let image = RenderImage::new(
-            Size::new(px(100.0), px(200.0)),
+            Size::new(100.0, 200.0),
             ImageFit::Cover,
             ImageAlignment::Center,
         );
 
         let rect = image
-            .paint_rect_in(Size::new(px(100.0), px(100.0)))
+            .paint_rect_in(Size::new(100.0, 100.0))
             .expect("paint rect");
-        assert_eq!(rect.size().width, px(100.0));
-        assert_eq!(rect.size().height, px(200.0));
+        assert_eq!(rect.size().width, 100.0);
+        assert_eq!(rect.size().height, 200.0);
         // Centered vertically → origin y = (100 - 200)/2 = -50 (crop top/bottom)
-        assert_eq!(rect.origin().y, px(-50.0));
+        assert_eq!(rect.origin().y, -50.0);
     }
 
     #[test]
     fn test_compute_paint_rect_scale_down_never_enlarges() {
         // Small 10x10 image in a big 100x100 box → ScaleDown keeps 10x10.
         let image = RenderImage::new(
-            Size::new(px(10.0), px(10.0)),
+            Size::new(10.0, 10.0),
             ImageFit::ScaleDown,
             ImageAlignment::TopLeft,
         );
 
         let rect = image
-            .paint_rect_in(Size::new(px(100.0), px(100.0)))
+            .paint_rect_in(Size::new(100.0, 100.0))
             .expect("paint rect");
-        assert_eq!(rect.size().width, px(10.0));
-        assert_eq!(rect.size().height, px(10.0));
+        assert_eq!(rect.size().width, 10.0);
+        assert_eq!(rect.size().height, 10.0);
     }
 
     #[test]
     fn test_compute_paint_rect_zero_intrinsic_is_none() {
         let image = RenderImage::new(
-            Size::new(px(0.0), px(50.0)),
+            Size::new(0.0, 50.0),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
-        assert!(
-            image
-                .paint_rect_in(Size::new(px(100.0), px(100.0)))
-                .is_none()
-        );
+        assert!(image.paint_rect_in(Size::new(100.0, 100.0)).is_none());
     }
 
     // ===== Paint pipeline integration (drives the real paint() method) =====
@@ -742,12 +719,12 @@ mod tests {
     #[test]
     fn test_paint_without_image_records_nothing() {
         let image = RenderImage::new(
-            Size::new(px(10.0), px(10.0)),
+            Size::new(10.0, 10.0),
             ImageFit::Fill,
             ImageAlignment::Center,
         );
         // No source image set → paint() should be a no-op.
-        assert!(capture_draw_images(&image, Size::new(px(100.0), px(100.0))).is_empty());
+        assert!(capture_draw_images(&image, Size::new(100.0, 100.0)).is_empty());
     }
 
     #[test]
@@ -758,15 +735,15 @@ mod tests {
         let image =
             RenderImage::from_image(test_image_2x2(), ImageFit::Contain, ImageAlignment::Center);
 
-        let draws = capture_draw_images(&image, Size::new(px(100.0), px(50.0)));
+        let draws = capture_draw_images(&image, Size::new(100.0, 50.0));
         assert_eq!(draws.len(), 1, "expected exactly one DrawImage command");
 
         let (byte_count, dst) = draws[0];
         assert_eq!(byte_count, 2 * 2 * 4, "2x2 RGBA = 16 bytes");
-        assert_eq!(dst.size().width, px(50.0));
-        assert_eq!(dst.size().height, px(50.0));
-        assert_eq!(dst.origin().x, px(25.0));
-        assert_eq!(dst.origin().y, Pixels::ZERO);
+        assert_eq!(dst.size().width, 50.0);
+        assert_eq!(dst.size().height, 50.0);
+        assert_eq!(dst.origin().x, 25.0);
+        assert_eq!(dst.origin().y, 0.0);
     }
 
     #[test]
@@ -774,13 +751,13 @@ mod tests {
         let image =
             RenderImage::from_image(test_image_2x2(), ImageFit::Fill, ImageAlignment::TopLeft);
 
-        let draws = capture_draw_images(&image, Size::new(px(120.0), px(80.0)));
+        let draws = capture_draw_images(&image, Size::new(120.0, 80.0));
         assert_eq!(draws.len(), 1);
         let (_, dst) = draws[0];
-        assert_eq!(dst.origin().x, Pixels::ZERO);
-        assert_eq!(dst.origin().y, Pixels::ZERO);
-        assert_eq!(dst.size().width, px(120.0));
-        assert_eq!(dst.size().height, px(80.0));
+        assert_eq!(dst.origin().x, 0.0);
+        assert_eq!(dst.origin().y, 0.0);
+        assert_eq!(dst.size().width, 120.0);
+        assert_eq!(dst.size().height, 80.0);
     }
 
     // ===== width / height / scale folding + intrinsics + dry layout =====
@@ -791,17 +768,17 @@ mod tests {
     fn forced_width_tightens_box_and_preserves_aspect() {
         // 1:1 intrinsic, forced logical width 40, otherwise unconstrained → 40x40.
         let mut img = RenderImage::new(
-            Size::new(px(4.0), px(4.0)),
+            Size::new(4.0, 4.0),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
         assert_eq!(
-            img.set_width(Some(px(40.0))),
+            img.set_width(Some(40.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
         assert_eq!(
             img.compute_size(&BoxConstraints::UNCONSTRAINED),
-            Size::new(px(40.0), px(40.0)),
+            Size::new(40.0, 40.0),
         );
     }
 
@@ -809,7 +786,7 @@ mod tests {
     fn scale_divides_the_aspect_source() {
         // 200x100 intrinsic at scale 2 → logical aspect source 100x50.
         let mut img = RenderImage::new(
-            Size::new(px(200.0), px(100.0)),
+            Size::new(200.0, 100.0),
             ImageFit::Fill,
             ImageAlignment::Center,
         );
@@ -819,7 +796,7 @@ mod tests {
         );
         assert_eq!(
             img.compute_size(&BoxConstraints::UNCONSTRAINED),
-            Size::new(px(100.0), px(50.0)),
+            Size::new(100.0, 50.0),
         );
     }
 
@@ -828,12 +805,12 @@ mod tests {
         // Flutter `_sizeForConstraints` never reads `fit`: every fit mode under
         // the same constraints + intrinsic must produce the same box.
         let constraints = BoxConstraints {
-            min_width: Pixels::ZERO,
-            max_width: px(80.0),
-            min_height: Pixels::ZERO,
-            max_height: px(80.0),
+            min_width: 0.0,
+            max_width: 80.0,
+            min_height: 0.0,
+            max_height: 80.0,
         };
-        let intrinsic = Size::new(px(200.0), px(100.0)); // 2:1 → 80x40 in an 80² box
+        let intrinsic = Size::new(200.0, 100.0); // 2:1 → 80x40 in an 80² box
         for fit in [
             ImageFit::Fill,
             ImageFit::Contain,
@@ -844,7 +821,7 @@ mod tests {
             let img = RenderImage::new(intrinsic, fit, ImageAlignment::Center);
             assert_eq!(
                 img.compute_size(&constraints),
-                Size::new(px(80.0), px(40.0)),
+                Size::new(80.0, 40.0),
                 "fit {fit:?} must not affect the box size",
             );
         }
@@ -853,27 +830,27 @@ mod tests {
     #[test]
     fn intrinsics_report_aspect_extent() {
         let img = RenderImage::new(
-            Size::new(px(200.0), px(100.0)),
+            Size::new(200.0, 100.0),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
         // Max-intrinsics under an unbounded cross extent = the aspect source.
         assert_eq!(
-            leaf_intrinsics(|c| img.compute_max_intrinsic_width(f32::INFINITY, c)),
+            leaf_intrinsics(|c| img.compute_max_intrinsic_width(f64::INFINITY, c)),
             200.0,
         );
         assert_eq!(
-            leaf_intrinsics(|c| img.compute_max_intrinsic_height(f32::INFINITY, c)),
+            leaf_intrinsics(|c| img.compute_max_intrinsic_height(f64::INFINITY, c)),
             100.0,
         );
         // Min-intrinsics are 0 with no forced width/height (the image can scale
         // down to nothing).
         assert_eq!(
-            leaf_intrinsics(|c| img.compute_min_intrinsic_width(f32::INFINITY, c)),
+            leaf_intrinsics(|c| img.compute_min_intrinsic_width(f64::INFINITY, c)),
             0.0,
         );
         assert_eq!(
-            leaf_intrinsics(|c| img.compute_min_intrinsic_height(f32::INFINITY, c)),
+            leaf_intrinsics(|c| img.compute_min_intrinsic_height(f64::INFINITY, c)),
             0.0,
         );
     }
@@ -881,24 +858,24 @@ mod tests {
     #[test]
     fn forced_width_drives_min_intrinsic_and_dry_layout_matches_layout() {
         let mut img = RenderImage::new(
-            Size::new(px(200.0), px(100.0)),
+            Size::new(200.0, 100.0),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
         assert_eq!(
-            img.set_width(Some(px(80.0))),
+            img.set_width(Some(80.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
         // A forced width makes the min-intrinsic-width report it (80).
         assert_eq!(
-            leaf_intrinsics(|c| img.compute_min_intrinsic_width(f32::INFINITY, c)),
+            leaf_intrinsics(|c| img.compute_min_intrinsic_width(f64::INFINITY, c)),
             80.0,
         );
         // Dry layout equals the size perform_layout commits for the same constraints.
         let constraints = BoxConstraints::UNCONSTRAINED;
         let dry = leaf_dry_layout(|c| img.compute_dry_layout(constraints, c));
         assert_eq!(dry, img.compute_size(&constraints));
-        assert_eq!(dry, Size::new(px(80.0), px(40.0)));
+        assert_eq!(dry, Size::new(80.0, 40.0));
     }
 
     #[test]
@@ -906,25 +883,25 @@ mod tests {
         // Forced width 40, but the parent demands min_width 50: the committed
         // size must not drop below the parent's minimum.
         let mut img = RenderImage::new(
-            Size::new(px(4.0), px(4.0)),
+            Size::new(4.0, 4.0),
             ImageFit::Contain,
             ImageAlignment::Center,
         );
         assert_eq!(
-            img.set_width(Some(px(40.0))),
+            img.set_width(Some(40.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
         let constraints = BoxConstraints {
-            min_width: px(50.0),
-            max_width: px(200.0),
-            min_height: Pixels::ZERO,
-            max_height: px(200.0),
+            min_width: 50.0,
+            max_width: 200.0,
+            min_height: 0.0,
+            max_height: 200.0,
         };
         let size = img.compute_size(&constraints);
         assert!(
-            size.width >= px(50.0),
+            size.width >= 50.0,
             "forced width {} must not violate the parent minimum 50",
-            size.width.get(),
+            size.width,
         );
         assert!(
             constraints.is_satisfied_by(size),
@@ -937,7 +914,7 @@ mod tests {
         // 200x100 asset at scale 2 → logical 100x50. In an oversized box,
         // ImageFit::None paints at the logical size, not the raw pixel size.
         let mut img = RenderImage::new(
-            Size::new(px(200.0), px(100.0)),
+            Size::new(200.0, 100.0),
             ImageFit::None,
             ImageAlignment::TopLeft,
         );
@@ -946,9 +923,9 @@ mod tests {
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
         let rect = img
-            .paint_rect_in(Size::new(px(400.0), px(400.0)))
+            .paint_rect_in(Size::new(400.0, 400.0))
             .expect("paint rect");
-        assert_eq!(rect.size().width, px(100.0));
-        assert_eq!(rect.size().height, px(50.0));
+        assert_eq!(rect.size().width, 100.0);
+        assert_eq!(rect.size().height, 50.0);
     }
 }

@@ -1,6 +1,6 @@
 //! `ImageFilterLayer` — filters its subtree's pixels: blur, dilate, erode, colour matrix.
 
-use flui_types::{Offset, geometry::Pixels, painting::effects::ImageFilter};
+use flui_types::{Offset, painting::effects::ImageFilter};
 
 /// Layer that applies an image filter to its children.
 ///
@@ -49,7 +49,7 @@ pub struct ImageFilterLayer {
     filter: ImageFilter,
 
     /// Optional offset (for optimization)
-    offset: Offset<Pixels>,
+    offset: Offset<f64>,
 }
 
 impl ImageFilterLayer {
@@ -64,31 +64,31 @@ impl ImageFilterLayer {
 
     /// Like [`Self::new`], also translating the subtree by `offset`.
     #[inline]
-    pub fn with_offset(filter: ImageFilter, offset: Offset<Pixels>) -> Self {
+    pub fn with_offset(filter: ImageFilter, offset: Offset<f64>) -> Self {
         Self { filter, offset }
     }
 
     /// A Gaussian blur with standard deviation `sigma` on both axes.
     #[inline]
-    pub fn blur(sigma: f32) -> Self {
+    pub fn blur(sigma: f64) -> Self {
         Self::new(ImageFilter::blur(sigma))
     }
 
     /// A Gaussian blur with per-axis standard deviations.
     #[inline]
-    pub fn blur_xy(sigma_x: f32, sigma_y: f32) -> Self {
+    pub fn blur_xy(sigma_x: f64, sigma_y: f64) -> Self {
         Self::new(ImageFilter::blur_directional(sigma_x, sigma_y))
     }
 
     /// A morphological dilation by `radius` pixels: bright regions grow (glow).
     #[inline]
-    pub fn dilate(radius: f32) -> Self {
+    pub fn dilate(radius: f64) -> Self {
         Self::new(ImageFilter::dilate(radius))
     }
 
     /// A morphological erosion by `radius` pixels: bright regions shrink.
     #[inline]
-    pub fn erode(radius: f32) -> Self {
+    pub fn erode(radius: f64) -> Self {
         Self::new(ImageFilter::erode(radius))
     }
 
@@ -106,7 +106,7 @@ impl ImageFilterLayer {
 
     /// The translation applied to the subtree (see [`Self::with_offset`]).
     #[inline]
-    pub fn offset(&self) -> Offset<Pixels> {
+    pub fn offset(&self) -> Offset<f64> {
         self.offset
     }
 
@@ -119,7 +119,6 @@ impl ImageFilterLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -135,12 +134,12 @@ mod tests {
     #[test]
     fn test_image_filter_layer_with_offset() {
         let filter = ImageFilter::blur(5.0);
-        let offset = Offset::new(px(10.0), px(20.0));
+        let offset = Offset::new(10.0, 20.0);
         let layer = ImageFilterLayer::with_offset(filter, offset);
 
         assert!(layer.has_offset());
-        assert_eq!(layer.offset().dx, px(10.0));
-        assert_eq!(layer.offset().dy, px(20.0));
+        assert_eq!(layer.offset().dx, 10.0);
+        assert_eq!(layer.offset().dy, 20.0);
     }
 
     #[test]

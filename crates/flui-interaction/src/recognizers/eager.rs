@@ -39,7 +39,7 @@
 //! // The recogniser claims the arena immediately on `add_pointer` — no
 //! // pointer event is required. The owner closes the arena after routing Down.
 //! let pointer = PointerId::PRIMARY;
-//! let position = Offset::new(Pixels(50.0), Pixels(50.0));
+//! let position = Offset::new(50.0, 50.0);
 //! recognizer.add_pointer(pointer, position, position);
 //! assert!(arena.contains(pointer));
 //! arena.close(pointer);
@@ -62,7 +62,7 @@
 
 use std::sync::Arc;
 
-use flui_types::{Offset, geometry::Pixels};
+use flui_types::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
@@ -123,13 +123,13 @@ impl GestureRecognizer for EagerGestureRecognizer {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: PointerId,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         // Eager reports no position in any callback of its own, but the base
         // records the contact in both spaces all the same: `initial_position`
         // and `initial_global_position` are read through the
         // `PrimaryPointerGestureRecognizer` trait, and a half-recorded contact
         // there would be a trap for the next reader.
-        global_position: Offset<Pixels>,
+        global_position: Offset<f64>,
     ) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
@@ -213,7 +213,7 @@ impl crate::recognizers::OneSequenceGestureRecognizer for EagerGestureRecognizer
 }
 
 impl crate::recognizers::PrimaryPointerGestureRecognizer for EagerGestureRecognizer {
-    fn initial_position(&self) -> Option<Offset<Pixels>> {
+    fn initial_position(&self) -> Option<Offset<f64>> {
         self.state.initial_position()
     }
 
@@ -253,8 +253,8 @@ mod tests {
     use crate::events::PointerType;
     use std::sync::Arc;
 
-    fn pos(x: f32, y: f32) -> Offset<Pixels> {
-        Offset::new(Pixels(x), Pixels(y))
+    fn pos(x: f64, y: f64) -> Offset<f64> {
+        Offset::new(x, y)
     }
 
     /// Minimal arena-member stand-in for arena-conflict tests. The real

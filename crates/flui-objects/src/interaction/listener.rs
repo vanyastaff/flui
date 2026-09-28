@@ -178,7 +178,7 @@ impl RenderBox for RenderListener {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         flui_rendering::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
     }
 

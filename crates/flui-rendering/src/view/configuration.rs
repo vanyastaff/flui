@@ -29,7 +29,7 @@ pub struct ViewConfiguration {
     /// The pixel density of the output surface.
     ///
     /// This is the number of physical pixels per logical pixel.
-    device_pixel_ratio: f32,
+    device_pixel_ratio: f64,
 }
 
 impl Default for ViewConfiguration {
@@ -50,7 +50,7 @@ impl ViewConfiguration {
     pub fn new(
         physical_constraints: BoxConstraints,
         logical_constraints: BoxConstraints,
-        device_pixel_ratio: f32,
+        device_pixel_ratio: f64,
     ) -> Self {
         Self {
             physical_constraints,
@@ -64,7 +64,7 @@ impl ViewConfiguration {
     ///
     /// This is a convenience constructor that derives logical constraints
     /// from physical constraints and the device pixel ratio.
-    pub fn from_size(physical_size: Size, device_pixel_ratio: f32) -> Self {
+    pub fn from_size(physical_size: Size, device_pixel_ratio: f64) -> Self {
         let physical_constraints = BoxConstraints::tight(physical_size);
         let logical_size = Size::new(
             physical_size.width / device_pixel_ratio,
@@ -86,7 +86,7 @@ impl ViewConfiguration {
     pub fn flexible(
         min_physical_size: Size,
         max_physical_size: Size,
-        device_pixel_ratio: f32,
+        device_pixel_ratio: f64,
     ) -> Self {
         let physical_constraints = BoxConstraints::new(
             min_physical_size.width,
@@ -129,7 +129,7 @@ impl ViewConfiguration {
     ///
     /// This is the number of physical pixels per logical pixel.
     #[inline]
-    pub fn device_pixel_ratio(&self) -> f32 {
+    pub fn device_pixel_ratio(&self) -> f64 {
         self.device_pixel_ratio
     }
 
@@ -170,7 +170,6 @@ impl ViewConfiguration {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -190,35 +189,31 @@ mod tests {
 
     #[test]
     fn test_view_configuration_from_size() {
-        let config = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(1920.0, 1080.0), 2.0);
         assert_eq!(config.device_pixel_ratio(), 2.0);
         assert_eq!(
             config.physical_constraints(),
-            BoxConstraints::tight(Size::new(px(1920.0), px(1080.0)))
+            BoxConstraints::tight(Size::new(1920.0, 1080.0))
         );
         assert_eq!(
             config.logical_constraints(),
-            BoxConstraints::tight(Size::new(px(960.0), px(540.0)))
+            BoxConstraints::tight(Size::new(960.0, 540.0))
         );
     }
 
     #[test]
     fn test_view_configuration_flexible() {
-        let config = ViewConfiguration::flexible(
-            Size::new(px(0.0), px(0.0)),
-            Size::new(px(800.0), px(600.0)),
-            1.0,
-        );
+        let config = ViewConfiguration::flexible(Size::new(0.0, 0.0), Size::new(800.0, 600.0), 1.0);
         let logical = config.logical_constraints();
-        assert_eq!(logical.min_width, px(0.0));
-        assert_eq!(logical.max_width, px(800.0));
-        assert_eq!(logical.min_height, px(0.0));
-        assert_eq!(logical.max_height, px(600.0));
+        assert_eq!(logical.min_width, 0.0);
+        assert_eq!(logical.max_width, 800.0);
+        assert_eq!(logical.min_height, 0.0);
+        assert_eq!(logical.max_height, 600.0);
     }
 
     #[test]
     fn test_view_configuration_to_matrix() {
-        let config = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(1920.0, 1080.0), 2.0);
         let matrix = config.to_matrix();
         assert!((matrix[0] - 2.0).abs() < 1e-6);
         assert!((matrix[5] - 2.0).abs() < 1e-6);
@@ -228,9 +223,9 @@ mod tests {
 
     #[test]
     fn test_view_configuration_should_update_matrix() {
-        let config1 = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 1.0);
-        let config2 = ViewConfiguration::from_size(Size::new(px(1600.0), px(1200.0)), 2.0);
-        let config3 = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 1.0);
+        let config1 = ViewConfiguration::from_size(Size::new(800.0, 600.0), 1.0);
+        let config2 = ViewConfiguration::from_size(Size::new(1600.0, 1200.0), 2.0);
+        let config3 = ViewConfiguration::from_size(Size::new(1920.0, 1080.0), 1.0);
 
         assert!(config1.should_update_matrix(&config2)); // Different DPR
         assert!(!config1.should_update_matrix(&config3)); // Same DPR
@@ -238,19 +233,19 @@ mod tests {
 
     #[test]
     fn test_view_configuration_to_physical_size() {
-        let config = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 2.0);
-        let logical = Size::new(px(960.0), px(540.0));
+        let config = ViewConfiguration::from_size(Size::new(1920.0, 1080.0), 2.0);
+        let logical = Size::new(960.0, 540.0);
         let physical = config.to_physical_size(logical);
-        assert!((physical.width.get() - 1920.0).abs() < 1e-6);
-        assert!((physical.height.get() - 1080.0).abs() < 1e-6);
+        assert!((physical.width - 1920.0).abs() < 1e-6);
+        assert!((physical.height - 1080.0).abs() < 1e-6);
     }
 
     #[test]
     fn test_view_configuration_to_logical_size() {
-        let config = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 2.0);
-        let physical = Size::new(px(1920.0), px(1080.0));
+        let config = ViewConfiguration::from_size(Size::new(1920.0, 1080.0), 2.0);
+        let physical = Size::new(1920.0, 1080.0);
         let logical = config.to_logical_size(physical);
-        assert!((logical.width.get() - 960.0).abs() < 1e-6);
-        assert!((logical.height.get() - 540.0).abs() < 1e-6);
+        assert!((logical.width - 960.0).abs() < 1e-6);
+        assert!((logical.height - 540.0).abs() < 1e-6);
     }
 }

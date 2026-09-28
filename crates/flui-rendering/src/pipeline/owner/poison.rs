@@ -385,11 +385,9 @@ mod tests {
     #[test]
     fn poison_tracks_the_failed_constraints_per_attempt() {
         use crate::constraints::BoxConstraints;
-        use flui_types::geometry::px;
 
-        let c1 =
-            ErasedConstraints::from(BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0)));
-        let c2 = ErasedConstraints::from(BoxConstraints::new(px(0.0), px(50.0), px(0.0), px(50.0)));
+        let c1 = ErasedConstraints::from(BoxConstraints::new(0.0, 100.0, 0.0, 100.0));
+        let c2 = ErasedConstraints::from(BoxConstraints::new(0.0, 50.0, 0.0, 50.0));
         let mut poison = LayoutPoison::default();
 
         // A layout-earned failure records its constraints; an

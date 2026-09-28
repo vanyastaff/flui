@@ -8,7 +8,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use flui_types::{EdgeInsets, Pixels, Size};
+use flui_types::{EdgeInsets, Size, geometry::canonical_bits_f64};
 
 use super::Constraints;
 
@@ -40,13 +40,13 @@ use super::Constraints;
 #[derive(Clone, Copy, PartialEq)]
 pub struct BoxConstraints {
     /// Minimum width that satisfies the constraints.
-    pub min_width: Pixels,
+    pub min_width: f64,
     /// Maximum width that satisfies the constraints (may be infinite).
-    pub max_width: Pixels,
+    pub max_width: f64,
     /// Minimum height that satisfies the constraints.
-    pub min_height: Pixels,
+    pub min_height: f64,
     /// Maximum height that satisfies the constraints (may be infinite).
-    pub max_height: Pixels,
+    pub max_height: f64,
 }
 
 // ============================================================================
@@ -57,10 +57,10 @@ impl Hash for BoxConstraints {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Canonical bits, so constraints equal under `PartialEq` (`0.0` and
         // `-0.0`) hash equal.
-        self.min_width.canonical_bits().hash(state);
-        self.max_width.canonical_bits().hash(state);
-        self.min_height.canonical_bits().hash(state);
-        self.max_height.canonical_bits().hash(state);
+        canonical_bits_f64(self.min_width).hash(state);
+        canonical_bits_f64(self.max_width).hash(state);
+        canonical_bits_f64(self.min_height).hash(state);
+        canonical_bits_f64(self.max_height).hash(state);
     }
 }
 
@@ -73,29 +73,24 @@ impl Eq for BoxConstraints {}
 impl BoxConstraints {
     /// Unconstrained - allows any size.
     pub const UNCONSTRAINED: Self = Self {
-        min_width: Pixels::ZERO,
-        max_width: Pixels::INFINITY,
-        min_height: Pixels::ZERO,
-        max_height: Pixels::INFINITY,
+        min_width: 0.0,
+        max_width: f64::INFINITY,
+        min_height: 0.0,
+        max_height: f64::INFINITY,
     };
 
     /// Zero-sized constraints (tight at zero).
     pub const ZERO: Self = Self {
-        min_width: Pixels::ZERO,
-        max_width: Pixels::ZERO,
-        min_height: Pixels::ZERO,
-        max_height: Pixels::ZERO,
+        min_width: 0.0,
+        max_width: 0.0,
+        min_height: 0.0,
+        max_height: 0.0,
     };
 
     /// Creates new box constraints with explicit bounds.
     #[inline]
     #[must_use]
-    pub const fn new(
-        min_width: Pixels,
-        max_width: Pixels,
-        min_height: Pixels,
-        max_height: Pixels,
-    ) -> Self {
+    pub const fn new(min_width: f64, max_width: f64, min_height: f64, max_height: f64) -> Self {
         Self {
             min_width,
             max_width,
@@ -121,9 +116,9 @@ impl BoxConstraints {
     #[must_use]
     pub const fn loose(size: Size) -> Self {
         Self {
-            min_width: Pixels::ZERO,
+            min_width: 0.0,
             max_width: size.width,
-            min_height: Pixels::ZERO,
+            min_height: 0.0,
             max_height: size.height,
         }
     }
@@ -133,10 +128,10 @@ impl BoxConstraints {
     #[must_use]
     pub const fn expand() -> Self {
         Self {
-            min_width: Pixels::INFINITY,
-            max_width: Pixels::INFINITY,
-            min_height: Pixels::INFINITY,
-            max_height: Pixels::INFINITY,
+            min_width: f64::INFINITY,
+            max_width: f64::INFINITY,
+            min_height: f64::INFINITY,
+            max_height: f64::INFINITY,
         }
     }
 
@@ -146,23 +141,23 @@ impl BoxConstraints {
     /// Loose dimensions allow any size.
     #[inline]
     #[must_use]
-    pub const fn tight_for(width: Option<Pixels>, height: Option<Pixels>) -> Self {
+    pub const fn tight_for(width: Option<f64>, height: Option<f64>) -> Self {
         Self {
             min_width: match width {
                 Some(w) => w,
-                None => Pixels::ZERO,
+                None => 0.0,
             },
             max_width: match width {
                 Some(w) => w,
-                None => Pixels::INFINITY,
+                None => f64::INFINITY,
             },
             min_height: match height {
                 Some(h) => h,
-                None => Pixels::ZERO,
+                None => 0.0,
             },
             max_height: match height {
                 Some(h) => h,
-                None => Pixels::INFINITY,
+                None => f64::INFINITY,
             },
         }
     }
@@ -171,31 +166,23 @@ impl BoxConstraints {
     /// that value is finite, leaving infinite dimensions unconstrained.
     ///
     /// Mirrors Flutter's `BoxConstraints.tightForFinite` (`box.dart`), used by
-    /// intrinsic-dimension probes that pass `f32::INFINITY` for the axis they
+    /// intrinsic-dimension probes that pass `f64::INFINITY` for the axis they
     /// are not constraining.
     #[inline]
     #[must_use]
-    pub fn tight_for_finite(width: Pixels, height: Pixels) -> Self {
+    pub fn tight_for_finite(width: f64, height: f64) -> Self {
         Self {
-            min_width: if width.is_finite() {
-                width
-            } else {
-                Pixels::ZERO
-            },
+            min_width: if width.is_finite() { width } else { 0.0 },
             max_width: if width.is_finite() {
                 width
             } else {
-                Pixels::INFINITY
+                f64::INFINITY
             },
-            min_height: if height.is_finite() {
-                height
-            } else {
-                Pixels::ZERO
-            },
+            min_height: if height.is_finite() { height } else { 0.0 },
             max_height: if height.is_finite() {
                 height
             } else {
-                Pixels::INFINITY
+                f64::INFINITY
             },
         }
     }
@@ -284,14 +271,14 @@ impl BoxConstraints {
     #[inline]
     #[must_use]
     pub fn has_loose_width(&self) -> bool {
-        self.min_width <= Pixels::ZERO
+        self.min_width <= 0.0
     }
 
     /// Returns whether height is loose (min == 0).
     #[inline]
     #[must_use]
     pub fn has_loose_height(&self) -> bool {
-        self.min_height <= Pixels::ZERO
+        self.min_height <= 0.0
     }
 
     /// Returns whether constraints are loose in both dimensions.
@@ -310,8 +297,8 @@ impl BoxConstraints {
     #[must_use]
     pub fn biggest(&self) -> Size {
         Size::new(
-            self.constrain_width(Pixels::INFINITY),
-            self.constrain_height(Pixels::INFINITY),
+            self.constrain_width(f64::INFINITY),
+            self.constrain_height(f64::INFINITY),
         )
     }
 
@@ -325,14 +312,14 @@ impl BoxConstraints {
     /// Constrains width to be within bounds.
     #[inline]
     #[must_use]
-    pub fn constrain_width(&self, width: Pixels) -> Pixels {
+    pub fn constrain_width(&self, width: f64) -> f64 {
         width.clamp(self.min_width, self.max_width)
     }
 
     /// Constrains height to be within bounds.
     #[inline]
     #[must_use]
-    pub fn constrain_height(&self, height: Pixels) -> Pixels {
+    pub fn constrain_height(&self, height: f64) -> f64 {
         height.clamp(self.min_height, self.max_height)
     }
 
@@ -374,8 +361,8 @@ impl BoxConstraints {
             return self.smallest();
         }
 
-        let mut width = size.width.get();
-        let mut height = size.height.get();
+        let mut width = size.width;
+        let mut height = size.height;
 
         // A degenerate aspect source has no ratio to preserve — just constrain.
         if width <= 0.0 || height <= 0.0 {
@@ -383,10 +370,10 @@ impl BoxConstraints {
         }
 
         let aspect_ratio = width / height;
-        let min_w = self.min_width.get();
-        let max_w = self.max_width.get();
-        let min_h = self.min_height.get();
-        let max_h = self.max_height.get();
+        let min_w = self.min_width;
+        let max_w = self.max_width;
+        let min_h = self.min_height;
+        let max_h = self.max_height;
 
         // Adjust each out-of-range dimension and bring the OTHER dimension along
         // to keep the ratio. Order (max then min, width then height) and the
@@ -411,10 +398,7 @@ impl BoxConstraints {
             width = height * aspect_ratio;
         }
 
-        Size::new(
-            self.constrain_width(Pixels::new(width)),
-            self.constrain_height(Pixels::new(height)),
-        )
+        Size::new(self.constrain_width(width), self.constrain_height(height))
     }
 
     // ============================================================================
@@ -432,10 +416,10 @@ impl BoxConstraints {
         let vertical = insets.top + insets.bottom;
 
         Self {
-            min_width: (self.min_width - horizontal).max(Pixels::ZERO),
-            max_width: (self.max_width - horizontal).max(Pixels::ZERO),
-            min_height: (self.min_height - vertical).max(Pixels::ZERO),
-            max_height: (self.max_height - vertical).max(Pixels::ZERO),
+            min_width: (self.min_width - horizontal).max(0.0),
+            max_width: (self.max_width - horizontal).max(0.0),
+            min_height: (self.min_height - vertical).max(0.0),
+            max_height: (self.max_height - vertical).max(0.0),
         }
     }
 
@@ -469,9 +453,9 @@ impl BoxConstraints {
     #[must_use]
     pub fn loosen(&self) -> Self {
         Self {
-            min_width: Pixels::ZERO,
+            min_width: 0.0,
             max_width: self.max_width,
-            min_height: Pixels::ZERO,
+            min_height: 0.0,
             max_height: self.max_height,
         }
     }
@@ -490,12 +474,12 @@ impl BoxConstraints {
     ///     min_height: 0,
     ///     max_height: 100,
     /// };
-    /// let tight = constraints.tighten(Some(Pixels(500)), None);
+    /// let tight = constraints.tighten(Some(500), None);
     /// // Result: min_width=100, max_width=100 (clamped to existing max)
     /// ```
     #[inline]
     #[must_use]
-    pub fn tighten(&self, width: Option<Pixels>, height: Option<Pixels>) -> Self {
+    pub fn tighten(&self, width: Option<f64>, height: Option<f64>) -> Self {
         Self {
             min_width: width.map_or(self.min_width, |w| w.clamp(self.min_width, self.max_width)),
             max_width: width.map_or(self.max_width, |w| w.clamp(self.min_width, self.max_width)),
@@ -557,7 +541,7 @@ impl BoxConstraints {
     /// Sets minimum width.
     #[inline]
     #[must_use]
-    pub const fn with_min_width(mut self, min_width: Pixels) -> Self {
+    pub const fn with_min_width(mut self, min_width: f64) -> Self {
         self.min_width = min_width;
         self
     }
@@ -565,7 +549,7 @@ impl BoxConstraints {
     /// Sets maximum width.
     #[inline]
     #[must_use]
-    pub const fn with_max_width(mut self, max_width: Pixels) -> Self {
+    pub const fn with_max_width(mut self, max_width: f64) -> Self {
         self.max_width = max_width;
         self
     }
@@ -573,7 +557,7 @@ impl BoxConstraints {
     /// Sets minimum height.
     #[inline]
     #[must_use]
-    pub const fn with_min_height(mut self, min_height: Pixels) -> Self {
+    pub const fn with_min_height(mut self, min_height: f64) -> Self {
         self.min_height = min_height;
         self
     }
@@ -581,7 +565,7 @@ impl BoxConstraints {
     /// Sets maximum height.
     #[inline]
     #[must_use]
-    pub const fn with_max_height(mut self, max_height: Pixels) -> Self {
+    pub const fn with_max_height(mut self, max_height: f64) -> Self {
         self.max_height = max_height;
         self
     }
@@ -589,7 +573,7 @@ impl BoxConstraints {
     /// Sets tight width (min == max).
     #[inline]
     #[must_use]
-    pub const fn with_tight_width(mut self, width: Pixels) -> Self {
+    pub const fn with_tight_width(mut self, width: f64) -> Self {
         self.min_width = width;
         self.max_width = width;
         self
@@ -598,7 +582,7 @@ impl BoxConstraints {
     /// Sets tight height (min == max).
     #[inline]
     #[must_use]
-    pub const fn with_tight_height(mut self, height: Pixels) -> Self {
+    pub const fn with_tight_height(mut self, height: f64) -> Self {
         self.min_height = height;
         self.max_height = height;
         self
@@ -670,26 +654,26 @@ impl BoxConstraints {
     // UTILITY METHODS
     // ============================================================================
 
-    /// Returns maximum possible area as raw f32.
+    /// Returns maximum possible area as raw f64.
     #[inline]
     #[must_use]
-    pub fn max_area(&self) -> f32 {
-        self.max_width.get() * self.max_height.get()
+    pub fn max_area(&self) -> f64 {
+        self.max_width * self.max_height
     }
 
-    /// Returns minimum required area as raw f32.
+    /// Returns minimum required area as raw f64.
     #[inline]
     #[must_use]
-    pub fn min_area(&self) -> f32 {
-        self.min_width.get() * self.min_height.get()
+    pub fn min_area(&self) -> f64 {
+        self.min_width * self.min_height
     }
 
-    /// Returns maximum diagonal length as raw f32.
+    /// Returns maximum diagonal length as raw f64.
     #[inline]
     #[must_use]
-    pub fn max_diagonal(&self) -> f32 {
-        let w = self.max_width.get();
-        let h = self.max_height.get();
+    pub fn max_diagonal(&self) -> f64 {
+        let w = self.max_width;
+        let h = self.max_height;
         (w * w + h * h).sqrt()
     }
 
@@ -708,14 +692,14 @@ impl BoxConstraints {
     /// Returns width range as tuple.
     #[inline]
     #[must_use]
-    pub const fn width_range(&self) -> (Pixels, Pixels) {
+    pub const fn width_range(&self) -> (f64, f64) {
         (self.min_width, self.max_width)
     }
 
     /// Returns height range as tuple.
     #[inline]
     #[must_use]
-    pub const fn height_range(&self) -> (Pixels, Pixels) {
+    pub const fn height_range(&self) -> (f64, f64) {
         (self.min_height, self.max_height)
     }
 
@@ -724,7 +708,7 @@ impl BoxConstraints {
     #[must_use]
     pub fn map<F>(&self, f: F) -> Self
     where
-        F: Fn(Pixels) -> Pixels,
+        F: Fn(f64) -> f64,
     {
         Self {
             min_width: f(self.min_width),
@@ -738,21 +722,21 @@ impl BoxConstraints {
     #[inline]
     #[must_use]
     pub fn round(&self) -> Self {
-        self.map(flui_types::Pixels::round)
+        self.map(f64::round)
     }
 
     /// Floors all constraint values.
     #[inline]
     #[must_use]
     pub fn floor(&self) -> Self {
-        self.map(flui_types::Pixels::floor)
+        self.map(f64::floor)
     }
 
     /// Ceils all constraint values.
     #[inline]
     #[must_use]
     pub fn ceil(&self) -> Self {
-        self.map(flui_types::Pixels::ceil)
+        self.map(f64::ceil)
     }
 }
 
@@ -762,9 +746,9 @@ impl BoxConstraints {
 
 /// Rounds a Pixels value to hundredths precision.
 #[inline]
-fn round_pixels_to_hundredths(value: Pixels) -> Pixels {
+fn round_pixels_to_hundredths(value: f64) -> f64 {
     if value.is_finite() {
-        Pixels((value.get() * 100.0).round() / 100.0)
+        (value * 100.0).round() / 100.0
     } else {
         value
     }
@@ -772,7 +756,7 @@ fn round_pixels_to_hundredths(value: Pixels) -> Pixels {
 
 /// Checks if a Pixels value is already normalized.
 #[inline]
-fn is_pixels_normalized(value: Pixels) -> bool {
+fn is_pixels_normalized(value: f64) -> bool {
     if value.is_finite() {
         value == round_pixels_to_hundredths(value)
     } else {
@@ -790,8 +774,8 @@ impl Constraints for BoxConstraints {
     }
 
     fn is_normalized(&self) -> bool {
-        self.min_width >= Pixels::ZERO
-            && self.min_height >= Pixels::ZERO
+        self.min_width >= 0.0
+            && self.min_height >= 0.0
             && self.min_width <= self.max_width
             && self.min_height <= self.max_height
             && !self.min_width.is_nan()
@@ -813,17 +797,13 @@ impl fmt::Debug for BoxConstraints {
             write!(
                 f,
                 "BoxConstraints(tight: {}×{})",
-                self.min_width.get(),
-                self.min_height.get()
+                self.min_width, self.min_height
             )
         } else {
             write!(
                 f,
                 "BoxConstraints(w: {}..{}, h: {}..{})",
-                self.min_width.get(),
-                self.max_width.get(),
-                self.min_height.get(),
-                self.max_height.get()
+                self.min_width, self.max_width, self.min_height, self.max_height
             )
         }
     }
@@ -839,30 +819,30 @@ impl fmt::Display for BoxConstraints {
 // OPERATOR OVERLOADS
 // ============================================================================
 
-impl std::ops::Mul<f32> for BoxConstraints {
+impl std::ops::Mul<f64> for BoxConstraints {
     type Output = Self;
 
-    fn mul(self, scale: f32) -> Self {
+    fn mul(self, scale: f64) -> Self {
         self.map(|v| v * scale)
     }
 }
 
-impl std::ops::Div<f32> for BoxConstraints {
+impl std::ops::Div<f64> for BoxConstraints {
     type Output = Self;
 
-    fn div(self, scale: f32) -> Self {
+    fn div(self, scale: f64) -> Self {
         self.map(|v| v / scale)
     }
 }
 
-impl std::ops::MulAssign<f32> for BoxConstraints {
-    fn mul_assign(&mut self, scale: f32) {
+impl std::ops::MulAssign<f64> for BoxConstraints {
+    fn mul_assign(&mut self, scale: f64) {
         *self = *self * scale;
     }
 }
 
-impl std::ops::DivAssign<f32> for BoxConstraints {
-    fn div_assign(&mut self, scale: f32) {
+impl std::ops::DivAssign<f64> for BoxConstraints {
+    fn div_assign(&mut self, scale: f64) {
         *self = *self / scale;
     }
 }
@@ -888,7 +868,7 @@ impl From<(Size, Size)> for BoxConstraints {
     }
 }
 
-impl From<BoxConstraints> for (Pixels, Pixels, Pixels, Pixels) {
+impl From<BoxConstraints> for (f64, f64, f64, f64) {
     fn from(c: BoxConstraints) -> Self {
         (c.min_width, c.max_width, c.min_height, c.max_height)
     }
@@ -902,15 +882,13 @@ impl From<BoxConstraints> for (Pixels, Pixels, Pixels, Pixels) {
 mod tests {
     use std::collections::HashSet;
 
-    use flui_types::geometry::px;
-
     use super::*;
 
     #[test]
     fn test_hash_equality() {
-        let c1 = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
-        let c2 = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
-        let c3 = BoxConstraints::tight(Size::new(px(200.0), px(200.0)));
+        let c1 = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let c2 = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let c3 = BoxConstraints::tight(Size::new(200.0, 200.0));
 
         assert_eq!(c1, c2);
         assert_ne!(c1, c3);
@@ -929,8 +907,8 @@ mod tests {
 
     #[test]
     fn equal_constraints_hash_equal_across_the_sign_of_zero() {
-        let positive = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(50.0));
-        let negative = BoxConstraints::new(px(-0.0), px(100.0), px(-0.0), px(50.0));
+        let positive = BoxConstraints::new(0.0, 100.0, 0.0, 50.0);
+        let negative = BoxConstraints::new(-0.0, 100.0, -0.0, 50.0);
 
         assert_eq!(positive, negative);
         assert_eq!(hash_of(&positive), hash_of(&negative));
@@ -942,18 +920,13 @@ mod tests {
 
     #[test]
     fn test_round_for_cache() {
-        let c = BoxConstraints::new(
-            px(10.123_456),
-            px(100.987_654),
-            px(20.555_555),
-            px(200.444_44),
-        );
+        let c = BoxConstraints::new(10.123_456, 100.987_654, 20.555_555, 200.444_44);
         let rounded = c.round_for_cache();
 
-        assert_eq!(rounded.min_width, px(10.12));
-        assert_eq!(rounded.max_width, px(100.99));
-        assert_eq!(rounded.min_height, px(20.56));
-        assert_eq!(rounded.max_height, px(200.44));
+        assert_eq!(rounded.min_width, 10.12);
+        assert_eq!(rounded.max_width, 100.99);
+        assert_eq!(rounded.min_height, 20.56);
+        assert_eq!(rounded.max_height, 200.44);
 
         // Infinity preserved
         let inf = BoxConstraints::UNCONSTRAINED.round_for_cache();
@@ -962,10 +935,10 @@ mod tests {
 
     #[test]
     fn test_is_rounded_for_cache() {
-        let rounded = BoxConstraints::new(px(10.12), px(100.99), px(20.56), px(200.44));
+        let rounded = BoxConstraints::new(10.12, 100.99, 20.56, 200.44);
         assert!(rounded.is_rounded_for_cache());
 
-        let unrounded = BoxConstraints::new(px(10.123_456), px(100.0), px(20.0), px(200.0));
+        let unrounded = BoxConstraints::new(10.123_456, 100.0, 20.0, 200.0);
         assert!(!unrounded.is_rounded_for_cache());
     }
 
@@ -980,32 +953,32 @@ mod tests {
 
     #[test]
     fn test_size_operations() {
-        let c = BoxConstraints::new(px(10.0), px(100.0), px(20.0), px(200.0));
+        let c = BoxConstraints::new(10.0, 100.0, 20.0, 200.0);
 
-        assert!(c.is_satisfied_by(Size::new(px(50.0), px(50.0))));
-        assert!(!c.is_satisfied_by(Size::new(px(5.0), px(50.0))));
-        assert!(!c.is_satisfied_by(Size::new(px(50.0), px(5.0))));
-        assert!(!c.is_satisfied_by(Size::new(px(150.0), px(50.0))));
+        assert!(c.is_satisfied_by(Size::new(50.0, 50.0)));
+        assert!(!c.is_satisfied_by(Size::new(5.0, 50.0)));
+        assert!(!c.is_satisfied_by(Size::new(50.0, 5.0)));
+        assert!(!c.is_satisfied_by(Size::new(150.0, 50.0)));
 
-        let constrained = c.constrain(Size::new(px(150.0), px(250.0)));
-        assert_eq!(constrained, Size::new(px(100.0), px(200.0)));
+        let constrained = c.constrain(Size::new(150.0, 250.0));
+        assert_eq!(constrained, Size::new(100.0, 200.0));
     }
 
     #[test]
     fn test_set_operations() {
-        let a = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
-        let b = BoxConstraints::new(px(50.0), px(150.0), px(50.0), px(150.0));
+        let a = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
+        let b = BoxConstraints::new(50.0, 150.0, 50.0, 150.0);
 
         let inter = a.intersection(&b).unwrap();
-        assert_eq!(inter.min_width, px(50.0));
-        assert_eq!(inter.max_width, px(100.0));
+        assert_eq!(inter.min_width, 50.0);
+        assert_eq!(inter.max_width, 100.0);
 
         let uni = a.union(&b);
-        assert_eq!(uni.min_width, px(0.0));
-        assert_eq!(uni.max_width, px(150.0));
+        assert_eq!(uni.min_width, 0.0);
+        assert_eq!(uni.max_width, 150.0);
 
-        let outer = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
-        let inner = BoxConstraints::new(px(50.0), px(150.0), px(50.0), px(150.0));
+        let outer = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
+        let inner = BoxConstraints::new(50.0, 150.0, 50.0, 150.0);
         assert!(outer.contains(&inner));
         assert!(!inner.contains(&outer));
         assert!(outer.overlaps(&inner));
@@ -1014,12 +987,12 @@ mod tests {
     #[test]
     fn test_builder_pattern() {
         let c = BoxConstraints::UNCONSTRAINED
-            .with_min_width(px(10.0))
-            .with_max_width(px(100.0))
-            .with_tight_height(px(50.0));
+            .with_min_width(10.0)
+            .with_max_width(100.0)
+            .with_tight_height(50.0);
 
-        assert_eq!(c.min_width, px(10.0));
-        assert_eq!(c.max_width, px(100.0));
+        assert_eq!(c.min_width, 10.0);
+        assert_eq!(c.max_width, 100.0);
         assert!(c.has_tight_height());
     }
 
@@ -1029,19 +1002,18 @@ mod tests {
         // so the argument (parent) bounds win (box.dart BoxConstraints.enforce).
         // additional minWidth 500 under a parent capped at 100 -> tight 100, not
         // 500. (The reversed pre-fix impl returned min_width 500 here.)
-        let additional =
-            BoxConstraints::new(px(500.0), Pixels::INFINITY, Pixels::ZERO, Pixels::INFINITY);
-        let parent = BoxConstraints::new(Pixels::ZERO, px(100.0), Pixels::ZERO, px(100.0));
+        let additional = BoxConstraints::new(500.0, f64::INFINITY, 0.0, f64::INFINITY);
+        let parent = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
         let combined = additional.enforce(&parent);
-        assert_eq!(combined.min_width, px(100.0));
-        assert_eq!(combined.max_width, px(100.0));
+        assert_eq!(combined.min_width, 100.0);
+        assert_eq!(combined.max_width, 100.0);
 
         // Overlapping ranges are unchanged either way (the common case, which is
         // why the pre-fix bug stayed hidden).
-        let a = BoxConstraints::new(px(10.0), px(50.0), px(10.0), px(50.0));
-        let b = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
+        let a = BoxConstraints::new(10.0, 50.0, 10.0, 50.0);
+        let b = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
         let c = a.enforce(&b);
-        assert_eq!(c.min_width, px(10.0));
-        assert_eq!(c.max_width, px(50.0));
+        assert_eq!(c.min_width, 10.0);
+        assert_eq!(c.max_width, 50.0);
     }
 }

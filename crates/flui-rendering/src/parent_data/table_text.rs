@@ -3,8 +3,8 @@
 use std::hash::{Hash, Hasher};
 
 use flui_foundation::RenderId;
-use flui_types::Offset;
 pub use flui_types::layout::TableCellVerticalAlignment;
+use flui_types::{Offset, geometry::canonical_bits_f64};
 // `TextRange` used to be declared here as well; flui-types owns the concept and
 // its copy is a strict superset. Imported privately, not re-exported: every
 // other consumer in the workspace already reaches for
@@ -104,8 +104,8 @@ impl ParentData for TableCellParentData {}
 
 impl Hash for TableCellParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.canonical_bits().hash(state);
-        self.offset.dy.canonical_bits().hash(state);
+        canonical_bits_f64(self.offset.dx).hash(state);
+        canonical_bits_f64(self.offset.dy).hash(state);
         self.x.hash(state);
         self.y.hash(state);
         self.vertical_alignment.hash(state);
@@ -189,8 +189,8 @@ impl ParentData for TextParentData {}
 
 impl Hash for TextParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.canonical_bits().hash(state);
-        self.offset.dy.canonical_bits().hash(state);
+        canonical_bits_f64(self.offset.dx).hash(state);
+        canonical_bits_f64(self.offset.dy).hash(state);
         self.container.hash(state);
         self.span.hash(state);
     }

@@ -19,7 +19,7 @@ use flui_painting::PaintStyle;
 use flui_painting::{DisplayList, DrawCommand, DrawOp};
 use flui_types::painting::{ClipOp, Paint};
 use flui_types::{
-    geometry::{Matrix4, Pixels, Point, RRect, Rect},
+    geometry::{Matrix4, Point, RRect, Rect},
     painting::Clip,
     styling::Color,
 };
@@ -73,8 +73,8 @@ pub struct DrawCommandSummary {
 
 // ── private helpers ──────────────────────────────────────────────────────────
 
-/// Format one `f32` to 2 decimal places, normalizing `-0.0` → `0.0`.
-fn f(v: f32) -> String {
+/// Format one `f64` to 2 decimal places, normalizing `-0.0` → `0.0`.
+fn f(v: f64) -> String {
     // Stability contract: callers pass finite floats. A non-finite value would
     // format as "NaN"/"inf" and break the fixed-decimal snapshot invariant — it
     // signals a bug in the render object that produced the command, not here.
@@ -83,7 +83,7 @@ fn f(v: f32) -> String {
         "snapshot: non-finite float in a draw command"
     );
     // Normalize negative zero before formatting.
-    let v = if v == 0.0 { 0.0_f32 } else { v };
+    let v = if v == 0.0 { 0.0_f64 } else { v };
     format!("{v:.2}")
 }
 
@@ -113,19 +113,19 @@ fn summarize_paint(paint: &Paint) -> String {
 }
 
 /// Format a `Rect<Pixels>` as `"(l,t WxH)"`.
-fn fmt_rect(r: Rect<Pixels>) -> String {
+fn fmt_rect(r: Rect<f64>) -> String {
     format!(
         "({},{} {}x{})",
-        f(r.left().get()),
-        f(r.top().get()),
-        f(r.width().get()),
-        f(r.height().get()),
+        f(r.left()),
+        f(r.top()),
+        f(r.width()),
+        f(r.height()),
     )
 }
 
 /// Format a `Point<Pixels>` as `"(x,y)"`.
-fn fmt_point(p: Point<Pixels>) -> String {
-    format!("({},{})", f(p.x.get()), f(p.y.get()))
+fn fmt_point(p: Point<f64>) -> String {
+    format!("({},{})", f(p.x), f(p.y))
 }
 
 /// Format an `RRect` as `"(l,t WxH r=tl/tr/br/bl)"`.
@@ -136,14 +136,14 @@ fn fmt_rrect(rr: &RRect) -> String {
     let r = rr.rect;
     format!(
         "({},{} {}x{} r={}/{}/{}/{})",
-        f(r.left().get()),
-        f(r.top().get()),
-        f(r.width().get()),
-        f(r.height().get()),
-        f(rr.top_left.x.get()),
-        f(rr.top_right.x.get()),
-        f(rr.bottom_right.x.get()),
-        f(rr.bottom_left.x.get()),
+        f(r.left()),
+        f(r.top()),
+        f(r.width()),
+        f(r.height()),
+        f(rr.top_left.x),
+        f(rr.top_right.x),
+        f(rr.bottom_right.x),
+        f(rr.bottom_left.x),
     )
 }
 
@@ -314,7 +314,7 @@ fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
             line: format!(
                 "DrawCircle center={} r={} {}",
                 fmt_point(*center),
-                f(radius.get()),
+                f(*radius),
                 summarize_paint(paint),
             ),
         },
@@ -414,8 +414,8 @@ fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
                 kind: DrawKind::Text,
                 line: format!(
                     "Paragraph offset=({},{}) {:?} {} lines={} runs=[{}]",
-                    f(offset.dx.get()),
-                    f(offset.dy.get()),
+                    f(offset.dx),
+                    f(offset.dy),
                     layout.text(),
                     hex_color(*color),
                     layout.metrics().line_count,
@@ -548,10 +548,10 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
                     let _ = writeln!(
                         out,
                         "Picture bounds=({},{} {}x{})",
-                        f(b.left().get()),
-                        f(b.top().get()),
-                        f(b.width().get()),
-                        f(b.height().get()),
+                        f(b.left()),
+                        f(b.top()),
+                        f(b.width()),
+                        f(b.height()),
                     );
                 }
                 None => out.push_str("Picture bounds=none\n"),
@@ -577,10 +577,10 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             let _ = writeln!(
                 out,
                 "ClipRect rect=({},{} {}x{}) clip={}",
-                f(r.left().get()),
-                f(r.top().get()),
-                f(r.width().get()),
-                f(r.height().get()),
+                f(r.left()),
+                f(r.top()),
+                f(r.width()),
+                f(r.height()),
                 fmt_clip(c.clip_behavior()),
             );
         }
@@ -616,22 +616,17 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             let _ = writeln!(
                 out,
                 "ClipSuperellipse rect=({},{} {}x{}) clip={}",
-                f(r.left().get()),
-                f(r.top().get()),
-                f(r.width().get()),
-                f(r.height().get()),
+                f(r.left()),
+                f(r.top()),
+                f(r.width()),
+                f(r.height()),
                 fmt_clip(c.clip_behavior()),
             );
         }
         Layer::Offset(o) => {
             out.push_str(&indent);
             let offset = o.offset();
-            let _ = writeln!(
-                out,
-                "Offset dx={} dy={}",
-                f(offset.dx.get()),
-                f(offset.dy.get())
-            );
+            let _ = writeln!(out, "Offset dx={} dy={}", f(offset.dx), f(offset.dy));
         }
         Layer::Transform(_) => {
             // Known blind spot: `TransformLayer` exposes no public matrix getter
@@ -660,10 +655,10 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             let _ = writeln!(
                 out,
                 "ShaderMask bounds=({},{} {}x{})",
-                f(r.left().get()),
-                f(r.top().get()),
-                f(r.width().get()),
-                f(r.height().get()),
+                f(r.left()),
+                f(r.top()),
+                f(r.width()),
+                f(r.height()),
             );
         }
         Layer::BackdropFilter(b) => {
@@ -672,10 +667,10 @@ fn write_layer(out: &mut String, tree: &LayerTree, id: LayerId, depth: usize) {
             let _ = writeln!(
                 out,
                 "BackdropFilter bounds=({},{} {}x{})",
-                f(r.left().get()),
-                f(r.top().get()),
-                f(r.width().get()),
-                f(r.height().get()),
+                f(r.left()),
+                f(r.top()),
+                f(r.width()),
+                f(r.height()),
             );
         }
         Layer::Leader(_) => {
@@ -820,16 +815,16 @@ mod tests {
 
     use flui_painting::{DrawCommand, DrawOp, Paint};
     use flui_types::{
-        geometry::{Matrix4, Pixels, Point, Rect, px},
+        geometry::{Matrix4, Point, Rect},
         painting::Path,
         styling::Color,
     };
 
     use super::{DrawKind, summarize_command};
 
-    /// Helper: build an identity `Rect<Pixels>` from raw f32 coordinates.
-    fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<Pixels> {
-        Rect::from_xywh(px(x), px(y), px(w), px(h))
+    /// Helper: build an identity `Rect<Pixels>` from raw f64 coordinates.
+    fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect<f64> {
+        Rect::from_xywh(x, y, w, h)
     }
 
     /// `DrawRect` with `fill Color::RED` + identity transform must produce
@@ -952,7 +947,7 @@ mod tests {
             transform: Matrix4::IDENTITY,
             op: DrawOp::Paragraph {
                 layout: Arc::new(layout),
-                offset: Offset::new(px(1.0), px(2.0)),
+                offset: Offset::new(1.0, 2.0),
                 color: Color::BLACK,
             },
         };
@@ -1023,9 +1018,9 @@ mod tests {
         use flui_types::geometry::RRect;
         use flui_types::painting::Clip;
         use flui_types::painting::ClipOp;
-        let mk = |radius: f32| {
+        let mk = |radius: f64| {
             summarize_command(&DrawCommand::untransformed(DrawOp::ClipRRect {
-                rrect: RRect::from_rect_circular(rect(0.0, 0.0, 40.0, 40.0), px(radius)),
+                rrect: RRect::from_rect_circular(rect(0.0, 0.0, 40.0, 40.0), radius),
                 clip_op: ClipOp::Intersect,
                 clip_behavior: Clip::HardEdge,
             }))
@@ -1051,9 +1046,9 @@ mod tests {
     #[test]
     fn negative_zero_normalizes_to_zero() {
         use super::f;
-        assert_eq!(f(-0.0_f32), "0.00");
-        assert_eq!(f(0.0_f32), "0.00");
-        assert_eq!(f(-1.5_f32), "-1.50");
+        assert_eq!(f(-0.0_f64), "0.00");
+        assert_eq!(f(0.0_f64), "0.00");
+        assert_eq!(f(-1.5_f64), "-1.50");
     }
 
     /// `hex_color` produces the canonical `#RRGGBBAA` format.
@@ -1090,7 +1085,7 @@ mod tests {
     #[test]
     fn fmt_point_helper() {
         use super::fmt_point;
-        let p = Point::new(px(3.5), px(-1.0));
+        let p = Point::new(3.5, -1.0);
         assert_eq!(fmt_point(p), "(3.50,-1.00)");
     }
 
@@ -1104,7 +1099,7 @@ mod tests {
 
     mod layer_tree_helpers {
         use flui_foundation::Leaf;
-        use flui_types::{Color, Point, Rect, Size, geometry::px};
+        use flui_types::{Color, Point, Rect, Size};
 
         use crate::{
             context::BoxLayoutContext, parent_data::BoxParentData, pipeline::Paint,
@@ -1119,9 +1114,9 @@ mod tests {
         }
 
         impl RedBox {
-            pub(super) fn fixed(width: f32, height: f32) -> Self {
+            pub(super) fn fixed(width: f64, height: f64) -> Self {
                 Self {
-                    size: Size::new(px(width), px(height)),
+                    size: Size::new(width, height),
                 }
             }
         }
@@ -1161,7 +1156,7 @@ mod tests {
         use crate::testing::{RenderTester, box_node, serialize_layer_tree};
 
         let run = RenderTester::mount(box_node(RedBox::fixed(40.0, 40.0)))
-            .with_size(Size::new(px(40.0), px(40.0)))
+            .with_size(Size::new(40.0, 40.0))
             .run_frame();
 
         let tree = run
@@ -1187,7 +1182,7 @@ mod tests {
         use crate::testing::{RenderTester, box_node, collect_commands};
 
         let run = RenderTester::mount(box_node(RedBox::fixed(40.0, 40.0)))
-            .with_size(Size::new(px(40.0), px(40.0)))
+            .with_size(Size::new(40.0, 40.0))
             .run_frame();
 
         let tree = run

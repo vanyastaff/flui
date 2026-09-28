@@ -15,7 +15,7 @@
 //!
 //! # Rust-native improvements
 //!
-//! * `step_width` / `step_height` are `Option<f32>` (vs Dart's nullable
+//! * `step_width` / `step_height` are `Option<f64>` (vs Dart's nullable
 //!   `double?`) — `None` preserves the raw intrinsic value without rounding.
 //! * The step-rounding helper is a private named function instead of a Dart
 //!   lambda for clarity.
@@ -26,7 +26,7 @@
 //!   and is consumed inside `child_constraints` before any subsequent ctx call.
 
 use flui_foundation::Single;
-use flui_types::{Offset, Size, geometry::px};
+use flui_types::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -45,7 +45,7 @@ use flui_rendering::{
 ///
 /// Mirrors `_applyStep(double input, double? step)` in `proxy_box.dart`.
 #[inline]
-fn apply_step(input: f32, step: Option<f32>) -> f32 {
+fn apply_step(input: f64, step: Option<f64>) -> f64 {
     match step {
         None => input,
         Some(s) if s <= 0.0 || !s.is_finite() => input,
@@ -83,10 +83,10 @@ fn apply_step(input: f32, step: Option<f32>) -> f32 {
 pub struct RenderIntrinsicWidth {
     /// Optional column-width quantum.  When set, the computed intrinsic width
     /// is rounded up to the nearest multiple of this value.
-    step_width: Option<f32>,
+    step_width: Option<f64>,
     /// Optional row-height quantum.  When set, the height extent passed to the
     /// intrinsic-width query is rounded up to the nearest multiple of this value.
-    step_height: Option<f32>,
+    step_height: Option<f64>,
     /// True after the first successful `perform_layout` with a child present.
     has_child: bool,
 }
@@ -97,7 +97,7 @@ impl RenderIntrinsicWidth {
     /// Both `step_width` and `step_height` default to `None` (no snapping).
     /// Non-positive or non-finite step values are treated as `None` at layout
     /// time via `apply_step`.
-    pub fn new(step_width: Option<f32>, step_height: Option<f32>) -> Self {
+    pub fn new(step_width: Option<f64>, step_height: Option<f64>) -> Self {
         Self {
             step_width,
             step_height,
@@ -112,14 +112,14 @@ impl RenderIntrinsicWidth {
 
     /// Returns the current step-width quantum.
     #[inline]
-    pub fn step_width(&self) -> Option<f32> {
+    pub fn step_width(&self) -> Option<f64> {
         self.step_width
     }
 
     /// Replaces the step-width quantum and reports layout when changed.
     pub fn set_step_width(
         &mut self,
-        step_width: Option<f32>,
+        step_width: Option<f64>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.step_width == step_width {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -130,14 +130,14 @@ impl RenderIntrinsicWidth {
 
     /// Returns the current step-height quantum.
     #[inline]
-    pub fn step_height(&self) -> Option<f32> {
+    pub fn step_height(&self) -> Option<f64> {
         self.step_height
     }
 
     /// Replaces the step-height quantum and reports layout when changed.
     pub fn set_step_height(
         &mut self,
-        step_height: Option<f32>,
+        step_height: Option<f64>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.step_height == step_height {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -183,7 +183,7 @@ impl RenderIntrinsicWidth {
     fn child_constraints(
         &self,
         constraints: BoxConstraints,
-        mut intrinsic: impl FnMut(IntrinsicDimension, f32) -> f32,
+        mut intrinsic: impl FnMut(IntrinsicDimension, f64) -> f64,
     ) -> BoxConstraints {
         // Width axis — proxy_box.dart:713-715
         let width = if constraints.has_tight_width() {
@@ -192,8 +192,8 @@ impl RenderIntrinsicWidth {
         } else {
             // Always force to intrinsic (apply_step with None ≡ identity).
             // Raw query arg: constraints.max_height, not step-snapped.
-            let raw = intrinsic(IntrinsicDimension::MaxWidth, constraints.max_height.get());
-            Some(px(apply_step(raw, self.step_width)))
+            let raw = intrinsic(IntrinsicDimension::MaxWidth, constraints.max_height);
+            Some(apply_step(raw, self.step_width))
         };
 
         // Height axis — proxy_box.dart:716-718
@@ -202,8 +202,8 @@ impl RenderIntrinsicWidth {
             None
         } else {
             // Raw query arg: constraints.max_width (NOT the computed width above).
-            let raw = intrinsic(IntrinsicDimension::MaxHeight, constraints.max_width.get());
-            Some(px(apply_step(raw, self.step_height)))
+            let raw = intrinsic(IntrinsicDimension::MaxHeight, constraints.max_width);
+            Some(apply_step(raw, self.step_height))
         };
 
         // tighten clamps to [min, max]: step-then-clamp, matching Flutter.
@@ -268,11 +268,11 @@ impl RenderBox for RenderIntrinsicWidth {
     //   getMaxIntrinsicWidth(double.infinity); }`), then query the child's
     //   min/max intrinsic height at that resolved width and apply `step_height`.
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.compute_max_intrinsic_width(height, ctx)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -280,27 +280,27 @@ impl RenderBox for RenderIntrinsicWidth {
         apply_step(child_max, self.step_width)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         let width = if width.is_finite() {
             width
         } else {
-            self.compute_max_intrinsic_width(f32::INFINITY, ctx)
+            self.compute_max_intrinsic_width(f64::INFINITY, ctx)
         };
         let child_min = ctx.child_min_intrinsic_height(0, width);
         apply_step(child_min, self.step_height)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         let width = if width.is_finite() {
             width
         } else {
-            self.compute_max_intrinsic_width(f32::INFINITY, ctx)
+            self.compute_max_intrinsic_width(f64::INFINITY, ctx)
         };
         let child_max = ctx.child_max_intrinsic_height(0, width);
         apply_step(child_max, self.step_height)
@@ -330,7 +330,7 @@ impl RenderBox for RenderIntrinsicWidth {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -350,10 +350,9 @@ impl RenderBox for RenderIntrinsicWidth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::geometry::px;
 
-    fn bc(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
-        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
+        BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
     #[test]
@@ -402,25 +401,25 @@ mod tests {
         // When incoming constraints have tight width, child_constraints must
         // also be tight on width and must NOT call the intrinsic closure.
         let node = RenderIntrinsicWidth::new(None, None);
-        let constraints = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
+        let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
         // Closure panics if called — verifies no intrinsic query on tight width.
         let child_c = node.child_constraints(constraints, |_, _| {
             panic!("intrinsic queried on tight width")
         });
         assert!(child_c.has_tight_width());
-        assert_eq!(child_c.min_width, px(100.0));
+        assert_eq!(child_c.min_width, 100.0);
     }
 
     #[test]
     fn child_constraints_tight_height_propagated() {
         let node = RenderIntrinsicWidth::new(None, None);
-        let constraints = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
+        let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
         // No step_height → height axis not queried; tight height preserved.
         let child_c = node.child_constraints(constraints, |_, _| {
             panic!("intrinsic queried on tight width")
         });
         assert!(child_c.has_tight_height());
-        assert_eq!(child_c.min_height, px(50.0));
+        assert_eq!(child_c.min_height, 50.0);
     }
 
     #[test]
@@ -434,7 +433,7 @@ mod tests {
             _ => panic!("unexpected intrinsic dimension"),
         });
         assert!(child_c.has_tight_width());
-        assert!((child_c.min_width.get() - 40.0).abs() < 0.01);
+        assert!((child_c.min_width - 40.0).abs() < 0.01);
     }
 
     #[test]
@@ -451,7 +450,7 @@ mod tests {
         });
         // Child should be tight at 120 (clamped to [0, 200] by tighten).
         assert!(child_c.has_tight_width());
-        assert!((child_c.min_width.get() - 120.0).abs() < 0.01);
+        assert!((child_c.min_width - 120.0).abs() < 0.01);
     }
 
     #[test]
@@ -466,7 +465,7 @@ mod tests {
             _ => panic!("unexpected intrinsic dimension"),
         });
         assert!(child_c.has_tight_width());
-        assert!((child_c.min_width.get() - 35.0).abs() < 0.01);
+        assert!((child_c.min_width - 35.0).abs() < 0.01);
     }
 
     #[test]
@@ -475,7 +474,7 @@ mod tests {
         // (NOT the computed width). Here max_width = 80.
         let node = RenderIntrinsicWidth::new(None, Some(10.0));
         let constraints = bc(0.0, 80.0, 0.0, 200.0);
-        let mut saw_height_extent = f32::NAN;
+        let mut saw_height_extent = f64::NAN;
         node.child_constraints(constraints, |dim, extent| match dim {
             IntrinsicDimension::MaxWidth => 40.0, // width query
             IntrinsicDimension::MaxHeight => {
@@ -497,7 +496,7 @@ mod tests {
         // Here max_height = 300.
         let node = RenderIntrinsicWidth::new(None, None);
         let constraints = bc(0.0, 500.0, 0.0, 300.0);
-        let mut saw_width_extent = f32::NAN;
+        let mut saw_width_extent = f64::NAN;
         node.child_constraints(constraints, |dim, extent| match dim {
             IntrinsicDimension::MaxWidth => {
                 saw_width_extent = extent;

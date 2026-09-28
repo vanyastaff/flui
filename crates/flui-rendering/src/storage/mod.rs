@@ -19,7 +19,7 @@
 //!             │    ├─ flags: AtomicRenderFlags
 //!             │    ├─ geometry: Option<ProtocolGeometry<P>>
 //!             │    ├─ constraints: Option<ProtocolConstraints<P>>
-//!             │    └─ offset: AtomicOffset
+//!             │    └─ offset: OffsetCell
 //!             └─ links: NodeLinks
 //!                  ├─ parent: Option<RenderId>
 //!                  ├─ children: Vec<RenderId>

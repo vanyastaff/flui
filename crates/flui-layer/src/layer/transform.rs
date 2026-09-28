@@ -1,9 +1,6 @@
 //! `TransformLayer` — transforms its subtree by a 4×4 matrix.
 
-use flui_types::{
-    Matrix4,
-    geometry::{Pixels, Point},
-};
+use flui_types::{Matrix4, geometry::Point};
 
 /// Layer that applies a full matrix transformation to its children.
 ///
@@ -33,7 +30,7 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
-/// use std::f32::consts::PI;
+/// use std::f64::consts::PI;
 ///
 /// use flui_layer::TransformLayer;
 /// use flui_types::Matrix4;
@@ -66,19 +63,19 @@ impl TransformLayer {
 
     /// A pure translation by `(dx, dy)` device pixels.
     #[inline]
-    pub fn translation(dx: f32, dy: f32) -> Self {
+    pub fn translation(dx: f64, dy: f64) -> Self {
         Self::new(Matrix4::translation(dx, dy, 0.0))
     }
 
     /// A rotation about the Z axis by `angle` radians.
     #[inline]
-    pub fn rotation(angle: f32) -> Self {
+    pub fn rotation(angle: f64) -> Self {
         Self::new(Matrix4::rotation_z(angle))
     }
 
     /// A uniform scale by `s` about the origin.
     #[inline]
-    pub fn scale(s: f32) -> Self {
+    pub fn scale(s: f64) -> Self {
         Self::new(Matrix4::scaling(s, s, 1.0))
     }
 
@@ -96,7 +93,7 @@ impl TransformLayer {
 
     /// `point` mapped through the matrix.
     #[inline]
-    pub fn transform_point(&self, point: Point<Pixels>) -> Point<Pixels> {
+    pub fn transform_point(&self, point: Point<f64>) -> Point<f64> {
         let (x, y) = self.transform.transform_point(point.x, point.y);
         Point::new(x, y)
     }
@@ -116,9 +113,7 @@ impl Default for TransformLayer {
 
 #[cfg(test)]
 mod tests {
-    use std::f32::consts::FRAC_PI_2;
-
-    use flui_types::geometry::px;
+    use std::f64::consts::FRAC_PI_2;
 
     use super::*;
 
@@ -141,27 +136,27 @@ mod tests {
     fn test_transform_layer_translation() {
         let layer = TransformLayer::translation(10.0, 20.0);
 
-        let point = layer.transform_point(Point::new(px(5.0), px(5.0)));
-        assert!((point.x - px(15.0)).abs() < px(0.001));
-        assert!((point.y - px(25.0)).abs() < px(0.001));
+        let point = layer.transform_point(Point::new(5.0, 5.0));
+        assert!((point.x - 15.0).abs() < 0.001);
+        assert!((point.y - 25.0).abs() < 0.001);
     }
 
     #[test]
     fn test_transform_layer_rotation() {
         let layer = TransformLayer::rotation(FRAC_PI_2); // 90 degrees
 
-        let point = layer.transform_point(Point::new(px(1.0), px(0.0)));
-        assert!(point.x.abs() < px(0.001));
-        assert!((point.y - px(1.0)).abs() < px(0.001));
+        let point = layer.transform_point(Point::new(1.0, 0.0));
+        assert!(point.x.abs() < 0.001);
+        assert!((point.y - 1.0).abs() < 0.001);
     }
 
     #[test]
     fn test_transform_layer_scale() {
         let layer = TransformLayer::scale(2.0);
 
-        let point = layer.transform_point(Point::new(px(10.0), px(20.0)));
-        assert!((point.x - px(20.0)).abs() < px(0.001));
-        assert!((point.y - px(40.0)).abs() < px(0.001));
+        let point = layer.transform_point(Point::new(10.0, 20.0));
+        assert!((point.x - 20.0).abs() < 0.001);
+        assert!((point.y - 40.0).abs() < 0.001);
     }
 
     #[test]
@@ -170,12 +165,12 @@ mod tests {
         let inverse = layer.try_inverse().unwrap();
 
         // Applying transform then inverse should give identity
-        let point = Point::new(px(10.0), px(20.0));
+        let point = Point::new(10.0, 20.0);
         let transformed = layer.transform_point(point);
         let back = inverse.transform_point(transformed);
 
-        assert!((back.x - point.x).abs() < px(0.001));
-        assert!((back.y - point.y).abs() < px(0.001));
+        assert!((back.x - point.x).abs() < 0.001);
+        assert!((back.y - point.y).abs() < 0.001);
     }
 
     #[test]

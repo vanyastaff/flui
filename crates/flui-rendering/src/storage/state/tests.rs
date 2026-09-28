@@ -11,7 +11,7 @@
 
 use std::mem::size_of;
 
-use flui_types::{Offset, geometry::px};
+use flui_types::Offset;
 
 use super::*;
 use crate::protocol::{BoxProtocol, SliverProtocol};
@@ -28,23 +28,24 @@ use crate::protocol::{BoxProtocol, SliverProtocol};
 #[test]
 fn render_state_box_fits_budget() {
     // RenderState<BoxProtocol> = AtomicRenderFlags(4) + Option<Size>
-    // + Option<BoxConstraints> + AtomicOffset(8) + layout_cache
-    // + parent_data + PhantomData(0).
-    // Documented estimate: 44-60 bytes for the core fields. Cap at 128
-    // to leave room for future fields without forcing a re-budget on every commit.
+    // + Option<BoxConstraints> + OffsetCell(16) + layout_cache
+    // + parent_data + PhantomData(0). Geometry and constraints are f64
+    // (ADR-0098 §2), so the cap is the measured size, not headroom: the next
+    // field has to justify itself here.
     let actual = size_of::<RenderState<BoxProtocol>>();
     assert!(
-        actual <= 128,
-        "RenderState<BoxProtocol> grew beyond budget: {actual} bytes (cap 128)"
+        actual <= 136,
+        "RenderState<BoxProtocol> grew beyond budget: {actual} bytes (cap 136)"
     );
 }
 
 #[test]
 fn render_state_sliver_fits_budget() {
+    // Sliver constraints and geometry carry more f64 fields than the box pair.
     let actual = size_of::<RenderState<SliverProtocol>>();
     assert!(
-        actual <= 192,
-        "RenderState<SliverProtocol> grew beyond budget: {actual} bytes (cap 192)"
+        actual <= 240,
+        "RenderState<SliverProtocol> grew beyond budget: {actual} bytes (cap 240)"
     );
 }
 
@@ -54,8 +55,8 @@ fn test_geometry_set_is_idempotent() {
     // (OnceCell-backed). Re-layout now overwrites cleanly mirroring
     // Flutter `_size = size` straight assignment.
     let mut state = BoxRenderState::new();
-    let size1 = flui_types::Size::new(px(100.0), px(50.0));
-    let size2 = flui_types::Size::new(px(200.0), px(100.0));
+    let size1 = flui_types::Size::new(100.0, 50.0);
+    let size2 = flui_types::Size::new(200.0, 100.0);
 
     // First set establishes geometry.
     state.set_geometry(size1);
@@ -73,13 +74,13 @@ fn test_geometry_set_is_idempotent() {
 #[test]
 fn test_atomic_offset() {
     let state = BoxRenderState::new();
-    let offset = Offset::new(px(10.0), px(20.0));
+    let offset = Offset::new(10.0, 20.0);
 
     state.set_offset(offset);
     assert_eq!(state.offset(), offset);
 
     // Can update multiple times
-    let offset2 = Offset::new(px(30.0), px(40.0));
+    let offset2 = Offset::new(30.0, 40.0);
     state.set_offset(offset2);
     assert_eq!(state.offset(), offset2);
 }
@@ -115,7 +116,7 @@ fn compute_relayout_boundary_non_tight_non_root_is_not_boundary_by_default() {
 
     let mut state = BoxRenderState::new();
     // Loose constraints (not tight) — typical layout-from-parent case.
-    let loose = BoxConstraints::loose(Size::new(px(200.0), px(100.0)));
+    let loose = BoxConstraints::loose(Size::new(200.0, 100.0));
     state.set_constraints(loose);
 
     // Bootstrap as if running under the relayout-boundary bootstrap with
@@ -138,7 +139,7 @@ fn compute_relayout_boundary_tight_constraints_is_boundary() {
     use flui_types::Size;
 
     let mut state = BoxRenderState::new();
-    let tight = BoxConstraints::tight(Size::new(px(50.0), px(50.0)));
+    let tight = BoxConstraints::tight(Size::new(50.0, 50.0));
     state.set_constraints(tight);
 
     state.compute_relayout_boundary(true, false, true);
@@ -199,7 +200,7 @@ fn parent_data_round_trips_through_typed_and_erased_accessors() {
     assert!(state.parent_data().is_none());
     assert!(state.parent_data_as::<BoxParentData>().is_none());
 
-    let offset = Offset::new(px(3.0), px(4.0));
+    let offset = Offset::new(3.0, 4.0);
     state.set_parent_data(Box::new(BoxParentData::new(offset)));
 
     // Type-erased read.
@@ -215,10 +216,10 @@ fn parent_data_round_trips_through_typed_and_erased_accessors() {
     state
         .parent_data_as_mut::<BoxParentData>()
         .expect("parent data is BoxParentData")
-        .offset = Offset::new(px(7.0), px(8.0));
+        .offset = Offset::new(7.0, 8.0);
     assert_eq!(
         state.parent_data_as::<BoxParentData>().unwrap().offset,
-        Offset::new(px(7.0), px(8.0))
+        Offset::new(7.0, 8.0)
     );
 
     // Erased mutation reaches the same storage as the typed accessors.
@@ -227,10 +228,10 @@ fn parent_data_round_trips_through_typed_and_erased_accessors() {
         .expect("parent data is set")
         .downcast_mut::<BoxParentData>()
         .expect("still BoxParentData")
-        .offset = Offset::new(px(1.0), px(2.0));
+        .offset = Offset::new(1.0, 2.0);
     assert_eq!(
         state.parent_data_as::<BoxParentData>().unwrap().offset,
-        Offset::new(px(1.0), px(2.0))
+        Offset::new(1.0, 2.0)
     );
 
     // Replacing with a new value overwrites rather than accumulating state.
@@ -309,9 +310,9 @@ fn clone_preserves_geometry_constraints_offset_and_parent_data_but_resets_layout
     use flui_types::Size;
 
     let mut state = BoxRenderState::new();
-    let size = Size::new(px(30.0), px(40.0));
+    let size = Size::new(30.0, 40.0);
     let constraints = BoxConstraints::tight(size);
-    let offset = Offset::new(px(5.0), px(6.0));
+    let offset = Offset::new(5.0, 6.0);
 
     state.set_geometry(size);
     state.set_constraints(constraints);
@@ -354,11 +355,11 @@ fn box_size_and_has_size_use_zero_fallback_before_layout() {
     assert_eq!(state.size(), flui_types::Size::ZERO);
     assert!(!state.has_size(flui_types::Size::ZERO));
 
-    let size = flui_types::Size::new(px(64.0), px(32.0));
+    let size = flui_types::Size::new(64.0, 32.0);
     state.set_size(size);
     assert_eq!(state.size(), size);
     assert!(state.has_size(size));
-    assert!(!state.has_size(flui_types::Size::new(px(1.0), px(1.0))));
+    assert!(!state.has_size(flui_types::Size::new(1.0, 1.0)));
 }
 
 #[test]
@@ -415,7 +416,7 @@ fn absolute_paint_size_maps_main_axis_to_height_for_vertical_scroll() {
     // Vertical scroll: main axis (paint_extent) is height, cross axis is width.
     assert_eq!(
         state.absolute_paint_size(),
-        flui_types::Size::new(px(120.0), px(80.0))
+        flui_types::Size::new(120.0, 80.0)
     );
 }
 
@@ -438,6 +439,6 @@ fn absolute_paint_size_maps_main_axis_to_width_for_horizontal_scroll() {
     // Horizontal scroll: main axis (paint_extent) is width, cross axis is height.
     assert_eq!(
         state.absolute_paint_size(),
-        flui_types::Size::new(px(80.0), px(120.0))
+        flui_types::Size::new(80.0, 120.0)
     );
 }

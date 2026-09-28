@@ -15,7 +15,7 @@ use flui_rendering::{
     testing::{inspect, sliver as sliver_presets},
     traits::RenderObject,
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 /// A boxed Box-protocol render object, as stored in the pipeline tree.
 pub type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
@@ -47,29 +47,17 @@ pub fn laid_out_with(
 /// [`laid_out_with`] under a tight 300×100 root — the shared viewport of
 /// the sliver-family harness tests.
 pub fn laid_out_tight_300x100(owner: PipelineOwner, root: RenderId) -> PipelineOwner<Layout> {
-    laid_out_with(
-        owner,
-        root,
-        BoxConstraints::tight(Size::new(px(300.0), px(100.0))),
-    )
+    laid_out_with(owner, root, BoxConstraints::tight(Size::new(300.0, 100.0)))
 }
 
 /// [`laid_out_with`] under a tight 100×100 root.
 pub fn laid_out_tight_100x100(owner: PipelineOwner, root: RenderId) -> PipelineOwner<Layout> {
-    laid_out_with(
-        owner,
-        root,
-        BoxConstraints::tight(Size::new(px(100.0), px(100.0))),
-    )
+    laid_out_with(owner, root, BoxConstraints::tight(Size::new(100.0, 100.0)))
 }
 
 /// [`laid_out_with`] under a loose 0–200 × 0–200 root.
 pub fn laid_out_loose_200x200(owner: PipelineOwner, root: RenderId) -> PipelineOwner<Layout> {
-    laid_out_with(
-        owner,
-        root,
-        BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)),
-    )
+    laid_out_with(owner, root, BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
 }
 
 /// Reads the committed [`SliverGeometry`] for `id`, panicking when layout
@@ -81,7 +69,7 @@ pub fn sliver_geometry(owner: &PipelineOwner<Layout>, id: RenderId) -> SliverGeo
 /// Vertical sliver constraints for the shared 300-wide × 100-tall test
 /// viewport: 100 px of paint room, a 120 px cache window starting 20 px
 /// before the leading edge.
-pub fn vertical_constraints(scroll_offset: f32) -> SliverConstraints {
+pub fn vertical_constraints(scroll_offset: f64) -> SliverConstraints {
     sliver_presets::vertical()
         .scroll_offset(scroll_offset)
         .remaining_paint_extent(100.0)
@@ -95,7 +83,7 @@ pub fn vertical_constraints(scroll_offset: f32) -> SliverConstraints {
 /// Horizontal counterpart of [`vertical_constraints`]: a 300-long main
 /// axis, 100 px cross axis, 320 px cache window starting 20 px before the
 /// leading edge.
-pub fn horizontal_constraints(scroll_offset: f32) -> SliverConstraints {
+pub fn horizontal_constraints(scroll_offset: f64) -> SliverConstraints {
     sliver_presets::horizontal()
         .scroll_offset(scroll_offset)
         .remaining_paint_extent(300.0)

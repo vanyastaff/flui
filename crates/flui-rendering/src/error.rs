@@ -248,7 +248,7 @@ pub enum RenderError {
     // ========================================================================
     /// Geometry returned from a render object's `perform_layout` is
     /// structurally invalid (NaN, negative dimensions, larger than
-    /// `f32::MAX / 2`, etc.). The frame is dropped; the previous
+    /// `f64::MAX / 2`, etc.). The frame is dropped; the previous
     /// geometry remains valid.
     #[error("invalid geometry from {render_object}: {reason}")]
     InvalidGeometry {

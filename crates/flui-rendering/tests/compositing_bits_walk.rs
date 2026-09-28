@@ -20,7 +20,6 @@
 
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, traits::RenderObject};
-use flui_types::geometry::px;
 
 // ============================================================================
 // IS_REPAINT_BOUNDARY bootstrap — storage flag set at insert
@@ -92,12 +91,7 @@ fn run_compositing_clears_needs_compositing_bits_update_flag() {
     // through the canonical mark above, so `run_compositing` has all the state it needs
     // from the typestate transition alone (no `run_layout` call).
     owner.set_root_id(Some(padding_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
     let owner = owner.into_layout();
     let mut owner = owner.into_compositing();
     owner.run_compositing().expect("run_compositing succeeds");
@@ -134,12 +128,7 @@ fn run_compositing_short_circuits_when_flag_cleared_after_enqueue() {
         .clear_needs_compositing_bits_update();
 
     owner.set_root_id(Some(padding_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
     let owner = owner.into_layout();
     let mut owner = owner.into_compositing();
 
@@ -235,12 +224,7 @@ fn run_compositing_walks_parent_then_child() {
     }
 
     owner.set_root_id(Some(padding_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
     let owner = owner.into_layout();
     let mut owner = owner.into_compositing();
     owner.run_compositing().expect("run_compositing succeeds");

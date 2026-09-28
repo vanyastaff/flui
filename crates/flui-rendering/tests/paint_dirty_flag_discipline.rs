@@ -15,7 +15,6 @@ use flui_foundation::LayerId;
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{RenderColoredBox, RenderPadding, RenderRepaintBoundary};
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, traits::RenderObject};
-use flui_types::geometry::px;
 
 // ============================================================================
 // Test 1 — RepaintBoundary bootstrap sets IS_REPAINT_BOUNDARY flag true
@@ -65,12 +64,7 @@ fn paint_clears_needs_paint_on_painted_nodes() {
         .expect("child insert");
 
     owner.set_root_id(Some(padding_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     // Run full pipeline: layout -> compositing -> paint.
     let mut owner = owner.into_layout();
@@ -120,12 +114,7 @@ fn repaint_boundary_isolates_subtree_paint() {
         .expect("leaf insert");
 
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     // Frame 1: full pipeline to clear all initial dirty flags.
     let mut owner = owner.into_layout();
@@ -203,12 +192,7 @@ fn unpainted_unreached_nodes_still_clear_flag() {
         .expect("leaf insert");
 
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     // Frame 1: full pipeline clears all flags.
     let mut owner = owner.into_layout();
@@ -279,12 +263,7 @@ fn paint_skips_node_that_still_needs_layout() {
         .expect("child insert");
 
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     let mut owner = owner.into_layout();
     owner.run_layout().expect("layout");

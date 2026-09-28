@@ -76,7 +76,7 @@ pub struct RenderSliverList {
     item_count: usize,
 
     /// Estimate currently assigned to unmeasured children.
-    default_extent_estimate: f32,
+    default_extent_estimate: f64,
 
     // ── virtualization state ─────────────────────────────────────────────────
     /// Protocol-agnostic windowing engine.
@@ -88,7 +88,7 @@ pub struct RenderSliverList {
 
     // ── anchor correction ───────────────────────────────────────────────────
     /// Accumulated anchor-correction delta not yet emitted to the viewport.
-    pending_correction: f32,
+    pending_correction: f64,
 
     // ── hit-test support ────────────────────────────────────────────────────
     /// Dense child count committed after the last layout pass. Used by the
@@ -111,7 +111,7 @@ impl RenderSliverList {
     /// Panics if `default_extent_estimate` is not finite or is zero/negative —
     /// a zero estimate would produce a virtualizer with infinite band width.
     #[must_use]
-    pub fn new(item_count: usize, default_extent_estimate: f32) -> Self {
+    pub fn new(item_count: usize, default_extent_estimate: f64) -> Self {
         assert!(
             default_extent_estimate.is_finite() && default_extent_estimate > 0.0,
             "default_extent_estimate must be finite and positive, got {default_extent_estimate}",
@@ -147,7 +147,7 @@ impl RenderSliverList {
     /// measurements already committed by layout.
     pub fn set_default_extent_estimate(
         &mut self,
-        estimate: f32,
+        estimate: f64,
     ) -> flui_rendering::RenderUpdateImpact {
         assert!(
             estimate.is_finite() && estimate > 0.0,
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "default_extent_estimate must be finite")]
     fn new_panics_on_infinite_estimate() {
-        let _ = RenderSliverList::new(10, f32::INFINITY);
+        let _ = RenderSliverList::new(10, f64::INFINITY);
     }
 
     #[test]

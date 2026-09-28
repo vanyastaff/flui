@@ -35,7 +35,7 @@ use std::fmt;
 
 use flui_foundation::Single;
 use flui_types::{
-    Offset, Pixels, Point, Rect,
+    Offset, Point, Rect,
     painting::{BlendMode, Shader},
 };
 
@@ -157,7 +157,7 @@ impl RenderShaderMask {
         flui_rendering::RenderUpdateImpact::PAINT
     }
 
-    fn resolve_shader(&self, bounds: Rect<Pixels>) -> Shader {
+    fn resolve_shader(&self, bounds: Rect<f64>) -> Shader {
         if let Some(target) = self.shader_target {
             match resolve_shader_mask_target(target, bounds) {
                 Ok(shader) => return shader,

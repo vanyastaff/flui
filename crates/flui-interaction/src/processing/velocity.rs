@@ -42,7 +42,7 @@
 //! for i in 0..10 {
 //!     tracker.add_position(
 //!         start + Duration::from_millis(i * 10),
-//!         Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+//!         Offset::new((i as f64 * 10.0), 0.0),
 //!     );
 //! }
 //!
@@ -56,7 +56,7 @@
 
 use web_time::{Duration, Instant};
 
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 pub use flui_types::gestures::{PointerDeviceKind, Velocity, VelocityEstimate};
 
 use super::lsq_solver::{MAX_SAMPLES, solve_two};
@@ -95,7 +95,7 @@ const POLYNOMIAL_DEGREE: usize = 2;
 /// Flutter's `VerticalDragGestureRecognizer.isFlingGesture` combines this
 /// with a slop check on the up/down offset; this crate applies the speed half
 /// on its own, through [`fling_velocity_or_zero`].
-const MIN_FLING_SPEED_PX_S: f32 = 50.0;
+const MIN_FLING_SPEED_PX_S: f64 = 50.0;
 
 /// Gate `velocity` to [`Velocity::ZERO`] unless it is a fling, or `allow_slow`
 /// waives the gate.
@@ -106,8 +106,8 @@ fn fling_velocity_or_zero(velocity: Velocity, allow_slow: bool) -> Velocity {
     if allow_slow {
         return velocity;
     }
-    if velocity.pixels_per_second.dx.get().abs() < MIN_FLING_SPEED_PX_S
-        && velocity.pixels_per_second.dy.get().abs() < MIN_FLING_SPEED_PX_S
+    if velocity.pixels_per_second.dx.abs() < MIN_FLING_SPEED_PX_S
+        && velocity.pixels_per_second.dy.abs() < MIN_FLING_SPEED_PX_S
     {
         return Velocity::ZERO;
     }
@@ -137,7 +137,7 @@ struct PointAtTime {
     /// When this sample was recorded.
     time: Instant,
     /// Position at this time.
-    position: Offset<Pixels>,
+    position: Offset<f64>,
 }
 
 // ============================================================================
@@ -224,11 +224,11 @@ impl VelocityTracker {
     /// "stationary for 40 ms" gate uses `Instant::now()` so the check
     /// always reflects wall-clock time, regardless of how the caller
     /// generates the logical timestamps.
-    pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
+    pub fn add_position(&mut self, time: Instant, position: Offset<f64>) {
         // Reject non-finite coordinates: NaN/Inf would poison the least-squares
         // fit (NaN comparisons defeat the singular-matrix guard) and propagate
         // into every downstream velocity. Pointer streams are untrusted input.
-        if !position.dx.0.is_finite() || !position.dy.0.is_finite() {
+        if !position.dx.is_finite() || !position.dy.is_finite() {
             return;
         }
         // Mark "now" as the latest activity. Used by get_velocity_estimate()
@@ -359,8 +359,8 @@ impl VelocityTracker {
 
             oldest = sample;
             ts[n] = -age_ms; // Negative: we go back from the newest sample.
-            xs[n] = sample.position.dx.get() as f64;
-            ys[n] = sample.position.dy.get() as f64;
+            xs[n] = sample.position.dx as f64;
+            ys[n] = sample.position.dy as f64;
             ws[n] = 1.0; // Uniform weights — Flutter's `PolynomialFitLeastSquares`.
             n += 1;
 
@@ -440,11 +440,11 @@ impl VelocityTracker {
             (Some(xf), Some(yf)) => Some(VelocityEstimate::new(
                 newest.position - oldest.position,
                 Offset::new(
-                    Pixels((xf.coefficients[1] * 1000.0) as f32),
-                    Pixels((yf.coefficients[1] * 1000.0) as f32),
+                    (xf.coefficients[1] * 1000.0) as f64,
+                    (yf.coefficients[1] * 1000.0) as f64,
                 ),
                 newest.time.saturating_duration_since(oldest.time),
-                (xf.confidence * yf.confidence) as f32,
+                (xf.confidence * yf.confidence) as f64,
             )),
             // Numerical failure on one axis — keep going with zero on that
             // axis and the other axis's confidence. Rare; happens on
@@ -581,7 +581,7 @@ impl IosFlingVelocityTracker {
     }
 
     /// Record a position. O(1). Mirrors `IOSScrollViewFlingVelocityTracker.addPosition`.
-    pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
+    pub fn add_position(&mut self, time: Instant, position: Offset<f64>) {
         self.inner.add_position(time, position);
     }
 
@@ -642,14 +642,14 @@ impl IosFlingVelocityTracker {
 
     /// The raw weighted-average velocity, regardless of the
     /// "stationary for 40 ms" gate.
-    fn estimated_velocity(&self) -> Offset<Pixels> {
+    fn estimated_velocity(&self) -> Offset<f64> {
         // We do the weighted sum in f64 for precision (weights are 0.6 /
-        // 0.35 / 0.05 and would lose bits through f32), then convert at
-        // the end. `Pixels` is a `#[repr(transparent)]` newtype around f32.
+        // 0.35 / 0.05 and would lose bits through f64), then convert at
+        // the end. `Pixels` is a `#[repr(transparent)]` newtype around f64.
         let v = |offset: isize| self.two_sample_velocity_at_f64(offset);
         let dx = v(-2).0 * self.weights[0] + v(-1).0 * self.weights[1] + v(0).0 * self.weights[2];
         let dy = v(-2).1 * self.weights[0] + v(-1).1 * self.weights[1] + v(0).1 * self.weights[2];
-        Offset::new(Pixels(dx as f32), Pixels(dy as f32))
+        Offset::new(dx as f64, dy as f64)
     }
 
     /// The 2-point velocity at the given offset from the newest sample,
@@ -671,8 +671,8 @@ impl IosFlingVelocityTracker {
         }
         let dt_ms = dt_us as f64 / 1000.0;
         // (end - start) is in pixels; divide by dt_ms to get px/ms; × 1000 = px/s.
-        let dx_px_s = (end.position.dx.get() - start.position.dx.get()) as f64 * 1000.0 / dt_ms;
-        let dy_px_s = (end.position.dy.get() - start.position.dy.get()) as f64 * 1000.0 / dt_ms;
+        let dx_px_s = (end.position.dx - start.position.dx) as f64 * 1000.0 / dt_ms;
+        let dy_px_s = (end.position.dy - start.position.dy) as f64 * 1000.0 / dt_ms;
         (dx_px_s, dy_px_s)
     }
 
@@ -719,7 +719,7 @@ impl MacosFlingVelocityTracker {
     }
 
     /// Record a position.
-    pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
+    pub fn add_position(&mut self, time: Instant, position: Offset<f64>) {
         self.inner.add_position(time, position);
     }
 
@@ -798,7 +798,7 @@ impl ImpulseVelocityTracker {
     }
 
     /// Record a position.
-    pub fn add_position(&mut self, time: Instant, position: Offset<Pixels>) {
+    pub fn add_position(&mut self, time: Instant, position: Offset<f64>) {
         self.inner.add_position(time, position);
     }
 
@@ -816,15 +816,15 @@ impl ImpulseVelocityTracker {
     /// AOSP: kinetic energy back to velocity, preserving direction.
     /// `v = sign(w) · √2 · √|w|` (mass cancels).
     #[inline]
-    fn kinetic_energy_to_velocity(work: f32) -> f32 {
-        core::f32::consts::SQRT_2 * work.abs().sqrt() * work.signum()
+    fn kinetic_energy_to_velocity(work: f64) -> f64 {
+        core::f64::consts::SQRT_2 * work.abs().sqrt() * work.signum()
     }
 
     /// Impulse velocity over one axis. `positions`/`times` are chronological
     /// (oldest first); both slices have the same length ≥ 2 and strictly
     /// increasing times (enforced by the caller's sample walk).
-    fn impulse_axis(positions: &[f32], dts: &[f32]) -> f32 {
-        let mut work = 0.0_f32;
+    fn impulse_axis(positions: &[f64], dts: &[f64]) -> f64 {
+        let mut work = 0.0_f64;
         for i in 0..positions.len() - 1 {
             let v_prev = Self::kinetic_energy_to_velocity(work);
             let v_curr = (positions[i + 1] - positions[i]) / dts[i];
@@ -897,26 +897,26 @@ impl ImpulseVelocityTracker {
         // Reverse into chronological order and strip zero-dt duplicates
         // (the walk guarantees monotone times, but identical timestamps can
         // occur on coarse clocks and would divide by zero).
-        let mut xs: [f32; HISTORY_SIZE] = [0.0; HISTORY_SIZE];
-        let mut ys: [f32; HISTORY_SIZE] = [0.0; HISTORY_SIZE];
-        let mut dts: [f32; HISTORY_SIZE] = [0.0; HISTORY_SIZE];
+        let mut xs: [f64; HISTORY_SIZE] = [0.0; HISTORY_SIZE];
+        let mut ys: [f64; HISTORY_SIZE] = [0.0; HISTORY_SIZE];
+        let mut dts: [f64; HISTORY_SIZE] = [0.0; HISTORY_SIZE];
         let mut m = 0usize;
         let mut last_time: Option<Instant> = None;
         for i in (0..n).rev() {
             // Invariant: slots 0..n were written by the walk above.
             let s = chron[i].expect("walk wrote chron[0..n]; i < n");
             if let Some(prev_time) = last_time {
-                let dt = s.time.saturating_duration_since(prev_time).as_secs_f32();
+                let dt = s.time.saturating_duration_since(prev_time).as_secs_f64();
                 if dt <= 0.0 {
                     // Same-timestamp duplicate: keep the newer position only.
-                    xs[m - 1] = s.position.dx.get();
-                    ys[m - 1] = s.position.dy.get();
+                    xs[m - 1] = s.position.dx;
+                    ys[m - 1] = s.position.dy;
                     continue;
                 }
                 dts[m - 1] = dt;
             }
-            xs[m] = s.position.dx.get();
-            ys[m] = s.position.dy.get();
+            xs[m] = s.position.dx;
+            ys[m] = s.position.dy;
             last_time = Some(s.time);
             m += 1;
         }
@@ -934,7 +934,7 @@ impl ImpulseVelocityTracker {
 
         Some(VelocityEstimate::new(
             newest.position - oldest.position,
-            Offset::new(Pixels(vx), Pixels(vy)),
+            Offset::new(vx, vy),
             newest.time.saturating_duration_since(oldest.time),
             // The impulse model makes no fit-quality claim (AOSP reports the
             // value unconditionally).
@@ -961,17 +961,14 @@ mod tests {
     fn linear_swipe_x(
         duration_ms: u64,
         samples: usize,
-        slope_px_per_s: f32,
-    ) -> Vec<(Instant, Offset<Pixels>)> {
+        slope_px_per_s: f64,
+    ) -> Vec<(Instant, Offset<f64>)> {
         let start = Instant::now();
         let dt = Duration::from_millis(duration_ms / samples as u64);
         (0..samples)
             .map(|i| {
                 let t = start + dt * i as u32;
-                let pos = Offset::new(
-                    Pixels(slope_px_per_s * (i as f32 * dt.as_secs_f32())),
-                    Pixels(0.0),
-                );
+                let pos = Offset::new((slope_px_per_s * (i as f64 * dt.as_secs_f64())), 0.0);
                 (t, pos)
             })
             .collect()
@@ -986,7 +983,7 @@ mod tests {
         for (t, p) in linear_swipe_x(90, 10, 1000.0) {
             tracker.add_position(t, p);
         }
-        let v = tracker.get_velocity().pixels_per_second.dx.get();
+        let v = tracker.get_velocity().pixels_per_second.dx;
         assert!(
             (v - 1000.0).abs() < 10.0,
             "constant 1000 px/s must be recovered exactly, got {v}"
@@ -999,7 +996,7 @@ mod tests {
         for (t, p) in linear_swipe_x(90, 10, -800.0) {
             tracker.add_position(t, p);
         }
-        let v = tracker.get_velocity().pixels_per_second.dx.get();
+        let v = tracker.get_velocity().pixels_per_second.dx;
         assert!(
             (v + 800.0).abs() < 10.0,
             "negative motion must produce negative velocity, got {v}"
@@ -1012,7 +1009,7 @@ mod tests {
         assert!(tracker.get_velocity_estimate().is_none());
 
         let mut tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
-        tracker.add_position(Instant::now(), Offset::new(Pixels(5.0), Pixels(5.0)));
+        tracker.add_position(Instant::now(), Offset::new(5.0, 5.0));
         assert_eq!(tracker.get_velocity(), Velocity::ZERO);
     }
 
@@ -1023,21 +1020,21 @@ mod tests {
         // the energy bookkeeping), unlike a plain window average.
         let mut tracker = ImpulseVelocityTracker::with_kind(PointerDeviceKind::Touch);
         let start = Instant::now();
-        let mut x = 0.0_f32;
+        let mut x = 0.0_f64;
         let mut t = start;
         // 4 intervals at 2000 px/s.
         for _ in 0..4 {
-            tracker.add_position(t, Offset::new(Pixels(x), Pixels(0.0)));
+            tracker.add_position(t, Offset::new(x, 0.0));
             x += 20.0; // 20 px / 10 ms
             t += Duration::from_millis(10);
         }
         // 5 intervals at 200 px/s.
         for _ in 0..6 {
-            tracker.add_position(t, Offset::new(Pixels(x), Pixels(0.0)));
+            tracker.add_position(t, Offset::new(x, 0.0));
             x += 2.0; // 2 px / 10 ms
             t += Duration::from_millis(10);
         }
-        let v = tracker.get_velocity().pixels_per_second.dx.get();
+        let v = tracker.get_velocity().pixels_per_second.dx;
         assert!(
             v < 1900.0 && v > 200.0,
             "deceleration must pull the estimate below the initial 2000 px/s \
@@ -1054,7 +1051,7 @@ mod tests {
 
     #[test]
     fn magnitude_and_direction() {
-        let v = Velocity::new(Offset::new(Pixels(3.0), Pixels(4.0)));
+        let v = Velocity::new(Offset::new(3.0, 4.0));
         assert!((v.magnitude() - 5.0).abs() < 0.001);
     }
 
@@ -1068,7 +1065,7 @@ mod tests {
     #[test]
     fn single_sample_returns_zero() {
         let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
-        tracker.add_position(Instant::now(), Offset::new(Pixels(0.0), Pixels(0.0)));
+        tracker.add_position(Instant::now(), Offset::new(0.0, 0.0));
         assert_eq!(tracker.get_velocity(), Velocity::ZERO);
     }
 
@@ -1079,11 +1076,11 @@ mod tests {
         // produces a finite velocity.
         let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
         let start = Instant::now();
-        tracker.add_position(start, Offset::new(Pixels(f32::NAN), Pixels(0.0)));
-        tracker.add_position(start, Offset::new(Pixels(0.0), Pixels(f32::INFINITY)));
+        tracker.add_position(start, Offset::new(f64::NAN, 0.0));
+        tracker.add_position(start, Offset::new(0.0, f64::INFINITY));
         for i in 0..5 {
             let t = start + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)));
+            tracker.add_position(t, Offset::new((i as f64 * 10.0), 0.0));
         }
         assert!(
             tracker.get_velocity().magnitude().is_finite(),
@@ -1100,12 +1097,12 @@ mod tests {
         }
         let v = tracker.get_velocity();
         assert!(
-            v.pixels_per_second.dx.get() > 800.0,
+            v.pixels_per_second.dx > 800.0,
             "expected dx > 800, got {}",
-            v.pixels_per_second.dx.get()
+            v.pixels_per_second.dx
         );
-        assert!(v.pixels_per_second.dx.get() < 1200.0);
-        assert!(v.pixels_per_second.dy.get().abs() < 100.0);
+        assert!(v.pixels_per_second.dx < 1200.0);
+        assert!(v.pixels_per_second.dy.abs() < 100.0);
     }
 
     #[test]
@@ -1115,12 +1112,12 @@ mod tests {
         for i in 0..10 {
             tracker.add_position(
                 start + Duration::from_millis(i * 10),
-                Offset::new(Pixels(0.0), Pixels(i as f32 * 10.0)),
+                Offset::new(0.0, (i as f64 * 10.0)),
             );
         }
         let v = tracker.get_velocity();
-        assert!(v.pixels_per_second.dx.get().abs() < 100.0);
-        assert!(v.pixels_per_second.dy.get() > 800.0);
+        assert!(v.pixels_per_second.dx.abs() < 100.0);
+        assert!(v.pixels_per_second.dy > 800.0);
     }
 
     #[test]
@@ -1131,7 +1128,7 @@ mod tests {
         for i in 0..10 {
             tracker.add_position(
                 start + Duration::from_millis(i * 10),
-                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+                Offset::new((i as f64 * 10.0), 0.0),
             );
         }
         std::thread::sleep(ASSUME_POINTER_STOPPED + Duration::from_millis(20));
@@ -1174,14 +1171,14 @@ mod tests {
         for i in 0..10 {
             tracker.add_position(
                 start + Duration::from_millis(i * 10),
-                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+                Offset::new((i as f64 * 10.0), 0.0),
             );
         }
         let v = tracker.get_velocity();
         assert!(
-            (v.pixels_per_second.dx.get() - 1000.0).abs() < 1.0,
+            (v.pixels_per_second.dx - 1000.0).abs() < 1.0,
             "expected ~1000 px/s, got {}",
-            v.pixels_per_second.dx.get()
+            v.pixels_per_second.dx
         );
     }
 
@@ -1193,7 +1190,7 @@ mod tests {
         for i in 0..3 {
             tracker.add_position(
                 start + Duration::from_millis(i * 10),
-                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+                Offset::new((i as f64 * 10.0), 0.0),
             );
         }
         assert!(tracker.has_sufficient_data());
@@ -1232,7 +1229,7 @@ mod tests {
         for i in 0..5 {
             tracker.add_position(
                 start + Duration::from_millis(i * 10),
-                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+                Offset::new((i as f64 * 10.0), 0.0),
             );
         }
         assert!(
@@ -1244,10 +1241,7 @@ mod tests {
             tracker.cached_estimate.is_some(),
             "first query must populate the cache"
         );
-        tracker.add_position(
-            start + Duration::from_millis(50),
-            Offset::new(Pixels(50.0), Pixels(0.0)),
-        );
+        tracker.add_position(start + Duration::from_millis(50), Offset::new(50.0, 0.0));
         assert!(
             tracker.cached_estimate.is_none(),
             "a new sample must invalidate the cache"
@@ -1270,20 +1264,20 @@ mod tests {
         for i in 0..8 {
             tracker.add_position(
                 start + Duration::from_millis(i * 5),
-                Offset::new(Pixels(i as f32 * 20.0), Pixels(0.0)),
+                Offset::new((i as f64 * 20.0), 0.0),
             );
         }
-        let right = tracker.get_velocity().pixels_per_second.dx.get();
+        let right = tracker.get_velocity().pixels_per_second.dx;
         assert!(right > 0.0, "rightward swipe should be +dx, got {right}");
 
         tracker.reset();
         for i in 0..8 {
             tracker.add_position(
                 start + Duration::from_millis(i * 5),
-                Offset::new(Pixels(-(i as f32) * 20.0), Pixels(0.0)),
+                Offset::new((-(i as f64) * 20.0), 0.0),
             );
         }
-        let left = tracker.get_velocity().pixels_per_second.dx.get();
+        let left = tracker.get_velocity().pixels_per_second.dx;
         assert!(left < 0.0, "leftward swipe should be -dx, got {left}");
     }
 
@@ -1301,10 +1295,10 @@ mod tests {
     /// property suite is for.
     ///
     /// The arithmetic runs in `f64` because `f64: From<u32>` is exact for every
-    /// step index, where `f32: From<u32>` does not exist at all. Only the final
+    /// step index, where `f64: From<u32>` does not exist at all. Only the final
     /// narrowing is lossy, and that is the point — the value has to land in the
     /// target type.
-    fn float_in(lo: f32, hi: f32) -> impl proptest::strategy::Strategy<Value = f32> {
+    fn float_in(lo: f64, hi: f64) -> impl proptest::strategy::Strategy<Value = f64> {
         const STEPS: u32 = 1 << 24;
         use proptest::strategy::Strategy as _;
         (0u32..=STEPS).prop_map(move |n| {
@@ -1314,7 +1308,7 @@ mod tests {
                 reason = "narrowing to the target type is the purpose; the \
                           arithmetic above is exact in f64"
             )]
-            let v = (f64::from(lo) + t * (f64::from(hi) - f64::from(lo))) as f32;
+            let v = (f64::from(lo) + t * (f64::from(hi) - f64::from(lo))) as f64;
             v
         })
     }
@@ -1331,7 +1325,7 @@ mod tests {
             for (i, &x) in xs.iter().enumerate() {
                 tracker.add_position(
                     start + Duration::from_millis(i as u64 * 8),
-                    Offset::new(Pixels(x), Pixels(0.0)),
+                    Offset::new((x), 0.0),
                 );
             }
             proptest::prop_assert!(
@@ -1424,13 +1418,13 @@ mod tests {
         for i in 0..3u32 {
             tracker.add_position(
                 start + Duration::from_millis(u64::from(i) * 10),
-                Offset::new(Pixels(i as f32 * 10.0), Pixels(0.0)),
+                Offset::new((i as f64 * 10.0), 0.0),
             );
         }
         for i in 0..2u32 {
             tracker.add_position(
                 start + Duration::from_millis(150 + u64::from(i) * 10),
-                Offset::new(Pixels(100.0 + i as f32 * 10.0), Pixels(0.0)),
+                Offset::new((100.0 + i as f64 * 10.0), 0.0),
             );
         }
 
@@ -1460,7 +1454,7 @@ mod tests {
         let mut tracker = VelocityTracker::new();
         for i in 0..5u32 {
             // Same timestamp, different positions: a batched drain.
-            tracker.add_position(instant, Offset::new(Pixels(i as f32 * 20.0), Pixels(0.0)));
+            tracker.add_position(instant, Offset::new((i as f64 * 20.0), 0.0));
         }
 
         let (estimate, log) = capture_tracing(|| tracker.get_velocity_estimate());

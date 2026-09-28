@@ -1,7 +1,7 @@
 //! RenderPadding - adds padding around a single child.
 
 use flui_foundation::Single;
-use flui_types::{EdgeInsets, Offset, Pixels, Size, geometry::px};
+use flui_types::{EdgeInsets, Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -55,13 +55,13 @@ impl RenderPadding {
     }
 
     /// Creates padding with all sides equal.
-    pub fn all(value: f32) -> Self {
-        Self::new(EdgeInsets::all(px(value)))
+    pub fn all(value: f64) -> Self {
+        Self::new(EdgeInsets::all(value))
     }
 
     /// Creates symmetric padding.
-    pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
-        Self::new(EdgeInsets::symmetric(px(vertical), px(horizontal)))
+    pub fn symmetric(horizontal: f64, vertical: f64) -> Self {
+        Self::new(EdgeInsets::symmetric(vertical, horizontal))
     }
 
     /// Returns the padding.
@@ -93,10 +93,10 @@ impl RenderPadding {
         let vertical = self.padding.vertical_total();
 
         BoxConstraints::new(
-            (constraints.min_width - horizontal).max(Pixels::ZERO),
-            (constraints.max_width - horizontal).max(Pixels::ZERO),
-            (constraints.min_height - vertical).max(Pixels::ZERO),
-            (constraints.max_height - vertical).max(Pixels::ZERO),
+            (constraints.min_width - horizontal).max(0.0),
+            (constraints.max_width - horizontal).max(0.0),
+            (constraints.min_height - vertical).max(0.0),
+            (constraints.max_height - vertical).max(0.0),
         )
     }
 }
@@ -144,50 +144,50 @@ impl RenderBox for RenderPadding {
 
     fn compute_min_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        let deflated_height = (height - self.padding.vertical_total().get()).max(0.0);
+    ) -> f64 {
+        let deflated_height = (height - self.padding.vertical_total()).max(0.0);
         if ctx.child_count() == 0 {
-            return self.padding.horizontal_total().get();
+            return self.padding.horizontal_total();
         }
-        ctx.child_min_intrinsic_width(0, deflated_height) + self.padding.horizontal_total().get()
+        ctx.child_min_intrinsic_width(0, deflated_height) + self.padding.horizontal_total()
     }
 
     fn compute_max_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        let deflated_height = (height - self.padding.vertical_total().get()).max(0.0);
+    ) -> f64 {
+        let deflated_height = (height - self.padding.vertical_total()).max(0.0);
         if ctx.child_count() == 0 {
-            return self.padding.horizontal_total().get();
+            return self.padding.horizontal_total();
         }
-        ctx.child_max_intrinsic_width(0, deflated_height) + self.padding.horizontal_total().get()
+        ctx.child_max_intrinsic_width(0, deflated_height) + self.padding.horizontal_total()
     }
 
     fn compute_min_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        let deflated_width = (width - self.padding.horizontal_total().get()).max(0.0);
+    ) -> f64 {
+        let deflated_width = (width - self.padding.horizontal_total()).max(0.0);
         if ctx.child_count() == 0 {
-            return self.padding.vertical_total().get();
+            return self.padding.vertical_total();
         }
-        ctx.child_min_intrinsic_height(0, deflated_width) + self.padding.vertical_total().get()
+        ctx.child_min_intrinsic_height(0, deflated_width) + self.padding.vertical_total()
     }
 
     fn compute_max_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        let deflated_width = (width - self.padding.horizontal_total().get()).max(0.0);
+    ) -> f64 {
+        let deflated_width = (width - self.padding.horizontal_total()).max(0.0);
         if ctx.child_count() == 0 {
-            return self.padding.vertical_total().get();
+            return self.padding.vertical_total();
         }
-        ctx.child_max_intrinsic_height(0, deflated_width) + self.padding.vertical_total().get()
+        ctx.child_max_intrinsic_height(0, deflated_width) + self.padding.vertical_total()
     }
 
     fn compute_dry_layout(
@@ -214,13 +214,13 @@ impl RenderBox for RenderPadding {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
         let child_constraints = self.deflate_constraints(&constraints);
         let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
-        Some(child_baseline + self.padding.top.get())
+        Some(child_baseline + self.padding.top)
     }
 
     // paint() uses default no-op - Padding just positions children
@@ -245,48 +245,48 @@ mod tests {
 
     #[test]
     fn test_edge_insets() {
-        let insets = EdgeInsets::all(px(10.0));
-        assert_eq!(insets.horizontal_total(), px(20.0));
-        assert_eq!(insets.vertical_total(), px(20.0));
+        let insets = EdgeInsets::all(10.0);
+        assert_eq!(insets.horizontal_total(), 20.0);
+        assert_eq!(insets.vertical_total(), 20.0);
         // insets.left/top are Pixels, so build the expected offset directly.
         let top_left = Offset::new(insets.left, insets.top);
-        assert_eq!(top_left, Offset::new(px(10.0), px(10.0)));
+        assert_eq!(top_left, Offset::new(10.0, 10.0));
     }
 
     #[test]
     fn test_padding_creation() {
         let padding = RenderPadding::all(16.0);
-        assert_eq!(padding.padding(), EdgeInsets::all(px(16.0)));
+        assert_eq!(padding.padding(), EdgeInsets::all(16.0));
     }
 
     #[test]
     fn test_deflate_constraints() {
         let padding = RenderPadding::symmetric(20.0, 10.0);
-        let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(100.0));
+        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 100.0);
         let deflated = padding.deflate_constraints(&constraints);
 
-        assert_eq!(deflated.max_width, px(160.0)); // 200 - 40
-        assert_eq!(deflated.max_height, px(80.0)); // 100 - 20
+        assert_eq!(deflated.max_width, 160.0); // 200 - 40
+        assert_eq!(deflated.max_height, 80.0); // 100 - 20
     }
 
     #[test]
     fn test_edge_insets_symmetric() {
-        let insets = EdgeInsets::symmetric(px(10.0), px(20.0));
+        let insets = EdgeInsets::symmetric(10.0, 20.0);
         // symmetric(vertical=10.0, horizontal=20.0)
-        assert_eq!(insets.horizontal_total(), px(40.0)); // left + right = 20.0 + 20.0
-        assert_eq!(insets.vertical_total(), px(20.0)); // top + bottom = 10.0 + 10.0
+        assert_eq!(insets.horizontal_total(), 40.0); // left + right = 20.0 + 20.0
+        assert_eq!(insets.vertical_total(), 20.0); // top + bottom = 10.0 + 10.0
     }
 
     #[test]
     fn zero_padding_is_accepted() {
         // The invariant is non-*negative*, not positive: zero on every side is
         // the identity padding and must not trip the guard.
-        let mut p = RenderPadding::new(EdgeInsets::all(px(0.0)));
+        let mut p = RenderPadding::new(EdgeInsets::all(0.0));
         assert_eq!(
-            p.set_padding(EdgeInsets::all(px(0.0))),
+            p.set_padding(EdgeInsets::all(0.0)),
             flui_rendering::RenderUpdateImpact::NONE,
         );
-        assert_eq!(p.padding(), EdgeInsets::all(px(0.0)));
+        assert_eq!(p.padding(), EdgeInsets::all(0.0));
     }
 
     // The negative-inset guard is a `debug_assert!`, mirroring the Dart
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "non-negative")]
     fn new_rejects_a_negative_inset() {
-        let _ = RenderPadding::new(EdgeInsets::new(px(0.0), px(-1.0), px(0.0), px(0.0)));
+        let _ = RenderPadding::new(EdgeInsets::new(0.0, -1.0, 0.0, 0.0));
     }
 
     #[cfg(debug_assertions)]
@@ -305,7 +305,7 @@ mod tests {
     fn set_padding_rejects_a_negative_inset() {
         let mut p = RenderPadding::all(4.0);
         assert_eq!(
-            p.set_padding(EdgeInsets::new(px(0.0), px(0.0), px(-3.0), px(0.0))),
+            p.set_padding(EdgeInsets::new(0.0, 0.0, -3.0, 0.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT,
         );
     }

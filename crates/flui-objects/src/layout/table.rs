@@ -51,7 +51,7 @@ use std::collections::HashMap;
 use flui_foundation::Variable;
 use flui_painting::{DecorationPaintOptions, paint_box_decoration, paint_table_border};
 use flui_types::{
-    Offset, Pixels, Rect, Size,
+    Offset, Rect, Size,
     layout::{TableCellVerticalAlignment, TableColumnWidth},
     styling::{BoxDecoration, TableBorder},
     typography::TextDirection,
@@ -81,10 +81,10 @@ enum WidthQuery {
 /// Folds two operands' flex factors for a `Max`/`Min` column-width combinator.
 ///
 /// A `None` operand contributes no flex, so the other operand's flex passes
-/// through unchanged; when both carry flex, `fold` (`f32::max` for `Max`,
-/// `f32::min` for `Min`) picks between them. Mirrors the oracle's
+/// through unchanged; when both carry flex, `fold` (`f64::max` for `Max`,
+/// `f64::min` for `Min`) picks between them. Mirrors the oracle's
 /// `MaxColumnWidth.flex`/`MinColumnWidth.flex` (`table.dart:266-276`/`:318-328`).
-fn combine_flex(a: Option<f32>, b: Option<f32>, fold: impl Fn(f32, f32) -> f32) -> Option<f32> {
+fn combine_flex(a: Option<f64>, b: Option<f64>, fold: impl Fn(f64, f64) -> f64) -> Option<f64> {
     match (a, b) {
         (Some(a), Some(b)) => Some(fold(a, b)),
         (a, b) => a.or(b),
@@ -94,8 +94,8 @@ fn combine_flex(a: Option<f32>, b: Option<f32>, fold: impl Fn(f32, f32) -> f32) 
 /// Local convergence epsilon for the two-round shrink in
 /// [`RenderTable::compute_column_widths`] — mirrors `wrap.rs`'s
 /// `PRECISION_TOLERANCE` convention (the more directly-analogous sibling
-/// file) over `flui_foundation::EPSILON_F32`.
-const EPSILON: f32 = 1e-6;
+/// file) over `flui_foundation::EPSILON`.
+const EPSILON: f64 = 1e-6;
 
 /// Lays out children in a row-major grid: `column_count` cells per row, with
 /// per-column width resolved by [`TableColumnWidth`] and each row's height
@@ -113,18 +113,18 @@ pub struct RenderTable {
     default_vertical_alignment: TableCellVerticalAlignment,
     text_baseline: Option<TextBaseline>,
     border: Option<TableBorder>,
-    row_decorations: Vec<Option<BoxDecoration<Pixels>>>,
+    row_decorations: Vec<Option<BoxDecoration<f64>>>,
 
     // Cached geometry, rebuilt on every layout — read by `paint`/`hit_test`.
     /// Row top offsets, length `row_count + 1` (the last entry is the
     /// table's total content height).
-    row_tops: Vec<Pixels>,
+    row_tops: Vec<f64>,
     /// Column left offsets, indexed BY COLUMN, length `column_count`.
     ///
     /// Ascending under `Ltr` and descending under `Rtl`, because column 0 is
     /// the rightmost column there. Cell offsets index this directly, as the
     /// reference's `positions` does.
-    column_lefts: Vec<Pixels>,
+    column_lefts: Vec<f64>,
     /// The x of each INTERIOR vertical divider, length `column_count - 1`.
     ///
     /// Kept separately rather than sliced off `column_lefts` at paint time: the
@@ -134,14 +134,14 @@ pub struct RenderTable {
     /// nothing about the resulting picture looks wrong enough to notice. The
     /// reference solves the same problem with a separate ascending
     /// `_columnLefts = positions.reversed` (`table.dart:1348`).
-    interior_column_lefts: Vec<Pixels>,
+    interior_column_lefts: Vec<f64>,
     /// Reading direction; decides which edge column 0 sits against.
     text_direction: TextDirection,
     /// Total table width (sum of resolved column widths).
-    table_width: Pixels,
+    table_width: f64,
     /// The first row's baseline distance, if any cell in it resolved to
     /// `TableCellVerticalAlignment::Baseline` with a real baseline value.
-    baseline_distance: Option<Pixels>,
+    baseline_distance: Option<f64>,
     /// Latches the irregular-grid warning, cleared by a child count that
     /// divides evenly again.
     irregular_grid_warned: bool,
@@ -160,11 +160,11 @@ impl RenderTable {
             text_baseline: None,
             border: None,
             row_decorations: Vec::new(),
-            row_tops: vec![Pixels::ZERO],
+            row_tops: vec![0.0],
             column_lefts: Vec::new(),
             interior_column_lefts: Vec::new(),
             text_direction: TextDirection::Ltr,
-            table_width: Pixels::ZERO,
+            table_width: 0.0,
             baseline_distance: None,
             irregular_grid_warned: false,
         }
@@ -216,7 +216,7 @@ impl RenderTable {
     #[must_use]
     pub fn with_row_decorations(
         mut self,
-        row_decorations: Vec<Option<BoxDecoration<Pixels>>>,
+        row_decorations: Vec<Option<BoxDecoration<f64>>>,
     ) -> Self {
         self.row_decorations = row_decorations;
         self
@@ -242,7 +242,7 @@ impl RenderTable {
 
     /// The first row's baseline distance from the last layout, if any.
     #[inline]
-    pub fn baseline_distance(&self) -> Option<Pixels> {
+    pub fn baseline_distance(&self) -> Option<f64> {
         self.baseline_distance
     }
 
@@ -337,7 +337,7 @@ impl RenderTable {
     /// Updates the per-row background decorations; returns `true` if changed.
     pub fn set_row_decorations(
         &mut self,
-        row_decorations: Vec<Option<BoxDecoration<Pixels>>>,
+        row_decorations: Vec<Option<BoxDecoration<f64>>>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.row_decorations == row_decorations {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -367,10 +367,10 @@ impl RenderTable {
         &self,
         x: usize,
         row_count: usize,
-        container_width: Pixels,
+        container_width: f64,
         query_kind: WidthQuery,
-        query: &mut impl FnMut(usize, f32, WidthQuery) -> f32,
-    ) -> (Pixels, Option<f32>) {
+        query: &mut impl FnMut(usize, f64, WidthQuery) -> f64,
+    ) -> (f64, Option<f64>) {
         let spec = self.column_width_for(x);
         self.extent_for_spec(&spec, x, row_count, container_width, query_kind, query)
     }
@@ -390,29 +390,29 @@ impl RenderTable {
         spec: &TableColumnWidth,
         x: usize,
         row_count: usize,
-        container_width: Pixels,
+        container_width: f64,
         query_kind: WidthQuery,
-        query: &mut impl FnMut(usize, f32, WidthQuery) -> f32,
-    ) -> (Pixels, Option<f32>) {
+        query: &mut impl FnMut(usize, f64, WidthQuery) -> f64,
+    ) -> (f64, Option<f64>) {
         match spec {
-            TableColumnWidth::Fixed(value) => (Pixels::new(*value), None),
-            TableColumnWidth::Flex(flex) => (Pixels::ZERO, Some(*flex)),
+            TableColumnWidth::Fixed(value) => ((*value), None),
+            TableColumnWidth::Flex(flex) => (0.0, Some(*flex)),
             TableColumnWidth::Fraction(fraction) => {
                 // Divergence from the oracle: see the module doc's
                 // "Fraction clamps" note.
                 let fraction = fraction.clamp(0.0, 1.0);
                 let width = if container_width.is_finite() {
-                    Pixels::new(fraction * container_width.get())
+                    fraction * container_width
                 } else {
-                    Pixels::ZERO
+                    0.0
                 };
                 (width, None)
             }
             TableColumnWidth::Intrinsic { flex } => {
-                let mut extent = Pixels::ZERO;
+                let mut extent = 0.0_f64;
                 for y in 0..row_count {
                     let idx = x + y * self.column_count;
-                    extent = extent.max(Pixels::new(query(idx, f32::INFINITY, query_kind)));
+                    extent = extent.max(query(idx, f64::INFINITY, query_kind));
                 }
                 // The intrinsic width is the column's floor; `flex` (if any)
                 // lets it also claim leftover space in the grow pass, exactly
@@ -424,14 +424,14 @@ impl RenderTable {
                     self.extent_for_spec(a, x, row_count, container_width, query_kind, query);
                 let (wb, fb) =
                     self.extent_for_spec(b, x, row_count, container_width, query_kind, query);
-                (wa.max(wb), combine_flex(fa, fb, f32::max))
+                (wa.max(wb), combine_flex(fa, fb, f64::max))
             }
             TableColumnWidth::Min(a, b) => {
                 let (wa, fa) =
                     self.extent_for_spec(a, x, row_count, container_width, query_kind, query);
                 let (wb, fb) =
                     self.extent_for_spec(b, x, row_count, container_width, query_kind, query);
-                (wa.min(wb), combine_flex(fa, fb, f32::min))
+                (wa.min(wb), combine_flex(fa, fb, f64::min))
             }
         }
     }
@@ -460,19 +460,19 @@ impl RenderTable {
     fn compute_column_widths(
         &self,
         row_count: usize,
-        min_width_constraint: Pixels,
-        max_width_constraint: Pixels,
-        mut query: impl FnMut(usize, f32, WidthQuery) -> f32,
-    ) -> Vec<Pixels> {
+        min_width_constraint: f64,
+        max_width_constraint: f64,
+        mut query: impl FnMut(usize, f64, WidthQuery) -> f64,
+    ) -> Vec<f64> {
         let column_count = self.column_count;
         if column_count == 0 {
             return Vec::new();
         }
 
         // ---- Pass 1 (`L1082-1120`): ideal widths, min widths, flex ---------
-        let mut widths = vec![0.0f32; column_count];
-        let mut min_widths = vec![0.0f32; column_count];
-        let mut flexes: Vec<Option<f32>> = vec![None; column_count];
+        let mut widths = vec![0.0_f64; column_count];
+        let mut min_widths = vec![0.0_f64; column_count];
+        let mut flexes: Vec<Option<f64>> = vec![None; column_count];
 
         for x in 0..column_count {
             let (ideal, flex) = self.column_extent(
@@ -489,8 +489,8 @@ impl RenderTable {
                 WidthQuery::Min,
                 &mut query,
             );
-            widths[x] = ideal.get();
-            min_widths[x] = min_w.get();
+            widths[x] = ideal;
+            min_widths[x] = min_w;
             flexes[x] = flex;
         }
 
@@ -498,11 +498,11 @@ impl RenderTable {
             &mut widths,
             &min_widths,
             &mut flexes,
-            min_width_constraint.get(),
-            max_width_constraint.get(),
+            min_width_constraint,
+            max_width_constraint,
         );
 
-        widths.into_iter().map(Pixels::new).collect()
+        widths.into_iter().collect()
     }
 
     /// Passes 2 and 3 of the column-width algorithm (`table.dart:1124-1234`),
@@ -523,11 +523,11 @@ impl RenderTable {
     /// (re-accumulating `total_flex` as columns hit floor), then equal-delta
     /// shrink of the remaining non-floored columns.
     fn grow_and_shrink_column_widths(
-        widths: &mut [f32],
-        min_widths: &[f32],
-        flexes: &mut [Option<f32>],
-        min_width_constraint: f32,
-        max_width_constraint: f32,
+        widths: &mut [f64],
+        min_widths: &[f64],
+        flexes: &mut [Option<f64>],
+        min_width_constraint: f64,
+        max_width_constraint: f64,
     ) {
         let column_count = widths.len();
         debug_assert_eq!(min_widths.len(), column_count);
@@ -536,13 +536,13 @@ impl RenderTable {
             return;
         }
 
-        let mut table_width: f32 = widths.iter().sum();
-        let unflexed_table_width: f32 = widths
+        let mut table_width: f64 = widths.iter().sum();
+        let unflexed_table_width: f64 = widths
             .iter()
             .zip(flexes.iter())
             .filter_map(|(w, f)| f.is_none().then_some(*w))
             .sum();
-        let mut total_flex: f32 = flexes.iter().flatten().sum();
+        let mut total_flex: f64 = flexes.iter().flatten().sum();
 
         // ---- Pass 2: grow toward the target width ---------------------------
         if total_flex > 0.0 {
@@ -567,7 +567,7 @@ impl RenderTable {
             }
         } else if table_width < min_width_constraint {
             // Steps 2 and 3 are mutually exclusive.
-            let delta = (min_width_constraint - table_width) / column_count as f32;
+            let delta = (min_width_constraint - table_width) / column_count as f64;
             for w in widths.iter_mut() {
                 *w += delta;
             }
@@ -582,7 +582,7 @@ impl RenderTable {
             // Round 1: proportionally shrink flexed columns toward their
             // floors, re-accumulating `total_flex` as columns hit floor.
             while deficit > EPSILON && total_flex > EPSILON {
-                let mut new_total_flex = 0.0f32;
+                let mut new_total_flex = 0.0_f64;
                 for x in 0..column_count {
                     if let Some(flex) = flexes[x] {
                         let new_width = widths[x] - deficit * flex / total_flex;
@@ -604,7 +604,7 @@ impl RenderTable {
 
             // Round 2: equal-delta shrink of whatever isn't at its floor yet.
             while deficit > EPSILON && available_columns > 0 {
-                let delta = deficit / available_columns as f32;
+                let delta = deficit / available_columns as f64;
                 let mut new_available_columns = 0;
                 for x in 0..column_count {
                     let available_delta = widths[x] - min_widths[x];
@@ -656,10 +656,10 @@ impl RenderBox for RenderTable {
         let column_count = self.column_count;
 
         if column_count == 0 || child_count == 0 {
-            self.row_tops = vec![Pixels::ZERO];
+            self.row_tops = vec![0.0];
             self.column_lefts = Vec::new();
             self.interior_column_lefts = Vec::new();
-            self.table_width = Pixels::ZERO;
+            self.table_width = 0.0;
             self.baseline_distance = None;
             return constraints.constrain(Size::ZERO);
         }
@@ -698,7 +698,7 @@ impl RenderBox for RenderTable {
         // Column positions, indexed BY COLUMN. Ported from `table.dart`'s two
         // branches: `Ltr` fills forward from the left edge, `Rtl` fills
         // BACKWARD from the right, so column 0 ends up rightmost.
-        let mut column_lefts = vec![Pixels::ZERO; column_count];
+        let mut column_lefts = vec![0.0; column_count];
         let table_width = match self.text_direction {
             TextDirection::Ltr => {
                 for x in 1..column_count {
@@ -716,14 +716,14 @@ impl RenderBox for RenderTable {
 
         // Interior dividers: every column edge EXCEPT the table's own left
         // edge, which is index 0 under `Ltr` and the last index under `Rtl`.
-        let interior_column_lefts: Vec<Pixels> = match self.text_direction {
+        let interior_column_lefts: Vec<f64> = match self.text_direction {
             TextDirection::Ltr => column_lefts[1..].to_vec(),
             TextDirection::Rtl => column_lefts[..column_count - 1].to_vec(),
         };
 
         let mut row_tops = Vec::with_capacity(row_count + 1);
         self.baseline_distance = None;
-        let mut row_top = Pixels::ZERO;
+        let mut row_top = 0.0_f64;
 
         for y in 0..row_count {
             row_tops.push(row_top);
@@ -747,11 +747,11 @@ impl RenderBox for RenderTable {
             }
 
             // ---- Measure pass (table.dart:1399-1421) ------------------------
-            let mut row_height = Pixels::ZERO;
+            let mut row_height = 0.0_f64;
             let mut have_baseline = false;
-            let mut before_baseline = Pixels::ZERO;
-            let mut after_baseline = Pixels::ZERO;
-            let mut baselines = vec![Pixels::ZERO; column_count];
+            let mut before_baseline = 0.0_f64;
+            let mut after_baseline = 0.0_f64;
+            let mut baselines = vec![0.0; column_count];
             let mut cell_sizes = vec![Size::ZERO; column_count];
 
             for x in 0..column_count {
@@ -772,7 +772,7 @@ impl RenderBox for RenderTable {
                             .and_then(|kind| ctx.child_distance_to_actual_baseline(idx, kind));
                         match baseline {
                             Some(distance) => {
-                                let distance = Pixels::new(distance);
+                                let distance = distance;
                                 before_baseline = before_baseline.max(distance);
                                 after_baseline = after_baseline.max(size.height - distance);
                                 baselines[x] = distance;
@@ -871,11 +871,11 @@ impl RenderBox for RenderTable {
                 WidthQuery::Max => ctx.child_max_intrinsic_width(i, h),
             },
         );
-        let table_width = widths.iter().copied().fold(Pixels::ZERO, |a, b| a + b);
+        let table_width = widths.iter().copied().fold(0.0, |a, b| a + b);
 
-        let mut row_top = Pixels::ZERO;
+        let mut row_top = 0.0_f64;
         for y in 0..row_count {
-            let mut row_height = Pixels::ZERO;
+            let mut row_height = 0.0_f64;
             for (x, &width) in widths.iter().enumerate() {
                 let idx = x + y * column_count;
                 let alignment = ctx
@@ -906,47 +906,47 @@ impl RenderBox for RenderTable {
         constraints.constrain(Size::new(table_width, row_top))
     }
 
-    fn compute_min_intrinsic_width(&self, _height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
         if column_count == 0 || child_count == 0 {
             return 0.0;
         }
         let row_count = child_count / column_count;
-        let mut query = |i: usize, h: f32, kind: WidthQuery| match kind {
+        let mut query = |i: usize, h: f64, kind: WidthQuery| match kind {
             WidthQuery::Min => ctx.child_min_intrinsic_width(i, h),
             WidthQuery::Max => ctx.child_max_intrinsic_width(i, h),
         };
-        let mut total = 0.0f32;
+        let mut total = 0.0_f64;
         for x in 0..column_count {
             let (min_w, _) =
-                self.column_extent(x, row_count, Pixels::INFINITY, WidthQuery::Min, &mut query);
-            total += min_w.get();
+                self.column_extent(x, row_count, f64::INFINITY, WidthQuery::Min, &mut query);
+            total += min_w;
         }
         total
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
         if column_count == 0 || child_count == 0 {
             return 0.0;
         }
         let row_count = child_count / column_count;
-        let mut query = |i: usize, h: f32, kind: WidthQuery| match kind {
+        let mut query = |i: usize, h: f64, kind: WidthQuery| match kind {
             WidthQuery::Min => ctx.child_min_intrinsic_width(i, h),
             WidthQuery::Max => ctx.child_max_intrinsic_width(i, h),
         };
-        let mut total = 0.0f32;
+        let mut total = 0.0_f64;
         for x in 0..column_count {
             let (max_w, _) =
-                self.column_extent(x, row_count, Pixels::INFINITY, WidthQuery::Max, &mut query);
-            total += max_w.get();
+                self.column_extent(x, row_count, f64::INFINITY, WidthQuery::Max, &mut query);
+            total += max_w;
         }
         total
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
         if column_count == 0 || child_count == 0 {
@@ -956,11 +956,11 @@ impl RenderBox for RenderTable {
 
         // Mirrors `BoxConstraints.tightForFinite(width: width)` — only the
         // width bound feeds `compute_column_widths` (it never reads height).
-        let requested_width = Pixels::new(width);
+        let requested_width = width;
         let (min_width, max_width) = if requested_width.is_finite() {
             (requested_width, requested_width)
         } else {
-            (Pixels::ZERO, Pixels::INFINITY)
+            (0.0, f64::INFINITY)
         };
 
         let widths =
@@ -972,27 +972,27 @@ impl RenderBox for RenderTable {
         // Winner of the 2016 world's most expensive intrinsic dimension
         // function award (the oracle's own doc comment, `table.dart:998`) —
         // note MAX even inside the MIN function, preserved exactly.
-        let mut total = 0.0f32;
+        let mut total = 0.0_f64;
         for y in 0..row_count {
-            let mut row_height = 0.0f32;
+            let mut row_height = 0.0_f64;
             for (x, &width) in widths.iter().enumerate() {
                 let idx = x + y * column_count;
-                row_height = row_height.max(ctx.child_max_intrinsic_height(idx, width.get()));
+                row_height = row_height.max(ctx.child_max_intrinsic_height(idx, width));
             }
             total += row_height;
         }
         total
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         // Oracle's own quirk (`table.dart:1023-1026`): `computeMaxIntrinsicHeight`
         // literally returns `getMinIntrinsicHeight(width)` — verified against
         // the oracle, not a transcription typo.
         self.compute_min_intrinsic_height(width, ctx)
     }
 
-    fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
-        self.baseline_distance.map(Pixels::get)
+    fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f64> {
+        self.baseline_distance
     }
 
     /// Dry equivalent of [`Self::compute_distance_to_actual_baseline`]: the
@@ -1011,7 +1011,7 @@ impl RenderBox for RenderTable {
         constraints: BoxConstraints,
         _baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         let column_count = self.column_count;
         let child_count = ctx.child_count();
         if column_count == 0 || child_count == 0 {
@@ -1042,7 +1042,7 @@ impl RenderBox for RenderTable {
         // `before_baseline`), or `None` if none report a baseline.
         // Row 0's cells are the flat children `0..column_count`, so the
         // column index doubles as the row-0 child index.
-        let mut before_baseline: Option<f32> = None;
+        let mut before_baseline: Option<f64> = None;
         for (cell, &width) in widths.iter().enumerate() {
             let alignment = ctx
                 .child_parent_data_as::<TableCellParentData>(cell)
@@ -1078,7 +1078,7 @@ impl RenderBox for RenderTable {
         for y in 0..row_count {
             if let Some(Some(decoration)) = self.row_decorations.get(y) {
                 let rect = Rect::from_ltrb(
-                    Pixels::ZERO,
+                    0.0,
                     self.row_tops[y],
                     self.table_width,
                     self.row_tops[y + 1],
@@ -1103,9 +1103,9 @@ impl RenderBox for RenderTable {
 
         // 3. Table border, on top of everything (table.dart:1508-1525).
         if let Some(border) = &self.border {
-            let table_height = self.row_tops.last().copied().unwrap_or(Pixels::ZERO);
-            let rect = Rect::from_ltrb(Pixels::ZERO, Pixels::ZERO, self.table_width, table_height);
-            let interior_rows: &[Pixels] = if self.row_tops.len() > 2 {
+            let table_height = self.row_tops.last().copied().unwrap_or(0.0);
+            let rect = Rect::from_ltrb(0.0, 0.0, self.table_width, table_height);
+            let interior_rows: &[f64] = if self.row_tops.len() > 2 {
                 &self.row_tops[1..self.row_tops.len() - 1]
             } else {
                 &[]
@@ -1113,7 +1113,7 @@ impl RenderBox for RenderTable {
             // Precomputed at layout time: which entry is the table's own edge
             // depends on the reading direction, so slicing here would be wrong
             // under `Rtl` (see `interior_column_lefts`).
-            let interior_columns: &[Pixels] = &self.interior_column_lefts;
+            let interior_columns: &[f64] = &self.interior_column_lefts;
             paint_table_border(ctx.canvas(), rect, interior_rows, interior_columns, border);
         }
     }
@@ -1139,7 +1139,6 @@ impl RenderBox for RenderTable {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -1156,7 +1155,7 @@ mod tests {
 
     /// A query closure that panics if called — proves `Fixed`/`Flex`/
     /// `Fraction` columns never touch a cell (only `Intrinsic` may).
-    fn deny_query() -> impl FnMut(usize, f32, WidthQuery) -> f32 {
+    fn deny_query() -> impl FnMut(usize, f64, WidthQuery) -> f64 {
         |index, extent, kind| {
             panic!(
                 "non-Intrinsic column queried child {index} ({kind:?} @ {extent}) — \
@@ -1174,8 +1173,8 @@ mod tests {
             TableColumnWidth::Fixed(100.0),
             TableColumnWidth::Fixed(30.0),
         ]);
-        let widths = table.compute_column_widths(1, Pixels::ZERO, Pixels::INFINITY, deny_query());
-        assert_eq!(widths, vec![px(50.0), px(100.0), px(30.0)]);
+        let widths = table.compute_column_widths(1, 0.0, f64::INFINITY, deny_query());
+        assert_eq!(widths, vec![50.0, 100.0, 30.0]);
     }
 
     #[test]
@@ -1183,8 +1182,8 @@ mod tests {
         // No flex present -> pass 2's "else" branch: grow every column
         // equally toward `min_width_constraint` (table.dart:1155-1160).
         let table = table_with(&[TableColumnWidth::Fixed(10.0), TableColumnWidth::Fixed(20.0)]);
-        let widths = table.compute_column_widths(1, px(60.0), Pixels::INFINITY, deny_query());
-        assert_eq!(widths, vec![px(25.0), px(35.0)]);
+        let widths = table.compute_column_widths(1, 60.0, f64::INFINITY, deny_query());
+        assert_eq!(widths, vec![25.0, 35.0]);
     }
 
     // ---- Pass 1/2: Flex-only ------------------------------------------------
@@ -1192,8 +1191,8 @@ mod tests {
     #[test]
     fn flex_only_columns_share_the_target_width_proportionally() {
         let table = table_with(&[TableColumnWidth::Flex(1.0), TableColumnWidth::Flex(2.0)]);
-        let widths = table.compute_column_widths(1, Pixels::ZERO, px(300.0), deny_query());
-        assert_eq!(widths, vec![px(100.0), px(200.0)]);
+        let widths = table.compute_column_widths(1, 0.0, 300.0, deny_query());
+        assert_eq!(widths, vec![100.0, 200.0]);
     }
 
     // ---- Pass 1: Fraction, finite vs. infinite container -------------------
@@ -1201,15 +1200,15 @@ mod tests {
     #[test]
     fn fraction_column_resolves_against_a_finite_container_width() {
         let table = table_with(&[TableColumnWidth::Fraction(0.25)]);
-        let widths = table.compute_column_widths(1, Pixels::ZERO, px(400.0), deny_query());
-        assert_eq!(widths, vec![px(100.0)]);
+        let widths = table.compute_column_widths(1, 0.0, 400.0, deny_query());
+        assert_eq!(widths, vec![100.0]);
     }
 
     #[test]
     fn fraction_column_is_zero_against_an_infinite_container_width() {
         let table = table_with(&[TableColumnWidth::Fraction(0.25)]);
-        let widths = table.compute_column_widths(1, Pixels::ZERO, Pixels::INFINITY, deny_query());
-        assert_eq!(widths, vec![px(0.0)]);
+        let widths = table.compute_column_widths(1, 0.0, f64::INFINITY, deny_query());
+        assert_eq!(widths, vec![0.0]);
     }
 
     #[test]
@@ -1219,8 +1218,8 @@ mod tests {
         // doc contract promises a 0.0..=1.0 clamp, so 1.5 must behave as 1.0,
         // not produce a 150px column from a 100px container.
         let table = table_with(&[TableColumnWidth::Fraction(1.5)]);
-        let widths = table.compute_column_widths(1, Pixels::ZERO, px(100.0), deny_query());
-        assert_eq!(widths, vec![px(100.0)]);
+        let widths = table.compute_column_widths(1, 0.0, 100.0, deny_query());
+        assert_eq!(widths, vec![100.0]);
     }
 
     // ---- Max/Min combinators (oracle table.dart:235-340) -------------------
@@ -1233,16 +1232,16 @@ mod tests {
             TableColumnWidth::Fixed(100.0),
             TableColumnWidth::Fraction(0.1),
         )]);
-        let narrow = table.compute_column_widths(1, Pixels::ZERO, px(400.0), deny_query());
+        let narrow = table.compute_column_widths(1, 0.0, 400.0, deny_query());
         assert_eq!(
             narrow,
-            vec![px(100.0)],
+            vec![100.0],
             "fixed floor wins when the fraction is smaller"
         );
-        let wide = table.compute_column_widths(1, Pixels::ZERO, px(2000.0), deny_query());
+        let wide = table.compute_column_widths(1, 0.0, 2000.0, deny_query());
         assert_eq!(
             wide,
-            vec![px(200.0)],
+            vec![200.0],
             "fraction wins when it exceeds the fixed floor"
         );
     }
@@ -1256,14 +1255,14 @@ mod tests {
             TableColumnWidth::Fixed(100.0),
             TableColumnWidth::Fraction(0.1),
         )]);
-        let narrow = table.compute_column_widths(1, Pixels::ZERO, px(400.0), deny_query());
+        let narrow = table.compute_column_widths(1, 0.0, 400.0, deny_query());
         assert_eq!(
             narrow,
-            vec![px(40.0)],
+            vec![40.0],
             "fraction wins when below the fixed ceiling"
         );
-        let wide = table.compute_column_widths(1, Pixels::ZERO, px(2000.0), deny_query());
-        assert_eq!(wide, vec![px(100.0)], "fixed ceiling caps the column");
+        let wide = table.compute_column_widths(1, 0.0, 2000.0, deny_query());
+        assert_eq!(wide, vec![100.0], "fixed ceiling caps the column");
     }
 
     #[test]
@@ -1277,8 +1276,8 @@ mod tests {
             ),
             TableColumnWidth::Fixed(30.0),
         )]);
-        let widths = table.compute_column_widths(1, Pixels::ZERO, px(100.0), deny_query());
-        assert_eq!(widths, vec![px(50.0)]);
+        let widths = table.compute_column_widths(1, 0.0, 100.0, deny_query());
+        assert_eq!(widths, vec![50.0]);
     }
 
     #[test]
@@ -1289,8 +1288,8 @@ mod tests {
             TableColumnWidth::max(TableColumnWidth::Flex(3.0), TableColumnWidth::Flex(1.0)),
             TableColumnWidth::Flex(1.0),
         ]);
-        let widths = table.compute_column_widths(1, Pixels::ZERO, px(400.0), deny_query());
-        assert_eq!(widths, vec![px(300.0), px(100.0)]);
+        let widths = table.compute_column_widths(1, 0.0, 400.0, deny_query());
+        assert_eq!(widths, vec![300.0, 100.0]);
     }
 
     #[test]
@@ -1300,17 +1299,17 @@ mod tests {
             TableColumnWidth::min(TableColumnWidth::Flex(3.0), TableColumnWidth::Flex(1.0)),
             TableColumnWidth::Flex(1.0),
         ]);
-        let widths = table.compute_column_widths(1, Pixels::ZERO, px(400.0), deny_query());
-        assert_eq!(widths, vec![px(200.0), px(200.0)]);
+        let widths = table.compute_column_widths(1, 0.0, 400.0, deny_query());
+        assert_eq!(widths, vec![200.0, 200.0]);
     }
 
     #[test]
     fn combine_flex_passes_through_the_set_operand_and_folds_two() {
-        assert_eq!(combine_flex(Some(1.0), None, f32::max), Some(1.0));
-        assert_eq!(combine_flex(None, Some(2.0), f32::max), Some(2.0));
-        assert_eq!(combine_flex(Some(1.0), Some(2.0), f32::max), Some(2.0));
-        assert_eq!(combine_flex(Some(1.0), Some(2.0), f32::min), Some(1.0));
-        assert_eq!(combine_flex(None, None, f32::max), None);
+        assert_eq!(combine_flex(Some(1.0), None, f64::max), Some(1.0));
+        assert_eq!(combine_flex(None, Some(2.0), f64::max), Some(2.0));
+        assert_eq!(combine_flex(Some(1.0), Some(2.0), f64::max), Some(2.0));
+        assert_eq!(combine_flex(Some(1.0), Some(2.0), f64::min), Some(1.0));
+        assert_eq!(combine_flex(None, None, f64::max), None);
     }
 
     // ---- Pass 1: Intrinsic queries real cells -------------------------------
@@ -1326,7 +1325,7 @@ mod tests {
         let (ideal, flex) = table.column_extent(
             0,
             2,
-            Pixels::INFINITY,
+            f64::INFINITY,
             WidthQuery::Max,
             &mut |index, _extent, kind| match (index, kind) {
                 (0, WidthQuery::Min) => 10.0,
@@ -1336,23 +1335,20 @@ mod tests {
                 _ => unreachable!("only 2 cells in this test"),
             },
         );
-        assert_eq!(ideal, px(30.0));
+        assert_eq!(ideal, 30.0);
         assert_eq!(flex, None);
 
-        let widths = table.compute_column_widths(
-            2,
-            Pixels::ZERO,
-            Pixels::INFINITY,
-            |index, _extent, kind| match (index, kind) {
+        let widths = table.compute_column_widths(2, 0.0, f64::INFINITY, |index, _extent, kind| {
+            match (index, kind) {
                 (0, WidthQuery::Min) => 10.0,
                 (0, WidthQuery::Max) => 30.0,
                 (1, WidthQuery::Min) => 25.0,
                 (1, WidthQuery::Max) => 15.0,
                 _ => unreachable!("only 2 cells in this test"),
-            },
-        );
+            }
+        });
         // Ideal (max-query) wins the table's resolved width: 30, not 25.
-        assert_eq!(widths, vec![px(30.0)]);
+        assert_eq!(widths, vec![30.0]);
     }
 
     #[test]
@@ -1366,10 +1362,15 @@ mod tests {
             TableColumnWidth::Fixed(50.0),
         ]);
         let widths =
-            table.compute_column_widths(1, Pixels::ZERO, px(200.0), |index, _extent, _kind| {
-                if index == 0 { 30.0 } else { 0.0 }
-            });
-        assert_eq!(widths, vec![px(150.0), px(50.0)]);
+            table.compute_column_widths(
+                1,
+                0.0,
+                200.0,
+                |index, _extent, _kind| {
+                    if index == 0 { 30.0 } else { 0.0 }
+                },
+            );
+        assert_eq!(widths, vec![150.0, 50.0]);
     }
 
     #[test]
@@ -1381,10 +1382,15 @@ mod tests {
             TableColumnWidth::Fixed(50.0),
         ]);
         let widths =
-            table.compute_column_widths(1, Pixels::ZERO, px(200.0), |index, _extent, _kind| {
-                if index == 0 { 30.0 } else { 0.0 }
-            });
-        assert_eq!(widths, vec![px(30.0), px(50.0)]);
+            table.compute_column_widths(
+                1,
+                0.0,
+                200.0,
+                |index, _extent, _kind| {
+                    if index == 0 { 30.0 } else { 0.0 }
+                },
+            );
+        assert_eq!(widths, vec![30.0, 50.0]);
     }
 
     // ---- Pass 3: the oracle's own adversarial shrink scenario ---------------
@@ -1398,9 +1404,9 @@ mod tests {
         // column at 990px, which is wildly unhelpful." The two-round shrink
         // must instead floor the low-ideal/high-flex column at 0 and push
         // nearly the whole deficit onto the high-ideal/low-flex column.
-        let mut widths = [1.0f32, 1000.0f32];
-        let min_widths = [0.0f32, 0.0f32];
-        let mut flexes = [Some(1000.0f32), Some(1.0f32)];
+        let mut widths = [1.0_f64, 1000.0_f64];
+        let min_widths = [0.0_f64, 0.0_f64];
+        let mut flexes = [Some(1000.0_f64), Some(1.0_f64)];
 
         RenderTable::grow_and_shrink_column_widths(&mut widths, &min_widths, &mut flexes, 0.0, 2.0);
 
@@ -1408,7 +1414,7 @@ mod tests {
             assert!(w >= 0.0, "no column may go negative, got {widths:?}");
             assert!(w.is_finite(), "no column may go non-finite, got {widths:?}");
         }
-        let total: f32 = widths.iter().sum();
+        let total: f64 = widths.iter().sum();
         assert!(
             (total - 2.0).abs() < 1e-3,
             "shrunk columns must sum to the 2px max width, got {total} from {widths:?}"
@@ -1430,9 +1436,9 @@ mod tests {
         // = None`) and column 1 (still flexed) absorbs the rest of the
         // deficit within the SAME round-1 loop — this converges before round
         // 2 is ever needed.
-        let mut widths = [50.0f32, 50.0f32];
-        let min_widths = [40.0f32, 0.0f32];
-        let mut flexes = [Some(1.0f32), Some(1.0f32)];
+        let mut widths = [50.0_f64, 50.0_f64];
+        let min_widths = [40.0_f64, 0.0_f64];
+        let mut flexes = [Some(1.0_f64), Some(1.0_f64)];
 
         RenderTable::grow_and_shrink_column_widths(
             &mut widths,
@@ -1446,7 +1452,7 @@ mod tests {
             (widths[0] - 40.0).abs() < 1e-3,
             "column 0 must floor at its min_width (40), got {widths:?}"
         );
-        let total: f32 = widths.iter().sum();
+        let total: f64 = widths.iter().sum();
         assert!(
             (total - 60.0).abs() < 1e-3,
             "shrunk columns must sum to the 60px max width, got {total} from {widths:?}"
@@ -1458,8 +1464,8 @@ mod tests {
         // With no flex at all, round 1's `while` guard (`total_flex >
         // EPSILON`) is false from the start, so the ENTIRE deficit must be
         // absorbed by round 2's equal-delta shrink of non-floored columns.
-        let mut widths = [50.0f32, 50.0f32];
-        let min_widths = [10.0f32, 30.0f32];
+        let mut widths = [50.0_f64, 50.0_f64];
+        let min_widths = [10.0_f64, 30.0_f64];
         let mut flexes = [None, None];
 
         RenderTable::grow_and_shrink_column_widths(

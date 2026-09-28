@@ -415,7 +415,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use flui_types::{Size, geometry::px};
+    use flui_types::Size;
 
     use super::*;
     use crate::view::ViewConfiguration;
@@ -537,7 +537,7 @@ mod tests {
             ViewConfiguration::default()
         );
 
-        let existing_config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let existing_config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let configured = RenderView::with_configuration(existing_config.clone());
         assert_eq!(
             binding.create_view_configuration_for(&configured),
@@ -562,7 +562,7 @@ mod tests {
         // A view that already had a configuration: metrics-changed must
         // request a frame since a real, visible view is being updated.
         let configured_view = Arc::new(RwLock::new(RenderView::with_configuration(
-            ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 1.0),
+            ViewConfiguration::from_size(Size::new(800.0, 600.0), 1.0),
         )));
         binding.insert_render_view(2, Arc::clone(&configured_view));
 
@@ -600,7 +600,7 @@ mod tests {
     fn debug_dump_render_and_layer_tree_include_the_added_view() {
         let binding = TestBinding::new();
         let mut view = RenderView::with_configuration(ViewConfiguration::from_size(
-            Size::new(px(800.0), px(600.0)),
+            Size::new(800.0, 600.0),
             1.0,
         ));
         view.prepare_initial_frame_without_owner();

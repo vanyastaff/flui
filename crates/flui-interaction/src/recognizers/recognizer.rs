@@ -8,7 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use flui_types::{Offset, geometry::Pixels};
+use flui_types::Offset;
 use parking_lot::Mutex;
 use tracing::instrument;
 
@@ -47,8 +47,8 @@ pub trait GestureRecognizer: GestureArenaMember {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: PointerId,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
     );
 
     /// Handle a pointer event.
@@ -124,9 +124,9 @@ pub struct RecognizerBase {
 struct InitialContact {
     /// The receiving node's space — what a `Move`/`Up` event carries after
     /// hit-test dispatch has rewritten it.
-    local: Offset<Pixels>,
+    local: Offset<f64>,
     /// The root's space — what dispatch rewrote away.
-    global: Offset<Pixels>,
+    global: Offset<f64>,
 }
 
 impl RecognizerBase {
@@ -171,7 +171,7 @@ impl RecognizerBase {
 
     /// Where the primary pointer went down, in the receiving node's space.
     #[inline]
-    pub fn initial_position(&self) -> Option<Offset<Pixels>> {
+    pub fn initial_position(&self) -> Option<Offset<f64>> {
         self.initial_contact.lock().map(|c| c.local)
     }
 
@@ -182,7 +182,7 @@ impl RecognizerBase {
     /// so a recogniser reporting a cancelled gesture has nowhere else to read
     /// an untransformed position from.
     #[inline]
-    pub fn initial_global_position(&self) -> Option<Offset<Pixels>> {
+    pub fn initial_global_position(&self) -> Option<Offset<f64>> {
         self.initial_contact.lock().map(|c| c.global)
     }
 
@@ -248,8 +248,8 @@ impl RecognizerBase {
     pub fn start_tracking<T: GestureArenaMember + Clone + 'static>(
         &self,
         pointer: PointerId,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
         recognizer: &Arc<T>,
     ) {
         if self.is_disposed() {
@@ -465,10 +465,10 @@ mod tests {
         let base = RecognizerBase::new(arena);
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(Pixels(100.0), Pixels(200.0));
+        let position = Offset::new(100.0, 200.0);
         // Deliberately different, so a test that confused the two spaces would
         // read the wrong number rather than the right one by coincidence.
-        let global_position = Offset::new(Pixels(250.0), Pixels(350.0));
+        let global_position = Offset::new(250.0, 350.0);
         let member = Arc::new(TestMember);
 
         base.start_tracking(pointer, position, global_position, &member);

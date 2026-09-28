@@ -156,9 +156,9 @@ impl RenderBox for RenderOffstage {
 
     fn compute_min_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         if self.offstage {
             0.0
         } else {
@@ -168,9 +168,9 @@ impl RenderBox for RenderOffstage {
 
     fn compute_max_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         if self.offstage {
             0.0
         } else {
@@ -180,9 +180,9 @@ impl RenderBox for RenderOffstage {
 
     fn compute_min_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         if self.offstage {
             0.0
         } else {
@@ -192,9 +192,9 @@ impl RenderBox for RenderOffstage {
 
     fn compute_max_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         if self.offstage {
             0.0
         } else {
@@ -220,7 +220,7 @@ impl RenderBox for RenderOffstage {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if self.offstage {
             None
         } else {

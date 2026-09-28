@@ -50,8 +50,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &mut self,
         id: RenderId,
         dimension: crate::storage::IntrinsicDimension,
-        extent: f32,
-    ) -> crate::error::RenderResult<f32> {
+        extent: f64,
+    ) -> crate::error::RenderResult<f64> {
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
         let Self {
@@ -142,7 +142,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id: RenderId,
         constraints: crate::constraints::BoxConstraints,
         baseline: crate::traits::TextBaseline,
-    ) -> crate::error::RenderResult<Option<f32>> {
+    ) -> crate::error::RenderResult<Option<f64>> {
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
         let Self {
@@ -383,10 +383,10 @@ pub(super) fn intrinsic_query(
     cx: &mut QueryPoisonCx<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
-    extent: f32,
+    extent: f64,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
-) -> crate::error::RenderResult<f32> {
+) -> crate::error::RenderResult<f64> {
     ensure_stack(|| intrinsic_query_impl(slots, cx, id, dimension, extent, parent_data_seeds))
 }
 
@@ -397,10 +397,10 @@ fn intrinsic_query_impl(
     cx: &mut QueryPoisonCx<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
-    extent: f32,
+    extent: f64,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
-) -> crate::error::RenderResult<f32> {
+) -> crate::error::RenderResult<f64> {
     let Some(slot) = slots.get_mut(&id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
@@ -466,7 +466,7 @@ fn intrinsic_query_impl(
         let value = {
             let child_err = &mut child_err;
             let mut child_query =
-                |index: usize, dim: crate::storage::IntrinsicDimension, ext: f32| -> f32 {
+                |index: usize, dim: crate::storage::IntrinsicDimension, ext: f64| -> f64 {
                     let Some(&child_id) = children.get(index) else {
                         let err = crate::error::RenderError::contract_violation(
                             "intrinsic child query",
@@ -647,7 +647,7 @@ fn dry_layout_query_impl(
 }
 
 /// Recursive memoized dry-baseline query; same skeleton as
-/// [`dry_layout_query`] with `(constraints, baseline → Option<f32>)`
+/// [`dry_layout_query`] with `(constraints, baseline → Option<f64>)`
 /// payloads. `cx` is threaded through for intrinsic sub-queries only
 /// (see [`dry_layout_query`]).
 pub(super) fn dry_baseline_query(
@@ -658,7 +658,7 @@ pub(super) fn dry_baseline_query(
     baseline: crate::traits::TextBaseline,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
-) -> crate::error::RenderResult<Option<f32>> {
+) -> crate::error::RenderResult<Option<f64>> {
     ensure_stack(|| {
         dry_baseline_query_impl(slots, cx, id, constraints, baseline, parent_data_seeds)
     })
@@ -674,7 +674,7 @@ fn dry_baseline_query_impl(
     baseline: crate::traits::TextBaseline,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
-) -> crate::error::RenderResult<Option<f32>> {
+) -> crate::error::RenderResult<Option<f64>> {
     let Some(slot) = slots.get_mut(&id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
     };

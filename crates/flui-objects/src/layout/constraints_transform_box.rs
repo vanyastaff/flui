@@ -42,9 +42,7 @@
 //! by [`super::fitted_box::RenderFittedBox::has_visual_overflow`].
 
 use flui_foundation::Single;
-use flui_types::{
-    Alignment, Axis, Offset, Pixels, Point, Rect, Size, geometry::px, painting::Clip,
-};
+use flui_types::{Alignment, Axis, Offset, Point, Rect, Size, painting::Clip};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -157,12 +155,12 @@ impl RenderConstraintsTransformBox {
             Some(Axis::Horizontal) => BoxConstraints::new(
                 constraints.min_width,
                 constraints.max_width,
-                Pixels::ZERO,
-                Pixels::INFINITY,
+                0.0,
+                f64::INFINITY,
             ),
             Some(Axis::Vertical) => BoxConstraints::new(
-                Pixels::ZERO,
-                Pixels::INFINITY,
+                0.0,
+                f64::INFINITY,
                 constraints.min_height,
                 constraints.max_height,
             ),
@@ -205,8 +203,8 @@ impl RenderBox for RenderConstraintsTransformBox {
         // not a size-only comparison: an out-of-range alignment can push a
         // smaller-than-box child outside the box.
         let child_offset = self.inner.child_offset();
-        self.has_visual_overflow = child_offset.dx < px(0.0)
-            || child_offset.dy < px(0.0)
+        self.has_visual_overflow = child_offset.dx < 0.0
+            || child_offset.dy < 0.0
             || child_offset.dx + child_size.width > our_size.width
             || child_offset.dy + child_size.height > our_size.height;
         self.inner.record_child_baselines(ctx);
@@ -218,7 +216,7 @@ impl RenderBox for RenderConstraintsTransformBox {
     /// (`child_baseline + offset.dy`). Without this override the trait
     /// default returns `None` and the `record_child_baselines` call above
     /// would be a dead write.
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         self.inner.actual_baseline(baseline)
     }
 
@@ -253,40 +251,40 @@ impl RenderBox for RenderConstraintsTransformBox {
     // intrinsics doc). A freed axis must probe the child at that axis'
     // infinite extent, exactly as layout would.
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
-        let probe = BoxConstraints::new(Pixels::ZERO, Pixels::INFINITY, Pixels::ZERO, px(height));
+        let probe = BoxConstraints::new(0.0, f64::INFINITY, 0.0, height);
         let transformed = self.transform_constraints(probe);
-        ctx.child_min_intrinsic_width(0, transformed.max_height.get())
+        ctx.child_min_intrinsic_width(0, transformed.max_height)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
-        let probe = BoxConstraints::new(Pixels::ZERO, Pixels::INFINITY, Pixels::ZERO, px(height));
+        let probe = BoxConstraints::new(0.0, f64::INFINITY, 0.0, height);
         let transformed = self.transform_constraints(probe);
-        ctx.child_max_intrinsic_width(0, transformed.max_height.get())
+        ctx.child_max_intrinsic_width(0, transformed.max_height)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
-        let probe = BoxConstraints::new(Pixels::ZERO, px(width), Pixels::ZERO, Pixels::INFINITY);
+        let probe = BoxConstraints::new(0.0, width, 0.0, f64::INFINITY);
         let transformed = self.transform_constraints(probe);
-        ctx.child_min_intrinsic_height(0, transformed.max_width.get())
+        ctx.child_min_intrinsic_height(0, transformed.max_width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
-        let probe = BoxConstraints::new(Pixels::ZERO, px(width), Pixels::ZERO, Pixels::INFINITY);
+        let probe = BoxConstraints::new(0.0, width, 0.0, f64::INFINITY);
         let transformed = self.transform_constraints(probe);
-        ctx.child_max_intrinsic_height(0, transformed.max_width.get())
+        ctx.child_max_intrinsic_height(0, transformed.max_width)
     }
 
     /// Dry layout uses the SAME transformed constraints as `perform_layout`,
@@ -312,7 +310,7 @@ impl RenderBox for RenderConstraintsTransformBox {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -321,7 +319,7 @@ impl RenderBox for RenderConstraintsTransformBox {
         let our_size = constraints.constrain(child_size);
         let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
         let child_offset: Offset = self.inner.dry_child_offset(our_size, child_size);
-        Some(child_baseline + child_offset.dy.get())
+        Some(child_baseline + child_offset.dy)
     }
 }
 
@@ -333,8 +331,8 @@ impl RenderBox for RenderConstraintsTransformBox {
 mod tests {
     use super::*;
 
-    fn bc(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
-        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
+        BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
     #[test]
@@ -352,10 +350,10 @@ mod tests {
             Clip::None,
         );
         let transformed = node.transform_constraints(bc(10.0, 200.0, 5.0, 100.0));
-        assert_eq!(transformed.min_width, px(10.0));
-        assert_eq!(transformed.max_width, px(200.0));
-        assert_eq!(transformed.min_height, Pixels::ZERO);
-        assert_eq!(transformed.max_height, Pixels::INFINITY);
+        assert_eq!(transformed.min_width, 10.0);
+        assert_eq!(transformed.max_width, 200.0);
+        assert_eq!(transformed.min_height, 0.0);
+        assert_eq!(transformed.max_height, f64::INFINITY);
     }
 
     #[test]
@@ -363,10 +361,10 @@ mod tests {
         let node =
             RenderConstraintsTransformBox::new(Alignment::CENTER, Some(Axis::Vertical), Clip::None);
         let transformed = node.transform_constraints(bc(10.0, 200.0, 5.0, 100.0));
-        assert_eq!(transformed.min_width, Pixels::ZERO);
-        assert_eq!(transformed.max_width, Pixels::INFINITY);
-        assert_eq!(transformed.min_height, px(5.0));
-        assert_eq!(transformed.max_height, px(100.0));
+        assert_eq!(transformed.min_width, 0.0);
+        assert_eq!(transformed.max_width, f64::INFINITY);
+        assert_eq!(transformed.min_height, 5.0);
+        assert_eq!(transformed.max_height, 100.0);
     }
 
     #[test]

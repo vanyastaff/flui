@@ -18,7 +18,7 @@
 //! - HitTestEntry: gestures/hit_test.dart
 
 pub use flui_foundation::RenderId;
-use flui_types::geometry::{Matrix4, Offset, Pixels};
+use flui_types::geometry::{Matrix4, Offset};
 
 use crate::pan_zoom::PointerPanZoomEvent;
 use crate::{
@@ -288,7 +288,7 @@ pub struct HitTestResult {
 #[derive(Debug, Clone)]
 enum TransformPart {
     Matrix(Matrix4),
-    Offset(Offset<Pixels>),
+    Offset(Offset<f64>),
 }
 
 impl TransformPart {
@@ -298,7 +298,7 @@ impl TransformPart {
             TransformPart::Matrix(m) => *m * rhs,
             TransformPart::Offset(o) => {
                 // Left multiply: Translation * rhs
-                Matrix4::translation(o.dx.0, o.dy.0, 0.0) * rhs
+                Matrix4::translation(o.dx, o.dy, 0.0) * rhs
             }
         }
     }
@@ -395,7 +395,7 @@ impl HitTestResult {
     /// Flutter equivalent: `@protected void pushOffset(Offset offset)`
     /// (callers negate before calling, e.g. `addWithPaintOffset` in
     /// `rendering/box.dart:839` calls `pushOffset(-offset)`).
-    pub fn push_offset(&mut self, offset: Offset<Pixels>) {
+    pub fn push_offset(&mut self, offset: Offset<f64>) {
         self.local_transforms.push(TransformPart::Offset(offset));
     }
 
@@ -456,7 +456,7 @@ impl HitTestResult {
     /// per-call transform balance is therefore not load-bearing.
     /// Callers wanting strict panic-safe transform balance should
     /// pop manually with `push_offset` + `pop_transform`.
-    pub fn with_paint_offset<F, R>(&mut self, offset: Offset<Pixels>, f: F) -> R
+    pub fn with_paint_offset<F, R>(&mut self, offset: Offset<f64>, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
@@ -492,11 +492,11 @@ impl HitTestResult {
     ///    detects and skips it (`LocalEventTransform::capture`) without
     ///    this method needing to thread a `bool` result back through every
     ///    caller. The skip is only threshold-relative, not guaranteed, for
-    ///    a merely near-singular transform (`0 < |det| < f32::EPSILON`,
+    ///    a merely near-singular transform (`0 < |det| < f64::EPSILON`,
     ///    which `Matrix4::is_invertible` also rejects): determinants
     ///    compose multiplicatively, so a large-determinant ancestor
     ///    elsewhere in the chain can lift the product back above
-    ///    `f32::EPSILON`. In that case delivery sees an invertible
+    ///    `f64::EPSILON`. In that case delivery sees an invertible
     ///    composite and delivers the entry with a garbage local position --
     ///    a wider divergence from Flutter's hard refusal than the
     ///    still-singular fallback above covers by itself.
@@ -842,7 +842,7 @@ impl Drop for TransformGuard<'_> {
 /// Trait for objects that can be hit-tested.
 pub trait HitTestable: crate::sealed::hit_testable::Sealed {
     /// Performs hit testing at the given position.
-    fn hit_test(&self, position: Offset<Pixels>, result: &mut HitTestResult) -> bool;
+    fn hit_test(&self, position: Offset<f64>, result: &mut HitTestResult) -> bool;
 
     /// Returns the hit test behavior.
     fn hit_test_behavior(&self) -> HitTestBehavior {
@@ -851,7 +851,7 @@ pub trait HitTestable: crate::sealed::hit_testable::Sealed {
 }
 
 impl<T: crate::sealed::CustomHitTestable> HitTestable for T {
-    fn hit_test(&self, position: Offset<Pixels>, result: &mut HitTestResult) -> bool {
+    fn hit_test(&self, position: Offset<f64>, result: &mut HitTestResult) -> bool {
         self.perform_hit_test(position, result)
     }
 
@@ -868,8 +868,8 @@ pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4)
     use ui_events::pointer::{PointerButtonEvent, PointerScrollEvent, PointerUpdate};
 
     let transform_position = |pos: dpi::PhysicalPosition<f64>| -> dpi::PhysicalPosition<f64> {
-        let (x, y) = transform.transform_point(Pixels(pos.x as f32), Pixels(pos.y as f32));
-        dpi::PhysicalPosition::new(x.0 as f64, y.0 as f64)
+        let (x, y) = transform.transform_point(pos.x as f64, pos.y as f64);
+        dpi::PhysicalPosition::new(x as f64, y as f64)
     };
 
     match event {
@@ -952,7 +952,7 @@ fn transform_pan_zoom_event(
     event: &PointerPanZoomEvent,
     transform: &Matrix4,
 ) -> PointerPanZoomEvent {
-    let localize = |point: Offset<Pixels>| {
+    let localize = |point: Offset<f64>| {
         let (x, y) = transform.transform_point(point.dx, point.dy);
         Offset::new(x, y)
     };
@@ -1050,7 +1050,7 @@ mod tests {
         // would pass even if the composition folded the wrong matrix in --
         // the exact vacuous shape that let the `with_paint_offset`/
         // `with_paint_transform` direction bug ship undetected.
-        result.push_offset(Offset::new(Pixels(10.0), Pixels(20.0)));
+        result.push_offset(Offset::new(10.0, 20.0));
         result.add(HitTestEntry::new(RenderId::new(1)));
 
         let transform = result.path()[0]
@@ -1061,7 +1061,7 @@ mod tests {
             (10.0, 20.0, 0.0),
             "push_offset(10, 20) must compose to the forward translation, unnegated"
         );
-        let (local_x, local_y) = transform.transform_point(Pixels(0.0), Pixels(0.0));
+        let (local_x, local_y) = transform.transform_point(0.0, 0.0);
         assert_eq!(
             (local_x.0, local_y.0),
             (10.0, 20.0),
@@ -1108,10 +1108,7 @@ mod tests {
             let mut result = HitTestResult::new();
             result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
 
-            let event = crate::events::make_down_event(
-                Offset::new(Pixels(50.0), Pixels(50.0)),
-                PointerType::Mouse,
-            );
+            let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
             result.dispatch(&event);
         });
         assert!(delivered.get());
@@ -1143,10 +1140,7 @@ mod tests {
             result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(leaf));
             result.add(HitTestEntry::new(RenderId::new(2)).pointer_target(root));
 
-            let event = crate::events::make_down_event(
-                Offset::new(Pixels(50.0), Pixels(50.0)),
-                PointerType::Mouse,
-            );
+            let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
             result.dispatch(&event);
         });
         assert_eq!(&*order.borrow(), &["leaf", "root"]);
@@ -1162,7 +1156,7 @@ mod tests {
 
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
-        let observed = Rc::new(Cell::new(Offset::new(Pixels(0.0), Pixels(0.0))));
+        let observed = Rc::new(Cell::new(Offset::new(0.0, 0.0)));
         lane.enter(|| {
             let position_probe = Rc::clone(&observed);
             let target = handle
@@ -1175,17 +1169,14 @@ mod tests {
             // child descent in `PipelineOwner::hit_test_subtree`) -- it
             // pushes the offset's inverse internally, so the entry's
             // recorded transform is already global-to-local.
-            result.with_paint_offset(Offset::new(Pixels(10.0), Pixels(20.0)), |result| {
+            result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
                 result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
             });
 
-            let event = crate::events::make_down_event(
-                Offset::new(Pixels(50.0), Pixels(50.0)),
-                PointerType::Mouse,
-            );
+            let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
             result.dispatch(&event);
         });
-        assert_eq!(observed.get(), Offset::new(Pixels(40.0), Pixels(30.0)));
+        assert_eq!(observed.get(), Offset::new(40.0, 30.0));
     }
 
     #[test]
@@ -1198,7 +1189,7 @@ mod tests {
 
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
-        let observed = Rc::new(Cell::new(Offset::new(Pixels(0.0), Pixels(0.0))));
+        let observed = Rc::new(Cell::new(Offset::new(0.0, 0.0)));
         lane.enter(|| {
             let position_probe = Rc::clone(&observed);
             let target = handle
@@ -1220,13 +1211,10 @@ mod tests {
                 result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
             });
 
-            let event = crate::events::make_down_event(
-                Offset::new(Pixels(50.0), Pixels(50.0)),
-                PointerType::Mouse,
-            );
+            let event = crate::events::make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
             result.dispatch(&event);
         });
-        assert_eq!(observed.get(), Offset::new(Pixels(25.0), Pixels(25.0)));
+        assert_eq!(observed.get(), Offset::new(25.0, 25.0));
     }
 
     #[test]
@@ -1251,10 +1239,7 @@ mod tests {
             let mut result = HitTestResult::new();
             result.add(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
 
-            let event = make_scroll_event(
-                Offset::new(Pixels(50.0), Pixels(50.0)),
-                Offset::new(Pixels(0.0), Pixels(10.0)),
-            );
+            let event = make_scroll_event(Offset::new(50.0, 50.0), Offset::new(0.0, 10.0));
             let PointerEvent::Scroll(event) = event else {
                 panic!("expected scroll event");
             };
@@ -1295,10 +1280,7 @@ mod tests {
             result.add(HitTestEntry::new(RenderId::new(1)).scroll_target(first));
             result.add(HitTestEntry::new(RenderId::new(2)).scroll_target(second));
 
-            let event = make_scroll_event(
-                Offset::new(Pixels(50.0), Pixels(50.0)),
-                Offset::new(Pixels(0.0), Pixels(10.0)),
-            );
+            let event = make_scroll_event(Offset::new(50.0, 50.0), Offset::new(0.0, 10.0));
             let PointerEvent::Scroll(event) = event else {
                 panic!("expected scroll event");
             };
@@ -1340,7 +1322,7 @@ mod tests {
             result.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(leaf));
             result.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(root));
 
-            let event = make_pinch_gesture_event(Offset::new(Pixels(50.0), Pixels(50.0)), 0.5);
+            let event = make_pinch_gesture_event(Offset::new(50.0, 50.0), 0.5);
             let pan_zoom = from_w3c_event(&event).expect("gesture converts");
             assert!(result.dispatch_pan_zoom(&pan_zoom));
         });
@@ -1379,7 +1361,7 @@ mod tests {
             result.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(leaf));
             result.add(HitTestEntry::new(RenderId::new(2)).pan_zoom_target(root));
 
-            let event = make_pinch_gesture_event(Offset::new(Pixels(50.0), Pixels(50.0)), 0.5);
+            let event = make_pinch_gesture_event(Offset::new(50.0, 50.0), 0.5);
             let pan_zoom = from_w3c_event(&event).expect("gesture converts");
             assert!(result.dispatch_pan_zoom(&pan_zoom));
         });
@@ -1425,11 +1407,8 @@ mod tests {
             // Build on a real converted tick so pointer identity and device
             // kind come from the production adapter, then supply the nonzero
             // pan payload that adapter cannot yet produce.
-            let converted = from_w3c_event(&make_pinch_gesture_event(
-                Offset::new(Pixels(50.0), Pixels(50.0)),
-                0.0,
-            ))
-            .expect("gesture converts");
+            let converted = from_w3c_event(&make_pinch_gesture_event(Offset::new(50.0, 50.0), 0.0))
+                .expect("gesture converts");
             let PointerPanZoomEvent::Update {
                 pointer_id,
                 scale,
@@ -1443,9 +1422,9 @@ mod tests {
             };
             let event = PointerPanZoomEvent::Update {
                 pointer_id,
-                position: Offset::new(Pixels(50.0), Pixels(50.0)),
-                pan: Offset::new(Pixels(40.0), Pixels(20.0)),
-                pan_delta: Offset::new(Pixels(10.0), Pixels(4.0)),
+                position: Offset::new(50.0, 50.0),
+                pan: Offset::new(40.0, 20.0),
+                pan_delta: Offset::new(10.0, 4.0),
                 scale,
                 rotation,
                 timestamp_nanos,
@@ -1455,10 +1434,10 @@ mod tests {
         });
 
         let (pan, pan_delta) = observed.get().expect("an Update reached the target");
-        assert_eq!(pan, Offset::new(Pixels(20.0), Pixels(10.0)), "pan halves");
+        assert_eq!(pan, Offset::new(20.0, 10.0), "pan halves");
         assert_eq!(
             pan_delta,
-            Offset::new(Pixels(5.0), Pixels(2.0)),
+            Offset::new(5.0, 2.0),
             "pan_delta halves with the subtree, not passed through in global space"
         );
     }
@@ -1474,7 +1453,7 @@ mod tests {
 
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
-        let observed = Rc::new(Cell::new(Offset::new(Pixels(0.0), Pixels(0.0))));
+        let observed = Rc::new(Cell::new(Offset::new(0.0, 0.0)));
         lane.enter(|| {
             let position_probe = Rc::clone(&observed);
             let target = handle
@@ -1488,15 +1467,15 @@ mod tests {
             // pointer transform tests use: a claimant in a subtree
             // translated by (10, 20) must see the focal point in ITS space,
             // or it scales around a point that is not under the fingers.
-            result.with_paint_offset(Offset::new(Pixels(10.0), Pixels(20.0)), |result| {
+            result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
                 result.add(HitTestEntry::new(RenderId::new(1)).pan_zoom_target(target));
             });
 
-            let event = make_pinch_gesture_event(Offset::new(Pixels(50.0), Pixels(50.0)), 0.5);
+            let event = make_pinch_gesture_event(Offset::new(50.0, 50.0), 0.5);
             let pan_zoom = from_w3c_event(&event).expect("gesture converts");
             assert!(result.dispatch_pan_zoom(&pan_zoom));
         });
-        assert_eq!(observed.get(), Offset::new(Pixels(40.0), Pixels(30.0)));
+        assert_eq!(observed.get(), Offset::new(40.0, 30.0));
     }
 
     #[test]
@@ -1509,7 +1488,7 @@ mod tests {
 
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
-        let observed = Rc::new(Cell::new(Offset::new(Pixels(0.0), Pixels(0.0))));
+        let observed = Rc::new(Cell::new(Offset::new(0.0, 0.0)));
         lane.enter(|| {
             let position_probe = Rc::clone(&observed);
             let target = handle
@@ -1522,20 +1501,17 @@ mod tests {
             // See `dispatch_applies_the_entry_local_transform`: exercise the
             // production `with_paint_offset` path, not the raw push/pop pair,
             // so this proves the fixed (inverse-pushing) contract.
-            result.with_paint_offset(Offset::new(Pixels(10.0), Pixels(20.0)), |result| {
+            result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
                 result.add(HitTestEntry::new(RenderId::new(1)).scroll_target(target));
             });
 
-            let event = make_scroll_event(
-                Offset::new(Pixels(50.0), Pixels(50.0)),
-                Offset::new(Pixels(0.0), Pixels(10.0)),
-            );
+            let event = make_scroll_event(Offset::new(50.0, 50.0), Offset::new(0.0, 10.0));
             let PointerEvent::Scroll(event) = event else {
                 panic!("expected scroll event");
             };
             let scroll = ScrollEventData::from(&event);
             assert!(result.dispatch_scroll(&scroll));
         });
-        assert_eq!(observed.get(), Offset::new(Pixels(40.0), Pixels(30.0)));
+        assert_eq!(observed.get(), Offset::new(40.0, 30.0));
     }
 }

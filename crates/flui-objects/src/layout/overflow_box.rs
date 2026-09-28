@@ -13,7 +13,7 @@
 //! Both use [`AligningShiftedBox`] for child positioning and hit-testing.
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Pixels, Size, geometry::px};
+use flui_types::{Alignment, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -71,10 +71,10 @@ pub enum OverflowBoxFit {
 #[derive(Debug, Clone)]
 pub struct RenderConstrainedOverflowBox {
     /// Per-axis constraint overrides (all optional).
-    min_width: Option<Pixels>,
-    max_width: Option<Pixels>,
-    min_height: Option<Pixels>,
-    max_height: Option<Pixels>,
+    min_width: Option<f64>,
+    max_width: Option<f64>,
+    min_height: Option<f64>,
+    max_height: Option<f64>,
     /// How to determine this box's own size relative to the parent constraints.
     fit: OverflowBoxFit,
     /// Handles child alignment and hit-testing.
@@ -85,10 +85,10 @@ impl RenderConstrainedOverflowBox {
     /// Creates the render object with `Alignment::CENTER` and `OverflowBoxFit::Max`.
     pub fn new(
         alignment: Alignment,
-        min_width: Option<Pixels>,
-        max_width: Option<Pixels>,
-        min_height: Option<Pixels>,
-        max_height: Option<Pixels>,
+        min_width: Option<f64>,
+        max_width: Option<f64>,
+        min_height: Option<f64>,
+        max_height: Option<f64>,
         fit: OverflowBoxFit,
     ) -> Self {
         Self {
@@ -129,10 +129,7 @@ impl RenderConstrainedOverflowBox {
     }
 
     /// Replaces the optional minimum-width override.
-    pub fn set_min_width(
-        &mut self,
-        min_width: Option<Pixels>,
-    ) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_min_width(&mut self, min_width: Option<f64>) -> flui_rendering::RenderUpdateImpact {
         if self.min_width == min_width {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
@@ -141,10 +138,7 @@ impl RenderConstrainedOverflowBox {
     }
 
     /// Replaces the optional maximum-width override.
-    pub fn set_max_width(
-        &mut self,
-        max_width: Option<Pixels>,
-    ) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_max_width(&mut self, max_width: Option<f64>) -> flui_rendering::RenderUpdateImpact {
         if self.max_width == max_width {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
@@ -155,7 +149,7 @@ impl RenderConstrainedOverflowBox {
     /// Replaces the optional minimum-height override.
     pub fn set_min_height(
         &mut self,
-        min_height: Option<Pixels>,
+        min_height: Option<f64>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.min_height == min_height {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -167,7 +161,7 @@ impl RenderConstrainedOverflowBox {
     /// Replaces the optional maximum-height override.
     pub fn set_max_height(
         &mut self,
-        max_height: Option<Pixels>,
+        max_height: Option<f64>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.max_height == max_height {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -212,16 +206,16 @@ impl RenderConstrainedOverflowBox {
 impl flui_foundation::Diagnosticable for RenderConstrainedOverflowBox {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
         if let Some(v) = self.min_width {
-            builder.add_double("min_width", v.get(), None);
+            builder.add_double("min_width", v, None);
         }
         if let Some(v) = self.max_width {
-            builder.add_double("max_width", v.get(), None);
+            builder.add_double("max_width", v, None);
         }
         if let Some(v) = self.min_height {
-            builder.add_double("min_height", v.get(), None);
+            builder.add_double("min_height", v, None);
         }
         if let Some(v) = self.max_height {
-            builder.add_double("max_height", v.get(), None);
+            builder.add_double("max_height", v, None);
         }
         builder.add_enum("fit", self.fit);
     }
@@ -261,28 +255,28 @@ impl RenderBox for RenderConstrainedOverflowBox {
     // No constraint override is applied — intrinsics are a property of the
     // child's content, independent of what constraints we pass during layout.
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_min_intrinsic_width(0, height)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_max_intrinsic_width(0, height)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_min_intrinsic_height(0, width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -320,7 +314,7 @@ impl RenderBox for RenderConstrainedOverflowBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -329,7 +323,7 @@ impl RenderBox for RenderConstrainedOverflowBox {
         let our_size = self.parent_size(constraints, child_size);
         let child_baseline = ctx.child_dry_baseline(0, inner_constraints, baseline)?;
         let child_offset = self.inner.dry_child_offset(our_size, child_size);
-        Some(child_baseline + child_offset.dy.get())
+        Some(child_baseline + child_offset.dy)
     }
 }
 
@@ -364,8 +358,8 @@ impl RenderSizedOverflowBox {
     }
 
     /// Convenience: center-aligned, requests `(width, height)` logical pixels.
-    pub fn centered(width: f32, height: f32) -> Self {
-        Self::new(Alignment::CENTER, Size::new(px(width), px(height)))
+    pub fn centered(width: f64, height: f64) -> Self {
+        Self::new(Alignment::CENTER, Size::new(width, height))
     }
 
     /// Returns the current requested size.
@@ -402,8 +396,8 @@ impl RenderSizedOverflowBox {
 
 impl flui_foundation::Diagnosticable for RenderSizedOverflowBox {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_double("requested_width", self.requested_size.width.get(), None);
-        builder.add_double("requested_height", self.requested_size.height.get(), None);
+        builder.add_double("requested_width", self.requested_size.width, None);
+        builder.add_double("requested_height", self.requested_size.height, None);
     }
 }
 
@@ -440,20 +434,20 @@ impl RenderBox for RenderSizedOverflowBox {
     // (The child is laid out under the incoming constraints and may overflow, so
     // the child's intrinsics do not describe this box's size.)
 
-    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        self.requested_size.width.get()
+    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.requested_size.width
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        self.requested_size.width.get()
+    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.requested_size.width
     }
 
-    fn compute_min_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        self.requested_size.height.get()
+    fn compute_min_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.requested_size.height
     }
 
-    fn compute_max_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        self.requested_size.height.get()
+    fn compute_max_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.requested_size.height
     }
 
     fn compute_dry_layout(
@@ -470,7 +464,7 @@ impl RenderBox for RenderSizedOverflowBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -481,7 +475,7 @@ impl RenderBox for RenderSizedOverflowBox {
         // Use the same alignment as the inner component.
         // We borrow alignment knowledge from a temporary to compute the offset.
         let dry_offset = self.inner.dry_child_offset(our_size, child_size);
-        Some(child_baseline + dry_offset.dy.get())
+        Some(child_baseline + dry_offset.dy)
     }
 }
 
@@ -492,10 +486,9 @@ impl RenderBox for RenderSizedOverflowBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::geometry::px;
 
-    fn bc(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
-        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
+        BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
     #[test]
@@ -517,10 +510,10 @@ mod tests {
         );
         let constraints = bc(10.0, 200.0, 5.0, 100.0);
         let inner = node.inner_constraints(constraints);
-        assert_eq!(inner.min_width, px(10.0));
-        assert_eq!(inner.max_width, px(200.0));
-        assert_eq!(inner.min_height, px(5.0));
-        assert_eq!(inner.max_height, px(100.0));
+        assert_eq!(inner.min_width, 10.0);
+        assert_eq!(inner.max_width, 200.0);
+        assert_eq!(inner.min_height, 5.0);
+        assert_eq!(inner.max_height, 100.0);
     }
 
     #[test]
@@ -528,15 +521,15 @@ mod tests {
         let node = RenderConstrainedOverflowBox::new(
             Alignment::CENTER,
             None,
-            Some(px(500.0)), // override max_width → allow child to be wider
+            Some(500.0), // override max_width → allow child to be wider
             None,
             None,
             OverflowBoxFit::Max,
         );
         let constraints = bc(0.0, 200.0, 0.0, 200.0);
         let inner = node.inner_constraints(constraints);
-        assert_eq!(inner.max_width, px(500.0)); // overridden
-        assert_eq!(inner.max_height, px(200.0)); // original
+        assert_eq!(inner.max_width, 500.0); // overridden
+        assert_eq!(inner.max_height, 200.0); // original
     }
 
     #[test]
@@ -550,7 +543,7 @@ mod tests {
             OverflowBoxFit::Max,
         );
         let constraints = bc(0.0, 300.0, 0.0, 200.0);
-        let our_size = node.parent_size(constraints, Size::new(px(50.0), px(50.0)));
+        let our_size = node.parent_size(constraints, Size::new(50.0, 50.0));
         assert_eq!(our_size, constraints.biggest());
     }
 
@@ -565,7 +558,7 @@ mod tests {
             OverflowBoxFit::DeferToChild,
         );
         let constraints = bc(0.0, 300.0, 0.0, 200.0);
-        let child_size = Size::new(px(50.0), px(50.0));
+        let child_size = Size::new(50.0, 50.0);
         let our_size = node.parent_size(constraints, child_size);
         assert_eq!(our_size, constraints.constrain(child_size));
     }
@@ -575,13 +568,13 @@ mod tests {
     #[test]
     fn sized_overflow_box_constrain_requested_size() {
         let node = RenderSizedOverflowBox::centered(80.0, 60.0);
-        assert_eq!(node.requested_size(), Size::new(px(80.0), px(60.0)));
+        assert_eq!(node.requested_size(), Size::new(80.0, 60.0));
     }
 
     #[test]
     fn sized_overflow_box_setter_returns_change_flag() {
         let mut node = RenderSizedOverflowBox::centered(80.0, 60.0);
-        let new_size = Size::new(px(100.0), px(100.0));
+        let new_size = Size::new(100.0, 100.0);
         assert_eq!(
             node.set_requested_size(new_size),
             flui_rendering::RenderUpdateImpact::LAYOUT
@@ -600,7 +593,7 @@ mod tests {
         // compute_dry_layout doesn't need ctx child count here — no child.
         assert_eq!(
             constraints.constrain(node.requested_size()),
-            Size::new(px(80.0), px(60.0))
+            Size::new(80.0, 60.0)
         );
     }
 }

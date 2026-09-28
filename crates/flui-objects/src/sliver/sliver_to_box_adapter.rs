@@ -6,10 +6,7 @@
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Single;
-use flui_types::{
-    geometry::px,
-    layout::AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
-};
+use flui_types::layout::AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
@@ -61,8 +58,8 @@ impl RenderSliver for RenderSliverToBoxAdapter {
 
         let child_size = ctx.layout_box_child(0, constraints.unbounded_main_axis_box_constraints());
         let child_extent = match constraints.axis_direction {
-            LeftToRight | RightToLeft => child_size.width.get(),
-            TopToBottom | BottomToTop => child_size.height.get(),
+            LeftToRight | RightToLeft => child_size.width,
+            TopToBottom | BottomToTop => child_size.height,
         };
         let painted_child_size = self.calculate_paint_offset(&constraints, 0.0, child_extent);
         let cache_extent = self.calculate_cache_offset(&constraints, 0.0, child_extent);
@@ -79,8 +76,7 @@ impl RenderSliver for RenderSliverToBoxAdapter {
                 || constraints.scroll_offset > 0.0,
             ..SliverGeometry::ZERO
         };
-        let child_paint_offset =
-            child_paint_offset(&constraints, &geometry, px(0.0), px(child_extent));
+        let child_paint_offset = child_paint_offset(&constraints, &geometry, 0.0, child_extent);
         ctx.position_child(0, child_paint_offset);
         geometry
     }
@@ -89,7 +85,7 @@ impl RenderSliver for RenderSliverToBoxAdapter {
         &self,
         constraints: &SliverConstraints,
         _child: &dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         -constraints.scroll_offset
     }
 

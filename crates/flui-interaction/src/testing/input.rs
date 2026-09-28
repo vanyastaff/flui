@@ -9,8 +9,8 @@
 //! use flui_types::Offset;
 //! use ui_events::pointer::PointerType;
 //!
-//! let down = pointer_down(Offset::new(Pixels(100.0), Pixels(100.0)), PointerType::Mouse);
-//! let up = pointer_up(Offset::new(Pixels(100.0), Pixels(100.0)), PointerType::Mouse);
+//! let down = pointer_down(Offset::new(100.0, 100.0), PointerType::Mouse);
+//! let up = pointer_up(Offset::new(100.0, 100.0), PointerType::Mouse);
 //! ```
 
 use flui_types::geometry::{Offset, Pixels};
@@ -47,19 +47,19 @@ pub fn device_kind_from_button(button: u32) -> PointerType {
 
 /// Create a PointerEvent::Down
 #[inline]
-pub fn pointer_down(position: Offset<Pixels>, device_kind: PointerType) -> PointerEvent {
+pub fn pointer_down(position: Offset<f64>, device_kind: PointerType) -> PointerEvent {
     make_down_event(position, device_kind)
 }
 
 /// Create a PointerEvent::Up
 #[inline]
-pub fn pointer_up(position: Offset<Pixels>, device_kind: PointerType) -> PointerEvent {
+pub fn pointer_up(position: Offset<f64>, device_kind: PointerType) -> PointerEvent {
     make_up_event(position, device_kind)
 }
 
 /// Create a PointerEvent::Move
 #[inline]
-pub fn pointer_move(position: Offset<Pixels>, device_kind: PointerType) -> PointerEvent {
+pub fn pointer_move(position: Offset<f64>, device_kind: PointerType) -> PointerEvent {
     make_move_event(position, device_kind)
 }
 
@@ -239,7 +239,7 @@ mod tests {
 
     #[test]
     fn test_pointer_event_creation() {
-        let pos = Offset::new(Pixels(100.0), Pixels(200.0));
+        let pos = Offset::new(100.0, 200.0);
         let event = pointer_down(pos, PointerType::Mouse);
 
         assert_eq!(event.position(), pos);

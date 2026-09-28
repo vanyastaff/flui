@@ -11,7 +11,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use flui_foundation::Variable;
-use flui_types::{Offset, Pixels, Size};
+use flui_types::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -69,28 +69,18 @@ impl RenderCustomMultiChildLayoutBox {
         constraints.constrain(self.delegate.get_size(constraints))
     }
 
-    fn intrinsic_width(&self, height: f32) -> f32 {
+    fn intrinsic_width(&self, height: f64) -> f64 {
         let width = self
-            .get_size(BoxConstraints::tight_for_finite(
-                Pixels::INFINITY,
-                Pixels::new(height),
-            ))
+            .get_size(BoxConstraints::tight_for_finite(f64::INFINITY, height))
             .width;
-        if width.is_finite() { width.get() } else { 0.0 }
+        if width.is_finite() { width } else { 0.0 }
     }
 
-    fn intrinsic_height(&self, width: f32) -> f32 {
+    fn intrinsic_height(&self, width: f64) -> f64 {
         let height = self
-            .get_size(BoxConstraints::tight_for_finite(
-                Pixels::new(width),
-                Pixels::INFINITY,
-            ))
+            .get_size(BoxConstraints::tight_for_finite(width, f64::INFINITY))
             .height;
-        if height.is_finite() {
-            height.get()
-        } else {
-            0.0
-        }
+        if height.is_finite() { height } else { 0.0 }
     }
 
     fn child_slots(
@@ -147,19 +137,19 @@ impl RenderBox for RenderCustomMultiChildLayoutBox {
         size
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_width(height)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_width(height)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_height(width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_height(width)
     }
 

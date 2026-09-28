@@ -127,14 +127,14 @@ pub struct SliverConstraintsCacheKey {
     growth_direction: u8,
     user_scroll_direction: u8,
     cross_axis_direction: u8,
-    cross_axis_extent_bits: u32,
-    viewport_main_axis_extent_bits: u32,
-    scroll_offset_bits: u32,
-    remaining_paint_extent_bits: u32,
-    overlap_bits: u32,
-    remaining_cache_extent_bits: u32,
-    cache_origin_bits: u32,
-    preceding_scroll_extent_bits: u32,
+    cross_axis_extent_bits: u64,
+    viewport_main_axis_extent_bits: u64,
+    scroll_offset_bits: u64,
+    remaining_paint_extent_bits: u64,
+    overlap_bits: u64,
+    remaining_cache_extent_bits: u64,
+    cache_origin_bits: u64,
+    preceding_scroll_extent_bits: u64,
 }
 
 impl SliverConstraintsCacheKey {
@@ -143,7 +143,7 @@ impl SliverConstraintsCacheKey {
     /// Returns `None` if any float value is NaN.
     pub fn from_constraints(c: &SliverConstraints) -> Option<Self> {
         // NaN check helper
-        let is_nan = |v: f32| v.is_nan();
+        let is_nan = |v: f64| v.is_nan();
 
         if is_nan(c.cross_axis_extent)
             || is_nan(c.viewport_main_axis_extent)
@@ -215,7 +215,7 @@ pub type BoxChildLayoutCallback<'a> = &'a dyn Fn(RenderId, BoxConstraints) -> Si
 
 /// Callback type for cross-protocol box child intrinsic queries driven by a
 /// Sliver parent.
-pub type BoxChildIntrinsicCallback<'a> = &'a dyn Fn(RenderId, IntrinsicDimension, f32) -> f32;
+pub type BoxChildIntrinsicCallback<'a> = &'a dyn Fn(RenderId, IntrinsicDimension, f64) -> f64;
 
 /// Dense per-child geometry cache used by Proxy storage.
 type ProxySliverChildGeometryCache = Vec<Option<SliverGeometry>>;
@@ -412,7 +412,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     // ════════════════════════════════════════════════════════════════════════
 
     /// Gets the scroll offset from constraints.
-    pub fn scroll_offset(&self) -> f32 {
+    pub fn scroll_offset(&self) -> f64 {
         match &self.storage {
             SliverLayoutCtxStorage::Direct { constraints, .. }
             | SliverLayoutCtxStorage::Proxy { constraints, .. } => constraints.scroll_offset,
@@ -420,7 +420,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     }
 
     /// Gets the remaining paint extent.
-    pub fn remaining_paint_extent(&self) -> f32 {
+    pub fn remaining_paint_extent(&self) -> f64 {
         match &self.storage {
             SliverLayoutCtxStorage::Direct { constraints, .. }
             | SliverLayoutCtxStorage::Proxy { constraints, .. } => {
@@ -430,7 +430,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     }
 
     /// Gets the viewport main axis extent.
-    pub fn viewport_main_axis_extent(&self) -> f32 {
+    pub fn viewport_main_axis_extent(&self) -> f64 {
         match &self.storage {
             SliverLayoutCtxStorage::Direct { constraints, .. }
             | SliverLayoutCtxStorage::Proxy { constraints, .. } => {
@@ -440,7 +440,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
     }
 
     /// Gets the cross axis extent.
-    pub fn cross_axis_extent(&self) -> f32 {
+    pub fn cross_axis_extent(&self) -> f64 {
         match &self.storage {
             SliverLayoutCtxStorage::Direct { constraints, .. }
             | SliverLayoutCtxStorage::Proxy { constraints, .. } => constraints.cross_axis_extent,
@@ -474,8 +474,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> SliverLayoutCtx<'ctx, A, P> {
         &mut self,
         index: usize,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         match &mut self.storage {
             SliverLayoutCtxStorage::Direct {
                 child_ids,
@@ -655,8 +655,8 @@ pub trait SliverLayoutCtxErased {
         &mut self,
         index: usize,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32;
+        extent: f64,
+    ) -> f64;
 
     /// Records the paint offset for child at `index`.
     fn position_child(&mut self, index: usize, offset: Offset);
@@ -746,8 +746,8 @@ impl<A: Arity, P: ParentData + Default> SliverLayoutCtxErased for SliverLayoutCt
         &mut self,
         index: usize,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         SliverLayoutCtx::box_child_intrinsic(self, index, dimension, extent)
     }
 
@@ -970,8 +970,8 @@ impl SliverLayoutCtxErased for ErasedSliverLayoutCtx<'_> {
         &mut self,
         index: usize,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         let Some(&child_id) = self.child_ids.get(index) else {
             return 0.0;
         };
@@ -1056,14 +1056,14 @@ impl HitTestCapability for SliverHitTest {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MainAxisPosition {
     /// Position along the main (scroll) axis.
-    pub main_axis: f32,
+    pub main_axis: f64,
     /// Position along the cross axis.
-    pub cross_axis: f32,
+    pub cross_axis: f64,
 }
 
 impl MainAxisPosition {
     /// Creates a new main axis position.
-    pub fn new(main_axis: f32, cross_axis: f32) -> Self {
+    pub fn new(main_axis: f64, cross_axis: f64) -> Self {
         Self {
             main_axis,
             cross_axis,
@@ -1072,12 +1072,12 @@ impl MainAxisPosition {
 
     /// Creates from an offset assuming vertical scrolling.
     pub fn from_vertical_offset(offset: Offset) -> Self {
-        Self::new(offset.dy.get(), offset.dx.get())
+        Self::new(offset.dy, offset.dx)
     }
 
     /// Creates from an offset assuming horizontal scrolling.
     pub fn from_horizontal_offset(offset: Offset) -> Self {
-        Self::new(offset.dx.get(), offset.dy.get())
+        Self::new(offset.dx, offset.dy)
     }
 }
 
@@ -1116,12 +1116,12 @@ pub struct SliverHitTestEntry {
     /// Target identifier.
     pub target_id: u64,
     /// Main axis position where hit occurred.
-    pub main_axis_position: f32,
+    pub main_axis_position: f64,
 }
 
 impl SliverHitTestEntry {
     /// Creates a new sliver hit test entry.
-    pub fn new(target_id: u64, main_axis_position: f32) -> Self {
+    pub fn new(target_id: u64, main_axis_position: f64) -> Self {
         Self {
             target_id,
             main_axis_position,
@@ -1194,9 +1194,9 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
     fn is_hit(&self, bounds: Rect) -> bool {
         // Sliver bounds are interpreted as cross-axis width by main-axis height.
         self.position.main_axis >= 0.0
-            && self.position.main_axis < bounds.height().get()
+            && self.position.main_axis < bounds.height()
             && self.position.cross_axis >= 0.0
-            && self.position.cross_axis < bounds.width().get()
+            && self.position.cross_axis < bounds.width()
     }
 
     fn hit_test_child(&mut self, index: usize, position: MainAxisPosition) -> bool {
@@ -1229,7 +1229,6 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
 #[cfg(test)]
 mod tests {
     use flui_foundation::Leaf;
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -1263,7 +1262,7 @@ mod tests {
 
     #[test]
     fn sliver_hit_test_context_checks_main_and_cross_axis_bounds() {
-        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(30.0), px(50.0));
+        let bounds = Rect::from_ltrb(0.0, 0.0, 30.0, 50.0);
 
         let inside: SliverHitTestCtx<'_, Leaf, SliverParentData> =
             SliverHitTestCtx::new(MainAxisPosition::new(49.999, 29.999));
@@ -1296,7 +1295,7 @@ mod tests {
 
         use crate::{constraints::GrowthDirection, view::ScrollDirection};
 
-        let constraints = |zero: f32| {
+        let constraints = |zero: f64| {
             SliverConstraints::new(
                 AxisDirection::TopToBottom,
                 GrowthDirection::Forward,
@@ -1390,7 +1389,7 @@ mod tests {
         let mut ctx = SliverLayoutCtx::<Leaf, SliverParentData>::new(SliverConstraints::default());
 
         assert_eq!(
-            ctx.layout_box_child(0, BoxConstraints::tight(Size::new(px(10.0), px(10.0)))),
+            ctx.layout_box_child(0, BoxConstraints::tight(Size::new(10.0, 10.0))),
             Size::ZERO
         );
         assert_eq!(
@@ -1431,11 +1430,11 @@ mod tests {
             assert!(ctx.child_parent_data_mut(5).is_none());
 
             ctx.child_parent_data_mut(0).unwrap().layout_offset = 99.0;
-            LayoutContextApi::position_child(&mut ctx, 1, Offset::new(px(3.0), px(4.0)));
+            LayoutContextApi::position_child(&mut ctx, 1, Offset::new(3.0, 4.0));
         }
 
         assert_eq!(children[0].parent_data.layout_offset, 99.0);
-        assert_eq!(children[1].offset, Offset::new(px(3.0), px(4.0)));
+        assert_eq!(children[1].offset, Offset::new(3.0, 4.0));
     }
 
     #[test]
@@ -1490,11 +1489,11 @@ mod tests {
         let box_calls: Mutex<Vec<RenderId>> = Mutex::new(Vec::new());
         let layout_box_child_callback = |id: RenderId, _c: BoxConstraints| -> Size {
             box_calls.lock().push(id);
-            Size::new(px(11.0), px(22.0))
+            Size::new(11.0, 22.0)
         };
 
         let intrinsic_calls: Mutex<Vec<RenderId>> = Mutex::new(Vec::new());
-        let box_child_intrinsic_callback = |id: RenderId, _d: IntrinsicDimension, _e: f32| -> f32 {
+        let box_child_intrinsic_callback = |id: RenderId, _d: IntrinsicDimension, _e: f64| -> f64 {
             intrinsic_calls.lock().push(id);
             77.0
         };
@@ -1517,8 +1516,8 @@ mod tests {
         assert_eq!(*sliver_calls.lock(), vec![child_b]);
         assert_eq!(ctx.child_geometry(1).unwrap().paint_extent, 123.0);
 
-        let size = ctx.layout_box_child(0, BoxConstraints::tight(Size::new(px(11.0), px(22.0))));
-        assert_eq!(size, Size::new(px(11.0), px(22.0)));
+        let size = ctx.layout_box_child(0, BoxConstraints::tight(Size::new(11.0, 22.0)));
+        assert_eq!(size, Size::new(11.0, 22.0));
         assert_eq!(*box_calls.lock(), vec![child_a]);
 
         let extent = ctx.box_child_intrinsic(0, IntrinsicDimension::MinWidth, 50.0);

@@ -253,7 +253,7 @@ impl RenderState<SliverProtocol> {
     /// let total_scroll = state.scroll_extent();
     /// ```
     #[inline]
-    pub fn scroll_extent(&self) -> f32 {
+    pub fn scroll_extent(&self) -> f64 {
         self.geometry().map_or(0.0, |g| g.scroll_extent)
     }
 
@@ -268,19 +268,19 @@ impl RenderState<SliverProtocol> {
     /// }
     /// ```
     #[inline]
-    pub fn paint_extent(&self) -> f32 {
+    pub fn paint_extent(&self) -> f64 {
         self.geometry().map_or(0.0, |g| g.paint_extent)
     }
 
     /// Returns layout extent, or 0.0 if geometry is not set.
     #[inline]
-    pub fn layout_extent(&self) -> f32 {
+    pub fn layout_extent(&self) -> f64 {
         self.geometry().map_or(0.0, |g| g.layout_extent)
     }
 
     /// Returns max paint extent, or 0.0 if geometry is not set.
     #[inline]
-    pub fn max_paint_extent(&self) -> f32 {
+    pub fn max_paint_extent(&self) -> f64 {
         self.geometry().map_or(0.0, |g| g.max_paint_extent)
     }
 
@@ -317,7 +317,6 @@ impl RenderState<SliverProtocol> {
     /// (2B field dedup — `RenderState` is geometry's sole owner). O(1).
     #[inline]
     pub fn absolute_paint_size(&self) -> flui_types::Size {
-        use flui_types::geometry::px;
         use flui_types::prelude::AxisDirection;
 
         let (Some(geometry), Some(constraints)) = (self.geometry(), self.constraints()) else {
@@ -327,10 +326,10 @@ impl RenderState<SliverProtocol> {
         let main = geometry.paint_extent;
         match constraints.axis_direction {
             AxisDirection::TopToBottom | AxisDirection::BottomToTop => {
-                flui_types::Size::new(px(cross), px(main))
+                flui_types::Size::new(cross, main)
             }
             AxisDirection::LeftToRight | AxisDirection::RightToLeft => {
-                flui_types::Size::new(px(main), px(cross))
+                flui_types::Size::new(main, cross)
             }
         }
     }

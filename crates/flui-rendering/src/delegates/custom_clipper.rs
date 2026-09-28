@@ -23,7 +23,7 @@ use flui_types::{Point, Rect, Size};
 ///
 /// #[derive(Debug)]
 /// struct InsetClipper {
-///     inset: f32,
+///     inset: f64,
 /// }
 ///
 /// impl CustomClipper<Rect> for InsetClipper {
@@ -116,16 +116,16 @@ mod tests {
 
     #[derive(Debug)]
     struct InsetClipper {
-        inset: f32,
+        inset: f64,
     }
 
     impl CustomClipper<Rect> for InsetClipper {
         fn get_clip(&self, size: Size) -> Rect {
             Rect::from_ltrb(
-                px(self.inset),
-                px(self.inset),
-                size.width - px(self.inset),
-                size.height - px(self.inset),
+                self.inset,
+                self.inset,
+                size.width - self.inset,
+                size.height - self.inset,
             )
         }
 
@@ -145,25 +145,25 @@ mod tests {
     #[test]
     fn test_rect_clipper() {
         let clipper = RectClipper;
-        let size = Size::new(px(100.0), px(200.0));
+        let size = Size::new(100.0, 200.0);
         let clip = clipper.get_clip(size);
 
-        assert_eq!(clip.left(), px(0.0));
-        assert_eq!(clip.top(), px(0.0));
-        assert_eq!(clip.right(), px(100.0));
-        assert_eq!(clip.bottom(), px(200.0));
+        assert_eq!(clip.left(), 0.0);
+        assert_eq!(clip.top(), 0.0);
+        assert_eq!(clip.right(), 100.0);
+        assert_eq!(clip.bottom(), 200.0);
     }
 
     #[test]
     fn test_inset_clipper() {
         let clipper = InsetClipper { inset: 10.0 };
-        let size = Size::new(px(100.0), px(200.0));
+        let size = Size::new(100.0, 200.0);
         let clip = clipper.get_clip(size);
 
-        assert_eq!(clip.left(), px(10.0));
-        assert_eq!(clip.top(), px(10.0));
-        assert_eq!(clip.right(), px(90.0));
-        assert_eq!(clip.bottom(), px(190.0));
+        assert_eq!(clip.left(), 10.0);
+        assert_eq!(clip.top(), 10.0);
+        assert_eq!(clip.right(), 90.0);
+        assert_eq!(clip.bottom(), 190.0);
     }
 
     #[test]

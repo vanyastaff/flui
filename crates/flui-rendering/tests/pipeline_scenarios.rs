@@ -33,11 +33,11 @@ use flui_rendering::{
     constraints::BoxConstraints,
     testing::{Probe, RenderTester, box_node},
 };
-use flui_types::{EdgeInsets, Matrix4, Offset, Point, Rect, Size, geometry::px};
+use flui_types::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 
 /// Loose `0..=hi x 0..=hi` constraints (children settle at natural size).
-fn loose(width: f32, height: f32) -> BoxConstraints {
-    BoxConstraints::new(px(0.0), px(width), px(0.0), px(height))
+fn loose(width: f64, height: f64) -> BoxConstraints {
+    BoxConstraints::new(0.0, width, 0.0, height)
 }
 
 // ============================================================================
@@ -60,12 +60,12 @@ fn deep_padding_chain_accumulates_offsets_and_merges_one_picture() {
 
     // Every padding contributes (1,1) to ITS child — the leaf's committed
     // offset relative to its parent is exactly (1,1)...
-    assert_eq!(run.offset(leaf), Offset::new(px(1.0), px(1.0)));
+    assert_eq!(run.offset(leaf), Offset::new(1.0, 1.0));
     // ...and the picture's ABSOLUTE bounds carry the full 50-deep
     // accumulation: the leaf draws at (50,50)..(60,60).
     assert_eq!(
         run.picture_bounds(),
-        Some(Rect::from_ltrb(px(50.0), px(50.0), px(60.0), px(60.0))),
+        Some(Rect::from_ltrb(50.0, 50.0, 60.0, 60.0)),
         "accumulated origins must be baked through the whole chain",
     );
     assert_eq!(
@@ -127,9 +127,9 @@ fn mixed_flex_padding_transform_clip_frame() {
     let green = run.id("green");
 
     // Row children sit at main-axis offsets 0 / 50 / 70.
-    assert_eq!(run.offset(pad), Offset::new(px(0.0), px(0.0)));
-    assert_eq!(run.offset(scaler), Offset::new(px(50.0), px(0.0)));
-    assert_eq!(run.offset(clip), Offset::new(px(70.0), px(0.0)));
+    assert_eq!(run.offset(pad), Offset::new(0.0, 0.0));
+    assert_eq!(run.offset(scaler), Offset::new(50.0, 0.0));
+    assert_eq!(run.offset(clip), Offset::new(70.0, 0.0));
 
     // Layer splits happen exactly where semantics demand them.
     assert_eq!(
@@ -219,8 +219,8 @@ fn mixed_flex_padding_transform_clip_frame() {
     assert_eq!(
         clip_rects,
         vec![Rect::from_origin_size(
-            Point::new(px(70.0), px(0.0)),
-            Size::new(px(40.0), px(40.0)),
+            Point::new(70.0, 0.0),
+            Size::new(40.0, 40.0),
         )],
         "the clip shape must be shifted by the node origin",
     );
@@ -276,23 +276,23 @@ fn paint_only_then_layout_invalidations_round_trip() {
     assert!(report.painted, "paint-only frame repaints");
     assert_eq!(
         run.picture_bounds(),
-        Some(Rect::from_ltrb(px(5.0), px(5.0), px(45.0), px(45.0))),
+        Some(Rect::from_ltrb(5.0, 5.0, 45.0, 45.0)),
         "geometry unchanged on a paint-only frame",
     );
 
     // Frame 3: layout invalidation — padding grows, offsets move.
     run.update::<RenderPadding>(pad, |padding| {
         assert_eq!(
-            padding.set_padding(EdgeInsets::all(px(20.0))),
+            padding.set_padding(EdgeInsets::all(20.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT,
         );
     });
     let report = run.pump();
     assert!(report.painted, "layout frame repaints");
-    assert_eq!(run.offset(child), Offset::new(px(20.0), px(20.0)));
+    assert_eq!(run.offset(child), Offset::new(20.0, 20.0));
     assert_eq!(
         run.picture_bounds(),
-        Some(Rect::from_ltrb(px(20.0), px(20.0), px(60.0), px(60.0))),
+        Some(Rect::from_ltrb(20.0, 20.0, 60.0, 60.0)),
         "relayout must repaint at the NEW offsets",
     );
 }
@@ -304,7 +304,7 @@ fn paint_only_then_layout_invalidations_round_trip() {
 #[test]
 fn clean_frames_after_first_produce_no_layer_tree() {
     let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(px(100.0), px(100.0)))
+        .with_size(Size::new(100.0, 100.0))
         .run_frame();
     assert!(run.painted(), "frame 1 paints");
 
@@ -348,10 +348,10 @@ fn remove_and_reinsert_child_keeps_pipeline_clean() {
         run.owner().render_tree().get(first_child).is_none(),
         "the stale id must not resolve to the reused slot (ABA guard)",
     );
-    assert_eq!(run.offset(second_child), Offset::new(px(5.0), px(5.0)));
+    assert_eq!(run.offset(second_child), Offset::new(5.0, 5.0));
     assert_eq!(
         run.picture_bounds(),
-        Some(Rect::from_ltrb(px(5.0), px(5.0), px(65.0), px(65.0))),
+        Some(Rect::from_ltrb(5.0, 5.0, 65.0, 65.0)),
         "the NEW child paints at the padded origin",
     );
     assert_eq!(
@@ -388,7 +388,7 @@ fn repaint_boundary_split_survives_relayout_frames() {
     // Move the boundary by growing the padding; re-frame.
     run.update::<RenderPadding>(pad, |padding| {
         assert_eq!(
-            padding.set_padding(EdgeInsets::all(px(30.0))),
+            padding.set_padding(EdgeInsets::all(30.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT,
         );
     });
@@ -406,15 +406,15 @@ fn repaint_boundary_split_survives_relayout_frames() {
     };
     assert_eq!(
         offset_layer.offset(),
-        Offset::new(px(30.0), px(30.0)),
+        Offset::new(30.0, 30.0),
         "an offset-only move shows up as the layer's offset",
     );
     assert_eq!(
         run.picture_bounds(),
-        Some(Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0))),
+        Some(Rect::from_ltrb(0.0, 0.0, 40.0, 40.0)),
         "boundary-subtree coordinates stay rebased to zero",
     );
-    assert_eq!(run.offset(leaf), Offset::new(px(0.0), px(0.0)));
+    assert_eq!(run.offset(leaf), Offset::new(0.0, 0.0));
 }
 
 // ============================================================================
@@ -437,14 +437,14 @@ fn zero_size_children_and_empty_containers_survive_the_pipeline() {
     let normal = run.id("normal");
 
     // Zero-size and empty contribute nothing to the main extent.
-    assert_eq!(run.offset(zero), Offset::new(px(0.0), px(0.0)));
-    assert_eq!(run.offset(empty_row), Offset::new(px(0.0), px(0.0)));
-    assert_eq!(run.offset(normal), Offset::new(px(0.0), px(0.0)));
+    assert_eq!(run.offset(zero), Offset::new(0.0, 0.0));
+    assert_eq!(run.offset(empty_row), Offset::new(0.0, 0.0));
+    assert_eq!(run.offset(normal), Offset::new(0.0, 0.0));
 
     // Only the normal child draws; degenerate nodes add no commands.
     assert_eq!(
         run.picture_bounds(),
-        Some(Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0))),
+        Some(Rect::from_ltrb(0.0, 0.0, 40.0, 40.0)),
     );
     // A zero-area child never claims a hit.
     assert_eq!(run.hit(10.0, 10.0).first().copied(), Some(normal));
@@ -475,7 +475,7 @@ fn repeated_churn_cycles_stay_clean_and_generations_protect_every_round() {
             "round {round}"
         );
         stale_ids.push(current);
-        let side = 10.0 + round as f32;
+        let side = 10.0 + round as f64;
         current = run
             .owner_mut()
             .insert_child_render_object(pad, Box::new(RenderColoredBox::blue(side, side)))
@@ -589,7 +589,7 @@ fn inserting_a_child_directly_schedules_exact_membership_work_for_new_child() {
     );
     assert_eq!(
         run.offset(new_child),
-        Offset::new(px(40.0), px(0.0)),
+        Offset::new(40.0, 0.0),
         "the new child flows into the row after the existing 40px child",
     );
     assert!(run.is_clean(), "queues drain fully once the insert settles");

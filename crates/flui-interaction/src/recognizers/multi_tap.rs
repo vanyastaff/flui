@@ -13,7 +13,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use web_time::{Duration, Instant};
 
-use flui_types::{Offset, geometry::Pixels};
+use flui_types::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
@@ -34,9 +34,9 @@ pub struct MultiTapDetails {
     /// Number of pointers/fingers involved
     pub pointer_count: usize,
     /// Positions of all pointers when tap completed
-    pub positions: Vec<Offset<Pixels>>,
+    pub positions: Vec<Offset<f64>>,
     /// Center point of all taps
-    pub center: Offset<Pixels>,
+    pub center: Offset<f64>,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -108,9 +108,9 @@ enum MultiTapPhase {
 #[derive(Debug, Clone)]
 struct PointerInfo {
     /// Initial position
-    initial_position: Offset<Pixels>,
+    initial_position: Offset<f64>,
     /// Current position
-    current_position: Offset<Pixels>,
+    current_position: Offset<f64>,
     /// Time when pointer went down
     #[expect(dead_code)]
     down_time: Instant,
@@ -216,7 +216,7 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Handle pointer down
-    fn handle_pointer_down(&self, pointer: PointerId, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_pointer_down(&self, pointer: PointerId, position: Offset<f64>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         match state.phase {
@@ -273,7 +273,7 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Handle pointer move
-    fn handle_pointer_move(&self, pointer: PointerId, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_pointer_move(&self, pointer: PointerId, position: Offset<f64>, kind: PointerType) {
         // Cache settings to avoid nested locks
         let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
@@ -290,7 +290,7 @@ impl MultiTapGestureRecognizer {
             // `multitap.dart:419`. Reading the touch tier unconditionally let a
             // pointer from a precise device wander the full finger tolerance
             // before the tap was cancelled.
-            if distance.get() > settings.hit_slop(kind) {
+            if distance > settings.hit_slop(kind) {
                 // Moved too far - cancel. Leave the phase alone: `handle_cancel`
                 // guards on `phase != Cancelled` and does the transition
                 // itself, so setting it here would make that guard reject its
@@ -318,7 +318,7 @@ impl MultiTapGestureRecognizer {
                 // Multi-tap completed!
                 state.phase = MultiTapPhase::Completed;
 
-                let positions: Vec<Offset<Pixels>> = state
+                let positions: Vec<Offset<f64>> = state
                     .pointers
                     .values()
                     .map(|info| info.initial_position)
@@ -356,14 +356,14 @@ impl MultiTapGestureRecognizer {
         if state.phase != MultiTapPhase::Ready && state.phase != MultiTapPhase::Cancelled {
             state.phase = MultiTapPhase::Cancelled;
 
-            let positions: Vec<Offset<Pixels>> = state
+            let positions: Vec<Offset<f64>> = state
                 .pointers
                 .values()
                 .map(|info| info.initial_position)
                 .collect();
 
             let center = if positions.is_empty() {
-                Offset::new(Pixels::ZERO, Pixels::ZERO)
+                Offset::new(0.0, 0.0)
             } else {
                 Self::calculate_center(&positions)
             };
@@ -388,21 +388,21 @@ impl MultiTapGestureRecognizer {
     }
 
     /// Calculate center point of all positions
-    fn calculate_center(positions: &[Offset<Pixels>]) -> Offset<Pixels> {
+    fn calculate_center(positions: &[Offset<f64>]) -> Offset<f64> {
         if positions.is_empty() {
-            return Offset::new(Pixels::ZERO, Pixels::ZERO);
+            return Offset::new(0.0, 0.0);
         }
 
         let mut sum_x = 0.0;
         let mut sum_y = 0.0;
 
         for pos in positions {
-            sum_x += pos.dx.0;
-            sum_y += pos.dy.0;
+            sum_x += pos.dx;
+            sum_y += pos.dy;
         }
 
-        let count = positions.len() as f32;
-        Offset::new(Pixels(sum_x / count), Pixels(sum_y / count))
+        let count = positions.len() as f64;
+        Offset::new(sum_x / count, sum_y / count)
     }
 
     /// Check if time window has expired
@@ -431,11 +431,11 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: PointerId,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         // Multi-tap's per-pointer callbacks carry no position, so none of them
         // reports the global one. The base records it anyway — the stored
         // contact is one value in two spaces, and half of it is a trap.
-        global_position: Offset<Pixels>,
+        global_position: Offset<f64>,
     ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
@@ -460,7 +460,7 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
                 // For now, we'll track via primary pointer
                 if let Some(pointer) = self.state.primary_pointer() {
                     let pos = data.current.position;
-                    let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
+                    let position = Offset::new(pos.x as f64, pos.y as f64);
                     self.handle_pointer_move(pointer, position, data.pointer.pointer_type);
                 }
             }
@@ -534,8 +534,8 @@ mod tests {
             .with_on_multi_tap_cancel(|_| panic!("multi tap cancel panic"));
         recognizer.add_pointer(
             PointerId::PRIMARY,
-            Offset::new(Pixels(1.0), Pixels(2.0)),
-            Offset::new(Pixels(1.0), Pixels(2.0)),
+            Offset::new(1.0, 2.0),
+            Offset::new(1.0, 2.0),
         );
         arena.close(PointerId::PRIMARY);
 
@@ -573,8 +573,8 @@ mod tests {
 
         recognizer.add_pointer(
             PointerId::PRIMARY,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(0.0, 0.0),
+            Offset::new(0.0, 0.0),
         );
         assert_eq!(
             recognizer.gesture_state.lock().phase,
@@ -623,7 +623,7 @@ mod tests {
         use crate::settings::DEFAULT_MOUSE_SLOP;
 
         let touch_slop = GestureSettings::touch_defaults().touch_slop();
-        let drift = f32::midpoint(DEFAULT_MOUSE_SLOP, touch_slop);
+        let drift = f64::midpoint(DEFAULT_MOUSE_SLOP, touch_slop);
         assert!(drift > DEFAULT_MOUSE_SLOP && drift < touch_slop);
 
         // (cancel callback fired, pointers still tracked, still in the arena)
@@ -634,16 +634,16 @@ mod tests {
             let recognizer = MultiTapGestureRecognizer::new(arena.clone(), 2)
                 .with_on_multi_tap_cancel(move |_| *flag.lock() = true);
 
-            let origin = Offset::new(Pixels(100.0), Pixels(100.0));
+            let origin = Offset::new(100.0, 100.0);
             recognizer.add_pointer(PointerId::PRIMARY, origin, origin);
             recognizer.add_pointer(
                 PointerId::new(3).expect("nonzero pointer id"),
-                Offset::new(Pixels(200.0), Pixels(100.0)),
-                Offset::new(Pixels(200.0), Pixels(100.0)),
+                Offset::new(200.0, 100.0),
+                Offset::new(200.0, 100.0),
             );
 
             recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
-                Offset::new(Pixels(100.0 + drift), Pixels(100.0)),
+                Offset::new((100.0 + drift), 100.0),
                 kind,
             )));
 
@@ -694,13 +694,13 @@ mod tests {
         // Add two pointers
         recognizer.add_pointer(
             pointer1,
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(100.0, 100.0),
+            Offset::new(100.0, 100.0),
         );
         recognizer.add_pointer(
             pointer2,
-            Offset::new(Pixels(200.0), Pixels(100.0)),
-            Offset::new(Pixels(200.0), Pixels(100.0)),
+            Offset::new(200.0, 100.0),
+            Offset::new(200.0, 100.0),
         );
 
         // Verify collecting phase
@@ -736,18 +736,18 @@ mod tests {
         // Add three pointers
         recognizer.add_pointer(
             PointerId::new(2).expect("nonzero pointer id"),
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(100.0, 100.0),
+            Offset::new(100.0, 100.0),
         );
         recognizer.add_pointer(
             PointerId::new(3).expect("nonzero pointer id"),
-            Offset::new(Pixels(200.0), Pixels(100.0)),
-            Offset::new(Pixels(200.0), Pixels(100.0)),
+            Offset::new(200.0, 100.0),
+            Offset::new(200.0, 100.0),
         );
         recognizer.add_pointer(
             PointerId::new(4).expect("nonzero pointer id"),
-            Offset::new(Pixels(150.0), Pixels(200.0)),
-            Offset::new(Pixels(150.0), Pixels(200.0)),
+            Offset::new(150.0, 200.0),
+            Offset::new(150.0, 200.0),
         );
 
         // Verify waiting for up phase
@@ -789,13 +789,13 @@ mod tests {
         // Add two pointers at (0, 0) and (100, 0)
         recognizer.add_pointer(
             PointerId::new(2).expect("nonzero pointer id"),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(0.0, 0.0),
+            Offset::new(0.0, 0.0),
         );
         recognizer.add_pointer(
             PointerId::new(3).expect("nonzero pointer id"),
-            Offset::new(Pixels(100.0), Pixels(0.0)),
-            Offset::new(Pixels(100.0), Pixels(0.0)),
+            Offset::new(100.0, 0.0),
+            Offset::new(100.0, 0.0),
         );
 
         // Release both
@@ -810,8 +810,8 @@ mod tests {
 
         // Center should be at (50, 0)
         let center = *center_pos.lock();
-        assert!((center.dx - Pixels(50.0)).abs() < Pixels(0.01));
-        assert!(center.dy.abs() < Pixels(0.01));
+        assert!((center.dx - 50.0).abs() < 0.01);
+        assert!(center.dy.abs() < 0.01);
     }
 
     #[test]
@@ -828,18 +828,18 @@ mod tests {
         // Add three pointers (one too many)
         recognizer.add_pointer(
             PointerId::new(2).expect("nonzero pointer id"),
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(100.0, 100.0),
+            Offset::new(100.0, 100.0),
         );
         recognizer.add_pointer(
             PointerId::new(3).expect("nonzero pointer id"),
-            Offset::new(Pixels(200.0), Pixels(100.0)),
-            Offset::new(Pixels(200.0), Pixels(100.0)),
+            Offset::new(200.0, 100.0),
+            Offset::new(200.0, 100.0),
         );
         recognizer.add_pointer(
             PointerId::new(4).expect("nonzero pointer id"),
-            Offset::new(Pixels(150.0), Pixels(200.0)),
-            Offset::new(Pixels(150.0), Pixels(200.0)),
+            Offset::new(150.0, 200.0),
+            Offset::new(150.0, 200.0),
         );
 
         // Should have cancelled

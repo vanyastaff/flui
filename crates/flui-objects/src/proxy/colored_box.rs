@@ -2,7 +2,7 @@
 
 use flui_foundation::Leaf;
 use flui_painting::Paint;
-use flui_types::{Color, Point, Rect, Size, geometry::px};
+use flui_types::{Color, Point, Rect, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,
@@ -26,18 +26,18 @@ impl RenderColoredBox {
     }
 
     /// Creates a red box.
-    pub fn red(width: f32, height: f32) -> Self {
-        Self::new([1.0, 0.0, 0.0, 1.0], Size::new(px(width), px(height)))
+    pub fn red(width: f64, height: f64) -> Self {
+        Self::new([1.0, 0.0, 0.0, 1.0], Size::new(width, height))
     }
 
     /// Creates a green box.
-    pub fn green(width: f32, height: f32) -> Self {
-        Self::new([0.0, 1.0, 0.0, 1.0], Size::new(px(width), px(height)))
+    pub fn green(width: f64, height: f64) -> Self {
+        Self::new([0.0, 1.0, 0.0, 1.0], Size::new(width, height))
     }
 
     /// Creates a blue box.
-    pub fn blue(width: f32, height: f32) -> Self {
-        Self::new([0.0, 0.0, 1.0, 1.0], Size::new(px(width), px(height)))
+    pub fn blue(width: f64, height: f64) -> Self {
+        Self::new([0.0, 0.0, 1.0, 1.0], Size::new(width, height))
     }
 
     /// Returns the color.
@@ -95,34 +95,34 @@ impl RenderBox for RenderColoredBox {
 
     fn compute_min_intrinsic_width(
         &self,
-        _height: f32,
+        _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        self.preferred_size.width.get()
+    ) -> f64 {
+        self.preferred_size.width
     }
 
     fn compute_max_intrinsic_width(
         &self,
-        _height: f32,
+        _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        self.preferred_size.width.get()
+    ) -> f64 {
+        self.preferred_size.width
     }
 
     fn compute_min_intrinsic_height(
         &self,
-        _width: f32,
+        _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        self.preferred_size.height.get()
+    ) -> f64 {
+        self.preferred_size.height
     }
 
     fn compute_max_intrinsic_height(
         &self,
-        _width: f32,
+        _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        self.preferred_size.height.get()
+    ) -> f64 {
+        self.preferred_size.height
     }
 
     fn compute_dry_layout(
@@ -144,7 +144,6 @@ impl RenderBox for RenderColoredBox {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -153,7 +152,7 @@ mod tests {
         let box_obj = RenderColoredBox::red(100.0, 50.0);
         // The committed size lives on RenderState after layout; the object
         // only carries its preferred size as config.
-        assert_eq!(box_obj.preferred_size(), Size::new(px(100.0), px(50.0)));
+        assert_eq!(box_obj.preferred_size(), Size::new(100.0, 50.0));
     }
 
     #[test]
@@ -163,8 +162,8 @@ mod tests {
         let blue = RenderColoredBox::blue(50.0, 60.0);
 
         // Check preferred sizes (size is ZERO before layout)
-        assert_eq!(red.preferred_size(), Size::new(px(10.0), px(20.0)));
-        assert_eq!(green.preferred_size(), Size::new(px(30.0), px(40.0)));
-        assert_eq!(blue.preferred_size(), Size::new(px(50.0), px(60.0)));
+        assert_eq!(red.preferred_size(), Size::new(10.0, 20.0));
+        assert_eq!(green.preferred_size(), Size::new(30.0, 40.0));
+        assert_eq!(blue.preferred_size(), Size::new(50.0, 60.0));
     }
 }

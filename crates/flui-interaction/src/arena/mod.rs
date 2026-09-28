@@ -2599,7 +2599,7 @@ mod tests {
         arena.add(pointer, member.clone());
 
         // Down closes the arena and queues the lone default winner.
-        let down = make_down_event(Offset::new(px(1.0), px(1.0)), PointerType::Touch);
+        let down = make_down_event(Offset::new(1.0, 1.0), PointerType::Touch);
         run_pointer_lifecycle(&arena, &down);
         assert!(!arena.is_open(pointer), "down must close the arena");
         assert!(
@@ -2610,7 +2610,7 @@ mod tests {
         assert!(member.was_accepted());
 
         // Up sweeps the (resolved) entry away.
-        let up = make_up_event(Offset::new(px(1.0), px(1.0)), PointerType::Touch);
+        let up = make_up_event(Offset::new(1.0, 1.0), PointerType::Touch);
         run_pointer_lifecycle(&arena, &up);
         assert!(!arena.contains(pointer), "up must sweep the entry");
     }

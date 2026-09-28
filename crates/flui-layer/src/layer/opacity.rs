@@ -1,6 +1,6 @@
 //! `OpacityLayer` — composites its subtree at an alpha, optionally with a blend mode.
 
-use flui_types::{Offset, geometry::Pixels, painting::BlendMode};
+use flui_types::{Offset, painting::BlendMode};
 
 /// Layer that applies opacity (alpha blending) to its children.
 ///
@@ -44,10 +44,10 @@ use flui_types::{Offset, geometry::Pixels, painting::BlendMode};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OpacityLayer {
     /// Opacity value (0.0 = fully transparent, 1.0 = fully opaque)
-    alpha: f32,
+    alpha: f64,
 
     /// Optional offset (for optimization, avoids extra OffsetLayer)
-    offset: Offset<Pixels>,
+    offset: Offset<f64>,
 
     /// Blend mode applied when compositing this layer onto its parent.
     ///
@@ -59,7 +59,7 @@ pub struct OpacityLayer {
 impl OpacityLayer {
     /// Composites the subtree at `alpha` (clamped to `0.0..=1.0`) with `BlendMode::SrcOver`.
     #[inline]
-    pub fn new(alpha: f32) -> Self {
+    pub fn new(alpha: f64) -> Self {
         Self {
             alpha: super::unit_alpha(alpha),
             offset: Offset::ZERO,
@@ -69,7 +69,7 @@ impl OpacityLayer {
 
     /// Like [`Self::new`], also translating the subtree by `offset`.
     #[inline]
-    pub fn with_offset(alpha: f32, offset: Offset<Pixels>) -> Self {
+    pub fn with_offset(alpha: f64, offset: Offset<f64>) -> Self {
         Self {
             alpha: super::unit_alpha(alpha),
             offset,
@@ -80,7 +80,7 @@ impl OpacityLayer {
     /// An opacity group with an explicit blend mode, for `saveLayer` paths that carry an
     /// advanced mode (Multiply, Screen, …); plain opacity is always `SrcOver`.
     #[inline]
-    pub fn with_blend(alpha: f32, offset: Offset<Pixels>, blend: BlendMode) -> Self {
+    pub fn with_blend(alpha: f64, offset: Offset<f64>, blend: BlendMode) -> Self {
         Self {
             alpha: super::unit_alpha(alpha),
             offset,
@@ -110,13 +110,13 @@ impl OpacityLayer {
 
     /// The group's alpha in `0.0..=1.0`.
     #[inline]
-    pub const fn alpha(&self) -> f32 {
+    pub const fn alpha(&self) -> f64 {
         self.alpha
     }
 
     /// The translation applied to the subtree (see [`Self::with_offset`]).
     #[inline]
-    pub const fn offset(&self) -> Offset<Pixels> {
+    pub const fn offset(&self) -> Offset<f64> {
         self.offset
     }
 
@@ -153,7 +153,6 @@ impl Default for OpacityLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -176,11 +175,11 @@ mod tests {
 
     #[test]
     fn test_opacity_layer_with_offset() {
-        let layer = OpacityLayer::with_offset(0.75, Offset::new(px(10.0), px(20.0)));
+        let layer = OpacityLayer::with_offset(0.75, Offset::new(10.0, 20.0));
 
         assert_eq!(layer.alpha(), 0.75);
-        assert_eq!(layer.offset().dx, px(10.0));
-        assert_eq!(layer.offset().dy, px(20.0));
+        assert_eq!(layer.offset().dx, 10.0);
+        assert_eq!(layer.offset().dy, 20.0);
         assert!(layer.has_offset());
     }
 

@@ -35,7 +35,7 @@ use std::{
     rc::Rc,
 };
 
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 use smallvec::SmallVec;
 
 pub use super::interaction_lane::{
@@ -107,7 +107,7 @@ struct DeviceState {
     /// Device class used by the `mouse_is_connected` query.
     pointer_type: PointerType,
     /// Last known position.
-    last_position: Offset<Pixels>,
+    last_position: Offset<f64>,
     /// Set of regions currently under this device.
     active_regions: HashSet<RegionId>,
     /// Hit-test order of regions currently under this device.
@@ -123,7 +123,7 @@ struct DeviceState {
 }
 
 impl DeviceState {
-    fn new(pointer_type: PointerType, position: Offset<Pixels>) -> Self {
+    fn new(pointer_type: PointerType, position: Offset<f64>) -> Self {
         Self {
             pointer_type,
             last_position: position,
@@ -213,7 +213,7 @@ impl MouseTracker {
         &self,
         device_id: DeviceId,
         pointer_type: PointerType,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
     ) {
         let mut inner = self.inner.borrow_mut();
         inner
@@ -484,9 +484,9 @@ impl MouseTracker {
     /// motion occurred; only structural enter/exit/cursor changes are valid.
     pub fn update_all_devices<F>(&self, hit_test_fn: F)
     where
-        F: Fn(Offset<Pixels>) -> HitTestResult,
+        F: Fn(Offset<f64>) -> HitTestResult,
     {
-        let device_positions: Vec<(DeviceId, Offset<Pixels>)> = self
+        let device_positions: Vec<(DeviceId, Offset<f64>)> = self
             .inner
             .borrow()
             .devices
@@ -585,7 +585,7 @@ impl MouseTracker {
 
     /// Gets the last known position for a device.
     #[must_use]
-    pub fn device_position(&self, device_id: DeviceId) -> Option<Offset<Pixels>> {
+    pub fn device_position(&self, device_id: DeviceId) -> Option<Offset<f64>> {
         self.inner
             .borrow()
             .devices
@@ -690,7 +690,7 @@ fn resolve_annotation_with_handle(
 
 struct DeviceWork {
     device_id: DeviceId,
-    position: Offset<Pixels>,
+    position: Offset<f64>,
     enter_callbacks: SmallVec<[MouseEnterCallback; 4]>,
     exit_callbacks: SmallVec<[MouseExitCallback; 4]>,
     cursor_callback: Option<CursorChangeCallback>,
@@ -845,7 +845,7 @@ mod tests {
         });
 
         let region_id = RenderId::new(1);
-        let inside_position = Offset::new(Pixels(10.0), Pixels(10.0));
+        let inside_position = Offset::new(10.0, 10.0);
         let inside_event = make_move_event(inside_position, PointerType::Mouse);
         let mut inside = HitTestResult::new();
         inside.add(
@@ -865,7 +865,7 @@ mod tests {
                 .unregister_mouse_region(target)
                 .expect("unregister target");
         });
-        let outside_position = Offset::new(Pixels(80.0), Pixels(10.0));
+        let outside_position = Offset::new(80.0, 10.0);
         let outside_event = make_move_event(outside_position, PointerType::Mouse);
         lane.enter(|| {
             tracker.update_with_motion(
@@ -895,7 +895,7 @@ mod tests {
         });
         let region_id = RenderId::new(1);
         let ordinary_id = RenderId::new(2);
-        let position = Offset::new(Pixels(10.0), Pixels(10.0));
+        let position = Offset::new(10.0, 10.0);
         let event = make_move_event(position, PointerType::Mouse);
         let mut result = HitTestResult::new();
         result.add(
@@ -942,7 +942,7 @@ mod tests {
                 .expect("register mouse region")
         });
         let region_id = RenderId::new(1);
-        let position = Offset::new(Pixels(10.0), Pixels(10.0));
+        let position = Offset::new(10.0, 10.0);
         let event = make_move_event(position, PointerType::Mouse);
         let mut result = HitTestResult::new();
         result.add(
@@ -988,7 +988,7 @@ mod tests {
                 .expect("register mouse region")
         });
         let region_id = RenderId::new(1);
-        let position = Offset::new(Pixels(10.0), Pixels(10.0));
+        let position = Offset::new(10.0, 10.0);
         // `make_move_event` defaults `buttons` to `Primary` held (it is meant
         // for contact-motion tests); a genuine hover-shaped move must clear
         // it explicitly, matching Flutter's `PointerHoverEvent` (no buttons)
@@ -1057,7 +1057,7 @@ mod tests {
 
         add_primary_mouse(&tracker);
 
-        let position = Offset::new(Pixels(10.0), Pixels(10.0));
+        let position = Offset::new(10.0, 10.0);
         let event = make_move_event(position, PointerType::Mouse);
         let first_id = RenderId::new(1);
         let second_id = RenderId::new(2);
@@ -1120,8 +1120,7 @@ mod tests {
         });
 
         let region_id = RenderId::new(1);
-        let inside_event =
-            make_move_event(Offset::new(Pixels(10.0), Pixels(10.0)), PointerType::Mouse);
+        let inside_event = make_move_event(Offset::new(10.0, 10.0), PointerType::Mouse);
         let mut inside = HitTestResult::new();
         inside.add(
             HitTestEntry::new(region_id)
@@ -1197,8 +1196,7 @@ mod tests {
         };
 
         add_primary_mouse(&tracker);
-        let inside_event =
-            make_move_event(Offset::new(Pixels(10.0), Pixels(10.0)), PointerType::Mouse);
+        let inside_event = make_move_event(Offset::new(10.0, 10.0), PointerType::Mouse);
         lane.enter(|| {
             tracker.update_with_motion(&inside_event, PointerMotionKind::Hover, &hits_region());
         });

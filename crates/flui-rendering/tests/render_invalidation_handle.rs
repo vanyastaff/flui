@@ -14,7 +14,7 @@ use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::{DirtySendError, PipelineOwner},
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 use crate::common::BoxedRenderObject;
 
@@ -22,7 +22,7 @@ fn fixture() -> (PipelineOwner, flui_foundation::RenderId) {
     let mut owner = PipelineOwner::new();
     let node = owner.insert(Box::new(RenderColoredBox::red(40.0, 40.0)) as BoxedRenderObject);
     owner.set_root_id(Some(node));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
     (owner, node)
 }
 

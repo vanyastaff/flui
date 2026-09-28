@@ -1,7 +1,7 @@
 //! `TextureLayer` — an external GPU texture (video, camera) drawn into a rectangle.
 
 use flui_types::{
-    geometry::{Pixels, Rect},
+    geometry::Rect,
     painting::{FilterQuality, TextureId},
 };
 
@@ -39,7 +39,7 @@ use flui_types::{
 ///
 /// // Create a texture layer for video playback
 /// let texture_id = TextureId::new(42);
-/// let rect = Rect::from_xywh(px(0.0), px(0.0), px(640.0), px(480.0));
+/// let rect = Rect::from_xywh(0.0, 0.0, 640.0, 480.0);
 /// let layer = TextureLayer::new(texture_id, rect);
 ///
 /// // With custom filter quality
@@ -51,7 +51,7 @@ pub struct TextureLayer {
     texture_id: TextureId,
 
     /// Destination rectangle where the texture will be drawn
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
 
     /// Whether the texture is frozen (not updating)
     freeze: bool,
@@ -60,13 +60,13 @@ pub struct TextureLayer {
     filter_quality: FilterQuality,
 
     /// Opacity (0.0 = transparent, 1.0 = opaque)
-    opacity: f32,
+    opacity: f64,
 }
 
 impl TextureLayer {
     /// Draws the external GPU texture `texture_id` into `rect`.
     #[inline]
-    pub fn new(texture_id: TextureId, rect: Rect<Pixels>) -> Self {
+    pub fn new(texture_id: TextureId, rect: Rect<f64>) -> Self {
         Self {
             texture_id,
             rect,
@@ -87,7 +87,7 @@ impl TextureLayer {
     /// The alpha the texture is drawn with, clamped to `0.0..=1.0`.
     #[inline]
     #[must_use]
-    pub fn with_opacity(mut self, opacity: f32) -> Self {
+    pub fn with_opacity(mut self, opacity: f64) -> Self {
         self.opacity = super::unit_alpha(opacity);
         self
     }
@@ -100,7 +100,7 @@ impl TextureLayer {
 
     /// The destination rectangle.
     #[inline]
-    pub fn bounds(&self) -> Rect<Pixels> {
+    pub fn bounds(&self) -> Rect<f64> {
         self.rect
     }
 
@@ -118,7 +118,7 @@ impl TextureLayer {
 
     /// See [`Self::with_opacity`].
     #[inline]
-    pub fn opacity(&self) -> f32 {
+    pub fn opacity(&self) -> f64 {
         self.opacity
     }
 
@@ -144,14 +144,13 @@ impl TextureLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
     #[test]
     fn test_texture_layer_new() {
         let id = TextureId::new(123);
-        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
         let layer = TextureLayer::new(id, rect);
 
         assert_eq!(layer.texture_id(), id);
@@ -164,7 +163,7 @@ mod tests {
     #[test]
     fn test_texture_layer_with_filter_quality() {
         let id = TextureId::new(1);
-        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let layer = TextureLayer::new(id, rect).with_filter_quality(FilterQuality::High);
 
         assert_eq!(layer.filter_quality(), FilterQuality::High);
@@ -173,7 +172,7 @@ mod tests {
     #[test]
     fn test_texture_layer_with_opacity() {
         let id = TextureId::new(1);
-        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let layer = TextureLayer::new(id, rect).with_opacity(0.5);
 
         assert_eq!(layer.opacity(), 0.5);
@@ -182,7 +181,7 @@ mod tests {
     #[test]
     fn test_texture_layer_opacity_clamping() {
         let id = TextureId::new(1);
-        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
 
         let layer1 = TextureLayer::new(id, rect).with_opacity(-0.5);
         assert_eq!(layer1.opacity(), 0.0);
@@ -194,7 +193,7 @@ mod tests {
     #[test]
     fn test_texture_layer_bounds() {
         let id = TextureId::new(1);
-        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
         let layer = TextureLayer::new(id, rect);
 
         assert_eq!(layer.bounds(), rect);
@@ -203,7 +202,7 @@ mod tests {
     #[test]
     fn test_texture_layer_visibility() {
         let id = TextureId::new(1);
-        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
 
         let invisible = TextureLayer::new(id, rect).with_opacity(0.0);
         assert!(invisible.is_invisible());

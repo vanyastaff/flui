@@ -9,7 +9,7 @@
 //! [`positioned_box_size`].
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Pixels, Size};
+use flui_types::{Alignment, Size};
 
 use crate::layout::shifted_box::AligningShiftedBox;
 use flui_rendering::{
@@ -31,7 +31,7 @@ use flui_rendering::{
 ///
 /// - `shrink_width = width_factor.is_some() || max_width.is_infinite()`
 ///   → shrinking: `width = child_width * width_factor.unwrap_or(1.0)`;
-///   → expanding: `width = Pixels::INFINITY` (clamped by `constrain`).
+///   → expanding: `width = f64::INFINITY` (clamped by `constrain`).
 /// - Same logic for height.
 ///
 /// This is the single canonical source for both live layout and dry-layout so
@@ -39,8 +39,8 @@ use flui_rendering::{
 pub(crate) fn positioned_box_size(
     constraints: &BoxConstraints,
     child_size: Size,
-    width_factor: Option<f32>,
-    height_factor: Option<f32>,
+    width_factor: Option<f64>,
+    height_factor: Option<f64>,
 ) -> Size {
     let shrink_width = width_factor.is_some() || constraints.max_width.is_infinite();
     let shrink_height = height_factor.is_some() || constraints.max_height.is_infinite();
@@ -48,12 +48,12 @@ pub(crate) fn positioned_box_size(
     let width = if shrink_width {
         child_size.width * width_factor.unwrap_or(1.0)
     } else {
-        Pixels::INFINITY
+        f64::INFINITY
     };
     let height = if shrink_height {
         child_size.height * height_factor.unwrap_or(1.0)
     } else {
-        Pixels::INFINITY
+        f64::INFINITY
     };
     constraints.constrain(Size::new(width, height))
 }
@@ -64,22 +64,14 @@ pub(crate) fn positioned_box_size(
 /// `double.infinity` for an expanding axis.
 pub(crate) fn positioned_box_size_no_child(
     constraints: &BoxConstraints,
-    width_factor: Option<f32>,
-    height_factor: Option<f32>,
+    width_factor: Option<f64>,
+    height_factor: Option<f64>,
 ) -> Size {
     let shrink_width = width_factor.is_some() || constraints.max_width.is_infinite();
     let shrink_height = height_factor.is_some() || constraints.max_height.is_infinite();
     constraints.constrain(Size::new(
-        if shrink_width {
-            Pixels::ZERO
-        } else {
-            Pixels::INFINITY
-        },
-        if shrink_height {
-            Pixels::ZERO
-        } else {
-            Pixels::INFINITY
-        },
+        if shrink_width { 0.0 } else { f64::INFINITY },
+        if shrink_height { 0.0 } else { f64::INFINITY },
     ))
 }
 
@@ -102,8 +94,8 @@ pub(crate) fn positioned_box_size_no_child(
 #[derive(Debug, Clone)]
 pub struct RenderAlign {
     inner: AligningShiftedBox,
-    width_factor: Option<f32>,
-    height_factor: Option<f32>,
+    width_factor: Option<f64>,
+    height_factor: Option<f64>,
 }
 
 impl RenderAlign {
@@ -121,7 +113,7 @@ impl RenderAlign {
     /// When set, the object's width becomes `child_width * factor` rather than
     /// expanding to the parent's max width.
     #[must_use]
-    pub fn with_width_factor(mut self, factor: f32) -> Self {
+    pub fn with_width_factor(mut self, factor: f64) -> Self {
         debug_assert!(
             factor >= 0.0,
             "width_factor must be >= 0.0 (got {factor}); Flutter asserts the same"
@@ -135,7 +127,7 @@ impl RenderAlign {
     /// When set, the object's height becomes `child_height * factor` rather
     /// than expanding to the parent's max height.
     #[must_use]
-    pub fn with_height_factor(mut self, factor: f32) -> Self {
+    pub fn with_height_factor(mut self, factor: f64) -> Self {
         debug_assert!(
             factor >= 0.0,
             "height_factor must be >= 0.0 (got {factor}); Flutter asserts the same"
@@ -145,12 +137,12 @@ impl RenderAlign {
     }
 
     /// Returns the width factor.
-    pub fn width_factor(&self) -> Option<f32> {
+    pub fn width_factor(&self) -> Option<f64> {
         self.width_factor
     }
 
     /// Returns the height factor.
-    pub fn height_factor(&self) -> Option<f32> {
+    pub fn height_factor(&self) -> Option<f64> {
         self.height_factor
     }
 
@@ -159,8 +151,8 @@ impl RenderAlign {
     pub fn update_configuration(
         &mut self,
         alignment: Alignment,
-        width_factor: Option<f32>,
-        height_factor: Option<f32>,
+        width_factor: Option<f64>,
+        height_factor: Option<f64>,
     ) -> flui_rendering::RenderUpdateImpact {
         let alignment_changed = self.inner.set_alignment(alignment);
         let changed = alignment_changed
@@ -210,32 +202,32 @@ impl RenderBox for RenderAlign {
         }
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         self.inner.actual_baseline(baseline)
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_min_intrinsic_width(0, height) * self.width_factor.unwrap_or(1.0)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_max_intrinsic_width(0, height) * self.width_factor.unwrap_or(1.0)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_min_intrinsic_height(0, width) * self.height_factor.unwrap_or(1.0)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -268,7 +260,7 @@ impl RenderBox for RenderAlign {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -283,11 +275,7 @@ impl RenderBox for RenderAlign {
         );
         // Mirror Flutter RenderPositionedBox.computeDryBaseline:
         //   resolvedAlignment.alongOffset(size − childSize).dy + childBaseline
-        let child_offset_dy = self
-            .inner
-            .dry_child_offset(parent_size, child_size)
-            .dy
-            .get();
+        let child_offset_dy = self.inner.dry_child_offset(parent_size, child_size).dy;
         Some(child_baseline + child_offset_dy)
     }
 

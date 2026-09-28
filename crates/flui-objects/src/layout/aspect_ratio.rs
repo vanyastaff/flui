@@ -19,7 +19,7 @@
 //!   `isFinite` checks on raw doubles.
 
 use flui_foundation::Single;
-use flui_types::{Offset, Pixels, Size, geometry::px};
+use flui_types::{Offset, Size};
 
 use flui_rendering::{
     constraints::{BoxConstraints, Constraints},
@@ -34,7 +34,7 @@ use flui_rendering::{
 /// Use [`AspectRatioFactor::new_unchecked`] in `const` contexts when the input is
 /// known to be valid (`assert!`-guarded panic on debug builds).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AspectRatioFactor(f32);
+pub struct AspectRatioFactor(f64);
 
 impl AspectRatioFactor {
     /// Square (1:1).
@@ -56,7 +56,7 @@ impl AspectRatioFactor {
     ///
     /// Returns `None` if the value is `<= 0`, NaN, or infinite.
     #[must_use]
-    pub fn new(value: f32) -> Option<Self> {
+    pub fn new(value: f64) -> Option<Self> {
         if value.is_finite() && value > 0.0 {
             Some(Self(value))
         } else {
@@ -72,7 +72,7 @@ impl AspectRatioFactor {
     /// In release builds the value is stored as-is (use this only when the
     /// input is a compile-time literal that has been visually validated).
     #[must_use]
-    pub const fn new_unchecked(value: f32) -> Self {
+    pub const fn new_unchecked(value: f64) -> Self {
         debug_assert!(value.is_finite() && value > 0.0, "invalid aspect ratio");
         Self(value)
     }
@@ -82,8 +82,8 @@ impl AspectRatioFactor {
     /// Returns `None` if either dimension is non-positive or the resulting
     /// quotient is not finite.
     pub fn from_size(size: Size) -> Option<Self> {
-        let w = size.width.get();
-        let h = size.height.get();
+        let w = size.width;
+        let h = size.height;
         if w > 0.0 && h > 0.0 {
             Self::new(w / h)
         } else {
@@ -94,7 +94,7 @@ impl AspectRatioFactor {
     /// Returns the underlying `width / height` quotient.
     #[inline]
     #[must_use]
-    pub const fn value(self) -> f32 {
+    pub const fn value(self) -> f64 {
         self.0
     }
 
@@ -112,7 +112,7 @@ impl Default for AspectRatioFactor {
     }
 }
 
-impl From<AspectRatioFactor> for f32 {
+impl From<AspectRatioFactor> for f64 {
     fn from(value: AspectRatioFactor) -> Self {
         value.0
     }
@@ -202,31 +202,31 @@ impl RenderAspectRatio {
         let ratio = self.aspect_ratio.value();
 
         let mut width = constraints.max_width;
-        let mut height: Pixels;
+        let mut height: f64;
 
-        if width.get().is_finite() {
-            height = px(width.get() / ratio);
+        if width.is_finite() {
+            height = width / ratio;
         } else {
             height = constraints.max_height;
-            width = px(height.get() * ratio);
+            width = height * ratio;
         }
 
         // Bias toward inflexibility: check tighter bounds first.
         if width > constraints.max_width {
             width = constraints.max_width;
-            height = px(width.get() / ratio);
+            height = width / ratio;
         }
         if height > constraints.max_height {
             height = constraints.max_height;
-            width = px(height.get() * ratio);
+            width = height * ratio;
         }
         if width < constraints.min_width {
             width = constraints.min_width;
-            height = px(width.get() / ratio);
+            height = width / ratio;
         }
         if height < constraints.min_height {
             height = constraints.min_height;
-            width = px(height.get() * ratio);
+            width = height * ratio;
         }
 
         constraints.constrain(Size::new(width, height))
@@ -271,9 +271,9 @@ impl RenderBox for RenderAspectRatio {
 
     fn compute_min_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         if height.is_finite() {
             return height * self.aspect_ratio.value();
         }
@@ -286,9 +286,9 @@ impl RenderBox for RenderAspectRatio {
 
     fn compute_max_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         if height.is_finite() {
             return height * self.aspect_ratio.value();
         }
@@ -301,9 +301,9 @@ impl RenderBox for RenderAspectRatio {
 
     fn compute_min_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         if width.is_finite() {
             return width / self.aspect_ratio.value();
         }
@@ -316,9 +316,9 @@ impl RenderBox for RenderAspectRatio {
 
     fn compute_max_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         if width.is_finite() {
             return width / self.aspect_ratio.value();
         }
@@ -345,7 +345,7 @@ impl RenderBox for RenderAspectRatio {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -362,8 +362,8 @@ impl RenderBox for RenderAspectRatio {
 mod tests {
     use super::*;
 
-    fn bc(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
-        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
+        BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
     // ---------- AspectRatioFactor newtype ---------------------------------------
@@ -372,8 +372,8 @@ mod tests {
     fn new_rejects_invalid() {
         assert!(AspectRatioFactor::new(0.0).is_none());
         assert!(AspectRatioFactor::new(-1.0).is_none());
-        assert!(AspectRatioFactor::new(f32::NAN).is_none());
-        assert!(AspectRatioFactor::new(f32::INFINITY).is_none());
+        assert!(AspectRatioFactor::new(f64::NAN).is_none());
+        assert!(AspectRatioFactor::new(f64::INFINITY).is_none());
     }
 
     #[test]
@@ -385,9 +385,9 @@ mod tests {
 
     #[test]
     fn from_size_handles_zero_or_negative() {
-        assert!(AspectRatioFactor::from_size(Size::new(px(0.0), px(100.0))).is_none());
-        assert!(AspectRatioFactor::from_size(Size::new(px(100.0), px(0.0))).is_none());
-        let ar = AspectRatioFactor::from_size(Size::new(px(100.0), px(50.0))).unwrap();
+        assert!(AspectRatioFactor::from_size(Size::new(0.0, 100.0)).is_none());
+        assert!(AspectRatioFactor::from_size(Size::new(100.0, 0.0)).is_none());
+        let ar = AspectRatioFactor::from_size(Size::new(100.0, 50.0)).unwrap();
         assert_eq!(ar.value(), 2.0);
     }
 
@@ -410,15 +410,15 @@ mod tests {
     #[test]
     fn unbounded_both_dims_falls_back_to_zero() {
         let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
-        let size = node.apply_aspect_ratio(bc(0.0, f32::INFINITY, 0.0, f32::INFINITY));
+        let size = node.apply_aspect_ratio(bc(0.0, f64::INFINITY, 0.0, f64::INFINITY));
         assert_eq!(size, Size::ZERO);
     }
 
     #[test]
     fn tight_constraints_pass_through_unchanged() {
         let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
-        let size = node.apply_aspect_ratio(BoxConstraints::tight(Size::new(px(50.0), px(80.0))));
-        assert_eq!(size, Size::new(px(50.0), px(80.0)));
+        let size = node.apply_aspect_ratio(BoxConstraints::tight(Size::new(50.0, 80.0)));
+        assert_eq!(size, Size::new(50.0, 80.0));
     }
 
     #[test]
@@ -427,7 +427,7 @@ mod tests {
         // width-first: 160 wide → 90 tall (fits within 200) → return (160, 90).
         let node = RenderAspectRatio::new(AspectRatioFactor::WIDESCREEN_16_9);
         let size = node.apply_aspect_ratio(bc(0.0, 160.0, 0.0, 200.0));
-        assert_eq!(size, Size::new(px(160.0), px(90.0)));
+        assert_eq!(size, Size::new(160.0, 90.0));
     }
 
     #[test]
@@ -437,7 +437,7 @@ mod tests {
         // to 100, width = 100 → (100, 100).
         let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
         let size = node.apply_aspect_ratio(bc(0.0, 200.0, 0.0, 100.0));
-        assert_eq!(size, Size::new(px(100.0), px(100.0)));
+        assert_eq!(size, Size::new(100.0, 100.0));
     }
 
     #[test]
@@ -445,8 +445,8 @@ mod tests {
         // 2:1 ratio, width unbounded, max_height=50.
         // height-first: 50 tall → 100 wide → (100, 50).
         let node = RenderAspectRatio::new(AspectRatioFactor::new(2.0).unwrap());
-        let size = node.apply_aspect_ratio(bc(0.0, f32::INFINITY, 0.0, 50.0));
-        assert_eq!(size, Size::new(px(100.0), px(50.0)));
+        let size = node.apply_aspect_ratio(bc(0.0, f64::INFINITY, 0.0, 50.0));
+        assert_eq!(size, Size::new(100.0, 50.0));
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod tests {
         let size = node.apply_aspect_ratio(bc(50.0, 200.0, 0.0, 5.0));
         // width-first: 200 → 20 (200/10), but 20 > 5 → height=5, width=50.
         // width=50 satisfies min_width=50 — no further bump.
-        assert_eq!(size, Size::new(px(50.0), px(5.0)));
+        assert_eq!(size, Size::new(50.0, 5.0));
     }
 
     // ---------- intrinsic dimensions --------------------------------------
@@ -482,8 +482,8 @@ mod tests {
         flui_rendering::context::intrinsics_test_support::leaf_intrinsics(|ctx| {
             // Unbounded extent defers to the child; childless → 0.0
             // (proxy_box.dart `child?.getMinIntrinsicWidth ?? 0.0`).
-            assert_eq!(node.compute_min_intrinsic_width(f32::INFINITY, ctx), 0.0);
-            assert_eq!(node.compute_max_intrinsic_height(f32::INFINITY, ctx), 0.0);
+            assert_eq!(node.compute_min_intrinsic_width(f64::INFINITY, ctx), 0.0);
+            assert_eq!(node.compute_max_intrinsic_height(f64::INFINITY, ctx), 0.0);
         });
     }
 

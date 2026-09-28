@@ -332,11 +332,11 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     fn intrinsic_raw(
         &self,
         _dimension: crate::storage::IntrinsicDimension,
-        _extent: f32,
+        _extent: f64,
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
-        _child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32,
-    ) -> f32 {
+        _child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f64) -> f64,
+    ) -> f64 {
         0.0
     }
 
@@ -380,7 +380,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
             usize,
             crate::context::DryBaselineChildRequest,
         ) -> crate::context::DryBaselineChildResponse,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         None
     }
 
@@ -390,7 +390,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     ///
     /// Default: `None` (no baseline). Box objects override via
     /// [`RenderBox::compute_distance_to_actual_baseline`](crate::traits::RenderBox::compute_distance_to_actual_baseline).
-    fn actual_baseline_raw(&self, _baseline: crate::traits::TextBaseline) -> Option<f32> {
+    fn actual_baseline_raw(&self, _baseline: crate::traits::TextBaseline) -> Option<f64> {
         None
     }
 
@@ -564,7 +564,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         if let Some(matrix) = self.paint_effects(size).transform {
             *transform *= matrix;
         }
-        *transform *= flui_types::Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
+        *transform *= flui_types::Matrix4::translation(child_offset.dx, child_offset.dy, 0.0);
     }
 
     /// Returns the transform matrix for hit testing.
@@ -733,7 +733,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         &self,
         _child_slot: usize,
         _size: flui_types::Size,
-    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+    ) -> Option<flui_types::Rect<f64>> {
         None
     }
 
@@ -758,7 +758,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         &self,
         _child_slot: usize,
         _size: flui_types::Size,
-    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+    ) -> Option<flui_types::Rect<f64>> {
         None
     }
 

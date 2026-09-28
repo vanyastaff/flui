@@ -22,7 +22,6 @@ use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints, error::RenderError, pipeline::PipelineOwner, traits::RenderObject,
 };
-use flui_types::geometry::px;
 
 fn mount_two_node_tree() -> (
     PipelineOwner<flui_rendering::pipeline::Idle>,
@@ -36,12 +35,7 @@ fn mount_two_node_tree() -> (
         .expect("child insert");
 
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     (owner, child_id)
 }

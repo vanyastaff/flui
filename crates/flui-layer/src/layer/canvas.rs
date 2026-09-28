@@ -2,7 +2,7 @@
 //! hand-authored scenes (`SceneBuilder::add_canvas`) and fixtures.
 
 use flui_painting::{Canvas, DisplayList};
-use flui_types::geometry::{Pixels, Rect};
+use flui_types::geometry::Rect;
 
 /// Canvas layer - a leaf layer that contains drawing commands
 ///
@@ -76,7 +76,7 @@ impl CanvasLayer {
 
     /// The union of the recorded commands that contribute bounds, or `None`
     /// when none does yet.
-    pub fn bounds(&self) -> Option<Rect<Pixels>> {
+    pub fn bounds(&self) -> Option<Rect<f64>> {
         self.canvas.display_list().bounds()
     }
 
@@ -106,12 +106,7 @@ mod tests {
     #[test]
     fn test_canvas_layer_clear() {
         let mut layer = CanvasLayer::new();
-        let rect = Rect::from_xywh(
-            flui_types::geometry::px(0.0),
-            flui_types::geometry::px(0.0),
-            flui_types::geometry::px(10.0),
-            flui_types::geometry::px(10.0),
-        );
+        let rect = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
         layer
             .canvas_mut()
             .draw_rect(rect, &flui_painting::Paint::default());

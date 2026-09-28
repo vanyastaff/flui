@@ -30,7 +30,7 @@ use flui_rendering::{
         box_protocol::BoxLayoutCtxErased,
     },
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 // ============================================================================
 // Leaf bridge: RenderColoredBox via blanket perform_layout_raw
@@ -47,7 +47,7 @@ use flui_types::{Size, geometry::px};
 #[test]
 fn leaf_bridge_returns_constrained_size() {
     let mut obj = RenderColoredBox::red(100.0, 50.0);
-    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(50.0)));
+    let constraints = BoxConstraints::tight(Size::new(100.0, 50.0));
 
     let mut direct_ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
@@ -65,7 +65,7 @@ fn leaf_bridge_returns_constrained_size() {
 
     assert_eq!(
         size,
-        Size::new(px(100.0), px(50.0)),
+        Size::new(100.0, 50.0),
         "Leaf bridge must return the user's perform_layout-completed size, \
          not Size::ZERO (prior placeholder behaviour)",
     );
@@ -77,7 +77,7 @@ fn leaf_bridge_returns_constrained_size() {
 #[test]
 fn leaf_bridge_honours_loose_constraints() {
     let mut obj = RenderColoredBox::blue(80.0, 40.0);
-    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
 
     let mut direct_ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
     let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
@@ -86,7 +86,7 @@ fn leaf_bridge_honours_loose_constraints() {
         <RenderColoredBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
             .expect("Leaf bridge happy path must succeed");
 
-    assert_eq!(size, Size::new(px(80.0), px(40.0)));
+    assert_eq!(size, Size::new(80.0, 40.0));
 }
 
 // ============================================================================
@@ -113,7 +113,7 @@ fn single_bridge_pads_child_and_returns_total_size() {
     // (left+right=20, top+bottom=20) → child gets up to 180×80. The
     // callback returns the child's max constraints as the child's size,
     // so child = 180×80. Final size = 180+20 = 200, 80+20 = 100.
-    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(100.0));
+    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 100.0);
 
     let mut children: Vec<ChildState<BoxParentData>> = vec![ChildState::new(RenderId::new(1))];
     let child_ids = [RenderId::new(1)];
@@ -139,7 +139,7 @@ fn single_bridge_pads_child_and_returns_total_size() {
 
     assert_eq!(
         size,
-        Size::new(px(200.0), px(100.0)),
+        Size::new(200.0, 100.0),
         "RenderPadding bridge must complete with child_size + padding"
     );
 
@@ -150,8 +150,8 @@ fn single_bridge_pads_child_and_returns_total_size() {
     // the underlying Direct ctx's children Vec.
     let child_offset = children[0].offset;
     assert!(
-        (child_offset.dx.get() - 10.0).abs() < f32::EPSILON
-            && (child_offset.dy.get() - 10.0).abs() < f32::EPSILON,
+        (child_offset.dx - 10.0).abs() < f64::EPSILON
+            && (child_offset.dy - 10.0).abs() < f64::EPSILON,
         "child offset {child_offset:?} should equal (10, 10)"
     );
 }
@@ -198,7 +198,7 @@ fn variable_bridge_walks_child_slice_with_typed_parent_data() {
 
     // Two children with distinct flex factors so we can verify typed
     // parent-data access through the Proxy → erased downcast path.
-    let constraints = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(100.0));
+    let constraints = BoxConstraints::new(0.0, 300.0, 0.0, 100.0);
     let mut children: Vec<ChildState<FlexParentData>> = vec![
         ChildState::with_parent_data(RenderId::new(1), FlexParentData::flexible(1)),
         ChildState::with_parent_data(RenderId::new(2), FlexParentData::flexible(2)),
@@ -236,7 +236,7 @@ fn variable_bridge_walks_child_slice_with_typed_parent_data() {
     // factors 1:2, parent max_width=300, no inflexible/spacing.
     assert_eq!(
         size,
-        Size::new(px(300.0), px(100.0)),
+        Size::new(300.0, 100.0),
         "Variable bridge with flex 1:2 over 300px main axis must produce \
          exact (300, 100) — actual {size:?}",
     );
@@ -260,14 +260,14 @@ fn variable_bridge_walks_child_slice_with_typed_parent_data() {
     assert_eq!(obs[0].0, RenderId::new(1));
     assert_eq!(
         obs[0].1,
-        BoxConstraints::new(px(100.0), px(100.0), px(0.0), px(100.0)),
+        BoxConstraints::new(100.0, 100.0, 0.0, 100.0),
         "Child A (flex=1) must receive tight 100×{{0..100}} constraints",
     );
     // Child B (flex=2): allocated = 300 * 2/3 = 200, tight.
     assert_eq!(obs[1].0, RenderId::new(2));
     assert_eq!(
         obs[1].1,
-        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(100.0)),
+        BoxConstraints::new(200.0, 200.0, 0.0, 100.0),
         "Child B (flex=2) must receive tight 200×{{0..100}} constraints",
     );
 }
@@ -283,7 +283,7 @@ fn variable_bridge_walks_child_slice_with_typed_parent_data() {
 #[test]
 fn with_leaf_erased_ctx_matches_direct_bridge_call() {
     let mut obj = RenderColoredBox::green(60.0, 30.0);
-    let constraints = BoxConstraints::tight(Size::new(px(60.0), px(30.0)));
+    let constraints = BoxConstraints::tight(Size::new(60.0, 30.0));
 
     // Mirror what RenderEntry::layout_leaf_only does.
     // `with_leaf_erased_ctx` forwards the closure return, which is now
@@ -293,7 +293,7 @@ fn with_leaf_erased_ctx_matches_direct_bridge_call() {
     })
     .expect("with_leaf_erased_ctx happy path must succeed");
 
-    assert_eq!(size, Size::new(px(60.0), px(30.0)));
+    assert_eq!(size, Size::new(60.0, 30.0));
 }
 
 // ============================================================================
@@ -319,7 +319,7 @@ fn with_leaf_erased_ctx_matches_direct_bridge_call() {
 fn variable_bridge_handles_zero_children() {
     let mut obj = RenderFlex::row();
     // min=0 / max=300; the default MainAxisSize::Max fills the bounded main axis.
-    let constraints = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(100.0));
+    let constraints = BoxConstraints::new(0.0, 300.0, 0.0, 100.0);
     let mut children: Vec<ChildState<FlexParentData>> = vec![];
     let child_ids: [RenderId; 0] = [];
 
@@ -335,7 +335,7 @@ fn variable_bridge_handles_zero_children() {
 
     assert_eq!(
         size,
-        Size::new(px(300.0), px(0.0)),
+        Size::new(300.0, 0.0),
         "empty MainAxisSize::Max Row fills the bounded main axis (Flutter idealMainSize)",
     );
 }
@@ -362,7 +362,7 @@ fn render_view_adapter_bridge_smoke() {
     use flui_rendering::view::{RenderView, RenderViewAdapter, ViewConfiguration};
 
     // Tight configuration: logical_size = (200, 150) at 1x DPR.
-    let config = ViewConfiguration::from_size(Size::new(px(200.0), px(150.0)), 1.0);
+    let config = ViewConfiguration::from_size(Size::new(200.0, 150.0), 1.0);
     let mut view = RenderView::with_configuration(config);
     // Without prepare_initial_frame*, root_transform stays None and
     // perform_layout asserts. The without-owner variant is the
@@ -377,7 +377,7 @@ fn render_view_adapter_bridge_smoke() {
     // sizing from it left newly exposed window area unpainted forever
     // (caught by the colored-box e2e gate, pinned by
     // tests/root_resize_repaint.rs).
-    let incoming = BoxConstraints::tight(Size::new(px(999.0), px(999.0)));
+    let incoming = BoxConstraints::tight(Size::new(999.0, 999.0));
     let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(incoming, |erased| {
         <RenderViewAdapter as RenderObject<BoxProtocol>>::perform_layout_raw(&mut adapter, erased)
     })
@@ -385,7 +385,7 @@ fn render_view_adapter_bridge_smoke() {
 
     assert_eq!(
         size,
-        Size::new(px(999.0), px(999.0)),
+        Size::new(999.0, 999.0),
         "RenderViewAdapter must size from the INCOMING root constraints \
          (live window size), not from its mount-time configuration snapshot",
     );

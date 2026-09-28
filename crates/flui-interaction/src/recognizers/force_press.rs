@@ -12,7 +12,7 @@
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use flui_types::{Offset, geometry::Pixels, gestures::ForcePressDetails};
+use flui_types::{Offset, gestures::ForcePressDetails};
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
@@ -25,10 +25,10 @@ use crate::{
 };
 
 /// Default pressure threshold to start force press (40%)
-pub const FORCE_PRESS_START_PRESSURE: f32 = 0.4;
+pub const FORCE_PRESS_START_PRESSURE: f64 = 0.4;
 
 /// Default pressure threshold for peak force press (85%)
-pub const FORCE_PRESS_PEAK_PRESSURE: f32 = 0.85;
+pub const FORCE_PRESS_PEAK_PRESSURE: f64 = 0.85;
 
 /// Callback for force press start events
 pub type ForcePressStartCallback = Rc<dyn Fn(ForcePressDetails)>;
@@ -89,10 +89,10 @@ pub struct ForcePressGestureRecognizer {
     settings: Arc<Mutex<GestureSettings>>,
 
     /// Pressure threshold to start force press (0.0 to 1.0)
-    start_pressure: f32,
+    start_pressure: f64,
 
     /// Pressure threshold for peak force press (0.0 to 1.0)
-    peak_pressure: f32,
+    peak_pressure: f64,
 }
 
 // Field names keep Flutter's `onForcePressStart`-style callback names (parity).
@@ -124,11 +124,11 @@ struct ForcePressState {
     /// Current phase
     phase: ForcePressPhase,
     /// Current position
-    current_position: Offset<Pixels>,
+    current_position: Offset<f64>,
     /// Current pressure (0.0 to 1.0)
-    current_pressure: f32,
+    current_pressure: f64,
     /// Maximum pressure for the device (always 1.0 for ui-events)
-    max_pressure: f32,
+    max_pressure: f64,
     /// Whether peak callback has been called
     peak_triggered: bool,
 }
@@ -137,7 +137,7 @@ impl Default for ForcePressState {
     fn default() -> Self {
         Self {
             phase: ForcePressPhase::Ready,
-            current_position: Offset::new(Pixels::ZERO, Pixels::ZERO),
+            current_position: Offset::new(0.0, 0.0),
             current_pressure: 0.0,
             max_pressure: 1.0,
             peak_triggered: false,
@@ -186,7 +186,7 @@ impl ForcePressGestureRecognizer {
     /// Set the start pressure threshold (0.0 to 1.0)
     ///
     /// Default is 0.4 (40% of max pressure).
-    pub fn with_start_pressure(mut self: Arc<Self>, pressure: f32) -> Arc<Self> {
+    pub fn with_start_pressure(mut self: Arc<Self>, pressure: f64) -> Arc<Self> {
         // `make_mut` mutates in place when uniquely owned and otherwise clones
         // first, so this is non-panicking even if the caller holds another
         // reference (unlike `get_mut().unwrap()`, which panicked in release).
@@ -197,7 +197,7 @@ impl ForcePressGestureRecognizer {
     /// Set the peak pressure threshold (0.0 to 1.0)
     ///
     /// Default is 0.85 (85% of max pressure).
-    pub fn with_peak_pressure(mut self: Arc<Self>, pressure: f32) -> Arc<Self> {
+    pub fn with_peak_pressure(mut self: Arc<Self>, pressure: f64) -> Arc<Self> {
         // `make_mut` mutates in place when uniquely owned and otherwise clones
         // first, so this is non-panicking even if the caller holds another
         // reference (unlike `get_mut().unwrap()`, which panicked in release).
@@ -250,12 +250,12 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Get the current start pressure threshold
-    pub fn start_pressure(&self) -> f32 {
+    pub fn start_pressure(&self) -> f64 {
         self.start_pressure
     }
 
     /// Get the current peak pressure threshold
-    pub fn peak_pressure(&self) -> f32 {
+    pub fn peak_pressure(&self) -> f64 {
         self.peak_pressure
     }
 
@@ -270,7 +270,7 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Handle pointer down event
-    fn handle_down(&self, position: Offset<Pixels>, pressure: f32) {
+    fn handle_down(&self, position: Offset<f64>, pressure: f64) {
         let mut state = self.gesture_state.lock();
 
         // Check if device supports pressure (pressure > 0 indicates support)
@@ -303,7 +303,7 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Handle pointer move event (pressure may change)
-    fn handle_move(&self, position: Offset<Pixels>, pressure: f32, kind: PointerType) {
+    fn handle_move(&self, position: Offset<f64>, pressure: f64, kind: PointerType) {
         // Cache settings to avoid nested locks
         let settings = self.settings.lock().clone();
         let mut state = self.gesture_state.lock();
@@ -317,7 +317,7 @@ impl ForcePressGestureRecognizer {
             // against the 1 a precise pointer should get -- so a force press
             // survived eighteen times more drift with a mouse than with a
             // finger, and no default-profile test could see it.
-            if delta.distance().get() > settings.hit_slop(kind) {
+            if delta.distance() > settings.hit_slop(kind) {
                 match state.phase {
                     // Already recognised: end it and report the end.
                     ForcePressPhase::Started | ForcePressPhase::Peaked => {
@@ -417,7 +417,7 @@ impl ForcePressGestureRecognizer {
     }
 
     /// Handle pointer up event
-    fn handle_up(&self, position: Offset<Pixels>) {
+    fn handle_up(&self, position: Offset<f64>) {
         let mut state = self.gesture_state.lock();
         state.current_position = position;
         state.current_pressure = 0.0;
@@ -478,7 +478,7 @@ impl ForcePressGestureRecognizer {
     fn reset(&self) {
         let mut state = self.gesture_state.lock();
         state.phase = ForcePressPhase::Ready;
-        state.current_position = Offset::new(Pixels::ZERO, Pixels::ZERO);
+        state.current_position = Offset::new(0.0, 0.0);
         state.current_pressure = 0.0;
         state.peak_triggered = false;
         drop(state);
@@ -491,12 +491,12 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: PointerId,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         // Force-press DETAILS carry pressure, not a position, so no callback
         // of this recogniser reports the global one. The base records it
         // anyway: `initial_position`/`initial_global_position` are one stored
         // contact, and writing half of it is how the two drift apart.
-        global_position: Offset<Pixels>,
+        global_position: Offset<f64>,
     ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
@@ -519,17 +519,21 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
-                self.handle_down(position, data.state.pressure);
+                let position = Offset::new(pos.x as f64, pos.y as f64);
+                self.handle_down(position, f64::from(data.state.pressure));
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
-                self.handle_move(position, data.current.pressure, data.pointer.pointer_type);
+                let position = Offset::new(pos.x as f64, pos.y as f64);
+                self.handle_move(
+                    position,
+                    f64::from(data.current.pressure),
+                    data.pointer.pointer_type,
+                );
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
+                let position = Offset::new(pos.x as f64, pos.y as f64);
                 self.handle_up(position);
             }
             PointerEvent::Cancel(_) => {
@@ -647,7 +651,7 @@ mod tests {
         let arena = GestureArena::new();
         let recognizer = ForcePressGestureRecognizer::new(arena.clone())
             .with_on_end(|_| panic!("force press cancel panic"));
-        let position = Offset::new(Pixels(1.0), Pixels(2.0));
+        let position = Offset::new(1.0, 2.0);
         recognizer.add_pointer(PointerId::PRIMARY, position, position);
         arena.close(PointerId::PRIMARY);
         recognizer.handle_down(position, 0.5);
@@ -685,7 +689,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(Pixels(100.0), Pixels(100.0));
+        let position = Offset::new(100.0, 100.0);
 
         // Start tracking
         recognizer.add_pointer(pointer, position, position);
@@ -707,7 +711,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(Pixels(100.0), Pixels(100.0));
+        let position = Offset::new(100.0, 100.0);
 
         // Start tracking
         recognizer.add_pointer(pointer, position, position);
@@ -730,7 +734,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(Pixels(100.0), Pixels(100.0));
+        let position = Offset::new(100.0, 100.0);
 
         // Start tracking
         recognizer.add_pointer(pointer, position, position);
@@ -759,7 +763,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(Pixels(100.0), Pixels(100.0));
+        let position = Offset::new(100.0, 100.0);
 
         // Start tracking
         recognizer.add_pointer(pointer, position, position);
@@ -785,7 +789,7 @@ mod tests {
         });
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(Pixels(100.0), Pixels(100.0));
+        let position = Offset::new(100.0, 100.0);
 
         // Start tracking
         recognizer.add_pointer(pointer, position, position);
@@ -827,7 +831,7 @@ mod tests {
             ForcePressGestureRecognizer::new(arena).with_on_start(move |_| *flag.lock() = true);
 
         let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let origin = Offset::new(Pixels(100.0), Pixels(100.0));
+        let origin = Offset::new(100.0, 100.0);
         recognizer.add_pointer(pointer, origin, origin);
 
         // Down at a pressure UNDER the start threshold: phase is `Possible`,
@@ -841,7 +845,7 @@ mod tests {
         );
 
         // Drift far past the touch slop, then return to the exact origin.
-        let far = Offset::new(Pixels(100.0 + 200.0), Pixels(100.0));
+        let far = Offset::new((100.0 + 200.0), 100.0);
         recognizer.handle_move(far, 0.1, PointerType::Touch);
         recognizer.handle_move(origin, 0.1, PointerType::Touch);
 
@@ -879,7 +883,7 @@ mod tests {
         use crate::settings::DEFAULT_MOUSE_SLOP;
 
         let touch_slop = GestureSettings::touch_defaults().touch_slop();
-        let drift = f32::midpoint(DEFAULT_MOUSE_SLOP, touch_slop);
+        let drift = f64::midpoint(DEFAULT_MOUSE_SLOP, touch_slop);
         assert!(
             drift > DEFAULT_MOUSE_SLOP && drift < touch_slop,
             "the sample drift must sit strictly between the two thresholds, \
@@ -898,11 +902,11 @@ mod tests {
                 .with_on_update(move |_| *u.lock() += 1);
 
             let pointer = PointerId::new(2).expect("nonzero pointer id");
-            let origin = Offset::new(Pixels(100.0), Pixels(100.0));
+            let origin = Offset::new(100.0, 100.0);
             recognizer.add_pointer(pointer, origin, origin);
             recognizer.handle_down(origin, 0.5);
 
-            let drifted = Offset::new(Pixels(100.0 + drift), Pixels(100.0));
+            let drifted = Offset::new((100.0 + drift), 100.0);
             recognizer.handle_move(drifted, 0.6, kind);
 
             (*ended.lock(), *updates.lock())

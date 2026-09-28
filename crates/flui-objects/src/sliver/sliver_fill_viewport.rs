@@ -2,7 +2,6 @@
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Variable;
-use flui_types::geometry::px;
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
@@ -25,7 +24,7 @@ use flui_rendering::{
 /// the `&self`-only `hit_test` walks the attached children in reverse.
 #[derive(Debug, Clone)]
 pub struct RenderSliverFillViewport {
-    viewport_fraction: f32,
+    viewport_fraction: f64,
     allow_implicit_scrolling: bool,
     child_count: usize,
 }
@@ -38,7 +37,7 @@ impl RenderSliverFillViewport {
     /// Panics when `viewport_fraction <= 0.0`.
     #[inline]
     #[must_use]
-    pub fn new(viewport_fraction: f32) -> Self {
+    pub fn new(viewport_fraction: f64) -> Self {
         assert!(
             viewport_fraction > 0.0,
             "viewport_fraction must be greater than zero"
@@ -53,7 +52,7 @@ impl RenderSliverFillViewport {
     /// Fraction of the viewport occupied by each child in the main axis.
     #[inline]
     #[must_use]
-    pub const fn viewport_fraction(&self) -> f32 {
+    pub const fn viewport_fraction(&self) -> f64 {
         self.viewport_fraction
     }
 
@@ -65,7 +64,7 @@ impl RenderSliverFillViewport {
     #[inline]
     pub fn set_viewport_fraction(
         &mut self,
-        viewport_fraction: f32,
+        viewport_fraction: f64,
     ) -> flui_rendering::RenderUpdateImpact {
         assert!(
             viewport_fraction > 0.0,
@@ -93,7 +92,7 @@ impl RenderSliverFillViewport {
     }
 
     #[inline]
-    fn item_extent(&self, constraints: &SliverConstraints) -> f32 {
+    fn item_extent(&self, constraints: &SliverConstraints) -> f64 {
         (constraints.viewport_main_axis_extent * self.viewport_fraction).max(0.0)
     }
 }
@@ -128,7 +127,7 @@ impl RenderSliver for RenderSliverFillViewport {
             );
         }
 
-        let scroll_extent = item_extent * self.child_count as f32;
+        let scroll_extent = item_extent * self.child_count as f64;
         let paint_extent = self.calculate_paint_offset(&constraints, 0.0, scroll_extent);
         let cache_extent = self.calculate_cache_offset(&constraints, 0.0, scroll_extent);
         let geometry = SliverGeometry {
@@ -145,10 +144,10 @@ impl RenderSliver for RenderSliverFillViewport {
         };
 
         for index in 0..self.child_count {
-            let layout_offset = item_extent * index as f32;
+            let layout_offset = item_extent * index as f64;
             ctx.position_child(
                 index,
-                child_paint_offset(&constraints, &geometry, px(layout_offset), px(item_extent)),
+                child_paint_offset(&constraints, &geometry, layout_offset, item_extent),
             );
         }
 

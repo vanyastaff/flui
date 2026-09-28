@@ -56,7 +56,7 @@ use std::sync::Arc;
 
 use flui_foundation::ListenerId;
 use flui_foundation::Variable;
-use flui_types::{Matrix4, Offset, Pixels, Point, Rect, Size, painting::Clip};
+use flui_types::{Matrix4, Offset, Point, Rect, Size, painting::Clip};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -153,29 +153,19 @@ impl RenderFlow {
     /// Shared by both width intrinsics — the oracle reuses the identical
     /// formula for `computeMinIntrinsicWidth` and `computeMaxIntrinsicWidth`
     /// (its own "dubious" TODO, L269-271: intrinsics never touch children).
-    fn intrinsic_width(&self, height: f32) -> f32 {
+    fn intrinsic_width(&self, height: f64) -> f64 {
         let width = self
-            .get_size(BoxConstraints::tight_for_finite(
-                Pixels::INFINITY,
-                Pixels::new(height),
-            ))
+            .get_size(BoxConstraints::tight_for_finite(f64::INFINITY, height))
             .width;
-        if width.is_finite() { width.get() } else { 0.0 }
+        if width.is_finite() { width } else { 0.0 }
     }
 
     /// Shared by both height intrinsics — see [`Self::intrinsic_width`].
-    fn intrinsic_height(&self, width: f32) -> f32 {
+    fn intrinsic_height(&self, width: f64) -> f64 {
         let height = self
-            .get_size(BoxConstraints::tight_for_finite(
-                Pixels::new(width),
-                Pixels::INFINITY,
-            ))
+            .get_size(BoxConstraints::tight_for_finite(width, f64::INFINITY))
             .height;
-        if height.is_finite() {
-            height.get()
-        } else {
-            0.0
-        }
+        if height.is_finite() { height } else { 0.0 }
     }
 
     /// Replaces the delegate, reporting whether the swap needs relayout,
@@ -265,19 +255,19 @@ impl RenderBox for RenderFlow {
         self.get_size(constraints)
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_width(height)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_width(height)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_height(width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_height(width)
     }
 
@@ -425,7 +415,7 @@ mod tests {
     use std::any::Any;
 
     use flui_rendering::context::intrinsics_test_support::{leaf_dry_layout, leaf_intrinsics};
-    use flui_types::{Matrix4, geometry::px};
+    use flui_types::Matrix4;
 
     use super::*;
 
@@ -434,7 +424,7 @@ mod tests {
     /// fixture used by the `RenderFlow` catalog tests.
     #[derive(Debug)]
     struct LinearFlowDelegate {
-        spacing: f32,
+        spacing: f64,
     }
 
     impl FlowDelegate for LinearFlowDelegate {
@@ -447,20 +437,20 @@ mod tests {
             _index: usize,
             _constraints: BoxConstraints,
         ) -> BoxConstraints {
-            BoxConstraints::loose(Size::new(px(100.0), px(50.0)))
+            BoxConstraints::loose(Size::new(100.0, 50.0))
         }
 
         fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
-            let mut x: f32 = 0.0;
+            let mut x: f64 = 0.0;
             for i in 0..context.child_count() {
                 context.paint_child(i, Matrix4::translation(x, 0.0, 0.0));
-                x += context.child_size(i).width.get() + self.spacing;
+                x += context.child_size(i).width + self.spacing;
             }
         }
 
         fn should_relayout(&self, old_delegate: &dyn FlowDelegate) -> bool {
             match old_delegate.as_any().downcast_ref::<Self>() {
-                Some(old) => (self.spacing - old.spacing).abs() > f32::EPSILON,
+                Some(old) => (self.spacing - old.spacing).abs() > f64::EPSILON,
                 None => true,
             }
         }
@@ -587,7 +577,7 @@ mod tests {
         }
     }
 
-    fn linear(spacing: f32) -> Arc<dyn FlowDelegate> {
+    fn linear(spacing: f64) -> Arc<dyn FlowDelegate> {
         Arc::new(LinearFlowDelegate { spacing })
     }
 
@@ -682,11 +672,11 @@ mod tests {
     #[test]
     fn get_size_formula_constrains_delegate_size() {
         let flow = RenderFlow::new(linear(0.0));
-        let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(100.0));
+        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 100.0);
         let size = leaf_dry_layout(|ctx| flow.compute_dry_layout(constraints, ctx));
         assert_eq!(
             size,
-            Size::new(px(200.0), px(100.0)),
+            Size::new(200.0, 100.0),
             "delegate.get_size(constraints.biggest()) must be constrain()-ed by the incoming box"
         );
     }
@@ -719,8 +709,8 @@ mod tests {
     #[test]
     fn childless_flow_sizes_via_get_size_alone() {
         let flow = RenderFlow::new(linear(0.0));
-        let constraints = BoxConstraints::new(px(10.0), px(300.0), px(10.0), px(150.0));
+        let constraints = BoxConstraints::new(10.0, 300.0, 10.0, 150.0);
         let size = leaf_dry_layout(|ctx| flow.compute_dry_layout(constraints, ctx));
-        assert_eq!(size, Size::new(px(300.0), px(150.0)));
+        assert_eq!(size, Size::new(300.0, 150.0));
     }
 }

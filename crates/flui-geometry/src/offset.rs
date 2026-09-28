@@ -35,11 +35,11 @@ use super::{
 /// use flui_geometry::{Offset, px, Pixels};
 ///
 /// let offset = Offset::<Pixels>::new(10.0, 20.0);
-/// assert_eq!(offset.dx.get(), 10.0);
-/// assert_eq!(offset.dy.get(), 20.0);
+/// assert_eq!(offset.dx, 10.0);
+/// assert_eq!(offset.dy, 20.0);
 ///
 /// let scaled = offset * 2.0;
-/// assert_eq!(scaled.dx.get(), 20.0);
+/// assert_eq!(scaled.dx, 20.0);
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Offset<T: Unit = f64> {
@@ -75,8 +75,8 @@ impl<T: Unit> Offset<T> {
     /// use flui_geometry::{Offset, px};
     ///
     /// let offset = Offset::new(10.0, 20.0);
-    /// assert_eq!(offset.dx.get(), 10.0);
-    /// assert_eq!(offset.dy.get(), 20.0);
+    /// assert_eq!(offset.dx, 10.0);
+    /// assert_eq!(offset.dy, 20.0);
     #[inline]
     #[must_use]
     pub const fn new(dx: T, dy: T) -> Self {
@@ -92,8 +92,8 @@ impl<T: Unit> Offset<T> {
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let swapped = offset.swap();
-    /// assert_eq!(swapped.dx.get(), 20.0);
-    /// assert_eq!(swapped.dy.get(), 10.0);
+    /// assert_eq!(swapped.dx, 20.0);
+    /// assert_eq!(swapped.dy, 10.0);
     #[inline]
     #[must_use]
     pub fn swap(self) -> Self {
@@ -112,8 +112,8 @@ impl<T: Unit> Offset<T> {
     ///
     /// let offset: Offset<Pixels> = Offset::new(10.0, 20.0);
     /// let doubled: Offset<Pixels> = offset.map(|v| v * 2.0);
-    /// assert_eq!(doubled.dx.get(), 20.0);
-    /// assert_eq!(doubled.dy.get(), 40.0);
+    /// assert_eq!(doubled.dx, 20.0);
+    /// assert_eq!(doubled.dy, 40.0);
     #[inline]
     #[must_use]
     pub fn map<U: Unit>(self, f: impl Fn(T) -> U) -> Offset<U> {
@@ -152,8 +152,8 @@ impl<T: Unit> Offset<T> {
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let vec: Vec2<Pixels> = offset.to_vec2();
-    /// assert_eq!(vec.x.get(), 10.0);
-    /// assert_eq!(vec.y.get(), 20.0);
+    /// assert_eq!(vec.x, 10.0);
+    /// assert_eq!(vec.y, 20.0);
     #[inline]
     #[must_use]
     pub fn to_vec2(self) -> Vec2<T> {
@@ -178,7 +178,7 @@ impl<T: Unit> Offset<T> {
     ///
     /// let px_offset = Offset::<Pixels>::new(10.0, 20.0);
     /// let f32_offset: Offset<Pixels> = px_offset.cast();
-    /// assert_eq!(f32_offset.dx.get(), 10.0);
+    /// assert_eq!(f32_offset.dx, 10.0);
     #[inline]
     #[must_use]
     pub fn cast<U: Unit>(self) -> Offset<U>
@@ -205,7 +205,7 @@ where
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let f32_offset = offset.to_f32();
-    /// assert_eq!(f32_offset.dx.get(), 10.0);
+    /// assert_eq!(f32_offset.dx, 10.0);
     #[inline]
     #[must_use]
     pub fn to_f32(self) -> Offset<f64> {
@@ -229,8 +229,8 @@ impl Offset<f64> {
     /// use flui_geometry::{Offset, px};
     ///
     /// let offset = Offset::from_direction(0.0, 10.0);
-    /// assert!((offset.dx.get() - 10.0).abs() < 0.001);
-    /// assert!(offset.dy.get().abs() < 0.001);
+    /// assert!((offset.dx - 10.0).abs() < 0.001);
+    /// assert!(offset.dy.abs() < 0.001);
     /// ```
     #[inline]
     pub fn from_direction(direction: f64, distance: f64) -> Self {
@@ -250,8 +250,8 @@ impl Offset<f64> {
     /// let from = Point::new(10.0, 20.0);
     /// let to = Point::new(30.0, 50.0);
     /// let offset = Offset::from_points(from, to);
-    /// assert_eq!(offset.dx.get(), 20.0);
-    /// assert_eq!(offset.dy.get(), 30.0);
+    /// assert_eq!(offset.dx, 20.0);
+    /// assert_eq!(offset.dy, 30.0);
     /// ```
     #[inline]
     pub fn from_points(from: Point<f64>, to: Point<f64>) -> Self {

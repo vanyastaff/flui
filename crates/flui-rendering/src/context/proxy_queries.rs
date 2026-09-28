@@ -14,7 +14,7 @@ use super::{
 
 /// Minimum intrinsic width: child answer, or `0.0` when childless.
 #[inline]
-pub fn forward_min_intrinsic_width(ctx: &mut BoxIntrinsicsCtx<'_>, height: f32) -> f32 {
+pub fn forward_min_intrinsic_width(ctx: &mut BoxIntrinsicsCtx<'_>, height: f64) -> f64 {
     if ctx.child_count() == 0 {
         0.0
     } else {
@@ -24,7 +24,7 @@ pub fn forward_min_intrinsic_width(ctx: &mut BoxIntrinsicsCtx<'_>, height: f32) 
 
 /// Maximum intrinsic width: child answer, or `0.0` when childless.
 #[inline]
-pub fn forward_max_intrinsic_width(ctx: &mut BoxIntrinsicsCtx<'_>, height: f32) -> f32 {
+pub fn forward_max_intrinsic_width(ctx: &mut BoxIntrinsicsCtx<'_>, height: f64) -> f64 {
     if ctx.child_count() == 0 {
         0.0
     } else {
@@ -34,7 +34,7 @@ pub fn forward_max_intrinsic_width(ctx: &mut BoxIntrinsicsCtx<'_>, height: f32) 
 
 /// Minimum intrinsic height: child answer, or `0.0` when childless.
 #[inline]
-pub fn forward_min_intrinsic_height(ctx: &mut BoxIntrinsicsCtx<'_>, width: f32) -> f32 {
+pub fn forward_min_intrinsic_height(ctx: &mut BoxIntrinsicsCtx<'_>, width: f64) -> f64 {
     if ctx.child_count() == 0 {
         0.0
     } else {
@@ -44,7 +44,7 @@ pub fn forward_min_intrinsic_height(ctx: &mut BoxIntrinsicsCtx<'_>, width: f32) 
 
 /// Maximum intrinsic height: child answer, or `0.0` when childless.
 #[inline]
-pub fn forward_max_intrinsic_height(ctx: &mut BoxIntrinsicsCtx<'_>, width: f32) -> f32 {
+pub fn forward_max_intrinsic_height(ctx: &mut BoxIntrinsicsCtx<'_>, width: f64) -> f64 {
     if ctx.child_count() == 0 {
         0.0
     } else {
@@ -70,7 +70,7 @@ pub fn forward_dry_baseline(
     constraints: BoxConstraints,
     baseline: TextBaseline,
     ctx: &mut BoxDryBaselineCtx<'_>,
-) -> Option<f32> {
+) -> Option<f64> {
     if ctx.child_count() == 0 {
         None
     } else {
@@ -124,33 +124,33 @@ macro_rules! forward_single_child_intrinsics {
     () => {
         fn compute_min_intrinsic_width(
             &self,
-            height: f32,
+            height: f64,
             ctx: &mut $crate::context::BoxIntrinsicsCtx<'_>,
-        ) -> f32 {
+        ) -> f64 {
             $crate::context::proxy_queries::forward_min_intrinsic_width(ctx, height)
         }
 
         fn compute_max_intrinsic_width(
             &self,
-            height: f32,
+            height: f64,
             ctx: &mut $crate::context::BoxIntrinsicsCtx<'_>,
-        ) -> f32 {
+        ) -> f64 {
             $crate::context::proxy_queries::forward_max_intrinsic_width(ctx, height)
         }
 
         fn compute_min_intrinsic_height(
             &self,
-            width: f32,
+            width: f64,
             ctx: &mut $crate::context::BoxIntrinsicsCtx<'_>,
-        ) -> f32 {
+        ) -> f64 {
             $crate::context::proxy_queries::forward_min_intrinsic_height(ctx, width)
         }
 
         fn compute_max_intrinsic_height(
             &self,
-            width: f32,
+            width: f64,
             ctx: &mut $crate::context::BoxIntrinsicsCtx<'_>,
-        ) -> f32 {
+        ) -> f64 {
             $crate::context::proxy_queries::forward_max_intrinsic_height(ctx, width)
         }
     };
@@ -175,7 +175,7 @@ macro_rules! forward_single_child_box_queries {
             constraints: $crate::constraints::BoxConstraints,
             baseline: $crate::traits::TextBaseline,
             ctx: &mut $crate::context::BoxDryBaselineCtx<'_>,
-        ) -> Option<f32> {
+        ) -> Option<f64> {
             $crate::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
         }
 
@@ -254,26 +254,13 @@ mod tests {
         assert_eq!(w, 0.0);
 
         let size = leaf_dry_layout(|ctx| {
-            forward_dry_layout(
-                BoxConstraints::new(
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(100.0),
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(100.0),
-                ),
-                ctx,
-            )
+            forward_dry_layout(BoxConstraints::new(0.0, 100.0, 0.0, 100.0), ctx)
         });
         assert_eq!(size, Size::ZERO);
 
         let baseline = leaf_dry_baseline(|ctx| {
             forward_dry_baseline(
-                BoxConstraints::new(
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(100.0),
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(100.0),
-                ),
+                BoxConstraints::new(0.0, 100.0, 0.0, 100.0),
                 TextBaseline::Alphabetic,
                 ctx,
             )

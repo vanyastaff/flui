@@ -26,7 +26,7 @@ use flui_rendering::{
     error::{PoisonPhase, RenderError},
     protocol::{BoxProtocol, RenderObject},
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 use crate::common::fresh_layout_pipeline;
 
@@ -65,7 +65,7 @@ fn two_level_padding_with_colored_box_child() {
 
     // Parent constraints: loose 0..300 × 0..200 — leaves room for the
     // 80+20=100 wide, 40+20=60 tall padded box.
-    let parent_constraints = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(200.0));
+    let parent_constraints = BoxConstraints::new(0.0, 300.0, 0.0, 200.0);
 
     let size = pipeline
         .layout_dirty_root(padding_id, parent_constraints)
@@ -73,7 +73,7 @@ fn two_level_padding_with_colored_box_child() {
 
     assert_eq!(
         size,
-        Size::new(px(100.0), px(60.0)),
+        Size::new(100.0, 60.0),
         "Padding(10) wrapping ColoredBox(80×40) must produce (80+20)×(40+20) = 100×60",
     );
 
@@ -84,7 +84,7 @@ fn two_level_padding_with_colored_box_child() {
         .expect("padding node still in tree");
     assert_eq!(
         padding_node.geometry_box(),
-        Some(Size::new(px(100.0), px(60.0))),
+        Some(Size::new(100.0, 60.0)),
         "padding's stored geometry must match the returned size",
     );
     assert!(
@@ -133,7 +133,7 @@ fn three_level_padding_center_colored_box_grandchild_propagation() {
         .insert_box_child(center_id, Box::new(RenderColoredBox::blue(60.0, 30.0)))
         .expect("colored box insert must succeed");
 
-    let parent_constraints = BoxConstraints::new(px(0.0), px(400.0), px(0.0), px(300.0));
+    let parent_constraints = BoxConstraints::new(0.0, 400.0, 0.0, 300.0);
 
     let size = pipeline
         .layout_dirty_root(padding_id, parent_constraints)
@@ -141,7 +141,7 @@ fn three_level_padding_center_colored_box_grandchild_propagation() {
 
     assert_eq!(
         size,
-        Size::new(px(400.0), px(300.0)),
+        Size::new(400.0, 300.0),
         "Padding(20) wrapping Center wrapping ColoredBox(60×30) under \
          (0..400)×(0..300) must expand to 400×300 (Center fills the \
          deflated 360×260 + Padding adds 40 each axis)",
@@ -157,10 +157,10 @@ fn three_level_padding_center_colored_box_grandchild_propagation() {
         .get(center_id)
         .and_then(flui_rendering::storage::RenderNode::geometry_box);
 
-    assert_eq!(padding_geom, Some(Size::new(px(400.0), px(300.0))));
+    assert_eq!(padding_geom, Some(Size::new(400.0, 300.0)));
     assert_eq!(
         center_geom,
-        Some(Size::new(px(360.0), px(260.0))),
+        Some(Size::new(360.0, 260.0)),
         "Center fills the loose constraints it received from Padding's \
          deflation (max_width=360, max_height=260)",
     );
@@ -207,10 +207,8 @@ fn stale_root_id_returns_node_not_found() {
 
     let stale_id = RenderId::new(999); // never inserted
 
-    let result = pipeline.layout_dirty_root(
-        stale_id,
-        BoxConstraints::tight(Size::new(px(100.0), px(100.0))),
-    );
+    let result =
+        pipeline.layout_dirty_root(stale_id, BoxConstraints::tight(Size::new(100.0, 100.0)));
 
     let err = result.expect_err("layout on a non-existent id must fail");
     assert!(
@@ -237,18 +235,18 @@ fn leaf_path_delegates_to_layout_leaf_only() {
         .render_tree_mut()
         .insert_box(Box::new(RenderColoredBox::green(120.0, 50.0)));
 
-    let constraints = BoxConstraints::tight(Size::new(px(120.0), px(50.0)));
+    let constraints = BoxConstraints::tight(Size::new(120.0, 50.0));
     let size = pipeline
         .layout_dirty_root(leaf_id, constraints)
         .expect("leaf-only layout_dirty_root must succeed");
 
-    assert_eq!(size, Size::new(px(120.0), px(50.0)));
+    assert_eq!(size, Size::new(120.0, 50.0));
 
     let geom = pipeline
         .render_tree()
         .get(leaf_id)
         .and_then(flui_rendering::storage::RenderNode::geometry_box);
-    assert_eq!(geom, Some(Size::new(px(120.0), px(50.0))));
+    assert_eq!(geom, Some(Size::new(120.0, 50.0)));
 }
 
 // ============================================================================
@@ -277,7 +275,7 @@ fn double_layout_does_not_panic_on_frame_two() {
         .insert_box_child(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("child insert must succeed");
 
-    let c = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let c = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
 
     let size1 = pipeline
         .layout_dirty_root(padding_id, c)
@@ -290,7 +288,7 @@ fn double_layout_does_not_panic_on_frame_two() {
         size1, size2,
         "deterministic layout: frame 1 and frame 2 must agree",
     );
-    assert_eq!(size1, Size::new(px(50.0), px(50.0)));
+    assert_eq!(size1, Size::new(50.0, 50.0));
 }
 
 /// A clean node can miss the geometry cache for three different reasons, and
@@ -324,23 +322,23 @@ fn a_clean_node_that_misses_the_cache_still_lays_out_for_either_benign_reason() 
     // Reason 1: no cached constraints at all — the first pass over a freshly
     // mounted node. NEEDS_LAYOUT is set here, so this is the ordinary entry,
     // but it establishes the cache the next two cases depend on.
-    let first = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let first = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
     let size_first = pipeline
         .layout_dirty_root(padding_id, first)
         .expect("first layout succeeds");
-    assert_eq!(size_first, Size::new(px(50.0), px(50.0)));
+    assert_eq!(size_first, Size::new(50.0, 50.0));
 
     // Reason 2: the node is now clean and its constraints are cached, but the
     // incoming constraints DIFFER — a resize, a viewport change, a parent that
     // lays its child out differently. The cache correctly refuses to serve,
     // which is the invalidation path working, not an invariant being broken.
-    let tighter = BoxConstraints::tight(Size::new(px(30.0), px(30.0)));
+    let tighter = BoxConstraints::tight(Size::new(30.0, 30.0));
     let size_resized = pipeline
         .layout_dirty_root(padding_id, tighter)
         .expect("relayout under new constraints succeeds");
     assert_eq!(
         size_resized,
-        Size::new(px(30.0), px(30.0)),
+        Size::new(30.0, 30.0),
         "a clean node under changed constraints must lay out again and honour them — \
          serving the stale cached size here would be the real defect"
     );
@@ -418,7 +416,7 @@ fn non_leaf_perform_layout_panic_surfaces_as_poisoned() {
         .insert_box_child(parent_id, Box::new(RenderColoredBox::red(10.0, 10.0)))
         .expect("child insert must succeed");
 
-    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     let result = pipeline.layout_dirty_root(parent_id, constraints);
 
     let err = result.expect_err("panicking non-leaf widget must return Err, not unwind");
@@ -498,7 +496,7 @@ fn descendant_err_preserves_parent_needs_layout() {
         .expect("padding node must exist");
     padding_node.add_child(child_id);
 
-    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     let result = pipeline.layout_dirty_root(padding_id, constraints);
 
     // Outer call SUCCEEDS (Padding's perform_layout completes with
@@ -508,7 +506,7 @@ fn descendant_err_preserves_parent_needs_layout() {
     // to tight (100, 100) constraints clamps it back to 100×100. Either
     // way, the test only cares about NEEDS_LAYOUT preservation; assert
     // size is non-NaN as a sanity check.
-    assert!(size.width.get().is_finite() && size.height.get().is_finite());
+    assert!(size.width.is_finite() && size.height.is_finite());
 
     // CRITICAL ASSERTION: padding's NEEDS_LAYOUT must STAY SET because
     // the descendant errored during the walk (pre-fix this would have
@@ -576,7 +574,7 @@ fn sliver_node_surfaces_as_protocol_mismatch() {
         Box::new(StubSliver);
     let sliver_id = pipeline.render_tree_mut().insert_sliver(sliver_obj);
 
-    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     let result = pipeline.layout_dirty_root(sliver_id, constraints);
 
     let err = result.expect_err("box layout on sliver node must fail");
@@ -659,14 +657,14 @@ fn four_level_padding_chain() {
         .insert_box_child(inner, Box::new(RenderColoredBox::green(20.0, 20.0)))
         .expect("leaf insert must succeed");
 
-    let constraints = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0));
+    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
     let size = pipeline
         .layout_dirty_root(outer, constraints)
         .expect("4-level layout must succeed under pre-acquired-subtree walk");
 
     assert_eq!(
         size,
-        Size::new(px(54.0), px(54.0)),
+        Size::new(54.0, 54.0),
         "Padding(10) → Padding(5) → Padding(2) → ColoredBox(20×20) must \
          compose to (20+4+10+20=54) × (54) — verifies recursive \
          layout_subtree_borrowed scales to deeper trees than 3 levels",
@@ -703,7 +701,7 @@ fn render_view_adapter_layout_smoke() {
 
     let mut pipeline = fresh_layout_pipeline();
 
-    let config = ViewConfiguration::from_size(Size::new(px(320.0), px(240.0)), 1.0);
+    let config = ViewConfiguration::from_size(Size::new(320.0, 240.0), 1.0);
     let mut view = RenderView::with_configuration(config);
     view.prepare_initial_frame_without_owner();
 
@@ -714,14 +712,14 @@ fn render_view_adapter_layout_smoke() {
     // set_root_constraints); the mount-time configuration is a stale
     // snapshot after the first resize. Pinned end-to-end by
     // tests/root_resize_repaint.rs.
-    let incoming = BoxConstraints::tight(Size::new(px(999.0), px(999.0)));
+    let incoming = BoxConstraints::tight(Size::new(999.0, 999.0));
     let size = pipeline
         .layout_dirty_root(view_id, incoming)
         .expect("RenderViewAdapter layout_dirty_root must succeed");
 
     assert_eq!(
         size,
-        Size::new(px(999.0), px(999.0)),
+        Size::new(999.0, 999.0),
         "RenderViewAdapter must size from the INCOMING root constraints \
          (live window size), not from its mount-time configuration snapshot",
     );

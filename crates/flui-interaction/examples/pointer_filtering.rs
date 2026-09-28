@@ -29,30 +29,26 @@ fn main() {
     let mut t = t0;
     for i in 0..24 {
         let jitter = if i % 2 == 0 { 1.0 } else { -1.0 };
-        let raw = Offset::new(Pixels(100.0 + jitter), Pixels(50.0));
+        let raw = Offset::new((100.0 + jitter), 50.0);
         let smoothed = filter.filter(t, raw);
         if i % 8 == 7 {
-            println!(
-                "     raw x={:7.2}  filtered x={:7.2}",
-                raw.dx.get(),
-                smoothed.dx.get()
-            );
+            println!("     raw x={:7.2}  filtered x={:7.2}", raw.dx, smoothed.dx);
         }
         t += dt;
     }
 
     println!("   fast phase (2000 px/s stroke — lag stays small):");
-    let mut x = 100.0_f32;
+    let mut x = 100.0_f64;
     for i in 0..24 {
-        x += 2000.0 * dt.as_secs_f32();
-        let raw = Offset::new(Pixels(x), Pixels(50.0));
+        x += 2000.0 * dt.as_secs_f64();
+        let raw = Offset::new(x, 50.0);
         let smoothed = filter.filter(t, raw);
         if i % 8 == 7 {
             println!(
                 "     raw x={:7.2}  filtered x={:7.2}  (lag {:5.2} px)",
-                raw.dx.get(),
-                smoothed.dx.get(),
-                raw.dx.get() - smoothed.dx.get()
+                raw.dx,
+                smoothed.dx,
+                raw.dx - smoothed.dx
             );
         }
         t += dt;
@@ -67,23 +63,23 @@ fn main() {
     let mut impulse = ImpulseVelocityTracker::default();
     let mut lsq = VelocityTracker::new();
 
-    let mut pos = 0.0_f32;
+    let mut pos = 0.0_f64;
     let mut t = Instant::now();
     for _ in 0..4 {
-        impulse.add_position(t, Offset::new(Pixels(pos), Pixels(0.0)));
-        lsq.add_position(t, Offset::new(Pixels(pos), Pixels(0.0)));
+        impulse.add_position(t, Offset::new(pos, 0.0));
+        lsq.add_position(t, Offset::new(pos, 0.0));
         pos += 20.0; // 20 px / 10 ms = 2000 px/s
         t += Duration::from_millis(10);
     }
     for _ in 0..6 {
-        impulse.add_position(t, Offset::new(Pixels(pos), Pixels(0.0)));
-        lsq.add_position(t, Offset::new(Pixels(pos), Pixels(0.0)));
+        impulse.add_position(t, Offset::new(pos, 0.0));
+        lsq.add_position(t, Offset::new(pos, 0.0));
         pos += 2.0; // 2 px / 10 ms = 200 px/s
         t += Duration::from_millis(10);
     }
 
-    let impulse_v = impulse.get_velocity().pixels_per_second.dx.get();
-    let lsq_v = lsq.get_velocity().pixels_per_second.dx.get();
+    let impulse_v = impulse.get_velocity().pixels_per_second.dx;
+    let lsq_v = lsq.get_velocity().pixels_per_second.dx;
     println!("   impulse (Android default): {impulse_v:8.1} px/s");
     println!("   least-squares (Flutter):   {lsq_v:8.1} px/s");
     println!(

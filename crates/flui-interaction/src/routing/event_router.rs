@@ -6,8 +6,6 @@
 
 use std::{collections::HashMap, rc::Rc};
 
-use flui_types::geometry::Pixels;
-
 use super::{
     focus::FocusManager,
     hit_test::{HitTestResult, HitTestable},
@@ -53,7 +51,7 @@ struct PointerStateTracking {
     is_down: bool,
 
     /// Last known position
-    last_position: flui_types::geometry::Offset<Pixels>,
+    last_position: flui_types::geometry::Offset<f64>,
 
     /// Target that received the down event (for drag tracking)
     down_target: Option<HitTestResult>,
@@ -247,11 +245,11 @@ pub(crate) mod tests {
 
     /// Mock layer for testing
     pub(crate) struct MockLayer {
-        pub(crate) bounds: Rect<Pixels>,
+        pub(crate) bounds: Rect<f64>,
     }
 
     impl HitTestable for MockLayer {
-        fn hit_test(&self, position: Offset<Pixels>, result: &mut HitTestResult) -> bool {
+        fn hit_test(&self, position: Offset<f64>, result: &mut HitTestResult) -> bool {
             if self.bounds.contains(position.into()) {
                 result.add(HitTestEntry::new(RenderId::new(1)));
                 true
@@ -273,18 +271,18 @@ pub(crate) mod tests {
 
         let mut router = EventRouter::new(FocusManager::new());
         let mut layer = MockLayer {
-            bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(100.0), Pixels(100.0)),
+            bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         };
 
         // Down event
-        let down = make_down_event(Offset::new(Pixels(50.0), Pixels(50.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(50.0, 50.0), PointerType::Mouse);
         router.route_event(&mut layer, &Event::Pointer(down));
 
         // Should track pointer
         assert_eq!(router.pointer_state.len(), 1);
 
         // Up event
-        let up = make_up_event(Offset::new(Pixels(50.0), Pixels(50.0)), PointerType::Mouse);
+        let up = make_up_event(Offset::new(50.0, 50.0), PointerType::Mouse);
         router.route_event(&mut layer, &Event::Pointer(up));
 
         // Should clear pointer
@@ -302,7 +300,7 @@ pub(crate) mod tests {
             PointerId::PRIMARY,
             PointerStateTracking {
                 is_down: true,
-                last_position: Offset::new(Pixels(0.0), Pixels(0.0)),
+                last_position: Offset::new(0.0, 0.0),
                 down_target: None,
             },
         );

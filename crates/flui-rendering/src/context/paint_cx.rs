@@ -50,7 +50,7 @@ use flui_foundation::{Arity, Optional, Single, Variable};
 use flui_layer::LayerLink;
 use flui_painting::{Canvas, DisplayList};
 use flui_types::{
-    Matrix4, Offset, Pixels, Point, Rect, Size,
+    Matrix4, Offset, Point, Rect, Size,
     painting::{Alignment, BlendMode, Clip, ImageFilter, Shader},
 };
 
@@ -92,7 +92,7 @@ pub enum FragmentOp {
     Push(Box<FragmentScope>),
 
     /// Opens a transform-layer scope; balanced by a matching [`Self::Pop`].
-    /// Boxed: `Matrix4` is 64 bytes ([f32; 16]) vs. this enum's other
+    /// Boxed: `Matrix4` is 64 bytes ([f64; 16]) vs. this enum's other
     /// variants — an unboxed variant would bloat `FragmentOp` for every
     /// render object's every paint, not just the (rare) per-child
     /// transform case this exists for (`RenderFlow` and friends).
@@ -138,7 +138,7 @@ pub enum FragmentScope {
         /// How the masked result blends with what's already painted.
         blend_mode: BlendMode,
         /// The mask rect in node-local coordinates.
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
     },
     /// Backdrop filter (`RenderBackdropFilter`) — samples and filters
     /// whatever was already painted behind this scope before the scope's
@@ -150,7 +150,7 @@ pub enum FragmentScope {
         /// top of it.
         blend_mode: BlendMode,
         /// The backdrop-sampling rect in node-local coordinates.
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
     },
     /// Leader-layer link tag (`RenderLeaderLayer`) — publishes this
     /// node's paint-time size under `link` so followers can later
@@ -164,7 +164,7 @@ pub enum FragmentScope {
         /// This node's laid-out size (node-local — the composer shifts
         /// the paired offset by the accumulated origin the same way it
         /// does for every other scope's `bounds`).
-        size: Size<Pixels>,
+        size: Size<f64>,
     },
     /// Follower-layer link tag (`RenderFollowerLayer`) — positions
     /// everything painted inside relative to whichever `Leader`
@@ -179,11 +179,11 @@ pub enum FragmentScope {
         /// [`Leader::size`](FragmentScope::Leader) is — required by
         /// `FollowerLayer::calculate_offset`'s `follower_size` parameter
         /// whenever `follower_anchor` is not top-left.
-        size: Size<Pixels>,
+        size: Size<f64>,
         /// Pixel gap added on top of the anchor-derived linked
         /// position, AND the standalone position used when unlinked
         /// (oracle's dual-purpose `offset` field, `:4555`).
-        target_offset: Offset<Pixels>,
+        target_offset: Offset<f64>,
         /// Whether to remain visible when no leader currently publishes
         /// under `link`.
         show_when_unlinked: bool,
@@ -245,13 +245,13 @@ pub struct FragmentRecorder {
     /// safe user code, the counter turns an internal bug into a loud
     /// debug failure instead of a silently malformed layer tree).
     open_scopes: usize,
-    dpr: f32,
+    dpr: f64,
 }
 
 impl FragmentRecorder {
     /// Creates a recorder for a node positioned at `origin` within the
     /// current layer space.
-    pub fn new(origin: Offset, dpr: f32) -> Self {
+    pub fn new(origin: Offset, dpr: f64) -> Self {
         Self {
             ops: Vec::new(),
             open: None,
@@ -263,7 +263,7 @@ impl FragmentRecorder {
 
     /// Device pixel ratio for this paint pass (text shaping and
     /// hairline snapping need it).
-    pub fn dpr(&self) -> f32 {
+    pub fn dpr(&self) -> f64 {
         self.dpr
     }
 
@@ -272,7 +272,7 @@ impl FragmentRecorder {
         self.open.get_or_insert_with(|| {
             let mut canvas = Canvas::new();
             if self.origin != Offset::ZERO {
-                canvas.translate(self.origin.dx.get(), self.origin.dy.get());
+                canvas.translate(self.origin.dx, self.origin.dy);
             }
             canvas
         })
@@ -396,7 +396,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     }
 
     /// Device pixel ratio for this paint pass.
-    pub fn dpr(&self) -> f32 {
+    pub fn dpr(&self) -> f64 {
         self.rec.dpr()
     }
 
@@ -445,12 +445,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
 
     /// Clips everything recorded inside `f` — self draws AND child
     /// subtrees — to `rect` (local coordinates).
-    pub fn with_clip_rect(
-        &mut self,
-        rect: Rect<Pixels>,
-        behavior: Clip,
-        f: impl FnOnce(&mut Self),
-    ) {
+    pub fn with_clip_rect(&mut self, rect: Rect<f64>, behavior: Clip, f: impl FnOnce(&mut Self)) {
         self.with_clip(PaintClip::Rect { rect, behavior }, f);
     }
 
@@ -537,7 +532,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// never gates on child presence (`proxy_box.dart:4513-4528`): a
     /// childless leader still needs its own compositor layer, since it is
     /// a coordinate anchor, not a visual effect.
-    pub fn with_leader(&mut self, link: LayerLink, size: Size<Pixels>, f: impl FnOnce(&mut Self)) {
+    pub fn with_leader(&mut self, link: LayerLink, size: Size<f64>, f: impl FnOnce(&mut Self)) {
         self.rec.push_scope(FragmentScope::Leader { link, size });
         f(self);
         self.rec.pop_scope();
@@ -556,8 +551,8 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     pub fn with_follower(
         &mut self,
         link: LayerLink,
-        size: Size<Pixels>,
-        target_offset: Offset<Pixels>,
+        size: Size<f64>,
+        target_offset: Offset<f64>,
         show_when_unlinked: bool,
         leader_anchor: Alignment,
         follower_anchor: Alignment,
@@ -667,12 +662,12 @@ impl PaintCx<'_, Variable> {
 #[cfg(test)]
 mod tests {
     use flui_foundation::Leaf;
-    use flui_types::{Point, Size, geometry::px, painting::Paint, styling::Color};
+    use flui_types::{Point, Size, painting::Paint, styling::Color};
 
     use super::*;
 
-    fn rect(w: f32, h: f32) -> Rect<Pixels> {
-        Rect::from_origin_size(Point::ZERO, Size::new(px(w), px(h)))
+    fn rect(w: f64, h: f64) -> Rect<f64> {
+        Rect::from_origin_size(Point::ZERO, Size::new(w, h))
     }
 
     fn fill() -> Paint {
@@ -720,7 +715,7 @@ mod tests {
 
     #[test]
     fn origin_is_baked_into_run_transforms() {
-        let mut rec = FragmentRecorder::new(Offset::new(px(7.0), px(3.0)), 1.0);
+        let mut rec = FragmentRecorder::new(Offset::new(7.0, 3.0), 1.0);
         let mut cx = PaintCx::<Leaf>::new(&mut rec, 0, Size::ZERO);
         cx.canvas().draw_rect(rect(10.0, 10.0), &fill());
 
@@ -732,7 +727,7 @@ mod tests {
         // local (0,0,10,10) lands at (7,3,17,13) in layer space.
         assert_eq!(
             list.bounds(),
-            Some(Rect::from_ltrb(px(7.0), px(3.0), px(17.0), px(13.0))),
+            Some(Rect::from_ltrb(7.0, 3.0, 17.0, 13.0)),
             "record-time bounds must include the node-origin translation",
         );
     }
@@ -794,7 +789,7 @@ mod tests {
     fn paint_child_at_records_offset_override() {
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
         let mut cx = PaintCx::<Single>::new(&mut rec, 1, Size::ZERO);
-        cx.paint_child_at(Offset::new(px(4.0), px(6.0)));
+        cx.paint_child_at(Offset::new(4.0, 6.0));
 
         let frag = rec.finish();
         assert!(matches!(
@@ -802,7 +797,7 @@ mod tests {
             [FragmentOp::Child {
                 index: 0,
                 offset_override: Some(o),
-            }] if *o == Offset::new(px(4.0), px(6.0)),
+            }] if *o == Offset::new(4.0, 6.0),
         ));
     }
 

@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use flui_types::{
-    Matrix4, Pixels, Point, RRect, Rect, Size,
+    Matrix4, Point, RRect, Rect, Size,
     painting::{Clip, Path},
 };
 
@@ -201,7 +201,7 @@ pub enum PaintClip {
     /// Axis-aligned rectangular clip.
     Rect {
         /// The clip rectangle, in the node's own coordinate space.
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         /// How to handle content outside the clip boundary.
         behavior: Clip,
     },

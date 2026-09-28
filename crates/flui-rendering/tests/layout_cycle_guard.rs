@@ -12,7 +12,7 @@
 
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{constraints::BoxConstraints, error::RenderError};
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 use crate::common::fresh_layout_pipeline;
 
@@ -57,7 +57,7 @@ fn structural_cycle_on_leaf_path_does_not_trigger_guard() {
         .expect("child in tree")
         .add_child(padding_id);
 
-    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     let result = pipeline.layout_dirty_root(padding_id, constraints);
     assert!(
         result.is_ok(),
@@ -106,7 +106,7 @@ fn callback_reentry_poisons_structural_cycle() {
         .expect("p2 in tree")
         .add_child(p1);
 
-    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     // P1.perform_layout → layout_child(0) → recurses into P2.
     // P2.perform_layout → layout_child(0) → recurses into P1 (cyclic
     // edge). P1's in-flight flag is already set → guard returns
@@ -205,7 +205,7 @@ fn drop_guard_clears_id_on_perform_layout_panic() {
         .insert_box_child(parent_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
         .expect("child insert");
 
-    let constraints = BoxConstraints::tight(Size::new(px(50.0), px(50.0)));
+    let constraints = BoxConstraints::tight(Size::new(50.0, 50.0));
 
     // Frame 1: panic surfaces as Poisoned (the non-leaf path wraps
     // perform_layout_raw in catch_unwind).
@@ -258,7 +258,7 @@ fn sequential_calls_on_same_root_do_not_trigger_cycle() {
         .insert_box_child(padding_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
         .expect("child insert");
 
-    let constraints = BoxConstraints::tight(Size::new(px(50.0), px(50.0)));
+    let constraints = BoxConstraints::tight(Size::new(50.0, 50.0));
 
     // 3 sequential calls — each must succeed.
     for frame in 1..=3 {

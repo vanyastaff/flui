@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use flui_types::{Offset, geometry::Pixels};
+use flui_types::Offset;
 
 use crate::{
     recognizers::one_sequence::OneSequenceGestureRecognizer,
@@ -28,7 +28,7 @@ pub trait PrimaryPointerGestureRecognizer:
     OneSequenceGestureRecognizer + GestureRecognizerSealed
 {
     /// The position of the primary pointer at down event.
-    fn initial_position(&self) -> Option<Offset<Pixels>>;
+    fn initial_position(&self) -> Option<Offset<f64>>;
 
     /// Deadline before which the recognizer must decide.
     ///

@@ -515,7 +515,7 @@ where
     /// let p1 = Point::new(100.0, 200.0);
     /// let p2 = Point::new(30.0, 50.0);
     /// let v: Vec2<Pixels> = p1 - p2;
-    /// assert_eq!(v.x.get(), 70.0);
+    /// assert_eq!(v.x, 70.0);
     /// ```
     #[inline]
     fn sub(self, rhs: Self) -> Vec2<T> {
@@ -782,8 +782,8 @@ impl<T: Unit> Point<T> {
     ///
     /// let p = Point::<Pixels>::new(100.0, 200.0);
     /// let p_f32: Point<Pixels> = p.cast();
-    /// assert_eq!(p_f32.x.get(), 100.0);
-    /// assert_eq!(p_f32.y.get(), 200.0);
+    /// assert_eq!(p_f32.x, 100.0);
+    /// assert_eq!(p_f32.y, 200.0);
     #[inline]
     #[must_use]
     pub fn cast<U>(self) -> Point<U>

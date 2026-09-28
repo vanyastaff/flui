@@ -16,7 +16,6 @@ use flui_foundation::Leaf;
 use flui_rendering::pipeline::{PipelineOwner, RenderInvalidationHandle};
 use flui_rendering::prelude::*;
 use flui_rendering::traits::RenderSliver;
-use flui_types::geometry::px;
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject};
 
@@ -97,7 +96,7 @@ impl RenderBox for LifecycleProbe {
 fn probe(log: LifecycleLog) -> BoxedRenderObject {
     Box::new(LifecycleProbe {
         log,
-        size: Size::new(px(40.0), px(40.0)),
+        size: Size::new(40.0, 40.0),
     }) as BoxedRenderObject
 }
 
@@ -127,7 +126,7 @@ impl RenderSliver for LifecycleProbeSliver {
         ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
     ) -> SliverGeometry {
         self.log.layout_count.fetch_add(1, Ordering::SeqCst);
-        let paint = 20.0_f32.min(ctx.constraints().remaining_paint_extent);
+        let paint = 20.0_f64.min(ctx.constraints().remaining_paint_extent);
         SliverGeometry {
             scroll_extent: 20.0,
             paint_extent: paint,
@@ -165,7 +164,7 @@ fn rooted_fixture() -> (PipelineOwner, flui_foundation::RenderId, LifecycleLog) 
     let log = LifecycleLog::default();
     let id = owner.insert(probe(log.clone()));
     owner.set_root_id(Some(id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(40.0), px(40.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(40.0, 40.0))));
     (owner, id, log)
 }
 

@@ -755,12 +755,7 @@ mod tests {
             .map(|index| FocusNode::with_debug_label(format!("node-{index}")))
             .collect();
         for (index, node) in nodes.iter().enumerate() {
-            node.set_rect(Rect::from_xywh(
-                Pixels(index as f32 * 20.0),
-                Pixels(0.0),
-                Pixels(10.0),
-                Pixels(10.0),
-            ));
+            node.set_rect(Rect::from_xywh((index as f64 * 20.0), 0.0, 10.0, 10.0));
             manager.root_scope().attach_node(node).unwrap();
         }
         (manager, nodes)
@@ -1283,53 +1278,27 @@ mod tests {
         let weak_node = Rc::downgrade(&node);
         node.set_rect_provider(Rc::new(move || {
             weak_node.upgrade().unwrap().clear_rect_provider();
-            Some(Rect::from_xywh(
-                Pixels(1.0),
-                Pixels(2.0),
-                Pixels(3.0),
-                Pixels(4.0),
-            ))
+            Some(Rect::from_xywh(1.0, 2.0, 3.0, 4.0))
         }));
         node.request_focus();
 
         assert!(!manager.dispatch_key_event(&key_event()));
-        assert_eq!(
-            node.rect(),
-            Rect::from_xywh(Pixels(1.0), Pixels(2.0), Pixels(3.0), Pixels(4.0))
-        );
+        assert_eq!(node.rect(), Rect::from_xywh(1.0, 2.0, 3.0, 4.0));
     }
 
     #[test]
     fn property_registrations_clear_only_the_generation_they_installed() {
         let node = FocusNode::new();
-        node.set_rect(Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(1.0),
-            Pixels(1.0),
-        ));
+        node.set_rect(Rect::from_xywh(0.0, 0.0, 1.0, 1.0));
 
         let key_registration = node.register_on_key_event(Rc::new(|_| KeyEventResult::Handled));
-        let rect_registration = node.register_rect_provider(Rc::new(|| {
-            Some(Rect::from_xywh(
-                Pixels(1.0),
-                Pixels(2.0),
-                Pixels(3.0),
-                Pixels(4.0),
-            ))
-        }));
+        let rect_registration =
+            node.register_rect_provider(Rc::new(|| Some(Rect::from_xywh(1.0, 2.0, 3.0, 4.0))));
         assert!(key_registration.is_current());
         assert!(rect_registration.is_current());
 
         node.set_on_key_event(Rc::new(|_| KeyEventResult::SkipRemainingHandlers));
-        node.set_rect_provider(Rc::new(|| {
-            Some(Rect::from_xywh(
-                Pixels(5.0),
-                Pixels(6.0),
-                Pixels(7.0),
-                Pixels(8.0),
-            ))
-        }));
+        node.set_rect_provider(Rc::new(|| Some(Rect::from_xywh(5.0, 6.0, 7.0, 8.0))));
         assert!(!key_registration.is_current());
         assert!(!rect_registration.is_current());
 
@@ -1342,7 +1311,7 @@ mod tests {
         );
         assert_eq!(
             node.rect(),
-            Rect::from_xywh(Pixels(5.0), Pixels(6.0), Pixels(7.0), Pixels(8.0)),
+            Rect::from_xywh(5.0, 6.0, 7.0, 8.0),
             "a stale geometry registration cannot erase a later writer"
         );
     }
@@ -1350,26 +1319,15 @@ mod tests {
     #[test]
     fn current_property_registrations_clean_up_or_can_relinquish_ownership() {
         let node = FocusNode::new();
-        node.set_rect(Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(1.0),
-            Pixels(1.0),
-        ));
+        node.set_rect(Rect::from_xywh(0.0, 0.0, 1.0, 1.0));
 
         let key_registration = node.register_on_key_event(Rc::new(|_| KeyEventResult::Handled));
-        let rect_registration = node.register_rect_provider(Rc::new(|| {
-            Some(Rect::from_xywh(
-                Pixels(1.0),
-                Pixels(2.0),
-                Pixels(3.0),
-                Pixels(4.0),
-            ))
-        }));
+        let rect_registration =
+            node.register_rect_provider(Rc::new(|| Some(Rect::from_xywh(1.0, 2.0, 3.0, 4.0))));
         drop(rect_registration);
         assert_eq!(
             node.rect(),
-            Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(1.0), Pixels(1.0)),
+            Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
             "dropping a current registration removes its provider"
         );
 
@@ -1440,21 +1398,11 @@ mod tests {
         inner.set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
 
         let inside = FocusNode::with_debug_label("inside");
-        inside.set_rect(Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(10.0),
-            Pixels(10.0),
-        ));
+        inside.set_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0));
         inner.attach_node(&inside).unwrap();
 
         let outside = FocusNode::with_debug_label("outside");
-        outside.set_rect(Rect::from_xywh(
-            Pixels(20.0),
-            Pixels(0.0),
-            Pixels(10.0),
-            Pixels(10.0),
-        ));
+        outside.set_rect(Rect::from_xywh(20.0, 0.0, 10.0, 10.0));
         manager.root_scope().attach_node(&outside).unwrap();
 
         inside.request_focus();
@@ -1478,21 +1426,11 @@ mod tests {
         inner.set_traversal_edge_behavior(TraversalEdgeBehavior::ParentScope);
 
         let inside = FocusNode::with_debug_label("inside");
-        inside.set_rect(Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(10.0),
-            Pixels(10.0),
-        ));
+        inside.set_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0));
         inner.attach_node(&inside).unwrap();
 
         let outside = FocusNode::with_debug_label("outside");
-        outside.set_rect(Rect::from_xywh(
-            Pixels(20.0),
-            Pixels(0.0),
-            Pixels(10.0),
-            Pixels(10.0),
-        ));
+        outside.set_rect(Rect::from_xywh(20.0, 0.0, 10.0, 10.0));
         manager.root_scope().attach_node(&outside).unwrap();
 
         inside.request_focus();

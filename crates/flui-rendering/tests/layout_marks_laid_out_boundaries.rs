@@ -24,11 +24,11 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     testing::{box_node, tree},
 };
-use flui_types::{EdgeInsets, Size, geometry::px};
+use flui_types::{EdgeInsets, Size};
 
 /// Change a `RenderPadding`'s inset and report the impact, the same way an
 /// element update does.
-fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f32) {
+fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f64) {
     let impact = {
         let entry = owner
             .render_tree_mut()
@@ -41,7 +41,7 @@ fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: 
             .as_any_mut()
             .downcast_mut::<RenderPadding>()
             .expect("RenderPadding")
-            .set_padding(EdgeInsets::all(px(value)))
+            .set_padding(EdgeInsets::all(value))
     };
     owner.apply_render_update_impact(id, impact);
 }
@@ -77,7 +77,7 @@ fn a_boundary_nested_in_a_relayout_subtree_is_queued_for_paint() {
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
 
     let padding_id = registry.get("padding").expect("padding is labelled");
     let inner_id = registry.get("inner").expect("inner boundary is labelled");
@@ -176,7 +176,7 @@ fn a_sliver_repaint_boundary_that_laid_out_is_queued_for_paint() {
             &mut self,
             ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
         ) -> SliverGeometry {
-            let extent = 40.0_f32.min(ctx.constraints().remaining_paint_extent);
+            let extent = 40.0_f64.min(ctx.constraints().remaining_paint_extent);
             SliverGeometry::new(40.0, extent, 0.0)
         }
 
@@ -196,7 +196,7 @@ fn a_sliver_repaint_boundary_that_laid_out_is_queued_for_paint() {
             .child(sliver_node(BoundarySliver).label("sliver-boundary")),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
 
     let sliver_id = registry
         .get("sliver-boundary")

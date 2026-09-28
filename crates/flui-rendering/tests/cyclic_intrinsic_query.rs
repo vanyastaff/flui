@@ -30,7 +30,7 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     traits::RenderBox,
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 /// A widget whose `perform_layout` queries child 0's max-intrinsic-width
 /// BEFORE laying it out. The intrinsic query routes through the borrowed walk
@@ -48,7 +48,7 @@ impl RenderBox for ChildIntrinsicQueryingWidget {
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         // Borrowed intrinsic walk on child 0, fired while this node is in-flight.
-        let _ = ctx.child_max_intrinsic_width(0, f32::INFINITY);
+        let _ = ctx.child_max_intrinsic_width(0, f64::INFINITY);
         let constraints = *ctx.constraints();
         ctx.layout_child(0, constraints);
         constraints.smallest()
@@ -89,7 +89,7 @@ fn borrowed_intrinsic_walk_skips_in_flight_cyclic_child() {
         .expect("w2 in tree")
         .add_child(w1);
 
-    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
     let result = pipeline.layout_dirty_root(w1, constraints);
 
     assert!(

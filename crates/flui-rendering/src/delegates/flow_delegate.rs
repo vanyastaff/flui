@@ -25,7 +25,7 @@ use crate::{constraints::BoxConstraints, context::PaintCx};
 ///
 /// #[derive(Debug)]
 /// struct CircularFlowDelegate {
-///     radius: f32,
+///     radius: f64,
 /// }
 ///
 /// impl FlowDelegate for CircularFlowDelegate {
@@ -43,7 +43,7 @@ use crate::{constraints::BoxConstraints, context::PaintCx};
 ///         let center_y = self.radius;
 ///
 ///         for i in 0..context.child_count() {
-///             let angle = 2.0 * std::f32::consts::PI * (i as f32) / (context.child_count() as f32);
+///             let angle = 2.0 * std::f64::consts::PI * (i as f64) / (context.child_count() as f64);
 ///             let child_size = context.child_size(i);
 ///
 ///             let x = center_x + self.radius * angle.cos() - child_size.width / 2.0;
@@ -307,13 +307,12 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
     #[derive(Debug)]
     struct LinearFlowDelegate {
-        spacing: f32,
+        spacing: f64,
     }
 
     impl FlowDelegate for LinearFlowDelegate {
@@ -326,21 +325,21 @@ mod tests {
             _index: usize,
             _constraints: BoxConstraints,
         ) -> BoxConstraints {
-            BoxConstraints::loose(Size::new(px(100.0), px(50.0)))
+            BoxConstraints::loose(Size::new(100.0, 50.0))
         }
 
         fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
-            let mut x: f32 = 0.0;
+            let mut x: f64 = 0.0;
             for i in 0..context.child_count() {
                 let transform = Matrix4::translation(x, 0.0, 0.0);
                 context.paint_child(i, transform);
-                x += context.child_size(i).width.get() + self.spacing;
+                x += context.child_size(i).width + self.spacing;
             }
         }
 
         fn should_relayout(&self, old_delegate: &dyn FlowDelegate) -> bool {
             if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
-                (self.spacing - old.spacing).abs() > f32::EPSILON
+                (self.spacing - old.spacing).abs() > f64::EPSILON
             } else {
                 true
             }
@@ -389,11 +388,11 @@ mod tests {
     #[test]
     fn for_replay_records_the_real_transform_not_just_a_painted_flag() {
         let mut fixture = ContextFixture::new(vec![
-            Size::new(px(50.0), px(30.0)),
-            Size::new(px(60.0), px(40.0)),
-            Size::new(px(70.0), px(50.0)),
+            Size::new(50.0, 30.0),
+            Size::new(60.0, 40.0),
+            Size::new(70.0, 50.0),
         ]);
-        let flow_size = Size::new(px(300.0), px(100.0));
+        let flow_size = Size::new(300.0, 100.0);
         let t0 = Matrix4::translation(10.0, 0.0, 0.0);
         let t1 = Matrix4::translation(60.0, 0.0, 0.0);
         let t2 = Matrix4::translation(130.0, 0.0, 0.0);
@@ -402,7 +401,7 @@ mod tests {
             let mut context = fixture.replay_context(flow_size);
             assert_eq!(context.size(), flow_size);
             assert_eq!(context.child_count(), 3);
-            assert_eq!(context.child_size(0), Size::new(px(50.0), px(30.0)));
+            assert_eq!(context.child_size(0), Size::new(50.0, 30.0));
             assert!(!context.all_children_painted());
 
             context.paint_child(0, t0);
@@ -428,7 +427,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "called twice")]
     fn paint_child_twice_in_one_pass_panics() {
-        let mut fixture = ContextFixture::new(vec![Size::new(px(10.0), px(10.0))]);
+        let mut fixture = ContextFixture::new(vec![Size::new(10.0, 10.0)]);
         let mut context = fixture.replay_context(Size::ZERO);
         context.paint_child(0, Matrix4::IDENTITY);
         context.paint_child(0, Matrix4::IDENTITY);
@@ -440,11 +439,11 @@ mod tests {
 
         use crate::context::{FragmentOp, FragmentRecorder};
 
-        let mut fixture = ContextFixture::new(vec![Size::new(px(20.0), px(20.0))]);
+        let mut fixture = ContextFixture::new(vec![Size::new(20.0, 20.0)]);
         let transform = Matrix4::translation(5.0, 7.0, 0.0);
 
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-        let mut paint_cx = PaintCx::<Variable>::new(&mut rec, 1, Size::new(px(100.0), px(100.0)));
+        let mut paint_cx = PaintCx::<Variable>::new(&mut rec, 1, Size::new(100.0, 100.0));
         {
             let mut context = FlowPaintingContext::for_paint(
                 &mut paint_cx,
@@ -453,7 +452,7 @@ mod tests {
                 &mut fixture.transforms,
                 &mut fixture.painted,
             );
-            assert_eq!(context.size(), Size::new(px(100.0), px(100.0)));
+            assert_eq!(context.size(), Size::new(100.0, 100.0));
             context.paint_child(0, transform);
         }
 
@@ -479,14 +478,14 @@ mod tests {
     #[test]
     fn test_linear_flow_delegate() {
         let delegate = LinearFlowDelegate { spacing: 10.0 };
-        let constraints = BoxConstraints::new(px(0.0), px(500.0), px(0.0), px(200.0));
+        let constraints = BoxConstraints::new(0.0, 500.0, 0.0, 200.0);
 
         let size = delegate.get_size(constraints);
-        assert_eq!(size, Size::new(px(500.0), px(200.0)));
+        assert_eq!(size, Size::new(500.0, 200.0));
 
         let child_constraints = delegate.get_constraints_for_child(0, constraints);
-        assert_eq!(child_constraints.max_width, px(100.0));
-        assert_eq!(child_constraints.max_height, px(50.0));
+        assert_eq!(child_constraints.max_width, 100.0);
+        assert_eq!(child_constraints.max_height, 50.0);
     }
 
     #[test]

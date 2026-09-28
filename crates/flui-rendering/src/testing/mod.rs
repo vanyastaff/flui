@@ -49,7 +49,7 @@
 //!     type Arity = Leaf;
 //!     type ParentData = BoxParentData;
 //!     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-//!         Size::new(px(40.0), px(40.0))
+//!         Size::new(40.0, 40.0)
 //!     }
 //!     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
 //! }
@@ -58,7 +58,7 @@
 //!     .run_frame();
 //!
 //! let root = run.id("root");
-//! assert_eq!(run.box_geometry(root), Size::new(px(40.0), px(40.0)));
+//! assert_eq!(run.box_geometry(root), Size::new(40.0, 40.0));
 //! assert!(run.painted());
 //! ```
 

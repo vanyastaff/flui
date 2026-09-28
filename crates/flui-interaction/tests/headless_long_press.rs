@@ -37,11 +37,7 @@ fn long_press_fires_on_pumped_virtual_frames_without_sleeping() {
 
     // Pointer down captures `down_time` from the VIRTUAL clock (now = base + 0).
     let pointer = PointerId::new(2).expect("nonzero pointer id");
-    recognizer.add_pointer(
-        pointer,
-        Offset::new(px(10.0), px(10.0)),
-        Offset::new(px(10.0), px(10.0)),
-    );
+    recognizer.add_pointer(pointer, Offset::new(10.0, 10.0), Offset::new(10.0, 10.0));
 
     // Hold still; pump virtual frames totalling < 500ms — must NOT fire.
     for _ in 0..3 {

@@ -367,7 +367,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     /// Device pixel ratio threaded into every paint pass.
-    pub fn device_pixel_ratio(&self) -> f32 {
+    pub fn device_pixel_ratio(&self) -> f64 {
         self.device_pixel_ratio
     }
 
@@ -607,11 +607,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // still-singular forward matrix: when the determinant is exactly
         // zero, the composed chain stays singular, so delivery still
         // detects and skips it (`LocalEventTransform::capture`). For a
-        // merely near-singular transform (`0 < |det| < f32::EPSILON`, which
+        // merely near-singular transform (`0 < |det| < f64::EPSILON`, which
         // `Matrix4::is_invertible` also rejects) the skip is only
         // threshold-relative, not guaranteed: determinants compose
         // multiplicatively, so a large-determinant ancestor can lift the
-        // product back above `f32::EPSILON`, and delivery then hands the
+        // product back above `f64::EPSILON`, and delivery then hands the
         // entry a garbage local position instead of skipping it -- out of
         // scope to change that skip behavior here.
         let hit_transform = render_object.hit_test_transform(own_size);
@@ -627,7 +627,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // shifts coordinate space via translation). Pushed as the inverse
         // translation for the same reason as `hit_test_transform` above.
         if let Some(r) = follower_offset {
-            result.push_transform(Matrix4::translation(-r.dx.get(), -r.dy.get(), 0.0));
+            result.push_transform(Matrix4::translation(-r.dx, -r.dy, 0.0));
         }
 
         // Shift the position handed into this node's own subtree by the
@@ -780,13 +780,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         let (raw_main, cross_axis) = match constraints.axis_direction {
             flui_types::layout::AxisDirection::LeftToRight
-            | flui_types::layout::AxisDirection::RightToLeft => {
-                (position.dx.get(), position.dy.get())
-            }
+            | flui_types::layout::AxisDirection::RightToLeft => (position.dx, position.dy),
             flui_types::layout::AxisDirection::TopToBottom
-            | flui_types::layout::AxisDirection::BottomToTop => {
-                (position.dy.get(), position.dx.get())
-            }
+            | flui_types::layout::AxisDirection::BottomToTop => (position.dy, position.dx),
         };
         let effective_axis_direction = match constraints.growth_direction {
             crate::constraints::GrowthDirection::Forward => constraints.axis_direction,
@@ -829,9 +825,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         let (offset_main, offset_cross) = match child_constraints.axis_direction {
             flui_types::layout::AxisDirection::LeftToRight
-            | flui_types::layout::AxisDirection::RightToLeft => (offset.dx.get(), offset.dy.get()),
+            | flui_types::layout::AxisDirection::RightToLeft => (offset.dx, offset.dy),
             flui_types::layout::AxisDirection::TopToBottom
-            | flui_types::layout::AxisDirection::BottomToTop => (offset.dy.get(), offset.dx.get()),
+            | flui_types::layout::AxisDirection::BottomToTop => (offset.dy, offset.dx),
         };
         let parent_physical_main = if parent_constraints
             .growth_direction
@@ -871,11 +867,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let (paint_main, paint_cross, child_main_extent) = match constraints.axis_direction {
             flui_types::layout::AxisDirection::LeftToRight
             | flui_types::layout::AxisDirection::RightToLeft => {
-                (offset.dx.get(), offset.dy.get(), child_size.width.get())
+                (offset.dx, offset.dy, child_size.width)
             }
             flui_types::layout::AxisDirection::TopToBottom
             | flui_types::layout::AxisDirection::BottomToTop => {
-                (offset.dy.get(), offset.dx.get(), child_size.height.get())
+                (offset.dy, offset.dx, child_size.height)
             }
         };
         let child_main_axis_position = if right_way_up {
@@ -891,15 +887,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         match constraints.axis_direction {
             flui_types::layout::AxisDirection::LeftToRight
-            | flui_types::layout::AxisDirection::RightToLeft => Offset::new(
-                flui_types::geometry::px(local_main),
-                flui_types::geometry::px(local_cross),
-            ),
+            | flui_types::layout::AxisDirection::RightToLeft => {
+                Offset::new(local_main, local_cross)
+            }
             flui_types::layout::AxisDirection::TopToBottom
-            | flui_types::layout::AxisDirection::BottomToTop => Offset::new(
-                flui_types::geometry::px(local_cross),
-                flui_types::geometry::px(local_main),
-            ),
+            | flui_types::layout::AxisDirection::BottomToTop => {
+                Offset::new(local_cross, local_main)
+            }
         }
     }
 
@@ -1063,7 +1057,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// change. Non-finite or non-positive values are rejected (kept at
     /// the previous ratio) — a zero or NaN DPR poisons every shaped
     /// glyph and snapped hairline downstream.
-    pub fn set_device_pixel_ratio(&mut self, dpr: f32) {
+    pub fn set_device_pixel_ratio(&mut self, dpr: f64) {
         if dpr.is_finite() && dpr > 0.0 {
             self.device_pixel_ratio = dpr;
         } else {

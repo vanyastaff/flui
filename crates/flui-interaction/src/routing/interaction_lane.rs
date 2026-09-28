@@ -18,7 +18,7 @@ use std::thread::{self, ThreadId};
 
 use flui_types::geometry::Matrix4;
 use flui_types::painting::{Path, Shader};
-use flui_types::{Offset, Pixels, Rect, Size};
+use flui_types::{Offset, Rect, Size};
 
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
 use crate::events::{DeviceId, PointerEvent, PointerEventExt, ScrollEventData};
@@ -332,16 +332,16 @@ type PointerHandler = Rc<dyn Fn(PointerDispatch<'_>) + 'static>;
 type ScrollHandler = Rc<dyn Fn(&ScrollEventData) -> EventPropagation + 'static>;
 type PanZoomHandler = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation + 'static>;
 type PathClipper = Rc<dyn Fn(Size) -> Path + 'static>;
-type ShaderMaskFactory = Rc<dyn Fn(Rect<Pixels>) -> Shader + 'static>;
+type ShaderMaskFactory = Rc<dyn Fn(Rect<f64>) -> Shader + 'static>;
 
 /// Callback for mouse enter events.
-pub type MouseEnterCallback = Rc<dyn Fn(DeviceId, Offset<Pixels>) + 'static>;
+pub type MouseEnterCallback = Rc<dyn Fn(DeviceId, Offset<f64>) + 'static>;
 
 /// Callback for mouse exit events.
-pub type MouseExitCallback = Rc<dyn Fn(DeviceId, Offset<Pixels>) + 'static>;
+pub type MouseExitCallback = Rc<dyn Fn(DeviceId, Offset<f64>) + 'static>;
 
 /// Callback for mouse hover events.
-pub type MouseHoverCallback = Rc<dyn Fn(DeviceId, Offset<Pixels>) + 'static>;
+pub type MouseHoverCallback = Rc<dyn Fn(DeviceId, Offset<f64>) + 'static>;
 
 /// Owner-local callback set for one mouse region target.
 #[doc(hidden)]
@@ -679,7 +679,7 @@ pub trait HitTestProbe {
     /// drag over nothing.
     fn probe(
         &self,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         result: &mut HitTestResult,
     ) -> Result<(), InteractionDispatchError>;
 }
@@ -697,14 +697,14 @@ pub trait HitTestProbe {
 /// otherwise. Take one, dispatch from it, drop it.
 #[derive(Debug, Clone)]
 pub struct HitTestSnapshot {
-    position: Offset<Pixels>,
+    position: Offset<f64>,
     path: Vec<HitTestEntry>,
 }
 
 impl HitTestSnapshot {
     /// The global position this snapshot was taken at.
     #[must_use]
-    pub fn position(&self) -> Offset<Pixels> {
+    pub fn position(&self) -> Offset<f64> {
         self.position
     }
 
@@ -847,7 +847,7 @@ impl HitTestHandle {
     /// presentation has closed.
     pub fn hit_test_at(
         &self,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
     ) -> Result<HitTestSnapshot, InteractionDispatchError> {
         self.dispatch.check_realm()?;
 
@@ -1399,7 +1399,7 @@ impl InteractionDispatchHandle {
     /// Register a shader-mask factory in the active owner lane.
     pub fn register_shader_mask(
         &self,
-        factory: impl Fn(Rect<Pixels>) -> Shader + 'static,
+        factory: impl Fn(Rect<f64>) -> Shader + 'static,
     ) -> Result<ShaderMaskTarget, InteractionDispatchError> {
         let lane = self.active_lane()?;
         let target_id = TargetId(lane.target_ids.try_next()?);
@@ -1416,7 +1416,7 @@ impl InteractionDispatchHandle {
     pub fn replace_shader_mask(
         &self,
         target: ShaderMaskTarget,
-        factory: impl Fn(Rect<Pixels>) -> Shader + 'static,
+        factory: impl Fn(Rect<f64>) -> Shader + 'static,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
@@ -1451,7 +1451,7 @@ impl InteractionDispatchHandle {
     pub fn invoke_shader_mask(
         &self,
         target: ShaderMaskTarget,
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
     ) -> Result<Shader, InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(target.lane_id)?;
@@ -1768,7 +1768,7 @@ pub fn resolve_path_clip_target(
 /// paint time.
 pub fn resolve_shader_mask_target(
     target: ShaderMaskTarget,
-    bounds: Rect<Pixels>,
+    bounds: Rect<f64>,
 ) -> Result<Shader, InteractionDispatchError> {
     active_dispatch_handle()?.invoke_shader_mask(target, bounds)
 }
@@ -2220,10 +2220,10 @@ mod tests {
                 })
                 .expect("register path clipper");
 
-            let path = resolve_path_clip_target(target, Size::new(Pixels(10.0), Pixels(20.0)))
+            let path = resolve_path_clip_target(target, Size::new(10.0, 20.0))
                 .expect("resolve path clipper");
 
-            assert!(path.contains(flui_types::Point::new(Pixels(5.0), Pixels(5.0),)));
+            assert!(path.contains(flui_types::Point::new(5.0, 5.0,)));
         });
         assert_eq!(calls.get(), 1);
     }
@@ -2240,7 +2240,7 @@ mod tests {
                     calls_for_factory.set(calls_for_factory.get() + 1);
                     assert_eq!(
                         bounds,
-                        Rect::from_origin_size(Point::ZERO, Size::new(Pixels(10.0), Pixels(20.0)))
+                        Rect::from_origin_size(Point::ZERO, Size::new(10.0, 20.0))
                     );
                     Shader::solid(flui_types::styling::Color::WHITE)
                 })
@@ -2248,7 +2248,7 @@ mod tests {
 
             let shader = resolve_shader_mask_target(
                 target,
-                Rect::from_origin_size(Point::ZERO, Size::new(Pixels(10.0), Pixels(20.0))),
+                Rect::from_origin_size(Point::ZERO, Size::new(10.0, 20.0)),
             )
             .expect("resolve shader mask factory");
 

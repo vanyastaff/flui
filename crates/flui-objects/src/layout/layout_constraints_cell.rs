@@ -165,10 +165,9 @@ impl BuildDuringLayoutCell for LayoutConstraintsCell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::geometry::px;
 
-    fn bc(w: f32) -> BoxConstraints {
-        BoxConstraints::tight_for(Some(px(w)), Some(px(10.0)))
+    fn bc(w: f64) -> BoxConstraints {
+        BoxConstraints::tight_for(Some(w), Some(10.0))
     }
 
     #[test]

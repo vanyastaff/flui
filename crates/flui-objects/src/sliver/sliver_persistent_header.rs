@@ -125,7 +125,7 @@ use flui_foundation::Single;
 use flui_foundation::{
     Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, Listenable, ListenerId,
 };
-use flui_types::{geometry::px, layout::Axis};
+use flui_types::layout::Axis;
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
@@ -212,7 +212,7 @@ pub enum SnapAction {
 #[derive(Clone)]
 pub struct OverScrollHeaderStretchConfiguration {
     /// The overscroll extent required to notify [`stretch_trigger`](Self::stretch_trigger).
-    pub stretch_trigger_offset: f32,
+    pub stretch_trigger_offset: f64,
     /// Data-only notification raised once per crossing of
     /// `stretch_trigger_offset`.
     pub stretch_trigger: Option<StretchTriggerSignal>,
@@ -222,7 +222,7 @@ impl OverScrollHeaderStretchConfiguration {
     /// Creates a stretch configuration with an explicit trigger offset and
     /// optional data-plane signal.
     #[must_use]
-    pub fn new(stretch_trigger_offset: f32, stretch_trigger: Option<StretchTriggerSignal>) -> Self {
+    pub fn new(stretch_trigger_offset: f64, stretch_trigger: Option<StretchTriggerSignal>) -> Self {
         Self {
             stretch_trigger_offset,
             stretch_trigger,
@@ -298,14 +298,14 @@ struct PersistentHeaderCore {
     /// natural "not yet triggered" value — a documented, harmless divergence
     /// that only differs from the oracle in the corner case of a first-ever
     /// layout whose overscroll already exceeds the trigger threshold.
-    last_stretch_offset: f32,
+    last_stretch_offset: f64,
     /// Starts `true` (`:159`) — the very first `layout_child` call always
     /// invokes `update_child` regardless of shrink-offset/overlap history.
     needs_update_child: bool,
-    last_shrink_offset: f32,
+    last_shrink_offset: f64,
     last_overlaps_content: bool,
-    min_extent: f32,
-    max_extent: f32,
+    min_extent: f64,
+    max_extent: f64,
     /// Build-during-layout mailbox (ADR-0017), when an element is driving a
     /// delegate. `None` for a header with a static child — including every
     /// render-harness test, which is why publishing is not unconditional.
@@ -314,8 +314,8 @@ struct PersistentHeaderCore {
 
 impl PersistentHeaderCore {
     fn new(
-        min_extent: f32,
-        max_extent: f32,
+        min_extent: f64,
+        max_extent: f64,
         stretch_configuration: Option<OverScrollHeaderStretchConfiguration>,
     ) -> Self {
         Self {
@@ -330,7 +330,7 @@ impl PersistentHeaderCore {
         }
     }
 
-    fn set_min_extent(&mut self, min_extent: f32) -> bool {
+    fn set_min_extent(&mut self, min_extent: f64) -> bool {
         if self.min_extent == min_extent {
             return false;
         }
@@ -344,7 +344,7 @@ impl PersistentHeaderCore {
         true
     }
 
-    fn set_max_extent(&mut self, max_extent: f32) -> bool {
+    fn set_max_extent(&mut self, max_extent: f64) -> bool {
         if self.max_extent == max_extent {
             return false;
         }
@@ -368,7 +368,7 @@ impl PersistentHeaderCore {
     /// check. This is a genuinely different formula from
     /// [`Self::layout_child`]'s own stretch-offset computation (trap #7 in
     /// the module docs); conflating them is an easy, plan-uncalled-out bug.
-    fn stretch_offset_for_geometry(&self, constraints: &SliverConstraints) -> f32 {
+    fn stretch_offset_for_geometry(&self, constraints: &SliverConstraints) -> f64 {
         if self.stretch_configuration.is_some() {
             constraints.overlap.abs()
         } else {
@@ -412,10 +412,10 @@ impl PersistentHeaderCore {
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
         constraints: &SliverConstraints,
-        scroll_offset: f32,
+        scroll_offset: f64,
         overlaps_content: bool,
-        update_child: impl FnOnce(f32, bool),
-    ) -> f32 {
+        update_child: impl FnOnce(f64, bool),
+    ) -> f64 {
         let shrink_offset = scroll_offset.min(self.max_extent);
         if self.needs_update_child
             || self.last_shrink_offset != shrink_offset
@@ -470,8 +470,8 @@ impl PersistentHeaderCore {
                 constraints.as_box_constraints(0.0, max_child_extent, None),
             );
             match constraints.axis() {
-                Axis::Horizontal => child_size.width.get(),
-                Axis::Vertical => child_size.height.get(),
+                Axis::Horizontal => child_size.width,
+                Axis::Vertical => child_size.height,
             }
         } else {
             0.0
@@ -508,14 +508,14 @@ fn position_persistent_header_child(
     ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,
     constraints: &SliverConstraints,
     geometry: &SliverGeometry,
-    child_position: f32,
-    child_extent: f32,
+    child_position: f64,
+    child_extent: f64,
 ) {
     if ctx.child_count() == 0 {
         return;
     }
     let layout_offset = child_position + constraints.scroll_offset;
-    let offset = child_paint_offset(constraints, geometry, px(layout_offset), px(child_extent));
+    let offset = child_paint_offset(constraints, geometry, layout_offset, child_extent);
     ctx.position_child(0, offset);
 }
 
@@ -535,13 +535,13 @@ macro_rules! header_core_accessors {
         impl $($header)* {
             /// The current minimum extent.
             #[must_use]
-            pub fn min_extent(&self) -> f32 {
+            pub fn min_extent(&self) -> f64 {
                 self.core.min_extent
             }
 
             /// The current maximum extent.
             #[must_use]
-            pub fn max_extent(&self) -> f32 {
+            pub fn max_extent(&self) -> f64 {
                 self.core.max_extent
             }
 
@@ -549,7 +549,7 @@ macro_rules! header_core_accessors {
             /// impact.
             pub fn set_min_extent(
                 &mut self,
-                min_extent: f32,
+                min_extent: f64,
             ) -> flui_rendering::RenderUpdateImpact {
                 layout_impact(self.core.set_min_extent(min_extent))
             }
@@ -569,7 +569,7 @@ macro_rules! header_core_accessors {
             /// impact.
             pub fn set_max_extent(
                 &mut self,
-                max_extent: f32,
+                max_extent: f64,
             ) -> flui_rendering::RenderUpdateImpact {
                 layout_impact(self.core.set_max_extent(max_extent))
             }
@@ -605,7 +605,7 @@ pub struct RenderSliverScrollingPersistentHeader {
     core: PersistentHeaderCore,
     /// Cached return value of `update_geometry`, mirroring `_childPosition`
     /// (`:361`) — read back by `child_main_axis_position`.
-    child_position: f32,
+    child_position: f64,
 }
 
 header_core_accessors!(impl RenderSliverScrollingPersistentHeader);
@@ -613,7 +613,7 @@ header_core_accessors!(impl RenderSliverScrollingPersistentHeader);
 impl RenderSliverScrollingPersistentHeader {
     /// Creates a scrolling persistent header with the given extents.
     #[must_use]
-    pub fn new(min_extent: f32, max_extent: f32) -> Self {
+    pub fn new(min_extent: f64, max_extent: f64) -> Self {
         Self {
             core: PersistentHeaderCore::new(min_extent, max_extent, None),
             child_position: 0.0,
@@ -627,8 +627,8 @@ impl RenderSliverScrollingPersistentHeader {
     fn update_geometry(
         &self,
         constraints: &SliverConstraints,
-        child_extent: f32,
-    ) -> (SliverGeometry, f32) {
+        child_extent: f64,
+    ) -> (SliverGeometry, f64) {
         let stretch_offset = self.core.stretch_offset_for_geometry(constraints);
         let max_extent = self.core.max_extent;
         let raw_paint_extent = max_extent - constraints.scroll_offset;
@@ -695,7 +695,7 @@ impl RenderSliver for RenderSliverScrollingPersistentHeader {
         &self,
         _constraints: &SliverConstraints,
         _child: &dyn RenderObject<SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         self.child_position
     }
 
@@ -727,7 +727,7 @@ header_core_accessors!(impl RenderSliverPinnedPersistentHeader);
 impl RenderSliverPinnedPersistentHeader {
     /// Creates a pinned persistent header with the given extents.
     #[must_use]
-    pub fn new(min_extent: f32, max_extent: f32) -> Self {
+    pub fn new(min_extent: f64, max_extent: f64) -> Self {
         Self {
             core: PersistentHeaderCore::new(min_extent, max_extent, None),
         }
@@ -796,7 +796,7 @@ impl RenderSliver for RenderSliverPinnedPersistentHeader {
         &self,
         _constraints: &SliverConstraints,
         _child: &dyn RenderObject<SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         // The defining "pinned" behavior — always at the leading edge.
         0.0
     }
@@ -836,9 +836,9 @@ pub trait FloatingHeaderMode: sealed::Sealed + Send + Sync + 'static {
     fn update_geometry(
         core: &PersistentHeaderCoreView<'_>,
         constraints: &SliverConstraints,
-        effective_scroll_offset: f32,
-        child_extent: f32,
-    ) -> (SliverGeometry, f32);
+        effective_scroll_offset: f64,
+        child_extent: f64,
+    ) -> (SliverGeometry, f64);
 }
 
 /// A read-only view of the fields of [`PersistentHeaderCore`] the sealed
@@ -852,20 +852,20 @@ pub struct PersistentHeaderCoreView<'a> {
 impl PersistentHeaderCoreView<'_> {
     /// The minimum extent.
     #[must_use]
-    pub fn min_extent(&self) -> f32 {
+    pub fn min_extent(&self) -> f64 {
         self.core.min_extent
     }
 
     /// The maximum extent.
     #[must_use]
-    pub fn max_extent(&self) -> f32 {
+    pub fn max_extent(&self) -> f64 {
         self.core.max_extent
     }
 
     /// `update_geometry`'s stretch-offset formula — see
     /// [`PersistentHeaderCore::stretch_offset_for_geometry`].
     #[must_use]
-    pub fn stretch_offset_for_geometry(&self, constraints: &SliverConstraints) -> f32 {
+    pub fn stretch_offset_for_geometry(&self, constraints: &SliverConstraints) -> f64 {
         self.core.stretch_offset_for_geometry(constraints)
     }
 }
@@ -889,9 +889,9 @@ impl FloatingHeaderMode for FloatingMode {
     fn update_geometry(
         core: &PersistentHeaderCoreView<'_>,
         constraints: &SliverConstraints,
-        effective_scroll_offset: f32,
-        child_extent: f32,
-    ) -> (SliverGeometry, f32) {
+        effective_scroll_offset: f64,
+        child_extent: f64,
+    ) -> (SliverGeometry, f64) {
         let stretch_offset = core.stretch_offset_for_geometry(constraints);
         let max_extent = core.max_extent();
         // Trap #2: paint_extent uses `effective_scroll_offset`, layout_extent
@@ -927,9 +927,9 @@ impl FloatingHeaderMode for FloatingPinnedMode {
     fn update_geometry(
         core: &PersistentHeaderCoreView<'_>,
         constraints: &SliverConstraints,
-        effective_scroll_offset: f32,
-        child_extent: f32,
-    ) -> (SliverGeometry, f32) {
+        effective_scroll_offset: f64,
+        child_extent: f64,
+    ) -> (SliverGeometry, f64) {
         let _ = child_extent; // Always pinned at 0.0 — unlike Floating, which can be negative.
         let min_extent = core.min_extent();
         let max_extent = core.max_extent();
@@ -1015,10 +1015,10 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     /// on `AnimationController::is_animating()` instead does not work: status
     /// flips to `Completed` on the exact same tick the value reaches the
     /// target, which would then skip applying that final tick's value.
-    last_synced_animation_value: Option<f32>,
+    last_synced_animation_value: Option<f64>,
     snap_configuration: Option<FloatingHeaderSnapConfiguration>,
-    last_actual_scroll_offset: Option<f32>,
-    effective_scroll_offset: Option<f32>,
+    last_actual_scroll_offset: Option<f64>,
+    effective_scroll_offset: Option<f64>,
     /// Pointer/wheel-scrolling bookkeeping (trap #4) — set via
     /// [`Self::update_scroll_start_direction`], never internally driven in
     /// this pass (see module docs).
@@ -1027,7 +1027,7 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     /// [`Self::apply_snap_command`]'s idempotency contract.
     last_snap_epoch: u64,
     /// Cached return value of `update_geometry`, mirroring `_childPosition`.
-    child_position: Option<f32>,
+    child_position: Option<f64>,
     /// Value-change subscription on `controller`, torn down in `detach`.
     listener_id: Option<ListenerId>,
     _mode: PhantomData<M>,
@@ -1039,7 +1039,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     /// Creates a floating persistent header. `controller` is optional: pass
     /// `None` when this header will never snap or programmatically expand.
     #[must_use]
-    pub fn new(min_extent: f32, max_extent: f32, controller: Option<AnimationController>) -> Self {
+    pub fn new(min_extent: f64, max_extent: f64, controller: Option<AnimationController>) -> Self {
         Self {
             core: PersistentHeaderCore::new(min_extent, max_extent, None),
             controller,
@@ -1117,7 +1117,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     /// (post-clamp, as tracked by the re-reveal state machine). `None` before
     /// the first layout.
     #[must_use]
-    pub fn effective_scroll_offset(&self) -> Option<f32> {
+    pub fn effective_scroll_offset(&self) -> Option<f64> {
         self.effective_scroll_offset
     }
 
@@ -1177,14 +1177,14 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     /// there is no "first creation" moment to gate on, so this method
     /// applies `duration` via `set_duration` on every call instead —
     /// documented divergence, not a silent behavior change.
-    fn update_animation(&mut self, duration: Duration, end_value: f32, curve: ArcCurve) {
+    fn update_animation(&mut self, duration: Duration, end_value: f64, curve: ArcCurve) {
         let Some(controller) = self.controller.as_ref() else {
             return;
         };
         controller.set_duration(duration);
         let begin = self.effective_scroll_offset.unwrap_or(0.0);
         self.float_tween = FloatTween::new(begin, end_value);
-        let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+        let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
         self.animation = Some(CurvedAnimation::new(parent, curve));
         // The freshly-built tween's value AT the controller's pre-reset
         // position may not equal `begin` (the controller hasn't been driven
@@ -1326,7 +1326,7 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
         &self,
         _constraints: &SliverConstraints,
         _child: &dyn RenderObject<SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         self.child_position.unwrap_or(0.0)
     }
 
@@ -1373,7 +1373,7 @@ mod tests {
         AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
     }
 
-    fn vertical_constraints(scroll_offset: f32, remaining_paint_extent: f32) -> SliverConstraints {
+    fn vertical_constraints(scroll_offset: f64, remaining_paint_extent: f64) -> SliverConstraints {
         sliver::vertical()
             .scroll_offset(scroll_offset)
             .remaining_paint_extent(remaining_paint_extent)

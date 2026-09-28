@@ -7,7 +7,7 @@
 //! - **Extension traits**: Add methods to foreign types
 //! - **Marker traits**: Compile-time constraints
 
-use flui_types::geometry::{Offset, PixelDelta, Pixels};
+use flui_types::geometry::Offset;
 
 use crate::{
     events::{PointerEvent, PointerEventExt as EventsPointerEventExt},
@@ -90,7 +90,7 @@ pub type BoxedCallback<D> = Box<dyn Fn(D)>;
 /// Adds commonly needed methods without modifying the original type.
 pub trait PointerEventExtTrait {
     /// Returns the position of this pointer event.
-    fn position(&self) -> Offset<Pixels>;
+    fn position(&self) -> Offset<f64>;
 
     /// Returns the pointer/device ID.
     fn pointer_id(&self) -> PointerId;
@@ -112,7 +112,7 @@ pub trait PointerEventExtTrait {
 }
 
 impl PointerEventExtTrait for PointerEvent {
-    fn position(&self) -> Offset<Pixels> {
+    fn position(&self) -> Offset<f64> {
         // Use the PointerEventExt trait from events module
         EventsPointerEventExt::position(self)
     }
@@ -159,17 +159,17 @@ pub trait GestureRecognizerExt {
     /// * `initial` - Initial pointer position
     /// * `current` - Current pointer position
     /// * `slop` - Maximum allowed movement (typically 18px)
-    fn exceeds_slop(initial: Offset<Pixels>, current: Offset<Pixels>, slop: Pixels) -> bool {
+    fn exceeds_slop(initial: Offset<f64>, current: Offset<f64>, slop: f64) -> bool {
         let delta = current - initial;
         delta.distance() > slop
     }
 
     /// Calculates the primary delta for a given drag axis.
-    fn primary_delta(delta: Offset<PixelDelta>, axis: DragAxis) -> f32 {
+    fn primary_delta(delta: Offset<f64>, axis: DragAxis) -> f64 {
         match axis {
-            DragAxis::Vertical => delta.dy.get(),
-            DragAxis::Horizontal => delta.dx.get(),
-            DragAxis::Free => delta.distance().get(),
+            DragAxis::Vertical => delta.dy,
+            DragAxis::Horizontal => delta.dx,
+            DragAxis::Free => delta.distance(),
         }
     }
 }
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_pointer_event_ext() {
-        let pos = Offset::new(Pixels(100.0), Pixels(200.0));
+        let pos = Offset::new(100.0, 200.0);
 
         let down = make_down_event(pos, PointerType::Mouse);
         assert!(down.is_down());
@@ -245,15 +245,15 @@ mod tests {
         struct Helper;
         impl GestureRecognizerExt for Helper {}
 
-        let initial = Offset::new(Pixels(100.0), Pixels(100.0));
+        let initial = Offset::new(100.0, 100.0);
 
         // Within slop (18px)
-        let within = Offset::new(Pixels(110.0), Pixels(105.0)); // ~11px
-        assert!(!Helper::exceeds_slop(initial, within, Pixels(18.0)));
+        let within = Offset::new(110.0, 105.0); // ~11px
+        assert!(!Helper::exceeds_slop(initial, within, 18.0));
 
         // Beyond slop
-        let beyond = Offset::new(Pixels(100.0), Pixels(125.0)); // 25px
-        assert!(Helper::exceeds_slop(initial, beyond, Pixels(18.0)));
+        let beyond = Offset::new(100.0, 125.0); // 25px
+        assert!(Helper::exceeds_slop(initial, beyond, 18.0));
     }
 
     #[test]
@@ -261,7 +261,7 @@ mod tests {
         struct Helper;
         impl GestureRecognizerExt for Helper {}
 
-        let delta = Offset::new(PixelDelta(10.0), PixelDelta(20.0));
+        let delta = Offset::new(10.0, 20.0);
 
         assert_eq!(Helper::primary_delta(delta, DragAxis::Horizontal), 10.0);
         assert_eq!(Helper::primary_delta(delta, DragAxis::Vertical), 20.0);

@@ -946,7 +946,7 @@ impl RenderTree {
 #[cfg(test)]
 mod tests {
     use flui_foundation::Leaf;
-    use flui_types::{Size, geometry::px};
+    use flui_types::Size;
     use static_assertions::assert_not_impl_any;
 
     use super::*;
@@ -969,7 +969,7 @@ mod tests {
         type Arity = Leaf;
         type ParentData = BoxParentData;
         fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            Size::new(px(10.0), px(10.0))
+            Size::new(10.0, 10.0)
         }
         fn paint(&self, _ctx: &mut crate::context::PaintCx<'_, Leaf>) {}
     }

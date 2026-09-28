@@ -1,6 +1,6 @@
 //! Pure sliver layout math shared by render objects and the pipeline.
 
-use flui_types::{Offset, Pixels, geometry::px, layout::Axis};
+use flui_types::{Offset, layout::Axis};
 
 use super::{SliverConstraints, SliverGeometry, right_way_up};
 
@@ -10,11 +10,11 @@ use super::{SliverConstraints, SliverGeometry, right_way_up};
 pub fn child_paint_offset(
     constraints: &SliverConstraints,
     geometry: &SliverGeometry,
-    layout_offset: Pixels,
-    child_main_extent: Pixels,
+    layout_offset: f64,
+    child_main_extent: f64,
 ) -> Offset {
-    let layout_offset = layout_offset.get();
-    let child_main_extent = child_main_extent.get();
+    let layout_offset = layout_offset;
+    let child_main_extent = child_main_extent;
     let child_main_axis_position = layout_offset - constraints.scroll_offset;
     let main_axis_delta = if right_way_up(constraints.axis_direction, constraints.growth_direction)
     {
@@ -24,8 +24,8 @@ pub fn child_paint_offset(
     };
 
     match constraints.axis_direction.axis() {
-        Axis::Horizontal => Offset::new(px(main_axis_delta), px(0.0)),
-        Axis::Vertical => Offset::new(px(0.0), px(main_axis_delta)),
+        Axis::Horizontal => Offset::new(main_axis_delta, 0.0),
+        Axis::Vertical => Offset::new(0.0, main_axis_delta),
     }
 }
 
@@ -43,13 +43,13 @@ pub fn child_paint_offset(
 pub fn grid_child_paint_offset(
     constraints: &SliverConstraints,
     geometry: &SliverGeometry,
-    layout_offset: Pixels,
-    child_main_axis_extent: Pixels,
-    cross_axis_offset: Pixels,
+    layout_offset: f64,
+    child_main_axis_extent: f64,
+    cross_axis_offset: f64,
 ) -> Offset {
-    let layout_offset_f = layout_offset.get();
-    let child_main_axis_extent_f = child_main_axis_extent.get();
-    let cross_f = cross_axis_offset.get();
+    let layout_offset_f = layout_offset;
+    let child_main_axis_extent_f = child_main_axis_extent;
+    let cross_f = cross_axis_offset;
 
     let child_main_axis_position = layout_offset_f - constraints.scroll_offset;
     let main_axis_delta = if right_way_up(constraints.axis_direction, constraints.growth_direction)
@@ -60,8 +60,8 @@ pub fn grid_child_paint_offset(
     };
 
     match constraints.axis_direction.axis() {
-        Axis::Horizontal => Offset::new(px(main_axis_delta), px(cross_f)),
-        Axis::Vertical => Offset::new(px(cross_f), px(main_axis_delta)),
+        Axis::Horizontal => Offset::new(main_axis_delta, cross_f),
+        Axis::Vertical => Offset::new(cross_f, main_axis_delta),
     }
 }
 
@@ -71,7 +71,7 @@ mod tests {
     use crate::constraints::GrowthDirection;
     use crate::testing::sliver;
 
-    fn vertical_constraints(growth: GrowthDirection, scroll_offset: f32) -> SliverConstraints {
+    fn vertical_constraints(growth: GrowthDirection, scroll_offset: f64) -> SliverConstraints {
         sliver::vertical()
             .with_growth_direction(growth)
             .scroll_offset(scroll_offset)
@@ -82,7 +82,7 @@ mod tests {
             .build()
     }
 
-    fn geometry(paint_extent: f32, scroll_extent: f32) -> SliverGeometry {
+    fn geometry(paint_extent: f64, scroll_extent: f64) -> SliverGeometry {
         SliverGeometry {
             scroll_extent,
             paint_extent,
@@ -100,8 +100,8 @@ mod tests {
         let geom = geometry(80.0, 100.0);
 
         assert_eq!(
-            child_paint_offset(&constraints, &geom, px(0.0), px(100.0)),
-            Offset::new(px(0.0), px(-10.0)),
+            child_paint_offset(&constraints, &geom, 0.0, 100.0),
+            Offset::new(0.0, -10.0),
         );
     }
 
@@ -111,8 +111,8 @@ mod tests {
         let geom = geometry(40.0, 40.0);
 
         assert_eq!(
-            child_paint_offset(&constraints, &geom, px(0.0), px(40.0)),
-            Offset::new(px(0.0), px(0.0)),
+            child_paint_offset(&constraints, &geom, 0.0, 40.0),
+            Offset::new(0.0, 0.0),
         );
     }
 
@@ -122,8 +122,8 @@ mod tests {
         let geom = geometry(80.0, 120.0);
 
         assert_eq!(
-            child_paint_offset(&constraints, &geom, px(40.0), px(30.0)),
-            Offset::new(px(0.0), px(40.0)),
+            child_paint_offset(&constraints, &geom, 40.0, 30.0),
+            Offset::new(0.0, 40.0),
         );
     }
 
@@ -143,8 +143,8 @@ mod tests {
         let geom = geometry(80.0, 100.0);
 
         assert_eq!(
-            child_paint_offset(&constraints, &geom, px(0.0), px(80.0)),
-            Offset::new(px(-5.0), px(0.0)),
+            child_paint_offset(&constraints, &geom, 0.0, 80.0),
+            Offset::new(-5.0, 0.0),
         );
     }
 
@@ -159,8 +159,8 @@ mod tests {
         let geom = geometry(200.0, 400.0);
 
         assert_eq!(
-            super::grid_child_paint_offset(&constraints, &geom, px(100.0), px(100.0), px(50.0),),
-            Offset::new(px(50.0), px(0.0)),
+            super::grid_child_paint_offset(&constraints, &geom, 100.0, 100.0, 50.0,),
+            Offset::new(50.0, 0.0),
         );
     }
 
@@ -171,8 +171,8 @@ mod tests {
         let geom = geometry(200.0, 400.0);
 
         assert_eq!(
-            super::grid_child_paint_offset(&constraints, &geom, px(200.0), px(100.0), px(100.0),),
-            Offset::new(px(100.0), px(100.0)),
+            super::grid_child_paint_offset(&constraints, &geom, 200.0, 100.0, 100.0,),
+            Offset::new(100.0, 100.0),
         );
     }
 
@@ -191,14 +191,14 @@ mod tests {
         let geom = geometry(200.0, 400.0);
 
         assert_eq!(
-            super::grid_child_paint_offset(&constraints, &geom, px(0.0), px(100.0), px(50.0),),
-            Offset::new(px(0.0), px(50.0)),
+            super::grid_child_paint_offset(&constraints, &geom, 0.0, 100.0, 50.0,),
+            Offset::new(0.0, 50.0),
         );
 
         // Second column (layout_offset=100, cross=0)
         assert_eq!(
-            super::grid_child_paint_offset(&constraints, &geom, px(100.0), px(100.0), px(0.0),),
-            Offset::new(px(100.0), px(0.0)),
+            super::grid_child_paint_offset(&constraints, &geom, 100.0, 100.0, 0.0,),
+            Offset::new(100.0, 0.0),
         );
     }
 }

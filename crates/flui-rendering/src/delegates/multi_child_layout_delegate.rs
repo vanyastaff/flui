@@ -31,7 +31,7 @@ use crate::constraints::BoxConstraints;
 ///
 /// #[derive(Debug)]
 /// struct DialogLayoutDelegate {
-///     padding: f32,
+///     padding: f64,
 /// }
 ///
 /// impl MultiChildLayoutDelegate for DialogLayoutDelegate {
@@ -135,13 +135,11 @@ pub trait MultiChildLayoutContext {
 mod tests {
     use std::collections::HashMap;
 
-    use flui_types::geometry::px;
-
     use super::*;
 
     #[derive(Debug)]
     struct TestDelegate {
-        padding: f32,
+        padding: f64,
     }
 
     impl MultiChildLayoutDelegate for TestDelegate {
@@ -149,17 +147,17 @@ mod tests {
             if context.has_child("header") {
                 let constraints = BoxConstraints::tight_for(Some(size.width), None);
                 let header_size = context.layout_child("header", constraints);
-                context.position_child("header", Offset::new(px(0.0), px(0.0)));
+                context.position_child("header", Offset::new(0.0, 0.0));
 
                 if context.has_child("body") {
                     let body_constraints = BoxConstraints::tight_for(
                         Some(size.width),
-                        Some(size.height - header_size.height - px(self.padding)),
+                        Some(size.height - header_size.height - self.padding),
                     );
                     context.layout_child("body", body_constraints);
                     context.position_child(
                         "body",
-                        Offset::new(px(0.0), header_size.height + px(self.padding)),
+                        Offset::new(0.0, header_size.height + self.padding),
                     );
                 }
             }
@@ -171,7 +169,7 @@ mod tests {
 
         fn should_relayout(&self, old_delegate: &dyn MultiChildLayoutDelegate) -> bool {
             if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
-                (self.padding - old.padding).abs() > f32::EPSILON
+                (self.padding - old.padding).abs() > f64::EPSILON
             } else {
                 true
             }
@@ -191,8 +189,8 @@ mod tests {
     impl MockContext {
         fn new() -> Self {
             let mut children = HashMap::new();
-            children.insert("header".to_string(), Size::new(px(100.0), px(50.0)));
-            children.insert("body".to_string(), Size::new(px(100.0), px(200.0)));
+            children.insert("header".to_string(), Size::new(100.0, 50.0));
+            children.insert("body".to_string(), Size::new(100.0, 200.0));
 
             Self {
                 children,
@@ -222,7 +220,7 @@ mod tests {
     fn test_multi_child_layout() {
         let delegate = TestDelegate { padding: 10.0 };
         let mut context = MockContext::new();
-        let size = Size::new(px(200.0), px(300.0));
+        let size = Size::new(200.0, 300.0);
 
         delegate.perform_layout(&mut context, size);
 
@@ -230,12 +228,12 @@ mod tests {
         assert!(context.laid_out.contains_key("body"));
 
         let header_pos = context.positions.get("header").unwrap();
-        assert_eq!(header_pos.dx, px(0.0));
-        assert_eq!(header_pos.dy, px(0.0));
+        assert_eq!(header_pos.dx, 0.0);
+        assert_eq!(header_pos.dy, 0.0);
 
         let body_pos = context.positions.get("body").unwrap();
-        assert_eq!(body_pos.dx, px(0.0));
-        assert_eq!(body_pos.dy, px(60.0)); // 50 (header height) + 10 (padding)
+        assert_eq!(body_pos.dx, 0.0);
+        assert_eq!(body_pos.dy, 60.0); // 50 (header height) + 10 (padding)
     }
 
     #[test]

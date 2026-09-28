@@ -14,14 +14,14 @@ use flui_rendering::{
     traits::{RenderBox, RenderSliver},
     view::ScrollableViewportOffset,
 };
-use flui_types::{Offset, Size, geometry::px, layout::AxisDirection};
+use flui_types::{Offset, Size, layout::AxisDirection};
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject, laid_out_tight_100x100 as laid_out};
 
 fn hits_at(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    x: f32,
-    y: f32,
+    x: f64,
+    y: f64,
 ) -> Vec<flui_foundation::RenderId> {
     inspect::hit_path(owner, x, y)
 }
@@ -66,16 +66,16 @@ impl RenderBox for SliverHitHost {
 
 #[derive(Debug)]
 struct MainAxisBandSliver {
-    extent: f32,
-    hit_start: f32,
-    hit_end: f32,
+    extent: f64,
+    hit_start: f64,
+    hit_end: f64,
     /// Cross-axis extent captured at layout, read by the `&self`-only
     /// `hit_test_self` (the sliver hit-test context does not carry it).
-    cross_axis_extent: f32,
+    cross_axis_extent: f64,
 }
 
 impl MainAxisBandSliver {
-    fn new(extent: f32, hit_start: f32, hit_end: f32) -> Self {
+    fn new(extent: f64, hit_start: f64, hit_end: f64) -> Self {
         Self {
             extent,
             hit_start,
@@ -110,7 +110,7 @@ impl RenderSliver for MainAxisBandSliver {
         }
     }
 
-    fn hit_test_self(&self, main: f32, cross: f32) -> bool {
+    fn hit_test_self(&self, main: f64, cross: f64) -> bool {
         main >= self.hit_start
             && main < self.hit_end
             && cross >= 0.0
@@ -124,50 +124,50 @@ fn sliver_hit_direction_matrix_through_box_host() {
         (
             AxisDirection::TopToBottom,
             GrowthDirection::Forward,
-            Offset::new(px(10.0), px(10.0)),
-            Offset::new(px(10.0), px(30.0)),
+            Offset::new(10.0, 10.0),
+            Offset::new(10.0, 30.0),
         ),
         (
             AxisDirection::TopToBottom,
             GrowthDirection::Reverse,
-            Offset::new(px(10.0), px(30.0)),
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(10.0, 30.0),
+            Offset::new(10.0, 10.0),
         ),
         (
             AxisDirection::BottomToTop,
             GrowthDirection::Forward,
-            Offset::new(px(10.0), px(30.0)),
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(10.0, 30.0),
+            Offset::new(10.0, 10.0),
         ),
         (
             AxisDirection::BottomToTop,
             GrowthDirection::Reverse,
-            Offset::new(px(10.0), px(10.0)),
-            Offset::new(px(10.0), px(30.0)),
+            Offset::new(10.0, 10.0),
+            Offset::new(10.0, 30.0),
         ),
         (
             AxisDirection::LeftToRight,
             GrowthDirection::Forward,
-            Offset::new(px(10.0), px(10.0)),
-            Offset::new(px(30.0), px(10.0)),
+            Offset::new(10.0, 10.0),
+            Offset::new(30.0, 10.0),
         ),
         (
             AxisDirection::LeftToRight,
             GrowthDirection::Reverse,
-            Offset::new(px(30.0), px(10.0)),
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(30.0, 10.0),
+            Offset::new(10.0, 10.0),
         ),
         (
             AxisDirection::RightToLeft,
             GrowthDirection::Forward,
-            Offset::new(px(30.0), px(10.0)),
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(30.0, 10.0),
+            Offset::new(10.0, 10.0),
         ),
         (
             AxisDirection::RightToLeft,
             GrowthDirection::Reverse,
-            Offset::new(px(10.0), px(10.0)),
-            Offset::new(px(30.0), px(10.0)),
+            Offset::new(10.0, 10.0),
+            Offset::new(30.0, 10.0),
         ),
     ];
 
@@ -187,12 +187,12 @@ fn sliver_hit_direction_matrix_through_box_host() {
         let owner = laid_out(owner, host_id);
 
         assert_eq!(
-            hits_at(&owner, hit_position.dx.get(), hit_position.dy.get()),
+            hits_at(&owner, hit_position.dx, hit_position.dy),
             vec![sliver_id, host_id],
             "{axis:?} {growth:?} must hit inside the leading main-axis band",
         );
         assert!(
-            hits_at(&owner, miss_position.dx.get(), miss_position.dy.get()).is_empty(),
+            hits_at(&owner, miss_position.dx, miss_position.dy).is_empty(),
             "{axis:?} {growth:?} must miss outside the leading main-axis band",
         );
     }

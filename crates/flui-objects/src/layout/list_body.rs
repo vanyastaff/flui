@@ -13,8 +13,7 @@ use flui_rendering::{
     traits::{RenderBox, TextBaseline},
 };
 use flui_types::{
-    Axis, Offset, Pixels, Size,
-    geometry::px,
+    Axis, Offset, Size,
     layout::AxisDirection,
     layout::AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
 };
@@ -39,7 +38,7 @@ pub struct RenderListBody {
     axis_direction: AxisDirection,
     child_count: usize,
     /// Baselines recorded during layout using Flutter's first-child-in-list rule.
-    reported_baselines: [Option<f32>; 2],
+    reported_baselines: [Option<f64>; 2],
 }
 
 impl RenderListBody {
@@ -112,21 +111,19 @@ impl RenderListBody {
         }
     }
 
-    fn child_main_extent(&self, size: Size) -> f32 {
+    fn child_main_extent(&self, size: Size) -> f64 {
         match self.main_axis() {
-            Axis::Horizontal => size.width.get(),
-            Axis::Vertical => size.height.get(),
+            Axis::Horizontal => size.width,
+            Axis::Vertical => size.height,
         }
     }
 
-    fn constrain_size(&self, constraints: BoxConstraints, main_extent: f32) -> Size {
+    fn constrain_size(&self, constraints: BoxConstraints, main_extent: f64) -> Size {
         match self.main_axis() {
             Axis::Horizontal => {
-                constraints.constrain(Size::new(px(main_extent), constraints.max_height))
+                constraints.constrain(Size::new(main_extent, constraints.max_height))
             }
-            Axis::Vertical => {
-                constraints.constrain(Size::new(constraints.max_width, px(main_extent)))
-            }
+            Axis::Vertical => constraints.constrain(Size::new(constraints.max_width, main_extent)),
         }
     }
 
@@ -148,32 +145,32 @@ impl RenderListBody {
     fn horizontal_intrinsic(
         &self,
         ctx: &mut BoxIntrinsicsCtx<'_>,
-        extent: f32,
-        mut child_query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f32) -> f32,
-    ) -> f32 {
+        extent: f64,
+        mut child_query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f64) -> f64,
+    ) -> f64 {
         match self.main_axis() {
             Axis::Horizontal => (0..ctx.child_count())
                 .map(|i| child_query(ctx, i, extent))
                 .sum(),
             Axis::Vertical => (0..ctx.child_count())
                 .map(|i| child_query(ctx, i, extent))
-                .fold(0.0_f32, f32::max),
+                .fold(0.0_f64, f64::max),
         }
     }
 
     fn vertical_intrinsic(
         &self,
         ctx: &mut BoxIntrinsicsCtx<'_>,
-        extent: f32,
-        mut child_query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f32) -> f32,
-    ) -> f32 {
+        extent: f64,
+        mut child_query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f64) -> f64,
+    ) -> f64 {
         match self.main_axis() {
             Axis::Horizontal => (0..ctx.child_count())
                 .map(|i| child_query(ctx, i, extent))
                 .sum(),
             Axis::Vertical => (0..ctx.child_count())
                 .map(|i| child_query(ctx, i, extent))
-                .fold(0.0_f32, f32::max),
+                .fold(0.0_f64, f64::max),
         }
     }
 }
@@ -218,14 +215,10 @@ impl RenderBox for RenderListBody {
         for (i, child_size) in child_sizes.iter().copied().enumerate() {
             let child_extent = self.child_main_extent(child_size);
             let offset = match self.axis_direction {
-                LeftToRight => Offset::new(px(forward_position), Pixels::ZERO),
-                TopToBottom => Offset::new(Pixels::ZERO, px(forward_position)),
-                RightToLeft => {
-                    Offset::new(px(main_extent - forward_position - child_extent), px(0.0))
-                }
-                BottomToTop => {
-                    Offset::new(px(0.0), px(main_extent - forward_position - child_extent))
-                }
+                LeftToRight => Offset::new(forward_position, 0.0),
+                TopToBottom => Offset::new(0.0, forward_position),
+                RightToLeft => Offset::new(main_extent - forward_position - child_extent, 0.0),
+                BottomToTop => Offset::new(0.0, main_extent - forward_position - child_extent),
             };
             ctx.position_child(i, offset);
             forward_position += child_extent;
@@ -235,7 +228,7 @@ impl RenderBox for RenderListBody {
                 if self.reported_baselines[slot].is_none() {
                     self.reported_baselines[slot] = ctx
                         .child_distance_to_actual_baseline(i, kind)
-                        .map(|baseline| baseline + offset.dy.get());
+                        .map(|baseline| baseline + offset.dy);
                 }
             }
         }
@@ -253,25 +246,25 @@ impl RenderBox for RenderListBody {
         })
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.horizontal_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.horizontal_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.vertical_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.vertical_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
         })
@@ -282,12 +275,12 @@ impl RenderBox for RenderListBody {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         self.debug_check_constraints(constraints);
         let child_constraints = self.child_constraints(constraints);
         match self.axis_direction {
             LeftToRight | RightToLeft => {
-                let mut result: Option<f32> = None;
+                let mut result: Option<f64> = None;
                 for i in 0..ctx.child_count() {
                     if let Some(child_baseline) =
                         ctx.child_dry_baseline(i, child_constraints, baseline)
@@ -326,7 +319,7 @@ impl RenderBox for RenderListBody {
         }
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         self.reported_baselines[baseline_kind_index(baseline)]
     }
 

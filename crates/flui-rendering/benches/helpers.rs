@@ -16,11 +16,11 @@ use flui_rendering::{
     pipeline::{Compositing, Layout, PaintPhase, PipelineOwner},
     testing::{TreeNode, box_node, tree},
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 /// Tight 200×200 root constraint used across all bench tree shapes.
 pub fn root_constraints() -> BoxConstraints {
-    BoxConstraints::tight(Size::new(px(200.0), px(200.0)))
+    BoxConstraints::tight(Size::new(200.0, 200.0))
 }
 
 /// Mounts a `TreeNode` spec into a fresh owner with the shared root

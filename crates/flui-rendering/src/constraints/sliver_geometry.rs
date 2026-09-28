@@ -8,9 +8,9 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use flui_types::geometry::canonical_bits;
+use flui_types::geometry::canonical_bits_f64;
 
-const PRECISION_ERROR_TOLERANCE: f32 = flui_foundation::EPSILON_F32;
+const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
 
 /// Layout output describing space occupied by a sliver.
 ///
@@ -34,30 +34,30 @@ const PRECISION_ERROR_TOLERANCE: f32 = flui_foundation::EPSILON_F32;
 #[derive(Clone, Copy, PartialEq)]
 pub struct SliverGeometry {
     /// Total scrollable extent consumed by this sliver.
-    pub scroll_extent: f32,
+    pub scroll_extent: f64,
 
     /// Extent that's actually painted in the viewport.
-    pub paint_extent: f32,
+    pub paint_extent: f64,
 
     /// Offset from the sliver's natural position where painting starts.
     /// Typically 0.0, but can be negative for effects like pinned headers.
-    pub paint_origin: f32,
+    pub paint_origin: f64,
 
     /// Extent that affects layout of subsequent slivers.
     /// Usually equals paint_extent but may differ for special cases.
-    pub layout_extent: f32,
+    pub layout_extent: f64,
 
     /// Maximum extent this sliver could paint if unconstrained.
-    pub max_paint_extent: f32,
+    pub max_paint_extent: f64,
 
     /// Maximum extent that should block scrolling (for pinned elements).
-    pub max_scroll_obstruction_extent: f32,
+    pub max_scroll_obstruction_extent: f64,
 
     /// Cross-axis extent if this sliver affects cross-axis sizing.
-    pub cross_axis_extent: Option<f32>,
+    pub cross_axis_extent: Option<f64>,
 
     /// Extent used for hit testing (usually equals paint_extent).
-    pub hit_test_extent: f32,
+    pub hit_test_extent: f64,
 
     /// Whether this sliver is currently visible in the viewport.
     pub visible: bool,
@@ -66,10 +66,10 @@ pub struct SliverGeometry {
     pub has_visual_overflow: bool,
 
     /// If set, requests a scroll offset correction.
-    pub scroll_offset_correction: Option<f32>,
+    pub scroll_offset_correction: Option<f64>,
 
     /// Total extent to keep alive in the cache (on and off screen).
-    pub cache_extent: f32,
+    pub cache_extent: f64,
 }
 
 // ============================================================================
@@ -80,26 +80,26 @@ impl Hash for SliverGeometry {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Canonical bits, so geometry equal under `PartialEq` (`0.0` and
         // `-0.0`) hashes equal.
-        canonical_bits(self.scroll_extent).hash(state);
-        canonical_bits(self.paint_extent).hash(state);
-        canonical_bits(self.paint_origin).hash(state);
-        canonical_bits(self.layout_extent).hash(state);
-        canonical_bits(self.max_paint_extent).hash(state);
-        canonical_bits(self.max_scroll_obstruction_extent).hash(state);
+        canonical_bits_f64(self.scroll_extent).hash(state);
+        canonical_bits_f64(self.paint_extent).hash(state);
+        canonical_bits_f64(self.paint_origin).hash(state);
+        canonical_bits_f64(self.layout_extent).hash(state);
+        canonical_bits_f64(self.max_paint_extent).hash(state);
+        canonical_bits_f64(self.max_scroll_obstruction_extent).hash(state);
 
         if let Some(extent) = self.cross_axis_extent {
-            canonical_bits(extent).hash(state);
+            canonical_bits_f64(extent).hash(state);
         }
 
-        canonical_bits(self.hit_test_extent).hash(state);
+        canonical_bits_f64(self.hit_test_extent).hash(state);
         self.visible.hash(state);
         self.has_visual_overflow.hash(state);
 
         if let Some(correction) = self.scroll_offset_correction {
-            canonical_bits(correction).hash(state);
+            canonical_bits_f64(correction).hash(state);
         }
 
-        canonical_bits(self.cache_extent).hash(state);
+        canonical_bits_f64(self.cache_extent).hash(state);
     }
 }
 
@@ -154,7 +154,7 @@ impl SliverGeometry {
     /// [`with_max_paint_extent`](Self::with_max_paint_extent).
     #[inline]
     #[must_use]
-    pub const fn new(scroll_extent: f32, paint_extent: f32, paint_origin: f32) -> Self {
+    pub const fn new(scroll_extent: f64, paint_extent: f64, paint_origin: f64) -> Self {
         Self {
             scroll_extent,
             paint_extent,
@@ -175,10 +175,10 @@ impl SliverGeometry {
     #[inline]
     #[must_use]
     pub const fn with_extents(
-        scroll_extent: f32,
-        paint_extent: f32,
-        layout_extent: f32,
-        cache_extent: f32,
+        scroll_extent: f64,
+        paint_extent: f64,
+        layout_extent: f64,
+        cache_extent: f64,
     ) -> Self {
         Self {
             scroll_extent,
@@ -201,7 +201,7 @@ impl SliverGeometry {
     /// Used when a sliver determines the scroll position needs adjustment.
     #[inline]
     #[must_use]
-    pub const fn scroll_offset_correction(correction: f32) -> Self {
+    pub const fn scroll_offset_correction(correction: f64) -> Self {
         Self {
             scroll_extent: 0.0,
             paint_extent: 0.0,
@@ -225,7 +225,7 @@ impl SliverGeometry {
     /// Sets max paint extent.
     #[inline]
     #[must_use]
-    pub const fn with_max_paint_extent(mut self, extent: f32) -> Self {
+    pub const fn with_max_paint_extent(mut self, extent: f64) -> Self {
         self.max_paint_extent = extent;
         self
     }
@@ -233,7 +233,7 @@ impl SliverGeometry {
     /// Sets paint origin.
     #[inline]
     #[must_use]
-    pub const fn with_paint_origin(mut self, origin: f32) -> Self {
+    pub const fn with_paint_origin(mut self, origin: f64) -> Self {
         self.paint_origin = origin;
         self
     }
@@ -241,7 +241,7 @@ impl SliverGeometry {
     /// Sets hit test extent.
     #[inline]
     #[must_use]
-    pub const fn with_hit_test_extent(mut self, extent: f32) -> Self {
+    pub const fn with_hit_test_extent(mut self, extent: f64) -> Self {
         self.hit_test_extent = extent;
         self
     }
@@ -249,7 +249,7 @@ impl SliverGeometry {
     /// Sets cross axis extent.
     #[inline]
     #[must_use]
-    pub const fn with_cross_axis_extent(mut self, extent: f32) -> Self {
+    pub const fn with_cross_axis_extent(mut self, extent: f64) -> Self {
         self.cross_axis_extent = Some(extent);
         self
     }
@@ -265,7 +265,7 @@ impl SliverGeometry {
     /// Sets max scroll obstruction extent (for pinned headers).
     #[inline]
     #[must_use]
-    pub const fn with_max_scroll_obstruction(mut self, extent: f32) -> Self {
+    pub const fn with_max_scroll_obstruction(mut self, extent: f64) -> Self {
         self.max_scroll_obstruction_extent = extent;
         self
     }
@@ -277,7 +277,7 @@ impl SliverGeometry {
     /// `paint_extent`, matching Flutter's `layoutExtent ??= paintExtent`.
     #[inline]
     #[must_use]
-    pub const fn with_layout_extent(mut self, extent: f32) -> Self {
+    pub const fn with_layout_extent(mut self, extent: f64) -> Self {
         self.layout_extent = extent;
         self
     }
@@ -288,7 +288,7 @@ impl SliverGeometry {
     /// it to `paint_extent`.
     #[inline]
     #[must_use]
-    pub const fn with_cache_extent(mut self, extent: f32) -> Self {
+    pub const fn with_cache_extent(mut self, extent: f64) -> Self {
         self.cache_extent = extent;
         self
     }
@@ -346,14 +346,14 @@ impl SliverGeometry {
     /// Returns layout extent that doesn't paint (dead space).
     #[inline]
     #[must_use]
-    pub fn non_painted_layout_extent(&self) -> f32 {
+    pub fn non_painted_layout_extent(&self) -> f64 {
         (self.layout_extent - self.paint_extent).max(0.0)
     }
 
     /// Returns cache extent beyond layout bounds.
     #[inline]
     #[must_use]
-    pub fn cache_beyond_layout(&self) -> f32 {
+    pub fn cache_beyond_layout(&self) -> f64 {
         (self.cache_extent - self.layout_extent).max(0.0)
     }
 
@@ -618,7 +618,7 @@ mod tests {
         );
 
         let geometry = SliverGeometry {
-            paint_origin: f32::NAN,
+            paint_origin: f64::NAN,
             ..SliverGeometry::new(100.0, 50.0, 0.0)
         };
         assert_eq!(
@@ -632,7 +632,7 @@ mod tests {
         let geometry = SliverGeometry {
             paint_extent: 1.0,
             layout_extent: 1.0,
-            max_paint_extent: 1.0 - flui_foundation::EPSILON_F32 / 2.0,
+            max_paint_extent: 1.0 - flui_foundation::EPSILON / 2.0,
             ..SliverGeometry::ZERO
         };
         assert_eq!(geometry.validation_error(), None);
@@ -640,7 +640,7 @@ mod tests {
         let geometry = SliverGeometry {
             paint_extent: 1.0,
             layout_extent: 1.0,
-            max_paint_extent: 1.0 - flui_foundation::EPSILON_F32 * 2.0,
+            max_paint_extent: 1.0 - flui_foundation::EPSILON * 2.0,
             ..SliverGeometry::ZERO
         };
         assert_eq!(geometry.validation_error(), None);
@@ -653,10 +653,10 @@ mod tests {
     #[test]
     fn validation_allows_infinite_scroll_and_max_paint_extents() {
         let geometry = SliverGeometry {
-            scroll_extent: f32::INFINITY,
+            scroll_extent: f64::INFINITY,
             paint_extent: 100.0,
             layout_extent: 100.0,
-            max_paint_extent: f32::INFINITY,
+            max_paint_extent: f64::INFINITY,
             hit_test_extent: 100.0,
             cache_extent: 120.0,
             visible: true,

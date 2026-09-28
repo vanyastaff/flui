@@ -51,7 +51,7 @@ use flui_rendering::{
 /// use flui_types::geometry::px;
 ///
 /// // Force the child to be at least 200x100 logical pixels.
-/// let extra = BoxConstraints::new(px(200.0), px(f32::INFINITY), px(100.0), px(f32::INFINITY));
+/// let extra = BoxConstraints::new(200.0, (f64::INFINITY), 100.0, (f64::INFINITY));
 /// let _node = RenderConstrainedBox::new(extra);
 /// ```
 #[derive(Debug, Clone)]
@@ -138,12 +138,12 @@ impl RenderBox for RenderConstrainedBox {
 
     fn compute_min_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         let ac = &self.additional_constraints;
         if ac.has_bounded_width() && ac.has_tight_width() {
-            return ac.min_width.get();
+            return ac.min_width;
         }
         let width = if ctx.child_count() > 0 {
             ctx.child_min_intrinsic_width(0, height)
@@ -157,18 +157,18 @@ impl RenderBox for RenderConstrainedBox {
         if ac.has_infinite_width() {
             width
         } else {
-            ac.constrain_width(flui_types::geometry::px(width)).get()
+            ac.constrain_width(width)
         }
     }
 
     fn compute_max_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         let ac = &self.additional_constraints;
         if ac.has_bounded_width() && ac.has_tight_width() {
-            return ac.min_width.get();
+            return ac.min_width;
         }
         let width = if ctx.child_count() > 0 {
             ctx.child_max_intrinsic_width(0, height)
@@ -182,18 +182,18 @@ impl RenderBox for RenderConstrainedBox {
         if ac.has_infinite_width() {
             width
         } else {
-            ac.constrain_width(flui_types::geometry::px(width)).get()
+            ac.constrain_width(width)
         }
     }
 
     fn compute_min_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         let ac = &self.additional_constraints;
         if ac.has_bounded_height() && ac.has_tight_height() {
-            return ac.min_height.get();
+            return ac.min_height;
         }
         let height = if ctx.child_count() > 0 {
             ctx.child_min_intrinsic_height(0, width)
@@ -207,18 +207,18 @@ impl RenderBox for RenderConstrainedBox {
         if ac.has_infinite_height() {
             height
         } else {
-            ac.constrain_height(flui_types::geometry::px(height)).get()
+            ac.constrain_height(height)
         }
     }
 
     fn compute_max_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         let ac = &self.additional_constraints;
         if ac.has_bounded_height() && ac.has_tight_height() {
-            return ac.min_height.get();
+            return ac.min_height;
         }
         let height = if ctx.child_count() > 0 {
             ctx.child_max_intrinsic_height(0, width)
@@ -232,7 +232,7 @@ impl RenderBox for RenderConstrainedBox {
         if ac.has_infinite_height() {
             height
         } else {
-            ac.constrain_height(flui_types::geometry::px(height)).get()
+            ac.constrain_height(height)
         }
     }
 
@@ -254,7 +254,7 @@ impl RenderBox for RenderConstrainedBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         let combined = self.additional_constraints.enforce(&constraints);
         if ctx.child_count() > 0 {
             ctx.child_dry_baseline(0, combined, baseline)
@@ -270,16 +270,15 @@ impl RenderBox for RenderConstrainedBox {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
-    fn tight(w: f32, h: f32) -> BoxConstraints {
-        BoxConstraints::tight(Size::new(px(w), px(h)))
+    fn tight(w: f64, h: f64) -> BoxConstraints {
+        BoxConstraints::tight(Size::new(w, h))
     }
 
-    fn bounded(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
-        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    fn bounded(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
+        BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
     // ---------- construction & getters ------------------------------------
@@ -349,7 +348,7 @@ mod tests {
         });
         // Without a child the smallest satisfying combined size is the
         // additional-constraints min (80, 40).
-        assert_eq!(dry, Size::new(px(80.0), px(40.0)));
+        assert_eq!(dry, Size::new(80.0, 40.0));
     }
 
     #[test]

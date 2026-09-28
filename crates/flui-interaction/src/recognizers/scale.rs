@@ -13,7 +13,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use web_time::Instant;
 
-use flui_types::{Offset, geometry::Pixels};
+use flui_types::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
@@ -42,9 +42,9 @@ pub type ScaleCancelCallback = Rc<dyn Fn()>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScaleStartDetails {
     /// Focal point (center between pointers) in global coordinates
-    pub focal_point: Offset<Pixels>,
+    pub focal_point: Offset<f64>,
     /// Focal point in local coordinates
-    pub local_focal_point: Offset<Pixels>,
+    pub local_focal_point: Offset<f64>,
     /// Number of pointers involved
     pub pointer_count: usize,
 }
@@ -53,17 +53,17 @@ pub struct ScaleStartDetails {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScaleUpdateDetails {
     /// Focal point (center between pointers) in global coordinates
-    pub focal_point: Offset<Pixels>,
+    pub focal_point: Offset<f64>,
     /// Focal point in local coordinates
-    pub local_focal_point: Offset<Pixels>,
+    pub local_focal_point: Offset<f64>,
     /// Scale factor (1.0 = no change, >1.0 = zoom in, <1.0 = zoom out)
-    pub scale: f32,
+    pub scale: f64,
     /// Horizontal scale factor
-    pub horizontal_scale: f32,
+    pub horizontal_scale: f64,
     /// Vertical scale factor
-    pub vertical_scale: f32,
+    pub vertical_scale: f64,
     /// Rotation angle in radians (positive = clockwise)
-    pub rotation: f32,
+    pub rotation: f64,
     /// Number of pointers involved
     pub pointer_count: usize,
 }
@@ -72,13 +72,13 @@ pub struct ScaleUpdateDetails {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScaleEndDetails {
     /// Final focal point
-    pub focal_point: Offset<Pixels>,
+    pub focal_point: Offset<f64>,
     /// Final scale factor
-    pub scale: f32,
+    pub scale: f64,
     /// Final rotation angle in radians
-    pub rotation: f32,
+    pub rotation: f64,
     /// Velocity of scale change (scale units per second)
-    pub velocity: f32,
+    pub velocity: f64,
 }
 
 /// Recognizes scale (pinch/zoom) gestures
@@ -156,25 +156,25 @@ struct ScaleState {
     /// Current phase
     phase: ScalePhase,
     /// Active pointers and their positions
-    pointers: HashMap<PointerId, Offset<Pixels>>,
+    pointers: HashMap<PointerId, Offset<f64>>,
     /// Initial span (distance between first two pointers)
-    initial_span: Option<f32>,
+    initial_span: Option<f64>,
     /// Initial focal point, captured with [`Self::initial_span`]
     ///
     /// Retained so the focal-point acceptance arm has a baseline to measure
     /// against; a two-finger pan changes this while leaving every span
     /// untouched.
-    initial_focal_point: Option<Offset<Pixels>>,
+    initial_focal_point: Option<Offset<f64>>,
     /// Initial horizontal span
-    initial_horizontal_span: Option<f32>,
+    initial_horizontal_span: Option<f64>,
     /// Initial vertical span
-    initial_vertical_span: Option<f32>,
+    initial_vertical_span: Option<f64>,
     /// Initial rotation angle (radians)
-    initial_rotation: Option<f32>,
+    initial_rotation: Option<f64>,
     /// Previous span (for calculating delta)
-    previous_span: Option<f32>,
+    previous_span: Option<f64>,
     /// Current rotation angle
-    current_rotation: f32,
+    current_rotation: f64,
     /// Velocity tracker for scale changes
     scale_velocity_tracker: VelocityTracker,
     /// Last update time for velocity calculation
@@ -289,7 +289,7 @@ impl ScaleGestureRecognizer {
     }
 
     /// Handle pointer down - add to tracking
-    fn handle_pointer_down(&self, pointer: PointerId, position: Offset<Pixels>) {
+    fn handle_pointer_down(&self, pointer: PointerId, position: Offset<f64>) {
         let mut state = self.gesture_state.lock();
 
         // Add pointer to tracking
@@ -330,7 +330,7 @@ impl ScaleGestureRecognizer {
     ///
     /// The span and focal tiers are per-kind (`computeScaleSlop` /
     /// `computePanSlop`); the ratio tier is dimensionless and so has no kind.
-    fn should_accept(&self, state: &ScaleState, current_span: f32, kind: PointerType) -> bool {
+    fn should_accept(&self, state: &ScaleState, current_span: f64, kind: PointerType) -> bool {
         let settings = self.settings.lock();
 
         if let Some(initial_span) = state.initial_span {
@@ -347,7 +347,7 @@ impl ScaleGestureRecognizer {
 
         if let Some(initial_focal) = state.initial_focal_point {
             let focal_delta = Self::calculate_focal_point(&state.pointers) - initial_focal;
-            if focal_delta.distance().0 > settings.pan_slop_for(kind) {
+            if focal_delta.distance() > settings.pan_slop_for(kind) {
                 return true;
             }
         }
@@ -356,7 +356,7 @@ impl ScaleGestureRecognizer {
     }
 
     /// Handle pointer move - update scale
-    fn handle_pointer_move(&self, pointer: PointerId, position: Offset<Pixels>, kind: PointerType) {
+    fn handle_pointer_move(&self, pointer: PointerId, position: Offset<f64>, kind: PointerType) {
         let mut state = self.gesture_state.lock();
 
         // Update pointer position
@@ -420,7 +420,7 @@ impl ScaleGestureRecognizer {
                     let now = self.state.now();
                     state
                         .scale_velocity_tracker
-                        .add_position(now, Offset::new(Pixels(scale), Pixels(0.0)));
+                        .add_position(now, Offset::new(scale, 0.0));
                     state.last_update_time = Some(now);
 
                     state.previous_span = Some(current_span);
@@ -482,8 +482,7 @@ impl ScaleGestureRecognizer {
                     .scale_velocity_tracker
                     .get_velocity()
                     .pixels_per_second
-                    .dx
-                    .0;
+                    .dx;
 
                 state.phase = ScalePhase::Ready;
                 state.clear_baseline();
@@ -536,7 +535,7 @@ impl ScaleGestureRecognizer {
 
     /// Calculate span (distance) between pointers
     /// Returns (total_span, horizontal_span, vertical_span)
-    fn calculate_spans(pointers: &HashMap<PointerId, Offset<Pixels>>) -> (f32, f32, f32) {
+    fn calculate_spans(pointers: &HashMap<PointerId, Offset<f64>>) -> (f64, f64, f64) {
         if pointers.len() < 2 {
             return (0.0, 0.0, 0.0);
         }
@@ -561,12 +560,12 @@ impl ScaleGestureRecognizer {
 
         for position in pointers.values() {
             let delta = focal - *position;
-            total_deviation += delta.distance().0;
-            total_h_deviation += delta.dx.abs().0;
-            total_v_deviation += delta.dy.abs().0;
+            total_deviation += delta.distance();
+            total_h_deviation += delta.dx.abs();
+            total_v_deviation += delta.dy.abs();
         }
 
-        let count = pointers.len() as f32;
+        let count = pointers.len() as f64;
         (
             total_deviation / count,
             total_h_deviation / count,
@@ -575,7 +574,7 @@ impl ScaleGestureRecognizer {
     }
 
     /// Calculate focal point (center of all pointers)
-    fn calculate_focal_point(pointers: &HashMap<PointerId, Offset<Pixels>>) -> Offset<Pixels> {
+    fn calculate_focal_point(pointers: &HashMap<PointerId, Offset<f64>>) -> Offset<f64> {
         if pointers.is_empty() {
             return Offset::ZERO;
         }
@@ -584,12 +583,12 @@ impl ScaleGestureRecognizer {
         let mut sum_y = 0.0;
 
         for pos in pointers.values() {
-            sum_x += pos.dx.0;
-            sum_y += pos.dy.0;
+            sum_x += pos.dx;
+            sum_y += pos.dy;
         }
 
-        let count = pointers.len() as f32;
-        Offset::new(Pixels(sum_x / count), Pixels(sum_y / count))
+        let count = pointers.len() as f64;
+        Offset::new(sum_x / count, sum_y / count)
     }
 
     /// Calculate rotation angle between pointers (in radians)
@@ -597,12 +596,12 @@ impl ScaleGestureRecognizer {
     /// For 2 pointers, returns the angle of the line between them.
     /// For more pointers, returns the average angle from the focal point to
     /// each pointer.
-    fn calculate_rotation(pointers: &HashMap<PointerId, Offset<Pixels>>) -> f32 {
+    fn calculate_rotation(pointers: &HashMap<PointerId, Offset<f64>>) -> f64 {
         if pointers.len() < 2 {
             return 0.0;
         }
 
-        let positions: Vec<&Offset<Pixels>> = pointers.values().collect();
+        let positions: Vec<&Offset<f64>> = pointers.values().collect();
 
         if positions.len() == 2 {
             // For exactly 2 pointers, calculate angle of line between them
@@ -616,15 +615,15 @@ impl ScaleGestureRecognizer {
 
             for pos in positions {
                 let delta = *pos - focal;
-                if delta.distance() > Pixels(0.001) {
+                if delta.distance() > 0.001 {
                     // Avoid division by zero
-                    total_angle += delta.dy.0.atan2(delta.dx.0);
+                    total_angle += delta.dy.atan2(delta.dx);
                     count += 1;
                 }
             }
 
             if count > 0 {
-                total_angle / count as f32
+                total_angle / count as f64
             } else {
                 0.0
             }
@@ -636,13 +635,13 @@ impl GestureRecognizer for ScaleGestureRecognizer {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: PointerId,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         // Scale reports a focal point derived from every tracked contact, in
         // the recogniser's own space — a global focal point needs all the
         // contacts' globals, not this one, and is not attempted here. The base
         // still records this contact in both spaces, because the stored pair
         // is one value and a half-written one is a trap for the next reader.
-        global_position: Offset<Pixels>,
+        global_position: Offset<f64>,
     ) {
         if !self.state.assert_not_disposed("add_pointer") {
             return;
@@ -670,7 +669,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
             PointerEvent::Move(data) => {
                 let pointer = crate::events::extract_pointer_id(event);
                 let pos = data.current.position;
-                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
+                let position = Offset::new(pos.x as f64, pos.y as f64);
                 self.handle_pointer_move(pointer, position, data.pointer.pointer_type);
             }
             PointerEvent::Up(_) => {
@@ -789,13 +788,13 @@ mod tests {
             .with_on_scale_cancel(|| panic!("scale cancel panic"));
         recognizer.add_pointer(
             PointerId::PRIMARY,
-            Offset::new(Pixels(1.0), Pixels(2.0)),
-            Offset::new(Pixels(1.0), Pixels(2.0)),
+            Offset::new(1.0, 2.0),
+            Offset::new(1.0, 2.0),
         );
         recognizer.add_pointer(
             PointerId::new(2).expect("nonzero pointer id"),
-            Offset::new(Pixels(3.0), Pixels(4.0)),
-            Offset::new(Pixels(3.0), Pixels(4.0)),
+            Offset::new(3.0, 4.0),
+            Offset::new(3.0, 4.0),
         );
         arena.close(PointerId::PRIMARY);
 
@@ -820,7 +819,7 @@ mod tests {
         // own slot and pinch produced no scale updates.
         let arena = GestureArena::new();
         let updates = Arc::new(AtomicUsize::new(0));
-        let last_scale = Arc::new(Mutex::new(1.0_f32));
+        let last_scale = Arc::new(Mutex::new(1.0_f64));
         let updates2 = Arc::clone(&updates);
         let last_scale2 = Arc::clone(&last_scale);
         let recognizer =
@@ -831,32 +830,16 @@ mod tests {
 
         let finger1 = PointerId::new(2).expect("nonzero pointer id");
         let finger2 = PointerId::new(3).expect("nonzero pointer id");
-        recognizer.add_pointer(
-            finger1,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
-        recognizer.add_pointer(
-            finger2,
-            Offset::new(Pixels(100.0), Pixels(0.0)),
-            Offset::new(Pixels(100.0), Pixels(0.0)),
-        );
+        recognizer.add_pointer(finger1, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
+        recognizer.add_pointer(finger2, Offset::new(100.0, 0.0), Offset::new(100.0, 0.0));
         // The start now waits on arena acceptance, so the arena must be closed
         // for it to land -- dispatch closes it after the pointer-down burst.
         arena.close(finger1);
 
         // Move ONLY the second finger outward through the public event path.
-        let move2 = make_move_event_for_id(
-            finger2,
-            Offset::new(Pixels(200.0), Pixels(0.0)),
-            PointerType::Touch,
-        );
+        let move2 = make_move_event_for_id(finger2, Offset::new(200.0, 0.0), PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&move2)); // crosses a tier -> arena accepts -> Started
-        let move2b = make_move_event_for_id(
-            finger2,
-            Offset::new(Pixels(220.0), Pixels(0.0)),
-            PointerType::Touch,
-        );
+        let move2b = make_move_event_for_id(finger2, Offset::new(220.0, 0.0), PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&move2b));
 
         assert!(
@@ -870,11 +853,7 @@ mod tests {
         );
 
         // Lifting the SECOND finger must remove its own slot.
-        let up2 = make_up_event_for_id(
-            finger2,
-            Offset::new(Pixels(220.0), Pixels(0.0)),
-            PointerType::Touch,
-        );
+        let up2 = make_up_event_for_id(finger2, Offset::new(220.0, 0.0), PointerType::Touch);
         recognizer.handle_event(PointerDispatch::at_root(&up2));
         assert_eq!(recognizer.gesture_state.lock().pointers.len(), 1);
         assert!(
@@ -892,18 +871,18 @@ mod tests {
         let mut pointers = HashMap::new();
         pointers.insert(
             PointerId::new(2).expect("nonzero pointer id"),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(0.0, 0.0),
         );
         pointers.insert(
             PointerId::new(3).expect("nonzero pointer id"),
-            Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(100.0, 100.0),
         );
 
         let focal_point = ScaleGestureRecognizer::calculate_focal_point(&pointers);
 
         // Center should be at (50, 50)
-        assert!((focal_point.dx - Pixels(50.0)).abs() < Pixels(0.01));
-        assert!((focal_point.dy - Pixels(50.0)).abs() < Pixels(0.01));
+        assert!((focal_point.dx - 50.0).abs() < 0.01);
+        assert!((focal_point.dy - 50.0).abs() < 0.01);
     }
 
     #[test]
@@ -911,11 +890,11 @@ mod tests {
         let mut pointers = HashMap::new();
         pointers.insert(
             PointerId::new(2).expect("nonzero pointer id"),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(0.0, 0.0),
         );
         pointers.insert(
             PointerId::new(3).expect("nonzero pointer id"),
-            Offset::new(Pixels(100.0), Pixels(0.0)),
+            Offset::new(100.0, 0.0),
         );
 
         let (span, h_span, v_span) = ScaleGestureRecognizer::calculate_spans(&pointers);
@@ -950,12 +929,12 @@ mod tests {
     fn two_fingers_moving_together_start_the_gesture() {
         use crate::settings::{DEFAULT_SCALE_SLOP, DEFAULT_SPAN_SLOP};
 
-        const STEP: f32 = 2.0;
+        const STEP: f64 = 2.0;
         const PAIRS: usize = 10;
-        const SEPARATION: f32 = 100.0;
+        const SEPARATION: f64 = 100.0;
         // Span is the mean deviation from the focal point: half the
         // separation for two pointers.
-        const BASELINE_SPAN: f32 = SEPARATION / 2.0;
+        const BASELINE_SPAN: f64 = SEPARATION / 2.0;
 
         // At each half-step only one pointer has moved, leaving the pair
         // STEP closer together and the span STEP/2 short of its baseline.
@@ -980,25 +959,21 @@ mod tests {
             PointerId::new(2).expect("nonzero pointer id"),
             PointerId::new(3).expect("nonzero pointer id"),
         );
-        recognizer.add_pointer(
-            p1,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        recognizer.add_pointer(p1, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         recognizer.add_pointer(
             p2,
-            Offset::new(Pixels(SEPARATION), Pixels(0.0)),
-            Offset::new(Pixels(SEPARATION), Pixels(0.0)),
+            Offset::new(SEPARATION, 0.0),
+            Offset::new(SEPARATION, 0.0),
         );
         arena.close(p1);
 
-        let mut max_span_drift: f32 = 0.0;
+        let mut max_span_drift: f64 = 0.0;
         for i in 1..=PAIRS {
-            let shift = STEP * i as f32;
+            let shift = STEP * i as f64;
             for (p, base) in [(p1, 0.0), (p2, SEPARATION)] {
                 recognizer.handle_pointer_move(
                     p,
-                    Offset::new(Pixels(base + shift), Pixels(0.0)),
+                    Offset::new((base + shift), 0.0),
                     PointerType::Touch,
                 );
                 let state = recognizer.gesture_state.lock();
@@ -1020,7 +995,7 @@ mod tests {
             ScalePhase::Started,
             "a {} px two-finger pan must start the gesture through the \
              focal-point arm",
-            STEP * PAIRS as f32
+            STEP * PAIRS as f64
         );
     }
 
@@ -1063,16 +1038,8 @@ mod tests {
             PointerId::new(2).expect("nonzero pointer id"),
             PointerId::new(3).expect("nonzero pointer id"),
         );
-        recognizer.add_pointer(
-            p1,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
-        recognizer.add_pointer(
-            p2,
-            Offset::new(Pixels(1000.0), Pixels(0.0)),
-            Offset::new(Pixels(1000.0), Pixels(0.0)),
-        );
+        recognizer.add_pointer(p1, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
+        recognizer.add_pointer(p2, Offset::new(1000.0, 0.0), Offset::new(1000.0, 0.0));
         arena.add(p1, Arc::new(Competitor(Arc::clone(&log))));
         arena.close(p1);
 
@@ -1083,11 +1050,7 @@ mod tests {
 
         // A symmetric spread well past every tier.
         for (p, to) in [(p1, -100.0), (p2, 1100.0)] {
-            recognizer.handle_pointer_move(
-                p,
-                Offset::new(Pixels(to), Pixels(0.0)),
-                PointerType::Touch,
-            );
+            recognizer.handle_pointer_move(p, Offset::new(to, 0.0), PointerType::Touch);
         }
 
         assert_eq!(
@@ -1118,8 +1081,8 @@ mod tests {
         // the 18 px tier -- while the ratio changes by 20/500 = 4%, under the
         // 5% tier. The gap between the tiers is the only region where the two
         // arms disagree.
-        const SEPARATION: f32 = 1000.0;
-        const GROWTH: f32 = 20.0;
+        const SEPARATION: f64 = 1000.0;
+        const GROWTH: f64 = 20.0;
         let baseline_span = SEPARATION / 2.0;
 
         const {
@@ -1144,26 +1107,18 @@ mod tests {
             PointerId::new(2).expect("nonzero pointer id"),
             PointerId::new(3).expect("nonzero pointer id"),
         );
-        recognizer.add_pointer(
-            p1,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        recognizer.add_pointer(p1, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         recognizer.add_pointer(
             p2,
-            Offset::new(Pixels(SEPARATION), Pixels(0.0)),
-            Offset::new(Pixels(SEPARATION), Pixels(0.0)),
+            Offset::new(SEPARATION, 0.0),
+            Offset::new(SEPARATION, 0.0),
         );
         // The arena must be closed for an acceptance to land, exactly as
         // dispatch closes it after the pointer-down burst.
         arena.close(p1);
 
         for (p, to) in [(p1, -GROWTH), (p2, SEPARATION + GROWTH)] {
-            recognizer.handle_pointer_move(
-                p,
-                Offset::new(Pixels(to), Pixels(0.0)),
-                PointerType::Touch,
-            );
+            recognizer.handle_pointer_move(p, Offset::new(to, 0.0), PointerType::Touch);
         }
 
         let state = recognizer.gesture_state.lock();
@@ -1192,8 +1147,8 @@ mod tests {
     fn the_span_tier_is_kind_aware() {
         use crate::settings::{DEFAULT_MOUSE_PAN_SLOP, DEFAULT_MOUSE_SPAN_SLOP, DEFAULT_SPAN_SLOP};
 
-        const SEPARATION: f32 = 1000.0;
-        const GROWTH: f32 = 2.5;
+        const SEPARATION: f64 = 1000.0;
+        const GROWTH: f64 = 2.5;
 
         const {
             assert!(
@@ -1213,19 +1168,15 @@ mod tests {
                 PointerId::new(2).expect("nonzero pointer id"),
                 PointerId::new(3).expect("nonzero pointer id"),
             );
-            recognizer.add_pointer(
-                p1,
-                Offset::new(Pixels(0.0), Pixels(0.0)),
-                Offset::new(Pixels(0.0), Pixels(0.0)),
-            );
+            recognizer.add_pointer(p1, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
             recognizer.add_pointer(
                 p2,
-                Offset::new(Pixels(SEPARATION), Pixels(0.0)),
-                Offset::new(Pixels(SEPARATION), Pixels(0.0)),
+                Offset::new(SEPARATION, 0.0),
+                Offset::new(SEPARATION, 0.0),
             );
             arena.close(p1);
             for (p, to) in [(p1, -GROWTH), (p2, SEPARATION + GROWTH)] {
-                recognizer.handle_pointer_move(p, Offset::new(Pixels(to), Pixels(0.0)), kind);
+                recognizer.handle_pointer_move(p, Offset::new(to, 0.0), kind);
             }
             recognizer.gesture_state.lock().phase
         };
@@ -1254,16 +1205,8 @@ mod tests {
         let pointer2 = PointerId::new(3).expect("nonzero pointer id");
 
         // Add two pointers 100px apart
-        recognizer.add_pointer(
-            pointer1,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
-        recognizer.add_pointer(
-            pointer2,
-            Offset::new(Pixels(100.0), Pixels(0.0)),
-            Offset::new(Pixels(100.0), Pixels(0.0)),
-        );
+        recognizer.add_pointer(pointer1, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
+        recognizer.add_pointer(pointer2, Offset::new(100.0, 0.0), Offset::new(100.0, 0.0));
 
         // Verify we have 2 pointers and initial span is set
         let state = recognizer.gesture_state.lock();
@@ -1274,11 +1217,7 @@ mod tests {
 
         // Manually test scale calculation by updating pointer and checking span
         drop(state);
-        recognizer.handle_pointer_move(
-            pointer2,
-            Offset::new(Pixels(200.0), Pixels(0.0)),
-            PointerType::Touch,
-        );
+        recognizer.handle_pointer_move(pointer2, Offset::new(200.0, 0.0), PointerType::Touch);
 
         let state = recognizer.gesture_state.lock();
         let current_span = ScaleGestureRecognizer::calculate_spans(&state.pointers).0;
