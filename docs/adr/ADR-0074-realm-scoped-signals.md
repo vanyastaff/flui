@@ -198,8 +198,8 @@ signal.set(v)                         // owner thread, outside build
   value's destructor, returns the value loan, durably invalidates readers, and only then destroys
   the retired value under its own unwind boundary.
   `set_if_changed` keeps the proposed value
-  outside the equality comparison's unwind boundary. Thus the first destructor or comparison
-  panic keeps priority and a committed replacement remains observable. Rust cannot generically
+  outside the equality comparison's unwind boundary. Thus the chronologically first phase panic
+  keeps priority and a committed replacement remains observable. Rust cannot generically
   recover when two fields panic inside one aggregate's generated drop glue; the framework instead
   completes its own loan/invalidation protocol before such opaque destruction begins, and retains
   opaque values when another panic already has priority.

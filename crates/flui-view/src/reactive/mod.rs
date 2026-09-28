@@ -654,6 +654,15 @@ impl Reactive {
                     }
                     std::panic::resume_unwind(payload)
                 }
+                if let Err(payload) = invalidated {
+                    // Invalidation is chronologically earlier than opaque
+                    // callback teardown. Retain the capture bundle so a
+                    // destructor panic cannot replace this payload or abort
+                    // inside aggregate drop glue.
+                    std::mem::forget(f);
+                    discard_secondary(result);
+                    std::panic::resume_unwind(payload)
+                }
                 // All graph protocol state is durable before user captures
                 // are destroyed. Even uncontainable aggregate drop glue can
                 // no longer bypass loan restoration or reader invalidation.
@@ -661,20 +670,10 @@ impl Reactive {
                 match disposed {
                     Ok(()) => Ok(result),
                     Err(payload) => {
-                        if let Err(secondary) = invalidated {
-                            discard_panic_payload(secondary);
-                        }
                         discard_secondary(result);
                         std::panic::resume_unwind(payload)
                     }
                 }
-                .and_then(|result| match invalidated {
-                    Ok(()) => Ok(result),
-                    Err(payload) => {
-                        discard_secondary(result);
-                        std::panic::resume_unwind(payload)
-                    }
-                })
             }
             Err(payload) => {
                 std::mem::forget(f);
@@ -901,14 +900,12 @@ impl<T: 'static> SignalWriteExt<T> for Signal<T> {
             }
             std::panic::resume_unwind(payload);
         }
-        let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(retired)));
-        if let Err(payload) = disposed {
-            if let Err(secondary) = invalidated {
-                discard_panic_payload(secondary);
-            }
+        if let Err(payload) = invalidated {
+            discard_secondary(retired);
             std::panic::resume_unwind(payload)
         }
-        if let Err(payload) = invalidated {
+        let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(retired)));
+        if let Err(payload) = disposed {
             std::panic::resume_unwind(payload)
         }
         Ok(())
@@ -1119,7 +1116,7 @@ mod tests {
     }
 
     #[test]
-    fn set_separates_commit_invalidation_and_both_value_destructors() {
+    fn set_preserves_invalidation_panic_before_retired_value_destruction() {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let r = Reactive::new();
         r.set_scheduler(ExternalBuildScheduler::from_parts(
@@ -1147,12 +1144,12 @@ mod tests {
             )
         }));
 
-        let payload = outcome.expect_err("retiring the old value must resume its panic");
-        assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"old value destructor probe")
+        let payload = outcome.expect_err("the earlier invalidation panic must resume");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"wake probe"));
+        assert!(
+            old_armed.load(std::sync::atomic::Ordering::Relaxed),
+            "the opaque retired value is retained after invalidation fails"
         );
-        assert!(!old_armed.load(std::sync::atomic::Ordering::Relaxed));
         assert!(
             new_armed.load(std::sync::atomic::Ordering::Relaxed),
             "the committed replacement must not be destroyed during the old value's unwind"
@@ -1163,6 +1160,7 @@ mod tests {
         );
         assert_eq!(scheduled(&inbox), vec![reader]);
 
+        old_armed.store(false, std::sync::atomic::Ordering::Relaxed);
         new_armed.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -1673,6 +1671,42 @@ mod tests {
             vec![reader],
             "reader invalidation must be durable before capture destruction"
         );
+    }
+
+    #[test]
+    fn invalidation_panic_retains_a_successful_updaters_capture_bundle() {
+        let inbox = Arc::new(ExternalBuildInbox::default());
+        let r = Reactive::new();
+        r.set_scheduler(ExternalBuildScheduler::from_parts(
+            Arc::clone(&inbox),
+            Some(Arc::new(|| panic!("wake probe"))),
+        ));
+        let signal = r.signal(0u8);
+        let reader = ElementId::new(1);
+        r.register_element_reader(signal.slot(), reader);
+        let capture_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let capture = ArmedValue {
+            name: "successful updater capture destructor probe",
+            drop_armed: Arc::clone(&capture_armed),
+            equality_panics: false,
+        };
+
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            signal.update(&r, move |value| {
+                let _capture_stays_owned_by_the_updater = &capture;
+                *value = 1;
+            })
+        }));
+
+        let payload = outcome.expect_err("the invalidation panic must resume");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"wake probe"));
+        assert!(
+            capture_armed.load(std::sync::atomic::Ordering::Relaxed),
+            "opaque captures are retained once invalidation has failed"
+        );
+        assert_eq!(signal.peek(&r, |value| *value), Ok(1));
+        assert_eq!(scheduled(&inbox), vec![reader]);
+        capture_armed.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[test]
