@@ -139,10 +139,10 @@ mod tests {
     ///
     /// The data describes the surface the constraints describe, with no
     /// insets, so the geometry assertions below are exact.
-    fn app_tree(width: f32, height: f32) -> MediaQuery {
+    fn app_tree(width: f64, height: f64) -> MediaQuery {
         MediaQuery::new(
             MediaQueryData {
-                size: Size::new((width), (height)),
+                size: Size::new(width, height),
                 ..MediaQueryData::default()
             },
             CounterApp,
@@ -191,8 +191,8 @@ mod tests {
     /// surface's, within a pixel of rounding.
     #[test]
     fn counter_content_is_centred() {
-        const WIDTH: f32 = 480.0;
-        const HEIGHT: f32 = 320.0;
+        const WIDTH: f64 = 480.0;
+        const HEIGHT: f64 = 320.0;
         let app = lay_out(app_tree(WIDTH, HEIGHT), tight(WIDTH, HEIGHT));
 
         let top = app

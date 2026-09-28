@@ -18,14 +18,6 @@ use std::time::Duration;
 /// Absolute tolerance for "is the value at a bound" comparisons.
 const BOUND_EPSILON: f64 = 1e-6;
 
-/// Narrow an f64 time/progress value to the f64 the animation value space uses.
-/// Time is accumulated in f64 for frame-coherence, but values and simulations
-/// are f64; the sub-microsecond precision lost here is irrelevant to rendering.
-#[inline]
-fn narrow_f32(x: f64) -> f64 {
-    x
-}
-
 /// Default spring for fling animations.
 fn default_fling_spring() -> SpringDescription {
     SpringDescription::with_damping_ratio(1.0, 500.0, 1.0)
@@ -1693,7 +1685,7 @@ impl AnimationController {
 
         let cycle = inner.cycle_elapsed_secs();
         if let Some(sim) = &inner.simulation {
-            return sim.dx(narrow_f32(cycle));
+            return sim.dx(cycle);
         }
 
         let duration = inner.current_duration();
@@ -1805,7 +1797,7 @@ impl AnimationController {
         if let Some(run) = inner.repeat {
             self.tick_repeat(inner, run, cycle);
         } else if inner.simulation.is_some() {
-            self.tick_simulation(inner, narrow_f32(cycle));
+            self.tick_simulation(inner, cycle);
         } else {
             self.tick_time_based(inner, cycle);
         }
@@ -1890,7 +1882,7 @@ impl AnimationController {
         let t = if duration.is_zero() {
             1.0
         } else {
-            narrow_f32((cycle / duration.as_secs_f64()).clamp(0.0, 1.0))
+            (cycle / duration.as_secs_f64()).clamp(0.0, 1.0)
         };
         // Flutter parity: `_InterpolationSimulation.x` special-cases the
         // endpoints to the exact begin/end value and only runs the curve
@@ -2539,7 +2531,7 @@ impl AnimationControllerInner {
             AnimationDirection::Forward => (run.min, run.max),
             AnimationDirection::Reverse => (run.max, run.min),
         };
-        let value = start + (target - start) * narrow_f32(phase);
+        let value = start + (target - start) * phase;
         RepeatSample {
             value,
             direction,

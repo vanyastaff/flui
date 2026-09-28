@@ -23,7 +23,7 @@ use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use flui_engine::Renderer;
 use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_types::geometry::{Rect, px};
+use flui_types::geometry::Rect;
 use flui_types::painting::Paint;
 use flui_types::styling::Color;
 use std::path::PathBuf;
@@ -86,10 +86,10 @@ fn build_test_scene(width: f64, height: f64) -> Scene {
     // Large red rectangle (top-left area)
     canvas.draw_rect(
         Rect::from_ltrb(
-            (50.0 * scale_x),
-            (50.0 * scale_y),
-            (350.0 * scale_x),
-            (250.0 * scale_y),
+            50.0 * scale_x,
+            50.0 * scale_y,
+            350.0 * scale_x,
+            250.0 * scale_y,
         ),
         &Paint::fill(Color::RED),
     );
@@ -97,10 +97,10 @@ fn build_test_scene(width: f64, height: f64) -> Scene {
     // Green rectangle (center area)
     canvas.draw_rect(
         Rect::from_ltrb(
-            (150.0 * scale_x),
-            (150.0 * scale_y),
-            (500.0 * scale_x),
-            (350.0 * scale_y),
+            150.0 * scale_x,
+            150.0 * scale_y,
+            500.0 * scale_x,
+            350.0 * scale_y,
         ),
         &Paint::fill(Color::GREEN),
     );
@@ -108,10 +108,10 @@ fn build_test_scene(width: f64, height: f64) -> Scene {
     // Blue rectangle (bottom-right area)
     canvas.draw_rect(
         Rect::from_ltrb(
-            (400.0 * scale_x),
-            (250.0 * scale_y),
-            (700.0 * scale_x),
-            (450.0 * scale_y),
+            400.0 * scale_x,
+            250.0 * scale_y,
+            700.0 * scale_x,
+            450.0 * scale_y,
         ),
         &Paint::fill(Color::BLUE),
     );
@@ -119,10 +119,10 @@ fn build_test_scene(width: f64, height: f64) -> Scene {
     // White rectangle (small, center)
     canvas.draw_rect(
         Rect::from_ltrb(
-            (300.0 * scale_x),
-            (200.0 * scale_y),
-            (450.0 * scale_x),
-            (300.0 * scale_y),
+            300.0 * scale_x,
+            200.0 * scale_y,
+            450.0 * scale_x,
+            300.0 * scale_y,
         ),
         &Paint::fill(Color::WHITE),
     );
@@ -130,10 +130,10 @@ fn build_test_scene(width: f64, height: f64) -> Scene {
     // Yellow rectangle (bottom area)
     canvas.draw_rect(
         Rect::from_ltrb(
-            (100.0 * scale_x),
-            (400.0 * scale_y),
-            (600.0 * scale_x),
-            (500.0 * scale_y),
+            100.0 * scale_x,
+            400.0 * scale_y,
+            600.0 * scale_x,
+            500.0 * scale_y,
         ),
         &Paint::fill(Color::rgb(255, 200, 0)),
     );

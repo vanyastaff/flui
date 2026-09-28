@@ -317,7 +317,7 @@ mod tests {
         let debug = format!("{:?}", ListView::new(50.0, Vec::<BoxedView>::new()));
         assert!(
             debug.contains("scroll_direction: Vertical")
-                && debug.contains("offset_source: 0.0")
+                && debug.contains("offset_source: Fixed(0.0)")
                 && debug.contains("shrink_wrap: false")
                 && debug.contains("item_extent: 50.0"),
             "Debug output must reflect the static constructor's defaults, got: {debug}",
@@ -366,7 +366,7 @@ mod tests {
         );
         assert!(
             debug.contains("scroll_direction: Horizontal")
-                && debug.contains("offset_source: 12.5")
+                && debug.contains("offset_source: Fixed(12.5)")
                 && debug.contains("shrink_wrap: true"),
             "Debug output must reflect the overridden builder values, got: {debug}",
         );
@@ -384,7 +384,8 @@ mod tests {
                 .position(position)
         );
         assert!(
-            position_debug.contains("offset_source: Position(") && !position_debug.contains('('),
+            position_debug.contains("offset_source: Position(")
+                && !position_debug.contains("Fixed("),
             "the last call (.position) must win over an earlier .offset call, got: \
              {position_debug}",
         );
@@ -396,7 +397,7 @@ mod tests {
                 .offset(12.5)
         );
         assert!(
-            offset_debug.contains("offset_source: 12.5"),
+            offset_debug.contains("offset_source: Fixed(12.5)"),
             "the last call (.offset) must win over an earlier .position call, got: \
              {offset_debug}",
         );

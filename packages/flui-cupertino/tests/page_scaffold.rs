@@ -128,7 +128,7 @@ fn resize_to_avoid_bottom_inset_toggles_the_bottom_padding() {
         .render_property(padding_box, "padding")
         .expect("RenderPadding always reports its padding");
     assert!(
-        padding.contains("bottom: 300px"),
+        padding.contains("bottom: 300.0"),
         "resize_to_avoid_bottom_inset defaults true: the 300px keyboard inset must become \
          bottom padding: {padding}"
     );

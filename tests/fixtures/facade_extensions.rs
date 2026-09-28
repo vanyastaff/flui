@@ -1,6 +1,5 @@
 #![cfg(test)]
 
-use flui::geometry::px;
 use flui::painting::{Canvas, CustomPainter, DrawOp, Paint};
 use flui::prelude::*;
 use flui::rendering::{
@@ -278,7 +277,7 @@ impl flui::interaction::GestureRecognizer for DistanceRecognizer {
         use flui::interaction::{PointerEvent, PointerEventExt};
         if let PointerEvent::Move(_) = dispatch.local {
             let origin = self.base.initial_position().expect("tracked pointer");
-            if (dispatch.local.position().dx - origin.dx).get() >= self.threshold {
+            if dispatch.local.position().dx - origin.dx >= self.threshold {
                 self.base.accept_tracked();
             }
         }

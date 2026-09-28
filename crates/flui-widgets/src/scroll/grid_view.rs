@@ -341,7 +341,8 @@ mod tests {
                 .position(position)
         );
         assert!(
-            position_debug.contains("offset_source: Position(") && !position_debug.contains('('),
+            position_debug.contains("offset_source: Position(")
+                && !position_debug.contains("Fixed("),
             "the last call (.position) must win over an earlier .offset call, got: \
              {position_debug}",
         );
@@ -353,7 +354,7 @@ mod tests {
                 .offset(12.5)
         );
         assert!(
-            offset_debug.contains("offset_source: 12.5"),
+            offset_debug.contains("offset_source: Fixed(12.5)"),
             "the last call (.offset) must win over an earlier .position call, got: \
              {offset_debug}",
         );

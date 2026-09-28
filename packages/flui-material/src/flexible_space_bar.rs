@@ -258,10 +258,10 @@ impl StatelessView for FlexibleSpaceBar {
             // inset when leading-aligned (past the leading slot).
             let start_inset = if self.center_title { 0.0 } else { 72.0 };
             let padding = EdgeInsets {
-                top: px_f(0.0),
-                right: px_f(if rtl { start_inset } else { 0.0 }),
-                bottom: px_f(16.0),
-                left: px_f(if rtl { 0.0 } else { start_inset }),
+                top: 0.0,
+                right: if rtl { start_inset } else { 0.0 },
+                bottom: 16.0,
+                left: if rtl { 0.0 } else { start_inset },
             };
             // The Material title style, faded by the delegate's toolbar
             // opacity (see the module doc's named divergence).
@@ -292,11 +292,6 @@ impl StatelessView for FlexibleSpaceBar {
 
         Stack::new(layers)
     }
-}
-
-/// Local shorthand: `EdgeInsets` is pixel-typed.
-fn px_f(value: f64) -> f64 {
-    value
 }
 
 #[cfg(test)]

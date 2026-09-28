@@ -295,7 +295,7 @@ fn opaque_tab_bar_pads_content_above_it_plus_the_bottom_inset() {
         .find_all_by_render_type("RenderPadding")
         .into_iter()
         .filter_map(|id| laid.render_property(id, "padding"))
-        .find(|padding| padding.contains("bottom: 70px"));
+        .find(|padding| padding.contains("bottom: 70.0"));
     assert!(
         matching_padding.is_some(),
         "some Padding must carry the content's 50.0 tab bar height + 20.0 bottom inset = 70.0"
@@ -331,7 +331,7 @@ fn translucent_tab_bar_does_not_pad_content_and_hints_via_media_query() {
         .find_all_by_render_type("RenderPadding")
         .into_iter()
         .filter_map(|id| laid.render_property(id, "padding"))
-        .any(|padding| padding.contains("bottom: 50px"));
+        .any(|padding| padding.contains("bottom: 50.0"));
     assert!(
         !has_50px_padding,
         "a translucent tab bar must not shift content by its own height"
@@ -377,14 +377,14 @@ fn keyboard_taller_than_the_tab_bar_pads_content_by_the_keyboard_inset_alone() {
     assert!(
         paddings
             .iter()
-            .any(|padding| padding.contains("bottom: 300px")),
+            .any(|padding| padding.contains("bottom: 300.0")),
         "the 300px keyboard inset (taller than the 50px tab bar) must become content padding \
          directly: {paddings:?}"
     );
     assert!(
         !paddings
             .iter()
-            .any(|padding| padding.contains("bottom: 50px")),
+            .any(|padding| padding.contains("bottom: 50.0")),
         "the tab-bar-height contribution must be skipped entirely when the keyboard is \
          already taller than it: {paddings:?}"
     );
