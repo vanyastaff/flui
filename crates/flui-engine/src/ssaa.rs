@@ -31,7 +31,7 @@
 
 use std::sync::Arc;
 
-use flui_types::{Rect, geometry::Pixels};
+use flui_types::Rect;
 
 use crate::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
@@ -324,10 +324,10 @@ impl GpuReplay {
         // side must be ≤ max_tex_dim/2.  Use saturating_div to avoid u32 overflow.
         let max_tile_half = max_tex_dim.saturating_div(2).max(1);
 
-        let tile_x = op.device_bounds.left().0.floor().max(0.0) as u32;
-        let tile_y = op.device_bounds.top().0.floor().max(0.0) as u32;
-        let tile_right_edge = (op.device_bounds.right().0.ceil() as u32 + 1).min(vp_w); // +1px AA fringe
-        let tile_bottom_edge = (op.device_bounds.bottom().0.ceil() as u32 + 1).min(vp_h); // +1px AA fringe
+        let tile_x = op.device_bounds.left().floor().max(0.0) as u32;
+        let tile_y = op.device_bounds.top().floor().max(0.0) as u32;
+        let tile_right_edge = (op.device_bounds.right().ceil() as u32 + 1).min(vp_w); // +1px AA fringe
+        let tile_bottom_edge = (op.device_bounds.bottom().ceil() as u32 + 1).min(vp_h); // +1px AA fringe
 
         let tile_w = tile_right_edge.saturating_sub(tile_x).max(1);
         let tile_h = tile_bottom_edge.saturating_sub(tile_y).max(1);
@@ -541,10 +541,10 @@ impl GpuReplay {
         //   - SrcOver (PR-3 baseline) → tile-safe path
 
         let composite_bounds = Rect::from_xywh(
-            Pixels(tile_x as f32),
-            Pixels(tile_y as f32),
-            Pixels(tile_w as f32),
-            Pixels(tile_h as f32),
+            f64::from(tile_x as f32),
+            f64::from(tile_y as f32),
+            f64::from(tile_w as f32),
+            f64::from(tile_h as f32),
         );
 
         if op.blend.is_advanced() {
@@ -786,7 +786,7 @@ mod unit_tests {
     use crate::command_ir::{DrawItem, DrawSegment};
     use crate::state_stack::GpuStateStack;
     use crate::{command_ir::SsaaPathOp, vertex::Vertex};
-    use flui_types::{Rect, geometry::Pixels};
+    use flui_types::Rect;
 
     fn make_vertex(x: f32, y: f32) -> Vertex {
         Vertex {
@@ -807,7 +807,7 @@ mod unit_tests {
 
         let op = SsaaPathOp {
             segment: seg,
-            device_bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(10.0), Pixels(10.0)),
+            device_bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             blend: flui_types::painting::BlendMode::SrcOver,
         };
 
@@ -818,7 +818,7 @@ mod unit_tests {
             "cloned SsaaPathOp must have 3 vertices"
         );
         assert!(
-            (cloned.device_bounds.width().0 - 10.0).abs() < f32::EPSILON,
+            (cloned.device_bounds.width() - 10.0).abs() < f64::from(f32::EPSILON),
             "cloned device_bounds width must be 10"
         );
     }
@@ -939,24 +939,24 @@ mod unit_tests {
         };
 
         assert!(
-            (op.device_bounds.left().0 - 5.0).abs() < 0.01,
+            (op.device_bounds.left() - 5.0).abs() < 0.01,
             "left must be 5.0; got {}",
-            op.device_bounds.left().0
+            op.device_bounds.left()
         );
         assert!(
-            (op.device_bounds.top().0 - 10.0).abs() < 0.01,
+            (op.device_bounds.top() - 10.0).abs() < 0.01,
             "top must be 10.0; got {}",
-            op.device_bounds.top().0
+            op.device_bounds.top()
         );
         assert!(
-            (op.device_bounds.right().0 - 30.0).abs() < 0.01,
+            (op.device_bounds.right() - 30.0).abs() < 0.01,
             "right must be 30.0; got {}",
-            op.device_bounds.right().0
+            op.device_bounds.right()
         );
         assert!(
-            (op.device_bounds.bottom().0 - 40.0).abs() < 0.01,
+            (op.device_bounds.bottom() - 40.0).abs() < 0.01,
             "bottom must be 40.0; got {}",
-            op.device_bounds.bottom().0
+            op.device_bounds.bottom()
         );
     }
 
@@ -1362,9 +1362,9 @@ mod gpu_tests {
         let left_y = cy + half_side;
 
         let mut path = flui_types::painting::path::Path::new();
-        path.move_to(flui_types::Point::new(Pixels(apex_x), Pixels(apex_y)));
-        path.line_to(flui_types::Point::new(Pixels(right_x), Pixels(right_y)));
-        path.line_to(flui_types::Point::new(Pixels(left_x), Pixels(left_y)));
+        path.move_to(flui_types::Point::new(apex_x, apex_y));
+        path.line_to(flui_types::Point::new(right_x, right_y));
+        path.line_to(flui_types::Point::new(left_x, left_y));
         path.close();
 
         // BlendMode::Multiply is an advanced (dst-read) blend mode.

@@ -115,7 +115,7 @@ fn nested_cross_kind_events_keep_one_window_causal_order() {
     *callbacks.on_input.lock() = Some(Box::new(move |_| {
         input_order.lock().expect("order lock").push("input:start");
         let callbacks = weak_for_input.upgrade().expect("callbacks alive");
-        callbacks.dispatch_resize(Size::new(px(200.0), px(80.0)), 2.0);
+        callbacks.dispatch_resize(Size::new(200.0, 80.0), 2.0);
         callbacks.dispatch_request_frame();
         input_order.lock().expect("order lock").push("input:end");
         DispatchEventResult::default()
@@ -157,12 +157,12 @@ fn nested_resize_is_drained_after_outer_callback_returns() {
             weak_callbacks
                 .upgrade()
                 .expect("callbacks alive")
-                .dispatch_resize(Size::new(px(200.0), px(80.0)), scale);
+                .dispatch_resize(Size::new(200.0, 80.0), scale);
             callback_widths.lock().expect("width lock").push(150.0);
         }
     }));
 
-    callbacks.dispatch_resize(Size::new(px(100.0), px(80.0)), 2.0);
+    callbacks.dispatch_resize(Size::new(100.0, 80.0), 2.0);
     assert_eq!(
         *widths.lock().expect("width lock"),
         vec![100.0, 150.0, 200.0]

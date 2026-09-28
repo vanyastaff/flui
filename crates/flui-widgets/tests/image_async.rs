@@ -44,8 +44,8 @@ fn fixture(name: &str) -> String {
 /// new provider is showing" passes just as well when the old one never left,
 /// or when the new one never arrived — which is exactly how a provider-swap
 /// race went unnoticed until it failed on CI.
-const OLD: (f32, f32) = (5.0, 3.0);
-const NEW: (f32, f32) = (7.0, 2.0);
+const OLD: (f64, f64) = (5.0, 3.0);
+const NEW: (f64, f64) = (7.0, 2.0);
 
 fn old_size() -> Size {
     size(OLD.0, OLD.1)

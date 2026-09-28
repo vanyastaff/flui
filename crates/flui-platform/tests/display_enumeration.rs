@@ -203,8 +203,8 @@ fn test_high_dpi_scale_factor() {
 
             // Verify logical size calculation
             let logical_size = display.logical_size();
-            let expected_logical_width = bounds.size.width.0 as f32 / scale as f32;
-            let expected_logical_height = bounds.size.height.0 as f32 / scale as f32;
+            let expected_logical_width = bounds.size.width.0 as f64 / scale as f64;
+            let expected_logical_height = bounds.size.height.0 as f64 / scale as f64;
 
             let width_diff = (logical_size.width.0 - expected_logical_width).abs();
             let height_diff = (logical_size.height.0 - expected_logical_height).abs();

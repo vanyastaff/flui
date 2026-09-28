@@ -54,7 +54,7 @@ fn layout_builder_receives_real_constraints_and_sizes_to_its_child() {
 
     let laid = lay_out(
         Center::new().child(
-            ConstrainedBox::new(BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(200.0)))
+            ConstrainedBox::new(BoxConstraints::new(0.0, 100.0, 0.0, 200.0))
                 .child(LayoutBuilder::new(recorder(Arc::clone(&log)))),
         ),
         loose(400.0),
@@ -62,7 +62,7 @@ fn layout_builder_receives_real_constraints_and_sizes_to_its_child() {
 
     assert_eq!(
         log.lock().as_slice(),
-        &[BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(200.0))],
+        &[BoxConstraints::new(0.0, 100.0, 0.0, 200.0)],
         "the builder must be handed the real incoming constraints, exactly once"
     );
 
@@ -73,12 +73,12 @@ fn layout_builder_receives_real_constraints_and_sizes_to_its_child() {
 
     assert_eq!(
         laid.size(builder_node),
-        Size::new(px(50.0), px(100.0)),
+        Size::new(50.0, 100.0),
         "size = constraints.constrain(child.size); not constraints.biggest"
     );
     assert_eq!(
         laid.size(laid.only_child(builder_node)),
-        Size::new(px(50.0), px(100.0)),
+        Size::new(50.0, 100.0),
         "the child returned by the builder is laid out in the SAME frame"
     );
 }
@@ -113,7 +113,7 @@ fn layout_builder_does_not_crash_at_zero_area() {
 fn layout_builder_constraint_change_rebuilds_in_the_same_frame() {
     let log = Arc::new(Mutex::new(Vec::new()));
 
-    let bounds = |w: f32, h: f32| BoxConstraints::new(px(0.0), px(w), px(0.0), px(h));
+    let bounds = |w: f64, h: f64| BoxConstraints::new(0.0, w, 0.0, h);
 
     let mut laid = lay_out(
         ConstrainedBox::new(bounds(200.0, 100.0))
@@ -123,7 +123,7 @@ fn layout_builder_constraint_change_rebuilds_in_the_same_frame() {
     assert_eq!(log.lock().len(), 1);
     assert_eq!(
         laid.size(laid.only_child(laid.root())),
-        Size::new(px(100.0), px(50.0)),
+        Size::new(100.0, 50.0),
         "first frame: constrain(biggest/2)"
     );
 
@@ -155,12 +155,12 @@ fn layout_builder_constraint_change_rebuilds_in_the_same_frame() {
     let builder_node = laid.only_child(laid.current_root());
     assert_eq!(
         laid.size(builder_node),
-        Size::new(px(40.0), px(30.0)),
+        Size::new(40.0, 30.0),
         "the builder node follows its rebuilt child, in the same frame"
     );
     assert_eq!(
         laid.size(laid.only_child(builder_node)),
-        Size::new(px(40.0), px(30.0)),
+        Size::new(40.0, 30.0),
         "the rebuilt child (biggest/2) must be laid out in the same frame"
     );
 }
@@ -200,14 +200,14 @@ fn layout_builder_same_constraints_do_not_reinvoke_the_builder() {
 /// identical.
 #[test]
 fn layout_builder_new_builder_closure_is_honored() {
-    let bounds = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
+    let bounds = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
 
     let mut laid = lay_out(
         ConstrainedBox::new(bounds).child(LayoutBuilder::new(|_ctx, _c| SizedBox::new(20.0, 20.0))),
         loose(400.0),
     );
     let builder_node = laid.only_child(laid.root());
-    assert_eq!(laid.size(builder_node), Size::new(px(20.0), px(20.0)));
+    assert_eq!(laid.size(builder_node), Size::new(20.0, 20.0));
 
     // Identical constraints, different closure: Flutter's `updateShouldRebuild`
     // default (`true`) means the builder must run again.
@@ -219,12 +219,12 @@ fn layout_builder_new_builder_closure_is_honored() {
     let child = laid.only_child(builder_node);
     assert_eq!(
         laid.size(child),
-        Size::new(px(40.0), px(10.0)),
+        Size::new(40.0, 10.0),
         "the new closure's child must replace the old one"
     );
     assert_eq!(
         laid.size(builder_node),
-        Size::new(px(40.0), px(10.0)),
+        Size::new(40.0, 10.0),
         "the builder node follows its new child"
     );
     assert_eq!(

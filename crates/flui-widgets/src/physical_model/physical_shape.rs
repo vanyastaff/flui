@@ -39,7 +39,7 @@ pub struct PhysicalShape {
     clipper: PathClipper,
     clip_source_token: ClipSourceToken,
     clip_behavior: Clip,
-    elevation: f32,
+    elevation: f64,
     color: Color,
     shadow_color: Color,
     child: Child,
@@ -72,7 +72,7 @@ impl PhysicalShape {
     /// Sets the elevation. Must be non-negative — the underlying render
     /// object debug-asserts this (oracle: `assert(elevation >= 0.0)`).
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = elevation;
         self
     }

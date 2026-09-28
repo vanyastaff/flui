@@ -48,7 +48,7 @@ use crate::{
 fn options(title: impl Into<String>) -> WindowOptions {
     WindowOptions {
         title: title.into(),
-        size: Size::new(px(320.0), px(240.0)),
+        size: Size::new(320.0, 240.0),
         visible: false,
         ..WindowOptions::default()
     }

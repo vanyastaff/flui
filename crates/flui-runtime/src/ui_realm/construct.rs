@@ -54,7 +54,7 @@ impl UiRealm {
     pub fn new(
         wake: Arc<dyn Fn() + Send + Sync>,
         window: impl Into<PresentationWindow>,
-        device_pixel_ratio: f32,
+        device_pixel_ratio: f64,
         needs_redraw: Arc<AtomicBool>,
         clipboard: Arc<dyn Clipboard>,
     ) -> Result<Self, UiRealmError> {
@@ -83,7 +83,7 @@ impl UiRealm {
         capacity: usize,
         wake: Arc<dyn Fn() + Send + Sync>,
         window: impl Into<PresentationWindow>,
-        device_pixel_ratio: f32,
+        device_pixel_ratio: f64,
         needs_redraw: Arc<AtomicBool>,
         clipboard: Arc<dyn Clipboard>,
     ) -> Result<Self, UiRealmError> {
@@ -129,7 +129,7 @@ impl UiRealm {
         wake: Arc<dyn Fn() + Send + Sync>,
         (realm_id, presentation_id): (RealmId, PresentationId),
         window: impl Into<PresentationWindow>,
-        device_pixel_ratio: Option<f32>,
+        device_pixel_ratio: Option<f64>,
         services: RealmServices,
         needs_redraw: Arc<AtomicBool>,
     ) -> Result<Self, UiRealmError> {

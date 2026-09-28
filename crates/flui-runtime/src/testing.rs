@@ -36,8 +36,8 @@ use crate::sink::{FrameSink, SubmitVerdict};
 pub struct TestWindow {
     id: WindowId,
     scale_factor: f64,
-    physical_size: Size<DevicePixels>,
-    logical_size: Size<Pixels>,
+    physical_size: Size<i32>,
+    logical_size: Size<f64>,
     focused: bool,
     on_show: Option<Arc<dyn Fn() + Send + Sync>>,
     visible: bool,
@@ -122,7 +122,7 @@ impl TestWindow {
 
     /// Report these physical and logical sizes.
     #[must_use]
-    pub fn with_sizes(mut self, physical: Size<DevicePixels>, logical: Size<Pixels>) -> Self {
+    pub fn with_sizes(mut self, physical: Size<i32>, logical: Size<f64>) -> Self {
         self.physical_size = physical;
         self.logical_size = logical;
         self
@@ -213,11 +213,11 @@ impl PlatformWindow for TestWindow {
         self.id
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
+    fn physical_size(&self) -> Size<i32> {
         self.physical_size
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
+    fn logical_size(&self) -> Size<f64> {
         self.logical_size
     }
 

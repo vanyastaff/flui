@@ -82,7 +82,7 @@
 //! )
 //! .with_on_long_press_start(move |_details| in_callback.store(true, Ordering::SeqCst));
 //!
-//! recognizer.add_pointer(PointerId::new(1).unwrap(), Offset::new(px(10.0), px(10.0)), Offset::new(px(10.0), px(10.0)));
+//! recognizer.add_pointer(PointerId::new(1).unwrap(), Offset::new(10.0, 10.0), Offset::new(10.0, 10.0));
 //!
 //! // 300ms of virtual time — the 500ms deadline has not elapsed.
 //! binding.pump_frame(Duration::from_millis(300));
@@ -804,7 +804,7 @@ impl HeadlessBinding {
     pub fn dispatch_pointer(
         &self,
         event: &PointerEvent,
-        hit_test: impl FnOnce(Offset<Pixels>) -> HitTestResult,
+        hit_test: impl FnOnce(Offset<f64>) -> HitTestResult,
     ) {
         self.interaction_lane.enter(|| {
             let route_panic = catch_unwind(AssertUnwindSafe(|| {

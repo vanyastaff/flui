@@ -3,7 +3,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
+use flui_types::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use windows::{
     Win32::{
@@ -98,17 +98,17 @@ pub(super) struct WindowContext {
     pub callbacks: WindowCallbacks,
     /// Scale factor for coordinate conversion.
     ///
-    /// `Cell`, not a plain `f32`: `window_proc` only ever holds a shared
+    /// `Cell`, not a plain `f64`: `window_proc` only ever holds a shared
     /// `&WindowContext` (see its `# Safety` section), and `WM_DPICHANGED` is
     /// the one message that updates this field — `Cell::set` lets it do so
     /// through that shared reference instead of forging a second, aliasing
     /// `&mut WindowContext` from the raw `GWLP_USERDATA` pointer while the
     /// shared one is still live.
-    pub scale_factor: std::cell::Cell<f32>,
+    pub scale_factor: std::cell::Cell<f64>,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<WindowMode>,
     /// Last known size (before minimization) for restore detection
-    pub last_size: std::cell::Cell<Size<DevicePixels>>,
+    pub last_size: std::cell::Cell<Size<i32>>,
     /// Window configuration (hotkeys, debouncing, etc.)
     pub config: WindowConfiguration,
     /// Is mouse hovering over this window? (T034)
@@ -900,8 +900,7 @@ impl WindowsPlatform {
                     let size_type = wparam.0 as u32;
 
                     if let Some(ctx) = ctx {
-                        use flui_types::geometry::DevicePixels;
-                        let size = Size::new(DevicePixels(width), DevicePixels(height));
+                        let size = Size::new(width, height);
                         let prev_mode = ctx.mode.get();
 
                         // Handle state transition and dispatch appropriate event
@@ -911,7 +910,7 @@ impl WindowsPlatform {
                                 // Validate transition
                                 let candidate = WindowMode::Minimized {
                                     previous: Bounds {
-                                        origin: Point::new(DevicePixels(0), DevicePixels(0)),
+                                        origin: Point::new(0, 0),
                                         size: ctx.last_size.get(),
                                     },
                                 };
@@ -939,7 +938,7 @@ impl WindowsPlatform {
                                 // Validate transition
                                 let candidate = WindowMode::Maximized {
                                     previous: Bounds {
-                                        origin: Point::new(DevicePixels(0), DevicePixels(0)),
+                                        origin: Point::new(0, 0),
                                         size: ctx.last_size.get(),
                                     },
                                 };
@@ -1032,14 +1031,8 @@ impl WindowsPlatform {
                         // Fire per-window on_resize callback (for all size changes except minimize)
                         if size_type != SIZE_MINIMIZED {
                             let logical_size = Size::new(
-                                flui_types::geometry::px(super::util::device_to_logical(
-                                    width,
-                                    ctx.scale_factor.get(),
-                                )),
-                                flui_types::geometry::px(super::util::device_to_logical(
-                                    height,
-                                    ctx.scale_factor.get(),
-                                )),
+                                super::util::device_to_logical(width, ctx.scale_factor.get()),
+                                super::util::device_to_logical(height, ctx.scale_factor.get()),
                             );
                             ctx.callbacks
                                 .dispatch_resize(logical_size, ctx.scale_factor.get());
@@ -1124,10 +1117,10 @@ impl WindowsPlatform {
                         ctx.callbacks.dispatch_moved();
 
                         // Dispatch Moved event to global handlers
-                        use flui_types::geometry::{Point, px};
+                        use flui_types::geometry::Point;
                         let position = Point::new(
-                            px(x as f32 / ctx.scale_factor.get()),
-                            px(y as f32 / ctx.scale_factor.get()),
+                            x as f64 / ctx.scale_factor.get(),
+                            y as f64 / ctx.scale_factor.get(),
                         );
                         ctx.dispatch_event(WindowEvent::Moved {
                             window_id: ctx.window_id,
@@ -1140,7 +1133,7 @@ impl WindowsPlatform {
 
                 WM_DPICHANGED => {
                     // Extract new DPI from wparam
-                    let new_dpi = hiword(wparam.0 as u32) as f32;
+                    let new_dpi = hiword(wparam.0 as u32) as f64;
                     let new_scale = new_dpi / 96.0; // 96 DPI = 1.0 scale
                     tracing::info!("🔍 DPI Changed: {} (scale: {:.2}x)", new_dpi, new_scale);
 

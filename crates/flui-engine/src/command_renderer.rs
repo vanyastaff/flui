@@ -12,7 +12,7 @@ use flui_painting::{BlendMode, Paint, PointMode};
 use std::sync::Arc;
 
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect},
+    geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Rect},
     painting::{Image, Path, TextureId},
     styling::Color,
 };
@@ -32,7 +32,7 @@ pub(crate) trait CommandRenderer {
     // ===== Primitive Shapes =====
 
     /// Render a filled or stroked rectangle
-    fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4);
+    fn render_rect(&mut self, rect: Rect<f64>, paint: &Paint, transform: &Matrix4);
 
     /// Render a rounded rectangle
     fn render_rrect(&mut self, rrect: RRect, paint: &Paint, transform: &Matrix4);
@@ -40,23 +40,17 @@ pub(crate) trait CommandRenderer {
     /// Render a circle
     fn render_circle(
         &mut self,
-        center: Point<Pixels>,
+        center: Point<f64>,
         radius: f32,
         paint: &Paint,
         transform: &Matrix4,
     );
 
     /// Render an oval (ellipse)
-    fn render_oval(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4);
+    fn render_oval(&mut self, rect: Rect<f64>, paint: &Paint, transform: &Matrix4);
 
     /// Render a line segment
-    fn render_line(
-        &mut self,
-        p1: Point<Pixels>,
-        p2: Point<Pixels>,
-        paint: &Paint,
-        transform: &Matrix4,
-    );
+    fn render_line(&mut self, p1: Point<f64>, p2: Point<f64>, paint: &Paint, transform: &Matrix4);
 
     /// Render an arbitrary path
     fn render_path(&mut self, path: &Path, paint: &Paint, transform: &Matrix4);
@@ -66,7 +60,7 @@ pub(crate) trait CommandRenderer {
     /// Render an arc segment
     fn render_arc(
         &mut self,
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
@@ -81,7 +75,7 @@ pub(crate) trait CommandRenderer {
     fn render_points(
         &mut self,
         mode: PointMode,
-        points: &[Point<Pixels>],
+        points: &[Point<f64>],
         paint: &Paint,
         transform: &Matrix4,
     );
@@ -93,7 +87,7 @@ pub(crate) trait CommandRenderer {
     fn render_paragraph(
         &mut self,
         layout: &Arc<flui_painting::TextLayout>,
-        offset: Offset<Pixels>,
+        offset: Offset<f64>,
         color: Color,
         transform: &Matrix4,
     );
@@ -104,7 +98,7 @@ pub(crate) trait CommandRenderer {
     fn render_image(
         &mut self,
         image: &Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         paint: Option<&Paint>,
         transform: &Matrix4,
     );
@@ -114,7 +108,7 @@ pub(crate) trait CommandRenderer {
     fn render_atlas(
         &mut self,
         image: &Image,
-        sprites: &[Rect<Pixels>],
+        sprites: &[Rect<f64>],
         transforms: &[Matrix4],
         colors: Option<&[Color]>,
         blend_mode: BlendMode,
@@ -126,7 +120,7 @@ pub(crate) trait CommandRenderer {
     fn render_image_repeat(
         &mut self,
         image: &Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         repeat: flui_types::painting::image::ImageRepeat,
         paint: Option<&Paint>,
         transform: &Matrix4,
@@ -136,8 +130,8 @@ pub(crate) trait CommandRenderer {
     fn render_image_nine_slice(
         &mut self,
         image: &Image,
-        center_slice: Rect<Pixels>,
-        dst: Rect<Pixels>,
+        center_slice: Rect<f64>,
+        dst: Rect<f64>,
         paint: Option<&Paint>,
         transform: &Matrix4,
     );
@@ -146,7 +140,7 @@ pub(crate) trait CommandRenderer {
     fn render_image_filtered(
         &mut self,
         image: &Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         filter: flui_types::painting::image::ColorFilter,
         paint: Option<&Paint>,
         transform: &Matrix4,
@@ -156,8 +150,8 @@ pub(crate) trait CommandRenderer {
     fn render_texture(
         &mut self,
         texture_id: TextureId,
-        dst: Rect<Pixels>,
-        src: Option<Rect<Pixels>>,
+        dst: Rect<f64>,
+        src: Option<Rect<f64>>,
         filter_quality: flui_types::painting::FilterQuality,
         opacity: f32,
         transform: &Matrix4,
@@ -181,9 +175,9 @@ pub(crate) trait CommandRenderer {
     /// Render custom vertex geometry
     fn render_vertices(
         &mut self,
-        vertices: &[Point<Pixels>],
+        vertices: &[Point<f64>],
         colors: Option<&[Color]>,
-        tex_coords: Option<&[Point<Pixels>]>,
+        tex_coords: Option<&[Point<f64>]>,
         indices: &[u16],
         paint: &Paint,
         transform: &Matrix4,
@@ -194,7 +188,7 @@ pub(crate) trait CommandRenderer {
     /// Set rectangular clip region
     fn clip_rect(
         &mut self,
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         clip_op: flui_types::painting::ClipOp,
         clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
@@ -249,7 +243,7 @@ pub(crate) trait CommandRenderer {
     // ===== Layer Operations =====
 
     /// Save canvas state and create a new compositing layer
-    fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint, transform: &Matrix4);
+    fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint, transform: &Matrix4);
 
     /// Restore canvas state and composite the saved layer
     fn restore_layer(&mut self, transform: &Matrix4);
@@ -289,7 +283,7 @@ pub(crate) trait CommandRenderer {
     fn add_performance_overlay(
         &mut self,
         options: flui_layer::PerformanceOverlayOption,
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
         fps: f32,
         frame_time_ms: f32,
         total_frames: u64,

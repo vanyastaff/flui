@@ -221,10 +221,7 @@ mod tests {
         let previous = flui_foundation::RenderId::new(7);
         let next = flui_foundation::RenderId::new(9);
         let mut parent_data = MultiChildLayoutParentData::zero().with_id("before".to_owned());
-        parent_data.offset = Offset::new(
-            flui_types::geometry::px(12.0),
-            flui_types::geometry::px(8.0),
-        );
+        parent_data.offset = Offset::new(12.0, 8.0);
         parent_data.container.previous_sibling = Some(previous);
         parent_data.container.next_sibling = Some(next);
 
@@ -232,13 +229,7 @@ mod tests {
 
         assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
         assert_eq!(parent_data.id.as_deref(), Some("after"));
-        assert_eq!(
-            parent_data.offset,
-            Offset::new(
-                flui_types::geometry::px(12.0),
-                flui_types::geometry::px(8.0)
-            )
-        );
+        assert_eq!(parent_data.offset, Offset::new(12.0, 8.0));
         assert_eq!(parent_data.container.previous_sibling, Some(previous));
         assert_eq!(parent_data.container.next_sibling, Some(next));
 

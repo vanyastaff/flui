@@ -44,17 +44,17 @@ impl Transform {
     }
 
     /// Translate the child by `(x, y)` device pixels.
-    pub fn translate(x: f32, y: f32) -> Self {
+    pub fn translate(x: f64, y: f64) -> Self {
         Self::new(*RenderTransform::translate(x, y).transform())
     }
 
     /// Scale the child by `(sx, sy)`, about its centre.
-    pub fn scale(sx: f32, sy: f32) -> Self {
+    pub fn scale(sx: f64, sy: f64) -> Self {
         Self::new(*RenderTransform::scale(sx, sy).transform()).alignment(Alignment::CENTER)
     }
 
     /// Rotate the child by `radians` about the Z axis, about its centre.
-    pub fn rotation(radians: f32) -> Self {
+    pub fn rotation(radians: f64) -> Self {
         Self::new(*RenderTransform::rotation(radians).transform()).alignment(Alignment::CENTER)
     }
 
@@ -172,7 +172,7 @@ mod tests {
 
         let changed = Transform::scale(2.0, 2.0)
             .alignment(Alignment::BOTTOM_RIGHT)
-            .origin(Offset::new(px(4.0), px(5.0)));
+            .origin(Offset::new(4.0, 5.0));
         assert_eq!(
             changed.update_render_object(
                 &flui_view::RenderObjectContext::detached(),

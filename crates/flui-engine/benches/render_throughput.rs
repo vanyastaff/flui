@@ -121,7 +121,7 @@ fn build_frame(painter: &mut WgpuPainter) {
         let row = (i / 10) as f32;
         let x = col * 80.0;
         let y = row * 100.0;
-        let rect = flui_types::Rect::from_ltrb(px(x), px(y), px(x + 70.0), px(y + 90.0));
+        let rect = flui_types::Rect::from_ltrb(x, y, (x + 70.0), (y + 90.0));
         let hue = i as f32 / 50.0;
         let color = Color::from_rgba_f32_array([hue, 0.5, 1.0 - hue, 1.0]);
         let paint = Paint::fill(black_box(color));
@@ -129,10 +129,10 @@ fn build_frame(painter: &mut WgpuPainter) {
     }
 
     // 1 linear gradient (4 colour stops — exercises SmallVec<GradientStop>)
-    let gradient_rect = flui_types::Rect::from_ltrb(px(0.0), px(500.0), px(800.0), px(600.0));
+    let gradient_rect = flui_types::Rect::from_ltrb(0.0, 500.0, 800.0, 600.0);
     let gradient_paint = Paint::fill(Color::WHITE).with_shader(Shader::simple_linear(
-        Offset::new(px(0.0), px(500.0)),
-        Offset::new(px(800.0), px(600.0)),
+        Offset::new(0.0, 500.0),
+        Offset::new(800.0, 600.0),
         GRADIENT_COLORS.to_vec(),
     ));
     painter.draw_rect(black_box(gradient_rect), &gradient_paint);
@@ -141,7 +141,7 @@ fn build_frame(painter: &mut WgpuPainter) {
     let text_paint = Paint::fill(Color::WHITE);
     painter.draw_text(
         black_box("Hello, flui bench!"),
-        flui_types::Point::new(px(10.0), px(480.0)),
+        flui_types::Point::new(10.0, 480.0),
         24.0,
         &text_paint,
     );
@@ -317,14 +317,14 @@ fn damage_scissor(c: &mut Criterion) {
         painter.save();
         if let Some(side) = damage {
             painter.clip_rect(
-                Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)),
+                Rect::from_xywh(0.0, 0.0, side, side),
                 flui_types::painting::Clip::HardEdge,
             );
         }
         for i in 0..layers {
             let f = i as f32;
             painter.draw_rect(
-                Rect::from_xywh(px(f * 2.0), px(f * 1.5), px(w), px(h)),
+                Rect::from_xywh((f * 2.0), (f * 1.5), w, h),
                 &Paint::fill(Color::rgba(0, 0, 255, 40)),
             );
         }

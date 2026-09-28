@@ -108,15 +108,15 @@ pub trait SliverPersistentHeaderDelegate {
     fn build(
         &self,
         ctx: &dyn BuildContext,
-        shrink_offset: f32,
+        shrink_offset: f64,
         overlaps_content: bool,
     ) -> BoxedView;
 
     /// The extent the header collapses to.
-    fn min_extent(&self) -> f32;
+    fn min_extent(&self) -> f64;
 
     /// The extent the header expands to.
-    fn max_extent(&self) -> f32;
+    fn max_extent(&self) -> f64;
 
     /// The over-scroll stretch behavior for this header, if any.
     ///
@@ -177,7 +177,7 @@ pub trait PersistentHeaderRenderObject:
     /// Construct with the delegate's extents. No cell yet — the element mints
     /// and installs it at mount, because only the element knows the registry
     /// entry the cell must also land in.
-    fn create(min_extent: f32, max_extent: f32) -> Self;
+    fn create(min_extent: f64, max_extent: f64) -> Self;
 
     /// Install the shared mailbox this render object publishes shrink state
     /// into on every layout pass.
@@ -186,8 +186,8 @@ pub trait PersistentHeaderRenderObject:
     /// Refresh both extents from a rebuilt delegate.
     fn update_extents(
         &mut self,
-        min_extent: f32,
-        max_extent: f32,
+        min_extent: f64,
+        max_extent: f64,
     ) -> flui_rendering::RenderUpdateImpact;
 
     /// Refresh the over-scroll stretch behavior from a rebuilt delegate.
@@ -226,7 +226,7 @@ pub trait PersistentHeaderRenderObject:
 macro_rules! persistent_header_render_object {
     ($header:ty, snap, $create:expr) => {
         impl PersistentHeaderRenderObject for $header {
-            fn create(min_extent: f32, max_extent: f32) -> Self {
+            fn create(min_extent: f64, max_extent: f64) -> Self {
                 $create(min_extent, max_extent)
             }
 
@@ -236,8 +236,8 @@ macro_rules! persistent_header_render_object {
 
             fn update_extents(
                 &mut self,
-                min_extent: f32,
-                max_extent: f32,
+                min_extent: f64,
+                max_extent: f64,
             ) -> flui_rendering::RenderUpdateImpact {
                 self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
             }
@@ -267,7 +267,7 @@ macro_rules! persistent_header_render_object {
     };
     ($header:ty, plain, $create:expr) => {
         impl PersistentHeaderRenderObject for $header {
-            fn create(min_extent: f32, max_extent: f32) -> Self {
+            fn create(min_extent: f64, max_extent: f64) -> Self {
                 $create(min_extent, max_extent)
             }
 
@@ -277,8 +277,8 @@ macro_rules! persistent_header_render_object {
 
             fn update_extents(
                 &mut self,
-                min_extent: f32,
-                max_extent: f32,
+                min_extent: f64,
+                max_extent: f64,
             ) -> flui_rendering::RenderUpdateImpact {
                 self.set_min_extent(min_extent) | self.set_max_extent(max_extent)
             }

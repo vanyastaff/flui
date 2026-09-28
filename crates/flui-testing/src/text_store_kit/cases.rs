@@ -174,15 +174,15 @@ fn scalar_boundaries(text: &str) -> Vec<Utf16Offset> {
     boundaries
 }
 
-fn centre(bounds: Bounds<Pixels>) -> Point<Pixels> {
+fn centre(bounds: Bounds<f64>) -> Point<f64> {
     Point::new(
         bounds.origin.x + bounds.size.width / 2.0,
         bounds.origin.y + bounds.size.height / 2.0,
     )
 }
 
-fn right(bounds: Bounds<Pixels>) -> f32 {
-    (bounds.origin.x + bounds.size.width).get()
+fn right(bounds: Bounds<f64>) -> f64 {
+    (bounds.origin.x + bounds.size.width)
 }
 
 /// What an observer heard, and whether the store was lockable each time.
@@ -736,7 +736,7 @@ fn one_session_is_one_owner_notification(fixture: &mut dyn TextStoreFixture) -> 
 // Geometry
 // ============================================================================
 
-fn scalar_rects(store: &Rc<dyn TextStore>) -> Result<Vec<(Utf16Offset, Bounds<Pixels>)>, String> {
+fn scalar_rects(store: &Rc<dyn TextStore>) -> Result<Vec<(Utf16Offset, Bounds<f64>)>, String> {
     let boundaries = scalar_boundaries(CORPUS);
     read(store, move |session| {
         boundaries
@@ -759,7 +759,7 @@ fn rects_advance_left_to_right(fixture: &mut dyn TextStoreFixture) -> Outcome {
     let rects = scalar_rects(&store)?;
     for pair in rects.windows(2) {
         let ((first, a), (second, b)) = (pair[0], pair[1]);
-        ensure(b.origin.x.get() + 0.01 >= a.origin.x.get(), || {
+        ensure(b.origin.x + 0.01 >= a.origin.x, || {
             format!("the rect at {second:?} ({b:?}) starts left of the one at {first:?} ({a:?})")
         })?;
     }
@@ -767,7 +767,7 @@ fn rects_advance_left_to_right(fixture: &mut dyn TextStoreFixture) -> Outcome {
         session.rect_for_range(range(0, CORPUS_LEN))
     })?
     .map_err(|error| format!("rect_for_range(whole): {error}"))?;
-    ensure(whole.bounds.size.width.get() > 0.0, || {
+    ensure(whole.bounds.size.width > 0.0, || {
         format!("the whole text's rect has no width: {whole:?}")
     })
 }
@@ -781,7 +781,7 @@ fn index_at_point_round_trips_rect_for_range(fixture: &mut dyn TextStoreFixture)
     for &(start, bounds) in &rects {
         // A scalar a layout draws with no width of its own has no interior
         // point to ask about.
-        if bounds.size.width.get() < 0.5 {
+        if bounds.size.width < 0.5 {
             continue;
         }
         let point = centre(bounds);
@@ -801,7 +801,7 @@ fn index_at_point_round_trips_rect_for_range(fixture: &mut dyn TextStoreFixture)
             format!("index_at_point for {start:?} answered the later {found:?}")
         })?;
         ensure(
-            named.origin.x.get() <= point.x.get() + 0.01 && point.x.get() <= right(named) + 0.01,
+            named.origin.x <= point.x + 0.01 && point.x <= right(named) + 0.01,
             || {
                 format!(
                     "index_at_point for {start:?} answered {found:?}, whose rect {named:?} misses {point:?}"
@@ -821,10 +821,10 @@ fn index_at_point_never_splits_a_surrogate_pair(fixture: &mut dyn TextStoreFixtu
     let bounds = read(&store, |session| session.document_bounds())?
         .map_err(|error| format!("document_bounds: {error}"))?;
     let y = centre(bounds).y;
-    let (left, width) = (bounds.origin.x.get(), bounds.size.width.get());
+    let (left, width) = (bounds.origin.x, bounds.size.width);
     for step in 0..=40_u8 {
-        let x = left - 5.0 + (width + 10.0) * f32::from(step) / 40.0;
-        let point = Point::new(px(x), y);
+        let x = left - 5.0 + (width + 10.0) * f64::from(step) / 40.0;
+        let point = Point::new(x, y);
         for mode in [PointMode::Exact, PointMode::Nearest] {
             let found = read(&store, move |session| session.index_at_point(point, mode))?;
             match found {

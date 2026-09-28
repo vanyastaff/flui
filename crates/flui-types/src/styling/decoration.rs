@@ -490,7 +490,7 @@ mod tests {
             "gradient": null
         }"#;
 
-        let decoration: BoxDecoration<crate::geometry::f64> =
+        let decoration: BoxDecoration<f64> =
             serde_json::from_str(legacy).expect("a pre-shape payload must still deserialize");
         assert_eq!(decoration.shape, BoxShape::Rectangle);
     }

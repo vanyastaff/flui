@@ -41,7 +41,7 @@ use flui_testing::a11y::{Role, Toggled};
 /// (`constants.dart`, `48.0`, oracle tag `3.44.0`), the branch
 /// `Checkbox.build` always takes in this V1 (no `materialTapTargetSize`
 /// override yet).
-const TAP_TARGET: f32 = 48.0;
+const TAP_TARGET: f64 = 48.0;
 
 #[test]
 fn a_toggle_passes_its_value_and_writer_to_the_callback() {

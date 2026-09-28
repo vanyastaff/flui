@@ -29,8 +29,8 @@ fn two_tabs() -> Vec<Tab> {
 /// height must win over a merely-permissive parent, the same reasoning
 /// `tests/navigation_bar.rs`'s `bar_constraints` and `tests/divider.rs`'s
 /// module doc give for why a fully-tight root would test the wrong height.
-fn bar_constraints(width: f32, max_height: f32) -> BoxConstraints {
-    BoxConstraints::new(px(width), px(width), px(0.0), px(max_height))
+fn bar_constraints(width: f64, max_height: f64) -> BoxConstraints {
+    BoxConstraints::new(width, width, 0.0, max_height)
 }
 
 fn themed(theme: ThemeData, child: impl flui_sdk::view::prelude::IntoView) -> Theme {
@@ -181,7 +181,7 @@ fn divider_theme_override_reaches_the_mounted_tree() {
         .into_iter()
         .find(|&id| {
             let size = laid.size(id);
-            size.height.get() == 1.0 && size.width.get() == 200.0
+            size.height == 1.0 && size.width == 200.0
         })
         .expect("a full-width 1dp divider must be mounted");
 
@@ -227,7 +227,7 @@ fn indicator_theme_override_reaches_the_mounted_selected_tab_band() {
         .into_iter()
         .filter(|&id| {
             let size = laid.size(id);
-            size.height.get() == 2.0 && size.width.get() == 100.0
+            size.height == 2.0 && size.width == 100.0
         })
         .collect();
     assert_eq!(
@@ -288,7 +288,7 @@ fn indicator_band_sits_at_the_bar_bottom_beneath_the_divider_and_paints_over_it(
         .into_iter()
         .find(|&id| {
             let size = laid.size(id);
-            size.height.get() == 1.0 && size.width.get() == 200.0
+            size.height == 1.0 && size.width == 200.0
         })
         .expect("a full-width 1dp divider must be mounted");
     let band = laid
@@ -296,12 +296,12 @@ fn indicator_band_sits_at_the_bar_bottom_beneath_the_divider_and_paints_over_it(
         .into_iter()
         .find(|&id| {
             let size = laid.size(id);
-            size.height.get() == 2.0 && size.width.get() == 100.0
+            size.height == 2.0 && size.width == 100.0
         })
         .expect("a per-tab 2dp indicator band must be mounted");
 
-    let divider_top = laid.absolute_offset(divider).dy.get();
-    let band_top = laid.absolute_offset(band).dy.get();
+    let divider_top = laid.absolute_offset(divider).dy;
+    let band_top = laid.absolute_offset(band).dy;
     assert_eq!(
         band_top, 46.0,
         "the indicator band must sit at the BOTTOM of the 48px bar (46px content + 2dp band), \
@@ -371,8 +371,7 @@ fn zero_tab_bar_mounts_a_48px_box() {
 
     let root_size = laid.size(laid.root());
     assert_eq!(
-        root_size.height.get(),
-        48.0,
+        root_size.height, 48.0,
         "a zero-tab TabBar must report the TAB_HEIGHT + indicator_weight (48px) box"
     );
 }
@@ -462,7 +461,7 @@ fn default_tab_controller_is_reachable_by_a_descendant_tab_bar_and_drives_its_in
     let bands = laid.find_all_by_render_type("RenderContainer");
     let opaque_bands: Vec<_> = bands
         .into_iter()
-        .filter(|&id| laid.size(id).height.get() == 2.0 && laid.size(id).width.get() == 100.0)
+        .filter(|&id| laid.size(id).height == 2.0 && laid.size(id).width == 100.0)
         .filter(|&id| {
             laid.render_property(id, "color")
                 .is_some_and(|color| color.contains(&format!("{indicator_color:?}")))
@@ -474,7 +473,7 @@ fn default_tab_controller_is_reachable_by_a_descendant_tab_bar_and_drives_its_in
         1,
         "exactly one tab's indicator band must be opaque (the selected one) after the tap"
     );
-    let selected_x = laid.absolute_offset(opaque_bands[0]).dx.get();
+    let selected_x = laid.absolute_offset(opaque_bands[0]).dx;
     assert_eq!(
         selected_x, 100.0,
         "the SECOND tab's band (starting at x=100) must be the opaque one after tapping it"
@@ -526,12 +525,12 @@ fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
     let clamped_band_x = laid
         .find_all_by_render_type("RenderContainer")
         .into_iter()
-        .filter(|&id| laid.size(id).height.get() == 2.0 && laid.size(id).width.get() == 150.0)
+        .filter(|&id| laid.size(id).height == 2.0 && laid.size(id).width == 150.0)
         .find(|&id| {
             laid.render_property(id, "color")
                 .is_some_and(|color| color.contains(&format!("{indicator_color:?}")))
         })
-        .map(|id| laid.absolute_offset(id).dx.get());
+        .map(|id| laid.absolute_offset(id).dx);
     assert_eq!(
         clamped_band_x,
         Some(150.0),
@@ -551,7 +550,7 @@ fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
     let opaque_bands: Vec<_> = laid
         .find_all_by_render_type("RenderContainer")
         .into_iter()
-        .filter(|&id| laid.size(id).height.get() == 2.0 && laid.size(id).width.get() == 150.0)
+        .filter(|&id| laid.size(id).height == 2.0 && laid.size(id).width == 150.0)
         .filter(|&id| {
             laid.render_property(id, "color")
                 .is_some_and(|color| color.contains(&format!("{indicator_color:?}")))

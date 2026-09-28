@@ -450,7 +450,7 @@ fn at_activation_drives_semantics_assembly_through_the_frame_reconcile() {
     )
     .expect("realm");
     let pipeline = realm.pipeline_for_test();
-    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
 
     assert!(
         !pipeline.with(flui_rendering::PipelineOwner::semantics_enabled),
@@ -511,7 +511,7 @@ fn at_activation_requests_a_full_republish_and_the_reconcile_consumes_it() {
         .primary()
         .semantics_host()
         .full_republish_handle();
-    let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
 
     fake.set_active(true);
     assert!(
@@ -973,7 +973,7 @@ fn test_route(name: &'static str) -> SimpleRoute<i32> {
 // ========================================================================
 
 fn coexistence_constraints() -> BoxConstraints {
-    BoxConstraints::tight(Size::new(px(200.0), px(200.0)))
+    BoxConstraints::tight(Size::new(200.0, 200.0))
 }
 
 /// Two realms constructed through the PRODUCTION path (`UiRealm::new`,
@@ -1123,10 +1123,10 @@ fn a_realms_fresh_hit_test_reads_its_own_live_tree() {
         .with_build_owner(|owner| owner.hit_test_handle().cloned())
         .expect("a presentation installs its own hit-test handle at assembly");
 
-    let probe_at = |x: f32, y: f32| {
+    let probe_at = |x: f64, y: f64| {
         realm
             .interaction_lane
-            .enter(|| handle.hit_test_at(Offset::new(Pixels(x), Pixels(y))))
+            .enter(|| handle.hit_test_at(Offset::new(x, y)))
     };
 
     let inside = probe_at(5.0, 5.0).expect("realm active");
@@ -1150,7 +1150,7 @@ fn a_realms_fresh_hit_test_reads_its_own_live_tree() {
     assert_eq!(
         other
             .interaction_lane
-            .enter(|| handle.hit_test_at(Offset::new(Pixels(5.0), Pixels(5.0))))
+            .enter(|| handle.hit_test_at(Offset::new(5.0, 5.0)))
             .unwrap_err(),
         flui_interaction::InteractionDispatchError::WrongRealm
     );
@@ -1196,7 +1196,7 @@ fn two_presentations_in_one_realm_do_not_share_a_hit_test_tree() {
         .expect("mounts into the primary presentation");
     let _ = realm.draw_frame(coexistence_constraints());
 
-    let at_origin = Offset::new(Pixels(5.0), Pixels(5.0));
+    let at_origin = Offset::new(5.0, 5.0);
     let (from_first, from_second) = realm.interaction_lane.enter(|| {
         (
             handle_for(first_id).hit_test_at(at_origin),
@@ -1252,7 +1252,7 @@ fn a_closed_presentations_hit_test_refuses_while_its_tree_is_still_held() {
         .pipeline()
         .clone();
 
-    let at = Offset::new(Pixels(5.0), Pixels(5.0));
+    let at = Offset::new(5.0, 5.0);
     assert!(
         realm
             .interaction_lane
@@ -1357,7 +1357,7 @@ fn two_realms_coexist_same_thread() {
     use flui_types::geometry::Pixels;
 
     let pointer = PointerId::new(9002).expect("nonzero pointer id");
-    let position = flui_types::Offset::new(Pixels(10.0), Pixels(10.0));
+    let position = flui_types::Offset::new(10.0, 10.0);
     let fired = Rc::new(Cell::new(0));
     let fired_by_route = Rc::clone(&fired);
     let handler: PointerRouteHandler = Rc::new(move |_| {
@@ -1576,10 +1576,7 @@ fn cross_realm_duplicate_global_key_mounts_succeed_in_both() {
             _ctx: &flui_view::RenderObjectContext<'_>,
             render_object: &mut Self::RenderObject,
         ) -> flui_rendering::RenderUpdateImpact {
-            render_object.set_size(
-                Some(flui_types::Pixels::ZERO),
-                Some(flui_types::Pixels::ZERO),
-            )
+            render_object.set_size(Some(0.0), Some(0.0))
         }
     }
 

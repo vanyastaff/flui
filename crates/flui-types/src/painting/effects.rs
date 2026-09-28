@@ -50,28 +50,28 @@ pub enum BlurMode {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ColorAdjustment {
     /// Adjust brightness (-1.0 to 1.0, 0.0 = no change)
-    Brightness(f64),
+    Brightness(f32),
 
     /// Adjust contrast (0.0 to 2.0, 1.0 = no change)
-    Contrast(f64),
+    Contrast(f32),
 
     /// Adjust saturation (0.0 to 2.0, 1.0 = no change, 0.0 = grayscale)
-    Saturation(f64),
+    Saturation(f32),
 
     /// Rotate hue (0.0 to 360.0 degrees)
-    HueRotate(f64),
+    HueRotate(f32),
 
     /// Convert to grayscale (0.0 = no effect, 1.0 = full grayscale)
-    Grayscale(f64),
+    Grayscale(f32),
 
     /// Apply sepia tone (0.0 = no effect, 1.0 = full sepia)
-    Sepia(f64),
+    Sepia(f32),
 
     /// Invert colors (0.0 = no effect, 1.0 = full inversion)
-    Invert(f64),
+    Invert(f32),
 
     /// Adjust opacity (0.0 = transparent, 1.0 = opaque)
-    Opacity(f64),
+    Opacity(f32),
 
     /// Custom 5×4 color matrix transformation
     Matrix(ColorMatrix),
@@ -111,13 +111,13 @@ pub enum ColorAdjustment {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ColorMatrix {
     /// Matrix values in row-major order: [r0-r4, g0-g4, b0-b4, a0-a4]
-    pub values: [f64; 20],
+    pub values: [f32; 20],
 }
 
 impl ColorMatrix {
     /// Create a new color matrix from values.
     #[inline]
-    pub const fn new(values: [f64; 20]) -> Self {
+    pub const fn new(values: [f32; 20]) -> Self {
         Self { values }
     }
 
@@ -166,7 +166,7 @@ impl ColorMatrix {
     ///
     /// * `amount` - Brightness adjustment (-1.0 to 1.0, 0.0 = no change)
     #[inline]
-    pub fn brightness(amount: f64) -> Self {
+    pub fn brightness(amount: f32) -> Self {
         Self::new([
             1.0, 0.0, 0.0, 0.0, amount, // R
             0.0, 1.0, 0.0, 0.0, amount, // G
@@ -181,7 +181,7 @@ impl ColorMatrix {
     ///
     /// * `amount` - Contrast multiplier (0.0 to 2.0, 1.0 = no change)
     #[inline]
-    pub fn contrast(amount: f64) -> Self {
+    pub fn contrast(amount: f32) -> Self {
         let offset = 0.5 * (1.0 - amount);
 
         Self::new([
@@ -199,7 +199,7 @@ impl ColorMatrix {
     /// * `amount` - Saturation multiplier (0.0 to 2.0, 1.0 = no change, 0.0 =
     ///   grayscale)
     #[inline]
-    pub fn saturation(amount: f64) -> Self {
+    pub fn saturation(amount: f32) -> Self {
         let r = 0.2126 * (1.0 - amount);
         let g = 0.7152 * (1.0 - amount);
         let b = 0.0722 * (1.0 - amount);
@@ -234,8 +234,8 @@ impl ColorMatrix {
     ///
     /// * `degrees` - Hue rotation in degrees (0.0 to 360.0)
     #[inline]
-    pub fn hue_rotate(degrees: f64) -> Self {
-        let radians = degrees * std::f64::consts::PI / 180.0;
+    pub fn hue_rotate(degrees: f32) -> Self {
+        let radians = degrees * std::f32::consts::PI / 180.0;
         let cos = radians.cos();
         let sin = radians.sin();
 
@@ -285,7 +285,7 @@ impl ColorMatrix {
     /// Used to lower a layer's group opacity via the color-matrix GPU pass
     /// without touching hue or saturation.
     #[inline]
-    pub fn opacity(opacity: f64) -> Self {
+    pub fn opacity(opacity: f32) -> Self {
         Self::new([
             1.0, 0.0, 0.0, 0.0, 0.0, // R
             0.0, 1.0, 0.0, 0.0, 0.0, // G
@@ -302,9 +302,9 @@ impl ColorMatrix {
     /// Used by `ColorAdjustment::to_color_matrix` for the strength-parameterised
     /// Grayscale/Sepia/Invert variants.
     #[inline]
-    pub fn lerp_from_identity(other: &ColorMatrix, t: f64) -> Self {
+    pub fn lerp_from_identity(other: &ColorMatrix, t: f32) -> Self {
         let identity = ColorMatrix::identity();
-        let mut values = [0.0_f64; 20];
+        let mut values = [0.0_f32; 20];
         for (i, v) in values.iter_mut().enumerate() {
             *v = identity.values[i] + (other.values[i] - identity.values[i]) * t;
         }
@@ -321,7 +321,7 @@ impl ColorMatrix {
     ///
     /// Transformed color as [r, g, b, a]
     #[inline]
-    pub fn apply(&self, color: [f64; 4]) -> [f64; 4] {
+    pub fn apply(&self, color: [f32; 4]) -> [f32; 4] {
         let [r, g, b, a] = color;
 
         [
@@ -966,7 +966,7 @@ mod tests {
         let invert_out = ColorMatrix::invert().apply([0.8, 0.4, 0.2, 1.0]);
         let half_out = half.apply([0.8, 0.4, 0.2, 1.0]);
         for i in 0..4 {
-            let expected_mid = f64::midpoint(identity_out[i], invert_out[i]);
+            let expected_mid = f32::midpoint(identity_out[i], invert_out[i]);
             assert!(
                 (half_out[i] - expected_mid).abs() < 1e-5,
                 "channel {i}: expected mid {expected_mid:.6}, got {:.6}",
@@ -976,7 +976,7 @@ mod tests {
     }
 
     #[track_caller]
-    fn assert_rgba(actual: [f64; 4], expected: [f64; 4]) {
+    fn assert_rgba(actual: [f32; 4], expected: [f32; 4]) {
         for (a, e) in actual.iter().zip(expected) {
             assert!((a - e).abs() < 1e-4, "{actual:?} vs {expected:?}");
         }

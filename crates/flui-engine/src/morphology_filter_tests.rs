@@ -94,17 +94,12 @@ mod gpu_tests {
         )
     }
 
-    fn px(physical_pixels: f32) -> Pixels {
-        Pixels(physical_pixels)
+    fn px(physical_pixels: f32) -> f64 {
+        physical_pixels
     }
 
-    fn full_surface_bounds() -> Rect<Pixels> {
-        Rect::from_xywh(
-            px(0.0),
-            px(0.0),
-            px(SURFACE_WIDTH as f32),
-            px(SURFACE_HEIGHT as f32),
-        )
+    fn full_surface_bounds() -> Rect<f64> {
+        Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32))
     }
 
     /// Return a rect representing a sub-region in the center of the surface.
@@ -112,13 +107,13 @@ mod gpu_tests {
     /// `edge_margin_px` is the distance in whole pixels from each surface edge to
     /// the returned content rect.  Leaves transparent space on all four sides for
     /// decal and grown-bounds tests.
-    fn center_rect(edge_margin_px: u32) -> Rect<Pixels> {
+    fn center_rect(edge_margin_px: u32) -> Rect<f64> {
         let margin = edge_margin_px as f32;
         Rect::from_xywh(
-            px(margin),
-            px(margin),
-            px(SURFACE_WIDTH as f32 - 2.0 * margin),
-            px(SURFACE_HEIGHT as f32 - 2.0 * margin),
+            margin,
+            margin,
+            (SURFACE_WIDTH as f32 - 2.0 * margin),
+            (SURFACE_HEIGHT as f32 - 2.0 * margin),
         )
     }
 
@@ -498,10 +493,10 @@ mod gpu_tests {
         );
 
         let opaque_rect = Rect::from_xywh(
-            px(RECT_ORIGIN_PX as f32),
-            px(RECT_ORIGIN_PX as f32),
-            px(RECT_SIZE_PX as f32),
-            px(RECT_SIZE_PX as f32),
+            (RECT_ORIGIN_PX as f32),
+            (RECT_ORIGIN_PX as f32),
+            (RECT_SIZE_PX as f32),
+            (RECT_SIZE_PX as f32),
         );
         let source_color = Color::rgba(100, 200, 80, 255);
 
@@ -604,16 +599,16 @@ mod gpu_tests {
         let right_half_color = Color::rgba(255, 255, 255, 128);
 
         let left_half_rect = Rect::from_xywh(
-            px(0.0),
-            px(0.0),
-            px(SURFACE_WIDTH as f32 / 2.0),
-            px(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            (SURFACE_WIDTH as f32 / 2.0),
+            (SURFACE_HEIGHT as f32),
         );
         let right_half_rect = Rect::from_xywh(
-            px(SURFACE_WIDTH as f32 / 2.0),
-            px(0.0),
-            px(SURFACE_WIDTH as f32 / 2.0),
-            px(SURFACE_HEIGHT as f32),
+            (SURFACE_WIDTH as f32 / 2.0),
+            0.0,
+            (SURFACE_WIDTH as f32 / 2.0),
+            (SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -893,7 +888,7 @@ mod gpu_tests {
         );
 
         // Opaque rect flush against the LEFT edge (x=0), away from top/bottom edges.
-        let edge_rect = Rect::from_xywh(px(0.0), px(20.0), px(24.0), px(24.0));
+        let edge_rect = Rect::from_xywh(0.0, 20.0, 24.0, 24.0);
         let source_color = Color::rgba(200, 60, 40, 255);
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -974,8 +969,8 @@ mod gpu_tests {
 
         // Opaque 16×16 square at [24,40)×[24,40), tightly bounded; dilate r=4 grows
         // it to [20,44)×[20,44) including square corners.
-        let content_rect = Rect::from_xywh(px(24.0), px(24.0), px(16.0), px(16.0));
-        let grown = Rect::from_xywh(px(20.0), px(20.0), px(24.0), px(24.0));
+        let content_rect = Rect::from_xywh(24.0, 24.0, 16.0, 16.0);
+        let grown = Rect::from_xywh(20.0, 20.0, 24.0, 24.0);
         let source_color = Color::rgba(255, 255, 255, 255);
 
         // Build the content as a single DrawSegment (mirrors the deterministic-replay
@@ -1072,7 +1067,7 @@ mod gpu_tests {
 
         // Opaque 20×20 square that exactly fills its tight content_bounds [22,42)².
         // Erode r=3 → opaque region shrinks to ~[25,39)²; the [22,25) edge erodes.
-        let content_rect = Rect::from_xywh(px(22.0), px(22.0), px(20.0), px(20.0));
+        let content_rect = Rect::from_xywh(22.0, 22.0, 20.0, 20.0);
         let source_color = Color::rgba(255, 255, 255, 255);
 
         let mut segment = DrawSegment::new();

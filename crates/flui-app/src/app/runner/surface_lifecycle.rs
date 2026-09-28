@@ -693,7 +693,7 @@ mod surface_lifecycle_tests {
         fn is_device_lost(&self) -> bool {
             false
         }
-        fn mark_dirty(&mut self, _rect: flui_types::Rect<flui_types::geometry::Pixels>) {}
+        fn mark_dirty(&mut self, _rect: flui_types::Rect<f64>) {}
         fn mark_full_repaint(&mut self) {}
         fn has_damage(&self) -> bool {
             true

@@ -94,18 +94,18 @@ impl PlatformWindow for AndroidWindow {
         WindowId(1)
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
+    fn physical_size(&self) -> Size<i32> {
         let (w, h) = self.native_size();
-        Size::new(device_px(w), device_px(h))
+        Size::new(w, h)
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
+    fn logical_size(&self) -> Size<f64> {
         let (w, h) = self.native_size();
-        let scale = self.scale_factor() as f32;
+        let scale = self.scale_factor() as f64;
         if scale > 0.0 {
-            Size::new(px(w as f32 / scale), px(h as f32 / scale))
+            Size::new((w as f64 / scale), (h as f64 / scale))
         } else {
-            Size::new(px(w as f32), px(h as f32))
+            Size::new((w as f64), (h as f64))
         }
     }
 
@@ -228,7 +228,7 @@ impl PlatformWindow for AndroidWindow {
         "FLUI Android".to_string()
     }
 
-    fn mouse_position(&self) -> Point<Pixels> {
+    fn mouse_position(&self) -> Point<f64> {
         Point::default()
     }
 

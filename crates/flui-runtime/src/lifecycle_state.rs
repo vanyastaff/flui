@@ -380,11 +380,9 @@ mod lifecycle_derivation_tests {
                     .expect("register lifecycle target");
                 let mut result = HitTestResult::new();
                 result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
-                let down =
-                    make_down_event(Offset::new(Pixels(8.0), Pixels(13.0)), PointerType::Touch);
+                let down = make_down_event(Offset::new(8.0, 13.0), PointerType::Touch);
                 realm.gestures().handle_pointer_event(&down, |_| result);
-                let move_event =
-                    make_move_event(Offset::new(Pixels(9.0), Pixels(14.0)), PointerType::Touch);
+                let move_event = make_move_event(Offset::new(9.0, 14.0), PointerType::Touch);
                 realm
                     .gestures()
                     .handle_pointer_event(&move_event, |_| HitTestResult::new());
@@ -452,8 +450,7 @@ mod lifecycle_derivation_tests {
                     .expect("register lifecycle target");
                 let mut result = HitTestResult::new();
                 result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
-                let down =
-                    make_down_event(Offset::new(Pixels(3.0), Pixels(5.0)), PointerType::Touch);
+                let down = make_down_event(Offset::new(3.0, 5.0), PointerType::Touch);
                 realm.gestures().handle_pointer_event(&down, |_| result);
                 handle
                     .unregister_pointer(target)

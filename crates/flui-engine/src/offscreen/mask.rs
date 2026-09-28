@@ -5,11 +5,7 @@
 
 use std::sync::Arc;
 
-use flui_types::{
-    Size,
-    geometry::{Pixels, Rect},
-    painting::Shader,
-};
+use flui_types::{Size, geometry::Rect, painting::Shader};
 use wgpu::util::DeviceExt;
 
 use super::shader::ShaderType;
@@ -159,8 +155,8 @@ impl OffscreenRenderer {
     #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
     pub fn render_masked(
         &mut self,
-        child_bounds: Rect<Pixels>,
-        result_size: Size<Pixels>,
+        child_bounds: Rect<f64>,
+        result_size: Size<f64>,
         shader: &Shader,
         child_texture: &wgpu::Texture,
     ) -> MaskedRenderResult {

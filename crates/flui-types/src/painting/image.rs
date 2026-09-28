@@ -478,12 +478,12 @@ impl ColorFilter {
 
     /// Creates a color filter that applies a 5×4 matrix transformation.
     ///
-    /// The `matrix` argument is the row-major `[f64; 20]` array (rows R/G/B/A,
+    /// The `matrix` argument is the row-major `[f32; 20]` array (rows R/G/B/A,
     /// each row has 4 multipliers then an additive offset).  Internally the
     /// array is wrapped in [`ColorMatrix`] to keep the IR uniform.
     #[inline]
     #[must_use]
-    pub const fn matrix(matrix: [f64; 20]) -> Self {
+    pub const fn matrix(matrix: [f32; 20]) -> Self {
         ColorFilter::Matrix(ColorMatrix::new(matrix))
     }
 
@@ -867,7 +867,7 @@ mod tests {
     fn test_color_filter_matrix() {
         use crate::painting::effects::ColorMatrix;
 
-        let raw = [0.0_f64; 20];
+        let raw = [0.0_f32; 20];
         let filter = ColorFilter::matrix(raw);
 
         match filter {

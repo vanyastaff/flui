@@ -45,7 +45,7 @@
 use std::sync::Arc;
 
 use bytemuck::cast_slice;
-use flui_types::{Rect, geometry::Pixels};
+use flui_types::Rect;
 
 pub(crate) use pipeline::BlurPipeline;
 
@@ -97,7 +97,7 @@ pub(crate) fn apply_blur(
     sigma_x: f32,
     sigma_y: f32,
     source_tex: &PooledTexture,
-    content_bounds: Rect<Pixels>,
+    content_bounds: Rect<f64>,
     fb_origin: (u32, u32),
     fb_dim: (u32, u32),
     surface_format: wgpu::TextureFormat,
@@ -118,10 +118,10 @@ pub(crate) fn apply_blur(
     // every content UV would be shifted by fb_origin/viewport, landing outside [0,1]
     // for off-origin content and clipping the blur decal to the wrong region.
     let content_rect_uv_h = [
-        (content_bounds.left().0 - fb_origin_x as f32) / fb_w as f32,
-        (content_bounds.top().0 - fb_origin_y as f32) / fb_h as f32,
-        (content_bounds.right().0 - fb_origin_x as f32) / fb_w as f32,
-        (content_bounds.bottom().0 - fb_origin_y as f32) / fb_h as f32,
+        (content_bounds.left() - f64::from(fb_origin_x as f32)) / f64::from(fb_w as f32),
+        (content_bounds.top() - f64::from(fb_origin_y as f32)) / f64::from(fb_h as f32),
+        (content_bounds.right() - f64::from(fb_origin_x as f32)) / f64::from(fb_w as f32),
+        (content_bounds.bottom() - f64::from(fb_origin_y as f32)) / f64::from(fb_h as f32),
     ];
     // The V pass reads the H-pass output whose content extent has already grown
     // horizontally into the halo. Decaling the V pass at the original content
@@ -146,7 +146,7 @@ pub(crate) fn apply_blur(
             [fb_w as f32, fb_h as f32],
             sigma_x,
             0.0, // horizontal
-            content_rect_uv_h,
+            (content_rect_uv_h).map(|v| v as f32),
         ),
         source_tex.view(),
         h_tex.view(),

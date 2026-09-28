@@ -25,10 +25,7 @@ pub fn start() {
     // Create canvas window before running the event loop
     let options = flui_platform::WindowOptions {
         title: "FLUI Web Demo".to_string(),
-        size: flui_types::geometry::Size::new(
-            flui_types::geometry::px(800.0),
-            flui_types::geometry::px(600.0),
-        ),
+        size: flui_types::geometry::Size::new(800.0, 600.0),
         ..Default::default()
     };
 

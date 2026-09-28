@@ -91,18 +91,18 @@ use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
 /// Default width of a [`Drawer`] — Flutter's `_kWidth` (`drawer.dart`).
-pub const DEFAULT_DRAWER_WIDTH: f32 = 304.0;
+pub const DEFAULT_DRAWER_WIDTH: f64 = 304.0;
 /// Default width of the closed-state edge-drag detection zone — `_kEdgeDragWidth`.
-const EDGE_DRAG_WIDTH: f32 = 20.0;
+const EDGE_DRAG_WIDTH: f64 = 20.0;
 /// Fling-velocity threshold, in normalized (value/second) units —
 /// `_kMinFlingVelocity`.
-const MIN_FLING_VELOCITY: f32 = 365.0;
+const MIN_FLING_VELOCITY: f64 = 365.0;
 /// The drawer's settle-animation duration — `_kBaseSettleDuration`.
 const BASE_SETTLE_DURATION: Duration = Duration::from_millis(246);
 /// M3 default elevation.
-const ELEVATION: f32 = 1.0;
+const ELEVATION: f64 = 1.0;
 /// M3 default corner radius on the drawer's end-facing edge.
-const CORNER_RADIUS: f32 = 16.0;
+const CORNER_RADIUS: f64 = 16.0;
 /// `Colors.black54` (`material/colors.dart`) — the default drawer scrim.
 const BLACK54: Color = Color {
     r: 0,
@@ -156,7 +156,7 @@ impl_inherited_view!(DrawerAlignmentScope);
 /// facing the scaffold's interior, sharp on the edge flush with the screen.
 /// LTR-only, matching [`DrawerAlignment`]'s own documented scope.
 fn end_rounded_shape(alignment: DrawerAlignment) -> MaterialShape {
-    let rounded = Radius::circular(px(CORNER_RADIUS));
+    let rounded = Radius::circular(CORNER_RADIUS);
     let square = Radius::ZERO;
     match alignment {
         // top_left, top_right, bottom_right, bottom_left.
@@ -190,8 +190,8 @@ fn end_rounded_shape(alignment: DrawerAlignment) -> MaterialShape {
 #[derive(Clone, StatelessView)]
 pub struct Drawer {
     background_color: Option<Color>,
-    elevation: f32,
-    width: f32,
+    elevation: f64,
+    width: f64,
     child: Option<BoxedView>,
 }
 
@@ -218,7 +218,7 @@ impl Drawer {
     /// Overrides the panel's elevation (must be non-negative). Defaults to
     /// `1.0`.
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         debug_assert!(elevation >= 0.0, "Drawer elevation must be non-negative");
         self.elevation = elevation;
         self
@@ -228,7 +228,7 @@ impl Drawer {
     /// module docs on why this value, not a live measurement, is what drives
     /// [`DrawerController`]'s drag math.
     #[must_use]
-    pub fn width(mut self, width: f32) -> Self {
+    pub fn width(mut self, width: f64) -> Self {
         debug_assert!(width > 0.0, "Drawer width must be positive");
         self.width = width;
         self
@@ -245,7 +245,7 @@ impl Drawer {
     /// [`DrawerController::panel_width`] when it builds the controller
     /// wrapping this drawer.
     #[must_use]
-    pub fn configured_width(&self) -> f32 {
+    pub fn configured_width(&self) -> f64 {
         self.width
     }
 }
@@ -288,7 +288,7 @@ impl StatelessView for Drawer {
             material = material.child(child.clone());
         }
 
-        ConstrainedBox::new(BoxConstraints::UNCONSTRAINED.tighten(Some(px(self.width)), None))
+        ConstrainedBox::new(BoxConstraints::UNCONSTRAINED.tighten(Some(self.width), None))
             .child(material)
     }
 }
@@ -449,11 +449,11 @@ pub struct DrawerController {
     key: GlobalKey<DrawerControllerState>,
     alignment: DrawerAlignment,
     child: BoxedView,
-    panel_width: f32,
+    panel_width: f64,
     is_open: bool,
     on_open_changed: Option<DrawerCallback>,
     scrim_color: Option<Color>,
-    edge_drag_width: Option<f32>,
+    edge_drag_width: Option<f64>,
     enable_open_drag_gesture: bool,
     barrier_dismissible: bool,
 }
@@ -485,7 +485,7 @@ impl DrawerController {
     /// The drag divisor — see the module docs' named-divergence note.
     /// Defaults to [`DEFAULT_DRAWER_WIDTH`].
     #[must_use]
-    pub fn panel_width(mut self, panel_width: f32) -> Self {
+    pub fn panel_width(mut self, panel_width: f64) -> Self {
         self.panel_width = panel_width;
         self
     }
@@ -523,7 +523,7 @@ impl DrawerController {
     /// Overrides the closed-state edge-drag detection width. Defaults to
     /// `20.0` plus the ambient safe-area inset on the drawer's edge.
     #[must_use]
-    pub fn edge_drag_width(mut self, width: f32) -> Self {
+    pub fn edge_drag_width(mut self, width: f64) -> Self {
         self.edge_drag_width = Some(width);
         self
     }
@@ -576,7 +576,7 @@ struct DrawerControllerCore {
     /// been recorded as opened yet).
     previously_opened: Cell<bool>,
     alignment: Cell<DrawerAlignment>,
-    panel_width: Cell<f32>,
+    panel_width: Cell<f64>,
     on_open_changed: RefCell<Option<BoundDrawerCallback>>,
 }
 
@@ -599,7 +599,7 @@ impl DrawerControllerCore {
 
     /// Flutter parity: `_directionFactor` (`drawer.dart`), LTR-only — see
     /// the module docs.
-    fn direction_factor(&self) -> f32 {
+    fn direction_factor(&self) -> f64 {
         match self.alignment.get() {
             DrawerAlignment::Start => 1.0,
             DrawerAlignment::End => -1.0,
@@ -610,7 +610,7 @@ impl DrawerControllerCore {
     /// instant the value crosses `0.5`, independent of `open()`/`close()`'s
     /// own immediate firing — the second of the three oracle-documented
     /// firing paths.
-    fn move_by(&self, primary_delta: f32) {
+    fn move_by(&self, primary_delta: f64) {
         let width = self.panel_width.get();
         let new_value = self.controller.value() + primary_delta / width * self.direction_factor();
         self.controller.set_value(new_value);
@@ -626,7 +626,7 @@ impl DrawerControllerCore {
     /// immediately when the fling threshold is crossed (the third
     /// oracle-documented firing path — independent of the value later
     /// crossing `0.5` as the fling animates).
-    fn settle(&self, primary_velocity: f32) {
+    fn settle(&self, primary_velocity: f64) {
         if self.is_dismissed() {
             return;
         }
@@ -799,9 +799,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
             DrawerAlignment::Start => media_query.padding.left,
             DrawerAlignment::End => media_query.padding.right,
         };
-        let drag_area_width = view
-            .edge_drag_width
-            .unwrap_or(EDGE_DRAG_WIDTH + side_inset.get());
+        let drag_area_width = view.edge_drag_width.unwrap_or(EDGE_DRAG_WIDTH + side_inset);
 
         if self.core.is_dismissed() {
             if view.enable_open_drag_gesture {
@@ -846,14 +844,14 @@ impl View for DrawerController {
 fn closed_edge_strip(
     core: &Rc<DrawerControllerCore>,
     alignment: DrawerAlignment,
-    drag_area_width: f32,
+    drag_area_width: f64,
 ) -> impl IntoView {
     let move_core = Rc::clone(core);
     let settle_core = Rc::clone(core);
     // `Align` measures its child against LOOSE constraints (0..available),
     // even though the scaffold's own drawer slot is tight — a
     // `SizedBox::width` (height passed through) would collapse to zero
-    // height under that looseness. Forcing `f32::INFINITY` clamps to
+    // height under that looseness. Forcing `f64::INFINITY` clamps to
     // whatever height Align's loose upper bound actually is (the slot's
     // full, bounded height — Scaffold's own `get_size` already requires
     // bounded constraints from ITS parent, so this is never truly
@@ -868,7 +866,7 @@ fn closed_edge_strip(
                 settle_core.settle(details.primary_velocity);
             })
             .behavior(HitTestBehavior::Translucent)
-            .child(SizedBox::new(drag_area_width, f32::INFINITY)),
+            .child(SizedBox::new(drag_area_width, f64::INFINITY)),
     )
 }
 
@@ -886,7 +884,7 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
     // `Stack` gives a non-positioned child LOOSE constraints (Flutter's
     // default `StackFit.loose`) — a bare `ColoredBox` (no size of its own)
     // collapses to zero under that looseness, same as the edge strip's
-    // `SizedBox` needed `f32::INFINITY` above. `SizedBox::expand` clamps to
+    // `SizedBox` needed `f64::INFINITY` above. `SizedBox::expand` clamps to
     // the Stack's own (bounded — the drawer slot is always tight) size, so
     // the scrim genuinely covers, and is tappable across, the whole area.
     // Flutter parity: the oracle's scrim is `ColoredBox(child: LimitedBox(...,
@@ -936,9 +934,9 @@ fn inner_alignment(alignment: DrawerAlignment) -> Alignment {
 
 /// Scales `color`'s alpha channel by `factor` (clamped to `[0, 1]`).
 /// Flutter parity: `Color.withValues(alpha: scrimColor.a * _controller.value)`.
-fn scale_alpha(color: Color, factor: f32) -> Color {
+fn scale_alpha(color: Color, factor: f64) -> Color {
     let factor = factor.clamp(0.0, 1.0);
-    let scaled = (f32::from(color.a) * factor).round().clamp(0.0, 255.0);
+    let scaled = (f64::from(color.a) * factor).round().clamp(0.0, 255.0);
     let alpha = scaled as u8;
     color.with_alpha(alpha)
 }
@@ -1170,7 +1168,7 @@ mod tests {
     /// the ticked animation). `width`/`alignment` are the two knobs
     /// `settle`'s `visual_velocity` formula reads.
     fn test_core_registered(
-        width: f32,
+        width: f64,
         alignment: DrawerAlignment,
     ) -> (Rc<DrawerControllerCore>, Vsync) {
         let core = Rc::new(DrawerControllerCore {
@@ -1355,7 +1353,7 @@ mod tests {
     #[test]
     fn scale_alpha_scales_black54_by_the_controller_value() {
         let half = scale_alpha(BLACK54, 0.5);
-        assert_eq!(half.a, (0x8A as f32 * 0.5).round() as u8);
+        assert_eq!(half.a, (0x8A as f64 * 0.5).round() as u8);
         let full = scale_alpha(BLACK54, 1.0);
         assert_eq!(full.a, BLACK54.a);
         let zero = scale_alpha(BLACK54, 0.0);

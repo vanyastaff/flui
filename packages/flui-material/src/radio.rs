@@ -125,22 +125,22 @@ use crate::theme::Theme;
 
 /// The outer ring's radius. Flutter parity: `_kOuterRadius` (`radio.dart`,
 /// oracle tag `3.44.0`), `8.0`.
-const OUTER_RADIUS: f32 = 8.0;
+const OUTER_RADIUS: f64 = 8.0;
 
 /// The inner (selected) dot's radius. Flutter parity: `_kInnerRadius`,
 /// `4.5`.
-const INNER_RADIUS: f32 = 4.5;
+const INNER_RADIUS: f64 = 4.5;
 
 /// The outer ring's centered stroke width. Flutter parity: the oracle's
 /// default `activeSide`/`inactiveSide`, `BorderSide(width: 2.0, strokeAlign:
 /// BorderSide.strokeAlignCenter)` (`radio.dart` `:749-764`).
-const RING_STROKE_WIDTH: f32 = 2.0;
+const RING_STROKE_WIDTH: f64 = 2.0;
 
 /// The M3 tap-target side length. Flutter parity: `kMinInteractiveDimension`
 /// (`constants.dart`, `48.0`), the `MaterialTapTargetSize.padded` branch
 /// `_RadioState.build` always takes in V1 — same deferral
 /// [`crate::Checkbox`]/[`crate::Switch`] already make.
-pub const RADIO_TAP_TARGET_SIZE: f32 = 48.0;
+pub const RADIO_TAP_TARGET_SIZE: f64 = 48.0;
 
 const _: () = assert!(OUTER_RADIUS * 2.0 < RADIO_TAP_TARGET_SIZE);
 const _: () = assert!(INNER_RADIUS < OUTER_RADIUS);
@@ -325,10 +325,7 @@ impl<T: PartialEq + Clone + 'static> ViewState<Radio<T>> for RadioState {
         let on_changed = view.on_changed.clone();
         let mut ink_well = InkWell::new(
             CustomPaint::new()
-                .size(Size::new(
-                    px(RADIO_TAP_TARGET_SIZE),
-                    px(RADIO_TAP_TARGET_SIZE),
-                ))
+                .size(Size::new(RADIO_TAP_TARGET_SIZE, RADIO_TAP_TARGET_SIZE))
                 .painter(painter),
         )
         .shape(MaterialShape::Stadium)
@@ -443,16 +440,16 @@ struct RadioPainter {
 
 impl CustomPainter for RadioPainter {
     fn paint(&self, canvas: &mut Canvas, size: Size) {
-        let center = Point::new(px(size.width.get() / 2.0), px(size.height.get() / 2.0));
+        let center = Point::new((size.width / 2.0), (size.height / 2.0));
 
         canvas.draw_circle(
             center,
-            px(OUTER_RADIUS),
+            OUTER_RADIUS,
             &Paint::stroke(self.ring_color, RING_STROKE_WIDTH),
         );
 
         if self.selected {
-            canvas.draw_circle(center, px(INNER_RADIUS), &Paint::fill(self.ring_color));
+            canvas.draw_circle(center, INNER_RADIUS, &Paint::fill(self.ring_color));
         }
     }
 
@@ -700,7 +697,7 @@ mod tests {
     fn inner_dot_is_present_only_when_selected() {
         use flui_sdk::painting::DrawOp;
 
-        let size = Size::new(px(RADIO_TAP_TARGET_SIZE), px(RADIO_TAP_TARGET_SIZE));
+        let size = Size::new(RADIO_TAP_TARGET_SIZE, RADIO_TAP_TARGET_SIZE);
 
         for (selected, expected_circle_count) in [(false, 1_usize), (true, 2_usize)] {
             let mut canvas = Canvas::new();

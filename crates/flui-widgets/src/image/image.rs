@@ -5,8 +5,7 @@ use std::sync::Arc;
 
 use flui_objects::{ImageAlignment, ImageFit, RenderImage};
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::geometry::px;
-use flui_types::{Pixels, Size, painting::Image as PixelImage};
+use flui_types::{Size, painting::Image as PixelImage};
 #[cfg(not(feature = "asset-images"))]
 use flui_view::prelude::StatelessView;
 #[cfg(feature = "asset-images")]
@@ -113,8 +112,8 @@ pub struct Image {
     provider: Arc<dyn ImageProvider + Send + Sync>,
     fit: ImageFit,
     alignment: ImageAlignment,
-    width: Option<Pixels>,
-    height: Option<Pixels>,
+    width: Option<f64>,
+    height: Option<f64>,
     gapless_playback: bool,
 }
 
@@ -216,8 +215,8 @@ impl Image {
     /// Folded into the layout constraints (`tighten`). If height is not also
     /// forced, the image's aspect ratio determines the height axis.
     #[must_use]
-    pub fn width(mut self, width_px: f32) -> Self {
-        self.width = Some(px(width_px));
+    pub fn width(mut self, width_px: f64) -> Self {
+        self.width = Some(width_px);
         self
     }
 
@@ -226,8 +225,8 @@ impl Image {
     /// Folded into the layout constraints (`tighten`). If width is not also
     /// forced, the image's aspect ratio determines the width axis.
     #[must_use]
-    pub fn height(mut self, height_px: f32) -> Self {
-        self.height = Some(px(height_px));
+    pub fn height(mut self, height_px: f64) -> Self {
+        self.height = Some(height_px);
         self
     }
 
@@ -367,8 +366,8 @@ struct RawImage {
     image: Option<PixelImage>,
     fit: ImageFit,
     alignment: ImageAlignment,
-    width: Option<Pixels>,
-    height: Option<Pixels>,
+    width: Option<f64>,
+    height: Option<f64>,
 }
 
 impl RenderView for RawImage {
@@ -478,7 +477,7 @@ mod tests {
     }
 
     fn loose() -> BoxConstraints {
-        BoxConstraints::loose(Size::new(px(1000.0), px(1000.0)))
+        BoxConstraints::loose(Size::new(1000.0, 1000.0))
     }
 
     fn detached_ctx() -> flui_view::RenderObjectContext<'static> {
@@ -512,7 +511,7 @@ mod tests {
         let mut render = with_image.create_render_object(&detached_ctx());
 
         assert!(render.image().is_some());
-        assert_eq!(render.compute_size(&loose()), Size::new(px(40.0), px(30.0)));
+        assert_eq!(render.compute_size(&loose()), Size::new(40.0, 30.0));
 
         let now_absent = RawImage {
             image: None,
@@ -541,7 +540,7 @@ mod tests {
             image: Some(PixelImage::from_rgba8(40, 30, vec![0u8; 40 * 30 * 4])),
             fit: ImageFit::Contain,
             alignment: ImageAlignment::Center,
-            width: Some(px(100.0)),
+            width: Some(100.0),
             height: None,
         };
         let mut render = with_image.create_render_object(&detached_ctx());
@@ -554,7 +553,7 @@ mod tests {
 
         assert_eq!(
             render.compute_size(&loose()),
-            Size::new(px(100.0), px(0.0)),
+            Size::new(100.0, 0.0),
             "clearing the image collapses only the axes the image was sizing \
              -- a forced width still reserves its width",
         );
@@ -566,13 +565,13 @@ mod tests {
             image: None,
             fit: ImageFit::Contain,
             alignment: ImageAlignment::Center,
-            width: Some(px(100.0)),
-            height: Some(px(80.0)),
+            width: Some(100.0),
+            height: Some(80.0),
         };
         let render = raw.create_render_object(&detached_ctx());
 
-        assert_eq!(render.width(), Some(px(100.0)));
-        assert_eq!(render.height(), Some(px(80.0)));
+        assert_eq!(render.width(), Some(100.0));
+        assert_eq!(render.height(), Some(80.0));
     }
 
     #[test]
@@ -601,7 +600,7 @@ mod tests {
         );
 
         let layout_and_paint = RawImage {
-            width: Some(px(100.0)),
+            width: Some(100.0),
             ..initial
         };
         assert_eq!(

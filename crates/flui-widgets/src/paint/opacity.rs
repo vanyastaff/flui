@@ -11,13 +11,13 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// still laid out and interactive unless wrapped in `IgnorePointer`).
 #[derive(Clone, Debug)]
 pub struct Opacity {
-    opacity: f32,
+    opacity: f64,
     child: Child,
 }
 
 impl Opacity {
     /// Create an `Opacity` with the given opacity (clamped to `0.0..=1.0`).
-    pub fn new(opacity: f32) -> Self {
+    pub fn new(opacity: f64) -> Self {
         Self {
             opacity,
             child: Child::empty(),

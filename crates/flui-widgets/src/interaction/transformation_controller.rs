@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_geometry::Matrix4;
-use flui_types::{Offset, geometry::Pixels};
+use flui_types::Offset;
 use parking_lot::Mutex;
 
 /// The heap-allocated state shared by every clone of a
@@ -117,7 +117,7 @@ impl TransformationController {
     /// not happen for a matrix built solely from translation + uniform
     /// scale, but a non-invertible matrix has no meaningful scene point).
     #[must_use]
-    pub fn to_scene(&self, viewport_point: Offset<Pixels>) -> Offset<Pixels> {
+    pub fn to_scene(&self, viewport_point: Offset<f64>) -> Offset<f64> {
         let value = self.value();
         let Some(inverse) = value.try_inverse() else {
             return viewport_point;
@@ -240,20 +240,17 @@ mod tests {
         controller
             .set_value(Matrix4::translation(10.0, 20.0, 0.0) * Matrix4::scaling(2.0, 2.0, 1.0));
 
-        let scene = controller.to_scene(Offset::new(
-            flui_geometry::px(10.0),
-            flui_geometry::px(20.0),
-        ));
+        let scene = controller.to_scene(Offset::new(10.0, 20.0));
         // Viewport (10, 20) is exactly the translation, so it maps back to
         // the scene origin.
-        assert!((scene.dx.get() - 0.0).abs() < 1e-5);
-        assert!((scene.dy.get() - 0.0).abs() < 1e-5);
+        assert!((scene.dx - 0.0).abs() < 1e-5);
+        assert!((scene.dy - 0.0).abs() < 1e-5);
     }
 
     #[test]
     fn to_scene_identity_is_passthrough() {
         let controller = TransformationController::new();
-        let point = Offset::new(flui_geometry::px(42.0), flui_geometry::px(7.0));
+        let point = Offset::new(42.0, 7.0);
         assert_eq!(controller.to_scene(point), point);
     }
 }

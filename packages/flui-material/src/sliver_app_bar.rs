@@ -64,11 +64,11 @@ pub struct SliverAppBar {
     snap: bool,
     /// Mirrors of the inner app bar's height inputs, kept here because the
     /// extent arithmetic needs them and [`AppBar`] does not expose getters.
-    toolbar_height: f32,
-    bottom_height: f32,
+    toolbar_height: f64,
+    bottom_height: f64,
     has_bottom: bool,
-    expanded_height: Option<f32>,
-    collapsed_height: Option<f32>,
+    expanded_height: Option<f64>,
+    collapsed_height: Option<f64>,
     pinned: bool,
     floating: bool,
 }
@@ -121,7 +121,7 @@ impl SliverAppBar {
 
     /// Sets the toolbar height. See [`AppBar::toolbar_height`].
     #[must_use]
-    pub fn toolbar_height(mut self, toolbar_height: f32) -> Self {
+    pub fn toolbar_height(mut self, toolbar_height: f64) -> Self {
         self.toolbar_height = toolbar_height;
         self.app_bar = self.app_bar.toolbar_height(toolbar_height);
         self
@@ -143,7 +143,7 @@ impl SliverAppBar {
 
     /// Sets the elevation. See [`AppBar::elevation`].
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         self.app_bar = self.app_bar.elevation(elevation);
         self
     }
@@ -153,7 +153,7 @@ impl SliverAppBar {
     /// `_bottomHeight` does.
     #[must_use]
     pub fn bottom(mut self, bottom: impl PreferredSizeView) -> Self {
-        self.bottom_height = bottom.preferred_size().height.get();
+        self.bottom_height = bottom.preferred_size().height;
         self.has_bottom = true;
         self.app_bar = self.app_bar.bottom(bottom);
         self
@@ -167,7 +167,7 @@ impl SliverAppBar {
     /// `None` (the default) means the bar is its toolbar (plus `bottom`) and
     /// never expands.
     #[must_use]
-    pub fn expanded_height(mut self, expanded_height: f32) -> Self {
+    pub fn expanded_height(mut self, expanded_height: f64) -> Self {
         self.expanded_height = Some(expanded_height);
         self
     }
@@ -176,7 +176,7 @@ impl SliverAppBar {
     /// safe-area inset and `bottom` — both are added on top when the
     /// extents are computed. Defaults to the toolbar height.
     #[must_use]
-    pub fn collapsed_height(mut self, collapsed_height: f32) -> Self {
+    pub fn collapsed_height(mut self, collapsed_height: f64) -> Self {
         self.collapsed_height = Some(collapsed_height);
         self
     }
@@ -244,17 +244,17 @@ impl std::fmt::Debug for SliverAppBar {
 /// `app_bar.dart:1339-1345`: min = collapsed; max = max(topPadding +
 /// (expandedHeight ?? toolbar + bottom), min).
 struct ExtentInputs {
-    toolbar_height: f32,
-    bottom_height: f32,
+    toolbar_height: f64,
+    bottom_height: f64,
     has_bottom: bool,
-    expanded_height: Option<f32>,
-    collapsed_height: Option<f32>,
+    expanded_height: Option<f64>,
+    collapsed_height: Option<f64>,
     pinned: bool,
     floating: bool,
-    top_padding: f32,
+    top_padding: f64,
 }
 
-fn extents(inputs: &ExtentInputs) -> (f32, f32) {
+fn extents(inputs: &ExtentInputs) -> (f64, f64) {
     let collapsed = if inputs.pinned && inputs.floating && inputs.has_bottom {
         inputs.collapsed_height.unwrap_or(0.0) + inputs.bottom_height + inputs.top_padding
     } else {
@@ -275,18 +275,18 @@ fn extents(inputs: &ExtentInputs) -> (f32, f32) {
 /// so it fades out as it scrolls away); everything else fades by the
 /// toolbar's visible fraction.
 struct ToolbarOpacityInputs {
-    shrink_offset: f32,
-    min_extent: f32,
-    max_extent: f32,
-    toolbar_height: f32,
-    bottom_height: f32,
+    shrink_offset: f64,
+    min_extent: f64,
+    max_extent: f64,
+    toolbar_height: f64,
+    bottom_height: f64,
     has_bottom: bool,
     pinned: bool,
     floating: bool,
-    top_padding: f32,
+    top_padding: f64,
 }
 
-fn toolbar_opacity_for(inputs: &ToolbarOpacityInputs) -> f32 {
+fn toolbar_opacity_for(inputs: &ToolbarOpacityInputs) -> f64 {
     let visible_main_height = inputs.max_extent - inputs.shrink_offset - inputs.top_padding;
     let extra_toolbar_height =
         (inputs.min_extent - inputs.bottom_height - inputs.top_padding - inputs.toolbar_height)
@@ -308,22 +308,22 @@ fn toolbar_opacity_for(inputs: &ToolbarOpacityInputs) -> f32 {
 /// context-free, so Flutter snapshots `topPadding` the same way).
 struct SliverAppBarDelegate {
     app_bar: AppBar,
-    min_extent: f32,
-    max_extent: f32,
+    min_extent: f64,
+    max_extent: f64,
     snap: bool,
     pinned: bool,
     floating: bool,
     has_bottom: bool,
-    bottom_height: f32,
-    toolbar_height: f32,
-    top_padding: f32,
+    bottom_height: f64,
+    toolbar_height: f64,
+    top_padding: f64,
 }
 
 impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
     fn build(
         &self,
         _ctx: &dyn BuildContext,
-        shrink_offset: f32,
+        shrink_offset: f64,
         _overlaps_content: bool,
     ) -> BoxedView {
         // The collapse state, republished on every seam rebuild so a
@@ -360,11 +360,11 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
         .boxed()
     }
 
-    fn min_extent(&self) -> f32 {
+    fn min_extent(&self) -> f64 {
         self.min_extent
     }
 
-    fn max_extent(&self) -> f32 {
+    fn max_extent(&self) -> f64 {
         self.max_extent
     }
 
@@ -385,7 +385,7 @@ impl StatelessView for SliverAppBar {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // Snapshot the inset at build time — the delegate's extent getters
         // are context-free, exactly why Flutter passes `topPadding` in.
-        let top_padding = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding.top.get());
+        let top_padding = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding.top);
         let (min_extent, max_extent) = extents(&ExtentInputs {
             toolbar_height: self.toolbar_height,
             bottom_height: self.bottom_height,

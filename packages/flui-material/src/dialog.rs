@@ -165,18 +165,18 @@ use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
 /// `_DialogDefaultsM3`'s elevation (`dialog.dart`, oracle tag `3.44.0`).
-const DEFAULT_ELEVATION: f32 = 6.0;
+const DEFAULT_ELEVATION: f64 = 6.0;
 /// `_DialogDefaultsM3`'s corner radius (`dialog.dart`, oracle tag `3.44.0`).
-const DEFAULT_CORNER_RADIUS: f32 = 28.0;
+const DEFAULT_CORNER_RADIUS: f64 = 28.0;
 /// `Dialog.build`'s fallback `constraints.minWidth` (`dialog.dart`, oracle
 /// tag `3.44.0`).
-const DEFAULT_MIN_WIDTH: f32 = 280.0;
+const DEFAULT_MIN_WIDTH: f64 = 280.0;
 /// `_defaultInsetPadding`'s horizontal component (`dialog.dart`, oracle tag
 /// `3.44.0`).
-const INSET_PADDING_HORIZONTAL: f32 = 40.0;
+const INSET_PADDING_HORIZONTAL: f64 = 40.0;
 /// `_defaultInsetPadding`'s vertical component (`dialog.dart`, oracle tag
 /// `3.44.0`).
-const INSET_PADDING_VERTICAL: f32 = 24.0;
+const INSET_PADDING_VERTICAL: f64 = 24.0;
 
 /// The Material dialog surface: an elevated, rounded, centered
 /// [`Material`] panel inset from the screen edges.
@@ -192,7 +192,7 @@ const INSET_PADDING_VERTICAL: f32 = 24.0;
 #[derive(Clone, StatelessView)]
 pub struct Dialog {
     color: Option<Color>,
-    elevation: Option<f32>,
+    elevation: Option<f64>,
     shape: Option<MaterialShape>,
     clip_behavior: Option<Clip>,
     alignment: Option<Alignment>,
@@ -239,7 +239,7 @@ impl Dialog {
 
     /// Overrides the dialog's elevation.
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = Some(elevation);
         self
     }
@@ -288,7 +288,7 @@ impl Dialog {
 /// same reason [`crate::app_bar`]'s `ResolvedAppBarStyle` is.
 struct ResolvedDialogStyle {
     color: Color,
-    elevation: f32,
+    elevation: f64,
     shape: MaterialShape,
 }
 
@@ -301,7 +301,7 @@ struct ResolvedDialogStyle {
 fn resolve_style(
     theme: &ThemeData,
     color: Option<Color>,
-    elevation: Option<f32>,
+    elevation: Option<f64>,
     shape: Option<MaterialShape>,
 ) -> ResolvedDialogStyle {
     let dialog_theme = theme.dialog_theme.as_ref();
@@ -315,9 +315,7 @@ fn resolve_style(
     let shape = shape
         .or_else(|| dialog_theme.and_then(|t| t.shape))
         .unwrap_or_else(|| {
-            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(
-                DEFAULT_CORNER_RADIUS,
-            ))))
+            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(DEFAULT_CORNER_RADIUS)))
         });
 
     ResolvedDialogStyle {
@@ -336,15 +334,10 @@ impl StatelessView for Dialog {
             shape,
         } = resolve_style(&theme, self.color, self.elevation, self.shape);
         let inset_padding = self.inset_padding.unwrap_or_else(|| {
-            EdgeInsets::symmetric(px(INSET_PADDING_VERTICAL), px(INSET_PADDING_HORIZONTAL))
+            EdgeInsets::symmetric(INSET_PADDING_VERTICAL, INSET_PADDING_HORIZONTAL)
         });
         let constraints = self.constraints.unwrap_or_else(|| {
-            BoxConstraints::new(
-                px(DEFAULT_MIN_WIDTH),
-                Pixels::INFINITY,
-                Pixels::ZERO,
-                Pixels::INFINITY,
-            )
+            BoxConstraints::new(DEFAULT_MIN_WIDTH, f64::INFINITY, 0.0, f64::INFINITY)
         });
 
         Padding::new(inset_padding).child(
@@ -364,7 +357,7 @@ impl StatelessView for Dialog {
 /// The 8px gap between adjacent `actions` — `(buttonPadding?.horizontal ??
 /// 16) / 2` with `buttonPadding` at its `null` default (`dialog.dart`,
 /// oracle tag `3.44.0`).
-const ACTION_SPACING: f32 = 8.0;
+const ACTION_SPACING: f64 = 8.0;
 
 /// A Material Design alert dialog: an optional title, an optional content
 /// body, and a row of actions, composed onto a [`Dialog`] surface.
@@ -465,17 +458,12 @@ impl StatelessView for AlertDialog {
         if let Some(title) = &self.title {
             let title_bottom = if self.content.is_some() { 0.0 } else { 20.0 };
             children.push(
-                Padding::new(EdgeInsets::new(
-                    px(24.0),
-                    px(24.0),
-                    px(title_bottom),
-                    px(24.0),
-                ))
-                .child(DefaultTextStyle::new(
-                    resolve_title_style(&theme),
-                    title.clone(),
-                ))
-                .boxed(),
+                Padding::new(EdgeInsets::new(24.0, 24.0, title_bottom, 24.0))
+                    .child(DefaultTextStyle::new(
+                        resolve_title_style(&theme),
+                        title.clone(),
+                    ))
+                    .boxed(),
             );
         }
 
@@ -485,11 +473,9 @@ impl StatelessView for AlertDialog {
             // tag `3.44.0`): the default loose fit lets content taller than
             // the Dialog's available height shrink instead of overflowing.
             children.push(
-                Flexible::new(
-                    Padding::new(EdgeInsets::new(px(16.0), px(24.0), px(24.0), px(24.0))).child(
-                        DefaultTextStyle::new(resolve_content_style(&theme), content.clone()),
-                    ),
-                )
+                Flexible::new(Padding::new(EdgeInsets::new(16.0, 24.0, 24.0, 24.0)).child(
+                    DefaultTextStyle::new(resolve_content_style(&theme), content.clone()),
+                ))
                 .boxed(),
             );
         }
@@ -503,7 +489,7 @@ impl StatelessView for AlertDialog {
                 row_children.push(action.clone());
             }
             children.push(
-                Padding::new(EdgeInsets::new(px(0.0), px(24.0), px(24.0), px(24.0)))
+                Padding::new(EdgeInsets::new(0.0, 24.0, 24.0, 24.0))
                     .child(Row::new(row_children).main_axis_alignment(MainAxisAlignment::End))
                     .boxed(),
             );
@@ -568,14 +554,14 @@ mod tests {
             .shape(MaterialShape::Stadium)
             .clip_behavior(Clip::AntiAlias)
             .alignment(Alignment::CENTER_LEFT)
-            .inset_padding(EdgeInsets::all(px(0.0)));
+            .inset_padding(EdgeInsets::all(0.0));
 
         assert_eq!(dialog.color, Some(Color::rgb(1, 2, 3)));
         assert_eq!(dialog.elevation, Some(2.0));
         assert_eq!(dialog.shape, Some(MaterialShape::Stadium));
         assert_eq!(dialog.clip_behavior, Some(Clip::AntiAlias));
         assert_eq!(dialog.alignment, Some(Alignment::CENTER_LEFT));
-        assert_eq!(dialog.inset_padding, Some(EdgeInsets::all(px(0.0))));
+        assert_eq!(dialog.inset_padding, Some(EdgeInsets::all(0.0)));
     }
 
     /// `_DialogDefaultsM3`'s shape: 28dp corners (`dialog.dart`, oracle tag
@@ -633,9 +619,9 @@ mod tests {
         assert_eq!(resolved.elevation, 11.0);
         assert_eq!(
             resolved.shape,
-            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(
-                DEFAULT_CORNER_RADIUS
-            ))))
+            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(
+                (DEFAULT_CORNER_RADIUS)
+            )))
         );
     }
 

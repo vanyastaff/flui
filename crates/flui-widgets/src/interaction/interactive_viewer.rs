@@ -73,14 +73,13 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_geometry::{Matrix4, px};
+use flui_geometry::Matrix4;
 use flui_interaction::events::{Modifiers, ScrollEventData};
 use flui_interaction::routing::EventPropagation;
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
 use flui_objects::SubtreeAnchor;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
-use flui_types::geometry::Pixels;
 use flui_types::gestures::Velocity;
 use flui_types::painting::Clip;
 use flui_types::{Alignment, Axis, EdgeInsets, Offset, Point, Rect};
@@ -125,10 +124,10 @@ pub enum PanAxis {
 pub struct InteractionStartDetails {
     /// The interaction's focal point, in the coordinates of the widget that
     /// contains `InteractiveViewer`.
-    pub focal_point: Offset<Pixels>,
+    pub focal_point: Offset<f64>,
     /// The interaction's focal point, in the coordinates of
     /// `InteractiveViewer` itself (viewport-local).
-    pub local_focal_point: Offset<Pixels>,
+    pub local_focal_point: Offset<f64>,
 }
 
 /// Details passed to `on_interaction_update`.
@@ -136,16 +135,16 @@ pub struct InteractionStartDetails {
 pub struct InteractionUpdateDetails {
     /// The interaction's current focal point, in the coordinates of the
     /// widget that contains `InteractiveViewer`.
-    pub focal_point: Offset<Pixels>,
+    pub focal_point: Offset<f64>,
     /// The interaction's current focal point, in `InteractiveViewer`'s own
     /// (viewport-local) coordinates.
-    pub local_focal_point: Offset<Pixels>,
+    pub local_focal_point: Offset<f64>,
     /// The multiplicative scale change applied by this update. `1.0` for a
     /// pure pan update (no scale change).
-    pub scale: f32,
+    pub scale: f64,
     /// The translation applied by this update, in viewport pixels. Zero for
     /// a pure wheel-scale update.
-    pub focal_point_delta: Offset<Pixels>,
+    pub focal_point_delta: Offset<f64>,
 }
 
 /// Details passed to `on_interaction_end`.
@@ -192,13 +191,13 @@ pub enum WheelScaleGate {
 pub struct InteractiveViewer {
     controller: TransformationController,
     boundary_margin: EdgeInsets,
-    min_scale: f32,
-    max_scale: f32,
+    min_scale: f64,
+    max_scale: f64,
     pan_enabled: bool,
     scale_enabled: bool,
     wheel_scale_gate: WheelScaleGate,
     pan_axis: PanAxis,
-    scale_factor: f32,
+    scale_factor: f64,
     clip_behavior: Clip,
     alignment: Option<Alignment>,
     on_interaction_start: Option<StartCallback>,
@@ -268,7 +267,7 @@ impl InteractiveViewer {
     /// A margin for the visible boundaries of the child.
     ///
     /// Any transformation that would move the viewport outside of the
-    /// boundary is clamped at the boundary. Pass `EdgeInsets::all(f32::
+    /// boundary is clamped at the boundary. Pass `EdgeInsets::all(f64::
     /// INFINITY)` for no boundary at all.
     ///
     /// # Precondition
@@ -297,7 +296,7 @@ impl InteractiveViewer {
     /// The minimum allowed scale. Must be finite and greater than zero, and
     /// no greater than [`max_scale`](Self::max_scale).
     #[must_use]
-    pub fn min_scale(mut self, min_scale: f32) -> Self {
+    pub fn min_scale(mut self, min_scale: f64) -> Self {
         debug_assert!(
             min_scale > 0.0 && min_scale.is_finite(),
             "InteractiveViewer::min_scale must be finite and greater than zero"
@@ -309,7 +308,7 @@ impl InteractiveViewer {
     /// The maximum allowed scale. Must be greater than zero, not NaN, and no
     /// less than [`min_scale`](Self::min_scale).
     #[must_use]
-    pub fn max_scale(mut self, max_scale: f32) -> Self {
+    pub fn max_scale(mut self, max_scale: f64) -> Self {
         debug_assert!(
             max_scale > 0.0 && !max_scale.is_nan(),
             "InteractiveViewer::max_scale must be greater than zero"
@@ -356,7 +355,7 @@ impl InteractiveViewer {
     /// faster. Defaults to Flutter's `kDefaultMouseScrollToScaleFactor`
     /// (`200.0`).
     #[must_use]
-    pub fn scale_factor(mut self, scale_factor: f32) -> Self {
+    pub fn scale_factor(mut self, scale_factor: f64) -> Self {
         self.scale_factor = scale_factor;
         self
     }
@@ -457,7 +456,7 @@ impl StatefulView for InteractiveViewer {
 struct GestureTracking {
     /// Viewport-local position at the most recent `on_pan_start`. `None`
     /// between gestures.
-    pan_start_local: Cell<Option<Offset<Pixels>>>,
+    pan_start_local: Cell<Option<Offset<f64>>>,
     /// The axis a [`PanAxis::Aligned`] drag has locked to, established from
     /// the first non-zero movement of the gesture. `None` before that, and
     /// reset to `None` at the end of every gesture.
@@ -560,10 +559,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                     ) {
                         let current_matrix = controller_update.value();
                         let scale = uniform_scale(&current_matrix);
-                        let raw_delta = Offset::new(
-                            px(details.delta.dx.get() / scale),
-                            px(details.delta.dy.get() / scale),
-                        );
+                        let raw_delta =
+                            Offset::new(details.delta.dx / scale, details.delta.dy / scale);
                         let aligned = match pan_axis {
                             PanAxis::Free => raw_delta,
                             PanAxis::Horizontal => align_to_axis(raw_delta, Axis::Horizontal),
@@ -584,10 +581,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                             focal_point: details.global_position,
                             local_focal_point: details.local_position,
                             scale: 1.0,
-                            focal_point_delta: Offset::new(
-                                px(details.delta.dx.get()),
-                                px(details.delta.dy.get()),
-                            ),
+                            focal_point_delta: Offset::new(details.delta.dx, details.delta.dy),
                         },
                     );
                 }
@@ -634,7 +628,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         // the ctrl-gated contract.
                         return EventPropagation::Continue;
                     }
-                    if data.delta.dy.get() == 0.0 {
+                    if data.delta.dy == 0.0 {
                         // Ignore horizontal-only wheel scroll, matching the
                         // oracle (`_receivedPointerSignal` returns early on
                         // `scrollDelta.dy == 0.0`).
@@ -651,7 +645,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         );
                     }
 
-                    let scale_change = (-data.delta.dy.get() / scale_factor).exp();
+                    let scale_change = (-data.delta.dy / scale_factor).exp();
 
                     let value_before_zoom = controller_wheel.value();
                     if scale_enabled
@@ -786,7 +780,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         );
                     }
                     #[expect(clippy::cast_possible_truncation)] // per-tick factors are near 1.0
-                    let scale_change = scale as f32;
+                    let scale_change = scale as f64;
                     let value_before_zoom = controller_pinch.value();
                     if scale_enabled
                         && scale_change != 1.0
@@ -882,11 +876,11 @@ impl InteractiveViewerState {
         pipeline_cell: Option<&PipelineCell>,
         anchor: &SubtreeAnchor,
         boundary_margin: EdgeInsets,
-    ) -> Option<(Rect<Pixels>, Rect<Pixels>)> {
+    ) -> Option<(Rect<f64>, Rect<f64>)> {
         let owner = pipeline_cell?;
         let render_id = anchor.get()?;
         let size = owner.with(|owner| owner.box_size(render_id))?;
-        let rect = Rect::from_origin_size(Point::new(px(0.0), px(0.0)), size);
+        let rect = Rect::from_origin_size(Point::new(0.0, 0.0), size);
         Some((rect, boundary_margin.inflate_rect(rect)))
     }
 }
@@ -898,7 +892,7 @@ impl InteractiveViewerState {
 /// The uniform scale factor of a matrix built solely from translation +
 /// uniform scale (no rotation — see the module docs on why rotation is out of
 /// scope): the length of the transformed x basis vector.
-fn uniform_scale(matrix: &Matrix4) -> f32 {
+fn uniform_scale(matrix: &Matrix4) -> f64 {
     let m = matrix.to_col_major_array();
     m[0].hypot(m[1])
 }
@@ -908,7 +902,7 @@ fn uniform_scale(matrix: &Matrix4) -> f32 {
 /// coordinates after the child has been transformed by `matrix`. Falls back
 /// to `viewport` unchanged if `matrix` is singular (should not happen for a
 /// translation + uniform-scale matrix with a non-zero scale).
-fn transform_viewport(matrix: Matrix4, viewport: Rect<Pixels>) -> Rect<Pixels> {
+fn transform_viewport(matrix: Matrix4, viewport: Rect<f64>) -> Rect<f64> {
     match matrix.try_inverse() {
         Some(inverse) => inverse.transform_rect(&viewport),
         None => viewport,
@@ -926,7 +920,7 @@ fn transform_viewport(matrix: Matrix4, viewport: Rect<Pixels>) -> Rect<Pixels> {
 /// case, including a viewport wider than the boundary on this axis (checked
 /// against both edges; the edge quoting the larger-magnitude excess wins,
 /// exactly as the `Quad` algorithm's per-corner comparison would).
-fn axis_excess(view_min: f32, view_max: f32, bound_min: f32, bound_max: f32) -> f32 {
+fn axis_excess(view_min: f64, view_max: f64, bound_min: f64, bound_max: f64) -> f64 {
     let excess_min = if view_min < bound_min {
         bound_min - view_min
     } else {
@@ -944,20 +938,20 @@ fn axis_excess(view_min: f32, view_max: f32, bound_min: f32, bound_max: f32) -> 
     }
 }
 
-fn rect_excess(boundary: Rect<Pixels>, viewport: Rect<Pixels>) -> Offset<Pixels> {
+fn rect_excess(boundary: Rect<f64>, viewport: Rect<f64>) -> Offset<f64> {
     Offset::new(
-        px(axis_excess(
-            viewport.min.x.get(),
-            viewport.max.x.get(),
-            boundary.min.x.get(),
-            boundary.max.x.get(),
-        )),
-        px(axis_excess(
-            viewport.min.y.get(),
-            viewport.max.y.get(),
-            boundary.min.y.get(),
-            boundary.max.y.get(),
-        )),
+        axis_excess(
+            viewport.min.x,
+            viewport.max.x,
+            boundary.min.x,
+            boundary.max.x,
+        ),
+        axis_excess(
+            viewport.min.y,
+            viewport.max.y,
+            boundary.min.y,
+            boundary.max.y,
+        ),
     )
 }
 
@@ -971,7 +965,7 @@ fn rect_excess(boundary: Rect<Pixels>, viewport: Rect<Pixels>) -> Offset<Pixels>
 /// that *should* be exactly zero but isn't once the matrix carries a
 /// non-unit (and non-power-of-two) scale, per the oracle's own comment:
 /// "values that should have been zero were given as within 10^-10 of zero".
-/// `f32` carries far fewer significant digits than the `f64` the oracle
+/// `f64` carries far fewer significant digits than the `f64` the oracle
 /// rounds, so a fixed decimal count doesn't transfer numerically; this
 /// snaps anything within `EXCESS_EPSILON` of zero back to exactly zero
 /// instead. Chosen against the scale of one gesture's excess (tens to
@@ -979,23 +973,23 @@ fn rect_excess(boundary: Rect<Pixels>, viewport: Rect<Pixels>) -> Offset<Pixels>
 /// larger than the ~1e-4 residue a `scale * (a - b)` round trip leaves at
 /// these magnitudes, comfortably smaller than any excess a real boundary
 /// hit produces.
-const EXCESS_EPSILON: f32 = 1e-3;
+const EXCESS_EPSILON: f64 = 1e-3;
 
 /// Whether a single excess component is within [`EXCESS_EPSILON`] of zero.
-fn is_negligible(component: f32) -> bool {
+fn is_negligible(component: f64) -> bool {
     component.abs() < EXCESS_EPSILON
 }
 
 /// Whether `excess` is within [`EXCESS_EPSILON`] of `Offset::ZERO` on both
 /// axes — the round-trip-tolerant replacement for `excess == Offset::ZERO`.
-fn excess_is_negligible(excess: Offset<Pixels>) -> bool {
-    is_negligible(excess.dx.get()) && is_negligible(excess.dy.get())
+fn excess_is_negligible(excess: Offset<f64>) -> bool {
+    is_negligible(excess.dx) && is_negligible(excess.dy)
 }
 
 /// Locks a `PanAxis::Aligned` drag to whichever axis dominates `delta`.
 /// `delta` must be non-zero (callers only invoke this on real movement).
-fn dominant_axis(delta: Offset<Pixels>) -> Axis {
-    if delta.dx.get().abs() > delta.dy.get().abs() {
+fn dominant_axis(delta: Offset<f64>) -> Axis {
+    if delta.dx.abs() > delta.dy.abs() {
         Axis::Horizontal
     } else {
         Axis::Vertical
@@ -1003,10 +997,10 @@ fn dominant_axis(delta: Offset<Pixels>) -> Axis {
 }
 
 /// Zeroes out the off-axis component of `delta`.
-fn align_to_axis(delta: Offset<Pixels>, axis: Axis) -> Offset<Pixels> {
+fn align_to_axis(delta: Offset<f64>, axis: Axis) -> Offset<f64> {
     match axis {
-        Axis::Horizontal => Offset::new(delta.dx, px(0.0)),
-        Axis::Vertical => Offset::new(px(0.0), delta.dy),
+        Axis::Horizontal => Offset::new(delta.dx, 0.0),
+        Axis::Vertical => Offset::new(0.0, delta.dy),
     }
 }
 
@@ -1022,14 +1016,14 @@ fn align_to_axis(delta: Offset<Pixels>, axis: Axis) -> Offset<Pixels> {
 /// global-space) convention and must not be used here.
 fn clamp_translation(
     matrix: Matrix4,
-    translation: Offset<Pixels>,
-    viewport: Rect<Pixels>,
-    boundary: Rect<Pixels>,
+    translation: Offset<f64>,
+    viewport: Rect<f64>,
+    boundary: Rect<f64>,
 ) -> Matrix4 {
     if translation == Offset::ZERO {
         return matrix;
     }
-    let next = matrix * Matrix4::translation(translation.dx.get(), translation.dy.get(), 0.0);
+    let next = matrix * Matrix4::translation(translation.dx, translation.dy, 0.0);
 
     if !boundary.is_finite() {
         return next;
@@ -1043,8 +1037,8 @@ fn clamp_translation(
 
     let (next_tx, next_ty, next_tz) = next.translation_component();
     let current_scale = uniform_scale(&matrix);
-    let corrected_tx = next_tx - excess.dx.get() * current_scale;
-    let corrected_ty = next_ty - excess.dy.get() * current_scale;
+    let corrected_tx = next_tx - excess.dx * current_scale;
+    let corrected_ty = next_ty - excess.dy * current_scale;
     let mut corrected = matrix;
     corrected.set_translation(corrected_tx, corrected_ty, next_tz);
 
@@ -1054,19 +1048,19 @@ fn clamp_translation(
         return corrected;
     }
 
-    if !is_negligible(corrected_excess.dx.get()) && !is_negligible(corrected_excess.dy.get()) {
+    if !is_negligible(corrected_excess.dx) && !is_negligible(corrected_excess.dy) {
         // Neither axis fits at all (the viewport is larger than the
         // boundary in both directions): no translation, matching the
         // oracle.
         return matrix;
     }
 
-    let unidirectional_tx = if is_negligible(corrected_excess.dx.get()) {
+    let unidirectional_tx = if is_negligible(corrected_excess.dx) {
         corrected_tx
     } else {
         0.0
     };
-    let unidirectional_ty = if is_negligible(corrected_excess.dy.get()) {
+    let unidirectional_ty = if is_negligible(corrected_excess.dy) {
         corrected_ty
     } else {
         0.0
@@ -1085,11 +1079,11 @@ fn clamp_translation(
 /// the mutating `Matrix4::scale` method is the wrong tool here.
 fn clamp_scale(
     matrix: Matrix4,
-    scale: f32,
-    min_scale: f32,
-    max_scale: f32,
-    viewport: Rect<Pixels>,
-    boundary: Rect<Pixels>,
+    scale: f64,
+    min_scale: f64,
+    max_scale: f64,
+    viewport: Rect<f64>,
+    boundary: Rect<f64>,
 ) -> Matrix4 {
     if scale == 1.0 {
         return matrix;
@@ -1105,21 +1099,21 @@ fn clamp_scale(
     let current_scale = uniform_scale(&matrix);
     // Finite / infinite (unbounded boundary) is naturally 0.0 here — no
     // separate infinite-boundary branch needed.
-    let boundary_floor = (viewport.width().get() / boundary.width().get())
-        .max(viewport.height().get() / boundary.height().get());
+    let boundary_floor =
+        (viewport.width() / boundary.width()).max(viewport.height() / boundary.height());
     let total_scale = (current_scale * scale).max(boundary_floor);
     let clamped_total = clamp_double(total_scale, min_scale, max_scale);
     let applied = clamped_total / current_scale;
     matrix * Matrix4::scaling(applied, applied, applied)
 }
 
-/// Flutter parity: `foundation.dart`'s `clampDouble`. Unlike `f32::clamp`
+/// Flutter parity: `foundation.dart`'s `clampDouble`. Unlike `f64::clamp`
 /// (which panics — in every build profile, not just debug — whenever `min >
 /// max`), this never panics: a misconfigured `min_scale > max_scale` falls
 /// through to Dart's own release-mode behavior (the `assert` above is
 /// debug-only) instead of crashing a release build over a caller error that
 /// should have been caught in testing.
-fn clamp_double(x: f32, min: f32, max: f32) -> f32 {
+fn clamp_double(x: f64, min: f64, max: f64) -> f64 {
     if x < min {
         min
     } else if x > max {
@@ -1133,11 +1127,8 @@ fn clamp_double(x: f32, min: f32, max: f32) -> f32 {
 mod tests {
     use super::*;
 
-    fn child_rect() -> Rect<Pixels> {
-        Rect::from_min_max(
-            Point::new(px(0.0), px(0.0)),
-            Point::new(px(200.0), px(200.0)),
-        )
+    fn child_rect() -> Rect<f64> {
+        Rect::from_min_max(Point::new(0.0, 0.0), Point::new(200.0, 200.0))
     }
 
     /// Regression: at a non-unit, non-power-of-two scale,
@@ -1155,7 +1146,7 @@ mod tests {
     /// -20..220), scale = e, a hard-left drag attempting -1000 scene units.
     /// Confirmed empirically that this exact
     /// input reproduces nonzero residue in `corrected_excess.dx` against
-    /// the pre-fix exact-`f32`-equality code, which returns exactly `0.0`
+    /// the pre-fix exact-`f64`-equality code, which returns exactly `0.0`
     /// here; the epsilon-tolerant fix returns the correctly clamped
     /// `~= -398.022`. Reverting the `excess_is_negligible`/`is_negligible`
     /// calls in `clamp_translation` back to `== Offset::ZERO` / `== 0.0` /
@@ -1163,10 +1154,10 @@ mod tests {
     #[test]
     fn clamp_translation_clamps_instead_of_snapping_to_zero_at_non_unit_scale() {
         let rect = child_rect();
-        let boundary = EdgeInsets::all(px(20.0)).inflate_rect(rect);
-        let scale = std::f32::consts::E;
+        let boundary = EdgeInsets::all(20.0).inflate_rect(rect);
+        let scale = std::f64::consts::E;
         let matrix = Matrix4::scaling(scale, scale, scale);
-        let translation = Offset::new(px(-1000.0), px(0.0));
+        let translation = Offset::new((-1000.0), 0.0);
 
         let result = clamp_translation(matrix, translation, rect, boundary);
         let (tx, ty, _tz) = result.translation_component();
@@ -1180,7 +1171,7 @@ mod tests {
         assert_eq!(ty, 0.0);
     }
 
-    /// `f32::clamp` panics — in every build profile, not just debug builds —
+    /// `f64::clamp` panics — in every build profile, not just debug builds —
     /// whenever `min > max`. `clamp_double` must never panic on that input,
     /// matching Dart's `clampDouble` (whose own `assert(min <= max)` is
     /// debug-only, so release Flutter never crashes over this either).

@@ -25,7 +25,7 @@ use crate::scroll::{ShrinkWrappingViewport, SliverChildBuilderDelegate, SliverGr
 /// [`crate::SingleChildScrollView`]'s template.
 #[derive(Clone, Debug)]
 enum OffsetSource {
-    Pixels(f32),
+    Fixed(f64),
     Position(ScrollPosition),
 }
 
@@ -101,7 +101,7 @@ impl GridView {
         let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(cross_axis_count);
         Self {
             scroll_direction: Axis::Vertical,
-            offset_source: OffsetSource::Pixels(0.0),
+            offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
             children: StaticChildren::new(children.into_boxed_vec()),
@@ -121,11 +121,11 @@ impl GridView {
     /// [`GridView::count`].
     ///
     /// Flutter parity: `GridView.extent`.
-    pub fn extent(max_cross_axis_extent: f32, children: impl ViewSeq) -> Self {
+    pub fn extent(max_cross_axis_extent: f64, children: impl ViewSeq) -> Self {
         let delegate = SliverGridDelegateWithMaxCrossAxisExtent::new(max_cross_axis_extent);
         Self {
             scroll_direction: Axis::Vertical,
-            offset_source: OffsetSource::Pixels(0.0),
+            offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
             grid_delegate: Arc::new(delegate),
             children: StaticChildren::new(children.into_boxed_vec()),
@@ -154,7 +154,7 @@ impl GridView {
     {
         Self {
             scroll_direction: Axis::Vertical,
-            offset_source: OffsetSource::Pixels(0.0),
+            offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
             grid_delegate,
             children: StaticChildren::new(Vec::new()),
@@ -204,8 +204,8 @@ impl GridView {
     /// this value is pushed into it on every rebuild. Mutually exclusive with
     /// [`GridView::position`] — whichever is called last wins.
     #[must_use]
-    pub fn offset(mut self, offset: f32) -> Self {
-        self.offset_source = OffsetSource::Pixels(offset);
+    pub fn offset(mut self, offset: f64) -> Self {
+        self.offset_source = OffsetSource::Fixed(offset);
         self
     }
 
@@ -306,14 +306,14 @@ impl StatelessView for GridView {
         if self.shrink_wrap {
             let viewport = ShrinkWrappingViewport::new((sliver,)).axis_direction(axis_direction);
             match &self.offset_source {
-                OffsetSource::Pixels(pixels) => viewport.offset(*pixels),
+                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
                 OffsetSource::Position(position) => viewport.position(position.clone()),
             }
             .boxed()
         } else {
             let viewport = Viewport::new((sliver,)).axis_direction(axis_direction);
             match &self.offset_source {
-                OffsetSource::Pixels(pixels) => viewport.offset(*pixels),
+                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
                 OffsetSource::Position(position) => viewport.position(position.clone()),
             }
             .boxed()
@@ -341,8 +341,7 @@ mod tests {
                 .position(position)
         );
         assert!(
-            position_debug.contains("offset_source: Position(")
-                && !position_debug.contains("Pixels("),
+            position_debug.contains("offset_source: Position(") && !position_debug.contains("("),
             "the last call (.position) must win over an earlier .offset call, got: \
              {position_debug}",
         );
@@ -354,7 +353,7 @@ mod tests {
                 .offset(12.5)
         );
         assert!(
-            offset_debug.contains("offset_source: Pixels(12.5)"),
+            offset_debug.contains("offset_source: 12.5"),
             "the last call (.offset) must win over an earlier .position call, got: \
              {offset_debug}",
         );

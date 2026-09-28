@@ -54,7 +54,7 @@ impl StatefulView for Counter {
 impl ViewState<Counter> for CounterState {
     fn build(&self, _view: &Counter, _ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.fetch_add(1, Ordering::Relaxed);
-        let side = self.side.load(Ordering::Relaxed) as f32;
+        let side = self.side.load(Ordering::Relaxed) as f64;
         SizedBox::square(side)
     }
 }

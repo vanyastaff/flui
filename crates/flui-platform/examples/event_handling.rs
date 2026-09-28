@@ -43,11 +43,11 @@ fn main() -> anyhow::Result<()> {
     // Create main window
     let window_options = WindowOptions {
         title: "Event Handling Demo - Click, type, resize!".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: true,
         visible: true,
         decorated: true,
-        min_size: Some(Size::new(px(400.0), px(300.0))),
+        min_size: Some(Size::new(400.0, 300.0)),
         max_size: None,
         ..Default::default()
     };

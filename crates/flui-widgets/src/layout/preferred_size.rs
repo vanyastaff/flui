@@ -51,7 +51,7 @@ pub trait PreferredSizeView: View {
 /// use flui_widgets::layout::PreferredSize;
 /// use flui_widgets::SizedBox;
 ///
-/// let _bar = PreferredSize::new(Size::new(px(f32::INFINITY), px(80.0)), SizedBox::shrink());
+/// let _bar = PreferredSize::new(Size::new((f64::INFINITY), 80.0), SizedBox::shrink());
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct PreferredSize {
@@ -102,14 +102,14 @@ mod tests {
 
     #[test]
     fn preferred_size_reports_the_configured_size() {
-        let size = Size::new(px(f32::INFINITY), px(80.0));
+        let size = Size::new(f64::INFINITY, 80.0);
         let wrapped = PreferredSize::new(size, SizedBox::shrink());
         assert_eq!(wrapped.preferred_size(), size);
     }
 
     #[test]
     fn child_view_type_is_preserved_through_the_wrapper() {
-        let wrapped = PreferredSize::new(Size::new(px(0.0), px(80.0)), SizedBox::new(10.0, 20.0));
+        let wrapped = PreferredSize::new(Size::new(0.0, 80.0), SizedBox::new(10.0, 20.0));
         assert_eq!(
             wrapped.child.view_type_id(),
             std::any::TypeId::of::<SizedBox>(),

@@ -118,8 +118,8 @@ fn held_buttons(wparam: WPARAM) -> PointerButtons {
 #[inline]
 fn pointer_state(
     lparam: LPARAM,
-    scale_factor: f32,
-    pressure: f32,
+    scale_factor: f64,
+    pressure: f64,
     buttons: PointerButtons,
     count: u8,
 ) -> (PointerState, KeyboardModifiers) {
@@ -142,16 +142,16 @@ fn pointer_state(
 fn pointer_state_at(
     x: i32,
     y: i32,
-    scale_factor: f32,
-    pressure: f32,
+    scale_factor: f64,
+    pressure: f64,
     buttons: PointerButtons,
     count: u8,
 ) -> (PointerState, KeyboardModifiers) {
     // SAFETY: see `get_modifiers`'s own `# Safety` section — no
     // precondition to discharge here.
     let modifiers = unsafe { get_modifiers() };
-    let logical_x = device_to_logical(x as f32, scale_factor);
-    let logical_y = device_to_logical(y as f32, scale_factor);
+    let logical_x = device_to_logical(x as f64, scale_factor);
+    let logical_y = device_to_logical(y as f64, scale_factor);
 
     let state = PointerState {
         time: event_timestamp_ns(),
@@ -161,7 +161,7 @@ fn pointer_state_at(
         count,
         contact_geometry: PhysicalSize::new(1.0, 1.0),
         orientation: PointerOrientation::default(),
-        pressure,
+        pressure: pressure as f32,
         tangential_pressure: 0.0,
         scale_factor: scale_factor as f64,
     };
@@ -174,7 +174,7 @@ pub fn mouse_button_event(
     is_down: bool,
     wparam: WPARAM,
     lparam: LPARAM,
-    scale_factor: f32,
+    scale_factor: f64,
 ) -> PlatformInput {
     let (state, modifiers) = pointer_state(
         lparam,
@@ -204,7 +204,7 @@ pub fn mouse_button_event(
 }
 
 /// Convert WM_MOUSEMOVE to W3C PointerEvent
-pub fn mouse_move_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f32) -> PlatformInput {
+pub fn mouse_move_event(wparam: WPARAM, lparam: LPARAM, scale_factor: f64) -> PlatformInput {
     let held = held_buttons(wparam);
     // Sensor-less pressure rule: 0.5 while any button is held (a drag),
     // 0.0 on a hover.
@@ -246,7 +246,7 @@ fn wheel_pointer_state(
     hwnd: HWND,
     wparam: WPARAM,
     lparam: LPARAM,
-    scale_factor: f32,
+    scale_factor: f64,
 ) -> (PointerState, KeyboardModifiers) {
     let mut point = POINT {
         x: get_x_lparam(lparam),
@@ -275,7 +275,7 @@ pub fn mouse_wheel_event(
     hwnd: HWND,
     wparam: WPARAM,
     lparam: LPARAM,
-    scale_factor: f32,
+    scale_factor: f64,
 ) -> PlatformInput {
     let (state, modifiers) = wheel_pointer_state(hwnd, wparam, lparam, scale_factor);
     let _ = modifiers;
@@ -300,7 +300,7 @@ pub fn mouse_hwheel_event(
     hwnd: HWND,
     wparam: WPARAM,
     lparam: LPARAM,
-    scale_factor: f32,
+    scale_factor: f64,
 ) -> PlatformInput {
     let (state, modifiers) = wheel_pointer_state(hwnd, wparam, lparam, scale_factor);
     let _ = modifiers;

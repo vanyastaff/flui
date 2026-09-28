@@ -630,8 +630,8 @@ mod tests {
         PipelineCell::new(PipelineOwner::new())
     }
 
-    fn constraints(side: f32) -> BoxConstraints {
-        BoxConstraints::tight_for(Some(px(side)), Some(px(side)))
+    fn constraints(side: f64) -> BoxConstraints {
+        BoxConstraints::tight_for(Some(side), Some(side))
     }
 
     /// Whether `render_id` is queued for the next layout pass.

@@ -36,7 +36,7 @@ fn pump_post_frame_callback_observes_this_frames_committed_layout() {
             &mut self,
             _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
         ) -> flui_types::Size {
-            flui_types::Size::new(px(40.0), px(24.0))
+            flui_types::Size::new(40.0, 24.0)
         }
         fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
     }
@@ -85,7 +85,7 @@ fn pump_post_frame_callback_observes_this_frames_committed_layout() {
     );
     assert_eq!(
         *observed.read(),
-        Some(flui_types::Size::new(px(40.0), px(24.0))),
+        Some(flui_types::Size::new(40.0, 24.0)),
         "the post-frame callback must observe THIS pump's committed layout"
     );
 }

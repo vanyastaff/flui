@@ -37,16 +37,16 @@ use flui_types::Color;
 /// A delegate that records every `(shrink_offset, overlaps_content)` pair its
 /// `build` was called with.
 struct RecordingDelegate {
-    min_extent: f32,
-    max_extent: f32,
-    builds: Rc<RefCell<Vec<(f32, bool)>>>,
+    min_extent: f64,
+    max_extent: f64,
+    builds: Rc<RefCell<Vec<(f64, bool)>>>,
 }
 
 impl SliverPersistentHeaderDelegate for RecordingDelegate {
     fn build(
         &self,
         _ctx: &dyn flui_view::BuildContext,
-        shrink_offset: f32,
+        shrink_offset: f64,
         overlaps_content: bool,
     ) -> BoxedView {
         self.builds
@@ -58,11 +58,11 @@ impl SliverPersistentHeaderDelegate for RecordingDelegate {
             .boxed()
     }
 
-    fn min_extent(&self) -> f32 {
+    fn min_extent(&self) -> f64 {
         self.min_extent
     }
 
-    fn max_extent(&self) -> f32 {
+    fn max_extent(&self) -> f64 {
         self.max_extent
     }
 }
@@ -76,7 +76,7 @@ fn trailing_content() -> BoxedView {
         .boxed()
 }
 
-fn scroll_view_at(offset: f32, header: SliverPersistentHeader) -> CustomScrollView {
+fn scroll_view_at(offset: f64, header: SliverPersistentHeader) -> CustomScrollView {
     CustomScrollView::new((header, trailing_content())).offset(offset)
 }
 
@@ -109,7 +109,7 @@ fn first_frame_builds_with_the_published_expanded_state() {
 #[test]
 fn the_child_rebuilds_on_shrink_change_and_only_then() {
     let builds = Rc::new(RefCell::new(Vec::new()));
-    let delegate = |builds: &Rc<RefCell<Vec<(f32, bool)>>>| RecordingDelegate {
+    let delegate = |builds: &Rc<RefCell<Vec<(f64, bool)>>>| RecordingDelegate {
         min_extent: 40.0,
         max_extent: 120.0,
         builds: Rc::clone(builds),
@@ -204,7 +204,7 @@ fn every_variant_builds_through_the_seam() {
 #[test]
 fn a_swap_that_shrinks_max_extent_never_hands_the_delegate_an_out_of_range_pair() {
     let builds = Rc::new(RefCell::new(Vec::new()));
-    let header = |max_extent: f32, builds: &Rc<RefCell<Vec<(f32, bool)>>>| {
+    let header = |max_extent: f64, builds: &Rc<RefCell<Vec<(f64, bool)>>>| {
         SliverPersistentHeader::new(RecordingDelegate {
             min_extent: 30.0,
             max_extent,
@@ -253,17 +253,17 @@ impl SliverPersistentHeaderDelegate for StretchingDelegate {
     fn build(
         &self,
         _ctx: &dyn flui_view::BuildContext,
-        _shrink_offset: f32,
+        _shrink_offset: f64,
         _overlaps_content: bool,
     ) -> BoxedView {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }
 
-    fn min_extent(&self) -> f32 {
+    fn min_extent(&self) -> f64 {
         40.0
     }
 
-    fn max_extent(&self) -> f32 {
+    fn max_extent(&self) -> f64 {
         120.0
     }
 
@@ -307,14 +307,14 @@ fn the_delegates_stretch_configuration_fires_its_trigger_on_over_scroll() {
 /// A delegate that delegates `should_rebuild` to a flag, counting builds.
 struct GatedDelegate {
     rebuild: bool,
-    builds: Rc<RefCell<Vec<(f32, bool)>>>,
+    builds: Rc<RefCell<Vec<(f64, bool)>>>,
 }
 
 impl SliverPersistentHeaderDelegate for GatedDelegate {
     fn build(
         &self,
         _ctx: &dyn flui_view::BuildContext,
-        shrink_offset: f32,
+        shrink_offset: f64,
         overlaps_content: bool,
     ) -> BoxedView {
         self.builds
@@ -323,11 +323,11 @@ impl SliverPersistentHeaderDelegate for GatedDelegate {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     }
 
-    fn min_extent(&self) -> f32 {
+    fn min_extent(&self) -> f64 {
         40.0
     }
 
-    fn max_extent(&self) -> f32 {
+    fn max_extent(&self) -> f64 {
         120.0
     }
 
@@ -342,7 +342,7 @@ impl SliverPersistentHeaderDelegate for GatedDelegate {
 #[test]
 fn a_delegate_swap_rebuilds_only_when_should_rebuild_says_so() {
     let builds = Rc::new(RefCell::new(Vec::new()));
-    let header = |rebuild: bool, builds: &Rc<RefCell<Vec<(f32, bool)>>>| {
+    let header = |rebuild: bool, builds: &Rc<RefCell<Vec<(f64, bool)>>>| {
         SliverPersistentHeader::new(GatedDelegate {
             rebuild,
             builds: Rc::clone(builds),
@@ -388,24 +388,24 @@ impl SliverPersistentHeaderDelegate for MinSizingDelegate {
     fn build(
         &self,
         _ctx: &dyn flui_view::BuildContext,
-        _shrink_offset: f32,
+        _shrink_offset: f64,
         _overlaps_content: bool,
     ) -> BoxedView {
         flui_widgets::ConstrainedBox::new(flui_rendering::constraints::BoxConstraints {
-            min_width: flui_types::geometry::px(0.0),
-            max_width: flui_types::geometry::px(f32::INFINITY),
-            min_height: flui_types::geometry::px(100.0),
-            max_height: flui_types::geometry::px(200.0),
+            min_width: 0.0,
+            max_width: (f64::INFINITY),
+            min_height: 100.0,
+            max_height: 200.0,
         })
         .into_view()
         .boxed()
     }
 
-    fn min_extent(&self) -> f32 {
+    fn min_extent(&self) -> f64 {
         100.0
     }
 
-    fn max_extent(&self) -> f32 {
+    fn max_extent(&self) -> f64 {
         200.0
     }
 }
@@ -424,7 +424,7 @@ fn a_min_sizing_child_survives_the_child_driven_paint_boundary() {
 
     let controller = ScrollController::new();
     let position_for_viewport = controller.position();
-    let big = |height: f32| -> BoxedView {
+    let big = |height: f64| -> BoxedView {
         SliverToBoxAdapter::new()
             .child(SizedBox::new(800.0, height))
             .into_view()
@@ -462,12 +462,7 @@ fn a_min_sizing_child_survives_the_child_driven_paint_boundary() {
     let header = *laid
         .find_all_by_render_type("RenderSliverPinnedPersistentHeader")
         .iter()
-        .min_by(|a, b| {
-            laid.offset(**a)
-                .dy
-                .get()
-                .total_cmp(&laid.offset(**b).dy.get())
-        })
+        .min_by(|a, b| laid.offset(**a).dy.get().total_cmp(&laid.offset(**b).dy))
         .expect("two pinned headers are mounted");
     // Premise: below the boundary the header's paint is capped by the
     // remaining room (600 − 550 = 50), not the child.
@@ -510,14 +505,14 @@ fn a_min_sizing_child_survives_the_child_driven_paint_boundary() {
 /// A snapping delegate: records builds and declares a fast snap so the test
 /// pumps few frames.
 struct SnappingDelegate {
-    builds: Rc<RefCell<Vec<(f32, bool)>>>,
+    builds: Rc<RefCell<Vec<(f64, bool)>>>,
 }
 
 impl SliverPersistentHeaderDelegate for SnappingDelegate {
     fn build(
         &self,
         _ctx: &dyn flui_view::BuildContext,
-        shrink_offset: f32,
+        shrink_offset: f64,
         overlaps_content: bool,
     ) -> BoxedView {
         self.builds
@@ -526,11 +521,11 @@ impl SliverPersistentHeaderDelegate for SnappingDelegate {
         SizedBox::new(300.0, 10.0).into_view().boxed()
     }
 
-    fn min_extent(&self) -> f32 {
+    fn min_extent(&self) -> f64 {
         40.0
     }
 
-    fn max_extent(&self) -> f32 {
+    fn max_extent(&self) -> f64 {
         120.0
     }
 

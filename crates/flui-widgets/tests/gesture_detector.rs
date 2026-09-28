@@ -572,7 +572,7 @@ mod event_cx {
         let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
             GestureDetector::new()
                 .on_double_tap_down(move |cx, details| {
-                    count.set(cx, details.local_position.dx.get() as u32)
+                    count.set(cx, details.local_position.dx as u32)
                 })
                 .child(target())
         });
@@ -593,7 +593,7 @@ mod event_cx {
         let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
             GestureDetector::new()
                 .on_pan_update(move |cx, details: DragUpdateDetails| {
-                    count.update(cx, |n| *n += details.delta.dy.get() as u32)
+                    count.update(cx, |n| *n += details.delta.dy as u32)
                 })
                 .child(target())
         });

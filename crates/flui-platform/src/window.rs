@@ -36,10 +36,7 @@
 //! }
 //! ```
 
-use flui_types::{
-    Pixels,
-    geometry::{Point, Rect, Size},
-};
+use flui_types::geometry::{Point, Rect, Size};
 
 // ============================================================================
 // Core Window Trait (Cross-Platform)
@@ -62,24 +59,24 @@ pub trait Window {
 
     /// Get the window's current position (top-left corner in screen
     /// coordinates).
-    fn position(&self) -> Point<Pixels>;
+    fn position(&self) -> Point<f64>;
 
     /// Set the window's position.
-    fn set_position(&mut self, position: Point<Pixels>);
+    fn set_position(&mut self, position: Point<f64>);
 
     /// Get the window's current size.
-    fn size(&self) -> Size<Pixels>;
+    fn size(&self) -> Size<f64>;
 
     /// Set the window's size.
-    fn set_size(&mut self, size: Size<Pixels>);
+    fn set_size(&mut self, size: Size<f64>);
 
     /// Get the window's bounds (position + size).
-    fn bounds(&self) -> Rect<Pixels> {
+    fn bounds(&self) -> Rect<f64> {
         Rect::from_origin_size(self.position(), self.size())
     }
 
     /// Set the window's bounds (position + size).
-    fn set_bounds(&mut self, bounds: Rect<Pixels>) {
+    fn set_bounds(&mut self, bounds: Rect<f64>) {
         self.set_position(bounds.origin());
         self.set_size(bounds.size());
     }
@@ -180,15 +177,15 @@ pub trait Window {
     fn request_redraw(&mut self);
 
     /// Set minimum window size.
-    fn set_min_size(&mut self, size: Option<Size<Pixels>>);
+    fn set_min_size(&mut self, size: Option<Size<f64>>);
 
     /// Set maximum window size.
-    fn set_max_size(&mut self, size: Option<Size<Pixels>>);
+    fn set_max_size(&mut self, size: Option<Size<f64>>);
 
     /// Get the window's content scale factor (DPI scale).
     ///
     /// Returns 1.0 for standard DPI, 2.0 for Retina/HiDPI displays.
-    fn scale_factor(&self) -> f32;
+    fn scale_factor(&self) -> f64;
 
     /// Get the window's raw handle for GPU integration.
     ///
@@ -329,10 +326,10 @@ pub struct WindowBuilder {
     pub title: String,
 
     /// Initial position (None = auto-position).
-    pub position: Option<Point<Pixels>>,
+    pub position: Option<Point<f64>>,
 
     /// Initial size.
-    pub size: Size<Pixels>,
+    pub size: Size<f64>,
 
     /// Initial state.
     pub state: WindowState,
@@ -350,10 +347,10 @@ pub struct WindowBuilder {
     pub closable: bool,
 
     /// Minimum size.
-    pub min_size: Option<Size<Pixels>>,
+    pub min_size: Option<Size<f64>>,
 
     /// Maximum size.
-    pub max_size: Option<Size<Pixels>>,
+    pub max_size: Option<Size<f64>>,
 }
 
 impl WindowBuilder {
@@ -362,7 +359,7 @@ impl WindowBuilder {
         Self {
             title: "FLUI Window".to_string(),
             position: None,
-            size: Size::new(Pixels(800.0), Pixels(600.0)),
+            size: Size::new(800.0, 600.0),
             state: WindowState::Normal,
             visible: true,
             resizable: true,
@@ -380,13 +377,13 @@ impl WindowBuilder {
     }
 
     /// Set the window position.
-    pub fn with_position(mut self, position: Point<Pixels>) -> Self {
+    pub fn with_position(mut self, position: Point<f64>) -> Self {
         self.position = Some(position);
         self
     }
 
     /// Set the window size.
-    pub fn with_size(mut self, size: Size<Pixels>) -> Self {
+    pub fn with_size(mut self, size: Size<f64>) -> Self {
         self.size = size;
         self
     }
@@ -410,13 +407,13 @@ impl WindowBuilder {
     }
 
     /// Set minimum size.
-    pub fn with_min_size(mut self, size: Size<Pixels>) -> Self {
+    pub fn with_min_size(mut self, size: Size<f64>) -> Self {
         self.min_size = Some(size);
         self
     }
 
     /// Set maximum size.
-    pub fn with_max_size(mut self, size: Size<Pixels>) -> Self {
+    pub fn with_max_size(mut self, size: Size<f64>) -> Self {
         self.max_size = Some(size);
         self
     }
@@ -475,14 +472,14 @@ pub trait WindowManager {
     /// Calculate a cascade position for a new window.
     ///
     /// This provides the standard "staircase" positioning for new windows.
-    fn calculate_cascade_position(&self, _window_size: Size<Pixels>) -> Point<Pixels> {
+    fn calculate_cascade_position(&self, _window_size: Size<f64>) -> Point<f64> {
         let count = self.window_count();
         let cascade_offset = 28.0; // Standard cascade offset
 
-        let x = 100.0 + (count as f32 * cascade_offset);
-        let y = 100.0 + (count as f32 * cascade_offset);
+        let x = 100.0 + (count as f64 * cascade_offset);
+        let y = 100.0 + (count as f64 * cascade_offset);
 
-        Point::new(Pixels(x), Pixels(y))
+        Point::new(x, y)
     }
 
     /// Find windows by title (partial match).
@@ -592,8 +589,8 @@ mod tests {
     fn test_window_builder_defaults() {
         let builder = WindowBuilder::new();
         assert_eq!(builder.title, "FLUI Window");
-        assert_eq!(builder.size.width, Pixels(800.0));
-        assert_eq!(builder.size.height, Pixels(600.0));
+        assert_eq!(builder.size.width, 800.0);
+        assert_eq!(builder.size.height, 600.0);
         assert_eq!(builder.state, WindowState::Normal);
         assert!(builder.visible);
         assert!(builder.resizable);
@@ -603,17 +600,14 @@ mod tests {
     fn test_window_builder_customization() {
         let builder = WindowBuilder::new()
             .with_title("Custom Window")
-            .with_size(Size::new(Pixels(1024.0), Pixels(768.0)))
-            .with_position(Point::new(Pixels(100.0), Pixels(100.0)))
+            .with_size(Size::new(1024.0, 768.0))
+            .with_position(Point::new(100.0, 100.0))
             .with_resizable(false)
             .with_state(WindowState::Maximized);
 
         assert_eq!(builder.title, "Custom Window");
-        assert_eq!(builder.size.width, Pixels(1024.0));
-        assert_eq!(
-            builder.position,
-            Some(Point::new(Pixels(100.0), Pixels(100.0)))
-        );
+        assert_eq!(builder.size.width, 1024.0);
+        assert_eq!(builder.position, Some(Point::new(100.0, 100.0)));
         assert!(!builder.resizable);
         assert_eq!(builder.state, WindowState::Maximized);
     }

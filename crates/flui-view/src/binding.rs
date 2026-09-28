@@ -88,7 +88,7 @@ use crate::{
 /// [`ViewConfiguration`](flui_rendering::view::ViewConfiguration).
 ///
 /// [`RenderView`]: flui_rendering::view::RenderView
-const DEFAULT_ROOT_VIEW_SIZE: (f32, f32) = (800.0, 600.0);
+const DEFAULT_ROOT_VIEW_SIZE: (f64, f64) = (800.0, 600.0);
 
 // ============================================================================
 // Route Information
@@ -195,11 +195,11 @@ pub enum ViewFocusDirection {
 #[derive(Debug, Clone, Copy)]
 pub struct PredictiveBackEvent {
     /// Progress of the back gesture (0.0 to 1.0).
-    pub progress: f32,
+    pub progress: f64,
     /// X coordinate of the touch.
-    pub touch_x: f32,
+    pub touch_x: f64,
     /// Y coordinate of the touch.
-    pub touch_y: f32,
+    pub touch_y: f64,
     /// Whether the swipe is from the left edge.
     pub swipe_edge_left: bool,
 }
@@ -919,8 +919,8 @@ impl WidgetsBinding {
     pub fn attach_root_widget_with_size<V>(
         &self,
         view: &V,
-        width: f32,
-        height: f32,
+        width: f64,
+        height: f64,
     ) -> Result<(), AttachError>
     where
         V: View + Clone + 'static,

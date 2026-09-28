@@ -341,13 +341,8 @@ mod gpu_tests {
     }
 
     /// Full-surface bounds for W×H.
-    fn full_surface_bounds() -> Rect<Pixels> {
-        Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        )
+    fn full_surface_bounds() -> Rect<f64> {
+        Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32))
     }
 
     // ── T6: Opaque Multiply saveLayer vs CPU oracle ───────────────────────────
@@ -670,17 +665,12 @@ mod gpu_tests {
         );
 
         let half_width = SURFACE_WIDTH / 2;
-        let left_bounds = Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(half_width as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        );
+        let left_bounds = Rect::from_xywh(0.0, 0.0, (half_width as f32), (SURFACE_HEIGHT as f32));
         let right_bounds = Rect::from_xywh(
-            Pixels(half_width as f32),
-            Pixels(0.0),
-            Pixels(half_width as f32),
-            Pixels(SURFACE_HEIGHT as f32),
+            (half_width as f32),
+            0.0,
+            (half_width as f32),
+            (SURFACE_HEIGHT as f32),
         );
 
         // Opaque red → Multiply with green backdrop → dark output.

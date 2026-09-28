@@ -68,7 +68,7 @@ impl RenderBox for LinkedPaintBox {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        ctx.constraints().constrain(Size::new(px(20.0), px(20.0)))
+        ctx.constraints().constrain(Size::new(20.0, 20.0))
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {

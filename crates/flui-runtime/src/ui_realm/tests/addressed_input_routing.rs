@@ -97,7 +97,7 @@ fn input_stamped_for_b_never_reaches_as_arena() {
     let a_id = realm.presentation_id();
     let b_id = realm.install_second_presentation_for_test();
 
-    let down = make_down_event(Offset::new(Pixels(4.0), Pixels(6.0)), PointerType::Mouse);
+    let down = make_down_event(Offset::new(4.0, 6.0), PointerType::Mouse);
     realm.enter(|realm| {
         realm.handle_input_addressed(b_id, PlatformInput::Pointer(down));
     });
@@ -148,7 +148,7 @@ fn input_addressed_to_a_closed_or_unknown_presentation_drops_traced_never_falls_
         999,
         std::num::NonZeroU32::new(999).expect("nonzero"),
     );
-    let down_for_bogus = make_down_event(Offset::new(Pixels(4.0), Pixels(6.0)), PointerType::Mouse);
+    let down_for_bogus = make_down_event(Offset::new(4.0, 6.0), PointerType::Mouse);
     realm.enter(|realm| {
         realm.handle_input_addressed(bogus, PlatformInput::Pointer(down_for_bogus));
     });
@@ -182,8 +182,7 @@ fn input_addressed_to_a_closed_or_unknown_presentation_drops_traced_never_falls_
         realm.presentations.get(b_id).is_none(),
         "precondition: B must actually be gone from the forest after closing"
     );
-    let down_for_closed =
-        make_down_event(Offset::new(Pixels(8.0), Pixels(10.0)), PointerType::Mouse);
+    let down_for_closed = make_down_event(Offset::new(8.0, 10.0), PointerType::Mouse);
     realm.enter(|realm| {
         realm.handle_input_addressed(b_id, PlatformInput::Pointer(down_for_closed));
     });

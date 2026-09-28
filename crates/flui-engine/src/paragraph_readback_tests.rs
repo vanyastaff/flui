@@ -39,12 +39,12 @@ fn truncated_paragraph_leaves_no_ink_below_its_line() {
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_string()));
-    painter.layout(0.0, SIDE as f32);
+    painter.layout(0.0, f64::from(SIDE as f32));
     assert!(
         painter.did_exceed_max_lines(),
         "the fixture must overflow one line"
     );
-    let line_height = painter.size().height.0;
+    let line_height = painter.size().height;
 
     let mut canvas = Canvas::new();
     painter.paint(&mut canvas, Offset::ZERO);
@@ -126,7 +126,7 @@ fn paragraph_scene(
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new(text).with_style(style))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, SIDE as f32 * 4.0);
+    painter.layout(0.0, f64::from(SIDE as f32 * 4.0));
     let mut canvas = Canvas::new();
     decorate(&mut canvas, &mut |canvas| {
         painter.paint(canvas, Offset::ZERO);
@@ -177,13 +177,13 @@ fn text_is_clipped_by_a_rounded_clip() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    use flui_types::geometry::{RRect, Rect, px};
+    use flui_types::geometry::{RRect, Rect};
     // A wide block of dense glyphs, clipped to a circle inscribed in the
     // surface: the corner pixel (4, 4) is inside the scissor box and far
     // outside the circle.
     let clip = RRect::from_rect_circular(
-        Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32)),
-        px(SIDE as f32 / 2.0),
+        Rect::from_xywh(0.0, 0.0, f64::from(SIDE as f32), f64::from(SIDE as f32)),
+        f64::from(SIDE as f32 / 2.0),
     );
     let tree = paragraph_scene("MMMMMMMM", 40.0, Color::BLACK, |canvas, paint| {
         canvas.save();

@@ -53,7 +53,7 @@ use flui_layer::SceneBuilder;
 use flui_painting::{BlendMode, Canvas, Paint};
 use flui_types::{
     Color, Rect,
-    geometry::{RRect, px},
+    geometry::RRect,
     painting::{Clip, ClipOp},
 };
 
@@ -79,7 +79,7 @@ const SOURCE: Color = Color::rgba(0, 220, 40, 128);
 /// Paints `DESTINATION` over the surface, then `SOURCE` with `mode` through an
 /// anti-aliased rounded clip whose left edge falls mid-column.
 fn blend_through_an_anti_aliased_clip(renderer: &HeadlessRenderer, mode: BlendMode) -> EdgeSamples {
-    let full_surface = Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32));
+    let full_surface = Rect::from_xywh(0.0, 0.0, f64::from(SIDE as f32), f64::from(SIDE as f32));
 
     let tree = {
         let mut builder = SceneBuilder::new();
@@ -91,8 +91,13 @@ fn blend_through_an_anti_aliased_clip(renderer: &HeadlessRenderer, mode: BlendMo
         canvas.save();
         canvas.clip_rrect_ext(
             RRect::from_rect_circular(
-                Rect::from_xywh(px(CLIP_LEFT), px(CLIP_TOP), px(CLIP_WIDTH), px(CLIP_HEIGHT)),
-                px(CLIP_RADIUS),
+                Rect::from_xywh(
+                    f64::from(CLIP_LEFT),
+                    f64::from(CLIP_TOP),
+                    f64::from(CLIP_WIDTH),
+                    f64::from(CLIP_HEIGHT),
+                ),
+                f64::from(CLIP_RADIUS),
             ),
             ClipOp::Intersect,
             Clip::AntiAlias,

@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
             use flui_painting::Canvas;
             use flui_types::{
                 Point, RRect, Rect,
-                geometry::{Pixels, px},
+                geometry::{f64, px},
                 painting::{Paint, path::Path},
                 styling::Color,
             };
@@ -36,7 +36,7 @@ fn main() -> anyhow::Result<()> {
 
             // Dark slate background so the AA edge band is visible against fills.
             canvas.draw_rect(
-                Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
+                Rect::from_ltrb(0.0, 0.0, width, height),
                 &Paint::fill(Color::rgb(24, 24, 37)),
             );
 
@@ -53,33 +53,26 @@ fn main() -> anyhow::Result<()> {
                 canvas.save();
                 canvas.translate(center_x, row1_y);
                 canvas.rotate(angle_deg.to_radians());
-                let local = Rect::from_ltrb(
-                    px(-card_half_w),
-                    px(-card_half_h),
-                    px(card_half_w),
-                    px(card_half_h),
-                );
-                canvas.draw_rrect(RRect::from_rect_circular(local, Pixels(16.0)), &white);
+                let local =
+                    Rect::from_ltrb((-card_half_w), (-card_half_h), card_half_w, card_half_h);
+                canvas.draw_rrect(RRect::from_rect_circular(local, 16.0), &white);
                 canvas.restore();
             }
 
             // ── Row 2: circle, rotated oval, pie arc (circle/arc instanced) ──────
             let row2_y = 340.0_f32;
-            canvas.draw_circle(Point::new(px(140.0), px(row2_y)), px(52.0), &white);
+            canvas.draw_circle(Point::new(140.0, row2_y), 52.0, &white);
 
             // Oval rotated 30° to exercise the affine ellipse path.
             canvas.save();
             canvas.translate(380.0, row2_y);
             canvas.rotate(30.0_f32.to_radians());
-            canvas.draw_oval(
-                Rect::from_ltrb(px(-70.0), px(-40.0), px(70.0), px(40.0)),
-                &white,
-            );
+            canvas.draw_oval(Rect::from_ltrb((-70.0), (-40.0), 70.0, 40.0), &white);
             canvas.restore();
 
             // Pie arc: 270° sweep, filled to centre.
             canvas.draw_arc(
-                Rect::from_ltrb(px(560.0), px(row2_y - 56.0), px(672.0), px(row2_y + 56.0)),
+                Rect::from_ltrb(560.0, (row2_y - 56.0), 672.0, (row2_y + 56.0)),
                 -45.0_f32.to_radians(),
                 270.0_f32.to_radians(),
                 true,
@@ -90,26 +83,26 @@ fn main() -> anyhow::Result<()> {
             let ring_center_x = 840.0_f32;
             let outer = RRect::from_rect_circular(
                 Rect::from_ltrb(
-                    px(ring_center_x - 56.0),
-                    px(row2_y - 56.0),
-                    px(ring_center_x + 56.0),
-                    px(row2_y + 56.0),
+                    (ring_center_x - 56.0),
+                    (row2_y - 56.0),
+                    (ring_center_x + 56.0),
+                    (row2_y + 56.0),
                 ),
-                Pixels(20.0),
+                20.0,
             );
             let inner = RRect::from_rect_circular(
                 Rect::from_ltrb(
-                    px(ring_center_x - 32.0),
-                    px(row2_y - 32.0),
-                    px(ring_center_x + 32.0),
-                    px(row2_y + 32.0),
+                    (ring_center_x - 32.0),
+                    (row2_y - 32.0),
+                    (ring_center_x + 32.0),
+                    (row2_y + 32.0),
                 ),
-                Pixels(12.0),
+                12.0,
             );
             canvas.draw_drrect(outer, inner, &white);
 
             // ── Row 3: self-intersecting 5-point star (SSAA-tile fill path) ──────
-            let star_center = Point::new(px(width / 2.0), px(520.0));
+            let star_center = Point::new((width / 2.0), 520.0);
             let outer_radius = 80.0_f32;
             let inner_radius = 32.0_f32;
             let mut star = Path::new();
@@ -122,8 +115,8 @@ fn main() -> anyhow::Result<()> {
                 // Start at the top tip (-90°) and step every 36°.
                 let angle = (-90.0_f32 + tip as f32 * 36.0).to_radians();
                 let point = Point::new(
-                    px(star_center.x.0 + radius * angle.cos()),
-                    px(star_center.y.0 + radius * angle.sin()),
+                    (star_center.x.0 + radius * angle.cos()),
+                    (star_center.y.0 + radius * angle.sin()),
                 );
                 if tip == 0 {
                     star.move_to(point);

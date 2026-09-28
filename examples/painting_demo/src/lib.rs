@@ -276,16 +276,16 @@ use flui_types::geometry::{Offset, Pixels, Point, RRect, Rect, px};
 use flui_types::painting::{Paint, Shader, path::Path};
 use flui_types::styling::Color;
 
-fn pt(x: f32, y: f32) -> Point<Pixels> {
-    Point::new(px(x), px(y))
+fn pt(x: f32, y: f32) -> Point<f64> {
+    Point::new(x, y)
 }
 
-fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<Pixels> {
-    Rect::from_xywh(px(x), px(y), px(w), px(h))
+fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect<f64> {
+    Rect::from_xywh(x, y, w, h)
 }
 
-fn ofs(dx: f32, dy: f32) -> Offset<Pixels> {
-    Offset::new(px(dx), px(dy))
+fn ofs(dx: f32, dy: f32) -> Offset<f64> {
+    Offset::new(dx, dy)
 }
 
 // ============================================================
@@ -328,7 +328,7 @@ fn draw_rounded_rects(painter: &mut flui_engine::WgpuPainter, y: f32) {
     let label_paint = Paint::fill(Color::WHITE);
     for (i, (radius, color)) in radii.iter().zip(colors.iter()).enumerate() {
         let x = 30.0 + i as f32 * 280.0;
-        let rrect = RRect::from_rect_circular(rect(x, y, 250.0, 80.0), px(*radius));
+        let rrect = RRect::from_rect_circular(rect(x, y, 250.0, 80.0), (*radius));
         painter.draw_rrect(rrect, &Paint::fill(*color));
         painter.draw_text(
             &format!("r={radius}"),
@@ -400,7 +400,7 @@ fn draw_lines_and_strokes(painter: &mut flui_engine::WgpuPainter, y: f32) {
     );
     painter.draw_text("stroke rect", pt(620.0, y + 85.0), 12.0, &label_paint);
 
-    let rrect = RRect::from_rect_circular(rect(780.0, y, 150.0, 80.0), px(15.0));
+    let rrect = RRect::from_rect_circular(rect(780.0, y, 150.0, 80.0), 15.0);
     painter.draw_rrect(rrect, &Paint::stroke(Color::rgba(100, 200, 255, 255), 3.0));
     painter.draw_text("stroke rrect", pt(800.0, y + 85.0), 12.0, &label_paint);
 
@@ -597,7 +597,7 @@ fn draw_gradients(painter: &mut flui_engine::WgpuPainter, y: f32) {
             Color::rgba(50, 200, 255, 255),
         ],
     );
-    let rrect = RRect::from_rect_circular(rect(1000.0, y, 170.0, 100.0), px(20.0));
+    let rrect = RRect::from_rect_circular(rect(1000.0, y, 170.0, 100.0), 20.0);
     painter.draw_rrect(rrect, &Paint::fill(Color::WHITE).with_shader(rrect_grad));
     painter.draw_text("Gradient rrect", pt(1020.0, y + 110.0), 12.0, &label_paint);
 }
@@ -790,14 +790,14 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f32) {
     let label_paint = Paint::fill(Color::LIGHT_GRAY);
 
     // Thick border frame
-    let outer1 = RRect::from_rect_circular(rect(30.0, y, 200.0, 100.0), px(20.0));
-    let inner1 = RRect::from_rect_circular(rect(45.0, y + 15.0, 170.0, 70.0), px(10.0));
+    let outer1 = RRect::from_rect_circular(rect(30.0, y, 200.0, 100.0), 20.0);
+    let inner1 = RRect::from_rect_circular(rect(45.0, y + 15.0, 170.0, 70.0), 10.0);
     painter.draw_drrect(outer1, inner1, &Paint::fill(Color::rgba(255, 100, 50, 255)));
     painter.draw_text("Thick frame", pt(80.0, y + 110.0), 12.0, &label_paint);
 
     // Gradient frame
-    let outer2 = RRect::from_rect_circular(rect(280.0, y, 200.0, 100.0), px(30.0));
-    let inner2 = RRect::from_rect_circular(rect(290.0, y + 10.0, 180.0, 80.0), px(20.0));
+    let outer2 = RRect::from_rect_circular(rect(280.0, y, 200.0, 100.0), 30.0);
+    let inner2 = RRect::from_rect_circular(rect(290.0, y + 10.0, 180.0, 80.0), 20.0);
     let frame_grad = Shader::simple_linear(
         ofs(280.0, y),
         ofs(480.0, y + 100.0),
@@ -814,8 +814,8 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f32) {
     painter.draw_text("Gradient frame", pt(320.0, y + 110.0), 12.0, &label_paint);
 
     // Thin outline frame
-    let outer3 = RRect::from_rect_circular(rect(530.0, y, 200.0, 100.0), px(15.0));
-    let inner3 = RRect::from_rect_circular(rect(534.0, y + 4.0, 192.0, 92.0), px(12.0));
+    let outer3 = RRect::from_rect_circular(rect(530.0, y, 200.0, 100.0), 15.0);
+    let inner3 = RRect::from_rect_circular(rect(534.0, y + 4.0, 192.0, 92.0), 12.0);
     painter.draw_drrect(
         outer3,
         inner3,
@@ -824,8 +824,8 @@ fn draw_drrect(painter: &mut flui_engine::WgpuPainter, y: f32) {
     painter.draw_text("Thin frame", pt(580.0, y + 110.0), 12.0, &label_paint);
 
     // Asymmetric radii frame
-    let outer4 = RRect::from_rect_circular(rect(780.0, y, 200.0, 100.0), px(40.0));
-    let inner4 = RRect::from_rect_circular(rect(800.0, y + 20.0, 160.0, 60.0), px(5.0));
+    let outer4 = RRect::from_rect_circular(rect(780.0, y, 200.0, 100.0), 40.0);
+    let inner4 = RRect::from_rect_circular(rect(800.0, y + 20.0, 160.0, 60.0), 5.0);
     painter.draw_drrect(outer4, inner4, &Paint::fill(Color::rgba(255, 200, 50, 255)));
     painter.draw_text("Asymmetric", pt(835.0, y + 110.0), 12.0, &label_paint);
 }
@@ -903,7 +903,7 @@ fn draw_opacity(painter: &mut flui_engine::WgpuPainter, y: f32) {
 // Geometry helpers
 // ============================================================
 
-fn make_star(center: Point<Pixels>, outer_r: f32, inner_r: f32, points: usize) -> Path {
+fn make_star(center: Point<f64>, outer_r: f32, inner_r: f32, points: usize) -> Path {
     let mut pts = Vec::with_capacity(points * 2);
     for i in 0..(points * 2) {
         let angle = (i as f32) * std::f32::consts::PI / points as f32 - std::f32::consts::FRAC_PI_2;
@@ -916,7 +916,7 @@ fn make_star(center: Point<Pixels>, outer_r: f32, inner_r: f32, points: usize) -
     Path::polygon(&pts)
 }
 
-fn make_regular_polygon(center: Point<Pixels>, radius: f32, sides: usize) -> Path {
+fn make_regular_polygon(center: Point<f64>, radius: f32, sides: usize) -> Path {
     let mut pts = Vec::with_capacity(sides);
     for i in 0..sides {
         let angle = (i as f32) * std::f32::consts::TAU / sides as f32 - std::f32::consts::FRAC_PI_2;

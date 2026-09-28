@@ -821,7 +821,7 @@ mod tests {
                 b,
                 flui_platform_api::PlatformInput::Pointer(
                     flui_interaction::events::make_down_event(
-                        flui_types::Offset::new(flui_types::Pixels(1.0), flui_types::Pixels(1.0)),
+                        flui_types::Offset::new(1.0, 1.0),
                         flui_interaction::events::PointerType::Mouse,
                     ),
                 ),
@@ -947,7 +947,7 @@ mod tests {
                 b,
                 flui_platform_api::PlatformInput::Pointer(
                     flui_interaction::events::make_down_event(
-                        flui_types::Offset::new(flui_types::Pixels(1.0), flui_types::Pixels(1.0)),
+                        flui_types::Offset::new(1.0, 1.0),
                         flui_interaction::events::PointerType::Mouse,
                     ),
                 ),

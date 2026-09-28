@@ -83,8 +83,8 @@ fn table_cell_overrides_the_tables_default_vertical_alignment() {
     // Row height = 50 (the spacer). The unset cell keeps the table's default
     // (Top): offset dy = 0. The `TableCell`-wrapped cell overrides to Bottom:
     // offset dy = 50 - 10 = 40.
-    assert_eq!(laid.offset(laid.child(root, 0)).dy, px(0.0));
-    assert_eq!(laid.offset(laid.child(root, 1)).dy, px(40.0));
+    assert_eq!(laid.offset(laid.child(root, 0)).dy, 0.0);
+    assert_eq!(laid.offset(laid.child(root, 1)).dy, 40.0);
 }
 
 /// A key on a cell is its identity inside its row: two keyed cells that swap

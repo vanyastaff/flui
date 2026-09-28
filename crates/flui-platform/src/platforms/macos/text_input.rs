@@ -45,7 +45,7 @@ use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger}
 
 use flui_types::{
     ImeEvent,
-    geometry::{Bounds, Pixels},
+    geometry::{Bounds, f64},
 };
 
 use super::view::{ViewContext, get_context as get_view_context};
@@ -89,7 +89,7 @@ pub(super) struct TextInputState {
     /// The candidate-window rectangle from
     /// [`PlatformTextInput::set_ime_cursor_area`], in the framework's logical
     /// window coordinates (top-left origin) as the trait specifies.
-    pub(super) cursor_area: Option<Bounds<Pixels>>,
+    pub(super) cursor_area: Option<Bounds<f64>>,
 
     /// The `NSResponder` `keyDown:` `NSEvent*` currently inside
     /// `interpretKeyEvents:`, as a `usize` (0 when none). Non-zero only for the
@@ -757,7 +757,7 @@ impl PlatformTextInput for MacOSTextInput {
         }
     }
 
-    fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+    fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         let stored = self.with_content_view(|ctx| {
             ctx.text_input.borrow_mut().cursor_area = Some(area);
         });

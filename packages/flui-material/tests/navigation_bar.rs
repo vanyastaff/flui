@@ -47,8 +47,8 @@ use flui_sdk::widgets::{
 /// Tight width, loose (`0..height`) height — see the module docs' note on
 /// why a fully-tight root is the wrong shape to mount a `NavigationBar`
 /// under.
-fn bar_constraints(width: f32, height: f32) -> BoxConstraints {
-    BoxConstraints::new(px(width), px(width), px(0.0), px(height))
+fn bar_constraints(width: f64, height: f64) -> BoxConstraints {
+    BoxConstraints::new(width, width, 0.0, height)
 }
 
 /// Every `NavigationBar` needs a [`Theme`] ancestor (`Theme::of` panics
@@ -143,12 +143,12 @@ fn destinations_lay_out_at_equal_width() {
     for cell in cells {
         assert_eq!(
             laid.size(cell).width,
-            px(100.0),
+            100.0,
             "each destination must take an equal 1/3 share of the bar's width",
         );
         assert_eq!(
             laid.size(cell).height,
-            px(80.0),
+            80.0,
             "each destination cell must span the bar's full 80dp height",
         );
     }
@@ -356,7 +356,7 @@ fn bar_height_and_elevation_match_the_m3_defaults() {
         .expect("NavigationBar must compose a full-size top-level Material surface");
     assert_eq!(
         laid.render_property(material, "elevation")
-            .and_then(|value| value.parse::<f32>().ok()),
+            .and_then(|value| value.parse::<f64>().ok()),
         Some(3.0),
         "_NavigationBarDefaultsM3.elevation is 3.0",
     );

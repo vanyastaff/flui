@@ -74,7 +74,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_interaction::PointerId;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_types::{Offset, geometry::Pixels};
+use flui_types::Offset;
 use flui_view::RebuildHandle;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
@@ -97,9 +97,9 @@ pub type ErasedDragData = Arc<dyn Any + Send + Sync>;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DragPosition {
     /// The pointer position in the global (root) coordinate space.
-    pub global: Offset<Pixels>,
+    pub global: Offset<f64>,
     /// The same position in the target's own local coordinate space.
-    pub local: Offset<Pixels>,
+    pub local: Offset<f64>,
 }
 
 impl DragPosition {
@@ -107,7 +107,7 @@ impl DragPosition {
     /// no transform between it and the root, and for direct callers driving
     /// the protocol without a hit-test path.
     #[must_use]
-    pub fn global_only(global: Offset<Pixels>) -> Self {
+    pub fn global_only(global: Offset<f64>) -> Self {
         Self {
             global,
             local: global,
@@ -125,9 +125,9 @@ pub struct DragTargetDetails<T> {
     /// The data carried by the drag.
     pub data: T,
     /// The global position at which the event occurred.
-    pub offset: Offset<Pixels>,
+    pub offset: Offset<f64>,
     /// The same position in this target's own local coordinate space.
-    pub local_offset: Offset<Pixels>,
+    pub local_offset: Offset<f64>,
 }
 
 /// Builds a [`DragTarget`]'s contents from its current candidate/rejected

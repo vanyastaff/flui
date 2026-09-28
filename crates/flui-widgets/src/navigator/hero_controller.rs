@@ -190,7 +190,7 @@ pub struct Measurement {
     pub to_transform: Option<Matrix4>,
     /// What the destination's primary animation read *while it was offstage*. The
     /// whole mechanism is a lie unless this is `1.0` (`routes.dart:1958`).
-    pub to_animation_while_offstage: f32,
+    pub to_animation_while_offstage: f64,
 }
 
 /// `_HeroFlightManifest.isValid` (`heroes.dart:530`):
@@ -603,7 +603,7 @@ impl MeasurementPass<'_> {
                 .unwrap_or_else(|| ArcCurve::new(curve.flipped()));
             curved.with_reverse_curve(reverse_curve)
         };
-        let animation: Arc<dyn Animation<f32>> = Arc::new(curved);
+        let animation: Arc<dyn Animation<f64>> = Arc::new(curved);
 
         // `toHero.widget.createRectTween ?? this.createRectTween` (`heroes.dart:495`):
         // the destination hero's factory wins, then the controller's default, then linear.

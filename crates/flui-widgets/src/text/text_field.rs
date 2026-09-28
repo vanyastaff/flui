@@ -30,10 +30,10 @@
 
 use std::rc::Rc;
 
-use flui_geometry::{EdgeInsets, px};
+use flui_geometry::EdgeInsets;
 use flui_interaction::FocusNode;
+use flui_types::Color;
 use flui_types::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
-use flui_types::{Color, Pixels};
 use flui_view::prelude::*;
 
 use crate::interaction::GestureDetector;
@@ -71,7 +71,7 @@ pub struct RawTextField {
     /// the field's mounted lifetime.
     external_focus_node: Option<Rc<FocusNode>>,
     /// Height of the caret bar, forwarded to [`EditableText`].
-    caret_height: f32,
+    caret_height: f64,
     /// Color of the caret bar when focused, forwarded to [`EditableText`].
     caret_color: Color,
     /// Inner padding between the decoration border and the text.
@@ -115,7 +115,7 @@ impl RawTextField {
             external_focus_node: None,
             caret_height: 18.0,
             caret_color: Color::BLACK,
-            content_padding: EdgeInsets::symmetric(px(8.0), px(12.0)),
+            content_padding: EdgeInsets::symmetric(8.0, 12.0),
             obscure_text: false,
             enabled: true,
             on_changed: None,
@@ -133,7 +133,7 @@ impl RawTextField {
 
     /// Override the caret bar height (default 18 logical pixels).
     #[must_use]
-    pub fn caret_height(mut self, height: f32) -> Self {
+    pub fn caret_height(mut self, height: f64) -> Self {
         self.caret_height = height;
         self
     }
@@ -284,12 +284,12 @@ impl ViewState<RawTextField> for RawTextFieldState {
 // ============================================================================
 
 /// Simple 1-px dark-gray border over a white background for the field.
-fn field_border_decoration() -> BoxDecoration<Pixels> {
+fn field_border_decoration() -> BoxDecoration<f64> {
     BoxDecoration::new()
         .set_color(Some(Color::WHITE))
         .set_border(Some(Border::all(BorderSide::new(
             Color::rgb(180, 180, 180),
-            px(1.0),
+            1.0,
             BorderStyle::Solid,
         ))))
 }
@@ -310,7 +310,7 @@ mod tests {
         let border = decoration.border.expect("border must be set");
         let top = border.top.expect("top side must be set");
         assert_eq!(top.color, Color::rgb(180, 180, 180));
-        assert_eq!(top.width, px(1.0));
+        assert_eq!(top.width, 1.0);
         assert_eq!(top.style, BorderStyle::Solid);
     }
 
@@ -320,11 +320,11 @@ mod tests {
         let field = RawTextField::new(controller)
             .caret_height(24.0)
             .caret_color(Color::rgb(1, 2, 3))
-            .content_padding(EdgeInsets::all(px(5.0)));
+            .content_padding(EdgeInsets::all(5.0));
 
         assert_eq!(field.caret_height, 24.0);
         assert_eq!(field.caret_color, Color::rgb(1, 2, 3));
-        assert_eq!(field.content_padding, EdgeInsets::all(px(5.0)));
+        assert_eq!(field.content_padding, EdgeInsets::all(5.0));
     }
 
     #[test]
@@ -332,10 +332,7 @@ mod tests {
         let field = RawTextField::new(TextEditingController::new());
         assert_eq!(field.caret_height, 18.0);
         assert_eq!(field.caret_color, Color::BLACK);
-        assert_eq!(
-            field.content_padding,
-            EdgeInsets::symmetric(px(8.0), px(12.0))
-        );
+        assert_eq!(field.content_padding, EdgeInsets::symmetric(8.0, 12.0));
         assert!(field.on_submitted.is_none());
     }
 }

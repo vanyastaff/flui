@@ -51,7 +51,7 @@ impl RenderBox for FixedBox {
         if let Some(probe) = &self.probe {
             probe();
         }
-        Size::new(px(40.0), px(24.0))
+        Size::new(40.0, 24.0)
     }
     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
 }
@@ -66,12 +66,7 @@ fn binding_with_probe(
     let mut owner = PipelineOwner::new();
     let root = owner.insert::<BoxProtocol>(Box::new(root_box));
     owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     let pipeline = PipelineCell::new(owner);
     let binding =
@@ -126,7 +121,7 @@ fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
     );
     assert_eq!(
         *observed.read(),
-        Some(Size::new(px(40.0), px(24.0))),
+        Some(Size::new(40.0, 24.0)),
         "the post-frame callback must observe THIS frame's committed layout"
     );
 }
@@ -173,7 +168,7 @@ fn the_post_frame_callback_has_not_run_while_layout_is_still_uncommitted() {
     assert!(fired.load(Ordering::SeqCst), "but it did run by frame end");
     assert_eq!(
         pipeline.with(|owner| owner.box_size(root)),
-        Some(Size::new(px(40.0), px(24.0)))
+        Some(Size::new(40.0, 24.0))
     );
 }
 

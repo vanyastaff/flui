@@ -39,9 +39,7 @@ mod measured {
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderUpdateImpact as _,
     };
-    use flui_sdk::types::geometry::{
-        EdgeInsets as _, Pixels as _, RRect as _, Radius as _, px as _,
-    };
+    use flui_sdk::types::geometry::{EdgeInsets as _, RRect as _, Radius as _, f64 as _, px as _};
     use flui_sdk::types::layout::Alignment as _;
     use flui_sdk::types::painting::{Clip as _, Paint as _, Path as _};
     use flui_sdk::types::platform::{Brightness as _, Locale as _};
@@ -51,8 +49,8 @@ mod measured {
     };
     use flui_sdk::types::typography::{FontWeight as _, TextDirection as _, TextStyle as _};
     use flui_sdk::types::{
-        Alignment as _, Color as _, EdgeInsets as _, Offset as _, Pixels as _, Point as _,
-        RRect as _, Rect as _, Size as _,
+        Alignment as _, Color as _, EdgeInsets as _, Offset as _, Point as _, RRect as _,
+        Rect as _, Size as _, f64 as _,
     };
     use flui_sdk::view::element::ElementKind as _;
     use flui_sdk::view::prelude::{BuildContext as _, InheritedData as _, StatelessView as _};

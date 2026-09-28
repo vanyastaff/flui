@@ -18,7 +18,7 @@ fn scale_transition_reads_animation_scale_on_each_tick() {
         AnimationController::without_ticker_bounds(Duration::from_millis(300), 0.0, 2.0)
             .expect("0.0 < 2.0 is valid bounds");
     controller.set_value(0.5);
-    let scale: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let scale: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
 
     let mut laid = lay_out(
         ScaleTransition::new(scale, SizedBox::new(100.0, 100.0)),
@@ -47,7 +47,7 @@ fn scale_transition_reads_animation_scale_on_each_tick() {
 fn scale_transition_lays_its_child_out_as_a_passthrough() {
     let controller = AnimationController::without_ticker(Duration::from_millis(300));
     controller.set_value(1.0);
-    let scale: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let scale: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
 
     // Transform is paint-only: the child keeps its size regardless of scale.
     let laid = lay_out(

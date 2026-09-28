@@ -100,8 +100,8 @@ impl Velocity {
     ///
     /// let velocity = Velocity::from_direction(100.0, 0.0);
     /// // Epsilon comparison is unitless: drop `Pixels` at the boundary.
-    /// assert!((velocity.pixels_per_second.dx.get() - 100.0).abs() < 0.01);
-    /// assert!(velocity.pixels_per_second.dy.get().abs() < 0.01);
+    /// assert!((velocity.pixels_per_second.dx - 100.0).abs() < 0.01);
+    /// assert!(velocity.pixels_per_second.dy.abs() < 0.01);
     /// ```
     #[inline]
     #[must_use]

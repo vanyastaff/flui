@@ -294,7 +294,7 @@ mod tab_tests {
         let left = FocusNode::with_debug_label("left");
         let right = FocusNode::with_debug_label("right");
 
-        let field = |x: f32, node: &Rc<FocusNode>| {
+        let field = |x: f64, node: &Rc<FocusNode>| {
             Positioned::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(node)))
                 .left(x)
                 .top(0.0)

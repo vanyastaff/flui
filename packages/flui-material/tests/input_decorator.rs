@@ -208,7 +208,7 @@ fn unfilled_enabled_decoration_has_a_transparent_fill_but_still_paints_the_under
 #[test]
 fn themed_fill_color_and_active_indicator_beat_the_m3_default_at_the_mounted_level() {
     let themed_fill = Color::rgb(11, 22, 33);
-    let themed_indicator = BorderSide::new(Color::rgb(44, 55, 66), px(3.0), BorderStyle::Solid);
+    let themed_indicator = BorderSide::new(Color::rgb(44, 55, 66), 3.0, BorderStyle::Solid);
     let theme = ThemeData::light();
     let colors = theme.color_scheme;
     let theme = theme.copy_with(ThemeDataOverrides {

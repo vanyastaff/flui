@@ -82,7 +82,7 @@ fn lazy_list_view_builder_builds_visible_items() {
 /// which owns a render node the moment `insert` returns.
 #[derive(Clone, StatelessView)]
 struct CompositeItem {
-    height: f32,
+    height: f64,
 }
 
 impl StatelessView for CompositeItem {
@@ -607,8 +607,8 @@ fn lazy_list_view_builder_repaint_boundaries_false_drops_the_wrappers() {
 #[test]
 fn lazy_list_view_builder_materialises_the_band_in_the_same_frame() {
     const ITEM_COUNT: usize = 100;
-    const ITEM_EXTENT: f32 = 48.0;
-    let list = |offset: f32| {
+    const ITEM_EXTENT: f64 = 48.0;
+    let list = |offset: f64| {
         ListView::builder(ITEM_COUNT, ITEM_EXTENT, |i| {
             // Exactly `ITEM_EXTENT` tall, so a jump to `50 * ITEM_EXTENT`
             // lands on item 50 whatever the estimate has adapted to.
@@ -629,8 +629,8 @@ fn lazy_list_view_builder_materialises_the_band_in_the_same_frame() {
     // service pass also created the paragraph nodes, but left them unsized
     // until the next frame. A non-zero height proves the fixpoint laid the
     // fresh band out before this frame painted.
-    let laid_out_height = |laid: &LaidOut, text: &str| -> Option<f32> {
-        laid.find_text(text).map(|id| laid.size(id).height.get())
+    let laid_out_height = |laid: &LaidOut, text: &str| -> Option<f64> {
+        laid.find_text(text).map(|id| laid.size(id).height)
     };
 
     // No tick: the bootstrap frame is the whole story.
@@ -706,12 +706,12 @@ impl ViewState<ProbeItem> for ProbeItemState {
 #[test]
 fn lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band() {
     const ITEM_COUNT: usize = 100;
-    const ITEM_EXTENT: f32 = 48.0;
+    const ITEM_EXTENT: f64 = 48.0;
     let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
         Arc::new(parking_lot::Mutex::new(Vec::new()));
     let list = {
         let log = Arc::clone(&log);
-        move |offset: f32| {
+        move |offset: f64| {
             let log = Arc::clone(&log);
             ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
                 (i < ITEM_COUNT).then(|| {
@@ -809,9 +809,9 @@ fn sliver_list_geometry(laid: &LaidOut) -> flui_rendering::constraints::SliverGe
 #[test]
 fn lazy_list_view_builder_overestimated_extent_settles_in_the_bootstrap_frame() {
     const ITEM_COUNT: usize = 1000;
-    const SEED_ESTIMATE: f32 = 200.0;
-    const ACTUAL: f32 = 10.0;
-    const VIEWPORT_HEIGHT: f32 = 600.0;
+    const SEED_ESTIMATE: f64 = 200.0;
+    const ACTUAL: f64 = 10.0;
+    const VIEWPORT_HEIGHT: f64 = 600.0;
     let laid = lay_out(
         ListView::builder(ITEM_COUNT, SEED_ESTIMATE, |i| {
             (i < ITEM_COUNT).then(|| {
@@ -828,7 +828,7 @@ fn lazy_list_view_builder_overestimated_extent_settles_in_the_bootstrap_frame() 
     let visible_items = (VIEWPORT_HEIGHT / ACTUAL) as usize;
     for i in [0, visible_items / 2, visible_items - 1] {
         let text = format!("item{i}");
-        let height = laid.find_text(&text).map(|id| laid.size(id).height.get());
+        let height = laid.find_text(&text).map(|id| laid.size(id).height);
         assert!(
             height.is_some_and(|h| h > 0.0),
             "{text} must be laid out by the bootstrap frame under a 20× over-estimate; height={height:?}"
@@ -852,19 +852,19 @@ fn lazy_list_view_builder_overestimated_extent_settles_in_the_bootstrap_frame() 
 fn lazy_list_view_builder_pathological_extents_defer_instead_of_panicking() {
     const ITEM_COUNT: usize = 400;
     const ENTRY: usize = 25;
-    const SEED: f32 = 200.0;
-    let height_of = |i: usize| -> f32 {
+    const SEED: f64 = 200.0;
+    let height_of = |i: usize| -> f64 {
         if i < ENTRY {
             SEED
         } else {
-            (SEED / 2f32.powi((i - ENTRY) as i32 + 1)).max(0.25)
+            (SEED / 2_f64.powi((i - ENTRY) as i32 + 1)).max(0.25)
         }
     };
     let mut laid = lay_out(
         ListView::builder(ITEM_COUNT, SEED, move |i| {
             (i < ITEM_COUNT).then(|| SizedBox::new(200.0, height_of(i)).boxed())
         })
-        .offset(ENTRY as f32 * SEED),
+        .offset(ENTRY as f64 * SEED),
         tight(200.0, 600.0),
     );
     // Whatever the first frame managed, the following frames finish the band.
@@ -898,8 +898,8 @@ fn lazy_list_view_builder_pathological_extents_defer_instead_of_panicking() {
 #[test]
 fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame() {
     const ITEM_COUNT: usize = 1000;
-    const SEED_ESTIMATE: f32 = 200.0;
-    const ACTUAL: f32 = 10.0;
+    const SEED_ESTIMATE: f64 = 200.0;
+    const ACTUAL: f64 = 10.0;
     let list = || {
         ListView::builder(ITEM_COUNT, SEED_ESTIMATE, |i| {
             (i < ITEM_COUNT).then(|| {
@@ -916,10 +916,10 @@ fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_fram
     laid.pump_widget(list());
     // `try_size`: a deferred item exists in the render tree (the safety net
     // built it) but has no geometry until the next frame lays it out.
-    let laid_out = |laid: &LaidOut, i: usize| -> Option<f32> {
+    let laid_out = |laid: &LaidOut, i: usize| -> Option<f64> {
         laid.find_text(&format!("item{i}"))
             .and_then(|id| laid.try_size(id))
-            .map(|size| size.height.get())
+            .map(|size| size.height)
     };
     assert!(
         laid_out(&laid, 0).is_some_and(|h| h > 0.0),
@@ -953,12 +953,12 @@ fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_fram
 #[test]
 fn lazy_list_view_builder_exhausted_budget_evicts_stale_residents_before_paint() {
     const ITEM_COUNT: usize = 1000;
-    const EXTENT: f32 = 10.0;
+    const EXTENT: f64 = 10.0;
     const JUMP_ROW: usize = 500;
     fn row_color(i: usize) -> Color {
         Color::rgb((i % 256) as u8, ((i / 256) % 256) as u8, 7)
     }
-    let list = |offset: f32| {
+    let list = |offset: f64| {
         ListView::builder(ITEM_COUNT, EXTENT, |i| {
             (i < ITEM_COUNT).then(|| {
                 SizedBox::new(200.0, EXTENT)
@@ -978,7 +978,7 @@ fn lazy_list_view_builder_exhausted_budget_evicts_stale_residents_before_paint()
     );
 
     laid.build_owner_mut().set_lazy_band_pass_budget_for_test(0);
-    laid.pump_widget(list(JUMP_ROW as f32 * EXTENT));
+    laid.pump_widget(list(JUMP_ROW as f64 * EXTENT));
     let after_jump = painted_rect_colors(&laid);
     let stale: Vec<usize> = (0..JUMP_ROW)
         .filter(|&i| after_jump.contains(&row_color(i)))
@@ -1036,7 +1036,7 @@ fn painted_rect_colors(laid: &LaidOut) -> Vec<Color> {
 #[test]
 fn list_view_new_materialises_only_the_window() {
     const ITEM_COUNT: usize = 1000;
-    const EXTENT: f32 = 10.0;
+    const EXTENT: f64 = 10.0;
     let children: Vec<BoxedView> = (0..ITEM_COUNT)
         .map(|i| {
             SizedBox::new(200.0, EXTENT)
@@ -1069,7 +1069,7 @@ fn list_view_new_materialises_only_the_window() {
 /// `SliverChildListDelegate` derives `findIndexByKey` from its children).
 #[test]
 fn list_view_new_keyed_row_moving_with_the_viewport_keeps_state() {
-    const EXTENT: f32 = 10.0;
+    const EXTENT: f64 = 10.0;
     let inits = Arc::new(parking_lot::Mutex::new(Vec::<u32>::new()));
     let rows = |order: &[u32]| -> Vec<BoxedView> {
         order
@@ -1105,7 +1105,7 @@ fn list_view_new_keyed_row_moving_with_the_viewport_keeps_state() {
     let row1 = laid
         .find_text("row1")
         .expect("row 1 is resident at its new index");
-    let top = laid.absolute_offset(row1).dy.get();
+    let top = laid.absolute_offset(row1).dy;
     assert!(
         (0.0..200.0).contains(&top),
         "row 1 is on screen at its new index; top={top}"
@@ -1126,9 +1126,9 @@ fn list_view_new_keyed_row_moving_with_the_viewport_keeps_state() {
 #[test]
 fn lazy_list_view_builder_thousandfold_overestimate_fills_the_viewport_in_the_bootstrap_frame() {
     const ITEM_COUNT: usize = 100_000;
-    const SEED_ESTIMATE: f32 = 1000.0;
-    const ACTUAL: f32 = 1.0;
-    const VIEWPORT_HEIGHT: f32 = 200.0;
+    const SEED_ESTIMATE: f64 = 1000.0;
+    const ACTUAL: f64 = 1.0;
+    const VIEWPORT_HEIGHT: f64 = 200.0;
     let laid = lay_out(
         ListView::builder(ITEM_COUNT, SEED_ESTIMATE, |i| {
             (i < ITEM_COUNT).then(|| SizedBox::new(200.0, ACTUAL).boxed())
@@ -1156,11 +1156,11 @@ fn lazy_list_view_builder_thousandfold_overestimate_fills_the_viewport_in_the_bo
 #[derive(Clone)]
 struct GlobalKeyedItem {
     key: flui_view::GlobalKey<GlobalKeyedItemState>,
-    height: f32,
+    height: f64,
 }
 
 struct GlobalKeyedItemState {
-    height: f32,
+    height: f64,
 }
 
 impl StatefulView for GlobalKeyedItem {
@@ -1300,11 +1300,11 @@ fn keyed_list(
 
 /// The id every on-stage row's STATE was born as, in list order.
 fn born_ids(laid: &LaidOut, ids: &[u32]) -> Vec<u32> {
-    let mut found: Vec<(f32, u32)> = ids
+    let mut found: Vec<(f64, u32)> = ids
         .iter()
         .filter_map(|&id| {
             laid.find_text(&format!("row{id}"))
-                .map(|node| (laid.absolute_offset(node).dy.get(), id))
+                .map(|node| (laid.absolute_offset(node).dy, id))
         })
         .collect();
     found.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1349,7 +1349,7 @@ fn lazy_list_view_builder_keyed_insert_at_head_preserves_resident_state() {
 /// destroyed it and mounted a fresh row at the destination.
 #[test]
 fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state() {
-    const EXTENT: f32 = 48.0;
+    const EXTENT: f64 = 48.0;
     let data: Data = Arc::new(parking_lot::Mutex::new((0..100).collect()));
     let inits = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let mut laid = lay_out(keyed_list(&data, &inits, true), tight(200.0, 200.0));
@@ -1685,14 +1685,14 @@ impl ViewState<KeptItem> for KeptItemState {
 #[test]
 fn a_kept_alive_item_survives_the_band_moving_away() {
     const ITEM_COUNT: usize = 100;
-    const ITEM_EXTENT: f32 = 48.0;
+    const ITEM_EXTENT: f64 = 48.0;
     const KEPT: usize = 1;
 
     let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
         Arc::new(parking_lot::Mutex::new(Vec::new()));
     let list = {
         let log = Arc::clone(&log);
-        move |offset: f32| {
+        move |offset: f64| {
             let log = Arc::clone(&log);
             ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
                 (i < ITEM_COUNT).then(|| {
@@ -1751,7 +1751,7 @@ fn a_kept_alive_item_survives_the_band_moving_away() {
 #[test]
 fn releasing_the_lease_lets_the_item_be_evicted() {
     const ITEM_COUNT: usize = 100;
-    const ITEM_EXTENT: f32 = 48.0;
+    const ITEM_EXTENT: f64 = 48.0;
     const KEPT: usize = 1;
 
     let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
@@ -1763,7 +1763,7 @@ fn releasing_the_lease_lets_the_item_be_evicted() {
     let list = {
         let log = Arc::clone(&log);
         let keeping = Arc::clone(&keeping);
-        move |offset: f32| {
+        move |offset: f64| {
             let log = Arc::clone(&log);
             let keeping = Arc::clone(&keeping);
             ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
@@ -1870,14 +1870,14 @@ impl ViewState<ReleasableItem> for ReleasableItemState {
 #[test]
 fn a_hold_taken_below_the_sparse_child_still_names_the_sparse_child() {
     const ITEM_COUNT: usize = 100;
-    const ITEM_EXTENT: f32 = 48.0;
+    const ITEM_EXTENT: f64 = 48.0;
     const KEPT: usize = 1;
 
     let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
         Arc::new(parking_lot::Mutex::new(Vec::new()));
     let list = {
         let log = Arc::clone(&log);
-        move |offset: f32| {
+        move |offset: f64| {
             let log = Arc::clone(&log);
             ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {
                 (i < ITEM_COUNT).then(|| {
@@ -2062,7 +2062,7 @@ impl ViewState<BecomesKeepWorthy> for BecomesKeepWorthyState {
 #[test]
 fn a_hold_taken_after_init_state_keeps_the_item_alive() {
     const ITEM_COUNT: usize = 100;
-    const ITEM_EXTENT: f32 = 48.0;
+    const ITEM_EXTENT: f64 = 48.0;
     const KEPT: usize = 1;
 
     let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
@@ -2073,7 +2073,7 @@ fn a_hold_taken_after_init_state_keeps_the_item_alive() {
     let list = {
         let log = Arc::clone(&log);
         let dirty = Arc::clone(&dirty);
-        move |offset: f32| {
+        move |offset: f64| {
             let log = Arc::clone(&log);
             let dirty = Arc::clone(&dirty);
             ListView::builder(ITEM_COUNT, ITEM_EXTENT, move |i| {

@@ -32,8 +32,8 @@ pub struct AnimatedContainer {
     alignment: Option<Alignment>,
     padding: Option<EdgeInsets>,
     color: Option<Color>,
-    width: Option<f32>,
-    height: Option<f32>,
+    width: Option<f64>,
+    height: Option<f64>,
     margin: Option<EdgeInsets>,
     duration: Duration,
     curve: ArcCurve,
@@ -80,14 +80,14 @@ impl AnimatedContainer {
 
     /// Animate toward this fixed width.
     #[must_use]
-    pub fn width(mut self, width: f32) -> Self {
+    pub fn width(mut self, width: f64) -> Self {
         self.width = Some(width);
         self
     }
 
     /// Animate toward this fixed height.
     #[must_use]
-    pub fn height(mut self, height: f32) -> Self {
+    pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }
@@ -131,8 +131,8 @@ pub struct AnimatedContainerState {
     alignment: OptTween<Alignment>,
     padding: OptTween<EdgeInsets>,
     color: OptTween<Color>,
-    width: OptTween<f32>,
-    height: OptTween<f32>,
+    width: OptTween<f64>,
+    height: OptTween<f64>,
     margin: OptTween<EdgeInsets>,
     child: BoxedView,
 }
@@ -241,7 +241,7 @@ mod tests {
     use super::*;
     use crate::SizedBox;
 
-    fn probe(width: f32) -> AnimatedContainer {
+    fn probe(width: f64) -> AnimatedContainer {
         AnimatedContainer::new(SizedBox::shrink()).width(width)
     }
 

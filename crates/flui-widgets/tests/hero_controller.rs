@@ -31,10 +31,7 @@ use crate::common::harness::{Harness, PostFrameCapability, mount, mount_with_cap
 
 /// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page fills
 /// its `Stack(fit: expand)` — so a route's subtree measures the screen.
-const SCREEN: flui_types::Size = flui_types::Size::new(
-    flui_types::geometry::px(800.0),
-    flui_types::geometry::px(600.0),
-);
+const SCREEN: flui_types::Size = flui_types::Size::new(800.0, 600.0);
 
 const TRANSITION: Duration = Duration::from_millis(300);
 
@@ -596,7 +593,7 @@ fn dead_local_lane_never_strands_the_destination_offstage() {
 /// `Center` because a `ModalRoute`'s page fills the screen under `Stack(fit: expand)`;
 /// without it every hero would measure 800x600 and the two rects would be
 /// indistinguishable.
-fn hero_page_route(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> {
+fn hero_page_route(tag_name: &'static str, w: f64, h: f64) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
         Center::new()
             .child(Hero::new(ValueKey::new(tag_name), SizedBox::new(w, h)))

@@ -41,10 +41,7 @@ use crate::common::harness::{Harness, mount};
 /// under `Stack(fit: expand)` (`routes.dart:2350-2356`, merged into one entry here).
 /// So a route's page **fills the screen**, and its size cannot distinguish the
 /// anchor from the `RenderTheater` above it — the render-tree position does.
-const SCREEN: Size = Size::new(
-    flui_types::geometry::px(800.0),
-    flui_types::geometry::px(600.0),
-);
+const SCREEN: Size = Size::new(800.0, 600.0);
 
 fn seeded_navigator() -> NavigatorHandle {
     let navigator = NavigatorHandle::new();

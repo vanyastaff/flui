@@ -57,8 +57,8 @@ fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
     // `_LisTileDefaultsM3.contentPadding` starts at `left: 16.0` — a point
     // 2px from the tile's left edge sits inside that padding gutter, well
     // before any title glyph begins.
-    laid.dispatch_pointer_down(origin.dx.get() + 2.0, origin.dy.get() + 2.0);
-    laid.dispatch_pointer_up(origin.dx.get() + 2.0, origin.dy.get() + 2.0);
+    laid.dispatch_pointer_down(origin.dx + 2.0, origin.dy + 2.0);
+    laid.dispatch_pointer_up(origin.dx + 2.0, origin.dy + 2.0);
 
     assert_eq!(
         taps.load(Ordering::SeqCst),
@@ -94,8 +94,8 @@ fn disabled_tile_swallows_a_tap() {
         .expect("ListTile must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
-    laid.dispatch_pointer_down(origin.dx.get() + 20.0, origin.dy.get() + 20.0);
-    laid.dispatch_pointer_up(origin.dx.get() + 20.0, origin.dy.get() + 20.0);
+    laid.dispatch_pointer_down(origin.dx + 20.0, origin.dy + 20.0);
+    laid.dispatch_pointer_up(origin.dx + 20.0, origin.dy + 20.0);
 
     assert_eq!(
         taps.load(Ordering::SeqCst),
@@ -123,7 +123,7 @@ fn title_only_tile_mounts_at_the_one_line_height() {
         .expect("ListTile must compose a Material surface");
 
     assert_eq!(
-        laid.size(material).height.get(),
+        laid.size(material).height,
         56.0,
         "a title-only tile (no subtitle) must mount at the one-line M3 default height"
     );
@@ -150,7 +150,7 @@ fn every_slot_present_mounts_a_two_line_tile() {
         .expect("ListTile must compose a Material surface");
 
     assert_eq!(
-        laid.size(material).height.get(),
+        laid.size(material).height,
         72.0,
         "leading+title+subtitle+trailing (two lines, not three) must mount at the two-line \
          M3 default height"
@@ -175,7 +175,7 @@ fn every_slot_present_mounts_a_two_line_tile() {
 /// height comparison would fail to distinguish them.
 #[test]
 fn ambient_icon_theme_size_reaches_a_bare_leading_icon_through_the_tile() {
-    fn mounted_glyph_height(ambient_size: f32) -> f32 {
+    fn mounted_glyph_height(ambient_size: f64) -> f64 {
         let laid = lay_out(
             themed(
                 ThemeData::light(),
@@ -193,7 +193,7 @@ fn ambient_icon_theme_size_reaches_a_bare_leading_icon_through_the_tile() {
         let glyph = laid
             .try_find_by_render_type("RenderParagraph")
             .expect("the leading Icon must mount its glyph as a RenderParagraph");
-        laid.size(glyph).height.get()
+        laid.size(glyph).height
     }
 
     let small = mounted_glyph_height(10.0);

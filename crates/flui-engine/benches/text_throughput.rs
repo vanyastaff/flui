@@ -22,12 +22,7 @@ use std::sync::Arc;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use flui_engine::WgpuPainter;
 use flui_painting::{Paint, TextLayout};
-use flui_types::{
-    Rect,
-    geometry::{Point, px},
-    styling::Color,
-    typography::TextDirection,
-};
+use flui_types::{Rect, geometry::Point, styling::Color, typography::TextDirection};
 
 #[cfg(target_os = "windows")]
 const BACKENDS: wgpu::Backends = wgpu::Backends::DX12;
@@ -86,8 +81,8 @@ fn shape(text: &str) -> Arc<TextLayout> {
     Arc::new(TextLayout::new(
         text,
         None,
-        FONT_SIZE,
-        Some(WIDTH as f32 - 32.0),
+        f64::from(FONT_SIZE),
+        Some(f64::from(WIDTH as f32 - 32.0)),
         None,
         TextDirection::Ltr,
     ))
@@ -105,20 +100,25 @@ fn record_frame(painter: &mut WgpuPainter, layouts: &[Arc<TextLayout>]) {
     let background = Paint::fill(Color::rgb(245, 245, 245));
     let stripe = Paint::fill(Color::rgb(230, 230, 230));
     painter.draw_rect(
-        Rect::from_xywh(px(0.0), px(0.0), px(WIDTH as f32), px(HEIGHT as f32)),
+        Rect::from_xywh(0.0, 0.0, f64::from(WIDTH as f32), f64::from(HEIGHT as f32)),
         &background,
     );
     for (row, layout) in layouts.iter().enumerate() {
         let y = row as f32 * ROW_HEIGHT;
         if row % 2 == 0 {
             painter.draw_rect(
-                Rect::from_xywh(px(0.0), px(y), px(WIDTH as f32), px(ROW_HEIGHT)),
+                Rect::from_xywh(
+                    0.0,
+                    f64::from(y),
+                    f64::from(WIDTH as f32),
+                    f64::from(ROW_HEIGHT),
+                ),
                 &stripe,
             );
         }
         painter.draw_paragraph(
             Arc::clone(layout),
-            Point::new(px(16.0), px(y + 4.0)),
+            Point::new(16.0, f64::from(y + 4.0)),
             Color::rgb(33, 33, 33),
         );
     }

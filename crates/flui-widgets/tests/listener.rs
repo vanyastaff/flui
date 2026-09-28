@@ -201,9 +201,8 @@ fn listener_routes_scroll_to_pointer_signal_callback() {
         tight(80.0, 80.0),
     );
 
-    let position = Offset::new(px(40.0), px(40.0));
-    let event =
-        flui_interaction::events::make_scroll_event(position, Offset::new(px(0.0), px(12.0)));
+    let position = Offset::new(40.0, 40.0);
+    let event = flui_interaction::events::make_scroll_event(position, Offset::new(0.0, 12.0));
 
     laid.dispatch_pointer_event(&event);
 

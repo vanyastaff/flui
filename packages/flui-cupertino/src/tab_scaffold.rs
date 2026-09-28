@@ -328,13 +328,13 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         };
 
         let media = MediaQuery::maybe_of(ctx).unwrap_or_default();
-        let tab_bar_height = px(view.tab_bar.preferred_size().height.get());
+        let tab_bar_height = view.tab_bar.preferred_size().height;
 
         let mut reduced = media.clone();
-        let mut content_padding_bottom = px(0.0);
+        let mut content_padding_bottom = 0.0;
 
         if view.resize_to_avoid_bottom_inset {
-            reduced.view_insets.bottom = px(0.0);
+            reduced.view_insets.bottom = 0.0;
             content_padding_bottom = media.view_insets.bottom;
         }
 
@@ -348,7 +348,7 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
                 // Opaque: directly stop content higher, and the bar's own
                 // height is fully consumed out of the republished padding.
                 content_padding_bottom = bottom_padding;
-                reduced.padding.bottom = px(0.0);
+                reduced.padding.bottom = 0.0;
             } else {
                 // Translucent: content may draw behind the bar; hint the
                 // obstructed area via padding instead of shifting content.
@@ -358,13 +358,8 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
 
         let content = MediaQuery::new(
             reduced,
-            Padding::new(EdgeInsets::new(
-                px(0.0),
-                px(0.0),
-                content_padding_bottom,
-                px(0.0),
-            ))
-            .child(Stack::new(tab_layers).fit(StackFit::Expand)),
+            Padding::new(EdgeInsets::new(0.0, 0.0, content_padding_bottom, 0.0))
+                .child(Stack::new(tab_layers).fit(StackFit::Expand)),
         );
 
         let background = view

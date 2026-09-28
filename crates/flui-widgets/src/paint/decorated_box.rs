@@ -2,7 +2,6 @@
 
 use flui_objects::{DecorationPosition, RenderDecoratedBox};
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::geometry::Pixels;
 use flui_types::styling::BoxDecoration;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
@@ -14,14 +13,14 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// (behind the child); use [`DecoratedBox::foreground`] to paint over the child.
 #[derive(Clone, Debug)]
 pub struct DecoratedBox {
-    decoration: BoxDecoration<Pixels>,
+    decoration: BoxDecoration<f64>,
     position: DecorationPosition,
     child: Child,
 }
 
 impl DecoratedBox {
     /// Paint `decoration` behind the child (the common case).
-    pub fn new(decoration: BoxDecoration<Pixels>) -> Self {
+    pub fn new(decoration: BoxDecoration<f64>) -> Self {
         Self {
             decoration,
             position: DecorationPosition::Background,

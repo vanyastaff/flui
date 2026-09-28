@@ -472,10 +472,10 @@ impl ViewState<FormPage> for FormPageState {
         );
 
         Column::new(column![
-            Padding::new(EdgeInsets::all(px(16.0))).child(name_field),
-            Padding::new(EdgeInsets::symmetric(px(0.0), px(16.0))).child(submit_button),
-            Padding::new(EdgeInsets::symmetric(px(8.0), px(16.0))).child(submitted_row),
-            Padding::new(EdgeInsets::all(px(16.0))).child(async_section),
+            Padding::new(EdgeInsets::all(16.0)).child(name_field),
+            Padding::new(EdgeInsets::symmetric(0.0, 16.0)).child(submit_button),
+            Padding::new(EdgeInsets::symmetric(8.0, 16.0)).child(submitted_row),
+            Padding::new(EdgeInsets::all(16.0)).child(async_section),
         ])
     }
 }
@@ -700,7 +700,7 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
                 let rebuild_for_tap = rebuild.clone();
                 let label_for_tap = label.clone();
                 Card::new(
-                    InkWell::new(Padding::new(EdgeInsets::all(px(12.0))).child(Text::new(label)))
+                    InkWell::new(Padding::new(EdgeInsets::all(12.0)).child(Text::new(label)))
                         .on_tap(move |_cx| {
                             selected_for_tap.borrow_mut().replace(label_for_tap.clone());
                             rebuild_for_tap.schedule(flui_view::RebuildReason::StateChange);
@@ -717,7 +717,7 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
         let list = GestureDetector::new()
             .behavior(HitTestBehavior::Opaque)
             .on_pan_update(move |_cx, details: DragUpdateDetails| {
-                let proposed = scroll_controller_for_drag.pixels() - details.delta.dy.get();
+                let proposed = scroll_controller_for_drag.pixels() - details.delta.dy;
                 scroll_controller_for_drag.jump_to(proposed);
             })
             .child(ListView::new(ITEM_EXTENT, cards).position(self.scroll_controller.position()));
@@ -776,7 +776,7 @@ impl ViewState<MaterialDemoHome> for MaterialDemoHomeState {
             .app_bar(app_bar)
             .floating_action_button(fab)
             .body(Column::new(column![
-                Padding::new(EdgeInsets::all(px(8.0))).child(Text::new(selected_text)),
+                Padding::new(EdgeInsets::all(8.0)).child(Text::new(selected_text)),
                 Expanded::new(list),
             ]))
     }

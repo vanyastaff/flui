@@ -48,7 +48,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use flui_engine::OffscreenRenderer;
 use flui_types::{
     Rect, Size,
-    geometry::{Pixels, px},
+    geometry::{f64, px},
     painting::Shader,
     styling::Color,
 };
@@ -174,9 +174,8 @@ fn bench_render_masked(c: &mut Criterion) {
     // Build the renderer once — sampler + fullscreen VB are constructor-time.
     let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
 
-    let child_bounds =
-        Rect::<Pixels>::from_ltrb(px(0.0), px(0.0), px(BENCH_SIDE_PX), px(BENCH_SIDE_PX));
-    let result_size: Size<Pixels> = Size::new(px(BENCH_SIDE_PX), px(BENCH_SIDE_PX));
+    let child_bounds = Rect::<f64>::from_ltrb(0.0, 0.0, BENCH_SIDE_PX, BENCH_SIDE_PX);
+    let result_size: Size<f64> = Size::new(BENCH_SIDE_PX, BENCH_SIDE_PX);
     let mask_shader = Shader::solid(Color::rgb(255, 128, 0));
 
     // Warm-up: one render pass ensures pipeline compilation is excluded.

@@ -159,30 +159,30 @@ use crate::theme_data::ThemeData;
 
 /// `_LisTileDefaultsM3`'s content padding start inset (`list_tile.dart`,
 /// oracle tag `3.44.0`).
-const CONTENT_PADDING_START: f32 = 16.0;
+const CONTENT_PADDING_START: f64 = 16.0;
 /// `_LisTileDefaultsM3`'s content padding end inset (`list_tile.dart`,
 /// oracle tag `3.44.0`).
-const CONTENT_PADDING_END: f32 = 24.0;
+const CONTENT_PADDING_END: f64 = 24.0;
 /// `_LisTileDefaultsM3`'s minimum leading width (`list_tile.dart`, oracle tag
 /// `3.44.0`) — `24.0`, not M2's `40.0`.
-const MIN_LEADING_WIDTH: f32 = 24.0;
+const MIN_LEADING_WIDTH: f64 = 24.0;
 /// `_LisTileDefaultsM3`'s minimum vertical padding (`list_tile.dart`, oracle
 /// tag `3.44.0`).
-const MIN_VERTICAL_PADDING: f32 = 8.0;
+const MIN_VERTICAL_PADDING: f64 = 8.0;
 /// `ListTile.build`'s bare horizontal-title-gap literal (`list_tile.dart`
 /// `:1029`, oracle tag `3.44.0`) — not part of `_LisTileDefaultsM3`.
-const HORIZONTAL_TITLE_GAP: f32 = 16.0;
+const HORIZONTAL_TITLE_GAP: f64 = 16.0;
 
 /// The M3 "disabled content" opacity this substrate uses in place of
 /// `ThemeData.disabledColor` (no such field exists yet) — see the module
 /// docs' "State-color cascade" section.
-const DISABLED_CONTENT_OPACITY: f32 = 0.38;
+const DISABLED_CONTENT_OPACITY: f64 = 0.38;
 
 /// `_RenderListTile._defaultTileHeight`'s one/two/three-line ×
 /// dense/not-dense table (`list_tile.dart` `:1503-1510`, oracle tag
 /// `3.44.0`) — a flat literal table, NOT `_LisTileDefaultsM3` and NOT
 /// arithmetically derived from the non-dense values.
-fn default_tile_height(is_three_line: bool, has_subtitle: bool, is_dense: bool) -> f32 {
+fn default_tile_height(is_three_line: bool, has_subtitle: bool, is_dense: bool) -> f64 {
     match (is_three_line, has_subtitle, is_dense) {
         (true, _, true) => 76.0,
         (true, _, false) => 88.0,
@@ -229,10 +229,10 @@ pub struct ListTile {
     selected: bool,
     tile_color: Option<Color>,
     selected_tile_color: Option<Color>,
-    horizontal_title_gap: Option<f32>,
-    min_vertical_padding: Option<f32>,
-    min_leading_width: Option<f32>,
-    min_tile_height: Option<f32>,
+    horizontal_title_gap: Option<f64>,
+    min_vertical_padding: Option<f64>,
+    min_leading_width: Option<f64>,
+    min_tile_height: Option<f64>,
 }
 
 impl Default for ListTile {
@@ -447,7 +447,7 @@ impl ListTile {
     /// Overrides the gap between the leading/trailing slots and the title
     /// column. Defaults to `16.0`.
     #[must_use]
-    pub fn horizontal_title_gap(mut self, gap: f32) -> Self {
+    pub fn horizontal_title_gap(mut self, gap: f64) -> Self {
         self.horizontal_title_gap = Some(gap);
         self
     }
@@ -455,7 +455,7 @@ impl ListTile {
     /// Overrides the minimum padding above/below the title/subtitle column.
     /// Defaults to `8.0`.
     #[must_use]
-    pub fn min_vertical_padding(mut self, padding: f32) -> Self {
+    pub fn min_vertical_padding(mut self, padding: f64) -> Self {
         self.min_vertical_padding = Some(padding);
         self
     }
@@ -463,7 +463,7 @@ impl ListTile {
     /// Overrides the minimum width reserved for [`ListTile::leading`].
     /// Defaults to `24.0`.
     #[must_use]
-    pub fn min_leading_width(mut self, width: f32) -> Self {
+    pub fn min_leading_width(mut self, width: f64) -> Self {
         self.min_leading_width = Some(width);
         self
     }
@@ -471,7 +471,7 @@ impl ListTile {
     /// Overrides the tile's minimum height. `None` (the default) falls
     /// through to the one/two/three-line table — see `default_tile_height`.
     #[must_use]
-    pub fn min_tile_height(mut self, height: f32) -> Self {
+    pub fn min_tile_height(mut self, height: f64) -> Self {
         self.min_tile_height = Some(height);
         self
     }
@@ -493,10 +493,10 @@ struct ResolvedListTileStyle {
     subtitle_style: TextStyle,
     leading_and_trailing_style: TextStyle,
     content_padding: EdgeInsets,
-    horizontal_title_gap: f32,
-    min_vertical_padding: f32,
-    min_leading_width: f32,
-    tile_height: f32,
+    horizontal_title_gap: f64,
+    min_vertical_padding: f64,
+    min_leading_width: f64,
+    tile_height: f64,
 }
 
 /// Resolves the `disabled > selected > enabled` color precedence Flutter's
@@ -661,14 +661,7 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
     let content_padding = view
         .content_padding
         .or_else(|| tile_theme.and_then(|t| t.content_padding))
-        .unwrap_or_else(|| {
-            EdgeInsets::new(
-                px(0.0),
-                px(CONTENT_PADDING_END),
-                px(0.0),
-                px(CONTENT_PADDING_START),
-            )
-        });
+        .unwrap_or_else(|| EdgeInsets::new(0.0, CONTENT_PADDING_END, 0.0, CONTENT_PADDING_START));
 
     let horizontal_title_gap = view
         .horizontal_title_gap
@@ -720,10 +713,10 @@ fn build_content_row(view: &ListTile, resolved: &ResolvedListTileStyle) -> Row<V
 
     if let Some(leading) = &view.leading {
         let leading_constraints = BoxConstraints::new(
-            px(resolved.min_leading_width),
-            Pixels::INFINITY,
-            px(0.0),
-            Pixels::INFINITY,
+            resolved.min_leading_width,
+            f64::INFINITY,
+            0.0,
+            f64::INFINITY,
         );
         children.push(
             ConstrainedBox::new(leading_constraints)
@@ -748,11 +741,7 @@ fn build_content_row(view: &ListTile, resolved: &ResolvedListTileStyle) -> Row<V
     }
     children.push(
         Expanded::new(
-            Padding::new(EdgeInsets::symmetric(
-                px(resolved.min_vertical_padding),
-                px(0.0),
-            ))
-            .child(
+            Padding::new(EdgeInsets::symmetric(resolved.min_vertical_padding, 0.0)).child(
                 Column::new(column_children)
                     .cross_axis_alignment(CrossAxisAlignment::Start)
                     .main_axis_size(MainAxisSize::Min),
@@ -823,12 +812,8 @@ impl StatelessView for ListTile {
             ink_well = ink_well.on_tap(move |cx| on_tap(cx));
         }
 
-        let tile_constraints = BoxConstraints::new(
-            Pixels::ZERO,
-            Pixels::INFINITY,
-            px(resolved.tile_height),
-            Pixels::INFINITY,
-        );
+        let tile_constraints =
+            BoxConstraints::new(0.0, f64::INFINITY, resolved.tile_height, f64::INFINITY);
 
         ConstrainedBox::new(tile_constraints).child(
             Material::new(resolved.tile_color)
@@ -911,12 +896,7 @@ mod tests {
         );
         assert_eq!(
             resolved.content_padding,
-            EdgeInsets::new(
-                px(0.0),
-                px(CONTENT_PADDING_END),
-                px(0.0),
-                px(CONTENT_PADDING_START)
-            )
+            EdgeInsets::new(0.0, (CONTENT_PADDING_END), 0.0, (CONTENT_PADDING_START))
         );
         assert_eq!(resolved.horizontal_title_gap, HORIZONTAL_TITLE_GAP);
         assert_eq!(resolved.min_vertical_padding, MIN_VERTICAL_PADDING);

@@ -161,27 +161,27 @@ use crate::theme_data::NavigationBarThemeData;
 
 /// The bar's default height. Flutter parity: `_NavigationBarDefaultsM3`'s
 /// `super(height: 80.0, ...)` (`navigation_bar.dart`, oracle tag `3.44.0`).
-pub const NAVIGATION_BAR_HEIGHT: f32 = 80.0;
+pub const NAVIGATION_BAR_HEIGHT: f64 = 80.0;
 
 /// The bar's default elevation. Flutter parity:
 /// `_NavigationBarDefaultsM3`'s `super(elevation: 3.0, ...)`.
-pub const NAVIGATION_BAR_ELEVATION: f32 = 3.0;
+pub const NAVIGATION_BAR_ELEVATION: f64 = 3.0;
 
 /// The selection indicator's width. Flutter parity: `_kIndicatorWidth`
 /// (`navigation_bar.dart`, `64.0`).
-const NAVIGATION_INDICATOR_WIDTH: f32 = 64.0;
+const NAVIGATION_INDICATOR_WIDTH: f64 = 64.0;
 
 /// The selection indicator's height. Flutter parity: `_kIndicatorHeight`
 /// (`32.0`).
-const NAVIGATION_INDICATOR_HEIGHT: f32 = 32.0;
+const NAVIGATION_INDICATOR_HEIGHT: f64 = 32.0;
 
 /// Each destination's icon side length. Flutter parity:
 /// `_NavigationBarDefaultsM3.iconTheme`'s `size: 24.0`.
-const NAVIGATION_DESTINATION_ICON_SIZE: f32 = 24.0;
+const NAVIGATION_DESTINATION_ICON_SIZE: f64 = 24.0;
 
 /// The label's top padding. Flutter parity:
 /// `_NavigationBarDefaultsM3.labelPadding`, `EdgeInsets.only(top: 4)`.
-const NAVIGATION_LABEL_PADDING_TOP: f32 = 4.0;
+const NAVIGATION_LABEL_PADDING_TOP: f64 = 4.0;
 
 // Compile-time geometry invariant (not a runtime test — every side is
 // `const`): the indicator must fit within the destination's icon area
@@ -279,9 +279,9 @@ pub struct NavigationBar {
     destinations: Vec<NavigationDestination>,
     selected_index: usize,
     on_destination_selected: Option<DestinationSelectedCallback>,
-    height: Option<f32>,
+    height: Option<f64>,
     background_color: Option<Color>,
-    elevation: Option<f32>,
+    elevation: Option<f64>,
     indicator_color: Option<Color>,
     overlay_color: Option<WidgetStateProperty<Option<Color>>>,
 }
@@ -336,7 +336,7 @@ impl NavigationBar {
 
     /// Overrides the bar's height. Defaults to [`NAVIGATION_BAR_HEIGHT`].
     #[must_use]
-    pub fn height(mut self, height: f32) -> Self {
+    pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }
@@ -351,7 +351,7 @@ impl NavigationBar {
 
     /// Overrides the bar's elevation. Defaults to [`NAVIGATION_BAR_ELEVATION`].
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = Some(elevation);
         self
     }
@@ -394,7 +394,7 @@ fn resolve_bar_geometry(
     view: &NavigationBar,
     theme: Option<&NavigationBarThemeData>,
     colors: &ColorScheme,
-) -> (f32, f32, Color, Color) {
+) -> (f64, f64, Color, Color) {
     let height = view
         .height
         .or(theme.and_then(|t| t.height))

@@ -33,7 +33,7 @@ const SCREENS: usize = 3;
 const CELLS_PER_SCREEN: usize = 200;
 
 fn cell(v: u32) -> SizedBox {
-    SizedBox::square(1.0 + (v % 7) as f32)
+    SizedBox::square(1.0 + (v % 7) as f64)
 }
 
 /// A: one cell, one plain value. Same element shape as [`CellB`] (a
@@ -117,7 +117,7 @@ impl ViewState<FormA> for FormAState {
         self.fields.with(|fields| {
             let mut children: Vec<_> = fields.iter().map(|v| CellA { v: *v }.boxed()).collect();
             let invalid = fields.iter().filter(|v| **v == 0).count() as u32;
-            children.push(SizedBox::square(1.0 + invalid as f32).boxed());
+            children.push(SizedBox::square(1.0 + invalid as f64).boxed());
             Column::new(children)
         })
     }
@@ -217,7 +217,7 @@ struct SaveB {
 impl StatelessView for SaveB {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let invalid = self.fields.iter().filter(|f| f.get(ctx) == 0).count();
-        SizedBox::square(1.0 + invalid as f32)
+        SizedBox::square(1.0 + invalid as f64)
     }
 }
 

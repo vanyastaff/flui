@@ -310,10 +310,7 @@ mod tests {
                 Self::ParentData,
             >,
         ) -> flui_types::geometry::Size {
-            flui_types::geometry::Size::new(
-                flui_types::geometry::px(1.0),
-                flui_types::geometry::px(1.0),
-            )
+            flui_types::geometry::Size::new(1.0, 1.0)
         }
     }
 

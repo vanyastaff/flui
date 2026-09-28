@@ -36,31 +36,31 @@ fn my_scene(width: f32, height: f32) -> Scene {
 
     // Background — deep purple (change this and rebuild to test hot-reload!)
     canvas.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
+        Rect::from_ltrb(0.0, 0.0, width, height),
         &Paint::fill(Color::rgb(80, 0, 120)),
     );
 
     // Teal rectangle (top-left)
     canvas.draw_rect(
-        Rect::from_ltrb(px(50.0), px(50.0), px(350.0), px(250.0)),
+        Rect::from_ltrb(50.0, 50.0, 350.0, 250.0),
         &Paint::fill(Color::rgb(0, 180, 180)),
     );
 
     // Coral rectangle (center)
     canvas.draw_rect(
-        Rect::from_ltrb(px(200.0), px(150.0), px(500.0), px(350.0)),
+        Rect::from_ltrb(200.0, 150.0, 500.0, 350.0),
         &Paint::fill(Color::rgb(255, 100, 80)),
     );
 
     // Gold rectangle (bottom-right)
     canvas.draw_rect(
-        Rect::from_ltrb(px(400.0), px(250.0), px(700.0), px(450.0)),
+        Rect::from_ltrb(400.0, 250.0, 700.0, 450.0),
         &Paint::fill(Color::rgb(255, 215, 0)),
     );
 
     // White rectangle (small, center)
     canvas.draw_rect(
-        Rect::from_ltrb(px(300.0), px(200.0), px(450.0), px(300.0)),
+        Rect::from_ltrb(300.0, 200.0, 450.0, 300.0),
         &Paint::fill(Color::WHITE),
     );
 

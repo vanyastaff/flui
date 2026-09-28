@@ -1817,10 +1817,8 @@ mod wake_and_clipboard_tests {
     fn wake_frame_calls_platform_request_redraw() {
         use flui_types::geometry::{Size, device_px, px};
 
-        let window = crate::app::window_test_support::TestWindow::new().with_sizes(
-            Size::new(device_px(800), device_px(600)),
-            Size::new(px(800.0), px(600.0)),
-        );
+        let window = crate::app::window_test_support::TestWindow::new()
+            .with_sizes(Size::new(800, 600), Size::new(800.0, 600.0));
         let redraw_count = window.redraw_calls_handle();
 
         let runtime = AppRuntime::new();
@@ -1898,10 +1896,8 @@ mod wake_and_clipboard_tests {
     fn the_frame_wake_pokes_the_window_from_the_thread_that_fired_it() {
         use flui_types::geometry::{Size, device_px, px};
 
-        let window = crate::app::window_test_support::TestWindow::new().with_sizes(
-            Size::new(device_px(800), device_px(600)),
-            Size::new(px(800.0), px(600.0)),
-        );
+        let window = crate::app::window_test_support::TestWindow::new()
+            .with_sizes(Size::new(800, 600), Size::new(800.0, 600.0));
         let redraw_threads = window.redraw_threads_handle();
 
         let runtime = AppRuntime::new();

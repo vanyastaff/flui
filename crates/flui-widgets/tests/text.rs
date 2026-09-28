@@ -14,11 +14,11 @@ fn text_measures_to_a_nonempty_box() {
     // metrics are font-dependent, so we assert non-degeneracy (would fail on a
     // Size::ZERO stub) rather than pinning fragile pixel values.
     assert!(
-        measured.width.get() > 0.0,
+        measured.width > 0.0,
         "measured text width should be positive, got {measured:?}",
     );
     assert!(
-        measured.height.get() > 0.0,
+        measured.height > 0.0,
         "measured text height should be positive, got {measured:?}",
     );
 }
@@ -36,7 +36,7 @@ fn text_composes_as_a_leaf_child() {
     let center = laid.only_child(laid.root());
     let text = laid.only_child(center);
     let measured = laid.size(text);
-    assert!(measured.width.get() > 0.0 && measured.height.get() > 0.0);
+    assert!(measured.width > 0.0 && measured.height > 0.0);
 }
 
 #[test]
@@ -48,18 +48,13 @@ fn max_lines_one_produces_a_shorter_box_than_unlimited_lines_for_wrapped_text() 
     // Tight width so the run must wrap; loose height so line-wrapping is free
     // to grow the box (a fully tight height would force the same number
     // regardless of content, defeating the comparison).
-    let narrow_but_tall = flui_rendering::constraints::BoxConstraints::new(
-        flui_types::geometry::px(80.0),
-        flui_types::geometry::px(80.0),
-        flui_types::geometry::px(0.0),
-        flui_types::geometry::px(1000.0),
-    );
+    let narrow_but_tall = flui_rendering::constraints::BoxConstraints::new(80.0, 80.0, 0.0, 1000.0);
 
     let unlimited = lay_out(Text::new(long_text), narrow_but_tall);
     let capped = lay_out(Text::new(long_text).max_lines(1), narrow_but_tall);
 
-    let unlimited_height = unlimited.size(unlimited.root()).height.get();
-    let capped_height = capped.size(capped.root()).height.get();
+    let unlimited_height = unlimited.size(unlimited.root()).height;
+    let capped_height = capped.size(capped.root()).height;
 
     assert!(
         capped_height < unlimited_height,
@@ -86,7 +81,7 @@ fn a_larger_font_size_measures_to_a_taller_box() {
     );
 
     assert!(
-        large.size(large.root()).height.get() > small.size(small.root()).height.get(),
+        large.size(large.root()).height > small.size(small.root()).height,
         "a larger font_size must measure to a taller box",
     );
 }
@@ -128,7 +123,7 @@ fn an_enclosing_default_text_style_styles_a_bare_run() {
     );
 
     assert!(
-        styled.size(styled.root()).height.get() > bare.size(bare.root()).height.get(),
+        styled.size(styled.root()).height > bare.size(bare.root()).height,
         "the ambient 40pt style must produce a taller box than the default type"
     );
 }
@@ -165,12 +160,7 @@ fn a_runs_own_style_wins_over_the_ambient_one() {
 #[test]
 fn ambient_max_lines_caps_a_run_that_sets_none() {
     let long_text = "one two three four five six seven eight nine ten";
-    let narrow_but_tall = flui_rendering::constraints::BoxConstraints::new(
-        flui_types::geometry::px(80.0),
-        flui_types::geometry::px(80.0),
-        flui_types::geometry::px(0.0),
-        flui_types::geometry::px(1000.0),
-    );
+    let narrow_but_tall = flui_rendering::constraints::BoxConstraints::new(80.0, 80.0, 0.0, 1000.0);
 
     let unlimited = lay_out(Text::new(long_text), narrow_but_tall);
     let ambient_capped = lay_out(
@@ -182,9 +172,9 @@ fn ambient_max_lines_caps_a_run_that_sets_none() {
         narrow_but_tall,
     );
 
-    let unlimited_height = unlimited.size(unlimited.root()).height.get();
-    let ambient_height = ambient_capped.size(ambient_capped.root()).height.get();
-    let own_height = own_cap_wins.size(own_cap_wins.root()).height.get();
+    let unlimited_height = unlimited.size(unlimited.root()).height;
+    let ambient_height = ambient_capped.size(ambient_capped.root()).height;
+    let own_height = own_cap_wins.size(own_cap_wins.root()).height;
     assert!(
         ambient_height < unlimited_height,
         "the ambient cap must apply to a run that sets none \

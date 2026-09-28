@@ -76,10 +76,10 @@ impl ViewState<Counter> for CounterState {
             let _ = other.set(r, 0);
         });
         Column::new(vec![
-            flui_view::ViewExt::boxed(SizedBox::square(1.0 + n as f32)),
-            flui_view::ViewExt::boxed(SizedBox::square(1.0 + t as f32)),
-            flui_view::ViewExt::boxed(SizedBox::square(1.0 + p as f32)),
-            flui_view::ViewExt::boxed(SizedBox::square(1.0 + q as f32)),
+            flui_view::ViewExt::boxed(SizedBox::square(1.0 + n as f64)),
+            flui_view::ViewExt::boxed(SizedBox::square(1.0 + t as f64)),
+            flui_view::ViewExt::boxed(SizedBox::square(1.0 + p as f64)),
+            flui_view::ViewExt::boxed(SizedBox::square(1.0 + q as f64)),
         ])
     }
 

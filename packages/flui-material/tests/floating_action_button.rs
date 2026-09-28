@@ -201,7 +201,7 @@ fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
         .render_property(material, "elevation")
         .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
     assert_eq!(
-        elevation.parse::<f32>(),
+        elevation.parse::<f64>(),
         Ok(12.0),
         "a configured floating_action_button_theme.elevation must reach the enabled tier",
     );
@@ -331,7 +331,7 @@ fn mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_posi
 #[test]
 fn a_nonzero_bottom_safe_area_still_clears_the_fab_by_at_least_the_flat_margin() {
     let media_query = MediaQueryData {
-        padding: EdgeInsets::new(px(0.0), px(0.0), px(34.0), px(0.0)),
+        padding: EdgeInsets::new(0.0, 0.0, 34.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -357,7 +357,7 @@ fn a_nonzero_bottom_safe_area_still_clears_the_fab_by_at_least_the_flat_margin()
     assert_eq!(laid.size(fab), common::size(56.0, 56.0));
     let fab_bottom = laid.offset(fab).dy + laid.size(fab).height;
     assert!(
-        fab_bottom <= px(800.0 - 34.0),
+        fab_bottom <= (800.0 - 34.0),
         "the FAB must clear the 34px bottom safe area, not just the flat 16px margin",
     );
 }

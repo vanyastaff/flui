@@ -53,7 +53,7 @@ struct Fixture {
 }
 
 fn constraints() -> BoxConstraints {
-    BoxConstraints::tight_for(Some(px(100.0)), Some(px(100.0)))
+    BoxConstraints::tight_for(Some(100.0), Some(100.0))
 }
 
 fn insert_child(

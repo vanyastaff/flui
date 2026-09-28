@@ -309,7 +309,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                 .on_tap(move |_cx| count_for_tap.update(|n| n + 1))
                 .child(
                     Container::new()
-                        .padding(EdgeInsets::all(px(8.0)))
+                        .padding(EdgeInsets::all(8.0))
                         .color(PLUS_BUTTON_COLOR)
                         .child(Text::new("+")),
                 ),
@@ -325,7 +325,7 @@ impl ViewState<DemoHome> for DemoHomeState {
             })
             .child(
                 Container::new()
-                    .padding(EdgeInsets::all(px(8.0)))
+                    .padding(EdgeInsets::all(8.0))
                     .color(DETAILS_BUTTON_COLOR)
                     .child(Text::new(DETAILS_BUTTON_LABEL)),
             );
@@ -347,7 +347,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                 // own layout committed into this controller's shared
                 // `ScrollPosition` (the content-dimension feedback loop —
                 // see the module doc), not a manually fed value.
-                let proposed = scroll_controller_for_drag.pixels() - details.delta.dy.get();
+                let proposed = scroll_controller_for_drag.pixels() - details.delta.dy;
                 scroll_controller_for_drag.jump_to(proposed);
                 scroll_offset_for_drag.set(scroll_controller_for_drag.pixels());
             })
@@ -366,7 +366,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                         (0..LIST_ITEM_COUNT)
                             .map(|index| {
                                 Container::new()
-                                    .padding(EdgeInsets::all(px(4.0)))
+                                    .padding(EdgeInsets::all(4.0))
                                     .child(Text::new(format!("Item {index}")))
                                     .boxed()
                             })
@@ -406,7 +406,7 @@ impl ViewState<DemoHome> for DemoHomeState {
 
         Container::new()
             .color(BACKGROUND_COLOR)
-            .padding(EdgeInsets::all(px(16.0)))
+            .padding(EdgeInsets::all(16.0))
             .alignment(Alignment::TOP_LEFT)
             .child(Column::new(column![
                 counter_row,
@@ -429,7 +429,7 @@ fn details_route(navigator: NavigatorHandle) -> PageRoute<()> {
         let navigator_for_back = navigator.clone();
         Container::new()
             .color(DETAILS_BACKGROUND_COLOR)
-            .padding(EdgeInsets::all(px(16.0)))
+            .padding(EdgeInsets::all(16.0))
             .alignment(Alignment::TOP_LEFT)
             .child(Column::new(column![
                 Text::new(DETAILS_ROUTE_TEXT),
@@ -441,7 +441,7 @@ fn details_route(navigator: NavigatorHandle) -> PageRoute<()> {
                     })
                     .child(
                         Container::new()
-                            .padding(EdgeInsets::all(px(8.0)))
+                            .padding(EdgeInsets::all(8.0))
                             .color(BACK_BUTTON_COLOR)
                             .child(Text::new(BACK_BUTTON_LABEL)),
                     ),

@@ -93,12 +93,12 @@ mod gpu_tests {
         WgpuPainter::with_shared_device(device, queue, SURFACE_FORMAT, (SURFACE_W, SURFACE_H))
     }
 
-    fn px(v: f32) -> Pixels {
-        Pixels(v)
+    fn px(v: f32) -> f64 {
+        v
     }
 
-    fn full_surface_rect() -> Rect<Pixels> {
-        Rect::from_xywh(px(0.0), px(0.0), px(SURFACE_W as f32), px(SURFACE_H as f32))
+    fn full_surface_rect() -> Rect<f64> {
+        Rect::from_xywh(0.0, 0.0, (SURFACE_W as f32), (SURFACE_H as f32))
     }
 
     // ── CPU oracle helpers ────────────────────────────────────────────────────
@@ -223,10 +223,10 @@ mod gpu_tests {
         clear_surface(&device, &queue, &view_order_b, transparent_black);
 
         let content_rect = Rect::from_xywh(
-            px(CONTENT_MARGIN_PX),
-            px(CONTENT_MARGIN_PX),
-            px(SURFACE_W as f32 - 2.0 * CONTENT_MARGIN_PX),
-            px(SURFACE_H as f32 - 2.0 * CONTENT_MARGIN_PX),
+            CONTENT_MARGIN_PX,
+            CONTENT_MARGIN_PX,
+            (SURFACE_W as f32 - 2.0 * CONTENT_MARGIN_PX),
+            (SURFACE_H as f32 - 2.0 * CONTENT_MARGIN_PX),
         );
         let opaque_white = Color::rgba(255, 255, 255, 255);
 

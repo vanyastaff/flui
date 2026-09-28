@@ -13,15 +13,15 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// shifts the hit-test region with the paint.
 #[derive(Clone, Debug)]
 pub struct FractionalTranslation {
-    dx: f32,
-    dy: f32,
+    dx: f64,
+    dy: f64,
     transform_hit_tests: bool,
     child: Child,
 }
 
 impl FractionalTranslation {
     /// Translate by `(dx, dy)` fractions of the child's size.
-    pub fn new(dx: f32, dy: f32) -> Self {
+    pub fn new(dx: f64, dy: f64) -> Self {
         Self {
             dx,
             dy,

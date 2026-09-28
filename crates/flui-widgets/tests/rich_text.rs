@@ -15,11 +15,11 @@ fn rich_text_measures_to_a_nonempty_box() {
     );
     let measured = laid.size(laid.root());
     assert!(
-        measured.width.get() > 0.0,
+        measured.width > 0.0,
         "measured span-tree width should be positive, got {measured:?}",
     );
     assert!(
-        measured.height.get() > 0.0,
+        measured.height > 0.0,
         "measured span-tree height should be positive, got {measured:?}",
     );
 }
@@ -35,7 +35,7 @@ fn rich_text_composes_as_a_leaf_child() {
     let center = laid.only_child(laid.root());
     let rich_text = laid.only_child(center);
     let measured = laid.size(rich_text);
-    assert!(measured.width.get() > 0.0 && measured.height.get() > 0.0);
+    assert!(measured.width > 0.0 && measured.height > 0.0);
 }
 
 #[test]
@@ -58,8 +58,8 @@ fn a_child_spans_style_widens_the_measured_run_beyond_the_unstyled_baseline() {
         loose(1000.0),
     );
 
-    let baseline_width = baseline.size(baseline.root()).width.get();
-    let styled_width = styled_child.size(styled_child.root()).width.get();
+    let baseline_width = baseline.size(baseline.root()).width;
+    let styled_width = styled_child.size(styled_child.root()).width;
 
     assert!(
         styled_width > baseline_width,
@@ -72,18 +72,13 @@ fn a_child_spans_style_widens_the_measured_run_beyond_the_unstyled_baseline() {
 fn max_lines_one_produces_a_shorter_box_than_unlimited_lines_for_wrapped_spans() {
     let long_span = TextSpan::new("one two three ")
         .with_child(TextSpan::new("four five six seven eight nine ten"));
-    let narrow_but_tall = flui_rendering::constraints::BoxConstraints::new(
-        flui_types::geometry::px(80.0),
-        flui_types::geometry::px(80.0),
-        flui_types::geometry::px(0.0),
-        flui_types::geometry::px(1000.0),
-    );
+    let narrow_but_tall = flui_rendering::constraints::BoxConstraints::new(80.0, 80.0, 0.0, 1000.0);
 
     let unlimited = lay_out(RichText::new(long_span.clone()), narrow_but_tall);
     let capped = lay_out(RichText::new(long_span).max_lines(1), narrow_but_tall);
 
-    let unlimited_height = unlimited.size(unlimited.root()).height.get();
-    let capped_height = capped.size(capped.root()).height.get();
+    let unlimited_height = unlimited.size(unlimited.root()).height;
+    let capped_height = capped.size(capped.root()).height;
 
     assert!(
         capped_height < unlimited_height,
@@ -109,8 +104,8 @@ fn two_child_spans_measure_wider_than_a_single_span_sharing_the_same_first_words
         loose(1000.0),
     );
 
-    let one_span_width = one_span.size(one_span.root()).width.get();
-    let two_span_width = two_spans.size(two_spans.root()).width.get();
+    let one_span_width = one_span.size(one_span.root()).width;
+    let two_span_width = two_spans.size(two_spans.root()).width;
 
     assert!(
         two_span_width > one_span_width,

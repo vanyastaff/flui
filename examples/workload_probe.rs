@@ -437,7 +437,7 @@ impl StatelessView for WorkloadRoot {
             .app_bar(AppBar::new().title(Text::new("FLUI Workload Probe")))
             .body(
                 Column::new(column![
-                    Padding::new(EdgeInsets::all(px(12.0))).child(text_field),
+                    Padding::new(EdgeInsets::all(12.0)).child(text_field),
                     Expanded::new(list),
                 ])
                 .cross_axis_alignment(CrossAxisAlignment::Stretch),

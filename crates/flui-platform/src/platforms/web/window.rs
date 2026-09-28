@@ -27,8 +27,8 @@ pub struct WebWindow {
 
 struct WebWindowState {
     title: String,
-    width: f32,
-    height: f32,
+    width: f64,
+    height: f64,
     scale_factor: f64,
     focused: bool,
     visible: bool,
@@ -43,17 +43,17 @@ unsafe impl Sync for WebWindow {}
 /// read from the live layout. `None` when the box is empty — a canvas that
 /// is `display: none`, or not yet laid out — since an empty surface is not
 /// a size to configure a swapchain for.
-fn layout_size(canvas: &web_sys::HtmlCanvasElement) -> Option<(f32, f32, f64)> {
+fn layout_size(canvas: &web_sys::HtmlCanvasElement) -> Option<(f64, f64, f64)> {
     let window = web_sys::window()?;
     let width = canvas.client_width();
     let height = canvas.client_height();
-    (width > 0 && height > 0).then(|| (width as f32, height as f32, window.device_pixel_ratio()))
+    (width > 0 && height > 0).then(|| (width as f64, height as f64, window.device_pixel_ratio()))
 }
 
 /// Set the canvas's backing store to `logical × scale`, rounded, so the
 /// surface renders one texel per device pixel. Skipped when unchanged:
 /// assigning `width`/`height` clears a canvas even to the same value.
-fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, width: f32, height: f32, scale: f64) {
+fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, width: f64, height: f64, scale: f64) {
     let phys_width = (f64::from(width) * scale).round() as u32;
     let phys_height = (f64::from(height) * scale).round() as u32;
     if canvas.width() != phys_width {
@@ -98,8 +98,8 @@ impl WebWindow {
     pub fn new(
         id: WindowId,
         title: &str,
-        width: f32,
-        height: f32,
+        width: f64,
+        height: f64,
     ) -> Result<Self, OpenWindowError> {
         fn backend(message: impl Into<String>) -> OpenWindowError {
             OpenWindowError::Backend {
@@ -227,7 +227,7 @@ impl LayoutSync {
         }
         apply_backing_size(&self.canvas, width, height, scale_factor);
         self.callbacks
-            .dispatch_resize(Size::new(px(width), px(height)), scale_factor as f32);
+            .dispatch_resize(Size::new(width, height), scale_factor as f64);
         self.callbacks.dispatch_request_frame();
     }
 }
@@ -248,21 +248,21 @@ impl PlatformWindow for WebWindow {
         self.id
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
+    fn physical_size(&self) -> Size<i32> {
         // Rounded, exactly as `apply_backing_size` sizes the canvas's
         // backing store, so the surface the embedder configures from this
         // answer and the store it renders into agree at fractional device
         // pixel ratios (981 CSS px at 1.5 is 1472, not 1471).
         let state = self.state.lock();
         Size::new(
-            device_px((f64::from(state.width) * state.scale_factor).round() as i32),
-            device_px((f64::from(state.height) * state.scale_factor).round() as i32),
+            ((f64::from(state.width) * state.scale_factor).round() as i32),
+            ((f64::from(state.height) * state.scale_factor).round() as i32),
         )
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
+    fn logical_size(&self) -> Size<f64> {
         let state = self.state.lock();
-        Size::new(px(state.width), px(state.height))
+        Size::new(state.width, state.height)
     }
 
     fn scale_factor(&self) -> f64 {
@@ -281,24 +281,18 @@ impl PlatformWindow for WebWindow {
         self.state.lock().visible
     }
 
-    fn bounds(&self) -> Bounds<Pixels> {
+    fn bounds(&self) -> Bounds<f64> {
         let state = self.state.lock();
-        Bounds::new(
-            Point::new(px(0.0), px(0.0)),
-            Size::new(px(state.width), px(state.height)),
-        )
+        Bounds::new(Point::new(0.0, 0.0), Size::new(state.width, state.height))
     }
 
-    fn content_size(&self) -> Size<Pixels> {
+    fn content_size(&self) -> Size<f64> {
         self.logical_size()
     }
 
     fn window_bounds(&self) -> WindowBounds {
         let state = self.state.lock();
-        let bounds = Bounds::new(
-            Point::default(),
-            Size::new(px(state.width), px(state.height)),
-        );
+        let bounds = Bounds::new(Point::default(), Size::new(state.width, state.height));
         if state.fullscreen {
             WindowBounds::Fullscreen(bounds)
         } else {

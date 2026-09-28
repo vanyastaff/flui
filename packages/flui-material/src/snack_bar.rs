@@ -74,12 +74,12 @@ use crate::theme_data::ThemeData;
 /// [`SnackBar::duration`].
 const DEFAULT_DISPLAY_DURATION: Duration = Duration::from_secs(4);
 /// `_singleLineVerticalPadding` (`snack_bar.dart:27`).
-const SINGLE_LINE_VERTICAL_PADDING: f32 = 14.0;
+const SINGLE_LINE_VERTICAL_PADDING: f64 = 14.0;
 /// `_SnackbarDefaultsM3.elevation` (`snack_bar.dart:980`).
-const DEFAULT_ELEVATION: f32 = 6.0;
+const DEFAULT_ELEVATION: f64 = 6.0;
 /// Fixed behavior's content horizontal padding — `isFloatingSnackBar ? 16.0 :
 /// 24.0` (`snack_bar.dart:687`), always the `false` branch here.
-const HORIZONTAL_PADDING: f32 = 24.0;
+const HORIZONTAL_PADDING: f64 = 24.0;
 
 /// A lightweight message with an optional action, briefly shown near the
 /// bottom of the screen via
@@ -102,7 +102,7 @@ pub struct SnackBar {
     action: Option<SnackBarAction>,
     duration: Duration,
     background_color: Option<Color>,
-    elevation: Option<f32>,
+    elevation: Option<f64>,
 }
 
 impl SnackBar {
@@ -146,7 +146,7 @@ impl SnackBar {
     /// Overrides the elevation (must be non-negative). Defaults to
     /// `DEFAULT_ELEVATION` (6.0).
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         debug_assert!(elevation >= 0.0, "SnackBar elevation must be non-negative");
         self.elevation = Some(elevation);
         self
@@ -298,32 +298,23 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
 
     let has_action = snack_bar.action.is_some();
     let content_padding = EdgeInsets::new(
-        px(0.0),
-        if has_action {
-            px(0.0)
-        } else {
-            px(HORIZONTAL_PADDING)
-        },
-        px(0.0),
-        px(HORIZONTAL_PADDING),
+        0.0,
+        if has_action { 0.0 } else { HORIZONTAL_PADDING },
+        0.0,
+        HORIZONTAL_PADDING,
     );
 
     let mut row_children: Vec<BoxedView> = vec![
         Expanded::new(
-            Padding::new(EdgeInsets::symmetric(
-                px(SINGLE_LINE_VERTICAL_PADDING),
-                px(0.0),
-            ))
-            .child(DefaultTextStyle::new(
-                content_text_style,
-                snack_bar.content.clone(),
-            )),
+            Padding::new(EdgeInsets::symmetric((SINGLE_LINE_VERTICAL_PADDING), 0.0)).child(
+                DefaultTextStyle::new(content_text_style, snack_bar.content.clone()),
+            ),
         )
         .boxed(),
     ];
     if let Some(action) = &snack_bar.action {
         row_children.push(
-            Padding::new(EdgeInsets::symmetric(px(0.0), px(HORIZONTAL_PADDING / 2.0)))
+            Padding::new(EdgeInsets::symmetric(0.0, (HORIZONTAL_PADDING / 2.0)))
                 .child(action.clone())
                 .boxed(),
         );

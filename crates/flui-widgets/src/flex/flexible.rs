@@ -168,14 +168,14 @@ mod tests {
     use crate::SizedBox;
 
     fn seeded_data() -> FlexParentData {
-        let mut data = FlexParentData::new(Offset::new(px(8.0), px(13.0)), Some(1), FlexFit::Loose);
+        let mut data = FlexParentData::new(Offset::new(8.0, 13.0), Some(1), FlexFit::Loose);
         data.container.previous_sibling = Some(RenderId::new(7));
         data.container.next_sibling = Some(RenderId::new(9));
         data
     }
 
     fn assert_layout_fields_preserved(data: &FlexParentData) {
-        assert_eq!(data.offset, Offset::new(px(8.0), px(13.0)));
+        assert_eq!(data.offset, Offset::new(8.0, 13.0));
         assert_eq!(data.container.previous_sibling, Some(RenderId::new(7)));
         assert_eq!(data.container.next_sibling, Some(RenderId::new(9)));
     }

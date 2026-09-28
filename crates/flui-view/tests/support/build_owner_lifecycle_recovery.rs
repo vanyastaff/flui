@@ -278,8 +278,8 @@ fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
         .downcast_ref::<flui_objects::LayoutConstraintsCell>()
         .expect("LayoutBuilder owns a constraints cell")
         .publish(flui_rendering::constraints::BoxConstraints::tight_for(
-            Some(flui_types::geometry::px(100.0)),
-            Some(flui_types::geometry::px(100.0)),
+            Some(100.0),
+            Some(100.0),
         ));
 
     assert!(owner.service_layout_builders(&mut tree, &pipeline));

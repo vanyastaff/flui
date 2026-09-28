@@ -161,16 +161,16 @@ impl StatelessView for SafeArea {
             effective_left,
         );
         if self.left {
-            media.padding.left = flui_geometry::px(0.0);
+            media.padding.left = 0.0;
         }
         if self.top {
-            media.padding.top = flui_geometry::px(0.0);
+            media.padding.top = 0.0;
         }
         if self.right {
-            media.padding.right = flui_geometry::px(0.0);
+            media.padding.right = 0.0;
         }
         if self.bottom {
-            media.padding.bottom = flui_geometry::px(0.0);
+            media.padding.bottom = 0.0;
         }
         Padding::new(insets).child(MediaQuery::new(media, self.child.clone()))
     }

@@ -51,13 +51,13 @@ use flui_sdk::widgets::{
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlexibleSpaceBarData {
     /// The extent the bar collapses to.
-    pub min_extent: f32,
+    pub min_extent: f64,
     /// The extent the bar expands to.
-    pub max_extent: f32,
+    pub max_extent: f64,
     /// The bar's extent right now, `min_extent..=max_extent`.
-    pub current_extent: f32,
+    pub current_extent: f64,
     /// The toolbar content's opacity, for delegates that fade it late.
-    pub toolbar_opacity: f32,
+    pub toolbar_opacity: f64,
 }
 
 /// Inherited scope carrying [`FlexibleSpaceBarData`] — Flutter's
@@ -123,7 +123,7 @@ pub struct FlexibleSpaceBar {
     title: Option<BoxedView>,
     background: Option<BoxedView>,
     center_title: bool,
-    expanded_title_scale: f32,
+    expanded_title_scale: f64,
 }
 
 impl FlexibleSpaceBar {
@@ -163,7 +163,7 @@ impl FlexibleSpaceBar {
     /// How much larger the title renders fully expanded (Flutter default
     /// 1.5).
     #[must_use]
-    pub fn expanded_title_scale(mut self, scale: f32) -> Self {
+    pub fn expanded_title_scale(mut self, scale: f64) -> Self {
         self.expanded_title_scale = scale;
         self
     }
@@ -186,7 +186,7 @@ impl std::fmt::Debug for FlexibleSpaceBar {
 
 /// `Interval(fade_start, 1).transform(t)` for the background fade — the
 /// only piece of Flutter's `Interval` curve this widget needs.
-fn interval_transform(fade_start: f32, t: f32) -> f32 {
+fn interval_transform(fade_start: f64, t: f64) -> f64 {
     if fade_start >= 1.0 {
         return if t >= 1.0 { 1.0 } else { 0.0 };
     }
@@ -295,8 +295,8 @@ impl StatelessView for FlexibleSpaceBar {
 }
 
 /// Local shorthand: `EdgeInsets` is pixel-typed.
-fn px_f(value: f32) -> flui_sdk::types::geometry::Pixels {
-    flui_sdk::types::geometry::px(value)
+fn px_f(value: f64) -> f64 {
+    (value)
 }
 
 #[cfg(test)]

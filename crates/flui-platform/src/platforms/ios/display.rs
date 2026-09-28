@@ -20,8 +20,8 @@ use crate::traits::{DisplayId, PlatformDisplay};
 pub struct IOSDisplay {
     id: DisplayId,
     name: String,
-    bounds: Bounds<DevicePixels>,
-    usable_bounds: Bounds<DevicePixels>,
+    bounds: Bounds<i32>,
+    usable_bounds: Bounds<i32>,
     scale_factor: f64,
     is_primary: bool,
 }
@@ -66,8 +66,8 @@ impl IOSDisplay {
 
 /// The `(points, scale)` → device-pixel conversion, free-standing so it can
 /// be tested without a display. `CGRect`/`CGSize` are plain C structs.
-pub(super) fn device_bounds_from_points(bounds: NSRect, scale: f64) -> Bounds<DevicePixels> {
-    let to_device = |points: f64| flui_types::geometry::device_px((points * scale).round() as i32);
+pub(super) fn device_bounds_from_points(bounds: NSRect, scale: f64) -> Bounds<i32> {
+    let to_device = |points: f64| ((points * scale).round() as i32);
     Bounds {
         origin: Point::new(to_device(bounds.origin.x), to_device(bounds.origin.y)),
         size: Size::new(to_device(bounds.size.width), to_device(bounds.size.height)),
@@ -83,11 +83,11 @@ impl PlatformDisplay for IOSDisplay {
         self.name.clone()
     }
 
-    fn bounds(&self) -> Bounds<DevicePixels> {
+    fn bounds(&self) -> Bounds<i32> {
         self.bounds
     }
 
-    fn usable_bounds(&self) -> Bounds<DevicePixels> {
+    fn usable_bounds(&self) -> Bounds<i32> {
         self.usable_bounds
     }
 

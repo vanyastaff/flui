@@ -351,13 +351,13 @@ pub(crate) fn renderer_or_skip() -> Option<crate::headless::HeadlessRenderer> {
 /// records exactly what a `BoxDecoration` would.
 #[cfg(feature = "testing")]
 pub(crate) fn linear_gradient_fill(
-    rect: flui_types::Rect<flui_types::geometry::Pixels>,
+    rect: flui_types::Rect<f64>,
     local_start: glam::Vec2,
     local_end: glam::Vec2,
     colors: Vec<flui_types::styling::Color>,
 ) -> flui_painting::Paint {
     use flui_types::geometry::{Offset, Pixels};
-    let at = |p: glam::Vec2| Offset::new(rect.left() + Pixels(p.x), rect.top() + Pixels(p.y));
+    let at = |p: glam::Vec2| Offset::new(rect.left() + p.x, rect.top() + p.y);
     flui_painting::Paint::fill(flui_types::styling::Color::TRANSPARENT).with_shader(
         flui_painting::Shader::linear_gradient(
             at(local_start),

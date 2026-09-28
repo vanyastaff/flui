@@ -26,10 +26,7 @@ impl flui_view::RenderView for LeafView {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.set_size(
-            Some(flui_types::Pixels::ZERO),
-            Some(flui_types::Pixels::ZERO),
-        )
+        render_object.set_size(Some(0.0), Some(0.0))
     }
 }
 
@@ -40,7 +37,7 @@ impl flui_view::View for LeafView {
 }
 
 fn test_constraints() -> BoxConstraints {
-    BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+    BoxConstraints::tight(flui_types::Size::new(800.0, 600.0))
 }
 
 #[derive(Clone)]
@@ -430,7 +427,7 @@ fn pointer_input_is_dropped_while_suspended_but_keyboard_flows() {
     realm.mark_rendered();
     realm.update_host_lifecycle(AppLifecycleState::Hidden);
 
-    let position = flui_types::Offset::new(px(50.0), px(50.0));
+    let position = flui_types::Offset::new(50.0, 50.0);
     realm.enter(|realm| {
         realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
             position,
@@ -490,7 +487,7 @@ fn all_input_dropped_after_close() {
     let realm = UiRealm::for_test();
     realm.stop_presentations();
 
-    let position = flui_types::Offset::new(px(50.0), px(50.0));
+    let position = flui_types::Offset::new(50.0, 50.0);
     realm.enter(|realm| {
         realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
             position,
@@ -533,7 +530,7 @@ fn input_lifecycle_gate_is_exhaustive_and_explicit() {
     use super::super::super::presentation::PresentationLifecycle;
 
     let pointer = PlatformInput::Pointer(make_down_event(
-        flui_types::Offset::new(px(0.0), px(0.0)),
+        flui_types::Offset::new(0.0, 0.0),
         PointerType::Mouse,
     ));
     let keyboard =
@@ -643,7 +640,7 @@ fn shell_installed_arena_resolves_nested_tap_detectors_to_one_winner() {
     // Production input arrives inside the realm (runner.rs's
     // PlatformToUi dispatch enters it before calling handle_input),
     // so the synthetic tap does the same.
-    let position = flui_types::Offset::new(px(50.0), px(50.0));
+    let position = flui_types::Offset::new(50.0, 50.0);
     realm.enter(|realm| {
         realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
             position,
@@ -713,7 +710,7 @@ fn root_gesture_scope_arbitrates_overlapping_detectors_once() {
             .is_empty()
     );
 
-    let position = Offset::new(Pixels(10.0), Pixels(10.0));
+    let position = Offset::new(10.0, 10.0);
     let down = make_down_event(position, PointerType::Touch);
     let up = make_up_event(position, PointerType::Touch);
     realm.enter(|realm| {
@@ -748,7 +745,7 @@ fn realm_input_dispatch_keeps_gesture_state_isolated() {
     let realm_a = UiRealm::for_test();
     let realm_b = UiRealm::for_test();
     let pointer = PointerId::new(9001).expect("nonzero pointer id");
-    let position = Offset::new(Pixels(10.0), Pixels(10.0));
+    let position = Offset::new(10.0, 10.0);
 
     let fired = Rc::new(Cell::new(0));
     let fired_by_route = Rc::clone(&fired);
@@ -841,11 +838,7 @@ fn pointer_input_boundary_drains_a_lone_deferred_winner() {
         .pointer_router()
         .add_route(pointer, Rc::clone(&handler));
 
-    let down = make_down_event_for_id(
-        pointer,
-        Offset::new(Pixels(10.0), Pixels(10.0)),
-        PointerType::Touch,
-    );
+    let down = make_down_event_for_id(pointer, Offset::new(10.0, 10.0), PointerType::Touch);
     realm.enter(|realm| {
         realm.handle_input_entered(PlatformInput::Pointer(down));
     });
@@ -919,7 +912,7 @@ fn long_press_fires_at_its_deadline_with_no_further_input() {
     // arrives inside the realm (runner.rs's RealmEvent dispatch
     // enters it before calling handle_input), so the synthetic down
     // does the same.
-    let position = flui_types::Offset::new(px(50.0), px(50.0));
+    let position = flui_types::Offset::new(50.0, 50.0);
     realm.enter(|realm| {
         realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
             position,
@@ -985,7 +978,7 @@ fn resampled_contact_motion_keeps_the_frame_wake_gate_open() {
             period: Duration::from_millis(8),
         });
 
-        let position = Offset::new(Pixels(8.0), Pixels(13.0));
+        let position = Offset::new(8.0, 13.0);
         realm
             .gestures()
             .handle_pointer_event(&make_down_event(position, PointerType::Touch), |_| {

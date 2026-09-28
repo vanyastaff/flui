@@ -1657,7 +1657,7 @@ impl Renderer {
     }
 
     /// Mark a screen region as dirty (needs repaint).
-    pub fn mark_dirty(&mut self, rect: flui_types::geometry::Rect<flui_types::geometry::Pixels>) {
+    pub fn mark_dirty(&mut self, rect: flui_types::geometry::Rect<f64>) {
         self.damage_tracker.mark_dirty(rect);
     }
 
@@ -2312,7 +2312,7 @@ impl Renderer {
         let partial_damage = self
             .damage_tracker
             .damage_rect()
-            .filter(|r| r.width().0 > 0.0 && r.height().0 > 0.0);
+            .filter(|r| r.width() > 0.0 && r.height() > 0.0);
         if let Some(damage) = partial_damage {
             // Hard: this is the damage-rect scissor, an internal repaint
             // optimisation with pixel-aligned bounds, not a user clip whose
@@ -2322,10 +2322,10 @@ impl Renderer {
                 .painter_mut()
                 .clip_rect(damage, flui_types::painting::Clip::HardEdge);
             tracing::trace!(
-                left = damage.left().0,
-                top = damage.top().0,
-                width = damage.width().0,
-                height = damage.height().0,
+                left = damage.left(),
+                top = damage.top(),
+                width = damage.width(),
+                height = damage.height(),
                 "Damage scissor applied"
             );
         }
@@ -2360,10 +2360,10 @@ impl Renderer {
         {
             self.force_full_repaint_next_frame = true;
             tracing::debug!(
-                left = damage.left().0,
-                top = damage.top().0,
-                width = damage.width().0,
-                height = damage.height().0,
+                left = damage.left(),
+                top = damage.top(),
+                width = damage.width(),
+                height = damage.height(),
                 "Advanced shape straddles partial damage; \
                  scheduling full repaint next frame"
             );
@@ -2498,7 +2498,7 @@ impl Renderer {
         // Extract sigma from blur filter; other filter types fall back to
         // normal child rendering (no GPU blur support yet).
         let sigma = if let ImageFilter::Blur { sigma_x, sigma_y } = bf_layer.filter() {
-            f32::midpoint(*sigma_x, *sigma_y)
+            f32::midpoint(*sigma_x as f32, *sigma_y as f32)
         } else {
             // No blur to apply, so this node is a passthrough: hand its
             // children back to the walk (`Descend`) rather than walking them
@@ -2591,7 +2591,7 @@ impl Renderer {
         ctx: &RenderContext,
     ) {
         use crate::layer_state_stack::LayerStateStack;
-        use flui_types::geometry::{Pixels, Size};
+        use flui_types::geometry::Size;
 
         let bounds = sm_layer.bounds();
         let shader = sm_layer.shader();
@@ -2604,8 +2604,8 @@ impl Renderer {
         let dpr_scale = backend.painter().current_max_scale().max(1.0);
 
         // Device-resolution offscreen dimensions: logical extent x DPR.
-        let dev_width = (bounds.width().0 * dpr_scale).round().max(1.0) as u32;
-        let dev_height = (bounds.height().0 * dpr_scale).round().max(1.0) as u32;
+        let dev_width = (bounds.width() * f64::from(dpr_scale)).round().max(1.0) as u32;
+        let dev_height = (bounds.height() * f64::from(dpr_scale)).round().max(1.0) as u32;
 
         // Composite rect in device space — the layer-tree equivalent of
         // `LayerDispatcher::render_shader_mask`'s `device_bounds`.
@@ -2634,7 +2634,7 @@ impl Renderer {
             let mut temp_backend = crate::layer_dispatcher::LayerDispatcher::new(offscreen_painter);
 
             let mut seed_transform = ambient_ctm;
-            seed_transform.translate(-device_bounds.left().0, -device_bounds.top().0, 0.0);
+            seed_transform.translate(-device_bounds.left(), -device_bounds.top(), 0.0);
             temp_backend.push_transform(&seed_transform);
 
             for &child_id in node.children() {
@@ -2686,7 +2686,7 @@ impl Renderer {
         // Apply the shader as a GPU mask against the captured child content,
         // then queue the masked result for compositing on the main target at
         // the device-space rect.
-        let result_size = Size::new(Pixels(dev_width as f32), Pixels(dev_height as f32));
+        let result_size = Size::new(f64::from(dev_width), f64::from(dev_height));
         let masked_texture = offscreen
             .render_masked(bounds, result_size, shader, child_tex.texture())
             .into_texture();
@@ -2823,7 +2823,7 @@ mod tests {
             ];
             for (index, color) in colors.iter().enumerate() {
                 painter.draw_rect(
-                    Rect::from_xywh(px(index as f32 * 10.0), px(0.0), px(10.0), px(64.0)),
+                    Rect::from_xywh((index as f32 * 10.0), 0.0, 10.0, 64.0),
                     &Paint::fill(*color),
                 );
             }
@@ -2963,7 +2963,7 @@ mod tests {
         backend.painter_mut().scale(2.0, 2.0);
 
         // Build a one-node layer tree: a leaf BackdropFilter with no children.
-        let logical_bounds = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(200.0));
+        let logical_bounds = Rect::from_xywh(100.0, 100.0, 200.0, 200.0);
         let bf = BackdropFilterLayer::new(
             ImageFilter::blur(5.0),
             flui_types::painting::BlendMode::SrcOver,
@@ -3064,11 +3064,9 @@ mod tests {
         // CTM: scale(2) then translate(+10,+10).
         // Maps (x,y) → (2x+20, 2y+20).
         backend.painter_mut().scale(2.0, 2.0);
-        backend
-            .painter_mut()
-            .translate(Offset::new(px(10.0), px(10.0)));
+        backend.painter_mut().translate(Offset::new(10.0, 10.0));
 
-        let logical_bounds = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(200.0));
+        let logical_bounds = Rect::from_xywh(100.0, 100.0, 200.0, 200.0);
         let bf = BackdropFilterLayer::new(
             ImageFilter::blur(5.0),
             flui_types::painting::BlendMode::SrcOver,
@@ -3186,7 +3184,7 @@ mod tests {
         // Backdrop at (350,350,200,200) — corners (350,350)→(550,550).
         // Clamped to 400×400 surface: x=350,y=350,right=400,bottom=400 →
         // w=50, h=50.
-        let logical_bounds = Rect::from_xywh(px(350.0), px(350.0), px(200.0), px(200.0));
+        let logical_bounds = Rect::from_xywh(350.0, 350.0, 200.0, 200.0);
         let bf = BackdropFilterLayer::new(
             ImageFilter::blur(5.0),
             flui_types::painting::BlendMode::SrcOver,
@@ -3719,8 +3717,7 @@ mod tests {
         // Source: opaque orange inside a Multiply saveLayer.
         let source_orange = Color::rgba(200, 120, 40, 255);
         let backdrop_color = Color::rgba(40, 60, 220, 255);
-        let layer_bounds =
-            Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(W as f32), Pixels(H as f32));
+        let layer_bounds = Rect::from_xywh(0.0, 0.0, (W as f32), (H as f32));
 
         let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
@@ -3921,7 +3918,7 @@ mod tests {
         // be registered as opaque by the (now-removed) bug.
         let mut bg_canvas = Canvas::new();
         bg_canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(800.0), px(600.0)),
+            Rect::from_xywh(0.0, 0.0, 800.0, 600.0),
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
         );
         let _bg_layer_id = tree.push_child(
@@ -3937,7 +3934,7 @@ mod tests {
         // BUG: this layer was culled by the back-to-front occlusion cull.
         let mut fg_canvas = Canvas::new();
         fg_canvas.draw_rect(
-            Rect::from_xywh(px(400.0), px(0.0), px(400.0), px(600.0)),
+            Rect::from_xywh(400.0, 0.0, 400.0, 600.0),
             &Paint::fill(Color::rgba(0, 0, 255, 255)),
         );
         let _fg_layer_id = tree.push_child(
@@ -4052,14 +4049,14 @@ mod tests {
         // Leader lives under `branch_a`, offset (60,0) from root.
         let branch_a = tree.push_child(
             root_id,
-            Layer::Offset(OffsetLayer::new(Offset::new(px(60.0), px(0.0)))),
+            Layer::Offset(OffsetLayer::new(Offset::new(60.0, 0.0))),
         );
         let _leader_id = tree.push_child(
             branch_a,
             Layer::Leader(LeaderLayer::with_offset(
                 link,
-                Size::new(px(20.0), px(20.0)),
-                Offset::new(px(5.0), px(5.0)),
+                Size::new(20.0, 20.0),
+                Offset::new(5.0, 5.0),
             )),
         );
 
@@ -4067,17 +4064,17 @@ mod tests {
         // (0,90) from root.
         let branch_b = tree.push_child(
             root_id,
-            Layer::Offset(OffsetLayer::new(Offset::new(px(0.0), px(90.0)))),
+            Layer::Offset(OffsetLayer::new(Offset::new(0.0, 90.0))),
         );
         let follower_id = tree.push_child(
             branch_b,
-            Layer::Follower(FollowerLayer::new(link).with_size(Size::new(px(10.0), px(10.0)))),
+            Layer::Follower(FollowerLayer::new(link).with_size(Size::new(10.0, 10.0))),
         );
 
         // The follower's child: a 10×10 opaque red rect at its own local origin.
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
         );
         let _child_id = tree.push_child(
@@ -4194,13 +4191,13 @@ mod tests {
         // below, not accidentally satisfy them via overlap.
         let follower = FollowerLayer::new(link)
             .with_show_when_unlinked(true)
-            .with_target_offset(Offset::new(px(30.0), px(30.0)))
-            .with_size(Size::new(px(10.0), px(10.0)));
+            .with_target_offset(Offset::new(30.0, 30.0))
+            .with_size(Size::new(10.0, 10.0));
         let follower_id = tree.push_child(root_id, Layer::Follower(follower));
 
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
         );
         let _child_id = tree.push_child(
@@ -4311,13 +4308,13 @@ mod tests {
 
         let follower = FollowerLayer::new(link)
             .with_show_when_unlinked(false)
-            .with_target_offset(Offset::new(px(5.0), px(5.0)))
-            .with_size(Size::new(px(10.0), px(10.0)));
+            .with_target_offset(Offset::new(5.0, 5.0))
+            .with_size(Size::new(10.0, 10.0));
         let follower_id = tree.push_child(root_id, Layer::Follower(follower));
 
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
         );
         let _child_id = tree.push_child(
@@ -4495,12 +4492,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(STACK)
             .spawn(move || {
-                let bounds = flui_types::geometry::Rect::from_xywh(
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(64.0),
-                    flui_types::geometry::px(64.0),
-                );
+                let bounds = flui_types::geometry::Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
                 let mask = || {
                     Layer::ShaderMask(ShaderMaskLayer::new(
                         Shader::solid(flui_types::Color::rgba(10, 20, 30, 128)),
@@ -4564,7 +4556,7 @@ mod tests {
         let width = 64u32;
         let height = 64u32;
 
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
         let shader = Shader::solid(Color::rgba(10, 20, 30, 128));
         let mut tree = LayerTree::new(Layer::ShaderMask(ShaderMaskLayer::new(
             shader,
@@ -4666,7 +4658,7 @@ mod tests {
             return;
         };
         let format = wgpu::TextureFormat::Bgra8Unorm;
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let mut tree = LayerTree::new(Layer::ShaderMask(ShaderMaskLayer::new(
             Shader::solid(Color::WHITE),
             BlendMode::SrcOver,
@@ -4785,14 +4777,11 @@ mod tests {
         let width = 200u32;
         let height = 200u32;
 
-        let mut tree = LayerTree::new(Layer::Offset(OffsetLayer::new(Offset::new(
-            px(60.0),
-            px(40.0),
-        ))));
+        let mut tree = LayerTree::new(Layer::Offset(OffsetLayer::new(Offset::new(60.0, 40.0))));
 
         let offset_id = tree.root();
 
-        let bounds = Rect::from_xywh(px(30.0), px(20.0), px(60.0), px(60.0));
+        let bounds = Rect::from_xywh(30.0, 20.0, 60.0, 60.0);
         let shader = Shader::solid(Color::rgba(10, 20, 30, 128));
         let mask_id = tree.push_child(
             offset_id,
@@ -4925,7 +4914,7 @@ mod tests {
         let width = 64u32;
         let height = 64u32;
 
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
         let shader = Shader::solid(Color::rgba(10, 20, 30, 128));
         let mut tree = LayerTree::new(Layer::ShaderMask(ShaderMaskLayer::new(
             shader,

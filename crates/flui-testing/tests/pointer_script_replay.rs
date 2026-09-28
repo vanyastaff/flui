@@ -23,8 +23,8 @@ use flui_testing::replay::{GestureRecorder, PointerPhase, PointerScript, Scripte
 use flui_types::Offset;
 use flui_types::geometry::px;
 
-fn at(x: f32, y: f32) -> Offset {
-    Offset::new(px(x), px(y))
+fn at(x: f64, y: f64) -> Offset {
+    Offset::new(x, y)
 }
 
 /// A long-press recognizer on `binding`'s clock-bound arena, plus the flag its

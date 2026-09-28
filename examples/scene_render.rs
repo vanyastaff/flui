@@ -56,37 +56,37 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
 
     // Background — dark blue
     canvas.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
+        Rect::from_ltrb(0.0, 0.0, width, height),
         &Paint::fill(Color::rgb(20, 30, 48)),
     );
 
     // Large red rectangle (top-left)
     canvas.draw_rect(
-        Rect::from_ltrb(px(50.0), px(50.0), px(350.0), px(250.0)),
+        Rect::from_ltrb(50.0, 50.0, 350.0, 250.0),
         &Paint::fill(Color::RED),
     );
 
     // Green rectangle (center)
     canvas.draw_rect(
-        Rect::from_ltrb(px(200.0), px(150.0), px(500.0), px(350.0)),
+        Rect::from_ltrb(200.0, 150.0, 500.0, 350.0),
         &Paint::fill(Color::GREEN),
     );
 
     // Blue rectangle (bottom-right)
     canvas.draw_rect(
-        Rect::from_ltrb(px(400.0), px(250.0), px(700.0), px(450.0)),
+        Rect::from_ltrb(400.0, 250.0, 700.0, 450.0),
         &Paint::fill(Color::BLUE),
     );
 
     // White rectangle (small, center)
     canvas.draw_rect(
-        Rect::from_ltrb(px(300.0), px(200.0), px(450.0), px(300.0)),
+        Rect::from_ltrb(300.0, 200.0, 450.0, 300.0),
         &Paint::fill(Color::WHITE),
     );
 
     // Yellow rectangle (bottom)
     canvas.draw_rect(
-        Rect::from_ltrb(px(100.0), px(400.0), px(600.0), px(500.0)),
+        Rect::from_ltrb(100.0, 400.0, 600.0, 500.0),
         &Paint::fill(Color::rgb(255, 200, 0)),
     );
 
@@ -117,7 +117,7 @@ fn main() {
 
     let options = WindowOptions {
         title: title.to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: true,
         visible: true,
         decorated: true,

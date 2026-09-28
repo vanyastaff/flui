@@ -9,7 +9,7 @@
 //! `painter`.  These types are re-exported `pub(crate)` so `painter`
 //! and future batcher/compositor modules can import from one place.
 
-use flui_types::{Rect, geometry::Pixels, painting::BlendMode};
+use flui_types::{Rect, painting::BlendMode};
 use smallvec::SmallVec;
 
 use crate::{
@@ -322,7 +322,7 @@ pub(crate) struct FilterOp {
     /// (e.g. Blur∘Mode∘Morph∘Identity). Heap-spills beyond 4 are correct.
     pub(crate) passes: SmallVec<[ImageFilterPass; 4]>,
     /// Pre-filter content AABB in physical pixels (record-time geometry bound).
-    pub(crate) content_bounds: Rect<Pixels>,
+    pub(crate) content_bounds: Rect<f64>,
     /// `content_bounds` expanded by the accumulated pass radius, clipped to
     /// the layer bounds. For Identity this equals `content_bounds` because the
     /// pass grows bounds by 0 pixels. Growing filters compute their pad via
@@ -336,7 +336,7 @@ pub(crate) struct FilterOp {
     // grown_bounds documents the fractional halo extent pre-quantisation and will
     // be needed by damage-tracking or future floating-point halo assertions.
     #[cfg_attr(not(all(test, feature = "testing")), expect(dead_code))]
-    pub(crate) grown_bounds: Rect<Pixels>,
+    pub(crate) grown_bounds: Rect<f64>,
     /// Integer-grid top-left of the offscreen intermediate in device pixels.
     ///
     /// Computed as `(floor(grown_bounds.left), floor(grown_bounds.top))`.
@@ -456,7 +456,7 @@ pub(crate) struct TessellatedBatch {
 // `wgpu::TextureView` and `PooledTexture` are not `Debug`; no derive possible.
 pub(crate) struct PendingOffscreenTexture {
     pub(crate) texture: PooledTexture,
-    pub(crate) bounds: Rect<Pixels>,
+    pub(crate) bounds: Rect<f64>,
     /// The blend mode the offscreen result must be composited with. The
     /// offscreen target is cleared transparent and drawn with straight
     /// `ALPHA_BLENDING`, so the result is premultiplied; `SrcOver` is the
@@ -849,7 +849,7 @@ pub(crate) struct AdvancedShapeOp {
     ///
     /// Used by `flush_advanced_layer` for the backdrop-copy region, the `src_uv`
     /// remap, and the damage-straddle guard.
-    pub(crate) device_bounds: Rect<Pixels>,
+    pub(crate) device_bounds: Rect<f64>,
 }
 
 // ─── SSAA-path op ────────────────────────────────────────────────────────────
@@ -896,7 +896,7 @@ pub(crate) struct SsaaPathOp {
     /// Used to size the SSAA tile: `ceil(device_bounds.width) × ceil(device_bounds.height)`,
     /// clamped to `[1, viewport]`.  Computed as the AABB of
     /// `segment.vertices[*].position` at record time.
-    pub(crate) device_bounds: Rect<Pixels>,
+    pub(crate) device_bounds: Rect<f64>,
     /// Blend mode to use when compositing the SSAA 1× tile onto the surface.
     ///
     /// Determines the composite strategy in `GpuReplay::render_ssaa_path`:
@@ -973,7 +973,7 @@ pub(crate) struct PendingOpacityLayer {
     /// See [`SavedLayer::layer_tint_rgb`].
     pub(crate) tint_rgb: [f32; 3],
     /// Compositing bounds in screen coordinates
-    pub(crate) bounds: Rect<Pixels>,
+    pub(crate) bounds: Rect<f64>,
     /// Blend mode to apply when compositing this layer onto its parent.
     ///
     /// Stored on the pending layer so the flush path can read it without
@@ -1004,7 +1004,7 @@ pub(crate) struct PendingOpacityLayer {
 // handle; see `DrawSegment`'s doc.
 #[cfg(test)]
 mod filter_ir_clone_pins {
-    use flui_types::{Rect, geometry::px};
+    use flui_types::Rect;
     use smallvec::smallvec;
 
     use flui_types::painting::BlendMode;
@@ -1024,7 +1024,7 @@ mod filter_ir_clone_pins {
     const _IMAGE_FILTER_PASS_IS_CLONE: fn(ImageFilterPass) -> ImageFilterPass = |p| p.clone();
 
     fn identity_op() -> FilterOp {
-        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(64.0), px(64.0));
+        let bounds = Rect::from_ltrb(0.0, 0.0, 64.0, 64.0);
         FilterOp {
             input: DrawSegment::new(),
             passes: smallvec![ImageFilterPass::Identity],
@@ -1127,7 +1127,7 @@ mod filter_ir_clone_pins {
     /// `FilterOp` carrying a `Morph` pass is still `Clone` (the `PooledTexture` bar above).
     #[test]
     fn filter_op_with_morph_pass_is_pure_cpu_data() {
-        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(64.0), px(64.0));
+        let bounds = Rect::from_ltrb(0.0, 0.0, 64.0, 64.0);
         let op = FilterOp {
             input: DrawSegment::new(),
             passes: smallvec![ImageFilterPass::Morph {
@@ -1171,7 +1171,7 @@ mod filter_ir_clone_pins {
     /// `FilterOp` carrying a `Blur` pass is still `Clone` (the `PooledTexture` bar above).
     #[test]
     fn filter_op_with_blur_pass_is_pure_cpu_data() {
-        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(64.0), px(64.0));
+        let bounds = Rect::from_ltrb(0.0, 0.0, 64.0, 64.0);
         let op = FilterOp {
             input: DrawSegment::new(),
             passes: smallvec![ImageFilterPass::Blur {

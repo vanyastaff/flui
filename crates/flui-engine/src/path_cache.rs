@@ -235,23 +235,22 @@ fn hash_command(cmd: &PathCommand, hasher: &mut DefaultHasher) {
 }
 
 /// Hash a `Point<Pixels>` by its f32 bit patterns.
-fn hash_point(p: flui_types::Point<flui_types::geometry::Pixels>, hasher: &mut DefaultHasher) {
-    p.x.0.to_bits().hash(hasher);
-    p.y.0.to_bits().hash(hasher);
+fn hash_point(p: flui_types::Point<f64>, hasher: &mut DefaultHasher) {
+    p.x.to_bits().hash(hasher);
+    p.y.to_bits().hash(hasher);
 }
 
 /// Hash a `Rect<Pixels>` by its four edge f32 bit patterns.
-fn hash_rect(r: &flui_types::Rect<flui_types::geometry::Pixels>, hasher: &mut DefaultHasher) {
-    r.left().0.to_bits().hash(hasher);
-    r.top().0.to_bits().hash(hasher);
-    r.right().0.to_bits().hash(hasher);
-    r.bottom().0.to_bits().hash(hasher);
+fn hash_rect(r: &flui_types::Rect<f64>, hasher: &mut DefaultHasher) {
+    r.left().to_bits().hash(hasher);
+    r.top().to_bits().hash(hasher);
+    r.right().to_bits().hash(hasher);
+    r.bottom().to_bits().hash(hasher);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::geometry::px;
 
     #[test]
     fn test_cache_hit_miss() {
@@ -306,9 +305,9 @@ mod tests {
     #[test]
     fn test_path_hash_deterministic() {
         let mut path = Path::new();
-        path.move_to(flui_types::Point::new(px(0.0), px(0.0)));
-        path.line_to(flui_types::Point::new(px(100.0), px(0.0)));
-        path.line_to(flui_types::Point::new(px(100.0), px(100.0)));
+        path.move_to(flui_types::Point::new(0.0, 0.0));
+        path.line_to(flui_types::Point::new(100.0, 0.0));
+        path.line_to(flui_types::Point::new(100.0, 100.0));
         path.close();
 
         let h1 = PathCache::compute_path_hash(
@@ -333,8 +332,8 @@ mod tests {
     #[test]
     fn test_different_paint_different_hash() {
         let mut path = Path::new();
-        path.move_to(flui_types::Point::new(px(0.0), px(0.0)));
-        path.line_to(flui_types::Point::new(px(100.0), px(100.0)));
+        path.move_to(flui_types::Point::new(0.0, 0.0));
+        path.line_to(flui_types::Point::new(100.0, 100.0));
 
         let h_fill = PathCache::compute_path_hash(
             &path,
@@ -363,12 +362,7 @@ mod tests {
     #[test]
     fn test_scale_bucket_partitions_hash() {
         let mut path = Path::new();
-        path.add_oval(flui_types::Rect::from_ltrb(
-            px(0.0),
-            px(0.0),
-            px(100.0),
-            px(100.0),
-        ));
+        path.add_oval(flui_types::Rect::from_ltrb(0.0, 0.0, 100.0, 100.0));
 
         let key = |scale: f32| {
             PathCache::compute_path_hash(
@@ -407,8 +401,8 @@ mod tests {
     #[test]
     fn dashed_and_solid_stroke_share_geometry_hash() {
         let mut path = flui_types::painting::path::Path::new();
-        path.move_to(flui_types::Point::new(px(0.0), px(0.0)));
-        path.line_to(flui_types::Point::new(px(100.0), px(0.0)));
+        path.move_to(flui_types::Point::new(0.0, 0.0));
+        path.line_to(flui_types::Point::new(100.0, 0.0));
 
         // compute_path_hash does not include dash_pattern (by design)
         let h_solid = PathCache::compute_path_hash(

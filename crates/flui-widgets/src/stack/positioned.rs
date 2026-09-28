@@ -22,12 +22,12 @@ use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, impl_parent_
 /// [`Stack`]: crate::Stack
 #[derive(Clone, Debug)]
 pub struct Positioned {
-    left: Option<f32>,
-    top: Option<f32>,
-    right: Option<f32>,
-    bottom: Option<f32>,
-    width: Option<f32>,
-    height: Option<f32>,
+    left: Option<f64>,
+    top: Option<f64>,
+    right: Option<f64>,
+    bottom: Option<f64>,
+    width: Option<f64>,
+    height: Option<f64>,
     child: BoxedView,
 }
 
@@ -54,28 +54,28 @@ impl Positioned {
 
     /// Distance between the child's left edge and the stack's left edge.
     #[must_use]
-    pub fn left(mut self, left: f32) -> Self {
+    pub fn left(mut self, left: f64) -> Self {
         self.left = Some(left);
         self
     }
 
     /// Distance between the child's top edge and the stack's top edge.
     #[must_use]
-    pub fn top(mut self, top: f32) -> Self {
+    pub fn top(mut self, top: f64) -> Self {
         self.top = Some(top);
         self
     }
 
     /// Distance between the child's right edge and the stack's right edge.
     #[must_use]
-    pub fn right(mut self, right: f32) -> Self {
+    pub fn right(mut self, right: f64) -> Self {
         self.right = Some(right);
         self
     }
 
     /// Distance between the child's bottom edge and the stack's bottom edge.
     #[must_use]
-    pub fn bottom(mut self, bottom: f32) -> Self {
+    pub fn bottom(mut self, bottom: f64) -> Self {
         self.bottom = Some(bottom);
         self
     }
@@ -83,7 +83,7 @@ impl Positioned {
     /// The child's explicit width (ignored when both `left` and `right` are
     /// set, which already determine it).
     #[must_use]
-    pub fn width(mut self, width: f32) -> Self {
+    pub fn width(mut self, width: f64) -> Self {
         self.width = Some(width);
         self
     }
@@ -91,7 +91,7 @@ impl Positioned {
     /// The child's explicit height (ignored when both `top` and `bottom` are
     /// set, which already determine it).
     #[must_use]
-    pub fn height(mut self, height: f32) -> Self {
+    pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn positioned_parent_data_reports_exact_impact_and_preserves_layout_fields() {
         let mut data = StackParentData::new().with_left(1.0).with_top(2.0);
-        data.offset = Offset::new(px(8.0), px(13.0));
+        data.offset = Offset::new(8.0, 13.0);
         data.container.previous_sibling = Some(RenderId::new(7));
         data.container.next_sibling = Some(RenderId::new(9));
         let unchanged = Positioned::new(SizedBox::shrink()).left(1.0).top(2.0);
@@ -188,7 +188,7 @@ mod tests {
             changed.apply_parent_data(&mut data),
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
-        assert_eq!(data.offset, Offset::new(px(8.0), px(13.0)));
+        assert_eq!(data.offset, Offset::new(8.0, 13.0));
         assert_eq!(data.container.previous_sibling, Some(RenderId::new(7)));
         assert_eq!(data.container.next_sibling, Some(RenderId::new(9)));
     }
@@ -206,14 +206,14 @@ mod tests {
 
         for configuration in configurations {
             let mut data = StackParentData::new();
-            data.offset = Offset::new(px(8.0), px(13.0));
+            data.offset = Offset::new(8.0, 13.0);
             data.container.previous_sibling = Some(RenderId::new(7));
             data.container.next_sibling = Some(RenderId::new(9));
             assert_eq!(
                 configuration.apply_parent_data(&mut data),
                 flui_rendering::RenderUpdateImpact::LAYOUT,
             );
-            assert_eq!(data.offset, Offset::new(px(8.0), px(13.0)));
+            assert_eq!(data.offset, Offset::new(8.0, 13.0));
             assert_eq!(data.container.previous_sibling, Some(RenderId::new(7)));
             assert_eq!(data.container.next_sibling, Some(RenderId::new(9)));
         }

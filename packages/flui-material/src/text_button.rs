@@ -133,10 +133,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
         })),
         elevation: Some(WidgetStateProperty::all(Some(0.0))),
         padding: Some(WidgetStateProperty::all(Some(scaled_padding_1x()))),
-        minimum_size: Some(WidgetStateProperty::all(Some(Size::new(
-            px(64.0),
-            px(40.0),
-        )))),
+        minimum_size: Some(WidgetStateProperty::all(Some(Size::new(64.0, 40.0)))),
         fixed_size: None,
         maximum_size: Some(WidgetStateProperty::all(Some(Size::INFINITY))),
         side: None,
@@ -150,7 +147,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
 /// `crate::elevated_button`'s docs for the shared `MediaQuery` text-scaler
 /// deferral this narrows to the 1x tier.
 fn scaled_padding_1x() -> EdgeInsets {
-    EdgeInsets::symmetric(px(8.0), px(12.0))
+    EdgeInsets::symmetric(8.0, 12.0)
 }
 
 #[cfg(test)]
@@ -211,7 +208,7 @@ mod tests {
             &WidgetStates::NONE,
         )
         .expect("padding is set");
-        assert_eq!(padding, EdgeInsets::symmetric(px(8.0), px(12.0)));
+        assert_eq!(padding, EdgeInsets::symmetric(8.0, 12.0));
     }
 
     #[test]

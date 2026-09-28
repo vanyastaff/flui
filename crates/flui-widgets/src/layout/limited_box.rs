@@ -3,25 +3,23 @@
 
 use flui_objects::RenderLimitedBox;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Pixels;
-use flui_types::geometry::px;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Caps the maximum size of its child *only when* the corresponding incoming
 /// constraint is unbounded; bounded constraints pass through untouched.
 ///
 /// Flutter parity: `widgets/basic.dart` `LimitedBox` over `RenderLimitedBox`.
-/// `f32::INFINITY` for a dimension means "no cap on that axis".
+/// `f64::INFINITY` for a dimension means "no cap on that axis".
 #[derive(Clone, Debug)]
 pub struct LimitedBox {
-    max_width: f32,
-    max_height: f32,
+    max_width: f64,
+    max_height: f64,
     child: Child,
 }
 
 impl LimitedBox {
-    /// A box capping width/height (use `f32::INFINITY` for "no cap").
-    pub fn new(max_width: f32, max_height: f32) -> Self {
+    /// A box capping width/height (use `f64::INFINITY` for "no cap").
+    pub fn new(max_width: f64, max_height: f64) -> Self {
         Self {
             max_width,
             max_height,
@@ -36,8 +34,8 @@ impl LimitedBox {
         self
     }
 
-    fn cap(value: f32) -> Option<Pixels> {
-        value.is_finite().then(|| px(value))
+    fn cap(value: f64) -> Option<f64> {
+        value.is_finite().then(|| value)
     }
 }
 

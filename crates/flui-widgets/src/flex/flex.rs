@@ -28,7 +28,7 @@ struct FlexStyle {
     main_axis_alignment: MainAxisAlignment,
     cross_axis_alignment: CrossAxisAlignment,
     main_axis_size: MainAxisSize,
-    spacing: f32,
+    spacing: f64,
     text_baseline: TextBaseline,
 }
 
@@ -104,7 +104,7 @@ macro_rules! flex_style_builders {
         /// strictly *between* children (never before the first or after the
         /// last), regardless of [`MainAxisAlignment`]. Defaults to `0.0`.
         #[must_use]
-        pub fn spacing(mut self, spacing: f32) -> Self {
+        pub fn spacing(mut self, spacing: f64) -> Self {
             self.style.spacing = spacing;
             self
         }

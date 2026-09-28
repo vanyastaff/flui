@@ -176,7 +176,7 @@ fn main() {
 
     let options = WindowOptions {
         title: "FLUI Platform + wgpu".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: true,
         visible: true,
         decorated: true,

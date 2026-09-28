@@ -383,7 +383,7 @@ mod tests {
 
     /// A leaf view of a fixed size — the child a builder returns.
     #[derive(Clone, Debug)]
-    struct FixedBox(f32, f32);
+    struct FixedBox(f64, f64);
 
     impl RenderView for FixedBox {
         type Protocol = BoxProtocol;
@@ -393,7 +393,7 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
         ) -> Self::RenderObject {
-            RenderSizedBox::new(Some(px(self.0)), Some(px(self.1)))
+            RenderSizedBox::new(Some(self.0), Some(self.1))
         }
 
         fn update_render_object(
@@ -401,7 +401,7 @@ mod tests {
             _ctx: &crate::RenderObjectContext<'_>,
             render_object: &mut Self::RenderObject,
         ) -> flui_rendering::RenderUpdateImpact {
-            render_object.set_size(Some(px(self.0)), Some(px(self.1)))
+            render_object.set_size(Some(self.0), Some(self.1))
         }
     }
 
@@ -414,7 +414,7 @@ mod tests {
     /// A structurally different leaf — used to prove reconcile replaces the
     /// child when the builder switches shape.
     #[derive(Clone, Debug)]
-    struct TightBox(f32);
+    struct TightBox(f64);
 
     impl RenderView for TightBox {
         type Protocol = BoxProtocol;
@@ -424,7 +424,7 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
         ) -> Self::RenderObject {
-            RenderConstrainedBox::new(BoxConstraints::tight(Size::new(px(self.0), px(self.0))))
+            RenderConstrainedBox::new(BoxConstraints::tight(Size::new(self.0, self.0)))
         }
 
         fn update_render_object(
@@ -432,10 +432,8 @@ mod tests {
             _ctx: &crate::RenderObjectContext<'_>,
             render_object: &mut Self::RenderObject,
         ) -> flui_rendering::RenderUpdateImpact {
-            render_object.set_additional_constraints(BoxConstraints::tight(Size::new(
-                px(self.0),
-                px(self.0),
-            )))
+            render_object
+                .set_additional_constraints(BoxConstraints::tight(Size::new(self.0, self.0)))
         }
     }
 
@@ -596,8 +594,8 @@ mod tests {
         })
     }
 
-    fn tight(w: f32, h: f32) -> BoxConstraints {
-        BoxConstraints::tight(Size::new(px(w), px(h)))
+    fn tight(w: f64, h: f64) -> BoxConstraints {
+        BoxConstraints::tight(Size::new(w, h))
     }
 
     #[test]
@@ -639,7 +637,7 @@ mod tests {
         );
         assert_eq!(
             h.root_size(),
-            Size::new(px(120.0), px(80.0)),
+            Size::new(120.0, 80.0),
             "the builder's node is laid out under its own constraints"
         );
 
@@ -649,7 +647,7 @@ mod tests {
         assert_eq!(
             h.pipeline
                 .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, child_render)),
-            Some(Size::new(px(120.0), px(80.0))),
+            Some(Size::new(120.0, 80.0)),
             "the child returned by the builder must be laid out in the SAME frame; \
              a one-frame-late seam leaves it without committed geometry"
         );
@@ -687,7 +685,7 @@ mod tests {
     fn layout_builder_loose_constraints_size_follows_the_child() {
         let log = Arc::new(parking_lot::Mutex::new(Vec::new()));
         // Flutter: Center > ConstrainedBox(maxWidth: 100, maxHeight: 200).
-        let incoming = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(200.0));
+        let incoming = BoxConstraints::new(0.0, 100.0, 0.0, 200.0);
         let view = LayoutBuilder {
             builder: Rc::new(move |_ctx, constraints: BoxConstraints| {
                 log.lock().push(constraints);
@@ -706,7 +704,7 @@ mod tests {
 
         assert_eq!(
             h.root_size(),
-            Size::new(px(50.0), px(100.0)),
+            Size::new(50.0, 100.0),
             "size = constraints.constrain(child.size); it must NOT be constraints.biggest \
              (100x200) — the intermediate no-child pass must never survive into the frame"
         );
@@ -714,7 +712,7 @@ mod tests {
         assert_eq!(
             h.pipeline
                 .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, child_render)),
-            Some(Size::new(px(50.0), px(100.0))),
+            Some(Size::new(50.0, 100.0)),
         );
     }
 
@@ -742,12 +740,12 @@ mod tests {
             &[first, second],
             "a resized parent must re-invoke the builder with the new constraints"
         );
-        assert_eq!(h.root_size(), Size::new(px(60.0), px(40.0)));
+        assert_eq!(h.root_size(), Size::new(60.0, 40.0));
         let child_render = child_render_id(&h);
         assert_eq!(
             h.pipeline
                 .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, child_render)),
-            Some(Size::new(px(60.0), px(40.0))),
+            Some(Size::new(60.0, 40.0)),
             "the rebuilt child must be relaid out in the same frame"
         );
     }
@@ -872,7 +870,7 @@ mod tests {
         assert_eq!(
             h.pipeline
                 .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, wide_child)),
-            Some(Size::new(px(120.0), px(120.0))),
+            Some(Size::new(120.0, 120.0)),
             "the wide branch's RenderSizedBox is stretched by the tight constraints"
         );
 

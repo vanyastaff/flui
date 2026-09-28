@@ -111,21 +111,21 @@ use crate::theme::Theme;
 
 /// A checkbox's edge length. Flutter parity: `Checkbox.width` (`18.0`,
 /// `checkbox.dart`, oracle tag `3.44.0`).
-pub const CHECKBOX_EDGE_SIZE: f32 = 18.0;
+pub const CHECKBOX_EDGE_SIZE: f64 = 18.0;
 
 /// The box outline's and checkmark/dash's stroke width. Flutter parity:
 /// `_kStrokeWidth` (`checkbox.dart`).
-const STROKE_WIDTH: f32 = 2.0;
+const STROKE_WIDTH: f64 = 2.0;
 
 /// The M3 tap-target side length. Flutter parity: `kMinInteractiveDimension`
 /// (`constants.dart`, `48.0`), the `MaterialTapTargetSize.padded` branch
 /// `_CheckboxState.build` always takes in V1 (no `materialTapTargetSize`
 /// override yet — see the module docs).
-pub const CHECKBOX_TAP_TARGET_SIZE: f32 = 48.0;
+pub const CHECKBOX_TAP_TARGET_SIZE: f64 = 48.0;
 
 /// The box's corner radius. Flutter parity: `_CheckboxDefaultsM3.shape`,
 /// `RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(2.0)))`.
-const CORNER_RADIUS: f32 = 2.0;
+const CORNER_RADIUS: f64 = 2.0;
 
 // The 18dp box must fit inside the 48dp tap target with room for the
 // centering inset the painter computes — a compile-time invariant, not a
@@ -445,8 +445,8 @@ impl ViewState<Checkbox> for CheckboxState {
         let mut ink_well = InkWell::new(
             CustomPaint::new()
                 .size(Size::new(
-                    px(CHECKBOX_TAP_TARGET_SIZE),
-                    px(CHECKBOX_TAP_TARGET_SIZE),
+                    CHECKBOX_TAP_TARGET_SIZE,
+                    CHECKBOX_TAP_TARGET_SIZE,
                 ))
                 .painter(painter),
         )
@@ -546,8 +546,8 @@ fn checkbox_default_check_color(colors: &ColorScheme, states: WidgetStates) -> C
 }
 
 /// `_CheckboxDefaultsM3.side` (`checkbox.dart`, oracle tag `3.44.0`).
-fn checkbox_default_side(colors: &ColorScheme, states: WidgetStates) -> BorderSide<Pixels> {
-    let side = |color: Color, width: f32| BorderSide::new(color, px(width), BorderStyle::Solid);
+fn checkbox_default_side(colors: &ColorScheme, states: WidgetStates) -> BorderSide<f64> {
+    let side = |color: Color, width: f64| BorderSide::new(color, width, BorderStyle::Solid);
 
     if states.contains_state(WidgetState::Disabled) {
         return if states.contains_state(WidgetState::Selected) {
@@ -620,31 +620,31 @@ fn checkbox_default_overlay_color(colors: &ColorScheme, states: WidgetStates) ->
 #[derive(Debug, Clone, PartialEq)]
 struct CheckboxPainter {
     fill_color: Color,
-    side: BorderSide<Pixels>,
+    side: BorderSide<f64>,
     check_color: Color,
     value: Option<bool>,
 }
 
 impl CustomPainter for CheckboxPainter {
     fn paint(&self, canvas: &mut Canvas, size: Size) {
-        let center_x = size.width.get() / 2.0;
-        let center_y = size.height.get() / 2.0;
+        let center_x = size.width / 2.0;
+        let center_y = size.height / 2.0;
         let half_edge = CHECKBOX_EDGE_SIZE / 2.0;
         let origin_x = center_x - half_edge;
         let origin_y = center_y - half_edge;
 
         let outer_rect = Rect::from_ltrb(
-            px(origin_x),
-            px(origin_y),
-            px(origin_x + CHECKBOX_EDGE_SIZE),
-            px(origin_y + CHECKBOX_EDGE_SIZE),
+            origin_x,
+            origin_y,
+            (origin_x + CHECKBOX_EDGE_SIZE),
+            (origin_y + CHECKBOX_EDGE_SIZE),
         );
-        let outer_rrect = RRect::from_rect_circular(outer_rect, px(CORNER_RADIUS));
+        let outer_rrect = RRect::from_rect_circular(outer_rect, CORNER_RADIUS);
 
         canvas.draw_rrect(outer_rrect, &Paint::fill(self.fill_color));
 
-        if self.side.style.is_solid() && self.side.width.get() > 0.0 {
-            let inner_rrect = outer_rrect.inflate(px(-self.side.width.get()));
+        if self.side.style.is_solid() && self.side.width > 0.0 {
+            let inner_rrect = outer_rrect.inflate((-self.side.width));
             canvas.draw_drrect(outer_rrect, inner_rrect, &Paint::fill(self.side.color));
         }
 
@@ -671,8 +671,8 @@ impl CustomPainter for CheckboxPainter {
 /// The settled (`t = 1.0`) checkmark stroke. Flutter parity:
 /// `_CheckboxPainter._drawCheck` (`checkbox.dart` `:750-771`) at `t = 1.0`:
 /// the full `start -> mid -> end` polyline.
-fn draw_checkmark(canvas: &mut Canvas, origin_x: f32, origin_y: f32, paint: &Paint) {
-    let point = |dx: f32, dy: f32| Point::new(px(origin_x + dx), px(origin_y + dy));
+fn draw_checkmark(canvas: &mut Canvas, origin_x: f64, origin_y: f64, paint: &Paint) {
+    let point = |dx: f64, dy: f64| Point::new((origin_x + dx), (origin_y + dy));
     let mut path = Path::new();
     path.move_to(point(CHECKBOX_EDGE_SIZE * 0.15, CHECKBOX_EDGE_SIZE * 0.45));
     path.line_to(point(CHECKBOX_EDGE_SIZE * 0.4, CHECKBOX_EDGE_SIZE * 0.7));
@@ -683,8 +683,8 @@ fn draw_checkmark(canvas: &mut Canvas, origin_x: f32, origin_y: f32, paint: &Pai
 /// The settled (`t = 1.0`) indeterminate dash: a full-width horizontal line.
 /// Flutter parity: `_CheckboxPainter._drawDash` (`checkbox.dart` `:773-783`)
 /// at `t = 1.0`.
-fn draw_dash(canvas: &mut Canvas, origin_x: f32, origin_y: f32, paint: &Paint) {
-    let point = |dx: f32| Point::new(px(origin_x + dx), px(origin_y + CHECKBOX_EDGE_SIZE * 0.5));
+fn draw_dash(canvas: &mut Canvas, origin_x: f64, origin_y: f64, paint: &Paint) {
+    let point = |dx: f64| Point::new((origin_x + dx), (origin_y + CHECKBOX_EDGE_SIZE * 0.5));
     canvas.draw_line(
         point(CHECKBOX_EDGE_SIZE * 0.2),
         point(CHECKBOX_EDGE_SIZE * 0.8),
@@ -958,14 +958,14 @@ mod tests {
         let states = WidgetStates::from(WidgetState::Selected);
         let side = checkbox_default_side(&light(), states);
         assert_eq!(side.color, Color::TRANSPARENT);
-        assert_eq!(side.width, px(0.0));
+        assert_eq!(side.width, 0.0);
     }
 
     #[test]
     fn default_side_unselected_enabled_default_is_on_surface_variant() {
         let side = checkbox_default_side(&light(), WidgetStates::NONE);
         assert_eq!(side.color, light().on_surface_variant);
-        assert_eq!(side.width, px(2.0));
+        assert_eq!(side.width, 2.0);
     }
 
     #[test]
@@ -995,7 +995,7 @@ mod tests {
         let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
         let side = checkbox_default_side(&light(), states);
         assert_eq!(side.color, Color::TRANSPARENT);
-        assert_eq!(side.width, px(2.0));
+        assert_eq!(side.width, 2.0);
     }
 
     #[test]
@@ -1060,9 +1060,9 @@ mod tests {
     /// `_CheckboxDefaultsM3.splashRadius`'s `20.0`.
     #[test]
     fn stadium_shape_on_the_tap_target_inscribes_a_circle_at_half_its_side() {
-        let tap_target = Size::new(px(CHECKBOX_TAP_TARGET_SIZE), px(CHECKBOX_TAP_TARGET_SIZE));
+        let tap_target = Size::new(CHECKBOX_TAP_TARGET_SIZE, CHECKBOX_TAP_TARGET_SIZE);
         let rrect = MaterialShape::Stadium.to_rrect(tap_target);
-        assert_eq!(rrect.top_left.x, px(CHECKBOX_TAP_TARGET_SIZE / 2.0));
+        assert_eq!(rrect.top_left.x, (CHECKBOX_TAP_TARGET_SIZE / 2.0));
     }
 
     // ------------------------------------------------------------------
@@ -1072,7 +1072,7 @@ mod tests {
     fn painter(value: Option<bool>) -> CheckboxPainter {
         CheckboxPainter {
             fill_color: Color::BLACK,
-            side: BorderSide::new(Color::WHITE, px(2.0), BorderStyle::Solid),
+            side: BorderSide::new(Color::WHITE, 2.0, BorderStyle::Solid),
             check_color: Color::WHITE,
             value,
         }
@@ -1121,7 +1121,7 @@ mod tests {
     fn draws_the_correct_mark_per_tristate_value() {
         use flui_sdk::painting::DrawOp;
 
-        let size = Size::new(px(CHECKBOX_TAP_TARGET_SIZE), px(CHECKBOX_TAP_TARGET_SIZE));
+        let size = Size::new(CHECKBOX_TAP_TARGET_SIZE, CHECKBOX_TAP_TARGET_SIZE);
 
         for (value, expect_path, expect_line) in [
             (Some(true), true, false),

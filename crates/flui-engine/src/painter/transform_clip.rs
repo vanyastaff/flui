@@ -3,11 +3,7 @@
 // Moved from `painter.rs` into `painter/transform_clip.rs` as part of the
 // C1 LOC-cap refactor.  Zero behaviour changes.
 
-use flui_types::{
-    Offset, Rect,
-    geometry::{Pixels, RRect},
-    painting::Path,
-};
+use flui_types::{Offset, Rect, geometry::RRect, painting::Path};
 
 use super::WgpuPainter;
 
@@ -38,7 +34,7 @@ impl WgpuPainter {
     ///
     /// `offset` is in device pixels.  Equivalent to premultiplying the CTM by
     /// `T(offset.dx, offset.dy)`.
-    pub fn translate(&mut self, offset: Offset<Pixels>) {
+    pub fn translate(&mut self, offset: Offset<f64>) {
         self.state.translate(offset);
     }
 
@@ -98,7 +94,7 @@ impl WgpuPainter {
     /// not have to switch parameter types. `Clip::None` is refused by the
     /// dispatcher before this call; reaching here with it would clip, so the
     /// guard stays on the caller's side.
-    pub fn clip_rect(&mut self, rect: Rect<Pixels>, clip: flui_types::painting::Clip) {
+    pub fn clip_rect(&mut self, rect: Rect<f64>, clip: flui_types::painting::Clip) {
         debug_assert!(
             !matches!(clip, flui_types::painting::Clip::None),
             "BUG: Clip::None must be refused by the dispatcher; this method always clips"
@@ -130,22 +126,22 @@ impl WgpuPainter {
     /// layer: the scissor is the clip's device-space bounding box already
     /// intersected with every ancestor clip, and every draw inside the layer is
     /// subject to it, so nothing the offscreen holds can fall outside.
-    pub(crate) fn clip_bounds(&self) -> Rect<Pixels> {
+    pub(crate) fn clip_bounds(&self) -> Rect<f64> {
         self.state.current_scissor().map_or_else(
             || {
                 Rect::from_xywh(
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(self.size.0 as f32),
-                    flui_types::geometry::px(self.size.1 as f32),
+                    0.0,
+                    0.0,
+                    f64::from(self.size.0 as f32),
+                    f64::from(self.size.1 as f32),
                 )
             },
             |(x, y, width, height)| {
                 Rect::from_xywh(
-                    flui_types::geometry::px(x as f32),
-                    flui_types::geometry::px(y as f32),
-                    flui_types::geometry::px(width as f32),
-                    flui_types::geometry::px(height as f32),
+                    f64::from(x as f32),
+                    f64::from(y as f32),
+                    f64::from(width as f32),
+                    f64::from(height as f32),
                 )
             },
         )

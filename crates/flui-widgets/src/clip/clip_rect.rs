@@ -2,7 +2,7 @@
 
 use flui_objects::RenderClipRect;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::geometry::{Pixels, Rect};
+use flui_types::geometry::Rect;
 use flui_types::painting::Clip;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
@@ -14,7 +14,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 #[derive(Clone, Debug)]
 pub struct ClipRect {
     clip_behavior: Clip,
-    clip_shape: Option<Rect<Pixels>>,
+    clip_shape: Option<Rect<f64>>,
     child: Child,
 }
 
@@ -51,7 +51,7 @@ impl ClipRect {
     /// for the full reasoning and for the size-dependent case it does not
     /// cover.
     #[must_use]
-    pub fn clipper(mut self, shape: Rect<Pixels>) -> Self {
+    pub fn clipper(mut self, shape: Rect<f64>) -> Self {
         self.clip_shape = Some(shape);
         self
     }

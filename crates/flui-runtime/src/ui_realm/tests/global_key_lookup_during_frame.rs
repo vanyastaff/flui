@@ -23,7 +23,7 @@ fn within_deadline<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) ->
 }
 
 fn frame_constraints() -> BoxConstraints {
-    BoxConstraints::tight(flui_types::Size::new(px(20.0), px(20.0)))
+    BoxConstraints::tight(flui_types::Size::new(20.0, 20.0))
 }
 
 /// A stateful toggle, the shape of the Material drawer controller: its

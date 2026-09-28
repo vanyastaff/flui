@@ -51,7 +51,7 @@ mod appkit_close_path_probe {
         let window = platform
             .open_window(flui_platform::WindowOptions {
                 title: "close-path probe".to_string(),
-                size: flui_types::geometry::Size::new(px(400.0), px(300.0)),
+                size: flui_types::geometry::Size::new(400.0, 300.0),
                 resizable: false,
                 visible: false, // never order-front; the close route is what is tested
                 decorated: true,

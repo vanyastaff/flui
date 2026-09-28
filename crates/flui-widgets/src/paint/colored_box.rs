@@ -3,7 +3,6 @@
 use flui_objects::RenderDecoratedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::Color;
-use flui_types::geometry::Pixels;
 use flui_types::styling::BoxDecoration;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
@@ -49,8 +48,8 @@ impl ColoredBox {
         self
     }
 
-    fn decoration(&self) -> BoxDecoration<Pixels> {
-        BoxDecoration::<Pixels>::with_color(self.color)
+    fn decoration(&self) -> BoxDecoration<f64> {
+        BoxDecoration::<f64>::with_color(self.color)
     }
 }
 

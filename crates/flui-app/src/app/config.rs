@@ -229,7 +229,7 @@ impl Default for AppConfig {
                 .expect("BUG: the default application identity is valid"),
             diagnostics_profile: DiagnosticsProfile::default(),
             title: "FLUI App".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             min_size: None,
             max_size: None,
             resizable: true,
@@ -280,21 +280,21 @@ impl AppConfig {
     /// Set the initial window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
-        self.size = Size::new(px(width as f32), px(height as f32));
+        self.size = Size::new((width as f32), (height as f32));
         self
     }
 
     /// Set the minimum window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_min_size(mut self, width: u32, height: u32) -> Self {
-        self.min_size = Some(Size::new(px(width as f32), px(height as f32)));
+        self.min_size = Some(Size::new((width as f32), (height as f32)));
         self
     }
 
     /// Set the maximum window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
-        self.max_size = Some(Size::new(px(width as f32), px(height as f32)));
+        self.max_size = Some(Size::new((width as f32), (height as f32)));
         self
     }
 
@@ -458,8 +458,8 @@ mod tests {
             .with_resizable(false);
 
         assert_eq!(config.title, "Test App");
-        assert_eq!(config.size.width, px(1024.0));
-        assert_eq!(config.size.height, px(768.0));
+        assert_eq!(config.size.width, 1024.0);
+        assert_eq!(config.size.height, 768.0);
         assert!(!config.resizable);
     }
 

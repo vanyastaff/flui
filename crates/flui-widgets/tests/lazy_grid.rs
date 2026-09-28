@@ -101,11 +101,11 @@ fn lazy_grid_view_builder_places_tiles_at_oracle_positions() {
         "all 4 tiles must be built and attached; got {tile_ids:?}"
     );
 
-    let mut tile_positions: Vec<(f32, f32)> = tile_ids
+    let mut tile_positions: Vec<(f64, f64)> = tile_ids
         .iter()
         .map(|&id| {
             let tile_offset = laid.offset(id);
-            (tile_offset.dx.get(), tile_offset.dy.get())
+            (tile_offset.dx, tile_offset.dy)
         })
         .collect();
     tile_positions.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -221,13 +221,11 @@ fn lazy_grid_view_builder_1000_item_scroll_stays_bounded() {
     for tile in laid.find_all_by_render_type("RenderConstrainedBox") {
         let offset = laid.offset(tile);
         assert!(
-            (offset.dx.get() == 0.0 || offset.dx.get() == 100.0)
-                && offset.dy.get() >= -400.0
-                && offset.dy.get() <= 400.0,
+            (offset.dx == 0.0 || offset.dx == 100.0) && offset.dy >= -400.0 && offset.dy <= 400.0,
             "scrolled grid tile must remain near the viewport/cache window; \
              got offset ({}, {})",
-            offset.dx.get(),
-            offset.dy.get()
+            offset.dx,
+            offset.dy
         );
     }
 }
@@ -527,7 +525,7 @@ fn grid_view_count_keyed_tile_moving_with_the_viewport_keeps_state() {
     let tile1 = laid
         .find_text("tile1")
         .expect("tile 1 is resident at its new index");
-    let top = laid.absolute_offset(tile1).dy.get();
+    let top = laid.absolute_offset(tile1).dy;
     assert!(
         (0.0..200.0).contains(&top),
         "tile 1 is on screen at its new index; top={top}"

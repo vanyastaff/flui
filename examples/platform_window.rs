@@ -44,7 +44,7 @@ fn main() {
 
             let window_options = WindowOptions {
                 title: "FLUI Platform Window".to_string(),
-                size: Size::new(px(800.0), px(600.0)),
+                size: Size::new(800.0, 600.0),
                 resizable: true,
                 visible: true,
                 decorated: true,

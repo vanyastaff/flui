@@ -14,8 +14,8 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// `Alignment::CENTER`.
 #[derive(Clone, Debug, Default)]
 pub struct FractionallySizedBox {
-    width_factor: Option<f32>,
-    height_factor: Option<f32>,
+    width_factor: Option<f64>,
+    height_factor: Option<f64>,
     alignment: Option<Alignment>,
     child: Child,
 }
@@ -28,14 +28,14 @@ impl FractionallySizedBox {
 
     /// Size the child's width to `factor` × the available width.
     #[must_use]
-    pub fn width_factor(mut self, factor: f32) -> Self {
+    pub fn width_factor(mut self, factor: f64) -> Self {
         self.width_factor = Some(factor);
         self
     }
 
     /// Size the child's height to `factor` × the available height.
     #[must_use]
-    pub fn height_factor(mut self, factor: f32) -> Self {
+    pub fn height_factor(mut self, factor: f64) -> Self {
         self.height_factor = Some(factor);
         self
     }
@@ -54,7 +54,7 @@ impl FractionallySizedBox {
         self
     }
 
-    fn factor(value: Option<f32>) -> Option<FractionFactor> {
+    fn factor(value: Option<f64>) -> Option<FractionFactor> {
         value.map(FractionFactor::new_unchecked)
     }
 

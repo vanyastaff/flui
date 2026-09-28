@@ -1439,8 +1439,8 @@ mod tests {
         );
         assert!(
             !path.contains(Point::new(
-                px(RADIUS + (RADIUS + 5.0) * PROBE_ANGLE.cos()),
-                px(RADIUS + (RADIUS + 5.0) * PROBE_ANGLE.sin()),
+                (RADIUS + (RADIUS + 5.0) * PROBE_ANGLE.cos()),
+                (RADIUS + (RADIUS + 5.0) * PROBE_ANGLE.sin()),
             )),
             "a point 5 units outside the same rim stays outside"
         );

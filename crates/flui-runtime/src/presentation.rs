@@ -1706,7 +1706,7 @@ mod tests {
             PipelineCell::new(PipelineOwner::new()),
             platform_window,
         );
-        let position = Offset::new(Pixels(12.0), Pixels(8.0));
+        let position = Offset::new(12.0, 8.0);
         let event = make_move_event(position, PointerType::Mouse);
         let mut hit_test = HitTestResult::new();
         hit_test.add(HitTestEntry::new(RenderId::new(1)).cursor(CursorIcon::Pointer));

@@ -94,14 +94,8 @@ fn contract_platform_displays() {
 
         // Bounds should have positive dimensions
         let bounds = display.bounds();
-        assert!(
-            bounds.size.width > device_px(0),
-            "Display width should be positive"
-        );
-        assert!(
-            bounds.size.height > device_px(0),
-            "Display height should be positive"
-        );
+        assert!(bounds.size.width > 0, "Display width should be positive");
+        assert!(bounds.size.height > 0, "Display height should be positive");
     }
 }
 
@@ -305,11 +299,11 @@ fn test_window_lifecycle_contract() {
     // Contract 3: Window creation should either succeed or fail gracefully
     let options = WindowOptions {
         title: "Contract Test Window".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         visible: false,
         resizable: true,
         decorated: true,
-        min_size: Some(Size::new(px(320.0), px(240.0))),
+        min_size: Some(Size::new(320.0, 240.0)),
         max_size: None,
         ..Default::default()
     };
@@ -348,8 +342,8 @@ fn test_window_lifecycle_contract() {
             assert!(scale_factor > 0.0, "Scale factor must be positive");
 
             // Contract 5: Scale factor relationship (physical = logical * scale)
-            let expected_physical_width = (logical_size.width.0 * scale_factor as f32) as i32;
-            let expected_physical_height = (logical_size.height.0 * scale_factor as f32) as i32;
+            let expected_physical_width = (logical_size.width.0 * scale_factor as f64) as i32;
+            let expected_physical_height = (logical_size.height.0 * scale_factor as f64) as i32;
 
             let width_diff = (physical_size.width.0 - expected_physical_width).abs();
             let height_diff = (physical_size.height.0 - expected_physical_height).abs();
@@ -388,7 +382,7 @@ fn test_window_lifecycle_contract() {
             // Contract 9: Multiple window creation
             let options2 = WindowOptions {
                 title: "Contract Test Window 2".to_string(),
-                size: Size::new(px(400.0), px(300.0)),
+                size: Size::new(400.0, 300.0),
                 visible: false,
                 ..Default::default()
             };

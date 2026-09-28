@@ -278,7 +278,7 @@ fn an_inactive_tabs_animation_is_muted_by_ticker_mode() {
 #[test]
 fn opaque_tab_bar_pads_content_above_it_plus_the_bottom_inset() {
     let media = MediaQueryData {
-        padding: EdgeInsets::new(px(0.0), px(0.0), px(20.0), px(0.0)),
+        padding: EdgeInsets::new(0.0, 0.0, 20.0, 0.0),
         ..MediaQueryData::default()
     };
     let controller = CupertinoTabController::new(0);
@@ -353,7 +353,7 @@ fn translucent_tab_bar_does_not_pad_content_and_hints_via_media_query() {
 #[test]
 fn keyboard_taller_than_the_tab_bar_pads_content_by_the_keyboard_inset_alone() {
     let media = MediaQueryData {
-        view_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
         ..MediaQueryData::default()
     };
     let controller = CupertinoTabController::new(0);

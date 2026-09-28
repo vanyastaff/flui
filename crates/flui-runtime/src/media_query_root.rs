@@ -58,7 +58,7 @@ impl MediaQuerySource {
         Self {
             data: RefCell::new(MediaQueryData {
                 size: window.logical_size(),
-                device_pixel_ratio: window.scale_factor() as f32,
+                device_pixel_ratio: window.scale_factor() as f64,
                 padding: window.safe_area_insets(),
                 ..MediaQueryData::default()
             }),

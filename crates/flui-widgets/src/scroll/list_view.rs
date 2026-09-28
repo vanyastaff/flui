@@ -22,7 +22,7 @@ use crate::scroll::{
 /// [`crate::SingleChildScrollView`]'s template.
 #[derive(Clone, Debug)]
 enum OffsetSource {
-    Pixels(f32),
+    Fixed(f64),
     Position(ScrollPosition),
 }
 
@@ -65,10 +65,10 @@ enum OffsetSource {
 pub struct ListView {
     scroll_direction: Axis,
     /// Per-item extent for the static variant ([`ListView::new`]).
-    item_extent: f32,
+    item_extent: f64,
     /// Per-item extent estimate for the lazy variant ([`ListView::builder`]).
     /// Seeds the virtualizer until real measurements arrive.
-    item_extent_estimate: f32,
+    item_extent_estimate: f64,
     offset_source: OffsetSource,
     shrink_wrap: bool,
     /// Children for the static variant. Empty in the lazy variant.
@@ -98,12 +98,12 @@ impl ListView {
     /// Prefer this constructor when the item count and content are known ahead
     /// of time; use [`ListView::builder`] for large or dynamically-generated
     /// lists.
-    pub fn new(item_extent: f32, children: impl ViewSeq) -> Self {
+    pub fn new(item_extent: f64, children: impl ViewSeq) -> Self {
         Self {
             scroll_direction: Axis::Vertical,
             item_extent,
             item_extent_estimate: item_extent,
-            offset_source: OffsetSource::Pixels(0.0),
+            offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
             children: StaticChildren::new(children.into_boxed_vec()),
             children_in_boundaries: std::cell::OnceCell::new(),
@@ -126,7 +126,7 @@ impl ListView {
     /// # Panics
     ///
     /// Panics if `item_extent_estimate` is not finite and positive.
-    pub fn builder<F>(item_count: usize, item_extent_estimate: f32, builder: F) -> Self
+    pub fn builder<F>(item_count: usize, item_extent_estimate: f64, builder: F) -> Self
     where
         F: Fn(usize) -> Option<BoxedView> + 'static,
     {
@@ -134,7 +134,7 @@ impl ListView {
             scroll_direction: Axis::Vertical,
             item_extent: item_extent_estimate,
             item_extent_estimate,
-            offset_source: OffsetSource::Pixels(0.0),
+            offset_source: OffsetSource::Fixed(0.0),
             shrink_wrap: false,
             children: StaticChildren::new(Vec::new()),
             children_in_boundaries: std::cell::OnceCell::new(),
@@ -187,8 +187,8 @@ impl ListView {
     /// this value is pushed into it on every rebuild. Mutually exclusive with
     /// [`ListView::position`] — whichever is called last wins.
     #[must_use]
-    pub fn offset(mut self, offset: f32) -> Self {
-        self.offset_source = OffsetSource::Pixels(offset);
+    pub fn offset(mut self, offset: f64) -> Self {
+        self.offset_source = OffsetSource::Fixed(offset);
         self
     }
 
@@ -292,14 +292,14 @@ impl StatelessView for ListView {
         if self.shrink_wrap {
             let viewport = ShrinkWrappingViewport::new((sliver,)).axis_direction(axis_direction);
             match &self.offset_source {
-                OffsetSource::Pixels(pixels) => viewport.offset(*pixels),
+                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
                 OffsetSource::Position(position) => viewport.position(position.clone()),
             }
             .boxed()
         } else {
             let viewport = Viewport::new((sliver,)).axis_direction(axis_direction);
             match &self.offset_source {
-                OffsetSource::Pixels(pixels) => viewport.offset(*pixels),
+                OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
                 OffsetSource::Position(position) => viewport.position(position.clone()),
             }
             .boxed()
@@ -317,7 +317,7 @@ mod tests {
         let debug = format!("{:?}", ListView::new(50.0, Vec::<BoxedView>::new()));
         assert!(
             debug.contains("scroll_direction: Vertical")
-                && debug.contains("offset_source: Pixels(0.0)")
+                && debug.contains("offset_source: 0.0")
                 && debug.contains("shrink_wrap: false")
                 && debug.contains("item_extent: 50.0"),
             "Debug output must reflect the static constructor's defaults, got: {debug}",
@@ -366,7 +366,7 @@ mod tests {
         );
         assert!(
             debug.contains("scroll_direction: Horizontal")
-                && debug.contains("offset_source: Pixels(12.5)")
+                && debug.contains("offset_source: 12.5")
                 && debug.contains("shrink_wrap: true"),
             "Debug output must reflect the overridden builder values, got: {debug}",
         );
@@ -384,8 +384,7 @@ mod tests {
                 .position(position)
         );
         assert!(
-            position_debug.contains("offset_source: Position(")
-                && !position_debug.contains("Pixels("),
+            position_debug.contains("offset_source: Position(") && !position_debug.contains("("),
             "the last call (.position) must win over an earlier .offset call, got: \
              {position_debug}",
         );
@@ -397,7 +396,7 @@ mod tests {
                 .offset(12.5)
         );
         assert!(
-            offset_debug.contains("offset_source: Pixels(12.5)"),
+            offset_debug.contains("offset_source: 12.5"),
             "the last call (.offset) must win over an earlier .position call, got: \
              {offset_debug}",
         );

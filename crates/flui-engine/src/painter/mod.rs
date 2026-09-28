@@ -19,7 +19,7 @@ use crate::{
     resources::GpuResources,
     state_stack::GpuStateStack,
 };
-use flui_types::{Rect, geometry::Pixels};
+use flui_types::Rect;
 
 /// GPU painter for wgpu-based rendering.
 ///
@@ -324,10 +324,7 @@ impl WgpuPainter {
     /// to schedule a full repaint on the next frame (self-healing).  Not test-gated
     /// because it is a production helper; it is also covered by the dedicated
     /// detector tests in `shape_blend_tests.rs`.
-    pub(crate) fn has_advanced_shape_straddling(
-        &self,
-        damage: flui_types::Rect<flui_types::geometry::Pixels>,
-    ) -> bool {
+    pub(crate) fn has_advanced_shape_straddling(&self, damage: flui_types::Rect<f64>) -> bool {
         use crate::command_ir::DrawItem;
         self.draw_order.iter().any(|item| match item {
             DrawItem::AdvancedShape(op) => {
@@ -386,7 +383,7 @@ impl WgpuPainter {
     }
 
     #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn offscreen_results_for_test(&self) -> Vec<(Rect<Pixels>, u32, u32)> {
+    pub(crate) fn offscreen_results_for_test(&self) -> Vec<(Rect<f64>, u32, u32)> {
         self.draw_order
             .iter()
             .filter_map(|item| match item {
@@ -512,7 +509,7 @@ impl WgpuPainter {
     pub(crate) fn queue_offscreen_result(
         &mut self,
         texture: crate::texture_pool::PooledTexture,
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
         blend: flui_types::painting::BlendMode,
     ) {
         // Finalize the current segment and start a new one

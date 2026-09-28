@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 // web-time: std::time re-export on native; performance.now()-backed on
 // wasm32, where std::time::Instant::now() panics — this module is in the
 // wasm-check set and timestamps must be mintable there.
@@ -26,7 +26,7 @@ pub struct BasicVelocityTracker {
 #[derive(Debug, Clone, Copy)]
 struct VelocitySample {
     timestamp: Instant,
-    position: Offset<Pixels>,
+    position: Offset<f64>,
 }
 
 impl BasicVelocityTracker {
@@ -39,7 +39,7 @@ impl BasicVelocityTracker {
     }
 
     /// Add a sample
-    pub fn add_sample(&mut self, timestamp: Instant, position: Offset<Pixels>) {
+    pub fn add_sample(&mut self, timestamp: Instant, position: Offset<f64>) {
         if self.samples.len() >= self.max_samples {
             self.samples.pop_front(); // O(1) instead of Vec::remove(0) O(n)
         }
@@ -50,9 +50,7 @@ impl BasicVelocityTracker {
     }
 
     /// Calculate velocity (pixels per second)
-    pub fn velocity(&self) -> Option<Offset<Pixels>> {
-        use flui_types::geometry::px;
-
+    pub fn velocity(&self) -> Option<Offset<f64>> {
         if self.samples.len() < 2 {
             return None;
         }
@@ -61,15 +59,15 @@ impl BasicVelocityTracker {
         let last = self.samples.back()?;
 
         let dt = last.timestamp.duration_since(first.timestamp);
-        if dt.as_secs_f32() < 0.001 {
+        if dt.as_secs_f64() < 0.001 {
             return None;
         }
 
-        let dx = last.position.dx.0 - first.position.dx.0;
-        let dy = last.position.dy.0 - first.position.dy.0;
-        let dt_secs = dt.as_secs_f32();
+        let dx = last.position.dx - first.position.dx;
+        let dy = last.position.dy - first.position.dy;
+        let dt_secs = dt.as_secs_f64();
 
-        Some(Offset::new(px(dx / dt_secs), px(dy / dt_secs)))
+        Some(Offset::new(dx / dt_secs, dy / dt_secs))
     }
 
     /// Clear samples
@@ -119,7 +117,7 @@ mod tests {
         if let Some(vel) = tracker.velocity() {
             // Should be ~500 pixels/sec (50px in 0.1s)
             use flui_types::geometry::px;
-            assert!(vel.dx > px(400.0) && vel.dx < px(600.0));
+            assert!(vel.dx > 400.0 && vel.dx < 600.0);
         }
     }
 }

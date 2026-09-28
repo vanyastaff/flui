@@ -60,9 +60,9 @@ impl View for SizedLeaf {
     }
 }
 
-fn leaf(width: f32, height: f32) -> SizedLeaf {
+fn leaf(width: f64, height: f64) -> SizedLeaf {
     SizedLeaf {
-        size: Size::new(px(width), px(height)),
+        size: Size::new(width, height),
     }
 }
 
@@ -111,7 +111,7 @@ fn mount_root_installs_the_render_root_and_lays_it_out() {
         &leaf(40.0, 25.0),
         MountOwners::with_pipeline_owner(pipeline_owner.clone()),
         MountOptions::new(flui_rendering::constraints::BoxConstraints::loose(
-            Size::new(px(200.0), px(200.0)),
+            Size::new(200.0, 200.0),
         )),
     );
 
@@ -124,12 +124,12 @@ fn mount_root_installs_the_render_root_and_lays_it_out() {
     // its child under tight constraints of that size (production shape).
     assert_eq!(
         pipeline_owner.with(|owner| inspect::box_geometry(owner, mounted.render_root)),
-        Some(Size::new(px(200.0), px(200.0))),
+        Some(Size::new(200.0, 200.0)),
         "the bootstrap frame lays the RenderView out at the seeded root size",
     );
     assert_eq!(
         pipeline_owner.with(|owner| inspect::box_geometry(owner, mounted.logical_render_root())),
-        Some(Size::new(px(200.0), px(200.0))),
+        Some(Size::new(200.0, 200.0)),
         "the caller's leaf under the RenderView receives the view's tight size",
     );
     assert!(
@@ -325,7 +325,7 @@ impl flui_view::ViewState<HitTestCapture> for HitTestCaptureState {
         _ctx: &dyn flui_view::BuildContext,
     ) -> impl flui_view::IntoView {
         SizedLeaf {
-            size: Size::new(px(40.0), px(40.0)),
+            size: Size::new(40.0, 40.0),
         }
     }
 }
@@ -348,7 +348,7 @@ fn the_bootstrap_installs_a_working_fresh_hit_test_capability() {
         },
         MountOwners::fresh(),
         MountOptions::new(flui_rendering::constraints::BoxConstraints::tight(
-            Size::new(px(40.0), px(40.0)),
+            Size::new(40.0, 40.0),
         )),
     );
 
@@ -360,7 +360,7 @@ fn the_bootstrap_installs_a_working_fresh_hit_test_capability() {
     // The realm check the handle makes needs the binding's lane active, the
     // same as any dispatch.
     let hit = binding
-        .enter_owner_scope(|| handle.hit_test_at(flui_types::Offset::new(px(20.0), px(20.0))))
+        .enter_owner_scope(|| handle.hit_test_at(flui_types::Offset::new(20.0, 20.0)))
         .expect("the tree is free between frames, so the probe must answer");
     assert!(
         !hit.is_empty(),

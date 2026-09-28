@@ -49,7 +49,7 @@ fn a_directional_alignment_resolves_against_a_mounted_directionality() {
         ));
         let resolved = seen.get().expect("the probe must have built");
         assert!(
-            (resolved.x - expected_x).abs() < f32::EPSILON,
+            (resolved.x - expected_x).abs() < f64::EPSILON,
             "start is the {direction:?} reading edge, so x must be \
              {expected_x}, got {}",
             resolved.x

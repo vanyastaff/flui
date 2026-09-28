@@ -7,7 +7,7 @@
 //! `lib.rs` for why it is `cfg(test)` and what it is for.
 
 use flui_types::{
-    geometry::{Pixels, Point, RSuperellipse, px},
+    geometry::{Point, RSuperellipse},
     painting::Path,
 };
 
@@ -37,39 +37,38 @@ pub(crate) fn generate_superellipse_path(superellipse: &RSuperellipse) -> Path {
     let mut path = Path::new();
 
     // iOS squircle exponent
-    let n: f32 = 4.0;
+    let n: f64 = 4.0;
     let two_over_n = 2.0 / n;
 
     // Number of sample points per corner quarter-arc
     let segments_per_corner: usize = 16;
 
-    let left = rect.left().0;
-    let top = rect.top().0;
-    let right = rect.right().0;
-    let bottom = rect.bottom().0;
+    let left = rect.left();
+    let top = rect.top();
+    let right = rect.right();
+    let bottom = rect.bottom();
 
     // Compute the superellipse point for a corner quadrant.
     // `cx`, `cy`: corner center; `rx`, `ry`: per-corner radii;
     // `t`: parametric angle; `sx`/`sy`: quadrant signs.
-    let se_point =
-        |cx: f32, cy: f32, rx: f32, ry: f32, t: f32, sx: f32, sy: f32| -> Point<Pixels> {
-            let cos_t = t.cos();
-            let sin_t = t.sin();
-            let x = cx + sx * rx * cos_t.abs().powf(two_over_n);
-            let y = cy + sy * ry * sin_t.abs().powf(two_over_n);
-            Point::new(px(x), px(y))
-        };
+    let se_point = |cx: f64, cy: f64, rx: f64, ry: f64, t: f64, sx: f64, sy: f64| -> Point<f64> {
+        let cos_t = t.cos();
+        let sin_t = t.sin();
+        let x = cx + sx * rx * cos_t.abs().powf(two_over_n);
+        let y = cy + sy * ry * sin_t.abs().powf(two_over_n);
+        Point::new(x, y)
+    };
 
     // Top-left corner: center at (left + tl.x, top + tl.y)
     // Sweep from PI/2 → 0, direction sx = -1, sy = -1 (upper-left quadrant)
     {
-        let cx = left + tl.x.0;
-        let cy = top + tl.y.0;
-        let rx = tl.x.0;
-        let ry = tl.y.0;
+        let cx = left + tl.x;
+        let cy = top + tl.y;
+        let rx = tl.x;
+        let ry = tl.y;
         if rx > 0.0 && ry > 0.0 {
             for i in 0..=segments_per_corner {
-                let t = std::f32::consts::FRAC_PI_2 * (1.0 - i as f32 / segments_per_corner as f32);
+                let t = std::f64::consts::FRAC_PI_2 * (1.0 - i as f64 / segments_per_corner as f64);
                 let p = se_point(cx, cy, rx, ry, t, -1.0, -1.0);
                 if i == 0 {
                     path.move_to(p);
@@ -78,61 +77,61 @@ pub(crate) fn generate_superellipse_path(superellipse: &RSuperellipse) -> Path {
                 }
             }
         } else {
-            path.move_to(Point::new(px(left), px(top)));
+            path.move_to(Point::new(left, top));
         }
     }
 
     // Top-right corner: center at (right - tr.x, top + tr.y)
     // Direction sx = +1, sy = -1 (upper-right quadrant)
     {
-        let cx = right - tr.x.0;
-        let cy = top + tr.y.0;
-        let rx = tr.x.0;
-        let ry = tr.y.0;
+        let cx = right - tr.x;
+        let cy = top + tr.y;
+        let rx = tr.x;
+        let ry = tr.y;
         if rx > 0.0 && ry > 0.0 {
             for i in 0..=segments_per_corner {
-                let t = std::f32::consts::FRAC_PI_2 * (i as f32 / segments_per_corner as f32);
+                let t = std::f64::consts::FRAC_PI_2 * (i as f64 / segments_per_corner as f64);
                 let p = se_point(cx, cy, rx, ry, t, 1.0, -1.0);
                 path.line_to(p);
             }
         } else {
-            path.line_to(Point::new(px(right), px(top)));
+            path.line_to(Point::new(right, top));
         }
     }
 
     // Bottom-right corner: center at (right - br.x, bottom - br.y)
     // Direction sx = +1, sy = +1 (lower-right quadrant)
     {
-        let cx = right - br.x.0;
-        let cy = bottom - br.y.0;
-        let rx = br.x.0;
-        let ry = br.y.0;
+        let cx = right - br.x;
+        let cy = bottom - br.y;
+        let rx = br.x;
+        let ry = br.y;
         if rx > 0.0 && ry > 0.0 {
             for i in 0..=segments_per_corner {
-                let t = std::f32::consts::FRAC_PI_2 * (1.0 - i as f32 / segments_per_corner as f32);
+                let t = std::f64::consts::FRAC_PI_2 * (1.0 - i as f64 / segments_per_corner as f64);
                 let p = se_point(cx, cy, rx, ry, t, 1.0, 1.0);
                 path.line_to(p);
             }
         } else {
-            path.line_to(Point::new(px(right), px(bottom)));
+            path.line_to(Point::new(right, bottom));
         }
     }
 
     // Bottom-left corner: center at (left + bl.x, bottom - bl.y)
     // Direction sx = -1, sy = +1 (lower-left quadrant)
     {
-        let cx = left + bl.x.0;
-        let cy = bottom - bl.y.0;
-        let rx = bl.x.0;
-        let ry = bl.y.0;
+        let cx = left + bl.x;
+        let cy = bottom - bl.y;
+        let rx = bl.x;
+        let ry = bl.y;
         if rx > 0.0 && ry > 0.0 {
             for i in 0..=segments_per_corner {
-                let t = std::f32::consts::FRAC_PI_2 * (i as f32 / segments_per_corner as f32);
+                let t = std::f64::consts::FRAC_PI_2 * (i as f64 / segments_per_corner as f64);
                 let p = se_point(cx, cy, rx, ry, t, -1.0, 1.0);
                 path.line_to(p);
             }
         } else {
-            path.line_to(Point::new(px(left), px(bottom)));
+            path.line_to(Point::new(left, bottom));
         }
     }
 

@@ -383,12 +383,12 @@ impl GpuReplay {
                             opacity: 1.0,
                             tint: [1.0, 1.0, 1.0],
                             src_uv_min: [
-                                op.device_bounds.left().0 / viewport_width_f32,
-                                op.device_bounds.top().0 / viewport_height_f32,
+                                (op.device_bounds.left() / f64::from(viewport_width_f32)) as f32,
+                                (op.device_bounds.top() / f64::from(viewport_height_f32)) as f32,
                             ],
                             src_uv_max: [
-                                op.device_bounds.right().0 / viewport_width_f32,
-                                op.device_bounds.bottom().0 / viewport_height_f32,
+                                (op.device_bounds.right() / f64::from(viewport_width_f32)) as f32,
+                                (op.device_bounds.bottom() / f64::from(viewport_height_f32)) as f32,
                             ],
                         };
                         flush_advanced_layer(
@@ -525,10 +525,10 @@ impl GpuReplay {
                     let (fb_origin_x, fb_origin_y) = op.fb_origin;
                     let (fb_w, fb_h) = op.fb_dim;
                     let dst_rect = flui_types::Rect::from_xywh(
-                        flui_types::geometry::px(fb_origin_x as f32),
-                        flui_types::geometry::px(fb_origin_y as f32),
-                        flui_types::geometry::px(fb_w as f32),
-                        flui_types::geometry::px(fb_h as f32),
+                        f64::from(fb_origin_x as f32),
+                        f64::from(fb_origin_y as f32),
+                        f64::from(fb_w as f32),
+                        f64::from(fb_h as f32),
                     );
                     let instance = crate::instancing::TextureInstance::with_uv(
                         dst_rect,

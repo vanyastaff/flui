@@ -1078,7 +1078,7 @@ fn tab_traversal_follows_geometry_not_attach_order() {
     let b = FocusNode::with_debug_label("b-top");
     let c = FocusNode::with_debug_label("c-bottom");
 
-    let positioned = |top: f32, node: &Rc<FocusNode>| {
+    let positioned = |top: f64, node: &Rc<FocusNode>| {
         Positioned::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(node)))
             .left(0.0)
             .top(top)

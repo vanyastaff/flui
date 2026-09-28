@@ -523,7 +523,7 @@ fn barrier_absorbs_pointers_and_only_a_dismissible_one_listens_for_the_tap() {
 fn page_and_transitions_builders_receive_both_animations_and_rebuild_on_tick() {
     let (navigator, mut harness, _bottom) = navigator_with_seed();
 
-    let seen = Arc::new(parking_lot::Mutex::new(Vec::<(f32, f32)>::new()));
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::<(f64, f64)>::new()));
     let wrapped = Arc::new(AtomicUsize::new(0));
 
     let route = {
@@ -674,7 +674,7 @@ fn back_gesture_edge_drag_sign_flips_with_ambient_directionality() {
     /// controller's value dropped from its entrance-completed `1.0` (`0.0`
     /// when the drag's sign pushed toward the clamped-away upper bound
     /// instead, so nothing was observable).
-    fn drop_for(direction: TextDirection, from_x: f32, to_x: f32) -> f32 {
+    fn drop_for(direction: TextDirection, from_x: f64, to_x: f64) -> f64 {
         let handle = NavigatorHandle::new();
         handle.seed_initial(plain_page());
         let mut harness = mount(Directionality::new(

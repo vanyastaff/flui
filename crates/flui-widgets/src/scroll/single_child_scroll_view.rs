@@ -13,7 +13,7 @@ use crate::scroll::{SliverToBoxAdapter, Viewport};
 /// pixels-or-position passthrough onto it.
 #[derive(Clone, Debug)]
 enum OffsetSource {
-    Pixels(f32),
+    Fixed(f64),
     Position(ScrollPosition),
 }
 
@@ -48,7 +48,7 @@ impl Default for SingleChildScrollView {
         Self {
             scroll_direction: Axis::Vertical,
             reverse: false,
-            offset_source: OffsetSource::Pixels(0.0),
+            offset_source: OffsetSource::Fixed(0.0),
             child: Child::empty(),
         }
     }
@@ -83,8 +83,8 @@ impl SingleChildScrollView {
     /// with [`SingleChildScrollView::position`] — whichever is called last
     /// wins.
     #[must_use]
-    pub fn offset(mut self, offset: f32) -> Self {
-        self.offset_source = OffsetSource::Pixels(offset);
+    pub fn offset(mut self, offset: f64) -> Self {
+        self.offset_source = OffsetSource::Fixed(offset);
         self
     }
 
@@ -119,7 +119,7 @@ impl StatelessView for SingleChildScrollView {
         };
         let viewport = Viewport::new((adapter,)).axis_direction(axis_direction);
         match &self.offset_source {
-            OffsetSource::Pixels(pixels) => viewport.offset(*pixels),
+            OffsetSource::Fixed(pixels) => viewport.offset(*pixels),
             OffsetSource::Position(position) => viewport.position(position.clone()),
         }
     }

@@ -3,7 +3,7 @@
 
 use flui_painting::{BlendMode, Paint};
 use flui_types::painting::Shader;
-use flui_types::{Point, Rect, geometry::Pixels};
+use flui_types::{Point, Rect};
 
 use super::{
     super::{
@@ -114,7 +114,7 @@ impl DrawBatcher {
     pub(in super::super) fn draw_gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
         gradient_start: glam::Vec2,
         gradient_end: glam::Vec2,
         stops: &[GradientStop],
@@ -155,10 +155,10 @@ impl DrawBatcher {
 
         let instance = LinearGradientInstance::new(
             [
-                bounds.left().0,
-                bounds.top().0,
-                bounds.width().0,
-                bounds.height().0,
+                (bounds.left() as f32),
+                (bounds.top() as f32),
+                (bounds.width() as f32),
+                (bounds.height() as f32),
             ],
             gradient_start,
             gradient_end,
@@ -198,7 +198,7 @@ impl DrawBatcher {
     pub(in super::super) fn draw_radial_gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
         center: glam::Vec2,
         radius: f32,
         stops: &[GradientStop],
@@ -238,10 +238,10 @@ impl DrawBatcher {
 
         let instance = RadialGradientInstance::new(
             [
-                bounds.left().0,
-                bounds.top().0,
-                bounds.width().0,
-                bounds.height().0,
+                (bounds.left() as f32),
+                (bounds.top() as f32),
+                (bounds.width() as f32),
+                (bounds.height() as f32),
             ],
             center,
             radius,
@@ -282,7 +282,7 @@ impl DrawBatcher {
     pub(in super::super) fn draw_sweep_gradient_rect(
         segment: &mut DrawSegment,
         state: &GpuStateStack,
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
         center: glam::Vec2,
         start_angle: f32,
         end_angle: f32,
@@ -323,10 +323,10 @@ impl DrawBatcher {
 
         let instance = SweepGradientInstance::new(
             [
-                bounds.left().0,
-                bounds.top().0,
-                bounds.width().0,
-                bounds.height().0,
+                (bounds.left() as f32),
+                (bounds.top() as f32),
+                (bounds.width() as f32),
+                (bounds.height() as f32),
             ],
             center,
             start_angle,
@@ -410,7 +410,7 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<crate::command_ir::DrawItem>,
         state: &GpuStateStack,
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
         paint: &Paint,
         corner_radii: [f32; 4],
     ) -> bool {
@@ -460,15 +460,20 @@ impl DrawBatcher {
             match shader {
                 Shader::LinearGradient { from, to, .. } => {
                     use crate::instancing::LinearGradientInstance;
-                    let start =
-                        glam::Vec2::new(from.dx.0 - bounds.left().0, from.dy.0 - bounds.top().0);
-                    let end = glam::Vec2::new(to.dx.0 - bounds.left().0, to.dy.0 - bounds.top().0);
+                    let start = glam::Vec2::new(
+                        (from.dx - bounds.left()) as f32,
+                        (from.dy - bounds.top()) as f32,
+                    );
+                    let end = glam::Vec2::new(
+                        (to.dx - bounds.left()) as f32,
+                        (to.dy - bounds.top()) as f32,
+                    );
                     let instance = LinearGradientInstance::new(
                         [
-                            transformed.left().0,
-                            transformed.top().0,
-                            transformed.width().0,
-                            transformed.height().0,
+                            (transformed.left() as f32),
+                            (transformed.top() as f32),
+                            (transformed.width() as f32),
+                            (transformed.height() as f32),
                         ],
                         start,
                         end,
@@ -493,18 +498,18 @@ impl DrawBatcher {
                 Shader::RadialGradient { center, radius, .. } => {
                     use crate::instancing::RadialGradientInstance;
                     let c = glam::Vec2::new(
-                        center.dx.0 - bounds.left().0,
-                        center.dy.0 - bounds.top().0,
+                        (center.dx - bounds.left()) as f32,
+                        (center.dy - bounds.top()) as f32,
                     );
                     let instance = RadialGradientInstance::new(
                         [
-                            transformed.left().0,
-                            transformed.top().0,
-                            transformed.width().0,
-                            transformed.height().0,
+                            (transformed.left() as f32),
+                            (transformed.top() as f32),
+                            (transformed.width() as f32),
+                            (transformed.height() as f32),
                         ],
                         c,
-                        *radius,
+                        *radius as f32,
                         corner_radii,
                         stop_count as u32,
                     )
@@ -531,19 +536,19 @@ impl DrawBatcher {
                 } => {
                     use crate::instancing::SweepGradientInstance;
                     let c = glam::Vec2::new(
-                        center.dx.0 - bounds.left().0,
-                        center.dy.0 - bounds.top().0,
+                        (center.dx - bounds.left()) as f32,
+                        (center.dy - bounds.top()) as f32,
                     );
                     let instance = SweepGradientInstance::new(
                         [
-                            transformed.left().0,
-                            transformed.top().0,
-                            transformed.width().0,
-                            transformed.height().0,
+                            (transformed.left() as f32),
+                            (transformed.top() as f32),
+                            (transformed.width() as f32),
+                            (transformed.height() as f32),
                         ],
                         c,
-                        *start_angle,
-                        *end_angle,
+                        *start_angle as f32,
+                        *end_angle as f32,
                         corner_radii,
                         stop_count as u32,
                     )
@@ -586,9 +591,14 @@ impl DrawBatcher {
 
         match shader {
             Shader::LinearGradient { from, to, .. } => {
-                let start =
-                    glam::Vec2::new(from.dx.0 - bounds.left().0, from.dy.0 - bounds.top().0);
-                let end = glam::Vec2::new(to.dx.0 - bounds.left().0, to.dy.0 - bounds.top().0);
+                let start = glam::Vec2::new(
+                    (from.dx - bounds.left()) as f32,
+                    (from.dy - bounds.top()) as f32,
+                );
+                let end = glam::Vec2::new(
+                    (to.dx - bounds.left()) as f32,
+                    (to.dy - bounds.top()) as f32,
+                );
                 Self::draw_gradient_rect(
                     segment,
                     state,
@@ -601,14 +611,16 @@ impl DrawBatcher {
                 );
             }
             Shader::RadialGradient { center, radius, .. } => {
-                let c =
-                    glam::Vec2::new(center.dx.0 - bounds.left().0, center.dy.0 - bounds.top().0);
+                let c = glam::Vec2::new(
+                    (center.dx - bounds.left()) as f32,
+                    (center.dy - bounds.top()) as f32,
+                );
                 Self::draw_radial_gradient_rect(
                     segment,
                     state,
                     transformed,
                     c,
-                    *radius,
+                    *radius as f32,
                     &stops,
                     corner_radii,
                     paint.blend_mode,
@@ -620,15 +632,17 @@ impl DrawBatcher {
                 end_angle,
                 ..
             } => {
-                let c =
-                    glam::Vec2::new(center.dx.0 - bounds.left().0, center.dy.0 - bounds.top().0);
+                let c = glam::Vec2::new(
+                    (center.dx - bounds.left()) as f32,
+                    (center.dy - bounds.top()) as f32,
+                );
                 Self::draw_sweep_gradient_rect(
                     segment,
                     state,
                     transformed,
                     c,
-                    *start_angle,
-                    *end_angle,
+                    *start_angle as f32,
+                    *end_angle as f32,
                     &stops,
                     corner_radii,
                     paint.blend_mode,

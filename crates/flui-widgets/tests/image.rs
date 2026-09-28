@@ -174,10 +174,10 @@ fn image_widget_wires_cover_fit_and_center_alignment_into_the_paint_rect() {
     let rect = laid
         .image_paint_rect(laid.root())
         .expect("a resolved image must produce a paint rect");
-    assert_eq!(rect.size().width, px(200.0));
-    assert_eq!(rect.size().height, px(200.0));
-    assert_eq!(rect.origin().x, px(0.0));
-    assert_eq!(rect.origin().y, px(-75.0));
+    assert_eq!(rect.size().width, 200.0);
+    assert_eq!(rect.size().height, 200.0);
+    assert_eq!(rect.origin().x, 0.0);
+    assert_eq!(rect.origin().y, -75.0);
 }
 
 #[test]
@@ -194,10 +194,10 @@ fn image_widget_wires_fill_fit_and_top_left_alignment_into_the_paint_rect() {
     let rect = laid
         .image_paint_rect(laid.root())
         .expect("a resolved image must produce a paint rect");
-    assert_eq!(rect.size().width, px(120.0));
-    assert_eq!(rect.size().height, px(80.0));
-    assert_eq!(rect.origin().x, px(0.0));
-    assert_eq!(rect.origin().y, px(0.0));
+    assert_eq!(rect.size().width, 120.0);
+    assert_eq!(rect.size().height, 80.0);
+    assert_eq!(rect.origin().x, 0.0);
+    assert_eq!(rect.origin().y, 0.0);
 }
 
 #[test]
@@ -214,10 +214,10 @@ fn image_widget_wires_scale_down_fit_and_bottom_right_alignment_into_the_paint_r
     let rect = laid
         .image_paint_rect(laid.root())
         .expect("a resolved image must produce a paint rect");
-    assert_eq!(rect.size().width, px(10.0));
-    assert_eq!(rect.size().height, px(10.0));
-    assert_eq!(rect.origin().x, px(90.0));
-    assert_eq!(rect.origin().y, px(90.0));
+    assert_eq!(rect.size().width, 10.0);
+    assert_eq!(rect.size().height, 10.0);
+    assert_eq!(rect.origin().x, 90.0);
+    assert_eq!(rect.origin().y, 90.0);
 }
 
 // ---------------------------------------------------------------------------
@@ -273,8 +273,8 @@ fn image_state_rebinds_config_to_positional_render_objects_when_reordered_withou
     let first = laid.child(root, 0);
     let second = laid.child(root, 1);
 
-    assert_eq!(laid.image_width(first), Some(px(10.0)));
-    assert_eq!(laid.image_width(second), Some(px(20.0)));
+    assert_eq!(laid.image_width(first), Some(10.0));
+    assert_eq!(laid.image_width(second), Some(20.0));
 
     laid.pump_widget(Column::new(column![image2, image1]));
     let after_root = laid.current_root();
@@ -289,11 +289,11 @@ fn image_state_rebinds_config_to_positional_render_objects_when_reordered_withou
     );
     assert_eq!(
         laid.image_width(first),
-        Some(px(20.0)),
+        Some(20.0),
         "position 0 must now carry image2's width -- config rebinds to the \
          POSITION, not the widget instance that first created the object",
     );
-    assert_eq!(laid.image_width(second), Some(px(10.0)));
+    assert_eq!(laid.image_width(second), Some(10.0));
 }
 
 /// Mirrors Flutter's `Image.memory control test` (`image_test.dart`,

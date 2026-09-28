@@ -41,7 +41,7 @@ fn demo_slivers() -> Vec<BoxedView> {
         slivers.push(
             SliverToBoxAdapter::new()
                 .child(ColoredBox::new(Color::rgb(shade, shade, shade)).child(
-                    SizedBox::height(56.0).child(Padding::new(EdgeInsets::all(px(16.0))).child(
+                    SizedBox::height(56.0).child(Padding::new(EdgeInsets::all(16.0)).child(
                         Text::new(format!("Row {i} — scrolled under a pinned SliverAppBar")),
                     )),
                 ))

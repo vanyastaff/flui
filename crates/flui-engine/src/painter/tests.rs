@@ -33,8 +33,8 @@ fn tessellated_line_bakes_current_transform() {
     );
     // current_transform == IDENTITY at construction
     painter.draw_line(
-        Point::new(px(10.0), px(0.0)),
-        Point::new(px(20.0), px(0.0)),
+        Point::new(10.0, 0.0),
+        Point::new(20.0, 0.0),
         &Paint::stroke(black, 2.0),
     );
     let verts_identity = painter.tess_vertices_for_test();
@@ -55,8 +55,8 @@ fn tessellated_line_bakes_current_transform() {
     );
     painter2.scale(2.0, 2.0);
     painter2.draw_line(
-        Point::new(px(10.0), px(0.0)),
-        Point::new(px(20.0), px(0.0)),
+        Point::new(10.0, 0.0),
+        Point::new(20.0, 0.0),
         &Paint::stroke(black, 2.0),
     );
     let verts_scaled = painter2.tess_vertices_for_test();
@@ -111,7 +111,7 @@ fn draw_texture_bakes_current_transform() {
         })
     };
 
-    let dst = Rect::from_xywh(px(10.0), px(20.0), px(50.0), px(30.0));
+    let dst = Rect::from_xywh(10.0, 20.0, 50.0, 30.0);
 
     // --- Identity pass ---
     let mut painter = WgpuPainter::with_shared_device(
@@ -230,7 +230,7 @@ fn draw_texture_captures_scissor() {
 
     // Establish a clip region, then draw the texture inside it.
     painter.clip_rect(
-        Rect::from_xywh(px(10.0), px(10.0), px(80.0), px(60.0)),
+        Rect::from_xywh(10.0, 10.0, 80.0, 60.0),
         flui_types::painting::Clip::HardEdge,
     );
     let scissor_before = painter.current_scissor_for_test();
@@ -239,7 +239,7 @@ fn draw_texture_captures_scissor() {
         "clip_rect must set current_scissor"
     );
 
-    let dst = Rect::from_xywh(px(20.0), px(20.0), px(40.0), px(30.0));
+    let dst = Rect::from_xywh(20.0, 20.0, 40.0, 30.0);
     painter.draw_texture(
         tex_id,
         dst,
@@ -280,7 +280,7 @@ fn draw_arc_reflection_takes_tessellation_path() {
         wgpu::TextureFormat::Bgra8UnormSrgb,
         (400, 400),
     );
-    let rect = Rect::from_xywh(px(100.0), px(100.0), px(80.0), px(80.0));
+    let rect = Rect::from_xywh(100.0, 100.0, 80.0, 80.0);
     painter_id.draw_arc(
         rect,
         0.0,
@@ -342,7 +342,7 @@ fn reset_frame_state_clears_damage_scissor() {
 
     // Simulate the per-frame damage clip the Renderer applies (unpaired).
     painter.clip_rect(
-        Rect::from_origin_size(Point::ZERO, Size::new(px(50.0), px(50.0))),
+        Rect::from_origin_size(Point::ZERO, Size::new(50.0, 50.0)),
         flui_types::painting::Clip::HardEdge,
     );
     assert!(
@@ -464,7 +464,7 @@ fn midtone_fill_is_not_srgb_double_encoded() {
     let (device, queue) = test_device_and_queue();
     let px = render_and_read_center(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
             &Paint::fill(flui_types::Color::rgb(128, 128, 128)),
         );
     });
@@ -498,7 +498,7 @@ fn opacity_layer_composites_premultiplied() {
     let px = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
         painter.save_layer(None, &Paint::fill(flui_types::Color::WHITE).with_alpha(128));
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
             &Paint::fill(flui_types::Color::rgba(255, 0, 0, 128)),
         );
         painter.restore_layer();
@@ -561,7 +561,7 @@ fn nested_opacity_layers_compose_at_depth_2() {
         painter.save_layer(None, &Paint::fill(flui_types::Color::WHITE).with_alpha(128));
         // Opaque RED fills the full canvas (center pixel fully covered).
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
             &Paint::fill(flui_types::Color::rgba(255, 0, 0, 255)),
         );
         painter.restore_layer(); // inner → composites at depth-1 offscreen
@@ -613,7 +613,7 @@ fn alpha_only_layer_paint_does_not_tint_black() {
         // Mirror the canvas opacity helper: TRANSPARENT (RGB 0,0,0) + alpha.
         painter.save_layer(None, &Paint::fill(flui_types::Color::rgba(0, 0, 0, 128)));
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
             &Paint::fill(flui_types::Color::WHITE),
         );
         painter.restore_layer();
@@ -724,7 +724,7 @@ fn decoded_image_midtone_round_trips() {
         .register(tex_id, gpu_tex, SIZE, SIZE, false, false);
     painter.draw_texture(
         tex_id,
-        Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+        Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
         None,
         flui_types::painting::FilterQuality::None,
         1.0,
@@ -843,13 +843,13 @@ fn path_fill_honors_nonzero_default_fill_rule() {
         // Default fill type is NonZero. Two same-winding triangles whose
         // bodies overlap around the frame center (~32,24).
         let mut path = flui_types::painting::path::Path::new();
-        path.move_to(Point::new(px(4.0), px(4.0)));
-        path.line_to(Point::new(px(56.0), px(4.0)));
-        path.line_to(Point::new(px(30.0), px(56.0)));
+        path.move_to(Point::new(4.0, 4.0));
+        path.line_to(Point::new(56.0, 4.0));
+        path.line_to(Point::new(30.0, 56.0));
         path.close();
-        path.move_to(Point::new(px(8.0), px(4.0)));
-        path.line_to(Point::new(px(60.0), px(4.0)));
-        path.line_to(Point::new(px(34.0), px(56.0)));
+        path.move_to(Point::new(8.0, 4.0));
+        path.line_to(Point::new(60.0, 4.0));
+        path.line_to(Point::new(34.0, 56.0));
         path.close();
         painter.draw_path(&path, &Paint::fill(flui_types::Color::rgb(255, 0, 0)));
     });
@@ -881,10 +881,10 @@ fn draw_shadow_primes_tessellator_scale() {
         painter.set_tessellator_max_scale_for_test(1.0);
 
         let mut path = flui_types::painting::path::Path::new();
-        path.move_to(Point::new(px(8.0), px(8.0)));
-        path.line_to(Point::new(px(24.0), px(8.0)));
-        path.line_to(Point::new(px(24.0), px(24.0)));
-        path.line_to(Point::new(px(8.0), px(24.0)));
+        path.move_to(Point::new(8.0, 8.0));
+        path.line_to(Point::new(24.0, 8.0));
+        path.line_to(Point::new(24.0, 24.0));
+        path.line_to(Point::new(8.0, 24.0));
         path.close();
         // elevation > 0.1 so the shadow actually tessellates.
         painter.draw_shadow(&path, flui_types::Color::BLACK, 4.0);
@@ -932,7 +932,7 @@ fn atlas_neighbors_do_not_bleed_under_linear_sampling() {
         // x=128, off the sampled column.
         painter.draw_image(
             &red,
-            Rect::from_xywh(px(-64.0), px(0.0), px(192.0), px(128.0)),
+            Rect::from_xywh((-64.0), 0.0, 192.0, 128.0),
             flui_painting::BlendMode::SrcOver,
         );
         // BLUE packs next → atlas columns immediately right of RED's gutter.
@@ -941,7 +941,7 @@ fn atlas_neighbors_do_not_bleed_under_linear_sampling() {
         // phenomenon, not screen-space.
         painter.draw_image(
             &blue,
-            Rect::from_xywh(px(120.0), px(120.0), px(8.0), px(8.0)),
+            Rect::from_xywh(120.0, 120.0, 8.0, 8.0),
             flui_painting::BlendMode::SrcOver,
         );
     });
@@ -1000,7 +1000,7 @@ fn atlas_image_is_sharp_at_one_to_one() {
     let rgba = render_to_rgba(&device, &queue, W, wgpu::Color::BLACK, |painter| {
         painter.draw_image(
             &img,
-            Rect::from_xywh(px(0.0), px(0.0), px(2.0), px(1.0)),
+            Rect::from_xywh(0.0, 0.0, 2.0, 1.0),
             flui_painting::BlendMode::SrcOver,
         );
     });
@@ -1035,12 +1035,7 @@ fn atlas_image_is_sharp_at_one_to_one() {
 /// the tessellated path regardless of the (axis-aligned) transform, so the
 /// per-draw blend pipeline is selected.
 fn full_frame_fill_path(size: f32) -> flui_types::painting::path::Path {
-    flui_types::painting::path::Path::rectangle(Rect::from_xywh(
-        px(0.0),
-        px(0.0),
-        px(size),
-        px(size),
-    ))
+    flui_types::painting::path::Path::rectangle(Rect::from_xywh(0.0, 0.0, size, size))
 }
 
 /// SrcOver pixel-identity (regression guard for the premultiply switch):
@@ -1092,7 +1087,7 @@ fn blend_srcover_stroked_rect_pixel_identity() {
         // Inset rect so its left edge centerline sits at x=8; a 16px stroke
         // fully covers the band around x=8.
         painter.draw_rect(
-            Rect::from_ltrb(px(8.0), px(8.0), px(56.0), px(56.0)),
+            Rect::from_ltrb(8.0, 8.0, 56.0, 56.0),
             &Paint::stroke(flui_types::Color::rgba(255, 0, 0, 128), 16.0),
         );
     });
@@ -1279,8 +1274,8 @@ fn a_gradient_fill_carrying_clear_erases_the_target() {
     let (device, queue) = test_device_and_queue();
 
     let shader = flui_painting::Shader::linear_gradient(
-        flui_types::Point::new(px(0.0), px(0.0)).into(),
-        flui_types::Point::new(px(64.0), px(0.0)).into(),
+        flui_types::Point::new(0.0, 0.0).into(),
+        flui_types::Point::new(64.0, 0.0).into(),
         vec![
             flui_types::Color::rgb(255, 0, 0),
             flui_types::Color::rgb(0, 0, 255),
@@ -1293,10 +1288,7 @@ fn a_gradient_fill_carrying_clear_erases_the_target() {
         .with_blend_mode(BlendMode::Clear);
 
     let cleared = render_and_read_center(&device, &queue, 64, wgpu::Color::WHITE, |painter| {
-        painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0)),
-            &paint,
-        );
+        painter.draw_rect(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), &paint);
     });
 
     assert_eq!(
@@ -1349,7 +1341,7 @@ fn blend_clear_respects_draw_order() {
 
         // Step 1: fill frame RED via instanced path (SrcOver → S0 rect_batch).
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             &Paint::fill(red),
         );
 
@@ -1369,7 +1361,7 @@ fn blend_clear_respects_draw_order() {
         // With the fix: S1 flushes entirely AFTER S0 (which ended with Clear),
         // so GREEN is drawn on top of transparent → GREEN visible.
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             &Paint::fill(green),
         );
     });
@@ -1450,7 +1442,7 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
         // Step 1: fill the frame RED via the fast instanced path.
         // axis-aligned + SrcOver → S0 rect_batch.
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             &Paint::fill(red),
         );
 
@@ -1463,11 +1455,11 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
         painter.save();
         // Rotate around the frame centre so the rotated quad covers centre.
         let half = SIZE as f32 / 2.0;
-        painter.translate(flui_types::Offset::new(px(half), px(half)));
+        painter.translate(flui_types::Offset::new(half, half));
         painter.rotate(FRAC_PI_4);
-        painter.translate(flui_types::Offset::new(px(-half), px(-half)));
+        painter.translate(flui_types::Offset::new((-half), (-half)));
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             &Paint::fill(red).with_blend_mode(BlendMode::Clear),
         );
         painter.restore();
@@ -1475,7 +1467,7 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
         // Step 3: fill the frame GREEN via the fast instanced path (SrcOver).
         // After step 2 sealed S0, this goes into S1.
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             &Paint::fill(green),
         );
     });
@@ -1548,19 +1540,19 @@ fn clip_rrect_sdf_removes_corner_pixels() {
     let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         let rrect = flui_types::RRect::from_rect_circular(
             Rect::from_xywh(
-                px(RRECT_LEFT),
-                px(RRECT_TOP),
-                px(RRECT_RIGHT - RRECT_LEFT),
-                px(RRECT_BOTTOM - RRECT_TOP),
+                RRECT_LEFT,
+                RRECT_TOP,
+                (RRECT_RIGHT - RRECT_LEFT),
+                (RRECT_BOTTOM - RRECT_TOP),
             ),
-            px(RADIUS),
+            RADIUS,
         );
         painter.clip_rrect(rrect, flui_types::painting::Clip::AntiAlias);
 
         // Fill the entire canvas RED. Only pixels passing the rrect SDF will
         // actually be painted; the rest remain BLACK (clear colour).
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             &Paint::fill(flui_types::Color::rgb(255, 0, 0)),
         );
     });
@@ -1632,17 +1624,17 @@ fn clip_rsuperellipse_sdf_removes_corner_pixels() {
 
     let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         let rse = RSuperellipse::from_ltrb_xy(
-            px(RRECT_LEFT),
-            px(RRECT_TOP),
-            px(RRECT_RIGHT),
-            px(RRECT_BOTTOM),
-            px(RADIUS),
-            px(RADIUS),
+            RRECT_LEFT,
+            RRECT_TOP,
+            RRECT_RIGHT,
+            RRECT_BOTTOM,
+            RADIUS,
+            RADIUS,
         );
         painter.clip_rsuperellipse(rse, flui_types::painting::Clip::AntiAlias);
 
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             &Paint::fill(flui_types::Color::rgb(0, 0, 255)),
         );
     });
@@ -1705,7 +1697,7 @@ fn nested_save_clip_restore_removes_scissor() {
 
         // Step 1: paint the full canvas GREEN (baseline for both halves).
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             &Paint::fill(green),
         );
 
@@ -1713,11 +1705,11 @@ fn nested_save_clip_restore_removes_scissor() {
         // The RED paint must be clipped (scissor blocks x≥50).
         painter.save();
         painter.clip_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, 50.0, (SIZE as f32)),
             flui_types::painting::Clip::HardEdge,
         );
         painter.draw_rect(
-            Rect::from_xywh(px(50.0), px(0.0), px(50.0), px(SIZE as f32)),
+            Rect::from_xywh(50.0, 0.0, 50.0, (SIZE as f32)),
             &Paint::fill(red),
         );
         painter.restore();
@@ -1725,7 +1717,7 @@ fn nested_save_clip_restore_removes_scissor() {
         // Step 3: after restore the scissor must be cleared. Paint a BLUE column
         // at x=60..62 which is in the right half (would be clipped if scissor leaked).
         painter.draw_rect(
-            Rect::from_xywh(px(60.0), px(0.0), px(2.0), px(SIZE as f32)),
+            Rect::from_xywh(60.0, 0.0, 2.0, (SIZE as f32)),
             &Paint::fill(blue),
         );
     });
@@ -1802,9 +1794,9 @@ fn draw_shadow_save_restore_is_balanced() {
             // produce at least one shadow layer (elevation=8 → blur_radius=8,
             // num_layers=4).
             let mut path = flui_types::painting::path::Path::new();
-            path.move_to(Point::new(px(30.0), px(5.0)));
-            path.line_to(Point::new(px(55.0), px(50.0)));
-            path.line_to(Point::new(px(5.0), px(50.0)));
+            path.move_to(Point::new(30.0, 5.0));
+            path.line_to(Point::new(55.0, 50.0));
+            path.line_to(Point::new(5.0, 50.0));
             path.close();
 
             // draw_shadow mutates state (save/translate/restore per layer).
@@ -1815,7 +1807,7 @@ fn draw_shadow_save_restore_is_balanced() {
             // If CTM has leaked a translation this lands somewhere else and the
             // pixel at (12, 12) reads black (background), not red.
             painter.draw_rect(
-                Rect::from_xywh(px(10.0), px(10.0), px(4.0), px(4.0)),
+                Rect::from_xywh(10.0, 10.0, 4.0, 4.0),
                 &Paint::fill(Color::rgba(255, 0, 0, 255)),
             );
         },
@@ -1861,8 +1853,8 @@ fn linear_gradient_rect_dispatches_through_thin_shim() {
 
     // Horizontal red→blue gradient spanning the full frame width.
     let gradient_shader = Shader::linear_gradient(
-        flui_types::Point::new(px(0.0), px(0.0)).into(),
-        flui_types::Point::new(px(SIZE as f32), px(0.0)).into(),
+        flui_types::Point::new(0.0, 0.0).into(),
+        flui_types::Point::new((SIZE as f32), 0.0).into(),
         vec![Color::rgb(255, 0, 0), Color::rgb(0, 0, 255)],
         None,
         TileMode::Clamp,
@@ -1871,7 +1863,7 @@ fn linear_gradient_rect_dispatches_through_thin_shim() {
 
     let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::TRANSPARENT, |painter| {
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             &gradient_paint,
         );
     });
@@ -1940,9 +1932,9 @@ fn draw_path_cache_hit_uses_current_paint_color() {
     // A filled right-triangle occupying the top-left 32×32 area.
     let triangle_path = {
         let mut p = Path::new();
-        p.move_to(flui_types::Point::new(px(0.0), px(0.0)));
-        p.line_to(flui_types::Point::new(px(32.0), px(0.0)));
-        p.line_to(flui_types::Point::new(px(0.0), px(32.0)));
+        p.move_to(flui_types::Point::new(0.0, 0.0));
+        p.line_to(flui_types::Point::new(32.0, 0.0));
+        p.line_to(flui_types::Point::new(0.0, 32.0));
         p.close();
         p
     };
@@ -1955,7 +1947,7 @@ fn draw_path_cache_hit_uses_current_paint_color() {
         painter.draw_path(&triangle_path, &red_paint);
 
         // Translate right so the second triangle doesn't overlap the first.
-        painter.translate(flui_types::Offset::new(px(32.0), px(0.0)));
+        painter.translate(flui_types::Offset::new(32.0, 0.0));
 
         // Second draw: cache HIT — must use blue_paint.color, not cached red.
         painter.draw_path(&triangle_path, &blue_paint);
@@ -2035,7 +2027,7 @@ fn draw_image_filtered_mode_tints_opaque_image() {
     let px_val = render_and_read_center(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         painter.draw_image_filtered(
             &green_image,
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             red_filter,
             flui_painting::BlendMode::SrcOver,
         );
@@ -2101,7 +2093,7 @@ fn draw_image_filtered_mode_honors_blend_mode() {
     let px_val = render_and_read_center(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         painter.draw_image_filtered(
             &white_image,
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             modulate_red,
             flui_painting::BlendMode::SrcOver,
         );
@@ -2158,7 +2150,7 @@ fn draw_image_filtered_matrix_swaps_channels() {
     let px_val = render_and_read_center(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         painter.draw_image_filtered(
             &red_image,
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             swap_rb,
             flui_painting::BlendMode::SrcOver,
         );
@@ -2223,13 +2215,13 @@ fn draw_image_filtered_distinct_filters_do_not_alias() {
         // second likely reusing the first's freed allocation address.
         painter.draw_image_filtered(
             &white_image,
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(half)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), half),
             modulate_red,
             flui_painting::BlendMode::SrcOver,
         );
         painter.draw_image_filtered(
             &white_image,
-            Rect::from_xywh(px(0.0), px(half), px(SIZE as f32), px(half)),
+            Rect::from_xywh(0.0, half, (SIZE as f32), half),
             modulate_blue,
             flui_painting::BlendMode::SrcOver,
         );
@@ -2353,7 +2345,7 @@ fn external_texture_resolves_at_replay_not_record_time() {
     // only the TextureId is stored.
     painter.draw_texture(
         tex_id,
-        Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+        Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
         None,
         flui_types::painting::FilterQuality::None,
         1.0,
@@ -2548,7 +2540,7 @@ fn external_texture_unregistered_at_replay_is_skipped() {
         // Step 2: record draw_texture in the top-left quadrant.
         painter.draw_texture(
             tex_id,
-            Rect::from_xywh(px(0.0), px(0.0), px(half as f32), px(half as f32)),
+            Rect::from_xywh(0.0, 0.0, (half as f32), (half as f32)),
             None,
             flui_types::painting::FilterQuality::None,
             1.0,
@@ -2561,12 +2553,7 @@ fn external_texture_unregistered_at_replay_is_skipped() {
         // Step 4: record a solid-RED rect in the bottom-right quadrant as a
         // "frame is alive" marker.  This must survive the external-texture skip.
         painter.draw_rect(
-            Rect::from_xywh(
-                px(half as f32),
-                px(half as f32),
-                px(half as f32),
-                px(half as f32),
-            ),
+            Rect::from_xywh((half as f32), (half as f32), (half as f32), (half as f32)),
             &Paint::fill(flui_types::Color::rgba(0xFF, 0x00, 0x00, 0xFF)),
         );
     });
@@ -2618,7 +2605,7 @@ fn opacity_layer_zero_viewport_is_noop() {
     // Use a semi-transparent paint so opacity < 1 (group-opacity layer).
     painter.save_layer(None, &Paint::fill(flui_types::Color::rgba(255, 0, 0, 128)));
     painter.draw_rect(
-        flui_types::Rect::from_xywh(px(0.0), px(0.0), px(1.0), px(1.0)),
+        flui_types::Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
         &Paint::fill(flui_types::Color::RED),
     );
     painter.restore();
@@ -2683,7 +2670,7 @@ fn an_offscreen_result_composites_with_its_own_blend_mode() {
     let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         // Step 1: opaque red, so the frame has something to erase.
         painter.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             &Paint::fill(flui_types::Color::rgb(255, 0, 0)),
         );
 
@@ -2719,7 +2706,7 @@ fn an_offscreen_result_composites_with_its_own_blend_mode() {
 
         painter.queue_offscreen_result(
             texture,
-            Rect::from_xywh(px(0.0), px(0.0), px(SIZE as f32), px(SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
             BlendMode::Clear,
         );
     });

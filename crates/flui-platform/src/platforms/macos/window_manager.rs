@@ -35,7 +35,7 @@ use std::{
 };
 
 use flui_types::{
-    Pixels,
+    f64,
     geometry::{Point, Size},
 };
 
@@ -178,14 +178,14 @@ impl WindowManager {
     /// Calculate cascade position for a new window.
     ///
     /// Cascades windows in a staggered pattern (like macOS does by default).
-    pub fn calculate_cascade_position(&self, _window_size: Size<Pixels>) -> Point<Pixels> {
+    pub fn calculate_cascade_position(&self, _window_size: Size<f64>) -> Point<f64> {
         let count = self.window_count();
         let cascade_offset = 28.0; // Standard macOS cascade offset
 
-        let x = 100.0 + (count as f32 * cascade_offset);
-        let y = 100.0 + (count as f32 * cascade_offset);
+        let x = 100.0 + (count as f64 * cascade_offset);
+        let y = 100.0 + (count as f64 * cascade_offset);
 
-        Point::new(Pixels(x), Pixels(y))
+        Point::new(x, y)
     }
 
     /// Create a window group (for tabbed windows).
@@ -288,10 +288,10 @@ pub struct WindowInfo {
     pub title: String,
 
     /// Window position (top-left corner).
-    pub position: Point<Pixels>,
+    pub position: Point<f64>,
 
     /// Window size.
-    pub size: Size<Pixels>,
+    pub size: Size<f64>,
 
     /// Whether the window is visible.
     pub visible: bool,
@@ -323,10 +323,10 @@ pub struct WindowOptions {
     pub title: String,
 
     /// Initial position.
-    pub position: Point<Pixels>,
+    pub position: Point<f64>,
 
     /// Initial size.
-    pub size: Size<Pixels>,
+    pub size: Size<f64>,
 
     /// Start visible.
     pub visible: bool,
@@ -349,8 +349,8 @@ impl WindowOptions {
     pub fn new(title: impl Into<String>) -> Self {
         Self {
             title: title.into(),
-            position: Point::new(Pixels(100.0), Pixels(100.0)),
-            size: Size::new(Pixels(800.0), Pixels(600.0)),
+            position: Point::new(100.0, 100.0),
+            size: Size::new(800.0, 600.0),
             visible: true,
             resizable: true,
             minimizable: true,
@@ -366,13 +366,13 @@ impl WindowOptions {
     }
 
     /// Set window position.
-    pub fn with_position(mut self, position: Point<Pixels>) -> Self {
+    pub fn with_position(mut self, position: Point<f64>) -> Self {
         self.position = position;
         self
     }
 
     /// Set window size.
-    pub fn with_size(mut self, size: Size<Pixels>) -> Self {
+    pub fn with_size(mut self, size: Size<f64>) -> Self {
         self.size = size;
         self
     }
@@ -492,17 +492,17 @@ mod tests {
     #[test]
     fn test_cascade_position() {
         let mut manager = WindowManager::new();
-        let size = Size::new(Pixels(800.0), Pixels(600.0));
+        let size = Size::new(800.0, 600.0);
 
         let pos1 = manager.calculate_cascade_position(size);
-        assert_eq!(pos1.x, Pixels(100.0));
-        assert_eq!(pos1.y, Pixels(100.0));
+        assert_eq!(pos1.x, 100.0);
+        assert_eq!(pos1.y, 100.0);
 
         manager.register_window(WindowOptions::default());
 
         let pos2 = manager.calculate_cascade_position(size);
-        assert_eq!(pos2.x, Pixels(128.0)); // 100 + 28
-        assert_eq!(pos2.y, Pixels(128.0));
+        assert_eq!(pos2.x, 128.0); // 100 + 28
+        assert_eq!(pos2.y, 128.0);
     }
 
     #[test]
@@ -564,13 +564,13 @@ mod tests {
     #[test]
     fn test_window_options_builder() {
         let options = WindowOptions::new("Test")
-            .with_size(Size::new(Pixels(1024.0), Pixels(768.0)))
-            .with_position(Point::new(Pixels(50.0), Pixels(50.0)))
+            .with_size(Size::new(1024.0, 768.0))
+            .with_position(Point::new(50.0, 50.0))
             .with_resizable(false)
             .with_level(WindowLevel::Floating);
 
         assert_eq!(options.title, "Test");
-        assert_eq!(options.size.width, Pixels(1024.0));
+        assert_eq!(options.size.width, 1024.0);
         assert!(!options.resizable);
         assert_eq!(options.level, WindowLevel::Floating);
     }

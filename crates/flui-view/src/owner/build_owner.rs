@@ -3777,8 +3777,8 @@ mod tests {
             .downcast_ref::<flui_objects::LayoutConstraintsCell>()
             .expect("a LayoutBuilder registration holds a LayoutConstraintsCell");
         cell.publish(flui_rendering::constraints::BoxConstraints::tight_for(
-            Some(flui_types::geometry::px(100.0)),
-            Some(flui_types::geometry::px(100.0)),
+            Some(100.0),
+            Some(100.0),
         ));
         assert!(owner.service_layout_builders(&mut tree, &pipeline));
         let moved = owner

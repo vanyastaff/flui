@@ -147,7 +147,7 @@ pub struct AppBarThemeData {
     /// (`ColorScheme.on_surface`).
     pub foreground_color: Option<Color>,
     /// Overrides [`AppBar`](crate::AppBar)'s default elevation (`0.0`).
-    pub elevation: Option<f32>,
+    pub elevation: Option<f64>,
     /// Overrides the title's text style verbatim — Flutter parity:
     /// `widget.titleTextStyle ?? appBarTheme.titleTextStyle ??
     /// defaults.titleTextStyle?.copyWith(color: foregroundColor)`
@@ -172,7 +172,7 @@ pub struct CardThemeData {
     /// (`ColorScheme.surfaceContainerLow`).
     pub color: Option<Color>,
     /// Overrides [`Card`](crate::Card)'s default elevation (`1.0`).
-    pub elevation: Option<f32>,
+    pub elevation: Option<f64>,
     /// Overrides [`Card`](crate::Card)'s default shape (a 12dp rounded
     /// rectangle).
     pub shape: Option<MaterialShape>,
@@ -203,7 +203,7 @@ pub struct DialogThemeData {
     /// (`ColorScheme.surfaceContainerHigh`).
     pub background_color: Option<Color>,
     /// Overrides [`Dialog`](crate::Dialog)'s default elevation (`6.0`).
-    pub elevation: Option<f32>,
+    pub elevation: Option<f64>,
     /// Overrides [`Dialog`](crate::Dialog)'s default shape (a 28dp rounded
     /// rectangle).
     pub shape: Option<MaterialShape>,
@@ -244,7 +244,7 @@ pub struct FabThemeData {
     /// `pressed`/`hovered`/`focused` tiers are unaffected, matching the
     /// oracle's own independent `highlightElevation`/`hoverElevation`/
     /// `focusElevation` fields (this crate exposes no override for those).
-    pub elevation: Option<f32>,
+    pub elevation: Option<f64>,
 }
 
 /// Overrides [`InputDecorator`](crate::input_decorator::InputDecorator)'s
@@ -278,7 +278,7 @@ pub struct InputDecorationThemeData {
     /// Overrides the bottom underline indicator's color/width, per state.
     /// `None` falls through to the M3 default state table — see
     /// `input_decorator.rs`'s `default_active_indicator`.
-    pub active_indicator: Option<WidgetStateProperty<Option<BorderSide<Pixels>>>>,
+    pub active_indicator: Option<WidgetStateProperty<Option<BorderSide<f64>>>>,
     /// Overrides the hint text style, per state. `None` falls through to the
     /// M3 default (disabled/enabled `onSurfaceVariant`).
     pub hint_style: Option<WidgetStateProperty<Option<TextStyle>>>,
@@ -359,17 +359,17 @@ pub struct ListTileThemeData {
     /// Overrides the gap between the leading/trailing slots and the title
     /// column (`16.0` — a bare `list_tile.dart` literal, not part of
     /// `_LisTileDefaultsM3`).
-    pub horizontal_title_gap: Option<f32>,
+    pub horizontal_title_gap: Option<f64>,
     /// Overrides the minimum padding above/below the title/subtitle column
     /// (`8.0`).
-    pub min_vertical_padding: Option<f32>,
+    pub min_vertical_padding: Option<f64>,
     /// Overrides the minimum width reserved for
     /// [`ListTile::leading`](crate::ListTile::leading) (`24.0`).
-    pub min_leading_width: Option<f32>,
+    pub min_leading_width: Option<f64>,
     /// Overrides the tile's minimum height. `None` (the default) falls
     /// through to the one/two/three-line table — see `list_tile.rs`'s
     /// `default_tile_height`.
-    pub min_tile_height: Option<f32>,
+    pub min_tile_height: Option<f64>,
     /// Overrides [`ListTile::is_three_line`](crate::ListTile::is_three_line)
     /// when the widget itself leaves it unset.
     pub is_three_line: Option<bool>,
@@ -389,13 +389,13 @@ pub struct DividerThemeData {
     pub color: Option<Color>,
     /// Overrides [`Divider`](crate::Divider)'s height /
     /// [`VerticalDivider`](crate::VerticalDivider)'s width (`16.0`).
-    pub space: Option<f32>,
+    pub space: Option<f64>,
     /// Overrides the line's thickness (`1.0`).
-    pub thickness: Option<f32>,
+    pub thickness: Option<f64>,
     /// Overrides the leading-edge indent (`0.0`).
-    pub indent: Option<f32>,
+    pub indent: Option<f64>,
     /// Overrides the trailing-edge indent (`0.0`).
-    pub end_indent: Option<f32>,
+    pub end_indent: Option<f64>,
     /// Overrides the line's corner radius. `None` (the default) paints a
     /// square-cornered line.
     pub radius: Option<BorderRadius>,
@@ -427,7 +427,7 @@ pub struct CheckboxThemeData {
     pub overlay_color: Option<StateColor>,
     /// Overrides [`Checkbox`](crate::Checkbox)'s default border side, per
     /// state.
-    pub side: Option<WidgetStateProperty<Option<BorderSide<Pixels>>>>,
+    pub side: Option<WidgetStateProperty<Option<BorderSide<f64>>>>,
 }
 
 /// Overrides [`Chip`](crate::Chip)/[`FilterChip`](crate::FilterChip)'s
@@ -506,7 +506,7 @@ pub struct ChipThemeData {
     pub checkmark_color: Option<Color>,
     /// Overrides the container's border side. `None` falls through to the
     /// M3 default (see `chip.rs`'s `chip_default_side`).
-    pub side: Option<BorderSide<Pixels>>,
+    pub side: Option<BorderSide<f64>>,
     /// Overrides the container's shape. `None` falls through to the M3
     /// default (an 8dp rounded rectangle).
     pub shape: Option<MaterialShape>,
@@ -577,13 +577,13 @@ pub struct SwitchThemeData {
 pub struct NavigationBarThemeData {
     /// Overrides [`NavigationBar`](crate::NavigationBar)'s default height
     /// (`80.0`).
-    pub height: Option<f32>,
+    pub height: Option<f64>,
     /// Overrides [`NavigationBar`](crate::NavigationBar)'s default background
     /// color (`ColorScheme.surfaceContainer`).
     pub background_color: Option<Color>,
     /// Overrides [`NavigationBar`](crate::NavigationBar)'s default elevation
     /// (`3.0`).
-    pub elevation: Option<f32>,
+    pub elevation: Option<f64>,
     /// Overrides [`NavigationBar`](crate::NavigationBar)'s default selection
     /// indicator color (`ColorScheme.secondaryContainer`).
     pub indicator_color: Option<Color>,
@@ -645,7 +645,7 @@ pub struct TabBarThemeData {
     /// (`ColorScheme.outlineVariant`).
     pub divider_color: Option<Color>,
     /// Overrides [`TabBar`](crate::TabBar)'s default divider height (`1.0`).
-    pub divider_height: Option<f32>,
+    pub divider_height: Option<f64>,
     /// Overrides each tab's default hover/focus/press overlay color, per
     /// state.
     pub overlay_color: Option<StateColor>,
@@ -689,35 +689,35 @@ pub struct RadioThemeData {
 pub struct DataTableThemeData {
     /// Overrides the table's background/border decoration. Defaults to no
     /// decoration.
-    pub decoration: Option<BoxDecoration<Pixels>>,
+    pub decoration: Option<BoxDecoration<f64>>,
     /// Overrides the data rows' background color, per state (`Selected`
     /// resolves the M3 default: `colorScheme.primary` at 8% opacity).
     pub data_row_color: Option<StateColor>,
     /// Overrides each data row's minimum height. Defaults to
     /// `kMinInteractiveDimension` (`48.0`).
-    pub data_row_min_height: Option<f32>,
+    pub data_row_min_height: Option<f64>,
     /// Overrides each data row's maximum height. Defaults to
     /// `kMinInteractiveDimension` (`48.0`).
-    pub data_row_max_height: Option<f32>,
+    pub data_row_max_height: Option<f64>,
     /// Overrides the data cells' text style. Defaults to `TextTheme.bodyMedium`.
     pub data_text_style: Option<TextStyle>,
     /// Overrides the heading row's background color, per state.
     pub heading_row_color: Option<StateColor>,
     /// Overrides the heading row's height. Defaults to `56.0`.
-    pub heading_row_height: Option<f32>,
+    pub heading_row_height: Option<f64>,
     /// Overrides the heading cells' text style. Defaults to `TextTheme.titleSmall`.
     pub heading_text_style: Option<TextStyle>,
     /// Overrides the margin between the table's edges and the first/last
     /// column's content. Defaults to `24.0`.
-    pub horizontal_margin: Option<f32>,
+    pub horizontal_margin: Option<f64>,
     /// Overrides the margin between adjacent data columns. Defaults to `56.0`.
-    pub column_spacing: Option<f32>,
+    pub column_spacing: Option<f64>,
     /// Overrides the divider painted between rows. Defaults to `1.0`.
-    pub divider_thickness: Option<f32>,
+    pub divider_thickness: Option<f64>,
     /// Overrides the margin around the leading selection checkbox, when
     /// shown. Defaults to [`Self::horizontal_margin`] (start) and half of it
     /// (end).
-    pub checkbox_horizontal_margin: Option<f32>,
+    pub checkbox_horizontal_margin: Option<f64>,
 }
 
 /// Visual-style configuration provided to descendants by a
@@ -1242,7 +1242,7 @@ mod tests {
 
         let base = ThemeData::light();
         let input_decoration_theme = InputDecorationThemeData {
-            content_padding: Some(EdgeInsets::all(px(9.0))),
+            content_padding: Some(EdgeInsets::all(9.0)),
             ..Default::default()
         };
 
@@ -1264,7 +1264,7 @@ mod tests {
         use flui_sdk::types::geometry::px;
 
         let input_decoration_theme = InputDecorationThemeData {
-            content_padding: Some(EdgeInsets::all(px(9.0))),
+            content_padding: Some(EdgeInsets::all(9.0)),
             ..Default::default()
         };
         let base = ThemeData::light().copy_with(ThemeDataOverrides {

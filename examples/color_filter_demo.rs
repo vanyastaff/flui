@@ -116,7 +116,7 @@ fn build_color_filter_scene(viewport_width: f32, viewport_height: f32) -> Scene 
         // Background canvas: dark slate covering the entire viewport.
         let mut background_canvas = CanvasLayer::new();
         background_canvas.canvas_mut().draw_rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(viewport_width), px(viewport_height)),
+            Rect::from_ltrb(0.0, 0.0, viewport_width, viewport_height),
             &Paint::fill(Color::rgb(22, 28, 40)),
         );
         builder.add_canvas(background_canvas);
@@ -179,32 +179,27 @@ fn build_column_canvas(x_offset: f32, column_width: f32, viewport_height: f32) -
     // Thin column divider on the right edge.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(x_offset + column_width - 1.0),
-            px(0.0),
-            px(x_offset + column_width),
-            px(viewport_height),
+            (x_offset + column_width - 1.0),
+            0.0,
+            (x_offset + column_width),
+            viewport_height,
         ),
         &Paint::fill(Color::rgb(60, 60, 60)),
     );
 
     // Large coral rectangle (primary subject).
     canvas.draw_rect(
-        Rect::from_ltrb(
-            px(left),
-            px(50.0),
-            px(right),
-            px(viewport_height / 2.0 - 20.0),
-        ),
+        Rect::from_ltrb(left, 50.0, right, (viewport_height / 2.0 - 20.0)),
         &Paint::fill(Color::rgb(220, 80, 60)),
     );
 
     // Overlapping teal rectangle.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(center_x - 50.0),
-            px(viewport_height / 2.0 - 50.0),
-            px(center_x + 50.0),
-            px(viewport_height - 60.0),
+            (center_x - 50.0),
+            (viewport_height / 2.0 - 50.0),
+            (center_x + 50.0),
+            (viewport_height - 60.0),
         ),
         &Paint::fill(Color::rgb(30, 180, 160)),
     );
@@ -212,10 +207,10 @@ fn build_column_canvas(x_offset: f32, column_width: f32, viewport_height: f32) -
     // Small white accent square.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(center_x - 20.0),
-            px(viewport_height / 2.0 - 20.0),
-            px(center_x + 20.0),
-            px(viewport_height / 2.0 + 20.0),
+            (center_x - 20.0),
+            (viewport_height / 2.0 - 20.0),
+            (center_x + 20.0),
+            (viewport_height / 2.0 + 20.0),
         ),
         &Paint::fill(Color::WHITE),
     );
@@ -223,10 +218,10 @@ fn build_column_canvas(x_offset: f32, column_width: f32, viewport_height: f32) -
     // Yellow strip at the bottom.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(left),
-            px(viewport_height - 50.0),
-            px(right),
-            px(viewport_height - 30.0),
+            left,
+            (viewport_height - 50.0),
+            right,
+            (viewport_height - 30.0),
         ),
         &Paint::fill(Color::rgb(255, 210, 0)),
     );
@@ -250,7 +245,7 @@ fn main() {
 
     let options = WindowOptions {
         title: "FLUI Color Filter Demo — Mode / Gamma / Matrix (SceneBuilder API)".to_string(),
-        size: Size::new(px(1100.0), px(600.0)),
+        size: Size::new(1100.0, 600.0),
         resizable: true,
         visible: true,
         decorated: true,

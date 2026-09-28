@@ -1,6 +1,6 @@
 //! [`SliverPadding`] — insets a sliver child within a scroll viewport.
 
-use flui_geometry::{EdgeInsets, px};
+use flui_geometry::EdgeInsets;
 use flui_objects::RenderSliverPadding;
 use flui_rendering::protocol::SliverProtocol;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
@@ -27,8 +27,8 @@ impl SliverPadding {
     }
 
     /// Uniform padding on all four sides.
-    pub fn all(value: f32) -> Self {
-        Self::new(EdgeInsets::all(px(value)))
+    pub fn all(value: f64) -> Self {
+        Self::new(EdgeInsets::all(value))
     }
 
     /// Set the padded sliver child.

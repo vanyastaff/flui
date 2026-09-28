@@ -146,22 +146,22 @@ pub trait MacOSWindowExt {
     /// # Parameters
     ///
     /// - `alpha`: 0.0 (fully transparent) to 1.0 (fully opaque)
-    fn set_alpha(&mut self, alpha: f32);
+    fn set_alpha(&mut self, alpha: f64);
 
     /// Get the window's backing scale factor (1.0 or 2.0 for Retina).
-    fn backing_scale_factor(&self) -> f32;
+    fn backing_scale_factor(&self) -> f64;
 
     /// Convert point from backing (pixel) coordinates to window coordinates.
     fn convert_point_from_backing(
         &self,
-        point: flui_types::geometry::Point<flui_types::Pixels>,
-    ) -> flui_types::geometry::Point<flui_types::Pixels>;
+        point: flui_types::geometry::Point<f64>,
+    ) -> flui_types::geometry::Point<f64>;
 
     /// Convert point from window coordinates to backing (pixel) coordinates.
     fn convert_point_to_backing(
         &self,
-        point: flui_types::geometry::Point<flui_types::Pixels>,
-    ) -> flui_types::geometry::Point<flui_types::Pixels>;
+        point: flui_types::geometry::Point<f64>,
+    ) -> flui_types::geometry::Point<f64>;
 }
 
 // ============================================================================

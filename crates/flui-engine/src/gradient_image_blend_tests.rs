@@ -35,7 +35,7 @@ mod gpu_tests {
     use flui_types::painting::image::ColorFilter;
     use flui_types::{
         Color, Rect,
-        geometry::{Offset, Pixels, px},
+        geometry::{Offset, f64, px},
         painting::{Image, TileMode},
     };
 
@@ -146,13 +146,8 @@ mod gpu_tests {
     }
 
     /// Full-surface bounds for the test viewport.
-    fn full_surface_bounds() -> Rect<Pixels> {
-        Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        )
+    fn full_surface_bounds() -> Rect<f64> {
+        Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32))
     }
 
     /// Build a solid-color 4×4 RGBA image (all pixels the given color).
@@ -225,8 +220,8 @@ mod gpu_tests {
                 color: gradient_left_color,
                 blend_mode: BlendMode::Multiply,
                 shader: Some(Shader::LinearGradient {
-                    from: Offset::new(px(0.0), px(0.0)),
-                    to: Offset::new(px(SURFACE_WIDTH as f32), px(0.0)),
+                    from: Offset::new(0.0, 0.0),
+                    to: Offset::new((SURFACE_WIDTH as f32), 0.0),
                     colors: vec![gradient_left_color, gradient_right_color],
                     stops: None,
                     tile_mode: TileMode::Clamp,
@@ -419,8 +414,8 @@ mod gpu_tests {
         painter.save();
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(
-                Rect::from_xywh(px(0.0), px(0.0), px(side), px(side)),
-                px(radius),
+                Rect::from_xywh(0.0, 0.0, side, side),
+                radius,
             ),
             flui_types::painting::Clip::AntiAlias,
         );
@@ -504,14 +499,14 @@ mod gpu_tests {
         painter.scale(2.0, 2.0);
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(
-                Rect::from_xywh(px(0.0), px(0.0), px(logical_side), px(logical_side)),
-                px(logical_side / 2.0),
+                Rect::from_xywh(0.0, 0.0, logical_side, logical_side),
+                (logical_side / 2.0),
             ),
             flui_types::painting::Clip::AntiAlias,
         );
         painter.draw_image(
             &source_image,
-            Rect::from_xywh(px(0.0), px(0.0), px(logical_side), px(logical_side)),
+            Rect::from_xywh(0.0, 0.0, logical_side, logical_side),
             BlendMode::SrcOver,
         );
         painter.restore();
@@ -836,8 +831,8 @@ mod gpu_tests {
             color: gradient_left,
             blend_mode: BlendMode::SrcOver,
             shader: Some(Shader::LinearGradient {
-                from: Offset::new(px(0.0), px(0.0)),
-                to: Offset::new(px(SURFACE_WIDTH as f32), px(0.0)),
+                from: Offset::new(0.0, 0.0),
+                to: Offset::new((SURFACE_WIDTH as f32), 0.0),
                 colors: vec![gradient_left, gradient_right],
                 stops: None,
                 tile_mode: TileMode::Clamp,
@@ -969,8 +964,8 @@ mod gpu_tests {
                         color: gradient_left,
                         blend_mode: mode,
                         shader: Some(Shader::LinearGradient {
-                            from: Offset::new(px(0.0), px(0.0)),
-                            to: Offset::new(px(SURFACE_WIDTH as f32), px(0.0)),
+                            from: Offset::new(0.0, 0.0),
+                            to: Offset::new((SURFACE_WIDTH as f32), 0.0),
                             colors: vec![gradient_left, gradient_right],
                             stops: None,
                             tile_mode: TileMode::Clamp,
@@ -1043,7 +1038,7 @@ mod gpu_tests {
             255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
         ];
         let image = Image::from_rgba8(2, 2, pixels);
-        let dst = Rect::from_xywh(px(0.0), px(0.0), px(4.0), px(2.0));
+        let dst = Rect::from_xywh(0.0, 0.0, 4.0, 2.0);
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.draw_image_repeat(
@@ -1085,8 +1080,8 @@ mod gpu_tests {
             pixels.extend_from_slice(&[200u8, 100, 50, 255]);
         }
         let image = Image::from_rgba8(6, 6, pixels);
-        let center_slice = Rect::from_xywh(px(2.0), px(2.0), px(2.0), px(2.0));
-        let dst = Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0));
+        let center_slice = Rect::from_xywh(2.0, 2.0, 2.0, 2.0);
+        let dst = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.draw_image_nine_slice(&image, center_slice, dst, BlendMode::Screen);
@@ -1125,8 +1120,8 @@ mod gpu_tests {
         let image = Image::from_rgba8(8, 4, pixels);
 
         let sprites = [
-            Rect::from_xywh(px(0.0), px(0.0), px(4.0), px(4.0)),
-            Rect::from_xywh(px(4.0), px(0.0), px(4.0), px(4.0)),
+            Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            Rect::from_xywh(4.0, 0.0, 4.0, 4.0),
         ];
         // Identity transforms: each sprite placed at its rect's origin.
         let transforms = [
@@ -1165,7 +1160,7 @@ mod gpu_tests {
             100u8, 150, 200, 255, 100, 150, 200, 255, 100, 150, 200, 255, 100, 150, 200, 255,
         ];
         let image = Image::from_rgba8(2, 2, pixels);
-        let dst = Rect::from_xywh(px(0.0), px(0.0), px(4.0), px(2.0));
+        let dst = Rect::from_xywh(0.0, 0.0, 4.0, 2.0);
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.draw_image_repeat(
@@ -1193,7 +1188,7 @@ mod gpu_tests {
         let (device, queue) = acquire_test_device_and_queue();
 
         let image = solid_color_image(Color::rgba(100, 150, 200, 255));
-        let sprites = [Rect::from_xywh(px(0.0), px(0.0), px(4.0), px(4.0))];
+        let sprites = [Rect::from_xywh(0.0, 0.0, 4.0, 4.0)];
         let transforms = [flui_types::Matrix4::identity()];
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1250,7 +1245,7 @@ mod gpu_tests {
         let sprite_image = solid_color_image(sprite_color);
 
         // One sprite covering the full 4×4 atlas image, placed at (0,0).
-        let sprites = [Rect::from_xywh(px(0.0), px(0.0), px(4.0), px(4.0))];
+        let sprites = [Rect::from_xywh(0.0, 0.0, 4.0, 4.0)];
         // Identity transform: no translation, no rotation.
         let transforms = [flui_types::Matrix4::identity()];
         let colors: Option<&[Color]> = None;

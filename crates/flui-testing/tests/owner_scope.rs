@@ -28,7 +28,7 @@ fn pointer_route_runs_inside_the_binding_owner_scope() {
         .clone();
     let fired = Rc::new(Cell::new(false));
     let callback_fired = Rc::clone(&fired);
-    let event = pointer_down(Offset::new(px(4.0), px(7.0)), device_kind_from_button(0));
+    let event = pointer_down(Offset::new(4.0, 7.0), device_kind_from_button(0));
 
     binding.dispatch_pointer(&event, move |_| {
         handle
@@ -84,14 +84,10 @@ fn pointer_route_panic_still_runs_the_down_arena_lifecycle() {
     let binding = HeadlessBinding::new();
     let pointer = PointerId::PRIMARY;
     let recognizer = TapGestureRecognizer::new(binding.arena().clone());
-    recognizer.add_pointer(
-        pointer,
-        Offset::new(px(4.0), px(7.0)),
-        Offset::new(px(4.0), px(7.0)),
-    );
+    recognizer.add_pointer(pointer, Offset::new(4.0, 7.0), Offset::new(4.0, 7.0));
     assert!(binding.arena().is_open(pointer));
 
-    let event = pointer_down(Offset::new(px(4.0), px(7.0)), device_kind_from_button(0));
+    let event = pointer_down(Offset::new(4.0, 7.0), device_kind_from_button(0));
     let unwind = catch_unwind(AssertUnwindSafe(|| {
         binding.dispatch_pointer(&event, |_| panic!("route panic"));
     }));
@@ -118,7 +114,7 @@ impl flui_interaction::sealed::CustomGestureRecognizer for CountingMember {
 fn pointer_event_boundary_drains_a_lone_deferred_winner() {
     let binding = HeadlessBinding::new();
     let accepted = Arc::new(AtomicUsize::new(0));
-    let event = pointer_down(Offset::new(px(4.0), px(7.0)), device_kind_from_button(0));
+    let event = pointer_down(Offset::new(4.0, 7.0), device_kind_from_button(0));
 
     binding.dispatch_pointer(&event, |_| {
         binding.arena().add(
@@ -157,7 +153,7 @@ fn hostile_secondary_lifecycle_payload_cannot_replace_the_route_panic() {
     binding
         .arena()
         .add(pointer, Arc::new(LifecyclePanicsWithHostilePayload));
-    let event = pointer_down(Offset::new(px(2.0), px(3.0)), device_kind_from_button(0));
+    let event = pointer_down(Offset::new(2.0, 3.0), device_kind_from_button(0));
 
     let unwind = catch_unwind(AssertUnwindSafe(|| {
         binding.dispatch_pointer(&event, |_| panic!("first route panic"));

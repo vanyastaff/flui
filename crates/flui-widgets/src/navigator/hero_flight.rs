@@ -100,7 +100,7 @@ struct FlightInner {
     /// `_HeroFlight._proxyAnimation` (`heroes.dart:557`): the animation the shuttle
     /// reads, already reversed for a pop. Its **parent** is repointed by a divert;
     /// the proxy object itself, and the listeners on it, never change.
-    proxy: Arc<ProxyAnimation<f32>>,
+    proxy: Arc<ProxyAnimation<f64>>,
     /// `_HeroFlight.heroRectTween` (`:553`) endpoints. Re-aimed by
     /// [`FlightInner::on_tick`]; interpolated through [`rect_factory`](Self::rect_factory).
     rect: Mutex<RectTween>,
@@ -111,10 +111,10 @@ struct FlightInner {
     rect_factory: Mutex<Option<RectTweenFactory>>,
     /// `_HeroFlight._heroOpacity` (`:556`), evaluated eagerly. `1.0` until the
     /// destination is lost.
-    opacity: Mutex<f32>,
+    opacity: Mutex<f64>,
     /// The animation value at which the destination was lost — the left edge of
     /// Flutter's `Interval(_proxyAnimation.value, 1.0)` (`:690`).
-    fade_from: Mutex<Option<f32>>,
+    fade_from: Mutex<Option<f64>>,
     /// `_HeroFlight._aborted` (`:566`).
     aborted: AtomicBool,
     /// Guards a re-entrant `_performAnimationUpdate`.
@@ -204,7 +204,7 @@ impl FlightInner {
         };
         let origin = destination
             .map(|rect| (rect.min_x(), rect.min_y()))
-            .filter(|(x, y)| x.0.is_finite() && y.0.is_finite());
+            .filter(|(x, y)| x.is_finite() && y.is_finite());
 
         if let Some((x, y)) = origin {
             let mut rect = self.rect.lock();
@@ -302,7 +302,7 @@ impl Drop for FlightInner {
 /// is the manifest's curved route animation, not the (possibly reversed) proxy.
 fn inflate_shuttle(
     builder: Option<&ShuttleBuilder>,
-    animation: &Arc<dyn Animation<f32>>,
+    animation: &Arc<dyn Animation<f64>>,
     direction: FlightDirection,
     from_hero: &HeroHandle,
     to_hero: &HeroHandle,
@@ -367,7 +367,7 @@ impl HeroFlight {
 
     /// The shuttle's current opacity.
     #[must_use]
-    pub fn opacity(&self) -> f32 {
+    pub fn opacity(&self) -> f64 {
         *self.inner.opacity.lock()
     }
 
@@ -496,7 +496,7 @@ impl HeroFlight {
 
         // The new parent for `_proxyAnimation`, the new rect endpoints, and whether the
         // shuttle is rebuilt — decided per branch, applied afterwards.
-        let new_parent: Arc<dyn Animation<f32>>;
+        let new_parent: Arc<dyn Animation<f64>>;
         let (new_begin, new_end): (Rect, Rect);
         let mut new_shuttle: Option<BoxedView> = None;
 
@@ -650,7 +650,7 @@ pub(crate) struct FlightPlan {
     /// `manifest.animation` (`heroes.dart:472-491`): the destination route's primary
     /// animation for a push, the source route's for a pop, already wrapped in the
     /// manifest's `CurvedAnimation` on the driving hero's `curve`/`reverse_curve`.
-    pub(crate) animation: Arc<dyn Animation<f32>>,
+    pub(crate) animation: Arc<dyn Animation<f64>>,
     /// The resolved `create_rect_tween` factory (`heroes.dart:495`): the destination
     /// hero's, else the controller's default, else `None` (linear).
     pub(crate) rect_factory: Option<RectTweenFactory>,
@@ -834,7 +834,7 @@ impl FlightManager {
 
         // `_proxyAnimation.parent = ReverseAnimation(manifest.animation)` for a pop,
         // `manifest.animation` for a push (`:719-724`).
-        let parent: Arc<dyn Animation<f32>> = match direction {
+        let parent: Arc<dyn Animation<f64>> = match direction {
             FlightDirection::Push => animation,
             FlightDirection::Pop => Arc::new(ReverseAnimation::new(animation)),
         };
@@ -1124,10 +1124,10 @@ impl ViewState<Shuttle> for ShuttleState {
                     .ignoring(true)
                     .child(Opacity::new(opacity).child(child)),
             )
-            .left(rect.min_x().0)
-            .top(rect.min_y().0)
-            .width(rect.width().0)
-            .height(rect.height().0)
+            .left(rect.min_x())
+            .top(rect.min_y())
+            .width(rect.width())
+            .height(rect.height())
             .into_view()
             .boxed(),
         ])

@@ -142,7 +142,7 @@ struct LifecycleReader {
 
 struct LifecycleReaderState {
     view: LifecycleReader,
-    width: f32,
+    width: f64,
 }
 
 impl StatefulView for LifecycleReader {
@@ -248,9 +248,9 @@ fn subtree(c: &Counters) -> StaticChild {
     }
 }
 
-fn data(width: f32, scale: f32) -> MediaQueryData {
+fn data(width: f64, scale: f64) -> MediaQueryData {
     MediaQueryData {
-        size: flui_types::Size::new(px(width), px(600.0)),
+        size: flui_types::Size::new(width, 600.0),
         text_scale_factor: scale,
         ..MediaQueryData::default()
     }
@@ -341,7 +341,7 @@ fn a_field_reader_still_rebuilds_when_its_own_field_changes_after_an_unrelated_o
     let column = laid.current_root();
     assert_eq!(
         laid.size(laid.child(column, 0)).width,
-        px(9.0),
+        9.0,
         "the size reader rendered the new width (900 / 100)"
     );
 }
@@ -367,11 +367,11 @@ fn an_unchanged_provider_swap_rebuilds_nobody() {
 #[test]
 fn padding_and_insets_masks_are_distinct_fields() {
     let a = MediaQueryData {
-        padding: EdgeInsets::all(px(8.0)),
+        padding: EdgeInsets::all(8.0),
         ..MediaQueryData::default()
     };
     let b = MediaQueryData {
-        view_insets: EdgeInsets::all(px(16.0)),
+        view_insets: EdgeInsets::all(16.0),
         ..a.clone()
     };
     let changed = flui_view::InheritedData::field_mask_diff(&a, &b);
@@ -423,7 +423,7 @@ fn a_rebuild_re_derives_the_field_set_so_a_dropped_read_stops_depending() {
     assert_eq!(builds.get(), 3, "a scale change rebuilds the reader");
     assert_eq!(
         laid.size(laid.current_root()).width,
-        px(1.5),
+        1.5,
         "the reader rendered the new scale"
     );
 }
@@ -467,7 +467,7 @@ fn a_build_that_panics_before_reading_keeps_its_dependency() {
     );
     assert_eq!(
         laid.size(laid.current_root()).width,
-        px(10.0),
+        10.0,
         "the reader rendered the new width after recovering"
     );
 }
@@ -550,7 +550,7 @@ fn a_dependency_acquired_in_a_lifecycle_hook_survives_a_rebuild_that_does_not_re
     );
     assert_eq!(
         laid.size(laid.current_root()).width,
-        px(9.0),
+        9.0,
         "the reader rendered the width it re-read"
     );
 }
@@ -584,7 +584,7 @@ fn an_empty_mask_read_is_promoted_to_a_whole_provider_dependency() {
     );
     assert_eq!(
         laid.size(laid.current_root()).width,
-        px(9.0),
+        9.0,
         "and it rendered the fresh value"
     );
 }

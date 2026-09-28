@@ -1108,7 +1108,7 @@ pub(crate) type SliverAdaptorElement<R> =
 /// Render-object-specific configuration for [`RenderSliverList`] under the
 /// generic [`SliverMultiBoxAdaptor`] adaptor.
 ///
-/// A named, `#[non_exhaustive]` struct rather than a bare `f32`: downstream
+/// A named, `#[non_exhaustive]` struct rather than a bare `f64`: downstream
 /// code constructs it through [`ListConfig::new`] and reads its fields, so a
 /// future knob can be added without breaking a caller — a struct literal
 /// would break on any new field, `Default` or not, which is why literals are
@@ -1118,13 +1118,13 @@ pub(crate) type SliverAdaptorElement<R> =
 pub struct ListConfig {
     /// Default per-item extent (logical pixels), used to seed the virtualizer
     /// until real measurements arrive from laid-out children.
-    pub item_extent_estimate: f32,
+    pub item_extent_estimate: f64,
 }
 
 impl ListConfig {
     /// A list config with the given per-item extent estimate.
     #[must_use]
-    pub const fn new(item_extent_estimate: f32) -> Self {
+    pub const fn new(item_extent_estimate: f64) -> Self {
         Self {
             item_extent_estimate,
         }
@@ -1317,7 +1317,7 @@ impl SliverList {
     /// negative estimate seeds the virtualizer with an invalid band width.
     pub fn new(
         item_count: impl Into<ItemCount>,
-        item_extent_estimate: f32,
+        item_extent_estimate: f64,
         builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
         assert!(
@@ -1355,7 +1355,7 @@ impl SliverList {
     /// `2 * item_count - 1` overflows `usize`.
     pub fn separated(
         item_count: usize,
-        item_extent_estimate: f32,
+        item_extent_estimate: f64,
         item_builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
         separator_builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
@@ -1428,7 +1428,7 @@ impl SliverList {
     /// # Panics
     ///
     /// Panics under the same condition as [`SliverList::new`].
-    pub fn list(item_extent_estimate: f32, children: Vec<BoxedView>) -> Self {
+    pub fn list(item_extent_estimate: f64, children: Vec<BoxedView>) -> Self {
         Self::over(item_extent_estimate, &StaticChildren::new(children))
     }
 
@@ -1436,7 +1436,7 @@ impl SliverList {
     /// built over one `Rc` compare as the same delegate on update, so the
     /// residents are not refreshed (Flutter's `shouldRebuild` by identity).
     #[must_use]
-    pub fn over(item_extent_estimate: f32, children: &Rc<StaticChildren>) -> Self {
+    pub fn over(item_extent_estimate: f64, children: &Rc<StaticChildren>) -> Self {
         Self::new(0, item_extent_estimate, Rc::new(|_| None)).over_static_children(children)
     }
 }
@@ -1517,13 +1517,13 @@ impl SliverGrid {
 #[non_exhaustive]
 pub struct FixedExtentConfig {
     /// Main-axis extent every child is laid out to (logical pixels).
-    pub item_extent: f32,
+    pub item_extent: f64,
 }
 
 impl FixedExtentConfig {
     /// A config with the given per-child extent.
     #[must_use]
-    pub const fn new(item_extent: f32) -> Self {
+    pub const fn new(item_extent: f64) -> Self {
         Self { item_extent }
     }
 }
@@ -1563,7 +1563,7 @@ impl SliverFixedExtentList {
     /// Panics if `item_extent` is not finite or not greater than zero.
     #[must_use]
     pub fn new(
-        item_extent: f32,
+        item_extent: f64,
         item_count: usize,
         builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     ) -> Self {
@@ -1577,13 +1577,13 @@ impl SliverFixedExtentList {
     /// A fixed-extent list over a fixed list of children, served lazily by
     /// index with the delegate's key map.
     #[must_use]
-    pub fn list(item_extent: f32, children: Vec<BoxedView>) -> Self {
+    pub fn list(item_extent: f64, children: Vec<BoxedView>) -> Self {
         Self::over(item_extent, &StaticChildren::new(children))
     }
 
     /// [`Self::list`] over an already shared delegate.
     #[must_use]
-    pub fn over(item_extent: f32, children: &Rc<StaticChildren>) -> Self {
+    pub fn over(item_extent: f64, children: &Rc<StaticChildren>) -> Self {
         Self::new(item_extent, 0, Rc::new(|_| None)).over_static_children(children)
     }
 }
@@ -1624,7 +1624,7 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
         ) -> Self::RenderObject {
-            RenderSizedBox::new(Some(px(48.0)), Some(px(48.0)))
+            RenderSizedBox::new(Some(48.0), Some(48.0))
         }
         fn update_render_object(
             &self,
@@ -1654,7 +1654,7 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
         ) -> Self::RenderObject {
-            RenderSizedBox::new(Some(px(48.0)), Some(px(48.0)))
+            RenderSizedBox::new(Some(48.0), Some(48.0))
         }
         fn update_render_object(
             &self,
@@ -1712,7 +1712,7 @@ mod tests {
         let builder = make_builder(100);
         let view = SliverList::new(100, 48.0, builder);
         assert_eq!(view.item_count, ItemCount::Exact(100));
-        assert!((view.config.item_extent_estimate - 48.0).abs() < f32::EPSILON);
+        assert!((view.config.item_extent_estimate - 48.0).abs() < f64::EPSILON);
         assert!(
             !view.has_children(),
             "adaptor view must have no dense children"
@@ -1946,7 +1946,7 @@ mod tests {
         let view = SliverList::new(10, 48.0, builder);
         let cloned = view.clone();
         assert_eq!(cloned.item_count, ItemCount::Exact(10));
-        assert!((cloned.config.item_extent_estimate - 48.0).abs() < f32::EPSILON);
+        assert!((cloned.config.item_extent_estimate - 48.0).abs() < f64::EPSILON);
     }
 
     /// `create_element` produces a `SliverAdaptorElement<RenderSliverList>`

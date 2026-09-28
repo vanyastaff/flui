@@ -231,7 +231,7 @@ mod appkit_ime_probe {
         // front never becomes one.
         let window: Arc<dyn PlatformWindow> = match owner.open_window(WindowOptions {
             title: TITLE.to_string(),
-            size: Size::new(px(480.0), px(320.0)),
+            size: Size::new(480.0, 320.0),
             resizable: false,
             visible: true,
             decorated: true,
@@ -986,7 +986,7 @@ mod appkit_ime_probe {
         );
 
         // ---- C: the cursor area reaches the candidate-window query ----------
-        let area = Bounds::new(Point::new(px(10.0), px(20.0)), Size::new(px(2.0), px(18.0)));
+        let area = Bounds::new(Point::new(10.0, 20.0), Size::new(2.0, 18.0));
         text_input.set_ime_cursor_area(area);
         // `actualRange:` is answered, not left null: the SDK requires it to hold
         // "the character range corresponding to the returned area", so a query

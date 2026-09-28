@@ -21,10 +21,10 @@ fn rotated_box_quarter_turn_swaps_child_axes() {
     );
     let size = laid.size(laid.current_root());
     assert!(
-        (size.width.get() - 10.0).abs() < 1e-3 && (size.height.get() - 30.0).abs() < 1e-3,
+        (size.width - 10.0).abs() < 1e-3 && (size.height - 30.0).abs() < 1e-3,
         "one quarter turn swaps 30×10 → 10×30, got {}×{}",
-        size.width.get(),
-        size.height.get(),
+        size.width,
+        size.height,
     );
 }
 
@@ -37,10 +37,10 @@ fn rotated_box_half_turn_keeps_child_axes() {
     );
     let size = laid.size(laid.current_root());
     assert!(
-        (size.width.get() - 30.0).abs() < 1e-3 && (size.height.get() - 10.0).abs() < 1e-3,
+        (size.width - 30.0).abs() < 1e-3 && (size.height - 10.0).abs() < 1e-3,
         "two quarter turns keep 30×10, got {}×{}",
-        size.width.get(),
-        size.height.get(),
+        size.width,
+        size.height,
     );
 }
 
@@ -56,7 +56,7 @@ fn intrinsic_width_with_step_rounds_child_width_up() {
             .child(SizedBox::new(30.0, 20.0)),
         loose(200.0),
     );
-    let width = laid.size(laid.current_root()).width.get();
+    let width = laid.size(laid.current_root()).width;
     assert!(
         (width - 40.0).abs() < 1e-3,
         "intrinsic width 30 stepped to the nearest 40 is 40, got {width}",
@@ -80,7 +80,7 @@ fn intrinsic_height_collapses_a_maxed_column_to_its_intrinsic_height() {
         ),
         loose(200.0),
     );
-    let height = laid.size(laid.current_root()).height.get();
+    let height = laid.size(laid.current_root()).height;
     assert!(
         (height - 80.0).abs() < 1e-3,
         "intrinsic height tightens the maxed column to its 30+50 stack (80), \
@@ -94,8 +94,8 @@ fn overflow_box_lets_child_exceed_the_parent_box() {
     // 80×80 child lays out at its full size while the box itself stays 50×50.
     let laid = lay_out(
         OverflowBox::new()
-            .with_max_width(px(100.0))
-            .with_max_height(px(100.0))
+            .with_max_width(100.0)
+            .with_max_height(100.0)
             .child(SizedBox::new(80.0, 80.0)),
         tight(50.0, 50.0),
     );
@@ -103,17 +103,16 @@ fn overflow_box_lets_child_exceed_the_parent_box() {
     let box_size = laid.size(root);
     let child_size = laid.size(laid.only_child(root));
     assert!(
-        (box_size.width.get() - 50.0).abs() < 1e-3 && (box_size.height.get() - 50.0).abs() < 1e-3,
+        (box_size.width - 50.0).abs() < 1e-3 && (box_size.height - 50.0).abs() < 1e-3,
         "the overflow box keeps the parent's tight 50×50, got {}×{}",
-        box_size.width.get(),
-        box_size.height.get(),
+        box_size.width,
+        box_size.height,
     );
     assert!(
-        (child_size.width.get() - 80.0).abs() < 1e-3
-            && (child_size.height.get() - 80.0).abs() < 1e-3,
+        (child_size.width - 80.0).abs() < 1e-3 && (child_size.height - 80.0).abs() < 1e-3,
         "the child overflows to its own 80×80, got {}×{}",
-        child_size.width.get(),
-        child_size.height.get(),
+        child_size.width,
+        child_size.height,
     );
 }
 
@@ -121,21 +120,21 @@ fn overflow_box_lets_child_exceed_the_parent_box() {
 fn sized_overflow_box_fixes_its_own_size_while_child_overflows() {
     // The box reports a fixed 40×40 regardless of its 100×100 child.
     let laid = lay_out(
-        SizedOverflowBox::new(Size::new(px(40.0), px(40.0))).child(SizedBox::new(100.0, 100.0)),
+        SizedOverflowBox::new(Size::new(40.0, 40.0)).child(SizedBox::new(100.0, 100.0)),
         loose(200.0),
     );
     let root = laid.current_root();
     let box_size = laid.size(root);
     let child_size = laid.size(laid.only_child(root));
     assert!(
-        (box_size.width.get() - 40.0).abs() < 1e-3 && (box_size.height.get() - 40.0).abs() < 1e-3,
+        (box_size.width - 40.0).abs() < 1e-3 && (box_size.height - 40.0).abs() < 1e-3,
         "the sized overflow box reports its requested 40×40, got {}×{}",
-        box_size.width.get(),
-        box_size.height.get(),
+        box_size.width,
+        box_size.height,
     );
     assert!(
-        (child_size.width.get() - 100.0).abs() < 1e-3,
+        (child_size.width - 100.0).abs() < 1e-3,
         "the child lays out at its own 100px width, overflowing the 40px box, got {}",
-        child_size.width.get(),
+        child_size.width,
     );
 }

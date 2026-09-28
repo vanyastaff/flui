@@ -47,7 +47,7 @@ use crate::FractionalTranslation;
 /// ```rust,ignore
 /// let controller = AnimationController::without_ticker(Duration::from_millis(300));
 /// let tween = Tween::new(TranslationFraction::new(-1.0, 0.0), TranslationFraction::ZERO);
-/// let position = Arc::new(tween.animate(Arc::new(controller.clone()) as Arc<dyn Animation<f32>>));
+/// let position = Arc::new(tween.animate(Arc::new(controller.clone()) as Arc<dyn Animation<f64>>));
 /// let slide = SlideTransition::new(position, Text::new("hi"));
 /// controller.forward(); // each frame re-reads the fractional offset into the child
 /// ```
@@ -157,7 +157,7 @@ mod tests {
         end: TranslationFraction,
     ) -> (AnimationController, Arc<dyn Animation<TranslationFraction>>) {
         let controller = AnimationController::without_ticker(Duration::from_millis(300));
-        let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+        let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
         let animation: Arc<dyn Animation<TranslationFraction>> =
             Arc::new(Tween::new(begin, end).animate(parent));
         (controller, animation)

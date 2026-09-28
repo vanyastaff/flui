@@ -1,7 +1,6 @@
 //! [`Baseline`] — positions its child so a given text baseline sits at a fixed
 //! distance from the top.
 
-use flui_geometry::px;
 use flui_objects::RenderBaseline;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::typography::TextBaseline;
@@ -13,14 +12,14 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Flutter parity: `widgets/basic.dart` `Baseline` over `RenderBaseline`.
 #[derive(Clone, Debug)]
 pub struct Baseline {
-    distance: f32,
+    distance: f64,
     kind: TextBaseline,
     child: Child,
 }
 
 impl Baseline {
     /// Place the child's `baseline_type` baseline `baseline` pixels from the top.
-    pub fn new(baseline: f32, baseline_type: TextBaseline) -> Self {
+    pub fn new(baseline: f64, baseline_type: TextBaseline) -> Self {
         Self {
             distance: baseline,
             kind: baseline_type,
@@ -44,7 +43,7 @@ impl RenderView for Baseline {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderBaseline::new(self.kind, px(self.distance))
+        RenderBaseline::new(self.kind, self.distance)
     }
 
     fn update_render_object(
@@ -54,7 +53,7 @@ impl RenderView for Baseline {
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_baseline(self.kind);
-        impact |= render_object.set_baseline_offset(px(self.distance));
+        impact |= render_object.set_baseline_offset(self.distance);
         impact
     }
 

@@ -94,10 +94,7 @@ fn dispose_during_teardown_cannot_reach_sibling_or_dead_services() {
         .enter(|realm| realm.attach_root_widget(&probe))
         .expect("A mounts the dispose probe");
     let _ = realm.enter(|realm| {
-        realm.draw_frame_entered(BoxConstraints::tight(flui_types::Size::new(
-            px(20.0),
-            px(20.0),
-        )))
+        realm.draw_frame_entered(BoxConstraints::tight(flui_types::Size::new(20.0, 20.0)))
     });
     assert!(
         handle_slot.borrow().is_some(),

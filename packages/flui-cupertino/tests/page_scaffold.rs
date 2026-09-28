@@ -15,12 +15,12 @@ use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
 /// The unique `RenderConstrainedBox` sized exactly `width x height` — used
 /// to locate the content marker unambiguously alongside the navigation
 /// bar's own (differently-sized) `SizedBox`.
-fn find_by_size(laid: &LaidOut, width: f32, height: f32) -> RenderId {
+fn find_by_size(laid: &LaidOut, width: f64, height: f64) -> RenderId {
     laid.find_all_by_render_type("RenderConstrainedBox")
         .into_iter()
         .find(|&id| {
             let size = laid.size(id);
-            (size.width.get() - width).abs() < 0.01 && (size.height.get() - height).abs() < 0.01
+            (size.width - width).abs() < 0.01 && (size.height - height).abs() < 0.01
         })
         .unwrap_or_else(|| panic!("no RenderConstrainedBox sized {width}x{height}"))
 }
@@ -58,7 +58,7 @@ fn background_defaults_to_the_themes_system_background_color() {
 #[test]
 fn content_is_padded_below_the_nav_bar_plus_the_top_inset() {
     let media = MediaQueryData {
-        padding: EdgeInsets::new(px(20.0), px(0.0), px(0.0), px(0.0)),
+        padding: EdgeInsets::new(20.0, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -73,7 +73,7 @@ fn content_is_padded_below_the_nav_bar_plus_the_top_inset() {
     let content = find_by_size(&laid, 60.0, 30.0);
     let offset = laid.absolute_offset(content);
     assert!(
-        (offset.dy.get() - 64.0).abs() < 0.01,
+        (offset.dy - 64.0).abs() < 0.01,
         "44.0 nav bar height + 20.0 top inset must push content to y=64.0: {offset:?}"
     );
 }
@@ -93,7 +93,7 @@ fn content_is_unpadded_with_no_navigation_bar() {
     let content = find_by_size(&laid, 60.0, 30.0);
     let offset = laid.absolute_offset(content);
     assert!(
-        offset.dy.get().abs() < 0.01,
+        offset.dy.abs() < 0.01,
         "no navigation bar means no top padding: {offset:?}"
     );
 }
@@ -111,7 +111,7 @@ fn content_is_unpadded_with_no_navigation_bar() {
 #[test]
 fn resize_to_avoid_bottom_inset_toggles_the_bottom_padding() {
     let media = MediaQueryData {
-        view_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
         ..MediaQueryData::default()
     };
 

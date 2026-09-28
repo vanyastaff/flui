@@ -72,7 +72,7 @@ fn media_query_of_returns_ancestor_data() {
     // Size distinct from the default 800×600 so the assertion fails if
     // `maybe_of` returned the default instead of the provided value.
     let provided = MediaQueryData {
-        size: Size::new(px(1280.0), px(800.0)),
+        size: Size::new(1280.0, 800.0),
         device_pixel_ratio: 2.0,
         platform_brightness: Brightness::Dark,
         ..MediaQueryData::default()
@@ -137,12 +137,12 @@ fn media_query_maybe_of_returns_none_without_ancestor() {
 fn media_query_data_default_has_unit_scale_factors() {
     let data = MediaQueryData::default();
     assert!(
-        (data.text_scale_factor - 1.0).abs() < f32::EPSILON,
+        (data.text_scale_factor - 1.0).abs() < f64::EPSILON,
         "default text_scale_factor should be 1.0, got {}",
         data.text_scale_factor
     );
     assert!(
-        (data.device_pixel_ratio - 1.0).abs() < f32::EPSILON,
+        (data.device_pixel_ratio - 1.0).abs() < f64::EPSILON,
         "default device_pixel_ratio should be 1.0, got {}",
         data.device_pixel_ratio
     );

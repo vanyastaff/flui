@@ -20,7 +20,7 @@ const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 /// overflows its width.
 const LATIN: &str = "The quick brown fox jumps over the lazy dog and runs back home again.";
 
-fn spec(spans: &[(String, Option<TextStyle>)], max_width: Option<f64>) -> ParagraphSpec<'_> {
+fn spec(spans: &[(String, Option<TextStyle>)], max_width: Option<f32>) -> ParagraphSpec<'_> {
     ParagraphSpec {
         spans,
         default_style: None,
@@ -35,18 +35,18 @@ fn plain(text: &str) -> Vec<(String, Option<TextStyle>)> {
     vec![(text.to_owned(), None)]
 }
 
-fn shape(context: &mut TextContext, text: &str, max_width: Option<f64>) -> ParagraphLayout {
+fn shape(context: &mut TextContext, text: &str, max_width: Option<f32>) -> ParagraphLayout {
     context.shape(&spec(&plain(text), max_width))
 }
 
 /// The fields a shaped paragraph reports, as one comparable tuple.
-fn key(metrics: &TextLayoutResult) -> (f64, f64, usize, f64, f64) {
+fn key(metrics: &TextLayoutResult) -> (f32, f32, usize, f32, f32) {
     (
-        metrics.width,
-        metrics.height,
+        ((metrics.width) as f32),
+        ((metrics.height) as f32),
         metrics.line_count,
-        metrics.alphabetic_baseline,
-        metrics.ideographic_baseline,
+        ((metrics.alphabetic_baseline) as f32),
+        ((metrics.ideographic_baseline) as f32),
     )
 }
 
@@ -125,7 +125,7 @@ fn the_parley_path_never_builds_the_process_font_system() {
 /// never saw the face shapes with, draws a narrower `A`.
 #[test]
 fn a_face_registered_after_the_fork_shapes_in_every_realm() {
-    const SIZE: f64 = 20.0;
+    const SIZE: f32 = 20.0;
     let fonts = FontCollection::new();
     let mut a = TextContext::new(&fonts);
     let mut b = TextContext::new(&fonts);
@@ -153,13 +153,13 @@ fn a_face_registered_after_the_fork_shapes_in_every_realm() {
     for (name, context) in [("a", &mut a), ("b", &mut b)] {
         let after = width(context);
         assert!(
-            (after - 4.0 * SIZE).abs() < 0.01,
+            (after - f64::from(4.0 * SIZE)).abs() < 0.01,
             "realm {name}: four one-em `A`s are {} px wide, got {after}",
             4.0 * SIZE
         );
     }
     assert!(
-        (before - 4.0 * SIZE).abs() > 1.0,
+        (before - f64::from(4.0 * SIZE)).abs() > 1.0,
         "before registration the probe family falls back to Roboto, got {before}"
     );
 }
@@ -168,12 +168,12 @@ fn a_face_registered_after_the_fork_shapes_in_every_realm() {
 /// laid-out lines rather than a stand-in (ADR-0054).
 #[test]
 fn a_paragraph_wraps_at_its_max_width() {
-    const MAX: f64 = 80.0;
+    const MAX: f32 = 80.0;
     let fonts = FontCollection::new();
     let mut context = TextContext::new(&fonts);
     let metrics = shape(&mut context, LATIN, Some(MAX)).metrics();
     assert!(metrics.line_count > 1, "{metrics:?}");
-    assert!(metrics.width <= MAX + 0.01, "{metrics:?}");
+    assert!(metrics.width <= f64::from(MAX + 0.01), "{metrics:?}");
     assert!(metrics.width > 0.0, "{metrics:?}");
     assert!(
         0.0 < metrics.alphabetic_baseline && metrics.alphabetic_baseline < metrics.height,

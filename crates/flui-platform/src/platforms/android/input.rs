@@ -306,7 +306,7 @@ fn make_pointer_state(
 
 /// The framework-facing position for a pointer Android reports at physical
 /// `(x, y)` on a screen of `scale_factor` device pixels per logical pixel.
-fn logical_position(x: f32, y: f32, scale_factor: f64) -> (f64, f64) {
+fn logical_position(x: f64, y: f64, scale_factor: f64) -> (f64, f64) {
     (f64::from(x) / scale_factor, f64::from(y) / scale_factor)
 }
 

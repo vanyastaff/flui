@@ -36,7 +36,7 @@ mod tests {
         // Create a test window
         let options = WindowOptions {
             title: "Test T051 - WM_LBUTTONDOWN".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             resizable: false,
             visible: false,
             decorated: true,
@@ -74,7 +74,7 @@ mod tests {
         // Create a test window
         let options = WindowOptions {
             title: "Test T052 - WM_KEYDOWN".to_string(),
-            size: Size::new(px(640.0), px(480.0)),
+            size: Size::new(640.0, 480.0),
             resizable: false,
             visible: false,
             decorated: true,
@@ -114,12 +114,12 @@ mod tests {
         // Create a resizable test window
         let options = WindowOptions {
             title: "Test T053 - WM_SIZE".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             resizable: true, // Must be resizable
             visible: false,
             decorated: true,
-            min_size: Some(Size::new(px(320.0), px(240.0))),
-            max_size: Some(Size::new(px(1920.0), px(1080.0))),
+            min_size: Some(Size::new(320.0, 240.0)),
+            max_size: Some(Size::new(1920.0, 1080.0)),
             ..Default::default()
         };
 
@@ -169,7 +169,7 @@ mod tests {
         // Create a test window
         let options = WindowOptions {
             title: "Test T054 - Latency".to_string(),
-            size: Size::new(px(640.0), px(480.0)),
+            size: Size::new(640.0, 480.0),
             resizable: false,
             visible: false,
             decorated: true,
@@ -212,7 +212,7 @@ mod tests {
         // Create a test window
         let options = WindowOptions {
             title: "Test T055 - Modifiers".to_string(),
-            size: Size::new(px(640.0), px(480.0)),
+            size: Size::new(640.0, 480.0),
             resizable: false,
             visible: false,
             decorated: true,
@@ -257,7 +257,7 @@ mod tests {
         // Create a test window
         let options = WindowOptions {
             title: "Integration Test - Event Pipeline".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             resizable: true,
             visible: false,
             decorated: true,
@@ -291,8 +291,8 @@ mod tests {
         // Verify coordinate system consistency
         let expected_logical_width = (physical_size.width.0 as f64) / scale_factor;
         let expected_logical_height = (physical_size.height.0 as f64) / scale_factor;
-        let width_diff = (logical_size.width.0 - expected_logical_width as f32).abs();
-        let height_diff = (logical_size.height.0 - expected_logical_height as f32).abs();
+        let width_diff = (logical_size.width.0 - expected_logical_width as f64).abs();
+        let height_diff = (logical_size.height.0 - expected_logical_height as f64).abs();
 
         assert!(
             width_diff < 2.0,

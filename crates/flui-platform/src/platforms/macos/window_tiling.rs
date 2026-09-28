@@ -23,7 +23,7 @@
 //! ```
 
 use flui_types::{
-    Pixels,
+    f64,
     geometry::{Rect, Size},
 };
 
@@ -56,7 +56,7 @@ pub struct TilingConfiguration {
     /// - 0.5 = Equal split
     /// - 0.33 = Primary takes 1/3, secondary takes 2/3
     /// - 0.67 = Primary takes 2/3, secondary takes 1/3
-    pub split_ratio: f32,
+    pub split_ratio: f64,
 
     /// Tiling layout mode.
     pub layout: TilingLayout,
@@ -65,7 +65,7 @@ pub struct TilingConfiguration {
     pub show_resize_handle: bool,
 
     /// Minimum size for tiled windows.
-    pub min_tile_size: Size<Pixels>,
+    pub min_tile_size: Size<f64>,
 }
 
 impl TilingConfiguration {
@@ -83,7 +83,7 @@ impl TilingConfiguration {
             split_ratio: 0.5,
             layout: TilingLayout::SideBySide,
             show_resize_handle: true,
-            min_tile_size: Size::new(Pixels(400.0), Pixels(300.0)),
+            min_tile_size: Size::new(400.0, 300.0),
         }
     }
 
@@ -94,7 +94,7 @@ impl TilingConfiguration {
     }
 
     /// Set the split ratio (clamped to 0.2-0.8).
-    pub fn with_split_ratio(mut self, ratio: f32) -> Self {
+    pub fn with_split_ratio(mut self, ratio: f64) -> Self {
         self.split_ratio = ratio.clamp(0.2, 0.8);
         self
     }
@@ -112,7 +112,7 @@ impl TilingConfiguration {
     }
 
     /// Set minimum tile size.
-    pub fn with_min_size(mut self, size: Size<Pixels>) -> Self {
+    pub fn with_min_size(mut self, size: Size<f64>) -> Self {
         self.min_tile_size = size;
         self
     }
@@ -130,8 +130,8 @@ impl TilingConfiguration {
     /// not cross-validate them, so this can only be caught here.
     pub fn calculate_tiles(
         &self,
-        screen_size: Size<Pixels>,
-    ) -> Result<(Rect<Pixels>, Rect<Pixels>), TilingError> {
+        screen_size: Size<f64>,
+    ) -> Result<(Rect<f64>, Rect<f64>), TilingError> {
         if !self.primary_position.is_valid_for_layout(self.layout) {
             return Err(TilingError {
                 position: self.primary_position,
@@ -149,21 +149,21 @@ impl TilingConfiguration {
                 match self.primary_position {
                     TilePosition::Left => (
                         Rect::from_origin_size(
-                            flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
+                            flui_types::geometry::Point::new(0.0, 0.0),
                             Size::new(split_x, height),
                         ),
                         Rect::from_origin_size(
-                            flui_types::geometry::Point::new(split_x, Pixels(0.0)),
+                            flui_types::geometry::Point::new(split_x, 0.0),
                             Size::new(width - split_x, height),
                         ),
                     ),
                     TilePosition::Right => (
                         Rect::from_origin_size(
-                            flui_types::geometry::Point::new(width - split_x, Pixels(0.0)),
+                            flui_types::geometry::Point::new(width - split_x, 0.0),
                             Size::new(split_x, height),
                         ),
                         Rect::from_origin_size(
-                            flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
+                            flui_types::geometry::Point::new(0.0, 0.0),
                             Size::new(width - split_x, height),
                         ),
                     ),
@@ -181,21 +181,21 @@ impl TilingConfiguration {
                 match self.primary_position {
                     TilePosition::Top => (
                         Rect::from_origin_size(
-                            flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
+                            flui_types::geometry::Point::new(0.0, 0.0),
                             Size::new(width, split_y),
                         ),
                         Rect::from_origin_size(
-                            flui_types::geometry::Point::new(Pixels(0.0), split_y),
+                            flui_types::geometry::Point::new(0.0, split_y),
                             Size::new(width, height - split_y),
                         ),
                     ),
                     TilePosition::Bottom => (
                         Rect::from_origin_size(
-                            flui_types::geometry::Point::new(Pixels(0.0), height - split_y),
+                            flui_types::geometry::Point::new(0.0, height - split_y),
                             Size::new(width, split_y),
                         ),
                         Rect::from_origin_size(
-                            flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
+                            flui_types::geometry::Point::new(0.0, 0.0),
                             Size::new(width, height - split_y),
                         ),
                     ),
@@ -212,15 +212,15 @@ impl TilingConfiguration {
 
                 let primary = match self.primary_position {
                     TilePosition::TopLeft => Rect::from_origin_size(
-                        flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
+                        flui_types::geometry::Point::new(0.0, 0.0),
                         Size::new(half_width, half_height),
                     ),
                     TilePosition::TopRight => Rect::from_origin_size(
-                        flui_types::geometry::Point::new(half_width, Pixels(0.0)),
+                        flui_types::geometry::Point::new(half_width, 0.0),
                         Size::new(half_width, half_height),
                     ),
                     TilePosition::BottomLeft => Rect::from_origin_size(
-                        flui_types::geometry::Point::new(Pixels(0.0), half_height),
+                        flui_types::geometry::Point::new(0.0, half_height),
                         Size::new(half_width, half_height),
                     ),
                     TilePosition::BottomRight => Rect::from_origin_size(
@@ -233,10 +233,8 @@ impl TilingConfiguration {
                 };
 
                 // Secondary takes the rest (3 quadrants)
-                let secondary = Rect::from_origin_size(
-                    flui_types::geometry::Point::new(Pixels(0.0), Pixels(0.0)),
-                    screen_size,
-                );
+                let secondary =
+                    Rect::from_origin_size(flui_types::geometry::Point::new(0.0, 0.0), screen_size);
 
                 (primary, secondary)
             }
@@ -443,13 +441,13 @@ mod tests {
             .with_primary_position(TilePosition::Left)
             .with_split_ratio(0.5);
 
-        let screen = Size::new(Pixels(1920.0), Pixels(1080.0));
+        let screen = Size::new(1920.0, 1080.0);
         let (primary, secondary) = config.calculate_tiles(screen).unwrap();
 
-        assert_eq!(primary.width(), Pixels(960.0));
-        assert_eq!(secondary.width(), Pixels(960.0));
-        assert_eq!(primary.height(), Pixels(1080.0));
-        assert_eq!(secondary.height(), Pixels(1080.0));
+        assert_eq!(primary.width(), 960.0);
+        assert_eq!(secondary.width(), 960.0);
+        assert_eq!(primary.height(), 1080.0);
+        assert_eq!(secondary.height(), 1080.0);
     }
 
     #[test]
@@ -459,11 +457,11 @@ mod tests {
             .with_primary_position(TilePosition::Top)
             .with_split_ratio(0.6);
 
-        let screen = Size::new(Pixels(1920.0), Pixels(1080.0));
+        let screen = Size::new(1920.0, 1080.0);
         let (primary, secondary) = config.calculate_tiles(screen).unwrap();
 
-        assert_eq!(primary.height(), Pixels(648.0)); // 60% of 1080
-        assert_eq!(secondary.height(), Pixels(432.0)); // 40% of 1080
+        assert_eq!(primary.height(), 648.0); // 60% of 1080
+        assert_eq!(secondary.height(), 432.0); // 40% of 1080
     }
 
     #[test]
@@ -475,7 +473,7 @@ mod tests {
             .with_layout(TilingLayout::SideBySide)
             .with_primary_position(TilePosition::TopLeft);
 
-        let screen = Size::new(Pixels(1920.0), Pixels(1080.0));
+        let screen = Size::new(1920.0, 1080.0);
         let err = config.calculate_tiles(screen).unwrap_err();
         assert_eq!(
             err,

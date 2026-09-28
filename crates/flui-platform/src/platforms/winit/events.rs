@@ -30,7 +30,7 @@ use crate::{
 fn pointer_state(
     position: winit::dpi::PhysicalPosition<f64>,
     scale_factor: f64,
-    pressure: f32,
+    pressure: f64,
     modifiers: KeyboardModifiers,
     buttons: PointerButtons,
     count: u8,
@@ -198,7 +198,7 @@ pub fn touch_event(
     };
     // Hardware without force reporting gets the same 0.5 stand-in the mouse
     // path uses for a held button.
-    let contact_pressure = touch.force.map_or(0.5, |force| force.normalized() as f32);
+    let contact_pressure = touch.force.map_or(0.5, |force| force.normalized() as f64);
     let contact_buttons = PointerButtons::from(PointerButton::Primary);
 
     let event = match touch.phase {

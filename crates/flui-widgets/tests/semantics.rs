@@ -195,7 +195,7 @@ fn clip_rect_narrows_the_semantics_rect_of_the_content_it_clips() {
             ClipRect::new().clip_behavior(clip).child(
                 OverflowBox::new()
                     .with_alignment(Alignment::TOP_LEFT)
-                    .with_max_height(px(200.0))
+                    .with_max_height(200.0)
                     .child(
                         Semantics::new()
                             .container(true)
@@ -290,14 +290,14 @@ fn scrolling_republishes_the_semantics_rects() {
     laid.enable_semantics();
     laid.pump();
 
-    let top_of = |laid: &crate::common::LaidOut, label: &str| -> f32 {
+    let top_of = |laid: &crate::common::LaidOut, label: &str| -> f64 {
         laid.a11y_tree()
             .expect("semantics enabled")
             .find_by_label(label)
             .unwrap_or_else(|e| panic!("expected one {label}: {e}"))
             .bounds()
             .expect("a laid-out row carries bounds")
-            .y0 as f32
+            .y0 as f64
     };
 
     let before = top_of(&laid, "row 1");

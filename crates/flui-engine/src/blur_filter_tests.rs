@@ -94,26 +94,21 @@ mod gpu_tests {
         )
     }
 
-    fn px(physical_pixels: f32) -> Pixels {
-        Pixels(physical_pixels)
+    fn px(physical_pixels: f32) -> f64 {
+        physical_pixels
     }
 
-    fn full_surface_bounds() -> Rect<Pixels> {
-        Rect::from_xywh(
-            px(0.0),
-            px(0.0),
-            px(SURFACE_WIDTH as f32),
-            px(SURFACE_HEIGHT as f32),
-        )
+    fn full_surface_bounds() -> Rect<f64> {
+        Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32))
     }
 
-    fn center_rect(edge_margin_px: u32) -> Rect<Pixels> {
+    fn center_rect(edge_margin_px: u32) -> Rect<f64> {
         let margin = edge_margin_px as f32;
         Rect::from_xywh(
-            px(margin),
-            px(margin),
-            px(SURFACE_WIDTH as f32 - 2.0 * margin),
-            px(SURFACE_HEIGHT as f32 - 2.0 * margin),
+            margin,
+            margin,
+            (SURFACE_WIDTH as f32 - 2.0 * margin),
+            (SURFACE_HEIGHT as f32 - 2.0 * margin),
         )
     }
 
@@ -336,10 +331,10 @@ mod gpu_tests {
         // Use `save_layer_with_image_filter` so the production path exercises the
         // `restore_layer(Blur)` arm and the `DrawItem::Filter` seam.
         let disc_rect = Rect::from_xywh(
-            px(disc_center.0 as f32 - DISC_RADIUS_PX),
-            px(disc_center.1 as f32 - DISC_RADIUS_PX),
-            px(2.0 * DISC_RADIUS_PX),
-            px(2.0 * DISC_RADIUS_PX),
+            (disc_center.0 as f32 - DISC_RADIUS_PX),
+            (disc_center.1 as f32 - DISC_RADIUS_PX),
+            (2.0 * DISC_RADIUS_PX),
+            (2.0 * DISC_RADIUS_PX),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -780,10 +775,10 @@ mod gpu_tests {
         );
 
         let content_rect = Rect::from_xywh(
-            px(CONTENT_LEFT as f32),
-            px(CONTENT_TOP as f32),
-            px((CONTENT_RIGHT - CONTENT_LEFT) as f32),
-            px((CONTENT_BOTTOM - CONTENT_TOP) as f32),
+            (CONTENT_LEFT as f32),
+            (CONTENT_TOP as f32),
+            ((CONTENT_RIGHT - CONTENT_LEFT) as f32),
+            ((CONTENT_BOTTOM - CONTENT_TOP) as f32),
         );
         let source_color = Color::rgba(200, 200, 200, 255);
 
@@ -794,10 +789,10 @@ mod gpu_tests {
         let grown_right = CONTENT_RIGHT + KERNEL_RAD;
         let grown_bottom = CONTENT_BOTTOM + KERNEL_RAD;
         let grown_rect = Rect::from_xywh(
-            px(grown_left as f32),
-            px(grown_top as f32),
-            px((grown_right - grown_left) as f32),
-            px((grown_bottom - grown_top) as f32),
+            (grown_left as f32),
+            (grown_top as f32),
+            ((grown_right - grown_left) as f32),
+            ((grown_bottom - grown_top) as f32),
         );
 
         let mut segment = DrawSegment::new();
@@ -938,10 +933,10 @@ mod gpu_tests {
         );
 
         let content_rect = Rect::from_xywh(
-            px(CONTENT_LEFT as f32),
-            px(CONTENT_TOP as f32),
-            px((CONTENT_RIGHT - CONTENT_LEFT) as f32),
-            px((CONTENT_BOTTOM - CONTENT_TOP) as f32),
+            (CONTENT_LEFT as f32),
+            (CONTENT_TOP as f32),
+            ((CONTENT_RIGHT - CONTENT_LEFT) as f32),
+            ((CONTENT_BOTTOM - CONTENT_TOP) as f32),
         );
 
         // Production path: save_layer_with_image_filter → restore_layer computes
@@ -1133,10 +1128,10 @@ mod gpu_tests {
         // content_aabb — this is the canonical producer the criterion covers.
         painter.draw_rect(
             Rect::from_xywh(
-                px(CONTENT_MARGIN as f32),
-                px(CONTENT_MARGIN as f32),
-                px((SURFACE_WIDTH - 2 * CONTENT_MARGIN) as f32),
-                px((SURFACE_HEIGHT - 2 * CONTENT_MARGIN) as f32),
+                (CONTENT_MARGIN as f32),
+                (CONTENT_MARGIN as f32),
+                ((SURFACE_WIDTH - 2 * CONTENT_MARGIN) as f32),
+                ((SURFACE_HEIGHT - 2 * CONTENT_MARGIN) as f32),
             ),
             &Paint::fill(Color::rgba(180, 120, 60, 255)),
         );
@@ -1241,10 +1236,10 @@ mod gpu_tests {
             });
             painter.draw_rect(
                 Rect::from_xywh(
-                    px(INNER_MARGIN as f32),
-                    px(INNER_MARGIN as f32),
-                    px((SURFACE_WIDTH - 2 * INNER_MARGIN) as f32),
-                    px((SURFACE_HEIGHT - 2 * INNER_MARGIN) as f32),
+                    (INNER_MARGIN as f32),
+                    (INNER_MARGIN as f32),
+                    ((SURFACE_WIDTH - 2 * INNER_MARGIN) as f32),
+                    ((SURFACE_HEIGHT - 2 * INNER_MARGIN) as f32),
                 ),
                 &Paint::fill(Color::rgba(200, 150, 80, 255)),
             );
@@ -1275,10 +1270,10 @@ mod gpu_tests {
         // Opaque rect filling [20,20]→[44,44].
         painter.draw_rect(
             Rect::from_xywh(
-                px(INNER_MARGIN as f32),
-                px(INNER_MARGIN as f32),
-                px((SURFACE_WIDTH - 2 * INNER_MARGIN) as f32),
-                px((SURFACE_HEIGHT - 2 * INNER_MARGIN) as f32),
+                (INNER_MARGIN as f32),
+                (INNER_MARGIN as f32),
+                ((SURFACE_WIDTH - 2 * INNER_MARGIN) as f32),
+                ((SURFACE_HEIGHT - 2 * INNER_MARGIN) as f32),
             ),
             &Paint::fill(Color::rgba(200, 150, 80, 255)),
         );
@@ -1365,7 +1360,7 @@ mod gpu_tests {
                 sigma_y: SIGMA,
             });
             painter.draw_circle(
-                Point::new(Pixels(CENTER_COL as f32), Pixels(CENTER_ROW as f32)),
+                Point::new((CENTER_COL as f32), (CENTER_ROW as f32)),
                 RADIUS_PX as f32,
                 &Paint::fill(Color::rgba(200, 80, 80, 255)),
             );
@@ -1400,7 +1395,7 @@ mod gpu_tests {
             sigma_y: SIGMA,
         });
         painter.draw_circle(
-            Point::new(Pixels(CENTER_COL as f32), Pixels(CENTER_ROW as f32)),
+            Point::new((CENTER_COL as f32), (CENTER_ROW as f32)),
             RADIUS_PX as f32,
             &Paint::fill(Color::rgba(200, 80, 80, 255)),
         );
@@ -1493,7 +1488,7 @@ mod gpu_tests {
                 sigma_x: SIGMA,
                 sigma_y: SIGMA,
             });
-            let rect = Rect::from_xywh(px(MARGIN), px(MARGIN), px(SIDE), px(SIDE));
+            let rect = Rect::from_xywh(MARGIN, MARGIN, SIDE, SIDE);
             painter.draw_rect(
                 rect,
                 &crate::test_support::linear_gradient_fill(
@@ -1545,7 +1540,7 @@ mod gpu_tests {
             sigma_x: SIGMA,
             sigma_y: SIGMA,
         });
-        let rect = Rect::from_xywh(px(MARGIN), px(MARGIN), px(SIDE), px(SIDE));
+        let rect = Rect::from_xywh(MARGIN, MARGIN, SIDE, SIDE);
         painter.draw_rect(
             rect,
             &crate::test_support::linear_gradient_fill(
@@ -1614,10 +1609,10 @@ mod gpu_tests {
         });
         painter.draw_rect(
             Rect::from_xywh(
-                px(INNER_MARGIN as f32),
-                px(INNER_MARGIN as f32),
-                px((SURFACE_WIDTH - 2 * INNER_MARGIN) as f32),
-                px((SURFACE_HEIGHT - 2 * INNER_MARGIN) as f32),
+                (INNER_MARGIN as f32),
+                (INNER_MARGIN as f32),
+                ((SURFACE_WIDTH - 2 * INNER_MARGIN) as f32),
+                ((SURFACE_HEIGHT - 2 * INNER_MARGIN) as f32),
             ),
             &flui_painting::Paint::fill(flui_types::Color::rgba(255, 128, 0, 255)),
         );
@@ -1731,19 +1726,19 @@ mod gpu_tests {
             // Apply clip then draw the inset content rect (clip is nested inside).
             painter.clip_rect(
                 Rect::from_xywh(
-                    px(CLIP_LEFT as f32),
-                    px(CLIP_TOP as f32),
-                    px((CLIP_RIGHT - CLIP_LEFT) as f32),
-                    px((CLIP_BOTTOM - CLIP_TOP) as f32),
+                    (CLIP_LEFT as f32),
+                    (CLIP_TOP as f32),
+                    ((CLIP_RIGHT - CLIP_LEFT) as f32),
+                    ((CLIP_BOTTOM - CLIP_TOP) as f32),
                 ),
                 flui_types::painting::Clip::HardEdge,
             );
             painter.draw_rect(
                 Rect::from_xywh(
-                    px(CONTENT_LEFT as f32),
-                    px(CONTENT_TOP as f32),
-                    px((CONTENT_RIGHT - CONTENT_LEFT) as f32),
-                    px((CONTENT_BOTTOM - CONTENT_TOP) as f32),
+                    (CONTENT_LEFT as f32),
+                    (CONTENT_TOP as f32),
+                    ((CONTENT_RIGHT - CONTENT_LEFT) as f32),
+                    ((CONTENT_BOTTOM - CONTENT_TOP) as f32),
                 ),
                 &flui_painting::Paint::fill(flui_types::Color::rgba(255, 0, 0, 255)),
             );
@@ -1792,19 +1787,19 @@ mod gpu_tests {
         });
         painter.clip_rect(
             Rect::from_xywh(
-                px(CLIP_LEFT as f32),
-                px(CLIP_TOP as f32),
-                px((CLIP_RIGHT - CLIP_LEFT) as f32),
-                px((CLIP_BOTTOM - CLIP_TOP) as f32),
+                (CLIP_LEFT as f32),
+                (CLIP_TOP as f32),
+                ((CLIP_RIGHT - CLIP_LEFT) as f32),
+                ((CLIP_BOTTOM - CLIP_TOP) as f32),
             ),
             flui_types::painting::Clip::HardEdge,
         );
         painter.draw_rect(
             Rect::from_xywh(
-                px(CONTENT_LEFT as f32),
-                px(CONTENT_TOP as f32),
-                px((CONTENT_RIGHT - CONTENT_LEFT) as f32),
-                px((CONTENT_BOTTOM - CONTENT_TOP) as f32),
+                (CONTENT_LEFT as f32),
+                (CONTENT_TOP as f32),
+                ((CONTENT_RIGHT - CONTENT_LEFT) as f32),
+                ((CONTENT_BOTTOM - CONTENT_TOP) as f32),
             ),
             &flui_painting::Paint::fill(flui_types::Color::rgba(255, 0, 0, 255)),
         );

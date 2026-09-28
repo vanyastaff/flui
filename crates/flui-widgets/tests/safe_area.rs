@@ -5,7 +5,7 @@ use flui_widgets::{MediaQuery, MediaQueryData, SafeArea, SizedBox};
 #[test]
 fn nested_safe_area_consumes_selected_padding_once() {
     let media = MediaQueryData {
-        padding: EdgeInsets::new(px(20.0), px(8.0), px(12.0), px(6.0)),
+        padding: EdgeInsets::new(20.0, 8.0, 12.0, 6.0),
         ..Default::default()
     };
     let laid = lay_out(

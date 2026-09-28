@@ -33,7 +33,7 @@ impl RenderView for KeyedBox {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderSizedBox;
     fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderSizedBox::new(Some(px(10.0)), Some(px(10.0)))
+        RenderSizedBox::new(Some(10.0), Some(10.0))
     }
     fn update_render_object(
         &self,
@@ -59,7 +59,7 @@ impl RenderView for HostBox {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderSizedBox;
     fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderSizedBox::new(Some(px(100.0)), Some(px(100.0)))
+        RenderSizedBox::new(Some(100.0), Some(100.0))
     }
     fn update_render_object(
         &self,
@@ -139,7 +139,7 @@ impl RenderView for PlainBox {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderSizedBox;
     fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderSizedBox::new(Some(px(10.0)), Some(px(10.0)))
+        RenderSizedBox::new(Some(10.0), Some(10.0))
     }
     fn update_render_object(
         &self,
@@ -418,7 +418,7 @@ impl RenderView for PanicsOnUpdate {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderSizedBox;
     fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderSizedBox::new(Some(px(10.0)), Some(px(10.0)))
+        RenderSizedBox::new(Some(10.0), Some(10.0))
     }
     fn update_render_object(
         &self,

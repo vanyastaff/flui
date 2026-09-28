@@ -1,6 +1,6 @@
 //! [`Padding`] — insets its child by a given amount.
 
-use flui_geometry::{EdgeInsets, px};
+use flui_geometry::EdgeInsets;
 use flui_objects::RenderPadding;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
@@ -33,18 +33,18 @@ impl Padding {
     }
 
     /// Uniform padding on all four sides.
-    pub fn all(value: f32) -> Self {
-        Self::new(EdgeInsets::all(px(value)))
+    pub fn all(value: f64) -> Self {
+        Self::new(EdgeInsets::all(value))
     }
 
     /// Symmetric padding: `horizontal` on left/right, `vertical` on top/bottom.
-    pub fn symmetric(horizontal: f32, vertical: f32) -> Self {
-        Self::new(EdgeInsets::symmetric(px(vertical), px(horizontal)))
+    pub fn symmetric(horizontal: f64, vertical: f64) -> Self {
+        Self::new(EdgeInsets::symmetric(vertical, horizontal))
     }
 
     /// Padding on individually-named sides (unspecified sides are zero).
-    pub fn only(left: f32, top: f32, right: f32, bottom: f32) -> Self {
-        Self::new(EdgeInsets::new(px(top), px(right), px(bottom), px(left)))
+    pub fn only(left: f64, top: f64, right: f64, bottom: f64) -> Self {
+        Self::new(EdgeInsets::new(top, right, bottom, left))
     }
 
     /// Set the child laid out inside the padding.

@@ -70,7 +70,7 @@ fn body_is_positioned_below_the_app_bar_with_no_padding() {
 
     assert_eq!(
         laid.size(app_bar).height,
-        px(56.0),
+        56.0,
         "with no MediaQuery padding, the app bar's measured height is exactly toolbar_height",
     );
     assert_eq!(
@@ -83,7 +83,7 @@ fn body_is_positioned_below_the_app_bar_with_no_padding() {
 #[test]
 fn app_bar_height_includes_the_top_padding_and_the_body_does_not_double_shift() {
     let media_query = MediaQueryData {
-        padding: EdgeInsets::new(px(24.0), px(0.0), px(0.0), px(0.0)),
+        padding: EdgeInsets::new(24.0, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -105,7 +105,7 @@ fn app_bar_height_includes_the_top_padding_and_the_body_does_not_double_shift() 
 
     assert_eq!(
         laid.size(app_bar).height,
-        px(56.0 + 24.0),
+        (56.0 + 24.0),
         "the app bar's measured height must include the top MediaQuery padding \
          (it consumes that inset itself — see app_bar.rs)",
     );
@@ -143,7 +143,7 @@ fn no_app_bar_means_the_body_starts_at_the_top() {
 #[test]
 fn floating_action_button_floats_above_the_keyboard() {
     let media_query = MediaQueryData {
-        view_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -178,7 +178,7 @@ fn floating_action_button_floats_above_the_keyboard() {
 #[test]
 fn resize_to_avoid_bottom_inset_false_ignores_the_keyboard() {
     let media_query = MediaQueryData {
-        view_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -244,14 +244,14 @@ fn media_query_change_repositions_the_floating_action_button_end_to_end() {
     let y_before_keyboard = laid.offset(fab_before).dy;
     assert_eq!(
         y_before_keyboard,
-        px(800.0 - 56.0 - 16.0),
+        (800.0 - 56.0 - 16.0),
         "sanity: no keyboard yet, the FAB sits at the bottom margin",
     );
 
     // The keyboard shows: root-swap to the same tree shape with a nonzero
     // `view_insets.bottom`.
     let media_query_with_keyboard = MediaQueryData {
-        view_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
         ..MediaQueryData::default()
     };
     laid.pump_widget(Theme::new(
@@ -270,7 +270,7 @@ fn media_query_change_repositions_the_floating_action_button_end_to_end() {
 
     assert_eq!(
         y_after_keyboard,
-        px(500.0 - 56.0 - 16.0),
+        (500.0 - 56.0 - 16.0),
         "once the keyboard shows, the FAB must move up to float above content_bottom",
     );
     assert!(
@@ -290,7 +290,7 @@ fn floating_action_button_clears_the_bottom_safe_area_with_no_keyboard() {
     // `fab_y_grows_the_safe_margin_for_a_nonzero_min_view_padding_bottom`;
     // this is the same case mounted end to end.
     let media_query = MediaQueryData {
-        padding: EdgeInsets::new(px(0.0), px(0.0), px(34.0), px(0.0)),
+        padding: EdgeInsets::new(0.0, 0.0, 34.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -315,7 +315,7 @@ fn floating_action_button_clears_the_bottom_safe_area_with_no_keyboard() {
     // fab_y = 800 - 56 - 50 = 694.
     assert_eq!(
         laid.offset(fab).dy,
-        px(694.0),
+        694.0,
         "with a 34px bottom safe-area inset and no keyboard, the FAB must be lifted clear of \
          it (y = 694); the flat-margin formula this replaces would have parked it at \
          800 - 56 - 16 = 728, inside the unsafe 34px band",
@@ -325,7 +325,7 @@ fn floating_action_button_clears_the_bottom_safe_area_with_no_keyboard() {
 #[test]
 fn floating_action_button_x_accounts_for_the_right_safe_area_padding() {
     let media_query = MediaQueryData {
-        padding: EdgeInsets::new(px(0.0), px(20.0), px(0.0), px(0.0)),
+        padding: EdgeInsets::new(0.0, 20.0, 0.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -346,7 +346,7 @@ fn floating_action_button_x_accounts_for_the_right_safe_area_padding() {
 
     assert_eq!(
         laid.offset(fab).dx,
-        px(400.0 - 16.0 - 20.0 - 56.0),
+        (400.0 - 16.0 - 20.0 - 56.0),
         "the FAB's x position must subtract min_insets.right (the right safe-area padding, \
          e.g. a landscape-orientation notch), not just the flat margin",
     );
@@ -355,7 +355,7 @@ fn floating_action_button_x_accounts_for_the_right_safe_area_padding() {
 #[test]
 fn greedy_body_fills_exactly_the_area_between_the_app_bar_and_the_keyboard() {
     let media_query = MediaQueryData {
-        view_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -376,11 +376,7 @@ fn greedy_body_fills_exactly_the_area_between_the_app_bar_and_the_keyboard() {
     let app_bar = laid.child(layout, 1);
 
     let content_top = laid.size(app_bar).height;
-    assert_eq!(
-        content_top,
-        px(56.0),
-        "sanity: the app bar's measured height"
-    );
+    assert_eq!(content_top, 56.0, "sanity: the app bar's measured height");
 
     // content_bottom = scaffold_height(800) - min_insets.bottom(300) = 500.
     // A body that greedily fills its loose constraints (SizedBox::expand())
@@ -403,7 +399,7 @@ fn body_media_query_has_zero_top_padding_under_an_app_bar() {
         captured: Rc::clone(&captured),
     };
     let media_query = MediaQueryData {
-        padding: EdgeInsets::new(px(24.0), px(0.0), px(0.0), px(0.0)),
+        padding: EdgeInsets::new(24.0, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     };
 
@@ -425,8 +421,7 @@ fn body_media_query_has_zero_top_padding_under_an_app_bar() {
         .clone()
         .expect("the body must have built at least once and read an ambient MediaQuery");
     assert_eq!(
-        observed.padding.top,
-        px(0.0),
+        observed.padding.top, 0.0,
         "the body's ambient MediaQuery.padding.top must be zeroed when an app bar is present \
          — the app bar already consumed that inset internally; a SafeArea nested in the body \
          reading the un-reduced 24px would double-pad",
@@ -440,7 +435,7 @@ fn body_media_query_keeps_top_padding_with_no_app_bar() {
         captured: Rc::clone(&captured),
     };
     let media_query = MediaQueryData {
-        padding: EdgeInsets::new(px(24.0), px(0.0), px(0.0), px(0.0)),
+        padding: EdgeInsets::new(24.0, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     };
 
@@ -457,8 +452,7 @@ fn body_media_query_keeps_top_padding_with_no_app_bar() {
         .clone()
         .expect("the body must have built at least once and read an ambient MediaQuery");
     assert_eq!(
-        observed.padding.top,
-        px(24.0),
+        observed.padding.top, 24.0,
         "with no app bar to consume it, the body's ambient MediaQuery.padding.top must pass \
          through unreduced — nothing else has claimed that inset",
     );
@@ -471,7 +465,7 @@ fn body_media_query_has_zero_bottom_view_inset_when_resizing() {
         captured: Rc::clone(&captured),
     };
     let media_query = MediaQueryData {
-        view_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
         ..MediaQueryData::default()
     };
 
@@ -493,8 +487,7 @@ fn body_media_query_has_zero_bottom_view_inset_when_resizing() {
         .clone()
         .expect("the body must have built at least once and read an ambient MediaQuery");
     assert_eq!(
-        observed.view_insets.bottom,
-        px(0.0),
+        observed.view_insets.bottom, 0.0,
         "with resize_to_avoid_bottom_inset(true), the body's ambient MediaQuery.view_insets.bottom \
          must be zeroed — the delegate already shrank the body's own constraints for the \
          keyboard; a body reading the raw 300px would double-avoid it",
@@ -508,7 +501,7 @@ fn body_media_query_keeps_bottom_view_inset_when_not_resizing() {
         captured: Rc::clone(&captured),
     };
     let media_query = MediaQueryData {
-        view_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
         ..MediaQueryData::default()
     };
 
@@ -530,8 +523,7 @@ fn body_media_query_keeps_bottom_view_inset_when_not_resizing() {
         .clone()
         .expect("the body must have built at least once and read an ambient MediaQuery");
     assert_eq!(
-        observed.view_insets.bottom,
-        px(300.0),
+        observed.view_insets.bottom, 300.0,
         "with resize_to_avoid_bottom_inset(false), the body's ambient \
          MediaQuery.view_insets.bottom must pass through unreduced — the delegate did not \
          shrink the body's constraints, so the body is responsible for avoiding the keyboard \
@@ -583,7 +575,7 @@ fn bottom_navigation_bar_shrinks_the_body_and_lifts_the_floating_action_button()
     // fab_y = content_bottom(720) - fab_height(56) - safe_margin(16) = 648.
     assert_eq!(
         laid.offset(fab).dy,
-        px(648.0),
+        648.0,
         "the floating action button must lift above the bottom navigation bar — it is \
          positioned from content_bottom, which already folds in the bar's measured height; \
          with no bottom-nav-aware content_bottom the FAB would sit at 800 - 56 - 16 = 728, \
@@ -598,7 +590,7 @@ fn body_media_query_has_zero_bottom_padding_under_a_bottom_navigation_bar() {
         captured: Rc::clone(&captured),
     };
     let media_query = MediaQueryData {
-        padding: EdgeInsets::new(px(0.0), px(0.0), px(34.0), px(0.0)),
+        padding: EdgeInsets::new(0.0, 0.0, 34.0, 0.0),
         ..MediaQueryData::default()
     };
 
@@ -620,8 +612,7 @@ fn body_media_query_has_zero_bottom_padding_under_a_bottom_navigation_bar() {
         .clone()
         .expect("the body must have built at least once and read an ambient MediaQuery");
     assert_eq!(
-        observed.padding.bottom,
-        px(0.0),
+        observed.padding.bottom, 0.0,
         "the body's ambient MediaQuery.padding.bottom must be zeroed when a bottom navigation \
          bar is present — the bar already consumes that inset internally (see its own SafeArea \
          wrapping); a SafeArea nested in the body reading the un-reduced 34px would double-pad",
@@ -647,7 +638,7 @@ fn bottom_navigation_bar_does_not_leak_the_ambient_top_padding_into_its_own_safe
     // bar's own `SafeArea` must never see this inset, or it inflates the
     // bar past its fixed 80dp height.
     let media_query = MediaQueryData {
-        padding: EdgeInsets::new(px(24.0), px(0.0), px(0.0), px(0.0)),
+        padding: EdgeInsets::new(24.0, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -670,7 +661,7 @@ fn bottom_navigation_bar_does_not_leak_the_ambient_top_padding_into_its_own_safe
 
     assert_eq!(
         laid.size(bottom_nav).height,
-        px(80.0),
+        80.0,
         "the bottom navigation bar's own SafeArea must not ALSO consume the ambient 24px \
          padding.top on top of its fixed 80dp height — a leaked top inset would inflate the \
          bar to 104 instead of the oracle's height + padding.bottom (80 here, since \

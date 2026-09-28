@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
+use flui_types::geometry::{Bounds, Point, Size};
 use windows::Win32::{
     Foundation::{LPARAM, RECT, TRUE},
     Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW},
@@ -18,8 +18,8 @@ use crate::traits::{DisplayId, PlatformDisplay};
 pub struct WindowsDisplay {
     id: DisplayId,
     name: String,
-    bounds: Bounds<DevicePixels>,
-    usable_bounds: Bounds<DevicePixels>,
+    bounds: Bounds<i32>,
+    usable_bounds: Bounds<i32>,
     scale_factor: f64,
     is_primary: bool,
 }
@@ -59,25 +59,13 @@ impl WindowsDisplay {
             let id = DisplayId(hmonitor.0 as u64);
 
             let bounds = Bounds {
-                origin: Point::new(
-                    flui_types::geometry::device_px(rc.left),
-                    flui_types::geometry::device_px(rc.top),
-                ),
-                size: Size::new(
-                    flui_types::geometry::device_px(rc.right - rc.left),
-                    flui_types::geometry::device_px(rc.bottom - rc.top),
-                ),
+                origin: Point::new(rc.left, rc.top),
+                size: Size::new(rc.right - rc.left, rc.bottom - rc.top),
             };
 
             let usable_bounds = Bounds {
-                origin: Point::new(
-                    flui_types::geometry::device_px(rc_work.left),
-                    flui_types::geometry::device_px(rc_work.top),
-                ),
-                size: Size::new(
-                    flui_types::geometry::device_px(rc_work.right - rc_work.left),
-                    flui_types::geometry::device_px(rc_work.bottom - rc_work.top),
-                ),
+                origin: Point::new(rc_work.left, rc_work.top),
+                size: Size::new(rc_work.right - rc_work.left, rc_work.bottom - rc_work.top),
             };
 
             Self {
@@ -101,11 +89,11 @@ impl PlatformDisplay for WindowsDisplay {
         self.name.clone()
     }
 
-    fn bounds(&self) -> Bounds<DevicePixels> {
+    fn bounds(&self) -> Bounds<i32> {
         self.bounds
     }
 
-    fn usable_bounds(&self) -> Bounds<DevicePixels> {
+    fn usable_bounds(&self) -> Bounds<i32> {
         self.usable_bounds
     }
 

@@ -7,7 +7,7 @@ use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::geometry::px;
 use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color, Pixels};
+use flui_types::{Alignment, Color};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A convenience widget that composes common painting, positioning, and sizing
@@ -72,16 +72,16 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///
 /// ```rust
 /// # use flui_widgets::prelude::*;
-/// let _ = Container::new().width(120.0).padding(EdgeInsets::all(px(8.0)));
+/// let _ = Container::new().width(120.0).padding(EdgeInsets::all(8.0));
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct Container {
     alignment: Option<Alignment>,
     padding: Option<EdgeInsets>,
     color: Option<Color>,
-    decoration: Option<BoxDecoration<Pixels>>,
-    width: Option<f32>,
-    height: Option<f32>,
+    decoration: Option<BoxDecoration<f64>>,
+    width: Option<f64>,
+    height: Option<f64>,
     constraints: Option<BoxConstraints>,
     margin: Option<EdgeInsets>,
     transform: Option<Matrix4>,
@@ -122,21 +122,21 @@ impl Container {
 
     /// Paint a [`BoxDecoration`] behind the child.
     #[must_use]
-    pub fn decoration(mut self, decoration: BoxDecoration<Pixels>) -> Self {
+    pub fn decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
         self.decoration = Some(decoration);
         self
     }
 
     /// Force the container's width (folded into its constraints).
     #[must_use]
-    pub fn width(mut self, width: f32) -> Self {
+    pub fn width(mut self, width: f64) -> Self {
         self.width = Some(width);
         self
     }
 
     /// Force the container's height (folded into its constraints).
     #[must_use]
-    pub fn height(mut self, height: f32) -> Self {
+    pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }

@@ -54,19 +54,19 @@ use crate::HeadlessBinding;
 /// Seed size for the headless [`RootRenderView`] when mount constraints are
 /// unbounded on an axis — matches the production
 /// `WidgetsBinding` default root-view seed (800×600).
-const DEFAULT_ROOT_VIEW_SIZE: (f32, f32) = (800.0, 600.0);
+const DEFAULT_ROOT_VIEW_SIZE: (f64, f64) = (800.0, 600.0);
 
 /// Logical width × height seeded into [`RootRenderView`] from mount
 /// constraints' biggest size, falling back per-axis when unbounded.
-fn root_view_size(constraints: &BoxConstraints) -> (f32, f32) {
+fn root_view_size(constraints: &BoxConstraints) -> (f64, f64) {
     let biggest = constraints.biggest();
     let width = if biggest.width.is_finite() {
-        biggest.width.0
+        biggest.width
     } else {
         DEFAULT_ROOT_VIEW_SIZE.0
     };
     let height = if biggest.height.is_finite() {
-        biggest.height.0
+        biggest.height
     } else {
         DEFAULT_ROOT_VIEW_SIZE.1
     };
@@ -172,14 +172,14 @@ impl MountOptions {
     /// Bootstrap under constraints forcing exactly `width` × `height` logical
     /// pixels — the surface-sized root a screenshot or a golden wants.
     #[must_use]
-    pub fn tight(width: f32, height: f32) -> Self {
-        Self::new(BoxConstraints::tight(Size::new(px(width), px(height))))
+    pub fn tight(width: f64, height: f64) -> Self {
+        Self::new(BoxConstraints::tight(Size::new(width, height)))
     }
 
     /// Bootstrap under loose constraints from zero up to `max` × `max`.
     #[must_use]
-    pub fn loose(max: f32) -> Self {
-        Self::new(BoxConstraints::loose(Size::new(px(max), px(max))))
+    pub fn loose(max: f64) -> Self {
+        Self::new(BoxConstraints::loose(Size::new(max, max)))
     }
 
     /// Override the capability policy (see [`BuildCapabilities`]).
@@ -224,7 +224,7 @@ pub struct Mounted {
     /// Logical size seeded into the [`RootRenderView`] at bootstrap — pass the
     /// same pair when swapping the root so the `RenderView` configuration
     /// stays stable.
-    pub root_view_size: (f32, f32),
+    pub root_view_size: (f64, f64),
     /// Whether the bootstrap frame committed a layer tree. Read it through
     /// [`HeadlessBinding::layer_tree`].
     pub painted: bool,
@@ -406,8 +406,8 @@ impl HeadlessBinding {
             // to 800×600 — and let the widget harness loosen if the caller
             // asked for non-tight layout.
             owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
-                px(view_size.0),
-                px(view_size.1),
+                view_size.0,
+                view_size.1,
             ))));
         });
 

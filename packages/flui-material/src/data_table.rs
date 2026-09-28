@@ -112,20 +112,20 @@ use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
 /// `data_table.dart`'s `_headingRowHeight` (oracle tag `3.44.0`).
-const DEFAULT_HEADING_ROW_HEIGHT: f32 = 56.0;
+const DEFAULT_HEADING_ROW_HEIGHT: f64 = 56.0;
 /// `data_table.dart`'s `_horizontalMargin` (oracle tag `3.44.0`).
-const DEFAULT_HORIZONTAL_MARGIN: f32 = 24.0;
+const DEFAULT_HORIZONTAL_MARGIN: f64 = 24.0;
 /// `data_table.dart`'s `_columnSpacing` (oracle tag `3.44.0`).
-const DEFAULT_COLUMN_SPACING: f32 = 56.0;
+const DEFAULT_COLUMN_SPACING: f64 = 56.0;
 /// `data_table.dart`'s `_dividerThickness` (oracle tag `3.44.0`).
-const DEFAULT_DIVIDER_THICKNESS: f32 = 1.0;
+const DEFAULT_DIVIDER_THICKNESS: f64 = 1.0;
 /// `kMinInteractiveDimension` (`constants.dart`, `48.0`, oracle tag
 /// `3.44.0`) — the data row min/max height default. Verified at the tag;
 /// NOT `52.0`.
-const DEFAULT_DATA_ROW_HEIGHT: f32 = 48.0;
+const DEFAULT_DATA_ROW_HEIGHT: f64 = 48.0;
 /// The selected-row default color's opacity: `colorScheme.primary.withOpacity(0.08)`
 /// (`data_table.dart`'s `defaultRowColor`, oracle tag `3.44.0`).
-const SELECTED_ROW_OPACITY: f32 = 0.08;
+const SELECTED_ROW_OPACITY: f64 = 0.08;
 
 /// A row-selection toggle: fires with the row's next `selected` value.
 /// `Rc`-based (owner-local, per ADR-0027) — matches [`InkWell`]'s own
@@ -304,18 +304,18 @@ pub struct DataTable {
     on_select_all: Option<RowSelectCallback>,
     show_checkbox_column: bool,
     show_bottom_border: bool,
-    decoration: Option<BoxDecoration<Pixels>>,
+    decoration: Option<BoxDecoration<f64>>,
     data_row_color: Option<RowColorProperty>,
-    data_row_min_height: Option<f32>,
-    data_row_max_height: Option<f32>,
+    data_row_min_height: Option<f64>,
+    data_row_max_height: Option<f64>,
     data_text_style: Option<TextStyle>,
     heading_row_color: Option<RowColorProperty>,
-    heading_row_height: Option<f32>,
+    heading_row_height: Option<f64>,
     heading_text_style: Option<TextStyle>,
-    horizontal_margin: Option<f32>,
-    column_spacing: Option<f32>,
-    divider_thickness: Option<f32>,
-    checkbox_horizontal_margin: Option<f32>,
+    horizontal_margin: Option<f64>,
+    column_spacing: Option<f64>,
+    divider_thickness: Option<f64>,
+    checkbox_horizontal_margin: Option<f64>,
 }
 
 impl std::fmt::Debug for DataTable {
@@ -398,7 +398,7 @@ impl DataTable {
     /// Overrides the table's background/border decoration. Flutter parity:
     /// `DataTable.decoration`.
     #[must_use]
-    pub fn decoration(mut self, decoration: BoxDecoration<Pixels>) -> Self {
+    pub fn decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
         self.decoration = Some(decoration);
         self
     }
@@ -414,7 +414,7 @@ impl DataTable {
     /// Overrides each data row's minimum height. Flutter parity:
     /// `DataTable.dataRowMinHeight`.
     #[must_use]
-    pub fn data_row_min_height(mut self, height: f32) -> Self {
+    pub fn data_row_min_height(mut self, height: f64) -> Self {
         self.data_row_min_height = Some(height);
         self
     }
@@ -422,7 +422,7 @@ impl DataTable {
     /// Overrides each data row's maximum height. Flutter parity:
     /// `DataTable.dataRowMaxHeight`.
     #[must_use]
-    pub fn data_row_max_height(mut self, height: f32) -> Self {
+    pub fn data_row_max_height(mut self, height: f64) -> Self {
         self.data_row_max_height = Some(height);
         self
     }
@@ -446,7 +446,7 @@ impl DataTable {
     /// Overrides the heading row's height. Flutter parity:
     /// `DataTable.headingRowHeight`.
     #[must_use]
-    pub fn heading_row_height(mut self, height: f32) -> Self {
+    pub fn heading_row_height(mut self, height: f64) -> Self {
         self.heading_row_height = Some(height);
         self
     }
@@ -462,7 +462,7 @@ impl DataTable {
     /// Overrides the margin between the table's edges and the first/last
     /// column's content. Flutter parity: `DataTable.horizontalMargin`.
     #[must_use]
-    pub fn horizontal_margin(mut self, margin: f32) -> Self {
+    pub fn horizontal_margin(mut self, margin: f64) -> Self {
         self.horizontal_margin = Some(margin);
         self
     }
@@ -470,7 +470,7 @@ impl DataTable {
     /// Overrides the margin between adjacent data columns. Flutter parity:
     /// `DataTable.columnSpacing`.
     #[must_use]
-    pub fn column_spacing(mut self, spacing: f32) -> Self {
+    pub fn column_spacing(mut self, spacing: f64) -> Self {
         self.column_spacing = Some(spacing);
         self
     }
@@ -478,7 +478,7 @@ impl DataTable {
     /// Overrides the divider thickness painted between rows. Flutter
     /// parity: `DataTable.dividerThickness`.
     #[must_use]
-    pub fn divider_thickness(mut self, thickness: f32) -> Self {
+    pub fn divider_thickness(mut self, thickness: f64) -> Self {
         self.divider_thickness = Some(thickness);
         self
     }
@@ -486,7 +486,7 @@ impl DataTable {
     /// Overrides the margin around the leading selection checkbox. Flutter
     /// parity: `DataTable.checkboxHorizontalMargin`.
     #[must_use]
-    pub fn checkbox_horizontal_margin(mut self, margin: f32) -> Self {
+    pub fn checkbox_horizontal_margin(mut self, margin: f64) -> Self {
         self.checkbox_horizontal_margin = Some(margin);
         self
     }
@@ -500,7 +500,7 @@ impl DataTable {
 /// [`DataTable`]'s theme-resolved geometry/color/text-style — see
 /// [`resolve_style`]'s doc comment for the cascade.
 struct ResolvedDataTableStyle {
-    decoration: Option<BoxDecoration<Pixels>>,
+    decoration: Option<BoxDecoration<f64>>,
     /// The widget/theme `dataRowColor` override cascade — `None` when
     /// neither tier set one (distinct from "resolves to no color for these
     /// states", which is `Some` wrapping a property that itself returns
@@ -511,20 +511,20 @@ struct ResolvedDataTableStyle {
     /// The M3 default row-color resolver: `Selected` -> `primary@8%`, else
     /// no color. Always present (unlike `data_row_color`).
     default_row_color: RowColorProperty,
-    data_row_min_height: f32,
-    data_row_max_height: f32,
+    data_row_min_height: f64,
+    data_row_max_height: f64,
     data_text_style: TextStyle,
     /// The heading row's resolved background color — pre-resolved against
     /// the empty state set (the oracle always resolves `headingRowColor`
     /// against `<WidgetState>{}`, `data_table.dart`'s `build`).
     heading_row_color: Option<Color>,
-    heading_row_height: f32,
+    heading_row_height: f64,
     heading_text_style: TextStyle,
-    horizontal_margin: f32,
-    column_spacing: f32,
-    divider_thickness: f32,
-    checkbox_margin_start: f32,
-    checkbox_margin_end: f32,
+    horizontal_margin: f64,
+    column_spacing: f64,
+    divider_thickness: f64,
+    checkbox_margin_start: f64,
+    checkbox_margin_end: f64,
 }
 
 /// Resolves the M3 `DataTable` defaults through the widget -> theme ->
@@ -699,7 +699,7 @@ fn column_table_width(
 /// The checkbox column's fixed width: margin + [`CHECKBOX_EDGE_SIZE`] +
 /// margin. Flutter parity: `build`'s `tableColumns[0] = FixedColumnWidth(...)`
 /// (`data_table.dart`, oracle tag `3.44.0`).
-fn checkbox_column_width(margin_start: f32, margin_end: f32) -> f32 {
+fn checkbox_column_width(margin_start: f64, margin_end: f64) -> f64 {
     margin_start + CHECKBOX_EDGE_SIZE + margin_end
 }
 
@@ -711,8 +711,8 @@ fn cell_padding(
     column_count: usize,
     display_checkbox_column: bool,
     checkbox_margin_is_set: bool,
-    horizontal_margin: f32,
-    column_spacing: f32,
+    horizontal_margin: f64,
+    column_spacing: f64,
 ) -> EdgeInsets {
     let start = if data_column_index == 0 {
         if display_checkbox_column && !checkbox_margin_is_set {
@@ -728,19 +728,15 @@ fn cell_padding(
     } else {
         column_spacing / 2.0
     };
-    EdgeInsets::new(px(0.0), px(end), px(0.0), px(start))
+    EdgeInsets::new(0.0, end, 0.0, start)
 }
 
 /// The row divider's border side. Flutter parity: `Divider.createBorderSide`
 /// (reusing [`crate::divider`]'s own established M3 default color,
 /// `ColorScheme.outlineVariant`), invoked from `build`'s `borderSide`
 /// (`data_table.dart`, oracle tag `3.44.0`).
-fn row_border_side(color_scheme: &ColorScheme, thickness: f32) -> BorderSide<Pixels> {
-    BorderSide::new(
-        color_scheme.outline_variant,
-        px(thickness),
-        BorderStyle::Solid,
-    )
+fn row_border_side(color_scheme: &ColorScheme, thickness: f64) -> BorderSide<f64> {
+    BorderSide::new(color_scheme.outline_variant, thickness, BorderStyle::Solid)
 }
 
 /// A [`TableRow`]'s background/border decoration. Flutter parity: `build`'s
@@ -752,8 +748,8 @@ fn row_decoration(
     row_index: usize,
     show_bottom_border: bool,
     color: Option<Color>,
-    border_side: BorderSide<Pixels>,
-) -> BoxDecoration<Pixels> {
+    border_side: BorderSide<f64>,
+) -> BoxDecoration<f64> {
     let border = if show_bottom_border {
         Some(Border::new(None, None, Some(border_side), None))
     } else if row_index == 0 {
@@ -816,18 +812,13 @@ fn wrap_selectable(
 fn header_checkbox_cell(
     checked: Option<bool>,
     on_change: impl Fn(&mut flui_sdk::view::EventCx<'_>, Option<bool>) + 'static,
-    margin_start: f32,
-    margin_end: f32,
+    margin_start: f64,
+    margin_end: f64,
 ) -> BoxedView {
     let checkbox = Checkbox::tristate(checked).on_changed(on_change);
     let content = Semantics::new().container(true).child(
-        Padding::new(EdgeInsets::new(
-            px(0.0),
-            px(margin_end),
-            px(0.0),
-            px(margin_start),
-        ))
-        .child(Center::new().child(checkbox)),
+        Padding::new(EdgeInsets::new(0.0, margin_end, 0.0, margin_start))
+            .child(Center::new().child(checkbox)),
     );
     TableCell::new(TableCellVerticalAlignment::Fill, content).boxed()
 }
@@ -839,8 +830,8 @@ fn header_checkbox_cell(
 fn row_checkbox_cell(
     selected: bool,
     on_select_changed: Option<RowSelectCallback>,
-    margin_start: f32,
-    margin_end: f32,
+    margin_start: f64,
+    margin_end: f64,
     overlay: Option<RowColorProperty>,
 ) -> BoxedView {
     let mut checkbox = Checkbox::new(selected);
@@ -850,13 +841,8 @@ fn row_checkbox_cell(
     let content: BoxedView = Semantics::new()
         .container(true)
         .child(
-            Padding::new(EdgeInsets::new(
-                px(0.0),
-                px(margin_end),
-                px(0.0),
-                px(margin_start),
-            ))
-            .child(Center::new().child(checkbox)),
+            Padding::new(EdgeInsets::new(0.0, margin_end, 0.0, margin_start))
+                .child(Center::new().child(checkbox)),
         )
         .boxed();
 
@@ -876,7 +862,7 @@ fn header_cell(
     numeric: bool,
     padding: EdgeInsets,
     text_style: TextStyle,
-    height: f32,
+    height: f64,
 ) -> BoxedView {
     let alignment = if numeric {
         Alignment::CENTER_RIGHT
@@ -906,8 +892,8 @@ fn data_cell(
     numeric: bool,
     padding: EdgeInsets,
     text_style: TextStyle,
-    min_height: f32,
-    max_height: f32,
+    min_height: f64,
+    max_height: f64,
     row_toggle: Option<CellTapCallback>,
     overlay: Option<RowColorProperty>,
 ) -> BoxedView {
@@ -916,12 +902,7 @@ fn data_cell(
     } else {
         Alignment::CENTER_LEFT
     };
-    let constraints = BoxConstraints::new(
-        Pixels::ZERO,
-        Pixels::INFINITY,
-        px(min_height),
-        px(max_height),
-    );
+    let constraints = BoxConstraints::new(0.0, f64::INFINITY, min_height, max_height);
     let content: BoxedView = Container::new()
         .padding(padding)
         .constraints(constraints)
@@ -1369,46 +1350,46 @@ mod tests {
     #[test]
     fn cell_padding_first_column_without_checkbox_gets_full_horizontal_margin_start() {
         let padding = cell_padding(0, 2, false, false, 24.0, 56.0);
-        assert_eq!(padding.left, px(24.0));
+        assert_eq!(padding.left, 24.0);
     }
 
     #[test]
     fn cell_padding_first_column_with_checkbox_and_no_checkbox_margin_gets_half_margin_start() {
         let padding = cell_padding(0, 2, true, false, 24.0, 56.0);
-        assert_eq!(padding.left, px(12.0));
+        assert_eq!(padding.left, 12.0);
     }
 
     #[test]
     fn cell_padding_first_column_with_explicit_checkbox_margin_gets_full_margin_start() {
         let padding = cell_padding(0, 2, true, true, 24.0, 56.0);
-        assert_eq!(padding.left, px(24.0));
+        assert_eq!(padding.left, 24.0);
     }
 
     #[test]
     fn cell_padding_middle_column_gets_half_column_spacing_on_both_sides() {
         let padding = cell_padding(1, 3, false, false, 24.0, 56.0);
-        assert_eq!(padding.left, px(28.0));
-        assert_eq!(padding.right, px(28.0));
+        assert_eq!(padding.left, 28.0);
+        assert_eq!(padding.right, 28.0);
     }
 
     #[test]
     fn cell_padding_last_column_gets_full_horizontal_margin_end() {
         let padding = cell_padding(1, 2, false, false, 24.0, 56.0);
-        assert_eq!(padding.right, px(24.0));
+        assert_eq!(padding.right, 24.0);
     }
 
     // ---- row_decoration -------------------------------------------------------
 
     #[test]
     fn row_decoration_heading_row_has_no_border_by_default() {
-        let side = BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid);
+        let side = BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid);
         let decoration = row_decoration(0, false, None, side);
         assert!(decoration.border.is_none());
     }
 
     #[test]
     fn row_decoration_data_rows_get_a_top_border_by_default() {
-        let side = BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid);
+        let side = BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid);
         let decoration = row_decoration(1, false, None, side);
         let border = decoration.border.expect("data rows must carry a border");
         assert_eq!(border.top, Some(side));
@@ -1417,7 +1398,7 @@ mod tests {
 
     #[test]
     fn row_decoration_show_bottom_border_puts_a_border_on_every_row_including_the_heading() {
-        let side = BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid);
+        let side = BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid);
         let heading = row_decoration(0, true, None, side);
         let data_row = row_decoration(1, true, None, side);
 
@@ -1427,7 +1408,7 @@ mod tests {
 
     #[test]
     fn row_decoration_carries_the_resolved_color() {
-        let side = BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid);
+        let side = BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid);
         let decoration = row_decoration(1, false, Some(Color::rgb(1, 2, 3)), side);
         assert_eq!(decoration.color, Some(Color::rgb(1, 2, 3)));
     }

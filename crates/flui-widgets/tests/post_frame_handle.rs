@@ -128,10 +128,7 @@ impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
                         // (which runs before this callback ever fires) has
                         // produced it. Committed geometry there must be
                         // 64×18 after the rebuild.
-                        let expected = flui_types::Size::new(
-                            flui_types::geometry::px(64.0),
-                            flui_types::geometry::px(18.0),
-                        );
+                        let expected = flui_types::Size::new(64.0, 18.0);
                         let Some(root) = logical_root.get() else {
                             return false;
                         };
@@ -144,7 +141,7 @@ impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
     }
 
     fn build(&self, _view: &LocalPostFrameProbe, _ctx: &dyn BuildContext) -> impl IntoView {
-        SizedBox::new(self.desired_width.load(Ordering::SeqCst) as f32, 18.0)
+        SizedBox::new(self.desired_width.load(Ordering::SeqCst) as f64, 18.0)
     }
 }
 
@@ -303,10 +300,7 @@ fn an_owner_local_post_frame_callback_observes_committed_geometry() {
 
     assert_eq!(
         pipeline.with(|owner| owner.box_size(laid.root())),
-        Some(flui_types::Size::new(
-            flui_types::geometry::px(32.0),
-            flui_types::geometry::px(18.0),
-        )),
+        Some(flui_types::Size::new(32.0, 18.0,)),
         "bootstrap geometry must differ from the geometry expected by the callback"
     );
     // Only available now: `LaidOut::root()` resolves the caller's own render

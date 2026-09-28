@@ -77,7 +77,7 @@ pub struct LaidOut {
     root_render_id: RenderId,
     root_element_id: ElementId,
     /// Logical size seeded into the bootstrap [`RootRenderView`].
-    root_view_size: (f32, f32),
+    root_view_size: (f64, f64),
     /// Concrete identity of the caller's root below the presentation scopes.
     logical_root_type: TypeId,
     /// Whether this mount wrapped the caller in [`Align`] so a non-tight
@@ -201,13 +201,13 @@ impl PointerContacts {
 pub const POINTER_SAMPLE_INTERVAL: Duration = Duration::from_millis(8);
 
 /// Loose constraints from `0` up to `max × max` on both axes.
-pub fn loose(max: f32) -> BoxConstraints {
-    BoxConstraints::loose(Size::new(px(max), px(max)))
+pub fn loose(max: f64) -> BoxConstraints {
+    BoxConstraints::loose(Size::new(max, max))
 }
 
 /// Tight constraints forcing exactly `width × height`.
-pub fn tight(width: f32, height: f32) -> BoxConstraints {
-    BoxConstraints::tight(Size::new(px(width), px(height)))
+pub fn tight(width: f64, height: f64) -> BoxConstraints {
+    BoxConstraints::tight(Size::new(width, height))
 }
 
 /// How the harness [`UnconstrainedBox`] wrap treats incoming maxes.
@@ -321,13 +321,12 @@ fn lay_out_with_pipeline_owner_and_binding(
     // `UnconstrainedBox` — otherwise ListBody/Flex see the clamped view
     // height and trip "must have unlimited space along its main axis".
     let loosen_with_align = !(constraints.has_tight_width() && constraints.has_tight_height());
-    let reapply_constraints = if loosen_with_align
-        && (constraints.min_width > Pixels::ZERO || constraints.min_height > Pixels::ZERO)
-    {
-        Some(constraints)
-    } else {
-        None
-    };
+    let reapply_constraints =
+        if loosen_with_align && (constraints.min_width > 0.0 || constraints.min_height > 0.0) {
+            Some(constraints)
+        } else {
+            None
+        };
     let unconstrained_wrap = unconstrained_wrap_for(&constraints);
     let scoped = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
     let wrapped = wrap_presentation(
@@ -647,13 +646,13 @@ impl LaidOut {
     pub fn absolute_offset(&self, id: RenderId) -> Offset {
         self.pipeline_owner.with(|owner| {
             let render_tree = owner.render_tree();
-            let mut x = 0.0f32;
-            let mut y = 0.0f32;
+            let mut x = 0.0_f64;
+            let mut y = 0.0_f64;
             let mut current = id;
             loop {
                 if let Some(node_offset) = inspect::render_offset(owner, current) {
-                    x += node_offset.dx.get();
-                    y += node_offset.dy.get();
+                    x += node_offset.dx;
+                    y += node_offset.dy;
                 }
                 match render_tree.parent(current) {
                     Some(parent) => current = parent,
@@ -801,11 +800,11 @@ impl LaidOut {
     /// The committed opacity of a [`RenderOpacity`] node (e.g. the one a
     /// `FadeTransition` builds) or a [`RenderAnimatedOpacity`] node (the one
     /// `AnimatedOpacity` builds). The latter reads the composed animation's
-    /// raw `f32` value (`RenderAnimatedOpacity::opacity_value`), not the
+    /// raw `f64` value (`RenderAnimatedOpacity::opacity_value`), not the
     /// quantized `u8` alpha cache — the `1/255` rounding would blow the
     /// implicit-animation tests' `< 1e-4` tolerance. Panics if `id` is
     /// neither.
-    pub fn opacity(&self, id: RenderId) -> f32 {
+    pub fn opacity(&self, id: RenderId) -> f64 {
         self.pipeline_owner.with_mut(|owner| {
             let node = owner
                 .render_tree_mut()
@@ -982,7 +981,7 @@ impl LaidOut {
 
     /// The x-scale (matrix `[0][0]`) of a [`RenderTransform`] node — the factor a
     /// `ScaleTransition` writes. Panics if `id` is not a `RenderTransform`.
-    pub fn transform_scale(&self, id: RenderId) -> f32 {
+    pub fn transform_scale(&self, id: RenderId) -> f64 {
         self.pipeline_owner.with_mut(|owner| {
             owner
                 .render_tree_mut()
@@ -996,7 +995,7 @@ impl LaidOut {
     /// The Z-rotation (radians) of a [`RenderTransform`] node — what a
     /// `RotationTransition` writes — recovered from the matrix as
     /// `atan2(m[1][0], m[0][0])`. Panics if `id` is not a `RenderTransform`.
-    pub fn transform_rotation(&self, id: RenderId) -> f32 {
+    pub fn transform_rotation(&self, id: RenderId) -> f64 {
         self.pipeline_owner.with_mut(|owner| {
             owner
                 .render_tree_mut()
@@ -1025,8 +1024,8 @@ impl LaidOut {
         &self,
         id: RenderId,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         self.pipeline_owner
             .with_mut(|owner| owner.box_intrinsic_dimension(id, dimension, extent))
             .expect("box_intrinsic_dimension should succeed for a live box-protocol node")
@@ -1064,7 +1063,7 @@ impl LaidOut {
     /// or `None` when unset — used to prove a builder's config actually
     /// reaches the render object it currently owns after a rebuild/reorder
     /// (not just at initial creation). Panics if `id` is not a `RenderImage`.
-    pub fn image_width(&self, id: RenderId) -> Option<Pixels> {
+    pub fn image_width(&self, id: RenderId) -> Option<f64> {
         self.pipeline_owner.with_mut(|owner| {
             owner
                 .render_tree_mut()
@@ -1120,7 +1119,7 @@ impl LaidOut {
     /// `left` is the pre-alignment layout-local value). Panics if `id` is
     /// not a `RenderParagraph`, carries no text, or has no laid-out line —
     /// all of which indicate the paragraph was queried before layout ran.
-    pub fn paragraph_first_line_left(&self, id: RenderId) -> f32 {
+    pub fn paragraph_first_line_left(&self, id: RenderId) -> f64 {
         self.pipeline_owner.with_mut(|owner| {
             let node = owner
                 .render_tree_mut()
@@ -1157,7 +1156,7 @@ impl LaidOut {
     /// font-specific constants.
     ///
     /// Panics if `id` is not a laid-out `RenderParagraph`.
-    pub fn text_baseline(&self, id: RenderId) -> f32 {
+    pub fn text_baseline(&self, id: RenderId) -> f64 {
         self.pipeline_owner.with_mut(|owner| {
             let node = owner
                 .render_tree_mut()
@@ -1513,7 +1512,7 @@ impl LaidOut {
     /// See [`hit_test_pointer`](Self::hit_test_pointer) for why hit-testing runs inside
     /// the lane scope alongside dispatch. Spends no virtual clock time — see
     /// `advance_pointer_clock`.
-    pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
+    pub fn dispatch_pointer_down(&self, x: f64, y: f64) {
         let event = make_down_event_for_id(self.begin_contact(), offset(x, y), PointerType::Mouse);
         self.binding
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
@@ -1521,7 +1520,7 @@ impl LaidOut {
 
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
     /// pointer-up — to assert `on_pointer_up` routing.
-    pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
+    pub fn dispatch_pointer_up(&self, x: f64, y: f64) {
         let event = make_up_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
         self.binding
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
@@ -1532,7 +1531,7 @@ impl LaidOut {
     /// the virtual clock by the default [`POINTER_SAMPLE_INTERVAL`] first; use
     /// [`dispatch_pointer_move_after`](Self::dispatch_pointer_move_after) when
     /// a test needs to assert against an explicit sample spacing instead.
-    pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
+    pub fn dispatch_pointer_move(&self, x: f64, y: f64) {
         self.dispatch_pointer_move_after(x, y, POINTER_SAMPLE_INTERVAL);
     }
 
@@ -1542,7 +1541,7 @@ impl LaidOut {
     /// explicitly how far apart its samples are (mirrors Flutter's
     /// `WidgetController.timedDrag`/`flingFrom`, which stamp each synthetic
     /// move with an explicit `timeStamp` rather than the wall clock).
-    pub fn dispatch_pointer_move_after(&self, x: f32, y: f32, dt: Duration) {
+    pub fn dispatch_pointer_move_after(&self, x: f64, y: f64, dt: Duration) {
         self.advance_pointer_clock(dt);
         let event =
             make_move_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
@@ -1551,7 +1550,7 @@ impl LaidOut {
     }
 
     /// A mouse hover move to `(x, y)` with no active contact.
-    pub fn dispatch_pointer_hover(&self, x: f32, y: f32) {
+    pub fn dispatch_pointer_hover(&self, x: f64, y: f64) {
         self.dispatch_pointer_hover_with_kind(x, y, PointerType::Mouse);
     }
 
@@ -1561,7 +1560,7 @@ impl LaidOut {
     /// A hover has no tracked contact, so it never reaches
     /// `DragGestureRecognizer::handle_move`'s velocity sampling and spends no
     /// virtual clock time.
-    pub fn dispatch_pointer_hover_with_kind(&self, x: f32, y: f32, kind: PointerType) {
+    pub fn dispatch_pointer_hover_with_kind(&self, x: f64, y: f64, kind: PointerType) {
         let mut event = make_move_event_for_id(PointerId::PRIMARY, offset(x, y), kind);
         let PointerEvent::Move(update) = &mut event else {
             unreachable!("the test move constructor must produce PointerEvent::Move");
@@ -1577,7 +1576,7 @@ impl LaidOut {
     /// Real backends emit line deltas that `ScrollEventData` converts at
     /// 53 px/line; this helper takes pixels directly so tests state exact
     /// offsets. Routed by hit test like every other contactless event.
-    pub fn dispatch_scroll(&self, x: f32, y: f32, dx: f32, dy: f32) {
+    pub fn dispatch_scroll(&self, x: f64, y: f64, dx: f64, dy: f64) {
         let event = flui_interaction::events::make_scroll_event(offset(x, y), offset(dx, dy));
         self.dispatch_pointer_event(&event);
     }
@@ -1586,10 +1585,10 @@ impl LaidOut {
     /// held — for the ctrl+wheel zoom-vs-scroll contract.
     pub fn dispatch_scroll_with_modifiers(
         &self,
-        x: f32,
-        y: f32,
-        dx: f32,
-        dy: f32,
+        x: f64,
+        y: f64,
+        dx: f64,
+        dy: f64,
         modifiers: flui_interaction::events::Modifiers,
     ) {
         let event = flui_interaction::events::make_scroll_event_with_modifiers(
@@ -1612,7 +1611,7 @@ impl LaidOut {
     /// button press reaching the framework. Used by `GestureDetector` tests to
     /// assert `on_secondary_tap` fires on right-click.
     /// Spends no virtual clock time — see `advance_pointer_clock`.
-    pub fn dispatch_secondary_down(&self, x: f32, y: f32) {
+    pub fn dispatch_secondary_down(&self, x: f64, y: f64) {
         use flui_interaction::events::pointer::PointerButton;
 
         let event = make_down_event_for_id_with_button(
@@ -1627,7 +1626,7 @@ impl LaidOut {
 
     /// As [`dispatch_secondary_down`](Self::dispatch_secondary_down), but a
     /// secondary-button pointer-up — to complete the right-click gesture.
-    pub fn dispatch_secondary_up(&self, x: f32, y: f32) {
+    pub fn dispatch_secondary_up(&self, x: f64, y: f64) {
         use flui_interaction::events::pointer::PointerButton;
 
         let event = make_up_event_for_id_with_button(
@@ -1661,13 +1660,13 @@ pub fn settle_lazy(laid: &mut LaidOut) {
 }
 
 /// Convenience: a `Size` in logical pixels.
-pub fn size(width: f32, height: f32) -> Size {
-    Size::new(px(width), px(height))
+pub fn size(width: f64, height: f64) -> Size {
+    Size::new(width, height)
 }
 
 /// Convenience: an `Offset` in logical pixels.
-pub fn offset(dx: f32, dy: f32) -> Offset {
-    Offset::new(px(dx), px(dy))
+pub fn offset(dx: f64, dy: f64) -> Offset {
+    Offset::new(dx, dy)
 }
 
 /// The part of `type_name` before its first `<`, if any — the base name

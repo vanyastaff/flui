@@ -482,7 +482,7 @@ mod gpu_tests {
     use flui_painting::{BlendMode, Paint};
     use flui_types::{
         Color, Rect,
-        geometry::{Pixels, RRect, px},
+        geometry::{RRect, f64, px},
     };
 
     use crate::{painter::WgpuPainter, render_target::RenderTarget};
@@ -596,13 +596,8 @@ mod gpu_tests {
         let radius = 8.0_f32;
 
         let rrect = RRect::from_rect_circular(
-            Rect::from_ltrb(
-                Pixels(cx - half_w),
-                Pixels(cy - half_h),
-                Pixels(cx + half_w),
-                Pixels(cy + half_h),
-            ),
-            Pixels(radius),
+            Rect::from_ltrb((cx - half_w), (cy - half_h), (cx + half_w), (cy + half_h)),
+            radius,
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -740,16 +735,11 @@ mod gpu_tests {
 
         // The rect in local space (centered at origin). The painter will rotate
         // it by applying a rotation transform before drawing.
-        let local_rect = Rect::from_ltrb(
-            Pixels(-half_w),
-            Pixels(-half_h),
-            Pixels(half_w),
-            Pixels(half_h),
-        );
+        let local_rect = Rect::from_ltrb((-half_w), (-half_h), half_w, half_h);
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         // Translate to center, then rotate.
-        painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
+        painter.translate(flui_types::Offset::new(cx, cy));
         painter.rotate(angle);
         painter.draw_rect(local_rect, &Paint::fill(Color::WHITE));
 
@@ -891,17 +881,12 @@ mod gpu_tests {
         let cy = SURFACE_HEIGHT as f32 / 2.0;
 
         let local_rrect = RRect::from_rect_circular(
-            Rect::from_ltrb(
-                Pixels(-half_w),
-                Pixels(-half_h),
-                Pixels(half_w),
-                Pixels(half_h),
-            ),
-            Pixels(radius),
+            Rect::from_ltrb((-half_w), (-half_h), half_w, half_h),
+            radius,
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
+        painter.translate(flui_types::Offset::new(cx, cy));
         painter.rotate(angle);
         painter.draw_rrect(local_rrect, &Paint::fill(Color::WHITE));
 
@@ -1021,10 +1006,7 @@ mod gpu_tests {
 
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             painter.draw_circle(
-                flui_types::Point::new(
-                    flui_types::geometry::Pixels(cx),
-                    flui_types::geometry::Pixels(cy),
-                ),
+                flui_types::Point::new((cx), (cy)),
                 radius,
                 &Paint::fill(Color::WHITE),
             );
@@ -1123,18 +1105,13 @@ mod gpu_tests {
 
         // Draw an oval (axis-aligned in local space) under a 30° rotation.
         // The bounding rect in local space is [cx-rx, cy-ry, cx+rx, cy+ry].
-        let local_rect = Rect::from_ltrb(
-            Pixels(cx - rx),
-            Pixels(cy - ry),
-            Pixels(cx + rx),
-            Pixels(cy + ry),
-        );
+        let local_rect = Rect::from_ltrb((cx - rx), (cy - ry), (cx + rx), (cy + ry));
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         // Rotate around the canvas center so the ellipse center stays at (cx, cy).
-        painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
+        painter.translate(flui_types::Offset::new(cx, cy));
         painter.rotate(angle);
-        painter.translate(flui_types::Offset::new(Pixels(-cx), Pixels(-cy)));
+        painter.translate(flui_types::Offset::new((-cx), (-cy)));
         painter.draw_oval(local_rect, &Paint::fill(Color::WHITE));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1213,10 +1190,7 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.draw_circle(
-            flui_types::Point::new(
-                flui_types::geometry::Pixels(cx),
-                flui_types::geometry::Pixels(cy),
-            ),
+            flui_types::Point::new((cx), (cy)),
             radius,
             &Paint::fill(Color::WHITE),
         );
@@ -1307,10 +1281,7 @@ mod gpu_tests {
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.scale(2.0, 2.0);
         painter.draw_circle(
-            flui_types::Point::new(
-                flui_types::geometry::Pixels(32.0),
-                flui_types::geometry::Pixels(32.0),
-            ),
+            flui_types::Point::new(32.0, 32.0),
             10.0,
             &Paint::fill(Color::WHITE),
         );
@@ -1392,7 +1363,7 @@ mod gpu_tests {
         clear_surface(&device, &queue, &view_a);
         clear_surface(&device, &queue, &view_b);
 
-        let flat_rect = Rect::from_ltrb(Pixels(20.0), Pixels(15.0), Pixels(108.0), Pixels(113.0));
+        let flat_rect = Rect::from_ltrb(20.0, 15.0, 108.0, 113.0);
         let color = Color::rgba(180, 80, 40, 200);
 
         for (surface, view) in [(&surface_a, &view_a), (&surface_b, &view_b)] {
@@ -1439,10 +1410,8 @@ mod gpu_tests {
         clear_surface(&device, &queue, &view_c);
         clear_surface(&device, &queue, &view_d);
 
-        let rounded_rect_shape = RRect::from_rect_circular(
-            Rect::from_ltrb(Pixels(20.0), Pixels(15.0), Pixels(108.0), Pixels(113.0)),
-            Pixels(8.0),
-        );
+        let rounded_rect_shape =
+            RRect::from_rect_circular(Rect::from_ltrb(20.0, 15.0, 108.0, 113.0), 8.0);
 
         for (surface, view) in [(&surface_c, &view_c), (&surface_d, &view_d)] {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1495,15 +1464,10 @@ mod gpu_tests {
             let cy = SURFACE_HEIGHT as f32 / 2.0;
 
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
+            painter.translate(flui_types::Offset::new(cx, cy));
             painter.rotate(angle);
             painter.draw_rect(
-                Rect::from_ltrb(
-                    Pixels(-half_w),
-                    Pixels(-half_h),
-                    Pixels(half_w),
-                    Pixels(half_h),
-                ),
+                Rect::from_ltrb((-half_w), (-half_h), half_w, half_h),
                 &Paint::fill(Color::WHITE),
             );
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1531,16 +1495,11 @@ mod gpu_tests {
             let cy = SURFACE_HEIGHT as f32 / 2.0;
 
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
+            painter.translate(flui_types::Offset::new(cx, cy));
             painter.scale(8.0, 8.0);
             painter.rotate(angle);
             painter.draw_rect(
-                Rect::from_ltrb(
-                    Pixels(-local_half_w),
-                    Pixels(-local_half_h),
-                    Pixels(local_half_w),
-                    Pixels(local_half_h),
-                ),
+                Rect::from_ltrb((-local_half_w), (-local_half_h), local_half_w, local_half_h),
                 &Paint::fill(Color::WHITE),
             );
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1602,13 +1561,13 @@ mod gpu_tests {
 
         // 80×80 axis-aligned rrect, ONLY the top-left corner rounded (r=24);
         // the other three corners are sharp.
-        let bounds = Rect::from_ltrb(Pixels(24.0), Pixels(24.0), Pixels(104.0), Pixels(104.0));
+        let bounds = Rect::from_ltrb(24.0, 24.0, 104.0, 104.0);
         let rrect = RRect::new(
             bounds,
-            flui_types::geometry::Radius::circular(Pixels(24.0)), // top-left
-            flui_types::geometry::Radius::ZERO,                   // top-right
-            flui_types::geometry::Radius::ZERO,                   // bottom-right
-            flui_types::geometry::Radius::ZERO,                   // bottom-left
+            flui_types::geometry::Radius::circular(24.0), // top-left
+            flui_types::geometry::Radius::ZERO,           // top-right
+            flui_types::geometry::Radius::ZERO,           // bottom-right
+            flui_types::geometry::Radius::ZERO,           // bottom-left
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1681,12 +1640,8 @@ mod gpu_tests {
             let sweep = 3.0 * std::f32::consts::FRAC_PI_2; // 270°
 
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-            let rect = Rect::from_xywh(
-                flui_types::geometry::Pixels(cx - radius),
-                flui_types::geometry::Pixels(cy - radius),
-                px(radius * 2.0),
-                px(radius * 2.0),
-            );
+            let rect =
+                Rect::from_xywh((cx - radius), (cy - radius), (radius * 2.0), (radius * 2.0));
             painter.draw_arc(rect, start, sweep, true, &Paint::fill(Color::WHITE));
 
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1797,18 +1752,10 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         // Translate to center, then rotate.
-        painter.translate(flui_types::Offset::new(
-            flui_types::geometry::Pixels(cx),
-            flui_types::geometry::Pixels(cy),
-        ));
+        painter.translate(flui_types::Offset::new((cx), (cy)));
         painter.rotate(angle);
         // The arc rect is centered at origin in local space.
-        let rect = Rect::from_xywh(
-            flui_types::geometry::Pixels(-radius),
-            flui_types::geometry::Pixels(-radius),
-            px(radius * 2.0),
-            px(radius * 2.0),
-        );
+        let rect = Rect::from_xywh((-radius), (-radius), (radius * 2.0), (radius * 2.0));
         painter.draw_arc(rect, start, sweep, true, &Paint::fill(Color::WHITE));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1936,10 +1883,10 @@ mod gpu_tests {
         // center is (64,64) and device radius is 20.
         let local_radius = 10.0_f32;
         let rect = Rect::from_xywh(
-            flui_types::geometry::Pixels(32.0 - local_radius),
-            flui_types::geometry::Pixels(32.0 - local_radius),
-            px(local_radius * 2.0),
-            px(local_radius * 2.0),
+            (32.0 - local_radius),
+            (32.0 - local_radius),
+            (local_radius * 2.0),
+            (local_radius * 2.0),
         );
         painter.draw_arc(
             rect,
@@ -2103,9 +2050,9 @@ mod gpu_tests {
         let dy = cy + 25.0;
 
         let mut path = flui_types::painting::path::Path::new();
-        path.move_to(flui_types::Point::new(Pixels(ax), Pixels(ay)));
-        path.line_to(flui_types::Point::new(Pixels(bx), Pixels(by)));
-        path.line_to(flui_types::Point::new(Pixels(dx), Pixels(dy)));
+        path.move_to(flui_types::Point::new(ax, ay));
+        path.line_to(flui_types::Point::new(bx, by));
+        path.line_to(flui_types::Point::new(dx, dy));
         path.close();
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -2211,10 +2158,10 @@ mod gpu_tests {
         let build_star_path = |fill_type: PathFillType| {
             let mut path = flui_types::painting::path::Path::with_fill_type(fill_type);
             let (first_x, first_y) = tips[pentagram_order[0]];
-            path.move_to(flui_types::Point::new(Pixels(first_x), Pixels(first_y)));
+            path.move_to(flui_types::Point::new(first_x, first_y));
             for &idx in &pentagram_order[1..] {
                 let (x, y) = tips[idx];
-                path.line_to(flui_types::Point::new(Pixels(x), Pixels(y)));
+                path.line_to(flui_types::Point::new(x, y));
             }
             path.close();
             path
@@ -2354,16 +2301,16 @@ mod gpu_tests {
             let ldy = (dy - cy) / scale + cy;
 
             let mut path = flui_types::painting::path::Path::new();
-            path.move_to(flui_types::Point::new(Pixels(lax), Pixels(lay)));
-            path.line_to(flui_types::Point::new(Pixels(lbx), Pixels(lby)));
-            path.line_to(flui_types::Point::new(Pixels(ldx), Pixels(ldy)));
+            path.move_to(flui_types::Point::new(lax, lay));
+            path.line_to(flui_types::Point::new(lbx, lby));
+            path.line_to(flui_types::Point::new(ldx, ldy));
             path.close();
 
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
             // Apply the compensating world scale so device geometry = target triangle.
-            painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
+            painter.translate(flui_types::Offset::new(cx, cy));
             painter.scale(scale, scale);
-            painter.translate(flui_types::Offset::new(Pixels(-cx), Pixels(-cy)));
+            painter.translate(flui_types::Offset::new((-cx), (-cy)));
             painter.draw_path(&path, &Paint::fill(Color::WHITE));
 
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2457,9 +2404,9 @@ mod gpu_tests {
         ];
 
         let mut path = flui_types::painting::path::Path::new();
-        path.move_to(flui_types::Point::new(Pixels(v[0].0), Pixels(v[0].1)));
+        path.move_to(flui_types::Point::new(v[0].0, v[0].1));
         for &(x, y) in &v[1..] {
-            path.line_to(flui_types::Point::new(Pixels(x), Pixels(y)));
+            path.line_to(flui_types::Point::new(x, y));
         }
         path.close();
 
@@ -2522,12 +2469,8 @@ mod gpu_tests {
         let (surface_texture, surface_view) = create_render_surface(&device);
         clear_surface(&device, &queue, &surface_view);
 
-        let full = flui_types::Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        );
+        let full =
+            flui_types::Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32));
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         {
@@ -2566,7 +2509,7 @@ mod gpu_tests {
                     None,
                     flui_types::typography::TextDirection::Ltr,
                 )),
-                flui_types::Offset::new(Pixels(4.0), Pixels(30.0)),
+                flui_types::Offset::new(4.0, 30.0),
                 Color::rgb(0, 0, 255),
                 &flui_types::Matrix4::IDENTITY,
             );
@@ -2589,7 +2532,7 @@ mod gpu_tests {
                     None,
                     flui_types::typography::TextDirection::Ltr,
                 )),
-                flui_types::Offset::new(Pixels(4.0), Pixels(50.0)),
+                flui_types::Offset::new(4.0, 50.0),
                 Color::rgb(255, 255, 0),
                 &flui_types::Matrix4::IDENTITY,
             );
@@ -2657,12 +2600,8 @@ mod gpu_tests {
         let (surface_texture, surface_view) = create_render_surface(&device);
         clear_surface(&device, &queue, &surface_view);
 
-        let full = flui_types::Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        );
+        let full =
+            flui_types::Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32));
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         {
@@ -2681,7 +2620,7 @@ mod gpu_tests {
                     None,
                     flui_types::typography::TextDirection::Ltr,
                 )),
-                flui_types::Offset::new(Pixels(4.0), Pixels(30.0)),
+                flui_types::Offset::new(4.0, 30.0),
                 Color::rgb(0, 0, 255),
                 &flui_types::Matrix4::IDENTITY,
             );
@@ -2734,12 +2673,8 @@ mod gpu_tests {
         let (surface_texture, surface_view) = create_render_surface(&device);
         clear_surface(&device, &queue, &surface_view);
 
-        let full = flui_types::Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        );
+        let full =
+            flui_types::Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32));
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         // Alpha 250/255 ≈ 0.98 ≠ 1.0 forces the offscreen Composite path
@@ -2748,7 +2683,7 @@ mod gpu_tests {
         painter.save_layer(None, &Paint::fill(Color::rgba(0, 0, 0, 250)));
         painter.draw_text(
             "Covered",
-            flui_types::Point::new(Pixels(4.0), Pixels(30.0)),
+            flui_types::Point::new(4.0, 30.0),
             20.0,
             &Paint::fill(Color::rgb(0, 0, 255)),
         );
@@ -2813,19 +2748,14 @@ mod gpu_tests {
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
         painter.clip_rect(
-            flui_types::Rect::from_xywh(
-                Pixels(0.0),
-                Pixels(0.0),
-                Pixels(SURFACE_WIDTH as f32),
-                Pixels(CLIP_BOTTOM),
-            ),
+            flui_types::Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), CLIP_BOTTOM),
             flui_types::painting::Clip::HardEdge,
         );
         // Positioned so the run straddles the clip edge: some of it is legally
         // inside, the rest must be cut.
         painter.draw_text(
             "Spill",
-            flui_types::Point::new(Pixels(4.0), Pixels(12.0)),
+            flui_types::Point::new(4.0, 12.0),
             28.0,
             &Paint::fill(Color::rgb(0, 0, 255)),
         );
@@ -2892,7 +2822,7 @@ mod gpu_tests {
             painter.scale(scale, scale);
             painter.draw_text(
                 "Ab",
-                flui_types::Point::new(Pixels(4.0), Pixels(10.0)),
+                flui_types::Point::new(4.0, 10.0),
                 16.0,
                 &Paint::fill(Color::rgb(0, 0, 255)),
             );
@@ -2951,7 +2881,7 @@ mod gpu_tests {
             painter.scale(sx, sy);
             painter.draw_text(
                 "Ab",
-                flui_types::Point::new(Pixels(4.0), Pixels(10.0)),
+                flui_types::Point::new(4.0, 10.0),
                 16.0,
                 &Paint::fill(Color::rgb(0, 0, 255)),
             );
@@ -2997,11 +2927,11 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
-        painter.translate(flui_types::Offset::new(Pixels(40.0), Pixels(4.0)));
+        painter.translate(flui_types::Offset::new(40.0, 4.0));
         painter.rotate(std::f32::consts::FRAC_PI_2);
         painter.draw_text(
             "IIIIIIII",
-            flui_types::Point::new(Pixels(0.0), Pixels(0.0)),
+            flui_types::Point::new(0.0, 0.0),
             12.0,
             &Paint::fill(Color::rgb(0, 0, 255)),
         );
@@ -3072,22 +3002,19 @@ mod gpu_tests {
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(
                 flui_types::Rect::from_xywh(
-                    Pixels(0.0),
-                    Pixels(0.0),
-                    Pixels(SURFACE_WIDTH as f32),
-                    Pixels(SURFACE_HEIGHT as f32),
+                    0.0,
+                    0.0,
+                    (SURFACE_WIDTH as f32),
+                    (SURFACE_HEIGHT as f32),
                 ),
-                Pixels(R),
+                R,
             ),
             flui_types::painting::Clip::AntiAlias,
         );
         // Radius 90 about the centre of a 128x128 surface: every corner of the
         // surface is well inside this circle.
         painter.draw_circle(
-            flui_types::Point::new(
-                Pixels(SURFACE_WIDTH as f32 / 2.0),
-                Pixels(SURFACE_HEIGHT as f32 / 2.0),
-            ),
+            flui_types::Point::new((SURFACE_WIDTH as f32 / 2.0), (SURFACE_HEIGHT as f32 / 2.0)),
             90.0,
             &Paint::fill(Color::rgb(0, 0, 255)),
         );
@@ -3156,26 +3083,22 @@ mod gpu_tests {
         clear_surface(&device, &queue, &surface_view);
 
         const R: f32 = 56.0;
-        let full = flui_types::Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        );
+        let full =
+            flui_types::Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32));
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         // [tl, tr, br, bl] = [0, 0, 0, R] — bottom-left only.
         use flui_types::geometry::{RRect, Radius};
-        let zero = Radius::circular(Pixels(0.0));
-        let rrect = RRect::new(full, zero, zero, zero, Radius::circular(Pixels(R)));
+        let zero = Radius::circular(0.0);
+        let rrect = RRect::new(full, zero, zero, zero, Radius::circular(R));
 
         // The base colour is RED and the gradient is BLUE on purpose: a blue
         // centre pixel proves the gradient pipeline ran at all, so a failure
         // here cannot be the tessellated fallback quietly standing in.
         let mut paint = Paint::fill(Color::rgb(255, 0, 0));
         paint.shader = Some(flui_types::painting::Shader::LinearGradient {
-            from: flui_types::Offset::new(Pixels(0.0), Pixels(0.0)),
-            to: flui_types::Offset::new(Pixels(0.0), Pixels(SURFACE_HEIGHT as f32)),
+            from: flui_types::Offset::new(0.0, 0.0),
+            to: flui_types::Offset::new(0.0, (SURFACE_HEIGHT as f32)),
             colors: vec![Color::rgb(0, 0, 255), Color::rgb(0, 0, 255)],
             stops: Some(vec![0.0, 1.0]),
             tile_mode: flui_types::painting::TileMode::Clamp,
@@ -3248,17 +3171,13 @@ mod gpu_tests {
         clear_surface(&device, &queue, &surface_view);
 
         const R: f32 = 40.0;
-        let full = flui_types::Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        );
+        let full =
+            flui_types::Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32));
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
         painter.clip_rrect(
-            flui_types::geometry::RRect::from_rect_circular(full, Pixels(R)),
+            flui_types::geometry::RRect::from_rect_circular(full, R),
             flui_types::painting::Clip::AntiAlias,
         );
         // Square corners: the clip, not the shape, is what must round this.
@@ -3325,17 +3244,13 @@ mod gpu_tests {
         clear_surface(&device, &queue, &surface_view);
 
         const R: f32 = 40.0;
-        let full = flui_types::Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        );
+        let full =
+            flui_types::Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32));
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
         painter.clip_rrect(
-            flui_types::geometry::RRect::from_rect_circular(full, Pixels(R)),
+            flui_types::geometry::RRect::from_rect_circular(full, R),
             flui_types::painting::Clip::AntiAlias,
         );
         // A stroke this wide covers the surface, corners included. `Paint`
@@ -3343,10 +3258,10 @@ mod gpu_tests {
         // instanced rect path.
         painter.draw_rect(
             flui_types::Rect::from_xywh(
-                Pixels(SURFACE_WIDTH as f32 / 2.0),
-                Pixels(SURFACE_HEIGHT as f32 / 2.0),
-                Pixels(1.0),
-                Pixels(1.0),
+                (SURFACE_WIDTH as f32 / 2.0),
+                (SURFACE_HEIGHT as f32 / 2.0),
+                1.0,
+                1.0,
             ),
             &Paint::stroke(Color::rgb(0, 0, 255), SURFACE_WIDTH as f32 * 2.0),
         );
@@ -3403,13 +3318,12 @@ mod gpu_tests {
         clear_surface(&device, &queue, &surface_view);
 
         // Bottom-right region of a 128x128 surface, heavily rounded.
-        let region =
-            flui_types::Rect::from_xywh(Pixels(48.0), Pixels(48.0), Pixels(80.0), Pixels(80.0));
+        let region = flui_types::Rect::from_xywh(48.0, 48.0, 80.0, 80.0);
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
         painter.clip_rrect(
-            flui_types::geometry::RRect::from_rect_circular(region, Pixels(40.0)),
+            flui_types::geometry::RRect::from_rect_circular(region, 40.0),
             flui_types::painting::Clip::AntiAlias,
         );
         // A FILL, and a large one: the SSAA gate reads the rect's own area
@@ -3505,25 +3419,20 @@ mod gpu_tests {
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save();
-        painter.translate(flui_types::Offset::new(Pixels(64.0), Pixels(64.0)));
+        painter.translate(flui_types::Offset::new(64.0, 64.0));
         painter.rotate(std::f32::consts::FRAC_PI_4);
-        painter.translate(flui_types::Offset::new(Pixels(-64.0), Pixels(-64.0)));
+        painter.translate(flui_types::Offset::new((-64.0), (-64.0)));
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(
-                flui_types::Rect::from_xywh(Pixels(24.0), Pixels(24.0), Pixels(80.0), Pixels(80.0)),
-                Pixels(12.0),
+                flui_types::Rect::from_xywh(24.0, 24.0, 80.0, 80.0),
+                12.0,
             ),
             flui_types::painting::Clip::AntiAlias,
         );
         // Far larger than the surface, so every sample point is inside the
         // drawn shape and only the clip can remove it.
         painter.draw_rect(
-            flui_types::Rect::from_xywh(
-                Pixels(-200.0),
-                Pixels(-200.0),
-                Pixels(600.0),
-                Pixels(600.0),
-            ),
+            flui_types::Rect::from_xywh((-200.0), (-200.0), 600.0, 600.0),
             &Paint::fill(Color::rgb(0, 0, 255)),
         );
         painter.restore();
@@ -3594,18 +3503,13 @@ mod gpu_tests {
         painter.scale(1.0, 3.0);
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(
-                flui_types::Rect::from_xywh(Pixels(16.0), Pixels(0.0), Pixels(96.0), Pixels(32.0)),
-                Pixels(16.0),
+                flui_types::Rect::from_xywh(16.0, 0.0, 96.0, 32.0),
+                16.0,
             ),
             flui_types::painting::Clip::AntiAlias,
         );
         painter.draw_rect(
-            flui_types::Rect::from_xywh(
-                Pixels(-200.0),
-                Pixels(-200.0),
-                Pixels(600.0),
-                Pixels(600.0),
-            ),
+            flui_types::Rect::from_xywh((-200.0), (-200.0), 600.0, 600.0),
             &Paint::fill(Color::rgb(0, 0, 255)),
         );
         painter.restore();
@@ -3665,18 +3569,14 @@ mod gpu_tests {
         let (surface_texture, surface_view) = create_render_surface(&device);
         clear_surface(&device, &queue, &surface_view);
 
-        let full = flui_types::Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        );
+        let full =
+            flui_types::Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32));
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.save_layer(None, &Paint::fill(Color::rgba(0, 0, 0, 250)));
         painter.draw_text(
             "Ghost",
-            flui_types::Point::new(Pixels(4.0), Pixels(30.0)),
+            flui_types::Point::new(4.0, 30.0),
             20.0,
             &Paint::fill(Color::rgb(0, 0, 255)),
         );
@@ -3718,18 +3618,14 @@ mod gpu_tests {
         let (surface_texture, surface_view) = create_render_surface(&device);
         clear_surface(&device, &queue, &surface_view);
 
-        let full = flui_types::Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        );
+        let full =
+            flui_types::Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32));
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         // Top-level text BEFORE the layer — pure blue.
         painter.draw_text(
             "Under",
-            flui_types::Point::new(Pixels(4.0), Pixels(30.0)),
+            flui_types::Point::new(4.0, 30.0),
             20.0,
             &Paint::fill(Color::rgb(0, 0, 255)),
         );
@@ -3740,7 +3636,7 @@ mod gpu_tests {
         // Top-level text AFTER the layer — yellow, must stay visible.
         painter.draw_text(
             "Over",
-            flui_types::Point::new(Pixels(4.0), Pixels(60.0)),
+            flui_types::Point::new(4.0, 60.0),
             20.0,
             &Paint::fill(Color::rgb(255, 255, 0)),
         );
@@ -3817,17 +3713,9 @@ mod gpu_tests {
         let rotation = PI / 6.0; // 30°
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
-        painter.translate(flui_types::Offset::new(
-            flui_types::geometry::Pixels(cx),
-            flui_types::geometry::Pixels(cy),
-        ));
+        painter.translate(flui_types::Offset::new((cx), (cy)));
         painter.rotate(rotation);
-        let rect = Rect::from_xywh(
-            flui_types::geometry::Pixels(-radius),
-            flui_types::geometry::Pixels(-radius),
-            px(radius * 2.0),
-            px(radius * 2.0),
-        );
+        let rect = Rect::from_xywh((-radius), (-radius), (radius * 2.0), (radius * 2.0));
         painter.draw_arc(rect, start, sweep, true, &Paint::fill(Color::WHITE));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -3918,9 +3806,9 @@ mod gpu_tests {
             (cx - 38.4, cy - 9.2),
         ];
         let mut path = flui_types::painting::path::Path::new();
-        path.move_to(flui_types::Point::new(Pixels(v[0].0), Pixels(v[0].1)));
+        path.move_to(flui_types::Point::new(v[0].0, v[0].1));
         for &(x, y) in &v[1..] {
-            path.line_to(flui_types::Point::new(Pixels(x), Pixels(y)));
+            path.line_to(flui_types::Point::new(x, y));
         }
         path.close();
 
@@ -3982,10 +3870,8 @@ mod gpu_tests {
         // Large rrect (60×60) with 10 px corner radii — well above SSAA threshold.
         let cx = SURFACE_WIDTH as f32 / 2.0;
         let cy = SURFACE_HEIGHT as f32 / 2.0;
-        let rrect = RRect::from_rect_circular(
-            Rect::from_xywh(px(cx - 30.0), px(cy - 30.0), px(60.0), px(60.0)),
-            px(10.0),
-        );
+        let rrect =
+            RRect::from_rect_circular(Rect::from_xywh((cx - 30.0), (cy - 30.0), 60.0, 60.0), 10.0);
 
         // Xor on transparent = SrcOver; the oracle proves routing, not
         // per-mode composite math.
@@ -4068,12 +3954,7 @@ mod gpu_tests {
         // Step 1: paint an opaque green background covering the whole surface.
         // This is SrcOver — it comes first in draw order so the DstOut circle
         // composites onto the green backdrop.
-        let full_rect = Rect::from_xywh(
-            px(0.0),
-            px(0.0),
-            px(SURFACE_WIDTH as f32),
-            px(SURFACE_HEIGHT as f32),
-        );
+        let full_rect = Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32));
         let green = Color::rgba(0, 255, 0, 255);
         painter.draw_rect(full_rect, &Paint::fill(green));
 
@@ -4081,7 +3962,7 @@ mod gpu_tests {
         // Radius 40 → bounding box area = 80×80 = 6400 px² >> SSAA_AREA_THRESHOLD_PX_SQ=256.
         // The circle is placed slightly off-pixel-center to ensure non-axis-aligned
         // edges and genuine partial-alpha boundary pixels from the SSAA downsample.
-        let center = flui_types::Point::new(px(cx + 0.5), px(cy + 0.5));
+        let center = flui_types::Point::new((cx + 0.5), (cy + 0.5));
         painter.draw_circle(
             center,
             radius,
@@ -4174,16 +4055,11 @@ mod gpu_tests {
             let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
 
             painter.draw_rect(
-                Rect::from_xywh(
-                    px(0.0),
-                    px(0.0),
-                    px(SURFACE_WIDTH as f32),
-                    px(SURFACE_HEIGHT as f32),
-                ),
+                Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32)),
                 &Paint::fill(backdrop),
             );
             painter.draw_circle(
-                flui_types::Point::new(px(cx + 0.5), px(cy + 0.5)),
+                flui_types::Point::new((cx + 0.5), (cy + 0.5)),
                 radius,
                 &Paint::fill(src).with_blend_mode(mode),
             );
@@ -4288,7 +4164,7 @@ mod gpu_tests {
         {
             let partial = count_partial(&|p: &mut WgpuPainter| {
                 p.draw_rect(
-                    Rect::from_xywh(px(cx - 30.0 + off), px(cy - 30.0 + off), px(60.0), px(60.0)),
+                    Rect::from_xywh((cx - 30.0 + off), (cy - 30.0 + off), 60.0, 60.0),
                     &xor_paint,
                 );
             });
@@ -4303,8 +4179,8 @@ mod gpu_tests {
         {
             let partial = count_partial(&|p: &mut WgpuPainter| {
                 let r = RRect::from_rect_circular(
-                    Rect::from_xywh(px(cx - 30.0 + off), px(cy - 30.0 + off), px(60.0), px(60.0)),
-                    px(12.0),
+                    Rect::from_xywh((cx - 30.0 + off), (cy - 30.0 + off), 60.0, 60.0),
+                    12.0,
                 );
                 p.draw_rrect(r, &xor_paint);
             });
@@ -4320,7 +4196,7 @@ mod gpu_tests {
         {
             let partial = count_partial(&|p: &mut WgpuPainter| {
                 p.draw_circle(
-                    flui_types::Point::new(px(cx + off), px(cy + off)),
+                    flui_types::Point::new((cx + off), (cy + off)),
                     40.0,
                     &xor_paint,
                 );
@@ -4337,7 +4213,7 @@ mod gpu_tests {
         {
             let partial = count_partial(&|p: &mut WgpuPainter| {
                 p.draw_oval(
-                    Rect::from_xywh(px(cx - 40.0 + off), px(cy - 30.0 + off), px(80.0), px(60.0)),
+                    Rect::from_xywh((cx - 40.0 + off), (cy - 30.0 + off), 80.0, 60.0),
                     &xor_paint,
                 );
             });
@@ -4356,8 +4232,7 @@ mod gpu_tests {
             let partial = count_partial(&|p: &mut WgpuPainter| {
                 use std::f32::consts::FRAC_PI_4;
                 // use_center=true → pie sector; sweep 90° → two diagonal edges.
-                let arc_rect =
-                    Rect::from_xywh(px(cx - 40.0 + off), px(cy - 40.0 + off), px(80.0), px(80.0));
+                let arc_rect = Rect::from_xywh((cx - 40.0 + off), (cy - 40.0 + off), 80.0, 80.0);
                 p.draw_arc(
                     arc_rect,
                     FRAC_PI_4,
@@ -4435,19 +4310,14 @@ mod gpu_tests {
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
 
         // Step 1: fill the entire surface with opaque red using SrcOver.
-        let full_rect = Rect::from_xywh(
-            px(0.0),
-            px(0.0),
-            px(SURFACE_WIDTH as f32),
-            px(SURFACE_HEIGHT as f32),
-        );
+        let full_rect = Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32));
         painter.draw_rect(full_rect, &Paint::fill(Color::rgba(255, 0, 0, 255)));
 
         // Step 2: draw a white circle (r=40, area >> SSAA threshold) with Xor blend.
         // The circle is placed at a fractional offset to ensure non-axis-aligned
         // edges, producing genuine partial-alpha pixels from the SSAA downsample.
         painter.draw_circle(
-            flui_types::Point::new(px(cx + 0.5), px(cy + 0.5)),
+            flui_types::Point::new((cx + 0.5), (cy + 0.5)),
             radius,
             &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Xor),
         );
@@ -4542,9 +4412,9 @@ mod gpu_tests {
             (cx - 38.4, cy - 9.2),
         ];
         let mut path = flui_types::painting::path::Path::new();
-        path.move_to(flui_types::Point::new(Pixels(v[0].0), Pixels(v[0].1)));
+        path.move_to(flui_types::Point::new(v[0].0, v[0].1));
         for &(x, y) in &v[1..] {
-            path.line_to(flui_types::Point::new(Pixels(x), Pixels(y)));
+            path.line_to(flui_types::Point::new(x, y));
         }
         path.close();
 
@@ -4628,14 +4498,9 @@ mod gpu_tests {
 
         // Build a rotated rect via the painter's transform API.
         painter.save();
-        painter.translate(flui_types::Offset::new(Pixels(cx), Pixels(cy)));
+        painter.translate(flui_types::Offset::new(cx, cy));
         painter.rotate(angle_deg.to_radians());
-        let rotated_rect = Rect::from_ltrb(
-            Pixels(-half_w),
-            Pixels(-half_h),
-            Pixels(half_w),
-            Pixels(half_h),
-        );
+        let rotated_rect = Rect::from_ltrb((-half_w), (-half_h), half_w, half_h);
         painter.draw_rect(rotated_rect, &Paint::fill(Color::WHITE));
         painter.restore();
 
@@ -4732,12 +4597,7 @@ mod gpu_tests {
         let half_w = 30.0_f32;
         let half_h = 20.0_f32;
 
-        let rect = Rect::from_ltrb(
-            Pixels(cx - half_w),
-            Pixels(cy - half_h),
-            Pixels(cx + half_w),
-            Pixels(cy + half_h),
-        );
+        let rect = Rect::from_ltrb((cx - half_w), (cy - half_h), (cx + half_w), (cy + half_h));
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.draw_rect(rect, &Paint::fill(Color::WHITE));

@@ -102,7 +102,7 @@ impl RasterBackend for TestRasterBackend {
     fn is_device_lost(&self) -> bool {
         false
     }
-    fn mark_dirty(&mut self, _rect: Rect<Pixels>) {}
+    fn mark_dirty(&mut self, _rect: Rect<f64>) {}
     fn mark_full_repaint(&mut self) {}
     fn has_damage(&self) -> bool {
         true

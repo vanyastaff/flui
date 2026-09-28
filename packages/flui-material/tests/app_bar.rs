@@ -34,7 +34,7 @@ fn standalone_app_bar_consumes_the_top_padding_itself() {
     // that inset on its own — the "consumes the top inset itself" contract
     // (`app_bar.rs`'s module docs).
     let media_query = MediaQueryData {
-        padding: EdgeInsets::new(px(24.0), px(0.0), px(0.0), px(0.0)),
+        padding: EdgeInsets::new(24.0, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -48,7 +48,7 @@ fn standalone_app_bar_consumes_the_top_padding_itself() {
     let root = laid.root();
     assert_eq!(
         laid.size(root).height,
-        px(56.0 + 24.0),
+        (56.0 + 24.0),
         "a primary AppBar must add the ambient MediaQuery top padding to its own \
          toolbar_height, unassisted by any Scaffold",
     );
@@ -70,7 +70,7 @@ fn app_bar_with_no_top_padding_is_exactly_the_toolbar_height() {
     let root = laid.root();
     assert_eq!(
         laid.size(root).height,
-        px(56.0),
+        56.0,
         "with a zero MediaQuery padding, the app bar's height must be exactly \
          the default toolbar_height",
     );
@@ -423,8 +423,8 @@ fn tapping_the_implied_back_button_pops_the_route() {
     let leading = find_leading_icon_button_material(&laid);
     let leading_size = laid.size(leading);
     let leading_origin = laid.absolute_offset(leading);
-    let tap_x = leading_origin.dx.get() + leading_size.width.get() / 2.0;
-    let tap_y = leading_origin.dy.get() + leading_size.height.get() / 2.0;
+    let tap_x = leading_origin.dx + leading_size.width / 2.0;
+    let tap_y = leading_origin.dy + leading_size.height / 2.0;
 
     laid.dispatch_pointer_down(tap_x, tap_y);
     laid.dispatch_pointer_up(tap_x, tap_y);
@@ -448,14 +448,11 @@ fn tapping_the_implied_back_button_pops_the_route() {
 /// agree — matching how a real [`flui_material::TabBar`] behaves (its own
 /// `build` returns exactly the height it advertises via
 /// [`flui_sdk::widgets::PreferredSizeView::preferred_size`]).
-fn fixed_height_bottom(height: f32) -> PreferredSize {
-    PreferredSize::new(
-        Size::new(px(f32::INFINITY), px(height)),
-        SizedBox::height(height),
-    )
+fn fixed_height_bottom(height: f64) -> PreferredSize {
+    PreferredSize::new(Size::new(f64::INFINITY, height), SizedBox::height(height))
 }
 
-const BOTTOM_SLOT_HEIGHT: f32 = 48.0;
+const BOTTOM_SLOT_HEIGHT: f64 = 48.0;
 
 /// The bottom slot's own mounted `RenderConstrainedBox`
 /// — the only one in this tree sized to exactly [`BOTTOM_SLOT_HEIGHT`] (the
@@ -467,7 +464,7 @@ fn find_bottom_slot_box(laid: &common::LaidOut) -> flui_sdk::foundation::RenderI
     let candidates: Vec<_> = laid
         .find_all_by_render_type("RenderConstrainedBox")
         .into_iter()
-        .filter(|&id| laid.size(id).height == px(BOTTOM_SLOT_HEIGHT))
+        .filter(|&id| laid.size(id).height == BOTTOM_SLOT_HEIGHT)
         .collect();
     assert_eq!(
         candidates.len(),
@@ -496,7 +493,7 @@ fn app_bar_with_a_bottom_slot_mounts_the_toolbar_then_the_bottom_at_their_full_h
     let root = laid.root();
     assert_eq!(
         laid.size(root).height,
-        px(56.0 + BOTTOM_SLOT_HEIGHT),
+        (56.0 + BOTTOM_SLOT_HEIGHT),
         "with no height shortfall, the AppBar's total height must be toolbar_height + the \
          bottom slot's own preferred height",
     );
@@ -504,7 +501,7 @@ fn app_bar_with_a_bottom_slot_mounts_the_toolbar_then_the_bottom_at_their_full_h
     let bottom = find_bottom_slot_box(&laid);
     assert_eq!(
         laid.absolute_offset(bottom).dy,
-        px(56.0),
+        56.0,
         "the bottom slot must sit directly below the toolbar, at y == toolbar_height"
     );
 }
@@ -525,7 +522,7 @@ fn app_bar_with_a_bottom_slot_mounts_the_toolbar_then_the_bottom_at_their_full_h
 #[test]
 fn a_height_shortfall_shrinks_the_toolbar_and_leaves_the_bottom_slot_at_its_full_height() {
     let media = MediaQueryData {
-        padding: EdgeInsets::new(px(40.0), px(0.0), px(0.0), px(0.0)),
+        padding: EdgeInsets::new(40.0, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -544,14 +541,14 @@ fn a_height_shortfall_shrinks_the_toolbar_and_leaves_the_bottom_slot_at_its_full
     let bottom = find_bottom_slot_box(&laid);
     assert_eq!(
         laid.size(bottom).height,
-        px(BOTTOM_SLOT_HEIGHT),
+        (BOTTOM_SLOT_HEIGHT),
         "the bottom slot must keep its full preferred height under a shortfall"
     );
 
     let toolbar_boxes: Vec<_> = laid
         .find_all_by_render_type("RenderConstrainedBox")
         .into_iter()
-        .filter(|&id| laid.size(id).height == px(56.0))
+        .filter(|&id| laid.size(id).height == 56.0)
         .collect();
     assert!(
         toolbar_boxes.is_empty(),
@@ -566,7 +563,7 @@ fn a_height_shortfall_shrinks_the_toolbar_and_leaves_the_bottom_slot_at_its_full
     let shrunk_toolbar_boxes: Vec<_> = laid
         .find_all_by_render_type("RenderConstrainedBox")
         .into_iter()
-        .filter(|&id| laid.size(id).height == px(16.0))
+        .filter(|&id| laid.size(id).height == 16.0)
         .collect();
     assert!(
         !shrunk_toolbar_boxes.is_empty(),
@@ -584,7 +581,7 @@ fn a_height_shortfall_shrinks_the_toolbar_and_leaves_the_bottom_slot_at_its_full
 #[test]
 fn standalone_app_bar_with_a_bottom_slot_still_consumes_its_own_top_padding() {
     let media = MediaQueryData {
-        padding: EdgeInsets::new(px(24.0), px(0.0), px(0.0), px(0.0)),
+        padding: EdgeInsets::new(24.0, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     };
     let laid = lay_out(
@@ -603,7 +600,7 @@ fn standalone_app_bar_with_a_bottom_slot_still_consumes_its_own_top_padding() {
     let root = laid.root();
     assert_eq!(
         laid.size(root).height,
-        px(56.0 + BOTTOM_SLOT_HEIGHT + 24.0),
+        (56.0 + BOTTOM_SLOT_HEIGHT + 24.0),
         "a primary AppBar with a bottom slot must add the ambient MediaQuery top padding to \
          toolbar_height + the bottom slot's own preferred height, unassisted by any Scaffold",
     );
@@ -611,7 +608,7 @@ fn standalone_app_bar_with_a_bottom_slot_still_consumes_its_own_top_padding() {
     let bottom = find_bottom_slot_box(&laid);
     assert_eq!(
         laid.size(bottom).height,
-        px(BOTTOM_SLOT_HEIGHT),
+        (BOTTOM_SLOT_HEIGHT),
         "with ample room (no shortfall), the bottom slot must mount at its full preferred height"
     );
 }

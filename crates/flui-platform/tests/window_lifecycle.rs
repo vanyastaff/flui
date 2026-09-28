@@ -26,12 +26,12 @@ fn test_window_creation_with_options() {
     // Create window with custom options
     let options = WindowOptions {
         title: "Test Window - T011".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         resizable: true,
         visible: false, // Don't show window during tests
         decorated: true,
-        min_size: Some(Size::new(px(320.0), px(240.0))),
-        max_size: Some(Size::new(px(1920.0), px(1080.0))),
+        min_size: Some(Size::new(320.0, 240.0)),
+        max_size: Some(Size::new(1920.0, 1080.0)),
         ..Default::default()
     };
 
@@ -94,7 +94,7 @@ fn test_window_close_event() {
 
     let options = WindowOptions {
         title: "Test Window - T012".to_string(),
-        size: Size::new(px(400.0), px(300.0)),
+        size: Size::new(400.0, 300.0),
         visible: false,
         ..Default::default()
     };
@@ -140,9 +140,9 @@ fn test_multiple_concurrent_windows() {
 
     // Create 3 windows with different sizes
     let window_configs = vec![
-        ("Window 1", px(400.0), px(300.0)),
-        ("Window 2", px(600.0), px(450.0)),
-        ("Window 3", px(800.0), px(600.0)),
+        ("Window 1", 400.0, 300.0),
+        ("Window 2", 600.0, 450.0),
+        ("Window 3", 800.0, 600.0),
     ];
 
     let mut windows = Vec::new();
@@ -205,7 +205,7 @@ fn test_request_redraw() {
 
     let options = WindowOptions {
         title: "Test Window - T021".to_string(),
-        size: Size::new(px(400.0), px(300.0)),
+        size: Size::new(400.0, 300.0),
         visible: false,
         ..Default::default()
     };
@@ -249,7 +249,7 @@ fn test_window_resize_event() {
 
     let options = WindowOptions {
         title: "Test Window - T022".to_string(),
-        size: Size::new(px(400.0), px(300.0)),
+        size: Size::new(400.0, 300.0),
         visible: false,
         resizable: true,
         ..Default::default()

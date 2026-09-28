@@ -32,7 +32,7 @@ impl RenderView for KeyedLeaf {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderSizedBox::new(Some(px(1.0)), Some(px(1.0)))
+        RenderSizedBox::new(Some(1.0), Some(1.0))
     }
 
     fn update_render_object(
@@ -40,7 +40,7 @@ impl RenderView for KeyedLeaf {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> RenderUpdateImpact {
-        let extent = px(1.0 + (self.revision % 2) as f32);
+        let extent = (1.0 + (self.revision % 2) as f64);
         render_object.set_size(Some(extent), Some(extent))
     }
 }

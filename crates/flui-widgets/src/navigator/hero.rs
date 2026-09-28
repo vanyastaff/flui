@@ -84,7 +84,6 @@ use flui_geometry::Rect;
 use flui_objects::SubtreeAnchor;
 use flui_rendering::pipeline::PipelineCell;
 use flui_types::Size;
-use flui_types::geometry::px;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
@@ -107,7 +106,7 @@ pub(crate) type RectTweenFactory =
 /// builder receives the flight animation, the direction, and the source and destination
 /// hero child views directly.
 pub(crate) type ShuttleBuilder =
-    Rc<dyn Fn(&Arc<dyn Animation<f32>>, FlightDirection, &BoxedView, &BoxedView) -> BoxedView>;
+    Rc<dyn Fn(&Arc<dyn Animation<f64>>, FlightDirection, &BoxedView, &BoxedView) -> BoxedView>;
 
 /// Builds the widget left in the hero's place while it is in flight. FLUI's
 /// state-preserving alternative to Flutter's lossy `placeholderBuilder`:
@@ -598,12 +597,7 @@ impl HeroHandle {
         owner.with(|owner| {
             let size = owner.box_size(render_id)?;
             let transform = owner.transform_to(render_id, ancestor)?;
-            Some(transform.transform_rect(&Rect::from_ltwh(
-                px(0.0),
-                px(0.0),
-                size.width,
-                size.height,
-            )))
+            Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height)))
         })
     }
 
@@ -777,7 +771,7 @@ impl Hero {
     #[must_use]
     pub fn flight_shuttle_builder<F, V>(mut self, builder: F) -> Self
     where
-        F: Fn(&Arc<dyn Animation<f32>>, FlightDirection, &BoxedView, &BoxedView) -> V + 'static,
+        F: Fn(&Arc<dyn Animation<f64>>, FlightDirection, &BoxedView, &BoxedView) -> V + 'static,
         V: IntoView,
     {
         self.shuttle_builder = Some(Rc::new(move |animation, direction, from, to| {
@@ -966,7 +960,7 @@ impl ViewState<Hero> for HeroState {
                 layers.push(build_placeholder(size));
             }
             let sized = match placeholder {
-                Some(size) => SizedBox::new(size.width.0, size.height.0),
+                Some(size) => SizedBox::new(size.width, size.height),
                 None => SizedBox::default(),
             };
             return AnchoredBox::new(anchor, sized.child(Stack::new(layers)));
@@ -978,7 +972,7 @@ impl ViewState<Hero> for HeroState {
         // state is not preserved (as in Flutter).
         if show_placeholder && !self.handle.includes_child() {
             let size = placeholder.expect("show_placeholder implies a size");
-            return AnchoredBox::new(anchor, SizedBox::new(size.width.0, size.height.0));
+            return AnchoredBox::new(anchor, SizedBox::new(size.width, size.height));
         }
 
         // The **fixed chain** — Flutter's `:427-437`, minus the `KeyedSubtree(_key)`:
@@ -993,7 +987,7 @@ impl ViewState<Hero> for HeroState {
         // Flutter's `_key` guards the *caller-supplied `placeholderBuilder`* shape,
         // which this slice does not support (deferred to the public API).
         let sized = match placeholder {
-            Some(size) => SizedBox::new(size.width.0, size.height.0),
+            Some(size) => SizedBox::new(size.width, size.height),
             None => SizedBox::default(),
         };
         AnchoredBox::new(

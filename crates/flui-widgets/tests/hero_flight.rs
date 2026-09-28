@@ -83,7 +83,7 @@ fn install(navigator: &NavigatorHandle) -> Arc<HeroController> {
 /// swallow a pointer whether or not it is wrapped in an `IgnorePointer`. Giving it a
 /// `ColoredBox` (a `RenderDecoratedBox`, which is) is what makes the `IgnorePointer`
 /// the thing under test.
-fn hittable_hero_page(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> {
+fn hittable_hero_page(tag_name: &'static str, w: f64, h: f64) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
         Center::new()
             .child(Hero::new(
@@ -97,7 +97,7 @@ fn hittable_hero_page(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> 
 }
 
 /// A `PageRoute` whose page is one `Hero`, centred so it does not fill the screen.
-fn hero_page(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> {
+fn hero_page(tag_name: &'static str, w: f64, h: f64) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
         Center::new()
             .child(Hero::new(ValueKey::new(tag_name), SizedBox::new(w, h)))
@@ -567,7 +567,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
     );
 }
 
-fn rect_origin(rect: Rect) -> (f32, f32) {
+fn rect_origin(rect: Rect) -> (f64, f64) {
     (rect.min_x().0, rect.min_y().0)
 }
 
@@ -940,7 +940,7 @@ fn many_flights_landing_in_one_frame_schedule_one_drain() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let two_heroes = |a: &'static str, b: &'static str, wa: f32, wb: f32| {
+    let two_heroes = |a: &'static str, b: &'static str, wa: f64, wb: f64| {
         PageRoute::<i32>::new(move |_ctx, _p, _s| {
             Column::new(vec![
                 Hero::new(ValueKey::new(a), SizedBox::new(wa, 20.0))
@@ -1312,8 +1312,8 @@ fn a_faded_out_flight_still_removes_its_entry_when_the_animation_settles() {
 /// A `hero_page` whose `Hero` is customized by `configure` — a flight curve, say.
 fn hero_page_with(
     tag_name: &'static str,
-    w: f32,
-    h: f32,
+    w: f64,
+    h: f64,
     configure: impl Fn(Hero) -> Hero + 'static,
 ) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
@@ -1549,8 +1549,8 @@ fn a_diverted_flight_drops_the_reverse_curve() {
 /// A `hero_page` under a chain of `HeroMode` scopes, outermost first.
 fn hero_mode_page(
     tag_name: &'static str,
-    w: f32,
-    h: f32,
+    w: f64,
+    h: f64,
     modes: &'static [bool],
 ) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
@@ -1671,7 +1671,7 @@ fn a_bare_hero_mode_changes_nothing() {
 #[test]
 fn a_pop_push_divert_resumes_from_the_old_manifest_animation_value() {
     let linear_page =
-        |w: f32, h: f32| hero_page_with("shared", w, h, |hero| hero.curve(flui_animation::Linear));
+        |w: f64, h: f64| hero_page_with("shared", w, h, |hero| hero.curve(flui_animation::Linear));
 
     let navigator = seeded_navigator();
     let controller = install(&navigator);

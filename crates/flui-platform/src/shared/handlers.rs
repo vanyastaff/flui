@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use flui_types::geometry::{Pixels, Size};
+use flui_types::geometry::Size;
 use parking_lot::Mutex;
 
 use crate::traits::{DispatchEventResult, PlatformInput, WindowEvent, WindowExecutionState};
@@ -229,7 +229,7 @@ pub struct WindowCallbacks {
 
     /// Called when the window is resized. Parameters: new size (logical), scale
     /// factor.
-    pub on_resize: Mutex<Option<Box<dyn FnMut(Size<Pixels>, f32) + Send>>>,
+    pub on_resize: Mutex<Option<Box<dyn FnMut(Size<f64>, f64) + Send>>>,
 
     /// Called when the window is moved.
     pub on_moved: Mutex<Option<Box<dyn FnMut() + Send>>>,
@@ -308,7 +308,7 @@ pub struct WindowCallbacks {
 enum WindowCallbackEvent {
     Input(PlatformInput),
     RequestFrame,
-    Resize(Size<Pixels>, f32),
+    Resize(Size<f64>, f64),
     Moved,
     Close,
     Active(bool),
@@ -733,7 +733,7 @@ impl WindowCallbacks {
     }
 
     /// Dispatch a resize event with new logical size and scale factor.
-    pub fn dispatch_resize(&self, size: Size<Pixels>, scale_factor: f32) {
+    pub fn dispatch_resize(&self, size: Size<f64>, scale_factor: f64) {
         let Some(drain) = DispatchDrain::begin(
             &self.event_dispatch,
             WindowCallbackEvent::Resize(size, scale_factor),
@@ -867,7 +867,7 @@ impl WindowCallbacks {
     }
 
     #[cfg(target_os = "ios")]
-    pub(crate) fn dispatch_metrics_resize(&self, size: Size<Pixels>, scale: f32) {
+    pub(crate) fn dispatch_metrics_resize(&self, size: Size<f64>, scale: f64) {
         if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
         }
@@ -994,9 +994,7 @@ macro_rules! impl_window_callback_setters {
 
         fn on_resize(
             &self,
-            callback: Box<
-                dyn FnMut(::flui_types::geometry::Size<::flui_types::geometry::Pixels>, f32) + Send,
-            >,
+            callback: Box<dyn FnMut(::flui_types::geometry::Size<f64>, f64) + Send>,
         ) {
             *self.$callbacks_field.on_resize.lock() = Some(callback);
         }
@@ -1228,7 +1226,7 @@ mod tests {
         callbacks.set_safe_area_callback(Box::new(move |_| {
             seen_in_observer.fetch_add(1, Ordering::SeqCst);
         }));
-        callbacks.dispatch_safe_area_change(EdgeInsets::new(px(44.0), px(0.0), px(34.0), px(0.0)));
+        callbacks.dispatch_safe_area_change(EdgeInsets::new(44.0, 0.0, 34.0, 0.0));
         assert_eq!(
             seen.load(Ordering::SeqCst),
             1,
@@ -1243,7 +1241,7 @@ mod tests {
             if inner.on_safe_area_change.lock().is_some() {
                 filled_in_input.store(1, Ordering::SeqCst);
             }
-            inner.dispatch_safe_area_change(EdgeInsets::new(px(1.0), px(1.0), px(1.0), px(1.0)));
+            inner.dispatch_safe_area_change(EdgeInsets::new(1.0, 1.0, 1.0, 1.0));
             DispatchEventResult::default()
         }));
         let _ = callbacks.dispatch_input(keyboard_event());

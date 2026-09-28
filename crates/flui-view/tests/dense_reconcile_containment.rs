@@ -73,7 +73,7 @@ pub(super) struct DenseHealthyLeaf {
 
 impl DenseHealthyLeaf {
     fn size(&self) -> Size {
-        Size::new(px(8.0 + self.marker as f32), px(12.0))
+        Size::new((8.0 + self.marker as f64), 12.0)
     }
 }
 
@@ -330,7 +330,7 @@ pub(super) fn run_real_pipeline_frame(
             "the sole parentless render node must be the expected dense parent frontier"
         );
         owner.set_root_id(Some(render_root));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(320.0), px(80.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(320.0, 80.0))));
         let (idle, result) = std::mem::take(owner).run_frame();
         *owner = idle;
         result.expect("the dense containment topology must complete a real pipeline frame");

@@ -85,7 +85,7 @@ pub type ValueWidgetBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &T, Option<BoxedVi
 /// let _widget = ValueListenableBuilder::new(
 ///     counter,
 ///     Rc::new(|_ctx: &dyn BuildContext, value: &i32, _child| {
-///         SizedBox::square(*value as f32).boxed()
+///         SizedBox::square(*value as f64).boxed()
 ///     }),
 /// );
 /// ```

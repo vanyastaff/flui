@@ -115,7 +115,7 @@
 //!
 //!     let options = WindowOptions {
 //!         title: "Test".to_string(),
-//!         size: Size::new(px(800.0), px(600.0)),
+//!         size: Size::new(800.0, 600.0),
 //!         visible: true,
 //!         ..Default::default()
 //!     };

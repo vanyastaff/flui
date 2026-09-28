@@ -70,7 +70,7 @@ fn create_test_window() -> Result<Arc<dyn flui_platform::PlatformWindow>, anyhow
     let platform = get_test_platform();
     let options = WindowOptions {
         title: "Integration Test Window".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         visible: false, // Hidden to avoid UI distraction
         ..Default::default()
     };
@@ -179,7 +179,7 @@ fn test_canvas_integration() {
     // // Test basic canvas operations
     // canvas.clear(Color::WHITE);
     // canvas.draw_rect(
-    //     Rect::new(px(10.0), px(10.0), px(100.0), px(100.0)),
+    //     Rect::new(10.0, 10.0, 100.0, 100.0),
     //     Color::RED,
     // );
     // canvas.present();

@@ -42,7 +42,7 @@ fn test_platform_event_contract() {
     // Create a test window
     let options = WindowOptions {
         title: "Test T061 - Event Contract".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: true,
         visible: false,
         decorated: true,
@@ -90,8 +90,8 @@ fn test_platform_event_contract() {
     let expected_logical_width = (physical_size.width.0 as f64) / scale_factor;
     let expected_logical_height = (physical_size.height.0 as f64) / scale_factor;
 
-    let width_diff = (logical_size.width.0 - expected_logical_width as f32).abs();
-    let height_diff = (logical_size.height.0 - expected_logical_height as f32).abs();
+    let width_diff = (logical_size.width.0 - expected_logical_width as f64).abs();
+    let height_diff = (logical_size.height.0 - expected_logical_height as f64).abs();
 
     assert!(
         width_diff < 2.0,
@@ -201,12 +201,12 @@ fn test_cross_platform_event_consistency() {
     // Create identical window options for all platforms
     let options = WindowOptions {
         title: format!("Event Consistency Test - {platform_name}"),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         resizable: true,
         visible: false,
         decorated: true,
-        min_size: Some(Size::new(px(320.0), px(240.0))),
-        max_size: Some(Size::new(px(1920.0), px(1080.0))),
+        min_size: Some(Size::new(320.0, 240.0)),
+        max_size: Some(Size::new(1920.0, 1080.0)),
         ..Default::default()
     };
 
@@ -244,8 +244,8 @@ fn test_cross_platform_event_consistency() {
     let computed_logical_width = (physical_size.width.0 as f64) / scale_factor;
     let computed_logical_height = (physical_size.height.0 as f64) / scale_factor;
 
-    let width_error = (logical_size.width.0 - computed_logical_width as f32).abs();
-    let height_error = (logical_size.height.0 - computed_logical_height as f32).abs();
+    let width_error = (logical_size.width.0 - computed_logical_width as f64).abs();
+    let height_error = (logical_size.height.0 - computed_logical_height as f64).abs();
 
     tracing::info!(
         "Coordinate conversion errors: width={:.2}, height={:.2}",
@@ -284,7 +284,7 @@ fn test_event_dispatch_latency_benchmark() {
     // Create a test window
     let options = WindowOptions {
         title: "Latency Benchmark".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: false,
         visible: false,
         decorated: true,
@@ -361,7 +361,7 @@ fn test_event_handling_performance_baseline() {
     for i in 0..window_count {
         let options = WindowOptions {
             title: format!("Perf Test Window {i}"),
-            size: Size::new(px(400.0), px(300.0)),
+            size: Size::new(400.0, 300.0),
             resizable: false,
             visible: false,
             decorated: true,

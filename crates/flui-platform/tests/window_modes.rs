@@ -23,7 +23,7 @@ fn test_window_modes() {
 
     let options = WindowOptions {
         title: "Test Window - T016".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         visible: false, // Don't show during tests
         ..Default::default()
     };
@@ -81,7 +81,7 @@ fn test_windows_mode_transitions() {
 
     let options = WindowOptions {
         title: "Windows Mode Test - T017".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         visible: false,
         ..Default::default()
     };
@@ -130,7 +130,7 @@ fn test_macos_mode_transitions() {
 
     let options = WindowOptions {
         title: "macOS Mode Test - T018".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         visible: false,
         ..Default::default()
     };
@@ -171,7 +171,7 @@ fn test_dpi_scaling_change() {
 
     let options = WindowOptions {
         title: "DPI Test - T019".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         visible: false,
         ..Default::default()
     };
@@ -259,7 +259,7 @@ fn test_per_monitor_dpi() {
     // Create window and verify it uses correct scale factor
     let options = WindowOptions {
         title: "Per-Monitor DPI Test - T020".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         visible: false,
         ..Default::default()
     };

@@ -308,13 +308,13 @@ impl FluiView {
         let bounds = self.bounds();
         let insets = self.safeAreaInsets();
         let next = WindowMetrics {
-            size: Size::new(px(bounds.size.width as f32), px(bounds.size.height as f32)),
+            size: Size::new((bounds.size.width as f64), (bounds.size.height as f64)),
             scale: self.contentScaleFactor(),
             safe_area: EdgeInsets::new(
-                px(insets.top as f32),
-                px(insets.right as f32),
-                px(insets.bottom as f32),
-                px(insets.left as f32),
+                (insets.top as f64),
+                (insets.right as f64),
+                (insets.bottom as f64),
+                (insets.left as f64),
             ),
         };
         if self.ivars().sampling.get() != admission
@@ -329,7 +329,7 @@ impl FluiView {
         };
         if previous.size != next.size || previous.scale != next.scale {
             self.callbacks()
-                .dispatch_metrics_resize(next.size, next.scale as f32);
+                .dispatch_metrics_resize(next.size, next.scale as f64);
         }
         if self.ivars().sampling.get() != admission {
             // The resize dispatch above retired this view, so this snapshot's
@@ -384,7 +384,7 @@ pub(super) enum LifecycleObservation {
 
 #[derive(Clone, Copy, PartialEq)]
 struct WindowMetrics {
-    size: Size<Pixels>,
+    size: Size<f64>,
     scale: f64,
     safe_area: EdgeInsets,
 }
@@ -429,7 +429,7 @@ impl IOSWindow {
     pub(super) fn new(mtm: MainThreadMarker, id: WindowId) -> Self {
         let callbacks = Arc::new(WindowCallbacks::new());
         let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
-            size: Size::new(px(0.0), px(0.0)),
+            size: Size::new(0.0, 0.0),
             scale: 1.0,
             safe_area: EdgeInsets::ZERO,
         }));
@@ -758,15 +758,15 @@ impl PlatformWindow for IOSWindow {
         self.id
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
+    fn physical_size(&self) -> Size<i32> {
         let metrics = *self.metrics.lock();
         Size::new(
-            device_px((f64::from(metrics.size.width.0) * metrics.scale).round() as i32),
-            device_px((f64::from(metrics.size.height.0) * metrics.scale).round() as i32),
+            ((f64::from(metrics.size.width.0) * metrics.scale).round() as i32),
+            ((f64::from(metrics.size.height.0) * metrics.scale).round() as i32),
         )
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
+    fn logical_size(&self) -> Size<f64> {
         self.metrics.lock().size
     }
     fn scale_factor(&self) -> f64 {

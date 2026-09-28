@@ -10,7 +10,7 @@
 //! cannot mirror the clip/transform nesting cannot render a real tree.
 
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, RRect, RSuperellipse, Rect},
+    geometry::{Matrix4, Offset, RRect, RSuperellipse, Rect},
     painting::Path,
 };
 
@@ -40,7 +40,7 @@ use flui_types::{
 /// which is what the split buys.
 pub(crate) trait LayerStateStack {
     /// Push a rectangular clip onto the clip stack
-    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip);
+    fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_types::painting::Clip);
 
     /// Push a rounded rectangular clip onto the clip stack
     fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip);
@@ -76,7 +76,7 @@ pub(crate) trait LayerStateStack {
     fn pop_clip(&mut self);
 
     /// Push a translation offset onto the transform stack
-    fn push_offset(&mut self, offset: Offset<Pixels>);
+    fn push_offset(&mut self, offset: Offset<f64>);
 
     /// Push a full matrix transformation onto the transform stack
     fn push_transform(&mut self, transform: &Matrix4);

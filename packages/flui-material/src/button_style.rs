@@ -133,7 +133,7 @@ pub struct ButtonStyle {
 
     /// The elevation of the button's `Material`. Flutter parity:
     /// `ButtonStyle.elevation`.
-    pub elevation: Option<WidgetStateProperty<Option<f32>>>,
+    pub elevation: Option<WidgetStateProperty<Option<f64>>>,
 
     /// The padding between the button's boundary and its child. Flutter
     /// parity: `ButtonStyle.padding` (narrowed to `EdgeInsets`; the oracle's
@@ -163,7 +163,7 @@ pub struct ButtonStyle {
     /// (see `shape.rs`'s "Named deferral: `OutlinedBorder` sides"). An
     /// `OutlinedButton` in V1 resolves an outline color/width but does not
     /// yet draw a stroke.
-    pub side: Option<WidgetStateProperty<Option<BorderSide<Pixels>>>>,
+    pub side: Option<WidgetStateProperty<Option<BorderSide<f64>>>>,
 
     /// The shape of the button's underlying `Material`. Flutter parity:
     /// `ButtonStyle.shape` (narrowed to [`MaterialShape`]; the oracle's open

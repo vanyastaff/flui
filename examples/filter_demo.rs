@@ -68,18 +68,13 @@ fn build_filter_scene(width: f32, height: f32) -> Scene {
 
             // Full background (dark navy).
             canvas.draw_rect(
-                Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
+                Rect::from_ltrb(0.0, 0.0, width, height),
                 &Paint::fill(Color::rgb(18, 26, 42)),
             );
 
             // Divider between left (sharp) and right (blurred) halves.
             canvas.draw_rect(
-                Rect::from_ltrb(
-                    px(half_width - 1.0),
-                    px(0.0),
-                    px(half_width + 1.0),
-                    px(height),
-                ),
+                Rect::from_ltrb((half_width - 1.0), 0.0, (half_width + 1.0), height),
                 &Paint::fill(Color::rgb(80, 80, 80)),
             );
 
@@ -134,17 +129,17 @@ fn draw_demo_shapes(
 
     // Large coral rectangle.
     canvas.draw_rect(
-        Rect::from_ltrb(px(left), px(60.0), px(right), px(height / 2.0 - 20.0)),
+        Rect::from_ltrb(left, 60.0, right, (height / 2.0 - 20.0)),
         &Paint::fill(Color::rgb(220, 80, 60)),
     );
 
     // Overlapping teal rectangle.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(center_x - 80.0),
-            px(height / 2.0 - 60.0),
-            px(center_x + 80.0),
-            px(height - 60.0),
+            (center_x - 80.0),
+            (height / 2.0 - 60.0),
+            (center_x + 80.0),
+            (height - 60.0),
         ),
         &Paint::fill(Color::rgb(30, 180, 160)),
     );
@@ -152,17 +147,17 @@ fn draw_demo_shapes(
     // Small white accent square.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(center_x - 30.0),
-            px(height / 2.0 - 30.0),
-            px(center_x + 30.0),
-            px(height / 2.0 + 30.0),
+            (center_x - 30.0),
+            (height / 2.0 - 30.0),
+            (center_x + 30.0),
+            (height / 2.0 + 30.0),
         ),
         &Paint::fill(Color::WHITE),
     );
 
     // Yellow strip at the bottom.
     canvas.draw_rect(
-        Rect::from_ltrb(px(left), px(height - 55.0), px(right), px(height - 30.0)),
+        Rect::from_ltrb(left, (height - 55.0), right, (height - 30.0)),
         &Paint::fill(Color::rgb(255, 210, 0)),
     );
 }
@@ -181,7 +176,7 @@ fn main() {
 
     let options = WindowOptions {
         title: "FLUI Filter Demo — Gaussian Blur (SceneBuilder API)".to_string(),
-        size: Size::new(px(900.0), px(600.0)),
+        size: Size::new(900.0, 600.0),
         resizable: true,
         visible: true,
         decorated: true,

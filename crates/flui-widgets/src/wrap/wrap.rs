@@ -47,9 +47,9 @@ use crate::support::generic_render_view_element;
 pub struct Wrap<C = Vec<BoxedView>> {
     direction: Axis,
     alignment: WrapAlignment,
-    spacing: f32,
+    spacing: f64,
     run_alignment: WrapAlignment,
-    run_spacing: f32,
+    run_spacing: f64,
     cross_axis_alignment: WrapCrossAlignment,
     clip_behavior: Clip,
     children: C,
@@ -99,7 +99,7 @@ impl<C> Wrap<C> {
 
     /// Sets the minimum gap between adjacent children within a run.
     #[must_use]
-    pub fn spacing(mut self, spacing: f32) -> Self {
+    pub fn spacing(mut self, spacing: f64) -> Self {
         self.spacing = spacing;
         self
     }
@@ -113,7 +113,7 @@ impl<C> Wrap<C> {
 
     /// Sets the minimum gap between adjacent runs.
     #[must_use]
-    pub fn run_spacing(mut self, run_spacing: f32) -> Self {
+    pub fn run_spacing(mut self, run_spacing: f64) -> Self {
         self.run_spacing = run_spacing;
         self
     }

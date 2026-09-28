@@ -231,8 +231,8 @@ pub enum DragDropEvent {
 /// let scale_factor = 2.0;
 ///
 /// let logical_pos = Offset::new(
-///     Pixels(device_to_logical(physical_x as f64, scale_factor)),
-///     Pixels(device_to_logical(physical_y as f64, scale_factor))
+///     (device_to_logical(physical_x as f64, scale_factor)),
+///     (device_to_logical(physical_y as f64, scale_factor))
 /// );
 /// // Result: (960, 540) logical pixels
 /// ```

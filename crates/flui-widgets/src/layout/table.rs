@@ -8,7 +8,6 @@ use flui_objects::RenderTable;
 use crate::SizedBox;
 use flui_rendering::parent_data::TableCellParentData;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Pixels;
 use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
 use flui_types::styling::{BoxDecoration, TableBorder};
 use flui_types::typography::TextBaseline;
@@ -25,7 +24,7 @@ use flui_view::{
 /// requires every `TableRow.children` to have the same length).
 #[derive(Clone)]
 pub struct TableRow {
-    decoration: Option<BoxDecoration<Pixels>>,
+    decoration: Option<BoxDecoration<f64>>,
     cells: Vec<BoxedView>,
     key: Option<Box<dyn ViewKey>>,
 }
@@ -74,7 +73,7 @@ impl TableRow {
 
     /// Builder: paint `decoration` behind this row's cells.
     #[must_use]
-    pub fn decoration(mut self, decoration: BoxDecoration<Pixels>) -> Self {
+    pub fn decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
         self.decoration = Some(decoration);
         self
     }
@@ -302,7 +301,7 @@ impl Table {
 
     /// One [`Option<BoxDecoration>`] per row, in row order — the shape
     /// `RenderTable::row_decorations` expects.
-    fn row_decorations(&self) -> Vec<Option<BoxDecoration<Pixels>>> {
+    fn row_decorations(&self) -> Vec<Option<BoxDecoration<f64>>> {
         self.rows.iter().map(|row| row.decoration.clone()).collect()
     }
 }
@@ -518,10 +517,7 @@ mod tests {
     #[test]
     fn table_cell_parent_data_reports_exact_impact_and_preserves_layout_fields() {
         let mut data = TableCellParentData::new(4, 6, TableCellVerticalAlignment::Top);
-        data.offset = flui_types::Offset::new(
-            flui_types::geometry::px(8.0),
-            flui_types::geometry::px(13.0),
-        );
+        data.offset = flui_types::Offset::new(8.0, 13.0);
         let unchanged = TableCell::new(TableCellVerticalAlignment::Top, SizedBox::shrink());
         assert_eq!(
             unchanged.apply_parent_data(&mut data),
@@ -534,13 +530,7 @@ mod tests {
         );
         assert_eq!(data.x, 4);
         assert_eq!(data.y, 6);
-        assert_eq!(
-            data.offset,
-            flui_types::Offset::new(
-                flui_types::geometry::px(8.0),
-                flui_types::geometry::px(13.0)
-            )
-        );
+        assert_eq!(data.offset, flui_types::Offset::new(8.0, 13.0));
     }
 
     #[test]
@@ -572,7 +562,7 @@ mod tests {
     fn create_render_object_installs_the_configured_border() {
         let border = TableBorder::all(flui_types::styling::BorderSide::new(
             Color::BLACK,
-            flui_types::geometry::px(1.0),
+            1.0,
             flui_types::styling::BorderStyle::Solid,
         ));
         let render_object = Table::new(vec![row(1)])
@@ -589,7 +579,7 @@ mod tests {
 
         let border = TableBorder::all(flui_types::styling::BorderSide::new(
             Color::BLACK,
-            flui_types::geometry::px(2.0),
+            2.0,
             flui_types::styling::BorderStyle::Solid,
         ));
         let impact = Table::new(vec![row(1)])

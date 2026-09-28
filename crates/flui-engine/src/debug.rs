@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use flui_painting::{BlendMode, Paint, PointMode};
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect},
+    geometry::{Matrix4, Offset, Point, RRect, Rect},
     painting::{Image, Path},
     styling::Color,
 };
@@ -38,7 +38,7 @@ impl DebugBackend {
 }
 
 impl CommandRenderer for DebugBackend {
-    fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, _transform: &Matrix4) {
+    fn render_rect(&mut self, rect: Rect<f64>, paint: &Paint, _transform: &Matrix4) {
         self.log_command("render_rect", &format!("rect={rect:?}, paint={paint:?}"));
     }
 
@@ -48,7 +48,7 @@ impl CommandRenderer for DebugBackend {
 
     fn render_circle(
         &mut self,
-        center: Point<Pixels>,
+        center: Point<f64>,
         radius: f32,
         _paint: &Paint,
         _transform: &Matrix4,
@@ -59,14 +59,14 @@ impl CommandRenderer for DebugBackend {
         );
     }
 
-    fn render_oval(&mut self, rect: Rect<Pixels>, _paint: &Paint, _transform: &Matrix4) {
+    fn render_oval(&mut self, rect: Rect<f64>, _paint: &Paint, _transform: &Matrix4) {
         self.log_command("render_oval", &format!("rect={rect:?}"));
     }
 
     fn render_line(
         &mut self,
-        p1: Point<Pixels>,
-        p2: Point<Pixels>,
+        p1: Point<f64>,
+        p2: Point<f64>,
         _paint: &Paint,
         _transform: &Matrix4,
     ) {
@@ -82,7 +82,7 @@ impl CommandRenderer for DebugBackend {
 
     fn render_arc(
         &mut self,
-        _rect: Rect<Pixels>,
+        _rect: Rect<f64>,
         start_angle: f32,
         sweep_angle: f32,
         _use_center: bool,
@@ -108,7 +108,7 @@ impl CommandRenderer for DebugBackend {
     fn render_points(
         &mut self,
         mode: PointMode,
-        points: &[Point<Pixels>],
+        points: &[Point<f64>],
         _paint: &Paint,
         _transform: &Matrix4,
     ) {
@@ -121,7 +121,7 @@ impl CommandRenderer for DebugBackend {
     fn render_paragraph(
         &mut self,
         layout: &Arc<flui_painting::TextLayout>,
-        offset: Offset<Pixels>,
+        offset: Offset<f64>,
         color: Color,
         _transform: &Matrix4,
     ) {
@@ -139,7 +139,7 @@ impl CommandRenderer for DebugBackend {
     fn render_image(
         &mut self,
         _image: &Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         _paint: Option<&Paint>,
         _transform: &Matrix4,
     ) {
@@ -149,7 +149,7 @@ impl CommandRenderer for DebugBackend {
     fn render_atlas(
         &mut self,
         _image: &Image,
-        sprites: &[Rect<Pixels>],
+        sprites: &[Rect<f64>],
         _transforms: &[Matrix4],
         _colors: Option<&[Color]>,
         _blend_mode: BlendMode,
@@ -162,7 +162,7 @@ impl CommandRenderer for DebugBackend {
     fn render_image_repeat(
         &mut self,
         _image: &Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         repeat: flui_types::painting::image::ImageRepeat,
         _paint: Option<&Paint>,
         _transform: &Matrix4,
@@ -176,8 +176,8 @@ impl CommandRenderer for DebugBackend {
     fn render_image_nine_slice(
         &mut self,
         _image: &Image,
-        center_slice: Rect<Pixels>,
-        dst: Rect<Pixels>,
+        center_slice: Rect<f64>,
+        dst: Rect<f64>,
         _paint: Option<&Paint>,
         _transform: &Matrix4,
     ) {
@@ -190,7 +190,7 @@ impl CommandRenderer for DebugBackend {
     fn render_image_filtered(
         &mut self,
         _image: &Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         filter: flui_types::painting::image::ColorFilter,
         _paint: Option<&Paint>,
         _transform: &Matrix4,
@@ -204,8 +204,8 @@ impl CommandRenderer for DebugBackend {
     fn render_texture(
         &mut self,
         texture_id: flui_types::painting::TextureId,
-        dst: Rect<Pixels>,
-        src: Option<Rect<Pixels>>,
+        dst: Rect<f64>,
+        src: Option<Rect<f64>>,
         filter_quality: flui_types::painting::FilterQuality,
         opacity: f32,
         _transform: &Matrix4,
@@ -240,9 +240,9 @@ impl CommandRenderer for DebugBackend {
 
     fn render_vertices(
         &mut self,
-        vertices: &[Point<Pixels>],
+        vertices: &[Point<f64>],
         _colors: Option<&[Color]>,
-        _tex_coords: Option<&[Point<Pixels>]>,
+        _tex_coords: Option<&[Point<f64>]>,
         indices: &[u16],
         _paint: &Paint,
         _transform: &Matrix4,
@@ -255,7 +255,7 @@ impl CommandRenderer for DebugBackend {
 
     fn clip_rect(
         &mut self,
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         _clip_op: flui_types::painting::ClipOp,
         _clip_behavior: flui_types::painting::Clip,
         _transform: &Matrix4,
@@ -283,7 +283,7 @@ impl CommandRenderer for DebugBackend {
         self.log_command("clip_path", &format!("commands={}", path.commands().len()));
     }
 
-    fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint, _transform: &Matrix4) {
+    fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint, _transform: &Matrix4) {
         self.log_command("save_layer", &format!("bounds={bounds:?}, paint={paint:?}"));
     }
 
@@ -307,7 +307,7 @@ impl CommandRenderer for DebugBackend {
     fn add_performance_overlay(
         &mut self,
         options: flui_layer::PerformanceOverlayOption,
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
         fps: f32,
         frame_time_ms: f32,
         total_frames: u64,
@@ -326,7 +326,7 @@ impl CommandRenderer for DebugBackend {
 // `LayerStateStack` trait rather than on `CommandRenderer`. Bodies and
 // log-command output are unchanged from before the split.
 impl LayerStateStack for DebugBackend {
-    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_types::painting::Clip) {
         self.log_command(
             "push_clip_rect",
             &format!("rect={rect:?}, behavior={clip_behavior:?}"),
@@ -370,7 +370,7 @@ impl LayerStateStack for DebugBackend {
         self.log_command("pop_clip", "");
     }
 
-    fn push_offset(&mut self, offset: Offset<Pixels>) {
+    fn push_offset(&mut self, offset: Offset<f64>) {
         self.log_command("push_offset", &format!("offset={offset:?}"));
     }
 

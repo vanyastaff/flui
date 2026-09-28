@@ -39,7 +39,7 @@
 //! use flui_widgets::{column, row}; // ViewSeq macros (shadow std's same-named)
 //!
 //! let _tree = Container::new()
-//!     .padding(EdgeInsets::all(px(8.0)))
+//!     .padding(EdgeInsets::all(8.0))
 //!     .color(Color::rgb(26, 102, 230))
 //!     .child(Column::new(column![
 //!         Text::new("Hello"),

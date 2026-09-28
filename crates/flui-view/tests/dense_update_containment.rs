@@ -49,7 +49,7 @@ impl DenseRenderUpdateLeaf {
     }
 
     fn size(&self) -> Size {
-        Size::new(px(10.0 + self.marker as f32), px(14.0))
+        Size::new((10.0 + self.marker as f64), 14.0)
     }
 }
 

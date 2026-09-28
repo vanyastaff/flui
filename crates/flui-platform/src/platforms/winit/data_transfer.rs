@@ -104,7 +104,7 @@ impl WinitDataTransfer {
         &self,
         window: WindowId,
         path: PathBuf,
-        position: Option<Point<Pixels>>,
+        position: Option<Point<f64>>,
     ) -> Option<DragDropEvent> {
         self.accumulate_or_begin(window, path, false, position)
     }
@@ -117,7 +117,7 @@ impl WinitDataTransfer {
         &self,
         window: WindowId,
         path: PathBuf,
-        position: Option<Point<Pixels>>,
+        position: Option<Point<f64>>,
     ) -> Option<DragDropEvent> {
         self.accumulate_or_begin(window, path, true, position)
     }
@@ -169,7 +169,7 @@ impl WinitDataTransfer {
     /// (documented approximation).
     pub(crate) fn freeze_completed(
         &self,
-        positions: &HashMap<WindowId, Point<Pixels>>,
+        positions: &HashMap<WindowId, Point<f64>>,
     ) -> Vec<(WindowId, DragDropEvent)> {
         let mut events = Vec::new();
         let mut completions: Vec<(TransferCompleter, Result<TransferPayload, TransferError>)> =
@@ -237,7 +237,7 @@ impl WinitDataTransfer {
         window: WindowId,
         path: PathBuf,
         dropped: bool,
-        position: Option<Point<Pixels>>,
+        position: Option<Point<f64>>,
     ) -> Option<DragDropEvent> {
         let (event, stale_pending) = {
             let mut state = self.state.lock();

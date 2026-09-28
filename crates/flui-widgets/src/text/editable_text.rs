@@ -25,7 +25,7 @@ use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{
     Color, Offset, Point, Rect,
-    geometry::{Bounds, Pixels},
+    geometry::Bounds,
     platform::TargetPlatform,
     typography::{TextDirection, TextSpan, TextStyle},
 };
@@ -142,7 +142,7 @@ pub(super) fn obscure(text: &str, offsets: &mut [usize], mask: char) -> String {
 fn source_offset_at_global(
     owner: &PipelineCell,
     inner_anchor: &flui_objects::SubtreeAnchor,
-    global: Offset<Pixels>,
+    global: Offset<f64>,
     obscuring: Option<char>,
     source_text: &str,
 ) -> Option<usize> {
@@ -190,7 +190,7 @@ fn source_offset_at_global(
 fn source_word_range_at_global(
     owner: &PipelineCell,
     inner_anchor: &flui_objects::SubtreeAnchor,
-    global: Offset<Pixels>,
+    global: Offset<f64>,
     obscuring: Option<char>,
     source_text: &str,
 ) -> Option<Range<usize>> {
@@ -361,7 +361,7 @@ pub struct EditableText {
     /// the node, matching Flutter's required `EditableText.focusNode`.
     pub(super) focus_node: Rc<FocusNode>,
     /// Height of the rendered caret bar in logical pixels.
-    pub(super) caret_height: f32,
+    pub(super) caret_height: f64,
     /// Color of the caret bar when the field is focused.
     pub(super) caret_color: Color,
     pub(super) selection_color: Color,
@@ -434,7 +434,7 @@ impl EditableText {
 
     /// Override the caret bar height (default 18 logical pixels).
     #[must_use]
-    pub fn caret_height(mut self, height: f32) -> Self {
+    pub fn caret_height(mut self, height: f64) -> Self {
         self.caret_height = height;
         self
     }
@@ -825,7 +825,7 @@ impl EditableTextState {
             let owner = owner.clone();
             let anchor = anchor.clone();
             let controller = Rc::clone(&controller);
-            move |global: Offset<Pixels>| -> Option<usize> {
+            move |global: Offset<f64>| -> Option<usize> {
                 // Owned, not borrowed across the call: `source_text` must be
                 // the CONTROLLER's source string, not `RenderEditable::
                 // plain_text()` (masked on an obscured field) — see
@@ -1297,7 +1297,7 @@ impl ViewState<EditableText> for EditableTextState {
                 // NEW flag so a stale queued firing from a previous
                 // attach (see the field's `cursor_area_alive` doc) can
                 // never resurrect this session or run alongside it.
-                let last_sent: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+                let last_sent: Rc<Cell<Option<Bounds<f64>>>> = Rc::new(Cell::new(None));
                 let alive = Rc::new(Cell::new(true));
                 let _prev = cursor_area_alive_for_focus
                     .borrow_mut()
@@ -1690,7 +1690,7 @@ struct CursorAreaLoop {
     /// attaches, see `EditableTextState::init_state`'s IME focus listener) —
     /// a brand-new IME session must always get the first rect, even at an
     /// unchanged caret position.
-    last_sent: Rc<Cell<Option<Bounds<Pixels>>>>,
+    last_sent: Rc<Cell<Option<Bounds<f64>>>>,
 }
 
 impl CursorAreaLoop {
@@ -1756,7 +1756,7 @@ impl CursorAreaLoop {
     /// post-frame callback, after the pipeline is released, so this only
     /// skips one firing's send instead of panicking, and the next firing
     /// retries.
-    fn global_caret_rect(&self) -> Option<Bounds<Pixels>> {
+    fn global_caret_rect(&self) -> Option<Bounds<f64>> {
         let owner = self.pipeline_owner.as_ref()?;
         with_editable_global(owner, &self.inner_anchor, |editable, to_root| {
             let local_rect = editable
@@ -1770,7 +1770,7 @@ impl CursorAreaLoop {
 /// `Rect` (min/max corners) to `Bounds` (origin/size) — `PlatformTextInput::
 /// set_ime_cursor_area`'s parameter convention, matching `PlatformWindow::
 /// bounds`.
-pub(super) fn bounds_from_rect(rect: Rect) -> Bounds<Pixels> {
+pub(super) fn bounds_from_rect(rect: Rect) -> Bounds<f64> {
     Bounds::new(
         Point::new(rect.min.x, rect.min.y),
         flui_types::Size::new(rect.width(), rect.height()),
@@ -2077,7 +2077,7 @@ struct EditableTextRenderView {
     /// field is obscured, because [`build_field_view`] masks before this point
     /// and the render object never sees the source characters.
     selection: Option<Range<usize>>,
-    caret_height: f32,
+    caret_height: f64,
     caret_color: Color,
     selection_color: Color,
     text_style: Option<TextStyle>,
@@ -2153,7 +2153,7 @@ impl_render_view!(EditableTextRenderView);
 /// height belonged.
 #[derive(Clone, Debug)]
 struct FieldAppearance {
-    caret_height: f32,
+    caret_height: f64,
     caret_color: Color,
     selection_color: Color,
     text_style: Option<TextStyle>,

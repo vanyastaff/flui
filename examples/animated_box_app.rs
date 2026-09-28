@@ -122,7 +122,7 @@ impl RenderView for AnimatedBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderColoredBox::new(self.color, Size::new(px(60.0), px(60.0)))
+        RenderColoredBox::new(self.color, Size::new(60.0, 60.0))
     }
 
     fn update_render_object(

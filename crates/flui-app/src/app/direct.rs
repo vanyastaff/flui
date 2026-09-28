@@ -34,7 +34,7 @@
 //!
 //!         let mut canvas = Canvas::new();
 //!         canvas.draw_rect(
-//!             Rect::from_ltwh(px(50.0), px(50.0), px(200.0), px(150.0)),
+//!             Rect::from_ltwh(50.0, 50.0, 200.0, 150.0),
 //!             &Paint::fill(Color::BLUE),
 //!         );
 //!         let picture = canvas.finish();

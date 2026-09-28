@@ -108,11 +108,11 @@ use crate::theme_data::ThemeData;
 /// The regular (non-mini) floating action button's side length. Flutter
 /// parity: `_FABDefaultsM3.sizeConstraints`, `BoxConstraints.tightFor(width:
 /// 56.0, height: 56.0)`.
-pub const FAB_SIZE: f32 = 56.0;
+pub const FAB_SIZE: f64 = 56.0;
 
 /// The regular variant's icon side length. Flutter parity:
 /// `_FABDefaultsM3.iconSize` for `_FloatingActionButtonType.regular`.
-pub const FAB_ICON_SIZE: f32 = 24.0;
+pub const FAB_ICON_SIZE: f64 = 24.0;
 
 /// The enabled default AND disabled elevation (they coincide — see the
 /// module docs). Flutter parity: `_FABDefaultsM3`'s `elevation: 6.0`. The
@@ -127,24 +127,24 @@ pub const FAB_ICON_SIZE: f32 = 24.0;
 /// docs' "The elevation chain" section) — `_FABDefaultsM3` never overrides
 /// `disabledElevation`, so it resolves to the same (possibly theme-resolved)
 /// enabled value.
-const ELEVATION_DEFAULT: f32 = 6.0;
+const ELEVATION_DEFAULT: f64 = 6.0;
 /// Flutter parity: `_FABDefaultsM3`'s `focusElevation: 6.0`. No
 /// `focus_elevation` theme slot exists (named deferral, see
 /// `crate::theme_data::FabThemeData`'s doc comment), so this constant is
 /// never theme-overridden.
-const ELEVATION_FOCUSED: f32 = 6.0;
+const ELEVATION_FOCUSED: f64 = 6.0;
 /// Flutter parity: `_FABDefaultsM3`'s `hoverElevation: 8.0`. Same named
 /// deferral as [`ELEVATION_FOCUSED`] — no `hover_elevation` theme slot.
-const ELEVATION_HOVERED: f32 = 8.0;
+const ELEVATION_HOVERED: f64 = 8.0;
 /// The pressed elevation — Flutter's `highlightElevation`. Flutter parity:
 /// `_FABDefaultsM3`'s `highlightElevation: 6.0`. Same named deferral as
 /// [`ELEVATION_FOCUSED`] — no `highlight_elevation` theme slot.
-const ELEVATION_PRESSED: f32 = 6.0;
+const ELEVATION_PRESSED: f64 = 6.0;
 
 /// The regular M3 FAB's shape: a rectangle with a 16dp corner radius —
 /// **not** a circle. See the module docs' "M3 shape" section.
 fn fab_shape() -> MaterialShape {
-    MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(16.0))))
+    MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(16.0)))
 }
 
 /// A circular-in-spirit floating action button — hovers over content to
@@ -216,7 +216,7 @@ impl std::fmt::Debug for FloatingActionButton {
 /// doc comment). Kept as a free function (not inlined into `build`) so the
 /// chain order is independently unit-testable against hand-built
 /// [`WidgetStates`] values.
-fn resolve_elevation(states: &WidgetStates, enabled_elevation: f32) -> f32 {
+fn resolve_elevation(states: &WidgetStates, enabled_elevation: f64) -> f64 {
     if states.contains_state(WidgetState::Disabled) {
         enabled_elevation
     } else if states.contains_state(WidgetState::Pressed) {
@@ -242,7 +242,7 @@ fn resolve_elevation(states: &WidgetStates, enabled_elevation: f32) -> f32 {
 struct ResolvedFabStyle {
     background_color: Color,
     foreground_color: Color,
-    elevation: f32,
+    elevation: f64,
 }
 
 fn resolve_colors(theme: &ThemeData) -> ResolvedFabStyle {
@@ -381,7 +381,7 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
             ink_well = ink_well.on_tap(move |cx| on_pressed(cx));
         }
 
-        let constraints = BoxConstraints::tight(Size::new(px(FAB_SIZE), px(FAB_SIZE)));
+        let constraints = BoxConstraints::tight(Size::new(FAB_SIZE, FAB_SIZE));
 
         ConstrainedBox::new(constraints).child(
             Material::new(background_color)
@@ -429,10 +429,10 @@ mod tests {
         let shape = fab_shape();
         match shape {
             MaterialShape::RoundedRect(radius) => {
-                assert_eq!(radius.top_left, Radius::circular(px(16.0)));
-                assert_eq!(radius.top_right, Radius::circular(px(16.0)));
-                assert_eq!(radius.bottom_right, Radius::circular(px(16.0)));
-                assert_eq!(radius.bottom_left, Radius::circular(px(16.0)));
+                assert_eq!(radius.top_left, Radius::circular(16.0));
+                assert_eq!(radius.top_right, Radius::circular(16.0));
+                assert_eq!(radius.bottom_right, Radius::circular(16.0));
+                assert_eq!(radius.bottom_left, Radius::circular(16.0));
             }
             MaterialShape::Stadium => panic!(
                 "the regular M3 FAB's shape must be a 16dp RoundedRect, not the M2 CircleBorder \

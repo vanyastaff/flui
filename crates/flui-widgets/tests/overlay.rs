@@ -1211,7 +1211,7 @@ fn positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack() {
 
     assert_eq!(
         positioned,
-        Point::new(px(40.0), px(25.0)),
+        Point::new(40.0, 25.0),
         "an inner Stack runs the positioned split, so the entry lands where it asked"
     );
 

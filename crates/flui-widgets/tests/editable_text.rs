@@ -1006,20 +1006,14 @@ fn focusing_sends_the_exact_caret_rect_including_ancestor_padding() {
     );
     assert_eq!(
         calls[0].origin,
-        flui_types::Point::new(
-            flui_types::geometry::px(20.0),
-            flui_types::geometry::px(10.0)
-        ),
+        flui_types::Point::new(20.0, 10.0),
         "the sent rect must include the Padding ancestor's offset, not just \
              the caret's local position: {:?}",
         calls[0]
     );
     assert_eq!(
         calls[0].size,
-        flui_types::Size::new(
-            flui_types::geometry::px(2.0),
-            flui_types::geometry::px(18.0)
-        ),
+        flui_types::Size::new(2.0, 18.0),
         "the sent rect must carry the caret's own width/height: {:?}",
         calls[0]
     );
@@ -1055,7 +1049,7 @@ fn caret_advance_sends_a_new_rect_with_x_advanced_after_a_commit() {
         "the caret moving after a commit must trigger exactly one more send"
     );
     assert!(
-        calls[1].origin.x.get() > first.origin.x.get(),
+        calls[1].origin.x > first.origin.x,
         "the caret's x must advance after inserting a character: {:?} -> {:?}",
         first,
         calls[1]

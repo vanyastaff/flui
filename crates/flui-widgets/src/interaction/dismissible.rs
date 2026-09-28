@@ -114,17 +114,17 @@ use crate::{
 
 /// `_kMinFlingVelocity` (`dismissible.dart:19`) — a fling below this speed
 /// never dismisses, regardless of direction.
-const MIN_FLING_VELOCITY: f32 = 700.0;
+const MIN_FLING_VELOCITY: f64 = 700.0;
 /// `_kMinFlingVelocityDelta` (`dismissible.dart:20`) — the primary-axis
 /// velocity must clear the cross-axis velocity by at least this much, or the
 /// gesture is not "generally in the right direction".
-const MIN_FLING_VELOCITY_DELTA: f32 = 400.0;
+const MIN_FLING_VELOCITY_DELTA: f64 = 400.0;
 /// `_kFlingVelocityScale` (`dismissible.dart:21`) — pointer velocity
 /// (px/s) is scaled into the `AnimationController.fling` velocity domain.
-const FLING_VELOCITY_SCALE: f32 = 1.0 / 300.0;
+const FLING_VELOCITY_SCALE: f64 = 1.0 / 300.0;
 /// `_kDismissThreshold` (`dismissible.dart:22`) — the default fraction of
 /// `overall_drag_axis_extent` that must be crossed to dismiss.
-const DEFAULT_DISMISS_THRESHOLD: f32 = 0.4;
+const DEFAULT_DISMISS_THRESHOLD: f64 = 0.4;
 
 /// The direction(s) in which a [`Dismissible`] can be dismissed.
 ///
@@ -178,7 +178,7 @@ pub struct DismissUpdateDetails {
     /// delivery — pairs with `reached` to catch the crossing moment.
     pub previous_reached: bool,
     /// `move_controller`'s value: `0.0` at rest, `1.0` fully off-screen.
-    pub progress: f32,
+    pub progress: f64,
 }
 
 /// A widget that can be dismissed by dragging in [`DismissDirection`].
@@ -197,9 +197,9 @@ pub struct Dismissible {
     on_update: Option<DismissUpdateCallback>,
     direction: DismissDirection,
     resize_duration: Option<Duration>,
-    dismiss_thresholds: HashMap<DismissDirection, f32>,
+    dismiss_thresholds: HashMap<DismissDirection, f64>,
     movement_duration: Duration,
-    cross_axis_end_offset: f32,
+    cross_axis_end_offset: f64,
     behavior: HitTestBehavior,
 }
 
@@ -298,7 +298,7 @@ impl Dismissible {
     /// drag or fling, even though [`Self::direction`] still allows dragging
     /// it (it always springs back).
     #[must_use]
-    pub fn dismiss_threshold(mut self, direction: DismissDirection, threshold: f32) -> Self {
+    pub fn dismiss_threshold(mut self, direction: DismissDirection, threshold: f64) -> Self {
         self.dismiss_thresholds.insert(direction, threshold);
         self
     }
@@ -315,7 +315,7 @@ impl Dismissible {
     /// direction, as a fraction of the widget's extent on that axis. Default
     /// `0.0` (no cross-axis drift).
     #[must_use]
-    pub fn cross_axis_end_offset(mut self, cross_axis_end_offset: f32) -> Self {
+    pub fn cross_axis_end_offset(mut self, cross_axis_end_offset: f64) -> Self {
         self.cross_axis_end_offset = cross_axis_end_offset;
         self
     }
@@ -354,15 +354,15 @@ fn direction_is_x_axis(direction: DismissDirection) -> bool {
     )
 }
 
-/// `extent.sign`, but `0.0` maps to `0.0` (Rust's `f32::signum` maps `+0.0` to
+/// `extent.sign`, but `0.0` maps to `0.0` (Rust's `f64::signum` maps `+0.0` to
 /// `1.0`, which would wrongly treat "no drag yet" as "dragged positive").
-fn drag_sign(extent: f32) -> f32 {
+fn drag_sign(extent: f64) -> f64 {
     if extent == 0.0 { 0.0 } else { extent.signum() }
 }
 
 /// Flutter parity: `_extentToDirection` (`dismissible.dart:343`).
 fn extent_to_direction(
-    extent: f32,
+    extent: f64,
     direction: DismissDirection,
     text_direction: TextDirection,
 ) -> DismissDirection {
@@ -389,9 +389,9 @@ fn extent_to_direction(
 fn accumulate_drag_extent(
     direction: DismissDirection,
     text_direction: TextDirection,
-    current: f32,
-    delta: f32,
-) -> f32 {
+    current: f64,
+    delta: f64,
+) -> f64 {
     let proposed = current + delta;
     match direction {
         DismissDirection::Horizontal | DismissDirection::Vertical => proposed,
@@ -426,9 +426,9 @@ fn accumulate_drag_extent(
 /// The resolved threshold for `direction` (Flutter parity:
 /// `widget.dismissThresholds[_dismissDirection] ?? _kDismissThreshold`).
 fn dismiss_threshold_for(
-    thresholds: &HashMap<DismissDirection, f32>,
+    thresholds: &HashMap<DismissDirection, f64>,
     direction: DismissDirection,
-) -> f32 {
+) -> f64 {
     thresholds
         .get(&direction)
         .copied()
@@ -448,11 +448,11 @@ enum FlingGestureKind {
 
 /// Flutter parity: `_describeFlingGesture` (`dismissible.dart:468`).
 fn describe_fling_gesture(
-    drag_extent: f32,
+    drag_extent: f64,
     direction: DismissDirection,
     text_direction: TextDirection,
-    primary_velocity: f32,
-    cross_velocity: f32,
+    primary_velocity: f64,
+    cross_velocity: f64,
 ) -> FlingGestureKind {
     if drag_extent == 0.0 {
         return FlingGestureKind::None;
@@ -490,7 +490,7 @@ fn describe_fling_gesture(
 #[derive(Default)]
 struct DragState {
     /// Signed pixel extent dragged so far. Flutter parity: `_dragExtent`.
-    drag_extent: Cell<f32>,
+    drag_extent: Cell<f64>,
     /// Whether a drag contact is currently down. Flutter parity:
     /// `_dragUnderway`.
     drag_underway: Cell<bool>,
@@ -504,7 +504,7 @@ struct DragState {
     /// `move_controller.value()` at the last `on_update` delivery, so an
     /// unrelated rebuild (e.g. a parent prop change) that leaves the drag
     /// position untouched does not re-fire `on_update`.
-    last_delivered_move_value: Cell<f32>,
+    last_delivered_move_value: Cell<f64>,
 
     /// `move_controller`'s current `Vsync` registration — re-registered (not
     /// just registered once) on every direct `set_value` while dragging; see
@@ -547,9 +547,9 @@ struct DragState {
 struct ResolvedConfig {
     direction: DismissDirection,
     text_direction: TextDirection,
-    dismiss_thresholds: HashMap<DismissDirection, f32>,
+    dismiss_thresholds: HashMap<DismissDirection, f64>,
     resize_duration: Option<Duration>,
-    cross_axis_end_offset: f32,
+    cross_axis_end_offset: f64,
     on_dismissed: Option<DirectionDelivery>,
     on_resize: Option<Rc<dyn Fn()>>,
 }
@@ -795,14 +795,14 @@ impl ViewState<Dismissible> for DismissibleState {
         LayoutBuilder::new(move |_ctx, constraints| {
             let axis_is_x = direction_is_x_axis(direction);
             let overall_extent = if axis_is_x {
-                constraints.max_width.get()
+                constraints.max_width
             } else {
-                constraints.max_height.get()
+                constraints.max_height
             };
             // Module docs divergence #4: this widget divides by
             // `overall_extent` to turn a drag delta into a fraction, so it
             // requires bounded constraints along the dismiss axis. An
-            // unbounded axis (`f32::INFINITY`) would silently produce a
+            // unbounded axis (`f64::INFINITY`) would silently produce a
             // stuck-at-zero or NaN drag fraction instead of a loud failure —
             // catch the caller error here instead.
             debug_assert!(
@@ -896,7 +896,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             direction,
                             resolved_for_update.text_direction,
                             overall_extent,
-                            details.delta.dx.get(),
+                            details.delta.dx,
                         );
                     })
                     .on_horizontal_drag_end(move |_cx, details: DragEndDetails| {
@@ -907,8 +907,8 @@ impl ViewState<Dismissible> for DismissibleState {
                             vsync_for_end.as_ref(),
                             &rebuild_for_end,
                             constraints,
-                            details.velocity.pixels_per_second.dx.get(),
-                            details.velocity.pixels_per_second.dy.get(),
+                            details.velocity.pixels_per_second.dx,
+                            details.velocity.pixels_per_second.dy,
                         );
                     });
             } else {
@@ -928,7 +928,7 @@ impl ViewState<Dismissible> for DismissibleState {
                             direction,
                             resolved_for_update.text_direction,
                             overall_extent,
-                            details.delta.dy.get(),
+                            details.delta.dy,
                         );
                     })
                     .on_pan_end(move |_cx, details: DragEndDetails| {
@@ -939,8 +939,8 @@ impl ViewState<Dismissible> for DismissibleState {
                             vsync_for_end.as_ref(),
                             &rebuild_for_end,
                             constraints,
-                            details.velocity.pixels_per_second.dy.get(),
-                            details.velocity.pixels_per_second.dx.get(),
+                            details.velocity.pixels_per_second.dy,
+                            details.velocity.pixels_per_second.dx,
                         );
                     });
             }
@@ -1096,7 +1096,7 @@ fn handle_drag_start(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,
     vsync: Option<&Vsync>,
-    overall_extent: f32,
+    overall_extent: f64,
 ) {
     drag.drag_underway.set(true);
     if move_controller.is_animating() {
@@ -1131,8 +1131,8 @@ fn handle_drag_update(
     move_controller: &AnimationController,
     direction: DismissDirection,
     text_direction: TextDirection,
-    overall_extent: f32,
-    delta: f32,
+    overall_extent: f64,
+    delta: f64,
 ) {
     if !drag.drag_underway.get() || move_controller.is_animating() {
         return;
@@ -1165,8 +1165,8 @@ fn handle_drag_end(
     vsync: Option<&Vsync>,
     rebuild: &RebuildHandle,
     constraints: BoxConstraints,
-    primary_velocity: f32,
-    cross_velocity: f32,
+    primary_velocity: f64,
+    cross_velocity: f64,
 ) {
     if !drag.drag_underway.get() || move_controller.is_animating() {
         return;
@@ -1417,7 +1417,7 @@ fn deliver_on_update(
 /// `EndToStart`/`Up` (Flutter parity: `dismissible.dart:613`-`619`).
 fn resolve_background(
     view: &Dismissible,
-    drag_extent: f32,
+    drag_extent: f64,
     text_direction: TextDirection,
 ) -> Option<BoxedView> {
     let dismiss_direction = extent_to_direction(drag_extent, view.direction, text_direction);
@@ -1442,9 +1442,9 @@ fn resolve_background(
 /// `648`-`651`).
 fn sliding_content_view(
     move_controller: &AnimationController,
-    drag_extent: f32,
+    drag_extent: f64,
     direction: DismissDirection,
-    cross_axis_end_offset: f32,
+    cross_axis_end_offset: f64,
     child: BoxedView,
 ) -> FractionalTranslation {
     let t = move_controller.value();
@@ -1475,9 +1475,9 @@ fn resize_collapse_view(
     let curved = Interval::new(0.4, 1.0, Curves::Ease).transform(resize_controller.value());
     let factor = 1.0 - curved;
     let (width, height) = if axis_is_x {
-        (prior.width.get(), prior.height.get() * factor)
+        (prior.width, prior.height * factor)
     } else {
-        (prior.width.get() * factor, prior.height.get())
+        (prior.width * factor, prior.height)
     };
     let collapsed = SizedBox::new(width, height);
     let collapsed = match background {
@@ -1908,11 +1908,8 @@ mod tests {
             on_dismissed: Some(on_dismissed_probe),
             on_resize: None,
         });
-        let overall_extent = 100.0_f32;
-        let constraints = BoxConstraints::tight(Size::new(
-            flui_types::geometry::px(overall_extent),
-            flui_types::geometry::px(50.0),
-        ));
+        let overall_extent = 100.0_f64;
+        let constraints = BoxConstraints::tight(Size::new((overall_extent), 50.0));
 
         // Drag straight past the clamp: a single update's delta already
         // exceeds 100% of `overall_extent`, exactly like a real drag that

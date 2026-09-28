@@ -104,7 +104,7 @@ mod appkit_frame_pump_probe {
         // started" from "started and stalled".
         let window = match owner.open_window(flui_platform::WindowOptions {
             title: "FLUI frame-pump probe".to_string(),
-            size: Size::new(px(480.0), px(320.0)),
+            size: Size::new(480.0, 320.0),
             resizable: false,
             visible: true,
             decorated: true,

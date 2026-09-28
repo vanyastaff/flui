@@ -83,7 +83,7 @@ mod tests {
 
         let linear = Shader::simple_linear(
             Offset::ZERO,
-            Offset::new(px(1.0), px(1.0)),
+            Offset::new(1.0, 1.0),
             vec![Color::RED, Color::BLUE],
         );
         assert_eq!(
@@ -91,11 +91,8 @@ mod tests {
             ShaderType::LinearGradientMask
         );
 
-        let radial = Shader::simple_radial(
-            Offset::new(px(0.5), px(0.5)),
-            1.0,
-            vec![Color::WHITE, Color::BLACK],
-        );
+        let radial =
+            Shader::simple_radial(Offset::new(0.5, 0.5), 1.0, vec![Color::WHITE, Color::BLACK]);
         assert_eq!(
             ShaderType::from_shader(&radial),
             ShaderType::RadialGradientMask

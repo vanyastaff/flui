@@ -33,12 +33,12 @@ use flui_widgets::{
 /// One 60 Hz frame of virtual time.
 const FRAME: Duration = Duration::from_nanos(16_666_667);
 const ROWS: usize = 10_000;
-const ROW_HEIGHT: f32 = 20.0;
-const WIDTH: f32 = 800.0;
-const HEIGHT: f32 = 600.0;
+const ROW_HEIGHT: f64 = 20.0;
+const WIDTH: f64 = 800.0;
+const HEIGHT: f64 = 600.0;
 /// The label's fixed height: the list below it is `HEIGHT - LABEL_HEIGHT`
 /// tall whatever the text measures, so font metrics cannot move the band.
-const LABEL_HEIGHT: f32 = 20.0;
+const LABEL_HEIGHT: f64 = 20.0;
 
 /// The one stateful piece: a label whose change rebuilds only itself and the
 /// text below it.

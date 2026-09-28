@@ -273,7 +273,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for OpacityLa
             renderer.push_offset(self.offset());
         }
         if !opacity_is_identity(self) {
-            renderer.push_opacity_blend(self.alpha(), self.blend());
+            renderer.push_opacity_blend(self.alpha() as f32, self.blend());
         }
     }
 
@@ -372,7 +372,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for TextureLa
             self.bounds(),
             None,
             self.filter_quality(),
-            self.opacity(),
+            self.opacity() as f32,
             &flui_types::geometry::Matrix4::IDENTITY,
         );
     }
@@ -421,8 +421,8 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Performan
         renderer.add_performance_overlay(
             self.options(),
             self.bounds(),
-            self.fps(),
-            self.frame_time_ms(),
+            self.fps() as f32,
+            self.frame_time_ms() as f32,
             self.total_frames(),
             self.diagnostic_line(),
         );
@@ -442,7 +442,7 @@ mod tests {
     };
     use flui_painting::{BlendMode, Paint, PointMode};
     use flui_types::{
-        geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, Size, px},
+        geometry::{Matrix4, Offset, Point, RRect, Rect, Size},
         painting::{Clip, FilterQuality, Image, ImageFilter, Path, TextureId},
         styling::Color,
     };
@@ -458,7 +458,7 @@ mod tests {
         /// The translation every `push_offset`/`push_transform` applied, in
         /// order, so a test can compare the walk's pushes with
         /// `Layer::local_translation`.
-        pushed_translations: Vec<Offset<Pixels>>,
+        pushed_translations: Vec<Offset<f64>>,
     }
 
     impl MockRenderer {
@@ -473,21 +473,21 @@ mod tests {
 
     impl CommandRenderer for MockRenderer {
         // ===== Primitive Shapes (no-ops) =====
-        fn render_rect(&mut self, _rect: Rect<Pixels>, _paint: &Paint, _transform: &Matrix4) {}
+        fn render_rect(&mut self, _rect: Rect<f64>, _paint: &Paint, _transform: &Matrix4) {}
         fn render_rrect(&mut self, _rrect: RRect, _paint: &Paint, _transform: &Matrix4) {}
         fn render_circle(
             &mut self,
-            _center: Point<Pixels>,
+            _center: Point<f64>,
             _radius: f32,
             _paint: &Paint,
             _transform: &Matrix4,
         ) {
         }
-        fn render_oval(&mut self, _rect: Rect<Pixels>, _paint: &Paint, _transform: &Matrix4) {}
+        fn render_oval(&mut self, _rect: Rect<f64>, _paint: &Paint, _transform: &Matrix4) {}
         fn render_line(
             &mut self,
-            _p1: Point<Pixels>,
-            _p2: Point<Pixels>,
+            _p1: Point<f64>,
+            _p2: Point<f64>,
             _paint: &Paint,
             _transform: &Matrix4,
         ) {
@@ -497,7 +497,7 @@ mod tests {
         // ===== Advanced Shapes (no-ops) =====
         fn render_arc(
             &mut self,
-            _rect: Rect<Pixels>,
+            _rect: Rect<f64>,
             _start_angle: f32,
             _sweep_angle: f32,
             _use_center: bool,
@@ -516,7 +516,7 @@ mod tests {
         fn render_points(
             &mut self,
             _mode: PointMode,
-            _points: &[Point<Pixels>],
+            _points: &[Point<f64>],
             _paint: &Paint,
             _transform: &Matrix4,
         ) {
@@ -526,7 +526,7 @@ mod tests {
         fn render_paragraph(
             &mut self,
             _layout: &Arc<flui_painting::TextLayout>,
-            _offset: Offset<Pixels>,
+            _offset: Offset<f64>,
             _color: Color,
             _transform: &Matrix4,
         ) {
@@ -536,7 +536,7 @@ mod tests {
         fn render_image(
             &mut self,
             _image: &Image,
-            _dst: Rect<Pixels>,
+            _dst: Rect<f64>,
             _paint: Option<&Paint>,
             _transform: &Matrix4,
         ) {
@@ -544,7 +544,7 @@ mod tests {
         fn render_atlas(
             &mut self,
             _image: &Image,
-            _sprites: &[Rect<Pixels>],
+            _sprites: &[Rect<f64>],
             _transforms: &[Matrix4],
             _colors: Option<&[Color]>,
             _blend_mode: BlendMode,
@@ -555,7 +555,7 @@ mod tests {
         fn render_image_repeat(
             &mut self,
             _image: &Image,
-            _dst: Rect<Pixels>,
+            _dst: Rect<f64>,
             _repeat: flui_types::painting::image::ImageRepeat,
             _paint: Option<&Paint>,
             _transform: &Matrix4,
@@ -564,8 +564,8 @@ mod tests {
         fn render_image_nine_slice(
             &mut self,
             _image: &Image,
-            _center_slice: Rect<Pixels>,
-            _dst: Rect<Pixels>,
+            _center_slice: Rect<f64>,
+            _dst: Rect<f64>,
             _paint: Option<&Paint>,
             _transform: &Matrix4,
         ) {
@@ -573,7 +573,7 @@ mod tests {
         fn render_image_filtered(
             &mut self,
             _image: &Image,
-            _dst: Rect<Pixels>,
+            _dst: Rect<f64>,
             _filter: flui_types::painting::image::ColorFilter,
             _paint: Option<&Paint>,
             _transform: &Matrix4,
@@ -582,8 +582,8 @@ mod tests {
         fn render_texture(
             &mut self,
             _texture_id: TextureId,
-            _dst: Rect<Pixels>,
-            _src: Option<Rect<Pixels>>,
+            _dst: Rect<f64>,
+            _src: Option<Rect<f64>>,
             _filter_quality: FilterQuality,
             _opacity: f32,
             _transform: &Matrix4,
@@ -605,9 +605,9 @@ mod tests {
         // ===== Custom Geometry (no-op) =====
         fn render_vertices(
             &mut self,
-            _vertices: &[Point<Pixels>],
+            _vertices: &[Point<f64>],
             _colors: Option<&[Color]>,
-            _tex_coords: Option<&[Point<Pixels>]>,
+            _tex_coords: Option<&[Point<f64>]>,
             _indices: &[u16],
             _paint: &Paint,
             _transform: &Matrix4,
@@ -617,7 +617,7 @@ mod tests {
         // ===== Clipping (no-ops) =====
         fn clip_rect(
             &mut self,
-            _rect: Rect<Pixels>,
+            _rect: Rect<f64>,
             _clip_op: flui_types::painting::ClipOp,
             _clip_behavior: flui_types::painting::Clip,
             _transform: &Matrix4,
@@ -641,12 +641,7 @@ mod tests {
         }
 
         // ===== Layer Operations (recorded) =====
-        fn save_layer(
-            &mut self,
-            _bounds: Option<Rect<Pixels>>,
-            _paint: &Paint,
-            _transform: &Matrix4,
-        ) {
+        fn save_layer(&mut self, _bounds: Option<Rect<f64>>, _paint: &Paint, _transform: &Matrix4) {
             self.calls.push("save_layer".to_string());
         }
         fn restore_layer(&mut self, _transform: &Matrix4) {
@@ -667,7 +662,7 @@ mod tests {
         fn add_performance_overlay(
             &mut self,
             _options: flui_layer::PerformanceOverlayOption,
-            _bounds: Rect<Pixels>,
+            _bounds: Rect<f64>,
             _fps: f32,
             _frame_time_ms: f32,
             _total_frames: u64,
@@ -684,7 +679,7 @@ mod tests {
     // MockRenderer records each push/pop as a string for the ordering
     // assertions in the test suite.
     impl LayerStateStack for MockRenderer {
-        fn push_clip_rect(&mut self, _rect: &Rect<Pixels>, _clip_behavior: Clip) {
+        fn push_clip_rect(&mut self, _rect: &Rect<f64>, _clip_behavior: Clip) {
             self.calls.push("push_clip_rect".to_string());
         }
         fn push_clip_rrect(&mut self, _rrect: &RRect, _clip_behavior: Clip) {
@@ -707,15 +702,14 @@ mod tests {
         fn pop_clip(&mut self) {
             self.calls.push("pop_clip".to_string());
         }
-        fn push_offset(&mut self, offset: Offset<Pixels>) {
+        fn push_offset(&mut self, offset: Offset<f64>) {
             self.calls.push("push_offset".to_string());
             self.pushed_translations.push(offset);
         }
         fn push_transform(&mut self, transform: &Matrix4) {
             self.calls.push("push_transform".to_string());
             let (dx, dy, _) = transform.translation_component();
-            self.pushed_translations
-                .push(Offset::new(Pixels::new(dx), Pixels::new(dy)));
+            self.pushed_translations.push(Offset::new(dx, dy));
         }
         fn pop_transform(&mut self) {
             self.calls.push("pop_transform".to_string());
@@ -767,7 +761,7 @@ mod tests {
     #[test]
     fn test_offset_layer_pushes_and_pops_transform() {
         let mut renderer = MockRenderer::new();
-        let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
+        let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
 
         layer.render(&mut renderer);
         assert_eq!(renderer.calls, vec!["push_offset"]);
@@ -800,7 +794,7 @@ mod tests {
     fn every_variant_pushes_exactly_its_local_translation() {
         use flui_layer::{LayerLink, LeaderLayer};
 
-        let offset = Offset::new(px(7.0), px(-3.0));
+        let offset = Offset::new(7.0, -3.0);
         let layers: Vec<Layer> = vec![
             OffsetLayer::new(offset).into(),
             TransformLayer::translation(7.0, -3.0).into(),
@@ -811,11 +805,7 @@ mod tests {
             LeaderLayer::with_offset(LayerLink::new(), Size::ZERO, offset).into(),
             OffsetLayer::zero().into(),
             OpacityLayer::new(0.5).into(),
-            ClipRectLayer::new(
-                Rect::from_xywh(px(0.0), px(0.0), px(1.0), px(1.0)),
-                Clip::HardEdge,
-            )
-            .into(),
+            ClipRectLayer::new(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), Clip::HardEdge).into(),
             ColorFilterLayer::new(flui_types::painting::ColorFilter::grayscale()).into(),
         ];
         for layer in &layers {
@@ -878,7 +868,7 @@ mod tests {
     #[test]
     fn test_opacity_layer_with_offset_pushes_offset_then_opacity() {
         let mut renderer = MockRenderer::new();
-        let layer = OpacityLayer::with_offset(0.5, Offset::new(px(10.0), px(20.0)));
+        let layer = OpacityLayer::with_offset(0.5, Offset::new(10.0, 20.0));
 
         layer.render(&mut renderer);
         assert_eq!(renderer.calls, vec!["push_offset", "push_opacity"]);
@@ -926,7 +916,7 @@ mod tests {
     #[test]
     fn test_opacity_layer_opaque_with_offset_pushes_only_the_offset() {
         let mut renderer = MockRenderer::new();
-        let layer = OpacityLayer::with_offset(1.0, Offset::new(px(10.0), px(20.0)));
+        let layer = OpacityLayer::with_offset(1.0, Offset::new(10.0, 20.0));
 
         layer.render(&mut renderer);
         assert_eq!(renderer.calls, vec!["push_offset"]);
@@ -942,7 +932,7 @@ mod tests {
     #[test]
     fn test_clip_rect_layer_pushes_and_pops() {
         let mut renderer = MockRenderer::new();
-        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let layer = ClipRectLayer::new(rect, Clip::HardEdge);
 
         layer.render(&mut renderer);
@@ -962,8 +952,8 @@ mod tests {
     fn clip_superellipse_layer_routes_to_the_squircle_call() {
         let mut renderer = MockRenderer::new();
         let squircle = flui_types::geometry::RSuperellipse::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-            px(24.0),
+            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            24.0,
         );
         let layer = flui_layer::ClipSuperellipseLayer::new(squircle, Clip::AntiAlias);
 
@@ -982,7 +972,7 @@ mod tests {
     #[test]
     fn test_clip_rect_layer_no_clip_is_noop() {
         let mut renderer = MockRenderer::new();
-        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let layer = ClipRectLayer::new(rect, Clip::None);
 
         layer.render(&mut renderer);
@@ -1000,10 +990,7 @@ mod tests {
     #[test]
     fn test_clip_rrect_layer_no_clip_is_noop() {
         let mut renderer = MockRenderer::new();
-        let rrect = RRect::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-            px(8.0),
-        );
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 8.0);
         let layer = ClipRRectLayer::new(rrect, Clip::None);
 
         layer.render(&mut renderer);
@@ -1019,7 +1006,7 @@ mod tests {
     fn test_clip_path_layer_no_clip_is_noop() {
         let mut renderer = MockRenderer::new();
         let mut path = Path::new();
-        path.add_rect(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        path.add_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
         let layer = ClipPathLayer::new(path, Clip::None);
 
         layer.render(&mut renderer);
@@ -1041,7 +1028,7 @@ mod tests {
 
         let mut renderer = MockRenderer::new();
         let shader = TShader::solid(Color::WHITE);
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let layer = ShaderMaskLayer::new(shader, TBlendMode::SrcOver, bounds);
 
         layer.render(&mut renderer);
@@ -1065,7 +1052,7 @@ mod tests {
         // The LayerRender impl is intentionally a no-op.
         let mut renderer = MockRenderer::new();
         let filter = ImageFilter::blur(5.0);
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(200.0), px(150.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 150.0);
         let layer =
             BackdropFilterLayer::new(filter, flui_types::painting::BlendMode::SrcOver, bounds);
 
@@ -1083,7 +1070,7 @@ mod tests {
     #[test]
     fn test_layer_enum_dispatches_to_offset() {
         let mut renderer = MockRenderer::new();
-        let layer = Layer::Offset(OffsetLayer::new(Offset::new(px(5.0), px(10.0))));
+        let layer = Layer::Offset(OffsetLayer::new(Offset::new(5.0, 10.0)));
 
         layer.render(&mut renderer);
         assert_eq!(renderer.calls, vec!["push_offset"]);
@@ -1097,7 +1084,7 @@ mod tests {
         use std::sync::Arc;
         let mut renderer = MockRenderer::new();
         let layer = Layer::AnnotatedRegion(flui_layer::AnnotatedRegionLayer::new(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             Arc::new("test annotation".to_string()),
         ));
 

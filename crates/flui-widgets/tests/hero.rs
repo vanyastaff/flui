@@ -306,7 +306,7 @@ fn start_flight_without_include_child_drops_the_child_from_the_placeholder() {
     );
     assert_eq!(
         hero_box_size(&harness, &hero),
-        Size::new(px(30.0), px(20.0)),
+        Size::new(30.0, 20.0),
         "but the hole is still the hero's old size"
     );
 }
@@ -335,7 +335,7 @@ fn end_flight_restores_child() {
     // hiding it would zero the anchor, so the real size is the honest check.
     assert_eq!(
         hero_box_size(&harness, &hero),
-        Size::new(px(30.0), px(20.0)),
+        Size::new(30.0, 20.0),
         "the child is back, at its own size — the Offstage is off, not hiding it"
     );
 }

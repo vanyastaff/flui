@@ -5,7 +5,7 @@
 
 use flui_painting::{BlendMode, Paint, PointMode};
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect, px},
+    geometry::{Matrix4, Offset, Point, RRect, Rect},
     painting::{Image, Path},
     styling::Color,
 };
@@ -334,7 +334,7 @@ impl<'frame> LayerDispatcher<'frame> {
     /// caller using the accumulated layer transform.
     pub(crate) fn apply_backdrop_blur(
         &mut self,
-        device_rect: Rect<Pixels>,
+        device_rect: Rect<f64>,
         sigma: f32,
         blend: BlendMode,
         surface_texture: &wgpu::Texture,
@@ -374,20 +374,32 @@ impl<'frame> LayerDispatcher<'frame> {
         let surface_extent = surface_texture.size();
         let surface_w = surface_extent.width;
         let surface_h = surface_extent.height;
-        let x = device_rect.left().0.clamp(0.0, surface_w as f32).round() as u32;
-        let y = device_rect.top().0.clamp(0.0, surface_h as f32).round() as u32;
-        let right = device_rect.right().0.clamp(0.0, surface_w as f32).round() as u32;
-        let bottom = device_rect.bottom().0.clamp(0.0, surface_h as f32).round() as u32;
+        let x = device_rect
+            .left()
+            .clamp(0.0, f64::from(surface_w as f32))
+            .round() as u32;
+        let y = device_rect
+            .top()
+            .clamp(0.0, f64::from(surface_h as f32))
+            .round() as u32;
+        let right = device_rect
+            .right()
+            .clamp(0.0, f64::from(surface_w as f32))
+            .round() as u32;
+        let bottom = device_rect
+            .bottom()
+            .clamp(0.0, f64::from(surface_h as f32))
+            .round() as u32;
         let w = right.saturating_sub(x).max(1);
         let h = bottom.saturating_sub(y).max(1);
 
         // Entirely off-screen after clamping → no copyable region.
         if right <= x || bottom <= y {
             tracing::warn!(
-                rect_l = device_rect.left().0,
-                rect_t = device_rect.top().0,
-                rect_r = device_rect.right().0,
-                rect_b = device_rect.bottom().0,
+                rect_l = device_rect.left(),
+                rect_t = device_rect.top(),
+                rect_r = device_rect.right(),
+                rect_b = device_rect.bottom(),
                 surface_w,
                 surface_h,
                 "Backdrop blur skipped: clamped device region is empty (entirely off-screen)"
@@ -451,10 +463,10 @@ impl<'frame> LayerDispatcher<'frame> {
             .expect("BUG: apply_backdrop_blur returned above when self.offscreen was None; nothing clears it before this borrow")
             .render_blur(&blur_input, sigma);
         let clamped_composite_rect = Rect::from_xywh(
-            Pixels(x as f32),
-            Pixels(y as f32),
-            Pixels(w as f32),
-            Pixels(h as f32),
+            f64::from(x as f32),
+            f64::from(y as f32),
+            f64::from(w as f32),
+            f64::from(h as f32),
         );
         self.painter
             .queue_offscreen_result(blurred, clamped_composite_rect, blend);
@@ -578,7 +590,7 @@ fn warn_unexpressible_clip_op(shape: &str) {
 }
 
 impl CommandRenderer for LayerDispatcher<'_> {
-    fn render_rect(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
+    fn render_rect(&mut self, rect: Rect<f64>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.draw_rect(rect, paint);
         });
@@ -592,7 +604,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
 
     fn render_circle(
         &mut self,
-        center: Point<Pixels>,
+        center: Point<f64>,
         radius: f32,
         paint: &Paint,
         transform: &Matrix4,
@@ -602,19 +614,13 @@ impl CommandRenderer for LayerDispatcher<'_> {
         });
     }
 
-    fn render_oval(&mut self, rect: Rect<Pixels>, paint: &Paint, transform: &Matrix4) {
+    fn render_oval(&mut self, rect: Rect<f64>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.draw_oval(rect, paint);
         });
     }
 
-    fn render_line(
-        &mut self,
-        p1: Point<Pixels>,
-        p2: Point<Pixels>,
-        paint: &Paint,
-        transform: &Matrix4,
-    ) {
+    fn render_line(&mut self, p1: Point<f64>, p2: Point<f64>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.draw_line(p1, p2, paint);
         });
@@ -628,7 +634,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
 
     fn render_arc(
         &mut self,
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
@@ -649,7 +655,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn render_points(
         &mut self,
         mode: PointMode,
-        points: &[Point<Pixels>],
+        points: &[Point<f64>],
         paint: &Paint,
         transform: &Matrix4,
     ) {
@@ -657,7 +663,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
             PointMode::Points => {
                 let radius = paint.stroke_width / 2.0;
                 for point in points {
-                    painter.draw_circle(*point, radius, paint);
+                    painter.draw_circle(*point, radius as f32, paint);
                 }
             }
             PointMode::Lines => {
@@ -681,7 +687,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn render_paragraph(
         &mut self,
         layout: &Arc<flui_painting::TextLayout>,
-        offset: Offset<Pixels>,
+        offset: Offset<f64>,
         color: Color,
         transform: &Matrix4,
     ) {
@@ -694,7 +700,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn render_image(
         &mut self,
         image: &Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
@@ -709,7 +715,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn render_atlas(
         &mut self,
         image: &Image,
-        sprites: &[Rect<Pixels>],
+        sprites: &[Rect<f64>],
         transforms: &[Matrix4],
         colors: Option<&[Color]>,
         blend_mode: BlendMode,
@@ -727,7 +733,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn render_image_repeat(
         &mut self,
         image: &Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         repeat: flui_types::painting::image::ImageRepeat,
         paint: Option<&Paint>,
         transform: &Matrix4,
@@ -741,8 +747,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn render_image_nine_slice(
         &mut self,
         image: &Image,
-        center_slice: Rect<Pixels>,
-        dst: Rect<Pixels>,
+        center_slice: Rect<f64>,
+        dst: Rect<f64>,
         paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
@@ -755,7 +761,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn render_image_filtered(
         &mut self,
         image: &Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         filter: flui_types::painting::image::ColorFilter,
         paint: Option<&Paint>,
         transform: &Matrix4,
@@ -773,8 +779,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn render_texture(
         &mut self,
         texture_id: flui_types::painting::TextureId,
-        dst: Rect<Pixels>,
-        src: Option<Rect<Pixels>>,
+        dst: Rect<f64>,
+        src: Option<Rect<f64>>,
         filter_quality: flui_types::painting::FilterQuality,
         opacity: f32,
         transform: &Matrix4,
@@ -809,9 +815,9 @@ impl CommandRenderer for LayerDispatcher<'_> {
 
     fn render_vertices(
         &mut self,
-        vertices: &[Point<Pixels>],
+        vertices: &[Point<f64>],
         colors: Option<&[Color]>,
-        tex_coords: Option<&[Point<Pixels>]>,
+        tex_coords: Option<&[Point<f64>]>,
         indices: &[u16],
         paint: &Paint,
         transform: &Matrix4,
@@ -823,7 +829,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
 
     fn clip_rect(
         &mut self,
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         clip_op: flui_types::painting::ClipOp,
         clip_behavior: flui_types::painting::Clip,
         transform: &Matrix4,
@@ -912,7 +918,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
         });
     }
 
-    fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint, transform: &Matrix4) {
+    fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint, transform: &Matrix4) {
         self.with_transform(transform, |painter| {
             painter.save_layer(bounds, paint);
         });
@@ -958,7 +964,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn add_performance_overlay(
         &mut self,
         _options: flui_layer::PerformanceOverlayOption,
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
         fps: f32,
         frame_time_ms: f32,
         total_frames: u64,
@@ -968,12 +974,12 @@ impl CommandRenderer for LayerDispatcher<'_> {
         let bg_color = Color::rgba(10, 10, 15, 200);
         let bg_paint = Paint::fill(bg_color);
         let bg_rrect =
-            RRect::from_rect_and_radius(bounds, flui_types::geometry::Radius::circular(px(4.0)));
+            RRect::from_rect_and_radius(bounds, flui_types::geometry::Radius::circular(4.0));
         self.painter.draw_rrect(bg_rrect, &bg_paint);
 
-        let x = bounds.left() + px(8.0);
-        let x_val = bounds.left() + px(50.0);
-        let mut y = bounds.top() + px(14.0);
+        let x = bounds.left() + 8.0;
+        let x_val = bounds.left() + 50.0;
+        let mut y = bounds.top() + 14.0;
 
         // GPU label (cyan) + FPS value
         let cyan = Color::rgba(0, 200, 200, 255);
@@ -998,15 +1004,15 @@ impl CommandRenderer for LayerDispatcher<'_> {
         // FPS unit (dimmer)
         let gray = Color::rgba(130, 130, 130, 255);
         let fps_w = if fps >= 100.0 {
-            px(24.0)
+            24.0
         } else if fps >= 10.0 {
-            px(16.0)
+            16.0
         } else {
-            px(8.0)
+            8.0
         };
         self.painter
             .draw_text("FPS", Point::new(x_val + fps_w, y), 8.0, &Paint::fill(gray));
-        y += px(14.0);
+        y += 14.0;
 
         // Frametime label (purple) + value
         let purple = Color::rgba(200, 100, 255, 255);
@@ -1020,15 +1026,11 @@ impl CommandRenderer for LayerDispatcher<'_> {
             10.0,
             &Paint::fill(white),
         );
-        self.painter.draw_text(
-            "ms",
-            Point::new(x_val + px(22.0), y),
-            8.0,
-            &Paint::fill(gray),
-        );
+        self.painter
+            .draw_text("ms", Point::new(x_val + 22.0, y), 8.0, &Paint::fill(gray));
 
         if let Some(line) = diagnostic_line {
-            y += px(14.0);
+            y += 14.0;
             // This is the highest-density row in the overlay. Keep it brighter
             // and slightly larger than unit suffixes so the diagnostic signal
             // remains legible after glyph antialiasing and display scaling.
@@ -1068,7 +1070,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
     // the cost is one branch per layer-stack call -- negligible
     // versus the save_layer/clip_path GPU work that follows.
 
-    fn push_clip_rect(&mut self, rect: &Rect<Pixels>, clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_types::painting::Clip) {
         self.flush_active_transform();
         self.painter.save();
         self.painter.clip_rect(*rect, clip_behavior);
@@ -1172,7 +1174,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
         }
     }
 
-    fn push_offset(&mut self, offset: Offset<Pixels>) {
+    fn push_offset(&mut self, offset: Offset<f64>) {
         self.flush_active_transform();
         self.painter.save();
         self.painter.translate(offset);
@@ -1301,8 +1303,8 @@ impl LayerStateStack for LayerDispatcher<'_> {
                 // (PINNED #2: premultiplied-direct, sRGB-encoded, √3·σ kernel).
                 self.painter
                     .save_layer_with_image_filter(ImageFilterSpec::Blur {
-                        sigma_x: *sigma_x,
-                        sigma_y: *sigma_y,
+                        sigma_x: (*sigma_x as f32),
+                        sigma_y: (*sigma_y as f32),
                     });
                 tracing::trace!(
                     sigma_x,
@@ -1313,7 +1315,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
             ImageFilter::Dilate { radius } => {
                 self.painter
                     .save_layer_with_image_filter(ImageFilterSpec::Morph {
-                        radius: *radius,
+                        radius: (*radius as f32),
                         op: MorphOp::Dilate,
                     });
                 tracing::trace!(
@@ -1324,7 +1326,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
             ImageFilter::Erode { radius } => {
                 self.painter
                     .save_layer_with_image_filter(ImageFilterSpec::Morph {
-                        radius: *radius,
+                        radius: (*radius as f32),
                         op: MorphOp::Erode,
                     });
                 tracing::trace!(
@@ -1434,19 +1436,19 @@ pub(crate) fn flatten_compose(
         match filter {
             ImageFilter::Blur { sigma_x, sigma_y } => {
                 out.push(ImageFilterPass::Blur {
-                    sigma_x: *sigma_x,
-                    sigma_y: *sigma_y,
+                    sigma_x: (*sigma_x as f32),
+                    sigma_y: (*sigma_y as f32),
                 });
             }
             ImageFilter::Dilate { radius } => {
                 out.push(ImageFilterPass::Morph {
-                    radius: *radius,
+                    radius: (*radius as f32),
                     op: MorphOp::Dilate,
                 });
             }
             ImageFilter::Erode { radius } => {
                 out.push(ImageFilterPass::Morph {
-                    radius: *radius,
+                    radius: (*radius as f32),
                     op: MorphOp::Erode,
                 });
             }

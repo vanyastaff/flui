@@ -167,13 +167,13 @@ struct ModalInner {
     /// (`:1958`). That swap is the entire reason an offstage route lays out at its
     /// *final* geometry rather than wherever its entrance transition happens to be:
     /// `HeroController` measures the destination one frame before the flight.
-    primary: Arc<ProxyAnimation<f32>>,
+    primary: Arc<ProxyAnimation<f64>>,
     /// `ModalRoute._secondaryAnimationProxy` (`:1686`, `:1973-1974`).
     ///
     /// Parent is the `TransitionRoute` secondary train, or
     /// `kAlwaysDismissedAnimation` while offstage (`:1959-1961`) — an offstage route
     /// must not be pushed aside by whatever sits above it either.
-    secondary: Arc<ProxyAnimation<f32>>,
+    secondary: Arc<ProxyAnimation<f64>>,
 
     /// `ModalRoute._subtreeKey` (`routes.dart:2268`) — owned from construction,
     /// filled while the page is mounted. ADR-0021, seam 4.
@@ -329,7 +329,7 @@ impl ModalInner {
             always_dismissed()
         } else {
             transition.map_or_else(always_dismissed, |transition| {
-                transition.secondary_animation() as Arc<dyn Animation<f32>>
+                transition.secondary_animation() as Arc<dyn Animation<f64>>
             })
         });
     }
@@ -386,9 +386,9 @@ struct ModalScope {
     transition: TransitionHandle,
     /// `widget.route.animation` (`routes.dart:1234`) — the **proxy**, so an offstage
     /// route's builders see `kAlwaysCompleteAnimation`.
-    primary: Arc<ProxyAnimation<f32>>,
+    primary: Arc<ProxyAnimation<f64>>,
     /// `widget.route.secondaryAnimation` (`:1235`).
-    secondary: Arc<ProxyAnimation<f32>>,
+    secondary: Arc<ProxyAnimation<f64>>,
     relay: Arc<ChangeNotifier>,
     subtree: RouteSubtreeCell,
     heroes: HeroRegistry,

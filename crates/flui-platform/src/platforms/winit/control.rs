@@ -400,7 +400,7 @@ mod tests {
     fn options(title: impl Into<String>) -> WindowOptions {
         WindowOptions {
             title: title.into(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             ..WindowOptions::default()
         }
     }
@@ -416,10 +416,10 @@ mod tests {
             crate::traits::WindowId(1)
         }
 
-        fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
+        fn physical_size(&self) -> flui_types::geometry::Size<i32> {
             flui_types::geometry::Size::default()
         }
-        fn logical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::Pixels> {
+        fn logical_size(&self) -> flui_types::geometry::Size<f64> {
             flui_types::geometry::Size::default()
         }
         fn scale_factor(&self) -> f64 {

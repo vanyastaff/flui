@@ -354,7 +354,7 @@ struct CountingRectTween {
 }
 
 impl Animatable<Rect> for CountingRectTween {
-    fn transform(&self, t: f32) -> Rect {
+    fn transform(&self, t: f64) -> Rect {
         self.transforms.fetch_add(1, Ordering::SeqCst);
         flui_animation::RectTween::new(self.begin, self.end).transform(t)
     }

@@ -76,12 +76,12 @@ use crate::theme::CupertinoTheme;
 
 /// `_kTabBarHeight` (`bottom_tab_bar.dart`, oracle tag `3.44.0`) — standard
 /// iOS 10 tab bar height.
-pub const TAB_BAR_HEIGHT: f32 = 50.0;
+pub const TAB_BAR_HEIGHT: f64 = 50.0;
 
 /// The stroke width this port paints the hairline border at — see
 /// [`crate::nav_bar::HAIRLINE_BORDER_WIDTH`]'s doc for why a literal
 /// `width: 0.0` cannot be ported verbatim.
-pub const HAIRLINE_BORDER_WIDTH: f32 = crate::nav_bar::HAIRLINE_BORDER_WIDTH;
+pub const HAIRLINE_BORDER_WIDTH: f64 = crate::nav_bar::HAIRLINE_BORDER_WIDTH;
 
 /// `_kDefaultTabBarBorderColor` (`bottom_tab_bar.dart`, oracle tag `3.44.0`):
 /// `CupertinoDynamicColor.withBrightness(color: 0x4D000000, darkColor:
@@ -176,9 +176,9 @@ pub struct CupertinoTabBar {
     background_color: Option<CupertinoColor>,
     active_color: Option<CupertinoColor>,
     inactive_color: CupertinoColor,
-    icon_size: f32,
-    height: f32,
-    border: Option<Border<flui_sdk::types::geometry::Pixels>>,
+    icon_size: f64,
+    height: f64,
+    border: Option<Border<f64>>,
     /// Whether `border` still holds the un-overridden default. If so,
     /// `build` resolves [`default_border_color`]'s light/dark variant fresh
     /// against the ambient brightness every time, rather than using a color
@@ -276,7 +276,7 @@ impl CupertinoTabBar {
     /// Overrides the icon size. Defaults to `30.0`. Flutter parity:
     /// `CupertinoTabBar.iconSize`.
     #[must_use]
-    pub fn icon_size(mut self, icon_size: f32) -> Self {
+    pub fn icon_size(mut self, icon_size: f64) -> Self {
         self.icon_size = icon_size;
         self
     }
@@ -284,7 +284,7 @@ impl CupertinoTabBar {
     /// Overrides the bar's height. Defaults to [`TAB_BAR_HEIGHT`]. Flutter
     /// parity: `CupertinoTabBar.height`.
     #[must_use]
-    pub fn height(mut self, height: f32) -> Self {
+    pub fn height(mut self, height: f64) -> Self {
         self.height = height;
         self
     }
@@ -292,7 +292,7 @@ impl CupertinoTabBar {
     /// Overrides the top border, or removes it with `None`. Defaults to
     /// the hairline border. Flutter parity: `CupertinoTabBar.border`.
     #[must_use]
-    pub fn border(mut self, border: Option<Border<flui_sdk::types::geometry::Pixels>>) -> Self {
+    pub fn border(mut self, border: Option<Border<f64>>) -> Self {
         self.border = border;
         self.border_is_default = false;
         self
@@ -342,7 +342,7 @@ impl StatelessView for CupertinoTabBar {
             .active_color
             .unwrap_or_else(|| theme.primary_color())
             .resolve(ctx);
-        let bottom_inset = MediaQuery::maybe_of(ctx).map_or(px(0.0), |data| data.padding.bottom);
+        let bottom_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding.bottom);
 
         let tab_label_style = theme.text_theme().tab_label_text_style();
 
@@ -375,7 +375,7 @@ impl StatelessView for CupertinoTabBar {
                     },
                     DefaultTextStyle::new(
                         tab_label_style.clone().with_color(color),
-                        Padding::new(flui_sdk::types::geometry::EdgeInsets::only_bottom(px(4.0)))
+                        Padding::new(flui_sdk::types::geometry::EdgeInsets::only_bottom(4.0))
                             .child(
                                 Column::new(column_children)
                                     .main_axis_alignment(MainAxisAlignment::End),
@@ -419,7 +419,7 @@ impl StatelessView for CupertinoTabBar {
             Some(Border::new(
                 Some(BorderSide::new(
                     CupertinoColor::Dynamic(default_border_color()).resolve(ctx),
-                    px(HAIRLINE_BORDER_WIDTH),
+                    HAIRLINE_BORDER_WIDTH,
                     BorderStyle::Solid,
                 )),
                 None,
@@ -431,12 +431,12 @@ impl StatelessView for CupertinoTabBar {
         };
 
         DecoratedBox::new(BoxDecoration::with_color(background).set_border(resolved_border))
-            .child(SizedBox::height(self.height + bottom_inset.get()).child(toolbar))
+            .child(SizedBox::height(self.height + bottom_inset).child(toolbar))
     }
 }
 
 impl PreferredSizeView for CupertinoTabBar {
     fn preferred_size(&self) -> Size {
-        Size::new(px(f32::INFINITY), px(self.height))
+        Size::new(f64::INFINITY, self.height)
     }
 }

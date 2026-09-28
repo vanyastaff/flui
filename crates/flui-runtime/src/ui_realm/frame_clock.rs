@@ -485,7 +485,7 @@ impl UiRealm {
 
     /// Apply a new device pixel ratio to this realm's render pipeline (the
     /// resize path; construction applies the initial ratio directly).
-    pub fn set_device_pixel_ratio(&self, device_pixel_ratio: f32) {
+    pub fn set_device_pixel_ratio(&self, device_pixel_ratio: f64) {
         self.presentations
             .primary()
             .renderer()

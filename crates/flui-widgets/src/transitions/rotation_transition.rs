@@ -1,7 +1,7 @@
 //! [`RotationTransition`] — animates its child's rotation from an
-//! [`Animation<f32>`] of turns.
+//! [`Animation<f64>`] of turns.
 
-use std::f32::consts::TAU;
+use std::f64::consts::TAU;
 use std::sync::Arc;
 
 use flui_animation::Animation;
@@ -13,7 +13,7 @@ use flui_view::{
 
 use crate::Transform;
 
-/// Rotates its child about its center as an [`Animation<f32>`] of *turns*
+/// Rotates its child about its center as an [`Animation<f64>`] of *turns*
 /// changes (`1.0` turn = a full 360° revolution).
 ///
 /// Flutter parity: `widgets/transitions.dart` `RotationTransition` — an
@@ -22,13 +22,13 @@ use crate::Transform;
 /// laid out as if unrotated.
 #[derive(Clone)]
 pub struct RotationTransition {
-    turns: Arc<dyn Animation<f32>>,
+    turns: Arc<dyn Animation<f64>>,
     child: BoxedView,
 }
 
 impl RotationTransition {
     /// A rotation driven by `turns` (1.0 = a full revolution), rotating `child`.
-    pub fn new(turns: Arc<dyn Animation<f32>>, child: impl IntoView) -> Self {
+    pub fn new(turns: Arc<dyn Animation<f64>>, child: impl IntoView) -> Self {
         Self {
             turns,
             child: child.into_view().boxed(),

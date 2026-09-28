@@ -64,23 +64,23 @@ impl ParagraphLayout {
         let Some(first) = first else {
             return TextLayoutResult {
                 width: 0.0,
-                height: self.line_height,
+                height: f64::from(self.line_height),
                 line_count: 1,
                 max_line_width: 0.0,
-                alphabetic_baseline: self.line_height * 0.8,
-                ideographic_baseline: self.line_height,
+                alphabetic_baseline: f64::from(self.line_height * 0.8),
+                ideographic_baseline: f64::from(self.line_height),
                 truncated: false,
             };
         };
         let line = first.metrics();
         let width = self.layout.width();
         TextLayoutResult {
-            width,
-            height: self.layout.height(),
+            width: f64::from(width),
+            height: f64::from(self.layout.height()),
             line_count: self.layout.len().max(1),
-            max_line_width: width,
-            alphabetic_baseline: line.baseline,
-            ideographic_baseline: line.block_max_coord,
+            max_line_width: f64::from(width),
+            alphabetic_baseline: f64::from(line.baseline),
+            ideographic_baseline: f64::from(line.block_max_coord),
             truncated: false,
         }
     }

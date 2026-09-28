@@ -46,7 +46,7 @@ impl RenderView for ColoredBoxView {
     type RenderObject = RenderColoredBox;
 
     fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderColoredBox::new(self.color, Size::new(px(self.width), px(self.height)))
+        RenderColoredBox::new(self.color, Size::new(self.width, self.height))
     }
 
     fn update_render_object(
@@ -56,7 +56,7 @@ impl RenderView for ColoredBoxView {
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_color(self.color);
-        let preferred_size = Size::new(px(self.width), px(self.height));
+        let preferred_size = Size::new(self.width, self.height);
         impact |= render_object.set_preferred_size(preferred_size);
         impact
     }

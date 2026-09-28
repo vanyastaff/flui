@@ -109,20 +109,20 @@ use crate::theme::Theme;
 
 /// The track's width. Flutter parity: `_SwitchConfigM3.trackWidth`/
 /// `switchWidth` (`switch.dart`, oracle tag `3.44.0`), both `52.0`.
-pub const SWITCH_TRACK_WIDTH: f32 = 52.0;
+pub const SWITCH_TRACK_WIDTH: f64 = 52.0;
 
 /// The track's height. Flutter parity: `_SwitchConfigM3.trackHeight`
 /// (`32.0`).
-pub const SWITCH_TRACK_HEIGHT: f32 = 32.0;
+pub const SWITCH_TRACK_HEIGHT: f64 = 32.0;
 
 /// The M3 default horizontal padding added to the track to form the tap
 /// target, each side. Flutter parity: `_SwitchDefaultsM3.padding`,
 /// `EdgeInsets.symmetric(horizontal: 4)`.
-const TAP_TARGET_HORIZONTAL_PADDING: f32 = 4.0;
+const TAP_TARGET_HORIZONTAL_PADDING: f64 = 4.0;
 
 /// The tap target's width: the track plus the M3 default horizontal
 /// padding on both sides.
-pub const SWITCH_TAP_TARGET_WIDTH: f32 = SWITCH_TRACK_WIDTH + TAP_TARGET_HORIZONTAL_PADDING * 2.0;
+pub const SWITCH_TAP_TARGET_WIDTH: f64 = SWITCH_TRACK_WIDTH + TAP_TARGET_HORIZONTAL_PADDING * 2.0;
 
 /// The tap target's height. Flutter parity: `_SwitchConfigM3.switchHeight`,
 /// `switchMinSize.height + 8.0` where `switchMinSize.height =
@@ -130,19 +130,19 @@ pub const SWITCH_TAP_TARGET_WIDTH: f32 = SWITCH_TRACK_WIDTH + TAP_TARGET_HORIZON
 /// `MaterialTapTargetSize.padded` branch `Switch._getSwitchSize` always
 /// takes in this V1 (no override yet, matching [`crate::Checkbox`]'s own
 /// deferral).
-pub const SWITCH_TAP_TARGET_HEIGHT: f32 = 48.0;
+pub const SWITCH_TAP_TARGET_HEIGHT: f64 = 48.0;
 
 /// The thumb radius when selected (or thumb-iconed, which V1 doesn't
 /// paint). Flutter parity: `_SwitchConfigM3.activeThumbRadius`, `24.0 / 2`.
-const ACTIVE_THUMB_RADIUS: f32 = 12.0;
+const ACTIVE_THUMB_RADIUS: f64 = 12.0;
 
 /// The thumb radius when unselected. Flutter parity:
 /// `_SwitchConfigM3.inactiveThumbRadius`, `16.0 / 2`.
-const INACTIVE_THUMB_RADIUS: f32 = 8.0;
+const INACTIVE_THUMB_RADIUS: f64 = 8.0;
 
 /// The track border's stroke width. Flutter parity:
 /// `_SwitchDefaultsM3.trackOutlineWidth`, `2.0`.
-const TRACK_OUTLINE_WIDTH: f32 = 2.0;
+const TRACK_OUTLINE_WIDTH: f64 = 2.0;
 
 // Compile-time geometry invariants — not runtime tests (every side is
 // `const`): the track must fit inside the tap target on both axes, and the
@@ -308,7 +308,7 @@ impl ViewState<Switch> for SwitchState {
             thumb_color,
             track_color,
             track_outline_color,
-            thumb_radius: px(thumb_radius),
+            thumb_radius,
             selected: view.value,
         });
 
@@ -317,10 +317,7 @@ impl ViewState<Switch> for SwitchState {
         let on_changed = view.on_changed.clone();
         let mut ink_well = InkWell::new(
             CustomPaint::new()
-                .size(Size::new(
-                    px(SWITCH_TAP_TARGET_WIDTH),
-                    px(SWITCH_TAP_TARGET_HEIGHT),
-                ))
+                .size(Size::new(SWITCH_TAP_TARGET_WIDTH, SWITCH_TAP_TARGET_HEIGHT))
                 .painter(painter),
         )
         .shape(MaterialShape::Stadium)
@@ -467,7 +464,7 @@ fn switch_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> O
 /// `effectiveInactiveThumbRadius` selection (`switch.dart` `:1064-1070`,
 /// the no-icon/no-image branch — V1 paints neither) — see the module docs'
 /// "Named deferral" section for why `Pressed` does not grow this further.
-fn switch_default_thumb_radius(states: WidgetStates) -> f32 {
+fn switch_default_thumb_radius(states: WidgetStates) -> f64 {
     if states.contains_state(WidgetState::Selected) {
         ACTIVE_THUMB_RADIUS
     } else {
@@ -486,27 +483,27 @@ struct SwitchPainter {
     thumb_color: Color,
     track_color: Color,
     track_outline_color: Color,
-    thumb_radius: Pixels,
+    thumb_radius: f64,
     selected: bool,
 }
 
 impl CustomPainter for SwitchPainter {
     fn paint(&self, canvas: &mut Canvas, size: Size) {
-        let track_origin_x = (size.width.get() - SWITCH_TRACK_WIDTH) / 2.0;
-        let track_origin_y = (size.height.get() - SWITCH_TRACK_HEIGHT) / 2.0;
+        let track_origin_x = (size.width - SWITCH_TRACK_WIDTH) / 2.0;
+        let track_origin_y = (size.height - SWITCH_TRACK_HEIGHT) / 2.0;
 
         let track_rect = Rect::from_ltrb(
-            px(track_origin_x),
-            px(track_origin_y),
-            px(track_origin_x + SWITCH_TRACK_WIDTH),
-            px(track_origin_y + SWITCH_TRACK_HEIGHT),
+            track_origin_x,
+            track_origin_y,
+            (track_origin_x + SWITCH_TRACK_WIDTH),
+            (track_origin_y + SWITCH_TRACK_HEIGHT),
         );
-        let track_rrect = RRect::from_rect_circular(track_rect, px(SWITCH_TRACK_HEIGHT / 2.0));
+        let track_rrect = RRect::from_rect_circular(track_rect, (SWITCH_TRACK_HEIGHT / 2.0));
 
         canvas.draw_rrect(track_rrect, &Paint::fill(self.track_color));
 
         if TRACK_OUTLINE_WIDTH > 0.0 {
-            let inner_rrect = track_rrect.inflate(px(-TRACK_OUTLINE_WIDTH));
+            let inner_rrect = track_rrect.inflate((-TRACK_OUTLINE_WIDTH));
             canvas.draw_drrect(
                 track_rrect,
                 inner_rrect,
@@ -530,7 +527,7 @@ impl CustomPainter for SwitchPainter {
         let thumb_center_y = track_origin_y + SWITCH_TRACK_HEIGHT / 2.0;
 
         canvas.draw_circle(
-            Point::new(px(thumb_center_x), px(thumb_center_y)),
+            Point::new(thumb_center_x, thumb_center_y),
             self.thumb_radius,
             &Paint::fill(self.thumb_color),
         );
@@ -847,7 +844,7 @@ mod tests {
             thumb_color: Color::BLACK,
             track_color: Color::WHITE,
             track_outline_color: Color::WHITE,
-            thumb_radius: px(ACTIVE_THUMB_RADIUS),
+            thumb_radius: ACTIVE_THUMB_RADIUS,
             selected,
         }
     }
@@ -879,7 +876,7 @@ mod tests {
     fn thumb_circle_center_lands_on_the_correct_track_end_per_value() {
         use flui_sdk::painting::DrawOp;
 
-        let size = Size::new(px(SWITCH_TAP_TARGET_WIDTH), px(SWITCH_TAP_TARGET_HEIGHT));
+        let size = Size::new(SWITCH_TAP_TARGET_WIDTH, SWITCH_TAP_TARGET_HEIGHT);
         let track_origin_x = (SWITCH_TAP_TARGET_WIDTH - SWITCH_TRACK_WIDTH) / 2.0;
         let track_origin_y = (SWITCH_TAP_TARGET_HEIGHT - SWITCH_TRACK_HEIGHT) / 2.0;
         let track_inner_start = SWITCH_TRACK_HEIGHT / 2.0;
@@ -906,14 +903,14 @@ mod tests {
 
             let expected_center_x = track_origin_x + expected_inner_x;
             assert!(
-                (circles[0].x.get() - expected_center_x).abs() < 0.01,
+                (circles[0].x - expected_center_x).abs() < 0.01,
                 "selected={selected}: expected thumb center x {expected_center_x}, got {}",
-                circles[0].x.get(),
+                circles[0].x,
             );
             assert!(
-                (circles[0].y.get() - expected_center_y).abs() < 0.01,
+                (circles[0].y - expected_center_y).abs() < 0.01,
                 "selected={selected}: expected thumb center y {expected_center_y}, got {}",
-                circles[0].y.get(),
+                circles[0].y,
             );
         }
     }

@@ -534,7 +534,7 @@ impl UiRealm {
             .root_pipeline_owner()
             .with(PipelineOwner::device_pixel_ratio);
         let constraints =
-            BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
+            BoxConstraints::tight(Size::new((width as f64 / dpr), (height as f64 / dpr)));
         let (producer_id, outcome, any_failed) = self.draw_frame_entered(constraints);
         // The presentation whose segment produced `outcome` above is never
         // inferred as `primary()`: test scaffolding can attach content to a

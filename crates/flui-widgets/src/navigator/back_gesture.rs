@@ -53,10 +53,10 @@ use crate::{Directionality, GestureArenaScope, Listener, Positioned, SizedBox, S
 
 /// Flutter's `_kBackGestureWidth` (`cupertino/route.dart`, 3.44.0): the
 /// width of the edge-anchored hit region that can start a drag.
-pub(crate) const BACK_GESTURE_WIDTH: f32 = 20.0;
+pub(crate) const BACK_GESTURE_WIDTH: f64 = 20.0;
 
 /// Flutter's `_kMinFlingVelocity`: screen-widths per second.
-const MIN_FLING_VELOCITY: f32 = 1.0;
+const MIN_FLING_VELOCITY: f64 = 1.0;
 
 /// Flutter's `_kDroppedSwipePageAnimationDuration`.
 const DROPPED_SWIPE_DURATION: Duration = Duration::from_millis(350);
@@ -65,7 +65,7 @@ const DROPPED_SWIPE_DURATION: Duration = Duration::from_millis(350);
 /// normalizes a horizontal delta/velocity fraction into pop-direction
 /// coordinates (positive = toward revealing the previous route), in exactly
 /// one place — see the module docs on the ambient `Directionality` read.
-pub(crate) fn convert_to_logical(value: f32, direction: TextDirection) -> f32 {
+pub(crate) fn convert_to_logical(value: f64, direction: TextDirection) -> f64 {
     match direction {
         TextDirection::Rtl => -value,
         TextDirection::Ltr => value,
@@ -116,7 +116,7 @@ impl BackGestureController {
     /// `AnimationController::set_value` now stops any active run first (step
     /// 0's Flutter-parity fix) — exactly Flutter's `value -=` setter
     /// semantics, so no separate `stop()` call is needed here.
-    pub fn drag_update(&self, delta: f32) {
+    pub fn drag_update(&self, delta: f64) {
         self.controller.set_value(self.controller.value() - delta);
     }
 
@@ -127,7 +127,7 @@ impl BackGestureController {
     /// `BackGestureDetectorState`'s per-rebuild poll) — `false` if it settled
     /// inline, in which case the gesture is already fully closed out
     /// (`did_stop_user_gesture` already called).
-    pub fn drag_end(&self, velocity: f32) -> bool {
+    pub fn drag_end(&self, velocity: f64) -> bool {
         let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::FastEaseInToSlowEaseOut); // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
         let is_current = self.navigator.current() == Some(self.route);
         let animate_forward = if !is_current {
@@ -331,7 +331,7 @@ impl BackGestureRuntime {
 
     /// Release the in-flight gesture at `velocity` (logical screen-widths per
     /// second); a no-op if none is in flight.
-    pub fn finish_drag(&self, velocity: f32) {
+    pub fn finish_drag(&self, velocity: f64) {
         let Some(gesture) = self.gesture.borrow_mut().take() else {
             return;
         };
@@ -427,13 +427,13 @@ impl BackGestureRuntime {
     /// unmeasured width (before the very first layout — a state a drag
     /// cannot start from, since hit-testing itself requires laid-out
     /// geometry) never divides a delta into infinity or NaN.
-    fn normalized_width(&self) -> f32 {
+    fn normalized_width(&self) -> f64 {
         let width = self
             .navigator
             .route_subtree(self.route)
             .zip(self.navigator.render_tree())
             .and_then(|(subtree, owner)| owner.with(|owner| owner.box_size(subtree.render_id)))
-            .map_or(BACK_GESTURE_WIDTH, |size| size.width.0);
+            .map_or(BACK_GESTURE_WIDTH, |size| size.width);
         width.max(1.0)
     }
 }

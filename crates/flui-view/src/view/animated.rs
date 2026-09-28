@@ -57,7 +57,7 @@ use super::stateful::StatefulView;
 ///
 /// #[derive(Clone)]
 /// struct FadeTransition {
-///     opacity: Arc<dyn Animation<f32>>,
+///     opacity: Arc<dyn Animation<f64>>,
 ///     child: Box<dyn View>,
 /// }
 ///

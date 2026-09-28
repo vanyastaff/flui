@@ -58,7 +58,7 @@ mod gpu_tests {
     use flui_layer::{CanvasLayer, LayerTree, SceneBuilder};
     use flui_painting::Paint;
     use flui_types::{
-        Color, Offset, Pixels, Rect,
+        Color, Offset, Rect, f64,
         painting::{BlendMode, ColorFilter, ImageFilter},
     };
 
@@ -111,13 +111,8 @@ mod gpu_tests {
         )
     }
 
-    fn full_surface_rect() -> Rect<Pixels> {
-        Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
-        )
+    fn full_surface_rect() -> Rect<f64> {
+        Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32))
     }
 
     /// Assert every interior pixel (1-px border excluded to avoid SDF edge

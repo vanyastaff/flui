@@ -11,13 +11,13 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// `RenderSliverOpacity`. `opacity` is clamped to `0.0..=1.0`.
 #[derive(Clone, Debug)]
 pub struct SliverOpacity {
-    opacity: f32,
+    opacity: f64,
     child: Child,
 }
 
 impl SliverOpacity {
     /// Create a `SliverOpacity` with the given opacity (clamped to `0.0..=1.0`).
-    pub fn new(opacity: f32) -> Self {
+    pub fn new(opacity: f64) -> Self {
         Self {
             opacity,
             child: Child::empty(),

@@ -36,12 +36,12 @@ const RUN: Duration = Duration::from_millis(100);
 #[derive(Clone, StatefulView)]
 struct OpacityProbe {
     vsync: Vsync,
-    target: Arc<Mutex<f32>>,
+    target: Arc<Mutex<f64>>,
 }
 
 struct OpacityProbeState {
     vsync: Vsync,
-    target: Arc<Mutex<f32>>,
+    target: Arc<Mutex<f64>>,
 }
 
 impl StatefulView for OpacityProbe {
@@ -212,13 +212,13 @@ impl ViewState<CountingChild> for CountingChildState {
 #[derive(Clone, StatefulView)]
 struct OpacityRebuildProbe {
     vsync: Vsync,
-    target: Arc<Mutex<f32>>,
+    target: Arc<Mutex<f64>>,
     child_builds: Arc<AtomicUsize>,
 }
 
 struct OpacityRebuildProbeState {
     vsync: Vsync,
-    target: Arc<Mutex<f32>>,
+    target: Arc<Mutex<f64>>,
     child_builds: Arc<AtomicUsize>,
 }
 
@@ -312,12 +312,12 @@ fn animated_opacity_ticks_do_not_rebuild_the_child_subtree() {
 #[derive(Clone, StatefulView)]
 struct PaddingProbe {
     vsync: Vsync,
-    target: Arc<Mutex<f32>>,
+    target: Arc<Mutex<f64>>,
 }
 
 struct PaddingProbeState {
     vsync: Vsync,
-    target: Arc<Mutex<f32>>,
+    target: Arc<Mutex<f64>>,
 }
 
 impl StatefulView for PaddingProbe {
@@ -336,8 +336,7 @@ impl ViewState<PaddingProbe> for PaddingProbeState {
         let inset = *self.target.lock();
         VsyncScope::new(
             self.vsync.clone(),
-            AnimatedPadding::new(EdgeInsets::all(px(inset)), SizedBox::new(20.0, 20.0))
-                .duration(RUN),
+            AnimatedPadding::new(EdgeInsets::all(inset), SizedBox::new(20.0, 20.0)).duration(RUN),
         )
     }
 }
@@ -359,10 +358,7 @@ fn animated_padding_interpolates_child_offset_over_frames() {
     };
 
     // Padding starts at 0 → child sits at the origin.
-    assert!(
-        child_offset(&laid).dx.get().abs() < 1e-4,
-        "child starts at x=0"
-    );
+    assert!(child_offset(&laid).dx.abs() < 1e-4, "child starts at x=0");
 
     // Animate padding to 20px on all sides.
     *target.lock() = 20.0;
@@ -372,7 +368,7 @@ fn animated_padding_interpolates_child_offset_over_frames() {
     let mut samples = Vec::new();
     for _ in 0..5 {
         laid.pump_for(FRAME);
-        samples.push(child_offset(&laid).dx.get());
+        samples.push(child_offset(&laid).dx);
     }
     for pair in samples.windows(2) {
         assert!(
@@ -438,9 +434,9 @@ fn animated_align_interpolates_child_position_over_frames() {
     // 100×100 box, 20×20 child: TOP_LEFT → child at (0,0); BOTTOM_RIGHT → (80,80).
     let mut laid = lay_out_animated(probe, tight(100.0, 100.0), vsync);
 
-    let child_x = |laid: &crate::common::LaidOut| -> f32 {
+    let child_x = |laid: &crate::common::LaidOut| -> f64 {
         let root = laid.current_root();
-        laid.offset(laid.only_child(root)).dx.get()
+        laid.offset(laid.only_child(root)).dx
     };
 
     assert!(
@@ -482,12 +478,12 @@ fn animated_align_interpolates_child_position_over_frames() {
 #[derive(Clone, StatefulView)]
 struct ContainerProbe {
     vsync: Vsync,
-    side: Arc<Mutex<f32>>,
+    side: Arc<Mutex<f64>>,
 }
 
 struct ContainerProbeState {
     vsync: Vsync,
-    side: Arc<Mutex<f32>>,
+    side: Arc<Mutex<f64>>,
 }
 
 impl StatefulView for ContainerProbe {
@@ -524,8 +520,7 @@ fn animated_container_interpolates_size_over_frames() {
     };
     let mut laid = lay_out_animated(probe, loose(200.0), vsync);
 
-    let width =
-        |laid: &crate::common::LaidOut| -> f32 { laid.size(laid.current_root()).width.get() };
+    let width = |laid: &crate::common::LaidOut| -> f64 { laid.size(laid.current_root()).width };
 
     assert!(
         (width(&laid) - 20.0).abs() < 1e-3,
@@ -563,12 +558,12 @@ fn animated_container_interpolates_size_over_frames() {
 #[derive(Clone, StatefulView)]
 struct ZeroDurationContainerProbe {
     vsync: Vsync,
-    side: Arc<Mutex<f32>>,
+    side: Arc<Mutex<f64>>,
 }
 
 struct ZeroDurationContainerProbeState {
     vsync: Vsync,
-    side: Arc<Mutex<f32>>,
+    side: Arc<Mutex<f64>>,
 }
 
 impl StatefulView for ZeroDurationContainerProbe {
@@ -653,8 +648,7 @@ fn zero_duration_retarget_lays_out_the_new_target_on_the_same_pump() {
     };
     let mut laid = lay_out_animated(probe, loose(200.0), vsync.clone());
 
-    let width =
-        |laid: &crate::common::LaidOut| -> f32 { laid.size(laid.current_root()).width.get() };
+    let width = |laid: &crate::common::LaidOut| -> f64 { laid.size(laid.current_root()).width };
     assert!((width(&laid) - 20.0).abs() < 1e-3, "sanity: initial width");
     assert!(
         !vsync.has_running(),
@@ -738,13 +732,13 @@ fn zero_duration_retarget_lays_out_the_new_target_on_the_same_pump() {
 #[derive(Clone, StatefulView)]
 struct CurveSwapOpacityProbe {
     vsync: Vsync,
-    target: Arc<Mutex<f32>>,
+    target: Arc<Mutex<f64>>,
     use_threshold_curve: Arc<Mutex<bool>>,
 }
 
 struct CurveSwapOpacityProbeState {
     vsync: Vsync,
-    target: Arc<Mutex<f32>>,
+    target: Arc<Mutex<f64>>,
     use_threshold_curve: Arc<Mutex<bool>>,
 }
 
@@ -824,13 +818,13 @@ fn animated_opacity_curve_only_change_reapplies_the_new_curve_mid_flight() {
 #[derive(Clone, StatefulView)]
 struct CurveSwapContainerProbe {
     vsync: Vsync,
-    side: Arc<Mutex<f32>>,
+    side: Arc<Mutex<f64>>,
     use_threshold_curve: Arc<Mutex<bool>>,
 }
 
 struct CurveSwapContainerProbeState {
     vsync: Vsync,
-    side: Arc<Mutex<f32>>,
+    side: Arc<Mutex<f64>>,
     use_threshold_curve: Arc<Mutex<bool>>,
 }
 
@@ -877,8 +871,7 @@ fn animated_container_curve_only_change_reapplies_the_new_curve_mid_flight() {
         use_threshold_curve: Arc::clone(&use_threshold_curve),
     };
     let mut laid = lay_out_animated(probe, loose(200.0), vsync);
-    let width =
-        |laid: &crate::common::LaidOut| -> f32 { laid.size(laid.current_root()).width.get() };
+    let width = |laid: &crate::common::LaidOut| -> f64 { laid.size(laid.current_root()).width };
     assert!(
         (width(&laid) - 20.0).abs() < 1e-3,
         "starts at the initial 20px width"
@@ -925,12 +918,12 @@ fn animated_container_curve_only_change_reapplies_the_new_curve_mid_flight() {
 #[derive(Clone, StatefulView)]
 struct ElasticOpacityProbe {
     vsync: Vsync,
-    target: Arc<Mutex<f32>>,
+    target: Arc<Mutex<f64>>,
 }
 
 struct ElasticOpacityProbeState {
     vsync: Vsync,
-    target: Arc<Mutex<f32>>,
+    target: Arc<Mutex<f64>>,
 }
 
 impl StatefulView for ElasticOpacityProbe {

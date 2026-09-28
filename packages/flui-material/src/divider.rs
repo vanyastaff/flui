@@ -51,13 +51,13 @@ use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
 /// `_DividerDefaultsM3`'s height/width (`divider.dart`, oracle tag `3.44.0`).
-const DEFAULT_SPACE: f32 = 16.0;
+const DEFAULT_SPACE: f64 = 16.0;
 /// `_DividerDefaultsM3`'s thickness (`divider.dart`, oracle tag `3.44.0`).
-const DEFAULT_THICKNESS: f32 = 1.0;
+const DEFAULT_THICKNESS: f64 = 1.0;
 /// `_DividerDefaultsM3`'s indent (`divider.dart`, oracle tag `3.44.0`).
-const DEFAULT_INDENT: f32 = 0.0;
+const DEFAULT_INDENT: f64 = 0.0;
 /// `_DividerDefaultsM3`'s end indent (`divider.dart`, oracle tag `3.44.0`).
-const DEFAULT_END_INDENT: f32 = 0.0;
+const DEFAULT_END_INDENT: f64 = 0.0;
 
 /// A thin horizontal rule, with padding on either side.
 ///
@@ -71,10 +71,10 @@ const DEFAULT_END_INDENT: f32 = 0.0;
 /// ```
 #[derive(Clone, Debug, Default, StatelessView)]
 pub struct Divider {
-    height: Option<f32>,
-    thickness: Option<f32>,
-    indent: Option<f32>,
-    end_indent: Option<f32>,
+    height: Option<f64>,
+    thickness: Option<f64>,
+    indent: Option<f64>,
+    end_indent: Option<f64>,
     color: Option<Color>,
     radius: Option<BorderRadius>,
 }
@@ -90,14 +90,14 @@ impl Divider {
     /// Overrides the divider's total height (the line is vertically centered
     /// within it). Defaults to `16.0`.
     #[must_use]
-    pub fn height(mut self, height: f32) -> Self {
+    pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }
 
     /// Overrides the line's thickness. Defaults to `1.0`.
     #[must_use]
-    pub fn thickness(mut self, thickness: f32) -> Self {
+    pub fn thickness(mut self, thickness: f64) -> Self {
         self.thickness = Some(thickness);
         self
     }
@@ -105,7 +105,7 @@ impl Divider {
     /// Overrides the empty space before the line's leading edge. Defaults to
     /// `0.0`.
     #[must_use]
-    pub fn indent(mut self, indent: f32) -> Self {
+    pub fn indent(mut self, indent: f64) -> Self {
         self.indent = Some(indent);
         self
     }
@@ -113,7 +113,7 @@ impl Divider {
     /// Overrides the empty space after the line's trailing edge. Defaults to
     /// `0.0`.
     #[must_use]
-    pub fn end_indent(mut self, end_indent: f32) -> Self {
+    pub fn end_indent(mut self, end_indent: f64) -> Self {
         self.end_indent = Some(end_indent);
         self
     }
@@ -151,10 +151,10 @@ impl StatelessView for Divider {
                 Container::new()
                     .height(resolved.thickness)
                     .margin(EdgeInsets::new(
-                        px(0.0),
-                        px(resolved.end_indent),
-                        px(0.0),
-                        px(resolved.indent),
+                        0.0,
+                        resolved.end_indent,
+                        0.0,
+                        resolved.indent,
                     ))
                     .decoration(decoration(resolved.color, resolved.radius)),
             ),
@@ -172,10 +172,10 @@ impl StatelessView for Divider {
 /// ```
 #[derive(Clone, Debug, Default, StatelessView)]
 pub struct VerticalDivider {
-    width: Option<f32>,
-    thickness: Option<f32>,
-    indent: Option<f32>,
-    end_indent: Option<f32>,
+    width: Option<f64>,
+    thickness: Option<f64>,
+    indent: Option<f64>,
+    end_indent: Option<f64>,
     color: Option<Color>,
     radius: Option<BorderRadius>,
 }
@@ -191,14 +191,14 @@ impl VerticalDivider {
     /// Overrides the divider's total width (the line is horizontally
     /// centered within it). Defaults to `16.0`.
     #[must_use]
-    pub fn width(mut self, width: f32) -> Self {
+    pub fn width(mut self, width: f64) -> Self {
         self.width = Some(width);
         self
     }
 
     /// Overrides the line's thickness. Defaults to `1.0`.
     #[must_use]
-    pub fn thickness(mut self, thickness: f32) -> Self {
+    pub fn thickness(mut self, thickness: f64) -> Self {
         self.thickness = Some(thickness);
         self
     }
@@ -206,7 +206,7 @@ impl VerticalDivider {
     /// Overrides the empty space above the line's top edge. Defaults to
     /// `0.0`.
     #[must_use]
-    pub fn indent(mut self, indent: f32) -> Self {
+    pub fn indent(mut self, indent: f64) -> Self {
         self.indent = Some(indent);
         self
     }
@@ -214,7 +214,7 @@ impl VerticalDivider {
     /// Overrides the empty space below the line's bottom edge. Defaults to
     /// `0.0`.
     #[must_use]
-    pub fn end_indent(mut self, end_indent: f32) -> Self {
+    pub fn end_indent(mut self, end_indent: f64) -> Self {
         self.end_indent = Some(end_indent);
         self
     }
@@ -252,10 +252,10 @@ impl StatelessView for VerticalDivider {
                 Container::new()
                     .width(resolved.thickness)
                     .margin(EdgeInsets::new(
-                        px(resolved.indent),
-                        px(0.0),
-                        px(resolved.end_indent),
-                        px(0.0),
+                        resolved.indent,
+                        0.0,
+                        resolved.end_indent,
+                        0.0,
                     ))
                     .decoration(decoration(resolved.color, resolved.radius)),
             ),
@@ -266,10 +266,10 @@ impl StatelessView for VerticalDivider {
 /// [`Divider`]/[`VerticalDivider`]'s theme-resolved geometry/color — see
 /// [`resolve_style`]'s doc comment for the widget → theme → default cascade.
 struct ResolvedDividerStyle {
-    space: f32,
-    thickness: f32,
-    indent: f32,
-    end_indent: f32,
+    space: f64,
+    thickness: f64,
+    indent: f64,
+    end_indent: f64,
     color: Color,
     /// Unlike every other field, `radius` has no concrete M3 default to fall
     /// through to — square corners (`None`) are Flutter's own fallback too
@@ -284,10 +284,10 @@ struct ResolvedDividerStyle {
 // mirrors the oracle's own per-field cascade; a patch struct would only relocate this
 fn resolve_style(
     theme: &ThemeData,
-    space: Option<f32>,
-    thickness: Option<f32>,
-    indent: Option<f32>,
-    end_indent: Option<f32>,
+    space: Option<f64>,
+    thickness: Option<f64>,
+    indent: Option<f64>,
+    end_indent: Option<f64>,
     color: Option<Color>,
     radius: Option<BorderRadius>,
 ) -> ResolvedDividerStyle {
@@ -316,10 +316,7 @@ fn resolve_style(
 /// The line's fill: `color`, optionally rounded to `radius` — see the module
 /// docs' "Composition" section for why a filled rect stands in for the
 /// oracle's full-height bottom border.
-fn decoration(
-    color: Color,
-    radius: Option<BorderRadius>,
-) -> BoxDecoration<flui_sdk::types::Pixels> {
+fn decoration(color: Color, radius: Option<BorderRadius>) -> BoxDecoration<f64> {
     BoxDecoration::with_color(color).set_border_radius(radius)
 }
 

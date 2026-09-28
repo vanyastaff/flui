@@ -375,7 +375,7 @@ impl<'a> RenderObjectContext<'a> {
     /// the element was mounted detached, or the owner is gone.
     pub fn register_shader_mask(
         &self,
-        factory: impl Fn(flui_types::Rect<flui_types::Pixels>) -> flui_types::painting::Shader + 'static,
+        factory: impl Fn(flui_types::Rect<f64>) -> flui_types::painting::Shader + 'static,
     ) -> Result<flui_interaction::ShaderMaskTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_shader_mask(factory)?)
     }
@@ -390,7 +390,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn replace_shader_mask(
         &self,
         target: flui_interaction::ShaderMaskTarget,
-        factory: impl Fn(flui_types::Rect<flui_types::Pixels>) -> flui_types::painting::Shader + 'static,
+        factory: impl Fn(flui_types::Rect<f64>) -> flui_types::painting::Shader + 'static,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
             .dispatch_handle()?
@@ -444,7 +444,7 @@ impl<'a> RenderObjectContext<'a> {
 ///
 /// #[derive(Clone)]
 /// struct ColoredBox {
-///     color: [f32; 4],
+///     color: [f64; 4],
 /// }
 ///
 /// impl RenderView for ColoredBox {
@@ -452,7 +452,7 @@ impl<'a> RenderObjectContext<'a> {
 ///     type RenderObject = RenderColoredBox;
 ///
 ///     fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
-///         RenderColoredBox::new(self.color, Size::new(px(40.0), px(24.0)))
+///         RenderColoredBox::new(self.color, Size::new(40.0, 24.0))
 ///     }
 ///
 ///     fn update_render_object(
@@ -591,8 +591,8 @@ mod tests {
     /// A simple test RenderView using RenderSizedBox
     #[derive(Clone)]
     struct SizedBoxView {
-        width: f32,
-        height: f32,
+        width: f64,
+        height: f64,
     }
 
     impl RenderView for SizedBoxView {
@@ -603,7 +603,7 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
         ) -> Self::RenderObject {
-            RenderSizedBox::new(Some(px(self.width)), Some(px(self.height)))
+            RenderSizedBox::new(Some(self.width), Some(self.height))
         }
 
         fn update_render_object(
@@ -611,7 +611,7 @@ mod tests {
             _ctx: &crate::RenderObjectContext<'_>,
             render_object: &mut Self::RenderObject,
         ) -> flui_rendering::RenderUpdateImpact {
-            render_object.set_size(Some(px(self.width)), Some(px(self.height)))
+            render_object.set_size(Some(self.width), Some(self.height))
         }
     }
 
@@ -634,7 +634,7 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
         ) -> Self::RenderObject {
-            RenderSizedBox::new(Some(px(10.0)), Some(px(10.0)))
+            RenderSizedBox::new(Some(10.0), Some(10.0))
         }
 
         fn update_render_object(

@@ -60,7 +60,7 @@ use crate::{FadeTransition, Stack};
 /// Flutter parity: `AnimatedSwitcherTransitionBuilder`
 /// (`animated_switcher.dart`, tag `3.44.0`).
 pub type AnimatedSwitcherTransitionBuilder =
-    Rc<dyn Fn(BoxedView, Arc<dyn Animation<f32>>) -> BoxedView>;
+    Rc<dyn Fn(BoxedView, Arc<dyn Animation<f64>>) -> BoxedView>;
 
 /// A custom layout for [`AnimatedSwitcher`]: arranges the incoming
 /// `current_child` (if any) alongside the still-animating-out
@@ -168,7 +168,7 @@ impl AnimatedSwitcher {
     #[must_use]
     pub fn transition_builder(
         mut self,
-        builder: impl Fn(BoxedView, Arc<dyn Animation<f32>>) -> BoxedView + 'static,
+        builder: impl Fn(BoxedView, Arc<dyn Animation<f64>>) -> BoxedView + 'static,
     ) -> Self {
         self.transition_builder = Rc::new(builder);
         self
@@ -199,7 +199,7 @@ impl AnimatedSwitcher {
     /// _childNumber)`) is what the corpus actually asserts on.
     pub fn default_transition_builder(
         child: BoxedView,
-        animation: Arc<dyn Animation<f32>>,
+        animation: Arc<dyn Animation<f64>>,
     ) -> BoxedView {
         FadeTransition::new(animation, child).boxed()
     }
@@ -337,7 +337,7 @@ impl ChildEntry {
         if let Some(reverse_duration) = reverse_duration {
             controller.set_reverse_duration(reverse_duration);
         }
-        let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+        let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
         let curved =
             CurvedAnimation::new(parent, switch_in_curve).with_reverse_curve(switch_out_curve);
 
@@ -407,7 +407,7 @@ impl ChildEntry {
         curved: &CurvedAnimation<ArcCurve>,
         transition_builder: &AnimatedSwitcherTransitionBuilder,
     ) -> BoxedView {
-        let animation: Arc<dyn Animation<f32>> = Arc::new(curved.clone());
+        let animation: Arc<dyn Animation<f64>> = Arc::new(curved.clone());
         let content = transition_builder(widget_child.clone(), animation);
         KeyedEntry::new(child_number, content).boxed()
     }

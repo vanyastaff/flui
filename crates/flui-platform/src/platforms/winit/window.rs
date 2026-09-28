@@ -62,7 +62,7 @@ impl PlatformTextInput for WinitTextInput {
         self.window.set_ime_allowed(allowed);
     }
 
-    fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+    fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         use winit::dpi::{LogicalPosition, LogicalSize};
 
         self.window.set_ime_cursor_area(
@@ -153,22 +153,19 @@ impl PlatformWindow for WinitWindow {
         self.id
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
+    fn physical_size(&self) -> Size<i32> {
         use flui_types::geometry::device_px;
 
         let size = self.window.inner_size();
-        Size::new(device_px(size.width as i32), device_px(size.height as i32))
+        Size::new((size.width as i32), (size.height as i32))
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
+    fn logical_size(&self) -> Size<f64> {
         use flui_types::geometry::px;
 
         let size = self.window.inner_size();
-        let scale = self.window.scale_factor() as f32;
-        Size::new(
-            px(size.width as f32 / scale),
-            px(size.height as f32 / scale),
-        )
+        let scale = self.window.scale_factor() as f64;
+        Size::new((size.width as f64 / scale), (size.height as f64 / scale))
     }
 
     fn appearance(&self) -> WindowAppearance {

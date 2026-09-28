@@ -150,7 +150,7 @@ fn press_opacity_fades_out_then_back_in_over_the_oracle_durations() {
         .try_find_by_render_type("RenderAnimatedOpacity")
         .expect("CupertinoButton should mount a FadeTransition render node");
 
-    let read_opacity = |laid: &common::LaidOut| -> f32 {
+    let read_opacity = |laid: &common::LaidOut| -> f64 {
         laid.render_property(opacity_id, "opacity")
             .expect("RenderAnimatedOpacity should report its opacity diagnostic")
             .parse()

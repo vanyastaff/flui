@@ -12,13 +12,13 @@ fn shrink_wrapping_viewport_sizes_to_sliver_content() {
             SliverFixedExtentList::new(25.0, vec![SizedBox::square(10.0), SizedBox::square(10.0)])
                 .boxed(),
         ]),
-        BoxConstraints::new(px(300.0), px(300.0), px(0.0), px(1_000.0)),
+        BoxConstraints::new(300.0, 300.0, 0.0, 1_000.0),
     );
 
     let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
     assert_eq!(
         laid.size(viewport),
-        Size::new(px(300.0), px(50.0)),
+        Size::new(300.0, 50.0),
         "ShrinkWrappingViewport must take its height from the fixed-extent sliver"
     );
 }
@@ -38,13 +38,13 @@ fn shrink_wrapping_viewport_clamps_to_parent_max_height() {
             )
             .boxed(),
         ]),
-        BoxConstraints::new(px(300.0), px(300.0), px(0.0), px(120.0)),
+        BoxConstraints::new(300.0, 300.0, 0.0, 120.0),
     );
 
     let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
     assert_eq!(
         laid.size(viewport),
-        Size::new(px(300.0), px(120.0)),
+        Size::new(300.0, 120.0),
         "parent max height must clamp the shrink-wrapped content height"
     );
 }
@@ -57,7 +57,7 @@ fn shrink_wrapping_viewport_adopts_the_new_axis_on_rebuild() {
     // a vertical→horizontal axis change must flip the layout — this is a
     // regression guard for the axis staying stale from construction instead
     // of updating on rebuild.
-    let constraints = BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(300.0));
+    let constraints = BoxConstraints::new(0.0, 300.0, 0.0, 300.0);
     let content = || {
         vec![
             SliverFixedExtentList::new(25.0, vec![SizedBox::square(10.0), SizedBox::square(10.0)])
@@ -72,7 +72,7 @@ fn shrink_wrapping_viewport_adopts_the_new_axis_on_rebuild() {
     let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
     assert_eq!(
         laid.size(viewport),
-        Size::new(px(300.0), px(50.0)),
+        Size::new(300.0, 50.0),
         "vertical: height shrinks to the 50px content, width fills the 300 cross axis",
     );
 
@@ -83,7 +83,7 @@ fn shrink_wrapping_viewport_adopts_the_new_axis_on_rebuild() {
     let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
     assert_eq!(
         laid.size(viewport),
-        Size::new(px(50.0), px(300.0)),
+        Size::new(50.0, 300.0),
         "after rebuild to horizontal the reused render object must adopt the new \
          axis: width shrinks to the 50px content, height fills the 300 cross axis \
          (stays (300, 50) if the axis was left stale)",

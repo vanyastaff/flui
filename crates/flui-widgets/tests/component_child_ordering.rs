@@ -18,8 +18,8 @@ use flui_widgets::{Row, SizedBox};
 /// that builds to a fixed-size box one level down.
 #[derive(Clone, Debug, StatelessView)]
 struct BoxBuilder {
-    width: f32,
-    height: f32,
+    width: f64,
+    height: f64,
 }
 
 impl StatelessView for BoxBuilder {

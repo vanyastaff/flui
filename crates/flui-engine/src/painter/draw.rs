@@ -20,11 +20,7 @@ impl super::WgpuPainter {
     ///
     /// `paint.style` determines fill vs stroke; `paint.color` and
     /// `paint.blend_mode` are applied at composite time.
-    pub fn draw_rect(
-        &mut self,
-        rect: flui_types::Rect<flui_types::geometry::Pixels>,
-        paint: &flui_painting::Paint,
-    ) {
+    pub fn draw_rect(&mut self, rect: flui_types::Rect<f64>, paint: &flui_painting::Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::draw_rect: rect={:?}, paint={:?}", rect, paint);
 
@@ -67,7 +63,7 @@ impl super::WgpuPainter {
     /// the correct device-pixel space.
     pub fn draw_circle(
         &mut self,
-        center: flui_types::Point<flui_types::geometry::Pixels>,
+        center: flui_types::Point<f64>,
         radius: f32,
         paint: &flui_painting::Paint,
     ) {
@@ -97,11 +93,7 @@ impl super::WgpuPainter {
     /// rendered via the circle-SDF pipeline with a non-uniform transform that
     /// stretches the unit circle to the ellipse aspect ratio — no tessellation
     /// required.
-    pub fn draw_oval(
-        &mut self,
-        rect: flui_types::Rect<flui_types::geometry::Pixels>,
-        paint: &flui_painting::Paint,
-    ) {
+    pub fn draw_oval(&mut self, rect: flui_types::Rect<f64>, paint: &flui_painting::Paint) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::draw_oval: rect={:?}, paint={:?}", rect, paint);
 
@@ -126,7 +118,7 @@ impl super::WgpuPainter {
     /// analytical arc-SDF pipeline.
     pub fn draw_arc(
         &mut self,
-        rect: flui_types::Rect<flui_types::geometry::Pixels>,
+        rect: flui_types::Rect<f64>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
@@ -194,8 +186,8 @@ impl super::WgpuPainter {
     /// always stroked).
     pub fn draw_line(
         &mut self,
-        p1: flui_types::Point<flui_types::geometry::Pixels>,
-        p2: flui_types::Point<flui_types::geometry::Pixels>,
+        p1: flui_types::Point<f64>,
+        p2: flui_types::Point<f64>,
         paint: &flui_painting::Paint,
     ) {
         #[cfg(debug_assertions)]
@@ -224,14 +216,14 @@ impl super::WgpuPainter {
     pub fn draw_text(
         &mut self,
         text: &str,
-        position: flui_types::Point<flui_types::geometry::Pixels>,
+        position: flui_types::Point<f64>,
         font_size: f32,
         paint: &flui_painting::Paint,
     ) {
         let layout = flui_painting::TextLayout::new(
             text,
             None,
-            font_size,
+            f64::from(font_size),
             None,
             None,
             flui_types::typography::TextDirection::Ltr,
@@ -248,7 +240,7 @@ impl super::WgpuPainter {
     pub fn draw_paragraph(
         &mut self,
         layout: Arc<flui_painting::TextLayout>,
-        position: flui_types::Point<flui_types::geometry::Pixels>,
+        position: flui_types::Point<f64>,
         color: flui_types::styling::Color,
     ) {
         tracing::trace!(
@@ -303,7 +295,7 @@ impl super::WgpuPainter {
     pub fn draw_image(
         &mut self,
         image: &flui_types::painting::Image,
-        dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
+        dst_rect: flui_types::Rect<f64>,
         blend_mode: flui_painting::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_image(
@@ -325,7 +317,7 @@ impl super::WgpuPainter {
     pub fn draw_image_repeat(
         &mut self,
         image: &flui_types::painting::Image,
-        dst: flui_types::Rect<flui_types::geometry::Pixels>,
+        dst: flui_types::Rect<f64>,
         repeat: flui_types::painting::image::ImageRepeat,
         blend_mode: flui_painting::BlendMode,
     ) {
@@ -349,8 +341,8 @@ impl super::WgpuPainter {
     pub fn draw_image_nine_slice(
         &mut self,
         image: &flui_types::painting::Image,
-        center_slice: flui_types::Rect<flui_types::geometry::Pixels>,
-        dst: flui_types::Rect<flui_types::geometry::Pixels>,
+        center_slice: flui_types::Rect<f64>,
+        dst: flui_types::Rect<f64>,
         blend_mode: flui_painting::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_image_nine_slice(
@@ -374,7 +366,7 @@ impl super::WgpuPainter {
     pub fn draw_image_filtered(
         &mut self,
         image: &flui_types::painting::Image,
-        dst: flui_types::Rect<flui_types::geometry::Pixels>,
+        dst: flui_types::Rect<f64>,
         filter: flui_types::painting::image::ColorFilter,
         blend_mode: flui_painting::BlendMode,
     ) {
@@ -437,9 +429,9 @@ impl super::WgpuPainter {
     /// binding is missing).
     pub fn draw_vertices(
         &mut self,
-        vertices: &[flui_types::Point<flui_types::geometry::Pixels>],
+        vertices: &[flui_types::Point<f64>],
         colors: Option<&[flui_types::styling::Color]>,
-        tex_coords: Option<&[flui_types::Point<flui_types::geometry::Pixels>]>,
+        tex_coords: Option<&[flui_types::Point<f64>]>,
         indices: &[u16],
         paint: &flui_painting::Paint,
     ) {
@@ -463,7 +455,7 @@ impl super::WgpuPainter {
     pub fn draw_atlas(
         &mut self,
         image: &flui_types::painting::Image,
-        sprites: &[flui_types::Rect<flui_types::geometry::Pixels>],
+        sprites: &[flui_types::Rect<f64>],
         transforms: &[flui_types::Matrix4],
         colors: Option<&[flui_types::styling::Color]>,
         blend_mode: flui_painting::BlendMode,
@@ -471,11 +463,11 @@ impl super::WgpuPainter {
         // Convert Matrix4 transforms to pixel-space origins here, at the
         // painter boundary, so the batcher stays Matrix4-free (C4 rule).
         // Each transform is column-major; m[12] = x translation, m[13] = y.
-        let sprite_origins: Vec<flui_types::Offset<flui_types::geometry::Pixels>> = transforms
+        let sprite_origins: Vec<flui_types::Offset<f64>> = transforms
             .iter()
             .map(|t| flui_types::Offset {
-                dx: flui_types::geometry::px(t.m[12]),
-                dy: flui_types::geometry::px(t.m[13]),
+                dx: (t.m[12]),
+                dy: (t.m[13]),
             })
             .collect();
         crate::batches::DrawBatcher::draw_atlas(
@@ -506,8 +498,8 @@ impl super::WgpuPainter {
     pub fn draw_texture(
         &mut self,
         texture_id: flui_types::painting::TextureId,
-        dst: flui_types::Rect<flui_types::geometry::Pixels>,
-        src: Option<flui_types::Rect<flui_types::geometry::Pixels>>,
+        dst: flui_types::Rect<f64>,
+        src: Option<flui_types::Rect<f64>>,
         filter_quality: flui_types::painting::FilterQuality,
         opacity: f32,
     ) {
