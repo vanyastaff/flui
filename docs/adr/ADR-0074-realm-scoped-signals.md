@@ -4,6 +4,9 @@
   feature was removed by ADR-0085 §5). Derived values and effects (`Computed<T>`, `Effect`) are
   not part of this decision; they are designed in [ADR-0075](ADR-0075-derived-state-and-effects.md).
 - **Date:** 2026-09-22
+- **Revised:** 2026-09-28 — read, update and cross-thread command callbacks are retained
+  `FnMut` values invoked at most once, so their captures can be destroyed outside the callback
+  unwind boundary under separate panic containment.
 - **Supersedes:** the signals clause of FOUNDATIONS C1 (now §7's wording) and ADR-0008's
   "signals-as-default are rejected" (ADR-0008 has since been retired).
 - **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
@@ -114,13 +117,13 @@ pub struct Signal<T: 'static> { /* SignalSlot */ }
 impl<T> Signal<T> {
     // build-time reads: the building element becomes a reader
     pub fn get(self, cx: &dyn BuildContext) -> T where T: Clone;  // panics on a stale handle
-    pub fn with<R>(self, cx: &dyn BuildContext, f: impl FnOnce(&T) -> R) -> R;
+    pub fn with<R>(self, cx: &dyn BuildContext, f: impl FnMut(&T) -> R) -> R;
     pub fn try_get(self, cx: &dyn BuildContext) -> Result<T, SignalError>;
-    pub fn try_with<R>(self, cx: &dyn BuildContext, f: impl FnOnce(&T) -> R) -> Result<R, SignalError>;
+    pub fn try_with<R>(self, cx: &dyn BuildContext, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
     // outside build: callbacks, tests, realm commands
-    pub fn peek<R>(self, r: &Reactive, f: impl FnOnce(&T) -> R) -> Result<R, SignalError>;
+    pub fn peek<R>(self, r: &Reactive, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
     pub fn set(self, r: &Reactive, value: T) -> Result<(), SignalError>;  // marks readers, equal or not
-    pub fn update<R>(self, r: &Reactive, f: impl FnOnce(&mut T) -> R) -> Result<R, SignalError>;
+    pub fn update<R>(self, r: &Reactive, f: impl FnMut(&mut T) -> R) -> Result<R, SignalError>;
     pub fn set_if_changed(self, r: &Reactive, value: T) -> Result<bool, SignalError> where T: PartialEq;
     pub fn detach(self) -> SignalSender<T>;                                // the Send form (§5.8)
 }
@@ -296,7 +299,7 @@ A headless test builds the model with the binding's `reactive()`, writes with
 ### 5.8 Threads
 
 - `Signal` and `Reactive` are `!Send + !Sync`, realm-affine like the element tree (ADR-0027).
-- Cross-thread writes go through the realm proxy: `UiCommand::SignalWrite(Box<dyn FnOnce(&Reactive)
+- Cross-thread writes go through the realm proxy: `UiCommand::SignalWrite(Box<dyn FnMut(&Reactive)
   + Send>)` runs on the owner thread at the next idle drain, marks readers, and wakes a frame. The
   closure captures `signal.detach()` — a `Send + Sync` `SignalSender<T>` re-attached with
   `.attach()` on the owner side. If the command panics after a partial signal commit, the owning

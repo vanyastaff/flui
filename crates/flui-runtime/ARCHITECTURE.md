@@ -261,7 +261,9 @@ The rearm itself has realm-scoped delivery debt shared by every
 boolean latch, prevent an older overlapping successful wake from erasing a
 newer failed delivery. Later command ingress or a completed owner-inbox drain
 retries the newest unacknowledged generation; no retry is promised without a
-later host opportunity.
+later host opportunity. A send refused because the bounded inbox is full is
+also a host opportunity: it retries existing debt before returning the rejected
+command, because otherwise no successful ingress could reach the wake path.
 
 This is continuation safety, not rollback or callback isolation. The panic
 still leaves the dispatch boundary, and arbitrary external effects remain the

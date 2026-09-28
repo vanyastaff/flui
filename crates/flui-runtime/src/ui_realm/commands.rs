@@ -344,10 +344,32 @@ impl UiCommandSender {
                 self.wake_owner();
                 Ok(())
             }
-            Err(TrySendError::Full(rejected)) => Err(CommandSendError::ChannelFull {
-                capacity: self.capacity,
-                rejected,
-            }),
+            Err(TrySendError::Full(rejected)) => {
+                // A failed wake can leave the already-accepted command at the
+                // head of a full bounded inbox. No later send can succeed to
+                // reach the normal wake path, so backpressure itself must pay
+                // any outstanding delivery debt before returning its payload.
+                let wake = catch_unwind(AssertUnwindSafe(|| self.retry_wake_debt()));
+                if let Err(wake_payload) = wake {
+                    // The rejected command is no longer recoverable when the
+                    // wake unwinds. Dispose it under separate containment so
+                    // a hostile capture cannot double-panic over the wake.
+                    let disposed = catch_unwind(AssertUnwindSafe(|| drop(rejected))).err();
+                    let mut first_panic = Some(wake_payload);
+                    preserve_first_input_panic(
+                        &mut first_panic,
+                        disposed,
+                        "full-inbox rejected command disposal",
+                    );
+                    resume_unwind(
+                        first_panic.expect("BUG: the full-inbox wake panic must be preserved"),
+                    );
+                }
+                Err(CommandSendError::ChannelFull {
+                    capacity: self.capacity,
+                    rejected,
+                })
+            }
             Err(TrySendError::Disconnected(rejected)) => {
                 Err(CommandSendError::OwnerGone { rejected })
             }
