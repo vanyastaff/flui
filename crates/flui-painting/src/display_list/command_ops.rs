@@ -1,7 +1,7 @@
 //! `DrawCommand::bounds` — the per-op geometry a recorded command
 //! contributes to its [`DisplayList`](super::DisplayList)'s cached extent.
 
-use flui_types::geometry::{Pixels, Rect, Size};
+use flui_types::geometry::{Rect, Size};
 
 use super::command::{DrawCommand, DrawOp};
 
@@ -13,7 +13,7 @@ impl DrawCommand {
     /// Used to calculate the DisplayList's overall bounds. `None` for ops
     /// that draw nothing or draw everywhere (clips, scope markers, `Color`,
     /// `Paint`).
-    pub(crate) fn bounds(&self) -> Option<Rect<Pixels>> {
+    pub(crate) fn bounds(&self) -> Option<Rect<f64>> {
         self.op
             .local_bounds()
             .map(|local| self.transform.transform_rect(&local))
@@ -22,8 +22,8 @@ impl DrawCommand {
 
 /// Smallest-enclosing axis-aligned box of a point set, `None` when empty.
 fn point_bounds<'a>(
-    mut points: impl Iterator<Item = &'a flui_types::geometry::Point<Pixels>>,
-) -> Option<Rect<Pixels>> {
+    mut points: impl Iterator<Item = &'a flui_types::geometry::Point<f64>>,
+) -> Option<Rect<f64>> {
     let first = points.next()?;
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (first.x, first.y, first.x, first.y);
     for point in points {
@@ -38,30 +38,30 @@ fn point_bounds<'a>(
 impl DrawOp {
     /// The op's bounds in its own (pre-transform) coordinate space, with
     /// half the stroke width added where the paint strokes.
-    pub(crate) fn local_bounds(&self) -> Option<Rect<Pixels>> {
+    pub(crate) fn local_bounds(&self) -> Option<Rect<f64>> {
         match self {
             DrawOp::Rect { rect, paint } | DrawOp::Oval { rect, paint } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                Some(rect.expand(Pixels(outset)))
+                Some(rect.expand(outset))
             }
             DrawOp::Arc { rect, paint, .. } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                Some(rect.expand(Pixels(outset)))
+                Some(rect.expand(outset))
             }
             DrawOp::RRect { rrect, paint } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                Some(rrect.bounding_rect().expand(Pixels(outset)))
+                Some(rrect.bounding_rect().expand(outset))
             }
             DrawOp::DRRect { outer, paint, .. } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                Some(outer.bounding_rect().expand(Pixels(outset)))
+                Some(outer.bounding_rect().expand(outset))
             }
             DrawOp::Circle {
                 center,
                 radius,
                 paint,
             } => {
-                let effective_radius = *radius + Pixels(paint.effective_stroke_width() * 0.5);
+                let effective_radius = *radius + (paint.effective_stroke_width() * 0.5);
                 let size = Size::new(effective_radius * 2.0, effective_radius * 2.0);
                 Some(Rect::from_center_size(*center, size))
             }
@@ -71,18 +71,18 @@ impl DrawOp {
             | DrawOp::ImageFiltered { dst, .. }
             | DrawOp::Texture { dst, .. } => Some(*dst),
             DrawOp::Line { p1, p2, paint } => {
-                let stroke_half = Pixels(paint.effective_stroke_width() * 0.5);
+                let stroke_half = paint.effective_stroke_width() * 0.5;
                 point_bounds([p1, p2].into_iter()).map(|b| b.expand(stroke_half))
             }
             DrawOp::Path { path, paint } => {
                 let outset = paint.effective_stroke_width() * 0.5;
-                Some(path.compute_bounds().expand(Pixels(outset)))
+                Some(path.compute_bounds().expand(outset))
             }
             DrawOp::Shadow {
                 path, elevation, ..
-            } => Some(path.compute_bounds().expand(Pixels(*elevation))),
+            } => Some(path.compute_bounds().expand(*elevation)),
             DrawOp::Points { points, paint, .. } => {
-                let stroke_half = Pixels(paint.effective_stroke_width() * 0.5);
+                let stroke_half = paint.effective_stroke_width() * 0.5;
                 point_bounds(points.iter()).map(|b| b.expand(stroke_half))
             }
             DrawOp::Vertices { vertices, .. } => point_bounds(vertices.iter()),

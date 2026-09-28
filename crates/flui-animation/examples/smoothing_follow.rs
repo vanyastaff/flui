@@ -16,12 +16,12 @@ fn main() {
     //    diverges; exp_decay does not.
     println!("1. One second of following target=100 from 0:");
     for (label, fps) in [("30 fps", 30u32), ("120 fps", 120u32)] {
-        let dt = 1.0 / fps as f32;
+        let dt = 1.0 / fps as f64;
 
         // Broken pattern: x += (target - x) * 0.05 per FRAME.
-        let mut broken = 0.0_f32;
+        let mut broken = 0.0_f64;
         // Correct pattern: exponential decay with a 250 ms half-life.
-        let mut correct = 0.0_f32;
+        let mut correct = 0.0_f64;
         for _ in 0..fps {
             broken += (100.0 - broken) * 0.05;
             correct = exp_decay_half_life(correct, 100.0, 0.25, dt);
@@ -43,7 +43,7 @@ fn main() {
         if frame % 6 == 5 {
             println!(
                 "   t={:>4.0} ms  value={v:6.2}",
-                (frame + 1) as f32 * 1000.0 / 120.0
+                (frame + 1) as f64 * 1000.0 / 120.0
             );
         }
     }
@@ -53,13 +53,13 @@ fn main() {
     //    overshoots — the right tool for camera/scroll-indicator follow.
     println!("3. SmoothDamp follow with a max speed of 300 units/s:");
     let mut damp = SmoothDamp::new(0.25).with_max_speed(300.0);
-    let mut pos = 0.0_f32;
+    let mut pos = 0.0_f64;
     for frame in 0..48 {
         pos = damp.step(pos, 100.0, 1.0 / 120.0);
         if frame % 12 == 11 {
             println!(
                 "   t={:>4.0} ms  pos={pos:6.2}  velocity={:7.2}/s",
-                (frame + 1) as f32 * 1000.0 / 120.0,
+                (frame + 1) as f64 * 1000.0 / 120.0,
                 damp.velocity()
             );
         }

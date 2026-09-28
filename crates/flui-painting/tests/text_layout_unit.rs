@@ -4,7 +4,7 @@
 
 use flui_painting::TextLayout;
 use flui_types::{
-    geometry::{Offset, px},
+    geometry::Offset,
     typography::{TextDirection, TextPosition, TextRange},
 };
 
@@ -23,7 +23,7 @@ fn test_text_layout_caret_position() {
     let layout = TextLayout::new("Hello", None, 14.0, None, None, TextDirection::Ltr);
 
     let start_offset = layout.get_offset_for_caret(TextPosition::upstream(0));
-    assert!(start_offset.dx >= px(0.0));
+    assert!(start_offset.dx >= 0.0);
 
     let mid_offset = layout.get_offset_for_caret(TextPosition::upstream(2));
     assert!(mid_offset.dx > start_offset.dx);
@@ -36,10 +36,10 @@ fn test_text_layout_caret_position() {
 fn test_text_layout_hit_test() {
     let layout = TextLayout::new("Hello", None, 14.0, None, None, TextDirection::Ltr);
 
-    let pos = layout.get_position_for_offset(Offset::new(px(0.0), px(5.0)));
+    let pos = layout.get_position_for_offset(Offset::new(0.0, 5.0));
     assert_eq!(pos.offset, 0);
 
-    let pos = layout.get_position_for_offset(Offset::new(px(1000.0), px(5.0)));
+    let pos = layout.get_position_for_offset(Offset::new(1000.0, 5.0));
     assert!(pos.offset <= 5);
 }
 
@@ -64,8 +64,8 @@ fn test_text_layout_selection_boxes() {
     assert!(!boxes.is_empty());
 
     let first_box = &boxes[0];
-    assert!(first_box.rect.width() > px(0.0));
-    assert!(first_box.rect.height() > px(0.0));
+    assert!(first_box.rect.width() > 0.0);
+    assert!(first_box.rect.height() > 0.0);
 }
 
 #[test]

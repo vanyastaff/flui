@@ -29,7 +29,7 @@ fn update_curve_direction(direction: &Mutex<Option<AnimationStatus>>, status: An
 
 /// An animation that applies a curve to another animation.
 ///
-/// Takes an `Animation<f32>` (typically an `AnimationController`) and applies
+/// Takes an `Animation<f64>` (typically an `AnimationController`) and applies
 /// an easing curve to transform the linear 0.0..1.0 progression into a
 /// non-linear progression.
 ///
@@ -52,7 +52,7 @@ fn update_curve_direction(direction: &Mutex<Option<AnimationStatus>>, status: An
 /// ```
 #[derive(Clone)]
 pub struct CurvedAnimation<C: Curve + Clone + Send + Sync> {
-    parent: Arc<dyn Animation<f32>>,
+    parent: Arc<dyn Animation<f64>>,
     curve: C,
     reverse_curve: Option<C>,
     notifier: Arc<ChangeNotifier>,
@@ -78,7 +78,7 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
     /// * `parent` - The parent animation (typically 0.0 to 1.0)
     /// * `curve` - The curve to apply
     #[must_use]
-    pub fn new(parent: Arc<dyn Animation<f32>>, curve: C) -> Self {
+    pub fn new(parent: Arc<dyn Animation<f64>>, curve: C) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
         let parent_sub = link_parent(&parent, &notifier);
 
@@ -140,9 +140,9 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
     }
 }
 
-impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> Animation<f32> for CurvedAnimation<C> {
+impl<C: Curve + Clone + Send + Sync + fmt::Debug + 'static> Animation<f64> for CurvedAnimation<C> {
     #[inline]
-    fn value(&self) -> f32 {
+    fn value(&self) -> f64 {
         let t = self.parent.value();
         let curve = self.current_curve();
         curve.transform(t)
@@ -205,7 +205,7 @@ mod tests {
         ));
 
         let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f32>>,
+            controller.clone() as Arc<dyn Animation<f64>>,
             Curves::EaseIn,
         );
 
@@ -227,7 +227,7 @@ mod tests {
         ));
 
         let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f32>>,
+            controller.clone() as Arc<dyn Animation<f64>>,
             Curves::Linear,
         );
 
@@ -252,7 +252,7 @@ mod tests {
             &scheduler,
         ));
         let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f32>>,
+            controller.clone() as Arc<dyn Animation<f64>>,
             Curves::Linear,
         );
 
@@ -288,7 +288,7 @@ mod tests {
         // Forward curve is the identity cubic; the reverse curve is strongly
         // sub-linear at t=0.5, so any curve swap is observable there.
         let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f32>>,
+            controller.clone() as Arc<dyn Animation<f64>>,
             Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
         )
         .with_reverse_curve(Curves::EaseInQuint);
@@ -336,7 +336,7 @@ mod tests {
             &scheduler,
         ));
         let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f32>>,
+            controller.clone() as Arc<dyn Animation<f64>>,
             Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
         )
         .with_reverse_curve(Curves::EaseInQuint);
@@ -368,7 +368,7 @@ mod tests {
             &scheduler,
         ));
         let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f32>>,
+            controller.clone() as Arc<dyn Animation<f64>>,
             Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
         )
         .with_reverse_curve(Curves::EaseInQuint);
@@ -404,7 +404,7 @@ mod tests {
         let _ = controller.forward(); // already Forward before CurvedAnimation exists
 
         let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f32>>,
+            controller.clone() as Arc<dyn Animation<f64>>,
             Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
         )
         .with_reverse_curve(Curves::EaseInQuint);
@@ -438,7 +438,7 @@ mod tests {
         let before = controller.debug_value_listener_count();
         {
             let _curved = CurvedAnimation::new(
-                controller.clone() as Arc<dyn Animation<f32>>,
+                controller.clone() as Arc<dyn Animation<f64>>,
                 Curves::Linear,
             );
             assert_eq!(

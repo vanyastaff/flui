@@ -26,7 +26,7 @@
 /// that sum to the same elapsed time land on the same value.
 #[inline]
 #[must_use]
-pub fn exp_decay(current: f32, target: f32, lambda: f32, dt: f32) -> f32 {
+pub fn exp_decay(current: f64, target: f64, lambda: f64, dt: f64) -> f64 {
     target + (current - target) * (-lambda * dt).exp()
 }
 
@@ -36,11 +36,11 @@ pub fn exp_decay(current: f32, target: f32, lambda: f32, dt: f32) -> f32 {
 /// `half_life <= 0` snaps to the target (interpreted as "no smoothing").
 #[inline]
 #[must_use]
-pub fn exp_decay_half_life(current: f32, target: f32, half_life: f32, dt: f32) -> f32 {
+pub fn exp_decay_half_life(current: f64, target: f64, half_life: f64, dt: f64) -> f64 {
     if half_life <= 0.0 {
         return target;
     }
-    exp_decay(current, target, core::f32::consts::LN_2 / half_life, dt)
+    exp_decay(current, target, core::f64::consts::LN_2 / half_life, dt)
 }
 
 /// A value that follows a (possibly moving) target with exponential decay.
@@ -58,16 +58,16 @@ pub fn exp_decay_half_life(current: f32, target: f32, half_life: f32, dt: f32) -
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Smoothed {
-    value: f32,
-    target: f32,
-    half_life: f32,
+    value: f64,
+    target: f64,
+    half_life: f64,
 }
 
 impl Smoothed {
     /// Create at `value`, targeting itself (at rest), with the given
     /// half-life in seconds.
     #[must_use]
-    pub fn new(value: f32, half_life: f32) -> Self {
+    pub fn new(value: f64, half_life: f64) -> Self {
         Self {
             value,
             target: value,
@@ -78,39 +78,39 @@ impl Smoothed {
     /// Current smoothed value.
     #[inline]
     #[must_use]
-    pub fn value(&self) -> f32 {
+    pub fn value(&self) -> f64 {
         self.value
     }
 
     /// Current target.
     #[inline]
     #[must_use]
-    pub fn target(&self) -> f32 {
+    pub fn target(&self) -> f64 {
         self.target
     }
 
     /// Retarget without disturbing the current value (the decay follows).
     #[inline]
-    pub fn set_target(&mut self, target: f32) {
+    pub fn set_target(&mut self, target: f64) {
         self.target = target;
     }
 
     /// Change the half-life (seconds).
     #[inline]
-    pub fn set_half_life(&mut self, half_life: f32) {
+    pub fn set_half_life(&mut self, half_life: f64) {
         self.half_life = half_life;
     }
 
     /// Snap to a value and stop (target = value).
     #[inline]
-    pub fn snap_to(&mut self, value: f32) {
+    pub fn snap_to(&mut self, value: f64) {
         self.value = value;
         self.target = value;
     }
 
     /// Advance by `dt` seconds; returns the new value.
     #[inline]
-    pub fn tick(&mut self, dt: f32) -> f32 {
+    pub fn tick(&mut self, dt: f64) -> f64 {
         self.value = exp_decay_half_life(self.value, self.target, self.half_life, dt);
         self.value
     }
@@ -118,7 +118,7 @@ impl Smoothed {
     /// Whether the value is within `tolerance` of the target.
     #[inline]
     #[must_use]
-    pub fn is_settled(&self, tolerance: f32) -> bool {
+    pub fn is_settled(&self, tolerance: f64) -> bool {
         (self.value - self.target).abs() <= tolerance
     }
 }
@@ -137,27 +137,27 @@ impl Smoothed {
 /// outside that range.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SmoothDamp {
-    velocity: f32,
+    velocity: f64,
     /// Approximate time (seconds) to reach the target. Smaller = stiffer.
-    pub smooth_time: f32,
-    /// Maximum speed in value-units/second. `f32::INFINITY` disables the clamp.
-    pub max_speed: f32,
+    pub smooth_time: f64,
+    /// Maximum speed in value-units/second. `f64::INFINITY` disables the clamp.
+    pub max_speed: f64,
 }
 
 impl SmoothDamp {
     /// Create with the given smooth-time (seconds) and no speed limit.
     #[must_use]
-    pub fn new(smooth_time: f32) -> Self {
+    pub fn new(smooth_time: f64) -> Self {
         Self {
             velocity: 0.0,
             smooth_time,
-            max_speed: f32::INFINITY,
+            max_speed: f64::INFINITY,
         }
     }
 
     /// Builder: cap the follow speed (value-units per second).
     #[must_use]
-    pub fn with_max_speed(mut self, max_speed: f32) -> Self {
+    pub fn with_max_speed(mut self, max_speed: f64) -> Self {
         self.max_speed = max_speed;
         self
     }
@@ -165,7 +165,7 @@ impl SmoothDamp {
     /// Current velocity (value-units per second).
     #[inline]
     #[must_use]
-    pub fn velocity(&self) -> f32 {
+    pub fn velocity(&self) -> f64 {
         self.velocity
     }
 
@@ -178,7 +178,7 @@ impl SmoothDamp {
     /// Advance `current` toward `target` by `dt` seconds; returns the new
     /// position. Velocity state is updated in place.
     #[must_use]
-    pub fn step(&mut self, current: f32, target: f32, dt: f32) -> f32 {
+    pub fn step(&mut self, current: f64, target: f64, dt: f64) -> f64 {
         // Guard degenerate inputs: a zero/negative smooth_time means "snap".
         let smooth_time = self.smooth_time.max(0.0001);
         let omega = 2.0 / smooth_time;
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn exp_decay_is_frame_rate_independent() {
         // Same wall-clock time, different step counts -> same result.
-        let (start, target, half_life) = (0.0_f32, 100.0_f32, 0.25_f32);
+        let (start, target, half_life) = (0.0_f64, 100.0_f64, 0.25_f64);
 
         let mut at_30fps = start;
         for _ in 0..30 {
@@ -271,8 +271,8 @@ mod tests {
     #[test]
     fn smooth_damp_converges_without_overshoot() {
         let mut damp = SmoothDamp::new(0.2);
-        let mut pos = 0.0_f32;
-        let mut max_seen = 0.0_f32;
+        let mut pos = 0.0_f64;
+        let mut max_seen = 0.0_f64;
         for _ in 0..240 {
             pos = damp.step(pos, 100.0, 1.0 / 120.0);
             max_seen = max_seen.max(pos);
@@ -290,7 +290,7 @@ mod tests {
     #[test]
     fn smooth_damp_respects_max_speed() {
         let mut damp = SmoothDamp::new(0.05).with_max_speed(50.0);
-        let mut pos = 0.0_f32;
+        let mut pos = 0.0_f64;
         let dt = 1.0 / 120.0;
         let mut prev = pos;
         for _ in 0..120 {
@@ -311,7 +311,7 @@ mod tests {
         // in the OLD direction (momentum), unlike a stateless lerp which
         // would immediately reverse.
         let mut damp = SmoothDamp::new(0.15);
-        let mut pos = 0.0_f32;
+        let mut pos = 0.0_f64;
         let dt = 1.0 / 120.0;
         for _ in 0..30 {
             pos = damp.step(pos, 100.0, dt);

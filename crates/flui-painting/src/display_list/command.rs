@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, RSuperellipse, Rect},
+    geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Rect},
     painting::{Image, Path},
     styling::Color,
 };
@@ -52,7 +52,7 @@ pub enum DrawOp {
     /// Clip to a rectangle.
     ClipRect {
         /// Rectangle to clip to.
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         /// Set operation (Intersect or Difference).
         clip_op: ClipOp,
         /// Anti-aliasing behavior.
@@ -107,9 +107,9 @@ pub enum DrawOp {
     /// Draw a line.
     Line {
         /// Start point.
-        p1: Point<Pixels>,
+        p1: Point<f64>,
         /// End point.
-        p2: Point<Pixels>,
+        p2: Point<f64>,
         /// Paint style (color, stroke width, etc.).
         paint: Arc<Paint>,
     },
@@ -117,7 +117,7 @@ pub enum DrawOp {
     /// Draw a rectangle.
     Rect {
         /// Rectangle to draw.
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         /// Paint style.
         paint: Arc<Paint>,
     },
@@ -133,9 +133,9 @@ pub enum DrawOp {
     /// Draw a circle.
     Circle {
         /// Center point.
-        center: Point<Pixels>,
+        center: Point<f64>,
         /// Radius.
-        radius: Pixels,
+        radius: f64,
         /// Paint style.
         paint: Arc<Paint>,
     },
@@ -143,7 +143,7 @@ pub enum DrawOp {
     /// Draw an oval (ellipse).
     Oval {
         /// Bounding rectangle.
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         /// Paint style.
         paint: Arc<Paint>,
     },
@@ -168,7 +168,7 @@ pub enum DrawOp {
         /// The shaped text.
         layout: Arc<TextLayout>,
         /// Top-left of the paragraph's box.
-        offset: Offset<Pixels>,
+        offset: Offset<f64>,
         /// The colour of every glyph that has no span colour of its own.
         color: Color,
     },
@@ -179,7 +179,7 @@ pub enum DrawOp {
         /// Image.
         image: Image,
         /// Destination rectangle.
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         /// Optional paint (for tinting, etc.).
         paint: Option<Arc<Paint>>,
     },
@@ -189,7 +189,7 @@ pub enum DrawOp {
         /// Image to tile.
         image: Image,
         /// Destination rectangle to fill.
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         /// How to repeat the image.
         repeat: ImageRepeat,
         /// Optional paint (for tinting, opacity, etc.).
@@ -201,9 +201,9 @@ pub enum DrawOp {
         /// Image to draw.
         image: Image,
         /// Center slice rectangle within the image (in image coords).
-        center_slice: Rect<Pixels>,
+        center_slice: Rect<f64>,
         /// Destination rectangle.
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         /// Optional paint (for tinting, opacity, etc.).
         paint: Option<Arc<Paint>>,
     },
@@ -213,7 +213,7 @@ pub enum DrawOp {
         /// Image to draw.
         image: Image,
         /// Destination rectangle.
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         /// Color filter to apply.
         filter: ColorFilter,
         /// Optional paint (for additional effects).
@@ -226,13 +226,13 @@ pub enum DrawOp {
         /// GPU texture identifier.
         texture_id: TextureId,
         /// Destination rectangle.
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         /// Source rectangle within the texture (None = entire texture).
-        src: Option<Rect<Pixels>>,
+        src: Option<Rect<f64>>,
         /// Filter quality for texture sampling.
         filter_quality: FilterQuality,
         /// Opacity (0.0 = transparent, 1.0 = opaque).
-        opacity: f32,
+        opacity: f64,
     },
 
     // === Effects ===
@@ -243,7 +243,7 @@ pub enum DrawOp {
         /// Shadow color.
         color: Color,
         /// Elevation (blur amount).
-        elevation: f32,
+        elevation: f64,
     },
 
     // === Gradient Drawing Commands ===
@@ -252,11 +252,11 @@ pub enum DrawOp {
     /// Draw an arc segment.
     Arc {
         /// Bounding rectangle for the ellipse.
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         /// Start angle in radians.
-        start_angle: f32,
+        start_angle: f64,
         /// Sweep angle in radians.
-        sweep_angle: f32,
+        sweep_angle: f64,
         /// Whether to draw from center (pie slice) or just the arc.
         use_center: bool,
         /// Paint style.
@@ -278,7 +278,7 @@ pub enum DrawOp {
         /// Point drawing mode.
         mode: PointMode,
         /// Points to draw.
-        points: Vec<Point<Pixels>>,
+        points: Vec<Point<f64>>,
         /// Paint style.
         paint: Arc<Paint>,
     },
@@ -287,11 +287,11 @@ pub enum DrawOp {
     /// coordinates.
     Vertices {
         /// Vertex positions.
-        vertices: Vec<Point<Pixels>>,
+        vertices: Vec<Point<f64>>,
         /// Optional vertex colors (must match vertices length).
         colors: Option<Vec<Color>>,
         /// Optional texture coordinates (must match vertices length).
-        tex_coords: Option<Vec<Point<Pixels>>>,
+        tex_coords: Option<Vec<Point<f64>>>,
         /// Triangle indices (groups of 3).
         indices: Vec<u16>,
         /// Paint style.
@@ -317,7 +317,7 @@ pub enum DrawOp {
         /// Source image (atlas texture).
         image: Image,
         /// Source rectangles in atlas (sprite locations).
-        sprites: Vec<Rect<Pixels>>,
+        sprites: Vec<Rect<f64>>,
         /// Destination transforms for each sprite.
         transforms: Vec<Matrix4>,
         /// Optional colors to blend with each sprite.
@@ -333,7 +333,7 @@ pub enum DrawOp {
     /// layer.
     SaveLayer {
         /// Bounds of the layer (None = unbounded).
-        bounds: Option<Rect<Pixels>>,
+        bounds: Option<Rect<f64>>,
         /// Paint to apply when compositing the layer.
         paint: Arc<Paint>,
     },
@@ -373,21 +373,21 @@ mod tests {
     /// The wire type has a size budget: every recorded command is one of
     /// these in a `Vec`, and every consumer walks that `Vec` once per frame.
     ///
-    /// `DrawOp` is two cache lines; the fattest variant is `ImageFiltered`,
-    /// whose inline `ColorFilter::Matrix` is a 5×4 `f32` matrix (80 bytes).
-    /// A new variant or field that pushes past this budget boxes its payload
-    /// instead (as `Paragraph` already carries its layout behind an `Arc`).
-    /// `DrawCommand` adds the 64-byte `Matrix4`.
+    /// Commands carry logical `f64` geometry; the engine narrows to `f32` when it ingests
+    /// them (ADR-0098 §2). The fattest `DrawOp` variant is `ImageFiltered`, whose inline
+    /// `ColorFilter::Matrix` is a 5×4 matrix. A new variant or field that pushes past this
+    /// budget boxes its payload instead (as `Paragraph` already carries its layout behind an
+    /// `Arc`). `DrawCommand` adds the 128-byte `Matrix4`.
     #[test]
     fn draw_command_fits_its_budget() {
         assert!(
-            size_of::<DrawOp>() <= 128,
-            "DrawOp is {} bytes; the budget is 128",
+            size_of::<DrawOp>() <= 224,
+            "DrawOp is {} bytes; the budget is 224",
             size_of::<DrawOp>()
         );
         assert!(
-            size_of::<DrawCommand>() <= 192,
-            "DrawCommand is {} bytes; the budget is 192",
+            size_of::<DrawCommand>() <= 352,
+            "DrawCommand is {} bytes; the budget is 352",
             size_of::<DrawCommand>()
         );
     }

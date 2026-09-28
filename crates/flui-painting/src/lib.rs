@@ -14,7 +14,7 @@
 //! canvas.save();
 //! canvas.translate(10.0, 10.0);
 //! canvas.draw_rect(
-//!     Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
+//!     Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
 //!     &Paint::fill(Color::RED),
 //! );
 //! canvas.restore();

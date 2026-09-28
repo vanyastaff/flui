@@ -37,7 +37,7 @@ fn shaping_never_bumps_the_generation() {
     let fonts = shared_font_system();
     let before = fonts.generation();
     for _ in 0..3 {
-        painter("shape me").layout(0.0, f32::INFINITY);
+        painter("shape me").layout(0.0, f64::INFINITY);
         fonts.shape(|shaper| {
             let _ = shaper.resolve_font(None);
         });
@@ -68,17 +68,17 @@ fn register_font_bumps_the_generation_once() {
 fn register_font_invalidates_a_laid_out_painter() {
     let fonts = shared_font_system();
     let mut painter = probe_painter("iiii wwww");
-    painter.layout(0.0, f32::INFINITY);
+    painter.layout(0.0, f64::INFINITY);
     let before = painter.size();
     // Same constraints: without a registration this is the cached early
     // return, and the size cannot change.
-    painter.layout(0.0, f32::INFINITY);
+    painter.layout(0.0, f64::INFINITY);
     assert_eq!(painter.size(), before);
 
     fonts
         .register_font(PROBE_MONO)
         .expect("the probe face loads");
-    painter.layout(0.0, f32::INFINITY);
+    painter.layout(0.0, f64::INFINITY);
     assert_ne!(
         painter.size(),
         before,
@@ -99,8 +99,8 @@ fn icon_fonts_measure_before_any_engine_exists() {
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new("\u{e87d}").with_style(style))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, f32::INFINITY);
-    let width = painter.size().width.0;
+    painter.layout(0.0, f64::INFINITY);
+    let width = painter.size().width;
     assert!(
         width > 10.0,
         "the icon glyph must have a real advance, got {width}"

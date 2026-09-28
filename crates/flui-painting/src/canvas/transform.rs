@@ -8,7 +8,7 @@ use super::Canvas;
 impl Canvas {
     /// Translates the coordinate system.
     #[inline]
-    pub fn translate(&mut self, dx: f32, dy: f32) {
+    pub fn translate(&mut self, dx: f64, dy: f64) {
         debug_assert!(dx.is_finite(), "Canvas::translate dx must be finite");
         debug_assert!(dy.is_finite(), "Canvas::translate dy must be finite");
         let translation = Matrix4::translation(dx, dy, 0.0);
@@ -17,7 +17,7 @@ impl Canvas {
 
     /// Scales the coordinate system with separate factors for each axis.
     #[inline]
-    pub fn scale(&mut self, sx: f32, sy: f32) {
+    pub fn scale(&mut self, sx: f64, sy: f64) {
         debug_assert!(sx.is_finite(), "Canvas::scale sx must be finite");
         debug_assert!(sy.is_finite(), "Canvas::scale sy must be finite");
         let scaling = Matrix4::scaling(sx, sy, 1.0);
@@ -26,7 +26,7 @@ impl Canvas {
 
     /// Rotates the coordinate system around the origin.
     #[inline]
-    pub fn rotate(&mut self, radians: f32) {
+    pub fn rotate(&mut self, radians: f64) {
         debug_assert!(radians.is_finite(), "Canvas::rotate radians must be finite");
         let rotation = Matrix4::rotation_z(radians);
         self.transform *= rotation;
@@ -37,7 +37,7 @@ impl Canvas {
     /// Useful for italic text effects, parallax, and perspective-like
     /// distortions.
     #[inline]
-    pub fn skew(&mut self, sx: f32, sy: f32) {
+    pub fn skew(&mut self, sx: f64, sy: f64) {
         debug_assert!(sx.is_finite(), "Canvas::skew sx must be finite");
         debug_assert!(sy.is_finite(), "Canvas::skew sy must be finite");
         let skew_matrix = Matrix4::new(

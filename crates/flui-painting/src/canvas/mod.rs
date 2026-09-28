@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use flui_types::geometry::{Matrix4, Pixels, Rect};
+use flui_types::geometry::{Matrix4, Rect};
 
 use crate::display_list::{DisplayList, DrawCommand, DrawOp, Paint};
 
@@ -35,9 +35,9 @@ pub(crate) use state::CanvasState;
 /// let mut canvas = Canvas::new();
 /// canvas.save();
 /// canvas.translate(50.0, 50.0);
-/// canvas.rotate(std::f32::consts::FRAC_PI_4);
+/// canvas.rotate(std::f64::consts::FRAC_PI_4);
 /// canvas.draw_rect(
-///     Rect::from_ltrb(px(10.0), px(10.0), px(100.0), px(100.0)),
+///     Rect::from_ltrb(10.0, 10.0, 100.0, 100.0),
 ///     &Paint::fill(Color::RED),
 /// );
 /// canvas.restore();
@@ -173,7 +173,7 @@ impl Canvas {
     /// `None` when none has yet.
     #[inline]
     #[must_use]
-    pub fn bounds(&self) -> Option<Rect<Pixels>> {
+    pub fn bounds(&self) -> Option<Rect<f64>> {
         self.display_list.bounds()
     }
 }

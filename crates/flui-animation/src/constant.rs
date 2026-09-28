@@ -172,7 +172,7 @@ where
 /// assert_eq!(ALWAYS_COMPLETE.value(), 1.0);
 /// assert_eq!(ALWAYS_COMPLETE.status(), AnimationStatus::Completed);
 /// ```
-pub static ALWAYS_COMPLETE: ConstantAnimation<f32> = ConstantAnimation {
+pub static ALWAYS_COMPLETE: ConstantAnimation<f64> = ConstantAnimation {
     value: 1.0,
     status: AnimationStatus::Completed,
 };
@@ -193,7 +193,7 @@ pub static ALWAYS_COMPLETE: ConstantAnimation<f32> = ConstantAnimation {
 /// assert_eq!(ALWAYS_DISMISSED.value(), 0.0);
 /// assert_eq!(ALWAYS_DISMISSED.status(), AnimationStatus::Dismissed);
 /// ```
-pub static ALWAYS_DISMISSED: ConstantAnimation<f32> = ConstantAnimation {
+pub static ALWAYS_DISMISSED: ConstantAnimation<f64> = ConstantAnimation {
     value: 0.0,
     status: AnimationStatus::Dismissed,
 };

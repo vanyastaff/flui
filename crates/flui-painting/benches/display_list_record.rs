@@ -15,7 +15,7 @@ use std::hint::black_box;
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use flui_painting::{Canvas, DisplayList, Paint};
 use flui_types::{
-    geometry::{Point, RRect, Rect, px},
+    geometry::{Point, RRect, Rect},
     painting::Path,
     styling::Color,
 };
@@ -28,40 +28,33 @@ fn record_scene(canvas: &mut Canvas, path: &Path) {
     let fill = Paint::fill(Color::rgb(30, 60, 90));
     let stroke = Paint::stroke(Color::rgb(240, 240, 240), 2.0);
     canvas.save();
-    canvas.clip_rect(Rect::from_xywh(px(0.0), px(0.0), px(800.0), px(600.0)));
-    canvas.draw_rect(
-        Rect::from_xywh(px(0.0), px(0.0), px(800.0), px(600.0)),
-        &fill,
-    );
+    canvas.clip_rect(Rect::from_xywh(0.0, 0.0, 800.0, 600.0));
+    canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 800.0, 600.0), &fill);
     canvas.draw_path(path, &stroke);
     for i in 0..16 {
-        let x = px(i as f32 * 48.0);
-        canvas.draw_rect(Rect::from_xywh(x, px(10.0), px(40.0), px(40.0)), &fill);
+        let x = i as f64 * 48.0;
+        canvas.draw_rect(Rect::from_xywh(x, 10.0, 40.0, 40.0), &fill);
         canvas.draw_rrect(
-            RRect::from_rect_circular(Rect::from_xywh(x, px(60.0), px(40.0), px(40.0)), px(8.0)),
+            RRect::from_rect_circular(Rect::from_xywh(x, 60.0, 40.0, 40.0), 8.0),
             &stroke,
         );
     }
     canvas.save();
     canvas.translate(100.0, 100.0);
-    canvas.draw_circle(Point::new(px(0.0), px(0.0)), px(20.0), &fill);
-    canvas.draw_line(
-        Point::new(px(0.0), px(0.0)),
-        Point::new(px(50.0), px(50.0)),
-        &stroke,
-    );
+    canvas.draw_circle(Point::new(0.0, 0.0), 20.0, &fill);
+    canvas.draw_line(Point::new(0.0, 0.0), Point::new(50.0, 50.0), &stroke);
     canvas.restore();
     canvas.restore();
 }
 
 fn star_path() -> Path {
     let mut path = Path::new();
-    path.move_to(Point::new(px(50.0), px(0.0)));
+    path.move_to(Point::new(50.0, 0.0));
     for i in 1..5 {
-        let angle = i as f32 * 4.0 * std::f32::consts::PI / 5.0;
+        let angle = i as f64 * 4.0 * std::f64::consts::PI / 5.0;
         path.line_to(Point::new(
-            px(50.0 + 50.0 * angle.sin()),
-            px(50.0 - 50.0 * angle.cos()),
+            50.0 + 50.0 * angle.sin(),
+            50.0 - 50.0 * angle.cos(),
         ));
     }
     path.close();

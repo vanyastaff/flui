@@ -34,7 +34,7 @@
 //! the tree can resolve child identities, because a node stores its children
 //! as arena ids.
 
-use flui_types::{Matrix4, Rect, geometry::Pixels};
+use flui_types::{Matrix4, Rect};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
@@ -82,7 +82,7 @@ pub struct SemanticsNodeData {
     /// Text direction.
     pub text_direction: Option<TextDirection>,
     /// Bounding rectangle.
-    pub rect: Rect<Pixels>,
+    pub rect: Rect<f64>,
     /// Transform matrix.
     pub transform: Matrix4,
     /// Stable identities of this node's addressable children, in child order.

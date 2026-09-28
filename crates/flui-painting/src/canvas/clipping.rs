@@ -6,7 +6,7 @@
 //! its clip stack when it replays the matching `Restore` command.
 
 use flui_types::{
-    geometry::{Pixels, RRect, RSuperellipse, Rect},
+    geometry::{RRect, RSuperellipse, Rect},
     painting::{Clip, ClipOp, Path},
 };
 
@@ -15,7 +15,7 @@ use crate::display_list::DrawOp;
 
 impl Canvas {
     /// Clips to a rectangle (intersect, anti-aliased).
-    pub fn clip_rect(&mut self, rect: Rect<Pixels>) {
+    pub fn clip_rect(&mut self, rect: Rect<f64>) {
         self.clip_rect_ext(rect, ClipOp::default(), Clip::default());
     }
 
@@ -38,7 +38,7 @@ impl Canvas {
     }
 
     /// Clips to a rectangle with an explicit operation and behaviour.
-    pub fn clip_rect_ext(&mut self, rect: Rect<Pixels>, clip_op: ClipOp, clip_behavior: Clip) {
+    pub fn clip_rect_ext(&mut self, rect: Rect<f64>, clip_op: ClipOp, clip_behavior: Clip) {
         self.push_clip(clip_behavior, || DrawOp::ClipRect {
             rect,
             clip_op,
@@ -90,14 +90,14 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::{Radius, px};
+    use flui_types::geometry::Radius;
 
     use super::*;
 
     fn make_rse() -> RSuperellipse {
         RSuperellipse::from_rect_and_radius(
-            Rect::from_ltwh(px(10.0), px(20.0), px(100.0), px(50.0)),
-            Radius::circular(px(8.0)),
+            Rect::from_ltwh(10.0, 20.0, 100.0, 50.0),
+            Radius::circular(8.0),
         )
     }
 
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn clip_none_records_nothing() {
         let mut canvas = Canvas::new();
-        let rect = Rect::from_xywh(px(10.0), px(10.0), px(50.0), px(50.0));
+        let rect = Rect::from_xywh(10.0, 10.0, 50.0, 50.0);
 
         canvas.clip_rect_ext(rect, ClipOp::Intersect, Clip::None);
         assert!(canvas.display_list().is_empty());

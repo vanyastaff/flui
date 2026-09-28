@@ -61,8 +61,8 @@ pub enum AnimationOperator {
 /// controller2.set_value(0.3);
 ///
 /// let compound = CompoundAnimation::new(
-///     controller1 as Arc<dyn Animation<f32>>,
-///     controller2 as Arc<dyn Animation<f32>>,
+///     controller1 as Arc<dyn Animation<f64>>,
+///     controller2 as Arc<dyn Animation<f64>>,
 ///     AnimationOperator::Add,
 /// );
 ///
@@ -70,8 +70,8 @@ pub enum AnimationOperator {
 /// ```
 #[derive(Clone)]
 pub struct CompoundAnimation {
-    first: Arc<dyn Animation<f32>>,
-    next: Arc<dyn Animation<f32>>,
+    first: Arc<dyn Animation<f64>>,
+    next: Arc<dyn Animation<f64>>,
     operator: AnimationOperator,
     notifier: Arc<ChangeNotifier>,
     /// Re-emit both children's value changes to our listeners; removed on last drop.
@@ -89,8 +89,8 @@ impl CompoundAnimation {
     /// * `operator` - The operator to combine them with
     #[must_use]
     pub fn new(
-        first: Arc<dyn Animation<f32>>,
-        next: Arc<dyn Animation<f32>>,
+        first: Arc<dyn Animation<f64>>,
+        next: Arc<dyn Animation<f64>>,
         operator: AnimationOperator,
     ) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
@@ -109,19 +109,19 @@ impl CompoundAnimation {
 
     /// Create a compound animation that adds two animations.
     #[must_use]
-    pub fn add(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
+    pub fn add(first: Arc<dyn Animation<f64>>, next: Arc<dyn Animation<f64>>) -> Self {
         Self::new(first, next, AnimationOperator::Add)
     }
 
     /// Create a compound animation that subtracts the second animation from the first.
     #[must_use]
-    pub fn subtract(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
+    pub fn subtract(first: Arc<dyn Animation<f64>>, next: Arc<dyn Animation<f64>>) -> Self {
         Self::new(first, next, AnimationOperator::Subtract)
     }
 
     /// Create a compound animation that multiplies two animations.
     #[must_use]
-    pub fn multiply(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
+    pub fn multiply(first: Arc<dyn Animation<f64>>, next: Arc<dyn Animation<f64>>) -> Self {
         Self::new(first, next, AnimationOperator::Multiply)
     }
 
@@ -129,19 +129,19 @@ impl CompoundAnimation {
     ///
     /// Note: Division by zero will produce infinity or NaN.
     #[must_use]
-    pub fn divide(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
+    pub fn divide(first: Arc<dyn Animation<f64>>, next: Arc<dyn Animation<f64>>) -> Self {
         Self::new(first, next, AnimationOperator::Divide)
     }
 
     /// Create a compound animation that returns the minimum of two animations.
     #[must_use]
-    pub fn min(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
+    pub fn min(first: Arc<dyn Animation<f64>>, next: Arc<dyn Animation<f64>>) -> Self {
         Self::new(first, next, AnimationOperator::Min)
     }
 
     /// Create a compound animation that returns the maximum of two animations.
     #[must_use]
-    pub fn max(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
+    pub fn max(first: Arc<dyn Animation<f64>>, next: Arc<dyn Animation<f64>>) -> Self {
         Self::new(first, next, AnimationOperator::Max)
     }
 
@@ -171,20 +171,20 @@ impl CompoundAnimation {
     /// controller2.set_value(0.8);
     ///
     /// let mean = CompoundAnimation::mean(
-    ///     controller1 as Arc<dyn Animation<f32>>,
-    ///     controller2 as Arc<dyn Animation<f32>>,
+    ///     controller1 as Arc<dyn Animation<f64>>,
+    ///     controller2 as Arc<dyn Animation<f64>>,
     /// );
     ///
     /// assert_eq!(mean.value(), 0.6);  // (0.4 + 0.8) / 2
     /// ```
     #[must_use]
-    pub fn mean(first: Arc<dyn Animation<f32>>, next: Arc<dyn Animation<f32>>) -> Self {
+    pub fn mean(first: Arc<dyn Animation<f64>>, next: Arc<dyn Animation<f64>>) -> Self {
         Self::new(first, next, AnimationOperator::Mean)
     }
 
     /// Apply the operator to two values.
     #[inline]
-    fn apply_operator(&self, a: f32, b: f32) -> f32 {
+    fn apply_operator(&self, a: f64, b: f64) -> f64 {
         match self.operator {
             AnimationOperator::Add => a + b,
             AnimationOperator::Subtract => a - b,
@@ -192,14 +192,14 @@ impl CompoundAnimation {
             AnimationOperator::Divide => a / b,
             AnimationOperator::Min => a.min(b),
             AnimationOperator::Max => a.max(b),
-            AnimationOperator::Mean => f32::midpoint(a, b),
+            AnimationOperator::Mean => f64::midpoint(a, b),
         }
     }
 }
 
-impl Animation<f32> for CompoundAnimation {
+impl Animation<f64> for CompoundAnimation {
     #[inline]
-    fn value(&self) -> f32 {
+    fn value(&self) -> f64 {
         let first_value = self.first.value();
         let next_value = self.next.value();
         self.apply_operator(first_value, next_value)
@@ -257,7 +257,7 @@ mod tests {
     use flui_scheduler::UpdateScheduler;
     use std::time::Duration;
 
-    fn create_controller(value: f32) -> Arc<AnimationController> {
+    fn create_controller(value: f64) -> Arc<AnimationController> {
         let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
@@ -273,8 +273,8 @@ mod tests {
         let controller2 = create_controller(0.3);
 
         let compound = CompoundAnimation::add(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            controller2.clone() as Arc<dyn Animation<f32>>,
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            controller2.clone() as Arc<dyn Animation<f64>>,
         );
 
         assert_eq!(compound.value(), 0.8);
@@ -289,8 +289,8 @@ mod tests {
         let controller2 = create_controller(0.3);
 
         let compound = CompoundAnimation::subtract(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            controller2.clone() as Arc<dyn Animation<f32>>,
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            controller2.clone() as Arc<dyn Animation<f64>>,
         );
 
         assert!((compound.value() - 0.5).abs() < 1e-6);
@@ -305,8 +305,8 @@ mod tests {
         let controller2 = create_controller(0.4);
 
         let compound = CompoundAnimation::multiply(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            controller2.clone() as Arc<dyn Animation<f32>>,
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            controller2.clone() as Arc<dyn Animation<f64>>,
         );
 
         assert!((compound.value() - 0.2).abs() < 1e-6);
@@ -321,8 +321,8 @@ mod tests {
         let controller2 = create_controller(0.4);
 
         let compound = CompoundAnimation::divide(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            controller2.clone() as Arc<dyn Animation<f32>>,
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            controller2.clone() as Arc<dyn Animation<f64>>,
         );
 
         assert!((compound.value() - 2.0).abs() < 1e-6);
@@ -337,8 +337,8 @@ mod tests {
         let controller2 = create_controller(0.3);
 
         let compound = CompoundAnimation::min(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            controller2.clone() as Arc<dyn Animation<f32>>,
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            controller2.clone() as Arc<dyn Animation<f64>>,
         );
 
         assert_eq!(compound.value(), 0.3);
@@ -353,8 +353,8 @@ mod tests {
         let controller2 = create_controller(0.3);
 
         let compound = CompoundAnimation::max(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            controller2.clone() as Arc<dyn Animation<f32>>,
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            controller2.clone() as Arc<dyn Animation<f64>>,
         );
 
         assert_eq!(compound.value(), 0.7);
@@ -373,8 +373,8 @@ mod tests {
         let controller2 = create_controller(0.0);
 
         let compound = CompoundAnimation::add(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            controller2.clone() as Arc<dyn Animation<f32>>,
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            controller2.clone() as Arc<dyn Animation<f64>>,
         );
 
         assert_eq!(compound.status(), AnimationStatus::Dismissed);
@@ -392,8 +392,8 @@ mod tests {
         let controller2 = create_controller(0.8);
 
         let compound = CompoundAnimation::mean(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            controller2.clone() as Arc<dyn Animation<f32>>,
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            controller2.clone() as Arc<dyn Animation<f64>>,
         );
 
         assert!((compound.value() - 0.6).abs() < 1e-6);
@@ -408,13 +408,13 @@ mod tests {
         let controller2 = create_controller(0.8);
 
         let mean1 = CompoundAnimation::mean(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            controller2.clone() as Arc<dyn Animation<f32>>,
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            controller2.clone() as Arc<dyn Animation<f64>>,
         );
 
         let mean2 = CompoundAnimation::mean(
-            controller2.clone() as Arc<dyn Animation<f32>>,
-            controller1.clone() as Arc<dyn Animation<f32>>,
+            controller2.clone() as Arc<dyn Animation<f64>>,
+            controller1.clone() as Arc<dyn Animation<f64>>,
         );
 
         // Mean should be symmetric

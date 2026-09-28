@@ -14,7 +14,7 @@
 //! their stable identities, not the structural input that produced them.
 
 use flui_foundation::SemanticsId;
-use flui_types::{Matrix4, Rect, geometry::Pixels};
+use flui_types::{Matrix4, Rect};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
@@ -191,7 +191,7 @@ pub struct SemanticsNodeSnapshot {
     tags: Box<[SemanticsTag]>,
     sort_key: Option<SemanticsSortKey>,
     hint_overrides: Option<SemanticsHintOverrides>,
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
     transform: Matrix4,
     platform_view_id: Option<i32>,
     max_value_length: Option<i32>,
@@ -369,7 +369,7 @@ impl SemanticsNodeSnapshot {
     /// Returns the node bounds in the semantics coordinate space.
     #[inline]
     #[must_use]
-    pub const fn rect(&self) -> Rect<Pixels> {
+    pub const fn rect(&self) -> Rect<f64> {
         self.rect
     }
 
@@ -464,7 +464,7 @@ mod tests {
         let handler_capture = Arc::clone(&callback_capture);
 
         let render_id = RenderId::new(17);
-        let rect = Rect::from_xywh(px(1.0), px(2.0), px(30.0), px(40.0));
+        let rect = Rect::from_xywh(1.0, 2.0, 30.0, 40.0);
         let transform = Matrix4::translation(5.0, 6.0, 0.0);
         let mut node = SemanticsNode::new().with_source_render_id(render_id);
         node.set_rect(rect);

@@ -4,7 +4,7 @@
 
 use flui_painting::{Canvas, TextBaseline, TextPainter};
 use flui_types::{
-    geometry::{Offset, px},
+    geometry::Offset,
     typography::{TextAlign, TextDirection, TextPosition, TextSpan},
 };
 
@@ -84,7 +84,7 @@ fn test_get_offset_for_caret() {
     let mid = painter.get_offset_for_caret(TextPosition::upstream(5));
     let end = painter.get_offset_for_caret(TextPosition::upstream(13));
 
-    assert!(start.dx >= px(0.0));
+    assert!(start.dx >= 0.0);
     assert!(mid.dx > start.dx);
     assert!(end.dx > mid.dx);
 }
@@ -97,10 +97,10 @@ fn test_get_position_for_offset() {
 
     painter.layout(0.0, 200.0);
 
-    let pos = painter.get_position_for_offset(Offset::new(px(0.0), px(5.0)));
+    let pos = painter.get_position_for_offset(Offset::new(0.0, 5.0));
     assert_eq!(pos.offset, 0);
 
-    let pos = painter.get_position_for_offset(Offset::new(px(1000.0), px(5.0)));
+    let pos = painter.get_position_for_offset(Offset::new(1000.0, 5.0));
     assert!(pos.offset <= 5);
 }
 
@@ -130,8 +130,8 @@ fn test_get_boxes_for_selection() {
     assert!(!boxes.is_empty());
 
     let first_box = &boxes[0];
-    assert!(first_box.rect.width() > px(0.0));
-    assert!(first_box.rect.height() > px(0.0));
+    assert!(first_box.rect.width() > 0.0);
+    assert!(first_box.rect.height() > 0.0);
 }
 
 #[test]
@@ -162,15 +162,15 @@ fn painted_span_contributes_its_laid_out_box_to_display_list_bounds() {
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new("Hello, FLUI!"))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, f32::INFINITY);
+    painter.layout(0.0, f64::INFINITY);
 
     let size = painter.size();
     assert!(
-        size.width > px(0.0) && size.height > px(0.0),
+        size.width > 0.0 && size.height > 0.0,
         "precondition: the text must lay out to a non-empty box, got {size:?}"
     );
 
-    let origin = Offset::new(px(7.0), px(11.0));
+    let origin = Offset::new(7.0, 11.0);
     let mut canvas = Canvas::new();
     painter.paint(&mut canvas, origin);
     let bounds = canvas.finish().bounds().expect("a painted span has bounds");
@@ -313,14 +313,14 @@ fn max_lines_with_ellipsis_keeps_positive_min_intrinsic_and_still_truncates_layo
     // Dry layout still enforces truncation — distinct from width intrinsics.
     let dry = painter.dry_size(0.0, 40.0);
     assert!(
-        dry.width.0 > 0.0 && dry.width.0 <= 40.0 + 0.01,
+        dry.width > 0.0 && dry.width <= 40.0 + 0.01,
         "dry layout under narrow width must stay within the constraint, got {}",
-        dry.width.0
+        dry.width
     );
     assert!(
-        dry.width.0 + 0.01 < max,
+        dry.width + 0.01 < max,
         "truncated dry width {} must be narrower than max intrinsic {max}",
-        dry.width.0
+        dry.width
     );
 
     painter.layout(0.0, 40.0);

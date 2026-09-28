@@ -26,7 +26,7 @@ fn main() {
     println!("blue -> yellow, 11 steps:");
     println!("    t     sRGB (r,g,b)  sum    Oklab (r,g,b)  sum");
     for i in 0..=10 {
-        let t = i as f32 / 10.0;
+        let t = i as f64 / 10.0;
         let s = srgb.transform(t);
         let o = oklab.transform(t);
         println!(

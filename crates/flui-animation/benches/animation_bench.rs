@@ -24,14 +24,14 @@ use flui_animation::{
     Curves, FloatTween, OklabColorTween, Simulation, SpringDescription, SpringSimulation, Tween,
 };
 use flui_scheduler::UpdateScheduler;
-use flui_types::geometry::{Offset, px};
+use flui_types::geometry::Offset;
 use flui_types::styling::Color;
 
 fn tween_transform(c: &mut Criterion) {
     let mut group = c.benchmark_group("tween_transform");
 
     let f = FloatTween::new(0.0, 100.0);
-    group.bench_function("f32", |b| {
+    group.bench_function("f64", |b| {
         b.iter(|| black_box(f.transform(black_box(0.37))));
     });
 
@@ -47,10 +47,7 @@ fn tween_transform(c: &mut Criterion) {
         b.iter(|| black_box(oklab.transform(black_box(0.37))));
     });
 
-    let off = Tween::new(
-        Offset::new(px(0.0), px(0.0)),
-        Offset::new(px(100.0), px(200.0)),
-    );
+    let off = Tween::new(Offset::new(0.0, 0.0), Offset::new(100.0, 200.0));
     group.bench_function("offset", |b| {
         b.iter(|| black_box(off.transform(black_box(0.37))));
     });
@@ -93,7 +90,7 @@ fn smoothing_step(c: &mut Criterion) {
     });
 
     let mut damp = SmoothDamp::new(0.2);
-    let mut pos = 0.0_f32;
+    let mut pos = 0.0_f64;
     group.bench_function("smooth_damp_step", |b| {
         b.iter(|| {
             pos = damp.step(black_box(pos), black_box(100.0), black_box(1.0 / 120.0));
@@ -115,7 +112,7 @@ fn spring_step(c: &mut Criterion) {
     );
     group.bench_function("simulation_x_dx", |b| {
         b.iter(|| {
-            let t = black_box(0.1_f32);
+            let t = black_box(0.1_f64);
             black_box((sim.x(t), sim.dx(t)))
         });
     });
@@ -148,7 +145,7 @@ fn controller_tick(c: &mut Criterion) {
     });
 
     // Reading a curved combinator's value goes through one Arc<dyn> hop.
-    let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
     let curved = CurvedAnimation::new(parent, Curves::EaseInOut);
     group.bench_function("curved_value", |b| {
         b.iter(|| black_box(curved.value()));

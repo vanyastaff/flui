@@ -5,19 +5,19 @@
 //! it does for a real downstream user.
 
 // The derive copies fields verbatim and the asserted values are exactly
-// representable in f32, so exact-equality round-trip assertions are correct.
+// representable in f64, so exact-equality round-trip assertions are correct.
 
 use flui_animation::{Animatable, AnimatedValue, SpringDescription, TwoWayConverter};
 
 #[derive(Clone, Animatable)]
 struct Translation {
-    x: f32,
-    y: f32,
-    z: f32,
+    x: f64,
+    y: f64,
+    z: f64,
 }
 
 #[derive(Clone, Animatable)]
-struct Pair(f32, f32);
+struct Pair(f64, f64);
 
 #[test]
 fn named_struct_round_trips_through_vector() {

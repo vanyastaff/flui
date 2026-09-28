@@ -217,8 +217,8 @@ mod derive_owner_tests {
 
     #[derive(Clone, flui_macros::Animatable)]
     struct Point {
-        x: f32,
-        y: f32,
+        x: f64,
+        y: f64,
     }
 
     #[test]

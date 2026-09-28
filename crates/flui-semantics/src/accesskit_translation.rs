@@ -458,10 +458,10 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     }
 
     node.set_bounds(Rect {
-        x0: f64::from(data.rect.left().0),
-        y0: f64::from(data.rect.top().0),
-        x1: f64::from(data.rect.right().0),
-        y1: f64::from(data.rect.bottom().0),
+        x0: f64::from(data.rect.left()),
+        y0: f64::from(data.rect.top()),
+        x1: f64::from(data.rect.right()),
+        y1: f64::from(data.rect.bottom()),
     });
 
     if let Some(position) = data.scroll_position {
@@ -1279,7 +1279,7 @@ mod tests {
     #[test]
     fn bounds_carry_the_nodes_rect() {
         let data = SemanticsNodeData {
-            rect: Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)),
+            rect: Rect::from_xywh(10.0, 20.0, 100.0, 50.0),
             ..Default::default()
         };
         let bounds = translate(&data).bounds().expect("bounds are always set");
@@ -1626,7 +1626,7 @@ mod owner_entry_point_tests {
         let mut owner = SemanticsOwner::new_without_callback();
 
         let mut node = SemanticsNode::new().with_source_render_id(source());
-        node.set_rect(Rect::from_xywh(px(0.0), px(0.0), px(200.0), px(100.0)));
+        node.set_rect(Rect::from_xywh(0.0, 0.0, 200.0, 100.0));
         let root = owner.tree_mut().insert(node);
         owner.tree_mut().set_root(Some(root));
 

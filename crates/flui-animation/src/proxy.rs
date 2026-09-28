@@ -63,14 +63,14 @@ fn fan_out_status(listeners: &Mutex<StatusListeners>, status: AnimationStatus) {
 ///     &scheduler,
 /// ));
 ///
-/// let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);
+/// let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f64>>);
 ///
 /// // Later, swap to a different animation
 /// let controller2 = Arc::new(AnimationController::new(
 ///     Duration::from_millis(500),
 ///     &scheduler,
 /// ));
-/// proxy.set_parent(controller2 as Arc<dyn Animation<f32>>);
+/// proxy.set_parent(controller2 as Arc<dyn Animation<f64>>);
 /// ```
 #[derive(Clone)]
 pub struct ProxyAnimation<T>
@@ -247,7 +247,7 @@ mod tests {
             &scheduler,
         ));
 
-        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);
+        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f64>>);
 
         controller1.set_value(0.5);
         assert_eq!(proxy.value(), 0.5);
@@ -258,7 +258,7 @@ mod tests {
             &scheduler,
         ));
         controller2.set_value(0.75);
-        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f32>>);
+        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f64>>);
 
         assert_eq!(proxy.value(), 0.75);
 
@@ -274,7 +274,7 @@ mod tests {
             &scheduler,
         ));
 
-        let proxy = ProxyAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
+        let proxy = ProxyAnimation::new(controller.clone() as Arc<dyn Animation<f64>>);
 
         assert_eq!(proxy.status(), AnimationStatus::Dismissed);
 
@@ -299,7 +299,7 @@ mod tests {
             &scheduler,
         ));
 
-        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);
+        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f64>>);
 
         let hits = Arc::new(AtomicUsize::new(0));
         let hits2 = Arc::clone(&hits);
@@ -309,7 +309,7 @@ mod tests {
 
         // Both parents are Dismissed: the swap itself must NOT fire (status
         // unchanged across the swap, Flutter parity).
-        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f32>>);
+        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f64>>);
         assert_eq!(hits.load(Ordering::SeqCst), 0);
 
         // A transition on the NEW parent must reach the proxy's listener.
@@ -345,7 +345,7 @@ mod tests {
         ));
         controller2.set_value(1.0); // Completed
 
-        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);
+        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f64>>);
 
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen2 = Arc::clone(&seen);
@@ -355,7 +355,7 @@ mod tests {
 
         // Dismissed -> Completed across the swap must fire once with the new
         // status (Flutter `ProxyAnimation.parent=` parity).
-        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f32>>);
+        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f64>>);
         assert_eq!(seen.lock().as_slice(), &[AnimationStatus::Completed]);
 
         controller1.dispose();
@@ -374,7 +374,7 @@ mod tests {
             &scheduler,
         ));
 
-        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f32>>);
+        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f64>>);
 
         let hits = Arc::new(AtomicUsize::new(0));
         let hits2 = Arc::clone(&hits);
@@ -382,7 +382,7 @@ mod tests {
             hits2.fetch_add(1, Ordering::SeqCst);
         }));
 
-        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f32>>);
+        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f64>>);
         // The id was issued by the proxy, so removal must work regardless of
         // which parent is current.
         proxy.remove_status_listener(id);

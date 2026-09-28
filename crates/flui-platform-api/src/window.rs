@@ -6,7 +6,7 @@
 //! `flui_platform::Platform` that opens windows (which stays in
 //! `flui-platform`, ADR-0082 §2) use in their signatures.
 
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
+use flui_types::geometry::{Bounds, Point, Size};
 
 // ==================== Creation ====================
 
@@ -44,7 +44,7 @@ pub struct WindowOptions {
     /// Window title
     pub title: String,
     /// Initial window size (logical pixels)
-    pub size: Size<Pixels>,
+    pub size: Size<f64>,
     /// Whether window is resizable
     pub resizable: bool,
     /// Whether the window should be visible initially.
@@ -63,18 +63,16 @@ pub struct WindowOptions {
     /// Whether window is decorated (has title bar)
     pub decorated: bool,
     /// Minimum window size
-    pub min_size: Option<Size<Pixels>>,
+    pub min_size: Option<Size<f64>>,
     /// Maximum window size
-    pub max_size: Option<Size<Pixels>>,
+    pub max_size: Option<Size<f64>>,
 }
 
 impl Default for WindowOptions {
     fn default() -> Self {
-        use flui_types::geometry::px;
-
         Self {
             title: "FLUI Window".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             resizable: true,
             visible: true,
             reveal: WindowReveal::AtOpen,
@@ -132,19 +130,19 @@ pub enum WindowMode {
     /// Window is minimized (iconified)
     Minimized {
         /// Bounds before minimization for restoration
-        previous: Bounds<DevicePixels>,
+        previous: Bounds<i32>,
     },
 
     /// Window is maximized
     Maximized {
         /// Bounds before maximization for restoration
-        previous: Bounds<DevicePixels>,
+        previous: Bounds<i32>,
     },
 
     /// Window is in fullscreen mode
     Fullscreen {
         /// Bounds before fullscreen for restoration
-        restore_bounds: Bounds<DevicePixels>,
+        restore_bounds: Bounds<i32>,
     },
 }
 
@@ -256,11 +254,11 @@ pub enum WindowBackgroundAppearance {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WindowBounds {
     /// Normal windowed mode with specific bounds
-    Windowed(Bounds<Pixels>),
+    Windowed(Bounds<f64>),
     /// Maximized with bounds
-    Maximized(Bounds<Pixels>),
+    Maximized(Bounds<f64>),
     /// Fullscreen with bounds
-    Fullscreen(Bounds<Pixels>),
+    Fullscreen(Bounds<f64>),
 }
 
 /// Failure to apply a cursor to one exact platform window.
@@ -331,7 +329,7 @@ pub enum WindowEvent {
         /// The window that was resized
         window_id: WindowId,
         /// New client-area size in device pixels
-        size: Size<DevicePixels>,
+        size: Size<i32>,
     },
 
     /// Window scale factor (DPI) changed
@@ -353,7 +351,7 @@ pub enum WindowEvent {
         /// The window that was moved
         window_id: WindowId,
         /// New top-left position in logical pixels
-        position: Point<Pixels>,
+        position: Point<f64>,
     },
 
     /// Window was minimized (iconified)
@@ -367,7 +365,7 @@ pub enum WindowEvent {
         /// The window that was maximized
         window_id: WindowId,
         /// Maximized client-area size in device pixels
-        size: Size<DevicePixels>,
+        size: Size<i32>,
     },
 
     /// Window was restored from minimized or maximized state
@@ -375,7 +373,7 @@ pub enum WindowEvent {
         /// The window that was restored
         window_id: WindowId,
         /// Restored client-area size in device pixels
-        size: Size<DevicePixels>,
+        size: Size<i32>,
     },
 
     /// Window entered fullscreen mode
@@ -383,7 +381,7 @@ pub enum WindowEvent {
         /// The window that entered fullscreen
         window_id: WindowId,
         /// Size of the fullscreen window (monitor size)
-        size: Size<DevicePixels>,
+        size: Size<i32>,
     },
 
     /// Window exited fullscreen mode
@@ -391,6 +389,6 @@ pub enum WindowEvent {
         /// The window that left fullscreen
         window_id: WindowId,
         /// Restored window size
-        size: Size<DevicePixels>,
+        size: Size<i32>,
     },
 }

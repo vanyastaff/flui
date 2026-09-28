@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use flui_types::{
-    geometry::{Offset, Pixels, Size},
+    geometry::{Offset, Size},
     typography::{InlineSpan, TextAlign, TextDirection, TextStyle},
 };
 
@@ -18,7 +18,7 @@ impl TextPainter {
     ///
     /// Panics if `text` or `text_direction` is not set.
     #[expect(clippy::expect_used)] // Documented precondition: text and text_direction must be set
-    pub fn layout(&mut self, min_width: f32, max_width: f32) {
+    pub fn layout(&mut self, min_width: f64, max_width: f64) {
         // NaN is forbidden, but `+INFINITY` is the documented "no max
         // width" sentinel — `compute_paint_offset` and the cosmic-text
         // path below detect `!is_finite()` and skip alignment shifts /
@@ -31,8 +31,8 @@ impl TextPainter {
         let font_generation = crate::shared_font_system().generation();
         if let Some(cache) = &self.layout_cache
             && cache.font_generation == font_generation
-            && (cache.min_width - min_width).abs() < f32::EPSILON
-            && (cache.max_width - max_width).abs() < f32::EPSILON
+            && (cache.min_width - min_width).abs() < f64::EPSILON
+            && (cache.max_width - max_width).abs() < f64::EPSILON
         {
             return;
         }
@@ -60,12 +60,12 @@ impl TextPainter {
         let (max_metrics, _) = self.compute_layout_metrics(
             text,
             0.0,
-            f32::INFINITY,
+            f64::INFINITY,
             LineOverflow::IgnoreForWidthIntrinsic,
         );
         let ellipsis_floor = self.ellipsis_width_floor(text);
-        let min_intrinsic_width = min_metrics.size.width.0.max(ellipsis_floor);
-        let max_intrinsic_width = max_metrics.size.width.0.max(ellipsis_floor);
+        let min_intrinsic_width = min_metrics.size.width.max(ellipsis_floor);
+        let max_intrinsic_width = max_metrics.size.width.max(ellipsis_floor);
 
         self.layout_cache = Some(TextLayoutCache {
             font_generation,
@@ -108,13 +108,13 @@ impl TextPainter {
     fn compute_layout_metrics(
         &self,
         text: &InlineSpan,
-        min_width: f32,
-        max_width: f32,
+        min_width: f64,
+        max_width: f64,
         line_overflow: LineOverflow,
     ) -> (LayoutMetrics, TextLayout) {
         let font_size = text
             .style()
-            .and_then(|s| s.font_size.map(|f| f as f32))
+            .and_then(|s| s.font_size.map(|f| f as f64))
             .unwrap_or(DEFAULT_FONT_SIZE);
 
         let scaled_font_size = font_size * self.text_scale_factor;
@@ -165,7 +165,7 @@ impl TextPainter {
         let paint_offset = self.compute_paint_offset(width, max_width);
 
         let metrics = LayoutMetrics {
-            size: Size::new(Pixels(width), Pixels(layout_result.height)),
+            size: Size::new(width, layout_result.height),
             alphabetic_baseline: layout_result.alphabetic_baseline,
             ideographic_baseline,
             did_exceed_max_lines,
@@ -181,7 +181,7 @@ impl TextPainter {
     /// prefix is exhausted, so width intrinsics must not report a value
     /// narrower than that ellipsis even when line-count truncation is skipped
     /// for the main probe (#1085 follow-up).
-    fn ellipsis_width_floor(&self, text: &InlineSpan) -> f32 {
+    fn ellipsis_width_floor(&self, text: &InlineSpan) -> f64 {
         let Some(ellipsis) = self.ellipsis.as_deref().filter(|e| !e.is_empty()) else {
             return 0.0;
         };
@@ -191,7 +191,7 @@ impl TextPainter {
 
         let font_size = text
             .style()
-            .and_then(|s| s.font_size.map(|f| f as f32))
+            .and_then(|s| s.font_size.map(|f| f as f64))
             .unwrap_or(DEFAULT_FONT_SIZE);
         let scaled_font_size = font_size * self.text_scale_factor;
         let direction = self.text_direction.unwrap_or(TextDirection::Ltr);
@@ -209,11 +209,7 @@ impl TextPainter {
     }
 
     /// Computes the paint offset based on text alignment.
-    pub(super) fn compute_paint_offset(
-        &self,
-        content_width: f32,
-        max_width: f32,
-    ) -> Offset<Pixels> {
+    pub(super) fn compute_paint_offset(&self, content_width: f64, max_width: f64) -> Offset<f64> {
         if !max_width.is_finite() {
             return Offset::ZERO;
         }
@@ -236,7 +232,7 @@ impl TextPainter {
             },
         };
 
-        Offset::new(Pixels(dx), Pixels(0.0))
+        Offset::new(dx, 0.0)
     }
 
     // ===== Metrics =====
@@ -248,7 +244,7 @@ impl TextPainter {
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
     #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
-    pub fn size(&self) -> Size<Pixels> {
+    pub fn size(&self) -> Size<f64> {
         self.layout_cache
             .as_ref()
             .expect("layout() must be called before accessing size")
@@ -257,14 +253,14 @@ impl TextPainter {
 
     /// Returns the computed width after layout.
     #[must_use]
-    pub fn width(&self) -> f32 {
-        self.size().width.0
+    pub fn width(&self) -> f64 {
+        self.size().width
     }
 
     /// Returns the computed height after layout.
     #[must_use]
-    pub fn height(&self) -> f32 {
-        self.size().height.0
+    pub fn height(&self) -> f64 {
+        self.size().height
     }
 
     /// Returns the distance from the top to the alphabetic baseline.
@@ -274,7 +270,7 @@ impl TextPainter {
     /// Panics if [`layout`](Self::layout) has not been called.
     #[must_use]
     #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
-    pub fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> f32 {
+    pub fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> f64 {
         let cache = self
             .layout_cache
             .as_ref()
@@ -321,7 +317,7 @@ impl TextPainter {
     /// (O(1) after `layout()`). Falls back to a fresh cosmic-text layout
     /// when called before `layout()`.
     #[must_use]
-    pub fn max_intrinsic_width(&self) -> f32 {
+    pub fn max_intrinsic_width(&self) -> f64 {
         if let Some(cache) = &self.layout_cache {
             return cache.max_intrinsic_width;
         }
@@ -331,10 +327,10 @@ impl TextPainter {
         let (metrics, _) = self.compute_layout_metrics(
             text,
             0.0,
-            f32::INFINITY,
+            f64::INFINITY,
             LineOverflow::IgnoreForWidthIntrinsic,
         );
-        metrics.size.width.0.max(self.ellipsis_width_floor(text))
+        metrics.size.width.max(self.ellipsis_width_floor(text))
     }
 
     /// The narrowest width the text can take without overflowing — the
@@ -351,7 +347,7 @@ impl TextPainter {
     /// (O(1) after `layout()`). Falls back to a fresh cosmic-text layout
     /// when called before `layout()`.
     #[must_use]
-    pub fn min_intrinsic_width(&self) -> f32 {
+    pub fn min_intrinsic_width(&self) -> f64 {
         if let Some(cache) = &self.layout_cache {
             return cache.min_intrinsic_width;
         }
@@ -360,14 +356,14 @@ impl TextPainter {
         };
         let (metrics, _) =
             self.compute_layout_metrics(text, 0.0, 0.0, LineOverflow::IgnoreForWidthIntrinsic);
-        metrics.size.width.0.max(self.ellipsis_width_floor(text))
+        metrics.size.width.max(self.ellipsis_width_floor(text))
     }
 
     /// The height the text takes when laid out at `width` — both the min
     /// and max intrinsic height for a paragraph (Flutter
     /// `RenderParagraph._computeIntrinsicHeight`).
     #[must_use]
-    pub fn intrinsic_height(&self, width: f32) -> f32 {
+    pub fn intrinsic_height(&self, width: f64) -> f64 {
         let Some(text) = self.text.as_ref() else {
             return 0.0;
         };
@@ -376,7 +372,7 @@ impl TextPainter {
         // `width.max(min_width)` — an infinite `width` probe would otherwise
         // make that field infinite.
         let (metrics, _) = self.compute_layout_metrics(text, 0.0, width, LineOverflow::Enforce);
-        metrics.size.height.0
+        metrics.size.height
     }
 
     /// The size the text would take under the given width constraints,
@@ -384,7 +380,7 @@ impl TextPainter {
     /// `TextPainter`-backed dry layout. Returns `Size::ZERO` when no text
     /// is set.
     #[must_use]
-    pub fn dry_size(&self, min_width: f32, max_width: f32) -> Size<Pixels> {
+    pub fn dry_size(&self, min_width: f64, max_width: f64) -> Size<f64> {
         let Some(text) = self.text.as_ref() else {
             return Size::ZERO;
         };
@@ -399,10 +395,10 @@ impl TextPainter {
     #[must_use]
     pub fn dry_baseline(
         &self,
-        min_width: f32,
-        max_width: f32,
+        min_width: f64,
+        max_width: f64,
         baseline: TextBaseline,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         let text = self.text.as_ref()?;
         let (metrics, _) =
             self.compute_layout_metrics(text, min_width, max_width, LineOverflow::Enforce);
@@ -440,12 +436,12 @@ enum LineOverflow {
 /// walk.
 pub(crate) fn collect_styled_spans(
     span: &InlineSpan,
-    scale: f32,
+    scale: f64,
 ) -> Vec<(String, Option<TextStyle>)> {
     fn walk(
         span: &flui_types::typography::TextSpan,
         inherited: Option<&TextStyle>,
-        scale: f32,
+        scale: f64,
         out: &mut Vec<(String, Option<TextStyle>)>,
     ) {
         let merged: Option<TextStyle> = match (inherited, span.style.as_ref()) {

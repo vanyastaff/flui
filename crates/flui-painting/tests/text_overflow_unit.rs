@@ -72,7 +72,7 @@ fn color_change_keeps_the_shaped_layout() {
         (painter.compute_distance_to_actual_baseline(flui_painting::TextBaseline::Alphabetic)
             - baseline_before)
             .abs()
-            < f32::EPSILON
+            < f64::EPSILON
     );
 
     // Identical span → no invalidation at all.
@@ -127,7 +127,7 @@ fn rich_child_span_styles_reach_the_shaper() {
     let mut rich_painter = TextPainter::new()
         .with_text(rich)
         .with_text_direction(TextDirection::Ltr);
-    rich_painter.layout(0.0, f32::INFINITY);
+    rich_painter.layout(0.0, f64::INFINITY);
 
     let mut flat_painter = TextPainter::new()
         .with_text({
@@ -136,7 +136,7 @@ fn rich_child_span_styles_reach_the_shaper() {
             root
         })
         .with_text_direction(TextDirection::Ltr);
-    flat_painter.layout(0.0, f32::INFINITY);
+    flat_painter.layout(0.0, f64::INFINITY);
 
     assert!(
         rich_painter.width() > flat_painter.width() + 1.0,
@@ -168,11 +168,11 @@ fn rich_inheritance_merges_parent_style_into_children() {
     let mut a = TextPainter::new()
         .with_text(inherited)
         .with_text_direction(TextDirection::Ltr);
-    a.layout(0.0, f32::INFINITY);
+    a.layout(0.0, f64::INFINITY);
     let mut b = TextPainter::new()
         .with_text(flat)
         .with_text_direction(TextDirection::Ltr);
-    b.layout(0.0, f32::INFINITY);
+    b.layout(0.0, f64::INFINITY);
 
     assert!(
         (a.width() - b.width()).abs() < 0.5,
@@ -399,7 +399,7 @@ fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
     let mut painter = TextPainter::new()
         .with_text(styled(red, blue))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, f32::INFINITY);
+    painter.layout(0.0, f64::INFINITY);
     let (first, first_color) = recorded(&painter);
     assert_eq!(first_color, red);
 
@@ -421,7 +421,7 @@ fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
         painter.set_text(Some(styled(green, red).into())),
         Invalidation::Layout
     );
-    painter.layout(0.0, f32::INFINITY);
+    painter.layout(0.0, f64::INFINITY);
     let (third, _) = recorded(&painter);
     assert!(
         !std::sync::Arc::ptr_eq(&second, &third),

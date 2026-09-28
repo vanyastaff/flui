@@ -71,8 +71,8 @@
 //!
 //! text_input.set_ime_allowed(true);
 //! text_input.set_ime_cursor_area(Bounds::new(
-//!     Point::new(px(0.0), px(0.0)),
-//!     Size::new(px(10.0), px(20.0)),
+//!     Point::new(0.0, 0.0),
+//!     Size::new(10.0, 20.0),
 //! ));
 //! haptics.perform(HapticFeedback::LightImpact);
 //!

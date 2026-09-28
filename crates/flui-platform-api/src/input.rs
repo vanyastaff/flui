@@ -24,7 +24,7 @@
 //! replace them before its first release.
 
 use flui_foundation::DataTransferId;
-use flui_types::geometry::{Offset, PixelDelta, Pixels, Point};
+use flui_types::geometry::{Offset, Point};
 /// Re-export scroll events
 pub use ui_events::ScrollDelta;
 /// Re-export W3C keyboard event from ui-events
@@ -180,7 +180,7 @@ pub enum DragDropEvent {
         /// backend stamps the last tracked cursor position — `None` before
         /// any cursor event, and possibly stale on Wayland where an external
         /// drag grabs the cursor (documented backend limitation).
-        position: Option<Point<Pixels>>,
+        position: Option<Point<f64>>,
     },
     /// The drag moved while over the window. `allowed` is re-stamped on
     /// every event: modifier-driven copy/move/link changes mid-drag arrive
@@ -191,7 +191,7 @@ pub enum DragDropEvent {
         /// Actions the source permits as of this event.
         allowed: crate::data_transfer::TransferActions,
         /// Logical-pixel hover position.
-        position: Point<Pixels>,
+        position: Point<f64>,
     },
     /// The user released and the backend resolved the drop from the cached
     /// feedback. `action` is the effect reported to the OS. The payload is
@@ -203,7 +203,7 @@ pub enum DragDropEvent {
         /// The drop effect resolved and reported to the OS.
         action: crate::data_transfer::TransferActions,
         /// Logical-pixel drop position when the backend knows it.
-        position: Option<Point<Pixels>>,
+        position: Option<Point<f64>>,
     },
     /// The drag left the window or the source cancelled; the offer is
     /// retired.
@@ -231,32 +231,32 @@ pub enum DragDropEvent {
 /// let scale_factor = 2.0;
 ///
 /// let logical_pos = Offset::new(
-///     Pixels(device_to_logical(physical_x as f32, scale_factor)),
-///     Pixels(device_to_logical(physical_y as f32, scale_factor))
+///     Pixels(device_to_logical(physical_x as f64, scale_factor)),
+///     Pixels(device_to_logical(physical_y as f64, scale_factor))
 /// );
 /// // Result: (960, 540) logical pixels
 /// ```
 #[inline]
-pub fn device_to_logical(device_pixels: f32, scale_factor: f32) -> f32 {
+pub fn device_to_logical(device_pixels: f64, scale_factor: f64) -> f64 {
     device_pixels / scale_factor
 }
 
 /// Convert logical pixels to device (physical) pixels
 #[inline]
-pub fn logical_to_device(logical_pixels: f32, scale_factor: f32) -> f32 {
+pub fn logical_to_device(logical_pixels: f64, scale_factor: f64) -> f64 {
     logical_pixels * scale_factor
 }
 
 /// Helper to create an Offset from raw coordinates
 #[inline]
-pub fn offset_from_coords(x: f32, y: f32) -> Offset<Pixels> {
-    Offset::new(Pixels(x), Pixels(y))
+pub fn offset_from_coords(x: f64, y: f64) -> Offset<f64> {
+    Offset::new(x, y)
 }
 
 /// Helper to create a delta Offset from raw coordinates
 #[inline]
-pub fn delta_offset_from_coords(dx: f32, dy: f32) -> Offset<PixelDelta> {
-    Offset::new(PixelDelta(dx), PixelDelta(dy))
+pub fn delta_offset_from_coords(dx: f64, dy: f64) -> Offset<f64> {
+    Offset::new(dx, dy)
 }
 
 #[cfg(test)]
@@ -280,11 +280,11 @@ mod tests {
     #[test]
     fn test_offset_helpers() {
         let offset = offset_from_coords(10.0, 20.0);
-        assert_eq!(offset.dx.0, 10.0);
-        assert_eq!(offset.dy.0, 20.0);
+        assert_eq!(offset.dx, 10.0);
+        assert_eq!(offset.dy, 20.0);
 
         let delta = delta_offset_from_coords(5.0, -3.0);
-        assert_eq!(delta.dx.0, 5.0);
-        assert_eq!(delta.dy.0, -3.0);
+        assert_eq!(delta.dx, 5.0);
+        assert_eq!(delta.dy, -3.0);
     }
 }

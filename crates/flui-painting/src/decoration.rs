@@ -15,7 +15,7 @@
 use std::sync::Once;
 
 use flui_types::{
-    Color, Offset, Pixels, Point, RRect, Rect,
+    Color, Offset, Point, RRect, Rect,
     geometry::Circle,
     painting::{Paint, Path, Shader},
     styling::{BoxDecoration, BoxShadow, Gradient},
@@ -66,7 +66,7 @@ enum Silhouette {
     /// `BoxShape::Rectangle` with a border radius.
     RRect(RRect),
     /// `BoxShape::Circle`, inscribed in the rect's shorter side.
-    Circle(Circle<Pixels>),
+    Circle(Circle<f64>),
 }
 
 /// Resolves `decoration`'s silhouette against `rect`.
@@ -82,7 +82,7 @@ enum Silhouette {
 /// ([`WARN_CIRCLE_BORDER_RADIUS`]): this function is called from both
 /// `paint_box_decoration` (every frame) and `box_decoration_hit_test`
 /// (every pointer event), and an ungated warn would spam at that rate.
-fn resolve_silhouette(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) -> Silhouette {
+fn resolve_silhouette(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Silhouette {
     if decoration.shape.is_circle() {
         if decoration.border_radius.is_some() {
             WARN_CIRCLE_BORDER_RADIUS.call_once(|| {
@@ -143,8 +143,8 @@ impl DecorationPaintOptions {
 /// then the border.
 pub fn paint_box_decoration(
     canvas: &mut Canvas,
-    rect: Rect<Pixels>,
-    decoration: &BoxDecoration<Pixels>,
+    rect: Rect<f64>,
+    decoration: &BoxDecoration<f64>,
     options: DecorationPaintOptions,
 ) {
     let silhouette = resolve_silhouette(rect, decoration);
@@ -187,7 +187,7 @@ pub fn paint_box_decoration(
     // through `shortest_side`'s `.abs()` — `circle_zero_size_and_negative_area_rects_do_not_panic`
     // pins an inverted 100x100 resolving to the same r=50 circle an upright
     // one gives. A signed test would have swallowed that whole case.
-    let paints_no_area = rect.width() == Pixels::ZERO || rect.height() == Pixels::ZERO;
+    let paints_no_area = rect.width() == 0.0 || rect.height() == 0.0;
     if paints_no_area {
         // fall through to the border/shadow/image passes
     } else if let Some(gradient) = &decoration.gradient {
@@ -282,9 +282,9 @@ pub fn paint_box_decoration(
 /// `BoxDecoration.hitTest`).
 #[must_use]
 pub fn box_decoration_hit_test(
-    rect: Rect<Pixels>,
-    decoration: &BoxDecoration<Pixels>,
-    position: Offset<Pixels>,
+    rect: Rect<f64>,
+    decoration: &BoxDecoration<f64>,
+    position: Offset<f64>,
 ) -> bool {
     let point = Point::new(position.dx, position.dy);
     if !rect.contains(point) {
@@ -298,7 +298,7 @@ pub fn box_decoration_hit_test(
 }
 
 /// The decoration's rounded rect, when a border radius is set.
-fn decoration_rrect(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) -> Option<RRect> {
+fn decoration_rrect(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Option<RRect> {
     decoration.border_radius.map(|radius| {
         RRect::from_rect_and_corners(
             rect,
@@ -334,14 +334,14 @@ fn decoration_rrect(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) -> O
 /// of this function. Clamping the circle path does not introduce a new
 /// inconsistency; it just avoids a shadow radius nearly an order of
 /// magnitude larger than the box it decorates.
-fn paint_circle_shadow(canvas: &mut Canvas, circle: Circle<Pixels>, shadow: &BoxShadow<Pixels>) {
+fn paint_circle_shadow(canvas: &mut Canvas, circle: Circle<f64>, shadow: &BoxShadow<f64>) {
     let silhouette = circle
         .inflate(shadow.spread_radius)
         .translate(shadow.offset.into());
     canvas.draw_shadow(
-        &Path::circle(silhouette.center, silhouette.radius.get()),
+        &Path::circle(silhouette.center, silhouette.radius),
         shadow.color,
-        shadow.blur_radius.get(),
+        shadow.blur_radius,
     );
 }
 
@@ -390,8 +390,8 @@ fn paint_circle_shadow(canvas: &mut Canvas, circle: Circle<Pixels>, shadow: &Box
 /// that draws a square frame around a circular fill.
 fn paint_circle_border(
     canvas: &mut Canvas,
-    circle: Circle<Pixels>,
-    border: &flui_types::styling::Border<Pixels>,
+    circle: Circle<f64>,
+    border: &flui_types::styling::Border<f64>,
 ) {
     if !border.is_uniform() {
         WARN_CIRCLE_NON_UNIFORM_BORDER.call_once(|| {
@@ -408,11 +408,11 @@ fn paint_circle_border(
     let Some(side) = border.top else {
         return;
     };
-    let width = side.width.get();
+    let width = side.width;
     if width <= 0.0 {
         return;
     }
-    let diameter = circle.radius.get() * 2.0;
+    let diameter = circle.radius * 2.0;
     if width > diameter {
         // Past the diameter the invariant is unsatisfiable: the stroke
         // center would need a negative radius, and pinning it at 0 while
@@ -436,9 +436,9 @@ fn paint_circle_border(
         // backend's handling of a degenerate radius.
         return;
     }
-    let stroke_radius = circle.radius.get() - width / 2.0;
+    let stroke_radius = circle.radius - width / 2.0;
     let paint = Paint::stroke(side.color, width);
-    canvas.draw_circle(circle.center, Pixels(stroke_radius), &paint);
+    canvas.draw_circle(circle.center, stroke_radius, &paint);
 }
 
 /// One box shadow: the casting silhouette is the decoration's shape
@@ -448,17 +448,17 @@ fn paint_circle_border(
 /// input).
 fn paint_shadow(
     canvas: &mut Canvas,
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
     rrect: Option<RRect>,
-    shadow: &BoxShadow<Pixels>,
+    shadow: &BoxShadow<f64>,
 ) {
-    let base = rrect.unwrap_or_else(|| RRect::from_rect_circular(rect, Pixels(0.0)));
+    let base = rrect.unwrap_or_else(|| RRect::from_rect_circular(rect, 0.0));
     let mut silhouette = base.inflate(shadow.spread_radius);
     silhouette.rect = silhouette.rect.translate_offset(shadow.offset);
     canvas.draw_shadow(
         &Path::from_rrect(silhouette),
         shadow.color,
-        shadow.blur_radius.get(),
+        shadow.blur_radius,
     );
 }
 
@@ -467,14 +467,14 @@ fn paint_shadow(
 /// space over the rect; the radial radius is a fraction of the
 /// shortest side (Flutter parity).
 #[must_use]
-pub(crate) fn resolve_gradient(gradient: &Gradient, rect: Rect<Pixels>) -> Shader {
+pub(crate) fn resolve_gradient(gradient: &Gradient, rect: Rect<f64>) -> Shader {
     let center = rect.center();
-    let half_w = rect.width().get() / 2.0;
-    let half_h = rect.height().get() / 2.0;
+    let half_w = rect.width() / 2.0;
+    let half_h = rect.height() / 2.0;
     let at = |alignment: flui_types::Alignment| {
         Offset::new(
-            Pixels(center.x.get() + alignment.x * half_w),
-            Pixels(center.y.get() + alignment.y * half_h),
+            center.x + alignment.x * half_w,
+            center.y + alignment.y * half_h,
         )
     };
 
@@ -510,7 +510,7 @@ pub(crate) fn resolve_gradient(gradient: &Gradient, rect: Rect<Pixels>) -> Shade
 /// repeat modes tile the image at its natural size).
 fn paint_decoration_image(
     canvas: &mut Canvas,
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
     image: &flui_types::styling::DecorationImage,
 ) {
     use flui_types::layout::BoxFit;
@@ -521,9 +521,9 @@ fn paint_decoration_image(
         return;
     }
 
-    // image dimensions are far below f32's 24-bit integer range
-    let (src_w, src_h) = (image.image.width() as f32, image.image.height() as f32);
-    let (dst_w, dst_h) = (rect.width().get(), rect.height().get());
+    // image dimensions are far below f64's 24-bit integer range
+    let (src_w, src_h) = (image.image.width() as f64, image.image.height() as f64);
+    let (dst_w, dst_h) = (rect.width(), rect.height());
     let fit = image.fit.unwrap_or(BoxFit::ScaleDown);
 
     let (out_w, out_h) = if src_w <= 0.0 || src_h <= 0.0 {
@@ -558,14 +558,9 @@ fn paint_decoration_image(
     // Alignment positions the fitted box within the paint rect.
     let free_w = dst_w - out_w;
     let free_h = dst_h - out_h;
-    let left = rect.min.x.get() + f32::midpoint(image.alignment.x, 1.0) * free_w;
-    let top = rect.min.y.get() + f32::midpoint(image.alignment.y, 1.0) * free_h;
-    let dst = Rect::from_ltrb(
-        Pixels(left),
-        Pixels(top),
-        Pixels(left + out_w),
-        Pixels(top + out_h),
-    );
+    let left = rect.min.x + f64::midpoint(image.alignment.x, 1.0) * free_w;
+    let top = rect.min.y + f64::midpoint(image.alignment.y, 1.0) * free_h;
+    let dst = Rect::from_ltrb(left, top, left + out_w, top + out_h);
 
     let paint = (image.opacity < 1.0).then(|| {
         // clamped 0..=1 then scaled to u8 range
@@ -589,9 +584,9 @@ fn paint_decoration_image(
 /// written once.
 pub(crate) fn paint_border(
     canvas: &mut Canvas,
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
     rrect: Option<RRect>,
-    border: &flui_types::styling::Border<Pixels>,
+    border: &flui_types::styling::Border<f64>,
 ) {
     if border.is_uniform() {
         // Uniform ⇒ all four sides are the same `Some` (or all `None`,
@@ -599,19 +594,18 @@ pub(crate) fn paint_border(
         let Some(side) = border.top else {
             return;
         };
-        if side.width.get() <= 0.0 {
+        if side.width <= 0.0 {
             return;
         }
-        let outer = rrect.unwrap_or_else(|| RRect::from_rect_circular(rect, Pixels(0.0)));
-        let inner = outer.inflate(Pixels(-side.width.get()));
+        let outer = rrect.unwrap_or_else(|| RRect::from_rect_circular(rect, 0.0));
+        let inner = outer.inflate(-side.width);
         canvas.draw_drrect(outer, inner, &Paint::fill(side.color));
         return;
     }
 
-    let side_width = |side: &Option<flui_types::styling::BorderSide<Pixels>>| {
-        side.map_or(0.0, |s| s.width.get())
-    };
-    let side_color = |side: &Option<flui_types::styling::BorderSide<Pixels>>| {
+    let side_width =
+        |side: &Option<flui_types::styling::BorderSide<f64>>| side.map_or(0.0, |s| s.width);
+    let side_color = |side: &Option<flui_types::styling::BorderSide<f64>>| {
         side.map_or(Color::TRANSPARENT, |s| s.color)
     };
     let (l, t, r, b) = (
@@ -620,33 +614,28 @@ pub(crate) fn paint_border(
         side_width(&border.right),
         side_width(&border.bottom),
     );
-    let (x0, y0, x1, y1) = (
-        rect.min.x.get(),
-        rect.min.y.get(),
-        rect.max.x.get(),
-        rect.max.y.get(),
-    );
+    let (x0, y0, x1, y1) = (rect.min.x, rect.min.y, rect.max.x, rect.max.y);
     if t > 0.0 {
         canvas.draw_rect(
-            Rect::from_ltrb(Pixels(x0), Pixels(y0), Pixels(x1), Pixels(y0 + t)),
+            Rect::from_ltrb(x0, y0, x1, y0 + t),
             &Paint::fill(side_color(&border.top)),
         );
     }
     if b > 0.0 {
         canvas.draw_rect(
-            Rect::from_ltrb(Pixels(x0), Pixels(y1 - b), Pixels(x1), Pixels(y1)),
+            Rect::from_ltrb(x0, y1 - b, x1, y1),
             &Paint::fill(side_color(&border.bottom)),
         );
     }
     if l > 0.0 {
         canvas.draw_rect(
-            Rect::from_ltrb(Pixels(x0), Pixels(y0 + t), Pixels(x0 + l), Pixels(y1 - b)),
+            Rect::from_ltrb(x0, y0 + t, x0 + l, y1 - b),
             &Paint::fill(side_color(&border.left)),
         );
     }
     if r > 0.0 {
         canvas.draw_rect(
-            Rect::from_ltrb(Pixels(x1 - r), Pixels(y0 + t), Pixels(x1), Pixels(y1 - b)),
+            Rect::from_ltrb(x1 - r, y0 + t, x1, y1 - b),
             &Paint::fill(side_color(&border.right)),
         );
     }

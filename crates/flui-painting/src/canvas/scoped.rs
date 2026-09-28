@@ -4,7 +4,7 @@
 //! after a panic, so nothing depends on it.
 
 use flui_types::{
-    geometry::{Matrix4, Pixels, RRect, Rect},
+    geometry::{Matrix4, RRect, Rect},
     painting::{BlendMode, Path},
 };
 
@@ -36,7 +36,7 @@ impl Canvas {
 
     /// Executes a closure with a clipping rectangle applied.
     #[inline]
-    pub fn with_clip_rect<F, R>(&mut self, rect: Rect<Pixels>, f: F) -> R
+    pub fn with_clip_rect<F, R>(&mut self, rect: Rect<f64>, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
@@ -74,7 +74,7 @@ impl Canvas {
     ///
     /// Creates an offscreen buffer; use sparingly (GPU overhead).
     #[inline]
-    pub fn with_opacity<F, R>(&mut self, opacity: f32, bounds: Option<Rect<Pixels>>, f: F) -> R
+    pub fn with_opacity<F, R>(&mut self, opacity: f64, bounds: Option<Rect<f64>>, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
     {
@@ -90,7 +90,7 @@ impl Canvas {
     pub fn with_blend_mode<F, R>(
         &mut self,
         blend_mode: BlendMode,
-        bounds: Option<Rect<Pixels>>,
+        bounds: Option<Rect<f64>>,
         f: F,
     ) -> R
     where

@@ -58,7 +58,7 @@ fn text_painter_caret_and_hit_test_roundtrip() {
 
     // Get caret offset at position 5
     let caret = painter.get_offset_for_caret(TextPosition::upstream(5));
-    assert!(caret.dx.get() >= 0.0, "caret x should be non-negative");
+    assert!(caret.dx >= 0.0, "caret x should be non-negative");
 
     // Hit test at that offset should return approximately position 5
     let hit = painter.get_position_for_offset(caret);
@@ -105,12 +105,9 @@ fn text_painter_selection_boxes() {
     assert!(!boxes.is_empty(), "selection should produce boxes");
 
     let first = &boxes[0];
+    assert!(first.rect.width() > 0.0, "selection box should have width");
     assert!(
-        first.rect.width().get() > 0.0,
-        "selection box should have width"
-    );
-    assert!(
-        first.rect.height().get() > 0.0,
+        first.rect.height() > 0.0,
         "selection box should have height"
     );
 }
@@ -147,7 +144,7 @@ fn text_painter_alignment_affects_offset() {
 
     // Both should have the same size
     assert!(
-        (left.width() - right.width()).abs() < f32::EPSILON,
+        (left.width() - right.width()).abs() < f64::EPSILON,
         "alignment should not change intrinsic width"
     );
 }
@@ -189,7 +186,7 @@ fn text_painter_layout_caching() {
     let w2 = painter.width();
 
     assert!(
-        (w1 - w2).abs() < f32::EPSILON,
+        (w1 - w2).abs() < f64::EPSILON,
         "cached layout should return same width"
     );
 }

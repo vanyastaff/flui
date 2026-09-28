@@ -13,7 +13,7 @@
 //! which keeps it trivially testable and composable.
 
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation};
-use flui_types::geometry::{Offset, Pixels, Size, px};
+use flui_types::geometry::{Offset, Size};
 use flui_types::styling::Color;
 use smallvec::SmallVec;
 
@@ -23,10 +23,10 @@ use smallvec::SmallVec;
 /// Mirrors the role of Jetpack Compose's `TwoWayConverter`. Implement it (or, in
 /// future, derive it) for any type you want to spring-animate.
 pub trait TwoWayConverter: Clone {
-    /// The scalar-component representation, e.g. `[f32; 4]` for an RGBA color.
-    /// `Copy` so it can be used as a scratch buffer; `AsRef`/`AsMut<[f32]>` so
+    /// The scalar-component representation, e.g. `[f64; 4]` for an RGBA color.
+    /// `Copy` so it can be used as a scratch buffer; `AsRef`/`AsMut<[f64]>` so
     /// the spring core can iterate components generically.
-    type Vector: AsRef<[f32]> + AsMut<[f32]> + Copy;
+    type Vector: AsRef<[f64]> + AsMut<[f64]> + Copy;
 
     /// Decompose into scalar components.
     fn to_vector(&self) -> Self::Vector;
@@ -35,8 +35,8 @@ pub trait TwoWayConverter: Clone {
     fn from_vector(v: Self::Vector) -> Self;
 }
 
-impl TwoWayConverter for f32 {
-    type Vector = [f32; 1];
+impl TwoWayConverter for f64 {
+    type Vector = [f64; 1];
     #[inline]
     fn to_vector(&self) -> Self::Vector {
         [*self]
@@ -47,46 +47,46 @@ impl TwoWayConverter for f32 {
     }
 }
 
-impl TwoWayConverter for Offset<Pixels> {
-    type Vector = [f32; 2];
+impl TwoWayConverter for Offset<f64> {
+    type Vector = [f64; 2];
     #[inline]
     fn to_vector(&self) -> Self::Vector {
-        [self.dx.get(), self.dy.get()]
+        [self.dx, self.dy]
     }
     #[inline]
     fn from_vector(v: Self::Vector) -> Self {
-        Offset::new(px(v[0]), px(v[1]))
+        Offset::new(v[0], v[1])
     }
 }
 
-impl TwoWayConverter for Size<Pixels> {
-    type Vector = [f32; 2];
+impl TwoWayConverter for Size<f64> {
+    type Vector = [f64; 2];
     #[inline]
     fn to_vector(&self) -> Self::Vector {
-        [self.width.get(), self.height.get()]
+        [self.width, self.height]
     }
     #[inline]
     fn from_vector(v: Self::Vector) -> Self {
-        Size::new(px(v[0]), px(v[1]))
+        Size::new(v[0], v[1])
     }
 }
 
 impl TwoWayConverter for Color {
-    type Vector = [f32; 4];
+    type Vector = [f64; 4];
     #[inline]
     fn to_vector(&self) -> Self::Vector {
         [
-            f32::from(self.r),
-            f32::from(self.g),
-            f32::from(self.b),
-            f32::from(self.a),
+            f64::from(self.r),
+            f64::from(self.g),
+            f64::from(self.b),
+            f64::from(self.a),
         ]
     }
     #[inline]
     fn from_vector(v: Self::Vector) -> Self {
         // The `clamp(0.0, 255.0).round()` pins the value into the exact u8 range
         // before the cast, so the truncation/sign-loss lints do not apply.
-        let to_u8 = |c: f32| c.clamp(0.0, 255.0).round() as u8;
+        let to_u8 = |c: f64| c.clamp(0.0, 255.0).round() as u8;
         Color::rgba(to_u8(v[0]), to_u8(v[1]), to_u8(v[2]), to_u8(v[3]))
     }
 }
@@ -104,7 +104,7 @@ pub struct AnimatedValue<T: TwoWayConverter> {
     /// The current target value (also serves as a correctly-sized scratch buffer).
     target: T,
     /// Seconds elapsed since the most recent (re)target.
-    elapsed: f32,
+    elapsed: f64,
 }
 
 impl<T: TwoWayConverter> AnimatedValue<T> {
@@ -153,7 +153,7 @@ impl<T: TwoWayConverter> AnimatedValue<T> {
     }
 
     /// Advance time by `dt` seconds.
-    pub fn advance(&mut self, dt: f32) {
+    pub fn advance(&mut self, dt: f64) {
         self.elapsed += dt;
     }
 
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn settles_at_target() {
-        let mut v = AnimatedValue::new(0.0_f32, spring());
+        let mut v = AnimatedValue::new(0.0_f64, spring());
         v.animate_to(100.0);
         // Advance well past the response period.
         for _ in 0..600 {
@@ -205,7 +205,7 @@ mod tests {
         // Animate toward 100; midway (moving fast) retarget to 0. With velocity
         // preserved the value must briefly continue PAST its position toward 100
         // before the new spring pulls it back — momentum is not discarded.
-        let mut v = AnimatedValue::new(0.0_f32, spring());
+        let mut v = AnimatedValue::new(0.0_f64, spring());
         v.animate_to(100.0);
         for _ in 0..6 {
             v.advance(1.0 / 60.0);
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn apple_presets_build() {
         // Smoke: presets produce sensible, distinct springs.
-        assert!(SpringDescription::smooth().damping_ratio() >= 1.0 - f32::EPSILON);
+        assert!(SpringDescription::smooth().damping_ratio() >= 1.0 - f64::EPSILON);
         assert!(SpringDescription::bouncy().damping_ratio() < 1.0);
         assert!(SpringDescription::snappy().damping_ratio() < 1.0);
     }

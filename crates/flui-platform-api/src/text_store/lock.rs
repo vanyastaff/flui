@@ -333,7 +333,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
 
-    use flui_types::geometry::{Bounds, Pixels, Point};
+    use flui_types::geometry::{Bounds, Point};
 
     use super::super::{Composition, PointMode, RangeRect, Selection, Utf16Offset, Utf16Range};
     use super::*;
@@ -369,12 +369,12 @@ mod tests {
         fn rect_for_range(&self, _: Utf16Range) -> Result<RangeRect, TextStoreError> {
             Err(TextStoreError::NoLayout)
         }
-        fn document_bounds(&self) -> Result<Bounds<Pixels>, TextStoreError> {
+        fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
             Err(TextStoreError::NoLayout)
         }
         fn index_at_point(
             &self,
-            _: Point<Pixels>,
+            _: Point<f64>,
             _: PointMode,
         ) -> Result<Utf16Offset, TextStoreError> {
             Err(TextStoreError::NoLayout)

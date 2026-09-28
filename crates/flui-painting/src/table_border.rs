@@ -15,7 +15,7 @@
 //! only rounds a uniform outer edge (`table_border.dart:143-156`).
 
 use flui_types::{
-    Pixels, Point, RRect, Rect,
+    Point, RRect, Rect,
     painting::{Paint, Path},
     styling::{BorderStyle, TableBorder},
 };
@@ -32,9 +32,9 @@ use crate::decoration::paint_border;
 /// top/bottom edges (those are `border.top`/`border.bottom`).
 pub fn paint_table_border(
     canvas: &mut Canvas,
-    rect: Rect<Pixels>,
-    rows: &[Pixels],
-    columns: &[Pixels],
+    rect: Rect<f64>,
+    rows: &[f64],
+    columns: &[f64],
     border: &TableBorder,
 ) {
     if !columns.is_empty() && border.vertical_inside.style == BorderStyle::Solid {
@@ -43,10 +43,7 @@ pub fn paint_table_border(
             path.move_to(Point::new(rect.min.x + x, rect.min.y));
             path.line_to(Point::new(rect.min.x + x, rect.max.y));
         }
-        let paint = Paint::stroke(
-            border.vertical_inside.color,
-            border.vertical_inside.width.get(),
-        );
+        let paint = Paint::stroke(border.vertical_inside.color, border.vertical_inside.width);
         canvas.draw_path(&path, &paint);
     }
 
@@ -58,7 +55,7 @@ pub fn paint_table_border(
         }
         let paint = Paint::stroke(
             border.horizontal_inside.color,
-            border.horizontal_inside.width.get(),
+            border.horizontal_inside.width,
         );
         canvas.draw_path(&path, &paint);
     }
@@ -80,19 +77,17 @@ pub fn paint_table_border(
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{
-        Color, Point as GeomPoint, geometry::px, painting::PathCommand, styling::BorderSide,
-    };
+    use flui_types::{Color, Point as GeomPoint, painting::PathCommand, styling::BorderSide};
 
     use super::*;
     use crate::DrawOp;
 
-    fn rect() -> Rect<Pixels> {
-        Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(60.0))
+    fn rect() -> Rect<f64> {
+        Rect::from_ltrb(0.0, 0.0, 100.0, 60.0)
     }
 
-    fn solid(width: f32, color: Color) -> BorderSide<Pixels> {
-        BorderSide::new(color, px(width), BorderStyle::Solid)
+    fn solid(width: f64, color: Color) -> BorderSide<f64> {
+        BorderSide::new(color, width, BorderStyle::Solid)
     }
 
     #[test]
@@ -111,7 +106,7 @@ mod tests {
             horizontal_inside: solid(2.0, Color::GREEN),
             ..TableBorder::all(solid(3.0, Color::BLUE))
         };
-        paint_table_border(&mut canvas, rect(), &[px(30.0)], &[px(50.0)], &border);
+        paint_table_border(&mut canvas, rect(), &[30.0], &[50.0], &border);
         let list = canvas.finish();
         // Vertical interior line, then horizontal interior line, then the
         // (uniform) outer border as a DrawDRRect — three draw calls, in
@@ -126,8 +121,8 @@ mod tests {
         assert_eq!(
             path.commands(),
             &[
-                PathCommand::MoveTo(GeomPoint::new(px(50.0), px(0.0))),
-                PathCommand::LineTo(GeomPoint::new(px(50.0), px(60.0))),
+                PathCommand::MoveTo(GeomPoint::new(50.0, 0.0)),
+                PathCommand::LineTo(GeomPoint::new(50.0, 60.0)),
             ][..]
         );
 
@@ -138,8 +133,8 @@ mod tests {
         assert_eq!(
             path.commands(),
             &[
-                PathCommand::MoveTo(GeomPoint::new(px(0.0), px(30.0))),
-                PathCommand::LineTo(GeomPoint::new(px(100.0), px(30.0))),
+                PathCommand::MoveTo(GeomPoint::new(0.0, 30.0)),
+                PathCommand::LineTo(GeomPoint::new(100.0, 30.0)),
             ][..]
         );
 
@@ -157,7 +152,7 @@ mod tests {
 
         let mut canvas = Canvas::new();
         let border = TableBorder::all(solid(2.0, Color::BLACK))
-            .with_border_radius(BorderRadius::circular(px(8.0)));
+            .with_border_radius(BorderRadius::circular(8.0));
         paint_table_border(&mut canvas, rect(), &[], &[], &border);
         let list = canvas.finish();
         let cmds: Vec<_> = list.iter().collect();
@@ -168,8 +163,8 @@ mod tests {
         let DrawOp::DRRect { outer, .. } = &cmds[0].op else {
             panic!("expected a single uniform outer DrawDRRect; got {:?}", cmds);
         };
-        assert_eq!(outer.top_left, Radius::circular(px(8.0)));
-        assert_eq!(outer.bottom_right, Radius::circular(px(8.0)));
+        assert_eq!(outer.top_left, Radius::circular(8.0));
+        assert_eq!(outer.bottom_right, Radius::circular(8.0));
     }
 
     #[test]
@@ -187,11 +182,7 @@ mod tests {
         let DrawOp::DRRect { outer, .. } = &cmds[0].op else {
             panic!("expected a single uniform outer DrawDRRect; got {:?}", cmds);
         };
-        assert_eq!(
-            outer.top_left,
-            Radius::circular(px(0.0)),
-            "square by default"
-        );
+        assert_eq!(outer.top_left, Radius::circular(0.0), "square by default");
     }
 
     #[test]
@@ -200,7 +191,7 @@ mod tests {
         let mut border = TableBorder::all(solid(1.0, Color::BLACK));
         border.vertical_inside.style = BorderStyle::None;
         border.horizontal_inside.style = BorderStyle::None;
-        paint_table_border(&mut canvas, rect(), &[px(30.0)], &[px(50.0)], &border);
+        paint_table_border(&mut canvas, rect(), &[30.0], &[50.0], &border);
         let list = canvas.finish();
         // Only the outer border remains.
         assert_eq!(list.len(), 1, "commands: {list:?}");

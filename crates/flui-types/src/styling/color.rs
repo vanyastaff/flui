@@ -861,8 +861,8 @@ impl Color {
     ///
     /// Alpha interpolates linearly, matching [`Color::lerp`].
     #[must_use]
-    pub fn lerp_oklab(a: Color, b: Color, t: f32) -> Color {
-        let t = t.clamp(0.0, 1.0);
+    pub fn lerp_oklab(a: Color, b: Color, t: f64) -> Color {
+        let t = (t as f32).clamp(0.0, 1.0);
         let la = a.to_oklab();
         let lb = b.to_oklab();
         let mixed = Oklab {

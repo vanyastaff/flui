@@ -27,8 +27,8 @@ use parley::{FontContext, FontData, Layout, LayoutContext};
 const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
 const MATERIAL_ICONS: &[u8] = include_bytes!("../assets/fonts/MaterialIcons-Regular.ttf");
 const LATIN: &str = "The quick brown fox jumps over the lazy dog 0123456789";
-const SIZES: [f32; 3] = [13.0, 18.0, 32.0];
-const ORIGINS: [f32; 4] = [0.0, 0.25, 0.5, 0.75];
+const SIZES: [f64; 3] = [13.0, 18.0, 32.0];
+const ORIGINS: [f64; 4] = [0.0, 0.25, 0.5, 0.75];
 
 /// A script the oracle compares, on the vendored face that covers it.
 struct Sample {
@@ -116,7 +116,7 @@ impl Shaper {
             .to_owned()
     }
 
-    fn layout(&mut self, text: &str, size: f32, family: &str) -> Layout<()> {
+    fn layout(&mut self, text: &str, size: f64, family: &str) -> Layout<()> {
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.font_cx, text, 1.0, true);
@@ -144,9 +144,9 @@ fn place(
     shaper: &mut Shaper,
     fonts: &mut FontRegistry,
     text: &str,
-    size: f32,
+    size: f64,
     family: &str,
-    origin_x: f32,
+    origin_x: f64,
 ) -> Vec<Placed> {
     let layout = shaper.layout(text, size, family);
     let mut placed = Vec::new();
@@ -289,7 +289,7 @@ fn cosmic_coords(font: &FontData) -> Vec<i16> {
     match variations.find_by_tag(wght) {
         Some(axis) => padded(
             &variations
-                .normalized_coords([(wght, 400.0_f32.clamp(axis.min_value(), axis.max_value()))])
+                .normalized_coords([(wght, 400.0_f64.clamp(axis.min_value(), axis.max_value()))])
                 .collect::<Vec<_>>(),
             font,
         ),

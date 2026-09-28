@@ -9,7 +9,7 @@
 
 use flui_painting::TextPainter;
 use flui_types::{
-    geometry::{Offset, px},
+    geometry::Offset,
     styling::Color,
     typography::{
         FontStyle, FontWeight, InlineSpan, TextAlign, TextDirection, TextPosition, TextSpan,
@@ -122,9 +122,9 @@ fn example_hit_testing() {
 
     // Simulate clicks at different x positions
     let click_positions = [
-        Offset::new(px(0.0), px(8.0)),   // Start of text
-        Offset::new(px(50.0), px(8.0)),  // Middle-ish
-        Offset::new(px(100.0), px(8.0)), // Further right
+        Offset::new(0.0, 8.0),   // Start of text
+        Offset::new(50.0, 8.0),  // Middle-ish
+        Offset::new(100.0, 8.0), // Further right
     ];
 
     for click in click_positions {
@@ -133,7 +133,7 @@ fn example_hit_testing() {
     }
 
     // Clicking at x=0 should give offset near 0
-    let start_pos = painter.get_position_for_offset(Offset::new(px(0.0), px(8.0)));
+    let start_pos = painter.get_position_for_offset(Offset::new(0.0, 8.0));
     assert!(
         start_pos.offset <= 2,
         "Click at start should be near offset 0"
@@ -172,8 +172,8 @@ fn example_text_selection() {
 
     // Selection box should have positive dimensions
     if let Some(first) = selection_boxes.first() {
-        assert!(first.rect.width().get() > 0.0);
-        assert!(first.rect.height().get() > 0.0);
+        assert!(first.rect.width() > 0.0);
+        assert!(first.rect.height() > 0.0);
     }
 }
 
@@ -412,7 +412,7 @@ fn example_paint_to_canvas() {
 
     // Create canvas and paint
     let mut canvas = Canvas::new();
-    painter.paint(&mut canvas, Offset::new(px(10.0), px(20.0)));
+    painter.paint(&mut canvas, Offset::new(10.0, 20.0));
 
     // Finish to get display list
     let display_list = canvas.finish();
