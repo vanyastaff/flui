@@ -207,6 +207,87 @@ fn stale_signal_command_disposal_panic_rearms_its_fifo_tail() {
 }
 
 #[test]
+fn stale_signal_command_disposal_panic_retries_a_concurrent_tails_failed_wake() {
+    struct BlockingDropBomb {
+        entered: Arc<std::sync::Barrier>,
+        release: Arc<std::sync::Barrier>,
+    }
+
+    impl Drop for BlockingDropBomb {
+        fn drop(&mut self) {
+            self.entered.wait();
+            self.release.wait();
+            panic!("stale command capture destructor probe");
+        }
+    }
+
+    let panic_next_wake = Arc::new(AtomicBool::new(false));
+    let panic_next_wake_in_callback = Arc::clone(&panic_next_wake);
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let wake_count_in_callback = Arc::clone(&wake_count);
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        wake_count_in_callback.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            !panic_next_wake_in_callback.swap(false, Ordering::Relaxed),
+            "concurrent tail wake probe"
+        );
+    });
+    let mut realm = new_runtime(wake).expect("runtime");
+    let closed = realm.install_second_presentation_for_test();
+    let stale = graph_of(&realm, closed).signal(1u32);
+    assert!(realm.close_presentation_entered(closed));
+    let live_graph = graph_of(&realm, realm.presentation_id());
+    let tail = live_graph.signal(0u32);
+    let tail_sender = tail.detach();
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let capture = BlockingDropBomb {
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    };
+    let sender = realm.command_sender();
+    sender
+        .send_signal_write(stale.detach(), move |_signal, _graph| {
+            let _capture_stays_owned_by_the_command = &capture;
+        })
+        .expect("stale command enqueues");
+    let wakes_after_stale_send = wake_count.load(Ordering::Relaxed);
+
+    let producer = std::thread::spawn(move || {
+        entered.wait();
+        panic_next_wake.store(true, Ordering::Relaxed);
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            sender.send_signal_write(tail_sender, move |tail, graph| {
+                tail.set(graph, 9).expect("tail signal remains live");
+            })
+        }));
+        release.wait();
+        let payload = outcome.expect_err("the concurrent tail wake must fail");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"concurrent tail wake probe")
+        );
+    });
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
+    producer.join().expect("producer contains its wake panic");
+
+    let payload = outcome.expect_err("the stale capture destructor panic must resume");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"stale command capture destructor probe")
+    );
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_stale_send + 2,
+        "the failed concurrent wake and the teardown recovery each reach the hook"
+    );
+    assert_eq!(tail.peek(&live_graph, |value| *value), Ok(0));
+    assert!(realm.drain_owner_inbox());
+    assert_eq!(tail.peek(&live_graph, |value| *value), Ok(9));
+}
+
+#[test]
 fn a_write_for_a_graph_outside_the_realm_never_runs_here() {
     let realm = UiRealm::for_test();
     let graph_a = graph_of(&realm, realm.presentation_id());

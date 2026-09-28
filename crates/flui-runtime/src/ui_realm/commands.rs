@@ -561,11 +561,23 @@ impl UiRealm {
                             self.rearm_after_signal_command_panic(payload);
                         }
                         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(apply))) {
-                            // Any pre-existing tail was rearmed before opaque
-                            // destruction began; with no tail there is no
-                            // owner work to rearm. Preserve the destructor
-                            // panic without issuing a redundant wake.
-                            resume_unwind(payload);
+                            // A producer can enqueue after the empty-inbox
+                            // snapshot while opaque destruction is blocked.
+                            // If that ingress's wake failed, pay its shared
+                            // debt before resuming the destructor panic.
+                            let wake_panic = catch_unwind(AssertUnwindSafe(|| {
+                                self.sender_prototype.retry_wake_debt();
+                            }))
+                            .err();
+                            let mut first_panic = Some(payload);
+                            preserve_first_input_panic(
+                                &mut first_panic,
+                                wake_panic,
+                                "stale signal-write teardown wake",
+                            );
+                            resume_unwind(first_panic.expect(
+                                "BUG: the stale command destructor panic must be preserved",
+                            ));
                         }
                         continue;
                     };

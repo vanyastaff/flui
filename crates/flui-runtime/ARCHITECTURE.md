@@ -255,8 +255,10 @@ The `SignalWrite` command callback is `FnMut`, although it is invoked at most
 once. Its envelope stays owned outside the caught invocation. Redraw demand is
 durable before a successful callback's captures are destroyed; a callback
 panic retains the opaque envelope. A stale command likewise rearms an existing
-FIFO tail before destroying its envelope. This prevents framework state from
-being stranded even though Rust cannot recover from two panicking field
+FIFO tail before destroying its envelope. If a tail arrives concurrently while
+that destruction is blocked and its ingress wake fails, a caught destructor
+panic retries the shared delivery debt before it resumes. This prevents framework
+state from being stranded even though Rust cannot recover from two panicking field
 destructors inside one aggregate's generated drop glue.
 
 Every command and input-redraw wake has realm-scoped delivery debt shared by
