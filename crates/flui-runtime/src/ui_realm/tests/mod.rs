@@ -769,6 +769,114 @@ fn inbox_reports_backpressure_at_capacity() {
 }
 
 #[test]
+fn full_inbox_retries_outstanding_wake_debt_before_rejecting() {
+    let fail_next_wake = Arc::new(AtomicBool::new(true));
+    let fail_next_wake_in_callback = Arc::clone(&fail_next_wake);
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let wake_count_in_callback = Arc::clone(&wake_count);
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        wake_count_in_callback.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            !fail_next_wake_in_callback.swap(false, Ordering::Relaxed),
+            "initial command wake probe"
+        );
+    });
+    let runtime = new_runtime_with_capacity(1, wake).expect("runtime with one command slot");
+    let sender = runtime.command_sender();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(test_route("/"));
+    let filler = || NavigatorCommand::maybe_pop(navigator.command_target());
+
+    let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sender.send_navigation(filler())
+    }));
+    assert!(
+        first.is_err(),
+        "the accepted command's first wake must fail"
+    );
+
+    let overflow = sender
+        .send_navigation(filler())
+        .expect_err("the accepted command still fills the inbox");
+    assert!(matches!(
+        overflow,
+        CommandSendError::ChannelFull { capacity: 1, .. }
+    ));
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        2,
+        "the full path must retry the first command's wake debt"
+    );
+
+    assert_eq!(runtime.drain_commands().invoked, 1);
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        2,
+        "successful debt delivery is acknowledged exactly once"
+    );
+}
+
+#[test]
+fn full_inbox_wake_panic_keeps_priority_over_rejected_command_disposal() {
+    struct DropBomb;
+
+    impl Drop for DropBomb {
+        fn drop(&mut self) {
+            panic!("rejected command destructor probe");
+        }
+    }
+
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let wake_count_in_callback = Arc::clone(&wake_count);
+    let wake: Arc<dyn Fn() + Send + Sync> =
+        Arc::new(
+            move || match wake_count_in_callback.fetch_add(1, Ordering::Relaxed) + 1 {
+                1 => panic!("initial command wake probe"),
+                2 => panic!("full-inbox retry wake probe"),
+                _ => {}
+            },
+        );
+    let runtime = new_runtime_with_capacity(1, wake).expect("runtime with one command slot");
+    let sender = runtime.command_sender();
+    let navigator = NavigatorHandle::new();
+    navigator.seed_initial(test_route("/"));
+    let filler = || NavigatorCommand::maybe_pop(navigator.command_target());
+    let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sender.send_navigation(filler())
+    }));
+    assert!(first.is_err(), "the accepted command leaves wake debt");
+
+    let foreign_graph = flui_view::Reactive::new();
+    let foreign_signal = foreign_graph.signal(0u8);
+    let capture = DropBomb;
+    let retry = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sender.send_signal_write(foreign_signal.detach(), move |_signal, _graph| {
+            let _capture_stays_owned_by_the_rejected_command = &capture;
+        })
+    }));
+    let payload = retry.expect_err("the failed debt retry must unwind");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"full-inbox retry wake probe"),
+        "the rejected command destructor panic must remain secondary"
+    );
+
+    let later_overflow = sender
+        .send_navigation(filler())
+        .expect_err("the original accepted command still fills the inbox");
+    assert!(matches!(
+        later_overflow,
+        CommandSendError::ChannelFull { capacity: 1, .. }
+    ));
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        3,
+        "the second failed wake leaves debt for a later healthy full-path retry"
+    );
+    assert_eq!(runtime.drain_commands().invoked, 1);
+}
+
+#[test]
 fn dropped_runtime_yields_owner_gone() {
     let runtime = new_runtime(noop_wake()).expect("runtime");
     let sender = runtime.command_sender();

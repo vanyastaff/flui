@@ -13,6 +13,7 @@
 
 mod build_owner;
 mod element_owner;
+mod external_build_inbox;
 mod global_key_registry;
 mod global_key_reservations;
 mod global_key_scope;
@@ -47,6 +48,8 @@ pub use flui_foundation::{RebuildReason, RebuildReasons};
 // no public consumer. See `ExternalBuildScheduler`.
 pub(crate) use build_owner::ExternalBuildScheduler;
 pub use element_owner::ElementOwner;
+#[cfg(test)]
+pub(crate) use external_build_inbox::ExternalBuildInbox;
 // Build-time live-tree handle carried on `ElementOwner` during a
 // `build_scope` drain (PR-K). Crate-internal.
 pub(crate) use element_owner::BuildHandle;

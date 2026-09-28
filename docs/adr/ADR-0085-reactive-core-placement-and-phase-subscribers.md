@@ -6,6 +6,10 @@
 - **Revised:** 2026-09-26 (prototype of the read contract; see Context. Then §2 and §5 shipped,
   with the drivers, `RebuildSink`, `ScopeRef::detached` and `SignalError::NoGraph` moved to §6
   step 2 and `SignalWriteExt` sealed)
+- **Revised:** 2026-09-28 — read and graph-routed command callbacks use retained `FnMut`
+  envelopes invoked at most once. Success destroys captures after framework finalization;
+  callback panic retains the opaque bundle because aggregate drop glue cannot be made safe by
+  another unwind boundary.
 - **Amends (on acceptance):** [ADR-0074](ADR-0074-realm-scoped-signals.md) — §5.1 ("`Reactive` … lives beside
   `BuildOwner`", "reachable as `cx.reactive()`"), §5.2 (reads take `&dyn BuildContext`; now any
   `&S` where `S: ReadScope`), and the `signals` feature named in its Status line
@@ -155,7 +159,7 @@ one graph per realm is not decided here; it would need its own scheduled step an
 cross-window read needs it.
 
 The command carries its routing key: `UiCommand::SignalWrite { target: SignalSlot, apply }`,
-built by `send_signal_write(target: SignalSender<T>, apply: impl FnOnce(Signal<T>, &Reactive))`,
+built by `send_signal_write(target: SignalSender<T>, apply: impl FnMut(Signal<T>, &Reactive))`,
 which takes the slot from the handle so a write cannot be addressed to one graph and performed
 against another. The drain requests the owning presentation's frame itself, because a
 secondary presentation's `BuildOwner` has no wake hook of its own.
@@ -217,11 +221,11 @@ impl<T: 'static> Signal<T> {
     #[doc(hidden)] pub const fn from_slot(slot: SignalSlot) -> Self;
     pub const fn slot(self) -> SignalSlot;
     pub const fn detach(self) -> SignalSender<T>;
-    pub fn try_with<S: ReadScope + ?Sized, R>(self, cx: &S, f: impl FnOnce(&T) -> R) -> Result<R, SignalError>;
+    pub fn try_with<S: ReadScope + ?Sized, R>(self, cx: &S, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
     pub fn try_get<S: ReadScope + ?Sized>(self, cx: &S) -> Result<T, SignalError> where T: Clone;
-    pub fn with<S: ReadScope + ?Sized, R>(self, cx: &S, f: impl FnOnce(&T) -> R) -> R; // `# Panics` documented
+    pub fn with<S: ReadScope + ?Sized, R>(self, cx: &S, f: impl FnMut(&T) -> R) -> R; // `# Panics` documented
     pub fn get<S: ReadScope + ?Sized>(self, cx: &S) -> T where T: Clone;                // `# Panics` documented
-    pub fn peek<R>(self, graph: &dyn ReadGraph, f: impl FnOnce(&T) -> R) -> Result<R, SignalError>;
+    pub fn peek<R>(self, graph: &dyn ReadGraph, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
 }
 
 pub struct SignalSender<T: 'static>; // Send + Sync; attach() -> Signal<T>; slot() -> SignalSlot

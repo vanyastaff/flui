@@ -234,6 +234,101 @@ fn a_read_in_build_subscribes_through_the_production_context() {
     );
 }
 
+#[test]
+fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader() {
+    let owners = MountOwners::fresh();
+    let graph = owners.build_owner.reactive().clone();
+    let signal = graph.signal(1u32);
+    let builds = Rc::new(Cell::new(0));
+    let reader_id = Rc::new(Cell::new(None));
+    let root = SigReader {
+        sig: signal,
+        builds: Rc::clone(&builds),
+        id: Rc::clone(&reader_id),
+    };
+    let mut binding = HeadlessBinding::new();
+    binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
+    binding.pump_frame(FRAME);
+
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        signal.update(&graph, |value| {
+            *value = 9;
+            panic!("update probe");
+        })
+    }));
+    assert!(outcome.is_err());
+    assert_eq!(signal.peek(&graph, |value| *value), Ok(9));
+
+    binding.pump_frame(FRAME);
+    assert_eq!(
+        builds.get(),
+        2,
+        "the partial commit invalidates its live reader"
+    );
+    let report = binding.build_owner_mut().last_frame_build_report();
+    assert_eq!(report.count(RebuildReason::SignalChange), 1, "{report:?}");
+}
+
+#[derive(Clone, StatefulView)]
+struct RecoveringSignalReader {
+    sig: Signal<u32>,
+    builds: Rc<Cell<u32>>,
+    observed: Rc<Cell<Option<u32>>>,
+}
+
+struct RecoveringSignalReaderState;
+
+impl StatefulView for RecoveringSignalReader {
+    type State = RecoveringSignalReaderState;
+
+    fn create_state(&self) -> Self::State {
+        RecoveringSignalReaderState
+    }
+}
+
+impl ViewState<RecoveringSignalReader> for RecoveringSignalReaderState {
+    fn build(&self, view: &RecoveringSignalReader, ctx: &dyn BuildContext) -> impl IntoView {
+        view.builds.set(view.builds.get() + 1);
+        let value = view.sig.with(ctx, |value| {
+            assert_ne!(*value, 0, "first build probe");
+            *value
+        });
+        view.observed.set(Some(value));
+        Leaf
+    }
+}
+
+#[test]
+fn a_panicking_first_read_stays_subscribed_and_can_recover() {
+    let owners = MountOwners::fresh();
+    let graph = owners.build_owner.reactive().clone();
+    let signal = graph.signal(0u32);
+    let builds = Rc::new(Cell::new(0));
+    let observed = Rc::new(Cell::new(None));
+    let root = RecoveringSignalReader {
+        sig: signal,
+        builds: Rc::clone(&builds),
+        observed: Rc::clone(&observed),
+    };
+    let mut binding = HeadlessBinding::new();
+    binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
+
+    binding.pump_frame(FRAME);
+    assert_eq!(builds.get(), 1);
+    assert_eq!(observed.get(), None, "the first build unwound");
+    assert_eq!(graph.readers_of(signal.slot()).len(), 1);
+
+    signal.set(&graph, 1).expect("signal remains writable");
+    binding.pump_frame(FRAME);
+
+    assert_eq!(
+        builds.get(),
+        2,
+        "the signal write retries the recovered element"
+    );
+    assert_eq!(observed.get(), Some(1));
+}
+
 // ============================================================================
 // A handle of the wrong type
 // ============================================================================

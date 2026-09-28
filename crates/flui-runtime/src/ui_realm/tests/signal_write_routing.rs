@@ -6,6 +6,7 @@
 
 use std::sync::atomic::AtomicU32;
 use std::sync::mpsc;
+use std::{panic::AssertUnwindSafe, panic::catch_unwind};
 
 use flui_view::{Reactive, Signal, SignalError};
 
@@ -146,6 +147,147 @@ fn a_write_whose_presentation_closed_is_dropped_and_counted() {
 }
 
 #[test]
+fn stale_signal_command_disposal_panic_rearms_its_fifo_tail() {
+    struct DropBomb;
+
+    impl Drop for DropBomb {
+        fn drop(&mut self) {
+            panic!("stale command capture destructor probe");
+        }
+    }
+
+    let (wake, wake_count) = counting_wake();
+    let mut realm = new_runtime(wake).expect("runtime");
+    let closed = realm.install_second_presentation_for_test();
+    let stale = graph_of(&realm, closed).signal(1u32);
+    assert!(realm.close_presentation_entered(closed));
+    let live_graph = graph_of(&realm, realm.presentation_id());
+    let tail = live_graph.signal(0u32);
+    let ran = Arc::new(AtomicBool::new(false));
+    let ran_in_callback = Arc::clone(&ran);
+    let capture = DropBomb;
+    let sender = realm.command_sender();
+    sender
+        .send_signal_write(stale.detach(), move |_signal, _graph| {
+            let _capture_stays_owned_by_the_command = &capture;
+            ran_in_callback.store(true, Ordering::Relaxed);
+        })
+        .expect("stale command enqueues");
+    sender
+        .send_signal_write(tail.detach(), move |tail, graph| {
+            tail.set(graph, 9).expect("tail signal remains live");
+        })
+        .expect("tail command enqueues");
+    let wakes_after_sends = wake_count.load(Ordering::Relaxed);
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
+
+    let payload = outcome.expect_err("the capture destructor panic must propagate");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"stale command capture destructor probe")
+    );
+    assert!(
+        !ran.load(Ordering::Relaxed),
+        "the stale callback must not run"
+    );
+    assert_eq!(
+        tail.peek(&live_graph, |value| *value),
+        Ok(0),
+        "the panic leaves the FIFO tail queued"
+    );
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_sends + 1,
+        "discarding the stale command must rearm its FIFO tail"
+    );
+
+    assert!(realm.drain_owner_inbox());
+    assert_eq!(tail.peek(&live_graph, |value| *value), Ok(9));
+}
+
+#[test]
+fn stale_signal_command_disposal_panic_retries_a_concurrent_tails_failed_wake() {
+    struct BlockingDropBomb {
+        entered: Arc<std::sync::Barrier>,
+        release: Arc<std::sync::Barrier>,
+    }
+
+    impl Drop for BlockingDropBomb {
+        fn drop(&mut self) {
+            self.entered.wait();
+            self.release.wait();
+            panic!("stale command capture destructor probe");
+        }
+    }
+
+    let panic_next_wake = Arc::new(AtomicBool::new(false));
+    let panic_next_wake_in_callback = Arc::clone(&panic_next_wake);
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let wake_count_in_callback = Arc::clone(&wake_count);
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        wake_count_in_callback.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            !panic_next_wake_in_callback.swap(false, Ordering::Relaxed),
+            "concurrent tail wake probe"
+        );
+    });
+    let mut realm = new_runtime(wake).expect("runtime");
+    let closed = realm.install_second_presentation_for_test();
+    let stale = graph_of(&realm, closed).signal(1u32);
+    assert!(realm.close_presentation_entered(closed));
+    let live_graph = graph_of(&realm, realm.presentation_id());
+    let tail = live_graph.signal(0u32);
+    let tail_sender = tail.detach();
+    let entered = Arc::new(std::sync::Barrier::new(2));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let capture = BlockingDropBomb {
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+    };
+    let sender = realm.command_sender();
+    sender
+        .send_signal_write(stale.detach(), move |_signal, _graph| {
+            let _capture_stays_owned_by_the_command = &capture;
+        })
+        .expect("stale command enqueues");
+    let wakes_after_stale_send = wake_count.load(Ordering::Relaxed);
+
+    let producer = std::thread::spawn(move || {
+        entered.wait();
+        panic_next_wake.store(true, Ordering::Relaxed);
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            sender.send_signal_write(tail_sender, move |tail, graph| {
+                tail.set(graph, 9).expect("tail signal remains live");
+            })
+        }));
+        release.wait();
+        let payload = outcome.expect_err("the concurrent tail wake must fail");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"concurrent tail wake probe")
+        );
+    });
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
+    producer.join().expect("producer contains its wake panic");
+
+    let payload = outcome.expect_err("the stale capture destructor panic must resume");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"stale command capture destructor probe")
+    );
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_stale_send + 2,
+        "the failed concurrent wake and the teardown recovery each reach the hook"
+    );
+    assert_eq!(tail.peek(&live_graph, |value| *value), Ok(0));
+    assert!(realm.drain_owner_inbox());
+    assert_eq!(tail.peek(&live_graph, |value| *value), Ok(9));
+}
+
+#[test]
 fn a_write_for_a_graph_outside_the_realm_never_runs_here() {
     let realm = UiRealm::for_test();
     let graph_a = graph_of(&realm, realm.presentation_id());
@@ -210,6 +352,283 @@ fn a_routed_write_requests_the_owning_presentations_frame() {
             .take_redraw_pending(),
         "a routed write must request the owning presentation's frame, whose BuildOwner has \
          no wake hook of its own"
+    );
+}
+
+#[test]
+fn a_panicking_routed_write_still_requests_its_owning_presentations_frame() {
+    let (wake, wake_count) = counting_wake();
+    let mut realm = new_runtime(wake).expect("runtime");
+    let a = realm.presentation_id();
+    let b = realm.install_second_presentation_for_test();
+    let graph_b = graph_of(&realm, b);
+    let signal = graph_b.signal(1u32);
+    let tail = graph_b.signal(0u32);
+    let builds_b = builds();
+    realm
+        .attach_root_widget_to_for_test(
+            b,
+            &Reader {
+                sig: signal,
+                builds: Arc::clone(&builds_b),
+            },
+        )
+        .expect("secondary root attaches");
+    let mut backend = ScriptedSink::always_presents();
+    realm.render_frame(&mut backend);
+    let _ = realm.take_redraw_request();
+    let _ = realm
+        .presentations
+        .get(b)
+        .expect("secondary installed")
+        .take_redraw_pending();
+
+    let sender = realm.command_sender();
+    sender
+        .send_signal_write(signal.detach(), move |signal, graph| {
+            let _ = signal.update(graph, |value| {
+                *value = 7;
+                panic!("command updater probe");
+            });
+        })
+        .expect("send");
+    sender
+        .send_signal_write(tail.detach(), move |tail, graph| {
+            tail.set(graph, 9).expect("tail signal remains live");
+        })
+        .expect("tail send");
+    let wakes_after_sends = wake_count.load(Ordering::Relaxed);
+    let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
+
+    let payload = outcome.expect_err("the command panic must resume");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"command updater probe")
+    );
+    assert_eq!(signal.peek(&graph_b, |value| *value), Ok(7));
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_sends + 1,
+        "the unwinding owner turn must re-arm a platform wake"
+    );
+    assert_eq!(
+        tail.peek(&graph_b, |value| *value),
+        Ok(0),
+        "the FIFO tail remains queued when the first command unwinds"
+    );
+    assert!(
+        realm.drain_owner_inbox(),
+        "the re-armed owner turn must observe redraw demand"
+    );
+    assert_eq!(
+        tail.peek(&graph_b, |value| *value),
+        Ok(9),
+        "the next owner turn drains the preserved FIFO tail"
+    );
+    assert!(
+        realm
+            .presentations
+            .get(b)
+            .expect("secondary installed")
+            .take_redraw_pending(),
+        "the addressed presentation must retain redraw demand"
+    );
+    assert!(
+        !realm
+            .presentations
+            .get(a)
+            .expect("primary installed")
+            .take_redraw_pending(),
+        "the sibling presentation stays untouched"
+    );
+
+    realm.render_frame(&mut backend);
+    assert_eq!(count(&builds_b), 2, "the partial commit becomes visible");
+}
+
+#[test]
+fn signal_command_panic_keeps_priority_over_its_captures_destructor_panic() {
+    struct DropBomb;
+
+    impl Drop for DropBomb {
+        fn drop(&mut self) {
+            panic!("command capture destructor probe");
+        }
+    }
+
+    let (wake, wake_count) = counting_wake();
+    let realm = new_runtime(wake).expect("runtime");
+    let graph = graph_of(&realm, realm.presentation_id());
+    let signal = graph.signal(1u32);
+    let first_capture = DropBomb;
+    let second_capture = DropBomb;
+    realm
+        .command_sender()
+        .send_signal_write(signal.detach(), move |signal, graph| {
+            let _capture_bundle_stays_owned_by_the_command = (&first_capture, &second_capture);
+            let _ = signal.update(graph, |value| {
+                *value = 7;
+                panic!("command callback probe");
+            });
+        })
+        .expect("send while wake is healthy");
+    let wakes_after_send = wake_count.load(Ordering::Relaxed);
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
+
+    let payload = outcome.expect_err("the command callback panic must resume");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"command callback probe"),
+        "the capture destructor panic must remain secondary"
+    );
+    assert_eq!(
+        signal.peek(&graph, |value| *value),
+        Ok(7),
+        "the partial commit survives both contained panics"
+    );
+    assert!(
+        realm.take_redraw_request(),
+        "the partial commit retains redraw demand"
+    );
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_send + 1,
+        "the owner turn is rearmed after the command panic"
+    );
+}
+
+#[test]
+fn a_failed_signal_write_rearm_retries_at_the_next_owner_boundary() {
+    let panic_on_wake = Arc::new(AtomicBool::new(false));
+    let panic_on_wake_in_callback = Arc::clone(&panic_on_wake);
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let wake_count_in_callback = Arc::clone(&wake_count);
+    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        wake_count_in_callback.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            !panic_on_wake_in_callback.swap(false, Ordering::Relaxed),
+            "command wake probe"
+        );
+    });
+    let realm = new_runtime(wake).expect("runtime");
+    let graph = graph_of(&realm, realm.presentation_id());
+    let signal = graph.signal(1u32);
+    let tail = graph.signal(0u32);
+    let sender = realm.command_sender();
+    sender
+        .send_signal_write(signal.detach(), move |signal, graph| {
+            let _ = signal.update(graph, |value| {
+                *value = 7;
+                panic!("command updater probe");
+            });
+        })
+        .expect("send while wake is healthy");
+    sender
+        .send_signal_write(tail.detach(), move |tail, graph| {
+            tail.set(graph, 9).expect("tail signal remains live");
+        })
+        .expect("tail send while wake is healthy");
+    let wakes_after_sends = wake_count.load(Ordering::Relaxed);
+    panic_on_wake.store(true, Ordering::Relaxed);
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
+
+    let payload = outcome.expect_err("the command panic must resume");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"command updater probe"),
+        "the secondary wake panic must not replace the updater panic"
+    );
+    assert_eq!(signal.peek(&graph, |value| *value), Ok(7));
+    assert_eq!(
+        tail.peek(&graph, |value| *value),
+        Ok(0),
+        "the callback panic leaves the FIFO tail queued"
+    );
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_sends + 1,
+        "the first rearm attempt reaches the hook and fails"
+    );
+
+    assert!(
+        realm.drain_owner_inbox(),
+        "the next owner boundary must preserve the partial commit's redraw demand"
+    );
+    assert_eq!(
+        tail.peek(&graph, |value| *value),
+        Ok(9),
+        "the next owner boundary drains the preserved FIFO tail"
+    );
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_sends + 2,
+        "the completed owner boundary must pay the failed wake debt"
+    );
+
+    let wakes_after_recovery = wake_count.load(Ordering::Relaxed);
+    assert_eq!(realm.drain_commands(), DrainReport::default());
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_recovery,
+        "a successful retry clears the debt instead of waking every boundary"
+    );
+}
+
+#[test]
+fn an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt() {
+    let first_started = Arc::new(std::sync::Barrier::new(2));
+    let release_first = Arc::new(std::sync::Barrier::new(2));
+    let wake_count = Arc::new(AtomicUsize::new(0));
+    let first_started_in_wake = Arc::clone(&first_started);
+    let release_first_in_wake = Arc::clone(&release_first);
+    let wake_count_in_callback = Arc::clone(&wake_count);
+    let wake: Arc<dyn Fn() + Send + Sync> =
+        Arc::new(
+            move || match wake_count_in_callback.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    first_started_in_wake.wait();
+                    release_first_in_wake.wait();
+                }
+                1 => panic!("newer wake probe"),
+                _ => {}
+            },
+        );
+    let realm = new_runtime(wake).expect("runtime");
+    let first_sender = realm.command_sender();
+    let second_sender = first_sender.clone();
+
+    let first = std::thread::spawn(move || first_sender.request_redraw());
+    first_started.wait();
+    let second = std::thread::spawn(move || {
+        catch_unwind(AssertUnwindSafe(|| second_sender.request_redraw()))
+    });
+    let second_outcome = second
+        .join()
+        .expect("second sender contains its wake panic");
+    assert!(second_outcome.is_err(), "the newer wake must fail");
+    release_first.wait();
+    first.join().expect("older wake eventually succeeds");
+    assert_eq!(wake_count.load(Ordering::SeqCst), 2);
+
+    assert_eq!(realm.drain_commands(), DrainReport::default());
+    assert_eq!(
+        wake_count.load(Ordering::SeqCst),
+        3,
+        "the older success acknowledges only its own generation; the next owner boundary must \
+         retry the newer failed generation"
+    );
+    assert!(
+        realm.take_redraw_request(),
+        "the overlapping requests retain their coalesced redraw demand"
+    );
+
+    assert_eq!(realm.drain_commands(), DrainReport::default());
+    assert_eq!(
+        wake_count.load(Ordering::SeqCst),
+        3,
+        "the successful retry clears the newer generation"
     );
 }
 

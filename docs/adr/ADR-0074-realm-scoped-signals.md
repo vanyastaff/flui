@@ -4,6 +4,10 @@
   feature was removed by ADR-0085 §5). Derived values and effects (`Computed<T>`, `Effect`) are
   not part of this decision; they are designed in [ADR-0075](ADR-0075-derived-state-and-effects.md).
 - **Date:** 2026-09-22
+- **Revised:** 2026-09-28 — read, update and cross-thread command callbacks are retained
+  `FnMut` values invoked at most once. Their opaque capture bundles are destroyed after successful
+  framework finalization but deliberately leaked after callback panic, because aggregate drop glue
+  cannot be made safe by an outer unwind boundary.
 - **Supersedes:** the signals clause of FOUNDATIONS C1 (now §7's wording) and ADR-0008's
   "signals-as-default are rejected" (ADR-0008 has since been retired).
 - **Amended-by:** [ADR-0085](ADR-0085-reactive-core-placement-and-phase-subscribers.md)
@@ -114,13 +118,13 @@ pub struct Signal<T: 'static> { /* SignalSlot */ }
 impl<T> Signal<T> {
     // build-time reads: the building element becomes a reader
     pub fn get(self, cx: &dyn BuildContext) -> T where T: Clone;  // panics on a stale handle
-    pub fn with<R>(self, cx: &dyn BuildContext, f: impl FnOnce(&T) -> R) -> R;
+    pub fn with<R>(self, cx: &dyn BuildContext, f: impl FnMut(&T) -> R) -> R;
     pub fn try_get(self, cx: &dyn BuildContext) -> Result<T, SignalError>;
-    pub fn try_with<R>(self, cx: &dyn BuildContext, f: impl FnOnce(&T) -> R) -> Result<R, SignalError>;
+    pub fn try_with<R>(self, cx: &dyn BuildContext, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
     // outside build: callbacks, tests, realm commands
-    pub fn peek<R>(self, r: &Reactive, f: impl FnOnce(&T) -> R) -> Result<R, SignalError>;
+    pub fn peek<R>(self, r: &Reactive, f: impl FnMut(&T) -> R) -> Result<R, SignalError>;
     pub fn set(self, r: &Reactive, value: T) -> Result<(), SignalError>;  // marks readers, equal or not
-    pub fn update<R>(self, r: &Reactive, f: impl FnOnce(&mut T) -> R) -> Result<R, SignalError>;
+    pub fn update<R>(self, r: &Reactive, f: impl FnMut(&mut T) -> R) -> Result<R, SignalError>;
     pub fn set_if_changed(self, r: &Reactive, value: T) -> Result<bool, SignalError> where T: PartialEq;
     pub fn detach(self) -> SignalSender<T>;                                // the Send form (§5.8)
 }
@@ -179,6 +183,26 @@ signal.set(v)                         // owner thread, outside build
 - **Re-entrancy.** A read/write closure runs with no borrow of the graph held (the value is on
   loan, put back if the generation still matches). Touching *another* slot from inside is fine;
   touching the same slot is `SignalError::Reentrant`, never a `RefCell` panic.
+- **Unwind consistency.** `update(&mut T)` is commit-on-unwind, not transactional: if its closure
+  mutates the value and panics while the slot remains live, the partial value is returned to the
+  slot, all current readers are durably enqueued as one batch, and the original panic resumes.
+  Enqueue precedes the frame wake and signal telemetry, so either of those panicking cannot leave
+  only a prefix invalidated. Explicitly releasing the same slot inside the closure remains
+  authoritative: the release destroys the loaned value and reader set, so no commit survives to
+  invalidate. Rollback for arbitrary `T` and arbitrary external effects is not promised; a domain
+  operation needing atomicity prepares and validates a replacement before `set`, or needs a
+  separate transaction primitive. A valid typed read records its dependency after graph/type
+  validation but before its user panic escapes, so first-build recovery retains a path for a later
+  write without imposing a reentrant `ReadGraph` contract.
+- **Replacement teardown is phased.** `set` commits the replacement without invoking either
+  value's destructor, returns the value loan, durably invalidates readers, and only then destroys
+  the retired value under its own unwind boundary.
+  `set_if_changed` keeps the proposed value
+  outside the equality comparison's unwind boundary. Thus the chronologically first phase panic
+  keeps priority and a committed replacement remains observable. Rust cannot generically
+  recover when two fields panic inside one aggregate's generated drop glue; the framework instead
+  completes its own loan/invalidation protocol before such opaque destruction begins, and retains
+  opaque values when another panic already has priority.
 - Writes during a drain (e.g. from `did_update_view`) fall into the mid-drain absorb path.
 
 ### 5.4 Effects
@@ -285,10 +309,12 @@ A headless test builds the model with the binding's `reactive()`, writes with
 ### 5.8 Threads
 
 - `Signal` and `Reactive` are `!Send + !Sync`, realm-affine like the element tree (ADR-0027).
-- Cross-thread writes go through the realm proxy: `UiCommand::SignalWrite(Box<dyn FnOnce(&Reactive)
+- Cross-thread writes go through the realm proxy: `UiCommand::SignalWrite(Box<dyn FnMut(&Reactive)
   + Send>)` runs on the owner thread at the next idle drain, marks readers, and wakes a frame. The
   closure captures `signal.detach()` — a `Send + Sync` `SignalSender<T>` re-attached with
-  `.attach()` on the owner side.
+  `.attach()` on the owner side. If the command panics after a partial signal commit, the owning
+  presentation and realm retain redraw demand before the original panic resumes; a sibling
+  presentation is not woken.
 - Writes from a dead realm's sender return `OwnerGone`, like every realm-scoped command.
 - `UiCommand::SignalWrite` and `UiCommandSender::send_signal_write` are `pub(crate)` until an
   async task API vends a `SignalSender` through the realm handle; this ADR adds no public realm

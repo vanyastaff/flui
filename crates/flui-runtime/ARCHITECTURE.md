@@ -241,6 +241,41 @@ tick still precedes every presentation's build, which is the ordering the
 segment relies on. Moving the tick into begin frame is a separate change.
 Pinned by `pump_ticks_vsync_in_the_persistent_phase_not_among_transient_callbacks`.
 
+### Addressed dispatch retains redraw demand across unwind
+
+**Rule.** An owner-thread operation that may run user mutation follows
+`catch dispatch → request the resolved presentation's redraw → resume the
+original panic`. Graph-addressed `SignalWrite`, active-presentation keyboard
+dispatch and presentation-addressed IME dispatch all use this ordering, as the
+pointer path already did. A partial signal commit can therefore become visible
+on a later frame even when its callback unwinds; the operation never redirects
+demand to the primary or wakes an unrelated sibling.
+
+The `SignalWrite` command callback is `FnMut`, although it is invoked at most
+once. Its envelope stays owned outside the caught invocation. Redraw demand is
+durable before a successful callback's captures are destroyed; a callback
+panic retains the opaque envelope. A stale command likewise rearms an existing
+FIFO tail before destroying its envelope. If a tail arrives concurrently while
+that destruction is blocked and its ingress wake fails, a caught destructor
+panic retries the shared delivery debt before it resumes. This prevents framework
+state from being stranded even though Rust cannot recover from two panicking field
+destructors inside one aggregate's generated drop glue.
+
+Every command and input-redraw wake has realm-scoped delivery debt shared by
+the realm and every `UiCommandSender`. Replaceable identity tokens, rather than
+a boolean latch or finite integer generation, prevent an older overlapping
+successful wake from erasing a newer failed delivery and cannot saturate on
+32-bit targets. Later command ingress or a completed owner-inbox drain retries
+the newest unacknowledged token; no retry is promised without a
+later host opportunity. A send refused because the bounded inbox is full is
+also a host opportunity: it retries existing debt before returning the rejected
+command, because otherwise no successful ingress could reach the wake path.
+
+This is continuation safety, not rollback or callback isolation. The panic
+still leaves the dispatch boundary, and arbitrary external effects remain the
+application's responsibility. Pinned by the panicking secondary-presentation
+signal command, command-capture destructor, and addressed keyboard/IME tests.
+
 `execution` has no Flutter counterpart to map: runtime and scheduling
 topology, including background execution, is outside Flutter's reference
 (ADR-0027), and ADR-0047 records its design.

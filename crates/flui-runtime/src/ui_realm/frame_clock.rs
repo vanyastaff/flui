@@ -181,7 +181,11 @@ impl UiRealm {
         // the screen while the position advanced invisibly. The wake sets
         // `needs_redraw` (idempotent with the store above) AND requests a
         // platform redraw, which winit coalesces per frame.
-        (self.wake)();
+        // Use the realm's shared owner-turn delivery ledger. If the platform
+        // hook unwinds before posting the redraw, the dirty flags above stay
+        // durable and the next ingress or completed command-drain boundary
+        // retries the unacknowledged wake generation.
+        self.sender_prototype.wake_owner();
     }
 
     /// [`Self::request_redraw_for`]'s pipeline-dirtying counterpart,

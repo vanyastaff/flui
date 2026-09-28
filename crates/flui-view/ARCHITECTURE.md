@@ -311,6 +311,80 @@ context's writes the owner's graph, a write opened in `build` is refused), the
 `compile_fail` doctests on `WriterSource` and `LifecycleContext::writer_source`, and the
 `tests/ui/signal_write_*`, `unit_closure_*`, `let_bound_*` and `writer_escapes_*` snapshots.
 
+### Signal mutation is commit-on-unwind, not transactional
+
+Signals have no Flutter counterpart; this is the unwind half of ADR-0074's
+write-to-dirty contract.
+
+**Rule.** An `update` closure that mutates its value and then panics leaves the
+partial value committed while the slot remains live. Before the original panic resumes, every registered
+reader is inserted into the external rebuild inbox as one durable batch. The
+batch releases its lock before requesting one frame; a panicking wake therefore
+cannot expose only a prefix of the reader set. Signal telemetry runs only after
+that enqueue. A failed wake leaves debt on the shared inbox; the next hooked
+scheduler call retries it even when every id is already queued. Concurrent
+callers never wait behind the external hook: they may race delivery, and a
+successful hook acknowledges only the identity token captured before that
+hook began. Fresh work replaces the token, so an older success cannot erase a
+newer failure and there is no finite counter to exhaust on 32-bit targets. A
+reentrant schedule cannot call the hook recursively and receives
+one compensating attempt from its outer call. The same debt also covers direct
+`BuildOwner`/`ElementOwner` scheduling. If invalidation or
+loan finalization panics while an updater panic is already being handled, the
+updater's original payload keeps priority.
+
+`set` commits its replacement without running either value's destructor, then
+returns the loan and invalidates readers before retiring the old value. A
+panicking old-value destructor therefore observes an already-readable
+replacement and cannot prevent its readers from being scheduled.
+`set_if_changed` likewise keeps its proposed value outside the equality
+comparison's unwind boundary, so a panicking `PartialEq` remains the primary
+failure and commits nothing even when the proposed value's destructor panics.
+
+The updater is `FnMut`, although the graph calls it exactly once. Keeping the
+  closure owned outside the caught invocation lets the graph retain its opaque
+  capture bundle when the updater panics; consuming an `FnOnce` would instead run
+  capture destructors during the updater's unwind, where a second panic aborts the
+  process before the graph can finalize the loan or invalidate readers. The same
+  ownership boundary covers pre-invocation preparation: a panicking refusal
+  telemetry subscriber retains the still-uninvoked updater. This is an
+  exceptional-path leak: aggregate closure drop glue cannot be decomposed or made
+  safe by an outer `catch_unwind`; successful callbacks still destroy captures,
+  but only after loan restoration and reader invalidation are durable.
+
+A valid typed read releases the graph's value loan, then subscribes before a
+panic from its user closure resumes. A recovered first build that panics in
+`Signal::with` therefore retains the dependency needed for a later write to
+retry it without requiring a reentrant `ReadGraph`. Foreign, stale, unbound and
+type-mismatched reads still subscribe nobody. Before any caught panic resumes,
+  every still-owned opaque callback, generic result and cleanup payload is
+  deliberately retained, so generated aggregate drop glue cannot replace the
+  chronologically first panic or turn recovery into a double-panic abort.
+Typed reader closures follow the same `FnMut`-called-once rule so their captures
+remain available to that cleanup boundary.
+
+**Not promised.** `update(&mut T)` is not a transaction and cannot roll back an
+arbitrary `T` or external effects. Code requiring atomic domain changes prepares
+and validates a replacement value before `set`; a future transactional primitive
+needs its own consumer and contract. Notification stays deferred through the
+existing rebuild inbox and never invokes signal readers inline. An explicit
+`Reactive::release` of that same slot from inside its closure remains
+authoritative: it destroys the loaned value and reader set, so no commit
+survives to invalidate.
+
+Rust also provides no generic way to recover from aggregate drop glue when two
+fields both panic: the second panic occurs while the first is unwinding and the
+process aborts before an outer `catch_unwind` can observe either payload. FLUI
+therefore completes its own loan/invalidation/wake protocol before destroying a
+successful callback or retired value, and retains opaque values once another
+panic already has priority. It does not promise process recovery from two
+simultaneously panicking destructors inside one user-owned aggregate.
+
+Pinned by the reactive graph unit tests for replacement/equality/destructor and
+updater/wake/telemetry panics,
+`flui-foundation`'s subscribe-before-unwind test, and
+`tests/signal_reads.rs` for mounted partial-commit and first-build recovery.
+
 ### Reconciliation emits typed events on the live path
 
 **Rule.** `reconcile_children_by_id` emits one `ReconcileEvent` per child disposition (`Mount`,
