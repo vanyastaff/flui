@@ -147,6 +147,66 @@ fn a_write_whose_presentation_closed_is_dropped_and_counted() {
 }
 
 #[test]
+fn stale_signal_command_disposal_panic_rearms_its_fifo_tail() {
+    struct DropBomb;
+
+    impl Drop for DropBomb {
+        fn drop(&mut self) {
+            panic!("stale command capture destructor probe");
+        }
+    }
+
+    let (wake, wake_count) = counting_wake();
+    let mut realm = new_runtime(wake).expect("runtime");
+    let closed = realm.install_second_presentation_for_test();
+    let stale = graph_of(&realm, closed).signal(1u32);
+    assert!(realm.close_presentation_entered(closed));
+    let live_graph = graph_of(&realm, realm.presentation_id());
+    let tail = live_graph.signal(0u32);
+    let ran = Arc::new(AtomicBool::new(false));
+    let ran_in_callback = Arc::clone(&ran);
+    let capture = DropBomb;
+    let sender = realm.command_sender();
+    sender
+        .send_signal_write(stale.detach(), move |_signal, _graph| {
+            let _capture_stays_owned_by_the_command = &capture;
+            ran_in_callback.store(true, Ordering::Relaxed);
+        })
+        .expect("stale command enqueues");
+    sender
+        .send_signal_write(tail.detach(), move |tail, graph| {
+            tail.set(graph, 9).expect("tail signal remains live");
+        })
+        .expect("tail command enqueues");
+    let wakes_after_sends = wake_count.load(Ordering::Relaxed);
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
+
+    let payload = outcome.expect_err("the capture destructor panic must propagate");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"stale command capture destructor probe")
+    );
+    assert!(
+        !ran.load(Ordering::Relaxed),
+        "the stale callback must not run"
+    );
+    assert_eq!(
+        tail.peek(&live_graph, |value| *value),
+        Ok(0),
+        "the panic leaves the FIFO tail queued"
+    );
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_sends + 1,
+        "discarding the stale command must rearm its FIFO tail"
+    );
+
+    assert!(realm.drain_owner_inbox());
+    assert_eq!(tail.peek(&live_graph, |value| *value), Ok(9));
+}
+
+#[test]
 fn a_write_for_a_graph_outside_the_realm_never_runs_here() {
     let realm = UiRealm::for_test();
     let graph_a = graph_of(&realm, realm.presentation_id());
@@ -303,6 +363,57 @@ fn a_panicking_routed_write_still_requests_its_owning_presentations_frame() {
 
     realm.render_frame(&mut backend);
     assert_eq!(count(&builds_b), 2, "the partial commit becomes visible");
+}
+
+#[test]
+fn signal_command_panic_keeps_priority_over_its_captures_destructor_panic() {
+    struct DropBomb;
+
+    impl Drop for DropBomb {
+        fn drop(&mut self) {
+            panic!("command capture destructor probe");
+        }
+    }
+
+    let (wake, wake_count) = counting_wake();
+    let realm = new_runtime(wake).expect("runtime");
+    let graph = graph_of(&realm, realm.presentation_id());
+    let signal = graph.signal(1u32);
+    let capture = DropBomb;
+    realm
+        .command_sender()
+        .send_signal_write(signal.detach(), move |signal, graph| {
+            let _capture_stays_owned_by_the_command = &capture;
+            let _ = signal.update(graph, |value| {
+                *value = 7;
+                panic!("command callback probe");
+            });
+        })
+        .expect("send while wake is healthy");
+    let wakes_after_send = wake_count.load(Ordering::Relaxed);
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| realm.drain_commands()));
+
+    let payload = outcome.expect_err("the command callback panic must resume");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"command callback probe"),
+        "the capture destructor panic must remain secondary"
+    );
+    assert_eq!(
+        signal.peek(&graph, |value| *value),
+        Ok(7),
+        "the partial commit survives both contained panics"
+    );
+    assert!(
+        realm.take_redraw_request(),
+        "the partial commit retains redraw demand"
+    );
+    assert_eq!(
+        wake_count.load(Ordering::Relaxed),
+        wakes_after_send + 1,
+        "the owner turn is rearmed after the command panic"
+    );
 }
 
 #[test]

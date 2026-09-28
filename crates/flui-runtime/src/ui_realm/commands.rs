@@ -100,7 +100,7 @@ pub enum UiCommand {
         /// The slot the write targets; its `graph()` selects the presentation.
         target: flui_view::SignalSlot,
         /// Runs against the graph that minted `target`, and against no other.
-        apply: Box<dyn FnOnce(&flui_view::Reactive) + Send>,
+        apply: Box<dyn FnMut(&flui_view::Reactive) + Send>,
     },
 }
 
@@ -304,7 +304,7 @@ impl UiCommandSender {
     pub(crate) fn send_signal_write<T: 'static>(
         &self,
         target: flui_view::SignalSender<T>,
-        apply: impl FnOnce(flui_view::Signal<T>, &flui_view::Reactive) + Send + 'static,
+        mut apply: impl FnMut(flui_view::Signal<T>, &flui_view::Reactive) + Send + 'static,
     ) -> Result<(), CommandSendError> {
         self.send(UiCommand::SignalWrite {
             target: target.slot(),
@@ -396,6 +396,17 @@ impl UiRealm {
     #[must_use]
     pub fn take_redraw_request(&self) -> bool {
         self.redraw_pending.swap(false, Ordering::AcqRel)
+    }
+
+    fn rearm_after_signal_command_panic(&self, payload: Box<dyn std::any::Any + Send>) -> ! {
+        let wake_panic = catch_unwind(AssertUnwindSafe(|| {
+            self.sender_prototype.wake_owner();
+        }))
+        .err();
+        let mut first_panic = Some(payload);
+        preserve_first_input_panic(&mut first_panic, wake_panic, "signal-write redraw wake");
+        let payload = first_panic.expect("BUG: the original signal-write panic must be preserved");
+        resume_unwind(payload);
     }
 
     /// Drain the closed command inbox on the owner thread in strict FIFO
@@ -493,20 +504,47 @@ impl UiRealm {
                         report.dropped_stale += 1;
                     }
                 },
-                UiCommand::SignalWrite { target, apply } => {
+                UiCommand::SignalWrite { target, mut apply } => {
                     let Some((presentation, reactive)) = self.signal_graph_for(target) else {
-                        tracing::warn!(
-                            target: "flui::signals",
-                            graph = target.graph(),
-                            slot = ?target,
-                            "dropping a cross-thread signal write: no presentation of this \
-                             realm owns the slot's graph (its presentation closed, or the \
-                             handle belongs to another realm)"
+                        // Dispose the user envelope before diagnostics, with
+                        // both phases contained. A panicking subscriber must
+                        // not start unwinding while a hostile capture is still
+                        // waiting to be dropped.
+                        let disposed = catch_unwind(AssertUnwindSafe(|| drop(apply)));
+                        let diagnosed = catch_unwind(AssertUnwindSafe(|| {
+                            tracing::warn!(
+                                target: "flui::signals",
+                                graph = target.graph(),
+                                slot = ?target,
+                                "dropping a cross-thread signal write: no presentation of this \
+                                 realm owns the slot's graph (its presentation closed, or the \
+                                 handle belongs to another realm)"
+                            );
+                        }));
+                        let mut stale_panic = disposed.err();
+                        preserve_first_input_panic(
+                            &mut stale_panic,
+                            diagnosed.err(),
+                            "stale signal-write diagnostics",
                         );
                         report.dropped_stale += 1;
+                        if let Some(payload) = stale_panic {
+                            self.rearm_after_signal_command_panic(payload);
+                        }
                         continue;
                     };
                     let outcome = catch_unwind(AssertUnwindSafe(|| apply(&reactive)));
+                    // Keep the command envelope outside the caught invocation.
+                    // Consuming a boxed `FnOnce` there would destroy captures
+                    // during a callback unwind, where a panicking destructor
+                    // would abort before redraw and wake recovery can run.
+                    let disposed = catch_unwind(AssertUnwindSafe(|| drop(apply)));
+                    let mut command_panic = outcome.err();
+                    preserve_first_input_panic(
+                        &mut command_panic,
+                        disposed.err(),
+                        "signal-write capture disposal",
+                    );
                     // A secondary presentation's BuildOwner has no wake hook,
                     // so the owning presentation's frame is requested here.
                     // Do it before resuming a command panic: a signal update
@@ -519,20 +557,8 @@ impl UiRealm {
                     // partial commit cannot starve in an otherwise idle host.
                     // An external wake panic must not replace the command's
                     // original payload.
-                    if let Err(payload) = outcome {
-                        let wake_panic = catch_unwind(AssertUnwindSafe(|| {
-                            self.sender_prototype.wake_owner();
-                        }))
-                        .err();
-                        let mut first_panic = Some(payload);
-                        preserve_first_input_panic(
-                            &mut first_panic,
-                            wake_panic,
-                            "signal-write redraw wake",
-                        );
-                        let payload = first_panic
-                            .expect("BUG: the original signal-write panic must be preserved");
-                        resume_unwind(payload);
+                    if let Some(payload) = command_panic {
+                        self.rearm_after_signal_command_panic(payload);
                     }
                     report.invoked += 1;
                 }

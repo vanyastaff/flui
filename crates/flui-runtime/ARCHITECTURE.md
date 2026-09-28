@@ -251,6 +251,11 @@ pointer path already did. A partial signal commit can therefore become visible
 on a later frame even when its callback unwinds; the operation never redirects
 demand to the primary or wakes an unrelated sibling.
 
+The `SignalWrite` command callback is `FnMut`, although it is invoked at most
+once. Its envelope stays owned outside the caught invocation and is destroyed
+under a separate containment boundary, so a panicking capture destructor
+cannot double-panic during callback unwind and bypass redraw/rearm recovery.
+
 The rearm itself has realm-scoped delivery debt shared by every
 `UiCommandSender`. Monotonic requested/delivered generations, rather than a
 boolean latch, prevent an older overlapping successful wake from erasing a
@@ -261,7 +266,7 @@ later host opportunity.
 This is continuation safety, not rollback or callback isolation. The panic
 still leaves the dispatch boundary, and arbitrary external effects remain the
 application's responsibility. Pinned by the panicking secondary-presentation
-signal command and addressed keyboard/IME tests.
+signal command, command-capture destructor, and addressed keyboard/IME tests.
 
 `execution` has no Flutter counterpart to map: runtime and scheduling
 topology, including background execution, is outside Flutter's reference

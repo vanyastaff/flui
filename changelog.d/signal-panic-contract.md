@@ -1,6 +1,6 @@
 ### Changed
 
-- Signal read and update callbacks now use `FnMut` (still invoked at most once), so their captured state remains outside the unwind boundary and can be destroyed under panic containment.
+- Signal read, update, and cross-thread command callbacks now use `FnMut` (still invoked at most once), so their captured state remains outside the unwind boundary and can be destroyed under panic containment.
 
 ### Fixed
 
