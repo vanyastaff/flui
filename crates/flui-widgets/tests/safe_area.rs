@@ -1,5 +1,5 @@
 use crate::common::{lay_out, offset, size, tight};
-use flui_geometry::EdgeInsets;
+use flui_foundation::geometry::EdgeInsets;
 use flui_widgets::{MediaQuery, MediaQueryData, SafeArea, SizedBox};
 
 #[test]

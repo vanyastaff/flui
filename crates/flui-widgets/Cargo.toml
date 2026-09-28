@@ -59,7 +59,6 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 # TextStyle, …).
 flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
-flui-geometry = { path = "../flui-geometry", version = "=0.2.0-dev" }
 # `Overlay`'s entry list and its published `RebuildHandle` live behind private
 # `Mutex`es: the list is mutated from outside the tree, and
 # `ViewState::build` takes `&self`.

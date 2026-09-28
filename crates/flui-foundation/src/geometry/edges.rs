@@ -165,7 +165,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Edges;
+    /// use flui_foundation::geometry::Edges;
     ///
     /// let insets = Edges::only_left(10.0);
     /// assert_eq!(insets.left, 10.0);
@@ -220,7 +220,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Edges, Size};
+    /// use flui_foundation::geometry::{Edges, Size};
     ///
     /// let insets = Edges::new(10.0, 20.0, 30.0, 40.0);
     /// let size = insets.total_size();
@@ -238,7 +238,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Edges, Offset};
+    /// use flui_foundation::geometry::{Edges, Offset};
     ///
     /// let insets = Edges::new(10.0, 20.0, 30.0, 40.0);
     /// let offset = insets.top_left();
@@ -256,7 +256,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Edges, Offset};
+    /// use flui_foundation::geometry::{Edges, Offset};
     ///
     /// let insets = Edges::new(10.0, 20.0, 30.0, 40.0);
     /// let offset = insets.bottom_right();
@@ -274,7 +274,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Edges;
+    /// use flui_foundation::geometry::Edges;
     ///
     /// let zero_insets = Edges::ZERO;
     /// assert!(zero_insets.is_zero());
@@ -293,7 +293,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Edges;
+    /// use flui_foundation::geometry::Edges;
     ///
     /// let positive = Edges::all(10.0);
     /// assert!(positive.is_non_negative());
@@ -315,7 +315,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Edges;
+    /// use flui_foundation::geometry::Edges;
     ///
     /// let insets = Edges::new(-5.0, 10.0, -3.0, 20.0);
     /// let clamped = insets.clamp_non_negative();
@@ -354,7 +354,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Edges, Point, Rect};
+    /// use flui_foundation::geometry::{Edges, Point, Rect};
     ///
     /// let insets = Edges::all(10.0);
     /// let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
@@ -380,7 +380,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Edges, Point, Rect};
+    /// use flui_foundation::geometry::{Edges, Point, Rect};
     ///
     /// let insets = Edges::all(10.0);
     /// let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
@@ -415,7 +415,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Edges, RRect, Radius, Rect};
+    /// use flui_foundation::geometry::{Edges, RRect, Radius, Rect};
     ///
     /// let rect = Rect::from_ltrb(10.0, 10.0, 90.0, 90.0);
     /// let rrect = RRect::from_rect_circular(rect, 8.0);
@@ -449,7 +449,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Edges, RRect, Radius, Rect};
+    /// use flui_foundation::geometry::{Edges, RRect, Radius, Rect};
     ///
     /// let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     /// let rrect = RRect::from_rect_circular(rect, 8.0);
@@ -482,7 +482,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Edges, Size};
+    /// use flui_foundation::geometry::{Edges, Size};
     ///
     /// let insets = Edges::all(10.0);
     /// let size = Size::new(100.0, 100.0);
@@ -506,7 +506,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Edges, Size};
+    /// use flui_foundation::geometry::{Edges, Size};
     ///
     /// let insets = Edges::all(10.0);
     /// let size = Size::new(100.0, 100.0);
@@ -528,7 +528,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Edges;
+    /// use flui_foundation::geometry::Edges;
     ///
     /// let insets = Edges::new(10.0, 20.0, 30.0, 40.0);
     /// let flipped = insets.flip_horizontal();
@@ -551,7 +551,7 @@ impl Edges<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Edges;
+    /// use flui_foundation::geometry::Edges;
     ///
     /// let insets = Edges::new(10.0, 20.0, 30.0, 40.0);
     /// let flipped = insets.flip_vertical();
@@ -740,8 +740,8 @@ impl<T: Clone> super::traits::Along for Edges<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::{Along, Axis};
-    use crate::{Offset, RRect, Radius, Rect, Size};
+    use crate::geometry::traits::{Along, Axis};
+    use crate::geometry::{Offset, RRect, Radius, Rect, Size};
 
     /// Distinct values in `(top, right, bottom, left)` order.
     fn distinct() -> Edges<i32> {

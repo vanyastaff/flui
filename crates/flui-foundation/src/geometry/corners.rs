@@ -254,8 +254,8 @@ impl<T: Clone> super::traits::Along for Corners<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::traits::{Along, Axis};
-    use crate::{Corner, Radius};
+    use crate::geometry::traits::{Along, Axis};
+    use crate::geometry::{Corner, Radius};
 
     const ALL: [Corner; 4] = [
         Corner::TopLeft,

@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use flui_geometry::EdgeInsets;
+use flui_foundation::geometry::EdgeInsets;
 use flui_view::prelude::StatelessView;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 

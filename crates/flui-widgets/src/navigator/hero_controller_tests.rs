@@ -12,7 +12,7 @@
 #[test]
 fn a_non_finite_rect_is_never_flown() {
     use super::hero_controller::is_valid_flight;
-    use flui_geometry::Rect;
+    use flui_foundation::geometry::Rect;
 
     let finite = Rect::from_ltwh(0.0, 0.0, 10.0, 10.0);
     let infinite = Rect::from_ltwh(0.0, 0.0, f64::INFINITY, 10.0);

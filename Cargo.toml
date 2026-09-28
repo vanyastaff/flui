@@ -6,7 +6,6 @@
 resolver = "3"
 members = [
     # === Phase 1: Foundation Layer ===
-    "crates/flui-geometry",     # Geometry primitives (split from flui-types)
     "crates/flui-types",        # Base types with Unit system (ACTIVE)
     "crates/flui-foundation",   # Foundation types and utilities (ACTIVE)
     "crates/flui-macros",       # Proc-macros (view, diagnostics, and animation derives)
@@ -369,10 +368,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 # === Engine/geometry shared math dependencies ===
 # glam: SIMD GPU math used by flui-engine (serde+bytemuck features) and
-# flui-geometry (bytemuck+mint features). The workspace entry carries the common
+# flui-foundation (geometry: `Matrix4` over `DMat4`). The workspace entry carries the common
 # base features; each crate adds its own extras via per-crate `features = [...]`.
 glam = { version = "0.33", features = ["bytemuck"] }
-# bytemuck: zero-copy Pod/Zeroable derives shared by flui-engine and flui-geometry.
+# bytemuck: zero-copy Pod/Zeroable derives used by flui-engine.
 bytemuck = { version = "1.24", features = ["derive"] }
 
 # === Engine build-script dependencies ===
@@ -652,7 +651,6 @@ workspace = true
 [dependencies]
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
 flui-types = { path = "crates/flui-types", version = "=0.2.0-dev" }
-flui-geometry = { path = "crates/flui-geometry", version = "=0.2.0-dev" }
 flui-foundation = { path = "crates/flui-foundation", version = "=0.2.0-dev" }
 flui-view = { path = "crates/flui-view", version = "=0.2.0-dev" }
 flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev" }

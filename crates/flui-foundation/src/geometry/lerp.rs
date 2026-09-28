@@ -10,7 +10,7 @@
 //! clamp `t`. Overshoot is a feature: bouncy, elastic, and spring curves emit
 //! `t > 1` (or `t < 0`), and clamping would silently flatten that motion.
 
-use crate::{Corners, Edges, Matrix4, Offset, Radius, Rect, Size};
+use crate::geometry::{Corners, Edges, Matrix4, Offset, Radius, Rect, Size};
 
 /// Linear interpolation between two values of the same type.
 ///

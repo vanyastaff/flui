@@ -73,7 +73,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_geometry::Matrix4;
+use flui_foundation::geometry::Matrix4;
 use flui_interaction::events::{Modifiers, ScrollEventData};
 use flui_interaction::routing::EventPropagation;
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
@@ -1010,7 +1010,7 @@ fn align_to_axis(delta: Offset<f64>, axis: Axis) -> Offset<f64> {
 /// `matrix * Matrix4::translation(..)` (post-multiply — the translation
 /// happens in the matrix's own local/scene space before the rest of the
 /// transform is applied), matching `vector_math`'s `translateByDouble`
-/// instance-method convention that the oracle relies on. `flui_geometry`'s
+/// instance-method convention that the oracle relies on. `flui_foundation::geometry`'s
 /// own `Matrix4::translate` mutator has the *opposite* (pre-multiply,
 /// global-space) convention and must not be used here.
 fn clamp_translation(

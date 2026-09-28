@@ -20,7 +20,7 @@
 //! ## Basic Transformations
 //!
 //! ```
-//! use flui_geometry::Matrix4;
+//! use flui_foundation::geometry::Matrix4;
 //!
 //! // Identity matrix (const-evaluable)
 //! const IDENTITY: Matrix4 = Matrix4::identity();
@@ -44,7 +44,7 @@
 //! ## Advanced Operations
 //!
 //! ```
-//! use flui_geometry::Matrix4;
+//! use flui_foundation::geometry::Matrix4;
 //!
 //! let m = Matrix4::rotation_z(0.5);
 //!
@@ -64,7 +64,7 @@
 //! ## Type-Safe Access
 //!
 //! ```
-//! use flui_geometry::Matrix4;
+//! use flui_foundation::geometry::Matrix4;
 //!
 //! let mut m = Matrix4::identity();
 //!
@@ -83,7 +83,7 @@
 //! ## Approximate Equality
 //!
 //! ```
-//! use flui_geometry::Matrix4;
+//! use flui_foundation::geometry::Matrix4;
 //!
 //! let m1 = Matrix4::translation(1.0, 2.0, 0.0);
 //! let m2 = Matrix4::translation(1.0000001, 2.0, 0.0);
@@ -103,7 +103,7 @@ use std::{
 
 use glam::DMat4;
 
-use crate::Rect;
+use crate::geometry::Rect;
 
 /// A 4x4 transformation matrix stored in column-major order.
 ///
@@ -120,8 +120,7 @@ use crate::Rect;
 /// | m2  m6  m10 m14 |
 /// | m3  m7  m11 m15 |
 /// ```
-#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct Matrix4 {
     /// Matrix elements in column-major order (16 floats)
     pub m: [f64; 16],
@@ -190,7 +189,7 @@ impl Matrix4 {
     /// # Example
     ///
     /// ```
-    /// use flui_geometry::Matrix4;
+    /// use flui_foundation::geometry::Matrix4;
     ///
     /// let transform = Matrix4::IDENTITY;
     /// assert!(transform.is_identity());
@@ -206,7 +205,7 @@ impl Matrix4 {
     /// # Example
     ///
     /// ```
-    /// use flui_geometry::Matrix4;
+    /// use flui_foundation::geometry::Matrix4;
     ///
     /// let zero = Matrix4::ZERO;
     /// assert_eq!(zero.determinant(), 0.0);
@@ -579,7 +578,7 @@ impl Matrix4 {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Matrix4;
+    /// use flui_foundation::geometry::Matrix4;
     ///
     /// assert!(Matrix4::identity().is_invertible());
     /// assert!(Matrix4::translation(3.0, -1.0, 0.0).is_invertible());
@@ -691,7 +690,7 @@ impl MulAssign for Matrix4 {
 ///
 /// # Example
 /// ```
-/// use flui_geometry::Matrix4;
+/// use flui_foundation::geometry::Matrix4;
 /// let m = Matrix4::identity();
 /// assert_eq!(m[0], 1.0); // m00
 /// assert_eq!(m[5], 1.0); // m11
@@ -820,7 +819,7 @@ mod glam_backend_tests {
         let cols = m.to_cols_array_f32();
         assert_eq!(&cols[12..15], &[3.0_f32, 4.0, 5.0]);
         assert_eq!(cols[0], 1.0_f32);
-        assert_eq!(bytemuck::bytes_of(&cols).len(), 64);
+        assert_eq!(std::mem::size_of_val(&cols), 64);
     }
 
     #[test]

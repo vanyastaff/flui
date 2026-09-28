@@ -9,7 +9,7 @@ error[E0308]: mismatched types
    = note: expected reference `&Rect<{float}>`
               found reference `&Rect<i32>`
 note: method defined here
-  --> $WORKSPACE/crates/flui-geometry/src/rect.rs
+  --> $WORKSPACE/crates/flui-foundation/src/geometry/rect.rs
    |
    |     pub fn intersect(&self, other: &Self) -> Option<Self> {
    |            ^^^^^^^^^

@@ -4,7 +4,7 @@
 //! mis-propagated constraints or mis-placed a child.
 
 use crate::common::{lay_out, loose, offset, size, tight};
-use flui_geometry::EdgeInsets;
+use flui_foundation::geometry::EdgeInsets;
 use flui_types::Alignment;
 use flui_types::Color;
 use flui_view::ViewExt;

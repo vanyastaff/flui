@@ -22,7 +22,7 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::Size;
+/// use flui_foundation::geometry::Size;
 ///
 /// let ui_size = Size::<f64>::new(800.0, 600.0);
 /// assert_eq!(ui_size.area(), 480_000.0);
@@ -89,7 +89,7 @@ impl<T: Unit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Size;
+    /// use flui_foundation::geometry::Size;
     ///
     /// let s = Size::<f64>::square(10.0);
     /// assert_eq!(s.width, 10.0);
@@ -111,7 +111,7 @@ impl<T: NumericUnit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Size;
+    /// use flui_foundation::geometry::Size;
     ///
     /// let s1 = Size::<f64>::new(100.0, 50.0);
     /// let s2 = Size::<f64>::new(80.0, 60.0);
@@ -132,7 +132,7 @@ impl<T: NumericUnit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Size;
+    /// use flui_foundation::geometry::Size;
     ///
     /// let s1 = Size::<f64>::new(100.0, 50.0);
     /// let s2 = Size::<f64>::new(80.0, 60.0);
@@ -158,7 +158,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Size;
+    /// use flui_foundation::geometry::Size;
     ///
     /// let s1 = Size::<f64>::new(0.0, 10.0);
     /// assert!(s1.is_empty());
@@ -180,7 +180,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Size;
+    /// use flui_foundation::geometry::Size;
     ///
     /// let s = Size::<f64>::new(10.0, 20.0);
     /// assert_eq!(s.area(), 200.0);
@@ -200,7 +200,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Size;
+    /// use flui_foundation::geometry::Size;
     ///
     /// let s = Size::<f64>::new(16.0, 9.0);
     /// assert!((s.aspect_ratio() - 1.777).abs() < 0.01);
@@ -218,7 +218,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, Size};
+    /// use flui_foundation::geometry::{Point, Size};
     ///
     /// let s = Size::<f64>::new(100.0, 200.0);
     /// let c = s.center();
@@ -245,7 +245,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, Size};
+    /// use flui_foundation::geometry::{Point, Size};
     ///
     /// let s = Size::<f64>::new(10.0, 20.0);
     /// assert!(s.contains(Point::<f64>::new(5.0, 10.0)));
@@ -273,7 +273,7 @@ impl<T: Unit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Size;
+    /// use flui_foundation::geometry::Size;
     ///
     /// let size_px = Size::new(100.0, 200.0);
     /// let size_f32: Size = size_px.cast();
@@ -301,7 +301,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Size;
+    /// use flui_foundation::geometry::Size;
     ///
     /// let size = Size::new(100.0, 200.0);
     /// let f32_size = size.to_f32();
@@ -321,7 +321,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Size;
+    /// use flui_foundation::geometry::Size;
     ///
     /// let s = Size::<f64>::new(100.0, 200.0);
     /// assert_eq!(s.to_array(), [100.0, 200.0]);
@@ -337,7 +337,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Size, Vec2};
+    /// use flui_foundation::geometry::{Size, Vec2};
     ///
     /// let s = Size::<f64>::new(100.0, 200.0);
     /// let v = s.to_vec2();
@@ -939,7 +939,7 @@ impl Size<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Size;
+    /// use flui_foundation::geometry::Size;
     ///
     /// let size = Size::new(100.0, 200.0);
     /// let scaled = size.scale(2.0); // 2x Retina display
@@ -1227,7 +1227,7 @@ mod typed_tests {
 
     #[test]
     fn test_size_utility_traits() {
-        use crate::{Along, ApproxEq, Axis, Double, Half};
+        use crate::geometry::{Along, ApproxEq, Axis, Double, Half};
 
         // Test Along trait
         let s = Size::<f64>::new(100.0, 200.0);

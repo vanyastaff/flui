@@ -1,6 +1,6 @@
 //! [`Transform`] — applies a 2D/3D matrix transform to its child when painting.
 
-use flui_geometry::Matrix4;
+use flui_foundation::geometry::Matrix4;
 use flui_objects::RenderTransform;
 use flui_rendering::protocol::BoxProtocol;
 use flui_types::{Alignment, Offset};

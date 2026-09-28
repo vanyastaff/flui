@@ -113,7 +113,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_animation::{Animatable, Animation, AnimationStatus, ArcCurve, Curve, CurvedAnimation};
-use flui_geometry::{Matrix4, Rect};
+use flui_foundation::geometry::{Matrix4, Rect};
 use flui_types::Size;
 use parking_lot::Mutex;
 

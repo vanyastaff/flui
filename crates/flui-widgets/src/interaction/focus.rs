@@ -43,7 +43,7 @@ use crate::anchored_box::AnchoredBox;
 use crate::semantics::Semantics;
 use crate::support::value_callback;
 use flui_foundation::ListenerId;
-use flui_geometry::Rect;
+use flui_foundation::geometry::Rect;
 use flui_interaction::events::KeyEvent;
 use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,

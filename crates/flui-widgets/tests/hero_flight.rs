@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use flui_animation::{Animatable, Animation, AnimationStatus, Curve, Curves, RectTween, Threshold};
 use flui_foundation::ValueKey;
-use flui_geometry::Rect;
+use flui_foundation::geometry::Rect;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_types::Color;
 use flui_types::Offset;

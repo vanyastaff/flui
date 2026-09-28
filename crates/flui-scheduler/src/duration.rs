@@ -571,7 +571,7 @@ impl fmt::Display for FrameDuration {
 /// Type-safe share of a frame's time budget, on the 0.0–100.0 percent scale.
 ///
 /// Used by the frame-budget instrumentation (utilization, per-phase budget
-/// share, jank rate). Distinct from `flui_geometry::Percentage`, which is a
+/// share, jank rate). Distinct from `flui_foundation::geometry::Percentage`, which is a
 /// 0.0–1.0 `f32` layout fraction — the two share nothing but the percent
 /// concept, so they are deliberately separate types with distinct names.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Default)]

@@ -38,7 +38,7 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::Vec2;
+/// use flui_foundation::geometry::Vec2;
 ///
 /// let velocity = Vec2::<f64>::new(10.0, 5.0);
 /// let normalized = Vec2::<f64>::new(0.6, 0.8);
@@ -245,7 +245,7 @@ impl<T: Unit> Vec2<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Vec2;
+    /// use flui_foundation::geometry::Vec2;
     ///
     /// let logical = Vec2::<f64>::new(10.0, 20.0);
     /// // Pixels: Into<PixelDelta> is implemented.
@@ -466,7 +466,7 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// use flui_geometry::Vec2;
+    /// use flui_foundation::geometry::Vec2;
     /// use std::f64::consts::PI;
     ///
     /// let v = Vec2::new(0.0, 1.0);
@@ -504,7 +504,7 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// use flui_geometry::Vec2;
+    /// use flui_foundation::geometry::Vec2;
     /// use std::f64::consts::PI;
     ///
     /// let v1 = Vec2::new(1.0, 0.0);
@@ -1368,7 +1368,7 @@ mod typed_tests {
 
     #[test]
     fn test_vec2_utility_traits() {
-        use crate::{Along, ApproxEq, Axis, Double, Half, Sign};
+        use crate::geometry::{Along, ApproxEq, Axis, Double, Half, Sign};
 
         // Test Along trait
         let v = Vec2::<f64>::new(10.0, 20.0);

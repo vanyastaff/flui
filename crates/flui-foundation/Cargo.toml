@@ -42,6 +42,10 @@ smallvec = { workspace = true }
 # `android_log-sys`, `tracing-oslog`, `tracing-wasm`) live in `flui-log`, so an
 # embedded host can link foundation without linking any of them.
 tracing = { workspace = true }
+# Geometry values (`geometry`): `Matrix4` is glam's `DMat4` inside; `GeometryError` derives
+# its `Display` through thiserror.
+glam = { workspace = true }
+thiserror = { workspace = true }
 
 # Optional dependencies
 serde = { workspace = true, optional = true }

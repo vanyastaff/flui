@@ -26,7 +26,7 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::{Point, Rect, Size, point, size};
+/// use flui_foundation::geometry::{Point, Rect, Size, point, size};
 ///
 /// // Create from origin and size
 /// let rect = Rect::from_origin_size(point(0.0, 0.0), size(100.0, 50.0));
@@ -329,7 +329,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Rect;
+    /// use flui_foundation::geometry::Rect;
     ///
     /// let rect = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
     /// assert_eq!(rect.shortest_side(), 100.0);
@@ -888,7 +888,7 @@ pub fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{point, size};
+    use crate::geometry::{point, size};
 
     #[test]
     fn test_construction() {

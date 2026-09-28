@@ -411,7 +411,7 @@ impl RRect {
     /// Mirrors [`Rect::translate_offset`] (Flutter `RRect.shift`).
     #[inline]
     #[must_use]
-    pub fn translate_offset(&self, offset: crate::Offset<f64>) -> Self {
+    pub fn translate_offset(&self, offset: crate::geometry::Offset<f64>) -> Self {
         Self {
             rect: self.rect.translate_offset(offset),
             ..*self
@@ -579,7 +579,7 @@ impl From<Rect<f64>> for RRect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Offset;
+    use crate::geometry::Offset;
 
     #[test]
     fn translate_offset_moves_rect_and_keeps_radii() {

@@ -79,8 +79,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_animation::{Animatable, Animation, ArcCurve, Curve, Curves};
+use flui_foundation::geometry::Rect;
 use flui_foundation::{RenderId, ViewKey};
-use flui_geometry::Rect;
 use flui_objects::SubtreeAnchor;
 use flui_rendering::pipeline::PipelineCell;
 use flui_types::Size;

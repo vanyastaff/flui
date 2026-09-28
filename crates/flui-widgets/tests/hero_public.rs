@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::{Animatable, Vsync};
-use flui_geometry::Rect;
+use flui_foundation::geometry::Rect;
 use flui_rendering::pipeline::PipelineCell;
 use flui_types::Size;
 use flui_widgets::prelude::*;

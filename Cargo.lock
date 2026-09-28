@@ -1844,7 +1844,6 @@ dependencies = [
  "flui-cupertino",
  "flui-engine",
  "flui-foundation",
- "flui-geometry",
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
@@ -2066,24 +2065,16 @@ version = "0.2.0-dev"
 dependencies = [
  "flui-macros",
  "flui-types",
+ "glam",
  "parking_lot",
  "serde",
  "serde_json",
  "smallvec",
+ "thiserror 2.0.20",
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen-test",
  "web-time",
-]
-
-[[package]]
-name = "flui-geometry"
-version = "0.2.0-dev"
-dependencies = [
- "bytemuck",
- "glam",
- "serde",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2454,7 +2445,7 @@ name = "flui-types"
 version = "0.2.0-dev"
 dependencies = [
  "criterion",
- "flui-geometry",
+ "flui-foundation",
  "proptest",
  "rstest",
  "serde",
@@ -2536,7 +2527,6 @@ dependencies = [
  "flui-animation",
  "flui-assets",
  "flui-foundation",
- "flui-geometry",
  "flui-interaction",
  "flui-macros",
  "flui-objects",
@@ -2907,7 +2897,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e762b9b188634fc508d4ec54b62ea3d352c43fd431d18d05d46f559f217f4725"
 dependencies = [
  "bytemuck",
- "mint",
  "serde_core",
 ]
 
@@ -3931,12 +3920,6 @@ dependencies = [
  "adler2",
  "simd-adler32",
 ]
-
-[[package]]
-name = "mint"
-version = "0.5.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 
 [[package]]
 name = "mio"

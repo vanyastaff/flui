@@ -155,16 +155,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-geometry/Cargo.toml"
-class = "pr-label"
-count = 1
-
-[[allow]]
-path = "crates/flui-geometry/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-hot-reload/src/dispatch.rs"
 class = "phase-letter"
 count = 1

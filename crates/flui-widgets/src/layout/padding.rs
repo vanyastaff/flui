@@ -1,6 +1,6 @@
 //! [`Padding`] — insets its child by a given amount.
 
-use flui_geometry::EdgeInsets;
+use flui_foundation::geometry::EdgeInsets;
 use flui_objects::RenderPadding;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};

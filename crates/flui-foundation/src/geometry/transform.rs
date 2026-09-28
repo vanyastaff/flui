@@ -16,7 +16,7 @@
 //! ## Basic Transforms
 //!
 //! ```rust,ignore
-//! use flui_geometry::{Transform, Matrix4, Offset};
+//! use flui_foundation::geometry::{Transform, Matrix4, Offset};
 //! use std::f64::consts::PI;
 //!
 //! // Translation - move by offset

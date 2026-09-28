@@ -1,7 +1,7 @@
 //! [`Container`] — the Flutter convenience widget that composes padding,
 //! alignment, sizing, decoration, margin, and a transform around a child.
 
-use flui_geometry::{EdgeInsets, Matrix4};
+use flui_foundation::geometry::{EdgeInsets, Matrix4};
 use flui_objects::RenderContainer;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::protocol::BoxProtocol;

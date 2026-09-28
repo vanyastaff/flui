@@ -85,7 +85,7 @@
 
 // Ship bar (wave 1): every public item is documented; keep it that way.
 #![deny(missing_docs)]
-// Math-crate idiom shared with flui-geometry (see its lib.rs): permanent
+// Math-crate idiom shared with `flui_foundation::geometry`: permanent
 // crate-specific relaxations of workspace pedantic lints for math-heavy code.
 // (The float-comparison / numeric-cast family is allowed workspace-wide.)
 #![expect(clippy::many_single_char_names)]
@@ -93,11 +93,8 @@
     not(any(test, target_arch = "wasm32")),
     expect(clippy::wildcard_imports)
 )]
-// Geometry primitives split out into flui-geometry crate.
-// Re-exported here under the original `geometry` namespace so existing consumers
-// of `flui_types::geometry::*` continue to compile unchanged during the transition.
-// Direct callers may also import `flui_geometry::*` for the same surface.
-pub use flui_geometry as geometry;
+// Geometry values live in `flui_foundation::geometry` (ADR-0098).
+pub use flui_foundation::geometry;
 
 pub mod gestures;
 pub mod haptics;

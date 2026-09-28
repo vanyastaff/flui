@@ -32,7 +32,7 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::Offset;
+/// use flui_foundation::geometry::Offset;
 ///
 /// let offset = Offset::<f64>::new(10.0, 20.0);
 /// assert_eq!(offset.dx, 10.0);
@@ -72,7 +72,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// assert_eq!(offset.dx, 10.0);
@@ -88,7 +88,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let swapped = offset.swap();
@@ -108,7 +108,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let offset: Offset = Offset::new(10.0, 20.0);
     /// let doubled: Offset = offset.map(|v| v * 2.0);
@@ -148,7 +148,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, Vec2};
+    /// use flui_foundation::geometry::{Offset, Vec2};
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let vec: Vec2 = offset.to_vec2();
@@ -174,7 +174,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let px_offset = Offset::<f64>::new(10.0, 20.0);
     /// let f32_offset: Offset = px_offset.cast();
@@ -201,7 +201,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let f32_offset = offset.to_f32();
@@ -226,7 +226,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let offset = Offset::from_direction(0.0, 10.0);
     /// assert!((offset.dx - 10.0).abs() < 0.001);
@@ -245,7 +245,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, Point};
+    /// use flui_foundation::geometry::{Offset, Point};
     ///
     /// let from = Point::new(10.0, 20.0);
     /// let to = Point::new(30.0, 50.0);
@@ -263,7 +263,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// assert!(Offset::ZERO.is_zero());
     /// assert!(!Offset::new(1.0, 0.0).is_zero());
@@ -278,7 +278,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let offset = Offset::new(3.0, 4.0);
     /// assert_eq!(offset.distance(), 5.0); // 3-4-5 triangle
@@ -293,7 +293,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let offset = Offset::new(3.0, 4.0);
     /// assert_eq!(offset.distance_squared(), 25.0);
@@ -308,7 +308,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let right = Offset::new(1.0, 0.0);
     /// assert!((right.direction() - 0.0).abs() < 0.001);
@@ -323,7 +323,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// assert!(Offset::ZERO.is_finite());
     /// assert!(!Offset::INFINITE.is_finite());
@@ -344,7 +344,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let scaled = offset.scale(2.0);
@@ -360,7 +360,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let a = Offset::new(10.0, 20.0);
     /// let b = Offset::new(5.0, 10.0);
@@ -378,7 +378,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let a = Offset::new(0.0, 0.0);
     /// let b = Offset::new(10.0, 10.0);
@@ -400,7 +400,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, Point};
+    /// use flui_foundation::geometry::{Offset, Point};
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let point = offset.to_point();
@@ -418,7 +418,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, Size};
+    /// use flui_foundation::geometry::{Offset, Size};
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let size = offset.to_size();
@@ -516,7 +516,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let offset = Offset::new(30.0, 40.0); // magnitude = 50
     /// let clamped = offset.clamp_magnitude(25.0);
@@ -547,7 +547,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     ///
     /// let start = Offset::new(0.0, 0.0);
     /// let target = Offset::new(10.0, 0.0);
@@ -581,7 +581,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use std::f64::consts::PI;
     ///
     /// let right = Offset::new(1.0, 0.0);
@@ -598,7 +598,7 @@ impl Offset<f64> {
         det.atan2(dot).abs()
     }
 
-    /// Calculate the angle between this offset and another as typed [`Radians`](crate::Radians).
+    /// Calculate the angle between this offset and another as typed [`Radians`](crate::geometry::Radians).
     ///
     /// Same as [`angle_to`](Self::angle_to), returning the absolute angle
     /// difference in range [0, π] as a typed unit.
@@ -1165,7 +1165,7 @@ mod typed_tests {
 
     #[test]
     fn test_offset_utility_traits() {
-        use crate::{Along, Axis, Half};
+        use crate::geometry::{Along, Axis, Half};
 
         // Test Along trait
         let o = Offset::<f64>::new(10.0, 20.0);

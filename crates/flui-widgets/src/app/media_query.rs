@@ -16,7 +16,7 @@
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.
 
-use flui_geometry::EdgeInsets;
+use flui_foundation::geometry::EdgeInsets;
 use flui_types::Size;
 use flui_types::platform::Brightness;
 use flui_view::prelude::*;

@@ -30,7 +30,7 @@
 
 use std::rc::Rc;
 
-use flui_geometry::EdgeInsets;
+use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::FocusNode;
 use flui_types::Color;
 use flui_types::styling::{Border, BorderSide, BorderStyle, BoxDecoration};

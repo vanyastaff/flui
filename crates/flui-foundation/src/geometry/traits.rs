@@ -222,7 +222,7 @@ pub trait Along {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::Half;
+/// use flui_foundation::geometry::Half;
 ///
 /// let width = 100.0;
 /// assert_eq!(width.half(), 50.0);
@@ -266,7 +266,7 @@ impl Half for i32 {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::Double;
+/// use flui_foundation::geometry::Double;
 ///
 /// let width = 50.0;
 /// assert_eq!(width.double(), 100.0);
@@ -310,7 +310,7 @@ impl Double for i32 {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::IsZero;
+/// use flui_foundation::geometry::IsZero;
 ///
 /// assert!(0.0.is_zero());
 /// assert!(!1.0.is_zero());
@@ -360,7 +360,7 @@ impl IsZero for usize {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::Sign;
+/// use flui_foundation::geometry::Sign;
 ///
 /// let positive = 100.0;
 /// assert!(positive.is_positive());
@@ -461,7 +461,7 @@ impl Sign for i32 {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::ApproxEq;
+/// use flui_foundation::geometry::ApproxEq;
 ///
 /// let a = 100.0;
 /// let b = (100.0 + 1e-8); // Very close but not exactly equal
@@ -521,7 +521,7 @@ impl ApproxEq for i32 {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::GeometryOps;
+/// use flui_foundation::geometry::GeometryOps;
 ///
 /// let a = -100.0_f64;
 /// assert_eq!(a.abs(), 100.0);
@@ -559,7 +559,7 @@ pub trait GeometryOps: NumericUnit {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_geometry::GeometryOps;
+    /// use flui_foundation::geometry::GeometryOps;
     ///
     /// let start = 0.0;
     /// let end = 100.0;

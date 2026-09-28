@@ -6,7 +6,7 @@
 use std::ops::{Add, Mul, Neg, Sub};
 
 use super::traits::{NumericUnit, Unit};
-use crate::{Offset, Size};
+use crate::geometry::{Offset, Size};
 
 /// A rectangle expressed as distances from the edges of a parent rectangle.
 ///

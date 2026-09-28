@@ -21,7 +21,7 @@ use std::{
 };
 
 use flui_foundation::Listenable;
-use flui_geometry::EdgeInsets;
+use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_interaction::{
     events::{Code, Key, KeyState, NamedKey},

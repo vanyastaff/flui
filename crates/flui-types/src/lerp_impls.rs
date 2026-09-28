@@ -5,12 +5,12 @@
 //! generic `Tween<V: Lerp>` in flui-animation interpolate them without a
 //! bespoke per-type tween struct.
 //!
-//! `BorderRadius` is **not** here: it is `flui_geometry::Corners<Radius>`,
+//! `BorderRadius` is **not** here: it is `flui_foundation::geometry::Corners<Radius>`,
 //! a flui-geometry type, so its `Lerp` lives there — the `Lerp for Corners<T>`
 //! blanket added alongside the matrix `Lerp` work — and `BorderRadiusTween` is
 //! now simply an alias for `Tween<BorderRadius>`.
 
-use flui_geometry::Lerp;
+use flui_foundation::geometry::Lerp;
 
 use crate::layout::Alignment;
 use crate::styling::Color;

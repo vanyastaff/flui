@@ -36,7 +36,7 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::Point;
+/// use flui_foundation::geometry::Point;
 ///
 /// let ui_pos = Point::<f64>::new(100.0, 200.0);
 /// let normalized = Point::<f64>::new(0.5, 0.75);
@@ -103,7 +103,7 @@ impl<T: Unit> Point<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::new(10.0, 20.0);
     /// assert_eq!(p.swap(), Point::new(20.0, 10.0));
@@ -209,7 +209,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p: Point = Point::new(3.0, 4.0);
     /// let p_doubled: Point = p.map(|coord| coord * 2.0);
@@ -282,7 +282,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p1 = Point::new(0.0, 0.0);
     /// let p2 = Point::new(3.0, 4.0);
@@ -314,7 +314,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p1 = Point::new(0.0, 0.0);
     /// let p2 = Point::new(10.0, 20.0);
@@ -504,7 +504,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, Vec2};
+    /// use flui_foundation::geometry::{Point, Vec2};
     ///
     /// let p1 = Point::<f64>::new(10.0, 20.0);
     /// let p2 = Point::<f64>::new(3.0, 5.0);
@@ -674,7 +674,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::<f64>::new(1.0, 2.0);
     /// let result = p.checked_add_vec(3.0, 4.0);
@@ -701,7 +701,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::<f64>::new(1.0, 2.0);
     /// let result = p.saturating_add_vec((f64::NAN), 4.0);
@@ -720,7 +720,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::<f64>::new(1.0, 2.0);
     /// let result = p.checked_mul(2.0);
@@ -752,7 +752,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::<f64>::new(1.0, 2.0);
     /// let result = p.saturating_mul(f64::INFINITY);
@@ -778,7 +778,7 @@ impl<T: Unit> Point<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::<f64>::new(100.0, 200.0);
     /// let p_f32: Point = p.cast();
@@ -811,7 +811,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::<f64>::new(100.0, 200.0);
     /// let p_f32 = p.to_f32();
@@ -831,7 +831,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::<f64>::new(100.0, 200.0);
     /// let arr = p.to_array();
@@ -847,7 +847,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::<f64>::new(100.0, 200.0);
     /// let tuple = p.to_tuple();
@@ -937,7 +937,7 @@ where
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::point;
+/// use flui_foundation::geometry::point;
 ///
 /// let p = point(10.0, 20.0);
 #[inline]
@@ -1106,7 +1106,7 @@ impl Point<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::new(100.0, 200.0);
     /// let scaled = p.scale(2.0);  // 2x Retina display
@@ -1124,7 +1124,7 @@ impl Point<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::new(3.0, 4.0);
     /// assert_eq!(p.magnitude(), 5.0);
@@ -1148,7 +1148,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::Point;
+    /// use flui_foundation::geometry::Point;
     ///
     /// let p = Point::new(100.0, 150.0);
     /// let origin = Point::new(20.0, 30.0);
@@ -1412,7 +1412,7 @@ mod typed_tests {
 #[cfg(test)]
 mod arithmetic_tests {
     use super::*;
-    use crate::vec2;
+    use crate::geometry::vec2;
 
     #[test]
     fn test_point_add_vec2() {
@@ -1595,7 +1595,7 @@ mod arithmetic_tests {
 
     #[test]
     fn test_point_utility_traits() {
-        use crate::{Along, Axis, Half, IsZero};
+        use crate::geometry::{Along, Axis, Half, IsZero};
 
         // Test Along trait
         let p = Point::<f64>::new(10.0, 20.0);

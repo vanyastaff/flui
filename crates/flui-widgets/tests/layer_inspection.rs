@@ -16,7 +16,7 @@
 use std::time::Duration;
 
 use crate::common::{lay_out, tight};
-use flui_geometry::Matrix4;
+use flui_foundation::geometry::Matrix4;
 use flui_types::Color;
 use flui_widgets::{ColoredBox, Opacity, SizedBox, Transform};
 

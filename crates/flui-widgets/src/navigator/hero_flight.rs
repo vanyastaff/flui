@@ -57,8 +57,8 @@ use flui_animation::{
     Animatable, Animation, AnimationStatus, Curve, Interval, ProxyAnimation, RectTween,
     ReverseAnimation, Tween, animate,
 };
+use flui_foundation::geometry::Rect;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId, RenderId};
-use flui_geometry::Rect;
 use flui_scheduler::LocalPostFrameHandle;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};

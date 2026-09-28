@@ -10,7 +10,7 @@
 //! of coordinate systems:
 //!
 //! ```ignore
-//! use flui_geometry::{Bounds, Point, Size};
+//! use flui_foundation::geometry::{Bounds, Point, Size};
 //!
 //! let ui_bounds = Bounds::<f64>::new(
 //!     Point::new(10.0, 20.0),
@@ -36,7 +36,7 @@
 //! # Examples
 //!
 //! ```
-//! use flui_geometry::{bounds, point, size};
+//! use flui_foundation::geometry::{bounds, point, size};
 //!
 //! let a = bounds(point(0.0, 0.0), size(10.0, 10.0));
 //! let b = bounds(point(5.0, 5.0), size(10.0, 10.0));
@@ -684,9 +684,9 @@ impl<T: Unit> Bounds<T> {
 
 /// Convenience constructor for [`Bounds`] from an origin point and size.
 ///
-/// Mirrors the constructor-function pattern used by [`rect()`](crate::rect()),
-/// [`point()`](crate::point()), [`size()`](crate::size()), and
-/// [`edges()`](crate::edges()).
+/// Mirrors the constructor-function pattern used by [`rect()`](crate::geometry::rect()),
+/// [`point()`](crate::geometry::point()), [`size()`](crate::geometry::size()), and
+/// [`edges()`](crate::geometry::edges()).
 #[inline]
 #[must_use]
 pub fn bounds(origin: Point<f64>, size: Size<f64>) -> Bounds<f64> {

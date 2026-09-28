@@ -92,8 +92,8 @@ fn main() {
 //!
 //! | Module | Crate | Feature | Layer |
 //! |---|---|---|---|
-//! | [`types`] | `flui-types` | — | foundation types + unit system |
-//! | [`geometry`] | `flui-geometry` | — | geometry primitives |
+//! | [`types`] | `flui-types` | — | layout, styling, typography and painting values |
+//! | [`geometry`] | `flui-foundation` | — | geometry values (`f64` logical pixels) |
 //! | [`foundation`] | `flui-foundation` | — | keys, listenables, diagnostics |
 //! | [`view`] | `flui-view` | — | View/Element tree |
 //! | [`widgets`] | `flui-widgets` | — | user-facing widget catalog |
@@ -130,7 +130,7 @@ pub use flui_cupertino as cupertino;
 pub use flui_foundation as foundation;
 /// Structured diagnostic properties for application-defined types.
 pub use flui_foundation::Diagnosticable;
-pub use flui_geometry as geometry;
+pub use flui_foundation::geometry;
 /// Development hot-reload support. Requires the `hot-reload` feature.
 #[cfg(feature = "hot-reload")]
 pub use flui_hot_reload as hot_reload;
