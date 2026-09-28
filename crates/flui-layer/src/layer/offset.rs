@@ -28,7 +28,6 @@ use flui_types::Offset;
 /// # Example
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_layer::OffsetLayer;
 /// use flui_types::Offset;
 ///

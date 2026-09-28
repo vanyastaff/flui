@@ -265,7 +265,7 @@ impl Drop for AllPointerTeardownGuard<'_> {
 /// at ~7 decimal digits and physical pointer positions are reported
 /// in device pixels (≤ 2^23 ≈ 8M), so `f64 → f64` is exact in that
 /// range. Used at the W3C→flui boundary where upstream carries `f64`
-/// physical pixels and our `Offset<Pixels>` stores `f64`.
+/// physical pixels and our `Offset` stores `f64`.
 ///
 /// Upper bound on simultaneously-tracked pointers.
 ///

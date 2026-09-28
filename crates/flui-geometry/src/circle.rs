@@ -8,15 +8,15 @@
 //! of coordinate systems:
 //!
 //! ```ignore
-//! use flui_geometry::{Circle, Point, Pixels, px};
+//! use flui_geometry::{Circle, Point};
 //!
-//! let ui_circle = Circle::<Pixels>::new(
+//! let ui_circle = Circle::<f64>::new(
 //!     Point::new(50.0, 50.0),
 //!     25.0
 //! );
 //!
 //! // Convert to f64 for GPU
-//! let gpu_circle: Circle<Pixels> = ui_circle.to_f32();
+//! let gpu_circle: Circle<f64> = ui_circle.to_f32();
 //! ```
 
 use std::fmt;
@@ -31,7 +31,7 @@ use super::{
 /// Generic over unit type `T` for type-safe coordinate system handling.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Circle<T: Unit> {
+pub struct Circle<T: Unit = f64> {
     /// Center point.
     pub center: Point<T>,
     /// Radius (must be non-negative).

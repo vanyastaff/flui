@@ -71,7 +71,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// use std::any::Any;
 ///
 /// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
-/// use flui_types::geometry::{DevicePixels, Pixels, Size};
+/// use flui_types::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
 ///
@@ -79,10 +79,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///     fn id(&self) -> WindowId {
 ///         WindowId(7)
 ///     }
-///     fn physical_size(&self) -> Size<DevicePixels> {
+///     fn physical_size(&self) -> DeviceSize {
 ///         Size::default()
 ///     }
-///     fn logical_size(&self) -> Size<Pixels> {
+///     fn logical_size(&self) -> Size {
 ///         Size::default()
 ///     }
 ///     fn scale_factor(&self) -> f64 {
@@ -115,7 +115,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// use std::any::Any;
 ///
 /// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId};
-/// use flui_types::geometry::{DevicePixels, Pixels, Size};
+/// use flui_types::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
 ///
@@ -123,10 +123,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///     fn id(&self) -> WindowId {
 ///         WindowId(7)
 ///     }
-///     fn physical_size(&self) -> Size<DevicePixels> {
+///     fn physical_size(&self) -> DeviceSize {
 ///         Size::default()
 ///     }
-///     fn logical_size(&self) -> Size<Pixels> {
+///     fn logical_size(&self) -> Size {
 ///         Size::default()
 ///     }
 ///     fn scale_factor(&self) -> f64 {

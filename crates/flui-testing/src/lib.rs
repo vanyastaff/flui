@@ -70,7 +70,6 @@
 //! use flui_interaction::settings::GestureSettings;
 //! use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
 //! use flui_types::Offset;
-//! use flui_types::geometry::px;
 //!
 //! let mut binding = HeadlessBinding::new();
 //!

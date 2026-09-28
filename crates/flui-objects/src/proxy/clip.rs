@@ -32,7 +32,7 @@
 //!  trait ClipGeometry        (sealed; impls for Rect, RRect, Oval, Path)
 //!  struct RenderClip<S: ClipGeometry>      ← single, generic, monomorphised
 //!  ──────────────────────────────────────
-//!  type RenderClipRect   = RenderClip<Rect<Pixels>>;
+//!  type RenderClipRect   = RenderClip<Rect>;
 //!  type RenderClipRRect  = RenderClip<RRect>;
 //!  type RenderClipOval   = RenderClip<Oval>;
 //!  type RenderClipPath   = RenderClip<Path>;
@@ -220,7 +220,7 @@ pub trait ClipGeometry:
     /// Flutter-parity diagnostics label (`RenderClipRect`, `RenderClipRRect`, …).
     ///
     /// Generic `RenderClip<S>` would otherwise surface as
-    /// `RenderClip<Rect<Pixels>>` via `type_name`, which breaks structured
+    /// `RenderClip<Rect>` via `type_name`, which breaks structured
     /// tree queries in the render harness.
     const DIAGNOSTIC_NAME: &'static str;
 
@@ -470,7 +470,7 @@ impl ClipGeometry for Path {
 
 /// A render object that clips its child to the geometry produced by `S`.
 ///
-/// The shape parameter `S` is one of [`Rect<Pixels>`], [`RRect`], [`Oval`],
+/// The shape parameter `S` is one of [`Rect`], [`RRect`], [`Oval`],
 /// or [`Path`] via the sealed [`ClipGeometry`] trait. Pick the right type
 /// alias for ergonomic construction:
 ///

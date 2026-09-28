@@ -1123,7 +1123,7 @@ fn signup_rejects_bad_email(t: &mut WidgetTester) {
 }
 ```
 
-**Conventions**, each with a lint where one exists: lengths take `impl Into<Pixels>`; UI callbacks
+**Conventions**, each with a lint where one exists: lengths take `impl Into<f64>`; UI callbacks
 are never `Send`; widgets are `#[non_exhaustive]` builders; `View` for `Option<V>` and `Either`;
 tuples instead of `column!`/`row!`; `Theme::of` falls back to a default instead of panicking.
 

@@ -175,7 +175,7 @@ impl CompoundAnimation {
     ///     controller2 as Arc<dyn Animation<f64>>,
     /// );
     ///
-    /// assert_eq!(mean.value(), 0.6);  // (0.4 + 0.8) / 2
+    /// assert!((mean.value() - 0.6).abs() < 1e-12); // (0.4 + 0.8) / 2
     /// ```
     #[must_use]
     pub fn mean(first: Arc<dyn Animation<f64>>, next: Arc<dyn Animation<f64>>) -> Self {

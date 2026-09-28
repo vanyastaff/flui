@@ -13,8 +13,7 @@
 //! caller normalized them. The Rust port preserves the same constructor
 //! ergonomics but routes every mutation through `set_additional_constraints`,
 //! which always re-normalizes — eliminating the bottom half of Flutter's
-//! "constraints not normalized" debug check at the API boundary (the typed
-//! `Pixels` boundary in `BoxConstraints` itself eliminates the rest).
+//! "constraints not normalized" debug check at the API boundary.
 
 use flui_foundation::Single;
 use flui_types::{Offset, Size};
@@ -48,7 +47,6 @@ use flui_rendering::{
 /// ```ignore
 /// use flui_objects::RenderConstrainedBox;
 /// use flui_rendering::constraints::BoxConstraints;
-/// use flui_types::geometry::px;
 ///
 /// // Force the child to be at least 200x100 logical pixels.
 /// let extra = BoxConstraints::new(200.0, (f64::INFINITY), 100.0, (f64::INFINITY));

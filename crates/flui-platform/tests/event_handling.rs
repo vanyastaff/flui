@@ -195,9 +195,9 @@ fn test_window_resize_event() {
 
     // Contract: WindowEvent::Resized should contain:
     // - window_id: WindowId
-    // - size: Size<DevicePixels> (physical pixels)
+    // - size: DeviceSize (physical pixels)
     //
-    // Note: Size is in DevicePixels, not Pixels, because it represents
+    // Note: Size is in device pixels (i32), not logical pixels, because it represents
     // the actual framebuffer size for rendering. To get logical size,
     // divide by scale_factor.
 
@@ -270,7 +270,7 @@ fn test_mouse_movement_pointer_event() {
     use ui_events::pointer::{PointerButton, PointerType};
 
     // Contract: PointerEvent::Move should contain:
-    // - position: Offset<Pixels> (logical coordinates)
+    // - position: Offset (logical coordinates)
     // - pointer_id: PointerId (for multi-touch)
     // - pointer_type: PointerType (Mouse, Touch, Pen)
     // - buttons: PointerButtons (which buttons are pressed)
@@ -424,14 +424,14 @@ fn test_event_coordinate_system() {
     let scale_factor = window.scale_factor();
     tracing::info!("Scale factor: {}", scale_factor);
 
-    // Contract: All input events use LOGICAL coordinates (Pixels)
-    // - PointerEvent.position: Offset<Pixels>
-    // - Window positions: Point<Pixels>
-    // - Mouse delta: Offset<PixelDelta>
+    // Contract: All input events use LOGICAL coordinates (f64)
+    // - PointerEvent.position: Offset
+    // - Window positions: Point
+    // - Mouse delta: Offset
     //
-    // Physical coordinates (DevicePixels) are only used for:
-    // - Window size: Size<DevicePixels> (framebuffer size)
-    // - Display bounds: Rect<DevicePixels>
+    // Physical coordinates (i32 device pixels) are only used for:
+    // - Window size: DeviceSize (framebuffer size)
+    // - Display bounds: DeviceRect
     //
     // Conversion: logical = physical / scale_factor
 

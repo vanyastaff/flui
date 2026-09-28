@@ -131,15 +131,14 @@ pub trait Decoration: std::fmt::Debug {
 ///
 /// ```
 /// use flui_types::{
-///     geometry::{Pixels, px},
 ///     styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color},
 /// };
 ///
 /// // Simple colored box
-/// let decoration = BoxDecoration::<Pixels>::with_color(Color::RED);
+/// let decoration = BoxDecoration::<f64>::with_color(Color::RED);
 ///
 /// // Box with border and shadow
-/// let decoration = BoxDecoration::<Pixels>::new()
+/// let decoration = BoxDecoration::<f64>::new()
 ///     .set_color(Some(Color::WHITE))
 ///     .set_border(Some(Border::all(BorderSide::new(
 ///         Color::BLACK,

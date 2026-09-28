@@ -26,7 +26,7 @@ use flui_types::{
 /// ```rust
 /// use flui_layer::ShaderMaskLayer;
 /// use flui_types::{
-///     geometry::{Offset, Rect, px},
+///     geometry::{Offset, Rect},
 ///     painting::{BlendMode, Shader},
 ///     styling::Color,
 /// };

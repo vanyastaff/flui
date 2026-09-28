@@ -46,7 +46,7 @@
 //! slots are all `Option<WidgetStateProperty<Option<Color>>>` — because
 //! their own oracle theme types (`checkbox_theme.dart` and siblings)
 //! genuinely type those fields as `WidgetStateProperty`, [`crate::ChipThemeData`]'s
-//! fields are **plain** (`Option<Color>`, `Option<BorderSide<Pixels>>`, …).
+//! fields are **plain** (`Option<Color>`, `Option<BorderSide<f64>>`, …).
 //! This mirrors `chip_theme.dart` exactly: every `ChipThemeData` field
 //! except `color` (the container fill, not ported to the theme tier here —
 //! see below) is a plain, non-resolved value in the oracle too. Per-state

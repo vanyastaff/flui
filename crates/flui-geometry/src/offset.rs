@@ -18,8 +18,8 @@ use super::{
 /// Similar to Flutter's `Offset`.
 ///
 /// Generic over unit type `T`. Common usage:
-/// - `Offset<Pixels>` - UI displacement
-/// - `Offset<Pixels>` - Normalized/dimensionless offset
+/// - `Offset` - UI displacement
+/// - `Offset` - Normalized/dimensionless offset
 ///
 /// # Distinction from Vec2
 ///
@@ -32,9 +32,9 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::{Offset, px, Pixels};
+/// use flui_geometry::Offset;
 ///
-/// let offset = Offset::<Pixels>::new(10.0, 20.0);
+/// let offset = Offset::<f64>::new(10.0, 20.0);
 /// assert_eq!(offset.dx, 10.0);
 /// assert_eq!(offset.dy, 20.0);
 ///
@@ -72,7 +72,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// assert_eq!(offset.dx, 10.0);
@@ -88,7 +88,7 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let swapped = offset.swap();
@@ -108,10 +108,10 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px, Pixels};
+    /// use flui_geometry::Offset;
     ///
-    /// let offset: Offset<Pixels> = Offset::new(10.0, 20.0);
-    /// let doubled: Offset<Pixels> = offset.map(|v| v * 2.0);
+    /// let offset: Offset = Offset::new(10.0, 20.0);
+    /// let doubled: Offset = offset.map(|v| v * 2.0);
     /// assert_eq!(doubled.dx, 20.0);
     /// assert_eq!(doubled.dy, 40.0);
     #[inline]
@@ -148,10 +148,10 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, Vec2, px, Pixels};
+    /// use flui_geometry::{Offset, Vec2};
     ///
     /// let offset = Offset::new(10.0, 20.0);
-    /// let vec: Vec2<Pixels> = offset.to_vec2();
+    /// let vec: Vec2 = offset.to_vec2();
     /// assert_eq!(vec.x, 10.0);
     /// assert_eq!(vec.y, 20.0);
     #[inline]
@@ -174,10 +174,10 @@ impl<T: Unit> Offset<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, Pixels, px};
+    /// use flui_geometry::Offset;
     ///
-    /// let px_offset = Offset::<Pixels>::new(10.0, 20.0);
-    /// let f32_offset: Offset<Pixels> = px_offset.cast();
+    /// let px_offset = Offset::<f64>::new(10.0, 20.0);
+    /// let f32_offset: Offset = px_offset.cast();
     /// assert_eq!(f32_offset.dx, 10.0);
     #[inline]
     #[must_use]
@@ -201,7 +201,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let f32_offset = offset.to_f32();
@@ -226,7 +226,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let offset = Offset::from_direction(0.0, 10.0);
     /// assert!((offset.dx - 10.0).abs() < 0.001);
@@ -245,7 +245,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, Point, px};
+    /// use flui_geometry::{Offset, Point};
     ///
     /// let from = Point::new(10.0, 20.0);
     /// let to = Point::new(30.0, 50.0);
@@ -263,7 +263,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// assert!(Offset::ZERO.is_zero());
     /// assert!(!Offset::new(1.0, 0.0).is_zero());
@@ -278,10 +278,10 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let offset = Offset::new(3.0, 4.0);
-    /// assert_eq!(offset.distance().get(), 5.0); // 3-4-5 triangle
+    /// assert_eq!(offset.distance(), 5.0); // 3-4-5 triangle
     #[inline]
     #[must_use]
     pub fn distance(self) -> f64 {
@@ -293,10 +293,10 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let offset = Offset::new(3.0, 4.0);
-    /// assert_eq!(offset.distance_squared().get(), 25.0);
+    /// assert_eq!(offset.distance_squared(), 25.0);
     #[inline]
     #[must_use]
     pub const fn distance_squared(&self) -> f64 {
@@ -308,7 +308,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let right = Offset::new(1.0, 0.0);
     /// assert!((right.direction() - 0.0).abs() < 0.001);
@@ -344,7 +344,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let scaled = offset.scale(2.0);
@@ -360,7 +360,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let a = Offset::new(10.0, 20.0);
     /// let b = Offset::new(5.0, 10.0);
@@ -378,7 +378,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let a = Offset::new(0.0, 0.0);
     /// let b = Offset::new(10.0, 10.0);
@@ -400,7 +400,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, Point, px};
+    /// use flui_geometry::{Offset, Point};
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let point = offset.to_point();
@@ -418,7 +418,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, Size, px};
+    /// use flui_geometry::{Offset, Size};
     ///
     /// let offset = Offset::new(10.0, 20.0);
     /// let size = offset.to_size();
@@ -465,13 +465,6 @@ impl Offset<f64> {
     pub fn rotate(self, angle: f64) -> Offset<f64> {
         let (sin, cos) = angle.sin_cos();
         Offset::new(self.dx * cos - self.dy * sin, self.dx * sin + self.dy * cos)
-    }
-
-    /// Rotate this offset around the origin by a typed [`Radians`](crate::Radians) angle.
-    #[inline]
-    #[must_use]
-    pub fn rotate_radians(self, angle: f64) -> Offset<f64> {
-        self.rotate(angle)
     }
 
     /// Round each component to the nearest whole pixel.
@@ -523,12 +516,12 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let offset = Offset::new(30.0, 40.0); // magnitude = 50
     /// let clamped = offset.clamp_magnitude(25.0);
     ///
-    /// assert!((clamped.distance().get() - 25.0).abs() < 0.1);
+    /// assert!((clamped.distance() - 25.0).abs() < 0.1);
     /// // Direction preserved: still pointing in same direction
     /// assert!((clamped.direction() - offset.direction()).abs() < 0.01);
     #[inline]
@@ -554,7 +547,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     ///
     /// let start = Offset::new(0.0, 0.0);
     /// let target = Offset::new(10.0, 0.0);
@@ -588,7 +581,7 @@ impl Offset<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Offset, px};
+    /// use flui_geometry::Offset;
     /// use std::f64::consts::PI;
     ///
     /// let right = Offset::new(1.0, 0.0);

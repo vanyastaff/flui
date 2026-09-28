@@ -20,7 +20,7 @@
 //! ## Basic Transformations
 //!
 //! ```
-//! use flui_geometry::{Matrix4, px};
+//! use flui_geometry::Matrix4;
 //!
 //! // Identity matrix (const-evaluable)
 //! const IDENTITY: Matrix4 = Matrix4::identity();
@@ -286,12 +286,6 @@ impl Matrix4 {
         )
     }
 
-    /// Creates a rotation matrix around the Z axis (type-safe version).
-    #[inline]
-    pub fn rotation_z_radians(angle: f64) -> Self {
-        Self::rotation_z(angle)
-    }
-
     /// Creates a rotation matrix around the X axis.
     ///
     /// Angle is in radians. Positive values rotate counter-clockwise when
@@ -304,12 +298,6 @@ impl Matrix4 {
         )
     }
 
-    /// Creates a rotation matrix around the X axis (type-safe version).
-    #[inline]
-    pub fn rotation_x_radians(angle: f64) -> Self {
-        Self::rotation_x(angle)
-    }
-
     /// Creates a rotation matrix around the Y axis.
     ///
     /// Angle is in radians. Positive values rotate counter-clockwise when
@@ -320,12 +308,6 @@ impl Matrix4 {
         Self::new(
             cos, 0.0, -sin, 0.0, 0.0, 1.0, 0.0, 0.0, sin, 0.0, cos, 0.0, 0.0, 0.0, 0.0, 1.0,
         )
-    }
-
-    /// Creates a rotation matrix around the Y axis (type-safe version).
-    #[inline]
-    pub fn rotation_y_radians(angle: f64) -> Self {
-        Self::rotation_y(angle)
     }
 
     /// Creates a 2D skew (shear) matrix.
@@ -467,13 +449,6 @@ impl Matrix4 {
     #[inline]
     pub fn rotate_z(&mut self, angle: f64) {
         *self = Matrix4::rotation_z(angle) * *self;
-    }
-
-    /// Applies a Z-axis rotation to this matrix (type-safe version, modifies in
-    /// place).
-    #[inline]
-    pub fn rotate_z_radians(&mut self, angle: f64) {
-        self.rotate_z(angle);
     }
 
     /// Transforms a 2D point (x, y) by this matrix.

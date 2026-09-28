@@ -33,7 +33,6 @@ use flui_rendering::{
 /// # Example
 ///
 /// ```ignore
-/// use flui_types::geometry::px;
 ///
 /// // Fixed 100x100 box
 /// let sized = RenderSizedBox::new(Some(100.0), Some(100.0));

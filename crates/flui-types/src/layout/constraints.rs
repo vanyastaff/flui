@@ -16,7 +16,7 @@ use crate::geometry::Size;
 ///
 /// ```
 /// use flui_types::{
-///     geometry::{Size, px},
+///     geometry::Size,
 ///     layout::BoxConstraints,
 /// };
 ///

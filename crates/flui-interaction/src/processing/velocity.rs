@@ -34,7 +34,7 @@
 //! use web_time::{Duration, Instant};
 //!
 //! use flui_interaction::processing::VelocityTracker;
-//! use flui_types::geometry::{Offset, Pixels};
+//! use flui_types::geometry::Offset;
 //! use flui_types::gestures::PointerDeviceKind;
 //!
 //! let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
@@ -640,9 +640,6 @@ impl IosFlingVelocityTracker {
     /// The raw weighted-average velocity, regardless of the
     /// "stationary for 40 ms" gate.
     fn estimated_velocity(&self) -> Offset<f64> {
-        // We do the weighted sum in f64 for precision (weights are 0.6 /
-        // 0.35 / 0.05 and would lose bits through f64), then convert at
-        // the end. `Pixels` is a `#[repr(transparent)]` newtype around f64.
         let v = |offset: isize| self.two_sample_velocity_at_f64(offset);
         let dx = v(-2).0 * self.weights[0] + v(-1).0 * self.weights[1] + v(0).0 * self.weights[2];
         let dy = v(-2).1 * self.weights[0] + v(-1).1 * self.weights[1] + v(0).1 * self.weights[2];

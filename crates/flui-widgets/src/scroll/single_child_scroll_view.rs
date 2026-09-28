@@ -78,7 +78,7 @@ impl SingleChildScrollView {
 
     /// Set the programmatic scroll offset in logical pixels.
     ///
-    /// Pixels mode: the composed [`Viewport`] owns a private `ScrollPosition`
+    /// Fixed mode: the composed [`Viewport`] owns a private `ScrollPosition`
     /// and this value is pushed into it on every rebuild. Mutually exclusive
     /// with [`SingleChildScrollView::position`] — whichever is called last
     /// wins.

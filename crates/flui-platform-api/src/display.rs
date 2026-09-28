@@ -36,7 +36,7 @@ pub trait PlatformDisplay: Send + Sync {
     /// For the primary display, this usually starts at (0, 0).
     /// Secondary displays are positioned relative to the primary.
     ///
-    /// Uses `Bounds<DevicePixels>` to represent physical pixel coordinates,
+    /// Uses `Bounds<i32>` to represent physical pixel coordinates,
     /// following GPUI's type-safe approach.
     fn bounds(&self) -> Bounds<i32>;
 
@@ -45,7 +45,7 @@ pub trait PlatformDisplay: Send + Sync {
     /// This is the area where windows can be placed without being obscured
     /// by system UI elements.
     ///
-    /// Uses `Bounds<DevicePixels>` for physical pixel coordinates.
+    /// Uses `Bounds<i32>` for physical pixel coordinates.
     fn usable_bounds(&self) -> Bounds<i32> {
         self.bounds() // Default: same as full bounds
     }
@@ -72,7 +72,7 @@ pub trait PlatformDisplay: Send + Sync {
         let bounds = self.bounds();
         let scale = self.scale_factor();
 
-        // Convert DevicePixels to Pixels by dividing by scale factor
+        // Device pixels to logical pixels: divide by the scale factor
         let device_width: i32 = bounds.size.width;
         let device_height: i32 = bounds.size.height;
 

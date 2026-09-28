@@ -8,7 +8,7 @@
 //!
 //! ```rust
 //! use flui_painting::{Canvas, Paint};
-//! use flui_types::{Rect, geometry::px, styling::Color};
+//! use flui_types::{Rect, styling::Color};
 //!
 //! let mut canvas = Canvas::new();
 //! canvas.save();

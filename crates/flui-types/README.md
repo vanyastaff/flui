@@ -206,7 +206,7 @@ fn edges_from_start_end(
     direction: TextDirection,
     start: Pixels,
     end: Pixels,
-) -> Edges<Pixels> {
+) -> EdgeInsets {
     match direction {
         TextDirection::Ltr => Edges::new(px(0.0), end, px(0.0), start),
         TextDirection::Rtl => Edges::new(px(0.0), start, px(0.0), end),

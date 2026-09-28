@@ -393,7 +393,7 @@ impl BoxShape {
 ///
 /// ```
 /// use flui_types::{
-///     geometry::{Size, px},
+///     geometry::Size,
 ///     layout::{BoxFit, FittedSizes},
 /// };
 ///

@@ -222,7 +222,7 @@ pub trait Along {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::{Half, Pixels, px};
+/// use flui_geometry::Half;
 ///
 /// let width = 100.0;
 /// assert_eq!(width.half(), 50.0);
@@ -247,7 +247,6 @@ impl Half for f64 {
     }
 }
 
-/// Implements `Half` for an f32-backed unit type.
 impl Half for i32 {
     #[inline]
     fn half(self) -> Self {
@@ -267,7 +266,7 @@ impl Half for i32 {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::{Double, Pixels, px};
+/// use flui_geometry::Double;
 ///
 /// let width = 50.0;
 /// assert_eq!(width.double(), 100.0);
@@ -292,7 +291,6 @@ impl Double for f64 {
     }
 }
 
-/// Implements `Double` for an f32-backed unit type.
 impl Double for i32 {
     #[inline]
     fn double(self) -> Self {
@@ -312,7 +310,7 @@ impl Double for i32 {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::{IsZero, Pixels, px};
+/// use flui_geometry::IsZero;
 ///
 /// assert!(0.0.is_zero());
 /// assert!(!1.0.is_zero());
@@ -359,28 +357,10 @@ impl IsZero for usize {
 /// This trait provides methods for checking and manipulating the sign
 /// of a numeric value.
 ///
-/// # Note on `signum()` method conflicts
-///
-/// **Important:** Some types (like `Pixels`) also have inherent `signum_raw()`
-/// methods that return `f32` instead of `Self`. Use the trait method
-/// `Sign::signum(value)` when you need the result in the same type.
-///
-/// ```rust
-/// use flui_geometry::{Pixels, Sign, px};
-///
-/// let value = 100.0;
-///
-/// // Inherent method signum_raw() returns f32
-/// let sign_f32: f32 = value.signum_raw();
-///
-/// // Trait method (returns Pixels) - use qualified syntax
-/// let sign_px: Pixels = Sign::signum(value);
-/// ```
-///
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::{Pixels, Sign, px};
+/// use flui_geometry::Sign;
 ///
 /// let positive = 100.0;
 /// assert!(positive.is_positive());
@@ -481,7 +461,7 @@ impl Sign for i32 {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::{ApproxEq, Pixels, px};
+/// use flui_geometry::ApproxEq;
 ///
 /// let a = 100.0;
 /// let b = (100.0 + 1e-8); // Very close but not exactly equal
@@ -541,13 +521,13 @@ impl ApproxEq for i32 {
 /// # Examples
 ///
 /// ```rust
-/// use flui_geometry::{GeometryOps, Pixels, px};
+/// use flui_geometry::GeometryOps;
 ///
-/// let a = -100.0;
+/// let a = -100.0_f64;
 /// assert_eq!(a.abs(), 100.0);
 ///
-/// let b = 50.0;
-/// let c = 150.0;
+/// let b = 50.0_f64;
+/// let c = 150.0_f64;
 /// assert_eq!(b.min(c), 50.0);
 /// assert_eq!(b.max(c), 150.0);
 /// assert_eq!(b.clamp(60.0, 140.0), 60.0);
@@ -579,7 +559,7 @@ pub trait GeometryOps: NumericUnit {
     /// # Examples
     ///
     /// ```rust
-    /// use flui_geometry::{GeometryOps, Pixels, px};
+    /// use flui_geometry::GeometryOps;
     ///
     /// let start = 0.0;
     /// let end = 100.0;

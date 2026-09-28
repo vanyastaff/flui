@@ -73,7 +73,7 @@ impl Axis {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Axis, Size, geometry::px};
+    /// use flui_types::{Axis, Size};
     ///
     /// let size = Size::new(100.0, 50.0);
     /// assert_eq!(Axis::Horizontal.select_size(size), 100.0);
@@ -93,7 +93,7 @@ impl Axis {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Axis, Size, geometry::px};
+    /// use flui_types::{Axis, Size};
     ///
     /// assert_eq!(Axis::Horizontal.make_size(100.0), Size::new(100.0, 0.0));
     /// assert_eq!(Axis::Vertical.make_size(100.0), Size::new(0.0, 100.0));
@@ -115,7 +115,7 @@ impl Axis {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Axis, Size, geometry::px};
+    /// use flui_types::{Axis, Size};
     ///
     /// assert_eq!(
     ///     Axis::Horizontal.make_size_with_cross(100.0, 50.0),
@@ -143,7 +143,7 @@ impl Axis {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Axis, Size, geometry::px};
+    /// use flui_types::{Axis, Size};
     ///
     /// let size = Size::new(100.0, 50.0);
     /// assert_eq!(Axis::Horizontal.flip_size(size), Size::new(100.0, 50.0));
@@ -163,7 +163,7 @@ impl Axis {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Axis, Size, geometry::px};
+    /// use flui_types::{Axis, Size};
     ///
     /// let size = Size::new(100.0, 50.0);
     /// assert_eq!(Axis::Horizontal.main_size(size), 100.0);
@@ -180,7 +180,7 @@ impl Axis {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Axis, Size, geometry::px};
+    /// use flui_types::{Axis, Size};
     ///
     /// let size = Size::new(100.0, 50.0);
     /// assert_eq!(Axis::Horizontal.cross_size(size), 50.0);
@@ -402,7 +402,7 @@ impl Orientation {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Size, geometry::px, layout::Orientation};
+    /// use flui_types::{Size, layout::Orientation};
     ///
     /// assert_eq!(
     ///     Orientation::from_size(Size::new(100.0, 200.0)),

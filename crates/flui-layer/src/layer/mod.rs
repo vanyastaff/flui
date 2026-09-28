@@ -64,7 +64,7 @@ pub use transform::TransformLayer;
 ///
 /// ```rust
 /// use flui_layer::{ClipRectLayer, Layer, OpacityLayer};
-/// use flui_types::{geometry::{Rect, px}, painting::Clip};
+/// use flui_types::{geometry::Rect, painting::Clip};
 ///
 /// let clip = Layer::from(ClipRectLayer::new(
 ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),

@@ -222,11 +222,11 @@ fn sliver_padding_insets_its_sliver_child() {
 }
 
 // ============================================================================
-// Viewport — Position/Pixels mode switching
+// Viewport — Position/Fixed mode switching
 // ============================================================================
 
 /// Regression: a `Viewport` reused across a Position-mode build (offset
-/// injected from a `ScrollController`) followed by a Pixels-mode rebuild
+/// injected from a `ScrollController`) followed by a Fixed-mode rebuild
 /// (`.offset(constant)`) must not keep pushing that constant into the
 /// PRIOR build's shared, controller-owned `ScrollPosition` — `update_render_object`
 /// only ever sees the new build's config, not the old one's, so the render
@@ -234,7 +234,7 @@ fn sliver_padding_insets_its_sliver_child() {
 /// (`ScrollPosition::is_uniquely_held` is false — the controller also holds
 /// a clone) and swap in a fresh, privately-owned position before pushing.
 ///
-/// Without the fix, the Pixels arm called `set_pixels` on whatever offset
+/// Without the fix, the Fixed arm called `set_pixels` on whatever offset
 /// was already installed — after a prior Position-mode build that is the
 /// controller's shared position, so this test's `controller.pixels()`
 /// assertion catches the stomp, and the widget's own geometry check catches
@@ -265,7 +265,7 @@ fn viewport_position_to_pixels_mode_switch_does_not_stomp_the_shared_controller_
 
     // Second build, same tree position — the element/render object is
     // REUSED (not remounted), so this exercises the mode-switch path:
-    // Pixels mode at a constant (42.0) distinct from the controller's 200.
+    // Fixed mode at a constant (42.0) distinct from the controller's 200.
     let pixels_widget = Viewport::new((SliverFixedExtentList::new(50.0, rows()),)).offset(42.0);
     laid.pump_widget(pixels_widget);
 
@@ -279,7 +279,7 @@ fn viewport_position_to_pixels_mode_switch_does_not_stomp_the_shared_controller_
 
     // And the widget must genuinely be scrolled to its OWN 42px constant
     // (not stuck at 200, and not silently reset to 0): compare its item
-    // geometry against a widget built fresh, directly in Pixels mode, at
+    // geometry against a widget built fresh, directly in Fixed mode, at
     // the same 42.0 constant — a correct mode switch makes these identical.
     let switched_sliver = laid.only_child(laid.root());
     let switched_item_offset = laid.absolute_offset(laid.child(switched_sliver, 0));

@@ -19,7 +19,7 @@ use crate::__private::generic_render_view_element;
 /// different `RenderObject`s (`RenderViewport` vs
 /// `RenderShrinkWrappingViewport`) underneath.
 ///
-/// - `Pixels`: the widget owns a private `ScrollPosition` and pushes this
+/// - `Fixed`: the widget owns a private `ScrollPosition` and pushes this
 ///   value into it on every rebuild — today's programmatic-offset behavior,
 ///   with no external subscriber.
 /// - `Position`: an external `ScrollPosition` (typically a
@@ -94,7 +94,7 @@ impl<C> Viewport<C> {
 
     /// Set the programmatic scroll offset in logical pixels.
     ///
-    /// Pixels mode: the render object's offset is a private `ScrollPosition`
+    /// Fixed mode: the render object's offset is a private `ScrollPosition`
     /// this widget owns and pushes `offset` into on every rebuild. Mutually
     /// exclusive with [`Viewport::position`] — whichever is called last wins.
     #[must_use]
@@ -292,7 +292,7 @@ generic_render_view_element!(Viewport);
 /// main-axis size from the accumulated sliver content, constrained by its
 /// parent.
 ///
-/// Mirrors [`Viewport`]'s `Pixels`-vs-`Position` `offset_source` mechanics —
+/// Mirrors [`Viewport`]'s `Fixed`-vs-`Position` `offset_source` mechanics —
 /// see [`ShrinkWrappingViewport::position`] for the injection contract.
 #[derive(Clone)]
 pub struct ShrinkWrappingViewport<C = Vec<BoxedView>> {
@@ -324,7 +324,7 @@ impl<C> ShrinkWrappingViewport<C> {
 
     /// Set the programmatic scroll offset in logical pixels.
     ///
-    /// Pixels mode: the render object's offset is a private `ScrollPosition`
+    /// Fixed mode: the render object's offset is a private `ScrollPosition`
     /// this widget owns and pushes `offset` into on every rebuild. Mutually
     /// exclusive with [`ShrinkWrappingViewport::position`] — whichever is
     /// called last wins.

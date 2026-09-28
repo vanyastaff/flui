@@ -37,7 +37,7 @@
 //! use flui_interaction::recognizers::multidrag::{
 //!     MultiDragGestureRecognizer, MultiDragAxis,
 //! };
-//! use flui_types::geometry::{Offset, Pixels};
+//! use flui_types::geometry::Offset;
 //!
 //! let arena = GestureArena::new();
 //! let recognizer = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free)
@@ -629,7 +629,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             PointerEvent::Up(e) => (e.state.position, e.pointer.pointer_type),
             _ => return,
         };
-        // Position is `PhysicalPosition<f64>`; convert to Offset<Pixels>.
+        // Position is `PhysicalPosition<f64>`; convert to Offset.
         let position = Offset::new(position.x, position.y);
         // The only point at which the untransformed position exists at all.
         let global_position = dispatch.global.position();

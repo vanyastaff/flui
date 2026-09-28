@@ -10,14 +10,14 @@ use crate::{
 
 /// A single shadow cast by a shape.
 ///
-/// Generic over unit type `T` for full type safety. Use `Shadow<Pixels>` for UI
+/// Generic over unit type `T` for full type safety. Use `Shadow<f64>` for UI
 /// shadows.
 ///
 /// # Examples
 ///
 /// ```
 /// use flui_types::{
-///     geometry::{Offset, px},
+///     geometry::Offset,
 ///     styling::{Color, Shadow},
 /// };
 ///
@@ -153,7 +153,7 @@ impl<T: Unit> Default for Shadow<T> {
 
 /// A shadow cast by a box.
 ///
-/// Generic over unit type `T` for full type safety. Use `BoxShadow<Pixels>` for
+/// Generic over unit type `T` for full type safety. Use `BoxShadow<f64>` for
 /// UI shadows.
 ///
 /// BoxShadow extends Shadow with a spread radius, which causes the shadow to
@@ -163,7 +163,7 @@ impl<T: Unit> Default for Shadow<T> {
 ///
 /// ```
 /// use flui_types::{
-///     geometry::{Offset, px},
+///     geometry::Offset,
 ///     styling::{BoxShadow, Color},
 /// };
 ///

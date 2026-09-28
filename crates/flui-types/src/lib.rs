@@ -127,7 +127,6 @@ pub use styling::{Color, Oklab};
 /// Import with `use flui_types::prelude::*;` to get all commonly-used types.
 pub mod prelude {
     // Geometry - Essential types
-    // Geometry - Edges and Pixels for layout
     pub use crate::geometry::{Edges, Matrix4, Offset, Point, RRect, Rect, Size, Vec2};
     // Layout - Common types
     pub use crate::layout::{

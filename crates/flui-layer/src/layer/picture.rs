@@ -20,7 +20,7 @@ use std::sync::Arc;
 /// ```rust
 /// use flui_layer::PictureLayer;
 /// use flui_painting::{Canvas, Paint};
-/// use flui_types::{geometry::{Rect, px}, styling::Color};
+/// use flui_types::{geometry::Rect, styling::Color};
 ///
 /// let mut canvas = Canvas::new();
 /// canvas.draw_rect(

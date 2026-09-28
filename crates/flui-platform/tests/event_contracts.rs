@@ -70,9 +70,9 @@ fn test_platform_event_contract() {
     // ============================================================================
 
     // All platforms must:
-    // - Report PointerEvent positions in LOGICAL pixels (Pixels)
+    // - Report PointerEvent positions in LOGICAL pixels (f64)
     // - Convert OS coordinates: logical = physical / scale_factor
-    // - Report window sizes in PHYSICAL pixels (DevicePixels)
+    // - Report window sizes in PHYSICAL pixels (i32)
     // - Provide scale_factor for conversion
 
     let physical_size = window.physical_size();
@@ -169,7 +169,7 @@ fn test_platform_event_contract() {
     // ============================================================================
 
     // All platforms must:
-    // - Emit WindowEvent::Resized with Size<DevicePixels>
+    // - Emit WindowEvent::Resized with DeviceSize
     // - Emit WindowEvent::ScaleFactorChanged with new scale
     // - Emit WindowEvent::CloseRequested on close button
     // - Emit WindowEvent::FocusChanged on focus change

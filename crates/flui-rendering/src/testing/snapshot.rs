@@ -112,7 +112,7 @@ fn summarize_paint(paint: &Paint) -> String {
     }
 }
 
-/// Format a `Rect<Pixels>` as `"(l,t WxH)"`.
+/// Format a `Rect` as `"(l,t WxH)"`.
 fn fmt_rect(r: Rect<f64>) -> String {
     format!(
         "({},{} {}x{})",
@@ -123,7 +123,7 @@ fn fmt_rect(r: Rect<f64>) -> String {
     )
 }
 
-/// Format a `Point<Pixels>` as `"(x,y)"`.
+/// Format a `Point` as `"(x,y)"`.
 fn fmt_point(p: Point<f64>) -> String {
     format!("({},{})", f(p.x), f(p.y))
 }
@@ -822,7 +822,7 @@ mod tests {
 
     use super::{DrawKind, summarize_command};
 
-    /// Helper: build an identity `Rect<Pixels>` from raw f64 coordinates.
+    /// Helper: build an identity `Rect` from raw f64 coordinates.
     fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect<f64> {
         Rect::from_xywh(x, y, w, h)
     }

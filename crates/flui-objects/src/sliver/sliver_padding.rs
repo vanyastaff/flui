@@ -418,7 +418,7 @@ impl RenderSliver for RenderSliverPadding {
         // `EdgeInsets` (left/right).
         //
         // FLUI has no directional inset type at all -- `EdgeInsets` is
-        // `Edges<Pixels>` with `top`/`right`/`bottom`/`left`, already resolved
+        // `EdgeInsets` with `top`/`right`/`bottom`/`left`, already resolved
         // -- so there is nothing to resolve and nothing to flip. Adding a
         // direction branch here would INTRODUCE a divergence, not remove one.
         // If a directional inset type ever lands, the resolution belongs at its

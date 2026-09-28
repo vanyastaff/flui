@@ -30,7 +30,7 @@
 //!     AppConfig::new().with_title("Direct Render").with_size(800, 600),
 //!     |builder, w, h| {
 //!         use flui_painting::Canvas;
-//!         use flui_types::{geometry::px, painting::Paint, Color, Rect};
+//!         use flui_types::{painting::Paint, Color, Rect};
 //!
 //!         let mut canvas = Canvas::new();
 //!         canvas.draw_rect(

@@ -146,7 +146,7 @@ mod tests {
         // ✓ WM_SIZE handler exists in windows/platform.rs:300
         // ✓ Extracts width/height from lparam (GET_X_LPARAM, GET_Y_LPARAM)
         // ✓ Detects SIZE_MINIMIZED, SIZE_MAXIMIZED, SIZE_RESTORED from wparam
-        // ✓ Fires WindowEvent::Resized with Size<DevicePixels>
+        // ✓ Fires WindowEvent::Resized with DeviceSize
         // ✓ Fires WindowEvent::Minimized for SIZE_MINIMIZED
         // ✓ Fires WindowEvent::Maximized for SIZE_MAXIMIZED
         // ✓ Fires WindowEvent::Restored for SIZE_RESTORED

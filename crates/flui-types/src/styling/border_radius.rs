@@ -1,21 +1,21 @@
 //! Border radius types for styling
 //!
 //! This module provides [`BorderRadius`] as a type alias to
-//! [`Corners<Radius<Pixels>>`](crate::geometry::Corners), offering ergonomic
+//! [`Corners<Radius>`](crate::geometry::Corners), offering ergonomic
 //! constructors and methods for defining corner radii in UI elements.
 
 use crate::geometry::{Corners, Radius};
 
 /// Border radius for all four corners of a rectangle.
 ///
-/// This is a type alias to [`Corners<Radius<Pixels>>`](Corners), providing
+/// This is a type alias to [`Corners<Radius>`](Corners), providing
 /// convenient constructors for common border radius patterns.
 ///
 /// # Examples
 ///
 /// ```
 /// use flui_types::{
-///     geometry::{Radius, px},
+///     geometry::Radius,
 ///     styling::{BorderRadius, BorderRadiusExt},
 /// };
 ///
@@ -38,7 +38,7 @@ pub type BorderRadius = Corners<Radius<f64>>;
 /// Extension trait providing BorderRadius-specific constructors and methods.
 ///
 /// This trait is automatically implemented for [`BorderRadius`] (which is
-/// [`Corners<Radius<Pixels>>`](Corners)) to provide ergonomic APIs that match
+/// [`Corners<Radius>`](Corners)) to provide ergonomic APIs that match
 /// Flutter's BorderRadius.
 pub trait BorderRadiusExt {
     /// Creates a border radius with all corners having the same circular
@@ -48,7 +48,6 @@ pub trait BorderRadiusExt {
     ///
     /// ```
     /// use flui_types::{
-    ///     geometry::px,
     ///     styling::{BorderRadius, BorderRadiusExt},
     /// };
     ///
@@ -63,7 +62,6 @@ pub trait BorderRadiusExt {
     ///
     /// ```
     /// use flui_types::{
-    ///     geometry::px,
     ///     styling::{BorderRadius, BorderRadiusExt},
     /// };
     ///
@@ -77,7 +75,7 @@ pub trait BorderRadiusExt {
     ///
     /// ```
     /// use flui_types::{
-    ///     geometry::{Radius, px},
+    ///     geometry::Radius,
     ///     styling::BorderRadius,
     /// };
     ///
@@ -125,7 +123,7 @@ pub trait BorderRadiusExt {
     ///
     /// ```
     /// use flui_types::{
-    ///     geometry::{Radius, px},
+    ///     geometry::Radius,
     ///     styling::BorderRadius,
     /// };
     ///
@@ -142,7 +140,7 @@ pub trait BorderRadiusExt {
     ///
     /// ```
     /// use flui_types::{
-    ///     geometry::{Radius, px},
+    ///     geometry::Radius,
     ///     styling::BorderRadius,
     /// };
     ///
@@ -313,7 +311,7 @@ impl BorderRadiusExt for BorderRadius {
 ///
 /// ```
 /// use flui_types::{
-///     geometry::{Radius, px},
+///     geometry::Radius,
 ///     styling::BorderRadiusDirectional,
 /// };
 ///

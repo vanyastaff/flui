@@ -339,7 +339,7 @@ impl TexturePool {
         }
     }
 
-    /// Acquire a texture sized from a `Size<Pixels>` value
+    /// Acquire a texture sized from a `Size` value
     #[must_use]
     pub(crate) fn acquire_from_size(
         &mut self,

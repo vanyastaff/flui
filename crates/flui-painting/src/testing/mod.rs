@@ -3,7 +3,7 @@
 //!
 //! ```
 //! use flui_painting::{Paint, testing::record};
-//! use flui_types::{Rect, geometry::px, styling::Color};
+//! use flui_types::{Rect, styling::Color};
 //!
 //! let list = record(|canvas| {
 //!     canvas.draw_rect(

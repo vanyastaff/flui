@@ -726,7 +726,7 @@ impl ScrollPosition {
     /// hands out a clone) can use this to detect that the position currently
     /// installed somewhere is instead a *foreign* one — e.g. `Viewport`
     /// switching from an injected, externally-shared position (Position
-    /// mode) back to its own private one (Pixels mode) uses this to decide
+    /// mode) back to its own private one (Fixed mode) uses this to decide
     /// whether it's safe to keep writing into the installed position or
     /// must swap in a fresh, privately-owned one first.
     #[must_use]

@@ -14,7 +14,7 @@ use crate::geometry::Offset;
 /// # Examples
 ///
 /// ```
-/// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
+/// use flui_types::{Offset, gestures::OffsetPair};
 ///
 /// let pair = OffsetPair::new(
 ///     Offset::new(10.0, 20.0),   // local
@@ -46,7 +46,7 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
+    /// use flui_types::{Offset, gestures::OffsetPair};
     ///
     /// let pair = OffsetPair::new(
     ///     Offset::new(10.0, 20.0),
@@ -64,7 +64,7 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
+    /// use flui_types::{Offset, gestures::OffsetPair};
     ///
     /// let pair = OffsetPair::from_offset(Offset::new(50.0, 75.0));
     /// assert_eq!(pair.local, pair.global);
@@ -85,7 +85,7 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
+    /// use flui_types::{Offset, gestures::OffsetPair};
     ///
     /// let pair = OffsetPair::new(
     ///     Offset::new(10.0, 20.0),
@@ -105,7 +105,7 @@ impl OffsetPair {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Offset, geometry::px, gestures::OffsetPair};
+    /// use flui_types::{Offset, gestures::OffsetPair};
     ///
     /// let valid = OffsetPair::new(
     ///     Offset::new(10.0, 20.0),
@@ -175,7 +175,6 @@ pub enum PointerDeviceKind {
 ///
 /// use flui_types::{
 ///     Offset,
-///     geometry::px,
 ///     gestures::{PointerData, PointerDeviceKind},
 /// };
 ///
@@ -273,7 +272,6 @@ impl PointerData {
     ///
     /// use flui_types::{
     ///     Offset,
-    ///     geometry::px,
     ///     gestures::{PointerData, PointerDeviceKind},
     /// };
     ///
@@ -534,7 +532,6 @@ impl PointerData {
     ///
     /// use flui_types::{
     ///     Offset,
-    ///     geometry::px,
     ///     gestures::{PointerData, PointerDeviceKind},
     /// };
     ///
@@ -577,7 +574,6 @@ impl PointerData {
     ///
     /// use flui_types::{
     ///     Offset,
-    ///     geometry::px,
     ///     gestures::{PointerData, PointerDeviceKind},
     /// };
     ///

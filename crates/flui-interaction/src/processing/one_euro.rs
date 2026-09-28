@@ -123,7 +123,7 @@ impl OneEuroFilter {
 /// use std::time::{Duration, Instant};
 ///
 /// use flui_interaction::processing::OneEuroFilter2D;
-/// use flui_types::geometry::{Offset, Pixels};
+/// use flui_types::geometry::Offset;
 ///
 /// let mut filter = OneEuroFilter2D::default();
 /// let t0 = Instant::now();

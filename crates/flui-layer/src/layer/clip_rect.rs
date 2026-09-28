@@ -17,7 +17,6 @@ use flui_types::{geometry::Rect, painting::Clip};
 /// # Example
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_layer::ClipRectLayer;
 /// use flui_types::{geometry::Rect, painting::Clip};
 ///

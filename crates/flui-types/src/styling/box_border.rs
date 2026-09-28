@@ -7,14 +7,13 @@ use crate::{
 
 /// A border for a box, with a separate side for each edge.
 ///
-/// Generic over unit type `T` for full type safety. Use `Border<Pixels>` for UI
+/// Generic over unit type `T` for full type safety. Use `Border<f64>` for UI
 /// borders.
 ///
 /// # Examples
 ///
 /// ```
 /// use flui_types::{
-///     geometry::px,
 ///     styling::{Border, BorderSide, BorderStyle, Color},
 /// };
 ///
@@ -176,7 +175,6 @@ where
 ///
 /// ```
 /// use flui_types::{
-///     geometry::px,
 ///     styling::{BorderDirectional, BorderSide, BorderStyle, Color},
 /// };
 ///

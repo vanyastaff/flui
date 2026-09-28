@@ -29,17 +29,17 @@ use super::{
 /// Absolute position in 2D space.
 ///
 /// Generic over unit type `T`. Common usage:
-/// - `Point<Pixels>` - UI coordinates
-/// - `Point<DevicePixels>` - Screen pixels
-/// - `Point<Pixels>` - Normalized/dimensionless coordinates
+/// - `Point` - UI coordinates
+/// - `DevicePoint` - Screen pixels
+/// - `Point` - Normalized/dimensionless coordinates
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::{Point, px, Pixels};
+/// use flui_geometry::Point;
 ///
-/// let ui_pos = Point::<Pixels>::new(100.0, 200.0);
-/// let normalized = Point::<Pixels>::new(0.5, 0.75);
+/// let ui_pos = Point::<f64>::new(100.0, 200.0);
+/// let normalized = Point::<f64>::new(0.5, 0.75);
 /// ```
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -103,7 +103,7 @@ impl<T: Unit> Point<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, px};
+    /// use flui_geometry::Point;
     ///
     /// let p = Point::new(10.0, 20.0);
     /// assert_eq!(p.swap(), Point::new(20.0, 10.0));
@@ -209,10 +209,10 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Point, px};
+    /// use flui_geometry::Point;
     ///
-    /// let p: Point<Pixels> = Point::new(3.0, 4.0);
-    /// let p_doubled: Point<Pixels> = p.map(|coord| coord * 2.0);
+    /// let p: Point = Point::new(3.0, 4.0);
+    /// let p_doubled: Point = p.map(|coord| coord * 2.0);
     /// assert_eq!(p_doubled, Point::new(6.0, 8.0));
     /// ```
     #[inline]
@@ -282,7 +282,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, px};
+    /// use flui_geometry::Point;
     ///
     /// let p1 = Point::new(0.0, 0.0);
     /// let p2 = Point::new(3.0, 4.0);
@@ -314,7 +314,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, px};
+    /// use flui_geometry::Point;
     ///
     /// let p1 = Point::new(0.0, 0.0);
     /// let p2 = Point::new(10.0, 20.0);
@@ -504,17 +504,17 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Point, Vec2, px};
+    /// use flui_geometry::{Point, Vec2};
     ///
-    /// let p1 = Point::<Pixels>::new(10.0, 20.0);
-    /// let p2 = Point::<Pixels>::new(3.0, 5.0);
-    /// let v: Vec2<Pixels> = p1 - p2;
+    /// let p1 = Point::<f64>::new(10.0, 20.0);
+    /// let p2 = Point::<f64>::new(3.0, 5.0);
+    /// let v: Vec2 = p1 - p2;
     /// assert_eq!(v, Vec2::new(7.0, 15.0));
     ///
     /// // Works with Pixels too
     /// let p1 = Point::new(100.0, 200.0);
     /// let p2 = Point::new(30.0, 50.0);
-    /// let v: Vec2<Pixels> = p1 - p2;
+    /// let v: Vec2 = p1 - p2;
     /// assert_eq!(v.x, 70.0);
     /// ```
     #[inline]
@@ -593,7 +593,7 @@ where
     }
 }
 
-// Reverse multiplication: f64 * Point<Pixels>
+// Reverse multiplication: f64 * Point
 impl Mul<Point<f64>> for f64 {
     type Output = Point<f64>;
 
@@ -674,9 +674,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Point, px};
+    /// use flui_geometry::Point;
     ///
-    /// let p = Point::<Pixels>::new(1.0, 2.0);
+    /// let p = Point::<f64>::new(1.0, 2.0);
     /// let result = p.checked_add_vec(3.0, 4.0);
     /// assert!(result.is_some());
     /// assert_eq!(result.unwrap(), Point::new(4.0, 6.0));
@@ -701,9 +701,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Point, px};
+    /// use flui_geometry::Point;
     ///
-    /// let p = Point::<Pixels>::new(1.0, 2.0);
+    /// let p = Point::<f64>::new(1.0, 2.0);
     /// let result = p.saturating_add_vec((f64::NAN), 4.0);
     /// // NaN gets clamped to 0
     /// assert_eq!(result.x, 0.0);
@@ -720,9 +720,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Point, px};
+    /// use flui_geometry::Point;
     ///
-    /// let p = Point::<Pixels>::new(1.0, 2.0);
+    /// let p = Point::<f64>::new(1.0, 2.0);
     /// let result = p.checked_mul(2.0);
     /// assert!(result.is_some());
     /// assert_eq!(result.unwrap(), Point::new(2.0, 4.0));
@@ -752,9 +752,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Point, px};
+    /// use flui_geometry::Point;
     ///
-    /// let p = Point::<Pixels>::new(1.0, 2.0);
+    /// let p = Point::<f64>::new(1.0, 2.0);
     /// let result = p.saturating_mul(f64::INFINITY);
     /// assert_eq!(result.x, (f64::MAX));
     /// assert_eq!(result.y, (f64::MAX));
@@ -778,10 +778,10 @@ impl<T: Unit> Point<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, Pixels, px};
+    /// use flui_geometry::Point;
     ///
-    /// let p = Point::<Pixels>::new(100.0, 200.0);
-    /// let p_f32: Point<Pixels> = p.cast();
+    /// let p = Point::<f64>::new(100.0, 200.0);
+    /// let p_f32: Point = p.cast();
     /// assert_eq!(p_f32.x, 100.0);
     /// assert_eq!(p_f32.y, 200.0);
     #[inline]
@@ -806,14 +806,14 @@ impl<T: NumericUnit> Point<T>
 where
     T: Into<f64>,
 {
-    /// Converts to `Point<Pixels>` (shorthand for GPU usage).
+    /// Converts to `Point` (shorthand for GPU usage).
     ///
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Point, px};
+    /// use flui_geometry::Point;
     ///
-    /// let p = Point::<Pixels>::new(100.0, 200.0);
+    /// let p = Point::<f64>::new(100.0, 200.0);
     /// let p_f32 = p.to_f32();
     /// assert_eq!(p_f32, Point::new(100.0, 200.0));
     /// ```
@@ -831,9 +831,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, Pixels, px};
+    /// use flui_geometry::Point;
     ///
-    /// let p = Point::<Pixels>::new(100.0, 200.0);
+    /// let p = Point::<f64>::new(100.0, 200.0);
     /// let arr = p.to_array();
     /// assert_eq!(arr, [100.0, 200.0]);
     #[inline]
@@ -847,9 +847,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, Pixels, px};
+    /// use flui_geometry::Point;
     ///
-    /// let p = Point::<Pixels>::new(100.0, 200.0);
+    /// let p = Point::<f64>::new(100.0, 200.0);
     /// let tuple = p.to_tuple();
     /// assert_eq!(tuple, (100.0, 200.0));
     #[inline]
@@ -863,7 +863,7 @@ where
 // From Trait Implementations
 // ============================================================================
 
-// Note: We cannot implement From<Point<T>> for Point<Pixels> generically
+// Note: We cannot implement From<Point<T>> for Point generically
 // because it conflicts with the reflexive impl From<T> for T when T=f64.
 // Instead, users should use .cast(), .to_f32(), or .into() on specific types.
 
@@ -1106,7 +1106,7 @@ impl Point<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, px};
+    /// use flui_geometry::Point;
     ///
     /// let p = Point::new(100.0, 200.0);
     /// let scaled = p.scale(2.0);  // 2x Retina display
@@ -1124,7 +1124,7 @@ impl Point<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, px};
+    /// use flui_geometry::Point;
     ///
     /// let p = Point::new(3.0, 4.0);
     /// assert_eq!(p.magnitude(), 5.0);
@@ -1148,7 +1148,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Point, px};
+    /// use flui_geometry::Point;
     ///
     /// let p = Point::new(100.0, 150.0);
     /// let origin = Point::new(20.0, 30.0);

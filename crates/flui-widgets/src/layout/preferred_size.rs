@@ -46,7 +46,6 @@ pub trait PreferredSizeView: View {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_types::Size;
 /// use flui_widgets::layout::PreferredSize;
 /// use flui_widgets::SizedBox;

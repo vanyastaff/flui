@@ -293,20 +293,6 @@ impl Transform {
         Self::Rotate { angle }
     }
 
-    /// Create a rotation transform (type-safe version).
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_geometry::{Radians, Transform};
-    ///
-    /// let t = Transform::rotate_radians(Radians::from_degrees(45.0));
-    /// ```
-    #[inline]
-    pub fn rotate_radians(angle: f64) -> Self {
-        Self::Rotate { angle }
-    }
-
     /// Create a rotation transform (angle in degrees, counter-clockwise)
     #[inline]
     pub fn rotate_degrees(degrees: f64) -> Self {
@@ -338,24 +324,6 @@ impl Transform {
     /// Create a rotation around a pivot point
     #[inline]
     pub fn rotate_around(angle: f64, pivot_x: f64, pivot_y: f64) -> Self {
-        Self::RotateAround {
-            angle,
-            pivot_x,
-            pivot_y,
-        }
-    }
-
-    /// Create a rotation around a pivot point (type-safe version).
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_geometry::{Radians, Transform};
-    ///
-    /// let t = Transform::rotate_around_radians(Radians::from_degrees(45.0), 100.0, 100.0);
-    /// ```
-    #[inline]
-    pub fn rotate_around_radians(angle: f64, pivot_x: f64, pivot_y: f64) -> Self {
         Self::RotateAround {
             angle,
             pivot_x,

@@ -85,8 +85,8 @@ pub const EPSILON_F32: f32 = 1e-6;
 // NOTE: `approx_equal`, `approx_equal_f32`, `is_near_zero`,
 // `is_near_zero_f32` were removed from this module — they had zero
 // in-workspace consumers. The geometry/float-comparison primitive belongs
-// in `flui-types`, not in the foundation crate. If a need surfaces, port
-// the helpers there alongside `Pixels` / `Offset` rather than here.
+// next to the geometry values. If a need surfaces, port
+// the helpers there alongside `Offset` rather than here.
 
 #[cfg(test)]
 mod tests {

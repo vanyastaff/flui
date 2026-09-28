@@ -43,8 +43,8 @@ runnable demo (`cargo run -p flui --example widgets_gallery`).
 | **Text** | `Text` |
 
 Each is **behavior-loyal to Flutter** (same layout/paint algorithm) with a
-**Rust-native** surface: compile-time child-arity safety, `f32` at the call site
-(`Pixels` conversion is internal), and a chainable `#[must_use]` builder API.
+**Rust-native** surface: compile-time child-arity safety, plain `f64` logical pixels at the call site,
+and a chainable `#[must_use]` builder API.
 
 ## How it composes (the three shapes)
 

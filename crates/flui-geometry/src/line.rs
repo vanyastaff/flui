@@ -17,7 +17,7 @@ use super::{
 /// A line segment defined by two endpoints with generic unit type.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Line<T: Unit> {
+pub struct Line<T: Unit = f64> {
     /// Start point.
     pub p0: Point<T>,
     /// End point.
@@ -307,7 +307,7 @@ impl Line<f64> {
     /// Computes the intersection point of this line with another line segment.
     ///
     /// Returns `Some(point)` if the lines intersect, `None` otherwise.
-    /// This only works for `Line<Pixels>` due to the complex mathematical
+    /// This only works for `Line<f64>` due to the complex mathematical
     /// operations.
     #[inline]
     #[must_use]

@@ -274,19 +274,19 @@ impl Animatable<Color> for OklabColorTween {
 /// A tween that linearly interpolates between two sizes.
 ///
 /// Similar to Flutter's `SizeTween`.
-/// Tween between two sizes. Alias for `Tween<Size<Pixels>>`.
+/// Tween between two sizes. Alias for `Tween<Size>`.
 pub type SizeTween = Tween<Size<f64>>;
 
 /// A tween that linearly interpolates between two rectangles.
 ///
 /// Similar to Flutter's `RectTween`.
-/// Tween between two rectangles. Alias for `Tween<Rect<Pixels>>`.
+/// Tween between two rectangles. Alias for `Tween<Rect>`.
 pub type RectTween = Tween<Rect<f64>>;
 
 /// A tween that linearly interpolates between two offsets.
 ///
 /// Similar to Flutter's `OffsetTween` (but `Offset::lerp` is used directly in Flutter).
-/// Tween between two offsets. Alias for `Tween<Offset<Pixels>>`.
+/// Tween between two offsets. Alias for `Tween<Offset>`.
 pub type OffsetTween = Tween<Offset<f64>>;
 
 /// A tween that linearly interpolates between two alignments.
@@ -298,7 +298,7 @@ pub type AlignmentTween = Tween<Alignment>;
 /// A tween that linearly interpolates between two edge insets.
 ///
 /// Similar to Flutter's `EdgeInsetsTween`.
-/// Tween between two edge insets. Alias for `Tween<Edges<Pixels>>`.
+/// Tween between two edge insets. Alias for `Tween<EdgeInsets>`.
 pub type EdgeInsetsTween = Tween<Edges<f64>>;
 
 /// Tween between two border radii. Alias for `Tween<BorderRadius>` (now that

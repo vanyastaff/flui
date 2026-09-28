@@ -99,8 +99,8 @@ impl Lerp for Radius<f64> {
     }
 }
 
-/// Interpolates each corner independently. With `Radius<Pixels>: Lerp` this
-/// makes `BorderRadius` (= `Corners<Radius<Pixels>>`) animatable, collapsing
+/// Interpolates each corner independently. With `Radius: Lerp` this
+/// makes `BorderRadius` (= `Corners<Radius>`) animatable, collapsing
 /// the bespoke border-radius tween into the generic `Tween<V>`.
 impl<T: Lerp> Lerp for Corners<T> {
     #[inline]

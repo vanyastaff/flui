@@ -744,7 +744,7 @@ impl BoxConstraints {
 // NORMALIZATION HELPERS
 // ============================================================================
 
-/// Rounds a Pixels value to hundredths precision.
+/// Rounds a logical length to hundredths precision.
 #[inline]
 fn round_pixels_to_hundredths(value: f64) -> f64 {
     if value.is_finite() {
@@ -754,7 +754,7 @@ fn round_pixels_to_hundredths(value: f64) -> f64 {
     }
 }
 
-/// Checks if a Pixels value is already normalized.
+/// Checks if a logical length is already normalized.
 #[inline]
 fn is_pixels_normalized(value: f64) -> bool {
     if value.is_finite() {

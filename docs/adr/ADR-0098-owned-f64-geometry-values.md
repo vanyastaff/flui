@@ -28,7 +28,7 @@ The census and the research found:
 
 - **The unit types did not buy safety.**
   - `ScaleFactor` and `to_device` have no production caller.
-  - flui-engine types physical rectangles as `Rect<Pixels>`, which says "logical".
+  - flui-engine types physical rectangles as `Rect`, which says "logical".
   - 28 raster and platform sites convert by hand, each with its own rounding.
 - **`f32` fails on the scroll axis.** Scroll offsets and sliver extents are `f32`; at 5e7
   logical px the step is 4 px, and small scroll deltas vanish (egui#1391 is the same failure).
@@ -271,7 +271,7 @@ Each step is one PR that builds and passes `cargo xtask check-changed`:
 
 - **A pre-1.0 breaking change for every consumer.**
   - `px(10.0)` becomes `10.0`.
-  - `Size<Pixels>` becomes `Size`; `Rect<Pixels>` becomes `Rect`.
+  - `Size` becomes `Size`; `Rect` becomes `Rect`.
   - Lengths become `f64`, and `f32` values need `f64::from` at the call site.
   - `flui::geometry` and `flui::types` are replaced by owner paths.
   - Float-holding types lose `Eq` and `Hash` (`Color` keeps them).

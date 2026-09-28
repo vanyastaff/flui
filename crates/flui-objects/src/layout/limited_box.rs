@@ -11,9 +11,8 @@
 //!
 //! Flutter stores `maxWidth` / `maxHeight` as `double` with `double.infinity`
 //! as the "no limit" sentinel. The Rust port models them as
-//! `Option<Pixels>` — `None` means "do not impose a cap" — and the typed
-//! `Pixels` boundary prevents the rest of the codebase from accidentally
-//! treating an infinite cap as a meaningful upper bound.
+//! `Option<f64>` — `None` means "do not impose a cap" — so no caller can
+//! mistake an infinite cap for a meaningful upper bound.
 
 use flui_foundation::Single;
 use flui_types::{Offset, Size};
@@ -43,7 +42,6 @@ use flui_rendering::{
 ///
 /// ```ignore
 /// use flui_objects::RenderLimitedBox;
-/// use flui_types::geometry::px;
 ///
 /// // Cap width at 240, leave height alone.
 /// let _node = RenderLimitedBox::new(Some(240.0), None);

@@ -24,7 +24,6 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_layer::ClipSuperellipseLayer;
 /// use flui_types::{
 ///     geometry::{RSuperellipse, Radius, Rect},

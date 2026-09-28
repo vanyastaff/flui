@@ -11,7 +11,7 @@ use super::{
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(C)]
-pub struct Radius<T: Unit> {
+pub struct Radius<T: Unit = f64> {
     /// Horizontal radius.
     pub x: T,
     /// Vertical radius.

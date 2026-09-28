@@ -30,7 +30,7 @@
 //! use flui_interaction::GestureRecognizer;
 //! use flui_interaction::arena::GestureArena;
 //! use flui_interaction::ids::PointerId;
-//! use flui_types::geometry::{Offset, Pixels};
+//! use flui_types::geometry::Offset;
 //! use flui_interaction::recognizers::EagerGestureRecognizer;
 //!
 //! let arena = GestureArena::new();

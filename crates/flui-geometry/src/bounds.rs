@@ -10,14 +10,14 @@
 //! of coordinate systems:
 //!
 //! ```ignore
-//! use flui_geometry::{Bounds, Point, Size, Pixels, DevicePixels, px, device_px};
+//! use flui_geometry::{Bounds, Point, Size};
 //!
-//! let ui_bounds = Bounds::<Pixels>::new(
+//! let ui_bounds = Bounds::<f64>::new(
 //!     Point::new(10.0, 20.0),
 //!     Size::new(100.0, 50.0)
 //! );
 //!
-//! let device_bounds = Bounds::<DevicePixels>::new(
+//! let device_bounds = Bounds::<i32>::new(
 //!     Point::new(80, 160),
 //!     Size::new(800, 400)
 //! );
@@ -61,7 +61,7 @@ use super::{
 /// Generic over unit type `T` for type-safe coordinate system handling.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Bounds<T: Unit> {
+pub struct Bounds<T: Unit = f64> {
     /// The origin point (top-left corner).
     pub origin: Point<T>,
     /// The size.
@@ -682,7 +682,7 @@ impl<T: Unit> Bounds<T> {
 // CONSTRUCTOR FUNCTION (symmetric with `rect()`, `point()`, `size()`, `edges()`)
 // =============================================================================
 
-/// Convenience constructor for [`Bounds<Pixels>`] from an origin point and size.
+/// Convenience constructor for [`Bounds`] from an origin point and size.
 ///
 /// Mirrors the constructor-function pattern used by [`rect()`](crate::rect()),
 /// [`point()`](crate::point()), [`size()`](crate::size()), and

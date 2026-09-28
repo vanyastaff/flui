@@ -24,7 +24,6 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_layer::BackdropFilterLayer;
 /// use flui_types::{
 ///     geometry::Rect,

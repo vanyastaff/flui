@@ -296,7 +296,7 @@ impl Alignment {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Alignment, Offset, Size, geometry::px};
+    /// use flui_types::{Alignment, Offset, Size};
     ///
     /// // Center: free space 100×50 → offset (50, 25)
     /// let offset = Alignment::CENTER.along_size(Size::new(100.0, 50.0));
@@ -329,7 +329,7 @@ impl Alignment {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::{Alignment, Rect, geometry::px};
+    /// use flui_types::{Alignment, Rect};
     ///
     /// let rect = flui_types::Rect::from_ltwh(10.0, 20.0, 100.0, 200.0);
     /// // Center of a 100×200 rect anchored at (10, 20) is (60, 120).

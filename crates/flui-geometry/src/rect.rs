@@ -18,7 +18,7 @@ use super::{
 ///
 /// Generic over unit type `T`. Common usage:
 /// - `Rect<f64>` - Raw coordinates (GPU-ready)
-/// - `Rect<Pixels>` - Logical pixel coordinates
+/// - `Rect` - Logical pixel coordinates
 ///
 /// Defined by minimum and maximum corner points. The rectangle is valid when
 /// `min.x <= max.x` and `min.y <= max.y`.
@@ -32,8 +32,8 @@ use super::{
 /// let rect = Rect::from_origin_size(point(0.0, 0.0), size(100.0, 50.0));
 ///
 /// // Query properties
-/// assert_eq!(rect.width().get(), 100.0);
-/// assert_eq!(rect.height().get(), 50.0);
+/// assert_eq!(rect.width(), 100.0);
+/// assert_eq!(rect.height(), 50.0);
 /// assert_eq!(rect.area(), 5000.0);
 ///
 /// // Hit testing
@@ -329,7 +329,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Rect, px};
+    /// use flui_geometry::Rect;
     ///
     /// let rect = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
     /// assert_eq!(rect.shortest_side(), 100.0);
@@ -814,7 +814,7 @@ impl<T: NumericUnit> Rect<T>
 where
     T: Into<f64>,
 {
-    /// Converts to `Rect<Pixels>` with f64 values.
+    /// Converts to `Rect` with f64 values.
     #[inline]
     #[must_use]
     pub fn to_f32(&self) -> Rect<f64> {

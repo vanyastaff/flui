@@ -439,12 +439,11 @@ impl<'a> RenderObjectContext<'a> {
 /// use flui_rendering::RenderUpdateImpact;
 /// use flui_rendering::protocol::BoxProtocol;
 /// use flui_types::Size;
-/// use flui_types::geometry::px;
 /// use flui_view::{RenderObjectContext, RenderView};
 ///
 /// #[derive(Clone)]
 /// struct ColoredBox {
-///     color: [f64; 4],
+///     color: [f32; 4],
 /// }
 ///
 /// impl RenderView for ColoredBox {

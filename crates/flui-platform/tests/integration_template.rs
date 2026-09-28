@@ -25,7 +25,7 @@
 //! // Import crates being integrated
 //! use flui_platform::{current_platform, WindowOptions};
 //! use flui_painting::Canvas; // Example dependent crate
-//! use flui_types::geometry::{px, Size};
+//! use flui_types::geometry::Size;
 //!
 //! #[test]
 //! fn test_platform_with_canvas() {

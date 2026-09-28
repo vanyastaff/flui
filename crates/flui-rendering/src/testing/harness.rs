@@ -458,7 +458,7 @@ impl FrameRun {
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
     /// # use flui_rendering::prelude::*;
     /// # use flui_foundation::Leaf;
-    /// # use flui_types::{Size, geometry::px};
+    /// # use flui_types::Size;
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox(f64);
     /// # impl flui_foundation::Diagnosticable for FixedBox {}
@@ -535,7 +535,7 @@ impl FrameRun {
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
     /// # use flui_rendering::prelude::*;
     /// # use flui_foundation::Leaf;
-    /// # use flui_types::{Size, geometry::px};
+    /// # use flui_types::Size;
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox(f64);
     /// # impl flui_foundation::Diagnosticable for FixedBox {}
@@ -674,7 +674,7 @@ impl RenderTester {
     /// # use flui_rendering::testing::{box_node, RenderTester};
     /// # use flui_rendering::prelude::*;
     /// # use flui_foundation::Leaf;
-    /// # use flui_types::{Size, geometry::px};
+    /// # use flui_types::Size;
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox;
     /// # impl flui_foundation::Diagnosticable for FixedBox {}

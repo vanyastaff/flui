@@ -248,7 +248,7 @@ mod tests {
         let insets = EdgeInsets::all(10.0);
         assert_eq!(insets.horizontal_total(), 20.0);
         assert_eq!(insets.vertical_total(), 20.0);
-        // insets.left/top are Pixels, so build the expected offset directly.
+        // insets.left/top are plain f64, so build the expected offset directly.
         let top_left = Offset::new(insets.left, insets.top);
         assert_eq!(top_left, Offset::new(10.0, 10.0));
     }

@@ -39,7 +39,7 @@
 //!
 //! use flui_platform_api::{PlatformHaptics, PlatformTextInput};
 //! use flui_types::HapticFeedback;
-//! use flui_types::geometry::{Bounds, Pixels, Point, Size, px};
+//! use flui_types::geometry::{Bounds, Point, Size};
 //!
 //! #[derive(Default)]
 //! struct Recorder {
@@ -52,7 +52,7 @@
 //!         self.ime_allowed.lock().expect("unpoisoned").push(allowed);
 //!     }
 //!
-//!     fn set_ime_cursor_area(&self, _area: Bounds<Pixels>) {}
+//!     fn set_ime_cursor_area(&self, _area: Bounds) {}
 //! }
 //!
 //! impl PlatformHaptics for Recorder {

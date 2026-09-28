@@ -29,8 +29,8 @@ use super::{
 /// A 2D vector representing direction and magnitude.
 ///
 /// Generic over unit type `T`. Common usage:
-/// - `Vec2<Pixels>` - UI displacement
-/// - `Vec2<Pixels>` - Normalized/dimensionless vector
+/// - `Vec2` - UI displacement
+/// - `Vec2` - Normalized/dimensionless vector
 ///
 /// This represents a displacement or direction, not an absolute position.
 /// For positions, use [`Point`].
@@ -38,13 +38,13 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::{Vec2, px, Pixels};
+/// use flui_geometry::Vec2;
 ///
-/// let velocity = Vec2::<Pixels>::new(10.0, 5.0);
-/// let normalized = Vec2::<Pixels>::new(0.6, 0.8);
+/// let velocity = Vec2::<f64>::new(10.0, 5.0);
+/// let normalized = Vec2::<f64>::new(0.6, 0.8);
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct Vec2<T: Unit> {
+pub struct Vec2<T: Unit = f64> {
     /// X component.
     pub x: T,
     /// Y component.
@@ -168,22 +168,6 @@ impl Vec2<f64> {
     pub fn from_angle(angle: f64) -> Self {
         Self::new(angle.cos(), angle.sin())
     }
-
-    /// Creates a unit vector from an angle (type-safe version).
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_geometry::{Vec2, radians, Radians};
-    /// use std::f64::consts::PI;
-    ///
-    /// let v = Vec2::from_radians(Radians::from_degrees(90.0));
-    /// assert!((v.y - 1.0).abs() < 0.001);
-    #[inline]
-    #[must_use]
-    pub fn from_radians(angle: f64) -> Self {
-        Self::from_angle(angle)
-    }
 }
 
 // ============================================================================
@@ -261,11 +245,11 @@ impl<T: Unit> Vec2<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{PixelDelta, Pixels, Vec2, delta_px, px};
+    /// use flui_geometry::Vec2;
     ///
-    /// let logical = Vec2::<Pixels>::new(10.0, 20.0);
+    /// let logical = Vec2::<f64>::new(10.0, 20.0);
     /// // Pixels: Into<PixelDelta> is implemented.
-    /// let delta: Vec2<PixelDelta> = logical.cast();
+    /// let delta: Vec2 = logical.cast();
     /// assert_eq!(delta.x, 10.0);
     /// assert_eq!(delta.y, 20.0);
     /// ```
@@ -482,12 +466,12 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// use flui_geometry::{Vec2, Radians, px};
+    /// use flui_geometry::Vec2;
     /// use std::f64::consts::PI;
     ///
     /// let v = Vec2::new(0.0, 1.0);
     /// let angle = v.angle_radians();
-    /// assert!((angle.0 - PI / 2.0).abs() < 0.001);
+    /// assert!((angle - PI / 2.0).abs() < 0.001);
     /// ```
     #[inline]
     #[must_use]
@@ -520,13 +504,13 @@ where
     /// # Examples
     ///
     /// ```rust
-    /// use flui_geometry::{Vec2, Radians, px};
+    /// use flui_geometry::Vec2;
     /// use std::f64::consts::PI;
     ///
     /// let v1 = Vec2::new(1.0, 0.0);
     /// let v2 = Vec2::new(0.0, 1.0);
     /// let angle = v1.angle_between_radians(v2);
-    /// assert!((angle.0 - PI / 2.0).abs() < 0.001);
+    /// assert!((angle - PI / 2.0).abs() < 0.001);
     /// ```
     #[inline]
     #[must_use]
@@ -545,24 +529,6 @@ where
             T::from_f64(x * cos - y * sin),
             T::from_f64(x * sin + y * cos),
         )
-    }
-
-    /// Rotates the vector by an angle (type-safe version).
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use flui_geometry::{Vec2, Radians, px};
-    /// use std::f64::consts::PI;
-    ///
-    /// let v = Vec2::new(1.0, 0.0);
-    /// let rotated = v.rotate_radians(Radians::from_degrees(90.0));
-    /// assert!((rotated.y - 1.0).abs() < 0.001);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn rotate_radians(self, angle: f64) -> Self {
-        self.rotate(angle)
     }
 }
 

@@ -69,7 +69,7 @@ pub enum PlatformViewHitTestBehavior {
 ///
 /// ```rust
 /// use flui_layer::{PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer};
-/// use flui_types::geometry::{Rect, px};
+/// use flui_types::geometry::Rect;
 ///
 /// // Embed a map view
 /// let map_view = PlatformViewLayer::new(

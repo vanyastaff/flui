@@ -36,14 +36,13 @@ impl BorderStyle {
 
 /// A single side of a border.
 ///
-/// Generic over unit type `T` for full type safety. Use `BorderSide<Pixels>`
+/// Generic over unit type `T` for full type safety. Use `BorderSide<f64>`
 /// for UI borders.
 ///
 /// # Examples
 ///
 /// ```
 /// use flui_types::{
-///     geometry::px,
 ///     styling::{BorderSide, BorderStyle, Color},
 /// };
 ///

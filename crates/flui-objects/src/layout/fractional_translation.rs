@@ -16,7 +16,7 @@
 //! convention with no compile-side enforcement.
 //!
 //! This port introduces a dedicated [`TranslationFraction`] newtype so
-//! "fraction of child size" is visible in the API surface. Pixels
+//! "fraction of child size" is visible in the API surface. Lengths
 //! never appear in the translation slot; the conversion happens once
 //! inside `paint`/`hit_test` against the driver-supplied size (from
 //! `RenderState`). The intent collapses into the type system instead of
@@ -38,8 +38,8 @@ use flui_rendering::{context::BoxHitTestContext, parent_data::BoxParentData, tra
 /// `TranslationFraction { dx: -0.5, dy: 0.0 }` shifts the subject left
 /// by half its own width; `{ dx: 1.0, dy: 0.0 }` shifts it right by
 /// its full width (off-stage). The fractions are unit-less `f64`,
-/// not pixels — distinguishing them from `Offset` which carries
-/// concrete `Pixels`.
+/// not pixels — distinguishing them from `Offset`, which carries
+/// logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TranslationFraction {
     /// Horizontal fraction (multiplied by `size.width` at use site).
@@ -60,7 +60,7 @@ impl TranslationFraction {
     }
 
     /// Resolves this fraction against a concrete `size`, producing a
-    /// `Pixels`-typed [`Offset`] suitable for canvas math.
+    /// logical-pixel [`Offset`] suitable for canvas math.
     #[inline]
     #[must_use]
     pub fn resolve(&self, size: Size) -> Offset {

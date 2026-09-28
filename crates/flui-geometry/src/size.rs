@@ -14,17 +14,17 @@ use super::{
 /// A 2D size with width and height.
 ///
 /// Generic over unit type `T`. Common usage:
-/// - `Size<Pixels>` - UI dimensions
-/// - `Size<DevicePixels>` - Screen dimensions
+/// - `Size` - UI dimensions
+/// - `DeviceSize` - Screen dimensions
 ///
 /// Display format: `{width}×{height}` (e.g. `800px×600px`).
 ///
 /// # Examples
 ///
 /// ```
-/// use flui_geometry::{Pixels, Size, px};
+/// use flui_geometry::Size;
 ///
-/// let ui_size = Size::<Pixels>::new(800.0, 600.0);
+/// let ui_size = Size::<f64>::new(800.0, 600.0);
 /// assert_eq!(ui_size.area(), 480_000.0);
 /// ```
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -89,9 +89,9 @@ impl<T: Unit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Size, px};
+    /// use flui_geometry::Size;
     ///
-    /// let s = Size::<Pixels>::square(10.0);
+    /// let s = Size::<f64>::square(10.0);
     /// assert_eq!(s.width, 10.0);
     /// assert_eq!(s.height, 10.0);
     /// ```
@@ -111,12 +111,12 @@ impl<T: NumericUnit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Size, px};
+    /// use flui_geometry::Size;
     ///
-    /// let s1 = Size::<Pixels>::new(100.0, 50.0);
-    /// let s2 = Size::<Pixels>::new(80.0, 60.0);
+    /// let s1 = Size::<f64>::new(100.0, 50.0);
+    /// let s2 = Size::<f64>::new(80.0, 60.0);
     /// let result = s1.min(s2);
-    /// assert_eq!(result, Size::<Pixels>::new(80.0, 50.0));
+    /// assert_eq!(result, Size::<f64>::new(80.0, 50.0));
     /// ```
     #[inline]
     #[must_use]
@@ -132,12 +132,12 @@ impl<T: NumericUnit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Size, px};
+    /// use flui_geometry::Size;
     ///
-    /// let s1 = Size::<Pixels>::new(100.0, 50.0);
-    /// let s2 = Size::<Pixels>::new(80.0, 60.0);
+    /// let s1 = Size::<f64>::new(100.0, 50.0);
+    /// let s2 = Size::<f64>::new(80.0, 60.0);
     /// let result = s1.max(s2);
-    /// assert_eq!(result, Size::<Pixels>::new(100.0, 60.0));
+    /// assert_eq!(result, Size::<f64>::new(100.0, 60.0));
     /// ```
     #[inline]
     #[must_use]
@@ -158,12 +158,12 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Size, px};
+    /// use flui_geometry::Size;
     ///
-    /// let s1 = Size::<Pixels>::new(0.0, 10.0);
+    /// let s1 = Size::<f64>::new(0.0, 10.0);
     /// assert!(s1.is_empty());
     ///
-    /// let s2 = Size::<Pixels>::new(10.0, 10.0);
+    /// let s2 = Size::<f64>::new(10.0, 10.0);
     /// assert!(!s2.is_empty());
     /// ```
     #[inline]
@@ -180,9 +180,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Size, px};
+    /// use flui_geometry::Size;
     ///
-    /// let s = Size::<Pixels>::new(10.0, 20.0);
+    /// let s = Size::<f64>::new(10.0, 20.0);
     /// assert_eq!(s.area(), 200.0);
     /// ```
     #[inline]
@@ -200,9 +200,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Size, px};
+    /// use flui_geometry::Size;
     ///
-    /// let s = Size::<Pixels>::new(16.0, 9.0);
+    /// let s = Size::<f64>::new(16.0, 9.0);
     /// assert!((s.aspect_ratio() - 1.777).abs() < 0.01);
     /// ```
     #[inline]
@@ -218,11 +218,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Point, Size, px};
+    /// use flui_geometry::{Point, Size};
     ///
-    /// let s = Size::<Pixels>::new(100.0, 200.0);
+    /// let s = Size::<f64>::new(100.0, 200.0);
     /// let c = s.center();
-    /// assert_eq!(c, Point::<Pixels>::new(50.0, 100.0));
+    /// assert_eq!(c, Point::<f64>::new(50.0, 100.0));
     /// ```
     #[inline]
     #[must_use]
@@ -245,11 +245,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Point, Size, px};
+    /// use flui_geometry::{Point, Size};
     ///
-    /// let s = Size::<Pixels>::new(10.0, 20.0);
-    /// assert!(s.contains(Point::<Pixels>::new(5.0, 10.0)));
-    /// assert!(!s.contains(Point::<Pixels>::new(15.0, 10.0)));
+    /// let s = Size::<f64>::new(10.0, 20.0);
+    /// assert!(s.contains(Point::<f64>::new(5.0, 10.0)));
+    /// assert!(!s.contains(Point::<f64>::new(15.0, 10.0)));
     /// ```
     #[inline]
     #[must_use]
@@ -273,10 +273,10 @@ impl<T: Unit> Size<T> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Size, px};
+    /// use flui_geometry::Size;
     ///
     /// let size_px = Size::new(100.0, 200.0);
-    /// let size_f32: Size<Pixels> = size_px.cast();
+    /// let size_f32: Size = size_px.cast();
     /// assert_eq!(size_f32.width, 100.0);
     /// ```
     #[inline]
@@ -301,7 +301,7 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Size, px};
+    /// use flui_geometry::Size;
     ///
     /// let size = Size::new(100.0, 200.0);
     /// let f32_size = size.to_f32();
@@ -321,9 +321,9 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Size, px};
+    /// use flui_geometry::Size;
     ///
-    /// let s = Size::<Pixels>::new(100.0, 200.0);
+    /// let s = Size::<f64>::new(100.0, 200.0);
     /// assert_eq!(s.to_array(), [100.0, 200.0]);
     /// ```
     #[inline]
@@ -337,11 +337,11 @@ where
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Pixels, Size, Vec2, px};
+    /// use flui_geometry::{Size, Vec2};
     ///
-    /// let s = Size::<Pixels>::new(100.0, 200.0);
+    /// let s = Size::<f64>::new(100.0, 200.0);
     /// let v = s.to_vec2();
-    /// assert_eq!(v, Vec2::<Pixels>::new(100.0, 200.0));
+    /// assert_eq!(v, Vec2::<f64>::new(100.0, 200.0));
     /// ```
     #[inline]
     #[must_use]
@@ -939,7 +939,7 @@ impl Size<f64> {
     /// # Examples
     ///
     /// ```
-    /// use flui_geometry::{Size, px};
+    /// use flui_geometry::Size;
     ///
     /// let size = Size::new(100.0, 200.0);
     /// let scaled = size.scale(2.0); // 2x Retina display

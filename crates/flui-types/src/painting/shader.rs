@@ -14,7 +14,7 @@ use crate::{
 /// # Examples
 ///
 /// ```
-/// use flui_types::{geometry::px, painting::Shader, styling::Color};
+/// use flui_types::{painting::Shader, styling::Color};
 ///
 /// let shader = Shader::linear_gradient(
 ///     flui_types::geometry::Offset::ZERO,
@@ -174,7 +174,7 @@ impl Shader {
     ///
     /// ```
     /// use flui_types::{
-    ///     geometry::{Offset, px},
+    ///     geometry::Offset,
     ///     painting::Shader,
     ///     styling::Color,
     /// };
@@ -202,7 +202,7 @@ impl Shader {
     ///
     /// ```
     /// use flui_types::{
-    ///     geometry::{Offset, px},
+    ///     geometry::Offset,
     ///     painting::Shader,
     ///     styling::Color,
     /// };
@@ -231,7 +231,7 @@ impl Shader {
     ///
     /// ```
     /// use flui_types::{
-    ///     geometry::{Offset, px},
+    ///     geometry::Offset,
     ///     painting::Shader,
     ///     styling::Color,
     /// };

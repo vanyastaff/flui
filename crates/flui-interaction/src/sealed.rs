@@ -111,7 +111,7 @@ pub trait CustomGestureRecognizer {
 /// }
 ///
 /// impl CustomHitTestable for CustomLayer {
-///     fn perform_hit_test(&self, position: Offset<Pixels>, result: &mut HitTestResult) -> bool {
+///     fn perform_hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
 ///         if !self.bounds.contains(position) {
 ///             return false;
 ///         }

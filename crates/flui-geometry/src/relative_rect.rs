@@ -15,7 +15,7 @@ use crate::{Offset, Size};
 /// to Flutter's `RelativeRect`, used by `Positioned` and `RelativeRectTween`.
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RelativeRect<T: Unit> {
+pub struct RelativeRect<T: Unit = f64> {
     /// Offset from the left edge of the parent.
     pub left: T,
     /// Offset from the top edge of the parent.

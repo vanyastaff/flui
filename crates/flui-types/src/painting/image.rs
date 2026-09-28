@@ -318,7 +318,7 @@ pub enum ImageRepeat {
 ///
 /// ```
 /// use flui_types::{
-///     geometry::{Size, px},
+///     geometry::Size,
 ///     painting::ImageConfiguration,
 /// };
 ///

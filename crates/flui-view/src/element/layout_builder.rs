@@ -93,7 +93,7 @@ pub(crate) type LayoutWidgetBuilder = Rc<dyn Fn(&dyn BuildContext, BoxConstraint
 /// use flui_view::view::ErrorView;
 ///
 /// let responsive = LayoutBuilder::new(|_ctx, constraints| {
-///     if constraints.max_width.get() > 600.0 {
+///     if constraints.max_width > 600.0 {
 ///         ErrorView::new("wide layout")
 ///     } else {
 ///         ErrorView::new("narrow layout")

@@ -199,7 +199,7 @@ impl GridView {
 
     /// Set the programmatic scroll offset in logical pixels.
     ///
-    /// Pixels mode: the composed [`Viewport`] (or [`ShrinkWrappingViewport`]
+    /// Fixed mode: the composed [`Viewport`] (or [`ShrinkWrappingViewport`]
     /// under [`GridView::shrink_wrap`]) owns a private `ScrollPosition` and
     /// this value is pushed into it on every rebuild. Mutually exclusive with
     /// [`GridView::position`] — whichever is called last wins.

@@ -2,11 +2,10 @@
 // target. `unwrap` in test/example code: a panic IS the failure report
 // (docs/PANIC-POLICY.md); style items here are ship-wave debt.
 #![expect(clippy::unwrap_used)]
-// This target intentionally exercises the deprecated raw-scalar device conversions (to_device_pixels(f32)/from_device_pixels).
 //! Basic usage example for flui_types
 //!
 //! This example demonstrates the fundamental types used in FLUI:
-//! - Pixels: The primary unit for layout and rendering
+//! - Lengths: plain `f64` logical pixels
 //! - Point: 2D coordinates
 //! - Rect: Rectangular regions
 //! - Size: Dimensions
@@ -20,8 +19,8 @@ use flui_types::{
 fn main() {
     println!("=== FLUI Types Basic Usage ===\n");
 
-    // 1. Working with Pixels
-    println!("1. Pixels:");
+    // 1. Lengths are plain f64 logical pixels
+    println!("1. Lengths:");
     let width = 100.0;
     let height = 50.0;
     println!("   Width: {width:?}");

@@ -30,7 +30,6 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_layer::TextureLayer;
 /// use flui_types::{
 ///     geometry::Rect,

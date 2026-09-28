@@ -23,7 +23,6 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_layer::ClipRRectLayer;
 /// use flui_types::{
 ///     geometry::{RRect, Rect},
