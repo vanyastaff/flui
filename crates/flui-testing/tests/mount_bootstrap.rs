@@ -25,7 +25,6 @@ use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
 use flui_types::Size;
-use flui_types::geometry::px;
 use flui_view::{BuildOwner, ElementTree, RenderView, View};
 
 /// A leaf of a fixed size, so the bootstrap frame has real geometry to commit.

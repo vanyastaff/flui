@@ -17,7 +17,6 @@ use flui_sdk::animation::{
     Animation, AnimationController, UpdateScheduler, Vsync, VsyncRegistration,
 };
 use flui_sdk::types::Color;
-use flui_sdk::types::geometry::px;
 // Only the `#[cfg(debug_assertions)]` recovery test names this type: the
 // ErrorView substitution it asserts on exists only in debug builds.
 #[cfg(debug_assertions)]

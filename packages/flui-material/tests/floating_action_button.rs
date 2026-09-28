@@ -35,7 +35,6 @@ use flui_material::{
     FabThemeData, FloatingActionButton, Scaffold, Theme, ThemeData, ThemeDataOverrides,
 };
 use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::geometry::px;
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
 
 /// `_FABDefaultsM3`'s formatted `Debug` string for a given resolved

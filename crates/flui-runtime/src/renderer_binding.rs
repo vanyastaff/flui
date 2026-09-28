@@ -767,7 +767,7 @@ mod tests {
     fn draw_frame_returns_layer_tree_and_defers_when_gated() {
         use flui_objects::RenderColoredBox;
         use flui_rendering::constraints::BoxConstraints;
-        use flui_types::{Size, geometry::px};
+        use flui_types::Size;
 
         let owner = PipelineCell::new(PipelineOwner::new());
         let root_id = owner.with_mut(|o| {
@@ -822,7 +822,7 @@ mod tests {
     fn hit_test_in_view_takes_logical_positions_without_rescaling() {
         use flui_objects::RenderColoredBox;
         use flui_rendering::constraints::BoxConstraints;
-        use flui_types::{Offset, geometry::px};
+        use flui_types::Offset;
 
         let owner = PipelineCell::new(PipelineOwner::new());
         owner.with_mut(|o| {

@@ -16,7 +16,7 @@ use flui_objects::{RenderFlex, RenderSizedBox};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 use flui_view::{
     BoxedView, BuildContext, BuildOwner, ElementTree, ErrorView, GlobalKey, IntoView,
     LifecycleHook, RebuildReason, RecoveredAt, RenderView, StatefulView, View, ViewExt, ViewState,
@@ -73,7 +73,7 @@ pub(super) struct DenseHealthyLeaf {
 
 impl DenseHealthyLeaf {
     fn size(&self) -> Size {
-        Size::new((8.0 + self.marker as f64), 12.0)
+        Size::new(8.0 + self.marker as f64, 12.0)
     }
 }
 

@@ -590,7 +590,7 @@ mod tests {
     // ------------------------------------------------------------------
 
     fn size(width: f64, height: f64) -> flui_sdk::types::Size {
-        flui_sdk::types::Size::new((width), (height))
+        flui_sdk::types::Size::new(width, height)
     }
 
     #[test]

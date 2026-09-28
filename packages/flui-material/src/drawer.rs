@@ -76,7 +76,7 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::rendering::{BoxConstraints, HitTestBehavior};
-use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::geometry::Radius;
 use flui_sdk::types::styling::{BorderRadius, BorderRadiusExt, Color};
 use flui_sdk::types::{Alignment, painting::Clip};
 use flui_sdk::view::prelude::*;

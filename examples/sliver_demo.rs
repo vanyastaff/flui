@@ -19,7 +19,6 @@ use flui::widgets::{
     ColoredBox, CustomScrollView, MediaQuery, MediaQueryData, Padding, ScrollController,
     Scrollable, SizedBox, SliverToBoxAdapter, Text, Viewport,
 };
-use flui_types::geometry::px;
 use flui_types::{Color, EdgeInsets};
 use flui_view::view::ViewExt;
 use flui_view::{BoxedView, BuildContext, IntoView, StatelessView, View};

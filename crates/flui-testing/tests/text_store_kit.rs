@@ -14,7 +14,7 @@ use flui_platform_api::text_store::{
 use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,
 };
-use flui_types::geometry::{Bounds, Pixels, Point};
+use flui_types::geometry::{Bounds, Point};
 
 #[test]
 fn in_memory_store_conforms_to_kit_v1() {

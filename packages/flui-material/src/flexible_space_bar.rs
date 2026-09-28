@@ -296,7 +296,7 @@ impl StatelessView for FlexibleSpaceBar {
 
 /// Local shorthand: `EdgeInsets` is pixel-typed.
 fn px_f(value: f64) -> f64 {
-    (value)
+    value
 }
 
 #[cfg(test)]

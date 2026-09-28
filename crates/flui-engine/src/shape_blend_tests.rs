@@ -121,8 +121,8 @@ mod gpu_tests {
         Rect::from_xywh(
             0.0,
             0.0,
-            f64::from((SURFACE_WIDTH as f32)),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_WIDTH as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         )
     }
 
@@ -252,8 +252,8 @@ mod gpu_tests {
             Rect::from_ltrb(
                 f64::from(inset),
                 f64::from(inset),
-                f64::from((SURFACE_WIDTH as f32 - inset)),
-                f64::from((SURFACE_HEIGHT as f32 - inset)),
+                f64::from(SURFACE_WIDTH as f32 - inset),
+                f64::from(SURFACE_HEIGHT as f32 - inset),
             ),
             4.0,
         );
@@ -338,10 +338,10 @@ mod gpu_tests {
         let full_bounds = full_surface_bounds();
         // Small center rect for the "after" SrcOver draw.
         let center_rect = Rect::from_xywh(
-            f64::from((SURFACE_WIDTH as f32 / 4.0)),
-            f64::from((SURFACE_HEIGHT as f32 / 4.0)),
-            f64::from((SURFACE_WIDTH as f32 / 2.0)),
-            f64::from((SURFACE_HEIGHT as f32 / 2.0)),
+            f64::from(SURFACE_WIDTH as f32 / 4.0),
+            f64::from(SURFACE_HEIGHT as f32 / 4.0),
+            f64::from(SURFACE_WIDTH as f32 / 2.0),
+            f64::from(SURFACE_HEIGHT as f32 / 2.0),
         );
 
         let before_color = Color::rgba(220, 80, 30, 200); // translucent orange — before
@@ -449,8 +449,8 @@ mod gpu_tests {
         // 1. A red circle covering the middle of the surface.
         painter.draw_circle(
             flui_types::Point::new(
-                f64::from((SURFACE_WIDTH as f32 / 2.0)),
-                f64::from((SURFACE_HEIGHT as f32 / 2.0)),
+                f64::from(SURFACE_WIDTH as f32 / 2.0),
+                f64::from(SURFACE_HEIGHT as f32 / 2.0),
             ),
             20.0,
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
@@ -459,10 +459,10 @@ mod gpu_tests {
         // 2. An opaque blue rect recorded AFTER it, covering the same area.
         painter.draw_rect(
             Rect::from_xywh(
-                f64::from((SURFACE_WIDTH as f32 / 4.0)),
-                f64::from((SURFACE_HEIGHT as f32 / 4.0)),
-                f64::from((SURFACE_WIDTH as f32 / 2.0)),
-                f64::from((SURFACE_HEIGHT as f32 / 2.0)),
+                f64::from(SURFACE_WIDTH as f32 / 4.0),
+                f64::from(SURFACE_HEIGHT as f32 / 4.0),
+                f64::from(SURFACE_WIDTH as f32 / 2.0),
+                f64::from(SURFACE_HEIGHT as f32 / 2.0),
             ),
             &Paint::fill(Color::rgba(0, 0, 255, 255)),
         );
@@ -623,17 +623,17 @@ mod gpu_tests {
 
         painter.draw_rect(
             Rect::from_xywh(
-                f64::from((SURFACE_WIDTH as f32 / 4.0)),
-                f64::from((SURFACE_HEIGHT as f32 / 4.0)),
-                f64::from((SURFACE_WIDTH as f32 / 2.0)),
-                f64::from((SURFACE_HEIGHT as f32 / 2.0)),
+                f64::from(SURFACE_WIDTH as f32 / 4.0),
+                f64::from(SURFACE_HEIGHT as f32 / 4.0),
+                f64::from(SURFACE_WIDTH as f32 / 2.0),
+                f64::from(SURFACE_HEIGHT as f32 / 2.0),
             ),
             &Paint::fill(Color::rgba(0, 0, 255, 255)),
         );
         painter.draw_circle(
             flui_types::Point::new(
-                f64::from((SURFACE_WIDTH as f32 / 2.0)),
-                f64::from((SURFACE_HEIGHT as f32 / 2.0)),
+                f64::from(SURFACE_WIDTH as f32 / 2.0),
+                f64::from(SURFACE_HEIGHT as f32 / 2.0),
             ),
             20.0,
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
@@ -715,7 +715,7 @@ mod gpu_tests {
             0.0,
             0.0,
             f64::from(half_width),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -903,7 +903,7 @@ mod gpu_tests {
             0.0,
             0.0,
             f64::from(half_width),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -939,7 +939,7 @@ mod gpu_tests {
             0.0,
             0.0,
             f64::from(quarter_width),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_HEIGHT as f32),
         );
         // Damage is the left half (0..32, 0..64) — fully contains the shape.
         let half_width = SURFACE_WIDTH as f32 / 2.0;
@@ -947,7 +947,7 @@ mod gpu_tests {
             0.0,
             0.0,
             f64::from(half_width),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -983,7 +983,7 @@ mod gpu_tests {
             0.0,
             0.0,
             f64::from(half_width),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1020,7 +1020,7 @@ mod gpu_tests {
             0.0,
             0.0,
             f64::from(half_width),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1061,7 +1061,7 @@ mod gpu_tests {
             0.0,
             0.0,
             f64::from(quarter_width),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_HEIGHT as f32),
         );
         // Damage is the left half (0..32, 0..64) — fully contains the layer.
         let half_width = SURFACE_WIDTH as f32 / 2.0;
@@ -1069,7 +1069,7 @@ mod gpu_tests {
             0.0,
             0.0,
             f64::from(half_width),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1110,7 +1110,7 @@ mod gpu_tests {
             0.0,
             0.0,
             f64::from(half_width),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));

@@ -5,7 +5,6 @@
 //! widget→render wiring and the live pipeline path).
 
 use crate::common::{lay_out, loose, tight};
-use flui_geometry::px;
 use flui_types::Size;
 use flui_widgets::{
     Column, IntrinsicHeight, IntrinsicWidth, OverflowBox, RotatedBox, SizedBox, SizedOverflowBox,

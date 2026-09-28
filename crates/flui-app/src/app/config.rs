@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use flui_log::AppIdentity;
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 use super::close_request::CloseRequestHandler;
 #[cfg(not(target_arch = "wasm32"))]
@@ -280,21 +280,21 @@ impl AppConfig {
     /// Set the initial window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_size(mut self, width: u32, height: u32) -> Self {
-        self.size = Size::new((width as f64), (height as f64));
+        self.size = Size::new(width as f64, height as f64);
         self
     }
 
     /// Set the minimum window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_min_size(mut self, width: u32, height: u32) -> Self {
-        self.min_size = Some(Size::new((width as f64), (height as f64)));
+        self.min_size = Some(Size::new(width as f64, height as f64));
         self
     }
 
     /// Set the maximum window size.
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_max_size(mut self, width: u32, height: u32) -> Self {
-        self.max_size = Some(Size::new((width as f64), (height as f64)));
+        self.max_size = Some(Size::new(width as f64, height as f64));
         self
     }
 

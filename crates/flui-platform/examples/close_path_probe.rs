@@ -23,7 +23,6 @@ mod appkit_close_path_probe {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use flui_types::geometry::px;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     pub(crate) fn run() {

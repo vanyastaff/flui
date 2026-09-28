@@ -9,7 +9,7 @@ use flui_platform_api::text_store::{
     TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
     Utf16Offset, Utf16Range, utf16,
 };
-use flui_types::geometry::{Bounds, Pixels, Point, px};
+use flui_types::geometry::{Bounds, Point};
 
 use super::{Case, TextStoreFixture};
 
@@ -182,7 +182,7 @@ fn centre(bounds: Bounds<f64>) -> Point<f64> {
 }
 
 fn right(bounds: Bounds<f64>) -> f64 {
-    (bounds.origin.x + bounds.size.width)
+    bounds.origin.x + bounds.size.width
 }
 
 /// What an observer heard, and whether the store was lockable each time.

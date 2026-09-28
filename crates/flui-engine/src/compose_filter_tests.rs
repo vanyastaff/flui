@@ -40,7 +40,7 @@ mod gpu_tests {
     use std::sync::Arc;
 
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, geometry::Pixels};
+    use flui_types::{Color, Rect};
     use smallvec::smallvec;
 
     use crate::{
@@ -101,8 +101,8 @@ mod gpu_tests {
         Rect::from_xywh(
             0.0,
             0.0,
-            f64::from((SURFACE_W as f32)),
-            f64::from((SURFACE_H as f32)),
+            f64::from(SURFACE_W as f32),
+            f64::from(SURFACE_H as f32),
         )
     }
 
@@ -230,8 +230,8 @@ mod gpu_tests {
         let content_rect = Rect::from_xywh(
             f64::from(CONTENT_MARGIN_PX),
             f64::from(CONTENT_MARGIN_PX),
-            f64::from((SURFACE_W as f32 - 2.0 * CONTENT_MARGIN_PX)),
-            f64::from((SURFACE_H as f32 - 2.0 * CONTENT_MARGIN_PX)),
+            f64::from(SURFACE_W as f32 - 2.0 * CONTENT_MARGIN_PX),
+            f64::from(SURFACE_H as f32 - 2.0 * CONTENT_MARGIN_PX),
         );
         let opaque_white = Color::rgba(255, 255, 255, 255);
 

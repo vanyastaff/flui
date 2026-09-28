@@ -179,7 +179,6 @@ mod tests {
         pipeline::{PipelineCell, PipelineOwner},
         protocol::BoxProtocol,
     };
-    use flui_types::geometry::px;
 
     use crate::{
         BuildOwner, LifecycleContext, RebuildHandle, RebuildReason,

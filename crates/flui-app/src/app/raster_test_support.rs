@@ -20,7 +20,7 @@
 
 use flui_engine::{EngineError, PresentDisposition, RasterBackend};
 use flui_layer::Scene;
-use flui_types::geometry::{Pixels, Rect};
+use flui_types::geometry::Rect;
 
 /// The scripted `render_scene` behavior a [`TestRasterBackend`] carries:
 /// zero-based call index and submitted scene in, what became of the frame

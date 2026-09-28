@@ -968,7 +968,7 @@ mod tests {
         (0..samples)
             .map(|i| {
                 let t = start + dt * i as u32;
-                let pos = Offset::new((slope_px_per_s * (i as f64 * dt.as_secs_f64())), 0.0);
+                let pos = Offset::new(slope_px_per_s * (i as f64 * dt.as_secs_f64()), 0.0);
                 (t, pos)
             })
             .collect()
@@ -1080,7 +1080,7 @@ mod tests {
         tracker.add_position(start, Offset::new(0.0, f64::INFINITY));
         for i in 0..5 {
             let t = start + Duration::from_millis(i * 10);
-            tracker.add_position(t, Offset::new((i as f64 * 10.0), 0.0));
+            tracker.add_position(t, Offset::new(i as f64 * 10.0, 0.0));
         }
         assert!(
             tracker.get_velocity().magnitude().is_finite(),
@@ -1112,7 +1112,7 @@ mod tests {
         for i in 0..10 {
             tracker.add_position(
                 start + Duration::from_millis(i * 10),
-                Offset::new(0.0, (i as f64 * 10.0)),
+                Offset::new(0.0, i as f64 * 10.0),
             );
         }
         let v = tracker.get_velocity();
@@ -1128,7 +1128,7 @@ mod tests {
         for i in 0..10 {
             tracker.add_position(
                 start + Duration::from_millis(i * 10),
-                Offset::new((i as f64 * 10.0), 0.0),
+                Offset::new(i as f64 * 10.0, 0.0),
             );
         }
         std::thread::sleep(ASSUME_POINTER_STOPPED + Duration::from_millis(20));
@@ -1171,7 +1171,7 @@ mod tests {
         for i in 0..10 {
             tracker.add_position(
                 start + Duration::from_millis(i * 10),
-                Offset::new((i as f64 * 10.0), 0.0),
+                Offset::new(i as f64 * 10.0, 0.0),
             );
         }
         let v = tracker.get_velocity();
@@ -1190,7 +1190,7 @@ mod tests {
         for i in 0..3 {
             tracker.add_position(
                 start + Duration::from_millis(i * 10),
-                Offset::new((i as f64 * 10.0), 0.0),
+                Offset::new(i as f64 * 10.0, 0.0),
             );
         }
         assert!(tracker.has_sufficient_data());
@@ -1229,7 +1229,7 @@ mod tests {
         for i in 0..5 {
             tracker.add_position(
                 start + Duration::from_millis(i * 10),
-                Offset::new((i as f64 * 10.0), 0.0),
+                Offset::new(i as f64 * 10.0, 0.0),
             );
         }
         assert!(
@@ -1264,7 +1264,7 @@ mod tests {
         for i in 0..8 {
             tracker.add_position(
                 start + Duration::from_millis(i * 5),
-                Offset::new((i as f64 * 20.0), 0.0),
+                Offset::new(i as f64 * 20.0, 0.0),
             );
         }
         let right = tracker.get_velocity().pixels_per_second.dx;
@@ -1274,7 +1274,7 @@ mod tests {
         for i in 0..8 {
             tracker.add_position(
                 start + Duration::from_millis(i * 5),
-                Offset::new((-(i as f64) * 20.0), 0.0),
+                Offset::new(-(i as f64) * 20.0, 0.0),
             );
         }
         let left = tracker.get_velocity().pixels_per_second.dx;
@@ -1325,7 +1325,7 @@ mod tests {
             for (i, &x) in xs.iter().enumerate() {
                 tracker.add_position(
                     start + Duration::from_millis(i as u64 * 8),
-                    Offset::new((x), 0.0),
+                    Offset::new(x, 0.0),
                 );
             }
             proptest::prop_assert!(
@@ -1418,13 +1418,13 @@ mod tests {
         for i in 0..3u32 {
             tracker.add_position(
                 start + Duration::from_millis(u64::from(i) * 10),
-                Offset::new((i as f64 * 10.0), 0.0),
+                Offset::new(i as f64 * 10.0, 0.0),
             );
         }
         for i in 0..2u32 {
             tracker.add_position(
                 start + Duration::from_millis(150 + u64::from(i) * 10),
-                Offset::new((100.0 + i as f64 * 10.0), 0.0),
+                Offset::new(100.0 + i as f64 * 10.0, 0.0),
             );
         }
 
@@ -1454,7 +1454,7 @@ mod tests {
         let mut tracker = VelocityTracker::new();
         for i in 0..5u32 {
             // Same timestamp, different positions: a batched drain.
-            tracker.add_position(instant, Offset::new((i as f64 * 20.0), 0.0));
+            tracker.add_position(instant, Offset::new(i as f64 * 20.0, 0.0));
         }
 
         let (estimate, log) = capture_tracing(|| tracker.get_velocity_estimate());

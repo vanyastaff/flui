@@ -21,7 +21,7 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::prelude::*;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::HeadlessBinding;
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 use flui_view::{BuildOwner, tree::ElementTree};
 use parking_lot::RwLock;
 

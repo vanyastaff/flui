@@ -1909,7 +1909,7 @@ mod tests {
             on_resize: None,
         });
         let overall_extent = 100.0_f64;
-        let constraints = BoxConstraints::tight(Size::new((overall_extent), 50.0));
+        let constraints = BoxConstraints::tight(Size::new(overall_extent, 50.0));
 
         // Drag straight past the clamp: a single update's delta already
         // exceeds 100% of `overall_extent`, exactly like a real drag that

@@ -93,10 +93,9 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::Listenable;
 use flui_sdk::painting::Canvas;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::painting::{Paint, Path};
 use flui_sdk::types::styling::{BorderSide, BorderStyle};
-use flui_sdk::types::{Color, Pixels, Point, RRect, Rect, Size};
+use flui_sdk::types::{Color, Point, RRect, Rect, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
@@ -636,15 +635,15 @@ impl CustomPainter for CheckboxPainter {
         let outer_rect = Rect::from_ltrb(
             origin_x,
             origin_y,
-            (origin_x + CHECKBOX_EDGE_SIZE),
-            (origin_y + CHECKBOX_EDGE_SIZE),
+            origin_x + CHECKBOX_EDGE_SIZE,
+            origin_y + CHECKBOX_EDGE_SIZE,
         );
         let outer_rrect = RRect::from_rect_circular(outer_rect, CORNER_RADIUS);
 
         canvas.draw_rrect(outer_rrect, &Paint::fill(self.fill_color));
 
         if self.side.style.is_solid() && self.side.width > 0.0 {
-            let inner_rrect = outer_rrect.inflate((-self.side.width));
+            let inner_rrect = outer_rrect.inflate(-self.side.width);
             canvas.draw_drrect(outer_rrect, inner_rrect, &Paint::fill(self.side.color));
         }
 
@@ -672,7 +671,7 @@ impl CustomPainter for CheckboxPainter {
 /// `_CheckboxPainter._drawCheck` (`checkbox.dart` `:750-771`) at `t = 1.0`:
 /// the full `start -> mid -> end` polyline.
 fn draw_checkmark(canvas: &mut Canvas, origin_x: f64, origin_y: f64, paint: &Paint) {
-    let point = |dx: f64, dy: f64| Point::new((origin_x + dx), (origin_y + dy));
+    let point = |dx: f64, dy: f64| Point::new(origin_x + dx, origin_y + dy);
     let mut path = Path::new();
     path.move_to(point(CHECKBOX_EDGE_SIZE * 0.15, CHECKBOX_EDGE_SIZE * 0.45));
     path.line_to(point(CHECKBOX_EDGE_SIZE * 0.4, CHECKBOX_EDGE_SIZE * 0.7));
@@ -684,7 +683,7 @@ fn draw_checkmark(canvas: &mut Canvas, origin_x: f64, origin_y: f64, paint: &Pai
 /// Flutter parity: `_CheckboxPainter._drawDash` (`checkbox.dart` `:773-783`)
 /// at `t = 1.0`.
 fn draw_dash(canvas: &mut Canvas, origin_x: f64, origin_y: f64, paint: &Paint) {
-    let point = |dx: f64| Point::new((origin_x + dx), (origin_y + CHECKBOX_EDGE_SIZE * 0.5));
+    let point = |dx: f64| Point::new(origin_x + dx, origin_y + CHECKBOX_EDGE_SIZE * 0.5);
     canvas.draw_line(
         point(CHECKBOX_EDGE_SIZE * 0.2),
         point(CHECKBOX_EDGE_SIZE * 0.8),

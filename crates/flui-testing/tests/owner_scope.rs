@@ -14,7 +14,6 @@ use flui_interaction::{GestureRecognizer, PointerId, TapGestureRecognizer};
 use flui_interaction::{HitTestResult, InteractionDispatchError};
 use flui_testing::HeadlessBinding;
 use flui_types::Offset;
-use flui_types::geometry::px;
 use flui_view::BuildOwner;
 
 #[test]

@@ -4,7 +4,6 @@
 //! `3.44.0`).
 
 use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::Pixels;
 use flui_sdk::types::platform::Brightness;
 use flui_sdk::types::styling::{BorderRadius, BorderSide, BoxDecoration, Color};
 use flui_sdk::types::typography::TextStyle;
@@ -1238,8 +1237,6 @@ mod tests {
     /// coverage of the other slots.
     #[test]
     fn copy_with_sets_input_decoration_theme_slot() {
-        use flui_sdk::types::geometry::px;
-
         let base = ThemeData::light();
         let input_decoration_theme = InputDecorationThemeData {
             content_padding: Some(EdgeInsets::all(9.0)),
@@ -1261,8 +1258,6 @@ mod tests {
     /// the new `input_decoration_theme` slot specifically.
     #[test]
     fn copy_with_none_preserves_an_already_set_input_decoration_theme_slot() {
-        use flui_sdk::types::geometry::px;
-
         let input_decoration_theme = InputDecorationThemeData {
             content_padding: Some(EdgeInsets::all(9.0)),
             ..Default::default()

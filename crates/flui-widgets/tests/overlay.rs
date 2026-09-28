@@ -39,7 +39,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::ElementId;
 use flui_foundation::panic::payload_text;
-use flui_types::geometry::px;
 use flui_view::prelude::*;
 use flui_widgets::__test_access::{OverlayEntryProbe as _, OverlayProbe as _};
 use flui_widgets::{InsertPosition, Overlay, OverlayEntry, OverlayHandle, SizedBox};

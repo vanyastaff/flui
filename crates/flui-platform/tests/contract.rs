@@ -26,7 +26,7 @@
 //! ```
 
 use flui_platform::{Platform, WindowOptions, current_platform, headless_platform};
-use flui_types::geometry::{Size, device_px, px};
+use flui_types::geometry::Size;
 
 // ==================== Helper: Get Test Platform ====================
 

@@ -2436,7 +2436,7 @@ mod tests {
     /// installed.
     #[test]
     fn test_on_safe_area_change() {
-        use flui_types::geometry::{EdgeInsets, px};
+        use flui_types::geometry::EdgeInsets;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
@@ -2512,8 +2512,6 @@ mod tests {
 
     #[test]
     fn test_window_bounds_query() {
-        use flui_types::geometry::px;
-
         let window = MockWindow::new(
             WindowId(0),
             WindowOptions {
@@ -2565,8 +2563,6 @@ mod tests {
 
     #[test]
     fn test_resize() {
-        use flui_types::geometry::px;
-
         let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
         window.resize(Size::new(1920.0, 1080.0));
         assert_eq!(window.logical_size(), Size::new(1920.0, 1080.0));
@@ -2582,7 +2578,7 @@ mod tests {
 
     #[test]
     fn text_input_reaches_the_same_fake_across_calls_and_records_delivered_values() {
-        use flui_types::geometry::{Bounds, Point, Size, px};
+        use flui_types::geometry::{Bounds, Point, Size};
 
         let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
         let fake = Arc::clone(&window.text_input);

@@ -34,7 +34,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use flui_interaction::events::{PointerType, make_move_event};
 use flui_interaction::ids::PointerId;
 use flui_interaction::processing::PointerEventResampler;
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 
 /// Build `count` move events. Position is varied by 1 px per event so
 /// the resampler's dedup logic does not collapse the queue to a
@@ -47,7 +47,7 @@ fn make_move_events(
     _duration_ms: u64,
 ) -> Vec<flui_interaction::events::PointerEvent> {
     (0..count)
-        .map(|i| make_move_event(Offset::new((100.0 + i as f64), 100.0), PointerType::Touch))
+        .map(|i| make_move_event(Offset::new(100.0 + i as f64, 100.0), PointerType::Touch))
         .collect()
 }
 

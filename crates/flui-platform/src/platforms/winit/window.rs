@@ -8,7 +8,7 @@
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Size};
+use flui_types::geometry::{Bounds, Size};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
 
@@ -154,18 +154,14 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn physical_size(&self) -> Size<i32> {
-        use flui_types::geometry::device_px;
-
         let size = self.window.inner_size();
-        Size::new((size.width as i32), (size.height as i32))
+        Size::new(size.width as i32, size.height as i32)
     }
 
     fn logical_size(&self) -> Size<f64> {
-        use flui_types::geometry::px;
-
         let size = self.window.inner_size();
         let scale = self.window.scale_factor() as f64;
-        Size::new((size.width as f64 / scale), (size.height as f64 / scale))
+        Size::new(size.width as f64 / scale, size.height as f64 / scale)
     }
 
     fn appearance(&self) -> WindowAppearance {

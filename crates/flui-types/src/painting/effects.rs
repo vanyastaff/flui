@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use super::canvas::{StrokeCap, StrokeJoin};
-use crate::geometry::Pixels;
 
 /// Blur quality/algorithm level.
 ///

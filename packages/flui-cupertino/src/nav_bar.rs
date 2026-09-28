@@ -86,7 +86,6 @@
 //! visually collide with it.
 
 use flui_sdk::types::Size;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;

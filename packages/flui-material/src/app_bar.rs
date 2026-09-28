@@ -154,10 +154,9 @@
 //! `LEADING_WIDTH` is the only width this slot ever takes.
 
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::styling::Color;
 use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Alignment, Pixels, Size};
+use flui_sdk::types::{Alignment, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Center, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded,
@@ -608,7 +607,7 @@ impl PreferredSizeView for AppBar {
         // `bottom`'s own preferred height, `0.0` when there is no `bottom`.
         Size::new(
             f64::INFINITY,
-            (self.toolbar_height + self.bottom_preferred_height),
+            self.toolbar_height + self.bottom_preferred_height,
         )
     }
 }

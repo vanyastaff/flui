@@ -34,7 +34,7 @@ mod gpu_tests {
     use std::sync::Arc;
 
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, geometry::Pixels};
+    use flui_types::{Color, Rect};
 
     use smallvec::smallvec;
 
@@ -102,8 +102,8 @@ mod gpu_tests {
         Rect::from_xywh(
             0.0,
             0.0,
-            f64::from((SURFACE_WIDTH as f32)),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_WIDTH as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         )
     }
 
@@ -117,8 +117,8 @@ mod gpu_tests {
         Rect::from_xywh(
             f64::from(margin),
             f64::from(margin),
-            f64::from((SURFACE_WIDTH as f32 - 2.0 * margin)),
-            f64::from((SURFACE_HEIGHT as f32 - 2.0 * margin)),
+            f64::from(SURFACE_WIDTH as f32 - 2.0 * margin),
+            f64::from(SURFACE_HEIGHT as f32 - 2.0 * margin),
         )
     }
 
@@ -498,10 +498,10 @@ mod gpu_tests {
         );
 
         let opaque_rect = Rect::from_xywh(
-            f64::from((RECT_ORIGIN_PX as f32)),
-            f64::from((RECT_ORIGIN_PX as f32)),
-            f64::from((RECT_SIZE_PX as f32)),
-            f64::from((RECT_SIZE_PX as f32)),
+            f64::from(RECT_ORIGIN_PX as f32),
+            f64::from(RECT_ORIGIN_PX as f32),
+            f64::from(RECT_SIZE_PX as f32),
+            f64::from(RECT_SIZE_PX as f32),
         );
         let source_color = Color::rgba(100, 200, 80, 255);
 
@@ -606,14 +606,14 @@ mod gpu_tests {
         let left_half_rect = Rect::from_xywh(
             0.0,
             0.0,
-            f64::from((SURFACE_WIDTH as f32 / 2.0)),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_WIDTH as f32 / 2.0),
+            f64::from(SURFACE_HEIGHT as f32),
         );
         let right_half_rect = Rect::from_xywh(
-            f64::from((SURFACE_WIDTH as f32 / 2.0)),
+            f64::from(SURFACE_WIDTH as f32 / 2.0),
             0.0,
-            f64::from((SURFACE_WIDTH as f32 / 2.0)),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_WIDTH as f32 / 2.0),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));

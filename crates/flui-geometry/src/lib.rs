@@ -41,9 +41,6 @@ pub mod rsuperellipse;
 pub mod size;
 pub mod traits;
 pub mod transform;
-/// Transitional scalar aliases, removed once the workspace no longer names them.
-#[doc(hidden)]
-pub mod units;
 pub mod vector;
 
 /// Common imports.
@@ -87,8 +84,6 @@ pub use traits::{
     Along, ApproxEq, Axis, Double, FloatUnit, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
 };
 pub use transform::Transform;
-#[doc(hidden)]
-pub use units::{DevicePixels, PixelDelta, Pixels, delta_px, device_px, px};
 pub use vector::{Vec2, vec2};
 
 /// A point on the device-pixel grid.

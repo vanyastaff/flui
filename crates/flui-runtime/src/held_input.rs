@@ -997,7 +997,7 @@ mod tests {
         make_move_event_for_id, make_up_event_for_id,
     };
     use flui_interaction::{PointerEvent, PointerId};
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     use super::{HELD_POINTER_CAPACITY, HeldPointerQueue, HeldPointerReplay};
 

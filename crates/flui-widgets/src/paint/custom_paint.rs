@@ -95,7 +95,7 @@ mod tests {
     use std::any::Any;
 
     use flui_rendering::pipeline::Canvas;
-    use flui_types::geometry::px;
+
     use flui_view::RenderView;
 
     use super::*;

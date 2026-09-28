@@ -712,7 +712,6 @@ impl std::fmt::Debug for DoubleTapGestureRecognizer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
     use crate::{arena::GestureArena, events::make_up_event};

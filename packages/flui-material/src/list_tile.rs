@@ -141,10 +141,9 @@
 //!   oracle's does.
 
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::geometry::px;
+use flui_sdk::types::EdgeInsets;
 use flui_sdk::types::styling::Color;
 use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{EdgeInsets, Pixels};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
@@ -896,7 +895,7 @@ mod tests {
         );
         assert_eq!(
             resolved.content_padding,
-            EdgeInsets::new(0.0, (CONTENT_PADDING_END), 0.0, (CONTENT_PADDING_START))
+            EdgeInsets::new(0.0, CONTENT_PADDING_END, 0.0, CONTENT_PADDING_START)
         );
         assert_eq!(resolved.horizontal_title_gap, HORIZONTAL_TITLE_GAP);
         assert_eq!(resolved.min_vertical_padding, MIN_VERTICAL_PADDING);

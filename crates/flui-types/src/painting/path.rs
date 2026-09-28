@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::{
-    geometry::{FloatUnit, NumericUnit, Offset, Point, Rect, Vec2, px},
+    geometry::{FloatUnit, NumericUnit, Offset, Point, Rect, Vec2},
     painting::PathFillType,
 };
 
@@ -121,7 +121,6 @@ impl Path {
     #[must_use]
     #[inline]
     pub fn circle(center: Point<f64>, radius: f64) -> Self {
-        use crate::geometry::px;
         let rect = Rect::from_xywh(
             (center.x - radius),
             (center.y - radius),
@@ -1145,7 +1144,7 @@ impl Default for Path {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{Point, px};
+    use crate::geometry::Point;
 
     /// A clone is a refcount bump: both paths read one command buffer until
     /// either side mutates, at which point only the mutating side copies.
@@ -1448,7 +1447,7 @@ mod tests {
 
     mod geometry_oracles {
         use super::super::*;
-        use crate::geometry::{Offset, Point, RRect, Radius, px};
+        use crate::geometry::{Offset, Point, RRect, Radius};
         use proptest::prelude::*;
 
         fn p(x: f64, y: f64) -> Point<f64> {

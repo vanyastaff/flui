@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn pointer_event_kind_maps_variants() {
         use crate::events::{make_cancel_event, make_down_event, make_move_event, make_up_event};
-        use flui_types::geometry::{Offset, Pixels};
+        use flui_types::geometry::Offset;
 
         let pos = Offset::new(0.0, 0.0);
         let pt = crate::events::PointerType::Touch;
@@ -222,7 +222,7 @@ mod tests {
     fn recognizer_base_accept_emits_span_with_subscriber() {
         use crate::arena::GestureArena;
         use crate::recognizers::recognizer::RecognizerBase;
-        use flui_types::{Offset, geometry::Pixels};
+        use flui_types::Offset;
         use std::sync::Arc;
 
         let subscriber = tracing_subscriber::fmt()

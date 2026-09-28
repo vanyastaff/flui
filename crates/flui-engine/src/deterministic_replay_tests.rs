@@ -51,7 +51,7 @@ mod tests {
     use std::sync::Arc;
 
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, geometry::px, styling::Color as StyledColor};
+    use flui_types::{Color, Rect, styling::Color as StyledColor};
 
     use crate::{
         command_ir::{DrawItem, DrawSegment},

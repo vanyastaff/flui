@@ -127,7 +127,7 @@ use std::cell::RefCell;
 use flui_sdk::foundation::ListenerId;
 use flui_sdk::types::styling::Color;
 use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{EdgeInsets, Size, geometry::px};
+use flui_sdk::types::{EdgeInsets, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::{
@@ -775,8 +775,8 @@ mod tests {
         assert!(index < tab_count, "index out of range for tab_count");
         let tab_width = bar_width / tab_count as f64;
         Rect::from_ltwh(
-            (tab_width * index as f64),
-            (bar_height - indicator_weight),
+            tab_width * index as f64,
+            bar_height - indicator_weight,
             tab_width,
             indicator_weight,
         )

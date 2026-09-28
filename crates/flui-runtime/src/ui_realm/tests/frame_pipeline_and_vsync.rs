@@ -1,8 +1,6 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool as StdAtomicBool, AtomicUsize};
 
-use flui_types::geometry::px;
-
 use super::*;
 
 /// Minimal leaf view/element so a headless `attach_root_widget` has
@@ -674,7 +672,7 @@ fn shell_installed_arena_resolves_nested_tap_detectors_to_one_winner() {
 fn root_gesture_scope_arbitrates_overlapping_detectors_once() {
     use flui_interaction::arena::SweepModel;
     use flui_interaction::events::{PointerType, make_down_event, make_up_event};
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
     use flui_widgets::{GestureDetector, HitTestBehavior, SizedBox};
 
     let realm = UiRealm::for_test();
@@ -740,7 +738,7 @@ fn realm_input_dispatch_keeps_gesture_state_isolated() {
     use flui_interaction::PointerId;
     use flui_interaction::events::{PointerType, make_down_event_for_id, make_up_event_for_id};
     use flui_interaction::routing::PointerRouteHandler;
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm_a = UiRealm::for_test();
     let realm_b = UiRealm::for_test();
@@ -818,7 +816,7 @@ impl flui_interaction::sealed::CustomGestureRecognizer for CountingArenaAcceptan
 fn pointer_input_boundary_drains_a_lone_deferred_winner() {
     use flui_interaction::events::{PointerType, make_down_event_for_id};
     use flui_interaction::routing::PointerRouteHandler;
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm = UiRealm::for_test();
     let pointer = flui_interaction::PointerId::new(9002).expect("nonzero pointer id");
@@ -961,7 +959,7 @@ fn resampled_contact_motion_keeps_the_frame_wake_gate_open() {
         processing::SamplingClock,
         routing::HitTestResult,
     };
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm = UiRealm::for_test();
     realm.mark_rendered();

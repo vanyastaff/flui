@@ -6,7 +6,7 @@
 //! Run with: cargo test -p flui-platform --test window_modes
 
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
+use flui_types::geometry::Size;
 
 /// T016: Test window mode transitions (Normal, Maximized, Fullscreen)
 #[test]

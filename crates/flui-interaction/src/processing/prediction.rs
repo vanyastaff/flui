@@ -421,7 +421,7 @@ mod tests {
         // Simulate horizontal motion: 100 pixels in 100ms = 1000 px/s
         for i in 0..10 {
             let t = start + Duration::from_millis(i * 10);
-            predictor.add_sample(t, Offset::new((i as f64 * 10.0), 0.0));
+            predictor.add_sample(t, Offset::new(i as f64 * 10.0, 0.0));
         }
 
         // Predict 16ms into future
@@ -494,7 +494,7 @@ mod tests {
 
         for i in 0..10 {
             let t = start + Duration::from_millis(i * 10);
-            predictor.add_sample(t, Offset::new((i as f64 * 10.0), 0.0));
+            predictor.add_sample(t, Offset::new(i as f64 * 10.0, 0.0));
         }
 
         // Request very long prediction - should be clamped
@@ -511,7 +511,7 @@ mod tests {
 
         for i in 0..10 {
             let t = start + Duration::from_millis(i * 10);
-            predictor.add_sample(t, Offset::new((i as f64 * 10.0), 0.0));
+            predictor.add_sample(t, Offset::new(i as f64 * 10.0, 0.0));
         }
 
         let at_60fps = predictor.predict_next_frame(60);
@@ -528,7 +528,7 @@ mod tests {
         for i in 0..5 {
             predictor.add_sample(
                 start + Duration::from_millis(i * 10),
-                Offset::new((i as f64 * 10.0), 0.0),
+                Offset::new(i as f64 * 10.0, 0.0),
             );
         }
         // `fps == 0` must clamp rather than divide by zero into a non-finite

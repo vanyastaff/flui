@@ -44,7 +44,7 @@ mod gpu_tests {
     use std::sync::Arc;
 
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, geometry::Pixels, painting::BlendMode};
+    use flui_types::{Color, Rect, painting::BlendMode};
 
     use crate::{command_ir::LayerFilter, painter::WgpuPainter, render_target::RenderTarget};
 
@@ -100,8 +100,8 @@ mod gpu_tests {
         Rect::from_xywh(
             0.0,
             0.0,
-            f64::from((SURFACE_WIDTH as f32)),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_WIDTH as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         )
     }
 

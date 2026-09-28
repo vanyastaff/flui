@@ -18,7 +18,6 @@ use flui_interaction::settings::GestureSettings;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
 use flui_testing::HeadlessBinding;
 use flui_types::Offset;
-use flui_types::geometry::px;
 
 #[test]
 fn long_press_fires_through_pump_frame_without_wall_clock_sleep() {

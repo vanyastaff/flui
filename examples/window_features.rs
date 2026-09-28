@@ -15,7 +15,7 @@
 //! ```
 
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
+use flui_types::geometry::Size;
 
 fn main() -> anyhow::Result<()> {
     // Initialize logging

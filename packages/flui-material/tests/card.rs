@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use common::{lay_out, tight};
 use flui_material::{Card, CardThemeData, MaterialShape, Theme, ThemeData, ThemeDataOverrides};
 use flui_sdk::types::Color;
-use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::geometry::Radius;
 use flui_sdk::types::styling::BorderRadius;
 use flui_sdk::widgets::{ColoredBox, GestureDetector};
 

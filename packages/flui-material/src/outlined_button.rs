@@ -19,7 +19,6 @@
 //! not yet draw a visible outline. A pre-existing deferral (`shape.rs`), not
 //! one introduced here.
 
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::styling::{BorderSide, BorderStyle};
 use flui_sdk::types::{EdgeInsets, Size};
 use flui_sdk::view::prelude::*;

@@ -27,7 +27,6 @@ fn main() -> anyhow::Result<()> {
             use flui_painting::Canvas;
             use flui_types::{
                 Point, RRect, Rect,
-                geometry::px,
                 painting::{Paint, path::Path},
                 styling::Color,
             };
@@ -53,8 +52,7 @@ fn main() -> anyhow::Result<()> {
                 canvas.save();
                 canvas.translate(center_x, row1_y);
                 canvas.rotate(angle_deg.to_radians());
-                let local =
-                    Rect::from_ltrb((-card_half_w), (-card_half_h), card_half_w, card_half_h);
+                let local = Rect::from_ltrb(-card_half_w, -card_half_h, card_half_w, card_half_h);
                 canvas.draw_rrect(RRect::from_rect_circular(local, 16.0), &white);
                 canvas.restore();
             }
@@ -67,12 +65,12 @@ fn main() -> anyhow::Result<()> {
             canvas.save();
             canvas.translate(380.0, row2_y);
             canvas.rotate(30.0_f64.to_radians());
-            canvas.draw_oval(Rect::from_ltrb((-70.0), (-40.0), 70.0, 40.0), &white);
+            canvas.draw_oval(Rect::from_ltrb(-70.0, -40.0, 70.0, 40.0), &white);
             canvas.restore();
 
             // Pie arc: 270° sweep, filled to centre.
             canvas.draw_arc(
-                Rect::from_ltrb(560.0, (row2_y - 56.0), 672.0, (row2_y + 56.0)),
+                Rect::from_ltrb(560.0, row2_y - 56.0, 672.0, row2_y + 56.0),
                 -45.0_f64.to_radians(),
                 270.0_f64.to_radians(),
                 true,
@@ -83,26 +81,26 @@ fn main() -> anyhow::Result<()> {
             let ring_center_x = 840.0_f64;
             let outer = RRect::from_rect_circular(
                 Rect::from_ltrb(
-                    (ring_center_x - 56.0),
-                    (row2_y - 56.0),
-                    (ring_center_x + 56.0),
-                    (row2_y + 56.0),
+                    ring_center_x - 56.0,
+                    row2_y - 56.0,
+                    ring_center_x + 56.0,
+                    row2_y + 56.0,
                 ),
                 20.0,
             );
             let inner = RRect::from_rect_circular(
                 Rect::from_ltrb(
-                    (ring_center_x - 32.0),
-                    (row2_y - 32.0),
-                    (ring_center_x + 32.0),
-                    (row2_y + 32.0),
+                    ring_center_x - 32.0,
+                    row2_y - 32.0,
+                    ring_center_x + 32.0,
+                    row2_y + 32.0,
                 ),
                 12.0,
             );
             canvas.draw_drrect(outer, inner, &white);
 
             // ── Row 3: self-intersecting 5-point star (SSAA-tile fill path) ──────
-            let star_center = Point::new((width / 2.0), 520.0);
+            let star_center = Point::new(width / 2.0, 520.0);
             let outer_radius = 80.0_f64;
             let inner_radius = 32.0_f64;
             let mut star = Path::new();
@@ -115,8 +113,8 @@ fn main() -> anyhow::Result<()> {
                 // Start at the top tip (-90°) and step every 36°.
                 let angle = (-90.0_f64 + tip as f64 * 36.0).to_radians();
                 let point = Point::new(
-                    (star_center.x + radius * angle.cos()),
-                    (star_center.y + radius * angle.sin()),
+                    star_center.x + radius * angle.cos(),
+                    star_center.y + radius * angle.sin(),
                 );
                 if tip == 0 {
                     star.move_to(point);

@@ -195,8 +195,8 @@ fn agent_can_mount_inspect_drive_and_assert_the_counter() {
     // pointer-replay path (`HeadlessBinding::replay`), not a widget-testing
     // shortcut like `dispatch_pointer_down`/`find_text`.
     let center = Offset::new(
-        (bounds.x0.midpoint(bounds.x1) as f64),
-        (bounds.y0.midpoint(bounds.y1) as f64),
+        bounds.x0.midpoint(bounds.x1) as f64,
+        bounds.y0.midpoint(bounds.y1) as f64,
     );
     binding.replay(&PointerScript::tap(center));
     // The replay's own doc is explicit that the frame after the last

@@ -1157,7 +1157,7 @@ mod tests {
         let boundary = EdgeInsets::all(20.0).inflate_rect(rect);
         let scale = std::f64::consts::E;
         let matrix = Matrix4::scaling(scale, scale, scale);
-        let translation = Offset::new((-1000.0), 0.0);
+        let translation = Offset::new(-1000.0, 0.0);
 
         let result = clamp_translation(matrix, translation, rect, boundary);
         let (tx, ty, _tz) = result.translation_component();

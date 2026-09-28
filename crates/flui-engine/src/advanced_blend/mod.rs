@@ -625,8 +625,8 @@ mod synthetic_op_tests {
                 device_bounds: Rect::from_xywh(
                     0.0,
                     0.0,
-                    f64::from((TARGET_W as f32)),
-                    f64::from((TARGET_H as f32)),
+                    f64::from(TARGET_W as f32),
+                    f64::from(TARGET_H as f32),
                 ),
                 opacity: 1.0,
                 tint: [1.0, 1.0, 1.0],
@@ -1007,7 +1007,7 @@ mod synthetic_op_tests {
         let op = AdvancedBlendOp {
             foreground: fg_pooled,
             mode: BlendMode::Multiply,
-            device_bounds: Rect::from_xywh(1.0, 0.0, 4.0, f64::from((SURF_H as f32))),
+            device_bounds: Rect::from_xywh(1.0, 0.0, 4.0, f64::from(SURF_H as f32)),
             opacity: 1.0,
             tint: [1.0, 1.0, 1.0],
             // Foreground is 4×SURF_H, not full-viewport (SURF_W=6) — identity
@@ -1154,8 +1154,8 @@ mod synthetic_op_tests {
             device_bounds: Rect::from_xywh(
                 0.0,
                 0.0,
-                f64::from((TARGET_W as f32)),
-                f64::from((TARGET_H as f32)),
+                f64::from(TARGET_W as f32),
+                f64::from(TARGET_H as f32),
             ),
             opacity: 1.0,
             tint: [1.0, 1.0, 1.0],

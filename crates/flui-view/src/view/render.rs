@@ -579,7 +579,6 @@ macro_rules! single_child_view_children {
 mod tests {
     use flui_objects::RenderSizedBox;
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-    use flui_types::geometry::px;
 
     use super::*;
     use crate::{

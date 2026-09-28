@@ -88,7 +88,7 @@ use flui_sdk::foundation::{Listenable, ListenerId};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::types::Color;
 use flui_sdk::types::Size;
-use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::geometry::Radius;
 use flui_sdk::types::styling::BorderRadius;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;

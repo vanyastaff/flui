@@ -95,7 +95,6 @@ impl PreferredSizeView for PreferredSize {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
     use crate::layout::SizedBox;

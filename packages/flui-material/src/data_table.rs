@@ -93,10 +93,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Alignment, EdgeInsets, Pixels};
+use flui_sdk::types::{Alignment, EdgeInsets};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Center, Container, DefaultTextStyle, Padding, Semantics, SemanticsRole, SizedBox, Table,

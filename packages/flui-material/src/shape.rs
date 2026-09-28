@@ -81,7 +81,7 @@ impl MaterialShape {
             ),
             Self::Stadium => {
                 let shortest_side = size.width.min(size.height);
-                let radius = Radius::circular((shortest_side / 2.0));
+                let radius = Radius::circular(shortest_side / 2.0);
                 RRect::from_rect_and_radius(bounds, radius)
             }
         }
@@ -105,7 +105,7 @@ impl Default for MaterialShape {
 
 #[cfg(test)]
 mod tests {
-    use flui_sdk::types::geometry::px;
+
     use flui_sdk::types::styling::BorderRadiusExt;
 
     use super::*;

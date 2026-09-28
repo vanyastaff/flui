@@ -643,7 +643,7 @@ mod tests {
             );
 
             recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
-                Offset::new((100.0 + drift), 100.0),
+                Offset::new(100.0 + drift, 100.0),
                 kind,
             )));
 

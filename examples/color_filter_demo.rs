@@ -34,7 +34,7 @@ use flui_layer::{CanvasLayer, Scene, SceneBuilder};
 use flui_platform::{WindowOptions, current_platform};
 use flui_types::{
     Color, Offset,
-    geometry::{Rect, Size, px},
+    geometry::{Rect, Size},
     painting::{BlendMode, ColorFilter, Paint},
 };
 
@@ -179,9 +179,9 @@ fn build_column_canvas(x_offset: f64, column_width: f64, viewport_height: f64) -
     // Thin column divider on the right edge.
     canvas.draw_rect(
         Rect::from_ltrb(
-            (x_offset + column_width - 1.0),
+            x_offset + column_width - 1.0,
             0.0,
-            (x_offset + column_width),
+            x_offset + column_width,
             viewport_height,
         ),
         &Paint::fill(Color::rgb(60, 60, 60)),
@@ -189,17 +189,17 @@ fn build_column_canvas(x_offset: f64, column_width: f64, viewport_height: f64) -
 
     // Large coral rectangle (primary subject).
     canvas.draw_rect(
-        Rect::from_ltrb(left, 50.0, right, (viewport_height / 2.0 - 20.0)),
+        Rect::from_ltrb(left, 50.0, right, viewport_height / 2.0 - 20.0),
         &Paint::fill(Color::rgb(220, 80, 60)),
     );
 
     // Overlapping teal rectangle.
     canvas.draw_rect(
         Rect::from_ltrb(
-            (center_x - 50.0),
-            (viewport_height / 2.0 - 50.0),
-            (center_x + 50.0),
-            (viewport_height - 60.0),
+            center_x - 50.0,
+            viewport_height / 2.0 - 50.0,
+            center_x + 50.0,
+            viewport_height - 60.0,
         ),
         &Paint::fill(Color::rgb(30, 180, 160)),
     );
@@ -207,22 +207,17 @@ fn build_column_canvas(x_offset: f64, column_width: f64, viewport_height: f64) -
     // Small white accent square.
     canvas.draw_rect(
         Rect::from_ltrb(
-            (center_x - 20.0),
-            (viewport_height / 2.0 - 20.0),
-            (center_x + 20.0),
-            (viewport_height / 2.0 + 20.0),
+            center_x - 20.0,
+            viewport_height / 2.0 - 20.0,
+            center_x + 20.0,
+            viewport_height / 2.0 + 20.0,
         ),
         &Paint::fill(Color::WHITE),
     );
 
     // Yellow strip at the bottom.
     canvas.draw_rect(
-        Rect::from_ltrb(
-            left,
-            (viewport_height - 50.0),
-            right,
-            (viewport_height - 30.0),
-        ),
+        Rect::from_ltrb(left, viewport_height - 50.0, right, viewport_height - 30.0),
         &Paint::fill(Color::rgb(255, 210, 0)),
     );
 

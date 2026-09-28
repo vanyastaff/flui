@@ -35,7 +35,7 @@ mod gpu_tests {
     use flui_types::painting::image::ColorFilter;
     use flui_types::{
         Color, Rect,
-        geometry::{Offset, px},
+        geometry::Offset,
         painting::{Image, TileMode},
     };
 
@@ -150,8 +150,8 @@ mod gpu_tests {
         Rect::from_xywh(
             0.0,
             0.0,
-            f64::from((SURFACE_WIDTH as f32)),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_WIDTH as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         )
     }
 
@@ -226,7 +226,7 @@ mod gpu_tests {
                 blend_mode: BlendMode::Multiply,
                 shader: Some(Shader::LinearGradient {
                     from: Offset::new(0.0, 0.0),
-                    to: Offset::new(f64::from((SURFACE_WIDTH as f32)), 0.0),
+                    to: Offset::new(f64::from(SURFACE_WIDTH as f32), 0.0),
                     colors: vec![gradient_left_color, gradient_right_color],
                     stops: None,
                     tile_mode: TileMode::Clamp,
@@ -505,7 +505,7 @@ mod gpu_tests {
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(
                 Rect::from_xywh(0.0, 0.0, f64::from(logical_side), f64::from(logical_side)),
-                f64::from((logical_side / 2.0)),
+                f64::from(logical_side / 2.0),
             ),
             flui_types::painting::Clip::AntiAlias,
         );
@@ -837,7 +837,7 @@ mod gpu_tests {
             blend_mode: BlendMode::SrcOver,
             shader: Some(Shader::LinearGradient {
                 from: Offset::new(0.0, 0.0),
-                to: Offset::new(f64::from((SURFACE_WIDTH as f32)), 0.0),
+                to: Offset::new(f64::from(SURFACE_WIDTH as f32), 0.0),
                 colors: vec![gradient_left, gradient_right],
                 stops: None,
                 tile_mode: TileMode::Clamp,
@@ -970,7 +970,7 @@ mod gpu_tests {
                         blend_mode: mode,
                         shader: Some(Shader::LinearGradient {
                             from: Offset::new(0.0, 0.0),
-                            to: Offset::new(f64::from((SURFACE_WIDTH as f32)), 0.0),
+                            to: Offset::new(f64::from(SURFACE_WIDTH as f32), 0.0),
                             colors: vec![gradient_left, gradient_right],
                             stops: None,
                             tile_mode: TileMode::Clamp,

@@ -739,7 +739,7 @@ impl Drop for FocusManager {
 mod tests {
     use std::cell::{Cell, RefCell};
 
-    use flui_types::geometry::{Pixels, Rect};
+    use flui_types::geometry::Rect;
 
     use super::*;
     use crate::{
@@ -755,7 +755,7 @@ mod tests {
             .map(|index| FocusNode::with_debug_label(format!("node-{index}")))
             .collect();
         for (index, node) in nodes.iter().enumerate() {
-            node.set_rect(Rect::from_xywh((index as f64 * 20.0), 0.0, 10.0, 10.0));
+            node.set_rect(Rect::from_xywh(index as f64 * 20.0, 0.0, 10.0, 10.0));
             manager.root_scope().attach_node(node).unwrap();
         }
         (manager, nodes)

@@ -14,10 +14,7 @@ use flui_interaction::events::{
 };
 use flui_platform_api::PlatformInput;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
-use flui_types::{
-    Size,
-    geometry::{Offset, px},
-};
+use flui_types::{Size, geometry::Offset};
 use flui_view::{BuildContext, IntoView, StatelessView};
 use flui_widgets::SizedBox;
 
@@ -1075,7 +1072,7 @@ fn production_addressed_input_collapses_a_thousand_held_moves() {
             primary.id(),
             PlatformInput::Pointer(make_move_event_for_id(
                 pointer,
-                Offset::new((11.0 + step as f64), 10.0),
+                Offset::new(11.0 + step as f64, 10.0),
                 PointerType::Touch,
             )),
         );

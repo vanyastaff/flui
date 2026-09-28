@@ -16,7 +16,7 @@ use objc2::{ClassType, class, sel};
 use objc2_app_kit::{NSBackingStoreType, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
+use flui_types::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,

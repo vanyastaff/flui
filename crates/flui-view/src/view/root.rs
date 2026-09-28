@@ -16,7 +16,7 @@ use flui_rendering::{
     storage::RenderNode,
     view::{RenderView as RenderViewObject, RenderViewAdapter, ViewConfiguration},
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 
 use crate::{
     element::{Lifecycle, RenderTreeRootElement},

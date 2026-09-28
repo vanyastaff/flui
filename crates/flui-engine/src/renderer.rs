@@ -2786,7 +2786,7 @@ mod tests {
     fn sdr_surface_selection_painter_readback_preserves_swatches_and_blending() {
         use crate::painter::WgpuPainter;
         use flui_painting::Paint;
-        use flui_types::{Color, Rect, geometry::px};
+        use flui_types::{Color, Rect};
         use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
 
         let (device, queue) = crate::test_support::test_device_and_queue("SDR transfer regression");
@@ -2823,7 +2823,7 @@ mod tests {
             ];
             for (index, color) in colors.iter().enumerate() {
                 painter.draw_rect(
-                    Rect::from_xywh(f64::from((index as f32 * 10.0)), 0.0, 10.0, 64.0),
+                    Rect::from_xywh(f64::from(index as f32 * 10.0), 0.0, 10.0, 64.0),
                     &Paint::fill(*color),
                 );
             }
@@ -2912,10 +2912,7 @@ mod tests {
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
         use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
-        use flui_types::{
-            geometry::{Rect, px},
-            painting::ImageFilter,
-        };
+        use flui_types::{geometry::Rect, painting::ImageFilter};
 
         let Some((device, queue)) = test_device_and_queue() else {
             // No GPU in this environment; skip gracefully (matches the other
@@ -3021,7 +3018,7 @@ mod tests {
         use crate::painter::WgpuPainter;
         use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
         use flui_types::{
-            geometry::{Offset, Rect, px},
+            geometry::{Offset, Rect},
             painting::ImageFilter,
         };
 
@@ -3137,10 +3134,7 @@ mod tests {
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
         use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
-        use flui_types::{
-            geometry::{Rect, px},
-            painting::ImageFilter,
-        };
+        use flui_types::{geometry::Rect, painting::ImageFilter};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return;
@@ -3646,7 +3640,7 @@ mod tests {
     #[test]
     fn intermediate_path_advanced_blend_matches_oracle() {
         use flui_painting::Paint;
-        use flui_types::{Color, Rect, geometry::Pixels, painting::BlendMode};
+        use flui_types::{Color, Rect, painting::BlendMode};
 
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
@@ -3717,7 +3711,7 @@ mod tests {
         // Source: opaque orange inside a Multiply saveLayer.
         let source_orange = Color::rgba(200, 120, 40, 255);
         let backdrop_color = Color::rgba(40, 60, 220, 255);
-        let layer_bounds = Rect::from_xywh(0.0, 0.0, f64::from((W as f32)), f64::from((H as f32)));
+        let layer_bounds = Rect::from_xywh(0.0, 0.0, f64::from(W as f32), f64::from(H as f32));
 
         let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
@@ -3860,10 +3854,7 @@ mod tests {
         use crate::painter::WgpuPainter;
         use flui_layer::{CanvasLayer, ImageFilterLayer, Layer, LayerTree, OpacityLayer};
         use flui_painting::{Canvas, Paint};
-        use flui_types::{
-            Color,
-            geometry::{Rect, px},
-        };
+        use flui_types::{Color, geometry::Rect};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return;
@@ -4031,7 +4022,7 @@ mod tests {
             CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer,
         };
         use flui_painting::{Canvas, Paint};
-        use flui_types::{Color, Offset, Size, geometry::Rect, geometry::px};
+        use flui_types::{Color, Offset, Size, geometry::Rect};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4169,7 +4160,7 @@ mod tests {
         use crate::render_target::RenderTarget;
         use flui_layer::{CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, OffsetLayer};
         use flui_painting::{Canvas, Paint};
-        use flui_types::{Color, Offset, Size, geometry::Rect, geometry::px};
+        use flui_types::{Color, Offset, Size, geometry::Rect};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4291,7 +4282,7 @@ mod tests {
         use crate::render_target::RenderTarget;
         use flui_layer::{CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, OffsetLayer};
         use flui_painting::{Canvas, Paint};
-        use flui_types::{Color, Offset, Size, geometry::Rect, geometry::px};
+        use flui_types::{Color, Offset, Size, geometry::Rect};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4542,11 +4533,7 @@ mod tests {
         use crate::render_target::RenderTarget;
         use flui_layer::{CanvasLayer, Layer, LayerTree, ShaderMaskLayer};
         use flui_painting::{Canvas, Paint, Shader};
-        use flui_types::{
-            Color,
-            geometry::{Rect, px},
-            painting::BlendMode,
-        };
+        use flui_types::{Color, geometry::Rect, painting::BlendMode};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4648,11 +4635,7 @@ mod tests {
         use crate::painter::WgpuPainter;
         use flui_layer::{CanvasLayer, Layer, LayerTree, ShaderMaskLayer};
         use flui_painting::{Canvas, Paint, Shader};
-        use flui_types::{
-            Color,
-            geometry::{Rect, px},
-            painting::BlendMode,
-        };
+        use flui_types::{Color, geometry::Rect, painting::BlendMode};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return;
@@ -4763,11 +4746,7 @@ mod tests {
         use crate::render_target::RenderTarget;
         use flui_layer::{CanvasLayer, Layer, LayerTree, OffsetLayer, ShaderMaskLayer};
         use flui_painting::{Canvas, Paint, Shader};
-        use flui_types::{
-            Color, Offset,
-            geometry::{Rect, px},
-            painting::BlendMode,
-        };
+        use flui_types::{Color, Offset, geometry::Rect, painting::BlendMode};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4900,11 +4879,7 @@ mod tests {
         use crate::render_target::RenderTarget;
         use flui_layer::{CanvasLayer, Layer, LayerTree, ShaderMaskLayer};
         use flui_painting::{Canvas, Paint, Shader};
-        use flui_types::{
-            Color,
-            geometry::{Rect, px},
-            painting::BlendMode,
-        };
+        use flui_types::{Color, geometry::Rect, painting::BlendMode};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.

@@ -53,7 +53,6 @@ use std::time::Duration;
 
 use flui_sdk::animation::{Animation, AnimationController, Curve, Curves};
 use flui_sdk::foundation::Listenable;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::painting::Clip;
 use flui_sdk::types::{Alignment, Color, EdgeInsets};
 use flui_sdk::view::RebuildHandle;
@@ -306,7 +305,7 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
 
     let mut row_children: Vec<BoxedView> = vec![
         Expanded::new(
-            Padding::new(EdgeInsets::symmetric((SINGLE_LINE_VERTICAL_PADDING), 0.0)).child(
+            Padding::new(EdgeInsets::symmetric(SINGLE_LINE_VERTICAL_PADDING, 0.0)).child(
                 DefaultTextStyle::new(content_text_style, snack_bar.content.clone()),
             ),
         )
@@ -314,7 +313,7 @@ fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
     ];
     if let Some(action) = &snack_bar.action {
         row_children.push(
-            Padding::new(EdgeInsets::symmetric(0.0, (HORIZONTAL_PADDING / 2.0)))
+            Padding::new(EdgeInsets::symmetric(0.0, HORIZONTAL_PADDING / 2.0))
                 .child(action.clone())
                 .boxed(),
         );

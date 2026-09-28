@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
             .with_size(800, 600),
         |builder, w, h| {
             use flui_painting::Canvas;
-            use flui_types::{Rect, geometry::px, painting::Paint, styling::Color};
+            use flui_types::{Rect, painting::Paint, styling::Color};
 
             // Record drawing commands into a Picture
             let mut canvas = Canvas::new();
@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
 
             // Blue rectangle (bottom-right)
             canvas.draw_rect(
-                Rect::from_ltrb(400.0, 250.0, (w - 50.0), (h - 50.0)),
+                Rect::from_ltrb(400.0, 250.0, w - 50.0, h - 50.0),
                 &Paint::fill(Color::BLUE),
             );
 
@@ -48,13 +48,13 @@ fn main() -> anyhow::Result<()> {
             let cx = w / 2.0;
             let cy = h / 2.0;
             canvas.draw_rect(
-                Rect::from_ltrb((cx - 60.0), (cy - 40.0), (cx + 60.0), (cy + 40.0)),
+                Rect::from_ltrb(cx - 60.0, cy - 40.0, cx + 60.0, cy + 40.0),
                 &Paint::fill(Color::WHITE),
             );
 
             // Yellow bar (bottom)
             canvas.draw_rect(
-                Rect::from_ltrb(80.0, (h - 120.0), (w - 80.0), (h - 70.0)),
+                Rect::from_ltrb(80.0, h - 120.0, w - 80.0, h - 70.0),
                 &Paint::fill(Color::rgb(255, 200, 0)),
             );
 

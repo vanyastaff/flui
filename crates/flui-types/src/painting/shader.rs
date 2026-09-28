@@ -1,7 +1,7 @@
 //! Shader types for painting.
 
 use crate::{
-    geometry::{Offset, px},
+    geometry::Offset,
     painting::{BlurStyle, TileMode},
     styling::Color,
 };
@@ -765,7 +765,7 @@ mod tests {
     /// wgpu uniform-size mismatch and garbage rendering.
     #[test]
     fn sweep_gradient_mask_uniform_is_48_bytes() {
-        use crate::geometry::{Offset, Rect, px};
+        use crate::geometry::{Offset, Rect};
 
         let shader = Shader::sweep_gradient(
             Offset::new(50.0, 50.0),
@@ -787,7 +787,7 @@ mod tests {
     /// LinearGradient and RadialGradient still emit 48 bytes (regression guard).
     #[test]
     fn linear_and_radial_gradient_mask_uniform_are_48_bytes() {
-        use crate::geometry::{Offset, Rect, px};
+        use crate::geometry::{Offset, Rect};
 
         let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
 
@@ -806,7 +806,7 @@ mod tests {
     /// Solid shader emits 16 bytes (regression guard).
     #[test]
     fn solid_shader_mask_uniform_is_16_bytes() {
-        use crate::geometry::{Rect, px};
+        use crate::geometry::Rect;
 
         let shader = Shader::solid(Color::RED);
         let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
@@ -816,7 +816,7 @@ mod tests {
     /// SweepGradient center is correctly normalized to bounds-relative 0..1.
     #[test]
     fn sweep_gradient_mask_uniform_normalizes_center() {
-        use crate::geometry::{Offset, Rect, px};
+        use crate::geometry::{Offset, Rect};
 
         // Center at (50, 50) in a 100x100 bounds starting at (0,0) → normalized (0.5, 0.5)
         let shader = Shader::sweep_gradient(
@@ -838,7 +838,7 @@ mod tests {
 
     mod uniforms {
         use super::super::*;
-        use crate::geometry::{Rect, px};
+        use crate::geometry::Rect;
 
         fn floats(bytes: &[u8]) -> Vec<f32> {
             bytes

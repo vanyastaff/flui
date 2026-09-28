@@ -20,7 +20,7 @@
 //! (`a_border_radius_change_updates_the_clip_layer_without_repainting_the_subtree`
 //! in `crates/flui-rendering/tests/retained_boundary_layers.rs`).
 
-use flui_types::geometry::{Radius, px};
+use flui_types::geometry::Radius;
 use flui_widgets::testing::{lay_out, tight};
 use flui_widgets::{ClipRRect, SizedBox};
 

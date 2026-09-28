@@ -116,7 +116,7 @@ pub mod typography;
 // Note: Event types moved to flui_interaction (uses ui-events crate)
 
 // Re-exports for convenience - Most commonly used types
-pub use geometry::{EdgeInsets, Edges, Matrix4, Offset, Pixels, Point, RRect, Rect, Size};
+pub use geometry::{EdgeInsets, Edges, Matrix4, Offset, Point, RRect, Rect, Size};
 pub use haptics::HapticFeedback;
 pub use ime::ImeEvent;
 pub use layout::{Alignment, Axis};
@@ -128,7 +128,7 @@ pub use styling::{Color, Oklab};
 pub mod prelude {
     // Geometry - Essential types
     // Geometry - Edges and Pixels for layout
-    pub use crate::geometry::{Edges, Matrix4, Offset, Pixels, Point, RRect, Rect, Size, Vec2, px};
+    pub use crate::geometry::{Edges, Matrix4, Offset, Point, RRect, Rect, Size, Vec2};
     // Layout - Common types
     pub use crate::layout::{
         Alignment, Axis, AxisDirection, CrossAxisAlignment, MainAxisAlignment, MainAxisSize,

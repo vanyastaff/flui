@@ -12,7 +12,7 @@ use flui_interaction::{
     events::{PointerType, make_down_event},
 };
 use flui_platform::traits::{PlatformInput, PlatformWindow};
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 use flui_view::View;
 
 use super::super::host::{
@@ -1927,7 +1927,7 @@ fn surface_applier_panic_is_caught_and_the_applier_still_applies_next_time() {
 
     let resize_event = |side: f64| {
         RealmTask::Event(PlatformToUi::Resized {
-            size: flui_types::Size::new((side), (side)),
+            size: flui_types::Size::new(side, side),
             scale_factor: 1.0,
         })
     };

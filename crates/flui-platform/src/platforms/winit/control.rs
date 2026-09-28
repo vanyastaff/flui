@@ -388,7 +388,7 @@ mod tests {
     };
 
     use flui_foundation::ClaimOutcome;
-    use flui_types::geometry::{Size, px};
+    use flui_types::geometry::Size;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::{CONTROL_CAPACITY, ControlCommand, ControlSendError, control_lane};

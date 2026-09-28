@@ -27,7 +27,7 @@ use flui_interaction::{
     events::{Code, Key, KeyState, NamedKey},
     routing::{FocusAttachment, FocusManager, FocusNode, KeyEventHandler, KeyEventResult},
 };
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 use flui_widgets::{EditableText, RawTextField, TextEditingController};
 
 // ============================================================================

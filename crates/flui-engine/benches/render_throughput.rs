@@ -34,7 +34,7 @@ use flui_engine::PathCache;
 use flui_engine::WgpuPainter;
 use flui_painting::Paint;
 use flui_types::Rect;
-use flui_types::{Offset, geometry::px, painting::Shader, styling::Color};
+use flui_types::{Offset, painting::Shader, styling::Color};
 
 // ---------------------------------------------------------------------------
 // Platform backend selection (mirrors Renderer::select_backend)
@@ -124,8 +124,8 @@ fn build_frame(painter: &mut WgpuPainter) {
         let rect = flui_types::Rect::from_ltrb(
             f64::from(x),
             f64::from(y),
-            f64::from((x + 70.0)),
-            f64::from((y + 90.0)),
+            f64::from(x + 70.0),
+            f64::from(y + 90.0),
         );
         let hue = i as f32 / 50.0;
         let color = Color::from_rgba_f32_array([hue, 0.5, 1.0 - hue, 1.0]);
@@ -330,8 +330,8 @@ fn damage_scissor(c: &mut Criterion) {
             let f = i as f32;
             painter.draw_rect(
                 Rect::from_xywh(
-                    f64::from((f * 2.0)),
-                    f64::from((f * 1.5)),
+                    f64::from(f * 2.0),
+                    f64::from(f * 1.5),
                     f64::from(w),
                     f64::from(h),
                 ),

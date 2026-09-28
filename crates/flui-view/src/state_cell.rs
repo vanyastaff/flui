@@ -457,7 +457,6 @@ mod tests {
         pipeline::{PipelineCell, PipelineOwner},
         protocol::BoxProtocol,
     };
-    use flui_types::geometry::px;
 
     use super::{StateCell, StateHandle};
     use crate::{

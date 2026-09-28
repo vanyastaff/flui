@@ -56,7 +56,7 @@ use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{AppLifecycleState, SchedulerPhase};
 use flui_scheduler::{LocalPostFrameLane, UpdateScheduler};
 #[cfg(test)]
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 use flui_view::GlobalKeyScope;
 #[cfg(test)]
 use parking_lot::RwLock;

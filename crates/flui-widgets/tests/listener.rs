@@ -13,7 +13,7 @@ use flui_interaction::events::pointer::{
     PointerUpdate,
 };
 use flui_types::Color;
-use flui_types::{Offset, geometry::px};
+use flui_types::Offset;
 use flui_view::EventCx;
 use flui_widgets::prelude::HitTestBehavior;
 use flui_widgets::{ColoredBox, Listener, PointerPanZoomEvent, SizedBox};

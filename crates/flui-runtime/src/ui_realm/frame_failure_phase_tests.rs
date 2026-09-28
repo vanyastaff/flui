@@ -12,7 +12,7 @@ use flui_rendering::{
     protocol::BoxProtocol,
     traits::{RenderBox, RenderObject},
 };
-use flui_types::{Offset, Size, geometry::px, painting::Alignment};
+use flui_types::{Offset, Size, painting::Alignment};
 use flui_widgets::SizedBox;
 
 use super::{FrameFailureHandler, FrameFailureKind, SegmentPhase, UiRealm};

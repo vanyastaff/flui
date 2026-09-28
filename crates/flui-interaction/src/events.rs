@@ -265,7 +265,7 @@ impl PointerEventData {
         let (position, time_stamp, buttons) = if let Some(s) = state {
             let pos = s.position;
             (
-                Offset::new((pos.x as f64), (pos.y as f64)),
+                Offset::new(pos.x as f64, pos.y as f64),
                 s.time, // time is already u64 nanoseconds
                 s.buttons,
             )

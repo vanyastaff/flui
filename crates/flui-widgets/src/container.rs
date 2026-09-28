@@ -5,7 +5,6 @@ use flui_geometry::{EdgeInsets, Matrix4};
 use flui_objects::RenderContainer;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::geometry::px;
 use flui_types::styling::BoxDecoration;
 use flui_types::{Alignment, Color};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
@@ -175,8 +174,8 @@ impl Container {
     /// `tightFor`.
     fn effective_constraints(&self) -> Option<BoxConstraints> {
         if self.width.is_some() || self.height.is_some() {
-            let width = self.width.map(px);
-            let height = self.height.map(px);
+            let width = self.width;
+            let height = self.height;
             Some(match self.constraints {
                 Some(constraints) => constraints.tighten(width, height),
                 None => BoxConstraints::tight_for(width, height),

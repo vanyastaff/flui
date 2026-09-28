@@ -21,7 +21,6 @@ use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId}
 use flui_testing::HeadlessBinding;
 use flui_testing::replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};
 use flui_types::Offset;
-use flui_types::geometry::px;
 
 fn at(x: f64, y: f64) -> Offset {
     Offset::new(x, y)

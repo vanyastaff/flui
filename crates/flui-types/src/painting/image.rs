@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::{
-    geometry::{Size, px},
+    geometry::Size,
     painting::{BlendMode, effects::ColorMatrix},
     styling::Color,
 };
@@ -540,7 +540,6 @@ impl ColorFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::units::px;
 
     #[test]
     fn try_from_rgba8_accepts_exact_length() {

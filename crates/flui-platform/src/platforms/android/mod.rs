@@ -716,7 +716,7 @@ impl PlatformDisplay for AndroidDisplay {
     }
 
     fn bounds(&self) -> flui_types::geometry::Bounds<i32> {
-        use flui_types::geometry::{Bounds, Point, Size, device_px};
+        use flui_types::geometry::{Bounds, Point, Size};
         Bounds::new(Point::new(0, 0), Size::new(1080, 2340))
     }
 

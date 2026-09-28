@@ -391,7 +391,7 @@ pub mod prelude {
         SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout, TableBorder,
         TableCellVerticalAlignment, TableColumnWidth,
     };
-    pub use flui_geometry::{EdgeInsets, Matrix4, Pixels, px};
+    pub use flui_geometry::{EdgeInsets, Matrix4};
     pub use flui_interaction::{
         DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, PointerPanZoomEvent,
     };

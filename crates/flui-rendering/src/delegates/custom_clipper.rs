@@ -110,7 +110,6 @@ impl CustomClipper<Rect> for RectClipper {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 

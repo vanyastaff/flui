@@ -13,7 +13,7 @@
 //! let up = pointer_up(Offset::new(100.0, 100.0), PointerType::Mouse);
 //! ```
 
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 use ui_events::keyboard::Location;
 
 use crate::events::{

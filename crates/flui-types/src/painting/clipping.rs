@@ -1,6 +1,6 @@
 //! Clipping types for painting.
 
-use crate::geometry::{Offset, Pixels, Rect, Size, px};
+use crate::geometry::{Offset, Rect, Size};
 
 /// How a new clip region combines with the current clip.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]

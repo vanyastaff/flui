@@ -107,7 +107,6 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::Listenable;
 use flui_sdk::painting::Canvas;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::painting::Paint;
 use flui_sdk::types::styling::Color;
 use flui_sdk::types::{Point, Size};
@@ -440,7 +439,7 @@ struct RadioPainter {
 
 impl CustomPainter for RadioPainter {
     fn paint(&self, canvas: &mut Canvas, size: Size) {
-        let center = Point::new((size.width / 2.0), (size.height / 2.0));
+        let center = Point::new(size.width / 2.0, size.height / 2.0);
 
         canvas.draw_circle(
             center,

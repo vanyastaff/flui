@@ -20,7 +20,6 @@ use flui_interaction::events::PointerEventExt as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
 use flui_types::Color;
-use flui_types::geometry::px;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView, ViewExt};
 use flui_widgets::{

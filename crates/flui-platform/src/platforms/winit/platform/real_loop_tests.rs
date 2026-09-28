@@ -23,7 +23,7 @@ use std::{
 };
 
 use flui_foundation::ClaimOutcome;
-use flui_types::geometry::{Size, px};
+use flui_types::geometry::Size;
 use parking_lot::Mutex;
 use winit::{
     application::ApplicationHandler,

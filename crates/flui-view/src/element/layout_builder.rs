@@ -377,7 +377,7 @@ mod tests {
     use flui_foundation::{ElementId, RenderId};
     use flui_objects::{RenderConstrainedBox, RenderSizedBox};
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-    use flui_types::{Size, geometry::px};
+    use flui_types::Size;
 
     use crate::{BuildOwner, IntoView, tree::ElementTree, view::ViewExt};
 

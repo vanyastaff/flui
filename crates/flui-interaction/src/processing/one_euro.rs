@@ -247,7 +247,7 @@ mod tests {
             let jitter = if i % 2 == 0 { 0.8 } else { -0.8 };
             last = f.filter(
                 t0 + Duration::from_millis(8 * i),
-                Offset::new((50.0 + jitter), (50.0 - jitter)),
+                Offset::new(50.0 + jitter, 50.0 - jitter),
             );
         }
         assert!((last.dx - 50.0).abs() < 1.0);

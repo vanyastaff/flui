@@ -1218,7 +1218,7 @@ mod tests {
     /// while the slot precondition still holds.
     #[test]
     fn safe_area_report_inside_a_closing_drain_is_dropped_by_the_latch() {
-        use flui_types::geometry::{EdgeInsets, px};
+        use flui_types::geometry::EdgeInsets;
 
         let callbacks = Arc::new(WindowCallbacks::new());
         let seen = Arc::new(AtomicU32::new(0));

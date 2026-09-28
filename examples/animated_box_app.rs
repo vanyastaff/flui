@@ -57,7 +57,7 @@ use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_app::run_app;
 use flui_foundation::Listenable;
 use flui_objects::RenderColoredBox;
-use flui_types::{Color, Size, geometry::px};
+use flui_types::{Color, Size};
 use flui_view::{
     AnimatedView, BuildContext, BuildContextExt, IntoView, LifecycleContext, RenderView,
     StatefulView, StatelessView, View, ViewExt, ViewState, impl_animated_view,

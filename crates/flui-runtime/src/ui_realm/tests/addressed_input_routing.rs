@@ -10,7 +10,7 @@ use flui_platform_api::text_store::{
     TextStoreObserver, TextStoreStatus,
 };
 use flui_types::ImeEvent;
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 use flui_view::{Signal, SignalWriteExt};
 use flui_widgets::{Focus, SizedBox};
 

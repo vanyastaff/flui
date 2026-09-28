@@ -260,7 +260,7 @@ impl Default for PointerSignalResolver {
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use flui_types::geometry::{Offset, px};
+    use flui_types::geometry::Offset;
 
     use super::*;
     use crate::ids::PointerId;

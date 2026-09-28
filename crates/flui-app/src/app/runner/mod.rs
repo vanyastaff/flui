@@ -297,7 +297,6 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use flui_types::geometry::px;
     use flui_view::{BuildContext, IntoView, View, ViewExt};
 
     use super::host::APP_RUNTIME;

@@ -17,7 +17,7 @@
 use std::sync::{Arc, Mutex};
 
 use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};
-use flui_types::geometry::{Size, px};
+use flui_types::geometry::Size;
 
 /// GPU state created from a PlatformWindow
 struct GpuState {

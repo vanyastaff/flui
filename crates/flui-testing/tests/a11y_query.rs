@@ -14,7 +14,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_semantics::{SemanticsConfiguration, SemanticsRole};
 use flui_testing::HeadlessBinding;
 use flui_testing::a11y::Role;
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 use flui_view::{BuildOwner, tree::ElementTree};
 
 /// A leaf carrying whatever semantics the test wants to see come out the other

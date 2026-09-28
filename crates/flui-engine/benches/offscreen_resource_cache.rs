@@ -46,7 +46,7 @@ use std::sync::Arc;
 use bytemuck::cast_slice;
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_engine::OffscreenRenderer;
-use flui_types::{Rect, Size, geometry::px, painting::Shader, styling::Color};
+use flui_types::{Rect, Size, painting::Shader, styling::Color};
 use wgpu::util::DeviceExt as _;
 
 // ---------------------------------------------------------------------------

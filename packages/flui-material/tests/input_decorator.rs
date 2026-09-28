@@ -27,7 +27,6 @@ use flui_material::{
     InputDecoration, InputDecorationThemeData, InputDecorator, Theme, ThemeData, ThemeDataOverrides,
 };
 use flui_sdk::types::Color;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::styling::{BorderSide, BorderStyle};
 use flui_sdk::widgets::{SizedBox, WidgetStateProperty};
 

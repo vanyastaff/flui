@@ -1697,7 +1697,7 @@ mod tests {
             events::{PointerType, make_move_event},
             routing::{HitTestEntry, HitTestResult, PointerMotionKind},
         };
-        use flui_types::geometry::{Offset, Pixels};
+        use flui_types::geometry::Offset;
 
         let window = Arc::new(crate::testing::TestWindow::new().focused(true));
         let platform_window: Arc<dyn PlatformWindow> = window.clone();

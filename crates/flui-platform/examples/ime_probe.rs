@@ -109,7 +109,7 @@ mod appkit_ime_probe {
         DispatchEventResult, Platform, PlatformTextInput, PlatformWindow, WindowOptions,
     };
     use flui_types::ImeEvent;
-    use flui_types::geometry::{Bounds, Point, Size, px};
+    use flui_types::geometry::{Bounds, Point, Size};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2::{ClassType, msg_send};
     use objc2_app_kit::NSApplication;

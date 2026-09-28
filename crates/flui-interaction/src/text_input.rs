@@ -490,7 +490,7 @@ mod tests {
         InMemoryTextStore, LockGrant, LockTiming, Selection, TextStoreError, TextStoreStatus,
         Utf16Offset,
     };
-    use flui_types::geometry::{Point, Size, px};
+    use flui_types::geometry::{Point, Size};
     use parking_lot::Mutex;
 
     use super::*;

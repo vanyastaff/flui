@@ -9,7 +9,6 @@ use flui_objects::RenderSizedBox;
 use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, RenderBox, Size};
-use flui_types::geometry::px;
 
 use super::SparseChildren;
 use crate::GlobalKey;

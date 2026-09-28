@@ -133,7 +133,7 @@ use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::{
     BoxedTask, ClockSource, DemandKind, FrameClock, LocalPostFrameLane, TaskToken, UpdateScheduler,
 };
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 use flui_view::{BuildOwner, ElementId, ElementTree, View};
 
 fn preserve_first_pointer_panic(

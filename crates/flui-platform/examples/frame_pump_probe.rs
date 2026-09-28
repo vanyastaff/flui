@@ -41,7 +41,7 @@ mod appkit_frame_pump_probe {
     use std::time::{Duration, Instant};
 
     use flui_platform::Platform;
-    use flui_types::geometry::{Size, px};
+    use flui_types::geometry::Size;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     /// How long the primer may keep poking before the pump is declared

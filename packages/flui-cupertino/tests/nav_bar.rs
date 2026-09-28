@@ -14,7 +14,6 @@ use crate::common;
 use common::{lay_out, loose, tight};
 use flui_cupertino::CupertinoNavigationBar;
 use flui_sdk::types::Size;
-use flui_sdk::types::geometry::px;
 use flui_sdk::widgets::prelude::EdgeInsets;
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, PreferredSizeView, SizedBox, Text};
 
@@ -33,7 +32,7 @@ fn media_with_top_padding(top: f64) -> MediaQueryData {
 #[test]
 fn preferred_size_is_the_44pt_persistent_height_with_no_top_inset_folded_in() {
     let preferred = CupertinoNavigationBar::new().preferred_size();
-    assert_eq!(preferred, Size::new((f64::INFINITY), 44.0));
+    assert_eq!(preferred, Size::new(f64::INFINITY, 44.0));
 }
 
 /// `_kDefaultNavBarBorderColor` (`nav_bar.dart`, oracle tag `3.44.0`) is

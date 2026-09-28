@@ -20,7 +20,6 @@ use flui_interaction::arena::GestureArena;
 use flui_interaction::settings::GestureSettings;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, ManualClock, PointerId};
 use flui_types::Offset;
-use flui_types::geometry::px;
 
 #[test]
 fn long_press_fires_on_pumped_virtual_frames_without_sleeping() {

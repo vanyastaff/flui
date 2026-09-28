@@ -587,7 +587,6 @@ mod tests {
     use flui_rendering::constraints::BoxConstraints;
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
-    use flui_types::geometry::px;
 
     use crate::{RebuildReason, View};
 

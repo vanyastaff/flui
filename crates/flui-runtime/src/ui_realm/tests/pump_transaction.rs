@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
 use flui_foundation::notifier::Listenable as _;
-use flui_types::geometry::px;
 
 use super::*;
 use flui_foundation::ManualClock;

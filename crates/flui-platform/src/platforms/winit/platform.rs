@@ -103,7 +103,7 @@ use winit::{
     window::{WindowAttributes, WindowId as WinitWindowId},
 };
 
-use flui_types::geometry::{Pixels, Point, px};
+use flui_types::geometry::Point;
 
 use super::window::WinitWindow;
 use super::{
@@ -136,8 +136,8 @@ fn logical_cursor_point(
     scale_factor: f64,
 ) -> Point<f64> {
     Point::new(
-        ((position.x / scale_factor) as f64),
-        ((position.y / scale_factor) as f64),
+        (position.x / scale_factor) as f64,
+        (position.y / scale_factor) as f64,
     )
 }
 
@@ -1093,9 +1093,9 @@ impl ApplicationHandler for WinitApp {
                 self.complete_window_close(event_loop, platform_id, window.as_ref());
             }
             WinitWindowEvent::Resized(physical_size) => {
-                use flui_types::geometry::{Size, device_px, px};
+                use flui_types::geometry::Size;
 
-                let size = Size::new((physical_size.width as i32), (physical_size.height as i32));
+                let size = Size::new(physical_size.width as i32, physical_size.height as i32);
 
                 tracing::debug!(?platform_id, ?size, "Window resized");
 
@@ -1103,8 +1103,8 @@ impl ApplicationHandler for WinitApp {
                 if let Some(ref win) = window {
                     let scale = win.scale_factor() as f64;
                     let logical = Size::new(
-                        (physical_size.width as f64 / scale),
-                        (physical_size.height as f64 / scale),
+                        physical_size.width as f64 / scale,
+                        physical_size.height as f64 / scale,
                     );
                     win.callbacks().dispatch_resize(logical, scale);
                 }

@@ -48,8 +48,7 @@ use std::sync::Arc;
 use flui_sdk::foundation::ListenerId;
 use flui_sdk::foundation::notifier::Listenable;
 use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::Pixels;
-use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::geometry::Radius;
 use flui_sdk::types::platform::Brightness;
 use flui_sdk::types::styling::{
     Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color,

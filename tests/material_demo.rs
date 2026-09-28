@@ -42,7 +42,6 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
-use flui_types::geometry::px;
 use flui_types::{Offset, Size};
 use flui_widgets::{
     FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, TextEditingController, VsyncScope,
@@ -181,8 +180,8 @@ impl MountedDemo {
         let position = self.absolute_position(id);
         let size = self.size(id);
         self.tap(
-            ((position.dx + size.width / 2.0) as f64),
-            ((position.dy + size.height / 2.0) as f64),
+            (position.dx + size.width / 2.0) as f64,
+            (position.dy + size.height / 2.0) as f64,
         );
     }
 
@@ -336,8 +335,8 @@ impl MountedDemo {
                 if let Some(offset) =
                     flui_rendering::testing::inspect::render_offset(owner, current)
                 {
-                    x += ((offset.dx) as f64);
-                    y += ((offset.dy) as f64);
+                    x += (offset.dx) as f64;
+                    y += (offset.dy) as f64;
                 }
                 match render_tree.parent(current) {
                     Some(parent) => current = parent,
@@ -517,8 +516,8 @@ fn tapping_the_fab_opens_the_dialog_and_hides_the_page_beneath_from_hit_testing(
     // home route beneath it — proof the home route is genuinely
     // un-hit-testable, not merely that this one tap happened to miss it.
     demo.tap(
-        ((settings_position.dx + 1.0) as f64),
-        ((settings_position.dy + 1.0) as f64),
+        (settings_position.dx + 1.0) as f64,
+        (settings_position.dy + 1.0) as f64,
     );
     demo.pump(Duration::ZERO);
     assert!(
@@ -939,11 +938,11 @@ fn the_counters_state_survives_switching_away_and_back() {
     // `tests/vertical_slice_demo.rs`'s `tapping_the_plus_button_updates_the_rendered_counter_text`
     // already established for its own repeatedly-tapped counter button.
     let tap_at = demo.absolute_position(increment);
-    demo.tap(((tap_at.dx + 1.0) as f64), ((tap_at.dy + 1.0) as f64));
+    demo.tap((tap_at.dx + 1.0) as f64, (tap_at.dy + 1.0) as f64);
     demo.pump(Duration::ZERO);
-    demo.tap(((tap_at.dx + 1.0) as f64), ((tap_at.dy + 1.0) as f64));
+    demo.tap((tap_at.dx + 1.0) as f64, (tap_at.dy + 1.0) as f64);
     demo.pump(Duration::ZERO);
-    demo.tap(((tap_at.dx + 1.0) as f64), ((tap_at.dy + 1.0) as f64));
+    demo.tap((tap_at.dx + 1.0) as f64, (tap_at.dy + 1.0) as f64);
     demo.pump(Duration::ZERO);
 
     assert!(

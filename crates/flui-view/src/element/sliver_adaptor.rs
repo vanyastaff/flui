@@ -1603,7 +1603,6 @@ mod tests {
     use flui_objects::RenderSizedBox;
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
-    use flui_types::geometry::px;
 
     use super::*;
     use crate::view::RenderView;

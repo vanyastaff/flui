@@ -83,7 +83,7 @@
 
 use flui_sdk::types::styling::BorderSide;
 use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Color, EdgeInsets, Pixels, Size};
+use flui_sdk::types::{Color, EdgeInsets, Size};
 use flui_sdk::widgets::WidgetStateProperty;
 
 use crate::shape::MaterialShape;

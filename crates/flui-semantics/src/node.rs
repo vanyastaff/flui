@@ -341,8 +341,6 @@ impl SemanticsNode {
 mod tests {
     use std::sync::Arc;
 
-    use flui_types::geometry::px;
-
     use super::*;
     use crate::{action::SemanticsAction, flags::SemanticsFlag};
 

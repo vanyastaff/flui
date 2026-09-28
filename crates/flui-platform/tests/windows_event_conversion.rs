@@ -11,7 +11,7 @@
 #[cfg(test)]
 mod tests {
     use flui_platform::{WindowOptions, current_platform};
-    use flui_types::geometry::{Size, px};
+    use flui_types::geometry::Size;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     /// Initialize tracing for tests

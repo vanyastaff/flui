@@ -147,11 +147,11 @@
 //!   `Theme`, which the oracle's capture step exists specifically to fix.
 
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::geometry::Radius;
 use flui_sdk::types::painting::Clip;
 use flui_sdk::types::styling::BorderRadius;
 use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Alignment, Color, EdgeInsets, Pixels};
+use flui_sdk::types::{Alignment, Color, EdgeInsets};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Flexible, IntrinsicWidth,
@@ -619,9 +619,7 @@ mod tests {
         assert_eq!(resolved.elevation, 11.0);
         assert_eq!(
             resolved.shape,
-            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(
-                (DEFAULT_CORNER_RADIUS)
-            )))
+            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(DEFAULT_CORNER_RADIUS)))
         );
     }
 

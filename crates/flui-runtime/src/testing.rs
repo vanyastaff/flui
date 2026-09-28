@@ -25,7 +25,7 @@ use flui_platform_api::{
     CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId, WindowShowError,
 };
 use flui_semantics::platform::PlatformAccessibility;
-use flui_types::geometry::{DevicePixels, Pixels, Size};
+use flui_types::geometry::Size;
 
 use crate::pump::FrameClockSource;
 use crate::sink::{FrameSink, SubmitVerdict};

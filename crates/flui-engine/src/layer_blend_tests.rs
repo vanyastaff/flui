@@ -249,7 +249,7 @@ mod gpu_tests {
     use std::sync::Arc;
 
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, geometry::Pixels, painting::BlendMode};
+    use flui_types::{Color, Rect, painting::BlendMode};
 
     use crate::{painter::WgpuPainter, render_target::RenderTarget};
 
@@ -345,8 +345,8 @@ mod gpu_tests {
         Rect::from_xywh(
             0.0,
             0.0,
-            f64::from((SURFACE_WIDTH as f32)),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(SURFACE_WIDTH as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         )
     }
 
@@ -673,14 +673,14 @@ mod gpu_tests {
         let left_bounds = Rect::from_xywh(
             0.0,
             0.0,
-            f64::from((half_width as f32)),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(half_width as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         );
         let right_bounds = Rect::from_xywh(
-            f64::from((half_width as f32)),
+            f64::from(half_width as f32),
             0.0,
-            f64::from((half_width as f32)),
-            f64::from((SURFACE_HEIGHT as f32)),
+            f64::from(half_width as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         // Opaque red → Multiply with green backdrop → dark output.

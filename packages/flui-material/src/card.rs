@@ -49,7 +49,7 @@
 
 use flui_sdk::types::Color;
 use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::geometry::{Radius, px};
+use flui_sdk::types::geometry::Radius;
 use flui_sdk::types::painting::Clip;
 use flui_sdk::types::styling::BorderRadius;
 use flui_sdk::view::prelude::*;
@@ -284,11 +284,9 @@ mod tests {
         // through to its own M3 default independently.
         assert_eq!(
             resolved.shape,
-            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(
-                (DEFAULT_CORNER_RADIUS)
-            )))
+            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(DEFAULT_CORNER_RADIUS)))
         );
-        assert_eq!(resolved.margin, EdgeInsets::all((DEFAULT_MARGIN)));
+        assert_eq!(resolved.margin, EdgeInsets::all(DEFAULT_MARGIN));
     }
 
     #[test]

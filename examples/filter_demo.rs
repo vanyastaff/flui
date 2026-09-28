@@ -26,7 +26,7 @@ use flui_layer::{CanvasLayer, Scene, SceneBuilder};
 use flui_platform::{WindowOptions, current_platform};
 use flui_types::{
     Color, Offset,
-    geometry::{Rect, Size, px},
+    geometry::{Rect, Size},
     painting::{ImageFilter, Paint},
 };
 
@@ -74,7 +74,7 @@ fn build_filter_scene(width: f64, height: f64) -> Scene {
 
             // Divider between left (sharp) and right (blurred) halves.
             canvas.draw_rect(
-                Rect::from_ltrb((half_width - 1.0), 0.0, (half_width + 1.0), height),
+                Rect::from_ltrb(half_width - 1.0, 0.0, half_width + 1.0, height),
                 &Paint::fill(Color::rgb(80, 80, 80)),
             );
 
@@ -129,17 +129,17 @@ fn draw_demo_shapes(
 
     // Large coral rectangle.
     canvas.draw_rect(
-        Rect::from_ltrb(left, 60.0, right, (height / 2.0 - 20.0)),
+        Rect::from_ltrb(left, 60.0, right, height / 2.0 - 20.0),
         &Paint::fill(Color::rgb(220, 80, 60)),
     );
 
     // Overlapping teal rectangle.
     canvas.draw_rect(
         Rect::from_ltrb(
-            (center_x - 80.0),
-            (height / 2.0 - 60.0),
-            (center_x + 80.0),
-            (height - 60.0),
+            center_x - 80.0,
+            height / 2.0 - 60.0,
+            center_x + 80.0,
+            height - 60.0,
         ),
         &Paint::fill(Color::rgb(30, 180, 160)),
     );
@@ -147,17 +147,17 @@ fn draw_demo_shapes(
     // Small white accent square.
     canvas.draw_rect(
         Rect::from_ltrb(
-            (center_x - 30.0),
-            (height / 2.0 - 30.0),
-            (center_x + 30.0),
-            (height / 2.0 + 30.0),
+            center_x - 30.0,
+            height / 2.0 - 30.0,
+            center_x + 30.0,
+            height / 2.0 + 30.0,
         ),
         &Paint::fill(Color::WHITE),
     );
 
     // Yellow strip at the bottom.
     canvas.draw_rect(
-        Rect::from_ltrb(left, (height - 55.0), right, (height - 30.0)),
+        Rect::from_ltrb(left, height - 55.0, right, height - 30.0),
         &Paint::fill(Color::rgb(255, 210, 0)),
     );
 }

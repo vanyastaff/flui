@@ -343,7 +343,7 @@ fn get_pointer_id(event: &PointerEvent) -> PointerId {
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
     use std::cell::RefCell;
 
     use super::*;

@@ -2,7 +2,7 @@
 
 use crate::common::lay_out;
 use flui_rendering::constraints::BoxConstraints;
-use flui_types::{Size, geometry::px};
+use flui_types::Size;
 use flui_widgets::prelude::*;
 
 #[test]

@@ -1105,7 +1105,7 @@ mod tests {
         let dt = std::time::Duration::from_millis(33);
         for i in 0..=3 {
             let t = start_time + dt * i;
-            let pos = Offset::new((i as f64 * 33.0), 0.0);
+            let pos = Offset::new(i as f64 * 33.0, 0.0);
             tracker.add_position(t, pos);
         }
 

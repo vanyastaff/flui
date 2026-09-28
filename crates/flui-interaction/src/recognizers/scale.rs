@@ -973,7 +973,7 @@ mod tests {
             for (p, base) in [(p1, 0.0), (p2, SEPARATION)] {
                 recognizer.handle_pointer_move(
                     p,
-                    Offset::new((base + shift), 0.0),
+                    Offset::new(base + shift, 0.0),
                     PointerType::Touch,
                 );
                 let state = recognizer.gesture_state.lock();

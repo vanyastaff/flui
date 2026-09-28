@@ -15,7 +15,6 @@ use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     protocol::BoxProtocol,
 };
-use flui_types::geometry::px;
 use flui_view::{BoxedView, BuildOwner, ElementTree, RenderView, View, ViewExt};
 
 #[derive(Clone)]
@@ -40,7 +39,7 @@ impl RenderView for KeyedLeaf {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> RenderUpdateImpact {
-        let extent = (1.0 + (self.revision % 2) as f64);
+        let extent = 1.0 + (self.revision % 2) as f64;
         render_object.set_size(Some(extent), Some(extent))
     }
 }

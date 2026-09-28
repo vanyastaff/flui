@@ -41,7 +41,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
-use flui_types::geometry::{Pixels, Point};
+use flui_types::geometry::Point;
 use parking_lot::Mutex;
 
 use crate::data_transfer::{

@@ -17,7 +17,7 @@ use flui_testing::{
     HeadlessBinding,
     bootstrap::{MountOptions, MountOwners},
 };
-use flui_types::{Offset, Size, geometry::px};
+use flui_types::{Offset, Size};
 use flui_view::{
     BoxedView, BuildContext, ErrorView, IntoView, LifecycleContext, LifecycleHook, RecoveredAt,
     RenderView, StatefulView, View, ViewExt, ViewState,
@@ -80,7 +80,7 @@ impl HealthyLeaf {
             // offset stable across the replacement as well as its own size.
             Size::new(48.0, 80.0)
         } else {
-            Size::new((10.0 + self.slot as f64), (20.0 + self.slot as f64))
+            Size::new(10.0 + self.slot as f64, 20.0 + self.slot as f64)
         }
     }
 }

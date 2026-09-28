@@ -25,7 +25,6 @@ use flui_rendering::constraints::BoxConstraints;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_types::Size;
-use flui_types::geometry::px;
 
 /// A trivial tree authored entirely off `flui::prelude::*` — the same import
 /// shape `src/lib.rs`'s crate-level doc-test demonstrates.

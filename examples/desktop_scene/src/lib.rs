@@ -24,11 +24,7 @@
 
 use flui_hot_reload::scene_plugin;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_types::{
-    geometry::{Rect, px},
-    painting::Paint,
-    styling::Color,
-};
+use flui_types::{geometry::Rect, painting::Paint, styling::Color};
 
 fn my_scene(width: f64, height: f64) -> Scene {
     let mut canvas_layer = CanvasLayer::new();

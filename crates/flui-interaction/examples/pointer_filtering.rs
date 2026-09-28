@@ -12,7 +12,7 @@
 use std::time::{Duration, Instant};
 
 use flui_interaction::processing::{ImpulseVelocityTracker, OneEuroFilter2D, VelocityTracker};
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 
 fn main() {
     println!("FLUI pointer filtering example\n");
@@ -29,7 +29,7 @@ fn main() {
     let mut t = t0;
     for i in 0..24 {
         let jitter = if i % 2 == 0 { 1.0 } else { -1.0 };
-        let raw = Offset::new((100.0 + jitter), 50.0);
+        let raw = Offset::new(100.0 + jitter, 50.0);
         let smoothed = filter.filter(t, raw);
         if i % 8 == 7 {
             println!("     raw x={:7.2}  filtered x={:7.2}", raw.dx, smoothed.dx);

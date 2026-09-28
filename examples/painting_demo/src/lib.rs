@@ -272,7 +272,7 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
 // Helper functions
 // ============================================================
 
-use flui_types::geometry::{Offset, Pixels, Point, RRect, Rect, px};
+use flui_types::geometry::{Offset, Point, RRect, Rect};
 use flui_types::painting::{Paint, Shader, path::Path};
 use flui_types::styling::Color;
 
@@ -328,7 +328,7 @@ fn draw_rounded_rects(painter: &mut flui_engine::WgpuPainter, y: f64) {
     let label_paint = Paint::fill(Color::WHITE);
     for (i, (radius, color)) in radii.iter().zip(colors.iter()).enumerate() {
         let x = 30.0 + i as f64 * 280.0;
-        let rrect = RRect::from_rect_circular(rect(x, y, 250.0, 80.0), (*radius));
+        let rrect = RRect::from_rect_circular(rect(x, y, 250.0, 80.0), *radius);
         painter.draw_rrect(rrect, &Paint::fill(*color));
         painter.draw_text(
             &format!("r={radius}"),
@@ -499,8 +499,8 @@ fn draw_arcs(painter: &mut flui_engine::WgpuPainter, y: f64) {
         let r = rect(x - 50.0, y, 100.0, 100.0);
         painter.draw_arc(
             r,
-            ((*start) as f32),
-            ((*sweep) as f32),
+            (*start) as f32,
+            (*sweep) as f32,
             true,
             &Paint::fill(*color),
         );
@@ -513,8 +513,8 @@ fn draw_arcs(painter: &mut flui_engine::WgpuPainter, y: f64) {
         let r = rect(x - 30.0, y + 10.0, 60.0, 60.0);
         painter.draw_arc(
             r,
-            ((*start) as f32),
-            ((*sweep) as f32),
+            (*start) as f32,
+            (*sweep) as f32,
             false,
             &Paint::stroke(*color, 3.0),
         );
@@ -644,7 +644,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f64) {
     for (i, color) in rot_colors.iter().enumerate() {
         painter.save();
         painter.translate(ofs(center_x, center_y));
-        painter.rotate(((i as f64 * std::f64::consts::PI / 6.0) as f32));
+        painter.rotate((i as f64 * std::f64::consts::PI / 6.0) as f32);
         painter.draw_rect(rect(-50.0, -15.0, 100.0, 30.0), &Paint::fill(*color));
         painter.restore();
     }
@@ -655,7 +655,7 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f64) {
     painter.translate(ofs(500.0, y + 70.0));
     for (i, s) in [0.5_f64, 0.75, 1.0, 1.25].iter().enumerate() {
         painter.save();
-        painter.scale(((*s) as f32), ((*s) as f32));
+        painter.scale((*s) as f32, (*s) as f32);
         let alpha = 100 + i as u8 * 40;
         painter.draw_rect(
             rect(-30.0, -20.0, 60.0, 40.0),
@@ -686,13 +686,13 @@ fn draw_transforms(painter: &mut flui_engine::WgpuPainter, y: f64) {
         &Paint::stroke(Color::GRAY, 1.0),
     );
     painter.save();
-    painter.rotate(((std::f64::consts::FRAC_PI_4) as f32));
+    painter.rotate((std::f64::consts::FRAC_PI_4) as f32);
     painter.draw_rect(
         rect(-35.0, -35.0, 70.0, 70.0),
         &Paint::fill(Color::rgba(150, 100, 255, 180)),
     );
     painter.save();
-    painter.rotate(((std::f64::consts::FRAC_PI_4) as f32));
+    painter.rotate((std::f64::consts::FRAC_PI_4) as f32);
     painter.draw_rect(
         rect(-20.0, -20.0, 40.0, 40.0),
         &Paint::fill(Color::rgba(255, 100, 150, 180)),

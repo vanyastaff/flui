@@ -27,7 +27,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use flui_interaction::processing::{
     ImpulseVelocityTracker, IosFlingVelocityTracker, OneEuroFilter2D, VelocityTracker,
 };
-use flui_types::geometry::{Offset, Pixels};
+use flui_types::geometry::Offset;
 use flui_types::gestures::PointerDeviceKind;
 
 /// Build a deterministic linear swipe: `samples` positions equally spaced
@@ -187,7 +187,7 @@ fn bench_one_euro_step(c: &mut Criterion) {
         b.iter(|| {
             i = i.wrapping_add(1);
             let t = start + Duration::from_millis(8) * i;
-            let p = Offset::new((i as f64 * 0.5), 50.0);
+            let p = Offset::new(i as f64 * 0.5, 50.0);
             black_box(filter.filter(black_box(t), black_box(p)))
         });
     });

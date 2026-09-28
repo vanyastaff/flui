@@ -567,7 +567,6 @@ mod stamp_tests {
     use flui_objects::RenderSizedBox;
     use flui_rendering::parent_data::{SliverMultiBoxAdaptorParentData, SliverSlot};
     use flui_rendering::pipeline::PipelineOwner;
-    use flui_types::geometry::px;
 
     use super::stamp_sliver_slot;
 

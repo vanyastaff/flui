@@ -1200,7 +1200,6 @@ mod tests {
     #[test]
     fn clip_rect_enclosing_survives_the_bounds_a_degenerate_path_produces() {
         let surface = (64, 64);
-        let _px = flui_types::geometry::px;
 
         for (name, rect) in [
             ("empty path", Rect::ZERO),

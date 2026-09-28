@@ -1085,7 +1085,7 @@ fn dispatched_input_is_attributed_end_to_end_in_the_exported_frame_record() {
     use std::time::Duration;
 
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
@@ -1151,7 +1151,7 @@ fn two_dispatched_inputs_before_one_produce_both_attributed_older_larger() {
     use std::time::Duration;
 
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
@@ -1392,14 +1392,14 @@ fn more_than_max_coalesced_inputs_before_one_produce_keeps_the_newest_arrivals()
     use std::time::Duration;
 
     use flui_interaction::events::{PointerType, make_move_event};
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
 
     let dispatched = flui_scheduler::MAX_COALESCED_INPUT_EPOCHS + 4;
     for i in 0..dispatched {
-        let position = Offset::new((i as f64), (i as f64));
+        let position = Offset::new(i as f64, i as f64);
         let event = make_move_event(position, PointerType::Mouse);
         realm.enter(|realm| {
             realm.handle_input_addressed(primary_id, PlatformInput::Pointer(event));
@@ -1444,7 +1444,7 @@ fn more_than_max_coalesced_inputs_before_one_produce_keeps_the_newest_arrivals()
 #[test]
 fn submit_latency_includes_time_spent_inside_render_scene_not_just_before_it() {
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
@@ -1496,7 +1496,7 @@ fn submit_latency_includes_time_spent_inside_render_scene_not_just_before_it() {
 #[test]
 fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
@@ -1577,7 +1577,7 @@ fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame
 #[test]
 fn device_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
@@ -1654,7 +1654,7 @@ fn device_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame(
 #[test]
 fn surface_validation_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
@@ -1911,7 +1911,7 @@ fn a_mid_frame_submit_failure_retry_repaints_the_actual_producer_not_the_primary
 #[test]
 fn drag_drop_input_is_not_stamped_since_it_is_dropped_not_routed() {
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_types::geometry::Offset;
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();

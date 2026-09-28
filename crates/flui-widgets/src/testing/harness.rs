@@ -30,7 +30,7 @@ use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
 use flui_types::Alignment;
 use flui_types::Offset;
-use flui_types::geometry::{Bounds, Pixels, px};
+use flui_types::geometry::Bounds;
 use flui_view::{ElementNode, RootRenderView, View};
 
 use super::{POINTER_SAMPLE_INTERVAL, PointerContacts};

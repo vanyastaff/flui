@@ -42,7 +42,6 @@
 //! - **`PopupMenuDivider`** — a distinct oracle type, out of this scope.
 
 use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::styling::{BorderRadius, BoxDecoration, Color};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{Center, Container, SizedBox};

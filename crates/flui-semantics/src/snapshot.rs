@@ -449,7 +449,7 @@ mod tests {
     use std::sync::Arc;
 
     use flui_foundation::RenderId;
-    use flui_types::{Matrix4, Rect, geometry::px};
+    use flui_types::{Matrix4, Rect};
 
     use super::*;
     use crate::{

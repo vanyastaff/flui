@@ -161,9 +161,8 @@ use std::sync::Arc;
 
 use flui_sdk::foundation::ElementId;
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::styling::Color;
-use flui_sdk::types::{EdgeInsets, Offset, Pixels, Size};
+use flui_sdk::types::{EdgeInsets, Offset, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::{
@@ -1069,7 +1068,7 @@ mod tests {
         // fab_y = 800 - 56 - 50 = 694.
         assert_eq!(
             ctx.positions[SLOT_FLOATING_ACTION_BUTTON],
-            Offset::new((400.0 - 16.0 - 56.0), 694.0),
+            Offset::new(400.0 - 16.0 - 56.0, 694.0),
             "a nonzero min_view_padding_bottom (e.g. the 34px home-indicator area) with no \
              keyboard must lift the FAB safe_margin above the flat kFloatingActionButtonMargin, \
              not park it at content_bottom - fab_height - 16",

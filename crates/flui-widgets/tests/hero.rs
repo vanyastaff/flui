@@ -10,7 +10,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_foundation::ValueKey;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_types::Size;
-use flui_types::geometry::px;
 use flui_view::ViewExt;
 use flui_view::prelude::*;
 use parking_lot::Mutex;

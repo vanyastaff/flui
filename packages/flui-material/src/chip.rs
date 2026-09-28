@@ -181,11 +181,10 @@ use std::sync::Arc;
 
 use flui_sdk::painting::Canvas;
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::painting::{Paint, Path};
 use flui_sdk::types::styling::{BorderSide, BorderStyle};
 use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Color, EdgeInsets, Pixels, Point, Size};
+use flui_sdk::types::{Color, EdgeInsets, Point, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::icon::IconData;
 use flui_sdk::widgets::{
@@ -985,7 +984,7 @@ impl CustomPainter for ChipBorderPainter {
             return;
         }
         let outer = self.shape.to_rrect(size);
-        let inner = outer.inflate((-self.side.width));
+        let inner = outer.inflate(-self.side.width);
         canvas.draw_drrect(outer, inner, &Paint::fill(self.side.color));
     }
 
@@ -1038,7 +1037,7 @@ impl CustomPainter for ChipCheckmarkPainter {
         // struct's own doc comment.
         let check_size = cell * 0.75;
         let origin_offset = cell * 0.125;
-        let point = |dx: f64, dy: f64| Point::new((origin_offset + dx), (origin_offset + dy));
+        let point = |dx: f64, dy: f64| Point::new(origin_offset + dx, origin_offset + dy);
         let mut path = Path::new();
         path.move_to(point(check_size * 0.15, check_size * 0.45));
         path.line_to(point(check_size * 0.4, check_size * 0.7));
@@ -1409,7 +1408,7 @@ mod tests {
         let rrect = chip_default_shape().to_rrect(size);
         assert_eq!(
             rrect.top_left,
-            flui_sdk::types::geometry::Radius::circular((CORNER_RADIUS))
+            flui_sdk::types::geometry::Radius::circular(CORNER_RADIUS)
         );
     }
 

@@ -20,7 +20,6 @@
 //! tighter by design (no fill or outline to visually separate from
 //! surrounding content).
 
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::{Color, EdgeInsets, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};

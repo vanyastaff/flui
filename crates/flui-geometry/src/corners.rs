@@ -360,7 +360,7 @@ mod tests {
     fn radius_constructors() {
         assert_eq!(Radius::circular(3.0), Radius::new(3.0, 3.0));
         assert_eq!(Radius::elliptical(3.0, 5.0), Radius { x: 3.0, y: 5.0 });
-        assert_eq!(Radius::<crate::Pixels>::zero(), Radius::ZERO);
+        assert_eq!(Radius::<f64>::zero(), Radius::ZERO);
         assert!(Radius::ZERO.is_zero());
         assert!(!Radius::new(0.0, 1.0).is_zero());
         assert!(!Radius::new(1.0, 0.0).is_zero());

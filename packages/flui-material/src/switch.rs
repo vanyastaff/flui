@@ -91,10 +91,9 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::Listenable;
 use flui_sdk::painting::Canvas;
-use flui_sdk::types::geometry::px;
 use flui_sdk::types::painting::Paint;
 use flui_sdk::types::styling::Color;
-use flui_sdk::types::{Pixels, Point, RRect, Rect, Size};
+use flui_sdk::types::{Point, RRect, Rect, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
@@ -495,15 +494,15 @@ impl CustomPainter for SwitchPainter {
         let track_rect = Rect::from_ltrb(
             track_origin_x,
             track_origin_y,
-            (track_origin_x + SWITCH_TRACK_WIDTH),
-            (track_origin_y + SWITCH_TRACK_HEIGHT),
+            track_origin_x + SWITCH_TRACK_WIDTH,
+            track_origin_y + SWITCH_TRACK_HEIGHT,
         );
-        let track_rrect = RRect::from_rect_circular(track_rect, (SWITCH_TRACK_HEIGHT / 2.0));
+        let track_rrect = RRect::from_rect_circular(track_rect, SWITCH_TRACK_HEIGHT / 2.0);
 
         canvas.draw_rrect(track_rrect, &Paint::fill(self.track_color));
 
         if TRACK_OUTLINE_WIDTH > 0.0 {
-            let inner_rrect = track_rrect.inflate((-TRACK_OUTLINE_WIDTH));
+            let inner_rrect = track_rrect.inflate(-TRACK_OUTLINE_WIDTH);
             canvas.draw_drrect(
                 track_rrect,
                 inner_rrect,

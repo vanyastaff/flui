@@ -2,7 +2,7 @@
 //!
 //! Wraps winit's MonitorHandle to implement PlatformDisplay.
 
-use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
+use flui_types::geometry::{Bounds, Point, Size};
 use winit::monitor::MonitorHandle;
 
 use crate::traits::{DisplayId, PlatformDisplay};
@@ -45,14 +45,12 @@ impl PlatformDisplay for WinitDisplay {
     }
 
     fn bounds(&self) -> Bounds<i32> {
-        use flui_types::geometry::device_px;
-
         let position = self.monitor.position();
         let size = self.monitor.size();
 
         Bounds::new(
             Point::new(position.x, position.y),
-            Size::new((size.width as i32), (size.height as i32)),
+            Size::new(size.width as i32, size.height as i32),
         )
     }
 

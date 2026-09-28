@@ -34,7 +34,6 @@
 use std::sync::{Arc, Mutex};
 
 use crate::common::{lay_out, loose};
-use flui_geometry::px;
 use flui_types::{Size, platform::Brightness};
 use flui_view::prelude::*;
 use flui_widgets::{MediaQuery, MediaQueryData, SizedBox};

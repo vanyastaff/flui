@@ -71,7 +71,7 @@ fn test_headless_window_creation_under_1ms() {
     // Verify headless window creation has minimal overhead
 
     use flui_platform::{WindowOptions, headless_platform};
-    use flui_types::geometry::{Size, px};
+    use flui_types::geometry::Size;
 
     let platform = headless_platform();
 

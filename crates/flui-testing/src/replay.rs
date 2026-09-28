@@ -50,7 +50,7 @@ use flui_interaction::events::{
     make_up_event_for_id,
 };
 use flui_interaction::{HitTestResult, PointerEvent, PointerId};
-use flui_types::geometry::{Offset, Pixels, px};
+use flui_types::geometry::Offset;
 
 use crate::HeadlessBinding;
 
@@ -402,7 +402,7 @@ impl PointerScript {
         let first = PointerId::PRIMARY;
         let second = secondary_pointer();
         let pair = |distance: f64| {
-            let half = (distance / 2.0);
+            let half = distance / 2.0;
             (
                 Offset::new(center.dx - half, center.dy),
                 Offset::new(center.dx + half, center.dy),

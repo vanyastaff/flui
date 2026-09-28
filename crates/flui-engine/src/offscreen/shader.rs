@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn test_shader_type_from_shader() {
-        use flui_types::geometry::{Offset, px};
+        use flui_types::geometry::Offset;
 
         let solid = Shader::solid(Color::WHITE);
         assert_eq!(ShaderType::from_shader(&solid), ShaderType::SolidMask);

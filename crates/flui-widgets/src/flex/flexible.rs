@@ -162,7 +162,6 @@ impl_parent_data_view!(Expanded);
 #[cfg(test)]
 mod tests {
     use flui_foundation::RenderId;
-    use flui_types::geometry::px;
 
     use super::*;
     use crate::SizedBox;

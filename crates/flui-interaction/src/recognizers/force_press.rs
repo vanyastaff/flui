@@ -845,7 +845,7 @@ mod tests {
         );
 
         // Drift far past the touch slop, then return to the exact origin.
-        let far = Offset::new((100.0 + 200.0), 100.0);
+        let far = Offset::new(100.0 + 200.0, 100.0);
         recognizer.handle_move(far, 0.1, PointerType::Touch);
         recognizer.handle_move(origin, 0.1, PointerType::Touch);
 
@@ -906,7 +906,7 @@ mod tests {
             recognizer.add_pointer(pointer, origin, origin);
             recognizer.handle_down(origin, 0.5);
 
-            let drifted = Offset::new((100.0 + drift), 100.0);
+            let drifted = Offset::new(100.0 + drift, 100.0);
             recognizer.handle_move(drifted, 0.6, kind);
 
             (*ended.lock(), *updates.lock())

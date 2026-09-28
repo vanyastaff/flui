@@ -10,7 +10,6 @@ use flui_foundation::{ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_types::geometry::px;
 
 use super::{ReconcileOutcome, ReconcileSource, SparseChildren, build_item_or_error};
 use crate::view::{RenderView, View};

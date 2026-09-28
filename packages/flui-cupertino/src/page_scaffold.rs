@@ -55,7 +55,7 @@
 //!   `TextScaler`/no-scaling variant to apply yet — `text_scale_factor`
 //!   passes through unchanged.
 
-use flui_sdk::types::geometry::{EdgeInsets, px};
+use flui_sdk::types::geometry::EdgeInsets;
 use flui_sdk::types::styling::BoxDecoration;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;

@@ -1289,7 +1289,7 @@ mod gpu_tests {
     use std::sync::Arc;
 
     use flui_painting::{BlendMode, Paint};
-    use flui_types::{Color, geometry::Pixels};
+    use flui_types::Color;
 
     use crate::{painter::WgpuPainter, render_target::RenderTarget};
 
