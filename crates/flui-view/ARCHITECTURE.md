@@ -345,7 +345,9 @@ The updater is `FnMut`, although the graph calls it exactly once. Keeping the
   closure owned outside the caught invocation lets the graph retain its opaque
   capture bundle when the updater panics; consuming an `FnOnce` would instead run
   capture destructors during the updater's unwind, where a second panic aborts the
-  process before the graph can finalize the loan or invalidate readers. This is an
+  process before the graph can finalize the loan or invalidate readers. The same
+  ownership boundary covers pre-invocation preparation: a panicking refusal
+  telemetry subscriber retains the still-uninvoked updater. This is an
   exceptional-path leak: aggregate closure drop glue cannot be decomposed or made
   safe by an outer `catch_unwind`; successful callbacks still destroy captures,
   but only after loan restoration and reader invalidation are durable.

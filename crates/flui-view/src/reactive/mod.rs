@@ -624,8 +624,21 @@ impl Reactive {
         slot: SignalSlot,
         mut f: impl FnMut(&mut T) -> R,
     ) -> Result<R, SignalError> {
-        self.refuse_if_building(slot)?;
-        let mut loan = self.loan(slot)?;
+        // Preparation can execute tracing subscribers while refusing a build
+        // write. Keep the opaque updater outside that unwind too: destroying
+        // its captures during a telemetry panic could otherwise abort before
+        // the caller regains control.
+        let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.refuse_if_building(slot)?;
+            self.loan(slot)
+        }));
+        let mut loan = match prepared {
+            Ok(result) => result?,
+            Err(payload) => {
+                std::mem::forget(f);
+                std::panic::resume_unwind(payload)
+            }
+        };
         let typed = loan
             .value
             .as_deref_mut()
@@ -1639,6 +1652,43 @@ mod tests {
             .set(&r, 2)
             .expect("the signal remains usable after both contained panics");
         assert_eq!(signal.peek(&r, |value| *value), Ok(2));
+    }
+
+    #[test]
+    fn refusal_telemetry_panic_retains_the_uninvoked_updaters_capture_bundle() {
+        let r = Reactive::new();
+        let signal = r.signal(0u8);
+        let building = ElementId::new(1);
+        r.begin_element_build(building);
+        let capture_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let capture = ArmedValue {
+            name: "uninvoked updater capture destructor probe",
+            drop_armed: Arc::clone(&capture_armed),
+            equality_panics: false,
+        };
+
+        let outcome = tracing::subscriber::with_default(PanickingSubscriber, || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                signal.update(&r, move |value| {
+                    let _capture_stays_owned_by_the_updater = &capture;
+                    *value = 1;
+                })
+            }))
+        });
+
+        let payload = outcome.expect_err("the refusal telemetry panic must resume");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"signal telemetry probe")
+        );
+        assert!(
+            capture_armed.load(std::sync::atomic::Ordering::Relaxed),
+            "the uninvoked updater must be retained after preparation fails"
+        );
+        assert_eq!(signal.peek(&r, |value| *value), Ok(0));
+
+        r.end_element_build(building, false);
+        capture_armed.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[test]
