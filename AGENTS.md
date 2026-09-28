@@ -222,6 +222,16 @@ script gates already run in CI, so style and anything they catch is not worth a 
   the PR must say what changed and why. A test that mutates genuinely process-global state
   (`Registry::global`, `FONT_SYSTEM`) needs a module-scoped lock, because nextest runs one
   process per test in parallel.
+- **Failure paths and recovery:** do not stop at the first reported error or panic. Inventory
+  every owned value, guard, callback and deferred obligation still live at each failure boundary,
+  including user-defined generic values whose `Drop` can panic. Exercise each failure point
+  alone, two failures in chronological competition, and the next operation after containment;
+  the first failure must remain authoritative and the subsystem must still make progress. For
+  queued or coalesced work, test durability and liveness separately: fail delivery, restore the
+  hook, repeat the same id, cross independent handles sharing the state, and prove that a handle
+  without a delivery hook cannot erase pending wake debt. See
+  [`docs/research/signal-unwind-contract.ru.md`](docs/research/signal-unwind-contract.ru.md) for a
+  concrete postmortem and regression matrix.
 - **Unwired surface:** a new `pub` item that no production path reaches (test, example and
   bench callers don't count) is this repository's most common defect. Flag it unless the PR
   names the follow-up that wires it.
