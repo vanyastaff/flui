@@ -80,10 +80,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_animation::{Animatable, Animation, ArcCurve, Curve, Curves};
 use flui_foundation::geometry::Rect;
+use flui_foundation::geometry::Size;
 use flui_foundation::{RenderId, ViewKey};
 use flui_objects::SubtreeAnchor;
 use flui_rendering::pipeline::PipelineCell;
-use flui_types::Size;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};

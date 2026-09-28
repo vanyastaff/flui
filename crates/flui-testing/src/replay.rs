@@ -45,12 +45,12 @@
 
 use std::time::Duration;
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
     PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
 use flui_interaction::{HitTestResult, PointerEvent, PointerId};
-use flui_types::geometry::Offset;
 
 use crate::HeadlessBinding;
 

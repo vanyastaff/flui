@@ -62,10 +62,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationStatus, Vsync, VsyncRegistration};
+use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
-use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BoxedView, BuildContext, BuildContextExt, Child, IntoView, LifecycleContext, ViewExt, ViewState,

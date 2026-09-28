@@ -893,7 +893,7 @@ impl GpuReplay {
 
     /// Flush all external-texture draws recorded in the segment.
     ///
-    /// Each entry carries a `flui_types::painting::TextureId` stored at
+    /// Each entry carries a `flui_painting::paint::TextureId` stored at
     /// record time.  Here, at replay time, each ID is resolved to a
     /// `wgpu::TextureView` via the external texture registry.  If an ID is not
     /// found (texture was unregistered between record and flush), a warning is
@@ -923,7 +923,7 @@ impl GpuReplay {
         // (`flush_texture_batch`) while iterating without holding a borrow on
         // `segment.external_images`.
         let pending: Vec<(
-            flui_types::painting::TextureId,
+            flui_painting::paint::TextureId,
             crate::instancing::TextureInstance,
             ScissorRect,
         )> = std::mem::take(&mut segment.external_images);
@@ -1144,7 +1144,7 @@ impl GpuReplay {
     /// be needed on the first call for a given mode.
     pub(crate) fn flush_texture_batch_premultiplied_with_mode(
         &mut self,
-        mode: flui_types::painting::BlendMode,
+        mode: flui_painting::paint::BlendMode,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
         pipelines: &mut PipelineSet,

@@ -6,7 +6,7 @@
 
 use std::{any::Any, fmt::Debug};
 
-use flui_types::{Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use crate::constraints::BoxConstraints;
 
@@ -27,7 +27,7 @@ use crate::constraints::BoxConstraints;
 /// ```ignore
 /// use flui_rendering::constraints::BoxConstraints;
 /// use flui_rendering::delegates::{MultiChildLayoutContext, MultiChildLayoutDelegate};
-/// use flui_types::{Offset, Size};
+/// use flui_foundation::geometry::{Offset, Size};
 ///
 /// #[derive(Debug)]
 /// struct DialogLayoutDelegate {

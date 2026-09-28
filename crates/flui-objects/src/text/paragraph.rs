@@ -14,11 +14,9 @@
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Size};
+use flui_painting::typography::{InlineSpan, TextAlign, TextDirection};
 use flui_painting::{Invalidation, TextBaseline as PainterBaseline, TextPainter};
-use flui_types::{
-    Offset, Size,
-    typography::{InlineSpan, TextAlign, TextDirection},
-};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -327,7 +325,7 @@ fn semantics_text_direction(direction: TextDirection) -> flui_rendering::semanti
 
 #[cfg(test)]
 mod tests {
-    use flui_types::typography::TextSpan;
+    use flui_painting::typography::TextSpan;
 
     use super::*;
     use flui_rendering::context::intrinsics_test_support::{

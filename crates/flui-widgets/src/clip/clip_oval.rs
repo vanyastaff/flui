@@ -1,8 +1,8 @@
 //! [`ClipOval`] — clips its child to the oval inscribed in its bounds.
 
 use flui_objects::{Oval, RenderClipOval};
+use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::painting::Clip;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Clips its child to the axis-aligned oval inscribed in this widget's bounds

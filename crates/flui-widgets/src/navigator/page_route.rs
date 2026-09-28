@@ -51,7 +51,7 @@ use std::fmt;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_view::{BoxedView, BuildContext};
 
 use super::binding::{RouteBindingSlot, TransitionGroup};
@@ -360,7 +360,7 @@ delegate_modal_route!(PageRoute);
 /// # Example
 ///
 /// ```
-/// use flui_types::Color;
+/// use flui_painting::styling::Color;
 /// use flui_widgets::prelude::*;
 /// use flui_widgets::{PopupRoute, Text};
 ///

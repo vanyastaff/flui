@@ -31,7 +31,7 @@
 //! `RenderResult` alongside other render errors).
 
 use crate::constraints::{BoxConstraints, SliverConstraints, SliverGeometry};
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 // ============================================================================
 // ErasedConstraints

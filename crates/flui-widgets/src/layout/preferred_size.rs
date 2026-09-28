@@ -4,7 +4,7 @@
 //! Flutter parity: `widgets/preferred_size.dart` `PreferredSizeWidget` /
 //! `PreferredSize` (oracle tag `3.44.0`).
 
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 use flui_view::prelude::*;
 
 /// A view that can report the size it would prefer if it were otherwise
@@ -46,7 +46,7 @@ pub trait PreferredSizeView: View {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::Size;
+/// use flui_foundation::geometry::Size;
 /// use flui_widgets::layout::PreferredSize;
 /// use flui_widgets::SizedBox;
 ///

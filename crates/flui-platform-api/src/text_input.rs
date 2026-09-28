@@ -15,7 +15,7 @@
 //! template (`PlatformWindow::haptics`, ADR-0031); `PlatformSystemChrome`
 //! is deferred (ADR-0031) with no target date.
 
-use flui_types::geometry::Bounds;
+use flui_foundation::geometry::Bounds;
 
 /// Platform capability for IME-driven text input on one window.
 ///

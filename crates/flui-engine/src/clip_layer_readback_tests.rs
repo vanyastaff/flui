@@ -32,9 +32,10 @@
 //!   `a_path_clip_installs_its_box_and_the_save_layer_mode_isolates` is where
 //!   that pair is pinned.
 
+use flui_foundation::geometry::Rect;
 use flui_layer::{LayerTree, SceneBuilder};
 use flui_painting::{Canvas, Paint};
-use flui_types::{Color, Rect, painting::Clip};
+use flui_painting::{paint::Clip, styling::Color};
 
 use crate::headless::HeadlessRenderer;
 
@@ -224,13 +225,16 @@ fn rotated_clip_scene(behavior: Clip) -> LayerTree {
     // Rotate about the surface centre so the clip's edges cross pixel
     // centres at an angle — the only geometry where the two modes must
     // visibly disagree.
-    let centre = flui_types::Matrix4::translation(
+    let centre = flui_foundation::geometry::Matrix4::translation(
         f64::from(SIDE as f32 / 2.0),
         f64::from(SIDE as f32 / 2.0),
         0.0,
     );
     builder.push_transform(
-        centre * flui_types::Matrix4::rotation_z(f64::from(std::f32::consts::FRAC_PI_6)),
+        centre
+            * flui_foundation::geometry::Matrix4::rotation_z(f64::from(
+                std::f32::consts::FRAC_PI_6,
+            )),
     );
     builder.push_clip_rect(Rect::from_xywh(-18.0, -18.0, 36.0, 36.0), behavior);
     let mut canvas = Canvas::new();
@@ -285,8 +289,11 @@ fn a_rect_clip_renders_the_same_under_both_modes_for_now() {
 /// Axis-aligned and on integer bounds so the straight edges land on pixel
 /// boundaries and only the four corners carry fractional coverage — the only
 /// place the two modes can differ at all.
-fn corner_clip() -> flui_types::geometry::RRect {
-    flui_types::geometry::RRect::from_rect_circular(Rect::from_xywh(8.0, 8.0, 48.0, 48.0), 16.0)
+fn corner_clip() -> flui_foundation::geometry::RRect {
+    flui_foundation::geometry::RRect::from_rect_circular(
+        Rect::from_xywh(8.0, 8.0, 48.0, 48.0),
+        16.0,
+    )
 }
 
 /// One picture inside [`corner_clip`] under `behavior`.
@@ -553,7 +560,7 @@ fn inside_a_clip(
     paint_inside: impl FnOnce(&mut Canvas),
 ) -> LayerTree {
     let mut builder = SceneBuilder::new();
-    builder.push_offset(flui_types::Offset::ZERO);
+    builder.push_offset(flui_foundation::geometry::Offset::ZERO);
 
     let mut canvas = Canvas::new();
     full_surface(&mut canvas, Color::rgb(255, 0, 0));
@@ -586,8 +593,8 @@ fn inside_a_clip(
 ///
 /// Every margin clears the roughly one-pixel anti-aliasing band, so no
 /// assertion below depends on a coverage threshold.
-fn icon_squircle() -> flui_types::geometry::RSuperellipse {
-    flui_types::geometry::RSuperellipse::from_rect_circular(
+fn icon_squircle() -> flui_foundation::geometry::RSuperellipse {
+    flui_foundation::geometry::RSuperellipse::from_rect_circular(
         Rect::from_xywh(0.0, 0.0, f64::from(SIDE as f32), f64::from(SIDE as f32)),
         f64::from(SIDE as f32 / 2.0),
     )
@@ -637,7 +644,7 @@ fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
 
     let path = crate::superellipse::generate_superellipse_path(&squircle);
     let inside_cpu = |x: u32, y: u32| {
-        path.contains(flui_types::Point::new(
+        path.contains(flui_foundation::geometry::Point::new(
             f64::from(x as f32 + 0.5),
             f64::from(y as f32 + 0.5),
         ))
@@ -752,9 +759,9 @@ fn a_clip_superellipse_layer_clips_to_the_squircle_not_its_bounding_rrect() {
     // bounding rrect would satisfy every assertion above.
     let rrect = render(&|builder, behavior| {
         builder.push_clip_rrect(
-            flui_types::geometry::RRect::from_rect_and_radius(
+            flui_foundation::geometry::RRect::from_rect_and_radius(
                 Rect::from_xywh(0.0, 0.0, f64::from(SIDE as f32), f64::from(SIDE as f32)),
-                flui_types::geometry::Radius::circular(f64::from(SIDE as f32 / 2.0)),
+                flui_foundation::geometry::Radius::circular(f64::from(SIDE as f32 / 2.0)),
             ),
             behavior,
         );
@@ -854,7 +861,7 @@ fn erase_everything(canvas: &mut Canvas) {
         Rect::from_xywh(0.0, 0.0, f64::from(SIDE as f32), f64::from(SIDE as f32)),
         &Paint::fill(Color::rgb(0, 0, 0))
             .with_anti_alias(false)
-            .with_blend_mode(flui_types::painting::BlendMode::Clear),
+            .with_blend_mode(flui_painting::paint::BlendMode::Clear),
     );
 }
 
@@ -970,7 +977,7 @@ fn a_path_clip_installs_its_box_and_the_save_layer_mode_isolates() {
         let tree = inside_a_clip(
             behavior,
             |builder, behavior| {
-                let mut path = flui_types::painting::Path::new();
+                let mut path = flui_painting::paint::Path::new();
                 path.add_rect(Rect::from_xywh(16.0, 16.0, 32.0, 32.0));
                 builder.push_clip_path(path, behavior);
             },
@@ -1049,7 +1056,7 @@ fn an_unbounded_fill_inside_a_path_clip_stays_inside_the_paths_box() {
         let tree = inside_a_clip(
             behavior,
             |builder, behavior| {
-                let mut path = flui_types::painting::Path::new();
+                let mut path = flui_painting::paint::Path::new();
                 path.add_rect(Rect::from_xywh(16.0, 16.0, 32.0, 32.0));
                 builder.push_clip_path(path, behavior);
             },
@@ -1097,10 +1104,10 @@ fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
             // A right triangle filling (8,8)-(48,48): the diagonal runs from
             // the bottom-left corner to the top-right, so the region above it
             // — where (40, 20) sits — is box-but-not-shape.
-            let mut path = flui_types::painting::Path::new();
-            path.move_to(flui_types::Point::new(8.0, 48.0));
-            path.line_to(flui_types::Point::new(48.0, 48.0));
-            path.line_to(flui_types::Point::new(8.0, 8.0));
+            let mut path = flui_painting::paint::Path::new();
+            path.move_to(flui_foundation::geometry::Point::new(8.0, 48.0));
+            path.line_to(flui_foundation::geometry::Point::new(48.0, 48.0));
+            path.line_to(flui_foundation::geometry::Point::new(8.0, 8.0));
             path.close();
             builder.push_clip_path(path, behavior);
         },
@@ -1148,7 +1155,7 @@ fn a_path_clip_keeps_the_pixel_its_fractional_edge_partly_covers() {
     let tree = inside_a_clip(
         Clip::AntiAlias,
         |builder, behavior| {
-            let mut path = flui_types::painting::Path::new();
+            let mut path = flui_painting::paint::Path::new();
             path.add_rect(Rect::from_ltrb(8.0, 8.0, 32.6, 40.0));
             builder.push_clip_path(path, behavior);
         },
@@ -1200,13 +1207,13 @@ fn a_path_clip_keeps_its_fractional_edge_under_a_fractional_offset() {
         // The half pixel is the whole point: it makes the CTM fractional, so
         // the scissor comes from the transformed-corner branch. It wraps the
         // backdrop too, exactly as a real ancestor offset would.
-        builder.push_offset(flui_types::Offset::new(0.5, 0.5));
+        builder.push_offset(flui_foundation::geometry::Offset::new(0.5, 0.5));
 
         let mut canvas = Canvas::new();
         full_surface(&mut canvas, Color::rgb(255, 0, 0));
         builder.add_picture(canvas.finish());
 
-        let mut path = flui_types::painting::Path::new();
+        let mut path = flui_painting::paint::Path::new();
         path.add_rect(Rect::from_ltrb(8.0, 8.0, 32.6, 40.0));
         builder.push_clip_path(path, Clip::AntiAlias);
         let mut canvas = Canvas::new();
@@ -1259,7 +1266,7 @@ fn an_empty_clip_path_clips_everything() {
         let tree = inside_a_clip(
             behavior,
             |builder, behavior| {
-                builder.push_clip_path(flui_types::painting::Path::new(), behavior);
+                builder.push_clip_path(flui_painting::paint::Path::new(), behavior);
             },
             fill_everything,
         );
@@ -1285,9 +1292,9 @@ fn an_empty_clip_path_clips_everything() {
 /// layer.
 fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
     let mut builder = SceneBuilder::new();
-    builder.push_offset(flui_types::Offset::ZERO);
+    builder.push_offset(flui_foundation::geometry::Offset::ZERO);
     if with_filter {
-        builder.push_image_filter(flui_types::painting::ImageFilter::blur(1.0));
+        builder.push_image_filter(flui_painting::paint::ImageFilter::blur(1.0));
     }
 
     // A sibling FLUSHED BEFORE the clip. Opening an offscreen finalises the
@@ -1417,7 +1424,7 @@ fn an_ancestor_clip_still_clips_the_draws_inside_a_save_layer_offscreen() {
         // Square corners and larger than the outer clip: this one's composite
         // must not be what keeps the content off the sample point.
         builder.push_clip_rrect(
-            flui_types::geometry::RRect::from_rect_circular(
+            flui_foundation::geometry::RRect::from_rect_circular(
                 Rect::from_xywh(0.0, 0.0, f64::from(SIDE as f32), f64::from(SIDE as f32)),
                 0.0,
             ),
@@ -1457,13 +1464,16 @@ fn an_ancestor_clip_still_clips_the_draws_inside_a_save_layer_offscreen() {
 
 /// The outer clip of the nesting scene. Its rounded corner is what
 /// `NESTED_OUTSIDE_OUTER_ROUND` samples.
-fn nesting_outer_clip() -> flui_types::geometry::RRect {
-    flui_types::geometry::RRect::from_rect_circular(Rect::from_xywh(4.0, 4.0, 56.0, 56.0), 8.0)
+fn nesting_outer_clip() -> flui_foundation::geometry::RRect {
+    flui_foundation::geometry::RRect::from_rect_circular(Rect::from_xywh(4.0, 4.0, 56.0, 56.0), 8.0)
 }
 
 /// The inner clip of the nesting scene, wholly inside [`nesting_outer_clip`].
-fn nesting_inner_clip() -> flui_types::geometry::RRect {
-    flui_types::geometry::RRect::from_rect_circular(Rect::from_xywh(16.0, 16.0, 32.0, 32.0), 8.0)
+fn nesting_inner_clip() -> flui_foundation::geometry::RRect {
+    flui_foundation::geometry::RRect::from_rect_circular(
+        Rect::from_xywh(16.0, 16.0, 32.0, 32.0),
+        8.0,
+    )
 }
 
 /// Inside the INNER clip's bounding box, outside its rounded corner.
@@ -1505,7 +1515,7 @@ fn nested_mixed_clip_tree(outer: Clip, inner: Clip) -> LayerTree {
     // An inert container, so the marker below is a SIBLING of the clips and
     // not an orphan: the first layer pushed becomes the root, and a leaf
     // added on an empty stack is never attached to the tree at all.
-    builder.push_offset(flui_types::Offset::ZERO);
+    builder.push_offset(flui_foundation::geometry::Offset::ZERO);
 
     builder.push_clip_rrect(nesting_outer_clip(), outer);
     builder.push_clip_rrect(nesting_inner_clip(), inner);
@@ -1620,7 +1630,7 @@ fn nested_clips_of_mixed_modes_close_in_the_order_they_opened() {
 fn rounded_clip_scene(behavior: Clip) -> LayerTree {
     let mut builder = SceneBuilder::new();
     builder.push_clip_rrect(
-        flui_types::geometry::RRect::from_rect_circular(
+        flui_foundation::geometry::RRect::from_rect_circular(
             Rect::from_xywh(8.0, 8.0, 48.0, 48.0),
             16.0,
         ),
@@ -1699,7 +1709,7 @@ fn a_canvas_clip_with_mode_none_does_not_clip() {
             let mut canvas = Canvas::new();
             canvas.clip_rect_ext(
                 Rect::from_xywh(0.0, 0.0, f64::from(SIDE as f32), f64::from(CLIP_BOTTOM)),
-                flui_types::painting::ClipOp::Intersect,
+                flui_painting::paint::ClipOp::Intersect,
                 behavior,
             );
             canvas.draw_rect(
@@ -1740,7 +1750,7 @@ fn a_canvas_clip_with_mode_none_does_not_clip() {
 ///
 /// A function pointer rather than a closure so the four shapes can sit in one
 /// array and the loop below reads against a single geometry.
-type PushClip = fn(&mut Canvas, flui_types::painting::ClipOp, Rect<f64>);
+type PushClip = fn(&mut Canvas, flui_painting::paint::ClipOp, Rect<f64>);
 
 /// EVERY canvas clip shape refuses `ClipOp::Difference` rather than inverting.
 ///
@@ -1780,9 +1790,9 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
         }),
         ("rrect", |canvas, op, r| {
             canvas.clip_rrect_ext(
-                flui_types::geometry::RRect::from_rect_and_radius(
+                flui_foundation::geometry::RRect::from_rect_and_radius(
                     r,
-                    flui_types::geometry::Radius::circular(4.0),
+                    flui_foundation::geometry::Radius::circular(4.0),
                 ),
                 op,
                 Clip::AntiAlias,
@@ -1790,23 +1800,23 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
         }),
         ("superellipse", |canvas, op, r| {
             canvas.clip_rsuperellipse_ext(
-                flui_types::geometry::RSuperellipse::from_rect_and_radius(
+                flui_foundation::geometry::RSuperellipse::from_rect_and_radius(
                     r,
-                    flui_types::geometry::Radius::circular(4.0),
+                    flui_foundation::geometry::Radius::circular(4.0),
                 ),
                 op,
                 Clip::AntiAlias,
             );
         }),
         ("path", |canvas, op, r| {
-            let mut path = flui_types::painting::Path::new();
+            let mut path = flui_painting::paint::Path::new();
             path.add_rect(r);
             canvas.clip_path_ext(&path, op, Clip::AntiAlias);
         }),
     ];
 
     for (name, push) in shapes {
-        let scene = |op: flui_types::painting::ClipOp| {
+        let scene = |op: flui_painting::paint::ClipOp| {
             let tree = {
                 let mut builder = SceneBuilder::new();
                 let mut canvas = Canvas::new();
@@ -1823,7 +1833,7 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
                 .expect("the headless capture path must rasterize a canvas-clipped tree")
         };
 
-        let intersect = sample(&scene(flui_types::painting::ClipOp::Intersect), 2, 2);
+        let intersect = sample(&scene(flui_painting::paint::ClipOp::Intersect), 2, 2);
         assert!(
             intersect[0] > 200,
             "control for {name}: an INTERSECT clip must actually clip, so (2, 2) \
@@ -1831,7 +1841,7 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
              difference assertion below proves nothing"
         );
 
-        let difference = sample(&scene(flui_types::painting::ClipOp::Difference), 2, 2);
+        let difference = sample(&scene(flui_painting::paint::ClipOp::Difference), 2, 2);
         assert!(
             difference[0] < 64,
             "a DIFFERENCE {name} clip must install nothing, so content outside \
@@ -1867,7 +1877,7 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
 /// `SrcOver`.
 #[test]
 fn a_destructive_blend_does_not_escape_a_rounded_clip() {
-    use flui_types::painting::{BlendMode, ClipOp};
+    use flui_painting::paint::{BlendMode, ClipOp};
 
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -1886,7 +1896,7 @@ fn a_destructive_blend_does_not_escape_a_rounded_clip() {
         // Then a full-surface CLEAR through a rounded clip, same pass.
         canvas.save();
         canvas.clip_rrect_ext(
-            flui_types::geometry::RRect::from_rect_circular(
+            flui_foundation::geometry::RRect::from_rect_circular(
                 Rect::from_xywh(8.0, 8.0, 48.0, 48.0),
                 16.0,
             ),
@@ -1959,7 +1969,7 @@ fn a_destructive_blend_does_not_escape_a_rounded_clip() {
 /// destination factor absorbs partial coverage already.
 #[test]
 fn an_anti_aliased_destructive_blend_feathers_its_fringe() {
-    use flui_types::painting::{BlendMode, ClipOp};
+    use flui_painting::paint::{BlendMode, ClipOp};
 
     /// Pixels along the edge that are neither untouched ground nor fully
     /// erased. The ground is opaque red, so the RED channel discriminates:
@@ -1983,7 +1993,7 @@ fn an_anti_aliased_destructive_blend_feathers_its_fringe() {
             );
             canvas.save();
             canvas.clip_rrect_ext(
-                flui_types::geometry::RRect::from_rect_circular(
+                flui_foundation::geometry::RRect::from_rect_circular(
                     Rect::from_xywh(8.0, 8.0, 48.0, 48.0),
                     16.0,
                 ),

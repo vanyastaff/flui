@@ -38,8 +38,8 @@
 //! not a visual effect, so it still needs its own compositor layer.
 
 use flui_foundation::Single;
+use flui_foundation::geometry::Offset;
 use flui_rendering::layer::LayerLink;
-use flui_types::Offset;
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintCx},

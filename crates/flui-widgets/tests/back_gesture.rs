@@ -53,8 +53,8 @@ fn mounted_with_transition_route() -> (NavigatorHandle, Harness, RouteId, Animat
 /// runtime, which only needs to know a drag began.
 fn drag_start() -> DragStartDetails {
     DragStartDetails {
-        global_position: flui_types::geometry::Offset::ZERO,
-        local_position: flui_types::geometry::Offset::ZERO,
+        global_position: flui_foundation::geometry::Offset::ZERO,
+        local_position: flui_foundation::geometry::Offset::ZERO,
         kind: flui_interaction::events::PointerType::Touch,
         timestamp: std::time::Instant::now(),
     }

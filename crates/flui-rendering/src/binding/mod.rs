@@ -118,7 +118,7 @@ pub trait RendererBinding {
     fn hit_test_in_view(
         &self,
         result: &mut HitTestResult,
-        position: flui_types::Offset,
+        position: flui_foundation::geometry::Offset,
         view_id: u64,
     );
 
@@ -415,7 +415,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use flui_types::Size;
+    use flui_foundation::geometry::Size;
 
     use super::*;
     use crate::view::ViewConfiguration;
@@ -461,7 +461,7 @@ mod tests {
         fn hit_test_in_view(
             &self,
             _result: &mut HitTestResult,
-            _position: flui_types::Offset,
+            _position: flui_foundation::geometry::Offset,
             _view_id: u64,
         ) {
         }

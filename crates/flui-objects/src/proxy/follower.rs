@@ -56,8 +56,9 @@
 //! gate both on `child != null`.
 
 use flui_foundation::Single;
+use flui_foundation::geometry::Offset;
+use flui_painting::paint::Alignment;
 use flui_rendering::layer::LayerLink;
-use flui_types::{Offset, painting::Alignment};
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintCx},

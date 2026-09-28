@@ -31,7 +31,7 @@
 use std::f64::consts::FRAC_PI_2;
 
 use flui_foundation::Single;
-use flui_types::{Matrix4, Offset, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,

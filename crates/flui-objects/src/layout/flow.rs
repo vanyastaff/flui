@@ -56,7 +56,8 @@ use std::sync::Arc;
 
 use flui_foundation::ListenerId;
 use flui_foundation::Variable;
-use flui_types::{Matrix4, Offset, Point, Rect, Size, painting::Clip};
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
+use flui_painting::paint::Clip;
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -414,8 +415,8 @@ impl RenderBox for RenderFlow {
 mod tests {
     use std::any::Any;
 
+    use flui_foundation::geometry::Matrix4;
     use flui_rendering::context::intrinsics_test_support::{leaf_dry_layout, leaf_intrinsics};
-    use flui_types::Matrix4;
 
     use super::*;
 

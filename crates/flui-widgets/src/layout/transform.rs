@@ -1,9 +1,10 @@
 //! [`Transform`] — applies a 2D/3D matrix transform to its child when painting.
 
 use flui_foundation::geometry::Matrix4;
+use flui_foundation::geometry::Offset;
 use flui_objects::RenderTransform;
+use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::{Alignment, Offset};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Applies a [`Matrix4`] transform to its child before painting.

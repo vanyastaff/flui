@@ -9,9 +9,9 @@
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Single;
-use flui_types::{
-    Offset,
-    layout::AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
+use flui_foundation::geometry::Offset;
+use flui_rendering::constraints::AxisDirection::{
+    BottomToTop, LeftToRight, RightToLeft, TopToBottom,
 };
 
 use flui_rendering::{
@@ -282,10 +282,10 @@ fn child_max_intrinsic_main_extent(
     constraints: &SliverConstraints,
 ) -> f64 {
     match constraints.axis_direction.axis() {
-        flui_types::layout::Axis::Horizontal => {
+        flui_foundation::geometry::Axis::Horizontal => {
             ctx.box_child_max_intrinsic_width(0, constraints.cross_axis_extent)
         }
-        flui_types::layout::Axis::Vertical => {
+        flui_foundation::geometry::Axis::Vertical => {
             ctx.box_child_max_intrinsic_height(0, constraints.cross_axis_extent)
         }
     }

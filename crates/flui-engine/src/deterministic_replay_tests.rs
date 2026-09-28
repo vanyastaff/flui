@@ -50,8 +50,9 @@
 mod tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::Rect;
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, styling::Color as StyledColor};
+    use flui_painting::styling::{Color, Color as StyledColor};
 
     use crate::{
         command_ir::{DrawItem, DrawSegment},
@@ -117,7 +118,11 @@ mod tests {
         painter.draw_rect(Rect::from_xywh(10.0, 10.0, 20.0, 20.0), &Paint::fill(white));
 
         // Phase 2: instanced circle
-        painter.draw_circle(flui_types::Point::new(48.0, 48.0), 10.0, &Paint::fill(red));
+        painter.draw_circle(
+            flui_foundation::geometry::Point::new(48.0, 48.0),
+            10.0,
+            &Paint::fill(red),
+        );
 
         // Phase 3: linear gradient rect — exercises the gradient flush phase
         let blue = StyledColor::rgba(0, 0, 255, 255);

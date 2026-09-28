@@ -2,9 +2,9 @@
 
 use std::fmt::Debug;
 
+use flui_foundation::geometry::{Matrix4, Rect, Size};
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_layer::TransformLayer;
-use flui_types::{Matrix4, Rect, Size};
 
 use super::ViewConfiguration;
 use crate::constraints::BoxConstraints;
@@ -425,7 +425,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         let child_constraints = crate::constraints::BoxConstraints::tight(size);
         for i in 0..layout_ctx.child_count() {
             let _ = layout_ctx.layout_child(i, child_constraints);
-            layout_ctx.position_child(i, flui_types::Offset::ZERO);
+            layout_ctx.position_child(i, flui_foundation::geometry::Offset::ZERO);
         }
 
         Ok(size)
@@ -435,7 +435,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         &self,
         recorder: &mut crate::context::FragmentRecorder,
         child_count: usize,
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
     ) {
         // Root pass-through: the view draws nothing itself and splices
         // every child subtree in order — `size` is only forwarded to
@@ -449,11 +449,11 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         &self,
         _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
         child_count: usize,
-        _size: flui_types::Size,
+        _size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
             Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
-            Option<flui_types::Matrix4>,
+            Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> crate::traits::HitTestOutcome {
         // Root pass-through: test children topmost-first (later
@@ -516,7 +516,7 @@ impl Diagnosticable for RenderView {
 // `impl HitTestTarget for RenderView` used to live here, but was deleted.
 // Its body was a no-op (`let _ = (event, entry);`) -- the view only
 // implemented the trait to satisfy the trait-dispatch shape that the
-// old rendering-side `flui_rendering::hit_testing::HitTestResult` type
+// old rendering-side `crate::hit_testing::HitTestResult` type
 // required. Hit testing now produces the data-typed
 // `flui_interaction::routing::HitTestResult`, whose entries carry handler
 // closures directly, so no trait impl is needed on RenderView. The

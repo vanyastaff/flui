@@ -28,13 +28,13 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use flui_foundation::geometry::Offset;
 use flui_interaction::GestureRecognizer;
 use flui_interaction::PointerDispatch;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_interaction::ids::PointerId;
 use flui_interaction::recognizers::TapGestureRecognizer;
-use flui_types::geometry::Offset;
 
 /// Build a recogniser with the given callback wiring. The arc clone
 /// is a one-time setup cost; the bench loop only measures

@@ -6,8 +6,8 @@
 //!
 //! Run with: cargo run --example platform_window
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::Size;
 
 fn main() {
     tracing_subscriber::fmt()

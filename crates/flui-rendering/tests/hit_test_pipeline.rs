@@ -12,11 +12,13 @@
 //!    matrix; child descent records paint offsets on the result
 //!    transform stack for gesture dispatch.
 
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_foundation::{Leaf, Variable};
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderPadding, RenderSliverIgnorePointer, RenderSliverOpacity,
     RenderSliverPadding, RenderTransform,
 };
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
@@ -27,7 +29,6 @@ use flui_rendering::{
     traits::{RenderBox, RenderSliver},
     view::ScrollDirection,
 };
-use flui_types::{Matrix4, Offset, Size, layout::AxisDirection};
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject, laid_out_loose_200x200 as laid_out};
 

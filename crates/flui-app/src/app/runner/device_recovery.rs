@@ -429,7 +429,7 @@ mod device_recovery_tests {
         fn is_device_lost(&self) -> bool {
             self.lost
         }
-        fn mark_dirty(&mut self, _rect: flui_types::Rect<f64>) {}
+        fn mark_dirty(&mut self, _rect: flui_foundation::geometry::Rect<f64>) {}
         fn mark_full_repaint(&mut self) {}
         fn has_damage(&self) -> bool {
             true
@@ -782,7 +782,7 @@ mod device_recovery_tests {
         fn is_device_lost(&self) -> bool {
             self.lost
         }
-        fn mark_dirty(&mut self, _rect: flui_types::Rect<f64>) {}
+        fn mark_dirty(&mut self, _rect: flui_foundation::geometry::Rect<f64>) {}
         fn mark_full_repaint(&mut self) {}
         fn has_damage(&self) -> bool {
             true
@@ -979,7 +979,7 @@ mod device_recovery_tests {
             fired_for_callback.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         let pointer = PointerId::new(3).expect("nonzero pointer id");
-        let at = flui_types::Offset::new(10.0, 10.0);
+        let at = flui_foundation::geometry::Offset::new(10.0, 10.0);
         // A synthetic pointer in a test tree with no ancestor transform: the
         // two spaces coincide, which is what passing the same value twice says.
         recognizer.add_pointer(pointer, at, at);

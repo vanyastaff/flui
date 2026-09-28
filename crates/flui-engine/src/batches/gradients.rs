@@ -1,9 +1,9 @@
 //! Gradient and shader-dispatch record methods: gradient_rect, radial_gradient_rect,
 //! sweep_gradient_rect, shadow_rect, dispatch_shader_rect.
 
+use flui_foundation::geometry::{Point, Rect};
+use flui_painting::paint::Shader;
 use flui_painting::{BlendMode, Paint};
-use flui_types::painting::Shader;
-use flui_types::{Point, Rect};
 
 use super::{
     super::{

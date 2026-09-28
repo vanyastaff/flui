@@ -14,7 +14,7 @@
 //! their stable identities, not the structural input that produced them.
 
 use flui_foundation::SemanticsId;
-use flui_types::{Matrix4, Rect};
+use flui_foundation::geometry::{Matrix4, Rect};
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
@@ -449,7 +449,7 @@ mod tests {
     use std::sync::Arc;
 
     use flui_foundation::RenderId;
-    use flui_types::{Matrix4, Rect};
+    use flui_foundation::geometry::{Matrix4, Rect};
 
     use super::*;
     use crate::{

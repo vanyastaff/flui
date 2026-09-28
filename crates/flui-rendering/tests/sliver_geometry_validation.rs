@@ -8,7 +8,9 @@
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::Diagnosticable;
+use flui_foundation::geometry::Size;
 use flui_foundation::{Leaf, Variable};
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
@@ -18,7 +20,6 @@ use flui_rendering::{
     traits::{RenderBox, RenderSliver},
     view::ScrollDirection,
 };
-use flui_types::{Size, layout::AxisDirection};
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject};
 

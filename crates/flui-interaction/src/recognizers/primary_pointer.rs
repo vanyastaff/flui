@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 
 use crate::{
     recognizers::one_sequence::OneSequenceGestureRecognizer,

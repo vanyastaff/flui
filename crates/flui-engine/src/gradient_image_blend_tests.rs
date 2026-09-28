@@ -31,12 +31,12 @@
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::{Offset, Rect};
+    use flui_painting::paint::image::ColorFilter;
     use flui_painting::{BlendMode, Paint, PaintStyle, Shader};
-    use flui_types::painting::image::ColorFilter;
-    use flui_types::{
-        Color, Rect,
-        geometry::Offset,
-        painting::{Image, TileMode},
+    use flui_painting::{
+        paint::{Image, TileMode},
+        styling::Color,
     };
 
     use crate::{effects::GradientStop, painter::WgpuPainter, render_target::RenderTarget};
@@ -418,11 +418,11 @@ mod gpu_tests {
         let radius = side / 2.0;
         painter.save();
         painter.clip_rrect(
-            flui_types::geometry::RRect::from_rect_circular(
+            flui_foundation::geometry::RRect::from_rect_circular(
                 Rect::from_xywh(0.0, 0.0, f64::from(side), f64::from(side)),
                 f64::from(radius),
             ),
-            flui_types::painting::Clip::AntiAlias,
+            flui_painting::paint::Clip::AntiAlias,
         );
         painter.draw_image(&source_image, full_surface_bounds(), BlendMode::SrcOver);
         painter.restore();
@@ -503,11 +503,11 @@ mod gpu_tests {
         painter.save();
         painter.scale(2.0, 2.0);
         painter.clip_rrect(
-            flui_types::geometry::RRect::from_rect_circular(
+            flui_foundation::geometry::RRect::from_rect_circular(
                 Rect::from_xywh(0.0, 0.0, f64::from(logical_side), f64::from(logical_side)),
                 f64::from(logical_side / 2.0),
             ),
-            flui_types::painting::Clip::AntiAlias,
+            flui_painting::paint::Clip::AntiAlias,
         );
         painter.draw_image(
             &source_image,
@@ -611,7 +611,7 @@ mod gpu_tests {
         painter.draw_image_repeat(
             &tile_image,
             full_surface_bounds(),
-            flui_types::painting::image::ImageRepeat::Repeat,
+            flui_painting::paint::image::ImageRepeat::Repeat,
             BlendMode::Multiply,
         );
 
@@ -811,9 +811,9 @@ mod gpu_tests {
     /// the SrcOver gradient path is unchanged by advanced-blend support.
     #[test]
     fn srcover_gradient_is_byte_identical_across_two_independent_draws() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Shader;
-        use flui_types::geometry::Offset;
-        use flui_types::painting::TileMode;
+        use flui_painting::paint::TileMode;
 
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_a, view_a) = create_sampleable_surface(&device);
@@ -934,9 +934,9 @@ mod gpu_tests {
     /// wrong value), or if any mode panics (which would fail here immediately).
     #[test]
     fn all_15_advanced_modes_gradient_and_image_produce_valid_output() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Shader;
-        use flui_types::geometry::Offset;
-        use flui_types::painting::TileMode;
+        use flui_painting::paint::TileMode;
 
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_texture, surface_view) = create_sampleable_surface(&device);
@@ -1049,7 +1049,7 @@ mod gpu_tests {
         painter.draw_image_repeat(
             &image,
             dst,
-            flui_types::painting::image::ImageRepeat::Repeat,
+            flui_painting::paint::image::ImageRepeat::Repeat,
             BlendMode::Multiply,
         );
 
@@ -1130,8 +1130,8 @@ mod gpu_tests {
         ];
         // Identity transforms: each sprite placed at its rect's origin.
         let transforms = [
-            flui_types::Matrix4::identity(),
-            flui_types::Matrix4::identity(),
+            flui_foundation::geometry::Matrix4::identity(),
+            flui_foundation::geometry::Matrix4::identity(),
         ];
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1171,7 +1171,7 @@ mod gpu_tests {
         painter.draw_image_repeat(
             &image,
             dst,
-            flui_types::painting::image::ImageRepeat::Repeat,
+            flui_painting::paint::image::ImageRepeat::Repeat,
             BlendMode::SrcOver,
         );
 
@@ -1194,7 +1194,7 @@ mod gpu_tests {
 
         let image = solid_color_image(Color::rgba(100, 150, 200, 255));
         let sprites = [Rect::from_xywh(0.0, 0.0, 4.0, 4.0)];
-        let transforms = [flui_types::Matrix4::identity()];
+        let transforms = [flui_foundation::geometry::Matrix4::identity()];
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         painter.draw_atlas(&image, &sprites, &transforms, None, BlendMode::SrcOver);
@@ -1252,7 +1252,7 @@ mod gpu_tests {
         // One sprite covering the full 4×4 atlas image, placed at (0,0).
         let sprites = [Rect::from_xywh(0.0, 0.0, 4.0, 4.0)];
         // Identity transform: no translation, no rotation.
-        let transforms = [flui_types::Matrix4::identity()];
+        let transforms = [flui_foundation::geometry::Matrix4::identity()];
         let colors: Option<&[Color]> = None;
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));

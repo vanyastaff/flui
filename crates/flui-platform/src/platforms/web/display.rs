@@ -1,6 +1,6 @@
 //! Web display implementation
 
-use flui_types::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 
 use crate::traits::{DisplayId, PlatformDisplay};
 

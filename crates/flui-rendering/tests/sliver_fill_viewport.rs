@@ -1,7 +1,9 @@
 //! `RenderSliverFillViewport` — direct Box children with viewport-sized extents.
 
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_objects::RenderSliverFillViewport;
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::SliverConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -10,7 +12,6 @@ use flui_rendering::{
     testing::inspect,
     traits::RenderBox,
 };
-use flui_types::{Offset, Rect, Size, layout::AxisDirection};
 
 use crate::common::{
     BoxedRenderObject, BoxedSliverObject, horizontal_constraints,
@@ -64,7 +65,7 @@ impl RenderBox for FixedHitBox {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         ctx.is_within_bounds(Rect::from_origin_size(
-            flui_types::Point::ZERO,
+            flui_foundation::geometry::Point::ZERO,
             ctx.own_size(),
         ))
     }

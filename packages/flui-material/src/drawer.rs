@@ -75,10 +75,10 @@ use flui_sdk::animation::{
     Animation, AnimationController, AnimationStatus, UpdateScheduler, Vsync, VsyncRegistration,
 };
 use flui_sdk::foundation::Listenable;
+use flui_sdk::geometry::Radius;
+use flui_sdk::painting::{Alignment, Clip};
+use flui_sdk::painting::{BorderRadius, BorderRadiusExt, Color};
 use flui_sdk::rendering::{BoxConstraints, HitTestBehavior};
-use flui_sdk::types::geometry::Radius;
-use flui_sdk::types::styling::{BorderRadius, BorderRadiusExt, Color};
-use flui_sdk::types::{Alignment, painting::Clip};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::animated::VsyncScope;

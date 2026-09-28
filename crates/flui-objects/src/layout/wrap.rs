@@ -22,11 +22,11 @@
 //! right-to-left. Both default to unflipped (`Ltr`, `Down`), which is the
 //! behaviour every caller predating this had.
 
+use crate::VerticalDirection;
 use flui_foundation::Variable;
-use flui_types::{
-    Axis, Offset, Point, Rect, Size, layout::VerticalDirection, painting::Clip,
-    typography::TextDirection,
-};
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::{paint::Clip, typography::TextDirection};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -35,10 +35,9 @@ use flui_rendering::{
     traits::RenderBox,
 };
 
-// Re-export the canonical alignment types so `layout::*` / `flui_objects::*`
-// exposes them without requiring callers to depend on `flui-types` directly.
+// Re-export the alignment types so `layout::*` / `crate::*` exposes them.
 // This `pub use` also serves as the module-level import for the code below.
-pub use flui_types::layout::{WrapAlignment, WrapCrossAlignment};
+pub use super::wrap_alignment::{WrapAlignment, WrapCrossAlignment};
 
 /// Precision tolerance for run-overflow detection.
 ///

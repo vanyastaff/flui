@@ -270,8 +270,9 @@ mod tests {
     //! introduced by the deref shape.
     //!
     //! No GPU is required; this runs on every CI worker.
+    use flui_foundation::geometry::Rect;
+    use flui_painting::styling::Color;
     use flui_painting::{Canvas, Paint};
-    use flui_types::{geometry::Rect, styling::Color};
 
     use super::dispatch_commands;
     use crate::debug::DebugBackend;

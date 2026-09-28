@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use flui_types::painting::Image as PixelImage;
+use flui_painting::paint::Image as PixelImage;
 
 use super::cache_key::ImageCacheKey;
 

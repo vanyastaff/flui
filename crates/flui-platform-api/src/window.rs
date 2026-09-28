@@ -6,7 +6,7 @@
 //! `flui_platform::Platform` that opens windows (which stays in
 //! `flui-platform`, ADR-0082 §2) use in their signatures.
 
-use flui_types::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 
 // ==================== Creation ====================
 

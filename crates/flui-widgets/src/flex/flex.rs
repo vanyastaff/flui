@@ -5,9 +5,9 @@ use std::fmt;
 use flui_objects::{
     CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize, RenderFlex,
 };
+use flui_painting::typography::TextBaseline;
+use flui_painting::typography::TextDirection;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::typography::TextBaseline;
-use flui_types::typography::TextDirection;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 

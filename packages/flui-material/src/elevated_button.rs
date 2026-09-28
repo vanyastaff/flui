@@ -16,8 +16,8 @@
 //! `fixed_size` either (the oracle's own "No default fixedSize" / "No
 //! default side" comments), so neither field is populated here.
 
-use flui_sdk::types::Color;
-use flui_sdk::types::{EdgeInsets, Size};
+use flui_sdk::geometry::{EdgeInsets, Size};
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 

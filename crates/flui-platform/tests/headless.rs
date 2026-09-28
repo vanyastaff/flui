@@ -13,8 +13,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform, headless_platform};
-use flui_types::geometry::Size;
 
 #[test]
 fn test_t064_flui_headless_environment_variable() {

@@ -39,7 +39,7 @@
 //!
 //! use flui_platform_api::{PlatformHaptics, PlatformTextInput};
 //! use flui_platform_api::HapticFeedback;
-//! use flui_types::geometry::{Bounds, Point, Size};
+//! use flui_foundation::geometry::{Bounds, Point, Size};
 //!
 //! #[derive(Default)]
 //! struct Recorder {

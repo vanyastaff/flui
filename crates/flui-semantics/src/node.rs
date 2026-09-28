@@ -4,8 +4,8 @@
 //! one or more render objects. Non-boundary render objects merge their
 //! semantics into the nearest boundary ancestor.
 
+use flui_foundation::geometry::{Matrix4, Rect};
 use flui_foundation::{ElementId, RenderId, SemanticsId};
-use flui_types::{Matrix4, geometry::Rect};
 
 // Use our optimized types from flui-semantics
 use crate::{
@@ -75,7 +75,7 @@ pub struct SemanticsNode {
 
     /// Transform matrix.
     ///
-    /// Stored as the workspace-canonical [`Matrix4`] from `flui_types`
+    /// Stored as the workspace-canonical [`Matrix4`] from `flui_foundation::geometry`
     /// — the same representation `to_node_data()` exports. Previously
     /// stored as `Option<[f32; 16]>` and round-tripped through
     /// `Matrix4::from` at export time; unifying the representation

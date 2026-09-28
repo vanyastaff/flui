@@ -13,7 +13,7 @@ use crate::common;
 
 use common::{lay_out, loose, tight};
 use flui_cupertino::CupertinoNavigationBar;
-use flui_sdk::types::Size;
+use flui_sdk::geometry::Size;
 use flui_sdk::widgets::prelude::EdgeInsets;
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, PreferredSizeView, SizedBox, Text};
 

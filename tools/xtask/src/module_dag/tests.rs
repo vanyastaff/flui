@@ -151,7 +151,7 @@ fn a_path_through_a_root_reexport_counts_as_its_source_module() {
                 "lib.rs",
                 "pub mod text;\npub mod interaction;\n\
                  pub use interaction::{Listener, GestureDetector as Detector};\n\
-                 pub use flui_types::Color;\n",
+                 pub use flui_painting::styling::Color;\n",
             ),
             ("text.rs", "use crate::Detector;\nuse crate::Color;\n"),
             (
@@ -217,7 +217,7 @@ transparent = ["__private"]
                 "__private.rs",
                 "use crate::interaction;\n\
                  pub use interaction::focus::install_rect_provider;\n\
-                 pub use flui_types::Color;\n",
+                 pub use flui_painting::styling::Color;\n",
             ),
             (
                 "interaction.rs",
@@ -457,8 +457,8 @@ fn a_leading_colon_alias_path_is_a_crate_path() {
     // `::` before any other name is another crate
     assert_eq!(
         run(
-            "pub use ::flui_types::Color;\n",
-            "use ::flui_types::Size;\nuse crate::Color;\n"
+            "pub use ::flui_painting::styling::Color;\n",
+            "use ::flui_foundation::geometry::Size;\nuse crate::Color;\n"
         ),
         set(&[])
     );

@@ -3,8 +3,8 @@
 use std::fmt;
 
 use flui_objects::{RenderIndexedStack, RenderStack, StackFit};
+use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Alignment;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
@@ -202,7 +202,7 @@ generic_render_view_element!(IndexedStack);
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Alignment;
+    use flui_painting::Alignment;
     use flui_view::RenderView;
 
     use super::*;

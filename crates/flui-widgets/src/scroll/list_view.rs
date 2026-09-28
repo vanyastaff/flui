@@ -3,8 +3,8 @@
 use std::fmt;
 use std::rc::Rc;
 
+use flui_foundation::geometry::Axis;
 use flui_rendering::view::ScrollPosition;
-use flui_types::layout::Axis;
 use flui_view::element::StaticChildren;
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;

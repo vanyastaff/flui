@@ -1,8 +1,8 @@
 //! RenderFlex - lays out children in a row or column.
 
 use flui_foundation::Variable;
-use flui_types::typography::TextDirection;
-use flui_types::{Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
+use flui_painting::typography::TextDirection;
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -41,12 +41,7 @@ pub enum MainAxisAlignment {
     SpaceEvenly,
 }
 
-/// Re-export of the canonical [`flui_types::layout::MainAxisSize`]:
-/// `Max` (Flutter default) fills the incoming max main extent when it
-/// is bounded - without it, alignment is dead under loose constraints
-/// (the container shrink-wraps, so there is never free space to
-/// distribute).
-pub use flui_types::layout::MainAxisSize;
+pub use super::main_axis_size::MainAxisSize;
 
 /// How children are aligned along the cross axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

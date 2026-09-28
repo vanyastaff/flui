@@ -37,7 +37,7 @@
 //! use flui_interaction::recognizers::multidrag::{
 //!     MultiDragGestureRecognizer, MultiDragAxis,
 //! };
-//! use flui_types::geometry::Offset;
+//! use flui_foundation::geometry::Offset;
 //!
 //! let arena = GestureArena::new();
 //! let recognizer = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free)
@@ -60,7 +60,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use web_time::Instant;
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};

@@ -15,7 +15,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use web_time::{Duration, Instant};
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 use tracing::instrument;
 

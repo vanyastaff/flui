@@ -15,8 +15,8 @@ mod helpers;
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
-use flui_types::Size;
 
 // ============================================================================
 // Flat: 1 RenderFlex root + N leaves

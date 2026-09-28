@@ -47,11 +47,11 @@
 //! - **`shadowColor`/`surfaceTintColor` overrides** — not exposed as builder
 //!   methods, because [`Material`] has nowhere to put them yet.
 
-use flui_sdk::types::Color;
-use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::geometry::Radius;
-use flui_sdk::types::painting::Clip;
-use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::geometry::Radius;
+use flui_sdk::painting::BorderRadius;
+use flui_sdk::painting::Clip;
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::Padding;
 

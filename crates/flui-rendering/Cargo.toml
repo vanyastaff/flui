@@ -39,7 +39,7 @@ name = "compile_fail"
 path = "tests/compile_fail.rs"
 
 [dependencies]
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+serde = { workspace = true, optional = true }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
@@ -148,7 +148,7 @@ flui-objects = { path = "../flui-objects", features = ["testing"] }
 default = []
 # serde: no direct serde derives in this crate; forwards to flui-types/serde
 # so downstream consumers enabling this feature get geometry/type serde impls.
-serde = ["flui-types/serde"]
+serde = ["dep:serde", "flui-painting/serde"]
 
 # testing: opt-in render-object test harness (`crate::testing`). Builds a
 # real `PipelineOwner` tree from a declarative spec, drives the production

@@ -31,7 +31,7 @@ accesskit = { workspace = true }
 # (ADR-0082 §2).
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # The contracts the backends implement (capability traits, window/input and
 # data-transfer vocabulary), re-exported here at their old paths (ADR-0082).
 flui-platform-api = { workspace = true }

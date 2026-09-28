@@ -6,7 +6,7 @@
 //! frame count and hands them in through [`PerformanceOverlayLayer::update_stats`],
 //! so no clock and no history ring lives in the compositor vocabulary.
 
-use flui_types::geometry::Rect;
+use flui_foundation::geometry::Rect;
 
 bitflags::bitflags! {
     /// Which readouts the overlay shows.

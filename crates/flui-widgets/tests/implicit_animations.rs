@@ -16,7 +16,8 @@ use std::time::Duration;
 use crate::common::{lay_out_animated, loose, tight};
 use flui_animation::{Curves, ElasticOutCurve, Threshold, Vsync};
 use flui_foundation::geometry::EdgeInsets;
-use flui_types::{Alignment, Offset};
+use flui_foundation::geometry::Offset;
+use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
 use flui_widgets::{

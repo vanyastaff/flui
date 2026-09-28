@@ -20,7 +20,7 @@
 //!
 //! ## Blend mode encoding
 //!
-//! `blend_mode_to_u32` maps each [`flui_types::painting::BlendMode`] variant to
+//! `blend_mode_to_u32` maps each [`flui_painting::paint::BlendMode`] variant to
 //! a `u32` by **declaration order** (0-indexed), so the WGSL switch statement
 //! in `mode.wgsl` can use a dense integer dispatch.  The mapping is an
 //! exhaustive match — no `_` fallthrough — so adding a new variant is a
@@ -28,7 +28,7 @@
 //!
 //! The "must match" comment in `mode.wgsl` keeps both sides auditable at a glance.
 
-use flui_types::painting::BlendMode;
+use flui_painting::paint::BlendMode;
 
 use super::generated::mode;
 use crate::shader_composer::{ComposableSource, compose_wgsl_shader};
@@ -231,7 +231,7 @@ impl ModePipeline {
 // `float_cmp` fires on `assert_eq!` of f32 arrays; these compare stored literals
 // read back through a struct — no arithmetic, so equality is bit-exact.
 mod cpu_tests {
-    use flui_types::painting::BlendMode;
+    use flui_painting::paint::BlendMode;
 
     use super::{blend_mode_to_u32, mode};
 

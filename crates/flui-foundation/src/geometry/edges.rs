@@ -701,21 +701,21 @@ impl<T: Clone> super::traits::Along for Edges<T> {
     type Unit = (T, T);
 
     #[inline]
-    fn along(&self, axis: super::traits::Axis) -> Self::Unit {
+    fn along(&self, axis: super::axis::Axis) -> Self::Unit {
         match axis {
-            super::traits::Axis::Horizontal => (self.left.clone(), self.right.clone()),
-            super::traits::Axis::Vertical => (self.top.clone(), self.bottom.clone()),
+            super::axis::Axis::Horizontal => (self.left.clone(), self.right.clone()),
+            super::axis::Axis::Vertical => (self.top.clone(), self.bottom.clone()),
         }
     }
 
     #[inline]
     fn apply_along(
         &self,
-        axis: super::traits::Axis,
+        axis: super::axis::Axis,
         f: impl FnOnce(Self::Unit) -> Self::Unit,
     ) -> Self {
         match axis {
-            super::traits::Axis::Horizontal => {
+            super::axis::Axis::Horizontal => {
                 let (left, right) = f((self.left.clone(), self.right.clone()));
                 Self {
                     top: self.top.clone(),
@@ -724,7 +724,7 @@ impl<T: Clone> super::traits::Along for Edges<T> {
                     left,
                 }
             }
-            super::traits::Axis::Vertical => {
+            super::axis::Axis::Vertical => {
                 let (top, bottom) = f((self.top.clone(), self.bottom.clone()));
                 Self {
                     top,
@@ -740,8 +740,8 @@ impl<T: Clone> super::traits::Along for Edges<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::traits::{Along, Axis};
     use crate::geometry::{Offset, RRect, Radius, Rect, Size};
+    use crate::geometry::{axis::Axis, traits::Along};
 
     /// Distinct values in `(top, right, bottom, left)` order.
     fn distinct() -> Edges<i32> {

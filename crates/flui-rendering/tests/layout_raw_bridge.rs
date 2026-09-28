@@ -16,6 +16,7 @@
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::Size;
 use flui_foundation::{Leaf, Single, Variable};
 use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding};
 use flui_rendering::{
@@ -30,7 +31,6 @@ use flui_rendering::{
         box_protocol::BoxLayoutCtxErased,
     },
 };
-use flui_types::Size;
 
 // ============================================================================
 // Leaf bridge: RenderColoredBox via blanket perform_layout_raw

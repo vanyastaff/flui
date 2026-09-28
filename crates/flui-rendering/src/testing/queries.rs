@@ -16,7 +16,7 @@ use crate::pipeline::{PipelineOwner, PipelinePhase};
 use crate::storage::IntrinsicDimension;
 use crate::traits::TextBaseline;
 use flui_foundation::RenderId;
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 use super::harness::{FrameRun, LayoutRun};
 

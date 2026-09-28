@@ -34,7 +34,7 @@ fn bar_at(offset: f64) -> Theme {
         .pinned(true)
         .flexible_space(
             FlexibleSpaceBar::new()
-                .background(ColoredBox::new(flui_sdk::types::Color::rgb(10, 20, 30))),
+                .background(ColoredBox::new(flui_sdk::painting::Color::rgb(10, 20, 30))),
         );
     Theme::new(
         ThemeData::light(),

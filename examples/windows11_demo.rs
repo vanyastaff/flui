@@ -22,8 +22,8 @@ fn main() {
 
 #[cfg(target_os = "windows")]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use flui_foundation::geometry::Size;
     use flui_platform::{WindowOptions, WindowsPlatform, traits::Platform};
-    use flui_types::geometry::Size;
 
     // Initialize logging
     tracing_subscriber::fmt()

@@ -4,10 +4,10 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 use flui_painting::{BlendMode, Paint, PointMode};
-use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, Rect},
-    painting::{Image, Path},
+use flui_painting::{
+    paint::{Image, Path},
     styling::Color,
 };
 
@@ -163,7 +163,7 @@ impl CommandRenderer for DebugBackend {
         &mut self,
         _image: &Image,
         dst: Rect<f64>,
-        repeat: flui_types::painting::image::ImageRepeat,
+        repeat: flui_painting::paint::image::ImageRepeat,
         _paint: Option<&Paint>,
         _transform: &Matrix4,
     ) {
@@ -191,7 +191,7 @@ impl CommandRenderer for DebugBackend {
         &mut self,
         _image: &Image,
         dst: Rect<f64>,
-        filter: flui_types::painting::image::ColorFilter,
+        filter: flui_painting::paint::image::ColorFilter,
         _paint: Option<&Paint>,
         _transform: &Matrix4,
     ) {
@@ -203,10 +203,10 @@ impl CommandRenderer for DebugBackend {
 
     fn render_texture(
         &mut self,
-        texture_id: flui_types::painting::TextureId,
+        texture_id: flui_painting::paint::TextureId,
         dst: Rect<f64>,
         src: Option<Rect<f64>>,
-        filter_quality: flui_types::painting::FilterQuality,
+        filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
         _transform: &Matrix4,
     ) {
@@ -256,8 +256,8 @@ impl CommandRenderer for DebugBackend {
     fn clip_rect(
         &mut self,
         rect: Rect<f64>,
-        _clip_op: flui_types::painting::ClipOp,
-        _clip_behavior: flui_types::painting::Clip,
+        _clip_op: flui_painting::paint::ClipOp,
+        _clip_behavior: flui_painting::paint::Clip,
         _transform: &Matrix4,
     ) {
         self.log_command("clip_rect", &format!("rect={rect:?}"));
@@ -266,8 +266,8 @@ impl CommandRenderer for DebugBackend {
     fn clip_rrect(
         &mut self,
         rrect: RRect,
-        _clip_op: flui_types::painting::ClipOp,
-        _clip_behavior: flui_types::painting::Clip,
+        _clip_op: flui_painting::paint::ClipOp,
+        _clip_behavior: flui_painting::paint::Clip,
         _transform: &Matrix4,
     ) {
         self.log_command("clip_rrect", &format!("rrect={rrect:?}"));
@@ -276,8 +276,8 @@ impl CommandRenderer for DebugBackend {
     fn clip_path(
         &mut self,
         path: &Path,
-        _clip_op: flui_types::painting::ClipOp,
-        _clip_behavior: flui_types::painting::Clip,
+        _clip_op: flui_painting::paint::ClipOp,
+        _clip_behavior: flui_painting::paint::Clip,
         _transform: &Matrix4,
     ) {
         self.log_command("clip_path", &format!("commands={}", path.commands().len()));
@@ -326,14 +326,14 @@ impl CommandRenderer for DebugBackend {
 // `LayerStateStack` trait rather than on `CommandRenderer`. Bodies and
 // log-command output are unchanged from before the split.
 impl LayerStateStack for DebugBackend {
-    fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_painting::paint::Clip) {
         self.log_command(
             "push_clip_rect",
             &format!("rect={rect:?}, behavior={clip_behavior:?}"),
         );
     }
 
-    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_painting::paint::Clip) {
         self.log_command(
             "push_clip_rrect",
             &format!("rrect={rrect:?}, behavior={clip_behavior:?}"),
@@ -346,8 +346,8 @@ impl LayerStateStack for DebugBackend {
     // be worse than one that recorded nothing.
     fn push_clip_rsuperellipse(
         &mut self,
-        rse: &flui_types::geometry::RSuperellipse,
-        clip_behavior: flui_types::painting::Clip,
+        rse: &flui_foundation::geometry::RSuperellipse,
+        clip_behavior: flui_painting::paint::Clip,
     ) {
         self.log_command(
             "push_clip_rsuperellipse",
@@ -355,7 +355,7 @@ impl LayerStateStack for DebugBackend {
         );
     }
 
-    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_painting::paint::Clip) {
         self.log_command(
             "push_clip_path",
             &format!(
@@ -386,7 +386,7 @@ impl LayerStateStack for DebugBackend {
         self.log_command("push_opacity", &format!("alpha={alpha}"));
     }
 
-    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_painting::paint::BlendMode) {
         self.log_command(
             "push_opacity_blend",
             &format!("alpha={alpha}, blend={blend:?}"),
@@ -397,7 +397,7 @@ impl LayerStateStack for DebugBackend {
         self.log_command("pop_opacity", "");
     }
 
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter) {
+    fn push_color_filter(&mut self, filter: &flui_painting::paint::ColorFilter) {
         self.log_command("push_color_filter", &format!("filter={filter:?}"));
     }
 
@@ -405,7 +405,7 @@ impl LayerStateStack for DebugBackend {
         self.log_command("pop_color_filter", "");
     }
 
-    fn push_image_filter(&mut self, filter: &flui_types::painting::effects::ImageFilter) {
+    fn push_image_filter(&mut self, filter: &flui_painting::paint::effects::ImageFilter) {
         self.log_command("push_image_filter", &format!("filter={filter:?}"));
     }
 

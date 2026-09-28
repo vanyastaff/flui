@@ -13,7 +13,7 @@
 //! the parent even across a relayout boundary — the boundary only
 //! isolates constraint-driven layout, not intrinsic queries.
 
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 use rustc_hash::FxHashMap;
 
 use crate::constraints::BoxConstraints;

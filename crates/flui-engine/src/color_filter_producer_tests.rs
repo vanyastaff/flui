@@ -39,11 +39,11 @@
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::{Matrix4, Rect};
     use flui_painting::Paint;
-    use flui_types::{
-        Color, Rect,
-        geometry::Matrix4,
-        painting::{BlendMode, ColorFilter},
+    use flui_painting::{
+        paint::{BlendMode, ColorFilter},
+        styling::Color,
     };
 
     use crate::{
@@ -415,7 +415,7 @@ mod gpu_tests {
     /// Matrix variant — confirming the `m.values` extraction works end-to-end.
     #[test]
     fn p4_matrix_filter_via_producer_path_matches_direct_painter() {
-        use flui_types::painting::effects::ColorMatrix;
+        use flui_painting::paint::effects::ColorMatrix;
 
         use crate::command_ir::LayerFilter;
 

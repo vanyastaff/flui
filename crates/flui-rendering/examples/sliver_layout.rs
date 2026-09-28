@@ -8,8 +8,8 @@
 //! Note: Full RenderSliver implementation requires additional setup.
 //! This example focuses on understanding the constraint/geometry system.
 
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::constraints::{SliverConstraints, SliverGeometry};
-use flui_types::prelude::AxisDirection;
 
 // ============================================================================
 // Sliver Simulation: SliverFixedExtentList

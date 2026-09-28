@@ -5,7 +5,7 @@
 //!
 //! # Architecture
 //!
-//! External textures are identified by `flui_types::painting::TextureId` (u64).
+//! External textures are identified by `flui_painting::paint::TextureId` (u64).
 //! This registry maps those IDs to actual GPU textures that can be rendered.
 //!
 //! ```text
@@ -43,7 +43,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use flui_types::painting::TextureId;
+use flui_painting::paint::TextureId;
 use wgpu::{
     AddressMode, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
     BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BindingType, Device,
@@ -72,7 +72,7 @@ pub struct ExternalTextureEntry {
 
 /// Registry for external GPU textures
 ///
-/// Maps `flui_types::painting::TextureId` to GPU textures that can be rendered.
+/// Maps `flui_painting::paint::TextureId` to GPU textures that can be rendered.
 #[expect(missing_debug_implementations)]
 pub struct ExternalTextureRegistry {
     /// Registered textures by ID
@@ -157,7 +157,7 @@ impl ExternalTextureRegistry {
     /// # Arguments
     ///
     /// * `texture_id` - The public texture ID from
-    ///   `flui_types::painting::TextureId`
+    ///   `flui_painting::paint::TextureId`
     /// * `texture` - The GPU texture
     /// * `width` - Texture width in pixels
     /// * `height` - Texture height in pixels

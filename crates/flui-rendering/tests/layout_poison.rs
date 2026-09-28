@@ -23,6 +23,7 @@ use std::sync::{
 };
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::{Matrix4, Size};
 use flui_foundation::{Leaf, Single};
 use flui_objects::RenderPadding;
 use flui_rendering::{
@@ -35,7 +36,6 @@ use flui_rendering::{
     testing::{FrameRun, Probe, RenderTester, box_node, sliver_node},
     traits::{HitTestOutcome, RenderBox, RenderObject, RenderSliver},
 };
-use flui_types::{Matrix4, Size};
 
 // ============================================================================
 // FlakyLeaf — a leaf render object that fails layout on demand

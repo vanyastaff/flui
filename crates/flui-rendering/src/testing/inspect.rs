@@ -12,8 +12,8 @@
 //!   implement so Box and Sliver are inspected identically regardless of
 //!   how far the pipeline was driven.
 
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_foundation::{DiagnosticsNode, RenderId};
-use flui_types::{Matrix4, Offset, Size};
 
 use crate::{
     constraints::SliverGeometry,

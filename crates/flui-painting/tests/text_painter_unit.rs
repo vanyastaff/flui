@@ -2,11 +2,9 @@
 //! `crates/flui-painting/src/text_painter/mod.rs` during the text-painter
 //! module split.
 
+use flui_foundation::geometry::Offset;
+use flui_painting::typography::{TextAlign, TextDirection, TextPosition, TextSpan};
 use flui_painting::{Canvas, TextBaseline, TextPainter};
-use flui_types::{
-    geometry::Offset,
-    typography::{TextAlign, TextDirection, TextPosition, TextSpan},
-};
 
 #[test]
 fn test_text_painter_new() {

@@ -1,8 +1,8 @@
 //! [`OverflowBox`] — lays child out under modified constraints.
 
 use flui_objects::{OverflowBoxFit, RenderConstrainedOverflowBox};
+use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Alignment;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Lays its child out as if it lived in a box with different constraints,

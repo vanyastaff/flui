@@ -13,8 +13,8 @@
 //! which keeps it trivially testable and composable.
 
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation};
-use flui_types::geometry::{Offset, Size};
-use flui_types::styling::Color;
+use flui_foundation::geometry::{Offset, Size};
+use flui_painting::styling::Color;
 use smallvec::SmallVec;
 
 /// A value that can be decomposed into, and rebuilt from, a fixed-width vector

@@ -155,7 +155,7 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
     let mut y_offset = 20.0;
 
     let label_paint =
-        flui_types::painting::Paint::fill(flui_types::styling::Color::rgba(0, 210, 255, 255));
+        flui_painting::paint::Paint::fill(flui_painting::styling::Color::rgba(0, 210, 255, 255));
 
     // === Section 1: Basic Shapes ===
     painter.draw_text("1. Basic Shapes", pt(30.0, y_offset), 22.0, &label_paint);
@@ -272,9 +272,9 @@ fn draw_all_demos(painter: &mut flui_engine::WgpuPainter) {
 // Helper functions
 // ============================================================
 
-use flui_types::geometry::{Offset, Point, RRect, Rect};
-use flui_types::painting::{Paint, Shader, path::Path};
-use flui_types::styling::Color;
+use flui_foundation::geometry::{Offset, Point, RRect, Rect};
+use flui_painting::paint::{Paint, Shader, path::Path};
+use flui_painting::styling::Color;
 
 fn pt(x: f64, y: f64) -> Point<f64> {
     Point::new(x, y)
@@ -716,7 +716,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f64) {
     // are unchanged by that fix; a smooth clip is `false`.
     painter.clip_rect(
         rect(30.0, y, 200.0, 100.0),
-        flui_types::painting::Clip::HardEdge,
+        flui_painting::paint::Clip::HardEdge,
     );
     let grad = Shader::simple_linear(
         ofs(0.0, y),
@@ -738,7 +738,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f64) {
     painter.save();
     painter.clip_rect(
         rect(300.0, y, 200.0, 100.0),
-        flui_types::painting::Clip::HardEdge,
+        flui_painting::paint::Clip::HardEdge,
     );
     for i in 0..8 {
         let cx = 300.0 + i as f64 * 30.0;
@@ -761,7 +761,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f64) {
     painter.save();
     painter.clip_rect(
         rect(570.0, y, 250.0, 100.0),
-        flui_types::painting::Clip::HardEdge,
+        flui_painting::paint::Clip::HardEdge,
     );
     painter.draw_rect(
         rect(570.0, y, 250.0, 100.0),
@@ -770,7 +770,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f64) {
     painter.save();
     painter.clip_rect(
         rect(590.0, y + 10.0, 100.0, 80.0),
-        flui_types::painting::Clip::HardEdge,
+        flui_painting::paint::Clip::HardEdge,
     );
     painter.draw_rect(
         rect(550.0, y - 10.0, 300.0, 120.0),
@@ -780,7 +780,7 @@ fn draw_clipping(painter: &mut flui_engine::WgpuPainter, y: f64) {
     painter.save();
     painter.clip_rect(
         rect(700.0, y + 10.0, 100.0, 80.0),
-        flui_types::painting::Clip::HardEdge,
+        flui_painting::paint::Clip::HardEdge,
     );
     painter.draw_rect(
         rect(550.0, y - 10.0, 300.0, 120.0),

@@ -22,12 +22,12 @@ use std::{
 
 use flui_foundation::Listenable;
 use flui_foundation::geometry::EdgeInsets;
+use flui_foundation::geometry::Size;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_interaction::{
     events::{Code, Key, KeyState, NamedKey},
     routing::{FocusAttachment, FocusManager, FocusNode, KeyEventHandler, KeyEventResult},
 };
-use flui_types::Size;
 use flui_widgets::{EditableText, RawTextField, TextEditingController};
 
 // ============================================================================

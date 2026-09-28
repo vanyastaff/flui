@@ -52,6 +52,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-macros = { path = "../flui-macros" }
 serde_json = { workspace = true }
@@ -74,6 +75,10 @@ tracing-subscriber = { workspace = true }
 # message that reads like a toolchain fault.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "=0.3.77"
+
+[[bench]]
+name = "geometry_bench"
+harness = false
 
 [features]
 default = []

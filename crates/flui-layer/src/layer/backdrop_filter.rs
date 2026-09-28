@@ -1,9 +1,7 @@
 //! `BackdropFilterLayer` — filters what is already painted behind it: frosted glass.
 
-use flui_types::{
-    geometry::Rect,
-    painting::{BlendMode, ImageFilter},
-};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::{BlendMode, ImageFilter};
 
 /// Layer that applies an image filter to backdrop content
 ///
@@ -25,10 +23,8 @@ use flui_types::{
 ///
 /// ```rust
 /// use flui_layer::BackdropFilterLayer;
-/// use flui_types::{
-///     geometry::Rect,
-///     painting::{BlendMode, ImageFilter},
-/// };
+/// use flui_foundation::geometry::Rect;
+/// use flui_painting::paint::{BlendMode, ImageFilter};
 ///
 /// // Create frosted glass effect
 /// let frosted_glass = BackdropFilterLayer::new(
@@ -127,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_backdrop_filter_layer_color_filter() {
-        use flui_types::painting::effects::ColorAdjustment;
+        use flui_painting::paint::effects::ColorAdjustment;
 
         let filter = ImageFilter::ColorAdjust(ColorAdjustment::Brightness(0.2));
         let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);

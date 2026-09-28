@@ -641,7 +641,7 @@ pub fn tree_to_update(
 #[cfg(test)]
 mod tests {
     use flui_foundation::SemanticsId;
-    use flui_types::Rect;
+    use flui_foundation::geometry::Rect;
 
     use super::*;
     use crate::identity::AccessibilityNodeId;
@@ -1600,7 +1600,7 @@ mod tests {
 
 #[cfg(test)]
 mod owner_entry_point_tests {
-    use flui_types::Rect;
+    use flui_foundation::geometry::Rect;
 
     use super::*;
     use crate::identity::AccessibilityNodeId;

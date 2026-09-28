@@ -11,7 +11,7 @@ use objc2::MainThreadMarker;
 use objc2_foundation::NSRect;
 use objc2_ui_kit::UIScreen;
 
-use flui_types::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 
 use crate::traits::{DisplayId, PlatformDisplay};
 

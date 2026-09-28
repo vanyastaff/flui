@@ -29,7 +29,8 @@
 //! ```
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
+use flui_painting::Alignment;
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},

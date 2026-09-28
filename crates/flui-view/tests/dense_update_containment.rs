@@ -4,10 +4,10 @@
 
 use std::{any::TypeId, cell::Cell, collections::HashSet, rc::Rc};
 
+use flui_foundation::geometry::Size;
 use flui_foundation::{ElementId, RebuildReason, RebuildReasons, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::{RenderUpdateImpact, protocol::BoxProtocol};
-use flui_types::Size;
 use flui_view::{
     BoxedView, BuildContext, BuildOwner, ElementTree, ErrorView, GlobalKey, IntoView,
     LifecycleHook, RecoveredAt, RenderView, StatefulView, View, ViewExt, ViewState,

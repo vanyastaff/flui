@@ -6,6 +6,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use flui_foundation::geometry::{Bounds, Point};
 use flui_platform_api::text_store::{
     CommitGate, Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, PointMode,
     RangeRect, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
@@ -14,7 +15,6 @@ use flui_platform_api::text_store::{
 use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,
 };
-use flui_types::geometry::{Bounds, Point};
 
 #[test]
 fn in_memory_store_conforms_to_kit_v1() {

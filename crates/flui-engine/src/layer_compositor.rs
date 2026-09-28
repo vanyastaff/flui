@@ -21,8 +21,8 @@
 //! No `Drop` impl: a `Drop`-based assertion would false-positive-panic during
 //! unwind and abort the process.
 
-use flui_types::Rect;
-use flui_types::painting::BlendMode;
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::BlendMode;
 
 use crate::command_ir::{DrawItem, DrawSegment, ImageFilterSpec, LayerFilterChain, SavedLayer};
 
@@ -411,7 +411,8 @@ impl LayerCompositor {
 #[cfg(test)]
 mod tests {
 
-    use flui_types::{Color, Rect};
+    use flui_foundation::geometry::Rect;
+    use flui_painting::styling::Color;
 
     use super::*;
     use crate::instancing::RectInstance;
@@ -558,7 +559,7 @@ mod tests {
                 [0.0, 0.0, 8.0, 12.0],
                 [0, 0],
                 false,
-                flui_types::styling::Color::BLACK,
+                flui_painting::styling::Color::BLACK,
             ));
         assert!(!text_only.is_empty());
 

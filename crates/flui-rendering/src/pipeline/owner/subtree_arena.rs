@@ -487,7 +487,7 @@ impl<'tree> SubtreeArena<'tree> {
         &self,
         id: RenderId,
         constraints: BoxConstraints,
-    ) -> crate::error::RenderResult<flui_types::Size> {
+    ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
         // SAFETY: `self` is alive for the entire duration of this call
         // and all recursive calls it triggers.  Each recursive level
         // reborrows a DISTINCT slab slot (parent ≠ child enforced by tree
@@ -786,7 +786,7 @@ unsafe fn layout_subtree_borrowed(
     arena: &SubtreeArena<'_>,
     id: RenderId,
     constraints: BoxConstraints,
-) -> crate::error::RenderResult<flui_types::Size> {
+) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
     ensure_stack(|| {
         // SAFETY: identical contract, forwarded verbatim from this
         // wrapper's own `# Safety` section; the stack-growth wrapper
@@ -842,7 +842,7 @@ unsafe fn layout_subtree_borrowed_impl(
     arena: &SubtreeArena<'_>,
     id: RenderId,
     constraints: BoxConstraints,
-) -> crate::error::RenderResult<flui_types::Size> {
+) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
     // Cycle guard: set `id`'s in-flight flag FIRST — before any
     // NodePtr reborrow (shared or exclusive).  On a cyclic edge the
     // guard's `enter` returns Err(LayoutCycle) here, so the aliasing
@@ -896,7 +896,8 @@ unsafe fn layout_subtree_borrowed_impl(
             // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
             // an ancestor frame; this shared reborrow is the only live borrow.
             let node: &RenderNode = unsafe { &*node_ptr };
-            node.geometry_box().unwrap_or(flui_types::Size::ZERO)
+            node.geometry_box()
+                .unwrap_or(flui_foundation::geometry::Size::ZERO)
         };
         match arena.layout_poison.failed_attempt(id) {
             Some(FailedAttempt::Layout(attempt))
@@ -959,11 +960,12 @@ unsafe fn layout_subtree_borrowed_impl(
         // them apart.
         let constraints_match = entry.state().has_constraints(&constraints);
         let has_cached_constraints = entry.state().constraints().is_some();
-        let cached_geometry: Option<flui_types::Size> = if needs_layout_flag || !constraints_match {
-            None
-        } else {
-            entry.state().geometry()
-        };
+        let cached_geometry: Option<flui_foundation::geometry::Size> =
+            if needs_layout_flag || !constraints_match {
+                None
+            } else {
+                entry.state().geometry()
+            };
         let geometry_degraded = entry.state().geometry_degraded();
         let is_leaf = child_ids.is_empty();
         // Snapshotted here, in the block that already holds the shared borrow,
@@ -1172,7 +1174,7 @@ unsafe fn layout_subtree_borrowed_impl(
         let descendant_error_for_sliver_cb = std::sync::Arc::clone(&descendant_error_flag);
         let cb_owned = move |child_id: RenderId,
                              child_constraints: BoxConstraints|
-              -> flui_types::Size {
+              -> flui_foundation::geometry::Size {
             // SAFETY: `arena_for_cb` is alive (held by the outer
             // layout_dirty_root stack frame for the entire walk).  The
             // recursive reborrow happens on `child_id`'s slot — distinct
@@ -1201,7 +1203,7 @@ unsafe fn layout_subtree_borrowed_impl(
                          The failure is recorded against the child's retry \
                          budget (layout poison).",
                     );
-                    flui_types::Size::ZERO
+                    flui_foundation::geometry::Size::ZERO
                 }
             }
         };
@@ -1951,7 +1953,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
 
         let box_cb_owned = move |child_id: RenderId,
                                  child_constraints: BoxConstraints|
-              -> flui_types::Size {
+              -> flui_foundation::geometry::Size {
             // SAFETY: same subtree-borrow contract as the sliver child
             // callback, but routed through the Box layout walk.
             match unsafe { layout_subtree_borrowed(arena_for_cb, child_id, child_constraints) } {
@@ -1976,7 +1978,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                          The failure is recorded against the child's retry \
                          budget (layout poison).",
                     );
-                    flui_types::Size::ZERO
+                    flui_foundation::geometry::Size::ZERO
                 }
             }
         };
@@ -2369,8 +2371,8 @@ mod tests {
     use std::sync::Arc;
 
     use flui_foundation::Diagnosticable;
+    use flui_foundation::geometry::Size;
     use flui_foundation::{Leaf, Single};
-    use flui_types::Size;
 
     use crate::{
         context::{BoxHitTestContext, BoxLayoutContext},
@@ -2678,7 +2680,7 @@ mod tests {
     // walk that queued a request against it, with no aliasing hazard
     // between the two.
 
-    use flui_types::layout::AxisDirection;
+    use crate::constraints::AxisDirection;
 
     use crate::{
         constraints::GrowthDirection,

@@ -8,11 +8,11 @@
 
 use std::sync::Arc;
 
-use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Rect},
-    painting::{Image, Path},
+use crate::{
+    paint::{Image, Path},
     styling::Color,
 };
+use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Rect};
 
 use super::{ColorFilter, ImageRepeat};
 use crate::display_list::{BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId};

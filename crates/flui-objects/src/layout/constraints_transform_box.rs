@@ -42,7 +42,10 @@
 //! by [`super::fitted_box::RenderFittedBox::has_visual_overflow`].
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Axis, Offset, Point, Rect, Size, painting::Clip};
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::Alignment;
+use flui_painting::paint::Clip;
 
 use flui_rendering::{
     constraints::BoxConstraints,

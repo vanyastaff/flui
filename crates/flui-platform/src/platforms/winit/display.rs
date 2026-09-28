@@ -2,7 +2,7 @@
 //!
 //! Wraps winit's MonitorHandle to implement PlatformDisplay.
 
-use flui_types::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use winit::monitor::MonitorHandle;
 
 use crate::traits::{DisplayId, PlatformDisplay};

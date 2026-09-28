@@ -1,7 +1,7 @@
 //! What a platform reads and edits inside a lock: the session traits and
 //! the values they speak.
 
-use flui_types::geometry::{Bounds, Point};
+use flui_foundation::geometry::{Bounds, Point};
 
 use super::lock::TextStoreError;
 use super::utf16::{Utf16Offset, Utf16Range};

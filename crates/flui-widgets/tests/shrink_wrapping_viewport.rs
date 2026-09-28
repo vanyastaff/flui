@@ -1,8 +1,8 @@
 //! Integration tests for `ShrinkWrappingViewport`.
 
 use crate::common::lay_out;
+use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
-use flui_types::Size;
 use flui_widgets::prelude::*;
 
 #[test]

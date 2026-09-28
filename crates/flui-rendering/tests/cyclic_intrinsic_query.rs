@@ -21,6 +21,7 @@
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Single;
+use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -30,7 +31,6 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     traits::RenderBox,
 };
-use flui_types::Size;
 
 /// A widget whose `perform_layout` queries child 0's max-intrinsic-width
 /// BEFORE laying it out. The intrinsic query routes through the borrowed walk

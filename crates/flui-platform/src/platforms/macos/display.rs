@@ -9,7 +9,7 @@ use objc2::rc::Retained;
 use objc2_app_kit::NSScreen;
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString};
 
-use flui_types::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 
 use crate::traits::{DisplayId, PlatformDisplay};
 

@@ -27,8 +27,8 @@
 //!   `&dyn` reference, which the trait surface does not offer.
 
 use flui_foundation::Variable;
-use flui_types::Offset;
-use flui_types::layout::Axis;
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::Offset;
 
 use flui_rendering::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},

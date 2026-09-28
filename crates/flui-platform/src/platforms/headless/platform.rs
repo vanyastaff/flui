@@ -13,10 +13,10 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, claim_slot};
 use flui_platform_api::HapticFeedback;
 use flui_platform_api::InMemoryClipboard;
-use flui_types::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 
 use crate::{
@@ -761,7 +761,7 @@ struct MockWindowState {
     focused: bool,
     visible: bool,
     execution: crate::WindowExecutionState,
-    safe_area: flui_types::geometry::EdgeInsets,
+    safe_area: flui_foundation::geometry::EdgeInsets,
     maximized: bool,
     minimized: bool,
     closed: bool,
@@ -813,7 +813,7 @@ impl MockWindow {
                 scale_factor: 1.0,
                 focused: true,
                 execution: crate::WindowExecutionState::Running,
-                safe_area: flui_types::geometry::EdgeInsets::ZERO,
+                safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
                 visible: options.visible,
                 maximized: false,
                 minimized: false,
@@ -1045,7 +1045,7 @@ impl MockWindow {
 
     /// Simulate an owner-thread safe-area report; the callback fires without
     /// holding window state. Closed and detached windows ignore the report.
-    pub fn simulate_safe_area(&self, insets: flui_types::geometry::EdgeInsets) {
+    pub fn simulate_safe_area(&self, insets: flui_foundation::geometry::EdgeInsets) {
         {
             let mut state = self.state.lock();
             if state.closed
@@ -1170,7 +1170,7 @@ impl PlatformWindow for MockWindow {
         self.state.lock().focused
     }
 
-    fn safe_area_insets(&self) -> flui_types::geometry::EdgeInsets {
+    fn safe_area_insets(&self) -> flui_foundation::geometry::EdgeInsets {
         self.state.lock().safe_area
     }
 
@@ -2434,7 +2434,7 @@ mod tests {
     /// installed.
     #[test]
     fn test_on_safe_area_change() {
-        use flui_types::geometry::EdgeInsets;
+        use flui_foundation::geometry::EdgeInsets;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
@@ -2576,7 +2576,7 @@ mod tests {
 
     #[test]
     fn text_input_reaches_the_same_fake_across_calls_and_records_delivered_values() {
-        use flui_types::geometry::{Bounds, Point, Size};
+        use flui_foundation::geometry::{Bounds, Point, Size};
 
         let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
         let fake = Arc::clone(&window.text_input);

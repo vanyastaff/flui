@@ -130,11 +130,11 @@ mod lifecycle_derivation_tests {
         },
     };
 
+    use flui_foundation::geometry::Offset;
     use flui_interaction::{
         HitTestEntry, HitTestResult, InteractionLane, RenderId,
         events::{PointerType, make_down_event, make_move_event},
     };
-    use flui_types::geometry::Offset;
     use flui_view::WidgetsBindingObserver;
 
     use super::{AppLifecycleState, derive_lifecycle_state, lifecycle_ladder};

@@ -32,7 +32,7 @@ use flui_widgets::{
     SliverToBoxAdapter,
 };
 
-use flui_types::Color;
+use flui_painting::styling::Color;
 
 /// A delegate that records every `(shrink_offset, overlaps_content)` pair its
 /// `build` was called with.

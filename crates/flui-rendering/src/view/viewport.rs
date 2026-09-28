@@ -8,7 +8,8 @@
 //!
 //! This corresponds to parts of Flutter's `rendering/viewport.dart`.
 
-use flui_types::{Axis, Rect};
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::Rect;
 
 use crate::{protocol::BoxProtocol, traits::RenderObject};
 
@@ -143,7 +144,7 @@ pub trait RenderAbstractViewport: RenderObject<BoxProtocol> {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Rect;
+    use flui_foundation::geometry::Rect;
 
     use super::*;
 

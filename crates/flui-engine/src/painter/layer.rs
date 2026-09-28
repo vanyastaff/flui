@@ -5,8 +5,8 @@
 
 use smallvec::smallvec;
 
+use flui_foundation::geometry::Rect;
 use flui_painting::Paint;
-use flui_types::Rect;
 
 use super::WgpuPainter;
 use crate::command_ir::{
@@ -384,7 +384,7 @@ impl WgpuPainter {
             Some(bounds),
             layer_opacity,
             [1.0, 1.0, 1.0],
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
             LayerFilterChain::new(),
             Some(clip),
         );
@@ -423,7 +423,7 @@ impl WgpuPainter {
             bounds,
             layer_opacity,
             [1.0, 1.0, 1.0],
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
             smallvec![filter],
             None, // no clip layer opened this one
         );
@@ -453,7 +453,7 @@ impl WgpuPainter {
             None, // bounds determined at restore time from content AABB + radius
             layer_opacity,
             [1.0, 1.0, 1.0],
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
             LayerFilterChain::new(), // no color-filter chain (image filter is separate)
             None,                    // no clip layer opened this one
         );
@@ -479,7 +479,7 @@ impl WgpuPainter {
         bounds: Option<Rect<f64>>,
         layer_opacity: f32,
         layer_tint_rgb: [f32; 3],
-        layer_blend: flui_types::painting::BlendMode,
+        layer_blend: flui_painting::paint::BlendMode,
         filters: LayerFilterChain,
         composite_clip: Option<crate::state_stack::ResolvedClip>,
     ) {

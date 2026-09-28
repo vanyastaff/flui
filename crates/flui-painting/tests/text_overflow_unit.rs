@@ -9,7 +9,7 @@
 
 use flui_painting::text_layout::TextLayout;
 use flui_painting::text_painter::TextPainter;
-use flui_types::typography::{TextDirection, TextSpan};
+use flui_painting::typography::{TextDirection, TextSpan};
 
 #[test]
 fn baselines_come_from_the_shaper() {
@@ -43,8 +43,8 @@ fn baselines_come_from_the_shaper() {
 #[test]
 fn color_change_keeps_the_shaped_layout() {
     use flui_painting::Invalidation;
-    use flui_types::Color;
-    use flui_types::typography::TextStyle;
+    use flui_painting::styling::Color;
+    use flui_painting::typography::TextStyle;
 
     let mut painter = TextPainter::new()
         .with_text(
@@ -86,7 +86,7 @@ fn color_change_keeps_the_shaped_layout() {
 
 #[test]
 fn named_font_family_reaches_the_shaper() {
-    use flui_types::typography::TextStyle;
+    use flui_painting::typography::TextStyle;
 
     // Pre-fix every non-generic family name collapsed to SansSerif, so
     // "monospace-by-name" shaped identically to the default face. A
@@ -110,7 +110,7 @@ fn named_font_family_reaches_the_shaper() {
 
 #[test]
 fn rich_child_span_styles_reach_the_shaper() {
-    use flui_types::typography::TextStyle;
+    use flui_painting::typography::TextStyle;
 
     // Root at 14px with a 28px child span: the rich path must measure
     // the child at 28px. The flattened pre-fix path shaped EVERYTHING
@@ -153,7 +153,7 @@ fn rich_child_span_styles_reach_the_shaper() {
 
 #[test]
 fn rich_inheritance_merges_parent_style_into_children() {
-    use flui_types::typography::TextStyle;
+    use flui_painting::typography::TextStyle;
 
     // A child WITHOUT its own size inherits the parent's 28px — the
     // tree must measure exactly like the flat 28px equivalent.
@@ -185,7 +185,7 @@ fn rich_inheritance_merges_parent_style_into_children() {
 
 #[test]
 fn rich_truncation_keeps_span_styling() {
-    use flui_types::typography::TextStyle;
+    use flui_painting::typography::TextStyle;
 
     // Two spans wrapped to one allowed line with an ellipsis: the rich
     // truncation slices the SPANS and the result still fits the width.
@@ -324,8 +324,9 @@ fn ellipsis_fits_within_the_width_constraint() {
 /// measured, ellipsis included.
 #[test]
 fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
+    use flui_foundation::geometry::Offset;
+    use flui_painting::styling::Color;
     use flui_painting::{Canvas, DrawOp};
-    use flui_types::{Color, geometry::Offset};
 
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new(
@@ -376,8 +377,9 @@ fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
 /// shapes again, once.
 #[test]
 fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
+    use flui_foundation::geometry::Offset;
     use flui_painting::{Canvas, DrawOp, Invalidation};
-    use flui_types::{Color, geometry::Offset, typography::TextStyle};
+    use flui_painting::{styling::Color, typography::TextStyle};
 
     fn styled(root: Color, child: Color) -> TextSpan {
         TextSpan::new("Hello, ")

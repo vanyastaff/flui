@@ -1,6 +1,6 @@
 //! WGSL sources and mask-shader selection for offscreen effects.
 
-use flui_types::painting::Shader;
+use flui_painting::paint::Shader;
 
 /// Shader type identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,13 +70,13 @@ impl ShaderType {
 
 #[cfg(all(test, feature = "testing"))]
 mod tests {
-    use flui_types::styling::Color;
+    use flui_painting::styling::Color;
 
     use super::*;
 
     #[test]
     fn test_shader_type_from_shader() {
-        use flui_types::geometry::Offset;
+        use flui_foundation::geometry::Offset;
 
         let solid = Shader::solid(Color::WHITE);
         assert_eq!(ShaderType::from_shader(&solid), ShaderType::SolidMask);

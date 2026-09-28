@@ -15,7 +15,7 @@
 //! mistake an infinite cap for a meaningful upper bound.
 
 use flui_foundation::Single;
-use flui_types::{Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,

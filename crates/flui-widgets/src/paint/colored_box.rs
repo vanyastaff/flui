@@ -1,9 +1,9 @@
 //! [`ColoredBox`] — paints a solid color behind its child.
 
 use flui_objects::RenderDecoratedBox;
+use flui_painting::styling::BoxDecoration;
+use flui_painting::styling::Color;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Color;
-use flui_types::styling::BoxDecoration;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Paints a solid `color` filling its bounds, behind its child.

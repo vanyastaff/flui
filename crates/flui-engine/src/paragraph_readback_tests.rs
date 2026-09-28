@@ -1,11 +1,11 @@
 //! The engine rasterises the paragraph it is handed and never shapes one
 //! itself (ADR-0065).
 
+use flui_foundation::geometry::Offset;
 use flui_layer::SceneBuilder;
 use flui_painting::{Canvas, TextPainter};
-use flui_types::{
-    Color,
-    geometry::Offset,
+use flui_painting::{
+    styling::Color,
     typography::{TextDirection, TextSpan, TextStyle},
 };
 
@@ -177,7 +177,7 @@ fn text_is_clipped_by_a_rounded_clip() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
-    use flui_types::geometry::{RRect, Rect};
+    use flui_foundation::geometry::{RRect, Rect};
     // A wide block of dense glyphs, clipped to a circle inscribed in the
     // surface: the corner pixel (4, 4) is inside the scissor box and far
     // outside the circle.

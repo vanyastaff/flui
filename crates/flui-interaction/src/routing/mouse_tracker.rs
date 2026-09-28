@@ -35,7 +35,7 @@ use std::{
     rc::Rc,
 };
 
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 use smallvec::SmallVec;
 
 pub use super::interaction_lane::{
@@ -757,7 +757,7 @@ mod tests {
     use std::panic;
 
     use flui_foundation::RenderId;
-    use flui_types::Offset;
+    use flui_foundation::geometry::Offset;
 
     use super::*;
     use crate::{

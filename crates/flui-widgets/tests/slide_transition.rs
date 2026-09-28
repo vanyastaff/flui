@@ -14,7 +14,7 @@ use flui_animation::ext::AnimatableExt;
 use flui_animation::{Animation, AnimationController, Tween};
 use flui_interaction::events::PointerEventExt as _;
 use flui_objects::TranslationFraction;
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector, Listener, SizedBox, SlideTransition};
 
 fn position_animation(

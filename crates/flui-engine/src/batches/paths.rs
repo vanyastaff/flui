@@ -1,7 +1,8 @@
 //! Path, vertices, line, and shadow record methods: draw_path, draw_vertices, line, draw_shadow.
 
+use flui_foundation::geometry::{Offset, Point};
 use flui_painting::{BlendMode, Paint, PaintStyle};
-use flui_types::{Offset, Point, painting::path::Path, styling::Color};
+use flui_painting::{paint::path::Path, styling::Color};
 
 use super::{
     super::{
@@ -170,7 +171,7 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<crate::command_ir::DrawItem>,
         state: &GpuStateStack,
-        rrect: &flui_types::geometry::RRect,
+        rrect: &flui_foundation::geometry::RRect,
         color: Color,
         elevation: f32,
     ) {
@@ -531,8 +532,8 @@ fn path_aabb_area_device_px_sq(path: &Path, state: &GpuStateStack) -> f32 {
 
 #[cfg(test)]
 mod threshold_tests {
+    use flui_painting::paint::path::Path;
     use flui_painting::{BlendMode, Paint, PaintStyle};
-    use flui_types::painting::path::Path;
 
     use super::DrawBatcher;
     use crate::{
@@ -546,7 +547,7 @@ mod threshold_tests {
     }
 
     fn rect_path(w: f32, h: f32) -> Path {
-        use flui_types::Rect;
+        use flui_foundation::geometry::Rect;
         Path::rectangle(Rect::from_xywh(0.0, 0.0, f64::from(w), f64::from(h)))
     }
 

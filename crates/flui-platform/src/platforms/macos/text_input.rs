@@ -43,8 +43,8 @@ use objc2::runtime::{AnyObject, Bool, ClassBuilder, Protocol, Sel};
 use objc2::{msg_send, sel};
 use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
 
+use flui_foundation::geometry::Bounds;
 use flui_platform_api::ImeEvent;
-use flui_types::geometry::Bounds;
 
 use super::view::{ViewContext, get_context as get_view_context};
 use super::window::route_on_owner;

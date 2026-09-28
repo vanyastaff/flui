@@ -158,7 +158,7 @@ fn external_consumers_can_name_custom_paint_contract() {
     dependencies.insert("flui".into(), dependency("flui", root, false));
     check_consumer(
         dependencies,
-        "use flui::painting::{Canvas, CustomPainter};\nuse flui::types::Size;\n#[derive(Debug)] pub struct Painter;\nimpl CustomPainter for Painter { fn paint(&self, _: &mut Canvas, _: Size) {} fn should_repaint(&self, _: &dyn CustomPainter) -> bool { false } fn as_any(&self) -> &dyn std::any::Any { self } }",
+        "use flui::painting::{Canvas, CustomPainter};\nuse flui::geometry::Size;\n#[derive(Debug)] pub struct Painter;\nimpl CustomPainter for Painter { fn paint(&self, _: &mut Canvas, _: Size) {} fn should_repaint(&self, _: &dyn CustomPainter) -> bool { false } fn as_any(&self) -> &dyn std::any::Any { self } }",
         "custom painting without testing feature",
     );
 }

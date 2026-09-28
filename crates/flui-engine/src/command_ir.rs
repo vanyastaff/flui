@@ -9,7 +9,8 @@
 //! `painter`.  These types are re-exported `pub(crate)` so `painter`
 //! and future batcher/compositor modules can import from one place.
 
-use flui_types::{Rect, painting::BlendMode};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::BlendMode;
 use smallvec::SmallVec;
 
 use crate::{
@@ -33,8 +34,8 @@ use crate::{
 /// shader applies per RGB channel (alpha is always passed through unchanged).
 ///
 /// The underlying transfer functions are the `pub` helpers
-/// [`flui_types::styling::color::srgb_to_linear`] and
-/// [`flui_types::styling::color::linear_to_srgb`] — the same functions used by
+/// [`flui_painting::styling::color::srgb_to_linear`] and
+/// [`flui_painting::styling::color::linear_to_srgb`] — the same functions used by
 /// the CPU oracle in the GPU readback tests, ensuring one authoritative home for
 /// the IEC 61966-2-1 piecewise formula.
 ///
@@ -73,7 +74,7 @@ pub(crate) enum GammaDirection {
 pub(crate) enum LayerFilter {
     /// A 5×4 row-major color matrix applied per-pixel on un-premultiplied color.
     ///
-    /// Layout mirrors [`flui_types::painting::ColorMatrix::values`]:
+    /// Layout mirrors [`flui_painting::paint::ColorMatrix::values`]:
     /// rows R/G/B/A × columns `[m0..m3, offset]`.
     ColorMatrix([f32; 20]),
 
@@ -81,12 +82,12 @@ pub(crate) enum LayerFilter {
     /// applied in straight sRGB space.
     ///
     /// `color` is the **filter** color in straight sRGB `[f32; 4]` (pre-converted
-    /// from [`flui_types::Color`] via [`flui_types::Color::to_f32_array`] at the
+    /// from [`flui_painting::styling::Color`] via [`flui_painting::styling::Color::to_f32_array`] at the
     /// call site).  The GPU shader unpremultiplies the layer pixel, computes
     /// `blend(src=color, dst=straight_pixel, mode)`, clamps to `[0, 1]`, and
     /// repremultiplies.
     ///
-    /// Mirrors [`flui_types::Color::blend`] (`self` = filter color = src,
+    /// Mirrors [`flui_painting::styling::Color::blend`] (`self` = filter color = src,
     /// `dst` = layer pixel): the CPU oracle for the GPU readback tests.
     ///
     /// Constructed from the production `push_color_filter` path via
@@ -95,7 +96,7 @@ pub(crate) enum LayerFilter {
         /// Filter color in straight sRGB `[r, g, b, a]` (values in `[0, 1]`).
         color: [f32; 4],
         /// Blend mode — selects the Porter-Duff or W3C blend function.
-        blend_mode: flui_types::painting::BlendMode,
+        blend_mode: flui_painting::paint::BlendMode,
     },
 
     /// Per-channel sRGB ↔ linear-light transfer function, applied per RGB channel
@@ -103,8 +104,8 @@ pub(crate) enum LayerFilter {
     ///
     /// The direction is selected by [`GammaDirection`]; the underlying formula is
     /// the IEC 61966-2-1 piecewise function implemented in
-    /// [`flui_types::styling::color::srgb_to_linear`] /
-    /// [`flui_types::styling::color::linear_to_srgb`].
+    /// [`flui_painting::styling::color::srgb_to_linear`] /
+    /// [`flui_painting::styling::color::linear_to_srgb`].
     ///
     /// The GPU shader unpremultiplies, applies the transfer per R/G/B, clamps to
     /// `[0, 1]`, and repremultiplies; alpha is left unchanged.
@@ -265,7 +266,7 @@ pub(crate) enum ImageFilterPass {
     /// the `LayerFilter::ColorMatrix` fold arm uses.  The matrix is applied
     /// full-viewport (REPLACE semantics, `LoadOp::Clear(TRANSPARENT)`).
     ///
-    /// Layout mirrors [`flui_types::painting::ColorMatrix::values`]:
+    /// Layout mirrors [`flui_painting::paint::ColorMatrix::values`]:
     /// rows R/G/B/A × columns `[m0..m3, offset]`.
     ///
     /// ## Two-route rule
@@ -595,7 +596,7 @@ pub(crate) struct DrawSegment {
     pub(crate) cached_images: Vec<(TextureKey, TextureInstance, ScissorRect)>,
     /// External-texture draws queued for this segment.
     ///
-    /// Each entry carries a `flui_types::painting::TextureId`
+    /// Each entry carries a `flui_painting::paint::TextureId`
     /// so the IR is comparable by value and free of non-`PartialEq` wgpu handles.
     /// Resolution from ID to `wgpu::TextureView` happens at replay time in
     /// `flush_segment_external_images`, which calls
@@ -607,7 +608,7 @@ pub(crate) struct DrawSegment {
     ///
     /// The third element is the scissor rect active at draw time.
     pub(crate) external_images: Vec<(
-        flui_types::painting::TextureId,
+        flui_painting::paint::TextureId,
         TextureInstance,
         ScissorRect,
     )>,
@@ -1004,10 +1005,10 @@ pub(crate) struct PendingOpacityLayer {
 // handle; see `DrawSegment`'s doc.
 #[cfg(test)]
 mod filter_ir_clone_pins {
-    use flui_types::Rect;
+    use flui_foundation::geometry::Rect;
     use smallvec::smallvec;
 
-    use flui_types::painting::BlendMode;
+    use flui_painting::paint::BlendMode;
 
     use super::{
         DrawItem, DrawSegment, FilterOp, GammaDirection, ImageFilterPass, ImageFilterSpec,

@@ -69,7 +69,7 @@
 //! use flui_testing::HeadlessBinding;
 //! use flui_interaction::settings::GestureSettings;
 //! use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
-//! use flui_types::Offset;
+//! use flui_foundation::geometry::Offset;
 //!
 //! let mut binding = HeadlessBinding::new();
 //!
@@ -127,12 +127,12 @@ use flui_interaction::{
 };
 // `flui-rendering` re-exports `flui-layer` wholesale, so naming the composited
 // tree costs no extra dependency edge.
+use flui_foundation::geometry::Offset;
 use flui_rendering::layer::LayerTree;
 use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::{
     BoxedTask, ClockSource, DemandKind, FrameClock, LocalPostFrameLane, TaskToken, UpdateScheduler,
 };
-use flui_types::geometry::Offset;
 use flui_view::{BuildOwner, ElementId, ElementTree, View};
 
 fn preserve_first_pointer_panic(

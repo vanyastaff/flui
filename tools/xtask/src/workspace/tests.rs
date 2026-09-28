@@ -989,16 +989,7 @@ fn the_tiers_match_the_adr_0081_table() {
     let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
     let members = super::Members::load(&util::repo_root(), &metadata).expect("manifests load");
     let table: [(&str, &str, &[&str]); 10] = [
-        (
-            "V",
-            "internal",
-            &[
-                "flui-geometry",
-                "flui-types",
-                "flui-macros",
-                "flui-foundation",
-            ],
-        ),
+        ("V", "internal", &["flui-macros", "flui-foundation"]),
         ("C", "stable", &["flui-platform-api", "flui-protocol"]),
         (
             "S",

@@ -1,7 +1,7 @@
 //! RenderOpacity - applies transparency to a single child.
 
 use flui_foundation::Single;
-use flui_types::{Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},

@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use flui_foundation::RenderId;
 use flui_foundation::Variable;
+use flui_foundation::geometry::{Offset, Size};
 use flui_objects::{MainAxisAlignment, MainAxisSize, RenderFlex};
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -34,7 +35,6 @@ use flui_rendering::{
         BoxLayoutCtx, BoxProtocol, ChildState, RenderObject, box_protocol::BoxLayoutCtxErased,
     },
 };
-use flui_types::{Offset, Size};
 
 type Observed = Arc<Mutex<Vec<(RenderId, BoxConstraints)>>>;
 

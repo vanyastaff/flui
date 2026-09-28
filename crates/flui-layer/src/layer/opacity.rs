@@ -1,6 +1,7 @@
 //! `OpacityLayer` — composites its subtree at an alpha, optionally with a blend mode.
 
-use flui_types::{Offset, painting::BlendMode};
+use flui_foundation::geometry::Offset;
+use flui_painting::paint::BlendMode;
 
 /// Layer that applies opacity (alpha blending) to its children.
 ///

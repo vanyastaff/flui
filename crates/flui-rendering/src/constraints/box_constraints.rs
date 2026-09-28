@@ -8,7 +8,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use flui_types::{EdgeInsets, Size, geometry::canonical_bits_f64};
+use flui_foundation::geometry::{EdgeInsets, Size, canonical_bits_f64};
 
 use super::Constraints;
 

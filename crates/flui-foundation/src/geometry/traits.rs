@@ -3,65 +3,11 @@
 //! This module provides helper traits that enable ergonomic operations on
 //! geometry types. Inspired by GPUI's design patterns.
 
+use crate::geometry::axis::Axis;
 use std::{
     fmt::Debug,
     ops::{Add, Mul, Neg, Sub},
 };
-
-// ============================================================================
-// AXIS - 2D cartesian axes
-// ============================================================================
-
-/// The two axes of a 2D cartesian coordinate system.
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
-pub enum Axis {
-    /// The vertical axis (y, up and down).
-    Vertical,
-    /// The horizontal axis (x, left and right).
-    Horizontal,
-}
-
-impl Axis {
-    /// Returns the perpendicular axis.
-    #[must_use]
-    pub const fn invert(self) -> Self {
-        match self {
-            Axis::Vertical => Axis::Horizontal,
-            Axis::Horizontal => Axis::Vertical,
-        }
-    }
-
-    /// Returns `true` if this is the vertical axis.
-    #[must_use]
-    pub const fn is_vertical(self) -> bool {
-        matches!(self, Axis::Vertical)
-    }
-
-    /// Returns `true` if this is the horizontal axis.
-    #[must_use]
-    pub const fn is_horizontal(self) -> bool {
-        matches!(self, Axis::Horizontal)
-    }
-
-    /// Returns the array index for this axis (horizontal=0, vertical=1).
-    #[must_use]
-    pub const fn index(self) -> usize {
-        match self {
-            Axis::Horizontal => 0,
-            Axis::Vertical => 1,
-        }
-    }
-
-    /// Selects a value based on the axis.
-    #[inline]
-    #[must_use]
-    pub fn select<T>(self, horizontal: T, vertical: T) -> T {
-        match self {
-            Axis::Horizontal => horizontal,
-            Axis::Vertical => vertical,
-        }
-    }
-}
 
 // ============================================================================
 // UNIT - the scalar a geometry type is built from

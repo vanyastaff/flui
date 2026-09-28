@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use flui_types::geometry::{Matrix4, Rect};
+use flui_foundation::geometry::{Matrix4, Rect};
 
 use crate::display_list::{DisplayList, DrawCommand, DrawOp, Paint};
 
@@ -30,7 +30,8 @@ pub(crate) use state::CanvasState;
 ///
 /// ```rust
 /// use flui_painting::{Canvas, Paint};
-/// use flui_types::{Rect, styling::Color};
+/// use flui_foundation::geometry::Rect;
+/// use flui_painting::styling::Color;
 ///
 /// let mut canvas = Canvas::new();
 /// canvas.save();

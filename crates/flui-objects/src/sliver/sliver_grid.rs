@@ -579,10 +579,10 @@ impl RenderSliver for RenderSliverGrid {
 mod tests {
     use std::any::Any;
 
+    use flui_rendering::constraints::AxisDirection;
     use flui_rendering::constraints::{GrowthDirection, SliverConstraints};
     use flui_rendering::delegates::{SliverGridDelegateWithFixedCrossAxisCount, SliverGridLayout};
     use flui_rendering::view::ScrollDirection;
-    use flui_types::layout::AxisDirection;
 
     use super::*;
 

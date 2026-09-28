@@ -1,10 +1,50 @@
-//! `TextBaseline` -- the baseline to use for aligning text.
-//!
-//! Re-exported from [`flui_types`] — the single canonical definition for the
-//! workspace. A local enum lived here while `flui-types`' definition lacked the
-//! `Copy + Eq + Hash` the painting/typography hot paths need (by-value passing
-//! and cache map keys); once those derives were widened on the canonical type,
-//! this consolidated to a re-export (2026-06), per the resolution this module
-//! previously documented.
+//! Baseline types for text alignment
 
-pub use flui_types::layout::TextBaseline;
+/// A horizontal line used for aligning text, equivalent to Flutter's
+/// `TextBaseline`.
+///
+/// Baseline-aligned layout (e.g. `CrossAxisAlignment::Baseline`) lines up
+/// children along the selected baseline kind rather than their box edges.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum TextBaseline {
+    /// The alphabetic baseline — the canonical, single definition for the whole
+    /// workspace (`flui-rendering` and `flui-painting` re-export this;
+    /// consolidated 2026-06). `Copy + Eq + Hash` so it stays a by-value,
+    /// map-key-capable type on the text hot paths.
+    #[default]
+    Alphabetic,
+
+    /// Ideographic baseline (used for CJK scripts).
+    ///
+    /// This is the baseline used for Chinese, Japanese, and Korean scripts.
+    /// In these scripts, the baseline is typically at the bottom of the
+    /// character box.
+    Ideographic,
+}
+
+impl TextBaseline {
+    /// Returns true if this is the alphabetic baseline.
+    #[inline]
+    pub const fn is_alphabetic(&self) -> bool {
+        matches!(self, Self::Alphabetic)
+    }
+
+    /// Returns true if this is the ideographic baseline.
+    #[inline]
+    pub const fn is_ideographic(&self) -> bool {
+        matches!(self, Self::Ideographic)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn predicates() {
+        let (a, i) = (TextBaseline::Alphabetic, TextBaseline::Ideographic);
+        assert_eq!((a.is_alphabetic(), a.is_ideographic()), (true, false));
+        assert_eq!((i.is_alphabetic(), i.is_ideographic()), (false, true));
+    }
+}

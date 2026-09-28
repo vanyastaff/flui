@@ -7,6 +7,7 @@ use std::sync::{
 use std::time::Duration;
 
 use flui_animation::AnimationController;
+use flui_foundation::geometry::{Offset, Size};
 use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerButtons, PointerType, make_down_event, make_down_event_for_id, make_move_event,
@@ -14,7 +15,6 @@ use flui_interaction::events::{
 };
 use flui_platform_api::PlatformInput;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
-use flui_types::{Size, geometry::Offset};
 use flui_view::{BuildContext, IntoView, StatelessView};
 use flui_widgets::SizedBox;
 

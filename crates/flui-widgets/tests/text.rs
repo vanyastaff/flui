@@ -3,7 +3,7 @@
 //! inside other widgets.
 
 use crate::common::{lay_out, loose, tight};
-use flui_types::typography::{TextDirection, TextStyle};
+use flui_painting::typography::{TextDirection, TextStyle};
 use flui_widgets::{Center, DefaultTextStyle, Padding, Text};
 
 #[test]

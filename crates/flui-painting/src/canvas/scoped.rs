@@ -3,10 +3,8 @@
 //! inside the closure unwinds past the `restore`; the canvas is not reused
 //! after a panic, so nothing depends on it.
 
-use flui_types::{
-    geometry::{Matrix4, RRect, Rect},
-    painting::{BlendMode, Path},
-};
+use crate::paint::{BlendMode, Path};
+use flui_foundation::geometry::{Matrix4, RRect, Rect};
 
 use super::Canvas;
 

@@ -1,6 +1,6 @@
 //! `OffsetLayer` — translates its subtree.
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 
 /// Layer that applies a simple offset to its children.
 ///
@@ -29,7 +29,7 @@ use flui_types::Offset;
 ///
 /// ```rust
 /// use flui_layer::OffsetLayer;
-/// use flui_types::Offset;
+/// use flui_foundation::geometry::Offset;
 ///
 /// let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
 ///

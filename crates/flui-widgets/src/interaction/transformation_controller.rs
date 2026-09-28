@@ -5,8 +5,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Matrix4;
+use flui_foundation::geometry::Offset;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_types::Offset;
 use parking_lot::Mutex;
 
 /// The heap-allocated state shared by every clone of a

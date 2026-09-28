@@ -12,6 +12,7 @@ use std::sync::{
 };
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::Size;
 use flui_objects::{RenderColoredBox, RenderFlex, RenderRepaintBoundary};
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -23,7 +24,6 @@ use flui_rendering::{
         tree,
     },
 };
-use flui_types::Size;
 
 /// A `Single`-arity proxy whose `paint_effects` panics while `armed`. Shared
 /// by every test in this module that poisons through a descriptor build
@@ -384,7 +384,7 @@ fn a_panicking_path_clipper_poisons_the_frame_on_both_arms() {
                 flui_rendering::traits::PaintClip::PathTarget {
                     target: self.target,
                     size,
-                    behavior: flui_types::painting::Clip::AntiAlias,
+                    behavior: flui_painting::paint::Clip::AntiAlias,
                 },
             )
         }
@@ -404,9 +404,9 @@ fn a_panicking_path_clipper_poisons_the_frame_on_both_arms() {
                     !armed.load(Ordering::Relaxed),
                     "path clipper: armed, poisoning resolution on purpose",
                 );
-                let mut path = flui_types::painting::Path::new();
-                path.add_rect(flui_types::Rect::from_origin_size(
-                    flui_types::Point::ZERO,
+                let mut path = flui_painting::paint::Path::new();
+                path.add_rect(flui_foundation::geometry::Rect::from_origin_size(
+                    flui_foundation::geometry::Point::ZERO,
                     size,
                 ));
                 path

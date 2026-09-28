@@ -99,7 +99,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         &mut self,
         id: RenderId,
         constraints: crate::constraints::BoxConstraints,
-    ) -> crate::error::RenderResult<flui_types::Size> {
+    ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
         let Self {
@@ -527,7 +527,7 @@ pub(super) fn dry_layout_query(
     constraints: crate::constraints::BoxConstraints,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
-) -> crate::error::RenderResult<flui_types::Size> {
+) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
     ensure_stack(|| dry_layout_query_impl(slots, cx, id, constraints, parent_data_seeds))
 }
 
@@ -540,7 +540,7 @@ fn dry_layout_query_impl(
     constraints: crate::constraints::BoxConstraints,
     #[cfg(any(test, feature = "testing"))] parent_data_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     #[cfg(not(any(test, feature = "testing")))] parent_data_seeds: &(),
-) -> crate::error::RenderResult<flui_types::Size> {
+) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
     let Some(slot) = slots.get_mut(&id) else {
         return Err(crate::error::RenderError::NodeNotFound(id));
     };
@@ -549,7 +549,7 @@ fn dry_layout_query_impl(
             false,
             "dry-layout query re-entered node {id:?} mid-computation — cyclic child links"
         );
-        return Ok(flui_types::Size::ZERO);
+        return Ok(flui_foundation::geometry::Size::ZERO);
     };
     let children = slot.children.clone();
 
@@ -583,7 +583,7 @@ fn dry_layout_query_impl(
                     ));
                     return match request {
                         DryLayoutChildRequest::DryLayout(_) => {
-                            DryLayoutChildResponse::DryLayout(flui_types::Size::ZERO)
+                            DryLayoutChildResponse::DryLayout(flui_foundation::geometry::Size::ZERO)
                         }
                         DryLayoutChildRequest::Intrinsic(_, _) => {
                             DryLayoutChildResponse::Intrinsic(0.0)
@@ -599,7 +599,9 @@ fn dry_layout_query_impl(
                             Ok(v) => DryLayoutChildResponse::DryLayout(v),
                             Err(err) => {
                                 child_err.get_or_insert(err);
-                                DryLayoutChildResponse::DryLayout(flui_types::Size::ZERO)
+                                DryLayoutChildResponse::DryLayout(
+                                    flui_foundation::geometry::Size::ZERO,
+                                )
                             }
                         }
                     }
@@ -724,7 +726,9 @@ fn dry_baseline_query_impl(
                             DryBaselineChildResponse::Baseline(None)
                         }
                         DryBaselineChildRequest::DryLayout(_) => {
-                            DryBaselineChildResponse::DryLayout(flui_types::Size::ZERO)
+                            DryBaselineChildResponse::DryLayout(
+                                flui_foundation::geometry::Size::ZERO,
+                            )
                         }
                         DryBaselineChildRequest::Intrinsic(_, _) => {
                             DryBaselineChildResponse::Intrinsic(0.0)
@@ -746,7 +750,9 @@ fn dry_baseline_query_impl(
                             Ok(v) => DryBaselineChildResponse::DryLayout(v),
                             Err(err) => {
                                 child_err.get_or_insert(err);
-                                DryBaselineChildResponse::DryLayout(flui_types::Size::ZERO)
+                                DryBaselineChildResponse::DryLayout(
+                                    flui_foundation::geometry::Size::ZERO,
+                                )
                             }
                         }
                     }

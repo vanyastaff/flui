@@ -317,7 +317,7 @@ mod cpu_tests {
     /// Uses a matrix with no symmetry so the transpose bug would produce wrong values.
     #[test]
     fn from_values_asymmetric_matrix_with_offset_matches_apply() {
-        use flui_types::painting::ColorMatrix;
+        use flui_painting::paint::ColorMatrix;
         #[rustfmt::skip]
         let values: [f32; 20] = [
             0.6, 0.2, 0.1, 0.0, 0.05,  // R_out

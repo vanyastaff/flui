@@ -24,7 +24,7 @@
 //! replace them before its first release.
 
 use flui_foundation::DataTransferId;
-use flui_types::geometry::{Offset, Point};
+use flui_foundation::geometry::{Offset, Point};
 /// Re-export scroll events
 pub use ui_events::ScrollDelta;
 /// Re-export W3C keyboard event from ui-events

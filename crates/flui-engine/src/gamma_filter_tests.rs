@@ -13,8 +13,8 @@
 //!
 //! ## Oracle discipline (G1)
 //!
-//! The oracle calls `flui_types::styling::color::srgb_to_linear` /
-//! `flui_types::styling::color::linear_to_srgb` **directly** — the identical
+//! The oracle calls `flui_painting::styling::color::srgb_to_linear` /
+//! `flui_painting::styling::color::linear_to_srgb` **directly** — the identical
 //! functions the WGSL shader mirrors.  No transfer-function math is re-derived
 //! in this test.  Absolute assertions verify specific known values so the test
 //! cannot be co-vacuous.
@@ -29,10 +29,11 @@
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::Rect;
     use flui_painting::Paint;
-    use flui_types::{
-        Color, Rect,
-        styling::color::{linear_to_srgb, srgb_to_linear},
+    use flui_painting::styling::{
+        Color,
+        color::{linear_to_srgb, srgb_to_linear},
     };
 
     use crate::{
@@ -132,12 +133,12 @@ mod gpu_tests {
         }
     }
 
-    // ── CPU oracle (G1 — calls flui_types transfer fns directly) ─────────────
+    // ── CPU oracle (G1 — calls flui_painting transfer fns directly) ─────────────
 
     /// Apply the sRGB → linear transfer to a straight-alpha opaque color and
     /// return the expected premultiplied `[r, g, b, a]` u8 quad.
     ///
-    /// **Oracle:** calls `flui_types::styling::color::srgb_to_linear` directly —
+    /// **Oracle:** calls `flui_painting::styling::color::srgb_to_linear` directly —
     /// the same source of truth as the WGSL shader.  No math re-derived here.
     ///
     /// For opaque input (alpha = 255): straight = premultiplied, so the
@@ -218,7 +219,7 @@ mod gpu_tests {
     ///
     /// **ABSOLUTE assertion:** `srgb_to_linear(128/255) * 255 ≈ 55`.
     /// This prevents a co-vacuous oracle — the expected value is computed from the
-    /// `flui_types::styling::color::srgb_to_linear` transfer function (the same
+    /// `flui_painting::styling::color::srgb_to_linear` transfer function (the same
     /// source as the WGSL), not re-derived here.
     ///
     /// **Fails if:** the direction flag is swapped (linear→sRGB of 0.502 ≈ 0.734
@@ -277,7 +278,7 @@ mod gpu_tests {
     /// must recover the original pixel value within ±2 LSB (round-trip identity).
     ///
     /// **Oracle:** applies `srgb_to_linear` then `linear_to_srgb` via the
-    /// `flui_types` transfer fns.  Any direction-swap in the shader would produce
+    /// `flui_painting` transfer fns.  Any direction-swap in the shader would produce
     /// a doubling of the same transfer (not an inverse), breaking the ±2 target.
     #[test]
     fn linear_to_srgb_inverse_of_srgb_to_linear() {
@@ -559,7 +560,7 @@ mod gpu_tests {
     /// (testing the chain fold), whereas GA6 checks the mathematical inverse
     /// property of the oracle itself and compares with a single-pass GPU output.
     ///
-    /// Oracle: apply srgb_to_linear then linear_to_srgb via flui_types fns.
+    /// Oracle: apply srgb_to_linear then linear_to_srgb via flui_painting fns.
     /// The GPU two-pass result must match the oracle within ±4 LSB
     /// (two offscreen quantisation boundaries).
     #[test]

@@ -11,7 +11,7 @@ use std::sync::{
 
 use android_activity::AndroidApp;
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Point, Size};
+use flui_foundation::geometry::{Point, Size};
 
 use crate::{
     shared::WindowCallbacks,

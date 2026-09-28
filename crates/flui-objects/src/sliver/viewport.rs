@@ -13,13 +13,12 @@ use std::sync::Arc;
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Variable;
-use flui_types::{
-    Offset, Point, Rect, Size,
-    layout::{
-        Axis, AxisDirection,
-        AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
-    },
-    painting::Clip,
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::paint::Clip;
+use flui_rendering::constraints::{
+    AxisDirection,
+    AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
 };
 
 use flui_rendering::{

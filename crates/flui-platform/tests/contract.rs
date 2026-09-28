@@ -25,8 +25,8 @@
 //! RUST_LOG=debug cargo test -p flui-platform --test contract -- --nocapture
 //! ```
 
+use flui_foundation::geometry::Size;
 use flui_platform::{Platform, WindowOptions, current_platform, headless_platform};
-use flui_types::geometry::Size;
 
 // ==================== Helper: Get Test Platform ====================
 

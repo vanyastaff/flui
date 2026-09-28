@@ -40,8 +40,8 @@
 
 use std::sync::Arc;
 
+use flui_painting::paint::Image as PixelImage;
 use flui_scheduler::{AsyncDriver, TaskToken};
-use flui_types::painting::Image as PixelImage;
 use flui_view::context::LifecycleContext;
 use flui_view::{RebuildHandle, RebuildReason};
 use parking_lot::Mutex;

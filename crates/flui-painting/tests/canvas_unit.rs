@@ -6,11 +6,9 @@
 //! does not carry inline `#[cfg(test)] mod tests` blocks for surface
 //! that is already exercised through the public API.
 
+use flui_foundation::geometry::{Point, Rect};
+use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
-use flui_types::{
-    geometry::{Point, Rect},
-    styling::Color,
-};
 
 #[test]
 fn test_canvas_creation() {

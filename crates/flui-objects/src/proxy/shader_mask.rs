@@ -34,10 +34,8 @@
 use std::fmt;
 
 use flui_foundation::Single;
-use flui_types::{
-    Offset, Point, Rect,
-    painting::{BlendMode, Shader},
-};
+use flui_foundation::geometry::{Offset, Point, Rect};
+use flui_painting::paint::{BlendMode, Shader};
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintCx},
@@ -269,7 +267,7 @@ impl RenderBox for RenderShaderMask {
 #[cfg(test)]
 mod tests {
     use flui_interaction::InteractionLane;
-    use flui_types::styling::Color;
+    use flui_painting::styling::Color;
 
     use super::*;
 

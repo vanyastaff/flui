@@ -20,7 +20,8 @@
 //! constitutes the authoritative correctness gate for the WGSL math.
 
 use bytemuck::cast_slice;
-use flui_types::{geometry::Rect, painting::BlendMode};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::BlendMode;
 
 pub(crate) use pipeline::AdvancedBlendPipeline;
 pub(crate) use pipeline::mode_to_u32;
@@ -313,7 +314,8 @@ pub(crate) fn flush_advanced_layer(
 mod synthetic_op_tests {
     use std::sync::Arc;
 
-    use flui_types::{Color, geometry::Rect, painting::BlendMode};
+    use flui_foundation::geometry::Rect;
+    use flui_painting::{paint::BlendMode, styling::Color};
     use wgpu::util::DeviceExt as _;
 
     use super::{AdvancedBlendOp, AdvancedBlendPipeline, flush_advanced_layer};

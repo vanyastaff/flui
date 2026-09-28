@@ -10,7 +10,7 @@
 //! with a left-to-right cross axis, [`horizontal`] scrolls left-to-right
 //! with a top-to-bottom cross axis.
 
-use flui_types::layout::AxisDirection;
+use crate::constraints::AxisDirection;
 
 use crate::{
     constraints::{GrowthDirection, SliverConstraints},

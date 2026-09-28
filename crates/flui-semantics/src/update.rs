@@ -34,7 +34,7 @@
 //! the tree can resolve child identities, because a node stores its children
 //! as arena ids.
 
-use flui_types::{Matrix4, Rect};
+use flui_foundation::geometry::{Matrix4, Rect};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 

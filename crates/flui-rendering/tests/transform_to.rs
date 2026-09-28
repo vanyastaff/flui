@@ -14,12 +14,12 @@
 
 #![cfg(feature = "testing")]
 
+use flui_foundation::geometry::{Matrix4, Offset, Point, Size};
 use flui_foundation::{Leaf, Single};
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::prelude::*;
 use flui_rendering::testing::{Probe, RenderTester, box_node};
 use flui_rendering::traits::PaintEffects;
-use flui_types::{Matrix4, Offset, Point, Size};
 
 /// A leaf of fixed size.
 #[derive(Debug, Default)]

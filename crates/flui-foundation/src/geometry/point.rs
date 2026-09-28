@@ -957,22 +957,22 @@ where
     type Unit = T;
 
     #[inline]
-    fn along(&self, axis: super::traits::Axis) -> Self::Unit {
+    fn along(&self, axis: super::axis::Axis) -> Self::Unit {
         match axis {
-            super::traits::Axis::Horizontal => self.x,
-            super::traits::Axis::Vertical => self.y,
+            super::axis::Axis::Horizontal => self.x,
+            super::axis::Axis::Vertical => self.y,
         }
     }
 
     #[inline]
     fn apply_along(
         &self,
-        axis: super::traits::Axis,
+        axis: super::axis::Axis,
         f: impl FnOnce(Self::Unit) -> Self::Unit,
     ) -> Self {
         match axis {
-            super::traits::Axis::Horizontal => Self::new(f(self.x), self.y),
-            super::traits::Axis::Vertical => Self::new(self.x, f(self.y)),
+            super::axis::Axis::Horizontal => Self::new(f(self.x), self.y),
+            super::axis::Axis::Vertical => Self::new(self.x, f(self.y)),
         }
     }
 }

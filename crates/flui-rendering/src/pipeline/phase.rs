@@ -138,7 +138,7 @@ pub struct Compositing;
 /// Paint phase: `run_paint` may execute.
 ///
 /// Named with a `Phase` suffix to avoid a collision with
-/// `flui_types::painting::Paint` (the canvas paint style type) that is
+/// `flui_painting::paint::Paint` (the canvas paint style type) that is
 /// re-exported from `flui_rendering::pipeline::*`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PaintPhase;

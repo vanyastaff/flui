@@ -2,10 +2,8 @@
 
 use std::sync::Arc;
 
-use flui_types::{
-    geometry::Rect,
-    painting::{Clip, Path},
-};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::{Clip, Path};
 
 /// Layer that clips children to an arbitrary path.
 ///
@@ -31,10 +29,8 @@ use flui_types::{
 ///
 /// ```rust
 /// use flui_layer::ClipPathLayer;
-/// use flui_types::{
-///     geometry::Point,
-///     painting::{Clip, Path},
-/// };
+/// use flui_foundation::geometry::Point;
+/// use flui_painting::paint::{Clip, Path};
 ///
 /// // Create a triangular clip path
 /// let path = Path::polygon(&[
@@ -109,7 +105,7 @@ impl ClipPathLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::Point;
+    use flui_foundation::geometry::Point;
 
     use super::*;
 

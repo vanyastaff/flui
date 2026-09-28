@@ -1,9 +1,7 @@
 //! `ClipRRectLayer` — clips its subtree to a rounded rectangle.
 
-use flui_types::{
-    geometry::{RRect, Rect},
-    painting::Clip,
-};
+use flui_foundation::geometry::{RRect, Rect};
+use flui_painting::paint::Clip;
 
 /// Layer that clips children to a rounded rectangle.
 ///
@@ -24,10 +22,8 @@ use flui_types::{
 ///
 /// ```rust
 /// use flui_layer::ClipRRectLayer;
-/// use flui_types::{
-///     geometry::{RRect, Rect},
-///     painting::Clip,
-/// };
+/// use flui_foundation::geometry::{RRect, Rect};
+/// use flui_painting::paint::Clip;
 ///
 /// // Create rounded rectangle with 10px corner radius
 /// let rrect = RRect::from_rect_circular(

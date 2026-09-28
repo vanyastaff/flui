@@ -92,16 +92,16 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Alignment, EdgeInsets};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Center, Container, DefaultTextStyle, Padding, Semantics, SemanticsRole, SizedBox, Table,
     TableCell, TableCellVerticalAlignment, TableColumnWidth, TableRow, WidgetState,
     WidgetStateProperty, WidgetStates,
 };
+use flui_sdk::{geometry::EdgeInsets, painting::Alignment};
 
 use crate::checkbox::{CHECKBOX_EDGE_SIZE, Checkbox};
 use crate::color_scheme::ColorScheme;

@@ -15,7 +15,7 @@ flui-layer = { path = "../../crates/flui-layer" }
 flui-view = { path = "../../crates/flui-view" }
 flui-rendering = { path = "../../crates/flui-rendering" }
 flui-objects = { path = "../../crates/flui-objects" }
-flui-types = { path = "../../crates/flui-types" }
+flui-painting = { path = "../../crates/flui-painting" }
 flui-foundation = { path = "../../crates/flui-foundation" }
 
 [lints]

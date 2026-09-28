@@ -8,7 +8,8 @@ use std::{
 
 use super::{
     Point, Vec2,
-    traits::{Along, Axis, FloatUnit, Half, IsZero, NumericUnit, Unit},
+    axis::Axis,
+    traits::{Along, FloatUnit, Half, IsZero, NumericUnit, Unit},
 };
 
 /// A 2D size with width and height.

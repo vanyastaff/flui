@@ -2,7 +2,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use flui_types::{Offset, geometry::canonical_bits_f64};
+use flui_foundation::geometry::{Offset, canonical_bits_f64};
 
 use super::base::ParentData;
 
@@ -19,7 +19,7 @@ use super::base::ParentData;
 ///
 /// ```ignore
 /// use flui_rendering::parent_data::BoxParentData;
-/// use flui_types::Offset;
+/// use flui_foundation::geometry::Offset;
 ///
 /// // Create with builder
 /// let data = BoxParentData::new(Offset::new(10.0, 20.0));

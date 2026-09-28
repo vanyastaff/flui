@@ -73,16 +73,18 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
+use flui_foundation::geometry::{EdgeInsets, Offset, Point, Rect};
 use flui_interaction::Velocity;
 use flui_interaction::events::{Modifiers, ScrollEventData};
 use flui_interaction::routing::EventPropagation;
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
 use flui_objects::SubtreeAnchor;
+use flui_painting::Alignment;
+use flui_painting::paint::Clip;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
-use flui_types::painting::Clip;
-use flui_types::{Alignment, Axis, EdgeInsets, Offset, Point, Rect};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{Child, IntoView, View, ViewState};

@@ -13,8 +13,8 @@
 //!   window-specific and async, so it stays on the concrete type.
 //! - The trait is dyn-compatible (no generics, no `async` in methods).
 
+use flui_foundation::geometry::Rect;
 use flui_layer::Scene;
-use flui_types::geometry::Rect;
 
 use crate::error::EngineError;
 

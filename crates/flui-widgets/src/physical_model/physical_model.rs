@@ -2,11 +2,11 @@
 //! around a single child.
 
 use flui_objects::RenderPhysicalModel;
+use flui_painting::BoxShape;
+use flui_painting::paint::Clip;
+use flui_painting::styling::BorderRadius;
+use flui_painting::styling::Color;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Color;
-use flui_types::layout::BoxShape;
-use flui_types::painting::Clip;
-use flui_types::styling::BorderRadius;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A physical layer that clips its child to a [`BoxShape`] (optionally
@@ -151,7 +151,7 @@ impl_render_view!(PhysicalModel);
 
 #[cfg(test)]
 mod tests {
-    use flui_types::styling::BorderRadiusExt;
+    use flui_painting::styling::BorderRadiusExt;
     use flui_view::RenderView;
 
     use super::*;

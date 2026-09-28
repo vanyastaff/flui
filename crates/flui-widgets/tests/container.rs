@@ -7,8 +7,9 @@ use std::time::Duration;
 use crate::common::{lay_out, lay_out_animated, loose, offset, size};
 use flui_animation::Vsync;
 use flui_foundation::geometry::{EdgeInsets, Matrix4};
-use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color};
+use flui_painting::Alignment;
+use flui_painting::styling::BoxDecoration;
+use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
 use flui_widgets::{

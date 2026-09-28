@@ -11,6 +11,7 @@
 //! Failure mode being prevented: stretch the window and the newly
 //! exposed area stays unpainted forever.
 
+use flui_foundation::geometry::Size;
 use flui_layer::Layer;
 use flui_objects::RenderColoredBox;
 use flui_rendering::{
@@ -18,7 +19,6 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     view::{RenderView, RenderViewAdapter, ViewConfiguration},
 };
-use flui_types::Size;
 
 fn run_frame_sizes(
     owner: flui_rendering::pipeline::PipelineOwner<flui_rendering::pipeline::phase::Idle>,

@@ -40,9 +40,10 @@ use std::ops::Range;
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
-use flui_types::{
-    Color, Offset, Point, Rect, Size,
+use flui_painting::{
+    styling::Color,
     typography::{InlineSpan, TextAffinity, TextAlign, TextDirection, TextPosition},
 };
 
@@ -818,8 +819,8 @@ fn non_negative_finite(value: f64, fallback: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_painting::typography::TextSpan;
     use flui_rendering::context::intrinsics_test_support::leaf_dry_layout;
-    use flui_types::typography::TextSpan;
 
     #[test]
     fn dry_layout_force_line_uses_finite_max_width() {

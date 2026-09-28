@@ -946,7 +946,7 @@ impl RenderTree {
 #[cfg(test)]
 mod tests {
     use flui_foundation::Leaf;
-    use flui_types::Size;
+    use flui_foundation::geometry::Size;
     use static_assertions::assert_not_impl_any;
 
     use super::*;

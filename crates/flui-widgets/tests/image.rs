@@ -14,7 +14,7 @@
 //! a provider's `cache_key()` returns `Some`.
 
 use crate::common::{lay_out, loose, size, tight};
-use flui_types::painting::Image as PixelImage;
+use flui_painting::paint::Image as PixelImage;
 use flui_widgets::{Image, ImageAlignment, ImageFit};
 
 // ---------------------------------------------------------------------------

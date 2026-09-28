@@ -45,6 +45,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::Diagnosticable;
+use flui_foundation::geometry::Size;
 use flui_foundation::{Leaf, Variable};
 use flui_objects::RenderSliverList;
 use flui_rendering::{
@@ -58,7 +59,6 @@ use flui_rendering::{
     traits::{RenderBox, RenderObject},
     virtualization::{ScrollWindow, Virtualizer},
 };
-use flui_types::Size;
 
 /// Sizes spanning two orders of magnitude so the `log n` vs `n` gap is visible.
 const SIZES: &[usize] = &[1_000, 10_000, 100_000];

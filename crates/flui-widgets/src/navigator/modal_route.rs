@@ -77,7 +77,7 @@ use std::sync::OnceLock;
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, BoxedView, ViewExt, impl_animated_view};
 use parking_lot::Mutex;

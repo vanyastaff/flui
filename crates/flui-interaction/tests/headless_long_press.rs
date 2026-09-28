@@ -16,10 +16,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::settings::GestureSettings;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, ManualClock, PointerId};
-use flui_types::Offset;
 
 #[test]
 fn long_press_fires_on_pumped_virtual_frames_without_sleeping() {

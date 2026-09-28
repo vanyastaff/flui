@@ -1,6 +1,6 @@
 //! `TransformLayer` — transforms its subtree by a 4×4 matrix.
 
-use flui_types::{Matrix4, geometry::Point};
+use flui_foundation::geometry::{Matrix4, Point};
 
 /// Layer that applies a full matrix transformation to its children.
 ///
@@ -33,7 +33,7 @@ use flui_types::{Matrix4, geometry::Point};
 /// use std::f64::consts::PI;
 ///
 /// use flui_layer::TransformLayer;
-/// use flui_types::Matrix4;
+/// use flui_foundation::geometry::Matrix4;
 ///
 /// // Create a rotation transform (45 degrees)
 /// let layer = TransformLayer::rotation(PI / 4.0);

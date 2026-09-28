@@ -159,7 +159,7 @@ impl Notification for LayoutChangedNotification {
 #[derive(Debug, Clone)]
 pub struct SizeChangedNotification {
     /// The new size after the change.
-    pub size: flui_types::Size,
+    pub size: flui_foundation::geometry::Size,
 }
 
 impl Notification for SizeChangedNotification {
@@ -182,7 +182,7 @@ pub struct ScrollNotification {
     /// The scroll offset.
     pub offset: f64,
     /// The scroll axis.
-    pub axis: flui_types::Axis,
+    pub axis: flui_foundation::geometry::Axis,
 }
 
 impl Notification for ScrollNotification {
@@ -200,7 +200,7 @@ impl Notification for ScrollNotification {
 #[derive(Debug, Clone)]
 pub struct DragStartNotification {
     /// Global position where drag started.
-    pub global_position: flui_types::Offset,
+    pub global_position: flui_foundation::geometry::Offset,
 }
 
 impl Notification for DragStartNotification {
@@ -213,7 +213,7 @@ impl Notification for DragStartNotification {
 #[derive(Debug, Clone)]
 pub struct DragEndNotification {
     /// Velocity at drag end.
-    pub velocity: flui_types::Offset,
+    pub velocity: flui_foundation::geometry::Offset,
 }
 
 impl Notification for DragEndNotification {
@@ -265,7 +265,7 @@ mod tests {
     fn test_scroll_notification_debug() {
         let notification = ScrollNotification {
             offset: 100.0,
-            axis: flui_types::Axis::Vertical,
+            axis: flui_foundation::geometry::Axis::Vertical,
         };
 
         let mut desc = Vec::new();

@@ -8,8 +8,8 @@
 //! `flutter_localizations/lib/src/l10n/generated_widgets_localizations.dart`
 //! (oracle tag `3.44.0`).
 
+use flui_painting::typography::TextDirection;
 use flui_platform_api::Locale;
-use flui_types::typography::TextDirection;
 
 use super::{
     BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, LocalizationsDelegate,
@@ -186,7 +186,7 @@ mod tests {
     }
 
     /// End-to-end canonicalization proof: `Locale::new("iw", ...)`
-    /// canonicalizes to `he` in `flui-types`'s constructor (not here), so
+    /// canonicalizes to `he` in `Locale`'s constructor (not here), so
     /// resolving through the deprecated `iw` spelling must produce the exact
     /// same [`TextDirection`] as the canonical `he` spelling — the
     /// canonicalization is genuinely load-bearing for RTL detection, not

@@ -591,7 +591,7 @@ mod tests {
         fn is_device_lost(&self) -> bool {
             self.lost
         }
-        fn mark_dirty(&mut self, _rect: flui_types::Rect<f64>) {}
+        fn mark_dirty(&mut self, _rect: flui_foundation::geometry::Rect<f64>) {}
         fn mark_full_repaint(&mut self) {}
         fn has_damage(&self) -> bool {
             true

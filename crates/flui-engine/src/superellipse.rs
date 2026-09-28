@@ -1,15 +1,13 @@
 //! Backend-agnostic superellipse (iOS squircle) path generation.
 //!
-//! Pure geometry — no wgpu, no lyon; depends only on `flui_types`.
+//! Pure geometry — no wgpu, no lyon; depends only on `flui_foundation::geometry`.
 //!
 //! The CPU statement of the shape the GPU evaluates as a signed distance
 //! field. Nothing in a shipped build calls it — see the module declaration in
 //! `lib.rs` for why it is `cfg(test)` and what it is for.
 
-use flui_types::{
-    geometry::{Point, RSuperellipse},
-    painting::Path,
-};
+use flui_foundation::geometry::{Point, RSuperellipse};
+use flui_painting::paint::Path;
 
 /// Generate a superellipse (iOS squircle) path from an [`RSuperellipse`].
 ///

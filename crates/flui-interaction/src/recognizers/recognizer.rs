@@ -8,7 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 use tracing::instrument;
 

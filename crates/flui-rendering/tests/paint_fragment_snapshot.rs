@@ -17,6 +17,7 @@
 //!   * docs/research/2026-06-10-rendering-design-amendments.md §D1/§D9
 //!   * crates/flui-rendering/src/context/paint_cx.rs (recording side)
 
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_foundation::{Leaf, Variable};
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{
@@ -24,6 +25,8 @@ use flui_objects::{
     RenderSliverToBoxAdapter,
 };
 use flui_painting::Paint;
+use flui_painting::styling::Color;
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
@@ -33,7 +36,6 @@ use flui_rendering::{
     traits::{RenderBox, RenderSliver},
     view::ScrollDirection,
 };
-use flui_types::{Color, Offset, Point, Rect, Size, layout::AxisDirection};
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject};
 

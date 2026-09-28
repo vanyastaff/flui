@@ -51,7 +51,7 @@ struct PointerStateTracking {
     is_down: bool,
 
     /// Last known position
-    last_position: flui_types::geometry::Offset<f64>,
+    last_position: flui_foundation::geometry::Offset<f64>,
 
     /// Target that received the down event (for drag tracking)
     down_target: Option<HitTestResult>,
@@ -238,7 +238,7 @@ fn get_pointer_id(event: &PointerEvent) -> PointerId {
 #[cfg(test)]
 pub(crate) mod tests {
     use flui_foundation::RenderId;
-    use flui_types::geometry::{Offset, Rect};
+    use flui_foundation::geometry::{Offset, Rect};
 
     use super::{super::hit_test::HitTestEntry, *};
     use crate::events::{PointerType, make_down_event};

@@ -14,10 +14,12 @@
 //! flui-rendering are distinct compiled artifacts). Integration tests do not
 //! have this problem — they link the already-built library.
 
+use flui_foundation::geometry::{EdgeInsets, Offset, Rect, Size};
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
     RenderSliverFixedExtentList, RenderStack, RenderViewport,
 };
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::testing::ParentDataSeed;
 use flui_rendering::{
@@ -25,7 +27,6 @@ use flui_rendering::{
     parent_data::{FlexParentData, StackParentData},
     testing::{BoxQueryRun, Probe, RenderTester, box_node, sliver_node},
 };
-use flui_types::{EdgeInsets, Offset, Rect, Size, layout::AxisDirection};
 
 /// Loose `0..=200 x 0..=200` constraints: children settle at their natural
 /// size rather than being forced to fill (the box-pipeline test default).

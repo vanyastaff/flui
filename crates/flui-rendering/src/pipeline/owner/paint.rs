@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::Offset;
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
     BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, FollowerLayer, Layer,
@@ -9,7 +10,6 @@ use flui_layer::{
     TransformLayer,
 };
 use flui_painting::DisplayList;
-use flui_types::Offset;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
@@ -1183,11 +1183,13 @@ impl FragmentComposer {
         let root_layer = if (device_pixel_ratio - 1.0).abs() < f64::EPSILON {
             Layer::Offset(OffsetLayer::zero())
         } else {
-            Layer::Transform(TransformLayer::new(flui_types::Matrix4::scaling(
-                device_pixel_ratio,
-                device_pixel_ratio,
-                1.0,
-            )))
+            Layer::Transform(TransformLayer::new(
+                flui_foundation::geometry::Matrix4::scaling(
+                    device_pixel_ratio,
+                    device_pixel_ratio,
+                    1.0,
+                ),
+            ))
         };
         let root_node = LayerNode::new(root_layer);
         let tree = LayerTree::new(match root_boundary {
@@ -1505,14 +1507,17 @@ impl FragmentComposer {
 /// and any other Variable-arity node giving each child its own paint-time
 /// transform). Flutter `PaintingContext.pushTransform`:
 /// `T(offset)·M·T(−offset)`.
-fn conjugate(matrix: flui_types::Matrix4, origin: Offset) -> flui_types::Matrix4 {
+fn conjugate(
+    matrix: flui_foundation::geometry::Matrix4,
+    origin: Offset,
+) -> flui_foundation::geometry::Matrix4 {
     if origin == Offset::ZERO {
         matrix
     } else {
         let (dx, dy) = (origin.dx, origin.dy);
-        flui_types::Matrix4::translation(dx, dy, 0.0)
+        flui_foundation::geometry::Matrix4::translation(dx, dy, 0.0)
             * matrix
-            * flui_types::Matrix4::translation(-dx, -dy, 0.0)
+            * flui_foundation::geometry::Matrix4::translation(-dx, -dy, 0.0)
     }
 }
 
@@ -1645,13 +1650,11 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::geometry::{Point, Rect, Size};
     use flui_foundation::{Exact, Leaf};
     use flui_interaction::InteractionLane;
     use flui_layer::LayerLink;
-    use flui_types::{
-        Point, Rect, Size,
-        painting::{Alignment, Clip, Path},
-    };
+    use flui_painting::paint::{Alignment, Clip, Path};
 
     use super::*;
     use crate::{

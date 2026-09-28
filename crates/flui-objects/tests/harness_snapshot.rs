@@ -6,9 +6,9 @@ fn insta_tooling_smoke() {
     insta::assert_snapshot!("smoke", "line one\nline two");
 }
 
+use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
 use flui_rendering::testing::{DrawKind, RenderTester, box_node};
-use flui_types::Size;
 
 #[test]
 fn frame_snapshot_and_predicate() {
@@ -64,13 +64,14 @@ fn run_to_semantics_is_probed_after_paint() {
 // ============================================================================
 
 use flui_objects::{RenderFittedBox, RenderStack, RenderViewport};
+use flui_painting::paint::Clip;
+use flui_painting::{Alignment, BoxFit};
 use flui_rendering::{
     context::FragmentRecorder,
     error::RenderError,
     protocol::{BoxProtocol, Protocol, ProtocolGeometry, ProtocolPosition, RenderObject},
     testing::Probe,
 };
-use flui_types::{Alignment, layout::BoxFit, painting::Clip};
 
 /// Returns `true` when the render object at `node` reports visual overflow.
 ///
@@ -128,7 +129,7 @@ impl RenderObject<BoxProtocol> for PanicPaintBox {
         &self,
         _recorder: &mut FragmentRecorder,
         _child_count: usize,
-        _size: flui_types::Size,
+        _size: flui_foundation::geometry::Size,
     ) {
         panic!("PanicPaintBox::paint_raw — intentional test panic");
     }
@@ -137,11 +138,11 @@ impl RenderObject<BoxProtocol> for PanicPaintBox {
         &self,
         _position: ProtocolPosition<BoxProtocol>,
         _child_count: usize,
-        _size: flui_types::Size,
+        _size: flui_foundation::geometry::Size,
         _hit_child: &mut dyn FnMut(
             usize,
             Option<ProtocolPosition<BoxProtocol>>,
-            Option<flui_types::Matrix4>,
+            Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> flui_rendering::traits::HitTestOutcome {
         flui_rendering::traits::HitTestOutcome::miss()
@@ -233,10 +234,10 @@ fn has_overflow_reflects_fitted_box_overflow_flag() {
 /// border) is invisible to `structure()` and `picture_bounds()`.
 #[test]
 fn snapshot_decorated_box() {
+    use flui_foundation::geometry::Offset;
     use flui_objects::RenderDecoratedBox;
-    use flui_types::{
-        Offset,
-        styling::{Border, BorderSide, BorderStyle, BoxDecoration, BoxShadow, Color},
+    use flui_painting::styling::{
+        Border, BorderSide, BorderStyle, BoxDecoration, BoxShadow, Color,
     };
 
     let decoration = BoxDecoration::<f64>::new()
@@ -272,7 +273,7 @@ fn snapshot_decorated_box() {
 #[test]
 fn snapshot_clip_layer() {
     use flui_objects::RenderClipRect;
-    use flui_types::painting::Clip;
+    use flui_painting::paint::Clip;
 
     let run = RenderTester::mount(
         box_node(RenderClipRect::new(Clip::AntiAlias))
@@ -342,8 +343,8 @@ fn snapshot_opacity_layer() {
 #[test]
 fn scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded() {
     use flui_objects::RenderSliverList;
+    use flui_rendering::constraints::AxisDirection;
     use flui_rendering::{testing::sliver_node, view::ScrollableViewportOffset};
-    use flui_types::layout::AxisDirection;
 
     let n_items = 1_000usize;
     let item_height = 50.0_f64;

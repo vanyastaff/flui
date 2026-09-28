@@ -48,13 +48,12 @@
 use std::fmt;
 
 use flui_foundation::Single;
+use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
+use flui_painting::BoxShape;
 use flui_painting::{Canvas, Paint};
-use flui_types::{
-    Color, Offset, Point, Rect, Size,
-    geometry::RRect,
-    layout::BoxShape,
-    painting::{Clip, Path},
-    styling::{BorderRadius, BorderRadiusExt},
+use flui_painting::{
+    paint::{Clip, Path},
+    styling::{BorderRadius, BorderRadiusExt, Color},
 };
 
 use flui_foundation::DiagnosticsBuilder;
@@ -701,8 +700,8 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
 #[cfg(test)]
 mod tests {
     use flui_foundation::Diagnosticable;
+    use flui_foundation::geometry::Radius;
     use flui_interaction::InteractionLane;
-    use flui_types::geometry::Radius;
 
     use super::*;
 

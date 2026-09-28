@@ -5,7 +5,8 @@
 
 use std::sync::Arc;
 
-use flui_types::{Size, geometry::Rect, painting::Shader};
+use flui_foundation::geometry::{Rect, Size};
+use flui_painting::paint::Shader;
 use wgpu::util::DeviceExt;
 
 use super::shader::ShaderType;

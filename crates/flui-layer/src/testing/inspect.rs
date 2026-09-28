@@ -6,8 +6,9 @@
 //! (pre-order, siblings in paint order, explicit stack), so a deep chain
 //! costs no Rust stack.
 
+use flui_foundation::geometry::{Matrix4, RRect, Rect};
 use flui_foundation::{Diagnosticable, DiagnosticsNode, LayerId};
-use flui_types::{Matrix4, RRect, Rect, painting::Path};
+use flui_painting::paint::Path;
 
 use crate::{Layer, LayerTree};
 
@@ -143,7 +144,8 @@ pub fn has_picture_layer(tree: &LayerTree) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{Matrix4, painting::Clip};
+    use flui_foundation::geometry::Matrix4;
+    use flui_painting::paint::Clip;
 
     use super::*;
     use crate::{
@@ -250,6 +252,6 @@ mod tests {
         assert_eq!(clip_rrects(&tree), vec![rrect]);
         let paths = clip_paths(&tree);
         assert_eq!(paths.len(), 1);
-        assert!(paths[0].contains(flui_types::geometry::Point::new(15.0, 15.0)));
+        assert!(paths[0].contains(flui_foundation::geometry::Point::new(15.0, 15.0)));
     }
 }

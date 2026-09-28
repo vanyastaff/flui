@@ -5,14 +5,13 @@
 //! All assertions are sans-IO over the recorded display list — the
 //! same contract the fragment paint model relies on.
 
+use flui_foundation::geometry::{Offset, Point, RRect, Radius, Rect};
+use flui_painting::BoxShape;
 use flui_painting::{
     Canvas, DecorationPaintOptions, DrawOp, box_decoration_hit_test, paint_box_decoration,
 };
-use flui_types::{
-    Offset, Point,
-    geometry::{RRect, Radius, Rect},
-    layout::BoxShape,
-    painting::{Image, PaintStyle, PathCommand, Shader},
+use flui_painting::{
+    paint::{Image, PaintStyle, PathCommand, Shader},
     styling::{
         Border, BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, BoxShadow,
         Color, DecorationImage, Gradient, LinearGradient,
@@ -89,11 +88,11 @@ fn flutter_paint_order_shadow_background_border() {
 #[test]
 fn gradient_wins_over_color_and_resolves_alignment() {
     let gradient = Gradient::Linear(LinearGradient::new(
-        flui_types::Alignment::CENTER_LEFT,
-        flui_types::Alignment::CENTER_RIGHT,
+        flui_painting::Alignment::CENTER_LEFT,
+        flui_painting::Alignment::CENTER_RIGHT,
         vec![Color::RED, Color::BLUE],
         None,
-        flui_types::painting::TileMode::Clamp,
+        flui_painting::paint::TileMode::Clamp,
     ));
     let decoration = BoxDecoration::with_color(Color::WHITE).set_gradient(Some(gradient.clone()));
     let cmds = commands(&decoration);
@@ -127,11 +126,11 @@ fn gradient_wins_over_color_and_resolves_alignment() {
 #[test]
 fn box_decoration_gradient_records_a_shader_paint_rrect() {
     let gradient = Gradient::Linear(LinearGradient::new(
-        flui_types::Alignment::CENTER_LEFT,
-        flui_types::Alignment::CENTER_RIGHT,
+        flui_painting::Alignment::CENTER_LEFT,
+        flui_painting::Alignment::CENTER_RIGHT,
         vec![Color::RED, Color::BLUE],
         None,
-        flui_types::painting::TileMode::Clamp,
+        flui_painting::paint::TileMode::Clamp,
     ));
     let corners = [
         Radius::circular(2.0),
@@ -293,11 +292,11 @@ fn circle_color_paints_a_circle_command_not_rect_or_rrect() {
 #[test]
 fn circle_gradient_paints_a_circle_carrying_the_shader_and_stops() {
     let gradient = Gradient::Linear(LinearGradient::new(
-        flui_types::Alignment::CENTER_LEFT,
-        flui_types::Alignment::CENTER_RIGHT,
+        flui_painting::Alignment::CENTER_LEFT,
+        flui_painting::Alignment::CENTER_RIGHT,
         vec![Color::RED, Color::BLUE],
         Some(vec![0.0, 1.0]),
-        flui_types::painting::TileMode::Clamp,
+        flui_painting::paint::TileMode::Clamp,
     ));
     // `color` is set too, to prove the gradient (not the color) wins, same
     // as the rect-path `gradient_wins_over_color_and_resolves_alignment`.
@@ -349,11 +348,11 @@ fn circle_gradient_without_stops_falls_back_to_transparent_like_the_rect_path() 
     // same path, so their fallback colour must agree: `Color::TRANSPARENT`
     // paints nothing, where `Color::BLACK` would paint a solid black disc.
     let gradient = Gradient::Linear(LinearGradient::new(
-        flui_types::Alignment::CENTER_LEFT,
-        flui_types::Alignment::CENTER_RIGHT,
+        flui_painting::Alignment::CENTER_LEFT,
+        flui_painting::Alignment::CENTER_RIGHT,
         vec![],
         None,
-        flui_types::painting::TileMode::Clamp,
+        flui_painting::paint::TileMode::Clamp,
     ));
     let decoration = BoxDecoration::with_color(Color::RED) // must not show through either
         .set_gradient(Some(gradient))

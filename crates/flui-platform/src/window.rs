@@ -36,7 +36,7 @@
 //! }
 //! ```
 
-use flui_types::geometry::{Point, Rect, Size};
+use flui_foundation::geometry::{Point, Rect, Size};
 
 // ============================================================================
 // Core Window Trait (Cross-Platform)

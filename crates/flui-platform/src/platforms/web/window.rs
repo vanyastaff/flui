@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use wasm_bindgen::JsCast;
 

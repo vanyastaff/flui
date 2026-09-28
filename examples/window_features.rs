@@ -14,8 +14,8 @@
 //! cargo run --example window_features
 //! ```
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::Size;
 
 fn main() -> anyhow::Result<()> {
     // Initialize logging

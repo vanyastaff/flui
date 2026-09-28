@@ -6,13 +6,13 @@
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
+use flui_foundation::geometry::{EdgeInsets, Offset, Rect};
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
     testing::{Probe, RenderTester, box_node},
 };
 use flui_scheduler::UpdateScheduler;
-use flui_types::{EdgeInsets, Offset, Rect};
 
 fn controller() -> AnimationController {
     AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new())

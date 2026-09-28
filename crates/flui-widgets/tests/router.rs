@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, lay_out_animated, tight};
 use flui_animation::Vsync;
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, GestureDetector, NamedRouteError, NavigatorHandle, PageRoute, PopupRoute,

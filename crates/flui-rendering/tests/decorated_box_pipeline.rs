@@ -3,15 +3,13 @@
 //! child's inside the merged fragment picture, and hit testing honors
 //! the rounded-corner geometry.
 
+use flui_foundation::geometry::{Offset, Size};
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{DecorationPosition, RenderColoredBox, RenderDecoratedBox};
 use flui_painting::DrawOp;
+use flui_painting::styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
 use flui_rendering::{
     constraints::BoxConstraints, hit_testing::HitTestResult, pipeline::PipelineOwner,
-};
-use flui_types::{
-    Offset, Size,
-    styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color},
 };
 
 use crate::common::BoxedRenderObject;

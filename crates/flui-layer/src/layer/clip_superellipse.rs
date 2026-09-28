@@ -1,9 +1,7 @@
 //! `ClipSuperellipseLayer` — clips its subtree to an iOS-style squircle.
 
-use flui_types::{
-    geometry::{RSuperellipse, Rect},
-    painting::Clip,
-};
+use flui_foundation::geometry::{RSuperellipse, Rect};
+use flui_painting::paint::Clip;
 
 /// Layer that clips children to a superellipse (squircle) shape.
 ///
@@ -25,10 +23,8 @@ use flui_types::{
 ///
 /// ```rust
 /// use flui_layer::ClipSuperellipseLayer;
-/// use flui_types::{
-///     geometry::{RSuperellipse, Radius, Rect},
-///     painting::Clip,
-/// };
+/// use flui_foundation::geometry::{RSuperellipse, Radius, Rect};
+/// use flui_painting::paint::Clip;
 ///
 /// // Create superellipse with 20px corner radius
 /// let squircle = RSuperellipse::from_rect_circular(

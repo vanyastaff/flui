@@ -2591,7 +2591,7 @@ mod tests {
     #[test]
     fn run_pointer_lifecycle_closes_on_down_and_sweeps_on_up() {
         use crate::events::{PointerType, make_down_event, make_up_event};
-        use flui_types::Offset;
+        use flui_foundation::geometry::Offset;
 
         let arena = GestureArena::binding_driven(Arc::new(SystemClock));
         let pointer = PointerId::PRIMARY;

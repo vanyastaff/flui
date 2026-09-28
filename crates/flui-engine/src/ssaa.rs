@@ -31,7 +31,7 @@
 
 use std::sync::Arc;
 
-use flui_types::Rect;
+use flui_foundation::geometry::Rect;
 
 use crate::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
@@ -590,7 +590,7 @@ impl GpuReplay {
                 );
                 let instance = crate::instancing::TextureInstance::new(
                     composite_bounds,
-                    flui_types::styling::Color::WHITE,
+                    flui_painting::styling::Color::WHITE,
                 );
                 let _ = self.texture_batch.add(instance);
                 self.flush_texture_batch_premultiplied(
@@ -624,7 +624,7 @@ impl GpuReplay {
             );
             let instance = crate::instancing::TextureInstance::new(
                 composite_bounds,
-                flui_types::styling::Color::WHITE,
+                flui_painting::styling::Color::WHITE,
             );
             let _ = self.texture_batch.add(instance);
             self.flush_texture_batch_premultiplied_with_mode(
@@ -786,7 +786,7 @@ mod unit_tests {
     use crate::command_ir::{DrawItem, DrawSegment};
     use crate::state_stack::GpuStateStack;
     use crate::{command_ir::SsaaPathOp, vertex::Vertex};
-    use flui_types::Rect;
+    use flui_foundation::geometry::Rect;
 
     fn make_vertex(x: f32, y: f32) -> Vertex {
         Vertex {
@@ -808,7 +808,7 @@ mod unit_tests {
         let op = SsaaPathOp {
             segment: seg,
             device_bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-            blend: flui_types::painting::BlendMode::SrcOver,
+            blend: flui_painting::paint::BlendMode::SrcOver,
         };
 
         let cloned = op.clone();
@@ -845,7 +845,7 @@ mod unit_tests {
             &state,
             &vertices,
             &indices,
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
         );
 
         assert_eq!(draw_order.len(), 1, "one SsaaPath item must be pushed");
@@ -893,7 +893,7 @@ mod unit_tests {
                 make_vertex(10.0, 15.0),
             ],
             &[0, 1, 2],
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
         );
 
         assert_eq!(
@@ -931,7 +931,7 @@ mod unit_tests {
                 make_vertex(17.5, 40.0),
             ],
             &[0, 1, 2],
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
         );
 
         let DrawItem::SsaaPath(ref op) = draw_order[0] else {
@@ -975,7 +975,7 @@ mod unit_tests {
             &state,
             &[make_vertex(0.0, 0.0), make_vertex(10.0, 0.0)],
             &[], // empty indices
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
         );
 
         assert!(
@@ -1288,8 +1288,8 @@ mod unit_tests {
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_painting::styling::Color;
     use flui_painting::{BlendMode, Paint};
-    use flui_types::Color;
 
     use crate::{painter::WgpuPainter, render_target::RenderTarget};
 
@@ -1361,13 +1361,19 @@ mod gpu_tests {
         let left_x = cx - half_side;
         let left_y = cy + half_side;
 
-        let mut path = flui_types::painting::path::Path::new();
-        path.move_to(flui_types::Point::new(f64::from(apex_x), f64::from(apex_y)));
-        path.line_to(flui_types::Point::new(
+        let mut path = flui_painting::paint::path::Path::new();
+        path.move_to(flui_foundation::geometry::Point::new(
+            f64::from(apex_x),
+            f64::from(apex_y),
+        ));
+        path.line_to(flui_foundation::geometry::Point::new(
             f64::from(right_x),
             f64::from(right_y),
         ));
-        path.line_to(flui_types::Point::new(f64::from(left_x), f64::from(left_y)));
+        path.line_to(flui_foundation::geometry::Point::new(
+            f64::from(left_x),
+            f64::from(left_y),
+        ));
         path.close();
 
         // BlendMode::Multiply is an advanced (dst-read) blend mode.

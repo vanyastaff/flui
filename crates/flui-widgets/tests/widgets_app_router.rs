@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use flui_animation::Vsync;
 use flui_interaction::routing::FocusScopeNode;
+use flui_painting::styling::Color;
+use flui_painting::typography::TextDirection;
 use flui_platform_api::Locale;
-use flui_types::Color;
-use flui_types::typography::TextDirection;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     AppForm, ColoredBox, Directionality, FocusScope, Localizations, NavigatorHandle,

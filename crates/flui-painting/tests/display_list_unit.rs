@@ -3,11 +3,9 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::{Matrix4, Rect};
+use flui_painting::styling::Color;
 use flui_painting::{Canvas, DisplayList, DrawCommand, DrawOp, Paint, Shader};
-use flui_types::{
-    geometry::{Matrix4, Rect},
-    styling::Color,
-};
 
 #[test]
 fn test_display_list_creation() {

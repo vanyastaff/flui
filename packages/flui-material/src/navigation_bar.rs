@@ -141,9 +141,9 @@
 
 use std::rc::Rc;
 
-use flui_sdk::types::Alignment;
-use flui_sdk::types::styling::Color;
-use flui_sdk::types::typography::TextStyle;
+use flui_sdk::painting::Alignment;
+use flui_sdk::painting::Color;
+use flui_sdk::painting::TextStyle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, Expanded, IconTheme, IconThemeData, MainAxisAlignment, MergeSemantics, Padding, Row,

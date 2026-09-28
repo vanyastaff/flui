@@ -1,9 +1,7 @@
 //! `ShaderMaskLayer` — masks its subtree with a shader: gradient fades, vignettes.
 
-use flui_types::{
-    geometry::Rect,
-    painting::{BlendMode, Shader},
-};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::{BlendMode, Shader};
 
 /// Layer that applies a shader as a mask to its child
 ///
@@ -25,11 +23,8 @@ use flui_types::{
 ///
 /// ```rust
 /// use flui_layer::ShaderMaskLayer;
-/// use flui_types::{
-///     geometry::{Offset, Rect},
-///     painting::{BlendMode, Shader},
-///     styling::Color,
-/// };
+/// use flui_foundation::geometry::{Offset, Rect};
+/// use flui_painting::{paint::{BlendMode, Shader}, styling::Color};
 ///
 /// // Create gradient fade mask
 /// let mask_layer = ShaderMaskLayer::new(
@@ -82,7 +77,8 @@ impl ShaderMaskLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{geometry::Offset, styling::Color};
+    use flui_foundation::geometry::Offset;
+    use flui_painting::styling::Color;
 
     use super::*;
 

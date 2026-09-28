@@ -110,7 +110,7 @@ pub mod switch;
 pub mod tween;
 pub mod vsync;
 
-// Data types (moved from flui_types)
+// Data types
 pub mod curve;
 pub mod status;
 pub mod tween_types;

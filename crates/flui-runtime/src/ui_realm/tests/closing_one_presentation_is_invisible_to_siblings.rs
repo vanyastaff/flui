@@ -25,7 +25,7 @@ fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
         })
         .expect("B mounts");
 
-    let constraints = BoxConstraints::tight(flui_types::Size::new(50.0, 50.0));
+    let constraints = BoxConstraints::tight(flui_foundation::geometry::Size::new(50.0, 50.0));
     let b_layer_tree_before = realm.enter(|realm| {
         let b = realm.presentations.get(b_id).expect("B installed");
         match UiRealm::draw_frame_for_presentation(b, constraints) {

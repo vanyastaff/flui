@@ -3,6 +3,12 @@
 //! Flutter parity: `rendering/list_body.dart` `RenderListBody`.
 
 use flui_foundation::Variable;
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Offset, Size};
+use flui_rendering::constraints::{
+    AxisDirection,
+    AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
+};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
@@ -11,13 +17,6 @@ use flui_rendering::{
     },
     parent_data::ListBodyParentData,
     traits::{RenderBox, TextBaseline},
-};
-use flui_types::{
-    Axis, Offset, Size,
-    layout::{
-        AxisDirection,
-        AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
-    },
 };
 
 /// Maps a [`TextBaseline`] kind into compact per-kind storage.

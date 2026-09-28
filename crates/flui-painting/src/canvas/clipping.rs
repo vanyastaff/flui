@@ -5,10 +5,8 @@
 //! Every enabled clip records one `DrawOp::Clip*`; the engine restores
 //! its clip stack when it replays the matching `Restore` command.
 
-use flui_types::{
-    geometry::{RRect, RSuperellipse, Rect},
-    painting::{Clip, ClipOp, Path},
-};
+use crate::paint::{Clip, ClipOp, Path};
+use flui_foundation::geometry::{RRect, RSuperellipse, Rect};
 
 use super::Canvas;
 use crate::display_list::DrawOp;
@@ -90,7 +88,7 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::Radius;
+    use flui_foundation::geometry::Radius;
 
     use super::*;
 

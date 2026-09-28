@@ -25,8 +25,8 @@
 //! it. The thumb width defaults to 6 px (mobile), matching Flutter's
 //! `ScrollbarThemeData.thickness`.
 
+use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_types::Color;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, Child, IntoView, ViewExt};
 

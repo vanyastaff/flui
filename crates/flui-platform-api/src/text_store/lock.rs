@@ -333,7 +333,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
 
-    use flui_types::geometry::{Bounds, Point};
+    use flui_foundation::geometry::{Bounds, Point};
 
     use super::super::{Composition, PointMode, RangeRect, Selection, Utf16Offset, Utf16Range};
     use super::*;

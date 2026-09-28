@@ -23,6 +23,7 @@
 //! passes with the gate removed. (It did — that version was written first.)
 
 use flui_foundation::Variable;
+use flui_foundation::geometry::{Offset, Size};
 use flui_objects::RenderColoredBox;
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -31,7 +32,6 @@ use flui_rendering::{
     testing::{Probe, RenderTester, box_node},
     traits::RenderBox,
 };
-use flui_types::{Offset, Size};
 
 /// Lays out and positions children `0..laid_out`, stacked vertically, and
 /// leaves the rest untouched — the shape of any virtualising parent.

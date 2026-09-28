@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use flui_types::layout::AxisDirection;
+use crate::constraints::AxisDirection;
 
 /// Direction in which content grows within a scrollable area.
 ///
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_apply_to_axis_direction_all_pairs() {
-        use flui_types::layout::AxisDirection::{
+        use crate::constraints::AxisDirection::{
             BottomToTop, LeftToRight, RightToLeft, TopToBottom,
         };
 
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_right_way_up_all_pairs() {
-        use flui_types::layout::AxisDirection::{
+        use crate::constraints::AxisDirection::{
             BottomToTop, LeftToRight, RightToLeft, TopToBottom,
         };
 

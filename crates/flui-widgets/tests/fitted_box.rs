@@ -12,7 +12,7 @@
 //! harness tests in `flui-objects`.
 
 use crate::common::{lay_out, loose, size, tight};
-use flui_types::layout::BoxFit;
+use flui_painting::BoxFit;
 use flui_widgets::{FittedBox, SizedBox};
 
 #[test]

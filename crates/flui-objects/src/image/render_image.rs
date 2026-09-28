@@ -6,7 +6,8 @@
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
-use flui_types::{Offset, Point, Rect, Size, painting::Image};
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::paint::Image;
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -688,9 +689,9 @@ mod tests {
 
     // ===== Paint pipeline integration (drives the real paint() method) =====
 
+    use flui_foundation::geometry::Offset;
     use flui_painting::DrawOp;
     use flui_rendering::context::{FragmentRecorder, PaintCx};
-    use flui_types::Offset;
 
     /// Runs `paint()` through a real FragmentRecorder and returns the
     /// recorded DrawImage commands (image byte_count, dst rect). The

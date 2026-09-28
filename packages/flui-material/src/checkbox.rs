@@ -93,13 +93,16 @@ use std::rc::Rc;
 
 use flui_sdk::foundation::Listenable;
 use flui_sdk::painting::Canvas;
-use flui_sdk::types::painting::{Paint, Path};
-use flui_sdk::types::styling::{BorderSide, BorderStyle};
-use flui_sdk::types::{Color, Point, RRect, Rect, Size};
+use flui_sdk::painting::{BorderSide, BorderStyle};
+use flui_sdk::painting::{Paint, Path};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
     WidgetStatesController,
+};
+use flui_sdk::{
+    geometry::{Point, RRect, Rect, Size},
+    painting::Color,
 };
 
 use crate::color_scheme::ColorScheme;

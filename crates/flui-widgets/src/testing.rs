@@ -29,7 +29,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{AnimationController, Vsync};
+use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
+use flui_foundation::geometry::{Offset, RRect, Rect, Size};
 use flui_foundation::{ElementId, RenderId};
 use flui_interaction::PointerId;
 use flui_interaction::events::{
@@ -43,6 +45,9 @@ use flui_objects::{
     RenderParagraph, RenderPhysicalModel, RenderPhysicalShape, RenderSliverOpacity,
     RenderTransform,
 };
+use flui_painting::Alignment;
+use flui_painting::paint::Clip;
+use flui_painting::styling::BorderRadius;
 use flui_platform_api::InMemoryClipboard;
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
@@ -50,9 +55,6 @@ use flui_rendering::storage::IntrinsicDimension;
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
-use flui_types::painting::Clip;
-use flui_types::styling::BorderRadius;
-use flui_types::{Alignment, Axis, Offset, RRect, Rect, Size};
 use flui_view::BoxedView;
 use flui_view::InheritedView;
 use flui_view::RootRenderView;

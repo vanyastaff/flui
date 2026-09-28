@@ -136,12 +136,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Matrix4, Offset};
 use flui_interaction::{
     DragUpdateDetails, GestureRecognizer, HitTestEntry, HitTestHandle, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
     MultiDragUpdateDetails, PointerEventExt as _, PointerId, Velocity,
 };
-use flui_types::{Offset, geometry::Matrix4, layout::Axis};
 use flui_view::RebuildHandle;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -930,7 +931,11 @@ impl DragSession {
         let node = self.listener_node.get()?;
         let pipeline = self.pipeline.borrow().clone()?;
         let global = pipeline.try_with(|owner| {
-            owner.local_to_global(node, flui_types::Point::new(local.dx, local.dy), None)
+            owner.local_to_global(
+                node,
+                flui_foundation::geometry::Point::new(local.dx, local.dy),
+                None,
+            )
         })??;
         Some(Offset::new(global.x, global.y))
     }

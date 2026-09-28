@@ -23,8 +23,8 @@
 //! the docstring.
 
 use flui_foundation::Single;
-use flui_types::geometry::Lerp;
-use flui_types::{Matrix4, Offset, Size};
+use flui_foundation::geometry::Lerp;
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 
 use flui_rendering::{context::BoxHitTestContext, parent_data::BoxParentData, traits::RenderBox};
 

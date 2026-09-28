@@ -13,10 +13,10 @@ use std::time::Duration;
 
 use flui_animation::{Animatable, Animation, AnimationStatus, Curve, Curves, RectTween, Threshold};
 use flui_foundation::ValueKey;
+use flui_foundation::geometry::Offset;
 use flui_foundation::geometry::Rect;
+use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_types::Color;
-use flui_types::Offset;
 use flui_view::ViewExt;
 use flui_view::prelude::*;
 use parking_lot::Mutex;

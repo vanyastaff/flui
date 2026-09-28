@@ -18,7 +18,7 @@
 //! - HitTestEntry: gestures/hit_test.dart
 
 pub use flui_foundation::RenderId;
-use flui_types::geometry::{Matrix4, Offset};
+use flui_foundation::geometry::{Matrix4, Offset};
 
 use crate::pan_zoom::PointerPanZoomEvent;
 use crate::{

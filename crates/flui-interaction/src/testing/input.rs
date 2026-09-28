@@ -6,14 +6,14 @@
 //!
 //! ```rust,ignore
 //! use flui_interaction::testing::input::{pointer_down, pointer_up};
-//! use flui_types::Offset;
+//! use flui_foundation::geometry::Offset;
 //! use ui_events::pointer::PointerType;
 //!
 //! let down = pointer_down(Offset::new(100.0, 100.0), PointerType::Mouse);
 //! let up = pointer_up(Offset::new(100.0, 100.0), PointerType::Mouse);
 //! ```
 
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 use ui_events::keyboard::Location;
 
 use crate::events::{

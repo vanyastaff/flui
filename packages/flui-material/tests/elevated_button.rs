@@ -27,12 +27,12 @@ use flui_sdk::widgets::{Text, WidgetStateProperty};
 use flui_testing::a11y::Role;
 
 /// `_ElevatedButtonDefaultsM3`'s formatted `Debug` string for a given
-/// resolved [`Color`](flui_sdk::types::Color) — what `RenderPhysicalShape`'s
+/// resolved [`Color`](flui_sdk::painting::Color) — what `RenderPhysicalShape`'s
 /// `Diagnosticable::debug_fill_properties` writes into its `"color"`
 /// property (`add_color("color", format!("{:?}", self.color))`,
 /// `crates/flui-objects/src/proxy/physical_model.rs`), so a test can compare
 /// against it without downcasting the render object.
-fn color_property(color: flui_sdk::types::Color) -> String {
+fn color_property(color: flui_sdk::painting::Color) -> String {
     format!("{color:?}")
 }
 
@@ -196,7 +196,7 @@ fn did_update_view_resyncs_disabled_when_the_press_handler_is_removed() {
 /// `None` at every call site).
 #[test]
 fn elevated_button_theme_slot_reaches_the_mounted_materials_background_color() {
-    let themed_background = flui_sdk::types::Color::rgb(11, 22, 33);
+    let themed_background = flui_sdk::painting::Color::rgb(11, 22, 33);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         elevated_button_theme: Some(ElevatedButtonThemeData {
             style: Some(ButtonStyle {
@@ -232,8 +232,8 @@ fn elevated_button_theme_slot_reaches_the_mounted_materials_background_color() {
 /// ?? getProperty(themeStyle) ?? …` precedence.
 #[test]
 fn widget_level_style_wins_over_the_elevated_button_theme() {
-    let themed_background = flui_sdk::types::Color::rgb(1, 1, 1);
-    let widget_background = flui_sdk::types::Color::rgb(9, 9, 9);
+    let themed_background = flui_sdk::painting::Color::rgb(1, 1, 1);
+    let widget_background = flui_sdk::painting::Color::rgb(9, 9, 9);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         elevated_button_theme: Some(ElevatedButtonThemeData {
             style: Some(ButtonStyle {

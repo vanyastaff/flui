@@ -108,7 +108,7 @@
 //!
 //! ```rust
 //! use flui_platform::{WindowOptions, headless_platform};
-//! use flui_types::geometry::Size;
+//! use flui_foundation::geometry::Size;
 //!
 //! fn test_window_creation() {
 //!     let platform = headless_platform();

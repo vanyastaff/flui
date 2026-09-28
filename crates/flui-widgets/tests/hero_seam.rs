@@ -20,8 +20,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::Size;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_types::Size;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
 use parking_lot::Mutex;

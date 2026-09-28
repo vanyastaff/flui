@@ -6,10 +6,10 @@
 //! occupied 200 PHYSICAL pixels (visually 125 logical) in the corner
 //! of the window, and pointer hits drifted by the scale factor.
 
+use flui_foundation::geometry::{Point, Rect, Size};
 use flui_layer::Layer;
 use flui_objects::RenderColoredBox;
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
-use flui_types::{Point, Rect, Size};
 
 use crate::common::BoxedRenderObject;
 

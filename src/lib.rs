@@ -92,9 +92,9 @@ fn main() {
 //!
 //! | Module | Crate | Feature | Layer |
 //! |---|---|---|---|
-//! | [`types`] | `flui-types` | — | layout, styling, typography and painting values |
 //! | [`geometry`] | `flui-foundation` | — | geometry values (`f64` logical pixels) |
 //! | [`foundation`] | `flui-foundation` | — | keys, listenables, diagnostics |
+//! | [`painting`] | `flui-painting` | — | custom painting; paint, style and text values |
 //! | [`platform`] | `flui-platform-api` | — | platform contracts and values (brightness, locale, IME) |
 //! | [`view`] | `flui-view` | — | View/Element tree |
 //! | [`widgets`] | `flui-widgets` | — | user-facing widget catalog |
@@ -142,7 +142,6 @@ pub use flui_macros::Diagnosticable;
 #[cfg(feature = "material")]
 pub use flui_material as material;
 pub use flui_platform_api as platform;
-pub use flui_types as types;
 pub use flui_view as view;
 pub use flui_widgets as widgets;
 

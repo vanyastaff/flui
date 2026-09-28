@@ -88,7 +88,7 @@ use std::{
 
 use dashmap::DashMap;
 use flui_foundation::MonotonicClock;
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 use smallvec::SmallVec;
 use ui_events::pointer::{PointerEvent, PointerType};
 

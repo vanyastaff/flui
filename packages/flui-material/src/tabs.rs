@@ -125,9 +125,9 @@
 use std::cell::RefCell;
 
 use flui_sdk::foundation::ListenerId;
-use flui_sdk::types::styling::Color;
-use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{EdgeInsets, Size};
+use flui_sdk::geometry::{EdgeInsets, Size};
+use flui_sdk::painting::Color;
+use flui_sdk::painting::TextStyle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::{
@@ -750,7 +750,7 @@ fn build_tab_cell(
 
 #[cfg(test)]
 mod tests {
-    use flui_sdk::types::Rect;
+    use flui_sdk::geometry::Rect;
 
     use super::*;
     use crate::theme_data::TabBarThemeData;

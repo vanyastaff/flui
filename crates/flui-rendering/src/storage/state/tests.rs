@@ -11,7 +11,7 @@
 
 use std::mem::size_of;
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 
 use super::*;
 use crate::protocol::{BoxProtocol, SliverProtocol};
@@ -55,8 +55,8 @@ fn test_geometry_set_is_idempotent() {
     // (OnceCell-backed). Re-layout now overwrites cleanly mirroring
     // Flutter `_size = size` straight assignment.
     let mut state = BoxRenderState::new();
-    let size1 = flui_types::Size::new(100.0, 50.0);
-    let size2 = flui_types::Size::new(200.0, 100.0);
+    let size1 = flui_foundation::geometry::Size::new(100.0, 50.0);
+    let size2 = flui_foundation::geometry::Size::new(200.0, 100.0);
 
     // First set establishes geometry.
     state.set_geometry(size1);
@@ -112,7 +112,7 @@ fn test_boundary_flags() {
 #[test]
 fn compute_relayout_boundary_non_tight_non_root_is_not_boundary_by_default() {
     use crate::constraints::BoxConstraints;
-    use flui_types::Size;
+    use flui_foundation::geometry::Size;
 
     let mut state = BoxRenderState::new();
     // Loose constraints (not tight) — typical layout-from-parent case.
@@ -136,7 +136,7 @@ fn compute_relayout_boundary_non_tight_non_root_is_not_boundary_by_default() {
 #[test]
 fn compute_relayout_boundary_tight_constraints_is_boundary() {
     use crate::constraints::BoxConstraints;
-    use flui_types::Size;
+    use flui_foundation::geometry::Size;
 
     let mut state = BoxRenderState::new();
     let tight = BoxConstraints::tight(Size::new(50.0, 50.0));
@@ -307,7 +307,7 @@ fn layout_cache_insert_peek_and_clear_round_trip() {
 fn clone_preserves_geometry_constraints_offset_and_parent_data_but_resets_layout_cache() {
     use crate::constraints::BoxConstraints;
     use crate::parent_data::BoxParentData;
-    use flui_types::Size;
+    use flui_foundation::geometry::Size;
 
     let mut state = BoxRenderState::new();
     let size = Size::new(30.0, 40.0);
@@ -352,14 +352,14 @@ fn box_size_and_has_size_use_zero_fallback_before_layout() {
 
     // Before the first layout, `size()` must fall back to ZERO rather than
     // panicking, and `has_size` must not falsely match ZERO.
-    assert_eq!(state.size(), flui_types::Size::ZERO);
-    assert!(!state.has_size(flui_types::Size::ZERO));
+    assert_eq!(state.size(), flui_foundation::geometry::Size::ZERO);
+    assert!(!state.has_size(flui_foundation::geometry::Size::ZERO));
 
-    let size = flui_types::Size::new(64.0, 32.0);
+    let size = flui_foundation::geometry::Size::new(64.0, 32.0);
     state.set_size(size);
     assert_eq!(state.size(), size);
     assert!(state.has_size(size));
-    assert!(!state.has_size(flui_types::Size::new(1.0, 1.0)));
+    assert!(!state.has_size(flui_foundation::geometry::Size::new(1.0, 1.0)));
 }
 
 #[test]
@@ -394,13 +394,16 @@ fn set_sliver_geometry_populates_all_extent_accessors() {
 #[test]
 fn absolute_paint_size_is_zero_before_layout() {
     let state = SliverRenderState::new();
-    assert_eq!(state.absolute_paint_size(), flui_types::Size::ZERO);
+    assert_eq!(
+        state.absolute_paint_size(),
+        flui_foundation::geometry::Size::ZERO
+    );
 }
 
 #[test]
 fn absolute_paint_size_maps_main_axis_to_height_for_vertical_scroll() {
+    use crate::constraints::AxisDirection;
     use crate::constraints::{SliverConstraints, SliverGeometry};
-    use flui_types::prelude::AxisDirection;
 
     let mut state = SliverRenderState::new();
     state.set_sliver_geometry(SliverGeometry {
@@ -416,14 +419,14 @@ fn absolute_paint_size_maps_main_axis_to_height_for_vertical_scroll() {
     // Vertical scroll: main axis (paint_extent) is height, cross axis is width.
     assert_eq!(
         state.absolute_paint_size(),
-        flui_types::Size::new(120.0, 80.0)
+        flui_foundation::geometry::Size::new(120.0, 80.0)
     );
 }
 
 #[test]
 fn absolute_paint_size_maps_main_axis_to_width_for_horizontal_scroll() {
+    use crate::constraints::AxisDirection;
     use crate::constraints::{SliverConstraints, SliverGeometry};
-    use flui_types::prelude::AxisDirection;
 
     let mut state = SliverRenderState::new();
     state.set_sliver_geometry(SliverGeometry {
@@ -439,6 +442,6 @@ fn absolute_paint_size_maps_main_axis_to_width_for_horizontal_scroll() {
     // Horizontal scroll: main axis (paint_extent) is width, cross axis is height.
     assert_eq!(
         state.absolute_paint_size(),
-        flui_types::Size::new(80.0, 120.0)
+        flui_foundation::geometry::Size::new(80.0, 120.0)
     );
 }

@@ -1,7 +1,7 @@
 //! `PlatformViewLayer` — a native view (Android `View`, iOS `UIView`) the embedder
 //! composites at a rectangle.
 
-use flui_types::geometry::Rect;
+use flui_foundation::geometry::Rect;
 
 /// Unique identifier for a platform view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,7 +69,7 @@ pub enum PlatformViewHitTestBehavior {
 ///
 /// ```rust
 /// use flui_layer::{PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer};
-/// use flui_types::geometry::Rect;
+/// use flui_foundation::geometry::Rect;
 ///
 /// // Embed a map view
 /// let map_view = PlatformViewLayer::new(

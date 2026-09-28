@@ -64,7 +64,7 @@ use common::{lay_out, lay_out_animated, tight};
 use flui_material::{Drawer, DrawerHandle, Scaffold, ScaffoldScope, Theme, ThemeData};
 use flui_sdk::animation::Vsync;
 use flui_sdk::foundation::RenderId;
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, GestureDetector, MediaQuery, MediaQueryData, SizedBox, VsyncScope,

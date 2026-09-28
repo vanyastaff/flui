@@ -135,8 +135,8 @@ generic_render_view_element!(CustomMultiChildLayout);
 mod tests {
     use std::any::{Any, TypeId};
 
+    use flui_foundation::geometry::{Offset, Size};
     use flui_rendering::delegates::MultiChildLayoutContext;
-    use flui_types::{Offset, Size};
     use flui_view::RenderView;
 
     use super::*;

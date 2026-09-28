@@ -154,14 +154,14 @@ pub trait MacOSWindowExt {
     /// Convert point from backing (pixel) coordinates to window coordinates.
     fn convert_point_from_backing(
         &self,
-        point: flui_types::geometry::Point<f64>,
-    ) -> flui_types::geometry::Point<f64>;
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> flui_foundation::geometry::Point<f64>;
 
     /// Convert point from window coordinates to backing (pixel) coordinates.
     fn convert_point_to_backing(
         &self,
-        point: flui_types::geometry::Point<f64>,
-    ) -> flui_types::geometry::Point<f64>;
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> flui_foundation::geometry::Point<f64>;
 }
 
 // ============================================================================

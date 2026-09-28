@@ -7,7 +7,7 @@ use flui::rendering::{
     RenderBox, RenderUpdateImpact, Single,
 };
 use flui::testing::widgets::{lay_out, loose};
-use flui::types::{Point, Rect, Size};
+use flui::geometry::{Point, Rect, Size};
 use flui::view::{RenderObjectContext, RenderView};
 use flui::widgets::AnimatedBuilder;
 use std::sync::{
@@ -166,7 +166,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     use flui::interaction::{
         GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
     };
-    use flui::types::Offset;
+    use flui::geometry::Offset;
     let mut binding = flui::testing::HeadlessBinding::new();
     let fired = Arc::new(AtomicUsize::new(0));
     let callback = fired.clone();
@@ -266,8 +266,8 @@ impl flui::interaction::GestureRecognizer for DistanceRecognizer {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: flui::interaction::PointerId,
-        position: flui::types::Offset,
-        global_position: flui::types::Offset,
+        position: flui::geometry::Offset,
+        global_position: flui::geometry::Offset,
     ) {
         self.base
             .start_tracking(pointer, position, global_position, self);
@@ -297,7 +297,7 @@ impl flui::interaction::GestureRecognizer for DistanceRecognizer {
 fn downstream_custom_recognizer_competes_in_the_arena() {
     use flui::interaction::{GestureArenaMember, GestureRecognizer, PointerId, RecognizerBase};
     use flui::testing::replay::{PointerPhase, ScriptedPointer};
-    use flui::types::Offset;
+    use flui::geometry::Offset;
     use flui::widgets::PointerDispatch;
 
     let binding = flui::testing::HeadlessBinding::new();

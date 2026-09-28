@@ -22,7 +22,7 @@ use std::sync::{
     mpsc::{Receiver, Sender, channel},
 };
 
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 /// Texture descriptor key for matching pooled textures
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -1,15 +1,13 @@
 //! Canvas Transform API Tests
 //!
 //! Tests for the `Canvas::transform()` method integration with the high-level
-//! Transform API from `flui_types::geometry`.
+//! Transform API from `flui_foundation::geometry`.
 
 use std::f64::consts::PI;
 
+use flui_foundation::geometry::{Matrix4, Rect, Transform};
+use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
-use flui_types::{
-    geometry::{Matrix4, Rect, Transform},
-    styling::Color,
-};
 
 #[test]
 fn test_transform_with_transform_enum() {

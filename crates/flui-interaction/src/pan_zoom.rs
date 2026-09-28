@@ -51,7 +51,7 @@
 //! <https://api.flutter.dev/flutter/gestures/PointerPanZoomEvent-class.html>
 
 use crate::PointerDeviceKind;
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 use ui_events::pointer::PointerEvent;
 
 use crate::ids::PointerId;

@@ -123,7 +123,7 @@ fn flexible_space_fills_the_expanded_box_inside_the_material_surface() {
         .expanded_height(180.0)
         .pinned(true)
         .flexible_space(flui_sdk::widgets::ColoredBox::new(
-            flui_sdk::types::Color::rgb(10, 20, 30),
+            flui_sdk::painting::Color::rgb(10, 20, 30),
         ));
 
     let laid = lay_out(scroll_view_at(0.0, bar), tight(400.0, 600.0));

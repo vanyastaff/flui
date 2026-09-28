@@ -54,7 +54,7 @@
 //! # Invariants preserved
 //!
 //! - `cached_images` entries are `(TextureKey, TextureInstance, ScissorRect)`.
-//! - `external_images` entries are `(flui_types::painting::TextureId, TextureInstance,
+//! - `external_images` entries are `(flui_painting::paint::TextureId, TextureInstance,
 //!   ScissorRect)` — no `wgpu::TextureView` in the IR; resolution to a view
 //!   happens in `flush_segment_external_images` at replay time.
 //! - The SrcOver `draw_image_repeat`/`draw_image_nine_slice` → `draw_image`
@@ -67,8 +67,9 @@
 //! - `texture_batch` is **not touched** by any method here; replay owns that
 //!   scratch batch.
 
+use flui_foundation::geometry::{Offset, Point, Rect};
 use flui_painting::BlendMode;
-use flui_types::{Offset, Point, Rect, painting::Image, styling::Color};
+use flui_painting::{paint::Image, styling::Color};
 
 use super::{
     super::{
@@ -163,12 +164,12 @@ impl DrawBatcher {
                     state.apply_active_clip(crate::instancing::TextureInstance::with_uv(
                         transformed_rect,
                         uv_rect,
-                        flui_types::styling::Color::WHITE,
+                        flui_painting::styling::Color::WHITE,
                     ))
                 } else {
                     state.apply_active_clip(crate::instancing::TextureInstance::new(
                         transformed_rect,
-                        flui_types::styling::Color::WHITE,
+                        flui_painting::styling::Color::WHITE,
                     ))
                 };
 
@@ -277,10 +278,10 @@ impl DrawBatcher {
         texture_cache: &mut TextureCache,
         image: &Image,
         dst: Rect<f64>,
-        repeat: flui_types::painting::image::ImageRepeat,
+        repeat: flui_painting::paint::image::ImageRepeat,
         blend_mode: BlendMode,
     ) {
-        use flui_types::painting::image::ImageRepeat;
+        use flui_painting::paint::image::ImageRepeat;
 
         let img_w = image.width() as f32;
         let img_h = image.height() as f32;
@@ -826,13 +827,13 @@ impl DrawBatcher {
         texture_cache: &mut TextureCache,
         image: &Image,
         dst: Rect<f64>,
-        filter: flui_types::painting::image::ColorFilter,
+        filter: flui_painting::paint::image::ColorFilter,
         // `paint_blend_mode` is the GPU-level composite mode (Paint.blend_mode).
         // It is independent of the filter's own blend_mode (CPU per-pixel
         // operation). See the method doc for the boundary explanation.
         paint_blend_mode: BlendMode,
     ) {
-        use flui_types::painting::image::ColorFilter;
+        use flui_painting::paint::image::ColorFilter;
 
         match filter {
             ColorFilter::Mode {
@@ -1068,7 +1069,7 @@ impl DrawBatcher {
         image: &Image,
         sprites: &[Rect<f64>],
         sprite_origins: &[Offset<f64>],
-        colors: Option<&[flui_types::styling::Color]>,
+        colors: Option<&[flui_painting::styling::Color]>,
         blend_mode: BlendMode,
     ) {
         #[cfg(debug_assertions)]
@@ -1162,7 +1163,7 @@ impl DrawBatcher {
                         let tint = colors
                             .and_then(|c| c.get(i))
                             .copied()
-                            .unwrap_or(flui_types::styling::Color::WHITE);
+                            .unwrap_or(flui_painting::styling::Color::WHITE);
 
                         // Sprite UV relative to the atlas image [0,1]×[0,1].
                         let sprite_uv = [
@@ -1242,7 +1243,7 @@ impl DrawBatcher {
                     let tint = colors
                         .and_then(|c| c.get(i))
                         .copied()
-                        .unwrap_or(flui_types::styling::Color::WHITE);
+                        .unwrap_or(flui_painting::styling::Color::WHITE);
 
                     // Calculate UV coordinates from sprite rect, then remap
                     // through the atlas UV if the image is atlas-packed.
@@ -1312,10 +1313,10 @@ impl DrawBatcher {
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         src_uv_registry: Option<(u32, u32)>,
-        texture_id: flui_types::painting::TextureId,
+        texture_id: flui_painting::paint::TextureId,
         dst: Rect<f64>,
         src: Option<Rect<f64>>,
-        _filter_quality: flui_types::painting::FilterQuality,
+        _filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
     ) {
         #[cfg(debug_assertions)]
@@ -1351,7 +1352,7 @@ impl DrawBatcher {
         };
 
         // Apply opacity via tint color alpha.
-        let tint = flui_types::styling::Color::rgba(255, 255, 255, (opacity * 255.0) as u8);
+        let tint = flui_painting::styling::Color::rgba(255, 255, 255, (opacity * 255.0) as u8);
 
         // Apply the current transform to dst corners (translation + scale; rotation
         // collapses to AABB — same accepted limitation as `texture()` and `draw_image`).

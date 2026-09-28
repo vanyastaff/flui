@@ -28,7 +28,7 @@
 
 use web_time::Instant;
 
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 
 /// Smoothing factor for a first-order low-pass at cutoff `fc` (Hz) and
 /// sampling period `te` (seconds).
@@ -123,7 +123,7 @@ impl OneEuroFilter {
 /// use std::time::{Duration, Instant};
 ///
 /// use flui_interaction::processing::OneEuroFilter2D;
-/// use flui_types::geometry::Offset;
+/// use flui_foundation::geometry::Offset;
 ///
 /// let mut filter = OneEuroFilter2D::default();
 /// let t0 = Instant::now();

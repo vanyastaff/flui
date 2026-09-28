@@ -3,11 +3,12 @@
 
 use std::fmt;
 
+use flui_foundation::geometry::Axis;
 use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
+use flui_painting::paint::Clip;
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::view::{CacheExtentStyle, ScrollPosition, SliverPaintOrder};
-use flui_types::layout::{Axis, AxisDirection};
-use flui_types::painting::Clip;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 

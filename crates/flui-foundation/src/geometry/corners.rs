@@ -206,15 +206,15 @@ impl<T: Clone> super::traits::Along for Corners<T> {
     type Unit = (T, T);
 
     #[inline]
-    fn along(&self, axis: super::traits::Axis) -> Self::Unit {
+    fn along(&self, axis: super::axis::Axis) -> Self::Unit {
         match axis {
-            super::traits::Axis::Horizontal => {
+            super::axis::Axis::Horizontal => {
                 // Top and bottom horizontal pairs (top-left/top-right,
                 // bottom-left/bottom-right) Return average or first pair - here
                 // we return top corners
                 (self.top_left.clone(), self.top_right.clone())
             }
-            super::traits::Axis::Vertical => {
+            super::axis::Axis::Vertical => {
                 // Left and right vertical pairs (top-left/bottom-left, top-right/bottom-right)
                 // Return left corners
                 (self.top_left.clone(), self.bottom_left.clone())
@@ -225,11 +225,11 @@ impl<T: Clone> super::traits::Along for Corners<T> {
     #[inline]
     fn apply_along(
         &self,
-        axis: super::traits::Axis,
+        axis: super::axis::Axis,
         f: impl FnOnce(Self::Unit) -> Self::Unit,
     ) -> Self {
         match axis {
-            super::traits::Axis::Horizontal => {
+            super::axis::Axis::Horizontal => {
                 let (top_left, top_right) = f((self.top_left.clone(), self.top_right.clone()));
                 Self {
                     top_left,
@@ -238,7 +238,7 @@ impl<T: Clone> super::traits::Along for Corners<T> {
                     bottom_left: self.bottom_left.clone(),
                 }
             }
-            super::traits::Axis::Vertical => {
+            super::axis::Axis::Vertical => {
                 let (top_left, bottom_left) = f((self.top_left.clone(), self.bottom_left.clone()));
                 Self {
                     top_left,
@@ -254,8 +254,8 @@ impl<T: Clone> super::traits::Along for Corners<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::traits::{Along, Axis};
     use crate::geometry::{Corner, Radius};
+    use crate::geometry::{axis::Axis, traits::Along};
 
     const ALL: [Corner; 4] = [
         Corner::TopLeft,

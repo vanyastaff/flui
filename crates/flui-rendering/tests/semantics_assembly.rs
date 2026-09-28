@@ -13,6 +13,7 @@
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_foundation::{Leaf, Variable};
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -26,7 +27,6 @@ use flui_rendering::{
     testing::{FrameRun, Probe, RenderTester, box_node},
     traits::RenderBox,
 };
-use flui_types::{Offset, Point, Rect, Size};
 
 /// A fixed-size leaf that reports a configurable `SemanticsConfiguration`.
 ///

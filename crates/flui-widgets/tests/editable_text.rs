@@ -8,10 +8,10 @@ use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
 
+use flui_foundation::geometry::{Point, Rect};
 use flui_interaction::events::{Key, KeyState, NamedKey};
 use flui_interaction::routing::FocusNode;
 use flui_objects::RenderEditable;
-use flui_types::{Point, Rect};
 use flui_view::prelude::*;
 use flui_widgets::__test_access::TextEditingControllerProbe as _;
 use flui_widgets::{EditableText, TextEditingController};
@@ -1018,14 +1018,14 @@ fn focusing_sends_the_exact_caret_rect_including_ancestor_padding() {
     );
     assert_eq!(
         calls[0].origin,
-        flui_types::Point::new(20.0, 10.0),
+        flui_foundation::geometry::Point::new(20.0, 10.0),
         "the sent rect must include the Padding ancestor's offset, not just \
              the caret's local position: {:?}",
         calls[0]
     );
     assert_eq!(
         calls[0].size,
-        flui_types::Size::new(2.0, 18.0),
+        flui_foundation::geometry::Size::new(2.0, 18.0),
         "the sent rect must carry the caret's own width/height: {:?}",
         calls[0]
     );
@@ -2276,7 +2276,7 @@ fn cursor_area_loop_prefers_the_composing_rect_and_falls_back_to_the_caret_rect_
     );
     assert_eq!(
         sent_while_composing.size,
-        flui_types::Size::new(composing.width(), composing.height())
+        flui_foundation::geometry::Size::new(composing.width(), composing.height())
     );
 
     // Cancel the composition — `Preedit("")`, winit's own signal.

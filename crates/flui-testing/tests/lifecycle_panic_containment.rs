@@ -6,6 +6,7 @@
 
 use std::{any::TypeId, cell::Cell, rc::Rc, time::Duration};
 
+use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::{RenderErrorBox, RenderFlex, RenderSizedBox};
 use flui_rendering::{
@@ -17,7 +18,6 @@ use flui_testing::{
     HeadlessBinding,
     bootstrap::{MountOptions, MountOwners},
 };
-use flui_types::{Offset, Size};
 use flui_view::{
     BoxedView, BuildContext, ErrorView, IntoView, LifecycleContext, LifecycleHook, RecoveredAt,
     RenderView, StatefulView, View, ViewExt, ViewState,

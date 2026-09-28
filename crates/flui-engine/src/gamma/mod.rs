@@ -14,8 +14,8 @@
 //!   WGSL shader unpremultiplies, applies the per-channel transfer, clamps to
 //!   `[0, 1]`, and re-premultiplies before writing.
 //! - Alpha is left unchanged (it is not part of the gamma transfer).
-//! - The CPU oracle is [`flui_types::styling::color::srgb_to_linear`] /
-//!   [`flui_types::styling::color::linear_to_srgb`] — the same functions used in
+//! - The CPU oracle is [`flui_painting::styling::color::srgb_to_linear`] /
+//!   [`flui_painting::styling::color::linear_to_srgb`] — the same functions used in
 //!   the GPU readback tests.
 //!
 //! ## Ping-pong

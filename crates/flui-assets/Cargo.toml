@@ -22,7 +22,7 @@ autotests = false
 
 [dependencies]
 # Internal dependencies
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 
 # Async runtime. "sync" backs the bridged-load completion channel
 # (`registry::bridge`); "rt-multi-thread" builds the single-worker background

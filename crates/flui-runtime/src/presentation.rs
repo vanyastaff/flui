@@ -1693,11 +1693,11 @@ mod tests {
     #[test]
     fn mouse_tracker_applies_cursor_to_the_exact_owned_window() {
         use flui_foundation::RenderId;
+        use flui_foundation::geometry::Offset;
         use flui_interaction::{
             events::{PointerType, make_move_event},
             routing::{HitTestEntry, HitTestResult, PointerMotionKind},
         };
-        use flui_types::geometry::Offset;
 
         let window = Arc::new(crate::testing::TestWindow::new().focused(true));
         let platform_window: Arc<dyn PlatformWindow> = window.clone();

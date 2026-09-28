@@ -10,6 +10,7 @@
 //! 4. commit the child's paint offset so hit-test/paint use the same source.
 
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_objects::RenderSliverToBoxAdapter;
 use flui_rendering::{
     constraints::{GrowthDirection, SliverConstraints},
@@ -19,7 +20,6 @@ use flui_rendering::{
     testing::inspect,
     traits::RenderBox,
 };
-use flui_types::{Offset, Rect, Size};
 
 use crate::common::{
     BoxedRenderObject, BoxedSliverObject, laid_out_tight_300x100 as laid_out, sliver_geometry,
@@ -66,7 +66,7 @@ impl RenderBox for FixedHitBox {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         ctx.is_within_bounds(Rect::from_origin_size(
-            flui_types::Point::ZERO,
+            flui_foundation::geometry::Point::ZERO,
             ctx.own_size(),
         ))
     }

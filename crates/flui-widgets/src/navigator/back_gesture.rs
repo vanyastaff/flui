@@ -42,8 +42,8 @@ use flui_interaction::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
     PointerEventExt,
 };
+use flui_painting::typography::TextDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_types::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_view::{AnimatedView, impl_animated_view};
 
@@ -745,8 +745,8 @@ mod tests {
         // would hand off by driving `on_drag_start` directly (the recognizer
         // plumbing itself is exercised only through a mounted harness).
         runtime.on_drag_start(DragStartDetails {
-            global_position: flui_types::geometry::Offset::ZERO,
-            local_position: flui_types::geometry::Offset::ZERO,
+            global_position: flui_foundation::geometry::Offset::ZERO,
+            local_position: flui_foundation::geometry::Offset::ZERO,
             kind: flui_interaction::events::PointerType::Touch,
             timestamp: std::time::Instant::now(),
         });
@@ -759,7 +759,7 @@ mod tests {
         let drag = horizontal_drag(arena.clone());
         let event = flui_interaction::events::make_down_event_for_id(
             flui_interaction::PointerId::new(2).expect("nonzero id"),
-            flui_types::geometry::Offset::ZERO,
+            flui_foundation::geometry::Offset::ZERO,
             flui_interaction::events::PointerType::Touch,
         );
         runtime.on_pointer_down(&drag, flui_interaction::PointerDispatch::at_root(&event));
@@ -796,7 +796,7 @@ mod tests {
         let drag = horizontal_drag(arena.clone());
         let down_1 = flui_interaction::events::make_down_event_for_id(
             flui_interaction::PointerId::new(1).expect("nonzero id"),
-            flui_types::geometry::Offset::ZERO,
+            flui_foundation::geometry::Offset::ZERO,
             flui_interaction::events::PointerType::Touch,
         );
         runtime.on_pointer_down(&drag, flui_interaction::PointerDispatch::at_root(&down_1));
@@ -811,7 +811,7 @@ mod tests {
         allow.set(false);
         let down_2 = flui_interaction::events::make_down_event_for_id(
             flui_interaction::PointerId::new(2).expect("nonzero id"),
-            flui_types::geometry::Offset::ZERO,
+            flui_foundation::geometry::Offset::ZERO,
             flui_interaction::events::PointerType::Touch,
         );
         // A disabled predicate must refuse before ever touching the

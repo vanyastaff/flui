@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+use flui_painting::paint::path::{Path, PathCommand};
 use flui_painting::{PaintStyle, StrokeCap, StrokeJoin};
-use flui_types::painting::path::{Path, PathCommand};
 
 /// Number of idle frames before a cached entry is evicted.
 const EVICTION_THRESHOLD: u64 = 120;
@@ -235,13 +235,13 @@ fn hash_command(cmd: &PathCommand, hasher: &mut DefaultHasher) {
 }
 
 /// Hash a `Point` by its f32 bit patterns.
-fn hash_point(p: flui_types::Point<f64>, hasher: &mut DefaultHasher) {
+fn hash_point(p: flui_foundation::geometry::Point<f64>, hasher: &mut DefaultHasher) {
     p.x.to_bits().hash(hasher);
     p.y.to_bits().hash(hasher);
 }
 
 /// Hash a `Rect` by its four edge f32 bit patterns.
-fn hash_rect(r: &flui_types::Rect<f64>, hasher: &mut DefaultHasher) {
+fn hash_rect(r: &flui_foundation::geometry::Rect<f64>, hasher: &mut DefaultHasher) {
     r.left().to_bits().hash(hasher);
     r.top().to_bits().hash(hasher);
     r.right().to_bits().hash(hasher);
@@ -305,9 +305,9 @@ mod tests {
     #[test]
     fn test_path_hash_deterministic() {
         let mut path = Path::new();
-        path.move_to(flui_types::Point::new(0.0, 0.0));
-        path.line_to(flui_types::Point::new(100.0, 0.0));
-        path.line_to(flui_types::Point::new(100.0, 100.0));
+        path.move_to(flui_foundation::geometry::Point::new(0.0, 0.0));
+        path.line_to(flui_foundation::geometry::Point::new(100.0, 0.0));
+        path.line_to(flui_foundation::geometry::Point::new(100.0, 100.0));
         path.close();
 
         let h1 = PathCache::compute_path_hash(
@@ -332,8 +332,8 @@ mod tests {
     #[test]
     fn test_different_paint_different_hash() {
         let mut path = Path::new();
-        path.move_to(flui_types::Point::new(0.0, 0.0));
-        path.line_to(flui_types::Point::new(100.0, 100.0));
+        path.move_to(flui_foundation::geometry::Point::new(0.0, 0.0));
+        path.line_to(flui_foundation::geometry::Point::new(100.0, 100.0));
 
         let h_fill = PathCache::compute_path_hash(
             &path,
@@ -362,7 +362,9 @@ mod tests {
     #[test]
     fn test_scale_bucket_partitions_hash() {
         let mut path = Path::new();
-        path.add_oval(flui_types::Rect::from_ltrb(0.0, 0.0, 100.0, 100.0));
+        path.add_oval(flui_foundation::geometry::Rect::from_ltrb(
+            0.0, 0.0, 100.0, 100.0,
+        ));
 
         let key = |scale: f32| {
             PathCache::compute_path_hash(
@@ -400,9 +402,9 @@ mod tests {
     /// paths, a later solid draw would return dashed geometry (or vice-versa).
     #[test]
     fn dashed_and_solid_stroke_share_geometry_hash() {
-        let mut path = flui_types::painting::path::Path::new();
-        path.move_to(flui_types::Point::new(0.0, 0.0));
-        path.line_to(flui_types::Point::new(100.0, 0.0));
+        let mut path = flui_painting::paint::path::Path::new();
+        path.move_to(flui_foundation::geometry::Point::new(0.0, 0.0));
+        path.line_to(flui_foundation::geometry::Point::new(100.0, 0.0));
 
         // compute_path_hash does not include dash_pattern (by design)
         let h_solid = PathCache::compute_path_hash(

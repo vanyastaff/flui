@@ -16,9 +16,9 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
 
-use flui_types::geometry::Matrix4;
-use flui_types::painting::{Path, Shader};
-use flui_types::{Offset, Rect, Size};
+use flui_foundation::geometry::Matrix4;
+use flui_foundation::geometry::{Offset, Rect, Size};
+use flui_painting::paint::{Path, Shader};
 
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
 use crate::events::{DeviceId, PointerEvent, PointerEventExt, ScrollEventData};
@@ -1785,7 +1785,7 @@ mod tests {
 
     use super::*;
     use crate::events::{PointerType, make_down_event};
-    use flui_types::{Offset, Point};
+    use flui_foundation::geometry::{Offset, Point};
 
     assert_not_impl_any!(HandlerCell: Send, Sync);
     assert_not_impl_any!(ScrollCell: Send, Sync);
@@ -2212,8 +2212,8 @@ mod tests {
                 .register_path_clipper(move |size| {
                     calls_for_clipper.set(calls_for_clipper.get() + 1);
                     let mut path = Path::new();
-                    path.add_rect(flui_types::Rect::from_origin_size(
-                        flui_types::Point::ZERO,
+                    path.add_rect(flui_foundation::geometry::Rect::from_origin_size(
+                        flui_foundation::geometry::Point::ZERO,
                         size,
                     ));
                     path
@@ -2223,7 +2223,7 @@ mod tests {
             let path = resolve_path_clip_target(target, Size::new(10.0, 20.0))
                 .expect("resolve path clipper");
 
-            assert!(path.contains(flui_types::Point::new(5.0, 5.0,)));
+            assert!(path.contains(flui_foundation::geometry::Point::new(5.0, 5.0,)));
         });
         assert_eq!(calls.get(), 1);
     }
@@ -2242,7 +2242,7 @@ mod tests {
                         bounds,
                         Rect::from_origin_size(Point::ZERO, Size::new(10.0, 20.0))
                     );
-                    Shader::solid(flui_types::styling::Color::WHITE)
+                    Shader::solid(flui_painting::styling::Color::WHITE)
                 })
                 .expect("register shader mask factory");
 
@@ -2252,7 +2252,7 @@ mod tests {
             )
             .expect("resolve shader mask factory");
 
-            assert_eq!(shader, Shader::solid(flui_types::styling::Color::WHITE));
+            assert_eq!(shader, Shader::solid(flui_painting::styling::Color::WHITE));
         });
         assert_eq!(calls.get(), 1);
     }

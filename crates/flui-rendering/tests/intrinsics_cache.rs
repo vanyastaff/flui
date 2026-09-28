@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::geometry::Size;
 use flui_foundation::{Leaf, Variable};
 use flui_objects::RenderConstrainedBox;
 use flui_rendering::{
@@ -24,7 +25,6 @@ use flui_rendering::{
     storage::IntrinsicDimension,
     traits::RenderBox,
 };
-use flui_types::Size;
 
 use crate::common::BoxedRenderObject;
 
@@ -376,8 +376,8 @@ fn dry_layout_flows_through_real_objects_and_memoizes() {
 #[test]
 fn dry_baseline_flows_through_padding_and_memoizes() {
     use flui_objects::{RenderPadding, RenderParagraph};
+    use flui_painting::typography::{TextDirection, TextSpan};
     use flui_rendering::traits::TextBaseline;
-    use flui_types::typography::{TextDirection, TextSpan};
 
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(8.0)) as BoxedRenderObject);

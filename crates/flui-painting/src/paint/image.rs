@@ -1,0 +1,968 @@
+//! Image handling types for painting.
+
+use std::sync::Arc;
+
+use crate::{
+    paint::{BlendMode, effects::ColorMatrix},
+    styling::Color,
+};
+use flui_foundation::geometry::Size;
+
+/// A handle to an image resource.
+///
+/// Similar to Flutter's `ui.Image`.
+///
+/// This is an opaque handle that represents an image loaded into memory.
+/// The actual image data is managed by the rendering backend.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use flui_painting::paint::Image;
+///
+/// // Images are typically created by image providers
+/// let image = Image::from_rgba8(100, 100, vec![255; 100 * 100 * 4]);
+/// println!("Image size: {}x{}", image.width(), image.height());
+/// ```
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Image {
+    /// The width of the image in pixels.
+    width: u32,
+
+    /// The height of the image in pixels.
+    height: u32,
+
+    /// The image data (RGBA8 format).
+    /// Wrapped in Arc for cheap cloning.
+    data: Arc<Vec<u8>>,
+}
+
+/// Why RGBA8 pixel data was rejected by [`Image::try_from_rgba8`].
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ImageDataError {
+    /// `width * height * 4` doesn't fit in `usize`.
+    #[error("{width}x{height} RGBA8 byte count overflows usize")]
+    SizeOverflow {
+        /// Requested width in pixels.
+        width: u32,
+        /// Requested height in pixels.
+        height: u32,
+    },
+    /// The buffer length isn't `width * height * 4`.
+    #[error("{width}x{height} RGBA8 needs {expected} bytes, got {actual}")]
+    LengthMismatch {
+        /// Requested width in pixels.
+        width: u32,
+        /// Requested height in pixels.
+        height: u32,
+        /// `width * height * 4`.
+        expected: usize,
+        /// `data.len()`.
+        actual: usize,
+    },
+}
+
+/// `width * height * 4` in `usize`, or `None` on overflow.
+fn rgba8_byte_len(width: u32, height: u32) -> Option<usize> {
+    usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(4)
+}
+
+impl Default for Image {
+    #[inline]
+    fn default() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            data: Arc::new(Vec::new()),
+        }
+    }
+}
+
+impl Image {
+    /// Creates a new image from RGBA8 pixel data.
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - The width of the image in pixels
+    /// * `height` - The height of the image in pixels
+    /// * `data` - The pixel data in RGBA8 format (4 bytes per pixel)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `width * height * 4` overflows `usize` or doesn't equal
+    /// `data.len()`. Use [`try_from_rgba8`](Self::try_from_rgba8) when the
+    /// dimensions or the buffer come from outside the program (a decoder, a
+    /// file, the network).
+    #[must_use]
+    #[inline]
+    #[expect(
+        clippy::panic,
+        reason = "the documented `# Panics` contract; `try_from_rgba8` is the fallible form"
+    )]
+    pub fn from_rgba8(width: u32, height: u32, data: Vec<u8>) -> Self {
+        match Self::try_from_rgba8(width, height, data) {
+            Ok(image) => image,
+            Err(error) => panic!("Image::from_rgba8: {error}"),
+        }
+    }
+
+    /// Creates a new image from RGBA8 pixel data, rejecting a buffer whose
+    /// length isn't `width * height * 4`.
+    ///
+    /// The expected length is computed in `usize` with checked arithmetic, so
+    /// dimensions whose byte count overflows are rejected rather than wrapped
+    /// into a length a short buffer could match.
+    ///
+    /// # Errors
+    ///
+    /// [`ImageDataError::SizeOverflow`] if `width * height * 4` doesn't fit in
+    /// `usize`; [`ImageDataError::LengthMismatch`] if it does but differs from
+    /// `data.len()`.
+    pub fn try_from_rgba8(width: u32, height: u32, data: Vec<u8>) -> Result<Self, ImageDataError> {
+        let expected =
+            rgba8_byte_len(width, height).ok_or(ImageDataError::SizeOverflow { width, height })?;
+        if data.len() != expected {
+            return Err(ImageDataError::LengthMismatch {
+                width,
+                height,
+                expected,
+                actual: data.len(),
+            });
+        }
+        Ok(Self {
+            width,
+            height,
+            data: Arc::new(data),
+        })
+    }
+
+    /// Returns the width of the image in pixels.
+    #[inline]
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Returns the height of the image in pixels.
+    #[inline]
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// Returns the size of the image.
+    #[inline]
+    #[must_use]
+    pub fn size(&self) -> Size<f64> {
+        Size::new((self.width as f64), (self.height as f64))
+    }
+
+    /// Returns a reference to the pixel data.
+    ///
+    /// The data is in RGBA8 format (4 bytes per pixel, row-major order).
+    #[inline]
+    #[must_use]
+    pub fn data(&self) -> &[u8] {
+        &self.data[..]
+    }
+
+    /// Returns the number of bytes used by this image.
+    #[inline]
+    #[must_use]
+    pub fn byte_count(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Returns a stable pointer-based identity for this image.
+    ///
+    /// Images that share the same underlying `Arc<Vec<u8>>` (i.e., cloned
+    /// handles) will return the same value. This is O(1) and suitable for
+    /// use as a cache key to avoid re-hashing large pixel buffers every frame.
+    #[inline]
+    #[must_use]
+    pub fn data_ptr(&self) -> usize {
+        Arc::as_ptr(&self.data) as usize
+    }
+
+    /// Creates a clone of the image that shares the underlying data.
+    ///
+    /// This is a cheap operation because the data is reference-counted.
+    #[inline]
+    #[must_use]
+    pub fn clone_handle(&self) -> Self {
+        self.clone()
+    }
+
+    /// Creates a solid color image.
+    ///
+    /// Useful for placeholders, backgrounds, and testing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::{styling::Color, paint::Image};
+    ///
+    /// // Red 100x100 image
+    /// let image = Image::solid_color(100, 100, Color::RED);
+    /// assert_eq!(image.width(), 100);
+    /// assert_eq!(image.height(), 100);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn solid_color(width: u32, height: u32, color: Color) -> Self {
+        let pixel_count = (width * height) as usize;
+        let pixel = [color.r, color.g, color.b, color.a];
+        let data: Vec<u8> = pixel
+            .iter()
+            .copied()
+            .cycle()
+            .take(pixel_count * 4)
+            .collect();
+
+        Self::from_rgba8(width, height, data)
+    }
+
+    /// Creates a fully transparent image.
+    ///
+    /// Useful for creating empty image buffers or placeholders.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::paint::Image;
+    ///
+    /// let image = Image::transparent(200, 150);
+    /// assert_eq!(image.width(), 200);
+    /// assert_eq!(image.height(), 150);
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn transparent(width: u32, height: u32) -> Self {
+        Self::solid_color(width, height, Color::TRANSPARENT)
+    }
+
+    /// Returns the aspect ratio (width / height) of the image.
+    ///
+    /// Returns 0.0 if height is 0.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::{styling::Color, paint::Image};
+    ///
+    /// let image = Image::solid_color(1920, 1080, Color::BLACK);
+    /// assert!((image.aspect_ratio() - 16.0 / 9.0).abs() < 0.01);
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn aspect_ratio(&self) -> f64 {
+        if self.height == 0 {
+            0.0
+        } else {
+            self.width as f64 / self.height as f64
+        }
+    }
+}
+
+impl PartialEq for Image {
+    /// Images are equal if they have the same dimensions and point to the same
+    /// data.
+    ///
+    /// Note: This uses Arc pointer equality, not pixel-by-pixel comparison.
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.width == other.width
+            && self.height == other.height
+            && Arc::ptr_eq(&self.data, &other.data)
+    }
+}
+
+// Re-export BoxFit and FittedSizes from layout module (single source of truth)
+pub use crate::{BoxFit, FittedSizes};
+
+/// How to repeat an image to fill its layout bounds.
+///
+/// Similar to Flutter's `ImageRepeat`.
+///
+/// # Examples
+///
+/// ```
+/// use flui_painting::paint::ImageRepeat;
+///
+/// let repeat = ImageRepeat::RepeatX;
+/// assert_eq!(repeat, ImageRepeat::RepeatX);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ImageRepeat {
+    /// Repeat the image in both the x and y directions until the box is filled.
+    Repeat,
+
+    /// Repeat the image in the x direction until the box is filled
+    /// horizontally.
+    RepeatX,
+
+    /// Repeat the image in the y direction until the box is filled vertically.
+    RepeatY,
+
+    /// Do not repeat the image.
+    #[default]
+    NoRepeat,
+}
+
+/// Configuration information for an image.
+///
+/// Similar to Flutter's `ImageConfiguration`.
+///
+/// # Examples
+///
+/// ```
+/// use flui_foundation::geometry::Size;
+/// use flui_painting::paint::ImageConfiguration;
+///
+/// let config = ImageConfiguration::new()
+///     .with_size(Size::new(100.0, 100.0))
+///     .with_device_pixel_ratio(2.0);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ImageConfiguration {
+    /// The size at which the image will be rendered.
+    pub size: Option<Size<f64>>,
+
+    /// The device pixel ratio where the image will be shown.
+    pub device_pixel_ratio: Option<f64>,
+
+    /// The platform the image is being rendered on.
+    pub platform: Option<String>,
+}
+
+impl ImageConfiguration {
+    /// Creates a new empty image configuration.
+    #[inline]
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            size: None,
+            device_pixel_ratio: None,
+            platform: None,
+        }
+    }
+
+    /// Creates a configuration with the given size.
+    #[inline]
+    #[must_use]
+    pub const fn with_size(mut self, size: Size<f64>) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    /// Creates a configuration with the given device pixel ratio.
+    #[inline]
+    #[must_use]
+    pub const fn with_device_pixel_ratio(mut self, ratio: f64) -> Self {
+        self.device_pixel_ratio = Some(ratio);
+        self
+    }
+
+    /// Creates a configuration with the given platform.
+    #[inline]
+    #[must_use]
+    pub fn with_platform(mut self, platform: String) -> Self {
+        self.platform = Some(platform);
+        self
+    }
+
+    /// Returns the effective device pixel ratio (defaults to 1.0).
+    #[inline]
+    #[must_use]
+    pub const fn effective_device_pixel_ratio(&self) -> f64 {
+        match self.device_pixel_ratio {
+            Some(ratio) => ratio,
+            None => 1.0,
+        }
+    }
+
+    /// Returns the logical size in physical pixels.
+    #[inline]
+    #[must_use]
+    pub fn physical_size(&self) -> Option<Size<f64>> {
+        self.size.map(|s| {
+            let ratio = self.effective_device_pixel_ratio();
+            Size::new((s.width * ratio), (s.height * ratio))
+        })
+    }
+}
+
+impl Default for ImageConfiguration {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A color filter to apply to an image.
+///
+/// Similar to Flutter's `ColorFilter`.
+///
+/// # Examples
+///
+/// ```
+/// use flui_painting::{paint::{BlendMode, ColorFilter}, styling::Color};
+///
+/// let filter = ColorFilter::mode(Color::RED, BlendMode::Multiply);
+/// ```
+/// A color filter to apply to an image or layer.
+///
+/// ## Copy semantics
+///
+/// `ColorFilter` is `Copy`: all variants are plain-old-data.  `Matrix`
+/// wraps `ColorMatrix` (a `[f64;20]` newtype) which also derives `Copy`.
+///
+/// ## Stability
+///
+/// `#[non_exhaustive]` is set because future variants (`Shader`, `Compose`)
+/// may be added without a semver-major bump.  Match with a wildcard arm:
+/// `_ => { /* handle unknown */ }`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum ColorFilter {
+    /// Apply a Porter-Duff / W3C blend of a solid color over each pixel.
+    Mode {
+        /// The solid filter color (SRC).
+        color: Color,
+        /// The blend equation to apply.
+        blend_mode: BlendMode,
+    },
+
+    /// Apply a 5×4 row-major matrix transformation in un-premultiplied RGBA.
+    ///
+    /// The matrix is applied as follows:
+    /// ```text
+    /// | R' |   | a00 a01 a02 a03 a04 |   | R |
+    /// | G' |   | a10 a11 a12 a13 a14 |   | G |
+    /// | B' | = | a20 a21 a22 a23 a24 | * | B |
+    /// | A' |   | a30 a31 a32 a33 a34 |   | A |
+    /// | 1  |   |  0   0   0   0   1  |   | 1 |
+    /// ```
+    ///
+    /// All channels are clamped to `[0, 1]` after multiplication.
+    Matrix(ColorMatrix),
+
+    /// Apply the IEC 61966-2-1 transfer: linear light → sRGB-encoded.
+    ///
+    /// RGB channels are gamma-encoded per channel; alpha is passed through
+    /// unchanged.
+    LinearToSrgbGamma,
+
+    /// Apply the IEC 61966-2-1 inverse transfer: sRGB-encoded → linear light.
+    ///
+    /// RGB channels are gamma-decoded per channel; alpha is passed through
+    /// unchanged.
+    SrgbToLinearGamma,
+}
+
+impl ColorFilter {
+    /// Creates a color filter that applies a color blend mode.
+    #[inline]
+    #[must_use]
+    pub const fn mode(color: Color, blend_mode: BlendMode) -> Self {
+        ColorFilter::Mode { color, blend_mode }
+    }
+
+    /// Creates a color filter that applies a 5×4 matrix transformation.
+    ///
+    /// The `matrix` argument is the row-major `[f32; 20]` array (rows R/G/B/A,
+    /// each row has 4 multipliers then an additive offset).  Internally the
+    /// array is wrapped in [`ColorMatrix`] to keep the IR uniform.
+    #[inline]
+    #[must_use]
+    pub const fn matrix(matrix: [f32; 20]) -> Self {
+        ColorFilter::Matrix(ColorMatrix::new(matrix))
+    }
+
+    /// Creates a color filter that converts from linear to sRGB gamma.
+    #[inline]
+    #[must_use]
+    pub const fn linear_to_srgb_gamma() -> Self {
+        ColorFilter::LinearToSrgbGamma
+    }
+
+    /// Creates a color filter that converts from sRGB to linear gamma.
+    #[inline]
+    #[must_use]
+    pub const fn srgb_to_linear_gamma() -> Self {
+        ColorFilter::SrgbToLinearGamma
+    }
+
+    /// Creates a grayscale color filter using luminance.
+    #[inline]
+    #[must_use]
+    pub const fn grayscale() -> Self {
+        ColorFilter::Matrix(ColorMatrix::new([
+            0.2126, 0.7152, 0.0722, 0.0, 0.0, // R = luminance
+            0.2126, 0.7152, 0.0722, 0.0, 0.0, // G = luminance
+            0.2126, 0.7152, 0.0722, 0.0, 0.0, // B = luminance
+            0.0, 0.0, 0.0, 1.0, 0.0, // A = unchanged
+        ]))
+    }
+
+    /// Creates a sepia tone color filter.
+    #[inline]
+    #[must_use]
+    pub const fn sepia() -> Self {
+        ColorFilter::Matrix(ColorMatrix::new([
+            0.393, 0.769, 0.189, 0.0, 0.0, 0.349, 0.686, 0.168, 0.0, 0.0, 0.272, 0.534, 0.131, 0.0,
+            0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        ]))
+    }
+
+    /// Creates an inverted color filter.
+    ///
+    /// Matrix channels are normalized to `0..=1` (the engine divides by 255
+    /// before applying), so the offset that turns `-c` into `1 - c` is 1.
+    #[inline]
+    #[must_use]
+    pub const fn invert() -> Self {
+        ColorFilter::Matrix(ColorMatrix::new([
+            -1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+        ]))
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::panic, reason = "a wrong variant is the test's failure report")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_from_rgba8_accepts_exact_length() {
+        let image = Image::try_from_rgba8(3, 2, vec![0; 3 * 2 * 4]).expect("exact length");
+        assert_eq!(
+            (image.width(), image.height(), image.byte_count()),
+            (3, 2, 24)
+        );
+    }
+
+    #[test]
+    fn try_from_rgba8_rejects_length_mismatch() {
+        assert_eq!(
+            Image::try_from_rgba8(3, 2, vec![0; 23]).map(|_| ()),
+            Err(ImageDataError::LengthMismatch {
+                width: 3,
+                height: 2,
+                expected: 24,
+                actual: 23,
+            })
+        );
+    }
+
+    /// `65536 * 65536 * 4` wraps to 0 in `u32`, so an empty buffer matched the
+    /// old length check in release builds.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn try_from_rgba8_rejects_dimensions_that_wrap_u32() {
+        assert_eq!(
+            Image::try_from_rgba8(65_536, 65_536, Vec::new()).map(|_| ()),
+            Err(ImageDataError::LengthMismatch {
+                width: 65_536,
+                height: 65_536,
+                expected: 1 << 34,
+                actual: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn try_from_rgba8_rejects_usize_overflow() {
+        // 2^34 bytes overflows a 32-bit usize; (2^32 - 1)^2 * 4 overflows a
+        // 64-bit one.
+        let (width, height) = if cfg!(target_pointer_width = "64") {
+            (u32::MAX, u32::MAX)
+        } else {
+            (65_536, 65_536)
+        };
+        assert_eq!(
+            Image::try_from_rgba8(width, height, Vec::new()).map(|_| ()),
+            Err(ImageDataError::SizeOverflow { width, height })
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "RGBA8 byte count overflows usize")]
+    fn from_rgba8_panics_on_overflowing_dimensions() {
+        let _ = Image::from_rgba8(u32::MAX, u32::MAX, Vec::new());
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    #[should_panic(expected = "65536x65536 RGBA8 needs 17179869184 bytes, got 0")]
+    fn from_rgba8_panics_on_dimensions_that_wrap_u32() {
+        let _ = Image::from_rgba8(65_536, 65_536, Vec::new());
+    }
+
+    #[test]
+    fn test_box_fit_default() {
+        assert_eq!(BoxFit::default(), BoxFit::Contain);
+    }
+
+    #[test]
+    fn test_box_fit_fill() {
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 200.0);
+        let fitted = BoxFit::Fill.apply(input, output);
+
+        assert_eq!(fitted.source, input);
+        assert_eq!(fitted.destination, output);
+    }
+
+    #[test]
+    fn test_box_fit_contain() {
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::Contain.apply(input, output);
+
+        assert_eq!(fitted.source, input);
+        assert_eq!(fitted.destination.width, 100.0);
+        assert_eq!(fitted.destination.height, 50.0);
+    }
+
+    /// Flutter parity: `applyBoxFit(BoxFit.cover, ...)` (`box_fit.dart`,
+    /// 3.44.0) — a `100×200` input into a `100×100` output: the output is
+    /// proportionally WIDER than the input (`outputAspect(1.0) >
+    /// inputAspect(0.5)`), so Cover crops the source's HEIGHT down to match
+    /// the output's aspect (`100 * 100/100 = 100`) and fills the
+    /// destination exactly — it never overflows, unlike a naive
+    /// "scale-to-cover" that would leave `destination.height == 200` (the
+    /// bug this test previously encoded and asserted as correct).
+    #[test]
+    fn test_box_fit_cover() {
+        let input = Size::new(100.0, 200.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::Cover.apply(input, output);
+
+        assert_eq!(fitted.source, Size::new(100.0, 100.0));
+        assert_eq!(fitted.destination, output);
+    }
+
+    /// Cover when the input is proportionally WIDER than the output crops
+    /// the source's WIDTH instead (the opposite branch from
+    /// `test_box_fit_cover` above): a `200×100` input into a `100×100`
+    /// output crops the source width to `100 * 100/100 = 100`, keeping the
+    /// full `100` height.
+    #[test]
+    fn test_box_fit_cover_crops_width_when_input_is_wider() {
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::Cover.apply(input, output);
+
+        assert_eq!(fitted.source, Size::new(100.0, 100.0));
+        assert_eq!(fitted.destination, output);
+    }
+
+    /// `FitWidth`'s "like Contain" branch (`outputAspect <= inputAspect`,
+    /// so the full width fits with no crop, matching Contain's own
+    /// letterbox math): destination `height = 100 * 100/200 = 50`.
+    #[test]
+    fn test_box_fit_fit_width() {
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::FitWidth.apply(input, output);
+
+        assert_eq!(fitted.source, input, "the contain-like branch never crops");
+        assert_eq!(fitted.destination.width, 100.0);
+        assert_eq!(fitted.destination.height, 50.0);
+    }
+
+    /// `FitWidth`'s "like Cover" branch (`outputAspect > inputAspect`): a
+    /// `100×200` input into a `100×100` output crops the source height to
+    /// `100 * 100/100 = 100` and fills the destination exactly, same as
+    /// `Cover` would for this input/output pair.
+    #[test]
+    fn test_box_fit_fit_width_crops_when_output_is_proportionally_wider() {
+        let input = Size::new(100.0, 200.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::FitWidth.apply(input, output);
+
+        assert_eq!(fitted.source, Size::new(100.0, 100.0));
+        assert_eq!(fitted.destination, output);
+    }
+
+    /// `FitHeight`'s "like Contain" branch (`outputAspect > inputAspect`,
+    /// so the full height fits with no crop): destination
+    /// `width = 100 * 100/200 = 50`.
+    #[test]
+    fn test_box_fit_fit_height() {
+        let input = Size::new(100.0, 200.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::FitHeight.apply(input, output);
+
+        assert_eq!(fitted.source, input, "the contain-like branch never crops");
+        assert_eq!(fitted.destination.width, 50.0);
+        assert_eq!(fitted.destination.height, 100.0);
+    }
+
+    /// `FitHeight`'s "like Cover" branch (`outputAspect <= inputAspect`): a
+    /// `200×100` input into a `100×100` output crops the source width to
+    /// `100 * 100/100 = 100` and fills the destination exactly.
+    #[test]
+    fn test_box_fit_fit_height_crops_when_output_is_proportionally_narrower() {
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::FitHeight.apply(input, output);
+
+        assert_eq!(fitted.source, Size::new(100.0, 100.0));
+        assert_eq!(fitted.destination, output);
+    }
+
+    /// Flutter parity: `applyBoxFit(BoxFit.none, ...)` — `None` never
+    /// scales, so `destination` always equals `source`, and `source` is
+    /// capped to `output` on whichever axis `input` overflows it: a
+    /// `200×100` input into a `100×100` output crops to `100×100` (the
+    /// width axis overflows; the height axis already fit).
+    #[test]
+    fn test_box_fit_none() {
+        let input = Size::new(200.0, 100.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::None.apply(input, output);
+
+        assert_eq!(fitted.source, Size::new(100.0, 100.0));
+        assert_eq!(fitted.destination, fitted.source);
+    }
+
+    /// `None`'s other side: an input already smaller than the output on
+    /// both axes is never scaled up and never cropped — `source ==
+    /// destination == input`, unchanged (empty space around it, which
+    /// `RenderFittedBox`'s alignment computes separately).
+    #[test]
+    fn test_box_fit_none_keeps_a_smaller_input_unchanged() {
+        let input = Size::new(40.0, 30.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::None.apply(input, output);
+
+        assert_eq!(fitted.source, input);
+        assert_eq!(fitted.destination, input);
+    }
+
+    /// Flutter's leading degenerate-size guard: any non-positive width or
+    /// height on either input answers `(Size::zero, Size::zero)` — there is
+    /// no meaningful fit to compute.
+    #[test]
+    fn test_box_fit_degenerate_input_size_returns_zero() {
+        let zero_width = Size::new(0.0, 50.0);
+        let output = Size::new(100.0, 100.0);
+        for fit in [
+            BoxFit::Fill,
+            BoxFit::Contain,
+            BoxFit::Cover,
+            BoxFit::FitWidth,
+            BoxFit::FitHeight,
+            BoxFit::None,
+            BoxFit::ScaleDown,
+        ] {
+            let fitted = fit.apply(zero_width, output);
+            assert_eq!(fitted.source, Size::ZERO, "fit = {fit:?}");
+            assert_eq!(fitted.destination, Size::ZERO, "fit = {fit:?}");
+        }
+    }
+
+    #[test]
+    fn test_box_fit_scale_down_shrinks() {
+        let input = Size::new(200.0, 200.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::ScaleDown.apply(input, output);
+
+        assert_eq!(fitted.source, input, "ScaleDown never crops the source");
+        assert_eq!(fitted.destination.width, 100.0);
+        assert_eq!(fitted.destination.height, 100.0);
+    }
+
+    #[test]
+    fn test_box_fit_scale_down_no_shrink() {
+        let input = Size::new(50.0, 50.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::ScaleDown.apply(input, output);
+
+        assert_eq!(fitted.source, input);
+        assert_eq!(fitted.destination, input);
+    }
+
+    /// Flutter's `ScaleDown` shrinks height first, then re-checks width
+    /// against the (possibly already-shrunk) destination — asymmetric
+    /// aspect ratios exercise both steps of that sequence, not just the
+    /// single-axis case `test_box_fit_scale_down_shrinks` covers: a `400×100`
+    /// (4:1) input shrinking into a `100×100` output. Height (`100`)
+    /// already fits, so the first step is a no-op; width (`400`) overflows,
+    /// so the second step rescales to `(100, 100/4 = 25)`.
+    #[test]
+    fn test_box_fit_scale_down_wide_aspect_shrinks_via_the_width_step() {
+        let input = Size::new(400.0, 100.0);
+        let output = Size::new(100.0, 100.0);
+        let fitted = BoxFit::ScaleDown.apply(input, output);
+
+        assert_eq!(fitted.source, input);
+        assert_eq!(fitted.destination, Size::new(100.0, 25.0));
+    }
+
+    #[test]
+    fn test_image_repeat_default() {
+        assert_eq!(ImageRepeat::default(), ImageRepeat::NoRepeat);
+    }
+
+    #[test]
+    fn test_image_repeat_variants() {
+        assert_ne!(ImageRepeat::Repeat, ImageRepeat::RepeatX);
+        assert_ne!(ImageRepeat::RepeatY, ImageRepeat::NoRepeat);
+    }
+
+    #[test]
+    fn test_image_configuration_new() {
+        let config = ImageConfiguration::new();
+        assert!(config.size.is_none());
+        assert!(config.device_pixel_ratio.is_none());
+        assert!(config.platform.is_none());
+    }
+
+    #[test]
+    fn test_image_configuration_builder() {
+        let config = ImageConfiguration::new()
+            .with_size(Size::new(100.0, 100.0))
+            .with_device_pixel_ratio(2.0);
+
+        assert_eq!(config.size, Some(Size::new(100.0, 100.0)));
+        assert_eq!(config.device_pixel_ratio, Some(2.0));
+    }
+
+    #[test]
+    fn test_fitted_sizes_new() {
+        let source = Size::new(100.0, 100.0);
+        let destination = Size::new(50.0, 50.0);
+        let fitted = FittedSizes::new(source, destination);
+
+        assert_eq!(fitted.source, source);
+        assert_eq!(fitted.destination, destination);
+    }
+
+    #[test]
+    fn test_color_filter_mode() {
+        let filter = ColorFilter::mode(Color::RED, BlendMode::Multiply);
+
+        match filter {
+            ColorFilter::Mode { color, blend_mode } => {
+                assert_eq!(color, Color::RED);
+                assert_eq!(blend_mode, BlendMode::Multiply);
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_color_filter_matrix() {
+        use crate::paint::effects::ColorMatrix;
+
+        let raw = [0.0_f32; 20];
+        let filter = ColorFilter::matrix(raw);
+
+        match filter {
+            ColorFilter::Matrix(m) => assert_eq!(m.values, raw),
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_color_filter_gamma() {
+        let linear_to_srgb = ColorFilter::linear_to_srgb_gamma();
+        assert!(matches!(linear_to_srgb, ColorFilter::LinearToSrgbGamma));
+
+        let srgb_to_linear = ColorFilter::srgb_to_linear_gamma();
+        assert!(matches!(srgb_to_linear, ColorFilter::SrgbToLinearGamma));
+    }
+
+    /// The prebuilt filters are the `ColorMatrix` constructors, so they work
+    /// in the same normalized units: invert maps 0.2 to 0.8, not to 1.0
+    /// (which a 255 offset clamps every channel to).
+    #[test]
+    fn color_filter_presets_match_their_color_matrices() {
+        use crate::paint::effects::ColorMatrix;
+        let matrix = |f: ColorFilter| match f {
+            ColorFilter::Matrix(m) => m.values,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            matrix(ColorFilter::grayscale()),
+            ColorMatrix::grayscale().values
+        );
+        assert_eq!(matrix(ColorFilter::sepia()), ColorMatrix::sepia().values);
+        assert_eq!(matrix(ColorFilter::invert()), ColorMatrix::invert().values);
+        let inverted = ColorMatrix::new(matrix(ColorFilter::invert())).apply([0.2, 0.4, 0.6, 0.8]);
+        for (got, want) in inverted.iter().zip([0.8, 0.6, 0.4, 0.8]) {
+            assert!((got - want).abs() < 1e-6, "{inverted:?}");
+        }
+        assert_eq!(
+            ColorFilter::matrix([0.5; 20]),
+            ColorFilter::Matrix(ColorMatrix::new([0.5; 20]))
+        );
+        assert!(matches!(
+            ColorFilter::mode(Color::RED, BlendMode::Multiply),
+            ColorFilter::Mode {
+                color: Color::RED,
+                blend_mode: BlendMode::Multiply
+            }
+        ));
+    }
+
+    #[test]
+    fn solid_color_fills_every_pixel() {
+        let image = Image::solid_color(3, 2, Color::rgba(1, 2, 3, 4));
+        assert_eq!(
+            (image.width(), image.height(), image.byte_count()),
+            (3, 2, 24)
+        );
+        assert_eq!(image.data(), [1, 2, 3, 4].repeat(6).as_slice());
+        let clear = Image::transparent(2, 2);
+        assert_eq!(clear.data(), [0; 16].as_slice());
+    }
+
+    #[test]
+    fn aspect_ratio() {
+        assert_eq!(Image::solid_color(6, 3, Color::RED).aspect_ratio(), 2.0);
+        assert_eq!(Image::solid_color(3, 6, Color::RED).aspect_ratio(), 0.5);
+        assert_eq!(Image::from_rgba8(4, 0, Vec::new()).aspect_ratio(), 0.0);
+    }
+
+    /// Images compare by shared pixel storage, not by content: a clone is
+    /// equal, an identical but separately built image is not.
+    #[test]
+    fn equality_is_pixel_buffer_identity() {
+        let a = Image::solid_color(2, 2, Color::RED);
+        let handle = a.clone_handle();
+        assert_eq!(a, handle);
+        assert_eq!(a.data_ptr(), handle.data_ptr());
+        let twin = Image::solid_color(2, 2, Color::RED);
+        assert_ne!(a, twin);
+        assert_ne!(a.data_ptr(), twin.data_ptr());
+        assert_ne!(a.data_ptr(), 0);
+    }
+
+    #[test]
+    fn image_configuration() {
+        let size = Size::new(10.0, 4.0);
+        let config = ImageConfiguration::new()
+            .with_size(size)
+            .with_device_pixel_ratio(2.5)
+            .with_platform("android".to_string());
+        assert_eq!(config.effective_device_pixel_ratio(), 2.5);
+        assert_eq!(config.physical_size(), Some(Size::new(25.0, 10.0)));
+        assert_eq!(config.platform.as_deref(), Some("android"));
+        let plain = ImageConfiguration::new().with_size(size);
+        assert_eq!(plain.effective_device_pixel_ratio(), 1.0);
+        assert_eq!(plain.physical_size(), Some(size));
+        assert_eq!(ImageConfiguration::new().physical_size(), None);
+    }
+}

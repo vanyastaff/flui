@@ -18,13 +18,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use flui_foundation::geometry::Size;
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
-use flui_types::Size;
 use flui_view::{BuildOwner, ElementTree, RenderView, View};
 
 /// A leaf of a fixed size, so the bootstrap frame has real geometry to commit.
@@ -359,7 +359,9 @@ fn the_bootstrap_installs_a_working_fresh_hit_test_capability() {
     // The realm check the handle makes needs the binding's lane active, the
     // same as any dispatch.
     let hit = binding
-        .enter_owner_scope(|| handle.hit_test_at(flui_types::Offset::new(20.0, 20.0)))
+        .enter_owner_scope(|| {
+            handle.hit_test_at(flui_foundation::geometry::Offset::new(20.0, 20.0))
+        })
         .expect("the tree is free between frames, so the probe must answer");
     assert!(
         !hit.is_empty(),

@@ -329,7 +329,7 @@ impl<'a> RenderObjectContext<'a> {
     /// the element was mounted detached, or the owner is gone.
     pub fn register_path_clipper(
         &self,
-        clipper: impl Fn(flui_types::Size) -> flui_types::painting::Path + 'static,
+        clipper: impl Fn(flui_foundation::geometry::Size) -> flui_painting::paint::Path + 'static,
     ) -> Result<flui_interaction::PathClipTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_path_clipper(clipper)?)
     }
@@ -344,7 +344,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn replace_path_clipper(
         &self,
         target: flui_interaction::PathClipTarget,
-        clipper: impl Fn(flui_types::Size) -> flui_types::painting::Path + 'static,
+        clipper: impl Fn(flui_foundation::geometry::Size) -> flui_painting::paint::Path + 'static,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
             .dispatch_handle()?
@@ -375,7 +375,7 @@ impl<'a> RenderObjectContext<'a> {
     /// the element was mounted detached, or the owner is gone.
     pub fn register_shader_mask(
         &self,
-        factory: impl Fn(flui_types::Rect<f64>) -> flui_types::painting::Shader + 'static,
+        factory: impl Fn(flui_foundation::geometry::Rect<f64>) -> flui_painting::paint::Shader + 'static,
     ) -> Result<flui_interaction::ShaderMaskTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_shader_mask(factory)?)
     }
@@ -390,7 +390,7 @@ impl<'a> RenderObjectContext<'a> {
     pub fn replace_shader_mask(
         &self,
         target: flui_interaction::ShaderMaskTarget,
-        factory: impl Fn(flui_types::Rect<f64>) -> flui_types::painting::Shader + 'static,
+        factory: impl Fn(flui_foundation::geometry::Rect<f64>) -> flui_painting::paint::Shader + 'static,
     ) -> Result<(), RenderObjectContextError> {
         Ok(self
             .dispatch_handle()?
@@ -438,7 +438,7 @@ impl<'a> RenderObjectContext<'a> {
 /// use flui_objects::RenderColoredBox;
 /// use flui_rendering::RenderUpdateImpact;
 /// use flui_rendering::protocol::BoxProtocol;
-/// use flui_types::Size;
+/// use flui_foundation::geometry::Size;
 /// use flui_view::{RenderObjectContext, RenderView};
 ///
 /// #[derive(Clone)]

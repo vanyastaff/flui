@@ -22,13 +22,13 @@ use std::time::{Duration, Instant};
 
 use flui_cupertino::{CupertinoTabController, CupertinoTheme, CupertinoThemeData};
 use flui_foundation::RenderId;
+use flui_foundation::geometry::{Offset, Size};
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
-use flui_types::{Offset, Size};
 use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, VsyncScope};
 
 /// The mounted root's logical width.

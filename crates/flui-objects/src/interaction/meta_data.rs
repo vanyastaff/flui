@@ -27,7 +27,7 @@
 use std::{any::Any, fmt, sync::Arc};
 
 use flui_foundation::Single;
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 
 use flui_rendering::{
     context::BoxHitTestContext, hit_testing::HitTestBehavior, parent_data::BoxParentData,

@@ -35,7 +35,8 @@ console_error_panic_hook = "0.1"
 raw-window-handle = "0.6"
 wgpu = { workspace = true, features = ["webgpu", "wgsl"] }
 flui-engine = { path = "../../crates/flui-engine", features = ["webgpu"] }
-flui-types = { path = "../../crates/flui-types" }
+flui-painting = { path = "../../crates/flui-painting" }
+flui-foundation = { path = "../../crates/flui-foundation" }
 
 [lints]
 workspace = true

@@ -3,7 +3,7 @@
 
 use std::{any::Any, fmt, sync::Arc};
 
-use flui_types::geometry::Rect;
+use flui_foundation::geometry::Rect;
 
 /// Type-erased annotation value.
 pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
@@ -40,7 +40,7 @@ pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
 /// use std::sync::Arc;
 ///
 /// use flui_layer::{AnnotatedRegionLayer, SystemUiOverlayStyle};
-/// use flui_types::geometry::Rect;
+/// use flui_foundation::geometry::Rect;
 ///
 /// let style = Arc::new(SystemUiOverlayStyle::Dark);
 /// let layer = AnnotatedRegionLayer::new(Rect::from_xywh(0.0, 0.0, 400.0, 24.0), style);

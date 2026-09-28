@@ -24,6 +24,7 @@
 //! 7. edge cases — zero sizes and empty containers;
 //! 8. churn stress — 20 remove+reinsert cycles.
 
+use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{
     RenderClipRect, RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBoundary,
@@ -33,7 +34,6 @@ use flui_rendering::{
     constraints::BoxConstraints,
     testing::{Probe, RenderTester, box_node},
 };
-use flui_types::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 
 /// Loose `0..=hi x 0..=hi` constraints (children settle at natural size).
 fn loose(width: f64, height: f64) -> BoxConstraints {
@@ -165,12 +165,14 @@ fn mixed_flex_padding_transform_clip_frame() {
     // `paint` must not re-open a `with_transform` scope around the layer the
     // pipeline already pushes from `paint_effects`; nothing in
     // `flui-objects`' own unit tests would catch that, but this list would.
-    let scaler_size = scaler_node.size().unwrap_or(flui_types::Size::ZERO);
+    let scaler_size = scaler_node
+        .size()
+        .unwrap_or(flui_foundation::geometry::Size::ZERO);
     let local = {
         let mut m = Matrix4::IDENTITY;
         scaler_node.box_render_object().apply_paint_transform(
             0,
-            flui_types::Offset::ZERO,
+            flui_foundation::geometry::Offset::ZERO,
             scaler_size,
             &mut m,
         );

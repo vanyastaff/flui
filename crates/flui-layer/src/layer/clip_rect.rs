@@ -1,6 +1,7 @@
 //! `ClipRectLayer` — clips its subtree to a rectangle.
 
-use flui_types::{geometry::Rect, painting::Clip};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::Clip;
 
 /// Layer that clips children to a rectangle.
 ///
@@ -18,7 +19,8 @@ use flui_types::{geometry::Rect, painting::Clip};
 ///
 /// ```rust
 /// use flui_layer::ClipRectLayer;
-/// use flui_types::{geometry::Rect, painting::Clip};
+/// use flui_foundation::geometry::Rect;
+/// use flui_painting::paint::Clip;
 ///
 /// let layer = ClipRectLayer::new(Rect::from_xywh(10.0, 10.0, 100.0, 100.0), Clip::HardEdge);
 ///

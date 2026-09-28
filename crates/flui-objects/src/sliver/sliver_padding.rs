@@ -36,7 +36,9 @@
 //!   remain test-friendly.
 
 use flui_foundation::Single;
-use flui_types::{Axis, EdgeInsets, Offset, layout::AxisDirection};
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{EdgeInsets, Offset};
+use flui_rendering::constraints::AxisDirection;
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry},
@@ -469,7 +471,7 @@ mod tests {
         remaining_cache_extent: f64,
         cross_axis_extent: f64,
     ) -> SliverConstraints {
-        use flui_types::layout::AxisDirection;
+        use flui_rendering::constraints::AxisDirection;
 
         use flui_rendering::view::ScrollDirection;
 
@@ -639,7 +641,7 @@ mod tests {
         assert_eq!(cross_v, 8.0);
 
         // Horizontal right scroll: main = left+right = 8, cross = top+bottom = 30.
-        use flui_types::layout::AxisDirection;
+        use flui_rendering::constraints::AxisDirection;
 
         use flui_rendering::view::ScrollDirection;
 
@@ -842,7 +844,7 @@ mod tests {
 
     #[test]
     fn padded_geometry_horizontal_axis_cross_uses_top() {
-        use flui_types::layout::AxisDirection;
+        use flui_rendering::constraints::AxisDirection;
 
         use flui_rendering::view::ScrollDirection;
 

@@ -30,7 +30,7 @@
 //! use flui_interaction::GestureRecognizer;
 //! use flui_interaction::arena::GestureArena;
 //! use flui_interaction::ids::PointerId;
-//! use flui_types::geometry::Offset;
+//! use flui_foundation::geometry::Offset;
 //! use flui_interaction::recognizers::EagerGestureRecognizer;
 //!
 //! let arena = GestureArena::new();
@@ -62,7 +62,7 @@
 
 use std::sync::Arc;
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};

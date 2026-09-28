@@ -1,7 +1,7 @@
 //! `LeaderLayer` — the anchor a [`FollowerLayer`](super::FollowerLayer)
 //! positions itself against (tooltips, dropdowns, connected overlays).
 
-use flui_types::geometry::{Offset, Rect, Size};
+use flui_foundation::geometry::{Offset, Rect, Size};
 
 use crate::LayerLink;
 

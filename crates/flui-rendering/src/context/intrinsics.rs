@@ -7,7 +7,7 @@
 //! memoizes every level in the per-node layout cache; an object never
 //! sees the cache.
 
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 use crate::constraints::BoxConstraints;
 use crate::parent_data::{FlexParentData, ParentData};
@@ -545,7 +545,7 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Offset;
+    use flui_foundation::geometry::Offset;
 
     use super::*;
     use crate::parent_data::{BoxParentData, FlexFit, FlexParentData};

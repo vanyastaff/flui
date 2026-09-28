@@ -43,7 +43,7 @@ use std::{
 
 use web_time::Instant;
 
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 
 use crate::{
     events::{PointerEvent, PointerType},

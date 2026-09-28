@@ -38,9 +38,9 @@ use std::{
 };
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::Offset;
 use flui_layer::LayerTree;
 use flui_semantics::SemanticsOwner;
-use flui_types::Offset;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 #[cfg(any(test, feature = "testing"))]
@@ -399,7 +399,8 @@ mod tests {
     use std::sync::Arc;
 
     use flui_foundation::Leaf;
-    use flui_types::{Color, Point, Rect, Size};
+    use flui_foundation::geometry::{Point, Rect, Size};
+    use flui_painting::styling::Color;
 
     use super::*;
     use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};
@@ -1759,13 +1760,13 @@ mod tests {
     /// site the pipeline owner wraps in `catch_unwind`.
     #[derive(Debug)]
     struct PanickingPaintBox {
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
     }
 
     impl PanickingPaintBox {
         fn new() -> Self {
             Self {
-                size: flui_types::Size::ZERO,
+                size: flui_foundation::geometry::Size::ZERO,
             }
         }
     }
@@ -1788,7 +1789,7 @@ mod tests {
             &self,
             _recorder: &mut crate::context::FragmentRecorder,
             _child_count: usize,
-            _size: flui_types::Size,
+            _size: flui_foundation::geometry::Size,
         ) {
             panic!("PanickingPaintBox::paint_raw -- intentional test panic");
         }
@@ -1797,11 +1798,11 @@ mod tests {
             &self,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
-            _size: flui_types::Size,
+            _size: flui_foundation::geometry::Size,
             _hit_child: &mut dyn FnMut(
                 usize,
                 Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
-                Option<flui_types::Matrix4>,
+                Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> crate::traits::HitTestOutcome {
             crate::traits::HitTestOutcome::miss()
@@ -1847,7 +1848,7 @@ mod tests {
             &self,
             _recorder: &mut crate::context::FragmentRecorder,
             _child_count: usize,
-            _size: flui_types::Size,
+            _size: flui_foundation::geometry::Size,
         ) {
         }
 
@@ -1855,11 +1856,11 @@ mod tests {
             &self,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
-            _size: flui_types::Size,
+            _size: flui_foundation::geometry::Size,
             _hit_child: &mut dyn FnMut(
                 usize,
                 Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
-                Option<flui_types::Matrix4>,
+                Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> crate::traits::HitTestOutcome {
             crate::traits::HitTestOutcome::miss()
@@ -1938,7 +1939,7 @@ mod tests {
     fn test_render_entry_layout_catches_panic() {
         use crate::error::{PoisonPhase, RenderError};
         use crate::storage::RenderEntry;
-        use flui_types::Size;
+        use flui_foundation::geometry::Size;
 
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
@@ -2133,7 +2134,7 @@ mod tests {
     /// the leaf commit path (`RenderEntry::layout_leaf_only`).
     #[derive(Debug)]
     struct FixedSizeLeaf {
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
     }
 
     impl flui_foundation::Diagnosticable for FixedSizeLeaf {}
@@ -2154,7 +2155,7 @@ mod tests {
             &self,
             _recorder: &mut crate::context::FragmentRecorder,
             _child_count: usize,
-            _size: flui_types::Size,
+            _size: flui_foundation::geometry::Size,
         ) {
         }
 
@@ -2162,11 +2163,11 @@ mod tests {
             &self,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
-            _size: flui_types::Size,
+            _size: flui_foundation::geometry::Size,
             _hit_child: &mut dyn FnMut(
                 usize,
                 Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
-                Option<flui_types::Matrix4>,
+                Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> crate::traits::HitTestOutcome {
             crate::traits::HitTestOutcome::miss()
@@ -2182,13 +2183,13 @@ mod tests {
 
         let mut owner = PipelineOwner::new();
         let root = owner.insert(Box::new(FixedSizeLeaf {
-            size: flui_types::Size::new(999.0, 999.0),
+            size: flui_foundation::geometry::Size::new(999.0, 999.0),
         })
             as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
         owner.set_root_id(Some(root));
-        owner.set_root_constraints(Some(BoxConstraints::tight(flui_types::Size::new(
-            100.0, 100.0,
-        ))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(
+            flui_foundation::geometry::Size::new(100.0, 100.0),
+        )));
 
         let (_, result) = owner.run_frame();
         match result {
@@ -2212,9 +2213,9 @@ mod tests {
         let root_node = owner.insert(Box::new(PaintingLeaf::red(40.0, 40.0))
             as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
         owner.set_root_id(Some(root_node));
-        owner.set_root_constraints(Some(BoxConstraints::tight(flui_types::Size::new(
-            40.0, 40.0,
-        ))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(
+            flui_foundation::geometry::Size::new(40.0, 40.0),
+        )));
 
         // Frame 1: fully dirty, must paint.
         let (owner, frame1) = owner.run_frame();

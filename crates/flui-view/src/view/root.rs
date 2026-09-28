@@ -10,13 +10,13 @@
 
 use std::any::TypeId;
 
+use flui_foundation::geometry::Size;
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     storage::RenderNode,
     view::{RenderView as RenderViewObject, RenderViewAdapter, ViewConfiguration},
 };
-use flui_types::Size;
 
 use crate::{
     element::{Lifecycle, RenderTreeRootElement},

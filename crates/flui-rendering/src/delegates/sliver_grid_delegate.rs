@@ -125,7 +125,7 @@ impl SliverGridLayout {
 ///
 /// ```ignore
 /// use flui_rendering::delegates::{SliverGridDelegate, SliverGridLayout};
-/// use flui_types::SliverConstraints;
+/// use flui_rendering::constraints::SliverConstraints;
 ///
 /// #[derive(Debug)]
 /// struct FixedCountGridDelegate {
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn test_get_layout_wires_reverse_cross_axis_from_direction() {
-        use flui_types::layout::AxisDirection;
+        use crate::constraints::AxisDirection;
 
         let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(3);
 

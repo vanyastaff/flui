@@ -37,8 +37,8 @@ pub use clip_rect::ClipRectLayer;
 pub use clip_rrect::ClipRRectLayer;
 pub use clip_superellipse::ClipSuperellipseLayer;
 pub use color_filter::ColorFilterLayer;
+use flui_foundation::geometry::{Offset, Rect};
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsNode};
-use flui_types::geometry::{Offset, Rect};
 pub use follower::FollowerLayer;
 pub use image_filter::ImageFilterLayer;
 pub use leader::LeaderLayer;
@@ -64,7 +64,8 @@ pub use transform::TransformLayer;
 ///
 /// ```rust
 /// use flui_layer::{ClipRectLayer, Layer, OpacityLayer};
-/// use flui_types::{geometry::Rect, painting::Clip};
+/// use flui_foundation::geometry::Rect;
+/// use flui_painting::paint::Clip;
 ///
 /// let clip = Layer::from(ClipRectLayer::new(
 ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
@@ -332,7 +333,8 @@ layer_from_impls! {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{geometry::Size, painting::Clip};
+    use flui_foundation::geometry::Size;
+    use flui_painting::paint::Clip;
 
     use super::*;
     use crate::LayerLink;
@@ -357,7 +359,7 @@ mod tests {
             OffsetLayer::new(offset).into(),
             TransformLayer::translation(3.0, 4.0).into(),
             OpacityLayer::with_offset(0.5, offset).into(),
-            ImageFilterLayer::with_offset(flui_types::painting::ImageFilter::blur(1.0), offset)
+            ImageFilterLayer::with_offset(flui_painting::paint::ImageFilter::blur(1.0), offset)
                 .into(),
             LeaderLayer::with_offset(LayerLink::new(), Size::ZERO, offset).into(),
         ];

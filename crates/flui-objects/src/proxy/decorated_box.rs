@@ -9,8 +9,9 @@
 //! child.
 
 use flui_foundation::Single;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::styling::BoxDecoration;
 use flui_painting::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
-use flui_types::{Offset, Point, Rect, Size, styling::BoxDecoration};
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
@@ -197,7 +198,7 @@ impl RenderBox for RenderDecoratedBox {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::styling::Color;
+    use flui_painting::styling::Color;
 
     use super::*;
 

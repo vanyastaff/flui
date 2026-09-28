@@ -1,7 +1,8 @@
 //! RenderSliver trait for scrollable content layout.
 
+use crate::constraints::AxisDirection;
 use flui_foundation::Arity;
-use flui_types::{Size, prelude::AxisDirection};
+use flui_foundation::geometry::Size;
 
 use crate::{
     constraints::{SliverConstraints, SliverGeometry},
@@ -358,7 +359,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     ///
     /// Default: [`PaintEffects::NONE`]. See [`RenderObject::paint_effects`]
     /// for the full contract (pure in `(self, size)`, no user code).
-    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
+    fn paint_effects(&self, size: flui_foundation::geometry::Size) -> PaintEffects {
         let _ = size;
         PaintEffects::NONE
     }
@@ -367,7 +368,10 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     ///
     /// Default: `None`. See
     /// [`RenderObject::hit_test_transform`].
-    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+    fn hit_test_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
         let _ = size;
         None
     }
@@ -459,8 +463,8 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     fn describe_approximate_paint_clip(
         &self,
         _child_slot: usize,
-        _size: flui_types::Size,
-    ) -> Option<flui_types::Rect<f64>> {
+        _size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         None
     }
 
@@ -471,8 +475,8 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     fn describe_semantics_clip(
         &self,
         _child_slot: usize,
-        _size: flui_types::Size,
-    ) -> Option<flui_types::Rect<f64>> {
+        _size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         None
     }
 
@@ -562,7 +566,7 @@ where
         &self,
         recorder: &mut crate::context::FragmentRecorder,
         child_count: usize,
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
     ) {
         // Same paint bridge shape as the BoxProtocol blanket: wrap the
         // recorder in the typed PaintCx<T::Arity> and call the user's
@@ -577,11 +581,11 @@ where
         &self,
         position: crate::protocol::ProtocolPosition<SliverProtocol>,
         _child_count: usize,
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
             Option<crate::protocol::ProtocolPosition<SliverProtocol>>,
-            Option<flui_types::Matrix4>,
+            Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome {
         // The sliver hit gate is driver-owned (geometry / cross-axis
@@ -610,11 +614,14 @@ where
         <T as RenderSliver>::skip_paint(self)
     }
 
-    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
+    fn paint_effects(&self, size: flui_foundation::geometry::Size) -> PaintEffects {
         <T as RenderSliver>::paint_effects(self, size)
     }
 
-    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+    fn hit_test_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
         <T as RenderSliver>::hit_test_transform(self, size)
     }
 
@@ -636,16 +643,16 @@ where
     fn describe_approximate_paint_clip(
         &self,
         child_slot: usize,
-        size: flui_types::Size,
-    ) -> Option<flui_types::Rect<f64>> {
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         <T as RenderSliver>::describe_approximate_paint_clip(self, child_slot, size)
     }
 
     fn describe_semantics_clip(
         &self,
         child_slot: usize,
-        size: flui_types::Size,
-    ) -> Option<flui_types::Rect<f64>> {
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         <T as RenderSliver>::describe_semantics_clip(self, child_slot, size)
     }
 
@@ -706,8 +713,8 @@ pub trait RenderProxySliver<C: RenderSliver>: RenderSliver {
 
 #[cfg(test)]
 mod tests {
+    use crate::constraints::{AxisDirection, AxisDirection::*};
     use flui_foundation::{Leaf, Single};
-    use flui_types::layout::{AxisDirection, AxisDirection::*};
 
     use super::*;
     use crate::{

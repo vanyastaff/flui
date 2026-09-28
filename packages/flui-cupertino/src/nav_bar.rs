@@ -85,8 +85,8 @@
 //! shifts or clips `middle` if `leading`/`trailing` grow wide enough to
 //! visually collide with it.
 
-use flui_sdk::types::Size;
-use flui_sdk::types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::geometry::Size;
+use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{

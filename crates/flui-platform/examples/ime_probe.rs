@@ -104,12 +104,12 @@ mod appkit_ime_probe {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    use flui_foundation::geometry::{Bounds, Point, Size};
     use flui_platform::traits::{Key, PlatformInput};
     use flui_platform::{
         DispatchEventResult, Platform, PlatformTextInput, PlatformWindow, WindowOptions,
     };
     use flui_platform_api::ImeEvent;
-    use flui_types::geometry::{Bounds, Point, Size};
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2::{ClassType, msg_send};
     use objc2_app_kit::NSApplication;

@@ -7,15 +7,15 @@
 
 use std::ops::Index;
 
+use flui_foundation::geometry::Rect;
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-use flui_types::geometry::Rect;
 
 pub mod command;
 pub mod command_ops;
 
 pub use command::{DrawCommand, DrawOp};
-// The paint vocabulary the commands carry; defined in `flui_types::painting`.
-pub(crate) use flui_types::painting::{
+// The paint vocabulary the commands carry; defined in `crate::paint`.
+pub(crate) use crate::paint::{
     BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId,
     image::{ColorFilter, ImageRepeat},
 };

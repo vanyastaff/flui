@@ -3,8 +3,9 @@
 //! Converts vector paths (curves, lines, arcs) into triangle meshes
 //! suitable for GPU rendering.
 
+use flui_foundation::geometry::{Point, RRect, Rect};
+use flui_painting::styling::Color;
 use flui_painting::{Paint, StrokeCap, StrokeJoin};
-use flui_types::{Point, Rect, geometry::RRect, styling::Color};
 use lyon::{
     path::{FillRule, Path},
     tessellation::{
@@ -32,14 +33,14 @@ const DEVICE_FILL_TOLERANCE: f32 = 0.1;
 /// placement only needs segment endpoints, not render-quality curvature.
 const DEVICE_DASH_TOLERANCE: f32 = 0.5;
 
-/// Map a FLUI [`PathFillType`](flui_types::painting::PathFillType) to lyon's
+/// Map a FLUI [`PathFillType`](flui_painting::paint::PathFillType) to lyon's
 /// [`FillRule`]. FLUI/Flutter default to non-zero winding; lyon's
 /// `FillOptions::default()` defaults to even-odd, so this mapping must be
 /// applied explicitly for every filled FLUI path.
-fn fill_rule_for(fill_type: flui_types::painting::PathFillType) -> FillRule {
+fn fill_rule_for(fill_type: flui_painting::paint::PathFillType) -> FillRule {
     match fill_type {
-        flui_types::painting::PathFillType::NonZero => FillRule::NonZero,
-        flui_types::painting::PathFillType::EvenOdd => FillRule::EvenOdd,
+        flui_painting::paint::PathFillType::NonZero => FillRule::NonZero,
+        flui_painting::paint::PathFillType::EvenOdd => FillRule::EvenOdd,
     }
 }
 
@@ -179,7 +180,7 @@ impl Tessellator {
     /// * `paint` - Paint style (color)
     /// * `fill_rule` - Winding rule. FLUI/Flutter default to
     ///   [`FillRule::NonZero`]; only paths carrying an explicit
-    ///   [`PathFillType::EvenOdd`](flui_types::painting::PathFillType) use
+    ///   [`PathFillType::EvenOdd`](flui_painting::paint::PathFillType) use
     ///   even-odd. Convex shapes (circle/ellipse/arc/rrect/drrect) are unaffected
     ///   by the rule, so their callers pass the FLUI default.
     ///
@@ -715,10 +716,10 @@ impl Tessellator {
     /// self-intersect or overlap same-winding subpaths, so the winding rule is
     /// observable: `PathFillType::NonZero` (the FLUI default) fills overlaps
     /// solid, `EvenOdd` punches holes. This is the only fill entry point that
-    /// reads [`flui_types::painting::path::Path::fill_type`].
+    /// reads [`flui_painting::paint::path::Path::fill_type`].
     pub(crate) fn tessellate_flui_path_fill(
         &mut self,
-        flui_path: &flui_types::painting::path::Path,
+        flui_path: &flui_painting::paint::path::Path,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let lyon_path = flui_path.to_lyon_path();
@@ -728,7 +729,7 @@ impl Tessellator {
     /// Tessellate a FLUI Path (stroked)
     pub(crate) fn tessellate_flui_path_stroke(
         &mut self,
-        flui_path: &flui_types::painting::path::Path,
+        flui_path: &flui_painting::paint::path::Path,
         paint: &Paint,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let lyon_path = flui_path.to_lyon_path();
@@ -743,9 +744,9 @@ impl Tessellator {
     /// an invalid pattern falls back to a solid stroke.
     pub(crate) fn tessellate_flui_path_dashed_stroke(
         &mut self,
-        flui_path: &flui_types::painting::path::Path,
+        flui_path: &flui_painting::paint::path::Path,
         paint: &Paint,
-        dash_pattern: &flui_types::painting::DashPattern,
+        dash_pattern: &flui_painting::paint::DashPattern,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         let lyon_path = flui_path.to_lyon_path();
         self.tessellate_dashed_stroke(&lyon_path, paint, dash_pattern)
@@ -767,7 +768,7 @@ impl Tessellator {
         &mut self,
         path: &Path,
         paint: &Paint,
-        dash_pattern: &flui_types::painting::DashPattern,
+        dash_pattern: &flui_painting::paint::DashPattern,
     ) -> Result<(Vec<Vertex>, Vec<u32>)> {
         use lyon::path::PathEvent;
         use lyon::path::iterator::PathIterator;
@@ -987,9 +988,9 @@ impl IntoLyonPath for Rect<f64> {
     }
 }
 
-impl IntoLyonPath for flui_types::painting::path::Path {
+impl IntoLyonPath for flui_painting::paint::path::Path {
     fn to_lyon_path(&self) -> Path {
-        use flui_types::painting::path::PathCommand;
+        use flui_painting::paint::path::PathCommand;
 
         // The one narrowing point from logical f64 path geometry to lyon's f32 (ADR-0098 §2).
         let lyon_point = |p: &Point<f64>| lyon::geom::point(p.x as f32, p.y as f32);
@@ -1142,7 +1143,7 @@ mod cpu_tests {
     use super::*;
 
     /// Where each contour of a converted path begins.
-    fn contour_starts(path: &flui_types::painting::path::Path) -> Vec<(f32, f32)> {
+    fn contour_starts(path: &flui_painting::paint::path::Path) -> Vec<(f32, f32)> {
         path.to_lyon_path()
             .iter()
             .filter_map(|event| match event {
@@ -1159,7 +1160,7 @@ mod cpu_tests {
     /// own end.
     #[test]
     fn segments_without_an_open_contour_start_from_the_pen() {
-        use flui_types::painting::path::Path as FluiPath;
+        use flui_painting::paint::path::Path as FluiPath;
         let p = |x: f64, y: f64| Point::new(x, y);
 
         let mut curve = FluiPath::new();
@@ -1317,7 +1318,7 @@ mod cpu_tests {
     /// default) → lyon NonZero, EvenOdd → lyon EvenOdd.
     #[test]
     fn fill_rule_mapping_is_faithful() {
-        use flui_types::painting::PathFillType;
+        use flui_painting::paint::PathFillType;
         assert!(matches!(
             fill_rule_for(PathFillType::NonZero),
             FillRule::NonZero
@@ -1356,8 +1357,8 @@ mod cpu_tests {
     /// the single-contour invariant at the lyon-conversion boundary.
     #[test]
     fn rounded_rect_converts_to_one_contour_not_per_corner_subpaths() {
-        use flui_types::geometry::rrect::RRect;
-        use flui_types::painting::path::Path as FluiPath;
+        use flui_foundation::geometry::rrect::RRect;
+        use flui_painting::paint::path::Path as FluiPath;
 
         let rrect = RRect::from_xywh_circular(0.0, 0.0, 120.0, 80.0, 12.0);
         let lyon_path = FluiPath::from_rrect(rrect).to_lyon_path();
@@ -1479,7 +1480,7 @@ mod cpu_tests {
     /// Rounded rects too — `shapes.rs` routes the stroked branch here.
     #[test]
     fn a_stroked_rrect_tessellates_outside_its_own_bounds() {
-        use flui_types::geometry::rrect::RRect;
+        use flui_foundation::geometry::rrect::RRect;
 
         let mut tessellator = Tessellator::new();
         let rrect = RRect::from_xywh_circular(10.0, 10.0, 100.0, 60.0, 8.0);
@@ -1502,7 +1503,7 @@ mod cpu_tests {
 #[cfg(all(test, feature = "testing"))]
 mod tests {
     use super::*;
-    use flui_types::geometry::{Radius, rrect::RRect};
+    use flui_foundation::geometry::{Radius, rrect::RRect};
 
     // `test_tessellate_rect` and `test_tessellate_rounded_rect` were
     // removed alongside the methods they exercised. No production code

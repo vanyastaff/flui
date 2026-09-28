@@ -6,7 +6,7 @@ use std::sync::Arc;
 use flui_animation::Animation;
 use flui_foundation::Listenable;
 use flui_objects::TranslationFraction;
-use flui_types::typography::TextDirection;
+use flui_painting::typography::TextDirection;
 use flui_view::prelude::BuildContext;
 use flui_view::{
     AnimatedView, BoxedView, IntoView, StatefulView, ViewExt, ViewState, impl_animated_view,

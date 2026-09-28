@@ -25,7 +25,7 @@
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 use ui_events::pointer::PointerButton;
 

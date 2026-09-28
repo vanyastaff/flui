@@ -20,13 +20,13 @@
 //!   * PR #143 (perform_layout_raw → Result)
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::Size;
 use flui_objects::{RenderCenter, RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
     error::{PoisonPhase, RenderError},
     protocol::{BoxProtocol, RenderObject},
 };
-use flui_types::Size;
 
 use crate::common::fresh_layout_pipeline;
 

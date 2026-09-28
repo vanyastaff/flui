@@ -1,6 +1,7 @@
 //! `ImageFilterLayer` — filters its subtree's pixels: blur, dilate, erode, colour matrix.
 
-use flui_types::{Offset, painting::effects::ImageFilter};
+use flui_foundation::geometry::Offset;
+use flui_painting::paint::effects::ImageFilter;
 
 /// Layer that applies an image filter to its children.
 ///
@@ -94,7 +95,7 @@ impl ImageFilterLayer {
 
     /// A colour-matrix filter.
     #[inline]
-    pub fn matrix(matrix: flui_types::painting::effects::ColorMatrix) -> Self {
+    pub fn matrix(matrix: flui_painting::paint::effects::ColorMatrix) -> Self {
         Self::new(ImageFilter::matrix(matrix))
     }
 

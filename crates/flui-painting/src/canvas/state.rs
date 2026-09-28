@@ -5,11 +5,8 @@
 //! `RestoreLayer`). `restore()` on an empty save stack is a silent no-op,
 //! as `dart:ui`'s `Canvas.restore()` is in release builds.
 
-use flui_types::{
-    geometry::{Matrix4, Rect},
-    painting::BlendMode,
-    styling::Color,
-};
+use crate::{paint::BlendMode, styling::Color};
+use flui_foundation::geometry::{Matrix4, Rect};
 
 use super::Canvas;
 use crate::display_list::{DrawOp, Paint};
@@ -164,7 +161,7 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::painting::BlendMode;
+    use crate::paint::BlendMode;
 
     use super::{Canvas, DrawOp};
 

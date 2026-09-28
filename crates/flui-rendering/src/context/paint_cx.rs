@@ -46,13 +46,11 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use flui_foundation::{Arity, Optional, Single, Variable};
 use flui_layer::LayerLink;
+use flui_painting::paint::{Alignment, BlendMode, Clip, ImageFilter, Shader};
 use flui_painting::{Canvas, DisplayList};
-use flui_types::{
-    Matrix4, Offset, Point, Rect, Size,
-    painting::{Alignment, BlendMode, Clip, ImageFilter, Shader},
-};
 
 use crate::traits::PaintClip;
 
@@ -345,7 +343,7 @@ impl FragmentRecorder {
 /// ```compile_fail
 /// use flui_rendering::context::{FragmentRecorder, PaintCx};
 /// use flui_foundation::Leaf;
-/// use flui_types::{Offset, Size};
+/// use flui_foundation::geometry::{Offset, Size};
 ///
 /// let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
 /// let mut cx = PaintCx::<Leaf>::new(&mut rec, 0, Size::ZERO);
@@ -453,7 +451,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// (local coordinates).
     pub fn with_clip_rrect(
         &mut self,
-        rrect: flui_types::RRect,
+        rrect: flui_foundation::geometry::RRect,
         behavior: Clip,
         f: impl FnOnce(&mut Self),
     ) {
@@ -464,7 +462,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// (local coordinates).
     pub fn with_clip_path(
         &mut self,
-        path: flui_types::painting::Path,
+        path: flui_painting::paint::Path,
         behavior: Clip,
         f: impl FnOnce(&mut Self),
     ) {
@@ -662,7 +660,8 @@ impl PaintCx<'_, Variable> {
 #[cfg(test)]
 mod tests {
     use flui_foundation::Leaf;
-    use flui_types::{Point, Size, painting::Paint, styling::Color};
+    use flui_foundation::geometry::{Point, Size};
+    use flui_painting::{paint::Paint, styling::Color};
 
     use super::*;
 

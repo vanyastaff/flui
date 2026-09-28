@@ -3,7 +3,8 @@
 //!
 //! ```
 //! use flui_painting::{Paint, testing::record};
-//! use flui_types::{Rect, styling::Color};
+//! use flui_foundation::geometry::Rect;
+//! use flui_painting::styling::Color;
 //!
 //! let list = record(|canvas| {
 //!     canvas.draw_rect(
@@ -26,8 +27,9 @@ pub fn record(f: impl FnOnce(&mut Canvas)) -> DisplayList {
 
 #[cfg(test)]
 mod tests {
+    use crate::styling::Color;
     use flui_foundation::Diagnosticable;
-    use flui_types::{Rect, styling::Color};
+    use flui_foundation::geometry::Rect;
 
     use super::record;
     use crate::Paint;

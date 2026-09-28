@@ -239,7 +239,7 @@ fn subtree(c: &Counters) -> StaticChild {
 
 fn data(width: f64, scale: f64) -> MediaQueryData {
     MediaQueryData {
-        size: flui_types::Size::new(width, 600.0),
+        size: flui_foundation::geometry::Size::new(width, 600.0),
         text_scale_factor: scale,
         ..MediaQueryData::default()
     }

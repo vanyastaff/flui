@@ -5,11 +5,11 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use flui_foundation::geometry::Size;
 use flui_platform::{
     WindowCallbacks,
     traits::{DispatchEventResult, Key, PlatformInput},
 };
-use flui_types::Size;
 
 fn keyboard_event(repeat: bool) -> PlatformInput {
     PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {

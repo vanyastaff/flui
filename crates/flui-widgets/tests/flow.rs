@@ -4,8 +4,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::{lay_out, loose, offset, size};
+use flui_foundation::geometry::{Matrix4, Size};
 use flui_rendering::constraints::BoxConstraints;
-use flui_types::{Matrix4, Size};
 use flui_widgets::row;
 use flui_widgets::{Flow, FlowDelegate, FlowPaintingContext, SizedBox};
 

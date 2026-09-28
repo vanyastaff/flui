@@ -13,7 +13,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use flui_foundation::LayerId;
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 
 use crate::LayerTree;
 
@@ -140,7 +140,7 @@ fn translation_through(tree: &LayerTree, start: LayerId, ancestor: LayerId) -> O
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::Size;
+    use flui_foundation::geometry::Size;
 
     use super::*;
     use crate::{FollowerLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer, TransformLayer};

@@ -49,12 +49,12 @@
 //! so a fix that is consistently wrong fails rather than agreeing with
 //! itself.
 
+use flui_foundation::geometry::{RRect, Rect};
 use flui_layer::SceneBuilder;
 use flui_painting::{BlendMode, Canvas, Paint};
-use flui_types::{
-    Color, Rect,
-    geometry::RRect,
-    painting::{Clip, ClipOp},
+use flui_painting::{
+    paint::{Clip, ClipOp},
+    styling::Color,
 };
 
 use crate::{

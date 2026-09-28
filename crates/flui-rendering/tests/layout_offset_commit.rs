@@ -16,6 +16,7 @@
 //!   * docs/research/2026-06-10-rendering-design-amendments.md §D9.1
 
 use flui_foundation::Variable;
+use flui_foundation::geometry::{EdgeInsets, Offset, Size};
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -24,7 +25,6 @@ use flui_rendering::{
     testing::{Probe, RenderTester, box_node},
     traits::RenderBox,
 };
-use flui_types::{EdgeInsets, Offset, Size};
 
 /// Loose `0..=200 x 0..=200` root constraints shared by every scenario.
 fn constraints() -> BoxConstraints {

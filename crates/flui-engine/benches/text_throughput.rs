@@ -21,8 +21,9 @@ use std::sync::Arc;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use flui_engine::WgpuPainter;
+use flui_foundation::geometry::{Point, Rect};
 use flui_painting::{Paint, TextLayout};
-use flui_types::{Rect, geometry::Point, styling::Color, typography::TextDirection};
+use flui_painting::{styling::Color, typography::TextDirection};
 
 #[cfg(target_os = "windows")]
 const BACKENDS: wgpu::Backends = wgpu::Backends::DX12;

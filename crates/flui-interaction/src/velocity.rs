@@ -27,7 +27,7 @@ use flui_foundation::geometry::Offset;
 /// # Examples
 ///
 /// ```
-/// use flui_types::Offset;
+/// use flui_foundation::geometry::Offset;
 /// use flui_interaction::Velocity;
 ///
 /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
@@ -58,7 +58,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, -50.0));
@@ -120,7 +120,7 @@ impl Velocity {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// // Moved 100px right and 50px down in 100ms
@@ -148,7 +148,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(3.0, 4.0));
@@ -169,7 +169,7 @@ impl Velocity {
     /// ```
     /// use std::f64::consts::PI;
     ///
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(1.0, 0.0));
@@ -189,7 +189,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// assert!(Velocity::ZERO.is_zero());
@@ -206,7 +206,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// let valid = Velocity::new(Offset::new(100.0, 50.0));
@@ -229,7 +229,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 0.0));
@@ -258,7 +258,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, -50.0));
@@ -276,7 +276,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
@@ -298,7 +298,7 @@ impl Velocity {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 0.0));
@@ -317,7 +317,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
@@ -334,7 +334,7 @@ impl Velocity {
     /// # Examples
     ///
     /// ```
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::Velocity;
     ///
     /// let velocity = Velocity::new(Offset::new(100.0, 50.0));
@@ -364,7 +364,7 @@ impl Default for Velocity {
 /// ```
 /// use std::time::Duration;
 ///
-/// use flui_types::Offset;
+/// use flui_foundation::geometry::Offset;
 /// use flui_interaction::VelocityEstimate;
 ///
 /// let estimate = VelocityEstimate::new(
@@ -403,7 +403,7 @@ impl VelocityEstimate {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::VelocityEstimate;
     ///
     /// let estimate = VelocityEstimate::new(
@@ -436,7 +436,7 @@ impl VelocityEstimate {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::VelocityEstimate;
     ///
     /// let estimate = VelocityEstimate::new(
@@ -463,7 +463,7 @@ impl VelocityEstimate {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::VelocityEstimate;
     ///
     /// let reliable =
@@ -483,7 +483,7 @@ impl VelocityEstimate {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::VelocityEstimate;
     ///
     /// let valid = VelocityEstimate::new(
@@ -514,7 +514,7 @@ impl VelocityEstimate {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::VelocityEstimate;
     ///
     /// let valid = VelocityEstimate::new(
@@ -546,7 +546,7 @@ impl VelocityEstimate {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use flui_types::Offset;
+    /// use flui_foundation::geometry::Offset;
     /// use flui_interaction::VelocityEstimate;
     ///
     /// let estimate = VelocityEstimate::new(

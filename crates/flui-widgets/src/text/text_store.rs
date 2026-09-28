@@ -40,6 +40,8 @@ use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 
+use flui_foundation::geometry::{Bounds, Point};
+use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_interaction::TextInputHandle;
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_platform_api::text_store::{
@@ -48,8 +50,6 @@ use flui_platform_api::text_store::{
     TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
-use flui_types::geometry::{Bounds, Point};
-use flui_types::{Matrix4, Offset, Rect};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::controller::{self, ComposingState, TextEditingController};

@@ -1,0 +1,1349 @@
+//! Color types and utilities for Flui.
+//!
+//! This module provides a comprehensive Color type with conversions between
+//! different color spaces (RGB, HSL, HSV), similar to Flutter's Color system.
+
+/// An RGBA color with four 8-bit channels and straight (unmultiplied) alpha.
+///
+/// Channels are in sRGB gamma space, matching Flutter's `Color`. The
+/// renderer premultiplies when it converts a color for the GPU.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Color {
+    /// Red channel (0-255)
+    pub r: u8,
+    /// Green channel (0-255)
+    pub g: u8,
+    /// Blue channel (0-255)
+    pub b: u8,
+    /// Alpha channel (0-255, 0 = transparent, 255 = opaque)
+    pub a: u8,
+}
+
+/// A color in the Oklab perceptually uniform color space.
+///
+/// Produced by [`Color::to_oklab`]; consumed by [`Color::from_oklab`] and
+/// [`Color::lerp_oklab`]. `L` is perceived lightness in roughly `[0, 1]`;
+/// `a`/`b` are the green–red and blue–yellow opponent axes (small values,
+/// typically within `[-0.4, 0.4]` for sRGB colors).
+///
+/// Reference: Björn Ottosson, "A perceptual color space for image
+/// processing" (2020), <https://bottosson.github.io/posts/oklab/>.
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Oklab {
+    /// Perceived lightness.
+    pub l: f32,
+    /// Green–red opponent axis.
+    pub a: f32,
+    /// Blue–yellow opponent axis.
+    pub b: f32,
+}
+
+impl Color {
+    // ===== Constructors =====
+
+    /// Creates a color from RGBA values (0-255).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::styling::Color;
+    ///
+    /// let red = Color::rgba(255, 0, 0, 255);
+    /// let semi_transparent = Color::rgba(100, 200, 150, 128);
+    /// ```
+    #[inline]
+    pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
+
+    /// Creates a fully opaque color from RGB values (0-255).
+    ///
+    /// Equivalent to `Color::rgba(r, g, b, 255)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::styling::Color;
+    ///
+    /// let blue = Color::rgb(0, 0, 255);
+    /// assert!(blue.is_opaque());
+    /// ```
+    #[inline]
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Self::rgba(r, g, b, 255)
+    }
+
+    /// Creates a color from a 32-bit ARGB value.
+    ///
+    /// Format: 0xAARRGGBB (alpha, red, green, blue)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::styling::Color;
+    ///
+    /// let red = Color::from_argb(0xFFFF0000);
+    /// assert_eq!(red, Color::rgb(255, 0, 0));
+    /// ```
+    #[inline]
+    pub const fn from_argb(argb: u32) -> Self {
+        let a = ((argb >> 24) & 0xFF) as u8;
+        let r = ((argb >> 16) & 0xFF) as u8;
+        let g = ((argb >> 8) & 0xFF) as u8;
+        let b = (argb & 0xFF) as u8;
+        Self::rgba(r, g, b, a)
+    }
+
+    /// Creates a color from a hex string.
+    ///
+    /// Supports formats: "#RRGGBB", "RRGGBB", "#AARRGGBB", "AARRGGBB"
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseColorError::InvalidLength`] if the string is not 6 or 8
+    /// characters (excluding the optional `#` prefix).
+    ///
+    /// Returns [`ParseColorError::InvalidHex`] if the string contains
+    /// non-hexadecimal characters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::styling::Color;
+    ///
+    /// let red = Color::from_hex("#FF0000").unwrap();
+    /// let blue = Color::from_hex("0000FF").unwrap();
+    /// let semi_transparent = Color::from_hex("#80FF0000").unwrap();
+    ///
+    /// assert!(Color::from_hex("invalid").is_err());
+    /// ```
+    #[inline]
+    pub fn from_hex(hex: &str) -> Result<Self, ParseColorError> {
+        let hex = hex.trim_start_matches('#');
+
+        match hex.len() {
+            6 => {
+                let rgb = u32::from_str_radix(hex, 16).map_err(|_| ParseColorError::InvalidHex)?;
+                Ok(Self::from_argb((0xFF << 24) | rgb))
+            }
+            8 => {
+                let argb = u32::from_str_radix(hex, 16).map_err(|_| ParseColorError::InvalidHex)?;
+                Ok(Self::from_argb(argb))
+            }
+            _ => Err(ParseColorError::InvalidLength),
+        }
+    }
+
+    // ===== Component accessors =====
+
+    /// Returns the alpha channel as an opacity value in `0.0..=1.0`.
+    #[inline]
+    #[must_use]
+    pub const fn opacity(&self) -> f32 {
+        self.a as f32 / 255.0
+    }
+
+    // ===== Modifiers =====
+
+    /// Returns a new color with the specified alpha value (0-255).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::styling::Color;
+    ///
+    /// let opaque_red = Color::rgb(255, 0, 0);
+    /// let transparent_red = opaque_red.with_alpha(128);
+    ///
+    /// assert_eq!(transparent_red.a, 128);
+    /// ```
+    #[inline]
+    pub const fn with_alpha(&self, alpha: u8) -> Self {
+        Self::rgba(self.r, self.g, self.b, alpha)
+    }
+
+    /// Returns a new color with the specified opacity (0.0-1.0).
+    ///
+    /// Values are clamped to the valid range, and the alpha rounds to the
+    /// nearest of its 256 steps, as Flutter's `withOpacity` does
+    /// (`(255 * opacity).round()`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::styling::Color;
+    ///
+    /// let opaque = Color::rgb(255, 0, 0);
+    /// let half = opaque.with_opacity(0.5);
+    ///
+    /// assert_eq!(half.a, 128); // 127.5 rounds up
+    /// ```
+    #[inline]
+    pub fn with_opacity(&self, opacity: f64) -> Self {
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        // 0..=255 after the clamp
+        let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        self.with_alpha(alpha)
+    }
+
+    /// Returns a new color with the specified red component.
+    #[inline]
+    pub const fn with_red(&self, red: u8) -> Self {
+        Self::rgba(red, self.g, self.b, self.a)
+    }
+
+    /// Returns a new color with the specified green component.
+    #[inline]
+    pub const fn with_green(&self, green: u8) -> Self {
+        Self::rgba(self.r, green, self.b, self.a)
+    }
+
+    /// Returns a new color with the specified blue component.
+    #[inline]
+    pub const fn with_blue(&self, blue: u8) -> Self {
+        Self::rgba(self.r, self.g, blue, self.a)
+    }
+
+    // ===== Checks =====
+
+    /// Returns true if this color is fully transparent (alpha = 0).
+    #[inline]
+    pub const fn is_transparent(&self) -> bool {
+        self.a == 0
+    }
+
+    /// Returns true if this color is fully opaque (alpha = 255).
+    #[inline]
+    pub const fn is_opaque(&self) -> bool {
+        self.a == 255
+    }
+
+    // ===== Operations =====
+
+    /// Linear interpolation between two colors.
+    ///
+    /// When `t` = 0.0, returns `self`. When `t` = 1.0, returns `other`.
+    /// Values are clamped to [0.0, 1.0].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::styling::Color;
+    ///
+    /// let red = Color::rgb(255, 0, 0);
+    /// let blue = Color::rgb(0, 0, 255);
+    ///
+    /// let purple = Color::lerp(red, blue, 0.5);
+    /// assert!(purple.r > 0 && purple.b > 0);
+    /// ```
+    #[inline]
+    pub fn lerp(a: Color, b: Color, t: f64) -> Color {
+        // Colour channels interpolate in f32; the animation parameter arrives as f64.
+        let t = t as f32;
+        Self::lerp_scalar(a, b, t)
+    }
+
+    #[inline]
+    fn lerp_scalar(a: Color, b: Color, t: f32) -> Color {
+        let t = t.clamp(0.0, 1.0);
+        // Round, not truncate: `x as u8` truncates toward zero, biasing every
+        // interpolated channel down by up to ~1 and producing a visibly darker
+        // mid-tween. `.round()` matches Flutter's `Color.lerp` (and the `as u8`
+        // cast still saturates out-of-range values to [0, 255]).
+        let lerp_u8 = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
+
+        Color::rgba(
+            lerp_u8(a.r, b.r),
+            lerp_u8(a.g, b.g),
+            lerp_u8(a.b, b.b),
+            lerp_u8(a.a, b.a),
+        )
+    }
+
+    /// Converts to a 32-bit ARGB value in `0xAARRGGBB` format.
+    ///
+    /// Inverse of [`Color::from_argb`].
+    #[inline]
+    #[must_use]
+    pub const fn to_argb(&self) -> u32 {
+        ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
+    }
+
+    /// Formats as an uppercase hex string: `#RRGGBB` when fully opaque,
+    /// `#AARRGGBB` otherwise.
+    ///
+    /// Both forms round-trip through [`Color::from_hex`].
+    #[must_use]
+    #[inline]
+    pub fn to_hex(&self) -> String {
+        // Lookup table avoids format! machinery (no padding, no Display trait
+        // dispatch).
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+        if self.is_opaque() {
+            let mut s = String::with_capacity(7);
+            s.push('#');
+            for &b in &[self.r, self.g, self.b] {
+                s.push(HEX[(b >> 4) as usize] as char);
+                s.push(HEX[(b & 0x0F) as usize] as char);
+            }
+            s
+        } else {
+            let mut s = String::with_capacity(9);
+            s.push('#');
+            for &b in &[self.a, self.r, self.g, self.b] {
+                s.push(HEX[(b >> 4) as usize] as char);
+                s.push(HEX[(b & 0x0F) as usize] as char);
+            }
+            s
+        }
+    }
+
+    /// Returns the RGBA channels as an `(r, g, b, a)` tuple of `f32` values
+    /// in `0.0..=1.0`.
+    #[inline]
+    #[must_use]
+    pub const fn to_rgba_f32(&self) -> (f32, f32, f32, f32) {
+        (
+            self.r as f32 / 255.0,
+            self.g as f32 / 255.0,
+            self.b as f32 / 255.0,
+            self.a as f32 / 255.0,
+        )
+    }
+
+    /// Returns the RGBA channels as an `[r, g, b, a]` array of `f32` values
+    /// in `0.0..=1.0`.
+    #[inline]
+    #[must_use]
+    pub const fn to_rgba_f32_array(&self) -> [f32; 4] {
+        [
+            self.r as f32 / 255.0,
+            self.g as f32 / 255.0,
+            self.b as f32 / 255.0,
+            self.a as f32 / 255.0,
+        ]
+    }
+
+    /// Creates a color from an `[r, g, b, a]` array of `f32` values in
+    /// `0.0..=1.0`.
+    ///
+    /// Values are clamped to `0.0..=1.0` before conversion.
+    #[inline]
+    #[must_use]
+    pub fn from_rgba_f32_array(rgba: [f32; 4]) -> Self {
+        Self::rgba(
+            (rgba[0].clamp(0.0, 1.0) * 255.0) as u8,
+            (rgba[1].clamp(0.0, 1.0) * 255.0) as u8,
+            (rgba[2].clamp(0.0, 1.0) * 255.0) as u8,
+            (rgba[3].clamp(0.0, 1.0) * 255.0) as u8,
+        )
+    }
+
+    /// Returns the RGBA channels as an `[r, g, b, a]` array of `f32` values
+    /// in `0.0..=1.0`.
+    ///
+    /// The shorter-named alias of [`Color::to_rgba_f32_array`], delegating to
+    /// it so the channel arithmetic exists once.
+    #[inline]
+    #[must_use]
+    pub const fn to_f32_array(&self) -> [f32; 4] {
+        self.to_rgba_f32_array()
+    }
+
+    /// Returns the red channel as an `f32` in `0.0..=1.0`.
+    #[inline]
+    #[must_use]
+    pub const fn red_f32(&self) -> f32 {
+        self.r as f32 / 255.0
+    }
+
+    /// Returns the green channel as an `f32` in `0.0..=1.0`.
+    #[inline]
+    #[must_use]
+    pub const fn green_f32(&self) -> f32 {
+        self.g as f32 / 255.0
+    }
+
+    /// Returns the blue channel as an `f32` in `0.0..=1.0`.
+    #[inline]
+    #[must_use]
+    pub const fn blue_f32(&self) -> f32 {
+        self.b as f32 / 255.0
+    }
+
+    /// Returns the alpha channel as an `f32` in `0.0..=1.0`.
+    #[inline]
+    #[must_use]
+    pub const fn alpha_f32(&self) -> f32 {
+        self.a as f32 / 255.0
+    }
+
+    // ===== Helper methods for rendering =====
+
+    /// Alpha-blends this color over `background` (Porter-Duff "source over",
+    /// straight alpha, gamma space): Flutter's `Color.alphaBlend`.
+    ///
+    /// Follows Flutter's float formulation: the background keeps
+    /// `back = a_bg · (1 − a_fg)` of its alpha, the result's alpha is
+    /// `a_fg + back` (exactly 1 over an opaque background), each channel is
+    /// `(fg · a_fg + bg · back) / alpha`, and channels round to nearest when
+    /// stored as 8 bits. Fully opaque returns `self` and fully transparent
+    /// returns `background`.
+    #[must_use]
+    #[inline]
+    pub fn blend_over(&self, background: Color) -> Color {
+        // Fast paths
+        if self.a == 255 {
+            return *self;
+        }
+        if self.a == 0 {
+            return background;
+        }
+
+        self.blend_over_scalar(background)
+    }
+
+    /// `(a_fg, back, alpha)` for [`Color::blend_over`], or `None` when the
+    /// result is fully transparent.
+    #[inline]
+    fn blend_over_factors(&self, background: Color) -> Option<(f32, f32, f32)> {
+        let alpha = f32::from(self.a) / 255.0;
+        let inv_alpha = 1.0 - alpha;
+        if background.a == 255 {
+            return Some((alpha, inv_alpha, 1.0));
+        }
+        let back = f32::from(background.a) / 255.0 * inv_alpha;
+        let out = alpha + back;
+        (out > 0.0).then_some((alpha, back, out))
+    }
+
+    #[inline]
+    fn blend_over_scalar(&self, background: Color) -> Color {
+        let Some((alpha, back, out)) = self.blend_over_factors(background) else {
+            return Color::TRANSPARENT;
+        };
+        let channel =
+            |fg: u8, bg: u8| ((f32::from(fg) * alpha + f32::from(bg) * back) / out).round() as u8;
+        Color::rgba(
+            channel(self.r, background.r),
+            channel(self.g, background.g),
+            channel(self.b, background.b),
+            (out * 255.0).round() as u8,
+        )
+    }
+
+    /// Multiplies each channel (including alpha) componentwise with `other`.
+    #[inline]
+    #[must_use]
+    pub const fn multiply(&self, other: Color) -> Color {
+        Color::rgba(
+            ((self.r as u16 * other.r as u16) / 255) as u8,
+            ((self.g as u16 * other.g as u16) / 255) as u8,
+            ((self.b as u16 * other.b as u16) / 255) as u8,
+            ((self.a as u16 * other.a as u16) / 255) as u8,
+        )
+    }
+
+    /// Darkens the color by scaling the RGB channels by `factor` (clamped to
+    /// `0.0..=1.0`).
+    ///
+    /// `0.0` yields black; `1.0` leaves the color unchanged. Alpha is
+    /// preserved.
+    #[inline]
+    #[must_use]
+    pub fn darken(&self, factor: f32) -> Color {
+        let factor = factor.clamp(0.0, 1.0);
+        Color::rgba(
+            (self.r as f32 * factor) as u8,
+            (self.g as f32 * factor) as u8,
+            (self.b as f32 * factor) as u8,
+            self.a,
+        )
+    }
+
+    /// Lightens the color by moving the RGB channels toward white by
+    /// `factor` (clamped to `0.0..=1.0`).
+    ///
+    /// `0.0` leaves the color unchanged; `1.0` yields white. Alpha is
+    /// preserved.
+    #[inline]
+    #[must_use]
+    pub fn lighten(&self, factor: f32) -> Color {
+        let factor = factor.clamp(0.0, 1.0);
+        Color::rgba(
+            (self.r as f32 + (255.0 - self.r as f32) * factor) as u8,
+            (self.g as f32 + (255.0 - self.g as f32) * factor) as u8,
+            (self.b as f32 + (255.0 - self.b as f32) * factor) as u8,
+            self.a,
+        )
+    }
+
+    /// Returns the perceived brightness in `0.0..=1.0`, using Rec. 709 luma
+    /// coefficients on the gamma-encoded channels.
+    #[inline]
+    #[must_use]
+    pub const fn luminance(&self) -> f32 {
+        (0.2126 * self.r as f32 + 0.7152 * self.g as f32 + 0.0722 * self.b as f32) / 255.0
+    }
+
+    /// Returns `true` if the luminance is below 0.5.
+    #[inline]
+    #[must_use]
+    pub const fn is_dark(&self) -> bool {
+        self.luminance() < 0.5
+    }
+
+    /// Returns `true` if the luminance is 0.5 or above.
+    #[inline]
+    #[must_use]
+    pub const fn is_light(&self) -> bool {
+        self.luminance() >= 0.5
+    }
+
+    /// Returns a legible text color for use over this background: white for
+    /// dark colors, black for light ones.
+    #[inline]
+    #[must_use]
+    pub const fn contrasting_text_color(&self) -> Color {
+        if self.is_dark() {
+            Color::WHITE
+        } else {
+            Color::BLACK
+        }
+    }
+
+    // ===== Perceptual (Oklab) interpolation =====
+
+    /// Convert to Oklab (perceptually uniform, Björn Ottosson 2020).
+    ///
+    /// Pipeline: sRGB → linear → LMS (M1) → cube root → Lab (M2). Exact
+    /// matrices from <https://bottosson.github.io/posts/oklab/>. Alpha is not
+    /// part of Oklab and is carried separately by the caller.
+    #[must_use]
+    pub fn to_oklab(self) -> Oklab {
+        let r = srgb_to_linear(f32::from(self.r) / 255.0);
+        let g = srgb_to_linear(f32::from(self.g) / 255.0);
+        let b = srgb_to_linear(f32::from(self.b) / 255.0);
+
+        let l = 0.412_221_47 * r + 0.536_332_54 * g + 0.051_445_995 * b;
+        let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
+        let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
+
+        let l_ = l.cbrt();
+        let m_ = m.cbrt();
+        let s_ = s.cbrt();
+
+        Oklab {
+            l: 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_,
+            a: 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_,
+            b: 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_,
+        }
+    }
+
+    /// Convert from Oklab back to sRGB, with the given alpha channel.
+    ///
+    /// Out-of-gamut results are clamped per channel (sufficient for
+    /// interpolation between two in-gamut endpoints; the Oklab segment
+    /// between two sRGB colors leaves the gamut only marginally).
+    #[must_use]
+    pub fn from_oklab(lab: Oklab, alpha: u8) -> Color {
+        // `.round() as u8` saturates: clamping out-of-gamut channels.
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating by design
+        #[inline]
+        fn to_channel(c: f32) -> u8 {
+            (linear_to_srgb(c).clamp(0.0, 1.0) * 255.0).round() as u8
+        }
+
+        let l_ = lab.l + 0.396_337_78 * lab.a + 0.215_803_76 * lab.b;
+        let m_ = lab.l - 0.105_561_346 * lab.a - 0.063_854_17 * lab.b;
+        let s_ = lab.l - 0.089_484_18 * lab.a - 1.291_485_5 * lab.b;
+
+        let l = l_ * l_ * l_;
+        let m = m_ * m_ * m_;
+        let s = s_ * s_ * s_;
+
+        let r = 4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s;
+        let g = -1.268_438 * l + 2.609_757_4 * m - 0.341_319_38 * s;
+        let b = -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s;
+
+        Color::rgba(to_channel(r), to_channel(g), to_channel(b), alpha)
+    }
+
+    /// Perceptually uniform interpolation through Oklab space.
+    ///
+    /// Componentwise sRGB lerp (what [`Color::lerp`] and Flutter's
+    /// `Color.lerp` compute) averages gamma-encoded values, so midpoints go
+    /// dark and gray — blue→yellow passes through mud. Interpolating L/a/b
+    /// linearly keeps lightness and chroma perceptually steady. Costs two
+    /// conversions per call (`powf`/`cbrt`); use [`Color::lerp`] when the
+    /// endpoints are close or the budget is tight.
+    ///
+    /// Alpha interpolates linearly, matching [`Color::lerp`].
+    #[must_use]
+    pub fn lerp_oklab(a: Color, b: Color, t: f64) -> Color {
+        let t = (t as f32).clamp(0.0, 1.0);
+        let la = a.to_oklab();
+        let lb = b.to_oklab();
+        let mixed = Oklab {
+            l: la.l + (lb.l - la.l) * t,
+            a: la.a + (lb.a - la.a) * t,
+            b: la.b + (lb.b - la.b) * t,
+        };
+        // Alpha is linear, same rounding contract as `lerp_scalar`.
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // saturating by design
+        let alpha = (f32::from(a.a) + (f32::from(b.a) - f32::from(a.a)) * t).round() as u8;
+        Color::from_oklab(mixed, alpha)
+    }
+
+    /// Samples a multi-stop color ramp at position `t` (clamped to
+    /// `0.0..=1.0`), like evaluating a gradient.
+    ///
+    /// `stops` are `(color, position)` pairs sorted by ascending position.
+    /// Returns `Color::TRANSPARENT` for an empty slice, and the nearest
+    /// endpoint color when `t` falls outside the stop range.
+    #[must_use]
+    #[inline]
+    pub fn lerp_multi_stop(stops: &[(Color, f32)], t: f32) -> Color {
+        if stops.is_empty() {
+            return Color::TRANSPARENT;
+        }
+
+        if stops.len() == 1 {
+            return stops[0].0;
+        }
+
+        let t = t.clamp(0.0, 1.0);
+
+        // Binary search for the interval containing t — O(log n) vs O(n) linear scan.
+        // partition_point returns the first index where stop > t,
+        // so the bracket is [idx-1, idx].
+        let idx = stops.partition_point(|&(_, stop)| stop <= t);
+
+        if idx == 0 {
+            return stops[0].0;
+        }
+        if idx >= stops.len() {
+            return stops[stops.len() - 1].0;
+        }
+
+        let (color1, stop1) = stops[idx - 1];
+        let (color2, stop2) = stops[idx];
+
+        let range = stop2 - stop1;
+        if range.abs() < f32::EPSILON {
+            return color1;
+        }
+
+        let local_t = (t - stop1) / range;
+        Color::lerp(color1, color2, f64::from(local_t))
+    }
+
+    /// Blends each color over the given background.
+    #[must_use]
+    #[inline]
+    pub fn blend_over_batch(colors: &[Color], background: Color) -> Vec<Color> {
+        colors
+            .iter()
+            .map(|color| color.blend_over(background))
+            .collect()
+    }
+
+    /// Composites `self` (the **source**) over `dst` (the **destination**)
+    /// using `mode`, returning the straight-alpha result.
+    ///
+    /// This generalizes [`Color::blend_over`] (the [`SrcOver`] case) to the full
+    /// Porter-Duff operator set plus the W3C separable and non-separable blend
+    /// modes. It is the per-pixel function behind `ui.ColorFilter.mode(color,
+    /// mode)`, where the filter computes `mode(src = color, dst = each layer
+    /// pixel)` before the layer is merged with its background.
+    ///
+    /// Channels are treated as straight (un-premultiplied), sRGB-*encoded*
+    /// values normalized to `[0, 1]` — the same non-color-managed space
+    /// [`Color::blend_over`] and the GPU blend pipeline use, so the Porter-Duff
+    /// results agree with hardware blending.
+    ///
+    /// [`SrcOver`]: crate::paint::BlendMode::SrcOver
+    #[must_use]
+    pub fn blend(&self, dst: Color, mode: crate::paint::BlendMode) -> Color {
+        use crate::paint::BlendMode;
+
+        let [src_r, src_g, src_b, src_a] = self.to_f32_array();
+        let [dst_r, dst_g, dst_b, dst_a] = dst.to_f32_array();
+
+        // The output color is accumulated premultiplied, then un-premultiplied
+        // once at the end. (`src_pm`/`dst_pm` are used by the Modulate and
+        // Porter-Duff branches; the advanced branch reads straight channels.)
+        let src_pm = [src_r * src_a, src_g * src_a, src_b * src_a];
+        let dst_pm = [dst_r * dst_a, dst_g * dst_a, dst_b * dst_a];
+
+        let (out_r_pm, out_g_pm, out_b_pm, out_a) = if matches!(mode, BlendMode::Modulate) {
+            // Modulate is the component-wise product of the premultiplied colors
+            // (Skia `kModulate`): r = s * d on every channel.
+            (
+                src_pm[0] * dst_pm[0],
+                src_pm[1] * dst_pm[1],
+                src_pm[2] * dst_pm[2],
+                src_a * dst_a,
+            )
+        } else if let Some((fa, fb)) = porter_duff_factors(mode, src_a, dst_a) {
+            // Porter-Duff coverage blend: r = Fa * src_premul + Fb * dst_premul
+            // (and the same for alpha).
+            (
+                (src_pm[0] * fa + dst_pm[0] * fb).clamp(0.0, 1.0),
+                (src_pm[1] * fa + dst_pm[1] * fb).clamp(0.0, 1.0),
+                (src_pm[2] * fa + dst_pm[2] * fb).clamp(0.0, 1.0),
+                (src_a * fa + dst_a * fb).clamp(0.0, 1.0),
+            )
+        } else {
+            // Separable / non-separable blend modes composite source-over with a
+            // per-mode blend function B(Cb, Cs) (W3C Compositing and Blending
+            // Level 1, §10–11):
+            //   co = αs·(1-αb)·Cs + αs·αb·B(Cb,Cs) + (1-αs)·αb·Cb   (premultiplied)
+            //   αo = αs + αb·(1-αs)
+            let backdrop = [dst_r, dst_g, dst_b];
+            let source = [src_r, src_g, src_b];
+            let blended = if matches!(
+                mode,
+                BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity
+            ) {
+                nonseparable_blend(mode, backdrop, source)
+            } else {
+                [
+                    separable_blend(mode, backdrop[0], source[0]),
+                    separable_blend(mode, backdrop[1], source[1]),
+                    separable_blend(mode, backdrop[2], source[2]),
+                ]
+            };
+
+            let composite = |cs: f32, cb: f32, b: f32| {
+                src_a * (1.0 - dst_a) * cs + src_a * dst_a * b + (1.0 - src_a) * dst_a * cb
+            };
+            (
+                composite(source[0], backdrop[0], blended[0]),
+                composite(source[1], backdrop[1], blended[1]),
+                composite(source[2], backdrop[2], blended[2]),
+                src_a + dst_a * (1.0 - src_a),
+            )
+        };
+
+        if out_a <= 0.0 {
+            return Color::TRANSPARENT;
+        }
+        // Round to nearest, as the GPU's float -> unorm8 conversion does;
+        // truncating made `Src`/`Dst` drift by one on ~13% of translucent inputs.
+        let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        Color::rgba(
+            to_u8(out_r_pm / out_a),
+            to_u8(out_g_pm / out_a),
+            to_u8(out_b_pm / out_a),
+            to_u8(out_a),
+        )
+    }
+
+    // ===== Common color constants =====
+
+    /// Fully transparent (alpha = 0).
+    pub const TRANSPARENT: Color = Color::rgba(0, 0, 0, 0);
+
+    /// Black (0, 0, 0).
+    pub const BLACK: Color = Color::rgb(0, 0, 0);
+
+    /// White (255, 255, 255).
+    pub const WHITE: Color = Color::rgb(255, 255, 255);
+
+    /// Red (255, 0, 0).
+    pub const RED: Color = Color::rgb(255, 0, 0);
+
+    /// Green (0, 255, 0).
+    pub const GREEN: Color = Color::rgb(0, 255, 0);
+
+    /// Blue (0, 0, 255).
+    pub const BLUE: Color = Color::rgb(0, 0, 255);
+
+    /// Yellow (255, 255, 0).
+    pub const YELLOW: Color = Color::rgb(255, 255, 0);
+
+    /// Cyan (0, 255, 255).
+    pub const CYAN: Color = Color::rgb(0, 255, 255);
+
+    /// Magenta (255, 0, 255).
+    pub const MAGENTA: Color = Color::rgb(255, 0, 255);
+
+    /// Gray (128, 128, 128).
+    pub const GRAY: Color = Color::rgb(128, 128, 128);
+
+    /// Light gray (192, 192, 192).
+    pub const LIGHT_GRAY: Color = Color::rgb(192, 192, 192);
+
+    /// Dark gray (64, 64, 64).
+    pub const DARK_GRAY: Color = Color::rgb(64, 64, 64);
+
+    // Material Design colors will be added in future commits
+}
+
+// ===== Transfer functions (IEC 61966-2-1 sRGB ↔ linear) =====
+
+/// sRGB electro-optical transfer function: gamma-encoded → linear light.
+///
+/// Applies the IEC 61966-2-1 piecewise formula to a single channel `c` in
+/// `[0, 1]` (straight sRGB). Returns the linearized value in `[0, 1]`.
+///
+/// Used by [`Color::to_oklab`] and the GPU gamma `ColorFilter` CPU oracle
+/// (Slice 3). One home for both callers — do not inline copies elsewhere.
+///
+/// # Examples
+/// ```
+/// use flui_painting::styling::color::srgb_to_linear;
+/// assert!((srgb_to_linear(0.0) - 0.0).abs() < 1e-6);
+/// assert!((srgb_to_linear(1.0) - 1.0).abs() < 1e-6);
+/// ```
+#[inline]
+#[must_use]
+pub fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Linear-light → sRGB opto-electronic transfer function (inverse of
+/// [`srgb_to_linear`]).
+///
+/// Applies the IEC 61966-2-1 piecewise formula to a single linearized channel
+/// `c` in `[0, 1]`. Returns the gamma-encoded sRGB value in `[0, 1]`.
+///
+/// Used by [`Color::from_oklab`] and the GPU gamma `ColorFilter` CPU oracle.
+/// One home for both callers — do not inline copies elsewhere.
+///
+/// # Examples
+/// ```
+/// use flui_painting::styling::color::linear_to_srgb;
+/// assert!((linear_to_srgb(0.0) - 0.0).abs() < 1e-6);
+/// assert!((linear_to_srgb(1.0) - 1.0).abs() < 1e-6);
+/// ```
+#[inline]
+#[must_use]
+pub fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+// ===== Blend-mode evaluation helpers (used by `Color::blend`) =====
+
+/// Porter-Duff source/destination coverage factors `(Fa, Fb)` for `mode`, given
+/// source alpha `sa` and destination alpha `da`. The composited premultiplied
+/// result is `Fa·src + Fb·dst` for every channel (and for alpha).
+///
+/// Returns `None` for modes that are not a coverage-factor blend — `Modulate`
+/// (a component product) and the advanced separable/non-separable modes — which
+/// [`Color::blend`] dispatches down its other branches.
+fn porter_duff_factors(mode: crate::paint::BlendMode, sa: f32, da: f32) -> Option<(f32, f32)> {
+    use crate::paint::BlendMode;
+    Some(match mode {
+        BlendMode::Clear => (0.0, 0.0),
+        BlendMode::Src => (1.0, 0.0),
+        BlendMode::Dst => (0.0, 1.0),
+        BlendMode::SrcOver => (1.0, 1.0 - sa),
+        BlendMode::DstOver => (1.0 - da, 1.0),
+        BlendMode::SrcIn => (da, 0.0),
+        BlendMode::DstIn => (0.0, sa),
+        BlendMode::SrcOut => (1.0 - da, 0.0),
+        BlendMode::DstOut => (0.0, 1.0 - sa),
+        BlendMode::SrcATop => (da, 1.0 - sa),
+        BlendMode::DstATop => (1.0 - da, sa),
+        BlendMode::Xor => (1.0 - da, 1.0 - sa),
+        BlendMode::Plus => (1.0, 1.0),
+        _ => return None,
+    })
+}
+
+/// W3C separable blend function `B(cb, cs)` for one channel, where `cb` is the
+/// backdrop and `cs` the source (both straight, in `[0, 1]`). Only the separable
+/// advanced modes are defined here; the four non-separable HSL modes are handled
+/// by [`nonseparable_blend`], and Porter-Duff modes never reach this function.
+fn separable_blend(mode: crate::paint::BlendMode, cb: f32, cs: f32) -> f32 {
+    use crate::paint::BlendMode;
+    match mode {
+        BlendMode::Multiply => cb * cs,
+        BlendMode::Screen => cb + cs - cb * cs,
+        // overlay(cb, cs) == hardlight(cs, cb).
+        BlendMode::Overlay => hard_light(cs, cb),
+        BlendMode::Darken => cb.min(cs),
+        BlendMode::Lighten => cb.max(cs),
+        BlendMode::ColorDodge => {
+            if cb <= 0.0 {
+                0.0
+            } else if cs >= 1.0 {
+                1.0
+            } else {
+                (cb / (1.0 - cs)).min(1.0)
+            }
+        }
+        BlendMode::ColorBurn => {
+            if cb >= 1.0 {
+                1.0
+            } else if cs <= 0.0 {
+                0.0
+            } else {
+                1.0 - ((1.0 - cb) / cs).min(1.0)
+            }
+        }
+        BlendMode::HardLight => hard_light(cb, cs),
+        BlendMode::SoftLight => {
+            if cs <= 0.5 {
+                cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb)
+            } else {
+                let d = if cb <= 0.25 {
+                    ((16.0 * cb - 12.0) * cb + 4.0) * cb
+                } else {
+                    cb.sqrt()
+                };
+                cb + (2.0 * cs - 1.0) * (d - cb)
+            }
+        }
+        BlendMode::Difference => (cb - cs).abs(),
+        BlendMode::Exclusion => cb + cs - 2.0 * cb * cs,
+        _ => cs,
+    }
+}
+
+/// W3C `HardLight(cb, cs)`: multiply for a dark source, screen for a light one.
+/// Also the kernel of `Overlay` with the arguments swapped.
+fn hard_light(cb: f32, cs: f32) -> f32 {
+    if cs <= 0.5 {
+        2.0 * cb * cs
+    } else {
+        1.0 - 2.0 * (1.0 - cb) * (1.0 - cs)
+    }
+}
+
+/// W3C non-separable blend (`Hue`, `Saturation`, `Color`, `Luminosity`) over the
+/// whole RGB triple; `cb` is the backdrop and `cs` the source.
+fn nonseparable_blend(mode: crate::paint::BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
+    use crate::paint::BlendMode;
+    match mode {
+        BlendMode::Hue => set_lum(set_sat(cs, sat(cb)), lum(cb)),
+        BlendMode::Saturation => set_lum(set_sat(cb, sat(cs)), lum(cb)),
+        BlendMode::Color => set_lum(cs, lum(cb)),
+        BlendMode::Luminosity => set_lum(cb, lum(cs)),
+        _ => cs,
+    }
+}
+
+/// Luminosity of an RGB triple (W3C `Lum`).
+fn lum(c: [f32; 3]) -> f32 {
+    0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]
+}
+
+/// Clip an RGB triple back into `[0, 1]` while preserving its luminosity
+/// (W3C `ClipColor`). The epsilon guards avoid a `0/0` when all channels are
+/// equal (a degenerate triple has nothing to scale).
+fn clip_color(c: [f32; 3]) -> [f32; 3] {
+    let l = lum(c);
+    let n = c[0].min(c[1]).min(c[2]);
+    let x = c[0].max(c[1]).max(c[2]);
+    let mut out = c;
+    if n < 0.0 && (l - n).abs() > f32::EPSILON {
+        for ch in &mut out {
+            *ch = l + (*ch - l) * l / (l - n);
+        }
+    }
+    if x > 1.0 && (x - l).abs() > f32::EPSILON {
+        for ch in &mut out {
+            *ch = l + (*ch - l) * (1.0 - l) / (x - l);
+        }
+    }
+    out
+}
+
+/// Shift an RGB triple to the target luminosity `l` (W3C `SetLum`).
+fn set_lum(c: [f32; 3], l: f32) -> [f32; 3] {
+    let d = l - lum(c);
+    clip_color([c[0] + d, c[1] + d, c[2] + d])
+}
+
+/// Saturation of an RGB triple (W3C `Sat`): max channel minus min channel.
+fn sat(c: [f32; 3]) -> f32 {
+    c[0].max(c[1]).max(c[2]) - c[0].min(c[1]).min(c[2])
+}
+
+/// Rescale an RGB triple to the target saturation `s` (W3C `SetSat`), keeping
+/// the relative channel ordering. A flat triple (max == min) collapses to black.
+fn set_sat(c: [f32; 3], s: f32) -> [f32; 3] {
+    let mut idx = [0usize, 1, 2];
+    idx.sort_by(|&a, &b| c[a].total_cmp(&c[b]));
+    let (i_min, i_mid, i_max) = (idx[0], idx[1], idx[2]);
+    let mut out = [0.0f32; 3];
+    if c[i_max] > c[i_min] {
+        out[i_mid] = (c[i_mid] - c[i_min]) * s / (c[i_max] - c[i_min]);
+        out[i_max] = s;
+    }
+    out
+}
+
+impl Default for Color {
+    #[inline]
+    fn default() -> Self {
+        Color::TRANSPARENT
+    }
+}
+
+// ===== Conversions =====
+
+impl From<(u8, u8, u8)> for Color {
+    #[inline]
+    fn from((r, g, b): (u8, u8, u8)) -> Self {
+        Color::rgb(r, g, b)
+    }
+}
+
+impl From<(u8, u8, u8, u8)> for Color {
+    #[inline]
+    fn from((r, g, b, a): (u8, u8, u8, u8)) -> Self {
+        Color::rgba(r, g, b, a)
+    }
+}
+
+impl From<[u8; 3]> for Color {
+    #[inline]
+    fn from([r, g, b]: [u8; 3]) -> Self {
+        Color::rgb(r, g, b)
+    }
+}
+
+impl From<[u8; 4]> for Color {
+    #[inline]
+    fn from([r, g, b, a]: [u8; 4]) -> Self {
+        Color::rgba(r, g, b, a)
+    }
+}
+
+// ===== Approximate equality =====
+
+impl flui_foundation::geometry::ApproxEq for Color {
+    /// Default epsilon for color comparison (1/255 ≈ 0.004).
+    ///
+    /// This allows for 1 unit difference in u8 color channels.
+    const DEFAULT_EPSILON: f64 = 1.0 / 255.0;
+
+    /// Compares colors in normalized f32 space with epsilon tolerance.
+    ///
+    /// This is useful when comparing colors that have been converted through
+    /// different color spaces or undergone floating-point calculations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_painting::styling::Color;
+    /// use flui_foundation::geometry::ApproxEq;
+    ///
+    /// let c1 = Color::rgb(100, 150, 200);
+    /// let c2 = Color::rgb(100, 150, 200);
+    /// let c3 = Color::rgb(100, 151, 200); // 1 unit difference
+    ///
+    /// assert!(c1.approx_eq(&c2));
+    /// assert!(c1.approx_eq(&c3)); // Within default epsilon
+    /// ```
+    #[inline]
+    fn approx_eq_eps(&self, other: &Self, epsilon: f64) -> bool {
+        // Distances are taken in 8-bit units before normalizing: subtracting
+        // two normalized channels can land just above `n / 255` (4/255 - 3/255
+        // does in f32), which would reject a one-unit difference at the
+        // default epsilon.
+        let within = |x: u8, y: u8| f64::from(x.abs_diff(y)) / 255.0 <= epsilon;
+        within(self.r, other.r)
+            && within(self.g, other.g)
+            && within(self.b, other.b)
+            && within(self.a, other.a)
+    }
+}
+
+// ===== Error types =====
+
+/// Error returned by [`Color::from_hex`] when parsing a hex color string
+/// fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseColorError {
+    /// Invalid hex string format
+    InvalidHex,
+    /// Invalid string length (must be 6 or 8 characters)
+    InvalidLength,
+}
+
+impl std::fmt::Display for ParseColorError {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParseColorError::InvalidHex => write!(f, "Invalid hex color format"),
+            ParseColorError::InvalidLength => {
+                write!(f, "Invalid hex color length (expected 6 or 8 characters)")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ParseColorError {}
+
+// ===== Tests =====
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oklab_roundtrip_preserves_color() {
+        // sRGB -> Oklab -> sRGB must come back within 1 channel unit
+        // (cbrt/powf rounding) for representative colors.
+        for color in [
+            Color::rgb(0, 0, 0),
+            Color::rgb(255, 255, 255),
+            Color::rgb(255, 0, 0),
+            Color::rgb(0, 255, 0),
+            Color::rgb(0, 0, 255),
+            Color::rgb(128, 64, 200),
+            Color::rgb(13, 250, 99),
+        ] {
+            let back = Color::from_oklab(color.to_oklab(), color.a);
+            assert!(
+                (i16::from(back.r) - i16::from(color.r)).abs() <= 1
+                    && (i16::from(back.g) - i16::from(color.g)).abs() <= 1
+                    && (i16::from(back.b) - i16::from(color.b)).abs() <= 1,
+                "roundtrip {color:?} -> {back:?} drifted more than 1 unit"
+            );
+        }
+    }
+
+    #[test]
+    fn oklab_white_has_unit_lightness() {
+        // Ottosson reference values: white = (L=1, a≈0, b≈0), black = (0,0,0).
+        let white = Color::rgb(255, 255, 255).to_oklab();
+        assert!((white.l - 1.0).abs() < 1e-2, "white L = {}", white.l);
+        assert!(white.a.abs() < 1e-2 && white.b.abs() < 1e-2);
+
+        let black = Color::rgb(0, 0, 0).to_oklab();
+        assert!(black.l.abs() < 1e-3);
+    }
+
+    #[test]
+    fn oklab_lerp_endpoints_and_midpoint() {
+        let blue = Color::rgb(0, 0, 255);
+        let yellow = Color::rgb(255, 255, 0);
+
+        // Endpoints round-trip through the conversion.
+        let at0 = Color::lerp_oklab(blue, yellow, 0.0);
+        let at1 = Color::lerp_oklab(blue, yellow, 1.0);
+        assert!((i16::from(at0.b) - 255).abs() <= 1 && i16::from(at0.r) <= 1);
+        assert!((i16::from(at1.r) - 255).abs() <= 1 && i16::from(at1.b) <= 1);
+
+        // The perceptual midpoint must be brighter than the muddy sRGB
+        // midpoint (128,128,128): Oklab preserves perceived lightness.
+        let mid = Color::lerp_oklab(blue, yellow, 0.5);
+        let srgb_mid = Color::lerp(blue, yellow, 0.5);
+        let sum = u16::from(mid.r) + u16::from(mid.g) + u16::from(mid.b);
+        let srgb_sum = u16::from(srgb_mid.r) + u16::from(srgb_mid.g) + u16::from(srgb_mid.b);
+        assert!(
+            sum > srgb_sum,
+            "Oklab midpoint {mid:?} must be brighter than sRGB midpoint {srgb_mid:?}"
+        );
+    }
+
+    #[test]
+    fn oklab_lerp_interpolates_alpha_linearly() {
+        let a = Color::rgba(255, 0, 0, 0);
+        let b = Color::rgba(255, 0, 0, 200);
+        assert_eq!(Color::lerp_oklab(a, b, 0.5).a, 100);
+    }
+
+    /// Characterization golden for `Color::blend` advanced modes.
+    ///
+    /// Locks the per-pixel output of every advanced (non-Porter-Duff) blend
+    /// mode at representative inputs so the WGSL port (PR-2) has a frozen CPU
+    /// oracle to compare against.  These assertions pass against the EXISTING
+    /// implementation — they must NOT be changed to match a buggy edit.
+    ///
+    /// If an assertion fails after a refactor, the formula changed: verify the
+    /// W3C Compositing and Blending Level 1 spec (§10–11) and fix the code,
+    /// not this test.
+    ///
+    /// ## Inputs
+    ///
+    /// - `WHITE` = `rgb(255,255,255)` — straight, fully opaque (sa=1, cs=1).
+    /// - `BLACK` = `rgb(0,0,0)`       — straight, fully opaque (da=1, cb=0).
+    /// - `MID`   = `rgb(128,128,128)` — achromatic mid-gray, fully opaque.
+    ///
+    /// For fully opaque src + dst (`sa=da=1`) the composite formula collapses
+    /// to `output = B(cb, cs)` (alpha=1), so results are easy to verify by
+    /// hand against the W3C blend function table.
+    #[test]
+    fn blend_advanced_modes_golden() {
+        use crate::paint::BlendMode;
+
+        let white = Color::WHITE; // rgb(255,255,255), a=255
+        let black = Color::BLACK; // rgb(0,0,0),       a=255
+        let mid = Color::GRAY; // rgb(128,128,128),  a=255
+
+        // Helper: assert blend output matches expected RGBA bytes.
+        let check = |src: Color, dst: Color, mode: BlendMode, expected: Color| {
+            let got = src.blend(dst, mode);
+            assert_eq!(
+                got, expected,
+                "blend({src:?}, {dst:?}, {mode:?}) = {got:?}, expected {expected:?}"
+            );
+        };
+
+        // ── Multiply ─────────────────────────────────────────────────────────
+        // B(cb, cs) = cb * cs.
+        // white src (cs=1) + black dst (cb=0): 0*1=0 → black.
+        // white src + white dst: 1*1=1 → white.
+        check(white, black, BlendMode::Multiply, black);
+        check(white, white, BlendMode::Multiply, white);
+
+        // ── Screen ───────────────────────────────────────────────────────────
+        // B(cb, cs) = cb + cs - cb*cs.
+        // white src + black dst: 0+1-0=1 → white.
+        // white src + white dst: 1+1-1=1 → white.
+        check(white, black, BlendMode::Screen, white);
+        check(white, white, BlendMode::Screen, white);
+
+        // ── Overlay ──────────────────────────────────────────────────────────
+        // overlay(cb, cs) = HardLight(cs, cb)  [note the swap].
+        // white src (cs=1), black dst (cb=0):
+        //   HardLight(cb=cs=1, cs=cb=0): cs_hl=0 ≤ 0.5 → 2·cb_hl·cs_hl = 2·1·0 = 0 → black.
+        check(white, black, BlendMode::Overlay, black);
+        // black src (cs=0), white dst (cb=1):
+        //   HardLight(cb_hl=0, cs_hl=1): cs_hl=1 > 0.5 → 1−2·(1−0)·(1−1) = 1 → white.
+        check(black, white, BlendMode::Overlay, white);
+
+        // ── Darken ───────────────────────────────────────────────────────────
+        // B = min(cb, cs). white+black → min(0,1)=0 → black.
+        check(white, black, BlendMode::Darken, black);
+        check(black, white, BlendMode::Darken, black);
+
+        // ── Lighten ──────────────────────────────────────────────────────────
+        // B = max(cb, cs). white+black → max(0,1)=1 → white.
+        check(white, black, BlendMode::Lighten, white);
+        check(black, white, BlendMode::Lighten, white);
+
+        // ── HardLight ────────────────────────────────────────────────────────
+        // hardlight(cb, cs): cs>0.5 → 1-2*(1-cb)*(1-cs).
+        // white(cs=1)+black(cb=0): cs>0.5 → 1-2*(1-0)*(1-1)=1 → white.
+        check(white, black, BlendMode::HardLight, white);
+
+        // ── SoftLight ────────────────────────────────────────────────────────
+        // cs=1(>0.5), cb=0(<=0.25): d=((16*0-12)*0+4)*0=0; result=0+(2*1-1)*(0-0)=0 → black.
+        check(white, black, BlendMode::SoftLight, black);
+
+        // ── Difference ───────────────────────────────────────────────────────
+        // B = |cb - cs|. white+black → |0-1|=1 → white.
+        check(white, black, BlendMode::Difference, white);
+        check(black, white, BlendMode::Difference, white);
+
+        // ── Exclusion ────────────────────────────────────────────────────────
+        // B = cb + cs - 2*cb*cs. white+black → 0+1-0=1 → white.
+        check(white, black, BlendMode::Exclusion, white);
+
+        // ── ColorDodge ───────────────────────────────────────────────────────
+        // cb=0 → B=0 (edge: source cannot dodge a zero-luminosity backdrop).
+        check(white, black, BlendMode::ColorDodge, black);
+        // cb=1, cs=1 → cs>=1 → B=1 → white (edge: fully lit backdrop, any source).
+        check(white, white, BlendMode::ColorDodge, white);
+
+        // ── ColorBurn ────────────────────────────────────────────────────────
+        // cb≥1 guard fires first regardless of cs → B=1 → white.
+        // cs=1(white), cb=1(white): cb≥1 → white.
+        check(white, white, BlendMode::ColorBurn, white);
+        // cs=0(black src), cb=1(white dst): cb≥1 fires first → white.
+        // (Note: cs≤0 → B=0 only applies when cb < 1; with cb=1 the cb≥1 guard wins.)
+        check(black, white, BlendMode::ColorBurn, white);
+        // cs=1(white), cb=0(black dst): cb<1, cs>0 → 1−((1−0)/1).min(1) = 1−1 = 0 → black.
+        check(white, black, BlendMode::ColorBurn, black);
+
+        // ── Non-separable: achromatic flat-triple (src==dst==mid-gray) ───────
+        // When src and dst are achromatic and equal, all four HSL blend modes
+        // must preserve the input: Hue/Saturation/Color/Luminosity all collapse
+        // to set_lum(cb_or_cs, lum_of_same) = same color.
+        for mode in [
+            BlendMode::Hue,
+            BlendMode::Saturation,
+            BlendMode::Color,
+            BlendMode::Luminosity,
+        ] {
+            let got = mid.blend(mid, mode);
+            assert_eq!(
+                got.r, mid.r,
+                "{mode:?} achromatic: r channel must be preserved"
+            );
+            assert_eq!(
+                got.g, mid.g,
+                "{mode:?} achromatic: g channel must be preserved"
+            );
+            assert_eq!(
+                got.b, mid.b,
+                "{mode:?} achromatic: b channel must be preserved"
+            );
+            assert_eq!(got.a, 255, "{mode:?} achromatic: alpha must be 1");
+        }
+    }
+
+    // ===== Transfer-function unit tests =====
+
+    /// Round-trip: sRGB → linear → sRGB must be the identity within f32 precision.
+    ///
+    /// Tests a span of values from 0 to 255 (normalized to [0, 1]) to cover both
+    /// the linear segment (c ≤ 0.04045) and the power-law segment (c > 0.04045).
+    #[test]
+    fn transfer_fn_round_trip_srgb_to_linear_and_back() {
+        for raw in 0u8..=255 {
+            let srgb = f32::from(raw) / 255.0;
+            let linear = srgb_to_linear(srgb);
+            let recovered = linear_to_srgb(linear);
+            assert!(
+                (srgb - recovered).abs() < 1e-5,
+                "round-trip failed at sRGB={srgb:.6}: linear={linear:.6}, recovered={recovered:.6}"
+            );
+        }
+    }
+
+    /// Known anchor points for `srgb_to_linear` per the IEC 61966-2-1 spec.
+    ///
+    /// 0.0 → 0.0 (identity at black), 1.0 → 1.0 (identity at white).
+    /// 0.5 tests the power-law segment; the expected value is (0.5+0.055/1.055)^2.4.
+    #[test]
+    fn transfer_fn_known_srgb_anchor_points() {
+        assert!(
+            srgb_to_linear(0.0).abs() < 1e-7,
+            "srgb_to_linear(0.0) must be 0"
+        );
+        assert!(
+            (srgb_to_linear(1.0) - 1.0).abs() < 1e-7,
+            "srgb_to_linear(1.0) must be 1"
+        );
+        // 0.5 is in the power-law region (> 0.04045)
+        let expected = ((0.5_f32 + 0.055) / 1.055).powf(2.4);
+        assert!(
+            (srgb_to_linear(0.5) - expected).abs() < 1e-6,
+            "srgb_to_linear(0.5) = {} expected {expected}",
+            srgb_to_linear(0.5)
+        );
+    }
+
+    /// Known anchor points for `linear_to_srgb` per the IEC 61966-2-1 spec.
+    #[test]
+    fn transfer_fn_known_linear_anchor_points() {
+        assert!(
+            linear_to_srgb(0.0).abs() < 1e-7,
+            "linear_to_srgb(0.0) must be 0"
+        );
+        assert!(
+            (linear_to_srgb(1.0) - 1.0).abs() < 1e-7,
+            "linear_to_srgb(1.0) must be 1"
+        );
+    }
+}

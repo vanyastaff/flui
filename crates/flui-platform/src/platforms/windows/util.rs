@@ -1,7 +1,7 @@
 //! Windows utility functions and helpers
 #![expect(dead_code)]
 
-use flui_types::geometry::{Point, Size};
+use flui_foundation::geometry::{Point, Size};
 use windows::{
     Win32::{Foundation::LPARAM, UI::Input::KeyboardAndMouse::GetAsyncKeyState},
     core::{PCWSTR, w},

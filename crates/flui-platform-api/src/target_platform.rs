@@ -5,7 +5,7 @@
 //! be selected at compile time (`current()`) or branched on at runtime.
 //!
 //! Per Constitution Principle 2 ("Strict Crate Dependency DAG"), this type
-//! lives in `flui-types` (Foundation layer) so any downstream crate can
+//! lives in `flui-platform-api` (a contract crate) so any downstream crate can
 //! consume it without inverting the dependency graph.
 //!
 //! # Variants

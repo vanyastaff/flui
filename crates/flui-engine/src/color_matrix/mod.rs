@@ -12,7 +12,7 @@
 //! - The matrix operates on straight (un-premultiplied) RGBA — the WGSL shader
 //!   unpremultiplies, applies the matrix, clamps to `[0, 1]` per channel, and
 //!   re-premultiplies before writing.  This is bit-identical to
-//!   [`flui_types::painting::ColorMatrix::apply`] on the straight color.
+//!   [`flui_painting::paint::ColorMatrix::apply`] on the straight color.
 //! - The output texture is rendered with `LoadOp::Clear(TRANSPARENT)` so
 //!   pixels outside the viewport are transparent.
 //! - `BlendState::REPLACE` is used; the GPU must not re-blend the result.

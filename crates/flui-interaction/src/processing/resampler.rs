@@ -48,7 +48,7 @@ use std::{collections::VecDeque, sync::Arc};
 
 use web_time::{Duration, Instant};
 
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 

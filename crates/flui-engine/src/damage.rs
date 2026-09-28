@@ -12,7 +12,7 @@
 //! (Slint keeps up to three) is a change to the consumer, and the tracker
 //! grows with it.
 
-use flui_types::geometry::Rect;
+use flui_foundation::geometry::Rect;
 
 /// Accumulates the area that changed since the last frame.
 ///

@@ -50,7 +50,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
-use flui_types::painting::Image as PixelImage;
+use flui_painting::paint::Image as PixelImage;
 use futures_util::FutureExt;
 use futures_util::future::Shared;
 use parking_lot::Mutex;

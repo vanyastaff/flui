@@ -27,7 +27,7 @@
 //!   available to a delegate as `shrink_offset`; the `FlexibleSpaceBar`
 //!   treatment of it is its own widget.
 
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::StatelessView;
 use flui_sdk::view::{BoxedView, BuildContext, IntoView, ViewExt};
 use flui_sdk::widgets::layout::PreferredSizeView;

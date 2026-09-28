@@ -9,7 +9,8 @@
 //! [`positioned_box_size`].
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Size};
+use flui_foundation::geometry::Size;
+use flui_painting::Alignment;
 
 use crate::layout::shifted_box::AligningShiftedBox;
 use flui_rendering::{

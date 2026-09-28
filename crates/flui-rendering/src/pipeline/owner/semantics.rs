@@ -36,10 +36,10 @@
 //! contract promised.
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_semantics::{
     AccessibilityNodeId, SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsTree,
 };
-use flui_types::{Offset, Point, Rect, Size};
 use rustc_hash::FxHashSet;
 
 use crate::{
@@ -352,7 +352,7 @@ fn child_clips_of(
     origin: Offset,
     child_slot: usize,
 ) -> (Option<Rect<f64>>, Option<Rect<f64>>) {
-    let offset = flui_types::Offset::new(origin.dx, origin.dy);
+    let offset = flui_foundation::geometry::Offset::new(origin.dx, origin.dy);
     // The node's own size is passed in rather than cached by each implementor.
     // A clip is always a function of the box it clips, so every implementor
     // would otherwise have to commit its own copy of a value the walk already

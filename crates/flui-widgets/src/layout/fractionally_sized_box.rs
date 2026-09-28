@@ -2,8 +2,8 @@
 //! space.
 
 use flui_objects::{FractionFactor, RenderFractionallySizedBox};
+use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Alignment;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Sizes its child to a fraction of the available space along each axis.
@@ -106,7 +106,7 @@ mod tests {
     // unit tests assert exact set-then-read values, not computed floats
 
     use flui_objects::FractionFactor;
-    use flui_types::Alignment;
+    use flui_painting::Alignment;
     use flui_view::RenderView;
 
     use super::*;

@@ -1,8 +1,8 @@
 //! `CanvasLayer` — a live recorder inside the tree; no production producer, kept for
 //! hand-authored scenes (`SceneBuilder::add_canvas`) and fixtures.
 
+use flui_foundation::geometry::Rect;
 use flui_painting::{Canvas, DisplayList};
-use flui_types::geometry::Rect;
 
 /// Canvas layer - a leaf layer that contains drawing commands
 ///

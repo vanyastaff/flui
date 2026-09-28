@@ -20,12 +20,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use flui_foundation::geometry::Size;
 use flui_layer::Scene;
 use flui_platform_api::{
     CursorError, CursorIcon, PlatformTextInput, PlatformWindow, WindowId, WindowShowError,
 };
 use flui_semantics::platform::PlatformAccessibility;
-use flui_types::geometry::Size;
 
 use crate::pump::FrameClockSource;
 use crate::sink::{FrameSink, SubmitVerdict};

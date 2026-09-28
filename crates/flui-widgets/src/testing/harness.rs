@@ -20,17 +20,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::ElementId;
+use flui_foundation::geometry::Bounds;
+use flui_foundation::geometry::Offset;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
+use flui_painting::Alignment;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
-use flui_types::Alignment;
-use flui_types::Offset;
-use flui_types::geometry::Bounds;
 use flui_view::{ElementNode, RootRenderView, View};
 
 use super::{POINTER_SAMPLE_INTERVAL, PointerContacts};

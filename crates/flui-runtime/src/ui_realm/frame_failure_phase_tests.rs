@@ -3,7 +3,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex as StdMutex};
 
+use flui_foundation::geometry::{Offset, Size};
 use flui_layer::LayerLink;
+use flui_painting::paint::Alignment;
 use flui_rendering::{
     context::{BoxLayoutContext, PaintCx},
     error::RenderError,
@@ -12,7 +14,6 @@ use flui_rendering::{
     protocol::BoxProtocol,
     traits::{RenderBox, RenderObject},
 };
-use flui_types::{Offset, Size, painting::Alignment};
 use flui_widgets::SizedBox;
 
 use super::{FrameFailureHandler, FrameFailureKind, SegmentPhase, UiRealm};

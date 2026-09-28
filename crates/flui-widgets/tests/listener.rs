@@ -7,13 +7,13 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::common::{lay_out, size, tight};
+use flui_foundation::geometry::Offset;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::pointer::{
     PointerButtons, PointerGesture, PointerGestureEvent, PointerInfo, PointerState, PointerType,
     PointerUpdate,
 };
-use flui_types::Color;
-use flui_types::Offset;
+use flui_painting::styling::Color;
 use flui_view::EventCx;
 use flui_widgets::prelude::HitTestBehavior;
 use flui_widgets::{ColoredBox, Listener, PointerPanZoomEvent, SizedBox};
@@ -257,7 +257,7 @@ mod event_cx {
     use std::rc::Rc;
 
     use crate::common::{ProbeSignals, SignalProbe, lay_out, tight};
-    use flui_types::Color;
+    use flui_painting::styling::Color;
     use flui_view::SignalWriteExt;
     use flui_widgets::{ColoredBox, Listener};
 

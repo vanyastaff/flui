@@ -224,8 +224,9 @@ pub use flui_objects::OverflowBoxFit;
 // `TableColumnWidth`/`TableCellVerticalAlignment` configure `Table`/`TableCell`;
 // `TableBorder` configures `Table::border`. Re-exported here so widget authors
 // need only import from `flui_widgets`.
-pub use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
-pub use flui_types::styling::TableBorder;
+pub use flui_objects::TableColumnWidth;
+pub use flui_painting::styling::TableBorder;
+pub use flui_rendering::parent_data::TableCellVerticalAlignment;
 pub use form::{
     AutovalidateMode, Form, FormField, FormFieldHandle, FormFieldHandleAlreadyAttached,
     FormFieldSetter, FormFieldState, FormFieldValidator, FormHandle, FormHandleAlreadyAttached,
@@ -290,8 +291,8 @@ pub use wrap::Wrap;
 pub use flui_view::{column, row};
 
 // Flex/stack configuration enums consumed by `Row`/`Column`/`Flex`/`Stack`
-// (re-exported from the `flui-objects` catalog, whose canonical home is
-// `flui-types::layout`).
+// (re-exported from the `flui-objects` catalog, their home beside
+// the render objects that read them).
 pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
 // `WrapAlignment`/`WrapCrossAlignment` configure `Wrap`'s main-axis distribution
 // and per-child cross-axis positioning.
@@ -391,20 +392,23 @@ pub mod prelude {
         SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout, TableBorder,
         TableCellVerticalAlignment, TableColumnWidth,
     };
+    pub use flui_foundation::geometry::Axis;
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};
     pub use flui_interaction::{
         DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, PointerPanZoomEvent,
     };
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};
+    pub use flui_painting::Alignment;
+    pub use flui_painting::BoxFit;
+    pub use flui_painting::paint::Clip;
+    pub use flui_painting::styling::Color;
+    pub use flui_painting::typography::TextBaseline;
     pub use flui_platform_api::Locale;
+    pub use flui_rendering::constraints::AxisDirection;
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::{
         CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch, PointerEvent,
     };
     pub use flui_rendering::view::ScrollPosition;
-    pub use flui_types::layout::{Axis, AxisDirection, BoxFit};
-    pub use flui_types::painting::Clip;
-    pub use flui_types::typography::TextBaseline;
-    pub use flui_types::{Alignment, Color};
 }

@@ -534,7 +534,7 @@ mod tests {
     use std::sync::Arc;
 
     use flui_painting::TextLayout;
-    use flui_types::typography::TextDirection;
+    use flui_painting::typography::TextDirection;
 
     use super::GlyphAtlas;
 

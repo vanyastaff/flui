@@ -2,10 +2,10 @@
 
 use std::fmt;
 
+use flui_foundation::geometry::Axis;
 use flui_objects::{RenderWrap, WrapAlignment, WrapCrossAlignment};
+use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::layout::Axis;
-use flui_types::painting::Clip;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 

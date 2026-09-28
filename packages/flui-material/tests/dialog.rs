@@ -11,9 +11,9 @@ use common::{lay_out, tight};
 use flui_material::{
     AlertDialog, Dialog, DialogThemeData, MaterialShape, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_sdk::types::Color;
-use flui_sdk::types::geometry::Radius;
-use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::geometry::Radius;
+use flui_sdk::painting::BorderRadius;
+use flui_sdk::painting::Color;
 use flui_sdk::view::ViewExt;
 use flui_sdk::widgets::{ColoredBox, GestureDetector, SizedBox, Text};
 
@@ -24,7 +24,7 @@ use flui_sdk::widgets::{ColoredBox, GestureDetector, SizedBox, Text};
 const PROBE: f64 = 7.6;
 
 /// `_DialogDefaultsM3`'s formatted `Debug` string for a resolved
-/// [`Color`](flui_sdk::types::Color) — the same helper `tests/card.rs`/
+/// [`Color`](flui_sdk::painting::Color) — the same helper `tests/card.rs`/
 /// `tests/elevated_button.rs` use for `RenderPhysicalShape`'s `"color"`
 /// diagnostics property.
 fn color_property(color: Color) -> String {

@@ -991,13 +991,13 @@ mod tests {
     use std::cell::RefCell;
 
     use flui_foundation::PresentationId;
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::pointer::{PointerButtons, PointerType};
     use flui_interaction::events::{
         PointerEventExt as _, make_cancel_event_for_id, make_down_event_for_id,
         make_move_event_for_id, make_up_event_for_id,
     };
     use flui_interaction::{PointerEvent, PointerId};
-    use flui_types::geometry::Offset;
 
     use super::{HELD_POINTER_CAPACITY, HeldPointerQueue, HeldPointerReplay};
 

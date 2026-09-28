@@ -41,11 +41,11 @@ impl PlatformWindow for HostedTestWindow {
         self.0.id()
     }
 
-    fn physical_size(&self) -> flui_types::geometry::Size<i32> {
+    fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
         self.0.physical_size()
     }
 
-    fn logical_size(&self) -> flui_types::geometry::Size<f64> {
+    fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
         self.0.logical_size()
     }
 

@@ -47,13 +47,11 @@ use std::sync::Arc;
 
 use flui_sdk::foundation::ListenerId;
 use flui_sdk::foundation::notifier::Listenable;
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::geometry::Radius;
+use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::{Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::platform::Brightness;
-use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::geometry::Radius;
-use flui_sdk::types::styling::{
-    Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color,
-};
-use flui_sdk::types::typography::TextStyle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, CrossAxisAlignment, DecoratedBox, MouseRegion, Padding, Text, WidgetState,

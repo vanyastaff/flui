@@ -34,7 +34,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use flui_types::geometry::{Point, Size};
+use flui_foundation::geometry::{Point, Size};
 
 // The platform-wide window identity: `crate::traits::WindowId` is the single
 // canonical definition; backends never

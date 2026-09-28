@@ -39,9 +39,11 @@
 //!   flag makes the overflow signal observable for tests and
 //!   diagnostics without touching painting.
 
+pub use super::stack_fit::StackFit;
 use flui_foundation::Variable;
-pub use flui_types::layout::StackFit;
-use flui_types::{Alignment, Offset, Point, Rect, Size, painting::Clip};
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::Alignment;
+use flui_painting::paint::Clip;
 
 use flui_rendering::{
     constraints::BoxConstraints,

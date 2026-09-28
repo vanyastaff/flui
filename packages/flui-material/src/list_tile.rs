@@ -140,10 +140,10 @@
 //!   resolved icon color the way the
 //!   oracle's does.
 
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::painting::Color;
+use flui_sdk::painting::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::styling::Color;
-use flui_sdk::types::typography::TextStyle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,

@@ -72,9 +72,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::PointerId;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_types::Offset;
 use flui_view::RebuildHandle;
 use flui_view::prelude::*;
 use parking_lot::Mutex;

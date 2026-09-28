@@ -1,6 +1,6 @@
 //! [`Text`] — displays a run of styled text.
 
-use flui_types::typography::{TextAlign, TextDirection, TextSpan, TextStyle};
+use flui_painting::typography::{TextAlign, TextDirection, TextSpan, TextStyle};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 

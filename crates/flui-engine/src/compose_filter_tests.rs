@@ -39,8 +39,9 @@
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::Rect;
     use flui_painting::Paint;
-    use flui_types::{Color, Rect};
+    use flui_painting::styling::Color;
     use smallvec::smallvec;
 
     use crate::{
@@ -354,8 +355,8 @@ mod gpu_tests {
     /// No `painter.render()` call — purely inspects in-memory IR.
     #[test]
     fn flatten_nested_compose_produces_correct_pass_sequence() {
-        use flui_types::painting::ColorMatrix;
-        use flui_types::painting::effects::ImageFilter;
+        use flui_painting::paint::ColorMatrix;
+        use flui_painting::paint::effects::ImageFilter;
 
         let (device, queue) = acquire_device_and_queue();
 
@@ -603,8 +604,8 @@ mod gpu_tests {
     /// No `painter.render()` call — purely inspects in-memory IR.
     #[test]
     fn empty_and_single_pass_compose_produce_correct_ir() {
-        use flui_types::painting::ColorMatrix;
-        use flui_types::painting::effects::ImageFilter;
+        use flui_painting::paint::ColorMatrix;
+        use flui_painting::paint::effects::ImageFilter;
 
         let (device, queue) = acquire_device_and_queue();
         let content_bounds = full_surface_rect();
@@ -675,7 +676,7 @@ mod gpu_tests {
 #[cfg(all(test, feature = "testing"))]
 mod painter_image_filter_bridge {
     use flui_painting::Paint;
-    use flui_types::Color;
+    use flui_painting::styling::Color;
     use smallvec::SmallVec;
 
     use crate::{
@@ -696,7 +697,7 @@ mod painter_image_filter_bridge {
         /// passes from a bare `WgpuPainter`.
         pub(crate) fn push_compose_for_test(
             &mut self,
-            filters: &[flui_types::painting::effects::ImageFilter],
+            filters: &[flui_painting::paint::effects::ImageFilter],
         ) {
             let mut passes: SmallVec<[ImageFilterPass; 4]> = SmallVec::new();
             crate::layer_dispatcher::flatten_compose(filters, &mut passes);

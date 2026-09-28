@@ -10,10 +10,12 @@
 //! properties worth pinning are that reuse HAPPENS and that it produces the
 //! same tree painting would have.
 
+use flui_foundation::geometry::{Matrix4, Size};
 use flui_objects::{
     RenderClipRRect, RenderClipRect, RenderColoredBox, RenderFlex, RenderFlow, RenderOpacity,
     RenderPadding, RenderRepaintBoundary, RenderRotatedBox, RenderTransform,
 };
+use flui_painting::styling::{BorderRadius, BorderRadiusExt};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
@@ -25,10 +27,6 @@ use flui_rendering::{
         },
         tree, update_render_object,
     },
-};
-use flui_types::{
-    Matrix4, Size,
-    styling::{BorderRadius, BorderRadiusExt},
 };
 
 /// Root flex row → N boundaries, each wrapping a coloured leaf.
@@ -1498,8 +1496,9 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
 
         fn paint_effects(&self, _size: Size) -> flui_rendering::traits::PaintEffects {
             if self.enabled {
-                flui_rendering::traits::PaintEffects::NONE
-                    .with_transform(flui_types::Matrix4::translation(3.0, 5.0, 0.0))
+                flui_rendering::traits::PaintEffects::NONE.with_transform(
+                    flui_foundation::geometry::Matrix4::translation(3.0, 5.0, 0.0),
+                )
             } else {
                 flui_rendering::traits::PaintEffects::NONE
             }
@@ -1640,12 +1639,17 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
             }
             if self.clip {
                 effects = effects.with_clip(flui_rendering::traits::PaintClip::Rect {
-                    rect: flui_types::Rect::from_origin_size(flui_types::Point::ZERO, size),
-                    behavior: flui_types::painting::Clip::HardEdge,
+                    rect: flui_foundation::geometry::Rect::from_origin_size(
+                        flui_foundation::geometry::Point::ZERO,
+                        size,
+                    ),
+                    behavior: flui_painting::paint::Clip::HardEdge,
                 });
             }
             if self.transform {
-                effects = effects.with_transform(flui_types::Matrix4::translation(3.0, 5.0, 0.0));
+                effects = effects.with_transform(flui_foundation::geometry::Matrix4::translation(
+                    3.0, 5.0, 0.0,
+                ));
             }
             effects
         }
@@ -1916,8 +1920,9 @@ fn unreached_update_boundary_loses_its_capture(nested: bool) {
 
         fn paint_effects(&self, _size: Size) -> flui_rendering::traits::PaintEffects {
             if self.enabled {
-                flui_rendering::traits::PaintEffects::NONE
-                    .with_transform(flui_types::Matrix4::translation(3.0, 5.0, 0.0))
+                flui_rendering::traits::PaintEffects::NONE.with_transform(
+                    flui_foundation::geometry::Matrix4::translation(3.0, 5.0, 0.0),
+                )
             } else {
                 flui_rendering::traits::PaintEffects::NONE
             }
@@ -2119,8 +2124,9 @@ fn a_patched_transform_uses_the_origin_it_was_captured_at() {
             // a translating fixture cancels the origin entirely and cannot
             // tell a right answer from a wrong one. A scale does not commute,
             // which is what makes the captured origin observable.
-            flui_rendering::traits::PaintEffects::NONE
-                .with_transform(flui_types::Matrix4::scaling(self.dx, self.dx, 1.0))
+            flui_rendering::traits::PaintEffects::NONE.with_transform(
+                flui_foundation::geometry::Matrix4::scaling(self.dx, self.dx, 1.0),
+            )
         }
     }
 
@@ -2947,7 +2953,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
 
     fn mount(
         width: f64,
-        rect: flui_types::Rect<f64>,
+        rect: flui_foundation::geometry::Rect<f64>,
     ) -> (
         PipelineOwner<flui_rendering::pipeline::Idle>,
         flui_foundation::RenderId,
@@ -2982,12 +2988,12 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
     fn set_clip_shape(
         owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
         id: flui_foundation::RenderId,
-        rect: flui_types::Rect<f64>,
+        rect: flui_foundation::geometry::Rect<f64>,
     ) {
         update_render_object::<RenderClipRect, _>(owner, id, |c| c.set_clip_shape(Some(rect)));
     }
 
-    let rect1 = flui_types::Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
+    let rect1 = flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
     let (owner, grower_id, clip_id) = mount(20.0, rect1);
     let (mut owner, result) = owner.run_frame();
     let first = result
@@ -3005,7 +3011,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
     // neither a transposition nor a stale size can pass this by accident.
     edit_render_object::<Grower, _, _>(&mut owner, grower_id, |object| object.width = 90.0);
     owner.mark_needs_layout(grower_id);
-    let rect2 = flui_types::Rect::from_xywh(0.0, 0.0, 15.0, 5.0);
+    let rect2 = flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 15.0, 5.0);
     set_clip_shape(&mut owner, clip_id, rect2);
 
     let (owner, result) = owner.run_frame();
@@ -3097,9 +3103,14 @@ impl flui_rendering::traits::RenderBox for DrawingPaintCounter {
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
         self.count.fetch_add(1, Ordering::Relaxed);
-        let rect = flui_types::Rect::from_origin_size(flui_types::Point::ZERO, ctx.size());
-        ctx.canvas()
-            .draw_rect(rect, &flui_painting::Paint::fill(flui_types::Color::RED));
+        let rect = flui_foundation::geometry::Rect::from_origin_size(
+            flui_foundation::geometry::Point::ZERO,
+            ctx.size(),
+        );
+        ctx.canvas().draw_rect(
+            rect,
+            &flui_painting::Paint::fill(flui_painting::styling::Color::RED),
+        );
     }
 
     fn hit_test(
@@ -3667,7 +3678,7 @@ fn a_clip_layer_update_is_written_back_into_the_retained_capture() {
 /// boundary — write-back through an unrelated repaint is already pinned for
 /// the border-radius branch above and does not need re-proving per shape.
 fn mount_clip_rect_under_boundary(
-    rect: flui_types::Rect<f64>,
+    rect: flui_foundation::geometry::Rect<f64>,
 ) -> (
     PipelineOwner<flui_rendering::pipeline::Idle>,
     flui_foundation::RenderId,
@@ -3707,8 +3718,8 @@ fn mount_clip_rect_under_boundary(
 /// are real evidence, not merely restated preconditions.
 #[test]
 fn a_clip_shape_change_updates_the_clip_layer_without_repainting_the_subtree() {
-    let rect1 = flui_types::Rect::from_xywh(0.0, 0.0, 20.0, 10.0);
-    let rect2 = flui_types::Rect::from_xywh(0.0, 0.0, 15.0, 5.0);
+    let rect1 = flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 20.0, 10.0);
+    let rect2 = flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 15.0, 5.0);
 
     let (owner, clip_id, painted) = mount_clip_rect_under_boundary(rect1);
     let (mut owner, result) = owner.run_frame();
@@ -3955,7 +3966,7 @@ fn a_flow_clip_behavior_change_is_structural_and_refused() {
 
     // The setter's own classification, pinned directly rather than assumed.
     let impact = edit_render_object::<RenderFlow, _, _>(&mut owner, flow_id, |flow| {
-        flow.set_clip_behavior(flui_types::painting::Clip::None)
+        flow.set_clip_behavior(flui_painting::paint::Clip::None)
     });
     assert_eq!(
         impact,
@@ -4028,9 +4039,9 @@ fn two_path_clips_under_one_boundary_resolve_in_paint_order() {
         handle
             .register_path_clipper(move |size: Size| {
                 sequence.borrow_mut().push(tag);
-                let mut path = flui_types::painting::Path::new();
-                path.add_rect(flui_types::Rect::from_origin_size(
-                    flui_types::Point::ZERO,
+                let mut path = flui_painting::paint::Path::new();
+                path.add_rect(flui_foundation::geometry::Rect::from_origin_size(
+                    flui_foundation::geometry::Point::ZERO,
                     size,
                 ));
                 path
@@ -4190,9 +4201,9 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
     fn register_whole_box(handle: &flui_interaction::InteractionDispatchHandle) -> PathClipTarget {
         handle
             .register_path_clipper(|size: Size| {
-                let mut path = flui_types::painting::Path::new();
-                path.add_rect(flui_types::Rect::from_origin_size(
-                    flui_types::Point::ZERO,
+                let mut path = flui_painting::paint::Path::new();
+                path.add_rect(flui_foundation::geometry::Rect::from_origin_size(
+                    flui_foundation::geometry::Point::ZERO,
                     size,
                 ));
                 path
@@ -4206,8 +4217,10 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
     fn register_left_half(handle: &flui_interaction::InteractionDispatchHandle) -> PathClipTarget {
         handle
             .register_path_clipper(|_size: Size| {
-                let mut path = flui_types::painting::Path::new();
-                path.add_rect(flui_types::Rect::from_xywh(0.0, 0.0, 15.0, 20.0));
+                let mut path = flui_painting::paint::Path::new();
+                path.add_rect(flui_foundation::geometry::Rect::from_xywh(
+                    0.0, 0.0, 15.0, 20.0,
+                ));
                 path
             })
             .expect("register path clipper")
@@ -4304,8 +4317,8 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
 
         // Probe points in LAYER space: the clip sits at the padding's
         // (12, 12) accumulated paint origin.
-        let inside_both = flui_types::Point::new(17.0, 17.0);
-        let inside_a_only = flui_types::Point::new(37.0, 17.0);
+        let inside_both = flui_foundation::geometry::Point::new(17.0, 17.0);
+        let inside_a_only = flui_foundation::geometry::Point::new(37.0, 17.0);
 
         assert!(
             paths[0].contains(inside_both),
@@ -4395,8 +4408,8 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
 // override point the pipeline reads.
 
 use flui_objects::{RenderSliverOpacity, RenderViewport};
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::testing::sliver_node;
-use flui_types::layout::AxisDirection;
 
 /// The Sliver-protocol counterpart of `RenderRepaintBoundary`: declares
 /// itself a repaint boundary and passes its single child through untouched.
@@ -4473,8 +4486,11 @@ impl flui_rendering::traits::RenderSliver for SliverPaintCounter {
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
         self.0.fetch_add(1, Ordering::Relaxed);
-        let rect = flui_types::Rect::from_origin_size(flui_types::Point::ZERO, ctx.size());
-        let color = flui_types::Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0]);
+        let rect = flui_foundation::geometry::Rect::from_origin_size(
+            flui_foundation::geometry::Point::ZERO,
+            ctx.size(),
+        );
+        let color = flui_painting::styling::Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0]);
         ctx.canvas()
             .draw_rect(rect, &flui_painting::Paint::fill(color));
     }

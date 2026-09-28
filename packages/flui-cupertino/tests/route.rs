@@ -11,7 +11,7 @@ use std::time::Duration;
 use common::{lay_out_animated, tight};
 use flui_cupertino::cupertino_page_route;
 use flui_sdk::animation::{Curve, Curves, Vsync};
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{ColoredBox, Navigator, NavigatorHandle, SimpleRoute, VsyncScope};
 

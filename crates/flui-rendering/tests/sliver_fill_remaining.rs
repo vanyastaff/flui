@@ -1,10 +1,12 @@
 //! Harness tests for the `RenderSliverFillRemaining` family.
 
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_foundation::{Leaf, Single};
 use flui_objects::{
     RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
     RenderSliverFillRemainingWithScrollable,
 };
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, SliverLayoutContext},
@@ -14,7 +16,6 @@ use flui_rendering::{
     testing::{inspect, sliver as sliver_presets},
     traits::{RenderBox, RenderSliver},
 };
-use flui_types::{Offset, Rect, Size, layout::AxisDirection};
 
 use crate::common::{
     BoxedRenderObject, BoxedSliverObject, laid_out_tight_300x100 as laid_out, sliver_geometry,
@@ -85,7 +86,7 @@ impl RenderBox for FixedHitBox {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         ctx.is_within_bounds(Rect::from_origin_size(
-            flui_types::Point::ZERO,
+            flui_foundation::geometry::Point::ZERO,
             ctx.own_size(),
         ))
     }
@@ -124,7 +125,7 @@ impl RenderBox for ExpandingHitBox {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         ctx.is_within_bounds(Rect::from_origin_size(
-            flui_types::Point::ZERO,
+            flui_foundation::geometry::Point::ZERO,
             ctx.own_size(),
         ))
     }

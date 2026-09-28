@@ -1,0 +1,107 @@
+//! Table layout types
+//!
+//! Types for configuring table column widths and cell alignment.
+//! Based on Flutter's Table widget API.
+
+/// How one table column's width is decided.
+///
+/// Mirrors Flutter's `TableColumnWidth` hierarchy (`rendering/table.dart`).
+/// The leaf variants (`Fixed`/`Flex`/`Intrinsic`/`Fraction`) are cheap value
+/// specs; [`Max`](Self::Max)/[`Min`](Self::Min) are *combinators* that wrap
+/// two other specs — which is why this enum owns them behind [`Box`] and is
+/// therefore [`Clone`] but not `Copy` (a recursive type cannot be `Copy`).
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum TableColumnWidth {
+    /// Fixed width in logical pixels.
+    ///
+    /// The column will always be exactly this width regardless of content.
+    Fixed(f64),
+
+    /// Flexible width with flex factor.
+    ///
+    /// Similar to `Flex` widget - distributes remaining space proportionally.
+    /// A column with `Flex(2.0)` will be twice as wide as one with `Flex(1.0)`.
+    Flex(f64),
+
+    /// Intrinsic width based on cell contents, with an optional flex factor.
+    ///
+    /// The column is sized to fit the widest cell content (this requires an
+    /// additional layout pass to measure content). When `flex` is `Some`, the
+    /// column ALSO participates in leftover-space distribution once the
+    /// non-flexible columns are sized — its intrinsic width acts as a floor.
+    /// `None` means it never takes extra space.
+    ///
+    /// Flutter parity: `IntrinsicColumnWidth({double? flex})`
+    /// (`rendering/table.dart:94`).
+    Intrinsic {
+        /// Optional flex factor for distributing leftover space;
+        /// `None` means the column never takes extra space.
+        flex: Option<f64>,
+    },
+
+    /// Fraction of available width (0.0-1.0).
+    ///
+    /// For example, `Fraction(0.25)` means 25% of the table's available width.
+    /// Values are clamped to the 0.0-1.0 range.
+    Fraction(f64),
+
+    /// The larger of two column-width specs, evaluated independently.
+    ///
+    /// For "10% of the container width or 100px, whichever is bigger", use
+    /// `TableColumnWidth::max(Fixed(100.0), Fraction(0.1))`. Both `a` and `b`
+    /// are evaluated (so if either is expensive, so is this). Flutter parity:
+    /// `MaxColumnWidth` (`rendering/table.dart:235`).
+    Max(Box<TableColumnWidth>, Box<TableColumnWidth>),
+
+    /// The smaller of two column-width specs, evaluated independently.
+    ///
+    /// For "10% of the container width but never bigger than 100px", use
+    /// `TableColumnWidth::min(Fixed(100.0), Fraction(0.1))`. Both `a` and `b`
+    /// are evaluated. Flutter parity: `MinColumnWidth`
+    /// (`rendering/table.dart:287`).
+    Min(Box<TableColumnWidth>, Box<TableColumnWidth>),
+}
+
+impl TableColumnWidth {
+    /// The larger of `a` and `b` (see [`TableColumnWidth::Max`]).
+    #[must_use]
+    pub fn max(a: TableColumnWidth, b: TableColumnWidth) -> Self {
+        TableColumnWidth::Max(Box::new(a), Box::new(b))
+    }
+
+    /// The smaller of `a` and `b` (see [`TableColumnWidth::Min`]).
+    #[must_use]
+    pub fn min(a: TableColumnWidth, b: TableColumnWidth) -> Self {
+        TableColumnWidth::Min(Box::new(a), Box::new(b))
+    }
+}
+
+impl Default for TableColumnWidth {
+    #[inline]
+    fn default() -> Self {
+        TableColumnWidth::Flex(1.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn combinators_keep_argument_order() {
+        let (a, b) = (
+            TableColumnWidth::Fixed(10.0),
+            TableColumnWidth::Fraction(0.5),
+        );
+        assert_eq!(
+            TableColumnWidth::max(a.clone(), b.clone()),
+            TableColumnWidth::Max(Box::new(a.clone()), Box::new(b.clone()))
+        );
+        assert_eq!(
+            TableColumnWidth::min(a.clone(), b.clone()),
+            TableColumnWidth::Min(Box::new(a), Box::new(b))
+        );
+        assert_eq!(TableColumnWidth::default(), TableColumnWidth::Flex(1.0));
+    }
+}

@@ -40,12 +40,12 @@
 //! its pipeline. It moved by exactly one bit, for a reason that constant names
 //! and measures.
 
+use flui_foundation::geometry::{Offset, RRect, Rect};
 use flui_layer::SceneBuilder;
 use flui_painting::{BlendMode, Canvas, Paint};
-use flui_types::{
-    Color, Offset, Rect,
-    geometry::RRect,
-    painting::{Clip, ClipOp, Shader, TileMode},
+use flui_painting::{
+    paint::{Clip, ClipOp, Shader, TileMode},
+    styling::Color,
 };
 
 use crate::{
@@ -742,10 +742,10 @@ fn gradient_rrect_keeps_per_corner_radii() {
     let side = SIDE as f32;
     let rrect = RRect::from_rect_and_corners(
         full_surface(),
-        flui_types::geometry::Radius::ZERO,
-        flui_types::geometry::Radius::ZERO,
-        flui_types::geometry::Radius::circular(f64::from(side / 3.0)),
-        flui_types::geometry::Radius::ZERO,
+        flui_foundation::geometry::Radius::ZERO,
+        flui_foundation::geometry::Radius::ZERO,
+        flui_foundation::geometry::Radius::circular(f64::from(side / 3.0)),
+        flui_foundation::geometry::Radius::ZERO,
     );
     let tree = {
         let mut builder = SceneBuilder::new();

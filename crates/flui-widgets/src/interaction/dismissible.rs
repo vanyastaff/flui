@@ -31,7 +31,7 @@
 //!    between the sliding child's edge and the container edge, growing as the
 //!    drag proceeds. `flui-widgets`' [`ClipRect`] has no
 //!    arbitrary-rect / custom-clipper primitive yet — only a fixed
-//!    [`flui_types::painting::Clip`] behavior. This port shows/hides
+//!    [`flui_painting::paint::Clip`] behavior. This port shows/hides
 //!    `background` by *presence* (mounted whenever `move_controller.value()
 //!    != 0.0`, matching the oracle's `!_moveAnimation.isDismissed` guard) but
 //!    does not crop it to the revealed sliver — it paints at full extent
@@ -93,13 +93,13 @@ use flui_animation::curve::{Curve, Interval};
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, Curves, Vsync, VsyncRegistration,
 };
+use flui_foundation::geometry::Size;
 use flui_foundation::{Listenable, ListenerId};
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
+use flui_painting::paint::Clip;
+use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_types::Size;
-use flui_types::painting::Clip;
-use flui_types::typography::TextDirection;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
     BoxedView, BuildContextExt, EventCx, EventOutcome, IntoView, LocalPostFrameHandle,

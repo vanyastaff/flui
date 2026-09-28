@@ -46,9 +46,11 @@
 //! See `crates/flui-widgets/ARCHITECTURE.md` mapping decision 15.
 
 use flui_foundation::Single;
+use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
+use flui_painting::Alignment;
+use flui_painting::styling::BoxDecoration;
+use flui_painting::styling::Color;
 use flui_painting::{DecorationPaintOptions, Paint, box_decoration_hit_test, paint_box_decoration};
-use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 
 use flui_rendering::{
     RenderUpdateImpact,

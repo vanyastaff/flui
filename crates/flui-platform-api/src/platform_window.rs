@@ -9,7 +9,7 @@
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 
 use crate::{
     CursorError, DispatchEventResult, Modifiers, PlatformDisplay, PlatformHaptics, PlatformInput,
@@ -71,7 +71,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// use std::any::Any;
 ///
 /// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
-/// use flui_types::geometry::{DeviceSize, Size};
+/// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
 ///
@@ -115,7 +115,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// use std::any::Any;
 ///
 /// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId};
-/// use flui_types::geometry::{DeviceSize, Size};
+/// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
 ///
@@ -503,15 +503,15 @@ pub trait PlatformWindow: Send + Sync {
     /// Safe-area intrusions in logical pixels, relative to the content view.
     /// Backends without native inset reporting return zero. Detached windows
     /// retain their last accepted geometry; this is not keyboard occlusion.
-    fn safe_area_insets(&self) -> flui_types::geometry::EdgeInsets {
-        flui_types::geometry::EdgeInsets::ZERO
+    fn safe_area_insets(&self) -> flui_foundation::geometry::EdgeInsets {
+        flui_foundation::geometry::EdgeInsets::ZERO
     }
 
     /// Observe safe-area changes on the owner thread. Register, then resample
     /// `safe_area_insets` to cover changes before callback installation.
     fn on_safe_area_change(
         &self,
-        callback: Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>,
+        callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
     ) {
         let _ = callback;
     }

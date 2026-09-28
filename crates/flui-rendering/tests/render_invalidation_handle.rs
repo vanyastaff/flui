@@ -9,12 +9,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::{DirtySendError, PipelineOwner},
 };
-use flui_types::Size;
 
 use crate::common::BoxedRenderObject;
 

@@ -61,8 +61,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_sdk::foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
-use flui_sdk::types::geometry::EdgeInsets;
-use flui_sdk::types::styling::BoxDecoration;
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::painting::BoxDecoration;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{AnimatedView, impl_animated_view};

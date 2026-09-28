@@ -3,9 +3,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use flui_foundation::geometry::Size;
 use flui_objects::{ImageAlignment, ImageFit, RenderImage};
+use flui_painting::paint::Image as PixelImage;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::{Size, painting::Image as PixelImage};
 #[cfg(not(feature = "asset-images"))]
 use flui_view::prelude::StatelessView;
 #[cfg(feature = "asset-images")]

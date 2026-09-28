@@ -10,9 +10,9 @@
 //!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md
 //!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 
+use flui_foundation::geometry::Size;
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{constraints::BoxConstraints, error::RenderError};
-use flui_types::Size;
 
 use crate::common::fresh_layout_pipeline;
 

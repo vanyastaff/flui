@@ -16,12 +16,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::prelude::*;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::HeadlessBinding;
-use flui_types::Size;
 use flui_view::{BuildOwner, tree::ElementTree};
 use parking_lot::RwLock;
 

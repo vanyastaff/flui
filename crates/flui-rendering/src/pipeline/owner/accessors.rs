@@ -7,7 +7,7 @@
 //! care which phase the owner is in.
 
 use flui_foundation::RenderId;
-use flui_types::{Matrix4, Offset};
+use flui_foundation::geometry::{Matrix4, Offset};
 
 use crate::{
     RenderUpdateImpact,
@@ -202,7 +202,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// The production twin of `flui_rendering::testing::box_geometry`, which is
     /// behind the `testing` feature and therefore unreachable from shipped code.
     #[must_use]
-    pub fn box_size(&self, id: RenderId) -> Option<flui_types::Size> {
+    pub fn box_size(&self, id: RenderId) -> Option<flui_foundation::geometry::Size> {
         self.render_tree.get(id)?.as_box()?.state().geometry()
     }
 
@@ -307,13 +307,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     pub fn local_to_global(
         &self,
         id: RenderId,
-        point: flui_types::Point,
+        point: flui_foundation::geometry::Point,
         ancestor: Option<RenderId>,
-    ) -> Option<flui_types::Point> {
+    ) -> Option<flui_foundation::geometry::Point> {
         let ancestor = ancestor.or(self.root_id)?;
         let transform = self.transform_to(id, ancestor)?;
         let (x, y) = transform.transform_point(point.x, point.y);
-        Some(flui_types::Point::new(x, y))
+        Some(flui_foundation::geometry::Point::new(x, y))
     }
 
     /// The inverse of [`local_to_global`](Self::local_to_global): converts
@@ -335,13 +335,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     pub fn global_to_local(
         &self,
         id: RenderId,
-        point: flui_types::Point,
+        point: flui_foundation::geometry::Point,
         ancestor: Option<RenderId>,
-    ) -> Option<flui_types::Point> {
+    ) -> Option<flui_foundation::geometry::Point> {
         let ancestor = ancestor.or(self.root_id)?;
         let inverse = self.transform_to(id, ancestor)?.try_inverse()?;
         let (x, y) = inverse.transform_point(point.x, point.y);
-        Some(flui_types::Point::new(x, y))
+        Some(flui_foundation::geometry::Point::new(x, y))
     }
 
     /// Returns a mutable reference to the render tree.
@@ -583,7 +583,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // Box bounds gate size, resolved from RenderState (geometry's
         // sole owner — 2B field dedup); threaded into hit_test_raw so the
         // default gate reads `ctx.is_within_own_size()`.
-        let own_size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
+        let own_size = entry
+            .state()
+            .geometry()
+            .unwrap_or(flui_foundation::geometry::Size::ZERO);
 
         // Push the node's hit-test transform onto the HitTestResult
         // stack BEFORE recursing, so child entries captured during
@@ -760,8 +763,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
         match axis_direction {
             Some(
-                flui_types::layout::AxisDirection::LeftToRight
-                | flui_types::layout::AxisDirection::RightToLeft,
+                crate::constraints::AxisDirection::LeftToRight
+                | crate::constraints::AxisDirection::RightToLeft,
             ) => MainAxisPosition::from_horizontal_offset(position),
             _ => MainAxisPosition::from_vertical_offset(position),
         }
@@ -779,10 +782,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
 
         let (raw_main, cross_axis) = match constraints.axis_direction {
-            flui_types::layout::AxisDirection::LeftToRight
-            | flui_types::layout::AxisDirection::RightToLeft => (position.dx, position.dy),
-            flui_types::layout::AxisDirection::TopToBottom
-            | flui_types::layout::AxisDirection::BottomToTop => (position.dy, position.dx),
+            crate::constraints::AxisDirection::LeftToRight
+            | crate::constraints::AxisDirection::RightToLeft => (position.dx, position.dy),
+            crate::constraints::AxisDirection::TopToBottom
+            | crate::constraints::AxisDirection::BottomToTop => (position.dy, position.dx),
         };
         let effective_axis_direction = match constraints.growth_direction {
             crate::constraints::GrowthDirection::Forward => constraints.axis_direction,
@@ -824,10 +827,10 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         };
 
         let (offset_main, offset_cross) = match child_constraints.axis_direction {
-            flui_types::layout::AxisDirection::LeftToRight
-            | flui_types::layout::AxisDirection::RightToLeft => (offset.dx, offset.dy),
-            flui_types::layout::AxisDirection::TopToBottom
-            | flui_types::layout::AxisDirection::BottomToTop => (offset.dy, offset.dx),
+            crate::constraints::AxisDirection::LeftToRight
+            | crate::constraints::AxisDirection::RightToLeft => (offset.dx, offset.dy),
+            crate::constraints::AxisDirection::TopToBottom
+            | crate::constraints::AxisDirection::BottomToTop => (offset.dy, offset.dx),
         };
         let parent_physical_main = if parent_constraints
             .growth_direction
@@ -855,7 +858,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     fn box_hit_offset_from_sliver_position(
         constraints: &SliverConstraints,
         geometry: &SliverGeometry,
-        child_size: flui_types::Size,
+        child_size: flui_foundation::geometry::Size,
         position: MainAxisPosition,
         offset: Offset,
     ) -> Offset {
@@ -865,12 +868,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         );
 
         let (paint_main, paint_cross, child_main_extent) = match constraints.axis_direction {
-            flui_types::layout::AxisDirection::LeftToRight
-            | flui_types::layout::AxisDirection::RightToLeft => {
+            crate::constraints::AxisDirection::LeftToRight
+            | crate::constraints::AxisDirection::RightToLeft => {
                 (offset.dx, offset.dy, child_size.width)
             }
-            flui_types::layout::AxisDirection::TopToBottom
-            | flui_types::layout::AxisDirection::BottomToTop => {
+            crate::constraints::AxisDirection::TopToBottom
+            | crate::constraints::AxisDirection::BottomToTop => {
                 (offset.dy, offset.dx, child_size.height)
             }
         };
@@ -886,12 +889,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let local_cross = position.cross_axis - paint_cross;
 
         match constraints.axis_direction {
-            flui_types::layout::AxisDirection::LeftToRight
-            | flui_types::layout::AxisDirection::RightToLeft => {
+            crate::constraints::AxisDirection::LeftToRight
+            | crate::constraints::AxisDirection::RightToLeft => {
                 Offset::new(local_main, local_cross)
             }
-            flui_types::layout::AxisDirection::TopToBottom
-            | flui_types::layout::AxisDirection::BottomToTop => {
+            crate::constraints::AxisDirection::TopToBottom
+            | crate::constraints::AxisDirection::BottomToTop => {
                 Offset::new(local_cross, local_main)
             }
         }

@@ -46,7 +46,6 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # `InMemoryTextStore`, the reference store its own fixture drives.
 flui-platform-api = { workspace = true }
 # Canonical hit-test positions accepted by the production input pipeline.
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # The element tree + build owner this binding drives each frame (`build_scope`
 # drains the external inbox an animation/listenable tick fills).
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["runtime-internals"] }
@@ -106,7 +105,7 @@ flui-objects = { workspace = true }
 # plus the geometry/offset types for the synthetic pointer-down. The `testing`
 # feature is NOT required: `add_pointer`/`poll_deadlines` are part of the release
 # API, so the deterministic deadline test runs against the public surface.
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 
 [[test]]
 name = "flui_testing_it"

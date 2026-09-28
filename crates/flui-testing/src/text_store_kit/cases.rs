@@ -4,12 +4,12 @@ use std::cell::{Cell, RefCell};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 
+use flui_foundation::geometry::{Bounds, Point};
 use flui_platform_api::text_store::{
     CommitGate, Composition, LockGrant, LockOutcome, LockTiming, OffsetError, PointMode, Selection,
     TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver, TextStoreRead,
     Utf16Offset, Utf16Range, utf16,
 };
-use flui_types::geometry::{Bounds, Point};
 
 use super::{Case, TextStoreFixture};
 

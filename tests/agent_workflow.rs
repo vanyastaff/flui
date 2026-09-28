@@ -51,12 +51,12 @@
 
 use std::time::Duration;
 
+use flui::geometry::Offset;
 use flui::prelude::*;
 use flui::testing::a11y::A11yQueryError;
 use flui::testing::rendering::render_diagnostics;
 use flui::testing::replay::PointerScript;
 use flui::testing::{HeadlessBinding, MountOptions, MountOwners};
-use flui::types::geometry::Offset;
 use flui::widgets::column;
 
 /// The tree `flui create`'s counter template builds: `Center` → `Column` →

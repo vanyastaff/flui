@@ -7,7 +7,7 @@
 //! - **Extension traits**: Add methods to foreign types
 //! - **Marker traits**: Compile-time constraints
 
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 
 use crate::{
     events::{PointerEvent, PointerEventExt as EventsPointerEventExt},

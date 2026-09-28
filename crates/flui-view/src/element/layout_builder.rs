@@ -374,10 +374,10 @@ mod tests {
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use flui_foundation::geometry::Size;
     use flui_foundation::{ElementId, RenderId};
     use flui_objects::{RenderConstrainedBox, RenderSizedBox};
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-    use flui_types::Size;
 
     use crate::{BuildOwner, IntoView, tree::ElementTree, view::ViewExt};
 

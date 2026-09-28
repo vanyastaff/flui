@@ -11,8 +11,8 @@
 
 use std::time::{Duration, Instant};
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::processing::{ImpulseVelocityTracker, OneEuroFilter2D, VelocityTracker};
-use flui_types::geometry::Offset;
 
 fn main() {
     println!("FLUI pointer filtering example\n");

@@ -11,12 +11,12 @@ use std::{
     sync::Arc,
 };
 
+use flui_foundation::geometry::Size;
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_objects::{RenderFlex, RenderSizedBox};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Size;
 use flui_view::{
     BoxedView, BuildContext, BuildOwner, ElementTree, ErrorView, GlobalKey, IntoView,
     LifecycleHook, RebuildReason, RecoveredAt, RenderView, StatefulView, View, ViewExt, ViewState,

@@ -3,7 +3,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use windows::{
     Win32::{
@@ -1117,7 +1117,7 @@ impl WindowsPlatform {
                         ctx.callbacks.dispatch_moved();
 
                         // Dispatch Moved event to global handlers
-                        use flui_types::geometry::Point;
+                        use flui_foundation::geometry::Point;
                         let position = Point::new(
                             x as f64 / ctx.scale_factor.get(),
                             y as f64 / ctx.scale_factor.get(),

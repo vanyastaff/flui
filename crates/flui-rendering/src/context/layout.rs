@@ -31,7 +31,7 @@
 //! ```
 
 use flui_foundation::Arity;
-use flui_types::{Size, geometry::Offset};
+use flui_foundation::geometry::{Offset, Size};
 
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},

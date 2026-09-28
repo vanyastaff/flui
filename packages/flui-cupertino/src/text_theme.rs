@@ -29,8 +29,8 @@
 //! whatever `common_fallback()` happens to name first. Falling through is
 //! what makes the rest of the chain do its job.
 
-use flui_sdk::types::Color;
-use flui_sdk::types::typography::{FontWeight, TextStyle};
+use flui_sdk::painting::Color;
+use flui_sdk::painting::{FontWeight, TextStyle};
 use flui_sdk::view::prelude::BuildContext;
 
 use crate::colors::{CupertinoColors, CupertinoDynamicColor};

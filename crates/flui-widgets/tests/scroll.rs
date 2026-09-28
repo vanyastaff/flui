@@ -17,9 +17,9 @@ use crate::common::{LaidOut, lay_out, offset, size, tight};
 use flui_animation::{Curves, Vsync};
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt as _;
+use flui_painting::styling::Color;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
-use flui_types::Color;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView, ViewExt};
 use flui_widgets::{
@@ -2456,7 +2456,7 @@ fn scrolled_nested_sliver_listener_receives_a_locally_transformed_position() {
 /// hand-derived reversed-axis arithmetic is load-bearing here.
 #[test]
 fn scrolled_reversed_list_row_listener_receives_a_locally_transformed_position() {
-    use flui_types::layout::AxisDirection;
+    use flui_rendering::constraints::AxisDirection;
     use flui_widgets::Viewport;
 
     let (recorders, rows) = recording_rows(10, 200.0, 50.0);
@@ -2997,7 +2997,7 @@ fn a_claimed_wheel_tick_is_still_observed_by_the_whole_path() {
 /// exact scrollable-plus-custom-widget conflict as its reason to exist).
 #[test]
 fn a_wheel_tick_over_an_interactive_viewer_zooms_without_scrolling_the_outer() {
-    use flui_types::Matrix4;
+    use flui_foundation::geometry::Matrix4;
     use flui_widgets::{InteractiveViewer, TransformationController};
 
     let outer = ScrollController::new();
@@ -3010,7 +3010,7 @@ fn a_wheel_tick_over_an_interactive_viewer_zooms_without_scrolling_the_outer() {
     // — the second half of this test pins that fall-through.
     let viewer = InteractiveViewer::new()
         .controller(transformation.clone())
-        .boundary_margin(flui_types::EdgeInsets::all(f64::INFINITY))
+        .boundary_margin(flui_foundation::geometry::EdgeInsets::all(f64::INFINITY))
         .child(SizedBox::new(300.0, 200.0));
     let widget = Scrollable::new()
         .controller(outer.clone())
@@ -3055,7 +3055,7 @@ fn a_wheel_tick_over_an_interactive_viewer_zooms_without_scrolling_the_outer() {
 /// unarbitrated and no-ops, while the scrollable wins the resolver).
 #[test]
 fn a_no_op_zoom_falls_through_to_the_outer_scrollable() {
-    use flui_types::Matrix4;
+    use flui_foundation::geometry::Matrix4;
     use flui_widgets::{InteractiveViewer, TransformationController};
 
     let outer = ScrollController::new();
@@ -3160,8 +3160,8 @@ fn a_wheel_tick_mid_drag_is_observed_under_the_cursor_not_the_captured_route() {
 /// inner claimed everything and the two gestures could not coexist.
 #[test]
 fn plain_wheel_scrolls_and_ctrl_wheel_zooms_under_the_ctrl_gate() {
+    use flui_foundation::geometry::Matrix4;
     use flui_interaction::events::Modifiers;
-    use flui_types::Matrix4;
     use flui_widgets::{InteractiveViewer, TransformationController, WheelScaleGate};
 
     let outer = ScrollController::new();
@@ -3171,7 +3171,7 @@ fn plain_wheel_scrolls_and_ctrl_wheel_zooms_under_the_ctrl_gate() {
     let viewer = InteractiveViewer::new()
         .controller(transformation.clone())
         .wheel_scale_gate(WheelScaleGate::CtrlWheel)
-        .boundary_margin(flui_types::EdgeInsets::all(f64::INFINITY))
+        .boundary_margin(flui_foundation::geometry::EdgeInsets::all(f64::INFINITY))
         .child(SizedBox::new(300.0, 200.0));
     let widget = Scrollable::new()
         .controller(outer.clone())
@@ -3240,7 +3240,7 @@ fn plain_wheel_scrolls_and_ctrl_wheel_zooms_under_the_ctrl_gate() {
 /// layer at all — a sliver may then paint outside the viewport's bounds.
 #[test]
 fn viewport_clip_behavior_controls_the_clip_layer() {
-    use flui_types::painting::Clip;
+    use flui_painting::paint::Clip;
     use flui_view::BoxedView;
     use flui_widgets::SliverFixedExtentList;
 

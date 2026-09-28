@@ -69,10 +69,10 @@ mod appkit_resize_jitter_probe {
 
     use flui_engine::PresentDisposition;
     use flui_engine::Renderer;
+    use flui_foundation::geometry::{Size, px};
     use flui_layer::{LayerTree, Scene};
     use flui_platform::Platform;
     use flui_platform::traits::PlatformWindow;
-    use flui_types::geometry::{Size, px};
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 

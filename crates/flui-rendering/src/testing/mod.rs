@@ -38,7 +38,7 @@
 //! use flui_rendering::testing::{RenderTester, Probe, box_node};
 //! use flui_rendering::prelude::*;
 //! use flui_foundation::Leaf;
-//! use flui_types::Size;
+//! use flui_foundation::geometry::Size;
 //!
 //! // A minimal leaf render object used only to exercise the harness API.
 //! // Concrete objects live in `flui_objects`; the harness itself is object-agnostic.

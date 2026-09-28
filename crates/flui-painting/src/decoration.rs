@@ -14,12 +14,11 @@
 
 use std::sync::Once;
 
-use flui_types::{
-    Color, Offset, Point, RRect, Rect,
-    geometry::Circle,
-    painting::{Paint, Path, Shader},
-    styling::{BoxDecoration, BoxShadow, Gradient},
+use crate::{
+    paint::{Paint, Path, Shader},
+    styling::{BoxDecoration, BoxShadow, Color, Gradient},
 };
+use flui_foundation::geometry::{Circle, Offset, Point, RRect, Rect};
 
 use crate::canvas::Canvas;
 
@@ -391,7 +390,7 @@ fn paint_circle_shadow(canvas: &mut Canvas, circle: Circle<f64>, shadow: &BoxSha
 fn paint_circle_border(
     canvas: &mut Canvas,
     circle: Circle<f64>,
-    border: &flui_types::styling::Border<f64>,
+    border: &crate::styling::Border<f64>,
 ) {
     if !border.is_uniform() {
         WARN_CIRCLE_NON_UNIFORM_BORDER.call_once(|| {
@@ -471,7 +470,7 @@ pub(crate) fn resolve_gradient(gradient: &Gradient, rect: Rect<f64>) -> Shader {
     let center = rect.center();
     let half_w = rect.width() / 2.0;
     let half_h = rect.height() / 2.0;
-    let at = |alignment: flui_types::Alignment| {
+    let at = |alignment: crate::Alignment| {
         Offset::new(
             center.x + alignment.x * half_w,
             center.y + alignment.y * half_h,
@@ -511,10 +510,10 @@ pub(crate) fn resolve_gradient(gradient: &Gradient, rect: Rect<f64>) -> Shader {
 fn paint_decoration_image(
     canvas: &mut Canvas,
     rect: Rect<f64>,
-    image: &flui_types::styling::DecorationImage,
+    image: &crate::styling::DecorationImage,
 ) {
-    use flui_types::layout::BoxFit;
-    use flui_types::styling::ImageRepeat;
+    use crate::BoxFit;
+    use crate::styling::ImageRepeat;
 
     if image.repeat != ImageRepeat::NoRepeat {
         canvas.draw_image_repeat(image.image.clone(), rect, image.repeat, None);
@@ -586,7 +585,7 @@ pub(crate) fn paint_border(
     canvas: &mut Canvas,
     rect: Rect<f64>,
     rrect: Option<RRect>,
-    border: &flui_types::styling::Border<f64>,
+    border: &crate::styling::Border<f64>,
 ) {
     if border.is_uniform() {
         // Uniform ⇒ all four sides are the same `Some` (or all `None`,
@@ -603,9 +602,8 @@ pub(crate) fn paint_border(
         return;
     }
 
-    let side_width =
-        |side: &Option<flui_types::styling::BorderSide<f64>>| side.map_or(0.0, |s| s.width);
-    let side_color = |side: &Option<flui_types::styling::BorderSide<f64>>| {
+    let side_width = |side: &Option<crate::styling::BorderSide<f64>>| side.map_or(0.0, |s| s.width);
+    let side_color = |side: &Option<crate::styling::BorderSide<f64>>| {
         side.map_or(Color::TRANSPARENT, |s| s.color)
     };
     let (l, t, r, b) = (

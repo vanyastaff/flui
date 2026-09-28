@@ -2,7 +2,7 @@
 //! through to their child unchanged (Flutter `RenderProxyBoxMixin` parity).
 
 use flui_foundation::Single;
-use flui_types::{Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use crate::constraints::BoxConstraints;
 use crate::parent_data::BoxParentData;

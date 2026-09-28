@@ -11,7 +11,7 @@
 //! this three-line function; hoisted here once all three needed the
 //! identical shape.
 
-use flui_sdk::types::styling::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::widgets::{WidgetStateProperty, WidgetStates};
 
 /// Resolves `property` against `states`, flattening the "no property" and

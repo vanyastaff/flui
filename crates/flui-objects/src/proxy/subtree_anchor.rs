@@ -45,8 +45,8 @@
 use std::sync::Arc;
 
 use flui_foundation::Single;
+use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::pipeline::RenderInvalidationHandle;
-use flui_types::{Offset, Size};
 use parking_lot::Mutex;
 
 use flui_foundation::RenderId;

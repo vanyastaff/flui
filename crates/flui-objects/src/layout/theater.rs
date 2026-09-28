@@ -55,7 +55,7 @@
 //!   route the user could neither see nor touch.
 
 use flui_foundation::Variable;
-use flui_types::{Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,

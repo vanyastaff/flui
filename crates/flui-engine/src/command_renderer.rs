@@ -11,9 +11,9 @@
 use flui_painting::{BlendMode, Paint, PointMode};
 use std::sync::Arc;
 
-use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Rect},
-    painting::{Image, Path, TextureId},
+use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Rect};
+use flui_painting::{
+    paint::{Image, Path, TextureId},
     styling::Color,
 };
 
@@ -121,7 +121,7 @@ pub(crate) trait CommandRenderer {
         &mut self,
         image: &Image,
         dst: Rect<f64>,
-        repeat: flui_types::painting::image::ImageRepeat,
+        repeat: flui_painting::paint::image::ImageRepeat,
         paint: Option<&Paint>,
         transform: &Matrix4,
     );
@@ -141,7 +141,7 @@ pub(crate) trait CommandRenderer {
         &mut self,
         image: &Image,
         dst: Rect<f64>,
-        filter: flui_types::painting::image::ColorFilter,
+        filter: flui_painting::paint::image::ColorFilter,
         paint: Option<&Paint>,
         transform: &Matrix4,
     );
@@ -152,7 +152,7 @@ pub(crate) trait CommandRenderer {
         texture_id: TextureId,
         dst: Rect<f64>,
         src: Option<Rect<f64>>,
-        filter_quality: flui_types::painting::FilterQuality,
+        filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
         transform: &Matrix4,
     );
@@ -189,8 +189,8 @@ pub(crate) trait CommandRenderer {
     fn clip_rect(
         &mut self,
         rect: Rect<f64>,
-        clip_op: flui_types::painting::ClipOp,
-        clip_behavior: flui_types::painting::Clip,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
         transform: &Matrix4,
     );
 
@@ -198,8 +198,8 @@ pub(crate) trait CommandRenderer {
     fn clip_rrect(
         &mut self,
         rrect: RRect,
-        clip_op: flui_types::painting::ClipOp,
-        clip_behavior: flui_types::painting::Clip,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
         transform: &Matrix4,
     );
 
@@ -214,8 +214,8 @@ pub(crate) trait CommandRenderer {
     fn clip_rsuperellipse(
         &mut self,
         rsuperellipse: RSuperellipse,
-        clip_op: flui_types::painting::ClipOp,
-        clip_behavior: flui_types::painting::Clip,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
         transform: &Matrix4,
     ) {
         // Default approximation: rrect built from outer_rect + per-corner radii.
@@ -235,8 +235,8 @@ pub(crate) trait CommandRenderer {
     fn clip_path(
         &mut self,
         path: &Path,
-        clip_op: flui_types::painting::ClipOp,
-        clip_behavior: flui_types::painting::Clip,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
         transform: &Matrix4,
     );
 

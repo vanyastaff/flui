@@ -42,7 +42,7 @@ use flui_animation::{
     VsyncRegistration,
 };
 use flui_foundation::{ListenerId, ViewKey};
-use flui_types::Alignment;
+use flui_painting::Alignment;
 use flui_view::element::ElementKind;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{

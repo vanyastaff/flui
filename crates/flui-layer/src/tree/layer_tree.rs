@@ -326,7 +326,7 @@ impl LayerTree {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::Size;
+    use flui_foundation::geometry::Size;
 
     use super::*;
     use crate::{LeaderLayer, OffsetLayer, PictureLayer};

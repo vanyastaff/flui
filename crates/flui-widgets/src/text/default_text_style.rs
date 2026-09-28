@@ -21,7 +21,7 @@
 //!   (`text.dart:718-720`) has no analogue: a run that wants no inheritance
 //!   sets every field it cares about.
 
-use flui_types::typography::{TextAlign, TextStyle};
+use flui_painting::typography::{TextAlign, TextStyle};
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
 
@@ -38,7 +38,7 @@ use flui_view::prelude::*;
 ///
 /// ```rust
 /// # use flui_widgets::prelude::*;
-/// # use flui_types::typography::TextStyle;
+/// # use flui_painting::typography::TextStyle;
 /// let _ = DefaultTextStyle::new(
 ///     TextStyle::default().with_font_size(20.0),
 ///     Text::new("inherits twenty-point type"),

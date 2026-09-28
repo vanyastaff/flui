@@ -13,8 +13,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use flui_foundation::geometry::Size;
 use flui_platform::{Platform, WindowOptions, current_platform};
-use flui_types::geometry::Size;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize tracing for tests

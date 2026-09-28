@@ -2998,8 +2998,8 @@ mod tests {
                 flui_foundation::Leaf,
                 Self::ParentData,
             >,
-        ) -> flui_types::geometry::Size {
-            flui_types::geometry::Size::new(1.0, 1.0)
+        ) -> flui_foundation::geometry::Size {
+            flui_foundation::geometry::Size::new(1.0, 1.0)
         }
     }
 
@@ -3315,8 +3315,8 @@ mod tests {
                 flui_foundation::Leaf,
                 Self::ParentData,
             >,
-        ) -> flui_types::geometry::Size {
-            flui_types::geometry::Size::new(1.0, 1.0)
+        ) -> flui_foundation::geometry::Size {
+            flui_foundation::geometry::Size::new(1.0, 1.0)
         }
 
         fn attach(&mut self, _handle: flui_rendering::pipeline::RenderInvalidationHandle) {

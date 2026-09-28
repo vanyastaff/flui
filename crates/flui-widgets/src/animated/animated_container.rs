@@ -5,7 +5,8 @@ use std::time::Duration;
 use flui_animation::Animation;
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_foundation::geometry::EdgeInsets;
-use flui_types::{Alignment, Color};
+use flui_painting::Alignment;
+use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
 

@@ -18,13 +18,13 @@
 //! early on an already-dirty node, so a boundary nested INSIDE a relayout
 //! subtree is never reached from that subtree's root.
 
+use flui_foundation::geometry::{EdgeInsets, Size};
 use flui_objects::{RenderColoredBox, RenderPadding, RenderRepaintBoundary};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
     testing::{box_node, tree},
 };
-use flui_types::{EdgeInsets, Size};
 
 /// Change a `RenderPadding`'s inset and report the impact, the same way an
 /// element update does.
@@ -153,13 +153,13 @@ fn a_boundary_nested_in_a_relayout_subtree_is_queued_for_paint() {
 fn a_sliver_repaint_boundary_that_laid_out_is_queued_for_paint() {
     use flui_foundation::Leaf;
     use flui_objects::RenderViewport;
+    use flui_rendering::constraints::AxisDirection;
     use flui_rendering::{
         constraints::SliverGeometry,
         context::{SliverHitTestContext, SliverLayoutContext},
         testing::sliver_node,
         traits::RenderSliver,
     };
-    use flui_types::layout::AxisDirection;
 
     /// A sliver that declares itself a repaint boundary and produces a fixed
     /// extent, so the viewport lays it out for real.

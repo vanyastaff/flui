@@ -81,10 +81,13 @@
 //!
 //! [`ButtonStyle::lerp`]: https://api.flutter.dev/flutter/material/ButtonStyle/lerp.html
 
-use flui_sdk::types::styling::BorderSide;
-use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Color, EdgeInsets, Size};
+use flui_sdk::painting::BorderSide;
+use flui_sdk::painting::TextStyle;
 use flui_sdk::widgets::WidgetStateProperty;
+use flui_sdk::{
+    geometry::{EdgeInsets, Size},
+    painting::Color,
+};
 
 use crate::shape::MaterialShape;
 
@@ -98,7 +101,7 @@ use crate::shape::MaterialShape;
 /// ```rust
 /// use flui_material::ButtonStyle;
 /// use flui_sdk::widgets::WidgetStateProperty;
-/// use flui_sdk::types::Color;
+/// use flui_sdk::painting::Color;
 ///
 /// let style = ButtonStyle {
 ///     background_color: Some(WidgetStateProperty::all(Some(Color::rgb(0, 255, 0)))),

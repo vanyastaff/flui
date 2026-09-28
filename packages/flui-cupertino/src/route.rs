@@ -77,8 +77,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_sdk::animation::{Animation, ArcCurve, Curve, CurvedAnimation, Curves, Tween, animate};
+use flui_sdk::painting::Color;
 use flui_sdk::pipeline::TranslationFraction;
-use flui_sdk::types::Color;
 use flui_sdk::view::prelude::BuildContext;
 use flui_sdk::view::{BoxedView, ViewExt};
 use flui_sdk::widgets::{

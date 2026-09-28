@@ -25,7 +25,7 @@ use flui_animation::{
     Vsync, VsyncRegistration,
 };
 use flui_foundation::Listenable;
-use flui_types::geometry::Lerp;
+use flui_foundation::geometry::Lerp;
 
 /// The default implicit-animation duration when a widget does not override it.
 ///

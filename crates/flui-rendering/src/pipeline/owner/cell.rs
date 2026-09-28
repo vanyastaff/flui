@@ -285,7 +285,8 @@ mod tests {
     // raw `layout_dirty_root` call the older `subtree_arena` walks use.
 
     use flui_foundation::Exact;
-    use flui_types::{Color, Point, Rect, Size};
+    use flui_foundation::geometry::{Point, Rect, Size};
+    use flui_painting::styling::Color;
 
     use crate::{
         constraints::BoxConstraints,

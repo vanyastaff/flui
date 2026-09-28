@@ -8,6 +8,7 @@
 //! in this module.
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::Size;
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     pipeline::{PipelineOwner, phase::Layout},
@@ -15,7 +16,6 @@ use flui_rendering::{
     testing::{inspect, sliver as sliver_presets},
     traits::RenderObject,
 };
-use flui_types::Size;
 
 /// A boxed Box-protocol render object, as stored in the pipeline tree.
 pub type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;

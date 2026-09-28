@@ -5,7 +5,7 @@
 
 use std::cell::Cell;
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 
 use super::RenderState;
 use crate::protocol::Protocol;

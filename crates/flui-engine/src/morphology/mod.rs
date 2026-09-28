@@ -28,7 +28,7 @@
 use std::sync::Arc;
 
 use bytemuck::cast_slice;
-use flui_types::Rect;
+use flui_foundation::geometry::Rect;
 
 pub(crate) use pipeline::MorphologyPipeline;
 

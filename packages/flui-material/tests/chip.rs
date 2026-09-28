@@ -33,7 +33,7 @@ use std::rc::Rc;
 use common::{lay_out, loose};
 use flui_material::chip::CHIP_ICON_SIZE;
 use flui_material::{Chip, ChipThemeData, FilterChip, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::widgets::{GestureDetector, HitTestBehavior, Text};
 
 /// `_ChipDefaultsM3`/`_FilterChipDefaultsM3.padding` (`chip.dart`/
@@ -62,7 +62,7 @@ fn color_property(color: Color) -> String {
 /// `RenderSemanticsAnnotations` node, which sizes to its `CustomPaint`/
 /// `Material`/content chain in full (mirrors `tests/checkbox.rs`'s own
 /// semantics-node-as-container-size assertion).
-fn container_size(laid: &common::LaidOut) -> flui_sdk::types::Size {
+fn container_size(laid: &common::LaidOut) -> flui_sdk::geometry::Size {
     // The wrapper node is the chip's own; its `GestureDetector`s add
     // action-only annotations beneath it for assistive technology.
     let semantics = laid
@@ -429,10 +429,10 @@ fn theme_side_reaches_the_mounted_border_painter_beating_the_default() {
     let themed_side_color = Color::rgb(44, 55, 66);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         chip_theme: Some(ChipThemeData {
-            side: Some(flui_sdk::types::styling::BorderSide::new(
+            side: Some(flui_sdk::painting::BorderSide::new(
                 themed_side_color,
                 3.0,
-                flui_sdk::types::styling::BorderStyle::Solid,
+                flui_sdk::painting::BorderStyle::Solid,
             )),
             ..Default::default()
         }),

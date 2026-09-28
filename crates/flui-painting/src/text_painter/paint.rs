@@ -1,10 +1,8 @@
 //! `TextPainter` painting and cursor queries, all over the layout that
 //! [`super::measure`]'s `layout()` cached.
 
-use flui_types::{
-    geometry::Offset,
-    typography::{LineMetrics, TextBox, TextPosition, TextRange},
-};
+use crate::typography::{LineMetrics, TextBox, TextPosition, TextRange};
+use flui_foundation::geometry::Offset;
 
 use super::TextPainter;
 use crate::Canvas;
@@ -135,7 +133,7 @@ impl TextPainter {
         let color = text
             .style()
             .and_then(crate::text_layout::paint_color)
-            .unwrap_or(flui_types::Color::BLACK);
+            .unwrap_or(crate::styling::Color::BLACK);
         // The very layout this painter measured: what the engine rasterises
         // is, by identity, what was laid out.
         canvas.draw_paragraph(&cache.layout, paint_offset, color);

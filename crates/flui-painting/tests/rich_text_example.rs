@@ -7,9 +7,9 @@
 //! - RTL and bidirectional text
 //! - Line metrics
 
+use flui_foundation::geometry::Offset;
 use flui_painting::TextPainter;
-use flui_types::{
-    geometry::Offset,
+use flui_painting::{
     styling::Color,
     typography::{
         FontStyle, FontWeight, InlineSpan, TextAlign, TextDirection, TextPosition, TextSpan,

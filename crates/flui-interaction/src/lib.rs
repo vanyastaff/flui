@@ -34,7 +34,7 @@
 //! ```text
 //! Platform (winit, Win32, etc.)
 //!     ↓
-//! PointerEvent/KeyEvent (flui_types)
+//! PointerEvent/KeyEvent
 //!     ↓
 //! EventRouter (event routing)
 //!     ├─ Hit Testing (spatial)
@@ -235,10 +235,10 @@ pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event
 // `use crate::PointerPanZoomEvent` is the single import path.
 pub use pan_zoom::{PointerPanZoomEvent, convert_gesture, from_w3c_event};
 // ============================================================================
-// Re-exports: Geometry from flui_types
+// Re-exports: geometry from flui_foundation
 // ============================================================================
+pub use flui_foundation::geometry::{Offset, Rect};
 pub use flui_platform_api::ImeEvent;
-pub use flui_types::geometry::{Offset, Rect};
 pub use ids::{FocusNodeId, HandlerId, PointerId};
 // ============================================================================
 // Re-exports: Input Processing
@@ -316,8 +316,8 @@ pub use traits::{
 /// ```
 pub mod prelude {
     // IDs
-    // Geometry from flui_types
-    pub use flui_types::geometry::{Offset, Rect};
+    // Geometry from flui_foundation
+    pub use flui_foundation::geometry::{Offset, Rect};
 
     // Gesture recognition
     pub use crate::arena::*;

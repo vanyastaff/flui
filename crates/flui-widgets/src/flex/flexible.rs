@@ -11,8 +11,8 @@
 //! [`Column`]: crate::Column
 //! [`Flex`]: crate::Flex
 
+use flui_foundation::geometry::Offset;
 use flui_rendering::parent_data::{FlexFit, FlexParentData};
-use flui_types::Offset;
 use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, impl_parent_data_view};
 
 /// Gives its child a share of the main axis of a [`Row`]/[`Column`]/[`Flex`],

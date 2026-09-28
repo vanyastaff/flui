@@ -13,13 +13,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
 use flui_material::{Card, CardThemeData, MaterialShape, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::types::Color;
-use flui_sdk::types::geometry::Radius;
-use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::geometry::Radius;
+use flui_sdk::painting::BorderRadius;
+use flui_sdk::painting::Color;
 use flui_sdk::widgets::{ColoredBox, GestureDetector};
 
 /// `_CardDefaultsM3`'s formatted `Debug` string for a resolved
-/// [`Color`](flui_sdk::types::Color) — what `RenderPhysicalShape`'s
+/// [`Color`](flui_sdk::painting::Color) — what `RenderPhysicalShape`'s
 /// `Diagnosticable::debug_fill_properties` writes into its `"color"`
 /// property, mirroring `tests/elevated_button.rs`'s identical helper.
 fn color_property(color: Color) -> String {
@@ -223,7 +223,7 @@ fn margin_override_replaces_the_default_inset() {
         Theme::new(
             ThemeData::light(),
             Card::new(ColoredBox::new(Color::rgb(1, 2, 3)))
-                .margin(flui_sdk::types::EdgeInsets::all(10.0)),
+                .margin(flui_sdk::geometry::EdgeInsets::all(10.0)),
         ),
         tight(200.0, 200.0),
     );

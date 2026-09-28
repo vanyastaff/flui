@@ -23,7 +23,8 @@ use std::{
 
 use super::{
     Point,
-    traits::{Along, Axis, FloatUnit, NumericUnit, Unit},
+    axis::Axis,
+    traits::{Along, FloatUnit, NumericUnit, Unit},
 };
 
 /// A 2D vector representing direction and magnitude.

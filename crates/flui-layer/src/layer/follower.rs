@@ -1,10 +1,8 @@
 //! `FollowerLayer` — content positioned relative to a
 //! [`LeaderLayer`](super::LeaderLayer) elsewhere in the tree.
 
-use flui_types::{
-    geometry::{Offset, Size},
-    painting::Alignment,
-};
+use flui_foundation::geometry::{Offset, Size};
+use flui_painting::paint::Alignment;
 
 use crate::LayerLink;
 

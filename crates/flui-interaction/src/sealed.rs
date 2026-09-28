@@ -37,7 +37,7 @@
 //! arena.add(pointer_id, Arc::new(recognizer));
 //! ```
 
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 
 use crate::ids::PointerId;
 
@@ -103,7 +103,7 @@ pub trait CustomGestureRecognizer {
 /// ```rust,ignore
 /// use flui_interaction::sealed::CustomHitTestable;
 /// use flui_interaction::hit_test::{HitTestResult, HitTestBehavior, HitTestEntry};
-/// use flui_types::geometry::Offset;
+/// use flui_foundation::geometry::Offset;
 ///
 /// struct CustomLayer {
 ///     bounds: Rect,

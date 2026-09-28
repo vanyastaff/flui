@@ -8,10 +8,7 @@
 
 use flui_foundation::Arity;
 use flui_foundation::RenderId;
-use flui_types::{
-    Size,
-    geometry::{Matrix4, Offset, Rect},
-};
+use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
@@ -1291,7 +1288,7 @@ mod tests {
 
     #[test]
     fn sliver_values_equal_across_the_sign_of_zero_hash_equal() {
-        use flui_types::layout::AxisDirection;
+        use crate::constraints::AxisDirection;
 
         use crate::{constraints::GrowthDirection, view::ScrollDirection};
 
@@ -1325,7 +1322,7 @@ mod tests {
 
     #[test]
     fn sliver_constraints_cache_key_includes_all_direction_fields() {
-        use flui_types::layout::AxisDirection;
+        use crate::constraints::AxisDirection;
 
         use crate::{constraints::GrowthDirection, view::ScrollDirection};
 

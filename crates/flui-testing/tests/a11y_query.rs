@@ -7,6 +7,7 @@
 //! reaching the pipeline owner, if the semantics phase stops assembling, or if
 //! the translation stops being invoked.
 
+use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::prelude::*;
@@ -14,7 +15,6 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_semantics::{SemanticsConfiguration, SemanticsRole};
 use flui_testing::HeadlessBinding;
 use flui_testing::a11y::Role;
-use flui_types::Size;
 use flui_view::{BuildOwner, tree::ElementTree};
 
 /// A leaf carrying whatever semantics the test wants to see come out the other
@@ -104,7 +104,7 @@ impl RenderBox for SemanticContainer {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             let size = ctx.layout_child(0, constraints);
-            ctx.position_child(0, flui_types::Offset::ZERO);
+            ctx.position_child(0, flui_foundation::geometry::Offset::ZERO);
             size
         } else {
             constraints.smallest()

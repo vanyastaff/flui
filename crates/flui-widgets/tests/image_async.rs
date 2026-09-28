@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 
 use common::{lay_out, loose, size};
 use flui_assets::AssetRegistry;
-use flui_types::Size;
-use flui_types::painting::Image as PixelImage;
+use flui_foundation::geometry::Size;
+use flui_painting::paint::Image as PixelImage;
 use flui_widgets::{AssetImage, Image, ImageProvider, ImageProviderError};
 use flui_widgets::{Padding, SizedBox};
 

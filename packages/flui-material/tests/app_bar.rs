@@ -11,7 +11,7 @@ use crate::common;
 
 use common::{lay_out, loose, tight};
 use flui_material::{AppBar, AppBarThemeData, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::types::{EdgeInsets, Size};
+use flui_sdk::geometry::{EdgeInsets, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     MediaQuery, MediaQueryData, Navigator, NavigatorHandle, PreferredSize, SimpleRoute, SizedBox,
@@ -22,7 +22,7 @@ use flui_sdk::widgets::{
 /// `tests/elevated_button.rs`'s `color_property`): the exact `Debug` string
 /// `RenderPhysicalShape` writes into its `"color"` diagnostics property, so a
 /// test can compare against a resolved `Color` without downcasting.
-fn color_property(color: flui_sdk::types::Color) -> String {
+fn color_property(color: flui_sdk::painting::Color) -> String {
     format!("{color:?}")
 }
 
@@ -109,7 +109,7 @@ fn theme_defaults_apply_surface_background_and_zero_elevation() {
 
 #[test]
 fn background_color_override_replaces_the_theme_default() {
-    let overridden = flui_sdk::types::Color::rgb(10, 20, 30);
+    let overridden = flui_sdk::painting::Color::rgb(10, 20, 30);
     let laid = lay_out(
         Theme::new(
             ThemeData::light(),
@@ -138,7 +138,7 @@ fn background_color_override_replaces_the_theme_default() {
 /// widget-level `background_color` in the way.
 #[test]
 fn app_bar_theme_slot_reaches_the_mounted_materials_background_color() {
-    let themed_background = flui_sdk::types::Color::rgb(44, 55, 66);
+    let themed_background = flui_sdk::painting::Color::rgb(44, 55, 66);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         app_bar_theme: Some(AppBarThemeData {
             background_color: Some(themed_background),
@@ -183,7 +183,7 @@ fn app_bar_theme_slot_reaches_the_mounted_materials_background_color() {
 /// `a_larger_font_size_measures_to_a_taller_box` technique).
 #[test]
 fn themed_title_text_style_does_not_leak_into_toolbar_actions() {
-    use flui_sdk::types::typography::TextStyle;
+    use flui_sdk::painting::TextStyle;
     use flui_sdk::widgets::DefaultTextStyle;
 
     let themed_font_size = 40.0;

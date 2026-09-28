@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use crate::common::{lay_out, tight};
 use flui_foundation::geometry::Matrix4;
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, Opacity, SizedBox, Transform};
 
 /// The baseline: a pumped frame reports the layers it composited.
@@ -165,7 +165,7 @@ fn idle_frame_retains_committed_output_without_reporting_paint() {
 #[test]
 fn identical_none_update_retains_committed_pixels_without_repainting() {
     let mut laid = lay_out(
-        flui_widgets::ColoredBox::new(flui_types::Color::rgb(12, 34, 56)),
+        flui_widgets::ColoredBox::new(flui_painting::styling::Color::rgb(12, 34, 56)),
         tight(800.0, 600.0),
     );
     let committed_layers = laid.layer_kinds();

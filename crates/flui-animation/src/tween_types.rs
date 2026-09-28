@@ -27,9 +27,9 @@
 //! ```
 
 use crate::curve::Curve;
-use flui_types::geometry::{Edges, Lerp, Matrix4, Offset, Rect, Size};
-use flui_types::layout::Alignment;
-use flui_types::styling::{BorderRadius, Color};
+use flui_foundation::geometry::{Edges, Lerp, Matrix4, Offset, Rect, Size};
+use flui_painting::Alignment;
+use flui_painting::styling::{BorderRadius, Color};
 
 /// A value that can be animated.
 ///
@@ -234,7 +234,7 @@ pub type ColorTween = Tween<Color>;
 ///
 /// ```
 /// use flui_animation::{Animatable, OklabColorTween};
-/// use flui_types::Color;
+/// use flui_painting::styling::Color;
 ///
 /// let tween = OklabColorTween::new(Color::rgb(0, 0, 255), Color::rgb(255, 255, 0));
 /// let perceptual_mid = tween.transform(0.5);
@@ -302,7 +302,7 @@ pub type AlignmentTween = Tween<Alignment>;
 pub type EdgeInsetsTween = Tween<Edges<f64>>;
 
 /// Tween between two border radii. Alias for `Tween<BorderRadius>` (now that
-/// `Lerp for Corners<T>` lives in flui-geometry).
+/// `Lerp for Corners<T>` lives in `flui_foundation::geometry`).
 pub type BorderRadiusTween = Tween<BorderRadius>;
 
 /// Tween between two affine transforms. Alias for `Tween<Matrix4>`; interpolates
@@ -343,7 +343,7 @@ pub type Matrix4Tween = Tween<Matrix4>;
 ///
 /// ```
 /// use flui_animation::{TweenSequence, TweenSequenceItem, Animatable, ColorTween};
-/// use flui_types::styling::Color;
+/// use flui_painting::styling::Color;
 ///
 /// let items = vec![
 ///     TweenSequenceItem::new(ColorTween::new(Color::RED, Color::GREEN), 1.0),
@@ -633,7 +633,7 @@ mod tests {
     // no longer needs the trait (Lerp handles interpolation), only the tests do.
     use crate::curve::Curves;
     use crate::ext::AnimatableExt;
-    use flui_types::styling::BorderRadiusExt;
+    use flui_painting::styling::BorderRadiusExt;
 
     #[test]
     fn test_float_tween() {
@@ -872,7 +872,7 @@ mod tests {
 
     #[test]
     fn test_tween_sequence_generic_with_color() {
-        use flui_types::styling::Color;
+        use flui_painting::styling::Color;
 
         let items = vec![
             TweenSequenceItem::new(ColorTween::new(Color::RED, Color::GREEN), 1.0),

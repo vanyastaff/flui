@@ -1674,9 +1674,9 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use flui_foundation::geometry::Rect;
     use flui_foundation::{FrameStamp, PresentationId, RealmId};
     use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene};
-    use flui_types::geometry::Rect;
 
     use super::*;
 

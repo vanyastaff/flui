@@ -211,7 +211,7 @@ fn selected_index_change_moves_the_indicator_fill() {
         laid.render_property(id, "color")
             .expect("RenderPhysicalShape reports a \"color\" diagnostics property")
     };
-    let transparent = format!("{:?}", flui_sdk::types::styling::Color::TRANSPARENT);
+    let transparent = format!("{:?}", flui_sdk::painting::Color::TRANSPARENT);
     let filled = format!("{:?}", colors.secondary_container);
 
     let mut laid = lay_out(
@@ -268,7 +268,7 @@ fn selected_index_change_moves_the_indicator_fill() {
 
 #[test]
 fn theme_indicator_color_beats_the_m3_default() {
-    let overridden = flui_sdk::types::styling::Color::rgb(9, 9, 9);
+    let overridden = flui_sdk::painting::Color::rgb(9, 9, 9);
     let laid = lay_out(
         themed(
             NavigationBar::new(three_destinations())
@@ -370,7 +370,7 @@ fn a_callback_less_but_enabled_destination_still_paints_the_hover_overlay() {
     // `:606`). A destination-level `InkWell` that only wires `on_tap` when a
     // callback is present would read as non-interactive here and never
     // paint its overlay, even with `overlay_color` configured.
-    let hover_color = flui_sdk::types::styling::Color::rgb(9, 9, 9);
+    let hover_color = flui_sdk::painting::Color::rgb(9, 9, 9);
     let mut laid = lay_out(
         themed(NavigationBar::new(three_destinations()).overlay_color(
             WidgetStateProperty::resolve_with(move |states: &WidgetStates| {

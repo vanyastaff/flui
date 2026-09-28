@@ -53,10 +53,9 @@
 use std::{borrow::Borrow, fmt, marker::PhantomData, sync::Arc};
 
 use flui_foundation::Single;
-use flui_types::{
-    Offset, Point, Rect, Size,
-    geometry::RRect,
-    painting::{Clip, Path},
+use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
+use flui_painting::{
+    paint::{Clip, Path},
     styling::BorderRadius,
 };
 
@@ -429,7 +428,7 @@ impl ClipGeometry for Path {
     }
 
     fn contains(&self, position: Point<f64>) -> bool {
-        // Delegate to the fill-type-aware algorithm in flui_types::Path:
+        // Delegate to the fill-type-aware algorithm in flui_painting::paint::Path:
         // even-odd (ray-casting) or non-zero (winding number), selected
         // by the path's PathFillType. This matches Flutter's hit-test
         // semantics for RenderClipPath.
@@ -920,7 +919,7 @@ pub type RenderClipPath = RenderClip<Path>;
 #[cfg(test)]
 mod tests {
 
-    use flui_types::styling::BorderRadiusExt;
+    use flui_painting::styling::BorderRadiusExt;
 
     use super::*;
 
@@ -1052,7 +1051,7 @@ mod tests {
     // ---------- ClipGeometry impls (Path) --------------------------------
 
     // 1.4 RED test (behavior fix): Path::contains must delegate to the
-    // fill-type-aware algorithm in flui_types::Path::contains, not return
+    // fill-type-aware algorithm in flui_painting::paint::Path::contains, not return
     // a conservative true for all points.
     #[test]
     fn path_contains_delegates_to_fill_type_algorithm() {

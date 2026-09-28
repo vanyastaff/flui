@@ -9,8 +9,8 @@
 //! The capability is declared in `flui-interaction`, where realm identity and
 //! thread affinity already live, and implemented here, where the tree is.
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::{HitTestProbe, HitTestResult, InteractionDispatchError};
-use flui_types::Offset;
 
 use super::{PipelineCell, WeakPipelineCell};
 
@@ -83,8 +83,8 @@ impl HitTestProbe for PipelineHitTestProbe {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::geometry::{Offset, Size};
     use flui_interaction::{HitTestProbe, HitTestResult, InteractionDispatchError};
-    use flui_types::{Offset, Size};
 
     use super::{PipelineCell, PipelineHitTestProbe};
     use crate::{

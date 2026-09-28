@@ -8,9 +8,9 @@
 
 use flui_hot_reload::scene_plugin;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_types::geometry::Rect;
-use flui_types::painting::Paint;
-use flui_types::styling::Color;
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::Paint;
+use flui_painting::styling::Color;
 
 fn my_scene(width: f64, height: f64) -> Scene {
     let mut canvas_layer = CanvasLayer::new();

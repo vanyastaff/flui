@@ -20,10 +20,10 @@ use std::fmt::Write as _;
 use std::sync::Once;
 use std::time::Duration;
 
+use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::ScrollPosition;
 use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners, pin_font_faces};
-use flui_types::Color;
 use flui_view::RebuildReason;
 use flui_widgets::prelude::*;
 use flui_widgets::{

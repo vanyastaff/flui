@@ -1,7 +1,7 @@
 //! [`SingleChildScrollView`] — makes a single child scrollable along one axis.
 
+use flui_foundation::geometry::Axis;
 use flui_rendering::view::ScrollPosition;
-use flui_types::layout::Axis;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, Child, IntoView};
 

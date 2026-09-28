@@ -19,9 +19,10 @@ use std::sync::Arc;
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::styling::Color;
+use flui_painting::typography::{TextDirection, TextStyle};
 use flui_painting::{Paint, TextLayout};
-use flui_types::typography::{TextDirection, TextStyle};
-use flui_types::{Color, Offset, Point, Rect, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,

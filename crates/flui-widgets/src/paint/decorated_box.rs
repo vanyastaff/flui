@@ -1,8 +1,8 @@
 //! [`DecoratedBox`] — paints a [`BoxDecoration`] around its child.
 
 use flui_objects::{DecorationPosition, RenderDecoratedBox};
+use flui_painting::styling::BoxDecoration;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::styling::BoxDecoration;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Paints a [`BoxDecoration`] (color, border, gradient, shadow, …) before or

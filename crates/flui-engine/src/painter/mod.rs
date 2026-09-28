@@ -19,7 +19,7 @@ use crate::{
     resources::GpuResources,
     state_stack::GpuStateStack,
 };
-use flui_types::Rect;
+use flui_foundation::geometry::Rect;
 
 /// GPU painter for wgpu-based rendering.
 ///
@@ -324,7 +324,10 @@ impl WgpuPainter {
     /// to schedule a full repaint on the next frame (self-healing).  Not test-gated
     /// because it is a production helper; it is also covered by the dedicated
     /// detector tests in `shape_blend_tests.rs`.
-    pub(crate) fn has_advanced_shape_straddling(&self, damage: flui_types::Rect<f64>) -> bool {
+    pub(crate) fn has_advanced_shape_straddling(
+        &self,
+        damage: flui_foundation::geometry::Rect<f64>,
+    ) -> bool {
         use crate::command_ir::DrawItem;
         self.draw_order.iter().any(|item| match item {
             DrawItem::AdvancedShape(op) => {
@@ -510,7 +513,7 @@ impl WgpuPainter {
         &mut self,
         texture: crate::texture_pool::PooledTexture,
         bounds: Rect<f64>,
-        blend: flui_types::painting::BlendMode,
+        blend: flui_painting::paint::BlendMode,
     ) {
         // Finalize the current segment and start a new one
         self.finish_current_segment();
@@ -680,7 +683,7 @@ impl WgpuPainter {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use flui_types::painting::TextureId;
+    /// use flui_painting::paint::TextureId;
     ///
     /// # fn wire(painter: &mut flui_engine::WgpuPainter, gpu_texture: wgpu::Texture) {
     /// let texture_id = TextureId::new(42);
@@ -728,7 +731,7 @@ impl WgpuPainter {
         self.state.max_scale()
     }
 
-    /// The accumulated current transform (CTM) as a [`flui_types::Matrix4`].
+    /// The accumulated current transform (CTM) as a [`flui_foundation::geometry::Matrix4`].
     ///
     /// The painter stores its CTM as a `glam::Mat4`; both `glam::Mat4` and
     /// `Matrix4` are column-major `[f32; 16]`, so this is a direct reinterpret
@@ -741,7 +744,7 @@ impl WgpuPainter {
     /// `push_transform`/`push_offset`, so reading it here is the same source of
     /// truth the display-list backdrop path ("Path B") receives as its
     /// `transform` argument.
-    pub(crate) fn current_transform_matrix(&self) -> flui_types::Matrix4 {
+    pub(crate) fn current_transform_matrix(&self) -> flui_foundation::geometry::Matrix4 {
         self.state.current_transform_matrix()
     }
 

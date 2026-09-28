@@ -14,18 +14,16 @@
 //! the renderer would pull the whole GPU stack into that crate's test build.
 
 use flui_engine::HeadlessRenderer;
+use flui_foundation::geometry::{Matrix4, Size};
 use flui_objects::{
     RenderClipRRect, RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding,
     RenderRepaintBoundary, RenderTransform,
 };
+use flui_painting::styling::{BorderRadius, BorderRadiusExt};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
     testing::{box_node, tree},
-};
-use flui_types::{
-    Matrix4, Size,
-    styling::{BorderRadius, BorderRadiusExt},
 };
 
 const SURFACE: (u32, u32) = (200, 200);
@@ -523,13 +521,14 @@ impl flui_rendering::traits::RenderBox for RunLocalClipParent {
         ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
     ) -> Size {
         let _ = ctx.layout_child(0, BoxConstraints::tight(Size::new(20.0, 20.0)));
-        ctx.position_child(0, flui_types::Offset::new(40.0, 0.0));
+        ctx.position_child(0, flui_foundation::geometry::Offset::new(40.0, 0.0));
         ctx.constraints().biggest()
     }
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {
+        use flui_foundation::geometry::Rect;
         use flui_painting::Paint;
-        use flui_types::{Color, Rect};
+        use flui_painting::styling::Color;
 
         let canvas = ctx.canvas();
         assert_eq!(canvas.save_count(), 1);

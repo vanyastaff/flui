@@ -8,8 +8,8 @@
 //!
 //! Run with: cargo run --example event_handling -p flui-platform
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::Size;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> anyhow::Result<()> {

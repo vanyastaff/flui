@@ -24,10 +24,9 @@
 //! component actually needs an outlined surface (M3's `OutlinedButton`,
 //! not yet built).
 
-use flui_sdk::types::{
-    Point, Rect, Size,
-    geometry::{RRect, Radius},
-    styling::BorderRadius,
+use flui_sdk::{
+    geometry::{Point, RRect, Radius, Rect, Size},
+    painting::BorderRadius,
 };
 
 /// The shape a [`crate::material::Material`] surface clips and paints to.
@@ -87,12 +86,12 @@ impl MaterialShape {
         }
     }
 
-    /// [`to_rrect`](Self::to_rrect), converted to a [`flui_sdk::types::painting::Path`]
+    /// [`to_rrect`](Self::to_rrect), converted to a [`flui_sdk::painting::Path`]
     /// — what [`crate::material::Material`] registers as its owner-lane path
     /// clipper.
     #[must_use]
-    pub fn to_path(self, size: Size) -> flui_sdk::types::painting::Path {
-        flui_sdk::types::painting::Path::from_rrect(self.to_rrect(size))
+    pub fn to_path(self, size: Size) -> flui_sdk::painting::Path {
+        flui_sdk::painting::Path::from_rrect(self.to_rrect(size))
     }
 }
 
@@ -106,7 +105,7 @@ impl Default for MaterialShape {
 #[cfg(test)]
 mod tests {
 
-    use flui_sdk::types::styling::BorderRadiusExt;
+    use flui_sdk::painting::BorderRadiusExt;
 
     use super::*;
 

@@ -163,7 +163,7 @@ impl_parent_data_view!(Positioned);
 #[cfg(test)]
 mod tests {
     use flui_foundation::RenderId;
-    use flui_types::Offset;
+    use flui_foundation::geometry::Offset;
 
     use super::*;
     use crate::SizedBox;

@@ -6,12 +6,12 @@ use crate::frame_failure::{FrameFailureKind, SegmentPhase};
 use crate::held_input::HeldPointerReplay;
 use crate::presentation::PresentationState;
 use flui_foundation::PresentationId;
+use flui_foundation::geometry::Size;
 use flui_layer::Scene;
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{DemandKind, FrameSnapshot, Instant, PresentOutcome};
-use flui_types::Size;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 impl UiRealm {

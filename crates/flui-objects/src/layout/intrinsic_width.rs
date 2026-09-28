@@ -26,7 +26,7 @@
 //!   and is consumed inside `child_constraints` before any subsequent ctx call.
 
 use flui_foundation::Single;
-use flui_types::{Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,

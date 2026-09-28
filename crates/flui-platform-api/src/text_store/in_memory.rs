@@ -16,7 +16,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_types::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 
 use super::lock::{CommitGate, LockArbiter, LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::session::{

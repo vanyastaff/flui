@@ -29,7 +29,7 @@ use objc2_foundation::{NSDefaultRunLoopMode, NSObjectProtocol, NSRunLoop, NSSet}
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{UITouch, UIView, UIViewController, UIWindow, UIWindowScene};
 
-use flui_types::geometry::{EdgeInsets, Size};
+use flui_foundation::geometry::{EdgeInsets, Size};
 
 use super::events::touch_to_pointer_events;
 use super::native_owner::NativeOwner;

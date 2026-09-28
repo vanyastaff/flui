@@ -42,8 +42,8 @@
 //!   read point relative to the compositor stack.
 //! - **No new per-draw heap allocations** vs. the pre-extraction baseline.
 
+use flui_foundation::geometry::Rect;
 use flui_painting::BlendMode;
-use flui_types::Rect;
 
 use crate::{
     command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, Phase, SsaaPathOp, TessellatedBatch},
@@ -396,15 +396,15 @@ impl DrawBatcher {
     ///
     /// Called by `DrawBatcher::dispatch_shader_rect` which lives in the same module.
     pub(super) fn shader_to_gradient_stops(
-        shader: &flui_types::painting::Shader,
+        shader: &flui_painting::paint::Shader,
     ) -> Vec<crate::effects::GradientStop> {
         let (colors, stops) = match shader {
-            flui_types::painting::Shader::LinearGradient { colors, stops, .. }
-            | flui_types::painting::Shader::RadialGradient { colors, stops, .. }
-            | flui_types::painting::Shader::SweepGradient { colors, stops, .. } => {
+            flui_painting::paint::Shader::LinearGradient { colors, stops, .. }
+            | flui_painting::paint::Shader::RadialGradient { colors, stops, .. }
+            | flui_painting::paint::Shader::SweepGradient { colors, stops, .. } => {
                 (colors.as_slice(), stops.as_deref())
             }
-            flui_types::painting::Shader::Solid { color } => {
+            flui_painting::paint::Shader::Solid { color } => {
                 return vec![
                     crate::effects::GradientStop::new(*color, 0.0),
                     crate::effects::GradientStop::new(*color, 1.0),
@@ -482,8 +482,8 @@ fn vertices_aabb(vertices: &[Vertex]) -> Rect<f64> {
 
 #[cfg(test)]
 mod unit_tests {
+    use flui_foundation::geometry::Rect;
     use flui_painting::BlendMode;
-    use flui_types::Rect;
 
     use super::{DrawBatcher, PipelineKey, Vertex, vertices_aabb};
     use crate::{
@@ -1054,11 +1054,9 @@ mod unit_tests {
     /// goes into `AdvancedShapeOp::segment`, not the main segment's batch.
     #[test]
     fn linear_gradient_advanced_mode_diverts_to_advanced_shape() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::Offset,
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         for mode in ALL_ADVANCED_MODES {
             let mut segment = DrawSegment::new();
@@ -1072,8 +1070,8 @@ mod unit_tests {
                     from: Offset::new(10.0, 10.0),
                     to: Offset::new(60.0, 10.0),
                     colors: vec![
-                        flui_types::Color::rgba(255, 0, 0, 255),
-                        flui_types::Color::rgba(0, 0, 255, 255),
+                        flui_painting::styling::Color::rgba(255, 0, 0, 255),
+                        flui_painting::styling::Color::rgba(0, 0, 255, 255),
                     ],
                     stops: None,
                     tile_mode: TileMode::Clamp,
@@ -1122,11 +1120,9 @@ mod unit_tests {
     /// case for the radial path.
     #[test]
     fn radial_gradient_advanced_mode_diverts_to_advanced_shape() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::Offset,
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         for mode in ALL_ADVANCED_MODES {
             let mut segment = DrawSegment::new();
@@ -1140,8 +1136,8 @@ mod unit_tests {
                     center: Offset::new(32.0, 32.0),
                     radius: 32.0,
                     colors: vec![
-                        flui_types::Color::rgba(255, 255, 0, 255),
-                        flui_types::Color::rgba(0, 255, 0, 255),
+                        flui_painting::styling::Color::rgba(255, 255, 0, 255),
+                        flui_painting::styling::Color::rgba(0, 255, 0, 255),
                     ],
                     stops: None,
                     tile_mode: TileMode::Clamp,
@@ -1185,11 +1181,9 @@ mod unit_tests {
     /// cases for sweep.
     #[test]
     fn sweep_gradient_advanced_mode_diverts_to_advanced_shape() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::Offset,
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         for mode in ALL_ADVANCED_MODES {
             let mut segment = DrawSegment::new();
@@ -1204,8 +1198,8 @@ mod unit_tests {
                     start_angle: 0.0,
                     end_angle: f64::from(std::f32::consts::TAU),
                     colors: vec![
-                        flui_types::Color::rgba(200, 100, 50, 255),
-                        flui_types::Color::rgba(50, 100, 200, 255),
+                        flui_painting::styling::Color::rgba(200, 100, 50, 255),
+                        flui_painting::styling::Color::rgba(50, 100, 200, 255),
                     ],
                     stops: None,
                     tile_mode: TileMode::Clamp,
@@ -1250,11 +1244,9 @@ mod unit_tests {
     /// SrcOver, leaving the gradient in the main segment's gradient batch.
     #[test]
     fn srcover_gradient_stays_in_main_segment() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::Offset,
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         let mut segment = DrawSegment::new();
         let mut draw_order: Vec<DrawItem> = Vec::new();
@@ -1267,8 +1259,8 @@ mod unit_tests {
                 from: Offset::new(0.0, 0.0),
                 to: Offset::new(64.0, 0.0),
                 colors: vec![
-                    flui_types::Color::rgba(255, 0, 0, 255),
-                    flui_types::Color::rgba(0, 0, 255, 255),
+                    flui_painting::styling::Color::rgba(255, 0, 0, 255),
+                    flui_painting::styling::Color::rgba(0, 0, 255, 255),
                 ],
                 stops: None,
                 tile_mode: TileMode::Clamp,
@@ -1313,11 +1305,9 @@ mod unit_tests {
     /// out-of-range stops in the isolated buffer and produce corrupt GPU output.
     #[test]
     fn advanced_gradient_isolated_segment_stop_offset_is_zero() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::Offset,
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         let mut segment = DrawSegment::new();
         let mut draw_order: Vec<DrawItem> = Vec::new();
@@ -1325,8 +1315,10 @@ mod unit_tests {
 
         // Pre-populate the main segment with stops so that a bug using the main
         // segment's stop count would produce stop_offset = 2 (wrong).
-        let placeholder_stop =
-            crate::effects::GradientStop::new(flui_types::Color::rgba(128, 128, 128, 255), 0.5);
+        let placeholder_stop = crate::effects::GradientStop::new(
+            flui_painting::styling::Color::rgba(128, 128, 128, 255),
+            0.5,
+        );
         segment.current_gradient_stops.push(placeholder_stop);
         segment.current_gradient_stops.push(placeholder_stop);
         // main segment now has 2 stops.
@@ -1338,8 +1330,8 @@ mod unit_tests {
                 from: Offset::new(0.0, 0.0),
                 to: Offset::new(64.0, 0.0),
                 colors: vec![
-                    flui_types::Color::rgba(255, 0, 0, 255),
-                    flui_types::Color::rgba(0, 0, 255, 255),
+                    flui_painting::styling::Color::rgba(255, 0, 0, 255),
+                    flui_painting::styling::Color::rgba(0, 0, 255, 255),
                 ],
                 stops: None,
                 tile_mode: TileMode::Clamp,
@@ -1388,11 +1380,9 @@ mod unit_tests {
     /// fires at the top of the advanced branch in `dispatch_shader_rect`.
     #[test]
     fn prior_content_sealed_before_gradient_advanced_shape() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::Offset,
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         let mut segment = DrawSegment::new();
         let mut draw_order: Vec<DrawItem> = Vec::new();
@@ -1421,8 +1411,8 @@ mod unit_tests {
                 from: Offset::new(0.0, 0.0),
                 to: Offset::new(64.0, 0.0),
                 colors: vec![
-                    flui_types::Color::rgba(200, 100, 50, 255),
-                    flui_types::Color::rgba(50, 100, 200, 255),
+                    flui_painting::styling::Color::rgba(200, 100, 50, 255),
+                    flui_painting::styling::Color::rgba(50, 100, 200, 255),
                 ],
                 stops: None,
                 tile_mode: TileMode::Clamp,

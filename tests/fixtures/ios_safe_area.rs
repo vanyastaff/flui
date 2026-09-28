@@ -1,10 +1,10 @@
 //! Native same-UIView safe-area and committed render-geometry oracle.
 use flui::prelude::*;
-use flui::types::Size;
+use flui::geometry::Size;
 use flui::rendering::{BoxConstraints, BoxDryLayoutCtx, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintCx, RenderBox, RenderUpdateImpact};
 use flui::view::{RenderObjectContext, RenderView};
 use flui::widgets::{MediaQuery, SafeArea, Stack};
-use flui::types::layout::StackFit;
+use flui::widgets::StackFit;
 use objc2::MainThreadMarker;
 use objc2_ui_kit::{UIApplication, UIWindowScene};
 use std::{cell::RefCell, sync::{Mutex, atomic::{AtomicUsize, Ordering}}, time::Duration};
@@ -22,7 +22,7 @@ impl RenderBox for ProbeLeaf {
     fn paint(&self, ctx: &mut PaintCx<'_,Leaf>) {
         let size = ctx.size();
         let color = if self.protected { Color::rgb(60,100,180) } else { Color::rgb(180,40,40) };
-        ctx.canvas().draw_rect(flui::types::Rect::from_origin_size(flui::types::Point::ZERO,size), &flui::painting::Paint::fill(color));
+        ctx.canvas().draw_rect(flui::geometry::Rect::from_origin_size(flui::geometry::Point::ZERO,size), &flui::painting::Paint::fill(color));
         PAINTS.fetch_add(1, Ordering::SeqCst);
     }
 }

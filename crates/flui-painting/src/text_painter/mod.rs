@@ -7,10 +7,8 @@
 
 use std::sync::Arc;
 
-use flui_types::{
-    geometry::{Offset, Size},
-    typography::{InlineSpan, TextAlign, TextDirection},
-};
+use crate::typography::{InlineSpan, TextAlign, TextDirection};
+use flui_foundation::geometry::{Offset, Size};
 
 use crate::text_layout::TextLayout;
 

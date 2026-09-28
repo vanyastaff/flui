@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
 use flui_material::{Material, MaterialShape};
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::EventCx;
 use flui_sdk::widgets::{ColoredBox, GestureDetector};
 

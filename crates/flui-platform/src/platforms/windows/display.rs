@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use flui_types::geometry::{Bounds, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use windows::Win32::{
     Foundation::{LPARAM, RECT, TRUE},
     Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW},

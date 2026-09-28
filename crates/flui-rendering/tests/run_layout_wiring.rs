@@ -12,9 +12,9 @@
 //!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md
 //!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 
+use flui_foundation::geometry::Size;
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, traits::RenderObject};
-use flui_types::Size;
 
 // ============================================================================
 // run_layout actually lays out via layout_dirty_root + root_constraints

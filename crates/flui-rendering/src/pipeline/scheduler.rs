@@ -1038,14 +1038,14 @@ mod tests {
         ) -> crate::error::RenderResult<
             crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
         > {
-            Ok(flui_types::Size::ZERO)
+            Ok(flui_foundation::geometry::Size::ZERO)
         }
 
         fn paint_raw(
             &self,
             _recorder: &mut crate::context::FragmentRecorder,
             _child_count: usize,
-            _size: flui_types::Size,
+            _size: flui_foundation::geometry::Size,
         ) {
         }
 
@@ -1053,11 +1053,11 @@ mod tests {
             &self,
             _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
             _child_count: usize,
-            _size: flui_types::Size,
+            _size: flui_foundation::geometry::Size,
             _hit_child: &mut dyn FnMut(
                 usize,
                 Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
-                Option<flui_types::Matrix4>,
+                Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> crate::traits::HitTestOutcome {
             crate::traits::HitTestOutcome::miss()

@@ -34,7 +34,7 @@
 //! use web_time::{Duration, Instant};
 //!
 //! use flui_interaction::processing::VelocityTracker;
-//! use flui_types::geometry::Offset;
+//! use flui_foundation::geometry::Offset;
 //! use flui_interaction::PointerDeviceKind;
 //!
 //! let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
@@ -58,7 +58,7 @@ use web_time::{Duration, Instant};
 
 pub use crate::device_kind::PointerDeviceKind;
 pub use crate::velocity::{Velocity, VelocityEstimate};
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 
 use super::lsq_solver::{MAX_SAMPLES, solve_two};
 

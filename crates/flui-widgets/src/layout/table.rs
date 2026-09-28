@@ -6,11 +6,12 @@ use flui_foundation::ViewKey;
 use flui_objects::RenderTable;
 
 use crate::SizedBox;
+use flui_objects::TableColumnWidth;
+use flui_painting::styling::{BoxDecoration, TableBorder};
+use flui_painting::typography::TextBaseline;
 use flui_rendering::parent_data::TableCellParentData;
+use flui_rendering::parent_data::TableCellVerticalAlignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
-use flui_types::styling::{BoxDecoration, TableBorder};
-use flui_types::typography::TextBaseline;
 use flui_view::{
     BoxedView, BuildContext, IntoView, ParentDataView, RenderView, StatelessView, View, ViewExt,
     impl_parent_data_view, impl_render_view,
@@ -503,8 +504,8 @@ impl_parent_data_view!(TableCell);
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Color;
-    use flui_types::typography::TextBaseline;
+    use flui_painting::styling::Color;
+    use flui_painting::typography::TextBaseline;
     use flui_view::RenderView;
 
     use super::*;
@@ -517,7 +518,7 @@ mod tests {
     #[test]
     fn table_cell_parent_data_reports_exact_impact_and_preserves_layout_fields() {
         let mut data = TableCellParentData::new(4, 6, TableCellVerticalAlignment::Top);
-        data.offset = flui_types::Offset::new(8.0, 13.0);
+        data.offset = flui_foundation::geometry::Offset::new(8.0, 13.0);
         let unchanged = TableCell::new(TableCellVerticalAlignment::Top, SizedBox::shrink());
         assert_eq!(
             unchanged.apply_parent_data(&mut data),
@@ -530,7 +531,10 @@ mod tests {
         );
         assert_eq!(data.x, 4);
         assert_eq!(data.y, 6);
-        assert_eq!(data.offset, flui_types::Offset::new(8.0, 13.0));
+        assert_eq!(
+            data.offset,
+            flui_foundation::geometry::Offset::new(8.0, 13.0)
+        );
     }
 
     #[test]
@@ -560,10 +564,10 @@ mod tests {
 
     #[test]
     fn create_render_object_installs_the_configured_border() {
-        let border = TableBorder::all(flui_types::styling::BorderSide::new(
+        let border = TableBorder::all(flui_painting::styling::BorderSide::new(
             Color::BLACK,
             1.0,
-            flui_types::styling::BorderStyle::Solid,
+            flui_painting::styling::BorderStyle::Solid,
         ));
         let render_object = Table::new(vec![row(1)])
             .border(border)
@@ -577,10 +581,10 @@ mod tests {
             .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.border(), None);
 
-        let border = TableBorder::all(flui_types::styling::BorderSide::new(
+        let border = TableBorder::all(flui_painting::styling::BorderSide::new(
             Color::BLACK,
             2.0,
-            flui_types::styling::BorderStyle::Solid,
+            flui_painting::styling::BorderStyle::Solid,
         ));
         let impact = Table::new(vec![row(1)])
             .border(border)

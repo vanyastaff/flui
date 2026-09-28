@@ -146,17 +146,20 @@
 //!   a dialog pushed onto an unrelated navigator subtree would not see that
 //!   `Theme`, which the oracle's capture step exists specifically to fix.
 
+use flui_sdk::geometry::Radius;
+use flui_sdk::painting::BorderRadius;
+use flui_sdk::painting::Clip;
+use flui_sdk::painting::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::geometry::Radius;
-use flui_sdk::types::painting::Clip;
-use flui_sdk::types::styling::BorderRadius;
-use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Alignment, Color, EdgeInsets};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Flexible, IntrinsicWidth,
     MainAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PopupRoute, RouteResult, Row,
     SizedBox,
+};
+use flui_sdk::{
+    geometry::EdgeInsets,
+    painting::{Alignment, Color},
 };
 
 use crate::material::Material;

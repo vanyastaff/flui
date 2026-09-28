@@ -5,8 +5,8 @@
 
 use std::fmt;
 
-use flui_types::Color;
-use flui_types::typography::TextShadow;
+use flui_painting::styling::Color;
+use flui_painting::typography::TextShadow;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 

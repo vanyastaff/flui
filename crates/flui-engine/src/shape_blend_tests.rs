@@ -28,8 +28,9 @@
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::{RRect, Rect};
+    use flui_painting::styling::Color;
     use flui_painting::{BlendMode, Paint, PaintStyle};
-    use flui_types::{Color, Rect, geometry::RRect};
 
     use crate::{painter::WgpuPainter, render_target::RenderTarget};
 
@@ -448,7 +449,7 @@ mod gpu_tests {
 
         // 1. A red circle covering the middle of the surface.
         painter.draw_circle(
-            flui_types::Point::new(
+            flui_foundation::geometry::Point::new(
                 f64::from(SURFACE_WIDTH as f32 / 2.0),
                 f64::from(SURFACE_HEIGHT as f32 / 2.0),
             ),
@@ -551,7 +552,7 @@ mod gpu_tests {
         //    of this test with just a rect between the gradients never reaches
         //    a backward transition and passes either way.
         painter.draw_circle(
-            flui_types::Point::new(6.0, 52.0),
+            flui_foundation::geometry::Point::new(6.0, 52.0),
             4.0,
             &Paint::fill(Color::rgba(0, 0, 0, 255)),
         );
@@ -631,7 +632,7 @@ mod gpu_tests {
             &Paint::fill(Color::rgba(0, 0, 255, 255)),
         );
         painter.draw_circle(
-            flui_types::Point::new(
+            flui_foundation::geometry::Point::new(
                 f64::from(SURFACE_WIDTH as f32 / 2.0),
                 f64::from(SURFACE_HEIGHT as f32 / 2.0),
             ),
@@ -722,7 +723,7 @@ mod gpu_tests {
         // Apply scissor; the tessellation will only emit foreground geometry for
         // the left half.  The advanced-blend pass reads the backdrop and composites
         // the trimmed foreground.
-        painter.clip_rect(clip, flui_types::painting::Clip::HardEdge);
+        painter.clip_rect(clip, flui_painting::paint::Clip::HardEdge);
         painter.draw_rect(
             full_bounds,
             &Paint {

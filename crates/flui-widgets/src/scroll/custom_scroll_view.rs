@@ -3,9 +3,9 @@
 
 use std::fmt;
 
+use flui_foundation::geometry::Axis;
+use flui_painting::paint::Clip;
 use flui_rendering::view::SliverPaintOrder;
-use flui_types::layout::Axis;
-use flui_types::painting::Clip;
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};

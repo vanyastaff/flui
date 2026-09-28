@@ -28,8 +28,9 @@ use flui_animation::{
 };
 use flui_foundation::ListenerId;
 use flui_objects::RenderAnimatedSize;
+use flui_painting::Alignment;
+use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::{Alignment, painting::Clip};
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{
     BuildContextExt, Child, EventCx, EventOutcome, IntoView, LocalPostFrameHandle, RenderView,

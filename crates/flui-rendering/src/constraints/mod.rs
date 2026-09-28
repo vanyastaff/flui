@@ -76,6 +76,7 @@
 //! - `SliverGeometry` ↔ Flutter `SliverGeometry`
 //! - `GrowthDirection` ↔ Flutter `GrowthDirection`
 
+mod axis_direction;
 mod box_constraints;
 mod direction;
 mod sliver_constraints;
@@ -84,6 +85,7 @@ mod sliver_layout;
 
 use std::fmt;
 
+pub use axis_direction::AxisDirection;
 pub use box_constraints::BoxConstraints;
 pub use direction::{GrowthDirection, apply_growth_direction_to_scroll_direction, right_way_up};
 pub use sliver_constraints::SliverConstraints;

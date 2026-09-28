@@ -8,7 +8,7 @@
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, Size};
+use flui_foundation::geometry::{Bounds, Size};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
 

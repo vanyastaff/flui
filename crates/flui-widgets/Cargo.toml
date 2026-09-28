@@ -57,7 +57,7 @@ flui-macros = { workspace = true }
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 # Styling + typography + layout value types (Alignment, Color, BoxDecoration,
 # TextStyle, …).
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
 # `Overlay`'s entry list and its published `RebuildHandle` live behind private
 # `Mutex`es: the list is mutated from outside the tree, and
@@ -112,7 +112,6 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features 
 # drive the deferral path with ordinary content.
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev", features = ["testing"] }
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # A paint oracle: a widget test walks the composited layer tree's display
 # lists to assert what a frame did and did not draw.
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
@@ -194,7 +193,7 @@ asset-images = ["dep:flui-assets", "flui-assets/images", "images", "dep:futures-
 # `flui-assets`' `NetworkLoader` (reqwest). Implies `asset-images` — both
 # share the same decode cache, coalescing engine, and background runtime.
 network-images = ["asset-images", "flui-assets/network"]
-serde = ["flui-types/serde"]
+serde = ["flui-painting/serde"]
 # The canonical headless test harness (`flui_widgets::testing`): mounts a
 # widget tree through the real pipeline inside a `HeadlessBinding` and exposes
 # geometry probes + synthetic pointer dispatch. Downstream test suites

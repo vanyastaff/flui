@@ -2,7 +2,7 @@
 //!
 //! Provides information about physical displays (monitors, screens).
 
-use flui_types::geometry::{Bounds, Size};
+use flui_foundation::geometry::{Bounds, Size};
 
 /// Display identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -14,11 +14,11 @@
 //! radius on the non-uniform (four-edge) path — matching the oracle, which
 //! only rounds a uniform outer edge (`table_border.dart:143-156`).
 
-use flui_types::{
-    Point, RRect, Rect,
-    painting::{Paint, Path},
+use crate::{
+    paint::{Paint, Path},
     styling::{BorderStyle, TableBorder},
 };
+use flui_foundation::geometry::{Point, RRect, Rect};
 
 use crate::canvas::Canvas;
 use crate::decoration::paint_border;
@@ -77,7 +77,11 @@ pub fn paint_table_border(
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{Color, Point as GeomPoint, painting::PathCommand, styling::BorderSide};
+    use crate::{
+        paint::PathCommand,
+        styling::{BorderSide, Color},
+    };
+    use flui_foundation::geometry::Point as GeomPoint;
 
     use super::*;
     use crate::DrawOp;
@@ -147,8 +151,8 @@ mod tests {
 
     #[test]
     fn uniform_outer_border_rounds_to_the_border_radius() {
-        use flui_types::geometry::Radius;
-        use flui_types::styling::{BorderRadius, BorderRadiusExt};
+        use crate::styling::{BorderRadius, BorderRadiusExt};
+        use flui_foundation::geometry::Radius;
 
         let mut canvas = Canvas::new();
         let border = TableBorder::all(solid(2.0, Color::BLACK))
@@ -169,7 +173,7 @@ mod tests {
 
     #[test]
     fn zero_border_radius_leaves_the_outer_corners_square() {
-        use flui_types::geometry::Radius;
+        use flui_foundation::geometry::Radius;
 
         let mut canvas = Canvas::new();
         // No `with_border_radius` -> default `BorderRadius::ZERO`.

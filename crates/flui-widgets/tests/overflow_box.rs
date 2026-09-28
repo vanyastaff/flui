@@ -8,7 +8,7 @@
 //! a NEW `alignment` value silently kept its FIRST alignment forever.
 
 use crate::common::{lay_out, loose, offset, size};
-use flui_types::Alignment;
+use flui_painting::Alignment;
 use flui_widgets::{OverflowBox, SizedBox, SizedOverflowBox};
 
 #[test]

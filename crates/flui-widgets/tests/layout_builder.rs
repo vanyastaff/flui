@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{lay_out, loose};
+use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::constraints::BoxConstraints;
-use flui_types::{Offset, Size};
 use parking_lot::Mutex;
 
 // Exercise the public prelude import path: if `LayoutBuilder` were not exported

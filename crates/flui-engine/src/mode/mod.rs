@@ -10,11 +10,11 @@
 //!
 //! - The source texture is premultiplied RGBA (DST).
 //! - `filter_color` is the SRC in straight sRGB `[f32; 4]` (pre-converted by
-//!   the caller via [`flui_types::Color::to_f32_array`]).
+//!   the caller via [`flui_painting::styling::Color::to_f32_array`]).
 //! - The GPU shader unpremultiplies the DST pixel, computes
 //!   `blend(src=filter_color, dst=straight_pixel, mode)` in straight sRGB space,
 //!   and emits a premultiplied result via `BlendState::REPLACE`.
-//! - The CPU oracle is [`flui_types::Color::blend`] with `self = filter_color`
+//! - The CPU oracle is [`flui_painting::styling::Color::blend`] with `self = filter_color`
 //!   (SRC) and `dst = pixel_color` — the same function used in the GPU readback
 //!   tests.
 //!
@@ -27,7 +27,7 @@
 use std::sync::Arc;
 
 use bytemuck::cast_slice;
-use flui_types::painting::BlendMode;
+use flui_painting::paint::BlendMode;
 
 pub(crate) use pipeline::ModePipeline;
 use pipeline::blend_mode_to_u32;

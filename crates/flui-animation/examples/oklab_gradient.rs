@@ -8,7 +8,7 @@
 //! Run with: `cargo run -p flui-animation --example oklab_gradient`
 
 use flui_animation::{Animatable, ColorTween, OklabColorTween};
-use flui_types::Color;
+use flui_painting::styling::Color;
 
 fn brightness(c: Color) -> u16 {
     u16::from(c.r) + u16::from(c.g) + u16::from(c.b)

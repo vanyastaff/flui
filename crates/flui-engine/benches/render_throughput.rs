@@ -32,9 +32,10 @@ use std::sync::Arc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_engine::PathCache;
 use flui_engine::WgpuPainter;
+use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::Rect;
 use flui_painting::Paint;
-use flui_types::Rect;
-use flui_types::{Offset, painting::Shader, styling::Color};
+use flui_painting::{paint::Shader, styling::Color};
 
 // ---------------------------------------------------------------------------
 // Platform backend selection (mirrors Renderer::select_backend)
@@ -121,7 +122,7 @@ fn build_frame(painter: &mut WgpuPainter) {
         let row = (i / 10) as f32;
         let x = col * 80.0;
         let y = row * 100.0;
-        let rect = flui_types::Rect::from_ltrb(
+        let rect = flui_foundation::geometry::Rect::from_ltrb(
             f64::from(x),
             f64::from(y),
             f64::from(x + 70.0),
@@ -134,7 +135,7 @@ fn build_frame(painter: &mut WgpuPainter) {
     }
 
     // 1 linear gradient (4 colour stops — exercises SmallVec<GradientStop>)
-    let gradient_rect = flui_types::Rect::from_ltrb(0.0, 500.0, 800.0, 600.0);
+    let gradient_rect = flui_foundation::geometry::Rect::from_ltrb(0.0, 500.0, 800.0, 600.0);
     let gradient_paint = Paint::fill(Color::WHITE).with_shader(Shader::simple_linear(
         Offset::new(0.0, 500.0),
         Offset::new(800.0, 600.0),
@@ -146,7 +147,7 @@ fn build_frame(painter: &mut WgpuPainter) {
     let text_paint = Paint::fill(Color::WHITE);
     painter.draw_text(
         black_box("Hello, flui bench!"),
-        flui_types::Point::new(10.0, 480.0),
+        flui_foundation::geometry::Point::new(10.0, 480.0),
         24.0,
         &text_paint,
     );
@@ -323,7 +324,7 @@ fn damage_scissor(c: &mut Criterion) {
         if let Some(side) = damage {
             painter.clip_rect(
                 Rect::from_xywh(0.0, 0.0, f64::from(side), f64::from(side)),
-                flui_types::painting::Clip::HardEdge,
+                flui_painting::paint::Clip::HardEdge,
             );
         }
         for i in 0..layers {

@@ -2,7 +2,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use flui_types::geometry::canonical_bits_f64;
+use flui_foundation::geometry::canonical_bits_f64;
 
 use super::base::ParentData;
 

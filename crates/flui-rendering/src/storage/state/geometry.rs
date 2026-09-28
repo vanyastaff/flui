@@ -203,8 +203,9 @@ impl RenderState<BoxProtocol> {
     /// let size = state.size(); // Never panics, returns ZERO if not laid out
     /// ```
     #[inline]
-    pub fn size(&self) -> flui_types::Size {
-        self.geometry().unwrap_or(flui_types::Size::ZERO)
+    pub fn size(&self) -> flui_foundation::geometry::Size {
+        self.geometry()
+            .unwrap_or(flui_foundation::geometry::Size::ZERO)
     }
 
     /// Convenience method for setting size (box protocol).
@@ -218,7 +219,7 @@ impl RenderState<BoxProtocol> {
     /// state.set_size(Size::new(100.0, 50.0));
     /// ```
     #[inline]
-    pub fn set_size(&mut self, size: flui_types::Size) {
+    pub fn set_size(&mut self, size: flui_foundation::geometry::Size) {
         self.set_geometry(size);
     }
 
@@ -235,7 +236,7 @@ impl RenderState<BoxProtocol> {
     /// }
     /// ```
     #[inline]
-    pub fn has_size(&self, size: flui_types::Size) -> bool {
+    pub fn has_size(&self, size: flui_foundation::geometry::Size) -> bool {
         self.geometry().is_some_and(|s| s == size)
     }
 }
@@ -316,20 +317,20 @@ impl RenderState<SliverProtocol> {
     /// a sliver reads `ctx.size()` instead of caching its own geometry
     /// (2B field dedup — `RenderState` is geometry's sole owner). O(1).
     #[inline]
-    pub fn absolute_paint_size(&self) -> flui_types::Size {
-        use flui_types::prelude::AxisDirection;
+    pub fn absolute_paint_size(&self) -> flui_foundation::geometry::Size {
+        use crate::constraints::AxisDirection;
 
         let (Some(geometry), Some(constraints)) = (self.geometry(), self.constraints()) else {
-            return flui_types::Size::ZERO;
+            return flui_foundation::geometry::Size::ZERO;
         };
         let cross = constraints.cross_axis_extent;
         let main = geometry.paint_extent;
         match constraints.axis_direction {
             AxisDirection::TopToBottom | AxisDirection::BottomToTop => {
-                flui_types::Size::new(cross, main)
+                flui_foundation::geometry::Size::new(cross, main)
             }
             AxisDirection::LeftToRight | AxisDirection::RightToLeft => {
-                flui_types::Size::new(main, cross)
+                flui_foundation::geometry::Size::new(main, cross)
             }
         }
     }

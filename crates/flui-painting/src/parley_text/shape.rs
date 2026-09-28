@@ -8,8 +8,8 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use flui_types::styling::Color;
-use flui_types::typography::{FontStyle, TextDirection, TextStyle};
+use crate::styling::Color;
+use crate::typography::{FontStyle, TextDirection, TextStyle};
 use parley::style::{
     FontFamily, FontFamilyName, FontStyle as ParleyFontStyle, FontWeight, GenericFamily,
     LineHeight, StyleProperty,
@@ -203,7 +203,7 @@ fn properties(style: &TextStyle) -> Vec<StyleProperty<'static, SpanBrush>> {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::typography::{TextDirection, TextStyle};
+    use crate::typography::{TextDirection, TextStyle};
 
     use super::{ParagraphLayout, ParagraphSpec};
     use crate::text_layout::{FontCollection, TextContext};

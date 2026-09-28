@@ -40,14 +40,11 @@
 use std::sync::{Arc, Mutex};
 
 use flui_engine::Renderer;
+use flui_foundation::geometry::{Rect, Size};
 use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
+use flui_painting::{paint::Paint, styling::Color};
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::{
-    geometry::{Rect, Size},
-    painting::Paint,
-    styling::Color,
-};
 
 /// Build a scene with colored rectangles (fallback when no plugin is loaded).
 fn build_test_scene(width: f64, height: f64) -> Scene {

@@ -4,7 +4,7 @@
 //! shaped glyph run (not just the top-level span).
 
 use crate::common::{lay_out, loose, tight};
-use flui_types::typography::{FontWeight, TextSpan, TextStyle};
+use flui_painting::typography::{FontWeight, TextSpan, TextStyle};
 use flui_widgets::{Center, Padding, RichText};
 
 #[test]

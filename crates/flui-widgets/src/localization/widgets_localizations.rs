@@ -7,7 +7,7 @@
 use std::any::Any;
 use std::fmt;
 
-use flui_types::typography::TextDirection;
+use flui_painting::typography::TextDirection;
 
 /// Interface for localized resource values consumed by the lowest levels of
 /// the widget catalog (reorderable-list semantics labels, text-editing menu

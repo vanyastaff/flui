@@ -10,7 +10,7 @@
 //! # Rust-native improvements
 //!
 //! * The scaling math is delegated to the existing typed
-//!   [`BoxFit::apply`] (from `flui_types::layout`), which returns a
+//!   [`BoxFit::apply`] (from `flui_painting`), which returns a
 //!   structured [`FittedSizes`] with both `source` and `destination`
 //!   regions. Flutter's `RenderFittedBox` reimplements the same math
 //!   inline; the Rust port keeps the math in one place so the seven
@@ -28,7 +28,7 @@
 //!
 //! Porting Flutter's `'Child can cover'` (`fitted_box_test.dart`, 3.44.0)
 //! surfaced a real bug, but **not in this file** — it lived one layer down,
-//! in `flui_types::layout::BoxFit::apply`. Every branch there answered
+//! in `flui_painting::BoxFit::apply`. Every branch there answered
 //! `source: input_size` unconditionally, so `BoxFit::Cover`/`FitWidth`/
 //! `FitHeight` never actually cropped the source the way Flutter's
 //! `applyBoxFit` does (`box_fit.dart`, 3.44.0) — instead of a cropped
@@ -38,14 +38,14 @@
 //! the problem; it just had nothing to compute an offset from.
 //!
 //! Two things changed as a result:
-//! 1. `BoxFit::apply` (`flui-types`) now crops the source exactly as
+//! 1. `BoxFit::apply` (`flui-painting`) now crops the source exactly as
 //!    `applyBoxFit` does for `Cover`/`FitWidth`/`FitHeight`/`None`.
 //! 2. This render object gained a `source_offset` field — the cropped
 //!    source region's own top-left within the child, i.e. Flutter's
 //!    `sourceRect.left`/`top` (`RenderFittedBox._updatePaintData`,
 //!    `proxy_box.dart`) — folded into `RenderFittedBox::effective_transform` as a
 //!    third `translate(-source_offset)` term alongside the pre-existing
-//!    `translate(align_offset) * scale`. Before the `flui-types` fix, this
+//!    `translate(align_offset) * scale`. Before the `BoxFit::apply` fix, this
 //!    term would have been a permanent no-op (`source_offset` could never
 //!    be anything but zero); it is now live for any crop under a
 //!    non-degenerate alignment, including the default `CENTER`.
@@ -74,7 +74,7 @@
 //! `paint` puts them the right way round; `apply_paint_transform` then keeps
 //! coordinate mapping working without re-emitting the layer.
 //!
-//! Verified at both layers: `flui-types`' own unit tests pin every
+//! Verified at both layers: `flui-painting`'s own unit tests pin every
 //! `BoxFit::apply` variant against oracle-computed `(source, destination)`
 //! pairs; this crate's `tests/render_object_harness.rs` drives
 //! `perform_layout` through the real pipeline
@@ -83,11 +83,9 @@
 //! call path ever sets to a nonzero value.
 
 use flui_foundation::Single;
-use flui_types::{
-    Alignment, Matrix4, Offset, Point, Rect, Size,
-    layout::{BoxFit, FittedSizes},
-    painting::Clip,
-};
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
+use flui_painting::paint::Clip;
+use flui_painting::{Alignment, BoxFit, FittedSizes};
 
 use flui_rendering::{
     constraints::BoxConstraints,

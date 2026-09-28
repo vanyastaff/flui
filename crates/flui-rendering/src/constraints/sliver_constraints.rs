@@ -8,10 +8,9 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use flui_types::{
-    geometry::canonical_bits_f64,
-    layout::{Axis, AxisDirection},
-};
+use crate::constraints::AxisDirection;
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::canonical_bits_f64;
 
 use super::{BoxConstraints, Constraints, GrowthDirection};
 use crate::view::ScrollDirection;

@@ -1,9 +1,7 @@
 //! `TextureLayer` — an external GPU texture (video, camera) drawn into a rectangle.
 
-use flui_types::{
-    geometry::Rect,
-    painting::{FilterQuality, TextureId},
-};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::{FilterQuality, TextureId};
 
 /// Layer that displays an external GPU texture.
 ///
@@ -31,10 +29,8 @@ use flui_types::{
 ///
 /// ```rust
 /// use flui_layer::TextureLayer;
-/// use flui_types::{
-///     geometry::Rect,
-///     painting::{FilterQuality, TextureId},
-/// };
+/// use flui_foundation::geometry::Rect;
+/// use flui_painting::paint::{FilterQuality, TextureId};
 ///
 /// // Create a texture layer for video playback
 /// let texture_id = TextureId::new(42);

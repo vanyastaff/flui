@@ -7,11 +7,8 @@
 //! `pop` back out.
 
 use flui_foundation::LayerId;
-use flui_types::{
-    Matrix4,
-    geometry::{Offset, RRect, RSuperellipse, Rect},
-    painting::{Clip, ColorFilter, ImageFilter, Path},
-};
+use flui_foundation::geometry::{Matrix4, Offset, RRect, RSuperellipse, Rect};
+use flui_painting::paint::{Clip, ColorFilter, ImageFilter, Path};
 
 use crate::{
     layer::{
@@ -31,7 +28,7 @@ use crate::{
 ///
 /// ```rust
 /// use flui_layer::{PictureLayer, SceneBuilder};
-/// use flui_types::Offset;
+/// use flui_foundation::geometry::Offset;
 ///
 /// let mut builder = SceneBuilder::new();
 /// let offset = builder.push_offset(Offset::ZERO);
@@ -176,7 +173,8 @@ impl SceneBuilder {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{geometry::Size, painting::Clip};
+    use flui_foundation::geometry::Size;
+    use flui_painting::paint::Clip;
 
     use super::*;
 

@@ -1,7 +1,7 @@
 //! Primitive shape record methods: rect, rrect, circle, oval, drrect, arc.
 
+use flui_foundation::geometry::{Point, RRect, Rect};
 use flui_painting::{BlendMode, Paint, PaintStyle};
-use flui_types::{Point, Rect, geometry::RRect};
 
 use super::{
     super::{
@@ -50,7 +50,12 @@ impl DrawBatcher {
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+                flui_painting::styling::Color::rgba(
+                    paint.color.r,
+                    paint.color.g,
+                    paint.color.b,
+                    alpha,
+                )
             } else {
                 paint.color
             };
@@ -226,7 +231,12 @@ impl DrawBatcher {
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+                flui_painting::styling::Color::rgba(
+                    paint.color.r,
+                    paint.color.g,
+                    paint.color.b,
+                    alpha,
+                )
             } else {
                 paint.color
             };
@@ -407,7 +417,12 @@ impl DrawBatcher {
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+                flui_painting::styling::Color::rgba(
+                    paint.color.r,
+                    paint.color.g,
+                    paint.color.b,
+                    alpha,
+                )
             } else {
                 paint.color
             };
@@ -568,7 +583,7 @@ impl DrawBatcher {
         // has no opacity uniform), mirroring `rect`/`rrect`/`circle`.
         let color = if opacity < 1.0 {
             let alpha = (f32::from(paint.color.a) * opacity) as u8;
-            flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+            flui_painting::styling::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
         } else {
             paint.color
         };
@@ -745,7 +760,12 @@ impl DrawBatcher {
             // pipeline has no opacity uniform), mirroring `rect`/`circle`/`oval`.
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+                flui_painting::styling::Color::rgba(
+                    paint.color.r,
+                    paint.color.g,
+                    paint.color.b,
+                    alpha,
+                )
             } else {
                 paint.color
             };

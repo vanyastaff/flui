@@ -612,7 +612,7 @@ impl GpuReplay {
                     // re-multiplied by its own alpha.
                     let instance = crate::instancing::TextureInstance::new(
                         p.bounds,
-                        flui_types::styling::Color::WHITE,
+                        flui_painting::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
                     // R2: flush_texture_batch_premultiplied drains + clears
@@ -765,7 +765,7 @@ impl GpuReplay {
                     //    frac(grown_left) (the composite-grid shift).
                     let (fb_origin_x, fb_origin_y) = op.fb_origin;
                     let (fb_w, fb_h) = op.fb_dim;
-                    let dst_rect = flui_types::Rect::from_xywh(
+                    let dst_rect = flui_foundation::geometry::Rect::from_xywh(
                         f64::from(fb_origin_x as f32),
                         f64::from(fb_origin_y as f32),
                         f64::from(fb_w as f32),
@@ -774,7 +774,7 @@ impl GpuReplay {
                     let instance = crate::instancing::TextureInstance::with_uv(
                         dst_rect,
                         [0.0, 0.0, 1.0, 1.0],
-                        flui_types::styling::Color::WHITE,
+                        flui_painting::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
                     self.flush_texture_batch_premultiplied(
@@ -1205,7 +1205,7 @@ fn fold_layer_filter_chain(
 pub(crate) fn apply_image_filter_passes(
     passes: &[ImageFilterPass],
     input_tex: PooledTexture,
-    content_bounds: flui_types::Rect<f64>,
+    content_bounds: flui_foundation::geometry::Rect<f64>,
     fb_origin: (u32, u32),
     fb_dim: (u32, u32),
     surface_format: wgpu::TextureFormat,
@@ -1293,7 +1293,8 @@ mod grown_offscreen_clip_tests {
     use crate::instancing::{CircleInstance, ClippableInstance, RectInstance};
     use crate::pipeline_cache::PipelineKey;
     use crate::state_stack::ResolvedClip;
-    use flui_types::{Color, Point, Rect};
+    use flui_foundation::geometry::{Point, Rect};
+    use flui_painting::styling::Color;
 
     /// Every clip carrier is rebased into a shrunken intermediate the same way.
     ///

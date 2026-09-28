@@ -70,8 +70,8 @@ fn test_headless_platform_startup_under_10ms() {
 fn test_headless_window_creation_under_1ms() {
     // Verify headless window creation has minimal overhead
 
+    use flui_foundation::geometry::Size;
     use flui_platform::{WindowOptions, headless_platform};
-    use flui_types::geometry::Size;
 
     let platform = headless_platform();
 

@@ -21,10 +21,10 @@
 //! smoke check for the facade surface itself.
 
 use flui::prelude::*;
+use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
-use flui_types::Size;
 
 /// A trivial tree authored entirely off `flui::prelude::*` — the same import
 /// shape `src/lib.rs`'s crate-level doc-test demonstrates.
@@ -88,8 +88,8 @@ fn cupertino_module_resolves_through_the_facade() {
 /// global one (Arabic resolves right-to-left), not the always-LTR default.
 #[test]
 fn global_widgets_localizations_resolve_through_flui_widgets() {
+    use flui::painting::typography::TextDirection;
     use flui::platform::Locale;
-    use flui::types::typography::TextDirection;
     use flui::widgets::{GlobalWidgetsLocalizationsDelegate, LocalizationsDelegate};
 
     let resources = GlobalWidgetsLocalizationsDelegate.load(&Locale::new("ar", None::<&str>));

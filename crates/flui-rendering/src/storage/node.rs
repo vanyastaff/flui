@@ -690,7 +690,10 @@ impl RenderNode {
     pub fn paint_effects(&self) -> crate::traits::PaintEffects {
         match self {
             Self::Box(entry) => {
-                let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
+                let size = entry
+                    .state()
+                    .geometry()
+                    .unwrap_or(flui_foundation::geometry::Size::ZERO);
                 entry.render_object().paint_effects(size)
             }
             Self::Sliver(entry) => {
@@ -707,7 +710,7 @@ impl RenderNode {
     /// silently returns `Size::ZERO` when either is missing, so the presence
     /// check happens here instead.
     #[inline]
-    pub fn laid_out_size(&self) -> Option<flui_types::Size> {
+    pub fn laid_out_size(&self) -> Option<flui_foundation::geometry::Size> {
         match self {
             Self::Box(entry) => entry.state().geometry(),
             Self::Sliver(entry) => {
@@ -739,8 +742,8 @@ impl RenderNode {
     pub fn apply_paint_transform(
         &self,
         child: usize,
-        child_offset: flui_types::Offset,
-        transform: &mut flui_types::Matrix4,
+        child_offset: flui_foundation::geometry::Offset,
+        transform: &mut flui_foundation::geometry::Matrix4,
     ) -> Option<()> {
         let size = self.laid_out_size()?;
         with_entry!(self, entry => entry
@@ -760,7 +763,10 @@ impl RenderNode {
     pub fn paint_raw(&self, recorder: &mut crate::context::FragmentRecorder, child_count: usize) {
         match self {
             Self::Box(entry) => {
-                let size = entry.state().geometry().unwrap_or(flui_types::Size::ZERO);
+                let size = entry
+                    .state()
+                    .geometry()
+                    .unwrap_or(flui_foundation::geometry::Size::ZERO);
                 entry.render_object().paint_raw(recorder, child_count, size);
             }
             Self::Sliver(entry) => {
@@ -772,13 +778,13 @@ impl RenderNode {
 
     /// Returns this node's parent-relative offset.
     #[inline]
-    pub fn offset(&self) -> flui_types::Offset {
+    pub fn offset(&self) -> flui_foundation::geometry::Offset {
         with_entry!(self, entry => entry.state().offset())
     }
 
     /// Sets this node's parent-relative offset.
     #[inline]
-    pub fn set_offset(&self, offset: flui_types::Offset) {
+    pub fn set_offset(&self, offset: flui_foundation::geometry::Offset) {
         with_entry!(self, entry => entry.state().set_offset(offset));
     }
 
@@ -812,7 +818,7 @@ impl RenderNode {
     }
 
     /// Returns the size for Box protocol nodes (None for Sliver nodes).
-    pub fn size(&self) -> Option<flui_types::Size> {
+    pub fn size(&self) -> Option<flui_foundation::geometry::Size> {
         match self {
             Self::Box(entry) => entry.state().geometry(),
             Self::Sliver(_) => None,
@@ -821,7 +827,7 @@ impl RenderNode {
 
     /// Returns the geometry for this node (Size for Box, SliverGeometry for
     /// Sliver).
-    pub fn geometry_box(&self) -> Option<flui_types::Size> {
+    pub fn geometry_box(&self) -> Option<flui_foundation::geometry::Size> {
         self.as_box().and_then(|entry| entry.state().geometry())
     }
 
@@ -969,7 +975,7 @@ impl RenderNode {
 #[cfg(test)]
 mod tests {
     use flui_foundation::Leaf;
-    use flui_types::Size;
+    use flui_foundation::geometry::Size;
 
     use super::*;
     use crate::{context::BoxLayoutContext, parent_data::BoxParentData, traits::RenderBox};

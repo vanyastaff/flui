@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
 
 use flui_foundation::Variable;
-use flui_types::layout::AxisDirection;
+use flui_rendering::constraints::AxisDirection;
 
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry, child_paint_offset},
@@ -104,7 +104,10 @@ fn bounded_unbounded_window(
 
 /// Returns the main-axis extent of `size` for `axis_direction`.
 #[inline]
-pub(super) fn main_axis_extent(size: flui_types::Size, axis_direction: AxisDirection) -> f64 {
+pub(super) fn main_axis_extent(
+    size: flui_foundation::geometry::Size,
+    axis_direction: AxisDirection,
+) -> f64 {
     match axis_direction {
         AxisDirection::TopToBottom | AxisDirection::BottomToTop => size.height,
         AxisDirection::LeftToRight | AxisDirection::RightToLeft => size.width,
@@ -530,11 +533,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_rendering::constraints::AxisDirection;
     use flui_rendering::{
         constraints::{GrowthDirection, SliverConstraints},
         view::ScrollDirection,
     };
-    use flui_types::layout::AxisDirection;
 
     fn vertical(
         scroll_offset: f64,

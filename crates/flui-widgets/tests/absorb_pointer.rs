@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{lay_out, size, tight};
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_widgets::{AbsorbPointer, ColoredBox, GestureDetector};
 
 /// A hit-testable child so the detector's tap recognizer registers.

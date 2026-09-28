@@ -14,7 +14,7 @@
 //!
 //! ## Oracle discipline (G1)
 //!
-//! Every mode oracle calls `flui_types::Color::blend(filter_color, dst_pixel, mode)`
+//! Every mode oracle calls `flui_painting::styling::Color::blend(filter_color, dst_pixel, mode)`
 //! directly — the identical function used in production CPU blending.  No blend
 //! math is re-derived in this file.  The oracle returns a **straight-alpha** `Color`
 //! which is then converted to premultiplied u8 for the GPU comparison.
@@ -43,8 +43,9 @@
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::Rect;
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, painting::BlendMode};
+    use flui_painting::{paint::BlendMode, styling::Color};
 
     use crate::{command_ir::LayerFilter, painter::WgpuPainter, render_target::RenderTarget};
 

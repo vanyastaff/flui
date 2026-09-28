@@ -5,8 +5,9 @@
 
 use std::{sync::Arc, thread};
 
+use flui_foundation::geometry::Rect;
+use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
-use flui_types::{geometry::Rect, styling::Color};
 
 #[test]
 fn test_canvas_is_send() {

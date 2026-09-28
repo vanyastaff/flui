@@ -260,7 +260,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         &self,
         recorder: &mut crate::context::FragmentRecorder,
         child_count: usize,
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
     );
 
     /// Hit tests this render object with raw protocol types.
@@ -300,11 +300,11 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         &self,
         position: ProtocolPosition<P>,
         child_count: usize,
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
             Option<ProtocolPosition<P>>,
-            Option<flui_types::Matrix4>,
+            Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome;
 
@@ -506,7 +506,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// Override on [`RenderBox`](crate::traits::RenderBox) or
     /// [`RenderSliver`](crate::traits::RenderSliver) — the blanket impls
     /// forward the call here.
-    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
+    fn paint_effects(&self, size: flui_foundation::geometry::Size) -> PaintEffects {
         let _ = size;
         PaintEffects::NONE
     }
@@ -552,19 +552,20 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     ///
     /// [`paint_effects`]: RenderObject::paint_effects
     /// [`PipelineOwner::transform_to`]: crate::pipeline::PipelineOwner::transform_to
-    /// [`Matrix4::translate`]: flui_types::Matrix4::translate
+    /// [`Matrix4::translate`]: flui_foundation::geometry::Matrix4::translate
     fn apply_paint_transform(
         &self,
         child: usize,
-        child_offset: flui_types::Offset,
-        size: flui_types::Size,
-        transform: &mut flui_types::Matrix4,
+        child_offset: flui_foundation::geometry::Offset,
+        size: flui_foundation::geometry::Size,
+        transform: &mut flui_foundation::geometry::Matrix4,
     ) {
         let _ = child;
         if let Some(matrix) = self.paint_effects(size).transform {
             *transform *= matrix;
         }
-        *transform *= flui_types::Matrix4::translation(child_offset.dx, child_offset.dy, 0.0);
+        *transform *=
+            flui_foundation::geometry::Matrix4::translation(child_offset.dx, child_offset.dy, 0.0);
     }
 
     /// Returns the transform matrix for hit testing.
@@ -572,7 +573,10 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// If `Some(matrix)`, the hit-test pipeline pushes this transform
     /// onto the `HitTestResult` stack before recursing into children.
     /// Default: `None` (no transform — uses identity).
-    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+    fn hit_test_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
         let _ = size;
         None
     }
@@ -732,8 +736,8 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     fn describe_approximate_paint_clip(
         &self,
         _child_slot: usize,
-        _size: flui_types::Size,
-    ) -> Option<flui_types::Rect<f64>> {
+        _size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         None
     }
 
@@ -757,8 +761,8 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     fn describe_semantics_clip(
         &self,
         _child_slot: usize,
-        _size: flui_types::Size,
-    ) -> Option<flui_types::Rect<f64>> {
+        _size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         None
     }
 
@@ -893,7 +897,7 @@ impl_downcast!(RenderObject<P> where P: Protocol);
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Size;
+    use flui_foundation::geometry::Size;
 
     use super::*;
     use crate::protocol::BoxProtocol;
@@ -925,13 +929,13 @@ mod tests {
 
         fn hit_test_raw(
             &self,
-            _position: flui_types::Offset,
+            _position: flui_foundation::geometry::Offset,
             _child_count: usize,
             _size: Size,
             _hit_child: &mut dyn FnMut(
                 usize,
-                Option<flui_types::Offset>,
-                Option<flui_types::Matrix4>,
+                Option<flui_foundation::geometry::Offset>,
+                Option<flui_foundation::geometry::Matrix4>,
             ) -> bool,
         ) -> HitTestOutcome {
             HitTestOutcome::miss()

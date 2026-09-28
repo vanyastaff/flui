@@ -10,16 +10,16 @@
 
 use std::sync::{Arc, OnceLock};
 
-use cosmic_text::fontdb::Family;
-use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, Style, SwashCache, Weight};
-use flui_types::{
-    geometry::{Offset, Rect},
+use crate::{
     styling::Color,
     typography::{
         FontStyle, LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition, TextRange,
         TextStyle,
     },
 };
+use cosmic_text::fontdb::Family;
+use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, Style, SwashCache, Weight};
+use flui_foundation::geometry::{Offset, Rect};
 use parking_lot::Mutex;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -553,7 +553,7 @@ fn style_to_attrs<'a>(
 
 /// The colour a style paints its glyphs with: `foreground` wins over
 /// `color`, as in Flutter's `TextStyle`.
-pub(crate) fn paint_color(style: &TextStyle) -> Option<flui_types::Color> {
+pub(crate) fn paint_color(style: &TextStyle) -> Option<crate::styling::Color> {
     style.foreground.or(style.color)
 }
 

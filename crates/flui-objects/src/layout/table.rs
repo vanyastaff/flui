@@ -27,7 +27,7 @@
 //!   the oracle rather than a bug.
 //! - **`MaxColumnWidth`/`MinColumnWidth`** are supported via
 //!   [`TableColumnWidth::Max`]/[`TableColumnWidth::Min`]
-//!   (`flui_types::layout::table`): each folds both operands' widths (by
+//!   (`table_column`): each folds both operands' widths (by
 //!   max/min) and flex factors, faithfully to the oracle
 //!   (`table.dart:235-340`), and nests recursively.
 //! - **`IntrinsicColumnWidth`'s optional flex** is supported via
@@ -49,13 +49,15 @@
 use std::collections::HashMap;
 
 use flui_foundation::Variable;
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_painting::{DecorationPaintOptions, paint_box_decoration, paint_table_border};
-use flui_types::{
-    Offset, Rect, Size,
-    layout::{TableCellVerticalAlignment, TableColumnWidth},
+use flui_painting::{
     styling::{BoxDecoration, TableBorder},
     typography::TextDirection,
 };
+use flui_rendering::parent_data::TableCellVerticalAlignment;
+
+use crate::TableColumnWidth;
 
 use flui_rendering::{
     constraints::BoxConstraints,

@@ -4,11 +4,11 @@
 //! and produces correct DrawCommand entries on Canvas. This covers the full
 //! measurement -> layout -> paint pipeline.
 
-use flui_painting::{Canvas, TextPainter};
-use flui_types::{
-    geometry::Offset,
-    typography::{FontWeight, TextAlign, TextDirection, TextPosition, TextSpan, TextStyle},
+use flui_foundation::geometry::Offset;
+use flui_painting::typography::{
+    FontWeight, TextAlign, TextDirection, TextPosition, TextSpan, TextStyle,
 };
+use flui_painting::{Canvas, TextPainter};
 
 // ============================================================================
 // measure_text standalone function
@@ -217,7 +217,7 @@ fn text_painter_invalidation_on_setter() {
     // A font-size change rewrites glyph geometry — full relayout.
     let inv = painter.set_text(Some(
         TextSpan::new("Hello")
-            .with_style(flui_types::typography::TextStyle::new().with_font_size(22.0))
+            .with_style(flui_painting::typography::TextStyle::new().with_font_size(22.0))
             .into(),
     ));
     assert_eq!(inv, Invalidation::Layout);

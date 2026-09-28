@@ -2,8 +2,8 @@
 //! multiple of the child's size.
 
 use flui_objects::RenderAlign;
+use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Alignment;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Aligns its child within itself.

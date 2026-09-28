@@ -22,14 +22,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
+use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Size};
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{RenderColoredBox, RenderOpacity, RenderPadding, RenderTransform};
+use flui_painting::Alignment;
 use flui_rendering::{
     RenderUpdateImpact, constraints::BoxConstraints, hit_testing::HitTestResult,
     pipeline::PipelineOwner, testing::inspect,
 };
 use flui_scheduler::UpdateScheduler;
-use flui_types::{Alignment, EdgeInsets, Matrix4, Offset, Size};
 
 use crate::common::BoxedRenderObject;
 
@@ -102,7 +103,12 @@ fn animated_padding_tracks_controller_value_across_frames() {
         let bounds = inspect::first_picture_bounds(&tree).expect("picture");
         assert_eq!(
             bounds,
-            flui_types::Rect::from_ltrb(padding, padding, padding + 40.0, padding + 40.0,),
+            flui_foundation::geometry::Rect::from_ltrb(
+                padding,
+                padding,
+                padding + 40.0,
+                padding + 40.0,
+            ),
             "frame {i}: painted bounds must track the animated origin",
         );
     }

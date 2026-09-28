@@ -25,7 +25,7 @@
 //! // Import crates being integrated
 //! use flui_platform::{current_platform, WindowOptions};
 //! use flui_painting::Canvas; // Example dependent crate
-//! use flui_types::geometry::Size;
+//! use flui_foundation::geometry::Size;
 //!
 //! #[test]
 //! fn test_platform_with_canvas() {
@@ -45,8 +45,8 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::Size;
 
 // ═══════════════════════════════════════════════════════════════
 // SECTION 1: Setup and Initialization

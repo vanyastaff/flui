@@ -26,8 +26,8 @@ use common::{lay_out, tight};
 use flui_material::{
     InputDecoration, InputDecorationThemeData, InputDecorator, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_sdk::types::Color;
-use flui_sdk::types::styling::{BorderSide, BorderStyle};
+use flui_sdk::painting::Color;
+use flui_sdk::painting::{BorderSide, BorderStyle};
 use flui_sdk::widgets::{SizedBox, WidgetStateProperty};
 
 /// A small render-object child standing in for a real field's content (e.g.

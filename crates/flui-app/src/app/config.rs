@@ -3,8 +3,8 @@
 #[cfg(feature = "hot-reload")]
 use std::path::PathBuf;
 
+use flui_foundation::geometry::Size;
 use flui_log::AppIdentity;
-use flui_types::Size;
 
 use super::close_request::CloseRequestHandler;
 #[cfg(not(target_arch = "wasm32"))]

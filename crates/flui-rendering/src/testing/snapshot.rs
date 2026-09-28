@@ -13,16 +13,13 @@
 
 use std::fmt::Write as _;
 
+use flui_foundation::geometry::{Matrix4, Point, RRect, Rect};
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::LayerTree;
 use flui_painting::PaintStyle;
+use flui_painting::paint::{ClipOp, Paint};
 use flui_painting::{DisplayList, DrawCommand, DrawOp};
-use flui_types::painting::{ClipOp, Paint};
-use flui_types::{
-    geometry::{Matrix4, Point, RRect, Rect},
-    painting::Clip,
-    styling::Color,
-};
+use flui_painting::{paint::Clip, styling::Color};
 
 /// Coarse category of a drawing command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -813,12 +810,9 @@ pub fn assert_any(tree: Option<&LayerTree>, pred: impl Fn(&DrawCommandSummary) -
 mod tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::{Matrix4, Point, Rect};
     use flui_painting::{DrawCommand, DrawOp, Paint};
-    use flui_types::{
-        geometry::{Matrix4, Point, Rect},
-        painting::Path,
-        styling::Color,
-    };
+    use flui_painting::{paint::Path, styling::Color};
 
     use super::{DrawKind, summarize_command};
 
@@ -939,9 +933,9 @@ mod tests {
     /// `Paragraph` must summarize with `kind == Text` and include the text.
     #[test]
     fn summarize_paragraph_has_text_kind() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::TextLayout;
-        use flui_types::geometry::Offset;
-        use flui_types::typography::TextDirection;
+        use flui_painting::typography::TextDirection;
         let layout = TextLayout::new("hello", None, 14.0, None, None, TextDirection::Ltr);
         let cmd = DrawCommand {
             transform: Matrix4::IDENTITY,
@@ -959,8 +953,8 @@ mod tests {
     /// `ClipRect` must summarize with `kind == Clip`.
     #[test]
     fn summarize_clip_rect_has_clip_kind() {
-        use flui_types::painting::Clip;
-        use flui_types::painting::ClipOp;
+        use flui_painting::paint::Clip;
+        use flui_painting::paint::ClipOp;
         let cmd = DrawCommand {
             transform: Matrix4::IDENTITY,
             op: DrawOp::ClipRect {
@@ -993,8 +987,8 @@ mod tests {
     /// regression diffs the snapshot instead of passing silently.
     #[test]
     fn clip_behavior_distinguishes_clip_summaries() {
-        use flui_types::painting::Clip;
-        use flui_types::painting::ClipOp;
+        use flui_painting::paint::Clip;
+        use flui_painting::paint::ClipOp;
         let mk = |behavior| {
             summarize_command(&DrawCommand::untransformed(DrawOp::ClipRect {
                 rect: rect(0.0, 0.0, 10.0, 10.0),
@@ -1015,9 +1009,9 @@ mod tests {
     /// altered radius diffs the snapshot instead of passing silently.
     #[test]
     fn clip_rrect_radii_distinguish_summaries() {
-        use flui_types::geometry::RRect;
-        use flui_types::painting::Clip;
-        use flui_types::painting::ClipOp;
+        use flui_foundation::geometry::RRect;
+        use flui_painting::paint::Clip;
+        use flui_painting::paint::ClipOp;
         let mk = |radius: f64| {
             summarize_command(&DrawCommand::untransformed(DrawOp::ClipRRect {
                 rrect: RRect::from_rect_circular(rect(0.0, 0.0, 40.0, 40.0), radius),
@@ -1063,7 +1057,7 @@ mod tests {
     /// `DrawImage` must summarize with `kind == Image`.
     #[test]
     fn summarize_draw_image_has_image_kind() {
-        use flui_types::painting::image::Image;
+        use flui_painting::paint::image::Image;
         let cmd = DrawCommand {
             transform: Matrix4::IDENTITY,
             op: DrawOp::Image {
@@ -1099,7 +1093,8 @@ mod tests {
 
     mod layer_tree_helpers {
         use flui_foundation::Leaf;
-        use flui_types::{Color, Point, Rect, Size};
+        use flui_foundation::geometry::{Point, Rect, Size};
+        use flui_painting::styling::Color;
 
         use crate::{
             context::BoxLayoutContext, parent_data::BoxParentData, pipeline::Paint,
@@ -1151,7 +1146,7 @@ mod tests {
     /// line for the painted rectangle.
     #[test]
     fn serialize_simple_box_is_stable() {
-        use flui_types::Size;
+        use flui_foundation::geometry::Size;
 
         use crate::testing::{RenderTester, box_node, serialize_layer_tree};
 
@@ -1177,7 +1172,7 @@ mod tests {
     /// The painted rectangle remains enclosed by its run-local state scope.
     #[test]
     fn collect_commands_red_box_preserves_its_state_scope() {
-        use flui_types::Size;
+        use flui_foundation::geometry::Size;
 
         use crate::testing::{RenderTester, box_node, collect_commands};
 

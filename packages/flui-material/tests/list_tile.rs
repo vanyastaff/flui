@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, loose, tight};
 use flui_material::{ListTile, ListTileThemeData, Radio, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::IntoView;
 use flui_sdk::widgets::{
     Icon, IconData, IconTheme, IconThemeData, MediaQuery, MediaQueryData, MergeSemantics, Text,

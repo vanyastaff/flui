@@ -330,8 +330,9 @@ mod tests {
             crate::app::presentation::test_clipboard(),
         )
         .expect("realm");
-        let constraints =
-            flui_rendering::constraints::BoxConstraints::tight(flui_types::Size::new(100.0, 100.0));
+        let constraints = flui_rendering::constraints::BoxConstraints::tight(
+            flui_foundation::geometry::Size::new(100.0, 100.0),
+        );
         realm
             .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
             .expect("root mounted");
@@ -448,7 +449,7 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let marker_size = flui_types::Size::new(4001.0, 4002.0);
+        let marker_size = flui_foundation::geometry::Size::new(4001.0, 4002.0);
 
         let platform = flui_platform::headless_platform();
         let window = platform

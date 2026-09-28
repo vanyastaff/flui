@@ -23,8 +23,8 @@ use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
 use flui_cupertino::{CupertinoColor, CupertinoColors, CupertinoTheme, CupertinoThemeData};
+use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
-use flui_sdk::types::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
 

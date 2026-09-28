@@ -20,7 +20,11 @@ impl super::WgpuPainter {
     ///
     /// `paint.style` determines fill vs stroke; `paint.color` and
     /// `paint.blend_mode` are applied at composite time.
-    pub fn draw_rect(&mut self, rect: flui_types::Rect<f64>, paint: &flui_painting::Paint) {
+    pub fn draw_rect(
+        &mut self,
+        rect: flui_foundation::geometry::Rect<f64>,
+        paint: &flui_painting::Paint,
+    ) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::draw_rect: rect={:?}, paint={:?}", rect, paint);
 
@@ -42,7 +46,11 @@ impl super::WgpuPainter {
     /// the SDF evaluator in `rect_instanced.wgsl` clips to the rounded
     /// boundary in the fragment shader, so no tessellation is needed for
     /// simple rounded rects.
-    pub fn draw_rrect(&mut self, rrect: flui_types::geometry::RRect, paint: &flui_painting::Paint) {
+    pub fn draw_rrect(
+        &mut self,
+        rrect: flui_foundation::geometry::RRect,
+        paint: &flui_painting::Paint,
+    ) {
         let opacity = self.compositor.current_opacity();
         self.batcher.draw_rrect(
             &mut self.current_segment,
@@ -63,7 +71,7 @@ impl super::WgpuPainter {
     /// the correct device-pixel space.
     pub fn draw_circle(
         &mut self,
-        center: flui_types::Point<f64>,
+        center: flui_foundation::geometry::Point<f64>,
         radius: f32,
         paint: &flui_painting::Paint,
     ) {
@@ -93,7 +101,11 @@ impl super::WgpuPainter {
     /// rendered via the circle-SDF pipeline with a non-uniform transform that
     /// stretches the unit circle to the ellipse aspect ratio — no tessellation
     /// required.
-    pub fn draw_oval(&mut self, rect: flui_types::Rect<f64>, paint: &flui_painting::Paint) {
+    pub fn draw_oval(
+        &mut self,
+        rect: flui_foundation::geometry::Rect<f64>,
+        paint: &flui_painting::Paint,
+    ) {
         #[cfg(debug_assertions)]
         tracing::trace!("WgpuPainter::draw_oval: rect={:?}, paint={:?}", rect, paint);
 
@@ -118,7 +130,7 @@ impl super::WgpuPainter {
     /// analytical arc-SDF pipeline.
     pub fn draw_arc(
         &mut self,
-        rect: flui_types::Rect<f64>,
+        rect: flui_foundation::geometry::Rect<f64>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
@@ -156,8 +168,8 @@ impl super::WgpuPainter {
     /// if `inner` extends beyond `outer`.
     pub fn draw_drrect(
         &mut self,
-        outer: flui_types::geometry::RRect,
-        inner: flui_types::geometry::RRect,
+        outer: flui_foundation::geometry::RRect,
+        inner: flui_foundation::geometry::RRect,
         paint: &flui_painting::Paint,
     ) {
         #[cfg(debug_assertions)]
@@ -186,8 +198,8 @@ impl super::WgpuPainter {
     /// always stroked).
     pub fn draw_line(
         &mut self,
-        p1: flui_types::Point<f64>,
-        p2: flui_types::Point<f64>,
+        p1: flui_foundation::geometry::Point<f64>,
+        p2: flui_foundation::geometry::Point<f64>,
         paint: &flui_painting::Paint,
     ) {
         #[cfg(debug_assertions)]
@@ -216,7 +228,7 @@ impl super::WgpuPainter {
     pub fn draw_text(
         &mut self,
         text: &str,
-        position: flui_types::Point<f64>,
+        position: flui_foundation::geometry::Point<f64>,
         font_size: f32,
         paint: &flui_painting::Paint,
     ) {
@@ -226,7 +238,7 @@ impl super::WgpuPainter {
             f64::from(font_size),
             None,
             None,
-            flui_types::typography::TextDirection::Ltr,
+            flui_painting::typography::TextDirection::Ltr,
         );
         self.draw_paragraph(Arc::new(layout), position, paint.color);
     }
@@ -240,8 +252,8 @@ impl super::WgpuPainter {
     pub fn draw_paragraph(
         &mut self,
         layout: Arc<flui_painting::TextLayout>,
-        position: flui_types::Point<f64>,
-        color: flui_types::styling::Color,
+        position: flui_foundation::geometry::Point<f64>,
+        color: flui_painting::styling::Color,
     ) {
         tracing::trace!(
             lines = layout.metrics().line_count,
@@ -274,7 +286,7 @@ impl super::WgpuPainter {
     /// `current_max_scale`).
     pub fn draw_path(
         &mut self,
-        path: &flui_types::painting::path::Path,
+        path: &flui_painting::paint::path::Path,
         paint: &flui_painting::Paint,
     ) {
         self.batcher.draw_path(
@@ -294,8 +306,8 @@ impl super::WgpuPainter {
     /// `DrawItem::AdvancedShape` so `flush_advanced_layer` can dst-read the backdrop.
     pub fn draw_image(
         &mut self,
-        image: &flui_types::painting::Image,
-        dst_rect: flui_types::Rect<f64>,
+        image: &flui_painting::paint::Image,
+        dst_rect: flui_foundation::geometry::Rect<f64>,
         blend_mode: flui_painting::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_image(
@@ -316,9 +328,9 @@ impl super::WgpuPainter {
     /// `DrawItem::AdvancedShape` so every tile reads the original backdrop.
     pub fn draw_image_repeat(
         &mut self,
-        image: &flui_types::painting::Image,
-        dst: flui_types::Rect<f64>,
-        repeat: flui_types::painting::image::ImageRepeat,
+        image: &flui_painting::paint::Image,
+        dst: flui_foundation::geometry::Rect<f64>,
+        repeat: flui_painting::paint::image::ImageRepeat,
         blend_mode: flui_painting::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_image_repeat(
@@ -340,9 +352,9 @@ impl super::WgpuPainter {
     /// `DrawItem::AdvancedShape`.
     pub fn draw_image_nine_slice(
         &mut self,
-        image: &flui_types::painting::Image,
-        center_slice: flui_types::Rect<f64>,
-        dst: flui_types::Rect<f64>,
+        image: &flui_painting::paint::Image,
+        center_slice: flui_foundation::geometry::Rect<f64>,
+        dst: flui_foundation::geometry::Rect<f64>,
         blend_mode: flui_painting::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_image_nine_slice(
@@ -365,9 +377,9 @@ impl super::WgpuPainter {
     /// `DrawBatcher::draw_image_filtered` for the boundary contract).
     pub fn draw_image_filtered(
         &mut self,
-        image: &flui_types::painting::Image,
-        dst: flui_types::Rect<f64>,
-        filter: flui_types::painting::image::ColorFilter,
+        image: &flui_painting::paint::Image,
+        dst: flui_foundation::geometry::Rect<f64>,
+        filter: flui_painting::paint::image::ColorFilter,
         blend_mode: flui_painting::BlendMode,
     ) {
         crate::batches::DrawBatcher::draw_image_filtered(
@@ -392,8 +404,8 @@ impl super::WgpuPainter {
     /// paths fall back gracefully without crashing.
     pub fn draw_shadow(
         &mut self,
-        path: &flui_types::painting::path::Path,
-        color: flui_types::styling::Color,
+        path: &flui_painting::paint::path::Path,
+        color: flui_painting::styling::Color,
         elevation: f32,
     ) {
         #[cfg(debug_assertions)]
@@ -429,9 +441,9 @@ impl super::WgpuPainter {
     /// binding is missing).
     pub fn draw_vertices(
         &mut self,
-        vertices: &[flui_types::Point<f64>],
-        colors: Option<&[flui_types::styling::Color]>,
-        tex_coords: Option<&[flui_types::Point<f64>]>,
+        vertices: &[flui_foundation::geometry::Point<f64>],
+        colors: Option<&[flui_painting::styling::Color]>,
+        tex_coords: Option<&[flui_foundation::geometry::Point<f64>]>,
         indices: &[u16],
         paint: &flui_painting::Paint,
     ) {
@@ -454,18 +466,18 @@ impl super::WgpuPainter {
     /// `DrawItem::AdvancedShape` so every sprite reads the original backdrop.
     pub fn draw_atlas(
         &mut self,
-        image: &flui_types::painting::Image,
-        sprites: &[flui_types::Rect<f64>],
-        transforms: &[flui_types::Matrix4],
-        colors: Option<&[flui_types::styling::Color]>,
+        image: &flui_painting::paint::Image,
+        sprites: &[flui_foundation::geometry::Rect<f64>],
+        transforms: &[flui_foundation::geometry::Matrix4],
+        colors: Option<&[flui_painting::styling::Color]>,
         blend_mode: flui_painting::BlendMode,
     ) {
         // Convert Matrix4 transforms to pixel-space origins here, at the
         // painter boundary, so the batcher stays Matrix4-free (C4 rule).
         // Each transform is column-major; m[12] = x translation, m[13] = y.
-        let sprite_origins: Vec<flui_types::Offset<f64>> = transforms
+        let sprite_origins: Vec<flui_foundation::geometry::Offset<f64>> = transforms
             .iter()
-            .map(|t| flui_types::Offset {
+            .map(|t| flui_foundation::geometry::Offset {
                 dx: (t.m[12]),
                 dy: (t.m[13]),
             })
@@ -497,10 +509,10 @@ impl super::WgpuPainter {
     /// `opacity` is pre-multiplied into the instance alpha before submission.
     pub fn draw_texture(
         &mut self,
-        texture_id: flui_types::painting::TextureId,
-        dst: flui_types::Rect<f64>,
-        src: Option<flui_types::Rect<f64>>,
-        filter_quality: flui_types::painting::FilterQuality,
+        texture_id: flui_painting::paint::TextureId,
+        dst: flui_foundation::geometry::Rect<f64>,
+        src: Option<flui_foundation::geometry::Rect<f64>>,
+        filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
     ) {
         // Read dimensions only when a `src` sub-rect was supplied, so the

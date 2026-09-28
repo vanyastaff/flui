@@ -32,6 +32,7 @@
 )]
 #![deny(missing_docs)]
 
+pub mod axis;
 pub mod bounds;
 pub mod circle;
 pub mod corner;
@@ -58,9 +59,8 @@ pub mod vector;
 
 /// Common imports.
 pub mod prelude {
-    pub use super::traits::{
-        Along, Axis, FloatUnit, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
-    };
+    pub use super::axis::Axis;
+    pub use super::traits::{Along, FloatUnit, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit};
     pub use super::{
         bounds::Bounds,
         circle::Circle,
@@ -75,6 +75,7 @@ pub mod prelude {
     };
 }
 
+pub use axis::Axis;
 pub use bounds::{Bounds, bounds};
 pub use circle::Circle;
 pub use corner::Corner;
@@ -94,7 +95,7 @@ pub use rrect::{RRect, Radius};
 pub use rsuperellipse::RSuperellipse;
 pub use size::{Size, size};
 pub use traits::{
-    Along, ApproxEq, Axis, Double, FloatUnit, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
+    Along, ApproxEq, Double, FloatUnit, GeometryOps, Half, IsZero, NumericUnit, Sign, Unit,
 };
 pub use transform::Transform;
 pub use vector::{Vec2, vec2};

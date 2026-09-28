@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use flui_types::Rect;
+use flui_foundation::geometry::Rect;
 
 /// A snapshot of the observable output of one frame.
 #[derive(Debug, Clone, PartialEq)]

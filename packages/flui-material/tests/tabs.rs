@@ -16,8 +16,8 @@ use flui_material::{
     DefaultTabController, Tab, TabBar, TabBarThemeData, TabController, Theme, ThemeData,
     ThemeDataOverrides,
 };
+use flui_sdk::painting::Color;
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::Color;
 use flui_sdk::view::ErrorView;
 
 fn two_tabs() -> Vec<Tab> {

@@ -332,16 +332,16 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for ShaderMas
         renderer.save_layer(
             Some(self.bounds()),
             &paint,
-            &flui_types::geometry::Matrix4::IDENTITY,
+            &flui_foundation::geometry::Matrix4::IDENTITY,
         );
         // Clip children to mask bounds so content outside is discarded
-        renderer.push_clip_rect(&self.bounds(), flui_types::painting::Clip::AntiAlias);
+        renderer.push_clip_rect(&self.bounds(), flui_painting::paint::Clip::AntiAlias);
     }
 
     fn cleanup(&self, renderer: &mut R) {
         // Pop in reverse order: first clip, then compositing layer
         renderer.pop_clip();
-        renderer.restore_layer(&flui_types::geometry::Matrix4::IDENTITY);
+        renderer.restore_layer(&flui_foundation::geometry::Matrix4::IDENTITY);
     }
 }
 
@@ -373,7 +373,7 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for TextureLa
             None,
             self.filter_quality(),
             self.opacity() as f32,
-            &flui_types::geometry::Matrix4::IDENTITY,
+            &flui_foundation::geometry::Matrix4::IDENTITY,
         );
     }
 }
@@ -436,14 +436,14 @@ impl<R: CommandRenderer + LayerStateStack + ?Sized> LayerRender<R> for Performan
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect, Size};
     use flui_layer::{
         BackdropFilterLayer, ClipRectLayer, ColorFilterLayer, ImageFilterLayer, OffsetLayer,
         OpacityLayer, ShaderMaskLayer, TransformLayer,
     };
     use flui_painting::{BlendMode, Paint, PointMode};
-    use flui_types::{
-        geometry::{Matrix4, Offset, Point, RRect, Rect, Size},
-        painting::{Clip, FilterQuality, Image, ImageFilter, Path, TextureId},
+    use flui_painting::{
+        paint::{Clip, FilterQuality, Image, ImageFilter, Path, TextureId},
         styling::Color,
     };
     use std::sync::Arc;
@@ -556,7 +556,7 @@ mod tests {
             &mut self,
             _image: &Image,
             _dst: Rect<f64>,
-            _repeat: flui_types::painting::image::ImageRepeat,
+            _repeat: flui_painting::paint::image::ImageRepeat,
             _paint: Option<&Paint>,
             _transform: &Matrix4,
         ) {
@@ -574,7 +574,7 @@ mod tests {
             &mut self,
             _image: &Image,
             _dst: Rect<f64>,
-            _filter: flui_types::painting::image::ColorFilter,
+            _filter: flui_painting::paint::image::ColorFilter,
             _paint: Option<&Paint>,
             _transform: &Matrix4,
         ) {
@@ -618,24 +618,24 @@ mod tests {
         fn clip_rect(
             &mut self,
             _rect: Rect<f64>,
-            _clip_op: flui_types::painting::ClipOp,
-            _clip_behavior: flui_types::painting::Clip,
+            _clip_op: flui_painting::paint::ClipOp,
+            _clip_behavior: flui_painting::paint::Clip,
             _transform: &Matrix4,
         ) {
         }
         fn clip_rrect(
             &mut self,
             _rrect: RRect,
-            _clip_op: flui_types::painting::ClipOp,
-            _clip_behavior: flui_types::painting::Clip,
+            _clip_op: flui_painting::paint::ClipOp,
+            _clip_behavior: flui_painting::paint::Clip,
             _transform: &Matrix4,
         ) {
         }
         fn clip_path(
             &mut self,
             _path: &Path,
-            _clip_op: flui_types::painting::ClipOp,
-            _clip_behavior: flui_types::painting::Clip,
+            _clip_op: flui_painting::paint::ClipOp,
+            _clip_behavior: flui_painting::paint::Clip,
             _transform: &Matrix4,
         ) {
         }
@@ -691,7 +691,7 @@ mod tests {
         // report the wrong operation by omitting it.
         fn push_clip_rsuperellipse(
             &mut self,
-            _rse: &flui_types::geometry::RSuperellipse,
+            _rse: &flui_foundation::geometry::RSuperellipse,
             _clip_behavior: Clip,
         ) {
             self.calls.push("push_clip_rsuperellipse".to_string());
@@ -720,13 +720,13 @@ mod tests {
         fn pop_opacity(&mut self) {
             self.calls.push("pop_opacity".to_string());
         }
-        fn push_color_filter(&mut self, _filter: &flui_types::painting::ColorFilter) {
+        fn push_color_filter(&mut self, _filter: &flui_painting::paint::ColorFilter) {
             self.calls.push("push_color_filter".to_string());
         }
         fn pop_color_filter(&mut self) {
             self.calls.push("pop_color_filter".to_string());
         }
-        fn push_image_filter(&mut self, _filter: &flui_types::painting::effects::ImageFilter) {
+        fn push_image_filter(&mut self, _filter: &flui_painting::paint::effects::ImageFilter) {
             self.calls.push("push_image_filter".to_string());
         }
         fn pop_image_filter(&mut self) {
@@ -806,7 +806,7 @@ mod tests {
             OffsetLayer::zero().into(),
             OpacityLayer::new(0.5).into(),
             ClipRectLayer::new(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), Clip::HardEdge).into(),
-            ColorFilterLayer::new(flui_types::painting::ColorFilter::grayscale()).into(),
+            ColorFilterLayer::new(flui_painting::paint::ColorFilter::grayscale()).into(),
         ];
         for layer in &layers {
             let mut renderer = MockRenderer::new();
@@ -951,7 +951,7 @@ mod tests {
     #[test]
     fn clip_superellipse_layer_routes_to_the_squircle_call() {
         let mut renderer = MockRenderer::new();
-        let squircle = flui_types::geometry::RSuperellipse::from_rect_circular(
+        let squircle = flui_foundation::geometry::RSuperellipse::from_rect_circular(
             Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             24.0,
         );
@@ -1022,8 +1022,8 @@ mod tests {
 
     #[test]
     fn test_shader_mask_layer_saves_and_clips() {
-        use flui_types::{
-            painting::{BlendMode as TBlendMode, Shader as TShader},
+        use flui_painting::{
+            paint::{BlendMode as TBlendMode, Shader as TShader},
             styling::Color,
         };
 
@@ -1055,7 +1055,7 @@ mod tests {
         let filter = ImageFilter::blur(5.0);
         let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 150.0);
         let layer =
-            BackdropFilterLayer::new(filter, flui_types::painting::BlendMode::SrcOver, bounds);
+            BackdropFilterLayer::new(filter, flui_painting::paint::BlendMode::SrcOver, bounds);
 
         layer.render(&mut renderer);
         assert_eq!(renderer.calls, Vec::<String>::new());

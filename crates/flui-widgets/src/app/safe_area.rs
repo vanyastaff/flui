@@ -153,7 +153,7 @@ impl StatelessView for SafeArea {
         };
 
         // `EdgeInsets::new(top, right, bottom, left)` — field order matches
-        // `Edges::new` in `flui-geometry`.
+        // `Edges::new` in `flui_foundation::geometry`.
         let insets = EdgeInsets::new(
             effective_top,
             effective_right,

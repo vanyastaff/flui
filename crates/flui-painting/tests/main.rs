@@ -16,6 +16,14 @@
 mod canvas_transform;
 #[path = "canvas_unit.rs"]
 mod canvas_unit;
+#[path = "color_blend.rs"]
+mod color_blend;
+#[path = "color_operations.rs"]
+mod color_operations;
+#[path = "color_property.rs"]
+mod color_property;
+#[path = "compile_fail.rs"]
+mod compile_fail;
 #[path = "decoration_unit.rs"]
 mod decoration_unit;
 #[path = "display_list_unit.rs"]

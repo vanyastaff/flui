@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 // web-time: std::time re-export on native; performance.now()-backed on
 // wasm32, where std::time::Instant::now() panics — this module is in the
 // wasm-check set and timestamps must be mintable there.

@@ -3,10 +3,11 @@
 
 use flui_foundation::geometry::{EdgeInsets, Matrix4};
 use flui_objects::RenderContainer;
+use flui_painting::Alignment;
+use flui_painting::styling::BoxDecoration;
+use flui_painting::styling::Color;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A convenience widget that composes common painting, positioning, and sizing
@@ -63,7 +64,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Decoration *painting* (color, gradient, border, radius, shadow) is
 /// faithful. One Flutter nuance is not yet modelled: a [`BoxDecoration`]
 /// border's thickness is not folded into the effective layout padding
-/// (`_paddingIncludingDecoration`), because `flui-types`' `BoxDecoration` does
+/// (`_paddingIncludingDecoration`), because `flui-painting`'s `BoxDecoration` does
 /// not expose border insets. Set `padding` explicitly if a bordered container
 /// must reserve the border's thickness.
 ///

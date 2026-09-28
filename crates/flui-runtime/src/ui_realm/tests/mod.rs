@@ -1100,7 +1100,7 @@ fn the_root_media_query_republishes_a_brightness_change() {
 /// make this pass against a probe wired to nothing.
 #[test]
 fn a_realms_fresh_hit_test_reads_its_own_live_tree() {
-    use flui_types::Offset;
+    use flui_foundation::geometry::Offset;
 
     let realm = new_runtime(noop_wake()).expect("realm claims cleanly");
     realm
@@ -1166,7 +1166,7 @@ fn a_realms_fresh_hit_test_reads_its_own_live_tree() {
 /// assembly, pairing the realm's ticket with that presentation's pipeline.
 #[test]
 fn two_presentations_in_one_realm_do_not_share_a_hit_test_tree() {
-    use flui_types::Offset;
+    use flui_foundation::geometry::Offset;
 
     let mut realm = UiRealm::for_test();
     let second_id = realm.install_second_presentation_for_test();
@@ -1228,8 +1228,8 @@ fn two_presentations_in_one_realm_do_not_share_a_hit_test_tree() {
 /// way such a widget would.
 #[test]
 fn a_closed_presentations_hit_test_refuses_while_its_tree_is_still_held() {
+    use flui_foundation::geometry::Offset;
     use flui_interaction::InteractionDispatchError;
-    use flui_types::Offset;
 
     let mut realm = UiRealm::for_test();
     let second_id = realm.install_second_presentation_for_test();
@@ -1356,7 +1356,7 @@ fn two_realms_coexist_same_thread() {
     use flui_interaction::routing::PointerRouteHandler;
 
     let pointer = PointerId::new(9002).expect("nonzero pointer id");
-    let position = flui_types::Offset::new(10.0, 10.0);
+    let position = flui_foundation::geometry::Offset::new(10.0, 10.0);
     let fired = Rc::new(Cell::new(0));
     let fired_by_route = Rc::clone(&fired);
     let handler: PointerRouteHandler = Rc::new(move |_| {

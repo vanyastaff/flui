@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{lay_out, tight};
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector, SizedBox};
 
 #[test]
@@ -512,9 +512,9 @@ mod event_cx {
     };
     use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
     use flui_interaction::{DragEndDetails, DragUpdateDetails};
+    use flui_painting::styling::Color;
     use flui_rendering::pipeline::PipelineCell;
     use flui_testing::{A11yTree, Action, ActionRequest, TreeId, invoke_semantics_action};
-    use flui_types::Color;
     use flui_view::prelude::*;
     use flui_widgets::{ColoredBox, GestureDetector, Semantics, Text};
 

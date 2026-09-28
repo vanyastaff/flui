@@ -55,7 +55,7 @@
 use std::sync::Arc;
 
 use flui_foundation::Single;
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 use flui_rendering::{
     constraints::BoxConstraints,

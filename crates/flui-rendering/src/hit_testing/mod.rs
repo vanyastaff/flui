@@ -62,7 +62,7 @@
 //!
 //! ```ignore
 //! use flui_rendering::hit_testing::HitTestResult;
-//! use flui_types::Offset;
+//! use flui_foundation::geometry::Offset;
 //!
 //! let mut result = HitTestResult::new();
 //! pipeline_owner.hit_test(&mut result, Offset::new(100.0, 200.0));

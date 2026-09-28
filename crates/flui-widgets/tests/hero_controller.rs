@@ -31,7 +31,7 @@ use crate::common::harness::{Harness, PostFrameCapability, mount, mount_with_cap
 
 /// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page fills
 /// its `Stack(fit: expand)` — so a route's subtree measures the screen.
-const SCREEN: flui_types::Size = flui_types::Size::new(800.0, 600.0);
+const SCREEN: flui_foundation::geometry::Size = flui_foundation::geometry::Size::new(800.0, 600.0);
 
 const TRANSITION: Duration = Duration::from_millis(300);
 

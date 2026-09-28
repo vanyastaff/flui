@@ -1,6 +1,6 @@
 //! View configuration for the root render object.
 
-use flui_types::{Matrix4, Size};
+use flui_foundation::geometry::{Matrix4, Size};
 
 use crate::constraints::BoxConstraints;
 

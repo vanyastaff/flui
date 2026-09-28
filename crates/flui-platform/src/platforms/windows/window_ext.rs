@@ -169,14 +169,14 @@ pub trait WindowsWindowExt {
     /// Convert point from device (pixel) coordinates to logical coordinates.
     fn convert_point_from_device(
         &self,
-        point: flui_types::geometry::Point<i32>,
-    ) -> flui_types::geometry::Point<f64>;
+        point: flui_foundation::geometry::Point<i32>,
+    ) -> flui_foundation::geometry::Point<f64>;
 
     /// Convert point from logical coordinates to device (pixel) coordinates.
     fn convert_point_to_device(
         &self,
-        point: flui_types::geometry::Point<f64>,
-    ) -> flui_types::geometry::Point<i32>;
+        point: flui_foundation::geometry::Point<f64>,
+    ) -> flui_foundation::geometry::Point<i32>;
 }
 
 // ============================================================================

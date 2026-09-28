@@ -2,10 +2,11 @@
 
 use std::fmt;
 
+use flui_foundation::geometry::Axis;
 use flui_objects::RenderListBody;
+use flui_painting::typography::TextDirection;
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::layout::{Axis, AxisDirection};
-use flui_types::typography::TextDirection;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
@@ -172,7 +173,7 @@ generic_render_view_element!(ListBodyRenderView);
 
 #[cfg(test)]
 mod tests {
-    use flui_types::layout::AxisDirection;
+    use flui_rendering::constraints::AxisDirection;
     use flui_view::RenderView;
     use flui_view::ViewExt;
 

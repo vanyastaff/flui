@@ -21,8 +21,9 @@
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::Rect;
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, painting::ColorMatrix};
+    use flui_painting::{paint::ColorMatrix, styling::Color};
 
     use crate::{command_ir::LayerFilter, painter::WgpuPainter, render_target::RenderTarget};
 
@@ -568,7 +569,7 @@ mod gpu_tests {
     /// full opacity (output alpha would be ~255 instead of ~128 for opaque content).
     #[test]
     fn filter_layer_inherits_outer_opacity() {
-        use flui_types::painting::BlendMode;
+        use flui_painting::paint::BlendMode;
 
         let (device, queue) = acquire_test_device_and_queue();
         let (surface_tex, surface_view) = create_surface(&device);

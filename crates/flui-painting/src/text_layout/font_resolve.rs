@@ -64,9 +64,9 @@
 
 use std::collections::HashSet;
 
+use crate::typography::TextStyle;
 use cosmic_text::fontdb::{self, Database, Family};
 use cosmic_text::{Fallback as _, FontSystem, PlatformFallback};
-use flui_types::typography::TextStyle;
 
 /// Maps a family name written in a [`TextStyle`] to a CSS generic, if it names
 /// one.

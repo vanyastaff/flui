@@ -16,7 +16,7 @@ use common::{lay_out, lay_out_animated, tight};
 use flui_material::InkWell;
 use flui_sdk::animation::Vsync;
 use flui_sdk::interaction::FocusNode;
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::SignalWriteExt;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{SizedBox, WidgetState, WidgetStatesController};

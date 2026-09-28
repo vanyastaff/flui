@@ -22,9 +22,10 @@
 //! detect the change and reload automatically (on Unix).
 //! On Windows, stop the host first due to DLL file locking.
 
+use flui_foundation::geometry::Rect;
 use flui_hot_reload::scene_plugin;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_types::{geometry::Rect, painting::Paint, styling::Color};
+use flui_painting::{paint::Paint, styling::Color};
 
 fn my_scene(width: f64, height: f64) -> Scene {
     let mut canvas_layer = CanvasLayer::new();

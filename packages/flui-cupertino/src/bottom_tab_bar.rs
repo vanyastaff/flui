@@ -60,8 +60,8 @@
 
 use std::rc::Rc;
 
-use flui_sdk::types::Size;
-use flui_sdk::types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::geometry::Size;
+use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
@@ -374,11 +374,10 @@ impl StatelessView for CupertinoTabBar {
                     },
                     DefaultTextStyle::new(
                         tab_label_style.clone().with_color(color),
-                        Padding::new(flui_sdk::types::geometry::EdgeInsets::only_bottom(4.0))
-                            .child(
-                                Column::new(column_children)
-                                    .main_axis_alignment(MainAxisAlignment::End),
-                            ),
+                        Padding::new(flui_sdk::geometry::EdgeInsets::only_bottom(4.0)).child(
+                            Column::new(column_children)
+                                .main_axis_alignment(MainAxisAlignment::End),
+                        ),
                     ),
                 );
 
@@ -405,14 +404,12 @@ impl StatelessView for CupertinoTabBar {
         // true, child: Row(...)))` (`bottom_tab_bar.dart`, oracle tag
         // `3.44.0`) — each item owns its own semantics node rather than
         // merging into one.
-        let toolbar = Padding::new(flui_sdk::types::geometry::EdgeInsets::only_bottom(
-            bottom_inset,
-        ))
-        .child(
-            Semantics::new()
-                .explicit_child_nodes(true)
-                .child(Row::new(item_views).cross_axis_alignment(CrossAxisAlignment::End)),
-        );
+        let toolbar = Padding::new(flui_sdk::geometry::EdgeInsets::only_bottom(bottom_inset))
+            .child(
+                Semantics::new()
+                    .explicit_child_nodes(true)
+                    .child(Row::new(item_views).cross_axis_alignment(CrossAxisAlignment::End)),
+            );
 
         let resolved_border = if self.border_is_default {
             Some(Border::new(

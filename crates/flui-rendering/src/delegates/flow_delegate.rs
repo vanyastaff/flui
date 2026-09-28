@@ -7,7 +7,7 @@ use std::{any::Any, fmt::Debug, sync::Arc};
 
 use flui_foundation::Listenable;
 use flui_foundation::Variable;
-use flui_types::{Matrix4, Size};
+use flui_foundation::geometry::{Matrix4, Size};
 
 use crate::{constraints::BoxConstraints, context::PaintCx};
 
@@ -21,7 +21,8 @@ use crate::{constraints::BoxConstraints, context::PaintCx};
 ///
 /// ```ignore
 /// use flui_rendering::delegates::{FlowDelegate, FlowPaintingContext};
-/// use flui_types::{BoxConstraints, Matrix4, Size};
+/// use flui_rendering::constraints::BoxConstraints;
+/// use flui_foundation::geometry::{Matrix4, Size};
 ///
 /// #[derive(Debug)]
 /// struct CircularFlowDelegate {
@@ -435,7 +436,7 @@ mod tests {
 
     #[test]
     fn for_paint_forwards_the_transform_to_the_live_paint_cx() {
-        use flui_types::Offset;
+        use flui_foundation::geometry::Offset;
 
         use crate::context::{FragmentOp, FragmentRecorder};
 

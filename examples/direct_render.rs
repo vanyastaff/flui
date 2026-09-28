@@ -14,8 +14,9 @@ fn main() -> anyhow::Result<()> {
             .with_title("FLUI Direct Render")
             .with_size(800, 600),
         |builder, w, h| {
+            use flui_foundation::geometry::Rect;
             use flui_painting::Canvas;
-            use flui_types::{Rect, painting::Paint, styling::Color};
+            use flui_painting::{paint::Paint, styling::Color};
 
             // Record drawing commands into a Picture
             let mut canvas = Canvas::new();

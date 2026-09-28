@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_animation::{Animation, AnimationStatus};
-use flui_types::Color;
-use flui_types::typography::TextDirection;
+use flui_painting::styling::Color;
+use flui_painting::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
 use flui_widgets::__test_access::{

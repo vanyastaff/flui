@@ -122,10 +122,10 @@ use flui_animation::{
     Animatable, Animation, AnimationController, ArcCurve, CurvedAnimation, Curves, FloatTween,
 };
 use flui_foundation::Single;
+use flui_foundation::geometry::Axis;
 use flui_foundation::{
     Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, Listenable, ListenerId,
 };
-use flui_types::layout::Axis;
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},

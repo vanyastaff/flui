@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn resolution_matches_across_deprecated_locale_aliases() {
-        // `iw` canonicalizes to `he` at construction (flui-types), so a
+        // `iw` canonicalizes to `he` at construction (flui-platform-api), so a
         // preferred `Locale::new("iw", ...)` must resolve exactly like the
         // canonical `he` spelling would.
         let supported = vec![l("en", Some("US")), l("he", Some("IL"))];

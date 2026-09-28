@@ -13,7 +13,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use web_time::Instant;
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};

@@ -32,8 +32,8 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::FocusNode;
-use flui_types::Color;
-use flui_types::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
+use flui_painting::styling::Color;
+use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
 use flui_view::prelude::*;
 
 use crate::interaction::GestureDetector;

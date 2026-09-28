@@ -8,7 +8,7 @@
 //!   caret/hit-test/line queries), and the style → `Attrs` mapping.
 //! - `glyphs` — the placed-glyph and glyph-bitmap types a rasteriser reads.
 
-use flui_types::geometry::Size;
+use flui_foundation::geometry::Size;
 
 mod context;
 pub(crate) mod font_resolve;

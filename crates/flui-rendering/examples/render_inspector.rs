@@ -15,12 +15,13 @@
 //! shipped library code (the harness itself never writes to stdout — it only
 //! returns reports and values).
 
+use flui_foundation::geometry::Size;
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderPadding, RenderSliverFixedExtentList, RenderViewport,
 };
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::testing::{ParentDataSeed, Probe, RenderTester, box_node, sliver_node};
-use flui_types::{Size, layout::AxisDirection};
 
 fn header(title: &str) {
     println!("\n========== {title} ==========");

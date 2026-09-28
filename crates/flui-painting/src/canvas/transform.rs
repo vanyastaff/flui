@@ -1,7 +1,7 @@
 //! Canvas transforms. Each method mutates the current matrix, which every
 //! `DrawCommand` records at emission so the engine needs no external state.
 
-use flui_types::geometry::Matrix4;
+use flui_foundation::geometry::Matrix4;
 
 use super::Canvas;
 

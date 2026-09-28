@@ -2,8 +2,8 @@
 //! distance from the top.
 
 use flui_objects::RenderBaseline;
+use flui_painting::typography::TextBaseline;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::typography::TextBaseline;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Positions its child so the child's `baseline_type` baseline sits `baseline`

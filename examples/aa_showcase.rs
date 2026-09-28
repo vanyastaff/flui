@@ -24,10 +24,10 @@ fn main() -> anyhow::Result<()> {
             .with_title("FLUI — AA Showcase (L2 SDF + SSAA paths)")
             .with_size(960, 640),
         |builder, width, height| {
+            use flui_foundation::geometry::{Point, RRect, Rect};
             use flui_painting::Canvas;
-            use flui_types::{
-                Point, RRect, Rect,
-                painting::{Paint, path::Path},
+            use flui_painting::{
+                paint::{Paint, path::Path},
                 styling::Color,
             };
 

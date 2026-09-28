@@ -3,10 +3,10 @@
 //! Flutter parity: `material/theme_data.dart` `ThemeData` (oracle tag
 //! `3.44.0`).
 
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::{BorderRadius, BorderSide, BoxDecoration, Color};
 use flui_sdk::platform::Brightness;
-use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::styling::{BorderRadius, BorderSide, BoxDecoration, Color};
-use flui_sdk::types::typography::TextStyle;
 use flui_sdk::widgets::WidgetStateProperty;
 
 use crate::button_style::ButtonStyle;
@@ -1131,7 +1131,7 @@ mod tests {
         assert_eq!(body_medium.font_size, Some(14.0));
         assert_eq!(
             body_medium.font_weight,
-            Some(flui_sdk::types::typography::FontWeight::W400)
+            Some(flui_sdk::painting::FontWeight::W400)
         );
     }
 

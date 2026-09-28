@@ -715,8 +715,8 @@ impl PlatformDisplay for AndroidDisplay {
         "Android Display".to_string()
     }
 
-    fn bounds(&self) -> flui_types::geometry::Bounds<i32> {
-        use flui_types::geometry::{Bounds, Point, Size};
+    fn bounds(&self) -> flui_foundation::geometry::Bounds<i32> {
+        use flui_foundation::geometry::{Bounds, Point, Size};
         Bounds::new(Point::new(0, 0), Size::new(1080, 2340))
     }
 

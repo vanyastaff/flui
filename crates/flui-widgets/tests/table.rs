@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use crate::common::{lay_out, offset, size, tight};
-use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
+use flui_objects::TableColumnWidth;
+use flui_rendering::parent_data::TableCellVerticalAlignment;
 use flui_view::ViewExt;
 use flui_widgets::{SizedBox, Table, TableCell, TableRow};
 

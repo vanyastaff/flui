@@ -18,7 +18,8 @@
 //! remain green without modification.
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Size};
+use flui_foundation::geometry::Size;
+use flui_painting::Alignment;
 
 use crate::layout::{
     align::{positioned_box_size, positioned_box_size_no_child},

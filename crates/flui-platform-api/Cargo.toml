@@ -22,7 +22,6 @@ workspace = true
 # `PlatformWindow::set_cursor`'s `CursorIcon`, allowed in stable signatures
 # by ADR-0089.
 cursor-icon = { workspace = true }
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # `DataTransferId`, the generational id of the ADR-0038 transport.
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # The one-shot slot inside `TransferRequest`.

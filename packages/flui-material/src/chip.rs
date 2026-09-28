@@ -180,17 +180,20 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::painting::Canvas;
+use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::{BorderSide, BorderStyle};
+use flui_sdk::painting::{Paint, Path};
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::painting::{Paint, Path};
-use flui_sdk::types::styling::{BorderSide, BorderStyle};
-use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Color, EdgeInsets, Point, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::icon::IconData;
 use flui_sdk::widgets::{
     ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
     IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, WidgetState,
     WidgetStates,
+};
+use flui_sdk::{
+    geometry::{EdgeInsets, Point, Size},
+    painting::Color,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -391,10 +394,10 @@ fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> Bor
 /// The default container shape: an 8dp rounded rectangle. Flutter parity:
 /// `_ChipDefaultsM3`/`_FilterChipDefaultsM3`'s constructor `shape:`.
 fn chip_default_shape() -> MaterialShape {
-    use flui_sdk::types::styling::BorderRadius;
-    MaterialShape::RoundedRect(BorderRadius::all(
-        flui_sdk::types::geometry::Radius::circular(CORNER_RADIUS),
-    ))
+    use flui_sdk::painting::BorderRadius;
+    MaterialShape::RoundedRect(BorderRadius::all(flui_sdk::geometry::Radius::circular(
+        CORNER_RADIUS,
+    )))
 }
 
 /// The default container padding: `EdgeInsets.all(8.0)`. Flutter parity:
@@ -1408,7 +1411,7 @@ mod tests {
         let rrect = chip_default_shape().to_rrect(size);
         assert_eq!(
             rrect.top_left,
-            flui_sdk::types::geometry::Radius::circular(CORNER_RADIUS)
+            flui_sdk::geometry::Radius::circular(CORNER_RADIUS)
         );
     }
 

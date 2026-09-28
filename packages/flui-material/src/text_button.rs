@@ -20,9 +20,12 @@
 //! tighter by design (no fill or outline to visually separate from
 //! surrounding content).
 
-use flui_sdk::types::{Color, EdgeInsets, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
+use flui_sdk::{
+    geometry::{EdgeInsets, Size},
+    painting::Color,
+};
 
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;

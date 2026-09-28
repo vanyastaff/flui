@@ -22,13 +22,12 @@
 //! deliberately no availability-discovery API upstream, and none is added
 //! here: a caller cannot ask "can this device vibrate?" before calling,
 //! matching Flutter's `HapticFeedback` exactly. See `PlatformHaptics` in
-//! `flui-platform` for the capability trait that performs feedback (not
-//! linked here — `flui-types` has no dependency on `flui-platform`).
+//! `flui-platform-api` for the capability trait a backend implements.
 //!
-//! # Why this type lives in `flui-types`, not `flui-platform`
+//! # Why this type lives in the contract crate, not `flui-platform`
 //!
 //! Following the [`crate::ImeEvent`] precedent: the payload vocabulary a
-//! platform capability carries is homed in `flui-types` so crates below
+//! platform capability carries is homed in `flui-platform-api` so crates below
 //! `flui-platform` in the dependency graph (a future Material `InkWell`,
 //! `Switch`, or other haptics-emitting widget in `flui-widgets`/
 //! `flui-material`) can name the type without depending on the platform

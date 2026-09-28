@@ -3,8 +3,8 @@
 //! object or failed to attach its child.
 
 use crate::common::{lay_out, loose, offset, size, tight};
-use flui_types::Alignment;
-use flui_types::Color;
+use flui_painting::Alignment;
+use flui_painting::styling::Color;
 use flui_widgets::{Align, Center, ColoredBox, Padding, SizedBox};
 
 #[test]

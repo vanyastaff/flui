@@ -91,7 +91,9 @@ fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach() 
     // actually happens, exactly like `a1_autowrap_causes_
     // registration_after_build_pass` above.
     let _ = realm.enter(|realm| {
-        realm.draw_frame_entered(BoxConstraints::tight(flui_types::Size::new(20.0, 20.0)))
+        realm.draw_frame_entered(BoxConstraints::tight(flui_foundation::geometry::Size::new(
+            20.0, 20.0,
+        )))
     });
 
     let (rebuild_handle, driver) = captured

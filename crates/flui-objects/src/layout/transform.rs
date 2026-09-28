@@ -1,7 +1,8 @@
 //! RenderTransform - applies a transformation matrix to a single child.
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Matrix4, Offset, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Size};
+use flui_painting::Alignment;
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},

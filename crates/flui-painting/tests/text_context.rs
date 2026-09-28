@@ -12,8 +12,8 @@ use std::time::Instant;
 
 use flui_painting::parley_text::{ParagraphLayout, ParagraphSpec};
 use flui_painting::text_layout::font_system_initialized;
+use flui_painting::typography::{FontWeight, TextDirection, TextStyle};
 use flui_painting::{FontCollection, TextContext, TextLayoutResult};
-use flui_types::typography::{FontWeight, TextDirection, TextStyle};
 
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 /// Every word is narrower than the widths the tests break at, so no line

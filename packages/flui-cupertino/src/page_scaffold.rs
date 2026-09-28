@@ -55,8 +55,8 @@
 //!   `TextScaler`/no-scaling variant to apply yet — `text_scale_factor`
 //!   passes through unchanged.
 
-use flui_sdk::types::geometry::EdgeInsets;
-use flui_sdk::types::styling::BoxDecoration;
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::painting::BoxDecoration;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{DecoratedBox, MediaQuery, Padding, Positioned, PreferredSizeView, Stack};

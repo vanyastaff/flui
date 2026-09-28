@@ -5,8 +5,8 @@
 //! Its own test target: these tests append to the process-wide font database,
 //! which the `painting_it` binary's tests deliberately never do.
 
+use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{TextPainter, shared_font_system};
-use flui_types::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 
 const PROBE_SANS: &[u8] = include_bytes!("../assets/fonts/probe-sans-400.ttf");
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");

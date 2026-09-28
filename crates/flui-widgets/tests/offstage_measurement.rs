@@ -38,8 +38,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::Size;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_types::Size;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 

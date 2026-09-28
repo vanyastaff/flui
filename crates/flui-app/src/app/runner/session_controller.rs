@@ -183,7 +183,7 @@ mod tests {
                     .enter(|realm| realm.attach_root_widget(&root))
                     .expect("root mounted");
                 let _ = realm.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
-                    flui_types::Size::new(80.0, 80.0),
+                    flui_foundation::geometry::Size::new(80.0, 80.0),
                 ));
                 let window: Arc<dyn flui_platform::PlatformWindow> = window;
                 Ok(install_realm_alongside(realm, &window)?)

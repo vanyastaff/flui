@@ -1,7 +1,7 @@
 //! [`Icon`] — draws a single glyph from an icon font.
 
-use flui_types::Color;
-use flui_types::typography::{FontVariation, TextDirection, TextSpan, TextStyle};
+use flui_painting::styling::Color;
+use flui_painting::typography::{FontVariation, TextDirection, TextSpan, TextStyle};
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView};
 

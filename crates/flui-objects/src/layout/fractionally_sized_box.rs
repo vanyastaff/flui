@@ -17,7 +17,7 @@
 //! * `width_factor`/`height_factor` are `Option<FractionFactor>` —
 //!   matching Flutter's `null = inherit parent constraint` semantics
 //!   without overloading `0.0` as a magic sentinel.
-//! * Alignment uses [`flui_types::Alignment`] (`x`,`y` ∈ `[-1, 1]`) rather
+//! * Alignment uses [`flui_painting::Alignment`] (`x`,`y` ∈ `[-1, 1]`) rather
 //!   than the painting-side parallel definition, keeping the alignment
 //!   math consistent with `RenderTransform` / `RenderCenter`.
 //! * **Divergence (intentional):** on a factored axis whose incoming `max` is
@@ -27,7 +27,8 @@
 //!   infinite-`max` factor tests.
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
+use flui_painting::Alignment;
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -106,7 +107,7 @@ impl From<FractionFactor> for f64 {
 ///
 /// ```ignore
 /// use flui_objects::{FractionFactor, RenderFractionallySizedBox};
-/// use flui_types::Alignment;
+/// use flui_painting::Alignment;
 ///
 /// // Child takes 50% width × 75% height of the parent, top-centered.
 /// let node = RenderFractionallySizedBox::new()

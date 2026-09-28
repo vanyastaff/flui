@@ -153,16 +153,16 @@
 //! `AppBarTheme.leadingWidth` override exists yet (named V1 deferral), so
 //! `LEADING_WIDTH` is the only width this slot ever takes.
 
+use flui_sdk::painting::Color;
+use flui_sdk::painting::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::styling::Color;
-use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Alignment, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Center, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded,
     Flexible, IconTheme, IconThemeData, MainAxisAlignment, NavigatorHandle, Positioned,
     PreferredSizeView, Row, SafeArea, SizedBox, Stack,
 };
+use flui_sdk::{geometry::Size, painting::Alignment};
 
 use crate::back_button::BackButton;
 use crate::material::Material;
@@ -732,7 +732,7 @@ mod tests {
     fn resolve_style_theme_title_text_style_is_used_verbatim_not_recolored() {
         let mut theme = ThemeData::light();
         let themed_title_style =
-            flui_sdk::types::typography::TextStyle::new().with_color(Color::rgb(3, 3, 3));
+            flui_sdk::painting::TextStyle::new().with_color(Color::rgb(3, 3, 3));
         theme.app_bar_theme = Some(crate::theme_data::AppBarThemeData {
             title_text_style: Some(themed_title_style.clone()),
             ..Default::default()

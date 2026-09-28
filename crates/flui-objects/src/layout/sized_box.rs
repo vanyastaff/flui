@@ -18,7 +18,7 @@
 //! [`RenderSizedBox::shrink`] is the explicit `(0, 0)` counterpart.
 
 use flui_foundation::Leaf;
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 use flui_rendering::{
     constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,

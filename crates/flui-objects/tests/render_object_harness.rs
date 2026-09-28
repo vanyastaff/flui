@@ -104,10 +104,23 @@ use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::D
 
 use flui_animation::curve::ArcCurve;
 use flui_animation::{Animation, AnimationController, Curves, ProxyAnimation, UpdateScheduler};
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 use flui_interaction::InteractionLane;
 use flui_interaction::routing::{MouseTracker, PointerMotionKind};
 use flui_objects::*;
+use flui_objects::{StackFit, TableColumnWidth};
+use flui_painting::{Alignment, BoxFit, BoxShape};
 use flui_painting::{Canvas, Paint};
+use flui_painting::{
+    paint::{BlendMode, Clip, ImageFilter, Path, Shader},
+    styling::{
+        BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, Color, TableBorder,
+    },
+    typography::{TextDirection, TextSpan, TextStyle},
+};
+use flui_rendering::constraints::AxisDirection;
+use flui_rendering::parent_data::TableCellVerticalAlignment;
 use flui_rendering::{
     RenderUpdateImpact,
     constraints::{BoxConstraints, SliverConstraints},
@@ -132,18 +145,6 @@ use flui_rendering::{
     },
     traits::{RenderBox, TextBaseline},
     view::{ScrollDirection, ScrollableViewportOffset},
-};
-use flui_types::{
-    Alignment, EdgeInsets, Matrix4, Offset, Point, Rect, Size,
-    layout::{
-        Axis, AxisDirection, BoxFit, BoxShape, StackFit, TableCellVerticalAlignment,
-        TableColumnWidth,
-    },
-    painting::{BlendMode, Clip, ImageFilter, Path, Shader},
-    styling::{
-        BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, Color, TableBorder,
-    },
-    typography::{TextDirection, TextSpan, TextStyle},
 };
 
 /// Every concrete render-object type exported from `flui_objects`.
@@ -5500,7 +5501,7 @@ fn harness_fitted_box_preserves_aspect_ratio_when_sizing_box() {
 /// cropped source, closing the gap a prior unit test left open: that test
 /// set `source_offset` directly on a struct literal, a state
 /// `perform_layout` could never actually reach while `BoxFit::apply` (before
-/// its fix in `flui-types`) always answered `source == input_size` for
+/// its fix in `flui-painting`) always answered `source == input_size` for
 /// every variant.
 ///
 /// A `100×50` child covering a `200×200` box: `Cover` crops the child's
@@ -10307,8 +10308,8 @@ fn align_dry_baseline_adds_child_offset_dy() {
     let mut run = RenderTester::mount(
         box_node(RenderAlign::new(Alignment::BOTTOM_RIGHT)).child(
             box_node(RenderParagraph::new(
-                flui_types::typography::TextSpan::new("A"),
-                flui_types::typography::TextDirection::Ltr,
+                flui_painting::typography::TextSpan::new("A"),
+                flui_painting::typography::TextDirection::Ltr,
             ))
             .label("text"),
         ),
@@ -10368,8 +10369,8 @@ fn align_live_baseline_adds_child_offset_dy() {
                 .label("align")
                 .child(
                     box_node(RenderParagraph::new(
-                        flui_types::typography::TextSpan::new("A"),
-                        flui_types::typography::TextDirection::Ltr,
+                        flui_painting::typography::TextSpan::new("A"),
+                        flui_painting::typography::TextDirection::Ltr,
                     ))
                     .label("text"),
                 ),
@@ -10546,8 +10547,8 @@ fn center_dry_baseline_adds_half_free_height() {
     let mut run = RenderTester::mount(
         box_node(RenderCenter::new()).child(
             box_node(RenderParagraph::new(
-                flui_types::typography::TextSpan::new("A"),
-                flui_types::typography::TextDirection::Ltr,
+                flui_painting::typography::TextSpan::new("A"),
+                flui_painting::typography::TextDirection::Ltr,
             ))
             .label("text"),
         ),

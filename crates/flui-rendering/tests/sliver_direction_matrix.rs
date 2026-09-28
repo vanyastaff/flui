@@ -3,12 +3,13 @@
 //! Covers 4 axis directions × 2 growth directions × 3 concerns:
 //! effective axis, paint/sign sizing, and scroll-direction composition.
 
+use flui_foundation::geometry::Size;
+use flui_rendering::constraints::AxisDirection::*;
 use flui_rendering::{
     constraints::{GrowthDirection, apply_growth_direction_to_scroll_direction, right_way_up},
     traits::RenderSliver,
     view::ScrollDirection,
 };
-use flui_types::{Size, layout::AxisDirection::*};
 
 struct DirectionProbe {
     constraints: flui_rendering::constraints::SliverConstraints,
@@ -21,7 +22,10 @@ impl std::fmt::Debug for DirectionProbe {
 }
 
 impl DirectionProbe {
-    fn new(axis_direction: flui_types::layout::AxisDirection, growth: GrowthDirection) -> Self {
+    fn new(
+        axis_direction: flui_rendering::constraints::AxisDirection,
+        growth: GrowthDirection,
+    ) -> Self {
         use flui_rendering::constraints::SliverConstraints;
         use flui_rendering::view::ScrollDirection;
 

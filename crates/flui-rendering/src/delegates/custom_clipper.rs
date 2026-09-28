@@ -6,7 +6,7 @@
 
 use std::{any::Any, fmt::Debug};
 
-use flui_types::{Point, Rect, Size};
+use flui_foundation::geometry::{Point, Rect, Size};
 
 /// A delegate that defines a custom clipping shape.
 ///
@@ -19,7 +19,7 @@ use flui_types::{Point, Rect, Size};
 ///
 /// ```ignore
 /// use flui_rendering::delegates::CustomClipper;
-/// use flui_types::{Rect, Size};
+/// use flui_foundation::geometry::{Rect, Size};
 ///
 /// #[derive(Debug)]
 /// struct InsetClipper {

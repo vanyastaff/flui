@@ -53,13 +53,16 @@ use std::time::Duration;
 
 use flui_sdk::animation::{Animation, AnimationController, Curve, Curves};
 use flui_sdk::foundation::Listenable;
-use flui_sdk::types::painting::Clip;
-use flui_sdk::types::{Alignment, Color, EdgeInsets};
+use flui_sdk::painting::Clip;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, AnimatedBuilder, ClipRect, DefaultTextStyle, Expanded, Padding, Row, SafeArea,
     WidgetStateProperty,
+};
+use flui_sdk::{
+    geometry::EdgeInsets,
+    painting::{Alignment, Color},
 };
 
 use crate::button_style::ButtonStyle;

@@ -33,8 +33,9 @@
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::{Point, Rect};
     use flui_painting::Paint;
-    use flui_types::{Color, Point, Rect};
+    use flui_painting::styling::Color;
     use smallvec::smallvec;
 
     use crate::{
@@ -1502,8 +1503,8 @@ mod gpu_tests {
                     glam::Vec2::new(MARGIN, MARGIN),
                     glam::Vec2::new(MARGIN + SIDE, MARGIN),
                     vec![
-                        flui_types::Color::rgba(255, 0, 0, 255),
-                        flui_types::Color::rgba(0, 0, 255, 255),
+                        flui_painting::styling::Color::rgba(255, 0, 0, 255),
+                        flui_painting::styling::Color::rgba(0, 0, 255, 255),
                     ],
                 ),
             );
@@ -1559,8 +1560,8 @@ mod gpu_tests {
                 glam::Vec2::new(MARGIN, MARGIN),
                 glam::Vec2::new(MARGIN + SIDE, MARGIN),
                 vec![
-                    flui_types::Color::rgba(200, 100, 0, 255),
-                    flui_types::Color::rgba(0, 100, 200, 255),
+                    flui_painting::styling::Color::rgba(200, 100, 0, 255),
+                    flui_painting::styling::Color::rgba(0, 100, 200, 255),
                 ],
             ),
         );
@@ -1625,7 +1626,7 @@ mod gpu_tests {
                 f64::from((SURFACE_WIDTH - 2 * INNER_MARGIN) as f32),
                 f64::from((SURFACE_HEIGHT - 2 * INNER_MARGIN) as f32),
             ),
-            &flui_painting::Paint::fill(flui_types::Color::rgba(255, 128, 0, 255)),
+            &flui_painting::Paint::fill(flui_painting::styling::Color::rgba(255, 128, 0, 255)),
         );
         painter.restore_layer();
 
@@ -1742,7 +1743,7 @@ mod gpu_tests {
                     f64::from((CLIP_RIGHT - CLIP_LEFT) as f32),
                     f64::from((CLIP_BOTTOM - CLIP_TOP) as f32),
                 ),
-                flui_types::painting::Clip::HardEdge,
+                flui_painting::paint::Clip::HardEdge,
             );
             painter.draw_rect(
                 Rect::from_xywh(
@@ -1751,7 +1752,7 @@ mod gpu_tests {
                     f64::from((CONTENT_RIGHT - CONTENT_LEFT) as f32),
                     f64::from((CONTENT_BOTTOM - CONTENT_TOP) as f32),
                 ),
-                &flui_painting::Paint::fill(flui_types::Color::rgba(255, 0, 0, 255)),
+                &flui_painting::Paint::fill(flui_painting::styling::Color::rgba(255, 0, 0, 255)),
             );
             painter.restore_layer();
 
@@ -1803,7 +1804,7 @@ mod gpu_tests {
                 f64::from((CLIP_RIGHT - CLIP_LEFT) as f32),
                 f64::from((CLIP_BOTTOM - CLIP_TOP) as f32),
             ),
-            flui_types::painting::Clip::HardEdge,
+            flui_painting::paint::Clip::HardEdge,
         );
         painter.draw_rect(
             Rect::from_xywh(
@@ -1812,7 +1813,7 @@ mod gpu_tests {
                 f64::from((CONTENT_RIGHT - CONTENT_LEFT) as f32),
                 f64::from((CONTENT_BOTTOM - CONTENT_TOP) as f32),
             ),
-            &flui_painting::Paint::fill(flui_types::Color::rgba(255, 0, 0, 255)),
+            &flui_painting::Paint::fill(flui_painting::styling::Color::rgba(255, 0, 0, 255)),
         );
         painter.restore_layer();
 

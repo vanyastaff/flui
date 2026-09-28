@@ -17,11 +17,11 @@
 
 use std::sync::Arc;
 
-use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, Rect},
-    painting::{Image, Path},
+use crate::{
+    paint::{Image, Path},
     styling::Color,
 };
+use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 
 use super::Canvas;
 use crate::display_list::{

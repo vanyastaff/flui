@@ -8,8 +8,9 @@
 //! the SDF clip, so a rounded clip rounds text exactly as it rounds the
 //! rect behind it.
 
+use flui_foundation::geometry::Point;
 use flui_painting::TextLayout;
-use flui_types::{geometry::Point, styling::Color};
+use flui_painting::styling::Color;
 
 use super::DrawBatcher;
 use crate::{

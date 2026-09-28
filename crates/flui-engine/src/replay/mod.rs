@@ -282,7 +282,7 @@ impl GpuReplay {
                 DrawItem::OffscreenTexture(p) => {
                     let instance = crate::instancing::TextureInstance::new(
                         p.bounds,
-                        flui_types::styling::Color::WHITE,
+                        flui_painting::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
                     // Offscreen compositing is always full-viewport — no scissor.
@@ -524,7 +524,7 @@ impl GpuReplay {
                     //    (the composite-grid shift this integer-grid contract prevents).
                     let (fb_origin_x, fb_origin_y) = op.fb_origin;
                     let (fb_w, fb_h) = op.fb_dim;
-                    let dst_rect = flui_types::Rect::from_xywh(
+                    let dst_rect = flui_foundation::geometry::Rect::from_xywh(
                         f64::from(fb_origin_x as f32),
                         f64::from(fb_origin_y as f32),
                         f64::from(fb_w as f32),
@@ -533,7 +533,7 @@ impl GpuReplay {
                     let instance = crate::instancing::TextureInstance::with_uv(
                         dst_rect,
                         [0.0, 0.0, 1.0, 1.0],
-                        flui_types::styling::Color::WHITE,
+                        flui_painting::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
                     self.flush_texture_batch_premultiplied(

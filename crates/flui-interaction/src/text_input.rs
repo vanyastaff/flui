@@ -46,10 +46,10 @@ use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
+use flui_foundation::geometry::Bounds;
 use flui_platform_api::ImeEvent;
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::text_store::{CommitGate, TextStore, project_ime_event};
-use flui_types::geometry::Bounds;
 
 /// Identity returned by [`TextInputHandle::attach`].
 ///
@@ -486,11 +486,11 @@ impl std::fmt::Debug for TextInputHandle {
 mod tests {
     use std::cell::RefCell;
 
+    use flui_foundation::geometry::{Point, Size};
     use flui_platform_api::text_store::{
         InMemoryTextStore, LockGrant, LockTiming, Selection, TextStoreError, TextStoreStatus,
         Utf16Offset,
     };
-    use flui_types::geometry::{Point, Size};
     use parking_lot::Mutex;
 
     use super::*;

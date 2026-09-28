@@ -67,7 +67,7 @@ impl ImageAsset {
 }
 
 impl Asset for ImageAsset {
-    type Data = flui_types::painting::Image;
+    type Data = flui_painting::paint::Image;
     type Key = AssetKey;
     type Error = AssetError;
 
@@ -103,7 +103,7 @@ impl Asset for ImageAsset {
             let (width, height) = rgba.dimensions();
             let data = rgba.into_raw();
 
-            flui_types::painting::Image::try_from_rgba8(width, height, data).map_err(|e| {
+            flui_painting::paint::Image::try_from_rgba8(width, height, data).map_err(|e| {
                 AssetError::LoadFailed {
                     path: self.path.clone(),
                     reason: format!("Decoded image is malformed: {e}"),

@@ -14,7 +14,7 @@ use std::{
 };
 
 use flui_foundation::ListenerId;
-use flui_types::geometry::Rect;
+use flui_foundation::geometry::Rect;
 use thiserror::Error;
 
 use crate::{FocusManager, events::KeyEvent};

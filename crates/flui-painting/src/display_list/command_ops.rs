@@ -1,7 +1,7 @@
 //! `DrawCommand::bounds` — the per-op geometry a recorded command
 //! contributes to its [`DisplayList`](super::DisplayList)'s cached extent.
 
-use flui_types::geometry::{Rect, Size};
+use flui_foundation::geometry::{Rect, Size};
 
 use super::command::{DrawCommand, DrawOp};
 
@@ -22,7 +22,7 @@ impl DrawCommand {
 
 /// Smallest-enclosing axis-aligned box of a point set, `None` when empty.
 fn point_bounds<'a>(
-    mut points: impl Iterator<Item = &'a flui_types::geometry::Point<f64>>,
+    mut points: impl Iterator<Item = &'a flui_foundation::geometry::Point<f64>>,
 ) -> Option<Rect<f64>> {
     let first = points.next()?;
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (first.x, first.y, first.x, first.y);

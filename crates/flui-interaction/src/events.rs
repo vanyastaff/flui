@@ -82,7 +82,7 @@
 //!   [`ScrollEventData::delta_to_offset`].
 //! - **`PageDelta`** is unit-less pages, likewise converted only here.
 
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 
 // ============================================================================
 // Re-exports from ui-events (W3C UI Events specification)

@@ -2,8 +2,8 @@
 //! layout is a pass-through (the child's size).
 
 use crate::common::{lay_out, loose, size};
-use flui_types::Size;
-use flui_types::painting::Path;
+use flui_foundation::geometry::Size;
+use flui_painting::paint::Path;
 use flui_widgets::{ClipOval, ClipPath, ClipRRect, ClipRect, SizedBox};
 
 #[test]

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use crate::common::{lay_out_animated, loose};
 use flui_animation::Vsync;
-use flui_types::Alignment;
+use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{EventCx, IntoView, ViewState};
 use flui_widgets::{AnimatedSize, SizedBox, VsyncScope};

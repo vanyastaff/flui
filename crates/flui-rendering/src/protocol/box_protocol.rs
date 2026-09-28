@@ -7,10 +7,7 @@
 
 use flui_foundation::Arity;
 use flui_foundation::RenderId;
-use flui_types::{
-    Size,
-    geometry::{Matrix4, Offset, Point, Rect},
-};
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
@@ -321,7 +318,7 @@ impl LayoutCapability for BoxLayout {
 /// use flui_foundation::RenderId;
 /// use flui_rendering::constraints::BoxConstraints;
 /// use flui_rendering::protocol::box_protocol::LayoutChildCallback;
-/// use flui_types::Size;
+/// use flui_foundation::geometry::Size;
 ///
 /// fn callback(_id: RenderId, _constraints: BoxConstraints) -> Size {
 ///     Size::ZERO

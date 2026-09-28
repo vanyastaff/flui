@@ -991,11 +991,11 @@ pub(super) mod tests {
     fn a_standalone_crate_beside_a_member_change_is_not_unowned() {
         let s = scope(&[
             "tools/text-spike/src/main.rs",
-            "crates/flui-geometry/src/lib.rs",
+            "crates/flui-foundation/src/lib.rs",
         ]);
         assert_eq!(s.mode, Mode::Packages, "{}", s.reason);
         assert_eq!(s.standalone, ["tools/text-spike"]);
-        assert!(s.packages.contains(&"flui-geometry".to_owned()));
+        assert!(s.packages.contains(&"flui-foundation".to_owned()));
     }
 
     #[test]
@@ -1037,7 +1037,7 @@ pub(super) mod tests {
         let s = scope(&["packages/flui-material/src/lib.rs"]);
         assert_eq!(s.mode, Mode::Packages);
         assert!(s.packages.contains(&"flui".to_owned())); // the facade depends on it
-        assert!(!s.packages.contains(&"flui-types".to_owned())); // a dependency, not a dependent
+        assert!(!s.packages.contains(&"flui-foundation".to_owned())); // a dependency, not a dependent
     }
 
     #[test]

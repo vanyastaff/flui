@@ -743,7 +743,7 @@ mod blend_logic {
 
     #[test]
     fn srcover_opaque_skips_blending() {
-        let paint = Paint::fill(flui_types::Color::rgb(10, 20, 30)); // a == 255, SrcOver
+        let paint = Paint::fill(flui_painting::styling::Color::rgb(10, 20, 30)); // a == 255, SrcOver
         let key = pipeline_key_from_paint(&paint);
         assert!(
             !key.is_alpha_blended(),
@@ -753,7 +753,7 @@ mod blend_logic {
 
     #[test]
     fn srcover_translucent_uses_blend() {
-        let paint = Paint::fill(flui_types::Color::rgba(10, 20, 30, 128));
+        let paint = Paint::fill(flui_painting::styling::Color::rgba(10, 20, 30, 128));
         let key = pipeline_key_from_paint(&paint);
         assert!(key.is_alpha_blended());
         assert_eq!(key.blend_mode(), BlendMode::SrcOver);
@@ -768,7 +768,7 @@ mod blend_logic {
     /// route a coverage-destructive mode through the tile.
     #[test]
     fn is_tile_safe_for_ssaa_agrees_with_color_blend() {
-        use flui_types::Color;
+        use flui_painting::styling::Color;
         let transparent = Color::TRANSPARENT;
         let dsts = [
             Color::rgba(200, 80, 40, 255),
@@ -825,7 +825,8 @@ mod blend_logic {
             BlendMode::Plus,
             BlendMode::Modulate,
         ] {
-            let paint = Paint::fill(flui_types::Color::rgb(255, 0, 0)).with_blend_mode(mode);
+            let paint =
+                Paint::fill(flui_painting::styling::Color::rgb(255, 0, 0)).with_blend_mode(mode);
             let key = pipeline_key_from_paint(&paint);
             assert!(key.is_alpha_blended(), "{mode:?} must enable blending");
             assert_eq!(key.blend_mode(), mode, "{mode:?} must key its own pipeline");
@@ -849,7 +850,8 @@ mod blend_logic {
             BlendMode::Hue,
             BlendMode::Luminosity,
         ] {
-            let paint = Paint::fill(flui_types::Color::rgb(255, 0, 0)).with_blend_mode(mode);
+            let paint =
+                Paint::fill(flui_painting::styling::Color::rgb(255, 0, 0)).with_blend_mode(mode);
             let key = pipeline_key_from_paint(&paint);
             // Advanced modes → alpha-blend key carrying the original mode.
             assert!(
@@ -923,7 +925,7 @@ mod blend_logic {
 
     #[test]
     fn distinct_blend_modes_produce_distinct_keys() {
-        let red = flui_types::Color::rgb(255, 0, 0);
+        let red = flui_painting::styling::Color::rgb(255, 0, 0);
         let k_plus = pipeline_key_from_paint(&Paint::fill(red).with_blend_mode(BlendMode::Plus));
         let k_clear = pipeline_key_from_paint(&Paint::fill(red).with_blend_mode(BlendMode::Clear));
         assert_ne!(
@@ -1176,8 +1178,8 @@ mod blend_logic {
     /// reaches `PipelineCache::get_or_create`.
     #[test]
     fn pipeline_key_routing_golden() {
-        let opaque = flui_types::Color::rgb(200, 100, 50); // a == 255
-        let translucent = flui_types::Color::rgba(200, 100, 50, 128);
+        let opaque = flui_painting::styling::Color::rgb(200, 100, 50); // a == 255
+        let translucent = flui_painting::styling::Color::rgba(200, 100, 50, 128);
 
         // ── SrcOver ─────────────────────────────────────────────────────────
         let k = pipeline_key_from_paint(&Paint::fill(opaque).with_blend_mode(BlendMode::SrcOver));
@@ -1318,7 +1320,7 @@ mod blend_logic {
     /// check but scoped specifically to the destructive modes documented in H2.)
     #[test]
     fn destructive_modes_are_never_ssaa_eligible() {
-        use flui_types::Color;
+        use flui_painting::styling::Color;
         let transparent = Color::TRANSPARENT;
         let opaque_dst = Color::rgba(200, 80, 40, 255);
 

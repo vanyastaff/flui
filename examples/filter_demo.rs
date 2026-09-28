@@ -22,13 +22,13 @@
 use std::sync::{Arc, Mutex};
 
 use flui_engine::Renderer;
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_layer::{CanvasLayer, Scene, SceneBuilder};
-use flui_platform::{WindowOptions, current_platform};
-use flui_types::{
-    Color, Offset,
-    geometry::{Rect, Size},
-    painting::{ImageFilter, Paint},
+use flui_painting::{
+    paint::{ImageFilter, Paint},
+    styling::Color,
 };
+use flui_platform::{WindowOptions, current_platform};
 
 // ── Scene construction ────────────────────────────────────────────────────────
 

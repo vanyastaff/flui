@@ -20,7 +20,7 @@
 //!   here, nothing below sees it") lives entirely in `hit_test`.
 
 use flui_foundation::Single;
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 
 use flui_rendering::{context::BoxHitTestContext, parent_data::BoxParentData, traits::RenderBox};
 

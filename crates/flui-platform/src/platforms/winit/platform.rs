@@ -103,7 +103,7 @@ use winit::{
     window::{WindowAttributes, WindowId as WinitWindowId},
 };
 
-use flui_types::geometry::Point;
+use flui_foundation::geometry::Point;
 
 use super::window::WinitWindow;
 use super::{
@@ -1090,7 +1090,7 @@ impl ApplicationHandler for WinitApp {
                 self.complete_window_close(event_loop, platform_id, window.as_ref());
             }
             WinitWindowEvent::Resized(physical_size) => {
-                use flui_types::geometry::Size;
+                use flui_foundation::geometry::Size;
 
                 let size = Size::new(physical_size.width as i32, physical_size.height as i32);
 

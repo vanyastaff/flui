@@ -19,7 +19,7 @@ pub struct IconData {
     pub code_point: u32,
 
     /// The font family to resolve `code_point` against. `None` defers to
-    /// whatever family the ambient [`TextStyle`](flui_types::typography::TextStyle)
+    /// whatever family the ambient [`TextStyle`](flui_painting::typography::TextStyle)
     /// resolves to.
     pub font_family: Option<String>,
 
@@ -63,7 +63,7 @@ impl IconData {
     }
 
     /// The codepoint as a one-character [`String`], ready to hand to a
-    /// [`TextSpan`](flui_types::typography::TextSpan).
+    /// [`TextSpan`](flui_painting::typography::TextSpan).
     ///
     /// Returns `None` when `code_point` is not a valid Unicode scalar value
     /// (a lone UTF-16 surrogate) — private-use icon-font codepoints are

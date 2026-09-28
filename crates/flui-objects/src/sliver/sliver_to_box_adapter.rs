@@ -6,7 +6,9 @@
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Single;
-use flui_types::layout::AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom};
+use flui_rendering::constraints::AxisDirection::{
+    BottomToTop, LeftToRight, RightToLeft, TopToBottom,
+};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},

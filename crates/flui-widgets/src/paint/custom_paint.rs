@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::Size;
 use flui_objects::RenderCustomPaint;
 use flui_rendering::delegates::CustomPainter;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Size;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Provides a canvas for a background and/or foreground [`CustomPainter`] to

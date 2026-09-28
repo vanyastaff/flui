@@ -106,10 +106,10 @@
 use std::rc::Rc;
 
 use flui_sdk::foundation::Listenable;
+use flui_sdk::geometry::{Point, Size};
 use flui_sdk::painting::Canvas;
-use flui_sdk::types::painting::Paint;
-use flui_sdk::types::styling::Color;
-use flui_sdk::types::{Point, Size};
+use flui_sdk::painting::Color;
+use flui_sdk::painting::Paint;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,

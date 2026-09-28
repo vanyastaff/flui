@@ -34,10 +34,7 @@
 //! ```
 
 use flui_foundation::Arity;
-use flui_types::{
-    Size,
-    geometry::{Matrix4, Offset, Rect},
-};
+use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 
 use crate::{
     parent_data::ParentData,

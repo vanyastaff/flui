@@ -17,7 +17,7 @@ use std::rc::Rc;
 
 use common::{lay_out, offset, size, tight};
 use flui_material::{AppBar, NavigationBar, NavigationDestination, Scaffold, Theme, ThemeData};
-use flui_sdk::types::EdgeInsets;
+use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::icon::IconData;
 use flui_sdk::widgets::{Icon, MediaQuery, MediaQueryData, SizedBox, Text};

@@ -10,6 +10,7 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use flui_foundation::ListenerId;
+use flui_foundation::geometry::{Bounds, Offset, Point, Rect};
 use flui_foundation::notifier::Listenable;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
@@ -20,15 +21,14 @@ use flui_interaction::routing::{
 };
 use flui_interaction::{ClientToken, ClipboardHandle, TextInputClient, TextInputHandle};
 use flui_objects::RenderEditable;
+use flui_painting::{
+    styling::Color,
+    typography::{TextDirection, TextSpan, TextStyle},
+};
 use flui_platform_api::TargetPlatform;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::{
-    Color, Offset, Point, Rect,
-    geometry::Bounds,
-    typography::{TextDirection, TextSpan, TextStyle},
-};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, RenderView, impl_render_view};
 
@@ -1773,7 +1773,7 @@ impl CursorAreaLoop {
 pub(super) fn bounds_from_rect(rect: Rect) -> Bounds<f64> {
     Bounds::new(
         Point::new(rect.min.x, rect.min.y),
-        flui_types::Size::new(rect.width(), rect.height()),
+        flui_foundation::geometry::Size::new(rect.width(), rect.height()),
     )
 }
 

@@ -4,7 +4,7 @@
 //! family end-to-end (offsets and resolved sizes).
 
 use crate::common::{lay_out, offset, size, tight};
-use flui_types::Alignment;
+use flui_painting::Alignment;
 use flui_widgets::row;
 use flui_widgets::{Positioned, SizedBox, Stack, StackFit};
 

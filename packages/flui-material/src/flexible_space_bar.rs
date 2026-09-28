@@ -34,7 +34,6 @@
 //! `titlePadding` overrides, and the M3 `isScrolledUnder` tint. Each is an
 //! additive knob on this same skeleton.
 
-use flui_sdk::types::{Alignment, EdgeInsets};
 use flui_sdk::view::BuildContextExt as _;
 use flui_sdk::view::prelude::StatelessView;
 use flui_sdk::view::{
@@ -44,6 +43,7 @@ use flui_sdk::widgets::{
     Align, DefaultTextStyle, Directionality, Opacity, Padding, Positioned, SizedBox, Stack,
     Transform,
 };
+use flui_sdk::{geometry::EdgeInsets, painting::Alignment};
 
 /// The collapse state a [`FlexibleSpaceBar`] interpolates over — provided by
 /// the enclosing `SliverAppBar` delegate on every build-during-layout
@@ -244,9 +244,8 @@ impl StatelessView for FlexibleSpaceBar {
             // Start/end resolve through the ambient Directionality — a
             // leading-aligned title sits at the RIGHT edge under RTL, and
             // its 72px leading inset moves with it.
-            let rtl = Directionality::maybe_of(ctx).is_some_and(|direction| {
-                direction == flui_sdk::types::typography::TextDirection::Rtl
-            });
+            let rtl = Directionality::maybe_of(ctx)
+                .is_some_and(|direction| direction == flui_sdk::painting::TextDirection::Rtl);
             let alignment = if self.center_title {
                 Alignment::BOTTOM_CENTER
             } else if rtl {

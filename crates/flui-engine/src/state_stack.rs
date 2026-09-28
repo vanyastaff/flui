@@ -12,7 +12,7 @@
 //! `active_transform` save, balanced by `LayerDispatcher`'s own `Drop`) must not
 //! false-positive-panic, and a `Drop` panic during unwind would trigger an abort.
 
-use flui_types::{Offset, Point, Rect, geometry::RRect};
+use flui_foundation::geometry::{Offset, Point, RRect, Rect};
 
 /// GPU draw state and complete snapshots for nested save/restore scopes.
 ///
@@ -250,7 +250,7 @@ impl GpuStateStack {
     /// skew or a perspective row survives. `Matrix4` and `glam::Mat4` are
     /// both column-major `[f32; 16]`; the conversion is a reinterpretation of
     /// the sixteen floats, the inverse of [`Self::current_transform_matrix`].
-    pub(super) fn concat(&mut self, matrix: &flui_types::Matrix4) {
+    pub(super) fn concat(&mut self, matrix: &flui_foundation::geometry::Matrix4) {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::concat: matrix={:?}", matrix);
 
@@ -279,17 +279,17 @@ impl GpuStateStack {
         self.current_transform
     }
 
-    /// The accumulated CTM as a [`flui_types::Matrix4`] (column-major).
+    /// The accumulated CTM as a [`flui_foundation::geometry::Matrix4`] (column-major).
     ///
-    /// Both `glam::Mat4` and `flui_types::Matrix4` are column-major `[f32; 16]`,
+    /// Both `glam::Mat4` and `flui_foundation::geometry::Matrix4` are column-major `[f32; 16]`,
     /// so the conversion is a direct reinterpret of the 16 floats.
     ///
     /// Ported verbatim from `WgpuPainter::current_transform_matrix` — the
     /// float column ordering is **not** changed; round-4/5 transform-bake and
     /// HiDPI device-sizing correctness depend on the exact layout.
-    pub(super) fn current_transform_matrix(&self) -> flui_types::Matrix4 {
+    pub(super) fn current_transform_matrix(&self) -> flui_foundation::geometry::Matrix4 {
         let c = self.current_transform.to_cols_array();
-        flui_types::Matrix4::new(
+        flui_foundation::geometry::Matrix4::new(
             f64::from(c[0]),
             f64::from(c[1]),
             f64::from(c[2]),
@@ -694,7 +694,7 @@ impl GpuStateStack {
     /// and ry per corner, so nothing collapses here at all.
     pub(super) fn clip_rsuperellipse(
         &mut self,
-        rse: flui_types::geometry::RSuperellipse,
+        rse: flui_foundation::geometry::RSuperellipse,
         surface_size: (u32, u32),
         hard: bool,
     ) {
@@ -727,7 +727,7 @@ impl GpuStateStack {
     /// [`Self::resolve_rrect_clip`]'s doc gives about its own pair: a second
     /// copy of this arithmetic would let the per-draw and at-composite routes
     /// disagree about where the same clip is, with nothing failing.
-    fn rsuperellipse_slots(rse: flui_types::geometry::RSuperellipse) -> [f32; 12] {
+    fn rsuperellipse_slots(rse: flui_foundation::geometry::RSuperellipse) -> [f32; 12] {
         let rect = rse.outer_rect();
         let tl_r = rse.tl_radius();
         let tr_r = rse.tr_radius();
@@ -765,7 +765,7 @@ impl GpuStateStack {
     /// `sdRoundedSuperellipse` through `clipAlpha` in `common/clip.wgsl`.
     pub(super) fn clip_rsuperellipse_at_composite(
         &mut self,
-        rse: flui_types::geometry::RSuperellipse,
+        rse: flui_foundation::geometry::RSuperellipse,
         surface_size: (u32, u32),
     ) -> ResolvedClip {
         // Soft, always, for the reason `clip_rrect_at_composite` gives: the
@@ -833,7 +833,7 @@ impl GpuStateStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::Offset;
+    use flui_foundation::geometry::Offset;
 
     fn identity_stack() -> GpuStateStack {
         GpuStateStack::new()
@@ -988,7 +988,7 @@ mod tests {
         stack.save();
         stack.scale(2.0, 3.0);
         stack.clip_rsuperellipse(
-            flui_types::geometry::RSuperellipse::from_rect_circular(bounds, 12.0),
+            flui_foundation::geometry::RSuperellipse::from_rect_circular(bounds, 12.0),
             (400, 400),
             false,
         );
@@ -1403,7 +1403,7 @@ mod tests {
     /// concat keeps it, which is what `push_transform` relies on.
     #[test]
     fn concat_keeps_a_skew_the_trs_decomposition_would_drop() {
-        let skew = flui_types::Matrix4::skew_2d(0.3, 0.0);
+        let skew = flui_foundation::geometry::Matrix4::skew_2d(0.3, 0.0);
         let mut stack = GpuStateStack::new();
         stack.concat(&skew);
         // The GPU stack holds f32: the skew survives exactly as narrowed on upload.
@@ -1426,9 +1426,11 @@ mod tests {
         composed.scale(2.0, 3.0);
 
         let mut concatenated = GpuStateStack::new();
-        concatenated.concat(&flui_types::Matrix4::translation(10.0, 20.0, 0.0));
-        concatenated.concat(&flui_types::Matrix4::rotation_z(0.5));
-        concatenated.concat(&flui_types::Matrix4::scaling(2.0, 3.0, 1.0));
+        concatenated.concat(&flui_foundation::geometry::Matrix4::translation(
+            10.0, 20.0, 0.0,
+        ));
+        concatenated.concat(&flui_foundation::geometry::Matrix4::rotation_z(0.5));
+        concatenated.concat(&flui_foundation::geometry::Matrix4::scaling(2.0, 3.0, 1.0));
 
         let lhs = composed.current_transform().to_cols_array();
         let rhs = concatenated.current_transform().to_cols_array();

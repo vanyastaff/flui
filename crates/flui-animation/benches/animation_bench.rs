@@ -23,9 +23,9 @@ use flui_animation::{
     Animatable, AnimatedValue, Animation, AnimationController, ColorTween, Curve, CurvedAnimation,
     Curves, FloatTween, OklabColorTween, Simulation, SpringDescription, SpringSimulation, Tween,
 };
+use flui_foundation::geometry::Offset;
+use flui_painting::styling::Color;
 use flui_scheduler::UpdateScheduler;
-use flui_types::geometry::Offset;
-use flui_types::styling::Color;
 
 fn tween_transform(c: &mut Criterion) {
     let mut group = c.benchmark_group("tween_transform");

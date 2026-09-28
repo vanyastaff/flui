@@ -182,9 +182,9 @@ fn viewport_clips_the_semantics_rects_of_off_screen_rows() {
 /// `none`.
 #[test]
 fn clip_rect_narrows_the_semantics_rect_of_the_content_it_clips() {
-    use flui_types::Alignment;
+    use flui_painting::Alignment;
 
-    use flui_types::painting::Clip;
+    use flui_painting::paint::Clip;
     use flui_widgets::{ClipRect, OverflowBox, Semantics};
 
     // `OverflowBox` is load-bearing: without it the outer 100x40 constrains

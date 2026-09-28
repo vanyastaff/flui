@@ -3,10 +3,8 @@
 
 use std::sync::Arc;
 
-use flui_types::{
-    geometry::{Offset, Size},
-    typography::{InlineSpan, TextAlign, TextDirection, TextStyle},
-};
+use crate::typography::{InlineSpan, TextAlign, TextDirection, TextStyle};
+use flui_foundation::geometry::{Offset, Size};
 
 use super::{DEFAULT_FONT_SIZE, LayoutMetrics, TextBaseline, TextLayoutCache, TextPainter};
 use crate::text_layout::TextLayout;
@@ -85,7 +83,7 @@ impl TextPainter {
     /// The colour each shaped run carries, relative to the root. Baked into
     /// the layout at shape time, so `set_text` treats a change to one as a
     /// layout change.
-    pub(super) fn span_colors(&self, text: &InlineSpan) -> Vec<Option<flui_types::Color>> {
+    pub(super) fn span_colors(&self, text: &InlineSpan) -> Vec<Option<crate::styling::Color>> {
         let root = text.style().and_then(crate::text_layout::paint_color);
         collect_styled_spans(text, self.text_scale_factor)
             .iter()
@@ -439,7 +437,7 @@ pub(crate) fn collect_styled_spans(
     scale: f64,
 ) -> Vec<(String, Option<TextStyle>)> {
     fn walk(
-        span: &flui_types::typography::TextSpan,
+        span: &crate::typography::TextSpan,
         inherited: Option<&TextStyle>,
         scale: f64,
         out: &mut Vec<(String, Option<TextStyle>)>,

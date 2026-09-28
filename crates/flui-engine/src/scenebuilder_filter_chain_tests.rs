@@ -55,11 +55,12 @@ mod gpu_tests {
     use std::sync::Arc;
 
     use flui_foundation::LayerId;
+    use flui_foundation::geometry::{Offset, Rect};
     use flui_layer::{CanvasLayer, LayerTree, SceneBuilder};
     use flui_painting::Paint;
-    use flui_types::{
-        Color, Offset, Rect,
-        painting::{BlendMode, ColorFilter, ImageFilter},
+    use flui_painting::{
+        paint::{BlendMode, ColorFilter, ImageFilter},
+        styling::Color,
     };
 
     use crate::{

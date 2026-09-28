@@ -20,8 +20,8 @@
 //! `<Idle>` owner.
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::{Rect, Size};
 use flui_layer::LayerTree;
-use flui_types::{Rect, Size};
 
 use crate::{
     constraints::BoxConstraints,
@@ -458,7 +458,7 @@ impl FrameRun {
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
     /// # use flui_rendering::prelude::*;
     /// # use flui_foundation::Leaf;
-    /// # use flui_types::Size;
+    /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox(f64);
     /// # impl flui_foundation::Diagnosticable for FixedBox {}
@@ -535,7 +535,7 @@ impl FrameRun {
     /// # use flui_rendering::testing::{RenderTester, Probe, box_node};
     /// # use flui_rendering::prelude::*;
     /// # use flui_foundation::Leaf;
-    /// # use flui_types::Size;
+    /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox(f64);
     /// # impl flui_foundation::Diagnosticable for FixedBox {}
@@ -674,7 +674,7 @@ impl RenderTester {
     /// # use flui_rendering::testing::{box_node, RenderTester};
     /// # use flui_rendering::prelude::*;
     /// # use flui_foundation::Leaf;
-    /// # use flui_types::Size;
+    /// # use flui_foundation::geometry::Size;
     /// # #[derive(Debug, Default)]
     /// # struct FixedBox;
     /// # impl flui_foundation::Diagnosticable for FixedBox {}

@@ -97,9 +97,9 @@
 use std::sync::Arc;
 
 use flui_sdk::foundation::{Listenable, ListenerId};
+use flui_sdk::painting::Color;
+use flui_sdk::painting::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::Color;
-use flui_sdk::types::typography::TextStyle;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
@@ -313,7 +313,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             default_style,
             minimum_size
         )
-        .unwrap_or(flui_sdk::types::Size::ZERO);
+        .unwrap_or(flui_sdk::geometry::Size::ZERO);
         let fixed_size = resolve_field!(
             &states,
             widget_style,
@@ -328,7 +328,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
             default_style,
             maximum_size
         )
-        .unwrap_or(flui_sdk::types::Size::INFINITY);
+        .unwrap_or(flui_sdk::geometry::Size::INFINITY);
         // `side` is NOT resolved here: `Material`/`MaterialShape` has no
         // border-side painting path yet (see `ButtonStyle::side`'s doc
         // comment), so nothing in this composition would consume it. Each
@@ -419,9 +419,9 @@ fn fold_foreground_into_text_style(
 /// invert `min > max` into a malformed [`BoxConstraints`] instead of
 /// clamping to the envelope's edge, matching the oracle's own behavior.
 fn effective_constraints(
-    minimum: flui_sdk::types::Size,
-    maximum: flui_sdk::types::Size,
-    fixed: Option<flui_sdk::types::Size>,
+    minimum: flui_sdk::geometry::Size,
+    maximum: flui_sdk::geometry::Size,
+    fixed: Option<flui_sdk::geometry::Size>,
 ) -> BoxConstraints {
     let mut constraints =
         BoxConstraints::new(minimum.width, maximum.width, minimum.height, maximum.height);
@@ -589,8 +589,8 @@ mod tests {
     // effective_constraints — min/max envelope + fixed-size clamping
     // ------------------------------------------------------------------
 
-    fn size(width: f64, height: f64) -> flui_sdk::types::Size {
-        flui_sdk::types::Size::new(width, height)
+    fn size(width: f64, height: f64) -> flui_sdk::geometry::Size {
+        flui_sdk::geometry::Size::new(width, height)
     }
 
     #[test]
@@ -654,7 +654,7 @@ mod tests {
         let constraints = effective_constraints(
             size(64.0, 40.0),
             size(200.0, 100.0),
-            Some(flui_sdk::types::Size::new(f64::INFINITY, 60.0)),
+            Some(flui_sdk::geometry::Size::new(f64::INFINITY, 60.0)),
         );
         assert_eq!(constraints.min_width, 64.0);
         assert_eq!(constraints.max_width, 200.0);

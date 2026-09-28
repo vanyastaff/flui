@@ -739,7 +739,7 @@ impl Drop for FocusManager {
 mod tests {
     use std::cell::{Cell, RefCell};
 
-    use flui_types::geometry::Rect;
+    use flui_foundation::geometry::Rect;
 
     use super::*;
     use crate::{

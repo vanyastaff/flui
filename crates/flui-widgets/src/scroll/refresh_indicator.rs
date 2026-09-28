@@ -42,8 +42,8 @@ use std::{
 
 use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_types::Color;
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BuildContext, BuildContextExt, Child, EventCx, EventOutcome, IntoView, LifecycleContext,

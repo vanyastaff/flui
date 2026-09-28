@@ -9,10 +9,8 @@
 //! even though every implementor in this crate implements both: a backend that
 //! cannot mirror the clip/transform nesting cannot render a real tree.
 
-use flui_types::{
-    geometry::{Matrix4, Offset, RRect, RSuperellipse, Rect},
-    painting::Path,
-};
+use flui_foundation::geometry::{Matrix4, Offset, RRect, RSuperellipse, Rect};
+use flui_painting::paint::Path;
 
 /// Compositor hand-off interface for the flui-layer clip/transform/effect
 /// stacks.
@@ -40,13 +38,13 @@ use flui_types::{
 /// which is what the split buys.
 pub(crate) trait LayerStateStack {
     /// Push a rectangular clip onto the clip stack
-    fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_types::painting::Clip);
+    fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_painting::paint::Clip);
 
     /// Push a rounded rectangular clip onto the clip stack
-    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip);
+    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_painting::paint::Clip);
 
     /// Push an arbitrary path clip onto the clip stack
-    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip);
+    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_painting::paint::Clip);
 
     /// Push a rounded-superellipse (iOS squircle) clip onto the clip stack.
     ///
@@ -69,7 +67,7 @@ pub(crate) trait LayerStateStack {
     fn push_clip_rsuperellipse(
         &mut self,
         rse: &RSuperellipse,
-        clip_behavior: flui_types::painting::Clip,
+        clip_behavior: flui_painting::paint::Clip,
     );
 
     /// Pop the most recent clip from the clip stack
@@ -93,7 +91,7 @@ pub(crate) trait LayerStateStack {
     /// which is correct for command-only backends that do not participate in the
     /// dst-read compositor path.  The `wgpu` backend overrides this to route
     /// advanced blend modes through `save_layer` with the blend propagated.
-    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_painting::paint::BlendMode) {
         let _ = blend;
         self.push_opacity(alpha);
     }
@@ -103,16 +101,16 @@ pub(crate) trait LayerStateStack {
 
     /// Push a color filter onto the effect stack.
     ///
-    /// Accepts the full [`flui_types::painting::ColorFilter`] enum — `Matrix`,
+    /// Accepts the full [`flui_painting::paint::ColorFilter`] enum — `Matrix`,
     /// `Mode`, `LinearToSrgbGamma`, and `SrgbToLinearGamma` — so all engine
     /// GPU passes are reachable from a single trait method.
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter);
+    fn push_color_filter(&mut self, filter: &flui_painting::paint::ColorFilter);
 
     /// Pop the most recent color filter from the effect stack
     fn pop_color_filter(&mut self);
 
     /// Push an image filter onto the effect stack
-    fn push_image_filter(&mut self, filter: &flui_types::painting::effects::ImageFilter);
+    fn push_image_filter(&mut self, filter: &flui_painting::paint::effects::ImageFilter);
 
     /// Pop the most recent image filter from the effect stack
     fn pop_image_filter(&mut self);

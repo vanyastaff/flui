@@ -1,6 +1,7 @@
 //! Pure sliver layout math shared by render objects and the pipeline.
 
-use flui_types::{Offset, layout::Axis};
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::Offset;
 
 use super::{SliverConstraints, SliverGeometry, right_way_up};
 
@@ -127,7 +128,7 @@ mod tests {
 
     #[test]
     fn child_paint_offset_horizontal_rtl_reverse_maps_to_x() {
-        use flui_types::layout::AxisDirection;
+        use crate::constraints::AxisDirection;
 
         let constraints = sliver::horizontal()
             .with_axis_direction(AxisDirection::RightToLeft)

@@ -43,11 +43,11 @@ use std::time::Duration;
 
 use flui_animation::Curve;
 use flui_animation::simulation::{ScrollSpringSimulation, Simulation, SpringDescription};
+use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::view::{
     CacheExtentStyle, DimensionChangePolicy, ScrollPosition, ViewportOffset,
 };
-use flui_types::layout::Axis;
 use flui_view::prelude::StatefulView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};

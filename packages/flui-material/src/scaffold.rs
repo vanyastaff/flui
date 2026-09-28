@@ -160,9 +160,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use flui_sdk::foundation::ElementId;
+use flui_sdk::geometry::{EdgeInsets, Offset, Size};
+use flui_sdk::painting::Color;
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::styling::Color;
-use flui_sdk::types::{EdgeInsets, Offset, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::{
@@ -1028,7 +1028,7 @@ mod tests {
     fn fab_y_grows_the_safe_margin_for_a_nonzero_min_view_padding_bottom() {
         use std::collections::HashMap;
 
-        use flui_sdk::types::Offset;
+        use flui_sdk::geometry::Offset;
 
         // Mirrors `flui-rendering`'s `delegates::multi_child_layout_delegate`'s
         // own in-crate `MockContext` test pattern.

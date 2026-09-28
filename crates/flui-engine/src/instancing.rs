@@ -27,7 +27,8 @@
 //! ```
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::{Point, Rect, styling::Color};
+use flui_foundation::geometry::{Point, Rect};
+use flui_painting::styling::Color;
 
 /// Instance data for a rectangle
 ///
@@ -680,7 +681,7 @@ impl TextureInstance {
     /// * `dst_rect` - Destination rectangle in screen coordinates
     /// * `tint` - Color tint (use Color::WHITE for no tint)
     #[must_use]
-    pub(crate) fn new(dst_rect: flui_types::Rect<f64>, tint: Color) -> Self {
+    pub(crate) fn new(dst_rect: flui_foundation::geometry::Rect<f64>, tint: Color) -> Self {
         Self {
             dst_rect: [
                 (dst_rect.left() as f32),
@@ -705,7 +706,11 @@ impl TextureInstance {
     /// * `src_uv` - Source UV rectangle [u_min, v_min, u_max, v_max]
     /// * `tint` - Color tint
     #[must_use]
-    pub(crate) fn with_uv(dst_rect: flui_types::Rect<f64>, src_uv: [f32; 4], tint: Color) -> Self {
+    pub(crate) fn with_uv(
+        dst_rect: flui_foundation::geometry::Rect<f64>,
+        src_uv: [f32; 4],
+        tint: Color,
+    ) -> Self {
         Self {
             dst_rect: [
                 (dst_rect.left() as f32),
@@ -740,7 +745,7 @@ impl TextureInstance {
     /// this tint (`tex_color * in.tint`).
     #[must_use]
     pub(crate) fn with_uv_tint_f32(
-        dst_rect: flui_types::Rect<f64>,
+        dst_rect: flui_foundation::geometry::Rect<f64>,
         src_uv: [f32; 4],
         tint: [f32; 4],
     ) -> Self {
@@ -1247,7 +1252,8 @@ impl<T> Default for InstanceBatch<T> {
 mod aliased_lane_tests {
     use super::*;
     use crate::state_stack::ResolvedClip;
-    use flui_types::{Color, Rect};
+    use flui_foundation::geometry::Rect;
+    use flui_painting::styling::Color;
 
     fn unit_rect() -> RectInstance {
         RectInstance::rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), Color::RED)
@@ -1598,7 +1604,7 @@ mod tests {
 
     #[test]
     fn test_circle_instance_field_values() {
-        use flui_types::Point;
+        use flui_foundation::geometry::Point;
         let center = Point::new(50.0, 75.0);
         let instance = CircleInstance::new(center, 20.0, Color::RED, [1.0, 1.0]);
         // The device center lives in `transform_translate` (added AFTER M in the
@@ -1619,7 +1625,7 @@ mod tests {
     /// scales it). A non-origin center proves the center → translate mapping.
     #[test]
     fn circle_instance_scale_propagates_to_transform() {
-        use flui_types::Point;
+        use flui_foundation::geometry::Point;
         let center = Point::new(12.0, 34.0);
         let identity = CircleInstance::new(center, 10.0, Color::RED, [1.0, 1.0]);
         // diag(1,1): x-col=(1,0), y-col=(0,1)

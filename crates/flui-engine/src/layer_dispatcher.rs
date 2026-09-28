@@ -3,10 +3,10 @@
 //! Production rendering backend executing drawing commands via GPU
 //! acceleration.
 
+use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 use flui_painting::{BlendMode, Paint, PointMode};
-use flui_types::{
-    geometry::{Matrix4, Offset, Point, RRect, Rect},
-    painting::{Image, Path},
+use flui_painting::{
+    paint::{Image, Path},
     styling::Color,
 };
 use smallvec::SmallVec;
@@ -202,7 +202,7 @@ impl<'frame> LayerDispatcher<'frame> {
     /// and by the layer's own `clips()` gate on the layer route. See
     /// `ARCHITECTURE.md` for why that condition once existed and what removing
     /// it proved.
-    fn opens_offscreen(&self, behavior: flui_types::painting::Clip) -> bool {
+    fn opens_offscreen(&self, behavior: flui_painting::paint::Clip) -> bool {
         clip_opens_a_layer(behavior) && !self.painter.inside_image_filter_layer()
     }
 
@@ -532,8 +532,8 @@ impl Drop for LayerDispatcher<'_> {
 /// This answers only the MODE half of the question. Whether a layer is actually
 /// opened is [`LayerDispatcher::opens_offscreen`], which also requires that no
 /// enclosing image-filter layer would discard it.
-const fn clip_opens_a_layer(behavior: flui_types::painting::Clip) -> bool {
-    matches!(behavior, flui_types::painting::Clip::AntiAliasWithSaveLayer)
+const fn clip_opens_a_layer(behavior: flui_painting::paint::Clip) -> bool {
+    matches!(behavior, flui_painting::paint::Clip::AntiAliasWithSaveLayer)
 }
 
 /// Whether a clip command asks for no clipping at all.
@@ -543,8 +543,8 @@ const fn clip_opens_a_layer(behavior: flui_types::painting::Clip) -> bool {
 /// `clip_rsuperellipse_ext` push their command whatever mode they are given.
 /// Honouring it means applying NO clip — the alternative, treating it as the
 /// cheapest clip, clips content the caller asked to leave alone.
-const fn clip_is_disabled(behavior: flui_types::painting::Clip) -> bool {
-    matches!(behavior, flui_types::painting::Clip::None)
+const fn clip_is_disabled(behavior: flui_painting::paint::Clip) -> bool {
+    matches!(behavior, flui_painting::paint::Clip::None)
 }
 
 /// Whether this clip op can be expressed by the primitives this backend has.
@@ -565,8 +565,8 @@ const fn clip_is_disabled(behavior: flui_types::painting::Clip) -> bool {
 /// Honouring it needs the machinery an exact path clip needs: a stencil pass,
 /// or a shader carrying a clip STACK that can evaluate `1 − coverage`. Both are
 /// tracked with path clipping itself.
-const fn clip_op_is_expressible(clip_op: flui_types::painting::ClipOp) -> bool {
-    matches!(clip_op, flui_types::painting::ClipOp::Intersect)
+const fn clip_op_is_expressible(clip_op: flui_painting::paint::ClipOp) -> bool {
+    matches!(clip_op, flui_painting::paint::ClipOp::Intersect)
 }
 
 /// Report a clip this backend cannot express, and go on without installing it.
@@ -734,7 +734,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
         &mut self,
         image: &Image,
         dst: Rect<f64>,
-        repeat: flui_types::painting::image::ImageRepeat,
+        repeat: flui_painting::paint::image::ImageRepeat,
         paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
@@ -762,7 +762,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
         &mut self,
         image: &Image,
         dst: Rect<f64>,
-        filter: flui_types::painting::image::ColorFilter,
+        filter: flui_painting::paint::image::ColorFilter,
         paint: Option<&Paint>,
         transform: &Matrix4,
     ) {
@@ -778,10 +778,10 @@ impl CommandRenderer for LayerDispatcher<'_> {
 
     fn render_texture(
         &mut self,
-        texture_id: flui_types::painting::TextureId,
+        texture_id: flui_painting::paint::TextureId,
         dst: Rect<f64>,
         src: Option<Rect<f64>>,
-        filter_quality: flui_types::painting::FilterQuality,
+        filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
         transform: &Matrix4,
     ) {
@@ -830,8 +830,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn clip_rect(
         &mut self,
         rect: Rect<f64>,
-        clip_op: flui_types::painting::ClipOp,
-        clip_behavior: flui_types::painting::Clip,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
         transform: &Matrix4,
     ) {
         if clip_is_disabled(clip_behavior) {
@@ -851,8 +851,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn clip_rrect(
         &mut self,
         rrect: RRect,
-        clip_op: flui_types::painting::ClipOp,
-        clip_behavior: flui_types::painting::Clip,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
         transform: &Matrix4,
     ) {
         if clip_is_disabled(clip_behavior) {
@@ -869,9 +869,9 @@ impl CommandRenderer for LayerDispatcher<'_> {
 
     fn clip_rsuperellipse(
         &mut self,
-        rsuperellipse: flui_types::geometry::RSuperellipse,
-        clip_op: flui_types::painting::ClipOp,
-        clip_behavior: flui_types::painting::Clip,
+        rsuperellipse: flui_foundation::geometry::RSuperellipse,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
         transform: &Matrix4,
     ) {
         // Override the trait default (which routes to clip_rrect against an
@@ -894,8 +894,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
     fn clip_path(
         &mut self,
         path: &Path,
-        clip_op: flui_types::painting::ClipOp,
-        clip_behavior: flui_types::painting::Clip,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
         transform: &Matrix4,
     ) {
         // `Clip::None` asks for no clipping, and this is where the three sibling
@@ -974,7 +974,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
         let bg_color = Color::rgba(10, 10, 15, 200);
         let bg_paint = Paint::fill(bg_color);
         let bg_rrect =
-            RRect::from_rect_and_radius(bounds, flui_types::geometry::Radius::circular(4.0));
+            RRect::from_rect_and_radius(bounds, flui_foundation::geometry::Radius::circular(4.0));
         self.painter.draw_rrect(bg_rrect, &bg_paint);
 
         let x = bounds.left() + 8.0;
@@ -1070,7 +1070,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
     // the cost is one branch per layer-stack call -- negligible
     // versus the save_layer/clip_path GPU work that follows.
 
-    fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_painting::paint::Clip) {
         self.flush_active_transform();
         self.painter.save();
         self.painter.clip_rect(*rect, clip_behavior);
@@ -1085,7 +1085,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
         self.open_clip_frame(composite_clip);
     }
 
-    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_painting::paint::Clip) {
         self.flush_active_transform();
         self.painter.save();
         // Decided BEFORE installing anything: the two calls below clip the
@@ -1106,8 +1106,8 @@ impl LayerStateStack for LayerDispatcher<'_> {
 
     fn push_clip_rsuperellipse(
         &mut self,
-        rse: &flui_types::geometry::RSuperellipse,
-        clip_behavior: flui_types::painting::Clip,
+        rse: &flui_foundation::geometry::RSuperellipse,
+        clip_behavior: flui_painting::paint::Clip,
     ) {
         self.flush_active_transform();
         self.painter.save();
@@ -1129,7 +1129,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
         self.open_clip_frame(composite_clip);
     }
 
-    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_types::painting::Clip) {
+    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_painting::paint::Clip) {
         self.flush_active_transform();
         self.painter.save();
         // The clip installed is the path's BOUNDING BOX, not the path — see
@@ -1200,7 +1200,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
         self.painter.save_layer(None, &paint);
     }
 
-    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_types::painting::BlendMode) {
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_painting::paint::BlendMode) {
         self.flush_active_transform();
         // Propagate the explicit blend mode into the saveLayer paint so the
         // compositor reads it from `paint.blend_mode` and routes the layer
@@ -1217,8 +1217,8 @@ impl LayerStateStack for LayerDispatcher<'_> {
         self.painter.restore_layer();
     }
 
-    fn push_color_filter(&mut self, filter: &flui_types::painting::ColorFilter) {
-        use flui_types::painting::ColorFilter;
+    fn push_color_filter(&mut self, filter: &flui_painting::paint::ColorFilter) {
+        use flui_painting::paint::ColorFilter;
 
         self.flush_active_transform();
 
@@ -1228,7 +1228,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
                 // Exact f32 comparison is correct: `ColorMatrix::identity()` is
                 // built from bit-exact 0.0/1.0 literals, so a transitive equality
                 // check correctly skips the GPU pass without ULP slop.
-                let identity = flui_types::painting::effects::ColorMatrix::identity();
+                let identity = flui_painting::paint::effects::ColorMatrix::identity();
                 if m.values == identity.values {
                     self.painter.save_layer(None, &Paint::fill(Color::WHITE));
                     tracing::trace!("push_color_filter: identity matrix — no-op layer");
@@ -1292,8 +1292,8 @@ impl LayerStateStack for LayerDispatcher<'_> {
         self.painter.restore_layer();
     }
 
-    fn push_image_filter(&mut self, filter: &flui_types::painting::effects::ImageFilter) {
-        use flui_types::painting::effects::ImageFilter;
+    fn push_image_filter(&mut self, filter: &flui_painting::paint::effects::ImageFilter) {
+        use flui_painting::paint::effects::ImageFilter;
 
         self.flush_active_transform();
 
@@ -1428,10 +1428,10 @@ impl LayerStateStack for LayerDispatcher<'_> {
 /// The inner `match` is exhaustive: adding a new `ImageFilter` variant forces
 /// a compile error here, ensuring the flatten stays up-to-date.
 pub(crate) fn flatten_compose(
-    filters: &[flui_types::painting::effects::ImageFilter],
+    filters: &[flui_painting::paint::effects::ImageFilter],
     out: &mut SmallVec<[ImageFilterPass; 4]>,
 ) {
-    use flui_types::painting::effects::ImageFilter;
+    use flui_painting::paint::effects::ImageFilter;
     for filter in filters {
         match filter {
             ImageFilter::Blur { sigma_x, sigma_y } => {
