@@ -108,7 +108,7 @@ where
                     return;
                 }
             };
-            r.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+            r.resize(phys_size.width as u32, phys_size.height as u32);
             tracing::info!("WebGPU renderer initialized");
             let _prev = renderer_init.lock().replace(r);
         });
@@ -143,11 +143,7 @@ where
 
         let logical = window.logical_size();
         let attach = ui_realm.enter(|realm| {
-            realm.attach_root_widget_with_size(
-                &root,
-                logical.width.0 as f64,
-                logical.height.0 as f64,
-            )
+            realm.attach_root_widget_with_size(&root, logical.width as f64, logical.height as f64)
         });
         if let Err(e) = attach {
             tracing::error!("Root widget attach failed: {:?}", e);
@@ -167,8 +163,8 @@ where
                         // Rounded like the backend's `physical_size` and
                         // the canvas backing store it sets, so all three
                         // agree at fractional device pixel ratios.
-                        let width = (size.width.0 * scale_factor).round() as u32;
-                        let height = (size.height.0 * scale_factor).round() as u32;
+                        let width = (size.width * scale_factor).round() as u32;
+                        let height = (size.height * scale_factor).round() as u32;
                         renderer.resize(width, height);
                     }
                 },

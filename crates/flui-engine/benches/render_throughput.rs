@@ -121,7 +121,12 @@ fn build_frame(painter: &mut WgpuPainter) {
         let row = (i / 10) as f32;
         let x = col * 80.0;
         let y = row * 100.0;
-        let rect = flui_types::Rect::from_ltrb(x, y, (x + 70.0), (y + 90.0));
+        let rect = flui_types::Rect::from_ltrb(
+            f64::from(x),
+            f64::from(y),
+            f64::from((x + 70.0)),
+            f64::from((y + 90.0)),
+        );
         let hue = i as f32 / 50.0;
         let color = Color::from_rgba_f32_array([hue, 0.5, 1.0 - hue, 1.0]);
         let paint = Paint::fill(black_box(color));
@@ -317,14 +322,19 @@ fn damage_scissor(c: &mut Criterion) {
         painter.save();
         if let Some(side) = damage {
             painter.clip_rect(
-                Rect::from_xywh(0.0, 0.0, side, side),
+                Rect::from_xywh(0.0, 0.0, f64::from(side), f64::from(side)),
                 flui_types::painting::Clip::HardEdge,
             );
         }
         for i in 0..layers {
             let f = i as f32;
             painter.draw_rect(
-                Rect::from_xywh((f * 2.0), (f * 1.5), w, h),
+                Rect::from_xywh(
+                    f64::from((f * 2.0)),
+                    f64::from((f * 1.5)),
+                    f64::from(w),
+                    f64::from(h),
+                ),
                 &Paint::fill(Color::rgba(0, 0, 255, 40)),
             );
         }

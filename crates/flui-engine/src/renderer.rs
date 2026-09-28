@@ -2823,7 +2823,7 @@ mod tests {
             ];
             for (index, color) in colors.iter().enumerate() {
                 painter.draw_rect(
-                    Rect::from_xywh((index as f32 * 10.0), 0.0, 10.0, 64.0),
+                    Rect::from_xywh(f64::from((index as f32 * 10.0)), 0.0, 10.0, 64.0),
                     &Paint::fill(*color),
                 );
             }
@@ -2990,10 +2990,10 @@ mod tests {
         );
         let (composite_rect, _tw, _th) = results[0];
         assert!(
-            (composite_rect.left().0 - 200.0).abs() < 0.5
-                && (composite_rect.top().0 - 200.0).abs() < 0.5
-                && (composite_rect.width().0 - 400.0).abs() < 0.5
-                && (composite_rect.height().0 - 400.0).abs() < 0.5,
+            (composite_rect.left() - 200.0).abs() < 0.5
+                && (composite_rect.top() - 200.0).abs() < 0.5
+                && (composite_rect.width() - 400.0).abs() < 0.5
+                && (composite_rect.height() - 400.0).abs() < 0.5,
             "backdrop composite rect must be the device rect (x=200,y=200,w=400,h=400) \
              under DPR=2; got {composite_rect:?} (logical (x=100,y=100,w=200,h=200) means \
              the DPR transform was dropped)"
@@ -3092,25 +3092,25 @@ mod tests {
         // Expected device rect corners: (220,220)→(620,620); w=h=400.
         // A translation-drop regression gives (200,200) position (not 220).
         assert!(
-            (composite_rect.left().0 - 220.0).abs() < 0.5,
+            (composite_rect.left() - 220.0).abs() < 0.5,
             "composite rect left must be ~220.0 (2*100+20); got {:.2} \
              (translation was likely dropped from CTM)",
-            composite_rect.left().0
+            composite_rect.left()
         );
         assert!(
-            (composite_rect.top().0 - 220.0).abs() < 0.5,
+            (composite_rect.top() - 220.0).abs() < 0.5,
             "composite rect top must be ~220.0 (2*100+20); got {:.2}",
-            composite_rect.top().0
+            composite_rect.top()
         );
         assert!(
-            (composite_rect.width().0 - 400.0).abs() < 0.5,
+            (composite_rect.width() - 400.0).abs() < 0.5,
             "composite rect width must be ~400.0; got {:.2}",
-            composite_rect.width().0
+            composite_rect.width()
         );
         assert!(
-            (composite_rect.height().0 - 400.0).abs() < 0.5,
+            (composite_rect.height() - 400.0).abs() < 0.5,
             "composite rect height must be ~400.0; got {:.2}",
-            composite_rect.height().0
+            composite_rect.height()
         );
     }
 
@@ -3220,26 +3220,26 @@ mod tests {
         // Before the fix, width/height would be 200 (device_rect was passed
         // to queue_offscreen_result instead of clamped_composite_rect).
         assert!(
-            (composite_rect.left().0 - 350.0).abs() < 0.5,
+            (composite_rect.left() - 350.0).abs() < 0.5,
             "composite rect left must be ~350.0 (clamped origin); got {:.2}",
-            composite_rect.left().0
+            composite_rect.left()
         );
         assert!(
-            (composite_rect.top().0 - 350.0).abs() < 0.5,
+            (composite_rect.top() - 350.0).abs() < 0.5,
             "composite rect top must be ~350.0 (clamped origin); got {:.2}",
-            composite_rect.top().0
+            composite_rect.top()
         );
         assert!(
-            (composite_rect.width().0 - 50.0).abs() < 0.5,
+            (composite_rect.width() - 50.0).abs() < 0.5,
             "composite rect width must be ~50.0 (clamped extent); got {:.2} — \
              200.0 indicates the unclamped device_rect was passed to \
              queue_offscreen_result (blurred texture would be stretched)",
-            composite_rect.width().0
+            composite_rect.width()
         );
         assert!(
-            (composite_rect.height().0 - 50.0).abs() < 0.5,
+            (composite_rect.height() - 50.0).abs() < 0.5,
             "composite rect height must be ~50.0 (clamped extent); got {:.2}",
-            composite_rect.height().0
+            composite_rect.height()
         );
     }
 
@@ -3717,7 +3717,7 @@ mod tests {
         // Source: opaque orange inside a Multiply saveLayer.
         let source_orange = Color::rgba(200, 120, 40, 255);
         let backdrop_color = Color::rgba(40, 60, 220, 255);
-        let layer_bounds = Rect::from_xywh(0.0, 0.0, (W as f32), (H as f32));
+        let layer_bounds = Rect::from_xywh(0.0, 0.0, f64::from((W as f32)), f64::from((H as f32)));
 
         let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
@@ -4724,10 +4724,10 @@ mod tests {
             "offscreen must be device-sized under DPR=2"
         );
         assert!(
-            composite_rect.left().0.abs() < 0.5
-                && composite_rect.top().0.abs() < 0.5
-                && (composite_rect.right().0 - 200.0).abs() < 0.5
-                && (composite_rect.bottom().0 - 200.0).abs() < 0.5,
+            composite_rect.left().abs() < 0.5
+                && composite_rect.top().abs() < 0.5
+                && (composite_rect.right() - 200.0).abs() < 0.5
+                && (composite_rect.bottom() - 200.0).abs() < 0.5,
             "composite rect must span device (0,0,200,200) under DPR=2; got {composite_rect:?}"
         );
     }

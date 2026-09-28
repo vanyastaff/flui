@@ -66,8 +66,8 @@ impl PlatformTextInput for WinitTextInput {
         use winit::dpi::{LogicalPosition, LogicalSize};
 
         self.window.set_ime_cursor_area(
-            LogicalPosition::new(f64::from(area.origin.x.0), f64::from(area.origin.y.0)),
-            LogicalSize::new(f64::from(area.size.width.0), f64::from(area.size.height.0)),
+            LogicalPosition::new(f64::from(area.origin.x), f64::from(area.origin.y)),
+            LogicalSize::new(f64::from(area.size.width), f64::from(area.size.height)),
         );
     }
 }

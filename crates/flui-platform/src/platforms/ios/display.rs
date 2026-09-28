@@ -119,8 +119,8 @@ mod tests {
     #[test]
     fn points_scale_to_device_pixels() {
         let b = device_bounds_from_points(rect(0.0, 0.0, 390.0, 844.0), 3.0);
-        assert_eq!(b.size.width.0, 1170);
-        assert_eq!(b.size.height.0, 2532);
+        assert_eq!(b.size.width, 1170);
+        assert_eq!(b.size.height, 2532);
     }
 
     /// A non-integer product must round rather than truncate, or a
@@ -128,14 +128,14 @@ mod tests {
     #[test]
     fn fractional_points_round_to_the_nearest_pixel() {
         let b = device_bounds_from_points(rect(0.0, 0.0, 10.5, 10.5), 1.5);
-        assert_eq!(b.size.width.0, 16);
-        assert_eq!(b.size.height.0, 16);
+        assert_eq!(b.size.width, 16);
+        assert_eq!(b.size.height, 16);
     }
 
     #[test]
     fn a_nonzero_origin_survives_the_conversion() {
         let b = device_bounds_from_points(rect(10.0, 20.0, 30.0, 40.0), 2.0);
-        assert_eq!(b.origin.x.0, 20);
-        assert_eq!(b.origin.y.0, 40);
+        assert_eq!(b.origin.x, 20);
+        assert_eq!(b.origin.y, 40);
     }
 }

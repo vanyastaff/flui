@@ -46,7 +46,7 @@ fn pointer_state(
         count,
         contact_geometry: PhysicalSize::new(1.0, 1.0),
         orientation: PointerOrientation::default(),
-        pressure,
+        pressure: pressure as f32,
         tangential_pressure: 0.0,
         scale_factor,
     }

@@ -724,7 +724,7 @@ fn decoded_image_midtone_round_trips() {
         .register(tex_id, gpu_tex, SIZE, SIZE, false, false);
     painter.draw_texture(
         tex_id,
-        Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+        Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
         None,
         flui_types::painting::FilterQuality::None,
         1.0,
@@ -1035,7 +1035,12 @@ fn atlas_image_is_sharp_at_one_to_one() {
 /// the tessellated path regardless of the (axis-aligned) transform, so the
 /// per-draw blend pipeline is selected.
 fn full_frame_fill_path(size: f32) -> flui_types::painting::path::Path {
-    flui_types::painting::path::Path::rectangle(Rect::from_xywh(0.0, 0.0, size, size))
+    flui_types::painting::path::Path::rectangle(Rect::from_xywh(
+        0.0,
+        0.0,
+        f64::from(size),
+        f64::from(size),
+    ))
 }
 
 /// SrcOver pixel-identity (regression guard for the premultiply switch):
@@ -1341,7 +1346,7 @@ fn blend_clear_respects_draw_order() {
 
         // Step 1: fill frame RED via instanced path (SrcOver → S0 rect_batch).
         painter.draw_rect(
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             &Paint::fill(red),
         );
 
@@ -1361,7 +1366,7 @@ fn blend_clear_respects_draw_order() {
         // With the fix: S1 flushes entirely AFTER S0 (which ended with Clear),
         // so GREEN is drawn on top of transparent → GREEN visible.
         painter.draw_rect(
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             &Paint::fill(green),
         );
     });
@@ -1442,7 +1447,7 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
         // Step 1: fill the frame RED via the fast instanced path.
         // axis-aligned + SrcOver → S0 rect_batch.
         painter.draw_rect(
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             &Paint::fill(red),
         );
 
@@ -1455,11 +1460,14 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
         painter.save();
         // Rotate around the frame centre so the rotated quad covers centre.
         let half = SIZE as f32 / 2.0;
-        painter.translate(flui_types::Offset::new(half, half));
+        painter.translate(flui_types::Offset::new(f64::from(half), f64::from(half)));
         painter.rotate(FRAC_PI_4);
-        painter.translate(flui_types::Offset::new((-half), (-half)));
+        painter.translate(flui_types::Offset::new(
+            f64::from((-half)),
+            f64::from((-half)),
+        ));
         painter.draw_rect(
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             &Paint::fill(red).with_blend_mode(BlendMode::Clear),
         );
         painter.restore();
@@ -1467,7 +1475,7 @@ fn batcher_rotated_clear_rect_seals_segment_before_srcover() {
         // Step 3: fill the frame GREEN via the fast instanced path (SrcOver).
         // After step 2 sealed S0, this goes into S1.
         painter.draw_rect(
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             &Paint::fill(green),
         );
     });
@@ -1540,19 +1548,19 @@ fn clip_rrect_sdf_removes_corner_pixels() {
     let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         let rrect = flui_types::RRect::from_rect_circular(
             Rect::from_xywh(
-                RRECT_LEFT,
-                RRECT_TOP,
-                (RRECT_RIGHT - RRECT_LEFT),
-                (RRECT_BOTTOM - RRECT_TOP),
+                f64::from(RRECT_LEFT),
+                f64::from(RRECT_TOP),
+                f64::from((RRECT_RIGHT - RRECT_LEFT)),
+                f64::from((RRECT_BOTTOM - RRECT_TOP)),
             ),
-            RADIUS,
+            f64::from(RADIUS),
         );
         painter.clip_rrect(rrect, flui_types::painting::Clip::AntiAlias);
 
         // Fill the entire canvas RED. Only pixels passing the rrect SDF will
         // actually be painted; the rest remain BLACK (clear colour).
         painter.draw_rect(
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             &Paint::fill(flui_types::Color::rgb(255, 0, 0)),
         );
     });
@@ -1624,17 +1632,17 @@ fn clip_rsuperellipse_sdf_removes_corner_pixels() {
 
     let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         let rse = RSuperellipse::from_ltrb_xy(
-            RRECT_LEFT,
-            RRECT_TOP,
-            RRECT_RIGHT,
-            RRECT_BOTTOM,
-            RADIUS,
-            RADIUS,
+            f64::from(RRECT_LEFT),
+            f64::from(RRECT_TOP),
+            f64::from(RRECT_RIGHT),
+            f64::from(RRECT_BOTTOM),
+            f64::from(RADIUS),
+            f64::from(RADIUS),
         );
         painter.clip_rsuperellipse(rse, flui_types::painting::Clip::AntiAlias);
 
         painter.draw_rect(
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             &Paint::fill(flui_types::Color::rgb(0, 0, 255)),
         );
     });
@@ -1697,7 +1705,7 @@ fn nested_save_clip_restore_removes_scissor() {
 
         // Step 1: paint the full canvas GREEN (baseline for both halves).
         painter.draw_rect(
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             &Paint::fill(green),
         );
 
@@ -1705,11 +1713,11 @@ fn nested_save_clip_restore_removes_scissor() {
         // The RED paint must be clipped (scissor blocks x≥50).
         painter.save();
         painter.clip_rect(
-            Rect::from_xywh(0.0, 0.0, 50.0, (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, 50.0, f64::from((SIZE as f32))),
             flui_types::painting::Clip::HardEdge,
         );
         painter.draw_rect(
-            Rect::from_xywh(50.0, 0.0, 50.0, (SIZE as f32)),
+            Rect::from_xywh(50.0, 0.0, 50.0, f64::from((SIZE as f32))),
             &Paint::fill(red),
         );
         painter.restore();
@@ -1717,7 +1725,7 @@ fn nested_save_clip_restore_removes_scissor() {
         // Step 3: after restore the scissor must be cleared. Paint a BLUE column
         // at x=60..62 which is in the right half (would be clipped if scissor leaked).
         painter.draw_rect(
-            Rect::from_xywh(60.0, 0.0, 2.0, (SIZE as f32)),
+            Rect::from_xywh(60.0, 0.0, 2.0, f64::from((SIZE as f32))),
             &Paint::fill(blue),
         );
     });
@@ -1854,7 +1862,7 @@ fn linear_gradient_rect_dispatches_through_thin_shim() {
     // Horizontal red→blue gradient spanning the full frame width.
     let gradient_shader = Shader::linear_gradient(
         flui_types::Point::new(0.0, 0.0).into(),
-        flui_types::Point::new((SIZE as f32), 0.0).into(),
+        flui_types::Point::new(f64::from(SIZE), 0.0).into(),
         vec![Color::rgb(255, 0, 0), Color::rgb(0, 0, 255)],
         None,
         TileMode::Clamp,
@@ -1863,7 +1871,7 @@ fn linear_gradient_rect_dispatches_through_thin_shim() {
 
     let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::TRANSPARENT, |painter| {
         painter.draw_rect(
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             &gradient_paint,
         );
     });
@@ -2027,7 +2035,7 @@ fn draw_image_filtered_mode_tints_opaque_image() {
     let px_val = render_and_read_center(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         painter.draw_image_filtered(
             &green_image,
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             red_filter,
             flui_painting::BlendMode::SrcOver,
         );
@@ -2093,7 +2101,7 @@ fn draw_image_filtered_mode_honors_blend_mode() {
     let px_val = render_and_read_center(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         painter.draw_image_filtered(
             &white_image,
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             modulate_red,
             flui_painting::BlendMode::SrcOver,
         );
@@ -2150,7 +2158,7 @@ fn draw_image_filtered_matrix_swaps_channels() {
     let px_val = render_and_read_center(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         painter.draw_image_filtered(
             &red_image,
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             swap_rb,
             flui_painting::BlendMode::SrcOver,
         );
@@ -2215,13 +2223,18 @@ fn draw_image_filtered_distinct_filters_do_not_alias() {
         // second likely reusing the first's freed allocation address.
         painter.draw_image_filtered(
             &white_image,
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), half),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from(half)),
             modulate_red,
             flui_painting::BlendMode::SrcOver,
         );
         painter.draw_image_filtered(
             &white_image,
-            Rect::from_xywh(0.0, half, (SIZE as f32), half),
+            Rect::from_xywh(
+                0.0,
+                f64::from(half),
+                f64::from((SIZE as f32)),
+                f64::from(half),
+            ),
             modulate_blue,
             flui_painting::BlendMode::SrcOver,
         );
@@ -2345,7 +2358,7 @@ fn external_texture_resolves_at_replay_not_record_time() {
     // only the TextureId is stored.
     painter.draw_texture(
         tex_id,
-        Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+        Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
         None,
         flui_types::painting::FilterQuality::None,
         1.0,
@@ -2540,7 +2553,7 @@ fn external_texture_unregistered_at_replay_is_skipped() {
         // Step 2: record draw_texture in the top-left quadrant.
         painter.draw_texture(
             tex_id,
-            Rect::from_xywh(0.0, 0.0, (half as f32), (half as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((half as f32)), f64::from((half as f32))),
             None,
             flui_types::painting::FilterQuality::None,
             1.0,
@@ -2553,7 +2566,12 @@ fn external_texture_unregistered_at_replay_is_skipped() {
         // Step 4: record a solid-RED rect in the bottom-right quadrant as a
         // "frame is alive" marker.  This must survive the external-texture skip.
         painter.draw_rect(
-            Rect::from_xywh((half as f32), (half as f32), (half as f32), (half as f32)),
+            Rect::from_xywh(
+                f64::from((half as f32)),
+                f64::from((half as f32)),
+                f64::from((half as f32)),
+                f64::from((half as f32)),
+            ),
             &Paint::fill(flui_types::Color::rgba(0xFF, 0x00, 0x00, 0xFF)),
         );
     });
@@ -2670,7 +2688,7 @@ fn an_offscreen_result_composites_with_its_own_blend_mode() {
     let rgba = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
         // Step 1: opaque red, so the frame has something to erase.
         painter.draw_rect(
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             &Paint::fill(flui_types::Color::rgb(255, 0, 0)),
         );
 
@@ -2706,7 +2724,7 @@ fn an_offscreen_result_composites_with_its_own_blend_mode() {
 
         painter.queue_offscreen_result(
             texture,
-            Rect::from_xywh(0.0, 0.0, (SIZE as f32), (SIZE as f32)),
+            Rect::from_xywh(0.0, 0.0, f64::from((SIZE as f32)), f64::from((SIZE as f32))),
             BlendMode::Clear,
         );
     });

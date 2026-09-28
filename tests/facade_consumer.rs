@@ -378,8 +378,8 @@ pub struct Palette {
 
 #[derive(Clone, Animatable)]
 pub struct Position {
-    pub x: f32,
-    pub y: f32,
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Routable, Clone, PartialEq)]
@@ -474,7 +474,7 @@ fn hot_reload_dependencies(include_layer: bool) -> Option<toml::Table> {
     Some(dependencies)
 }
 
-const SCENE_PLUGIN_SOURCE: &str = "fn build(_: f32, _: f32) -> flui_layer::Scene { flui_layer::Scene::default() } flui::hot_reload::scene_plugin!(build);";
+const SCENE_PLUGIN_SOURCE: &str = "fn build(_: f64, _: f64) -> flui_layer::Scene { flui_layer::Scene::default() } flui::hot_reload::scene_plugin!(build);";
 const APP_PLUGIN_SOURCE: &str =
     "flui::hot_reload::app_plugin!(flui::widgets::Text::new(\"hello\"));";
 
@@ -485,7 +485,7 @@ fn plugin_factory_requires_the_canonical_scene() {
     };
     let output = compile_consumer(
         dependencies,
-        "fn build(_: f32, _: f32) -> u8 { 1 } flui::hot_reload::scene_plugin!(build);",
+        "fn build(_: f64, _: f64) -> u8 { 1 } flui::hot_reload::scene_plugin!(build);",
     );
     let diagnostics = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "non-Scene factory compiled");
@@ -532,7 +532,7 @@ fn app_free_requires_unsafe() {
 fn plugin_macros_use_only_the_facade_including_when_renamed() {
     for alias in ["flui", "ui"] {
         for source in [
-            "fn build(_: f32, _: f32) -> flui::hot_reload::Scene { Default::default() } flui::hot_reload::scene_plugin!(build);",
+            "fn build(_: f64, _: f64) -> flui::hot_reload::Scene { Default::default() } flui::hot_reload::scene_plugin!(build);",
             APP_PLUGIN_SOURCE,
         ] {
             let Some(mut dependencies) = hot_reload_dependencies(false) else {

@@ -57,7 +57,7 @@ fn new_size() -> Size {
 
 /// `inner` grown by `Padding::all(2.0)` on every side.
 fn padded(inner: Size) -> Size {
-    size(inner.width.0 + 4.0, inner.height.0 + 4.0)
+    size(inner.width + 4.0, inner.height + 4.0)
 }
 
 fn registry() -> Arc<AssetRegistry> {

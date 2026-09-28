@@ -46,12 +46,7 @@ use std::sync::Arc;
 use bytemuck::cast_slice;
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_engine::OffscreenRenderer;
-use flui_types::{
-    Rect, Size,
-    geometry::{f64, px},
-    painting::Shader,
-    styling::Color,
-};
+use flui_types::{Rect, Size, geometry::px, painting::Shader, styling::Color};
 use wgpu::util::DeviceExt as _;
 
 // ---------------------------------------------------------------------------
@@ -174,8 +169,9 @@ fn bench_render_masked(c: &mut Criterion) {
     // Build the renderer once — sampler + fullscreen VB are constructor-time.
     let mut offscreen = OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
 
-    let child_bounds = Rect::<f64>::from_ltrb(0.0, 0.0, BENCH_SIDE_PX, BENCH_SIDE_PX);
-    let result_size: Size<f64> = Size::new(BENCH_SIDE_PX, BENCH_SIDE_PX);
+    let child_bounds =
+        Rect::<f64>::from_ltrb(0.0, 0.0, f64::from(BENCH_SIDE_PX), f64::from(BENCH_SIDE_PX));
+    let result_size: Size<f64> = Size::new(f64::from(BENCH_SIDE_PX), f64::from(BENCH_SIDE_PX));
     let mask_shader = Shader::solid(Color::rgb(255, 128, 0));
 
     // Warm-up: one render pass ensures pipeline compilation is excluded.

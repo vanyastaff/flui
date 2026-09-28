@@ -31,7 +31,7 @@ mod gpu_tests {
 
     use flui_painting::Paint;
     use flui_types::{
-        Color, Rect, f64,
+        Color, Rect,
         styling::color::{linear_to_srgb, srgb_to_linear},
     };
 
@@ -90,7 +90,12 @@ mod gpu_tests {
     }
 
     fn full_surface_bounds() -> Rect<f64> {
-        Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32))
+        Rect::from_xywh(
+            0.0,
+            0.0,
+            f64::from((SURFACE_WIDTH as f32)),
+            f64::from((SURFACE_HEIGHT as f32)),
+        )
     }
 
     /// Assert every interior pixel (skip 1-pixel border) is within `tolerance`

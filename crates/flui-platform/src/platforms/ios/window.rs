@@ -318,8 +318,8 @@ impl FluiView {
             ),
         };
         if self.ivars().sampling.get() != admission
-            || next.size.width.0 <= 0.0
-            || next.size.height.0 <= 0.0
+            || next.size.width <= 0.0
+            || next.size.height <= 0.0
         {
             return;
         }
@@ -761,8 +761,8 @@ impl PlatformWindow for IOSWindow {
     fn physical_size(&self) -> Size<i32> {
         let metrics = *self.metrics.lock();
         Size::new(
-            ((f64::from(metrics.size.width.0) * metrics.scale).round() as i32),
-            ((f64::from(metrics.size.height.0) * metrics.scale).round() as i32),
+            ((f64::from(metrics.size.width) * metrics.scale).round() as i32),
+            ((f64::from(metrics.size.height) * metrics.scale).round() as i32),
         )
     }
 

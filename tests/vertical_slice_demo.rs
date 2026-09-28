@@ -52,7 +52,7 @@ use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 /// animated box (up to [`tree::EXPANDED_HEIGHT`] tall) all coexist in the
 /// `Column` without overflow.
 fn root_constraints() -> BoxConstraints {
-    BoxConstraints::tight(Size::new(px(480.0), px(720.0)))
+    BoxConstraints::tight(Size::new(480.0, 720.0))
 }
 
 /// Everything the test needs to drive and inspect the mounted demo tree.
@@ -116,14 +116,14 @@ impl MountedDemo {
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down.
-    fn tap_down(&self, x: f32, y: f32) {
+    fn tap_down(&self, x: f64, y: f64) {
         self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
     /// paired with [`tap_down`](Self::tap_down) at the same position, this
     /// completes a tap (`TapGestureRecognizer` fires `on_tap`).
-    fn tap_up(&self, x: f32, y: f32) {
+    fn tap_up(&self, x: f64, y: f64) {
         self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
@@ -141,7 +141,7 @@ impl MountedDemo {
     }
 
     /// A full tap (down + up) at `(x, y)`.
-    fn tap(&self, x: f32, y: f32) {
+    fn tap(&self, x: f64, y: f64) {
         self.tap_down(x, y);
         self.tap_up(x, y);
     }
@@ -152,14 +152,14 @@ impl MountedDemo {
     /// [`advance_gesture_clock`]). Distinct from [`tap_down`](Self::tap_down):
     /// only drag sequences need the clock advance, and `tap_down` is shared by
     /// unrelated tests this change must not perturb.
-    fn drag_down(&self, x: f32, y: f32) {
+    fn drag_down(&self, x: f64, y: f64) {
         advance_gesture_clock();
         self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-move,
     /// advancing the gesture clock first (see [`advance_gesture_clock`]).
-    fn drag_move(&self, x: f32, y: f32) {
+    fn drag_move(&self, x: f64, y: f64) {
         advance_gesture_clock();
         self.dispatch_pointer(make_move_event(offset(x, y), PointerType::Mouse));
     }
@@ -167,7 +167,7 @@ impl MountedDemo {
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
     /// pairs with [`drag_down`](Self::drag_down)/[`drag_move`](Self::drag_move)
     /// to complete a drag gesture.
-    fn drag_up(&self, x: f32, y: f32) {
+    fn drag_up(&self, x: f64, y: f64) {
         self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
@@ -293,7 +293,7 @@ impl MountedDemo {
     /// above and below to cross the slop and keep moving without the pointer
     /// leaving the box (which would hit-test a different render path on the
     /// next move).
-    fn list_box_center(&self) -> (f32, f32) {
+    fn list_box_center(&self) -> (f64, f64) {
         let list_box = self.list_box_render_id();
         let size = self
             .pipeline_owner
@@ -301,8 +301,8 @@ impl MountedDemo {
             .expect("the list box must have box geometry after the bootstrap frame");
         let top_left = self.absolute_position(list_box);
         (
-            ((top_left.dx + size.width / 2.0) as f32),
-            ((top_left.dy + size.height / 2.0) as f32),
+            ((top_left.dx + size.width / 2.0) as f64),
+            ((top_left.dy + size.height / 2.0) as f64),
         )
     }
 
@@ -313,13 +313,13 @@ impl MountedDemo {
     fn absolute_position(&self, id: RenderId) -> Offset {
         self.pipeline_owner.with(|owner| {
             let render_tree = owner.render_tree();
-            let mut x = 0.0f32;
-            let mut y = 0.0f32;
+            let mut x = 0.0_f64;
+            let mut y = 0.0_f64;
             let mut current = id;
             loop {
                 if let Some(offset) = inspect::render_offset(owner, current) {
-                    x += ((offset.dx) as f32);
-                    y += ((offset.dy) as f32);
+                    x += ((offset.dx) as f64);
+                    y += ((offset.dy) as f64);
                 }
                 match render_tree.parent(current) {
                     Some(parent) => current = parent,
@@ -331,8 +331,8 @@ impl MountedDemo {
     }
 }
 
-fn offset(x: f32, y: f32) -> Offset {
-    Offset::new(px(f64::from(x)), px(f64::from(y)))
+fn offset(x: f64, y: f64) -> Offset {
+    Offset::new(f64::from(x), f64::from(y))
 }
 
 /// The part of `type_name` before its first `<`, if any — the base name
@@ -380,7 +380,7 @@ fn tapping_the_plus_button_updates_the_rendered_counter_text() {
         .find_text("+")
         .expect("the '+' button's Text must be in the render tree");
     let tap_at = demo.absolute_position(plus);
-    demo.tap(((tap_at.dx + 1.0) as f32), ((tap_at.dy + 1.0) as f32));
+    demo.tap(((tap_at.dx + 1.0) as f64), ((tap_at.dy + 1.0) as f64));
 
     // The tap's on_tap handler scheduled a rebuild via `StateCell::update`;
     // the next pump drains it.
@@ -397,7 +397,7 @@ fn tapping_the_plus_button_updates_the_rendered_counter_text() {
 
     // A second tap keeps incrementing — proves the element (and its bound
     // `StateCell`) survives across rebuilds rather than being torn down.
-    demo.tap(((tap_at.dx + 1.0) as f32), ((tap_at.dy + 1.0) as f32));
+    demo.tap(((tap_at.dx + 1.0) as f64), ((tap_at.dy + 1.0) as f64));
     demo.pump(Duration::ZERO);
     assert!(
         demo.find_text("Count: 2").is_some(),
@@ -422,7 +422,7 @@ fn tapping_the_plus_button_updates_the_rendered_counter_text() {
 /// "50 px > 18 px" comment on `flui-widgets/tests/scroll.rs`'s
 /// `scrollable_drag_up_increases_scroll_offset`, which exercises the same
 /// recognizer through `Scrollable`.
-const DRAG_SLOP: f32 = 18.0;
+const DRAG_SLOP: f64 = 18.0;
 
 #[test]
 fn dragging_inside_the_list_box_scrolls_its_items() {
@@ -445,9 +445,9 @@ fn dragging_inside_the_list_box_scrolls_its_items() {
     // A competing tap recognizer would keep the arena unresolved until the
     // drag crosses slop and would instead re-anchor `DragStartBehavior::Start`
     // at the crossing position.
-    const SLOP_CROSSING_DELTA: f32 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
-    const UPDATE_DELTA_1: f32 = 20.0;
-    const UPDATE_DELTA_2: f32 = 25.0;
+    const SLOP_CROSSING_DELTA: f64 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
+    const UPDATE_DELTA_1: f64 = 20.0;
+    const UPDATE_DELTA_2: f64 = 25.0;
     let expected_scroll_delta = SLOP_CROSSING_DELTA + UPDATE_DELTA_1 + UPDATE_DELTA_2;
 
     demo.drag_down(anchor_x, anchor_y);
@@ -494,8 +494,8 @@ fn dragging_down_at_the_top_of_the_list_does_not_scroll_past_zero() {
 
     // Post-slop deltas toward positive dy (finger moving down) — the mirror
     // image of the upward drag above.
-    const SLOP_CROSSING_DELTA: f32 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
-    const UPDATE_DELTA: f32 = 20.0;
+    const SLOP_CROSSING_DELTA: f64 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
+    const UPDATE_DELTA: f64 = 20.0;
 
     demo.drag_down(anchor_x, anchor_y);
     demo.drag_move(anchor_x, anchor_y + SLOP_CROSSING_DELTA);
@@ -534,7 +534,7 @@ fn tapping_the_animated_box_interpolates_width_to_the_expanded_target() {
     // Tap the box (Opaque hit-test behavior, so any point inside its bounds
     // works) to toggle `expanded` and retarget the controller.
     let tap_at = demo.absolute_position(box_id);
-    demo.tap(((tap_at.dx + 2.0) as f32), ((tap_at.dy + 2.0) as f32));
+    demo.tap(((tap_at.dx + 2.0) as f64), ((tap_at.dy + 2.0) as f64));
     demo.pump(Duration::ZERO); // the detection frame: rebuild + retarget, t = 0
 
     let box_id = demo.animated_box_render_id();
@@ -616,8 +616,8 @@ fn tapping_the_details_button_pushes_a_route_that_hides_the_home_route_from_hit_
         .expect("the 'View details' button must be in the render tree");
     let details_tap_at = demo.absolute_position(details_button);
     demo.tap(
-        ((details_tap_at.dx + 1.0) as f32),
-        ((details_tap_at.dy + 1.0) as f32),
+        ((details_tap_at.dx + 1.0) as f64),
+        ((details_tap_at.dy + 1.0) as f64),
     );
     demo.pump(Duration::ZERO);
 
@@ -634,8 +634,8 @@ fn tapping_the_details_button_pushes_a_route_that_hides_the_home_route_from_hit_
     // details `PageRoute` is opaque, so `RenderTheater`'s skip_count now
     // excludes the home route from hit-testing (`overlay/mod.rs::onstage_plan`).
     demo.tap(
-        ((plus_tap_at.dx + 1.0) as f32),
-        ((plus_tap_at.dy + 1.0) as f32),
+        ((plus_tap_at.dx + 1.0) as f64),
+        ((plus_tap_at.dy + 1.0) as f64),
     );
     demo.pump(Duration::ZERO);
     assert!(
@@ -659,13 +659,13 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         .expect("the '+' button's Text must be in the render tree");
     let plus_tap_at = demo.absolute_position(plus);
     demo.tap(
-        ((plus_tap_at.dx + 1.0) as f32),
-        ((plus_tap_at.dy + 1.0) as f32),
+        ((plus_tap_at.dx + 1.0) as f64),
+        ((plus_tap_at.dy + 1.0) as f64),
     );
     demo.pump(Duration::ZERO);
     demo.tap(
-        ((plus_tap_at.dx + 1.0) as f32),
-        ((plus_tap_at.dy + 1.0) as f32),
+        ((plus_tap_at.dx + 1.0) as f64),
+        ((plus_tap_at.dy + 1.0) as f64),
     );
     demo.pump(Duration::ZERO);
     assert!(
@@ -678,8 +678,8 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         .expect("the 'View details' button must be in the render tree");
     let details_tap_at = demo.absolute_position(details_button);
     demo.tap(
-        ((details_tap_at.dx + 1.0) as f32),
-        ((details_tap_at.dy + 1.0) as f32),
+        ((details_tap_at.dx + 1.0) as f64),
+        ((details_tap_at.dy + 1.0) as f64),
     );
     demo.pump(Duration::ZERO);
     assert!(demo.find_text(tree::DETAILS_ROUTE_TEXT).is_some());
@@ -689,8 +689,8 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
         .expect("the back button must be in the render tree while the details route is on top");
     let back_tap_at = demo.absolute_position(back);
     demo.tap(
-        ((back_tap_at.dx + 1.0) as f32),
-        ((back_tap_at.dy + 1.0) as f32),
+        ((back_tap_at.dx + 1.0) as f64),
+        ((back_tap_at.dy + 1.0) as f64),
     );
     demo.pump(Duration::ZERO);
 
@@ -724,8 +724,8 @@ fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
 
     // The home route's own hit-testing must be restored, too.
     demo.tap(
-        ((plus_tap_at.dx + 1.0) as f32),
-        ((plus_tap_at.dy + 1.0) as f32),
+        ((plus_tap_at.dx + 1.0) as f64),
+        ((plus_tap_at.dy + 1.0) as f64),
     );
     demo.pump(Duration::ZERO);
     assert!(

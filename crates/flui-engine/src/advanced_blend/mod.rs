@@ -313,11 +313,7 @@ pub(crate) fn flush_advanced_layer(
 mod synthetic_op_tests {
     use std::sync::Arc;
 
-    use flui_types::{
-        Color,
-        geometry::{Rect, f64},
-        painting::BlendMode,
-    };
+    use flui_types::{Color, geometry::Rect, painting::BlendMode};
     use wgpu::util::DeviceExt as _;
 
     use super::{AdvancedBlendOp, AdvancedBlendPipeline, flush_advanced_layer};
@@ -626,7 +622,12 @@ mod synthetic_op_tests {
             let op = AdvancedBlendOp {
                 foreground: fg_this_mode,
                 mode,
-                device_bounds: Rect::from_xywh(0.0, 0.0, (TARGET_W as f32), (TARGET_H as f32)),
+                device_bounds: Rect::from_xywh(
+                    0.0,
+                    0.0,
+                    f64::from((TARGET_W as f32)),
+                    f64::from((TARGET_H as f32)),
+                ),
                 opacity: 1.0,
                 tint: [1.0, 1.0, 1.0],
                 // Full-viewport foreground: identity UV remap.
@@ -1006,7 +1007,7 @@ mod synthetic_op_tests {
         let op = AdvancedBlendOp {
             foreground: fg_pooled,
             mode: BlendMode::Multiply,
-            device_bounds: Rect::from_xywh(1.0, 0.0, 4.0, (SURF_H as f32)),
+            device_bounds: Rect::from_xywh(1.0, 0.0, 4.0, f64::from((SURF_H as f32))),
             opacity: 1.0,
             tint: [1.0, 1.0, 1.0],
             // Foreground is 4×SURF_H, not full-viewport (SURF_W=6) — identity
@@ -1150,7 +1151,12 @@ mod synthetic_op_tests {
         let op = AdvancedBlendOp {
             foreground: fg_pooled,
             mode: BlendMode::Screen,
-            device_bounds: Rect::from_xywh(0.0, 0.0, (TARGET_W as f32), (TARGET_H as f32)),
+            device_bounds: Rect::from_xywh(
+                0.0,
+                0.0,
+                f64::from((TARGET_W as f32)),
+                f64::from((TARGET_H as f32)),
+            ),
             opacity: 1.0,
             tint: [1.0, 1.0, 1.0],
             src_uv_min: [0.0, 0.0],

@@ -34,8 +34,8 @@ impl ViewState<Counter> for CounterState {
 
 #[derive(Clone, Animatable)]
 pub struct Position {
-    pub x: f32,
-    pub y: f32,
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Debug, Diagnosticable)]

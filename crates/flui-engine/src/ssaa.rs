@@ -1362,9 +1362,12 @@ mod gpu_tests {
         let left_y = cy + half_side;
 
         let mut path = flui_types::painting::path::Path::new();
-        path.move_to(flui_types::Point::new(apex_x, apex_y));
-        path.line_to(flui_types::Point::new(right_x, right_y));
-        path.line_to(flui_types::Point::new(left_x, left_y));
+        path.move_to(flui_types::Point::new(f64::from(apex_x), f64::from(apex_y)));
+        path.line_to(flui_types::Point::new(
+            f64::from(right_x),
+            f64::from(right_y),
+        ));
+        path.line_to(flui_types::Point::new(f64::from(left_x), f64::from(left_y)));
         path.close();
 
         // BlendMode::Multiply is an advanced (dst-read) blend mode.

@@ -143,7 +143,7 @@ fn pointer_state(touch: &UITouch, phase: TouchPhase, scale: f64) -> PointerState
     let orientation = if pointer_type(touch) == PointerType::Pen {
         PointerOrientation {
             altitude: 0.0,
-            azimuth: touch.azimuthAngleInView(None) as f64,
+            azimuth: ((touch.azimuthAngleInView(None) as f64) as f32),
         }
     } else {
         PointerOrientation::default()
@@ -157,7 +157,7 @@ fn pointer_state(touch: &UITouch, phase: TouchPhase, scale: f64) -> PointerState
         count: u8::from(matches!(phase, TouchPhase::Down | TouchPhase::Up)),
         contact_geometry: contact,
         orientation,
-        pressure,
+        pressure: pressure as f32,
         tangential_pressure: 0.0,
         scale_factor: scale,
     }

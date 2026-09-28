@@ -395,8 +395,8 @@ fn test_macos_nsscreen_enumeration() {
         tracing::info!(
             "macOS display: '{}' at {}x{} @ {}x",
             disp.name(),
-            bounds.size.width.0,
-            bounds.size.height.0,
+            bounds.size.width,
+            bounds.size.height,
             scale
         );
 
@@ -407,7 +407,7 @@ fn test_macos_nsscreen_enumeration() {
 
         // macOS should provide menu bar exclusion in usable bounds
         let usable = disp.usable_bounds();
-        let menu_bar_height = bounds.size.height.0 - usable.size.height.0;
+        let menu_bar_height = bounds.size.height - usable.size.height;
 
         if menu_bar_height > 0 {
             tracing::info!("  → Menu bar height: {} pixels", menu_bar_height);

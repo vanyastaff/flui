@@ -357,7 +357,7 @@ pub(crate) fn linear_gradient_fill(
     colors: Vec<flui_types::styling::Color>,
 ) -> flui_painting::Paint {
     use flui_types::geometry::{Offset, Pixels};
-    let at = |p: glam::Vec2| Offset::new(rect.left() + p.x, rect.top() + p.y);
+    let at = |p: glam::Vec2| Offset::new(rect.left() + f64::from(p.x), rect.top() + f64::from(p.y));
     flui_painting::Paint::fill(flui_types::styling::Color::TRANSPARENT).with_shader(
         flui_painting::Shader::linear_gradient(
             at(local_start),

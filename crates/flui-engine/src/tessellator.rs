@@ -1505,7 +1505,7 @@ mod tests {
     use flui_types::geometry::{Radius, rrect::RRect};
 
     fn px(v: f32) -> f64 {
-        v
+        f64::from(v)
     }
 
     // `test_tessellate_rect` and `test_tessellate_rounded_rect` were

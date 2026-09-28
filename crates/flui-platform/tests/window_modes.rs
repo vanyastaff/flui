@@ -141,7 +141,7 @@ fn test_macos_mode_transitions() {
 
             // macOS-specific: Verify window is in Normal mode initially
             let size = window.logical_size();
-            assert!(size.width.0 > 0.0 && size.height.0 > 0.0);
+            assert!(size.width > 0.0 && size.height > 0.0);
 
             // TODO: Test macOS-specific mode transitions:
             // - NSWindow zoom for Maximized

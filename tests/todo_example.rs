@@ -15,7 +15,7 @@ use flui_interaction::testing::input::KeyEventBuilder;
 use flui_widgets::testing::{LaidOut, lay_out, tight};
 use flui_widgets::{MediaQuery, MediaQueryData};
 
-const WIDTH: f32 = 480.0;
+const WIDTH: f64 = 480.0;
 
 /// The example's root under the `MediaQuery` a running app publishes above
 /// it (its `SafeArea` reads one).

@@ -43,10 +43,7 @@ use objc2::runtime::{AnyObject, Bool, ClassBuilder, Protocol, Sel};
 use objc2::{msg_send, sel};
 use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
 
-use flui_types::{
-    ImeEvent,
-    geometry::{Bounds, f64},
-};
+use flui_types::{ImeEvent, geometry::Bounds};
 
 use super::view::{ViewContext, get_context as get_view_context};
 use super::window::route_on_owner;
@@ -488,10 +485,10 @@ extern "C-unwind" fn first_rect_for_character_range(
             NSRange::new(state.marked_range.0, state.marked_range.1)
         };
         let view_bounds: NSRect = msg_send![this, bounds];
-        let flipped_y = view_bounds.size.height - (area.origin.y.0 + area.size.height.0) as f64;
+        let flipped_y = view_bounds.size.height - (area.origin.y + area.size.height) as f64;
         let window_rect = NSRect::new(
-            NSPoint::new(area.origin.x.0 as f64, flipped_y),
-            NSSize::new(area.size.width.0 as f64, area.size.height.0 as f64),
+            NSPoint::new(area.origin.x as f64, flipped_y),
+            NSSize::new(area.size.width as f64, area.size.height as f64),
         );
         let window: *mut AnyObject = msg_send![this, window];
         if window.is_null() {

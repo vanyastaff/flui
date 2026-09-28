@@ -22,10 +22,7 @@
 //! window.enable_tiling(config)?;
 //! ```
 
-use flui_types::{
-    f64,
-    geometry::{Rect, Size},
-};
+use flui_types::geometry::{Rect, Size};
 
 /// A [`TilingConfiguration`] combines a [`TilePosition`] and [`TilingLayout`]
 /// that are not compatible with each other.

@@ -52,18 +52,15 @@ use flui_widgets::{
 /// enough that the FAB's end-float offset from the trailing edge is easy to
 /// pin down exactly (see [`FAB_MARGIN`]/`FAB_SIZE` in
 /// `scaffold_mounts_with_app_bar_at_top_and_fab_at_the_end_float_position`).
-const ROOT_WIDTH: f32 = 480.0;
+const ROOT_WIDTH: f64 = 480.0;
 /// The mounted root's logical height — tall enough to show several cards but
 /// short enough that [`tree::INITIAL_ITEM_COUNT`] cards (at
 /// [`tree::ITEM_EXTENT`] each) genuinely overflow it, so the drag-to-scroll
 /// test exercises a real overflow.
-const ROOT_HEIGHT: f32 = 800.0;
+const ROOT_HEIGHT: f64 = 800.0;
 
 fn root_constraints() -> BoxConstraints {
-    BoxConstraints::tight(Size::new(
-        px(f64::from(ROOT_WIDTH)),
-        px(f64::from(ROOT_HEIGHT)),
-    ))
+    BoxConstraints::tight(Size::new(f64::from(ROOT_WIDTH), f64::from(ROOT_HEIGHT)))
 }
 
 /// Everything the test needs to drive and inspect the mounted demo tree.
@@ -143,14 +140,14 @@ impl MountedDemo {
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down.
-    fn tap_down(&self, x: f32, y: f32) {
+    fn tap_down(&self, x: f64, y: f64) {
         self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
     /// paired with [`tap_down`](Self::tap_down) at the same position, this
     /// completes a tap.
-    fn tap_up(&self, x: f32, y: f32) {
+    fn tap_up(&self, x: f64, y: f64) {
         self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
@@ -168,7 +165,7 @@ impl MountedDemo {
     }
 
     /// A full tap (down + up) at `(x, y)`.
-    fn tap(&self, x: f32, y: f32) {
+    fn tap(&self, x: f64, y: f64) {
         self.tap_down(x, y);
         self.tap_up(x, y);
     }
@@ -184,8 +181,8 @@ impl MountedDemo {
         let position = self.absolute_position(id);
         let size = self.size(id);
         self.tap(
-            ((position.dx + size.width / 2.0) as f32),
-            ((position.dy + size.height / 2.0) as f32),
+            ((position.dx + size.width / 2.0) as f64),
+            ((position.dy + size.height / 2.0) as f64),
         );
     }
 
@@ -193,14 +190,14 @@ impl MountedDemo {
     /// advancing the gesture clock first so the drag recognizer's first
     /// velocity-tracker sample gets a fresh timestamp (see
     /// [`advance_gesture_clock`]).
-    fn drag_down(&self, x: f32, y: f32) {
+    fn drag_down(&self, x: f64, y: f64) {
         advance_gesture_clock();
         self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-move,
     /// advancing the gesture clock first (see [`advance_gesture_clock`]).
-    fn drag_move(&self, x: f32, y: f32) {
+    fn drag_move(&self, x: f64, y: f64) {
         advance_gesture_clock();
         self.dispatch_pointer(make_move_event(offset(x, y), PointerType::Mouse));
     }
@@ -208,7 +205,7 @@ impl MountedDemo {
     /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
     /// pairs with [`drag_down`](Self::drag_down)/[`drag_move`](Self::drag_move)
     /// to complete a drag gesture.
-    fn drag_up(&self, x: f32, y: f32) {
+    fn drag_up(&self, x: f64, y: f64) {
         self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
@@ -332,15 +329,15 @@ impl MountedDemo {
     fn absolute_position(&self, id: RenderId) -> Offset {
         self.pipeline_owner.with(|owner| {
             let render_tree = owner.render_tree();
-            let mut x = 0.0f32;
-            let mut y = 0.0f32;
+            let mut x = 0.0_f64;
+            let mut y = 0.0_f64;
             let mut current = id;
             loop {
                 if let Some(offset) =
                     flui_rendering::testing::inspect::render_offset(owner, current)
                 {
-                    x += ((offset.dx) as f32);
-                    y += ((offset.dy) as f32);
+                    x += ((offset.dx) as f64);
+                    y += ((offset.dy) as f64);
                 }
                 match render_tree.parent(current) {
                     Some(parent) => current = parent,
@@ -352,8 +349,8 @@ impl MountedDemo {
     }
 }
 
-fn offset(x: f32, y: f32) -> Offset {
-    Offset::new(px(f64::from(x)), px(f64::from(y)))
+fn offset(x: f64, y: f64) -> Offset {
+    Offset::new(f64::from(x), f64::from(y))
 }
 
 /// Spin until `Instant::now()` returns a value strictly greater than the one
@@ -446,8 +443,8 @@ fn scaffold_mounts_with_app_bar_at_top_and_fab_at_the_end_float_position() {
         .find_text(tree::FAB_LABEL)
         .expect("the FAB's '+' label must render");
     let fab_size = Size::new(
-        px(flui_material::floating_action_button::FAB_SIZE),
-        px(flui_material::floating_action_button::FAB_SIZE),
+        flui_material::floating_action_button::FAB_SIZE,
+        flui_material::floating_action_button::FAB_SIZE,
     );
     let fab = demo
         .nearest_ancestor_with_size(fab_glyph, fab_size)
@@ -459,11 +456,11 @@ fn scaffold_mounts_with_app_bar_at_top_and_fab_at_the_end_float_position() {
     // `MediaQuery` padding/view-insets in this mount (`MediaQueryData::default()`)
     // — see `scaffold.rs`'s `ScaffoldLayoutDelegate::perform_layout` for the
     // exact formula this pins.
-    const FAB_MARGIN: f32 = 16.0;
+    const FAB_MARGIN: f64 = 16.0;
     let expected_x =
-        ROOT_WIDTH - FAB_MARGIN - ((flui_material::floating_action_button::FAB_SIZE) as f32);
+        ROOT_WIDTH - FAB_MARGIN - ((flui_material::floating_action_button::FAB_SIZE) as f64);
     let expected_y =
-        ROOT_HEIGHT - FAB_MARGIN - ((flui_material::floating_action_button::FAB_SIZE) as f32);
+        ROOT_HEIGHT - FAB_MARGIN - ((flui_material::floating_action_button::FAB_SIZE) as f64);
     assert!(
         (fab_position.dx - f64::from(expected_x)).abs() < 1.0,
         "the FAB must float {FAB_MARGIN}px from the trailing edge, expected x={expected_x}, got \
@@ -520,8 +517,8 @@ fn tapping_the_fab_opens_the_dialog_and_hides_the_page_beneath_from_hit_testing(
     // home route beneath it — proof the home route is genuinely
     // un-hit-testable, not merely that this one tap happened to miss it.
     demo.tap(
-        ((settings_position.dx + 1.0) as f32),
-        ((settings_position.dy + 1.0) as f32),
+        ((settings_position.dx + 1.0) as f64),
+        ((settings_position.dy + 1.0) as f64),
     );
     demo.pump(Duration::ZERO);
     assert!(
@@ -811,7 +808,7 @@ fn app_bar_action_pushes_settings_and_back_button_pops_with_home_state_intact() 
 /// constant/comment for why 18px (the touch default), not the mouse default,
 /// is the operative slop even though these events dispatch as
 /// `PointerType::Mouse`.
-const DRAG_SLOP: f32 = 18.0;
+const DRAG_SLOP: f64 = 18.0;
 
 #[test]
 fn dragging_inside_the_list_scrolls_its_items() {
@@ -827,9 +824,9 @@ fn dragging_inside_the_list_scrolls_its_items() {
     let anchor_x = ROOT_WIDTH / 2.0;
     let anchor_y = ROOT_HEIGHT / 2.0;
 
-    const SLOP_CROSSING_DELTA: f32 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
-    const UPDATE_DELTA_1: f32 = 20.0;
-    const UPDATE_DELTA_2: f32 = 25.0;
+    const SLOP_CROSSING_DELTA: f64 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
+    const UPDATE_DELTA_1: f64 = 20.0;
+    const UPDATE_DELTA_2: f64 = 25.0;
     let expected_scroll_delta = UPDATE_DELTA_1 + UPDATE_DELTA_2;
 
     demo.drag_down(anchor_x, anchor_y);
@@ -942,11 +939,11 @@ fn the_counters_state_survives_switching_away_and_back() {
     // `tests/vertical_slice_demo.rs`'s `tapping_the_plus_button_updates_the_rendered_counter_text`
     // already established for its own repeatedly-tapped counter button.
     let tap_at = demo.absolute_position(increment);
-    demo.tap(((tap_at.dx + 1.0) as f32), ((tap_at.dy + 1.0) as f32));
+    demo.tap(((tap_at.dx + 1.0) as f64), ((tap_at.dy + 1.0) as f64));
     demo.pump(Duration::ZERO);
-    demo.tap(((tap_at.dx + 1.0) as f32), ((tap_at.dy + 1.0) as f32));
+    demo.tap(((tap_at.dx + 1.0) as f64), ((tap_at.dy + 1.0) as f64));
     demo.pump(Duration::ZERO);
-    demo.tap(((tap_at.dx + 1.0) as f32), ((tap_at.dy + 1.0) as f32));
+    demo.tap(((tap_at.dx + 1.0) as f64), ((tap_at.dy + 1.0) as f64));
     demo.pump(Duration::ZERO);
 
     assert!(
@@ -1013,11 +1010,11 @@ fn the_app_bar_height_is_toolbar_plus_the_mounted_tab_bars_height() {
     let mut demo = MountedDemo::mount();
     push_tabs_route(&mut demo);
 
-    const EXPECTED_HEIGHT: f32 = 56.0 + 48.0;
+    const EXPECTED_HEIGHT: f64 = 56.0 + 48.0;
     let matches = demo
         .find_all_by_render_type("RenderConstrainedBox")
         .into_iter()
-        .filter(|&id| demo.size(id).height == px(f64::from(EXPECTED_HEIGHT)))
+        .filter(|&id| demo.size(id).height == f64::from(EXPECTED_HEIGHT))
         .count();
     assert!(
         matches > 0,

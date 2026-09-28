@@ -578,20 +578,20 @@ impl WinitPlatform {
         let mut attributes = WindowAttributes::default()
             .with_title(options.title)
             .with_inner_size(winit::dpi::LogicalSize::new(
-                options.size.width.0,
-                options.size.height.0,
+                options.size.width,
+                options.size.height,
             ))
             .with_resizable(options.resizable)
             .with_decorations(options.decorated)
             .with_visible(options.visible);
 
         if let Some(min) = options.min_size {
-            attributes = attributes
-                .with_min_inner_size(winit::dpi::LogicalSize::new(min.width.0, min.height.0));
+            attributes =
+                attributes.with_min_inner_size(winit::dpi::LogicalSize::new(min.width, min.height));
         }
         if let Some(max) = options.max_size {
-            attributes = attributes
-                .with_max_inner_size(winit::dpi::LogicalSize::new(max.width.0, max.height.0));
+            attributes =
+                attributes.with_max_inner_size(winit::dpi::LogicalSize::new(max.width, max.height));
         }
 
         let raw_window = Arc::new(event_loop.create_window(attributes).map_err(|error| {

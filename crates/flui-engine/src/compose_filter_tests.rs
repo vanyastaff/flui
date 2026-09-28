@@ -94,11 +94,16 @@ mod gpu_tests {
     }
 
     fn px(v: f32) -> f64 {
-        v
+        f64::from(v)
     }
 
     fn full_surface_rect() -> Rect<f64> {
-        Rect::from_xywh(0.0, 0.0, (SURFACE_W as f32), (SURFACE_H as f32))
+        Rect::from_xywh(
+            0.0,
+            0.0,
+            f64::from((SURFACE_W as f32)),
+            f64::from((SURFACE_H as f32)),
+        )
     }
 
     // ── CPU oracle helpers ────────────────────────────────────────────────────
@@ -223,10 +228,10 @@ mod gpu_tests {
         clear_surface(&device, &queue, &view_order_b, transparent_black);
 
         let content_rect = Rect::from_xywh(
-            CONTENT_MARGIN_PX,
-            CONTENT_MARGIN_PX,
-            (SURFACE_W as f32 - 2.0 * CONTENT_MARGIN_PX),
-            (SURFACE_H as f32 - 2.0 * CONTENT_MARGIN_PX),
+            f64::from(CONTENT_MARGIN_PX),
+            f64::from(CONTENT_MARGIN_PX),
+            f64::from((SURFACE_W as f32 - 2.0 * CONTENT_MARGIN_PX)),
+            f64::from((SURFACE_H as f32 - 2.0 * CONTENT_MARGIN_PX)),
         );
         let opaque_white = Color::rgba(255, 255, 255, 255);
 
@@ -373,11 +378,11 @@ mod gpu_tests {
         let matrix_pass = ImageFilterPass::ColorMatrix(matrix_values);
 
         let blur_filter = ImageFilter::Blur {
-            sigma_x: sigma_blur,
-            sigma_y: sigma_blur,
+            sigma_x: f64::from(sigma_blur),
+            sigma_y: f64::from(sigma_blur),
         };
         let dilate_filter = ImageFilter::Dilate {
-            radius: dilate_radius,
+            radius: f64::from(dilate_radius),
         };
         let matrix_filter = ImageFilter::Matrix(ColorMatrix {
             values: matrix_values,

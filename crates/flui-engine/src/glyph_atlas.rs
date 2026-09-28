@@ -551,7 +551,7 @@ mod tests {
     }
 
     fn keys(text: &str, size: f32) -> Vec<flui_painting::GlyphKey> {
-        TextLayout::new(text, None, size, None, None, TextDirection::Ltr)
+        TextLayout::new(text, None, f64::from(size), None, None, TextDirection::Ltr)
             .placed_glyphs((0.0, 0.0), 1.0)
             .map(|g| g.key)
             .collect()

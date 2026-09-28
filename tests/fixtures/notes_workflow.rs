@@ -246,6 +246,6 @@ fn notes_workflow(semantics: bool) {
         .expect("saved signal reaches new page");
     assert!(
         tree.try_size(rendered)
-            .is_some_and(|size| size.width.get() > 0.0)
+            .is_some_and(|size| size.width > 0.0)
     );
 }

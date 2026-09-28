@@ -35,7 +35,7 @@ mod gpu_tests {
     use flui_types::painting::image::ColorFilter;
     use flui_types::{
         Color, Rect,
-        geometry::{Offset, f64, px},
+        geometry::{Offset, px},
         painting::{Image, TileMode},
     };
 
@@ -147,7 +147,12 @@ mod gpu_tests {
 
     /// Full-surface bounds for the test viewport.
     fn full_surface_bounds() -> Rect<f64> {
-        Rect::from_xywh(0.0, 0.0, (SURFACE_WIDTH as f32), (SURFACE_HEIGHT as f32))
+        Rect::from_xywh(
+            0.0,
+            0.0,
+            f64::from((SURFACE_WIDTH as f32)),
+            f64::from((SURFACE_HEIGHT as f32)),
+        )
     }
 
     /// Build a solid-color 4×4 RGBA image (all pixels the given color).
@@ -221,7 +226,7 @@ mod gpu_tests {
                 blend_mode: BlendMode::Multiply,
                 shader: Some(Shader::LinearGradient {
                     from: Offset::new(0.0, 0.0),
-                    to: Offset::new((SURFACE_WIDTH as f32), 0.0),
+                    to: Offset::new(f64::from((SURFACE_WIDTH as f32)), 0.0),
                     colors: vec![gradient_left_color, gradient_right_color],
                     stops: None,
                     tile_mode: TileMode::Clamp,
@@ -414,8 +419,8 @@ mod gpu_tests {
         painter.save();
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(
-                Rect::from_xywh(0.0, 0.0, side, side),
-                radius,
+                Rect::from_xywh(0.0, 0.0, f64::from(side), f64::from(side)),
+                f64::from(radius),
             ),
             flui_types::painting::Clip::AntiAlias,
         );
@@ -499,14 +504,14 @@ mod gpu_tests {
         painter.scale(2.0, 2.0);
         painter.clip_rrect(
             flui_types::geometry::RRect::from_rect_circular(
-                Rect::from_xywh(0.0, 0.0, logical_side, logical_side),
-                (logical_side / 2.0),
+                Rect::from_xywh(0.0, 0.0, f64::from(logical_side), f64::from(logical_side)),
+                f64::from((logical_side / 2.0)),
             ),
             flui_types::painting::Clip::AntiAlias,
         );
         painter.draw_image(
             &source_image,
-            Rect::from_xywh(0.0, 0.0, logical_side, logical_side),
+            Rect::from_xywh(0.0, 0.0, f64::from(logical_side), f64::from(logical_side)),
             BlendMode::SrcOver,
         );
         painter.restore();
@@ -832,7 +837,7 @@ mod gpu_tests {
             blend_mode: BlendMode::SrcOver,
             shader: Some(Shader::LinearGradient {
                 from: Offset::new(0.0, 0.0),
-                to: Offset::new((SURFACE_WIDTH as f32), 0.0),
+                to: Offset::new(f64::from((SURFACE_WIDTH as f32)), 0.0),
                 colors: vec![gradient_left, gradient_right],
                 stops: None,
                 tile_mode: TileMode::Clamp,
@@ -965,7 +970,7 @@ mod gpu_tests {
                         blend_mode: mode,
                         shader: Some(Shader::LinearGradient {
                             from: Offset::new(0.0, 0.0),
-                            to: Offset::new((SURFACE_WIDTH as f32), 0.0),
+                            to: Offset::new(f64::from((SURFACE_WIDTH as f32)), 0.0),
                             colors: vec![gradient_left, gradient_right],
                             stops: None,
                             tile_mode: TileMode::Clamp,

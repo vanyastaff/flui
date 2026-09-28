@@ -197,7 +197,7 @@ where
                 return Err(anyhow::anyhow!(e).context("GPU init failed"));
             }
         };
-        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+        renderer.resize(phys_size.width as u32, phys_size.height as u32);
 
         // 3. Mount root widget (used when no plugin is active) at the
         // LOGICAL size; the paint root's DPR transform maps to physical.
@@ -230,11 +230,7 @@ where
 
         let logical = window.logical_size();
         let attach = ui_realm.enter(|realm| {
-            realm.attach_root_widget_with_size(
-                &root,
-                logical.width.0 as f64,
-                logical.height.0 as f64,
-            )
+            realm.attach_root_widget_with_size(&root, logical.width as f64, logical.height as f64)
         });
         if let Err(e) = attach {
             tracing::error!("Root widget attach failed: {:?}", e);
@@ -271,8 +267,8 @@ where
         let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
             renderer,
             realm_dispatch.address,
-            phys_size.width.0 as u32,
-            phys_size.height.0 as u32,
+            phys_size.width as u32,
+            phys_size.height as u32,
         )));
 
         // Install the registration-lifetime surface applier alongside the
@@ -283,8 +279,8 @@ where
             install_surface_applier(
                 realm_dispatch.address.realm_id,
                 move |size, scale_factor| {
-                    let w = (size.width.0 * scale_factor) as u32;
-                    let h = (size.height.0 * scale_factor) as u32;
+                    let w = (size.width * scale_factor) as u32;
+                    let h = (size.height * scale_factor) as u32;
                     resize_hook.apply(w, h);
                 },
             );

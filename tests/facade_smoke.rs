@@ -41,7 +41,7 @@ impl StatelessView for FacadeSmokeApp {
 }
 
 fn root_constraints() -> BoxConstraints {
-    BoxConstraints::tight(Size::new(px(320.0), px(240.0)))
+    BoxConstraints::tight(Size::new(320.0, 240.0))
 }
 
 #[test]
