@@ -910,6 +910,14 @@ mod tests {
                 Some(expected),
                 "`{name}` arrives as {platform:?} and must reach {expected:?}",
             );
+            // The in-process route (`agent`) reaches the same FLUI action the
+            // Windows adapter's route does, so an agent's `invoke` means one
+            // thing whichever backend carries it.
+            assert_eq!(
+                crate::agent::semantics_action_for_wire(name),
+                semantics_action_for(platform),
+                "`{name}` routes differently in process than through UI Automation",
+            );
         }
     }
 
