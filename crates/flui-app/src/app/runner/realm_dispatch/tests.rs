@@ -2048,64 +2048,6 @@ fn teardown_drops_queued_destructors_outside_tls_borrow() {
     assert!(*owner_queue_dropped.borrow());
 }
 
-#[cfg(feature = "hot-reload")]
-#[test]
-fn old_registered_hot_reload_hook_cannot_touch_recreated_realm() {
-    use flui_hot_reload::{register_request_rebuild, request_rebuild};
-
-    use crate::app::hot_reload::queued_hot_reload_hook;
-
-    let runtime_a = crate::app::ui_realm::UiRealm::for_test();
-    let sender_a = runtime_a.command_sender();
-    let old_a_hook = queued_hot_reload_hook(sender_a.clone());
-    let registration_a = register_request_rebuild(queued_hot_reload_hook(sender_a));
-    let _realm_a = install_platform_realm(runtime_a, &test_window());
-    teardown_platform_realm();
-
-    let runtime_b = crate::app::ui_realm::UiRealm::for_test();
-    let sender_b = runtime_b.command_sender();
-    let realm_b = install_platform_realm(runtime_b, &test_window());
-    let registration_b = register_request_rebuild(queued_hot_reload_hook(sender_b));
-    drop(registration_a);
-
-    old_a_hook();
-    let after_old = Rc::new(RefCell::new(None));
-    let after_old_in_frame = Rc::clone(&after_old);
-    dispatch_platform_realm(
-        realm_b,
-        RealmTask::Frame(Box::new(move |realm| {
-            *after_old_in_frame.borrow_mut() = Some(realm.drain_commands());
-        })),
-    )
-    .expect("B frame dispatches");
-    assert_eq!(
-        *after_old.borrow(),
-        Some(crate::app::ui_realm::DrainReport::default()),
-        "stale A hook must not enqueue into B"
-    );
-
-    std::thread::spawn(request_rebuild)
-        .join()
-        .expect("worker-side rebuild request");
-    let after_current = Rc::new(RefCell::new(None));
-    let after_current_in_frame = Rc::clone(&after_current);
-    dispatch_platform_realm(
-        realm_b,
-        RealmTask::Frame(Box::new(move |realm| {
-            *after_current_in_frame.borrow_mut() = Some(realm.drain_commands());
-        })),
-    )
-    .expect("B frame dispatches");
-    assert_eq!(
-        after_current.borrow().as_ref().map(|report| report.invoked),
-        Some(1),
-        "current B hook must dispatch exactly once"
-    );
-
-    drop(registration_b);
-    teardown_platform_realm();
-}
-
 #[test]
 fn whole_frame_event_keeps_realm_global_key_scope_active() {
     let realm = crate::app::ui_realm::UiRealm::for_test();

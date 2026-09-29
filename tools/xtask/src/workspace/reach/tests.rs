@@ -614,33 +614,48 @@ fn a_reach_exception_needs_exactly_one_of_exit_or_grant() {
     );
 }
 
-/// The real facts' packages: flui-app's edge to flui-hot-reload optional or
-/// not, its `hot-reload` feature bringing it in or not, and the host
-/// enabling that feature or not.
-fn hot_reload(optional: bool, feature_brings_it: bool, host_enables: bool) -> Fixture {
-    let hot_reload = if feature_brings_it {
+/// How flui-app names flui-hot-reload in a [`hot_reload`] fixture.
+#[derive(Clone, Copy)]
+enum AppEdge {
+    /// It does not: the hook is the only seam.
+    None,
+    /// Optionally, behind a `hot-reload` feature.
+    Feature,
+    /// Always.
+    Normal,
+}
+
+/// The real facts' packages: flui-app's edge to flui-hot-reload, the
+/// facade's `hot-reload` feature bringing it in or not, and the host
+/// enabling its `app-plugin` or not.
+fn hot_reload(app: AppEdge, facade_brings_it: bool, host_enables: bool) -> Fixture {
+    let facade = if facade_brings_it {
         &["dep:flui-hot-reload"][..]
     } else {
         &[]
     };
     let host = if host_enables {
-        Dep::normal().features(&["hot-reload"])
+        Dep::normal().features(&["app-plugin"])
     } else {
         Dep::normal()
     };
-    let edge = if optional {
-        Dep::normal().optional()
-    } else {
-        Dep::normal()
-    };
-    base()
+    let fixture = base()
         .member("flui-app", "H", &json!(null))
         .member("flui-hot-reload", "pkg", &json!(null))
         .example("hot-reload-counter-host")
         .feature("flui-app", "default", &[])
-        .feature("flui-app", "hot-reload", hot_reload)
-        .dep("flui-app", "flui-hot-reload", edge)
-        .dep("hot-reload-counter-host", "flui-app", host)
+        .feature("flui-hot-reload", "app-plugin", &[])
+        .feature("flui", "hot-reload", facade)
+        .dep("flui", "flui-hot-reload", Dep::normal().optional())
+        .dep("hot-reload-counter-host", "flui-app", Dep::normal())
+        .dep("hot-reload-counter-host", "flui-hot-reload", host);
+    match app {
+        AppEdge::None => fixture,
+        AppEdge::Feature => fixture
+            .feature("flui-app", "hot-reload", &["dep:flui-hot-reload"])
+            .dep("flui-app", "flui-hot-reload", Dep::normal().optional()),
+        AppEdge::Normal => fixture.dep("flui-app", "flui-hot-reload", Dep::normal()),
+    }
 }
 
 /// The train-guard facts' packages: `flui-sdk` and the facade each with or
@@ -661,8 +676,16 @@ fn train_guard(sdk_has_it: bool, facade_has_it: bool) -> Fixture {
 
 #[test]
 fn each_fact_reads_the_build_both_ways() {
-    let [absent, present, enables, sdk_guard, facade_guard] = FACTS;
+    let [
+        absent,
+        absent_all,
+        present,
+        enables,
+        sdk_guard,
+        facade_guard,
+    ] = FACTS;
     assert!(matches!(absent.expect, Expect::Absent(_)));
+    assert!(matches!(absent_all.expect, Expect::Absent(_)));
     assert!(matches!(present.expect, Expect::Present(_)));
     assert!(matches!(enables.expect, Expect::Enables(..)));
     let holds = |fixture: &Fixture, fact: &Fact| {
@@ -670,10 +693,19 @@ fn each_fact_reads_the_build_both_ways() {
         evaluate(&graph, fact).expect("evaluates").is_none()
     };
 
-    let good = hot_reload(true, true, true);
-    for fact in [&absent, &present, &enables] {
+    let good = hot_reload(AppEdge::None, true, true);
+    for fact in [&absent, &absent_all, &present, &enables] {
         assert!(holds(&good, fact), "{}", fact.what);
     }
+    // an optional flui-app edge passes the default fact and fails the
+    // every-feature one; a normal edge fails both
+    let feature_edge = hot_reload(AppEdge::Feature, true, true);
+    assert!(holds(&feature_edge, &absent));
+    assert!(!holds(&feature_edge, &absent_all));
+    assert!(!holds(
+        &hot_reload(AppEdge::Normal, true, true),
+        &absent_all
+    ));
 
     // the train guard: in the SDK's and the facade's builds, or reported
     let guarded = train_guard(true, true);
@@ -683,11 +715,11 @@ fn each_fact_reads_the_build_both_ways() {
     }
     assert!(!holds(&train_guard(false, true), &sdk_guard));
     assert!(!holds(&train_guard(true, false), &facade_guard));
-    assert!(!holds(&hot_reload(false, true, true), &absent));
-    assert!(!holds(&hot_reload(true, false, true), &present));
-    assert!(!holds(&hot_reload(true, true, false), &enables));
+    assert!(!holds(&hot_reload(AppEdge::Normal, true, true), &absent));
+    assert!(!holds(&hot_reload(AppEdge::None, false, true), &present));
+    assert!(!holds(&hot_reload(AppEdge::None, true, false), &enables));
     let failed = evaluate(
-        &Graph::from_metadata(&hot_reload(false, true, true).metadata()).expect("joins"),
+        &Graph::from_metadata(&hot_reload(AppEdge::Normal, true, true).metadata()).expect("joins"),
         &absent,
     )
     .expect("evaluates")
@@ -710,7 +742,7 @@ fn each_fact_reads_the_build_both_ways() {
             ..absent
         },
         Fact {
-            expect: Expect::Enables("flui-app", "no-such-feature"),
+            expect: Expect::Enables("flui-hot-reload", "no-such-feature"),
             ..enables
         },
     ] {

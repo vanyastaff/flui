@@ -97,6 +97,19 @@
 //!     }
 //! }
 //! ```
+//!
+//! ## Installing in a host
+//!
+//! A `flui-app` host does not drive these types itself: it installs a
+//! development reload hook (ADR-0094 §1) on its configuration, and the runner
+//! attaches, polls and detaches it. [`WorkerReloadHook`] drives the host/worker
+//! split; [`ScenePluginHook`] lets an Android scene plugin draw frames.
+//!
+//! ```rust,ignore
+//! use flui::hot_reload::WorkerReloadHook;
+//!
+//! let config = flui::AppConfig::new().with_dev_reload(WorkerReloadHook::new(worker_path));
+//! ```
 
 // Ship bar (wave 4): every public item is documented; keep it that way.
 #![deny(missing_docs)]
@@ -160,7 +173,12 @@ mod dispatch;
 pub mod worker;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod hook;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub use driver::HotReloadDriver;
+#[cfg(not(target_arch = "wasm32"))]
+pub use hook::{ScenePluginHook, WorkerReloadHook};
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{PluginKind, ScenePlugin};
 #[cfg(not(target_arch = "wasm32"))]

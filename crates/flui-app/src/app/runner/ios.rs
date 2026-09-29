@@ -18,14 +18,13 @@
 //!
 //! # Hot-reload
 //!
-//! iOS runs the same host/worker split as desktop and Android: `bootstrap_ios`
-//! loads a worker dylib when one is configured, watches the artifact, and
-//! reassembles on change. The `dlopen` path is the shared `flui-hot-reload`
-//! `DynLib`; on iOS this is usable in the Simulator (and for a dev-signed
-//! build), while a production App Store build has no mutable dylib to load and
-//! simply runs static — `AppConfig`'s worker field is `None` and the whole
-//! capability is inert. See [`super::hot_reload`] for the seam and
-//! `docs/hot-reload.md` for the two-layer model.
+//! iOS drives the application's development reload hook the way desktop
+//! does: the loop attaches it once, and `bootstrap_ios` polls it at every
+//! frame boundary and reassembles the realm on a patch. A worker hook's
+//! `dlopen` is usable in the Simulator (and for a dev-signed build), while a
+//! production App Store build installs no hook and the whole capability is
+//! inert. See [`super::hot_reload`] for the seam and `docs/hot-reload.md` for
+//! the two-layer model.
 
 use flui_platform::HostWindow;
 use flui_platform::platforms::ios::{IOSSceneEvent, IOSSceneSessionId};
@@ -310,7 +309,6 @@ where
         tracing::error!("Root widget attach failed: {:?}", e);
         return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
     }
-    let hot_reload_sender = ui_realm.command_sender();
     let realm_dispatch = install_realm_alongside(ui_realm, &window)?;
     struct ProvisionalRealm(Option<RealmDispatcher>);
     impl Drop for ProvisionalRealm {
@@ -321,9 +319,6 @@ where
         }
     }
     let mut provisional = ProvisionalRealm(Some(realm_dispatch));
-
-    let rebuild_guard: crate::app::hot_reload::RebuildHookGuard =
-        worker_reload.register_rebuild_hook(hot_reload_sender);
 
     // 4. Adopt the raster mailbox (ADR-0045's inline lane).
     let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
@@ -531,7 +526,6 @@ where
     );
 
     window.on_close(Box::new(move || {
-        contain(|| drop(rebuild_guard));
         close_this_window(realm_dispatch);
     }));
 

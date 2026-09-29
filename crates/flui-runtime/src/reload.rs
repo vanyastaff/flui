@@ -1,12 +1,12 @@
 //! The development reload a realm applies to its presentations.
 //!
-//! A hot-reload driver lives in a host crate (`flui-hot-reload`, reached only
-//! through `flui-app`'s `hot-reload` feature); the realm that applies a reload
-//! lives here and may not depend on it. The driver's tier is therefore
-//! translated at the host into this crate's [`ReloadTier`], and nothing below
-//! the host names a hot-reload type. The module exists only with this
-//! crate's `hot-reload` feature, which `flui-app`'s feature of the same name
-//! turns on, so a production graph carries none of it.
+//! A reload driver is a `flui_view::dev_reload::DevReloadHook` the
+//! application installs (ADR-0094 §1); the host, `flui-app`, polls it and
+//! translates its event into this crate's [`ReloadTier`], which the realm
+//! applies. Nothing here or in the host names a reload tool. The module
+//! exists only with this crate's `hot-reload` feature, which `flui-app`
+//! turns on; it names no reload crate, so it adds nothing to a production
+//! graph.
 
 /// How much of a presentation a development reload replaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

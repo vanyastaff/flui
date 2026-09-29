@@ -24,7 +24,7 @@
 //!
 //! The graph is `cargo metadata --locked --all-features`, not its resolution:
 //! Cargo resolves features once for the whole workspace, so its own graph
-//! puts the facade's defaults and `flui-app`'s `hot-reload` into every root.
+//! puts the facade's defaults and optional features into every root.
 //!
 //! `--self-test` runs the check over a built-in workspace with planted
 //! violations and fails unless it reports exactly those (ADR-0078 §4).
@@ -174,14 +174,16 @@ enum Expect {
     Enables(&'static str, &'static str),
 }
 
-/// Hot reload must be absent from an ordinary production graph, not merely
-/// unused by it; the feature must bring it in; and the first-party host, the
-/// executable contract for `flui run`, must enable flui-app's feature (a
-/// direct dependency on flui-hot-reload does not). The train guard,
-/// `flui-foundation`, must be in the SDK's build and in the facade's build
-/// with no features, so a package on one and an application on the other
-/// share it (ADR-0088 §5).
-const FACTS: [Fact; 5] = [
+/// Hot reload must be absent from the application crate's graph under every
+/// feature, not merely unused by it: `flui-app` reaches a reload tool only
+/// through an installed `DevReloadHook` (ADR-0094 §1). The facade's
+/// `hot-reload` feature must bring the tool in, and the first-party host, the
+/// executable contract for `flui run`, must enable the tool's `app-plugin`
+/// (the worker's rebuild requests reach the host through it). The train
+/// guard, `flui-foundation`, must be in the SDK's build and in the facade's
+/// build with no features, so a package on one and an application on the
+/// other share it (ADR-0088 §5).
+const FACTS: [Fact; 6] = [
     Fact {
         what: "flui-hot-reload must be absent from flui-app's default graph",
         root: "flui-app",
@@ -190,18 +192,25 @@ const FACTS: [Fact; 5] = [
         failure: "flui-hot-reload is in flui-app's default normal dependency graph",
     },
     Fact {
-        what: "the hot-reload feature must bring in flui-hot-reload",
+        what: "flui-hot-reload must be absent from flui-app's graph with every feature",
         root: "flui-app",
-        selection: "--features hot-reload",
-        expect: Expect::Present("flui-hot-reload"),
-        failure: "the hot-reload feature did not bring in flui-hot-reload",
+        selection: "--all-features",
+        expect: Expect::Absent("flui-hot-reload"),
+        failure: "a flui-app feature brings flui-hot-reload into its normal dependency graph",
     },
     Fact {
-        what: "hot-reload-counter-host must enable flui-app/hot-reload",
+        what: "the facade's hot-reload feature must bring in flui-hot-reload",
+        root: "flui",
+        selection: "--no-default-features --features hot-reload",
+        expect: Expect::Present("flui-hot-reload"),
+        failure: "the facade's hot-reload feature did not bring in flui-hot-reload",
+    },
+    Fact {
+        what: "hot-reload-counter-host must enable flui-hot-reload/app-plugin",
         root: "hot-reload-counter-host",
         selection: "",
-        expect: Expect::Enables("flui-app", "hot-reload"),
-        failure: "hot-reload-counter-host does not enable flui-app/hot-reload",
+        expect: Expect::Enables("flui-hot-reload", "app-plugin"),
+        failure: "hot-reload-counter-host does not enable flui-hot-reload/app-plugin",
     },
     Fact {
         what: "the train guard must be in flui-sdk's build",

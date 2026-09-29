@@ -39,7 +39,7 @@
 //! | `material` | **on** | `flui::material` and the Material half of [`prelude`] |
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `localizations` | off | nothing; deprecated, kept so existing feature lists resolve |
-//! | `hot-reload` | off | desktop/Android development reload machinery inside [`app`] |
+//! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::with_dev_reload` |
 //!
 //! `default = ["material"]` keeps the documented Material-first quick start
 //! working out of the box. Turning defaults off (`default-features = false`)

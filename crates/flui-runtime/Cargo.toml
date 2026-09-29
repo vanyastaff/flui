@@ -26,8 +26,8 @@ workspace = true
 # which enable it on their dev edge. Never on a normal edge.
 test-support = []
 # `reload::ReloadTier`, the development reload the realm applies. Names no
-# hot-reload crate; `flui-app`'s `hot-reload` feature turns it on alongside its
-# optional `flui-hot-reload` edge and translates the driver's tier into it.
+# hot-reload crate; `flui-app` always turns it on and translates an installed
+# `DevReloadHook`'s event into it (ADR-0094 §1).
 hot-reload = []
 
 [dependencies]
