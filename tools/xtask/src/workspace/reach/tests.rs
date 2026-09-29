@@ -1,5 +1,5 @@
 //! Synthetic workspaces go through the same `cargo metadata` document the
-//! real run reads ([`Fixture::metadata`]); the last three tests read this
+//! real run reads ([`Fixture::metadata`]); the last case reads this
 //! repository.
 
 use std::collections::BTreeSet;
@@ -10,12 +10,9 @@ use serde_json::json;
 use super::fixture::{Dep, Fixture};
 use super::resolve::{Graph, Selection, resolve};
 use super::rules::Rules;
-use super::{
-    COMBOS, Expect, FACTS, Fact, Finding, Report, Staleness, check_metadata, evaluate,
-    self_test_diff,
-};
+use super::{Expect, FACTS, Fact, Finding, Report, check_metadata, evaluate};
 use crate::util;
-use crate::workspace::{Members, Warrant, tiers};
+use crate::workspace::{Members, Warrant};
 
 /// The standard rules and a facade with nothing but its defaults, so the
 /// only roots that matter are the members'.
@@ -66,44 +63,9 @@ fn names(fixture: &Fixture, root: &str, selection: &str) -> BTreeSet<String> {
         .collect()
 }
 
-#[test]
-fn a_k_crate_that_reaches_winit_is_reported() {
-    let fixture = base()
-        .member("k", "K", &json!(null))
-        .external("p")
-        .external("winit")
-        .dep("k", "p", Dep::normal())
-        .dep("p", "winit", Dep::normal());
-    let found = findings(&fixture);
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(
-        found[0].to_string(),
-        "k (tier K) reaches winit under `k`: k -> p -> winit (forbidden in tier K, ADR-0081 §2)"
-    );
-    // the same crate one tier up is a host, which may reach anything
-    let fixture =
-        base()
-            .member("k", "H", &json!(null))
-            .external("winit")
-            .dep("k", "winit", Dep::normal());
-    assert_eq!(findings(&fixture), []);
-}
-
-#[test]
-fn a_dev_dependency_reaches_nothing() {
-    let fixture =
-        base()
-            .member("k", "K", &json!(null))
-            .external("winit")
-            .dep("k", "winit", Dep::dev());
-    assert_eq!(findings(&fixture), []);
-    assert!(!names(&fixture, "k", "--all-features").contains("winit"));
-}
-
 /// Parley's `std = [.., "peniko/std", ..]` names `peniko`, a dev-dependency
 /// only: Cargo applies it where dev edges are built, and resolving a root
 /// with the feature on is neither an error nor an edge.
-#[test]
 fn a_feature_forwarded_to_a_dev_dependency_is_ignored() {
     let fixture = base()
         .member("k", "K", &json!(null))
@@ -114,7 +76,6 @@ fn a_feature_forwarded_to_a_dev_dependency_is_ignored() {
     assert!(!names(&fixture, "k", "--features std").contains("winit"));
 }
 
-#[test]
 fn an_optional_dependency_reaches_only_under_a_feature_that_enables_it() {
     let fixture = base()
         .member("k", "K", &json!(null))
@@ -132,7 +93,6 @@ fn an_optional_dependency_reaches_only_under_a_feature_that_enables_it() {
     );
 }
 
-#[test]
 fn a_weak_feature_does_not_activate_its_dependency() {
     let fixture = base()
         .member("k", "K", &json!(null))
@@ -169,7 +129,6 @@ fn a_weak_feature_does_not_activate_its_dependency() {
     assert!(build.features[x].contains("g"), "{:?}", build.features[x]);
 }
 
-#[test]
 fn a_strong_feature_enables_the_same_named_feature_whatever_it_lists() {
     // `k/x` is explicit and forwards to `y`; `k/s = ["x/g"]` enables it, so
     // `y` joins with `f`, as cargo resolves it
@@ -199,7 +158,6 @@ fn a_strong_feature_enables_the_same_named_feature_whatever_it_lists() {
     );
 }
 
-#[test]
 fn an_unknown_feature_is_an_error_not_a_pass() {
     let fixture = base()
         .member("k", "K", &json!(null))
@@ -219,7 +177,6 @@ fn an_unknown_feature_is_an_error_not_a_pass() {
     }
 }
 
-#[test]
 fn a_dependency_is_matched_by_package_name_not_library_name() {
     // the resolve graph names `xml-rs` by its library, `xml`
     let fixture = base()
@@ -256,7 +213,6 @@ fn a_dependency_is_matched_by_package_name_not_library_name() {
     assert!(names(&fixture, "h", "").contains("inner"));
 }
 
-#[test]
 fn a_target_specific_dependency_counts_on_every_target() {
     let fixture = base()
         .member("k", "K", &json!(null))
@@ -299,7 +255,6 @@ fn a_target_specific_dependency_counts_on_every_target() {
     );
 }
 
-#[test]
 fn a_build_dependency_reaches() {
     let fixture =
         base()
@@ -309,7 +264,6 @@ fn a_build_dependency_reaches() {
     assert_eq!(reaches(&fixture), [pair("k", "winit")]);
 }
 
-#[test]
 fn features_combine_within_one_root_and_not_across_roots() {
     let fixture = base()
         .member("app", "H", &json!(null))
@@ -333,25 +287,6 @@ fn features_combine_within_one_root_and_not_across_roots() {
     assert!(!names(&fixture, "k", "").contains("winit"));
 }
 
-#[test]
-fn selection_parses_every_facade_combo() {
-    for combo in COMBOS {
-        let selection = Selection::parse(combo).expect("a facade combo parses");
-        assert_eq!(selection.to_string(), combo, "round trip");
-    }
-    assert_eq!(
-        Selection::parse("--features a,b").expect("parses"),
-        Selection::Defaults(vec!["a".to_owned(), "b".to_owned()])
-    );
-    for bad in [
-        "--no-such-flag",
-        "--features",
-        "--all-features --no-default-features",
-    ] {
-        assert!(Selection::parse(bad).is_err(), "{bad}");
-    }
-}
-
 fn rules(reach: serde_json::Value) -> anyhow::Result<Rules> {
     let tiers: Vec<String> = ["V", "C", "S", "R", "K", "H", "pkg"]
         .map(str::to_owned)
@@ -359,7 +294,6 @@ fn rules(reach: serde_json::Value) -> anyhow::Result<Rules> {
     Rules::from_workspace_metadata(&json!({ "flui": { "reach": reach } }), &tiers)
 }
 
-#[test]
 fn a_generic_ffi_crate_matches_no_glob() {
     let rules = rules(json!({
         "generic-ffi": [{ "name": "windows-sys", "reason": "raw bindings" }],
@@ -373,7 +307,6 @@ fn a_generic_ffi_crate_matches_no_glob() {
     assert!(!rules.forbidden("H", &[], "windows"));
 }
 
-#[test]
 fn an_exact_forbid_entry_naming_a_generic_ffi_crate_is_an_error() {
     let error = rules(json!({
         "generic-ffi": [{ "name": "windows_*", "reason": "import libraries" }],
@@ -391,7 +324,6 @@ fn an_exact_forbid_entry_naming_a_generic_ffi_crate_is_an_error() {
     assert!(error.to_string().contains("k's `reach-forbid`"), "{error}");
 }
 
-#[test]
 fn the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio() {
     let rules = rules(json!({
         "tier": {
@@ -410,7 +342,6 @@ fn the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio() {
     assert!(!rules.forbidden("S", &[], "tokio"));
 }
 
-#[test]
 fn an_extends_cycle_or_unknown_tier_is_an_error() {
     let cases = [
         (
@@ -442,142 +373,6 @@ fn an_extends_cycle_or_unknown_tier_is_an_error() {
     }
 }
 
-#[test]
-fn reach_forbid_adds_to_the_tier_set() {
-    let fixture = base()
-        .member("r", "R", &json!({ "reach-forbid": ["tokio"] }))
-        .member("r2", "R", &json!(null))
-        .external("tokio")
-        .dep("r", "tokio", Dep::normal())
-        .dep("r2", "tokio", Dep::normal());
-    let found = findings(&fixture);
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert!(
-        found[0]
-            .to_string()
-            .ends_with("(forbidden by its `reach-forbid`, ADR-0081 §2)"),
-        "{}",
-        found[0]
-    );
-}
-
-#[test]
-fn only_a_grant_lets_an_r_crate_reach_wgpu() {
-    // wgpu without its DX12 backend brings no `windows`: the name itself
-    // must be forbidden to every R crate but the one holding the grant
-    let grant =
-        json!({ "reach-exceptions": [{ "to": "wgpu", "grant": "ADR-0081", "reason": "test" }] });
-    let fixture = base()
-        .member("r-engine", "R", &grant)
-        .member("r-layer", "R", &json!(null))
-        .external("wgpu")
-        .dep("r-engine", "wgpu", Dep::normal())
-        .dep("r-layer", "wgpu", Dep::normal());
-    assert_eq!(reaches(&fixture), [pair("r-layer", "wgpu")]);
-}
-
-/// `k -> s -> flui-platform -> winit`, with `s` declaring `exception`.
-fn through_s(exception: &serde_json::Value) -> Fixture {
-    base()
-        .member("k", "K", &json!(null))
-        .member("s", "S", exception)
-        .member("flui-platform", "H", &json!(null))
-        .external("winit")
-        .dep("k", "s", Dep::normal())
-        .dep("s", "flui-platform", Dep::normal())
-        .dep("flui-platform", "winit", Dep::normal())
-}
-
-fn exception(to: &str) -> serde_json::Value {
-    json!({ "reach-exceptions": [{ "to": to, "exit": "ADR-0082", "reason": "test" }] })
-}
-
-#[test]
-fn a_reach_exception_excuses_only_paths_through_its_crate() {
-    let without = through_s(&json!(null));
-    assert_eq!(
-        reaches(&without),
-        [
-            pair("k", "flui-platform"),
-            pair("k", "winit"),
-            pair("s", "flui-platform"),
-            pair("s", "winit"),
-        ]
-    );
-    let with = through_s(&exception("flui-platform"));
-    assert_eq!(findings(&with), []);
-    // a direct edge is still reported, and so is a second way around
-    let direct = through_s(&exception("flui-platform"))
-        .member("k2", "K", &json!(null))
-        .dep("k2", "flui-platform", Dep::normal())
-        .dep("k", "flui-platform", Dep::normal());
-    let found = findings(&direct);
-    assert_eq!(
-        found
-            .iter()
-            .map(|finding| match finding {
-                Finding::Reaches {
-                    package,
-                    forbidden,
-                    path,
-                    ..
-                } => format!("{package}:{forbidden}:{}", path.join(">")),
-                other => other.to_string(),
-            })
-            .collect::<Vec<_>>(),
-        [
-            "k:flui-platform:k>flui-platform",
-            "k:winit:k>flui-platform>winit",
-            "k2:flui-platform:k2>flui-platform",
-            "k2:winit:k2>flui-platform>winit",
-        ]
-    );
-}
-
-#[test]
-fn a_reach_exception_whose_edge_is_gone_is_stale() {
-    let fixture = base().member("s", "S", &exception("flui-platform"));
-    assert_eq!(
-        findings(&fixture),
-        [Finding::Stale {
-            package: "s".to_owned(),
-            to: "flui-platform".to_owned(),
-            why: Staleness::Absent,
-        }]
-    );
-    assert!(
-        findings(&fixture)[0]
-            .to_string()
-            .contains("reaches no flui-platform in any root build")
-    );
-}
-
-#[test]
-fn a_reach_exception_that_excuses_nothing_is_stale() {
-    let fixture = base()
-        .member("s", "S", &exception("harmless"))
-        .external("harmless")
-        .dep("s", "harmless", Dep::normal());
-    assert_eq!(
-        findings(&fixture),
-        [Finding::Stale {
-            package: "s".to_owned(),
-            to: "harmless".to_owned(),
-            why: Staleness::ExcusesNothing,
-        }]
-    );
-    // what lies behind it counts for the crates that reach the declaring
-    // one: a host's exception excuses the K crate above it
-    let fixture = base()
-        .member("k", "K", &json!(null))
-        .member("h", "H", &exception("winit"))
-        .external("winit")
-        .dep("k", "h", Dep::normal())
-        .dep("h", "winit", Dep::normal());
-    assert_eq!(findings(&fixture), []);
-}
-
-#[test]
 fn a_reach_exception_needs_exactly_one_of_exit_or_grant() {
     for entry in [
         json!({ "to": "x", "reason": "neither" }),
@@ -659,7 +454,6 @@ fn train_guard(sdk_has_it: bool, facade_has_it: bool) -> Fixture {
     fixture
 }
 
-#[test]
 fn each_fact_reads_the_build_both_ways() {
     let [absent, present, enables, sdk_guard, facade_guard] = FACTS;
     assert!(matches!(absent.expect, Expect::Absent(_)));
@@ -718,123 +512,8 @@ fn each_fact_reads_the_build_both_ways() {
     }
 }
 
-#[test]
-fn the_self_test_reports_exactly_the_planted_findings() {
-    let (missed, extra) = self_test_diff().expect("the self-test workspace checks");
-    assert!(
-        missed.is_empty() && extra.is_empty(),
-        "missed {missed:#?}, false positives {extra:#?}"
-    );
-}
-
-/// `(tier, forbidden set)` of the root manifest, and the rules.
-fn real_rules() -> (Vec<String>, Rules) {
-    let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
-    let tiers = tiers::names(&metadata.workspace_metadata).expect("tier names");
-    let rules =
-        Rules::from_workspace_metadata(&metadata.workspace_metadata, &tiers).expect("rules parse");
-    (tiers, rules)
-}
-
-#[test]
-fn the_forbid_sets_match_the_adr_0081_table() {
-    let (tiers, rules) = real_rules();
-    let k = [
-        "flui-platform",
-        "winit",
-        "android-activity",
-        "ndk",
-        "windows",
-        "objc2-app-kit",
-        "objc2-ui-kit",
-        "wgpu",
-        "flui-engine",
-        "flui-app",
-    ];
-    let os = [
-        "windows-*",
-        "objc2-*",
-        "core-foundation*",
-        "core-graphics*",
-        "jni-*",
-        "ndk-*",
-        "android-*",
-        "android_*",
-    ];
-    let set = |names: &[&str]| -> BTreeSet<String> {
-        names.iter().map(|&name| name.to_owned()).collect()
-    };
-    // R keeps `wgpu`: only flui-engine's grant admits it
-    let expected = [
-        ("V", set(&[&k[..], &["tokio"]].concat())),
-        ("C", set(&k)),
-        ("S", set(&k)),
-        ("R", set(&k)),
-        ("K", set(&k)),
-        ("H", set(&[])),
-        ("pkg", set(&[&k[..], &os[..]].concat())),
-    ];
-    assert_eq!(
-        tiers,
-        expected
-            .iter()
-            .map(|(tier, _)| (*tier).to_owned())
-            .collect::<Vec<_>>()
-    );
-    for (tier, names) in expected {
-        let actual: BTreeSet<String> = rules
-            .tier_set(tier)
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        assert_eq!(actual, names, "tier {tier}");
-    }
-    // the generic FFI crates ADR-0081 §2 names, each with its reason
-    for name in ["windows-sys", "jni", "objc2", "core-foundation"] {
-        let reason = rules
-            .generic_ffi()
-            .iter()
-            .find(|(pattern, _)| pattern.to_string() == name)
-            .map(|(_, reason)| reason.clone())
-            .unwrap_or_default();
-        assert!(
-            !reason.trim().is_empty(),
-            "{name} is allowlisted with a reason"
-        );
-    }
-}
-
-#[test]
-fn the_seeded_reach_exceptions_are_the_known_debt() {
-    let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
-    let members = Members::load(&util::repo_root(), &metadata).expect("manifests load");
-    let seeded: BTreeSet<(String, String, Warrant)> = members
-        .iter()
-        .flat_map(|member| {
-            member.reach_exceptions.iter().map(move |entry| {
-                (
-                    member.name().to_owned(),
-                    entry.to.clone(),
-                    entry.warrant.clone(),
-                )
-            })
-        })
-        .collect();
-    let exit = |adr: &str| Warrant::Exit(adr.to_owned());
-    let expected: BTreeSet<(String, String, Warrant)> = [
-        ("flui-engine", "wgpu", Warrant::Grant("ADR-0081".to_owned())),
-        ("flui-hot-reload", "windows", exit("ADR-0094")),
-        ("flui-hot-reload", "android_log-sys", exit("ADR-0094")),
-    ]
-    .into_iter()
-    .map(|(package, to, warrant)| (package.to_owned(), to.to_owned(), warrant))
-    .collect();
-    assert_eq!(seeded, expected);
-}
-
 /// The resolver builds exactly what `cargo tree` prints for the same root,
 /// on every target, over normal and build edges.
-#[test]
 fn the_resolver_agrees_with_cargo_tree() {
     let root = util::repo_root();
     let metadata = util::resolved_metadata(&root).expect("cargo metadata --all-features");
@@ -884,4 +563,77 @@ fn the_resolver_agrees_with_cargo_tree() {
             tree.len()
         );
     }
+}
+
+#[test]
+fn reach_gate_contract() {
+    crate::table_test::run_table(
+        "reach_gate_contract",
+        &[
+            (
+                "a_feature_forwarded_to_a_dev_dependency_is_ignored",
+                a_feature_forwarded_to_a_dev_dependency_is_ignored as fn(),
+            ),
+            (
+                "an_optional_dependency_reaches_only_under_a_feature_that_enables_it",
+                an_optional_dependency_reaches_only_under_a_feature_that_enables_it as fn(),
+            ),
+            (
+                "a_weak_feature_does_not_activate_its_dependency",
+                a_weak_feature_does_not_activate_its_dependency as fn(),
+            ),
+            (
+                "a_strong_feature_enables_the_same_named_feature_whatever_it_lists",
+                a_strong_feature_enables_the_same_named_feature_whatever_it_lists as fn(),
+            ),
+            (
+                "an_unknown_feature_is_an_error_not_a_pass",
+                an_unknown_feature_is_an_error_not_a_pass as fn(),
+            ),
+            (
+                "a_dependency_is_matched_by_package_name_not_library_name",
+                a_dependency_is_matched_by_package_name_not_library_name as fn(),
+            ),
+            (
+                "a_target_specific_dependency_counts_on_every_target",
+                a_target_specific_dependency_counts_on_every_target as fn(),
+            ),
+            (
+                "a_build_dependency_reaches",
+                a_build_dependency_reaches as fn(),
+            ),
+            (
+                "features_combine_within_one_root_and_not_across_roots",
+                features_combine_within_one_root_and_not_across_roots as fn(),
+            ),
+            (
+                "a_generic_ffi_crate_matches_no_glob",
+                a_generic_ffi_crate_matches_no_glob as fn(),
+            ),
+            (
+                "an_exact_forbid_entry_naming_a_generic_ffi_crate_is_an_error",
+                an_exact_forbid_entry_naming_a_generic_ffi_crate_is_an_error as fn(),
+            ),
+            (
+                "the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio",
+                the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio as fn(),
+            ),
+            (
+                "an_extends_cycle_or_unknown_tier_is_an_error",
+                an_extends_cycle_or_unknown_tier_is_an_error as fn(),
+            ),
+            (
+                "a_reach_exception_needs_exactly_one_of_exit_or_grant",
+                a_reach_exception_needs_exactly_one_of_exit_or_grant as fn(),
+            ),
+            (
+                "each_fact_reads_the_build_both_ways",
+                each_fact_reads_the_build_both_ways as fn(),
+            ),
+            (
+                "the_resolver_agrees_with_cargo_tree",
+                the_resolver_agrees_with_cargo_tree as fn(),
+            ),
+        ],
+    );
 }

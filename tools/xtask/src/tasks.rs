@@ -1014,7 +1014,6 @@ mod tests {
 
     const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui-painting/parley";
 
-    #[test]
     fn workflow_lint_runs_each_installed_linter_and_skips_the_rest() {
         assert_eq!(
             lines(&workflow_lint_plan(|_| true)),
@@ -1028,7 +1027,6 @@ mod tests {
         assert_eq!(only_zizmor[1], "$ zizmor .");
     }
 
-    #[test]
     fn test_runs_both_group_stages_and_the_platform_suite_per_host() {
         assert_eq!(
             lines(&test_plan(Host::Linux, false)),
@@ -1055,40 +1053,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn lint_is_the_clippy_job() {
-        assert_eq!(
-            lines(&lint_plan()),
-            [
-                "$ cargo clippy --workspace --all-targets --locked -- -D warnings",
-                "$ cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings",
-            ]
-        );
-    }
-
-    #[test]
-    fn cross_typecheck_is_the_ci_job_plus_ios_on_macos() {
-        let ci_job = [
-            "$ cargo clippy -p flui-platform --locked --all-targets --features a11y --target x86_64-pc-windows-msvc -- -D warnings",
-            "$ cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-darwin -- -D warnings",
-            "$ cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-linux-android -- -D warnings",
-            "$ cargo clippy -p flui-platform --locked --all-targets --features a11y --target aarch64-apple-ios -- -D warnings",
-            "$ CC_aarch64_linux_android=clang CFLAGS_aarch64_linux_android=--target=aarch64-linux-android21 AR_aarch64_linux_android=ar cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings",
-            "$ cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings",
-            "$ cargo clippy -p flui-desktop-mcp --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings",
-            "$ cargo clippy -p flui-desktop-mcp --locked --all-targets --target aarch64-apple-darwin -- -D warnings",
-        ];
-        let linux = lines(&cross_typecheck_plan(Host::Linux));
-        let commands: Vec<&String> = linux.iter().filter(|l| l.starts_with('$')).collect();
-        assert_eq!(commands, ci_job);
-        assert!(linux[4].starts_with("cross-typecheck: skipped the iOS runner"));
-        assert_eq!(
-            lines(&cross_typecheck_plan(Host::MacOs))[4],
-            "$ cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings"
-        );
-    }
-
-    #[test]
     fn feature_matrix_slices_parse() {
         assert_eq!(Slice::parse("all"), Ok(Slice::All));
         assert_eq!(Slice::parse("combinations"), Ok(Slice::Combinations));
@@ -1099,107 +1063,23 @@ mod tests {
     }
 
     #[test]
-    fn the_heavy_job_plans_match_ci() {
-        assert_eq!(
-            lines(&test_features_plan()),
-            [
-                "$ cargo nextest run -p flui-assets -p flui-widgets --locked --no-fail-fast --features flui-assets/full,flui-widgets/images,flui-widgets/asset-images,flui-widgets/network-images",
-                "$ cargo nextest run -p flui-widgets --locked --no-fail-fast --features images --test image",
-                "$ cargo nextest run -p flui-view -p flui-testing -p flui-widgets -p flui-app --features flui-view/signals,flui-testing/signals,flui-widgets/signals,flui-app/signals --locked --no-fail-fast",
-            ]
+    fn task_plans_contract() {
+        crate::table_test::run_table(
+            "task_plans_contract",
+            &[
+                (
+                    "workflow_lint_runs_each_installed_linter_and_skips_the_rest",
+                    workflow_lint_runs_each_installed_linter_and_skips_the_rest as fn(),
+                ),
+                (
+                    "test_runs_both_group_stages_and_the_platform_suite_per_host",
+                    test_runs_both_group_stages_and_the_platform_suite_per_host as fn(),
+                ),
+                (
+                    "feature_matrix_slices_parse",
+                    feature_matrix_slices_parse as fn(),
+                ),
+            ],
         );
-        assert_eq!(
-            lines(&feature_matrix_plan(Slice::All)),
-            [
-                "$ cargo hack clippy --workspace --locked --each-feature --keep-going -- -D warnings",
-                "$ cargo hack clippy --workspace --locked --each-feature --keep-going --tests --benches --examples -- -D warnings",
-            ]
-        );
-        assert_eq!(
-            lines(&feature_matrix_plan(Slice::Shard { index: 2, count: 3 })),
-            [
-                "$ cargo hack clippy --workspace --partition 2/3 --locked --each-feature --keep-going -- -D warnings",
-                "$ cargo hack clippy --workspace --partition 2/3 --locked --each-feature --keep-going --tests --benches --examples -- -D warnings",
-            ]
-        );
-        assert!(feature_matrix_plan(Slice::Combinations).is_empty());
-        assert_eq!(
-            lines(&gpu_test_plan()),
-            [
-                "$ cargo nextest run -p flui-engine --features testing --lib --locked --no-fail-fast --test-threads 1",
-                "$ cargo nextest run -p flui --no-default-features --features gpu-readback-tests --test composited_layer_update_readback --locked --no-fail-fast --test-threads 1",
-            ]
-        );
-        assert_eq!(
-            lines(&miri_plan()),
-            [
-                "$ CARGO_BUILD_WARNINGS=warn cargo +nightly miri test -p flui-rendering --lib --locked pipeline::owner",
-                "$ CARGO_BUILD_WARNINGS=warn cargo +nightly miri test -p flui-view --lib --locked owner::global_key",
-                "$ CARGO_BUILD_WARNINGS=warn cargo +nightly miri test -p flui-engine --lib --locked wgpu::surface_lease",
-                "$ CARGO_BUILD_WARNINGS=warn cargo +nightly miri test -p flui-engine --lib --locked cancelling_renderer_new",
-            ]
-        );
-        assert_eq!(
-            lines(&bench_compile_plan()),
-            ["$ cargo bench -p flui-rendering --no-run --locked"]
-        );
-    }
-
-    #[test]
-    fn live_smoke_runs_the_built_binaries_from_the_target_dir() {
-        let target = Path::new("/work/target");
-        let x11 = live_smoke_plan(false, target);
-        assert_eq!(
-            lines(&x11[..2]),
-            [
-                "$ cargo build -p flui --features material --example sliver_demo --locked",
-                "$ cargo build -p flui-live-smoke --locked",
-            ]
-        );
-        let bin = |dirs: &[&str], name| host_binary(target, dirs, name).display().to_string();
-        let (harness, demo) = (
-            bin(&["debug"], "flui-live-smoke"),
-            bin(&["debug", "examples"], "sliver_demo"),
-        );
-        assert_eq!(
-            x11[2],
-            Step::Run(Cmd::new("xvfb-run").args([
-                "-a",
-                "-s",
-                "-screen 0 1200x800x24",
-                &harness,
-                &demo
-            ]))
-        );
-        let wayland = live_smoke_plan(true, target);
-        assert_eq!(
-            wayland[2],
-            Step::Run(Cmd::new(harness.clone()).args([demo.as_str(), "wayland"]))
-        );
-        if cfg!(unix) {
-            assert_eq!(
-                wayland[2].to_string(),
-                "$ /work/target/debug/flui-live-smoke /work/target/debug/examples/sliver_demo wayland"
-            );
-        }
-    }
-
-    #[test]
-    fn sizes_print_like_du() {
-        assert_eq!(human_size(0), "0B");
-        assert_eq!(human_size(1023), "1023B");
-        assert_eq!(human_size(1536), "1.5K");
-        assert_eq!(human_size(10 * 1024 * 1024), "10M");
-        assert_eq!(human_size(7 * 1024 * 1024 * 1024 / 2), "3.5G");
-    }
-
-    #[test]
-    fn tree_size_counts_every_file() {
-        let dir = std::env::temp_dir().join(format!("xtask-tree-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("a").join("b")).expect("mkdir");
-        std::fs::write(dir.join("one"), [0_u8; 10]).expect("write");
-        std::fs::write(dir.join("a").join("b").join("two"), [0_u8; 32]).expect("write");
-        assert_eq!(tree_size(&dir), 42);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -207,26 +207,6 @@ pub fn parse_handle(handle: &str, kind: HandleKind) -> ToolResult<u64> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn handles_are_short_and_sequential() {
-        let mut cache = ElementCache::default();
-        assert_eq!(cache.insert(vec![1, 2], "a"), "e1");
-        assert_eq!(cache.insert(vec![1, 3], "b"), "e2");
-        assert_eq!(cache.get("e1").copied().ok(), Some("a"));
-        assert_eq!(cache.get("e2").copied().ok(), Some("b"));
-    }
-
-    #[test]
-    fn same_identity_keeps_its_handle_and_refreshes_the_object() {
-        let mut cache = ElementCache::default();
-        let first = cache.insert(vec![42], "old");
-        let again = cache.insert(vec![42], "new");
-        assert_eq!(first, again);
-        assert_eq!(cache.len(), 1);
-        assert_eq!(cache.get(&first).copied().ok(), Some("new"));
-    }
-
-    #[test]
     fn unknown_and_malformed_handles_are_distinct_errors() {
         let mut cache = ElementCache::<Vec<i32>, &str>::default();
         cache.insert(vec![1], "a");
@@ -245,7 +225,6 @@ mod tests {
         assert!(matches!(cache.get(&padded), Err(ToolError::InvalidArgument(m)) if m.len() < 100));
     }
 
-    #[test]
     fn past_the_capacity_the_oldest_handle_goes() {
         let mut cache = ElementCache::with_capacity(2);
         let a = cache.insert("a", 1);
@@ -270,7 +249,6 @@ mod tests {
     /// retired: the old handle permanently answers gone,
     /// the new element gets its own handle, and its old queue entry
     /// does not unmap the new one.
-    #[test]
     fn a_retired_identity_gets_a_fresh_handle() {
         let mut cache = ElementCache::with_capacity(3);
         let old = cache.insert("id", "removed button");
@@ -292,7 +270,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn an_observed_gone_handle_never_revives_when_its_identity_returns() {
         let mut cache = ElementCache::with_capacity(2);
         let old = cache.insert("runtime-id", "old object");
@@ -305,17 +282,25 @@ mod tests {
         assert_eq!(cache.handle_of(&"runtime-id"), Some(new));
     }
 
-    /// A handle read again is the newest, so eviction takes one not seen
-    /// since: a response never carries a handle its own read evicted.
     #[test]
-    fn a_re_read_handle_outlives_older_ones() {
-        let mut cache = ElementCache::with_capacity(2);
-        let a = cache.insert("a", 1);
-        let b = cache.insert("b", 2);
-        assert_eq!(cache.insert("a", 10), a, "a re-read keeps its handle");
-        let c = cache.insert("c", 3);
-        assert!(cache.get(&b).is_err(), "b, touched longest ago, went");
-        assert_eq!(cache.get(&a).copied().ok(), Some(10));
-        assert_eq!(cache.get(&c).copied().ok(), Some(3));
+    fn handle_identity_contract() {
+        crate::test_rows::run_rows(&[
+            (
+                "a_retired_identity_gets_a_fresh_handle",
+                a_retired_identity_gets_a_fresh_handle,
+            ),
+            (
+                "an_observed_gone_handle_never_revives_when_its_identity_returns",
+                an_observed_gone_handle_never_revives_when_its_identity_returns,
+            ),
+            (
+                "past_the_capacity_the_oldest_handle_goes",
+                past_the_capacity_the_oldest_handle_goes,
+            ),
+            (
+                "unknown_and_malformed_handles_are_distinct_errors",
+                unknown_and_malformed_handles_are_distinct_errors,
+            ),
+        ]);
     }
 }

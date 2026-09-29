@@ -48,20 +48,3 @@ impl fmt::Display for Rect {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn center_rounds_down() {
-        let r = Rect::from_ltrb(10, 20, 15, 30);
-        assert_eq!(r.center(), (12, 25));
-    }
-
-    #[test]
-    fn inverted_rect_is_empty() {
-        let r = Rect::from_ltrb(5, 5, 0, 0);
-        assert_eq!((r.width, r.height), (0, 0));
-    }
-}

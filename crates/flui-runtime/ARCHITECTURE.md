@@ -101,8 +101,7 @@ host.
   `tier-kind = "internal"`: nothing here is an embedder API (ADR-0027 §9)
   except the `execution` host-injection seam below.
   `allowed-dependents = ["flui-app"]` makes `flui-app` the only crate allowed a
-  normal edge, checked by `cargo xtask workspace` (and pinned by its
-  `the_runtime_admits_only_the_host_as_a_normal_dependent`). That rule is what
+  normal edge, checked by `cargo xtask workspace`. That rule is what
   keeps ADR-0047's invariant true now that `ExecutionServices` is `pub`: only
   a host crate, one of the runtime's `allowed-dependents`, constructs the
   services, and no other workspace crate reaches the pools. ADR-0083 §4 adds

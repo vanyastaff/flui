@@ -163,8 +163,7 @@ For the accepted part:
   through AccessKit's Windows adapter).
 - `cargo nextest run -p flui-desktop-mcp`: `every_action_name_has_a_uia_pattern`, and the
   server's reply and schema tests pass unchanged on the lifted types.
-- `cargo xtask workspace` places `flui-protocol` in tier C;
-  `the_tiers_match_the_adr_0081_table` lists it.
+- `cargo xtask workspace` places `flui-protocol` in tier C, its `tier` in the manifest.
 
 Not yet built:
 

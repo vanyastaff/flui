@@ -382,16 +382,13 @@ For the accepted part:
   cross-tier edge, an in-tier edge against `order`, an H → `pkg` edge without an exception, a
   stale exception, a missing `tier-kind`, a duplicate `order` and an edge onto a `tool`; it
   fails unless exactly those are reported. `cargo xtask checks` runs it before `workspace`.
-- `cargo nextest run -p xtask workspace`: `an_upward_tier_edge_is_refused`,
-  `an_in_tier_edge_to_a_larger_order_is_refused`, `an_in_tier_edge_to_a_smaller_order_is_allowed`,
-  `a_dev_edge_may_point_up_a_tier`, `a_dev_cycle_inside_a_tier_is_allowed`,
-  `a_crate_without_tier_order_or_kind_is_reported`, `an_unknown_tier_or_kind_is_reported`,
-  `two_crates_sharing_an_order_in_a_tier_are_reported`, `an_example_declares_only_the_tool_kind`,
-  `nothing_depends_on_a_tool_kind_crate`, `an_edge_exception_admits_one_upward_edge`,
-  `a_stale_edge_exception_is_reported`, `an_edge_exception_citing_a_missing_adr_is_reported`,
-  `the_self_test_reports_exactly_the_planted_findings`, and
-  `the_tiers_match_the_adr_0081_table`, which pins the table above and the four remaining
-  seeded exceptions against the real manifests.
+- `cargo nextest run -p xtask workspace`: the table test `workspace_gate_contract` runs the layer,
+  manifest and ADR-citation rules over throwaway workspaces, among them
+  `a_dev_cycle_inside_a_tier_is_allowed`, `a_crate_without_tier_order_or_kind_is_reported`,
+  `an_unknown_tier_or_kind_is_reported`, `an_example_declares_only_the_tool_kind`,
+  `a_stale_edge_exception_is_reported` and `an_edge_exception_citing_a_missing_adr_is_reported`;
+  the tier rule's own rejection cases (upward edge, in-tier order, duplicate order, an edge onto
+  a `tool`) are the self-test's planted findings above.
 - `cargo xtask reach` is green with the three seeded `reach-exceptions` entries of §2; removing
   `flui-engine`'s grant makes it fail with
   ``flui-engine (tier R) reaches wgpu under `flui --no-default-features`: flui-engine -> wgpu``
@@ -406,8 +403,7 @@ For the accepted part:
   reaching `wgpu` through its grant and an excused path, and fails unless exactly the planted findings are reported. `cargo xtask checks` runs it,
   then `reach`, after `workspace`; the pinned list test in `tools/xtask/src/tasks/checks.rs` names
   both.
-- `cargo nextest run -p xtask reach`: `a_k_crate_that_reaches_winit_is_reported`,
-  `a_dev_dependency_reaches_nothing`,
+- `cargo nextest run -p xtask reach`: the table test `reach_gate_contract`, whose cases include
   `an_optional_dependency_reaches_only_under_a_feature_that_enables_it`,
   `a_weak_feature_does_not_activate_its_dependency`,
   `a_strong_feature_enables_the_same_named_feature_whatever_it_lists`,
@@ -415,16 +411,13 @@ For the accepted part:
   `a_dependency_is_matched_by_package_name_not_library_name`,
   `a_target_specific_dependency_counts_on_every_target`, `a_build_dependency_reaches`,
   `features_combine_within_one_root_and_not_across_roots`,
-  `selection_parses_every_facade_combo`, `a_generic_ffi_crate_matches_no_glob`,
+  `a_generic_ffi_crate_matches_no_glob`,
   `an_exact_forbid_entry_naming_a_generic_ffi_crate_is_an_error`,
-  `the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio`, `only_a_grant_lets_an_r_crate_reach_wgpu`,
-  `an_extends_cycle_or_unknown_tier_is_an_error`, `reach_forbid_adds_to_the_tier_set`,
-  `a_reach_exception_excuses_only_paths_through_its_crate`,
-  `a_reach_exception_whose_edge_is_gone_is_stale`, `a_reach_exception_that_excuses_nothing_is_stale`,
-  `a_reach_exception_needs_exactly_one_of_exit_or_grant`, `a_reach_exception_citing_a_missing_adr_is_reported`,
-  `each_fact_reads_the_build_both_ways`, `the_self_test_reports_exactly_the_planted_findings`,
-  `the_forbid_sets_match_the_adr_0081_table`, `the_seeded_reach_exceptions_are_the_known_debt`
-  and `the_resolver_agrees_with_cargo_tree`, which compares the resolved package set with
+  `the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio`,
+  `an_extends_cycle_or_unknown_tier_is_an_error`,
+  `a_reach_exception_needs_exactly_one_of_exit_or_grant`,
+  `each_fact_reads_the_build_both_ways` and
+  `the_resolver_agrees_with_cargo_tree`, which compares the resolved package set with
   `cargo tree -e normal,build --target all` for `flui` (no features, defaults, all features),
   `flui-widgets --all-features` and `flui-app`.
 

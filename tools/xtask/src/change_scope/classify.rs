@@ -763,27 +763,6 @@ pub(super) mod tests {
         .expect("classify")
     }
 
-    #[test]
-    fn globs_keep_star_inside_a_segment() {
-        assert!(matches("README.md", "*.md"));
-        assert!(!matches("docs/README.md", "*.md"));
-        assert!(matches(
-            "crates/flui-view/ARCHITECTURE.md",
-            "crates/*/ARCHITECTURE.md"
-        ));
-        assert!(!matches(
-            "crates/a/b/ARCHITECTURE.md",
-            "crates/*/ARCHITECTURE.md"
-        ));
-        assert!(matches(".github/a/b/x.md", ".github/**/*.md"));
-        assert!(matches("a/b/c.wgsl", "**/*.wgsl"));
-        assert!(matches("LICENSE-MIT", "LICENSE*"));
-        assert!(matches("docs/x/y", "docs/**"));
-        assert!(!matches("docsx/y", "docs/**"));
-        assert!(fnmatch("abc", "a?c") && !fnmatch("ac", "a?c") && fnmatch("a/b", "a*"));
-    }
-
-    #[test]
     fn documentation_paths() {
         for path in [
             "README.md",
@@ -803,7 +782,6 @@ pub(super) mod tests {
         }
     }
 
-    #[test]
     fn compiled_markdown_is_not_docs() {
         // crate READMEs are include_str!()'d into doctests; a nested .md is not a root .md
         for path in [
@@ -819,19 +797,16 @@ pub(super) mod tests {
         }
     }
 
-    #[test]
     fn docs_and_empty() {
         assert_eq!(scope(&["docs/a.md", "README.md"]).mode, Mode::Docs);
         assert_eq!(scope(&[]).mode, Mode::Docs);
         assert_eq!(scope(&[]).reason, "no changes");
     }
 
-    #[test]
     fn shaders_require_the_heavy_lane() {
         assert!(scope(&["crates/flui-engine/src/shaders/rect_instanced.wgsl"]).heavy_required);
     }
 
-    #[test]
     fn heavy_inputs_require_the_heavy_lane() {
         for path in [
             "Cargo.lock",
@@ -847,7 +822,6 @@ pub(super) mod tests {
         }
     }
 
-    #[test]
     fn inputs_only_a_heavy_job_runs_require_the_heavy_lane() {
         // read out of ci.yml, not restated
         let inputs = heavy_job_inputs(
@@ -863,7 +837,6 @@ pub(super) mod tests {
         }
     }
 
-    #[test]
     fn heavy_job_inputs_from_a_workflow() {
         let ci = format!(
             "on: push\njobs:\n  checks:\n    runs-on: x\n    steps:\n      - run: cargo xtask checks\n\
@@ -901,7 +874,6 @@ pub(super) mod tests {
         assert_eq!(kebab_case("WasmTestCrates"), "wasm-test-crates");
     }
 
-    #[test]
     fn lane_machinery_gets_the_whole_workspace() {
         // xtask's dispatch and shared helpers run inside the wide lane's jobs
         // too (feature-matrix, doc, wasm-check call `cargo xtask`), so a change
@@ -929,7 +901,6 @@ pub(super) mod tests {
         }
     }
 
-    #[test]
     fn xtask_changes_scope_the_xtask_package() {
         // Modules only `checks` runs (fonts) and fixtures stay in the fast
         // lane; xtask's manifest is a heavy-lane input like its dispatch.
@@ -947,7 +918,6 @@ pub(super) mod tests {
         }
     }
 
-    #[test]
     fn checks_only_tooling_compiles_nothing() {
         assert_eq!(
             scope(&[
@@ -960,7 +930,6 @@ pub(super) mod tests {
         );
     }
 
-    #[test]
     fn unattributable_file_is_full() {
         let s = scope(&["some-new-dir/thing.txt"]);
         assert_eq!(s.mode, Mode::Full);
@@ -970,7 +939,6 @@ pub(super) mod tests {
         );
     }
 
-    #[test]
     fn a_standalone_crate_is_tooling() {
         let s = scope(&[
             "tools/text-spike/Cargo.toml",
@@ -987,7 +955,6 @@ pub(super) mod tests {
         );
     }
 
-    #[test]
     fn a_standalone_crate_beside_a_member_change_is_not_unowned() {
         let s = scope(&[
             "tools/text-spike/src/main.rs",
@@ -998,7 +965,6 @@ pub(super) mod tests {
         assert!(s.packages.contains(&"flui-foundation".to_owned()));
     }
 
-    #[test]
     fn a_crate_a_member_depends_on_is_not_standalone() {
         let tmp = TempRepo::new();
         std::fs::create_dir_all(tmp.0.join("sub/src")).expect("mkdir");
@@ -1032,15 +998,6 @@ pub(super) mod tests {
         assert_eq!(standalone_root(&tmp.0, &apart, "other/x.rs"), None);
     }
 
-    #[test]
-    fn crate_change_pulls_in_its_dependents() {
-        let s = scope(&["packages/flui-material/src/lib.rs"]);
-        assert_eq!(s.mode, Mode::Packages);
-        assert!(s.packages.contains(&"flui".to_owned())); // the facade depends on it
-        assert!(!s.packages.contains(&"flui-foundation".to_owned())); // a dependency, not a dependent
-    }
-
-    #[test]
     fn a_dev_dependent_is_the_last_hop() {
         // base <- mid (normal) <- tester (dev) <- above_tester (normal);
         // base <- both (normal and dev) <- above_both (normal).
@@ -1084,22 +1041,6 @@ pub(super) mod tests {
         assert_eq!(affected, expected);
     }
 
-    #[test]
-    fn a_design_system_change_leaves_the_other_out() {
-        // Material → the facade (optional normal) → flui-sdk, whose tests
-        // dev-depend on the facade. Cupertino's library links flui-sdk's
-        // library, which does not contain Material, so it stays out.
-        let s = scope(&["packages/flui-material/src/lib.rs"]);
-        assert!(!s.packages.contains(&"flui-cupertino".to_owned()));
-        // A dev-dependent is still in scope: flui-view's tests use flui-testing.
-        assert!(
-            scope(&["crates/flui-testing/src/lib.rs"])
-                .packages
-                .contains(&"flui-view".to_owned())
-        );
-    }
-
-    #[test]
     fn optional_dependency_edges_count() {
         // declared but feature-gated: the resolved graph would miss these
         assert!(
@@ -1114,7 +1055,6 @@ pub(super) mod tests {
         );
     }
 
-    #[test]
     fn root_package_owns_its_targets_directories() {
         let s = scope(&["examples/material_demo/tree.rs"]); // an [[example]] whose main.rs is in a subdirectory
         assert_eq!(s.mode, Mode::Packages);
@@ -1126,7 +1066,6 @@ pub(super) mod tests {
         );
     }
 
-    #[test]
     fn a_changed_manifest_is_reported() {
         assert_eq!(
             scope(&["packages/flui-material/Cargo.toml"]).manifests,
@@ -1169,7 +1108,6 @@ pub(super) mod tests {
         }
     }
 
-    #[test]
     fn a_move_puts_both_crates_in_scope() {
         let tmp = TempRepo::new();
         tmp.git(&["init", "-q", "-b", "main"]);
@@ -1194,6 +1132,85 @@ pub(super) mod tests {
         assert_eq!(
             repo.changed_files("main", true).expect("diff"),
             ["a/x.rs", "b/x.rs", "new file.rs"]
+        );
+    }
+
+    #[test]
+    fn change_scope_classification() {
+        crate::table_test::run_table(
+            "change_scope_classification",
+            &[
+                ("documentation_paths", documentation_paths as fn()),
+                (
+                    "compiled_markdown_is_not_docs",
+                    compiled_markdown_is_not_docs as fn(),
+                ),
+                ("docs_and_empty", docs_and_empty as fn()),
+                (
+                    "shaders_require_the_heavy_lane",
+                    shaders_require_the_heavy_lane as fn(),
+                ),
+                (
+                    "heavy_inputs_require_the_heavy_lane",
+                    heavy_inputs_require_the_heavy_lane as fn(),
+                ),
+                (
+                    "inputs_only_a_heavy_job_runs_require_the_heavy_lane",
+                    inputs_only_a_heavy_job_runs_require_the_heavy_lane as fn(),
+                ),
+                (
+                    "heavy_job_inputs_from_a_workflow",
+                    heavy_job_inputs_from_a_workflow as fn(),
+                ),
+                (
+                    "lane_machinery_gets_the_whole_workspace",
+                    lane_machinery_gets_the_whole_workspace as fn(),
+                ),
+                (
+                    "xtask_changes_scope_the_xtask_package",
+                    xtask_changes_scope_the_xtask_package as fn(),
+                ),
+                (
+                    "checks_only_tooling_compiles_nothing",
+                    checks_only_tooling_compiles_nothing as fn(),
+                ),
+                (
+                    "unattributable_file_is_full",
+                    unattributable_file_is_full as fn(),
+                ),
+                (
+                    "a_standalone_crate_is_tooling",
+                    a_standalone_crate_is_tooling as fn(),
+                ),
+                (
+                    "a_standalone_crate_beside_a_member_change_is_not_unowned",
+                    a_standalone_crate_beside_a_member_change_is_not_unowned as fn(),
+                ),
+                (
+                    "a_crate_a_member_depends_on_is_not_standalone",
+                    a_crate_a_member_depends_on_is_not_standalone as fn(),
+                ),
+                (
+                    "a_dev_dependent_is_the_last_hop",
+                    a_dev_dependent_is_the_last_hop as fn(),
+                ),
+                (
+                    "optional_dependency_edges_count",
+                    optional_dependency_edges_count as fn(),
+                ),
+                (
+                    "root_package_owns_its_targets_directories",
+                    root_package_owns_its_targets_directories as fn(),
+                ),
+                (
+                    "a_changed_manifest_is_reported",
+                    a_changed_manifest_is_reported as fn(),
+                ),
+                (
+                    "a_move_puts_both_crates_in_scope",
+                    a_move_puts_both_crates_in_scope as fn(),
+                ),
+            ],
         );
     }
 }

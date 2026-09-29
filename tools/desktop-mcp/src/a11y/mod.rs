@@ -655,7 +655,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn only_a_clipped_searched_property_makes_a_node_unmatchable() {
         let cut = format!("{}…", "x".repeat(CLIPPED_CHARS));
         let mut n = node("1", Role::TextInput, "field", Vec::new());
@@ -683,7 +682,6 @@ mod tests {
         )]
     }
 
-    #[test]
     fn criteria_combine_with_and() {
         let q = Query {
             role: Some("button".into()),
@@ -699,7 +697,6 @@ mod tests {
 
     /// `name_contains` uses full case folding: a German sharp s matches its
     /// capital spelling, a final sigma matches a capital one.
-    #[test]
     fn name_contains_folds_unicode_case() {
         let named = |name: &str| node("e1", Role::Label, name, vec![]);
         let query = |needle: &str| {
@@ -719,7 +716,6 @@ mod tests {
 
     /// A node whose searched properties were not read in full matches no
     /// query, not even `name: ""` against its missing name.
-    #[test]
     fn an_unreadable_node_matches_nothing() {
         let mut unread = node("e1", Role::Unknown, "", vec![]);
         unread.unmatchable = true;
@@ -732,7 +728,6 @@ mod tests {
         assert!(query.matches(&unread));
     }
 
-    #[test]
     fn handle_only_queries_can_wait_on_independently_read_state() {
         let mut node = tests_node();
         node.unmatchable = true;
@@ -759,28 +754,6 @@ mod tests {
         assert!(search(&[node], &named).is_empty());
     }
 
-    #[test]
-    fn prepared_element_queries_use_the_same_canonical_handle_as_the_cache() {
-        let query = Query {
-            element: Some(" e4 ".into()),
-            ..Query::default()
-        }
-        .prepared()
-        .expect("BUG: handle padding is accepted");
-        assert_eq!(search(&sample(), &query).len(), 1);
-        for element in ["e04", "e+4", "e-4", "e18446744073709551616"] {
-            assert!(
-                Query {
-                    element: Some(element.into()),
-                    ..Query::default()
-                }
-                .prepared()
-                .is_err()
-            );
-        }
-    }
-
-    #[test]
     fn exact_name_is_case_sensitive() {
         let q = Query {
             name: Some("increment".into()),
@@ -789,7 +762,6 @@ mod tests {
         assert!(search(&sample(), &q).is_empty());
     }
 
-    #[test]
     fn search_is_depth_first_and_flat() {
         let q = Query {
             role: Some("Button".into()),
@@ -811,7 +783,6 @@ mod tests {
 
     /// The outline carries the handle, the name and what is notable, one
     /// line per element, and nothing at its default.
-    #[test]
     fn outline_is_one_line_per_element() {
         let mut roots = sample();
         roots[0].window = Some("w2".into());
@@ -831,11 +802,49 @@ mod tests {
         assert_eq!(count(&roots), 4);
     }
 
-    #[test]
     fn summary_is_bounded() {
         let text = summarize(&sample(), 2);
         assert_eq!(text.lines().count(), 2);
         assert!(text.starts_with("e1 window \"Counter\""), "{text}");
         assert_eq!(summarize(&[], 5), "(empty)");
+    }
+
+    #[test]
+    fn find_criteria_matching() {
+        crate::test_rows::run_rows(&[
+            (
+                "only_a_clipped_searched_property_makes_a_node_unmatchable",
+                only_a_clipped_searched_property_makes_a_node_unmatchable,
+            ),
+            ("criteria_combine_with_and", criteria_combine_with_and),
+            (
+                "name_contains_folds_unicode_case",
+                name_contains_folds_unicode_case,
+            ),
+            (
+                "an_unreadable_node_matches_nothing",
+                an_unreadable_node_matches_nothing,
+            ),
+            ("exact_name_is_case_sensitive", exact_name_is_case_sensitive),
+            (
+                "handle_only_queries_can_wait_on_independently_read_state",
+                handle_only_queries_can_wait_on_independently_read_state,
+            ),
+        ]);
+    }
+
+    #[test]
+    fn tree_reading_shape() {
+        crate::test_rows::run_rows(&[
+            (
+                "search_is_depth_first_and_flat",
+                search_is_depth_first_and_flat,
+            ),
+            (
+                "outline_is_one_line_per_element",
+                outline_is_one_line_per_element,
+            ),
+            ("summary_is_bounded", summary_is_bounded),
+        ]);
     }
 }

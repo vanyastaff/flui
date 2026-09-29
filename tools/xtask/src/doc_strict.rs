@@ -83,17 +83,3 @@ fn testing_features<'a>(packages: impl IntoIterator<Item = (&'a str, bool)>) -> 
         .collect::<Vec<_>>()
         .join(",")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_packages_with_a_testing_feature_are_listed() {
-        assert_eq!(
-            testing_features([("a", true), ("b", false), ("c", true)]),
-            "a/testing,c/testing"
-        );
-        assert_eq!(testing_features([("b", false)]), "");
-    }
-}

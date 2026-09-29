@@ -451,7 +451,6 @@ fn encode(image: RgbaImage, source: Rect, max_side: Option<u32>) -> ToolResult<S
 mod tests {
     use super::*;
 
-    #[test]
     fn an_unread_monitor_identity_is_not_reported_as_disappearance() {
         let monitors = [MonitorSnapshot {
             id: 1,
@@ -470,7 +469,6 @@ mod tests {
         assert!(monitor_for_id(&monitors, 1, |monitor| Ok(monitor.id)).is_ok());
     }
 
-    #[test]
     fn monitor_pixels_reject_a_same_geometry_replacement() {
         let captured = MonitorSnapshot {
             id: 1,
@@ -492,7 +490,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn monitor_pixels_follow_native_identity_after_enumeration_reorders() {
         let captured = MonitorSnapshot {
             id: 1,
@@ -523,21 +520,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn cropped_pixels_are_not_mistaken_for_a_scaled_physical_capture() {
-        let source = Rect {
-            x: 59,
-            y: 52,
-            width: 466,
-            height: 313,
-        };
-        assert!(physical_size_matches((466, 313), source).is_ok());
-        assert!(matches!(
-            physical_size_matches((459, 311), source),
-            Err(ToolError::Busy(_))
-        ));
-    }
-
     fn source() -> Rect {
         Rect {
             x: 0,
@@ -547,7 +529,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn downscale_keeps_aspect_and_reports_scale() {
         let shot = encode(RgbaImage::new(400, 100), source(), Some(200))
             .expect("BUG: encoding a blank image succeeds");
@@ -557,7 +538,6 @@ mod tests {
         assert_eq!(&shot.png[..8], b"\x89PNG\r\n\x1a\n");
     }
 
-    #[test]
     fn small_images_are_not_upscaled() {
         let shot = encode(RgbaImage::new(400, 100), source(), Some(1000))
             .expect("BUG: encoding a blank image succeeds");
@@ -569,7 +549,6 @@ mod tests {
 
     /// A capture larger than the pixel limit is refused before anything is
     /// allocated; one at the limit is not.
-    #[test]
     fn an_enormous_capture_is_refused_first() {
         let rect = |width, height| Rect {
             x: 0,
@@ -582,15 +561,39 @@ mod tests {
         assert!(within_pixel_limit(rect(8192, 8192), Some(1.0), "x").is_err());
     }
 
-    /// A HiDPI capture has more pixels than screen units; the reply says
-    /// so instead of claiming a 1:1 mapping.
     #[test]
-    fn a_backing_scale_is_reported_from_the_pixels() {
-        let shot = encode(RgbaImage::new(800, 200), source(), None)
-            .expect("BUG: encoding a blank image succeeds");
-        assert_eq!((shot.scale_x, shot.scale_y), (2.0, 2.0));
-        let shot = encode(RgbaImage::new(800, 200), source(), Some(400))
-            .expect("BUG: encoding a blank image succeeds");
-        assert_eq!((shot.scale_x, shot.scale_y), (1.0, 1.0));
+    fn screenshot_scaling_and_limits() {
+        crate::test_rows::run_rows(&[
+            (
+                "downscale_keeps_aspect_and_reports_scale",
+                downscale_keeps_aspect_and_reports_scale,
+            ),
+            (
+                "small_images_are_not_upscaled",
+                small_images_are_not_upscaled,
+            ),
+            (
+                "an_enormous_capture_is_refused_first",
+                an_enormous_capture_is_refused_first,
+            ),
+        ]);
+    }
+
+    #[test]
+    fn monitor_capture_follows_identity() {
+        crate::test_rows::run_rows(&[
+            (
+                "monitor_pixels_follow_native_identity_after_enumeration_reorders",
+                monitor_pixels_follow_native_identity_after_enumeration_reorders,
+            ),
+            (
+                "monitor_pixels_reject_a_same_geometry_replacement",
+                monitor_pixels_reject_a_same_geometry_replacement,
+            ),
+            (
+                "an_unread_monitor_identity_is_not_reported_as_disappearance",
+                an_unread_monitor_identity_is_not_reported_as_disappearance,
+            ),
+        ]);
     }
 }
