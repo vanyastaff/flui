@@ -733,12 +733,11 @@ dispatch2.workspace = true
 
 [features]
 testing = ["dep:flui-testing", "flui-widgets/testing", "flui-rendering/testing"]
-# Material-first by default: `cargo add flui` keeps working exactly as the
-# README and the crate-level docs teach it. An author who wants a different
-# catalog — or none — turns the default off and selects explicitly. The base
-# widget surface (`flui::widgets`, `flui::prelude` minus the Material glob,
-# `flui::run_app`) needs no feature at all.
-default = ["material"]
+# No catalog, tool or capability is on by default: an application names what it
+# uses (ADR-0088 §6). The base widget surface (`flui::widgets`, `flui::prelude`
+# minus the Material glob, `flui::run_app`) needs no feature at all;
+# `cargo xtask facade-combos` builds every combination.
+default = []
 
 # === Catalogs and localization ===
 # Each gates both the Cargo edge and the matching `flui::<module>` re-export.
@@ -819,8 +818,7 @@ path = "examples/todo.rs"
 name = "two_screens"
 path = "examples/two_screens.rs"
 
-# `default = ["material"]` does not make this redundant: `cargo xtask facade-combos`
-# builds every isolated feature combination with `--no-default-features`, and
+# `cargo xtask facade-combos` builds every isolated feature combination, and
 # `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme` from the Material
 # catalog, so an isolated non-material build fails with E0433 without this.
 [[example]]
@@ -899,16 +897,16 @@ name = "facade_serde"
 path = "tests/facade_serde.rs"
 required-features = ["serde"]
 
-# Structural snapshots of the demo trees' painted layer trees. Needs both
-# catalogs because it snapshots the Material and Cupertino demos; both are
-# named directly rather than through an alias feature, so the target's
-# requirements are readable at the target. CI's "facade non-default catalogs"
-# step (`--features cupertino`, Material being default) runs it.
 [[test]]
 name = "composited_layer_update_readback"
 path = "tests/composited_layer_update_readback.rs"
 required-features = ["gpu-readback-tests"]
 
+# Structural snapshots of the demo trees' painted layer trees. Needs both
+# catalogs because it snapshots the Material and Cupertino demos; both are
+# named directly rather than through an alias feature, so the target's
+# requirements are readable at the target. `cargo xtask test`'s scope
+# (`flui/material,flui/cupertino`) runs it.
 [[test]]
 name = "demo_layer_snapshots"
 path = "tests/demo_layer_snapshots.rs"

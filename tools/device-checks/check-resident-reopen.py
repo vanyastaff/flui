@@ -23,7 +23,7 @@ def prepare(directory, target):
     shutil.copy2(ROOT / "tests/fixtures/resident_app.rs", directory / "src/main.rs")
     (directory / "Cargo.toml").write_text(
         '[workspace]\n[package]\nname="flui-resident-probe"\nversion="0.0.0"\nedition="2024"\n'
-        '[dependencies]\nflui={path=' + json.dumps(str(ROOT)) + '}\n'
+        '[dependencies]\nflui={path=' + json.dumps(str(ROOT)) + ',features=["material"]}\n'
         'tracing-subscriber={version="0.3",features=["fmt","env-filter"]}\n')
     build = subprocess.run(["cargo", "build", "--offline", "--manifest-path", str(directory / "Cargo.toml"),
                             "--target-dir", str(target), "--message-format=json-render-diagnostics"],

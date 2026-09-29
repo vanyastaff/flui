@@ -10,8 +10,8 @@
 //!
 //! - tests exclude flui-platform (its suite needs a display server: a separate
 //!   headless leg runs it when it is in scope);
-//! - the facade's non-default catalogs join the run when `flui` is in scope
-//!   (`--features flui/cupertino`);
+//! - the facade's catalogs, neither on by default, join the run when `flui` is
+//!   in scope (`--features flui/material,flui/cupertino`);
 //! - cfg-gated code the Linux lane would never compile gets a check on its own
 //!   target: flui-platform's four backends, the flui-app/flui mobile runner,
 //!   the flui-cli Windows paths (mirroring the cross-typecheck job), and wasm32
@@ -488,7 +488,7 @@ pub(super) fn lane_args(
             }
         },
         features: if has("flui") {
-            "--features flui/cupertino".to_owned()
+            "--features flui/material,flui/cupertino".to_owned()
         } else {
             String::new()
         },
@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(
             a.ci_test_args,
             "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests \
-             --features flui/cupertino,flui-painting/parley \
+             --features flui/material,flui/cupertino,flui-painting/parley \
              -E package(flui)|package(flui-material)|package(flui-sdk)|package(flui-web-counter)"
         );
         // check-changed keeps the scoped build
@@ -669,9 +669,11 @@ mod tests {
 
     #[test]
     fn a_changed_manifest_gets_the_per_feature_pass() {
+        // the package itself for its changed manifest, and the facade, whose
+        // edge to it only exists under the `material` feature
         assert_eq!(
             args(&["packages/flui-material/Cargo.toml"]).hack_args,
-            "-p flui-material"
+            "-p flui -p flui-material"
         );
     }
 
@@ -717,9 +719,14 @@ mod tests {
     }
 
     #[test]
-    fn default_on_optional_edges_need_no_per_feature_pass() {
-        // `flui` takes flui-material through its default `material` feature
-        assert_eq!(args(&["packages/flui-material/src/lib.rs"]).hack_args, "");
+    fn a_design_system_change_gets_the_facades_per_feature_pass() {
+        // the facade turns no feature on by default, so its edge to
+        // flui-material only exists under `material`: a Material change must
+        // compile that edge, which the facade's default build never does
+        assert_eq!(
+            args(&["packages/flui-material/src/lib.rs"]).hack_args,
+            "-p flui"
+        );
     }
 
     #[test]
