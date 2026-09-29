@@ -88,6 +88,13 @@ fn point_bounds<'a>(
     Some(Rect::from_ltrb(min_x, min_y, max_x, max_y))
 }
 
+/// How many elevations a shadow's ink reaches past its path. The GPU's
+/// analytic shadow (`flui-engine`'s `draw_analytic_rrect_shadow`) blurs with
+/// a sigma of one elevation out to three sigma, around a copy of the shape
+/// offset half an elevation down; the path-fill fallback shifts by at most
+/// one elevation and does not blur.
+const SHADOW_REACH: f64 = 3.5;
+
 impl DrawOp {
     /// Every pixel this op may change, in its own (pre-transform) coordinate
     /// space; `None` for an op that draws nothing.
@@ -102,11 +109,11 @@ impl DrawOp {
     /// - a paragraph's glyphs overflow its laid-out box (ascenders, italic
     ///   overhang, combining marks) by up to about half a line, so the box
     ///   grows by half the layout height on every side;
-    /// - a shadow's blur spreads about twice its elevation;
+    /// - a shadow reaches [`SHADOW_REACH`] elevations past its path;
     /// - a full-canvas fill (`Color`, `Paint`), an unbounded `SaveLayer` and
     ///   a filtered image (whose filter can spread arbitrarily) are
     ///   [`DamageExtent::Unbounded`].
-    pub fn damage_bounds(&self) -> Option<DamageExtent> {
+    pub(crate) fn damage_bounds(&self) -> Option<DamageExtent> {
         let stroke = |paint: &crate::paint::Paint| paint.effective_stroke_width();
         let bounded = |rect: Rect<f64>| Some(DamageExtent::Bounded(rect));
         match self {
@@ -138,7 +145,7 @@ impl DrawOp {
                 .and_then(|b| bounded(b.expand(stroke(paint).max(1.0) * 2.0))),
             DrawOp::Shadow {
                 path, elevation, ..
-            } => bounded(path.compute_bounds().expand(*elevation * 2.0)),
+            } => bounded(path.compute_bounds().expand(*elevation * SHADOW_REACH)),
             DrawOp::Paragraph { layout, offset, .. } => {
                 let size = layout.metrics().size();
                 let overflow = size.height * 0.5;

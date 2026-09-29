@@ -363,8 +363,9 @@ fn paragraph_extent_covers_ink_overflow() {
 }
 
 /// A stroke's miter reaches a full width past the geometry (the layout box
-/// adds half), and a shadow's blur spreads twice its elevation (the layout
-/// box adds one).
+/// adds half), and a shadow reaches 3.5 elevations: three blur sigmas of one
+/// elevation each past a copy offset half an elevation down, the reach of the
+/// GPU's analytic shadow (the layout box adds one elevation).
 #[test]
 fn stroke_and_shadow_extents_cover_their_outsets() {
     let rect = Rect::from_xywh(100.0, 100.0, 50.0, 50.0);
@@ -379,7 +380,7 @@ fn stroke_and_shadow_extents_cover_their_outsets() {
         canvas.draw_shadow(&path, Color::BLACK, 6.0);
     });
     assert_eq!(shadow.bounds(), Some(rect.expand(6.0)));
-    assert_eq!(bounded(&shadow), rect.expand(12.0));
+    assert_eq!(bounded(&shadow), rect.expand(21.0));
 
     // A transform maps the widened local rect, as `bounds()` does.
     let scaled = flui_painting::testing::record(|canvas| {

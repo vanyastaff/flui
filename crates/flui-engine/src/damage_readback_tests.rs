@@ -343,6 +343,89 @@ fn an_invalid_target_promotes_to_full() {
     );
 }
 
+/// Renders `after` in full on a fresh capture and returns its pixels.
+fn full_frame_pixels(renderer: &crate::headless::HeadlessRenderer, after: &Scene) -> Vec<u8> {
+    let mut full = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    full.mark_full_repaint();
+    full.render_scene(after).expect("full frame");
+    full.read_rgba().expect("readback")
+}
+
+/// The first few pixels where `partial` and `full` differ by more than
+/// `tolerance` in any channel, as `(x, y, partial, full)`.
+fn mismatches(partial: &[u8], full: &[u8], tolerance: u8) -> Vec<(u32, u32, [u8; 4], [u8; 4])> {
+    (0..SIDE)
+        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+        .filter_map(|(x, y)| {
+            let (p, f) = (px(partial, x, y), px(full, x, y));
+            (!near(p, f, tolerance)).then_some((x, y, p, f))
+        })
+        .take(8)
+        .collect()
+}
+
+/// A removed boundary's shadow leaves no penumbra behind: the damage its
+/// display list reports reaches as far as the GPU shadow's ink, which the
+/// analytic rounded-rect shadow spreads three sigma past a rect offset half
+/// a sigma down (sigma = elevation), so 3.5 x elevation below the shape.
+///
+/// The removed boundary is the only change, so the damage is its old
+/// extent alone and any ink outside it survives the partial frame. The
+/// comparison is exact: both frames paint only background there.
+#[test]
+fn a_removed_shadow_leaves_no_penumbra() {
+    use flui_foundation::geometry::RRect;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, card) = (ContentToken::mint(), ContentToken::mint());
+    let shadowed = |canvas: &mut Canvas| {
+        let shape = Path::from_rrect(RRect::from_rect_circular(
+            Rect::from_xywh(0.0, 0.0, 32.0, 16.0),
+            4.0,
+        ));
+        assert!(shape.rrect_hint().is_some(), "precondition: analytic path");
+        canvas.draw_shadow(&shape, Color::BLACK, 8.0);
+    };
+    let before = scene(
+        &root,
+        &[Boundary {
+            id: 2,
+            token: &card,
+            at: Offset::new(40.0, 40.0),
+            paint: &shadowed,
+        }],
+        None,
+    );
+    let after = scene(&root, &[], None);
+
+    let mut partial = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    let mut differ = LayerDiffer::default();
+    let region = differ.diff(&before, (SIDE, SIDE));
+    frame(&mut partial, &before, region, |plan| {
+        plan == FramePlan::Direct
+    });
+    warm(&mut partial, &before);
+    let region = differ.diff(&after, (SIDE, SIDE));
+    frame(&mut partial, &after, region, |plan| {
+        matches!(plan, FramePlan::RetainedPartial(_))
+    });
+    let partial_pixels = partial.read_rgba().expect("readback");
+    let full_pixels = full_frame_pixels(&renderer, &after);
+
+    let stale = mismatches(&partial_pixels, &full_pixels, 0);
+    assert!(
+        stale.is_empty(),
+        "the old shadow's penumbra survived outside the damage at \
+         (x, y, partial, full): {stale:?}"
+    );
+}
+
 /// A frame rendered partially over its predecessor equals the same frame
 /// rendered in full, everywhere: inside the damage (text with its glyph
 /// overflow, a shadow, a dst-reading blend), where a backdrop filter reads
