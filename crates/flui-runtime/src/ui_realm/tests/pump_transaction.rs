@@ -371,6 +371,37 @@ fn a_manual_clock_realm_gates_its_min_produce_interval_on_that_clock() {
     );
 }
 
+/// A frame drawn outside a pump ticks the realm's `Vsync` registry on the
+/// realm's clock source, not the wall clock: 50 ms of manual time into a
+/// 100 ms run is halfway.
+///
+/// Fails against a realm whose out-of-pump frame time reads the wall clock:
+/// microseconds pass, and the value stays near 0.
+#[test]
+fn a_frame_outside_a_pump_ticks_vsync_on_the_realms_clock() {
+    let clock = ManualClock::new();
+    let realm = manual_clock_realm(&clock);
+    let controller = AnimationController::new(
+        Duration::from_millis(100),
+        &flui_scheduler::UpdateScheduler::new(),
+    );
+    realm.vsync().register(controller.clone());
+    controller.forward().expect("fresh controller forwards");
+    let constraints = BoxConstraints::tight(Size::new(800.0, 600.0));
+
+    // Anchors the run at the realm's current time.
+    let _ = realm.draw_frame(constraints);
+    clock.advance(Duration::from_millis(50));
+    let _ = realm.draw_frame(constraints);
+
+    let value = controller.value();
+    assert!(
+        (value - 0.5).abs() < 1e-4,
+        "50 ms of the realm's clock into a 100 ms run is halfway (value={value})"
+    );
+    controller.dispose();
+}
+
 fn realm_produced(realm: &UiRealm) -> u64 {
     realm.presentations.primary().clock().produced_count()
 }
