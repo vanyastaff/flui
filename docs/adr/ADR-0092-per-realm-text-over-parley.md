@@ -6,12 +6,16 @@
   flui-app's `SharedEngineServices` builds the collection (one per owner thread, which is one
   per process while [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md)
   fixes one owner thread), `UiRealm::new` takes it, and each realm owns a `TextContext` over
-  it; nothing shapes through that context until step 3. A passed gate is evidence, not shipped
+  it. §10 step 3a landed: layout, intrinsics and dry queries measure through the realm's
+  `TextContext`, lent through each presentation's pipeline; Parley measures behind
+  `parley-layout`; registration re-layout is 3b. A passed gate is evidence, not shipped
   behaviour: the record is accepted section by section as the text migration lands §§1–7, and
   gates 2–8 bind those changes. The three supersessions below take effect together, when §§1–5
   are accepted; a section accepted before then supersedes nothing.
 - **Date:** 2026-09-25
-- **Revised:** 2026-09-26 (rasterization prototype; see Context)
+- **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
+  split into 3a and 3b; the realm lends its context through a shared handle; Parley
+  measurement behind `parley-layout`)
 - **Supersedes (when §§1–5 are accepted):** [ADR-0077](ADR-0077-migrate-to-parley.md)
   (absorbed: its direction, its preconditions and its "If later Rejected" branch are carried
   here)
@@ -322,15 +326,36 @@ that wires what it adds.
      built from it is 2a's `a_face_registered_after_the_fork_shapes_in_every_realm`; with the
      realms' contexts proven to be built from that same collection, it is not repeated at the
      runtime level, which would need `parley` on the runtime's test build.
-3. **Layout reaches the realm's text context; registration re-lays out text.**
-   - The realm lends `&mut TextContext` to each presentation's layout flush, and the box layout,
-     intrinsics, dry-layout and dry-baseline contexts expose it; `TextPainter::layout` measures
-     through it behind `parley`. The realm holds the context as a plain field, while `pump` and
-     `render_frame` take `&self`; how the realm lends `&mut TextContext` from there (a `RefCell`
-     or a `&mut` threaded down) is decided in this step.
-   - Registering raises a font-collection-changed event on every realm, which marks text render
-     objects for layout (ADR-0065's named gap).
-   - *Acceptance:* a two-realm test: a font registered through realm A re-lays out text in
+3. **Layout reaches the realm's text context; registration re-lays out text.** Two halves that
+   land separately. 3a has landed.
+   - (3a) The realm lends its `TextContext` to each presentation's layout, and the box layout,
+     intrinsics, dry-layout and dry-baseline contexts expose it (`ctx.text()`, a scoped
+     `&mut TextContext`). Every `TextPainter` measuring method takes `&mut TextContext`, and
+     `RenderParagraph` and `RenderEditable` pass the lent one.
+   - (3a) How the realm lends it: a shared handle, `TextContextHandle`
+     (`Rc<RefCell<TextContext>>`), held by the realm and cloned into every presentation's
+     `PipelineOwner` when the presentation is assembled (`RealmCapabilities::text`, a required
+     field). Threading `&mut TextContext` down would change `run_frame`, `run_layout` and every
+     binding and harness that drives them, while `pump` and `render_frame` take `&self`. The
+     realm and the pipeline owners are already `!Send`; a render object sees only the scoped
+     borrow, taken from `&mut` context, so it cannot hold two loans or lay out a child while it
+     holds one. A pipeline never given the handle measures on a private context.
+   - (3a) Parley measures behind `parley-layout`, not `parley`: the workspace test scope turns
+     `parley` on for CI's `test` and `fast-lane` jobs, and if `parley` switched measurement, CI
+     would measure every text-size test with Parley while the build that ships measures with
+     cosmic-text. `parley` compiles the Parley measurement and its tests pin a painter to it.
+     Under `parley-layout` size, baselines and intrinsics come from Parley while glyphs and
+     carets still come from cosmic-text, until steps 4 and 5 (flui-painting `ARCHITECTURE.md`,
+     mapping decisions 14 and 15).
+   - (3b) Registering raises a font-collection-changed event on every realm, which marks text
+     render objects for layout (ADR-0065's named gap); flui-app's `register_font` moves from
+     `FONT_SYSTEM` to the collection.
+   - *Acceptance (3a):* two realms over two collections measure through their own contexts, and
+     a frame on one lends nothing of the other's; every presentation's pipeline holds the
+     realm's handle; a painter measures through the context it is given, and a registration on
+     that collection invalidates its cache; Parley's metrics on the bundled Roboto round to
+     today's baselines; a layout that panics while holding the context releases it.
+   - *Acceptance (3b):* a two-realm test: a font registered through realm A re-lays out text in
      realm B (fails on main). Test bootstraps construct the collection.
 4. **Neutral shaped runs on the display list.**
    - `DrawOp::Paragraph` carries flui-painting's `ShapedParagraph`: runs naming a FLUI-owned
@@ -419,7 +444,8 @@ that wires what it adds.
 
 The gate 1 prototype exists on `spike/parley_atlas` (not merged). The raster seam, the
 same-key-twice test, and the per-realm text context (§10 step 2, both halves) with its tests
-exist; the rest do not exist yet, including any layout that measures through the context.
+exist, and so does layout measuring through the realm's context (§10 step 3a); the rest do not
+exist yet.
 
 - The raster seam, `ParleyGlyphKey`, `FontRegistry` and `SwashRasterizer` exist behind
   flui-painting's `parley` feature, with the oracle (`crates/flui-painting/tests/parley_oracle.rs`).
@@ -439,12 +465,31 @@ exist; the rest do not exist yet, including any layout that measures through the
   in flui-app, `separate_realm_windows_shape_over_the_runtimes_font_collection` (through
   `build_runtime_realm`, the one call every runner site builds its realm with) and
   `ensure_services_resolves_both_and_caches_them` (one collection per runtime).
-- A two-realm test: registering a font in one realm makes text in the other re-lay out.
+- Layout measures through the realm's context (§10 step 3a): in
+  `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
+  `two_realms_measure_text_through_their_own_contexts` and
+  `every_presentation_pipeline_holds_the_realms_text_context`; in
+  `crates/flui-painting/tests/text_painter_unit.rs` (under `parley`),
+  `measurement_follows_the_context_it_is_given` and
+  `a_registration_on_the_collection_invalidates_the_painter_cache`; in
+  `crates/flui-rendering/tests/text_context.rs`,
+  `a_layout_that_panics_while_holding_the_text_context_releases_it`,
+  `intrinsic_and_dry_queries_measure_through_the_pipelines_context` and
+  `a_pipeline_without_a_handle_measures_on_its_own_context`.
+- A two-realm test: registering a font in one realm makes text in the other re-lay out (§10
+  step 3b).
 - A registry test: a source-cache prune while the registry holds the blob keeps keys equal, and
   the test fails without the registry.
 - A same-key-twice test: rasterizing one key twice yields equal bitmaps
   (`one_key_rasterizes_to_equal_images_twice`).
-- A baseline test against today's rounding.
+- A baseline test against today's rounding, measurement side:
+  `crates/flui-painting/tests/parley_metrics_oracle.rs` (`parley`) measures the bundled Roboto
+  on both paths at 13, 14, 16, 18 and 32 px, default and 1.5 line height, and finds equal width
+  and height and the same device baseline, `(baseline * scale).round()`, at scales 1, 1.25,
+  1.5 and 2. It holds because Parley's layout is unquantized: quantized, Parley rounds ascent,
+  descent and the leading halves to whole logical pixels, and seven of the forty cases landed
+  on another device row (16 px at 1.5 line height: 17 against 17.47, so 34 against 35 at
+  scale 2). The glyph side waits for step 4.
 - `the_engine_does_not_shape` ([ADR-0067](ADR-0067-engine-owned-glyph-atlas.md)) extended so the
   engine's manifest names no Parley, fontique, skrifa or cosmic-text crate.
 - The process-global state gate ([ADR-0097](ADR-0097-no-process-global-state-gate.md)) with
