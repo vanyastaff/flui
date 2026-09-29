@@ -29,7 +29,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use flui_view::dev_reload::DevReloadHook;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use flui_view::dev_reload::ReloadEvent;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use flui_view::dev_reload::ReloadWake;
@@ -54,10 +54,14 @@ use flui_runtime::reload::ReloadTier;
 #[derive(Clone)]
 pub struct DevReload(Arc<Mutex<Slot>>);
 
-// The web runner drives no hook, so there only `new` and `Debug` touch it.
+// The web runner drives no hook, and the Android runner only asks it for
+// scene frames, so neither reads the realm bookkeeping.
 #[cfg_attr(
-    target_arch = "wasm32",
-    expect(dead_code, reason = "the web runner drives no development reload hook")
+    any(target_arch = "wasm32", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "only the desktop and iOS runners poll the hook for realms"
+    )
 )]
 struct Slot {
     /// `None` while a call has the hook lent out, and for good once it
@@ -145,6 +149,7 @@ impl DevReload {
     }
 
     /// The loop ended: detach the hook and forget every realm.
+    #[cfg(not(target_os = "android"))]
     fn detach(&self) {
         {
             let mut slot = self.0.lock();
@@ -166,18 +171,28 @@ impl DevReload {
 /// into the frame.
 #[cfg(not(target_arch = "wasm32"))]
 fn disable(what: &'static str, hook: Box<dyn DevReloadHook>) {
-    crate::app::application_control::contain(|| {
+    contain(|| {
         tracing::error!(
             call = what,
             "development reload hook panicked; hot reload is disabled until the app restarts"
         );
     });
-    crate::app::application_control::contain(|| drop(hook));
+    contain(|| drop(hook));
+}
+
+/// Run `body`, swallowing a panic without running its payload's `Drop`,
+/// which may panic too. (`application_control::contain` does the same, but
+/// is not compiled for Android.)
+#[cfg(not(target_arch = "wasm32"))]
+fn contain(body: impl FnOnce()) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(body)) {
+        std::mem::forget(payload);
+    }
 }
 
 /// The realm reload an event asks for. Exhaustive, so a new event does not
 /// compile until it is given a meaning here.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 const fn reload_tier(event: ReloadEvent) -> Option<ReloadTier> {
     match event {
         ReloadEvent::Unchanged => None,
