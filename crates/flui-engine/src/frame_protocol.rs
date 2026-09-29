@@ -1,11 +1,11 @@
 //! The frame protocol the windowed renderer and the headless retained
 //! capture share (ADR-0087 §4): the damage owed, the retained target that
-//! holds the last frame, and the sequence that turns a [`FramePlan`] into
+//! holds the last frame, and the sequence that turns a [`FramePlan`](crate::damage::FramePlan) into
 //! GPU work — pick the target, clear it unless the frame is partial, record
 //! the content, blit a retained frame to the surface, commit.
 //!
 //! Only the steps that genuinely differ between a swapchain and a readback
-//! texture ([`FrameSteps`]) live with each caller; everything a readback test
+//! texture ([`FrameSteps`](crate::frame_protocol::FrameSteps)) live with each caller; everything a readback test
 //! pins about partial frames runs through this one implementation.
 
 use flui_foundation::geometry::Rect;
