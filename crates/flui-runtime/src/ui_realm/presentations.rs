@@ -10,6 +10,7 @@ use flui_interaction::GestureBinding;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_view::GlobalKeyRegistryComposite;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+#[cfg(any(test, feature = "test-support"))]
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -414,10 +415,10 @@ impl UiRealm {
     /// surface a pull-model platform input method reads and edits
     /// (ADR-0090).
     ///
-    /// Hidden for the reason `TextInputOwner::active_store` is: until the
-    /// first pull-model backend reads it, its caller is the headless test
-    /// host, which drives stores the way that backend will.
-    #[doc(hidden)]
+    /// Compiled only for tests and the `test-support` feature: until the
+    /// first pull-model backend reads it, its only caller is the headless
+    /// test host, which drives stores the way that backend will.
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
     pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform_api::TextStore>> {
         self.presentations.primary().text_input().active_store()

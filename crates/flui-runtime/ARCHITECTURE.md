@@ -172,12 +172,12 @@ host.
   `for_test` constructors and `*_for_test` probes such as
   `text_context_for_test`, the `testing` doubles),
   compile only under `cfg(test)` or the `test-support` feature, which only
-  dev edges enable. Wiring one into production removes its gate in the same
-  change. The exception is what the headless test driver reads on its normal
-  edge, which cannot carry the feature: the `FrameClockSource` impl for
-  `ManualClock`, and `UiRealm::active_text_store`, doc-hidden like the
-  `TextInputOwner::active_store` it forwards, until a pull-model platform
-  input method reads it.
+  dev edges and the headless test driver `flui-testing` enable (it is a
+  test-only crate, reached by applications through dev edges or the facade's
+  `testing` feature). Wiring one into production removes its gate in the same
+  change. `UiRealm::active_text_store` is one of them until a pull-model
+  platform input method reads it. The exception is the `FrameClockSource`
+  impl for `ManualClock`, which a trait impl cannot gate per caller.
 
 ## Mapping decisions
 

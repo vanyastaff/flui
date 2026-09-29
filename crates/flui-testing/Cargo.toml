@@ -62,8 +62,9 @@ flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 flui-objects = { workspace = true }
 # `HeadlessRealm` hosts a `UiRealm` and drives its frame transaction
 # (`UiRealm::pump`, ADR-0083 §4). The runtime admits this crate as a normal
-# dependent beside the host.
-flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev" }
+# dependent beside the host. `test-support` exposes the test-only realm hooks
+# the harness reads (`UiRealm::active_text_store`).
+flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["test-support"] }
 # The widget harness's recording IME double.
 parking_lot = { workspace = true }
 # The process-wide `FontSystem` text measurement resolves against. `fonts`
