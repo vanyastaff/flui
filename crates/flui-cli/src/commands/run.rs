@@ -342,6 +342,7 @@ fn run_once(release: bool, profile: Option<String>, verbose: bool) -> CliResult<
         }
         match child.try_wait() {
             Ok(Some(status)) => {
+                child.drain_output();
                 ui::emit(
                     "run.app.exit",
                     &serde_json::json!({ "code": status.code() }),
@@ -428,7 +429,7 @@ enum LoopEvent {
 
 /// A hot-reload mode: how to build, spawn, and react to a change.
 ///
-/// Strategies borrow the running app through `&mut Option<Child>` and never
+/// Strategies borrow the running app through `&mut Option<AppChild>` and never
 /// take it by value: the loop keeps ownership, so an error anywhere inside a
 /// strategy still leaves the child where the loop's cleanup can stop it.
 trait ReloadStrategy {
@@ -436,11 +437,11 @@ trait ReloadStrategy {
     fn watch_paths(&self) -> Vec<(PathBuf, bool)>;
     /// Build everything and start the app into `child`. Leaves `None` when
     /// the build failed (the loop keeps watching so the user can fix and save).
-    fn build_and_spawn(&mut self, child: &mut Option<Child>) -> CliResult<()>;
+    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()>;
     /// React to changed sources with the app possibly still running.
-    fn on_change(&mut self, paths: &[PathBuf], child: &mut Option<Child>) -> CliResult<()>;
+    fn on_change(&mut self, paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()>;
     /// The cheapest reload (`r`). Defaults to a change with no paths.
-    fn reload(&mut self, child: &mut Option<Child>) -> CliResult<()> {
+    fn reload(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
         self.on_change(&[], child)
     }
     /// What `r` does, for the legend.
@@ -448,7 +449,7 @@ trait ReloadStrategy {
     /// Whether the last build left something running. A process strategy
     /// answers from the child; a browser session has no child and answers
     /// from its own state.
-    fn is_running(&self, child: Option<&Child>) -> bool {
+    fn is_running(&self, child: Option<&AppChild>) -> bool {
         child.is_some()
     }
 }
@@ -492,7 +493,7 @@ fn drive(
     interrupted: &AtomicBool,
     keys: Option<&KeyReader>,
     watcher: &SourceWatcher,
-    child: &mut Option<Child>,
+    child: &mut Option<AppChild>,
 ) -> CliResult<()> {
     loop {
         match next_event(interrupted, keys, watcher, child.as_mut()) {
@@ -506,6 +507,9 @@ fn drive(
             }
             LoopEvent::WatcherClosed => return Ok(()),
             LoopEvent::ChildExited(status) => {
+                if let Some(exited) = child.as_mut() {
+                    exited.drain_output();
+                }
                 ui::emit(
                     "run.app.exit",
                     &serde_json::json!({ "code": status.code() }),
@@ -552,7 +556,7 @@ fn next_event(
     interrupted: &AtomicBool,
     keys: Option<&KeyReader>,
     watcher: &SourceWatcher,
-    mut child: Option<&mut Child>,
+    mut child: Option<&mut AppChild>,
 ) -> LoopEvent {
     loop {
         if interrupted.swap(false, Ordering::SeqCst) {
@@ -782,7 +786,7 @@ mod raw_mode {
 
 /// Stop the app if it is running and report it (`run.app.stop`), so every
 /// `run.app.start` a consumer saw is closed by exactly one stop or exit.
-fn stop_and_report(child: &mut Option<Child>) {
+fn stop_and_report(child: &mut Option<AppChild>) {
     if stop_child(child.as_mut()) {
         ui::emit("run.app.stop", &serde_json::json!({}));
     }
@@ -791,7 +795,7 @@ fn stop_and_report(child: &mut Option<Child>) {
 
 /// Kill and reap the app if it is still running (bounded wait).
 /// Returns whether a running app was actually stopped.
-fn stop_child(child: Option<&mut Child>) -> bool {
+fn stop_child(child: Option<&mut AppChild>) -> bool {
     let Some(child) = child else { return false };
     if let Ok(Some(_)) = child.try_wait() {
         return false;
@@ -800,6 +804,7 @@ fn stop_child(child: Option<&mut Child>) -> bool {
         crate::ui::debug(format!("could not kill child process: {e}"));
     }
     wait_with_timeout(child, Duration::from_secs(5));
+    child.drain_output();
     true
 }
 
@@ -826,7 +831,7 @@ fn timed_build(build: impl FnOnce() -> bool) -> bool {
     ok
 }
 
-fn announce_started(child: &Child, what: &str) {
+fn announce_started(child: &AppChild, what: &str) {
     ui::emit("run.app.start", &serde_json::json!({ "pid": child.id() }));
     let _ = ui::success(format!("{what} (PID {})", child.id()));
 }
@@ -839,7 +844,7 @@ fn announce_started(child: &Child, what: &str) {
 ///   forwarded line by line as `run.app.log {stream, line}`, so the machine
 ///   stream on stdout stays one object per line and nothing the app says is
 ///   lost to a human-only channel. In human mode both are inherited.
-fn spawn_child(mut cmd: Command, context: &str) -> CliResult<Child> {
+fn spawn_child(mut cmd: Command, context: &str) -> CliResult<AppChild> {
     cmd.stdin(Stdio::null());
     if ui::is_json() {
         cmd.stdout(Stdio::piped());
@@ -848,18 +853,79 @@ fn spawn_child(mut cmd: Command, context: &str) -> CliResult<Child> {
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::inherit());
     }
-    let mut child = cmd.spawn().context(context)?;
-    if let Some(stdout) = child.stdout.take() {
-        forward_app_stream("stdout", stdout);
+    let mut process = cmd.spawn().context(context)?;
+    let mut forwarders = Vec::new();
+    if let Some(stdout) = process.stdout.take() {
+        forwarders.extend(forward_app_stream("stdout", stdout));
     }
-    if let Some(stderr) = child.stderr.take() {
-        forward_app_stream("stderr", stderr);
+    if let Some(stderr) = process.stderr.take() {
+        forwarders.extend(forward_app_stream("stderr", stderr));
     }
-    Ok(child)
+    Ok(AppChild {
+        process,
+        forwarders,
+    })
+}
+
+/// How long [`AppChild::drain_output`] waits for the forwarders to reach the
+/// end of the app's streams. A process the app left behind can hold a pipe
+/// open forever; past this bound its remaining output is forwarded whenever
+/// it arrives, after the exit event.
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The app's process together with the threads forwarding its output.
+///
+/// The forwarders read pipes the OS keeps buffered after the process exits,
+/// so a reap alone says nothing about whether its last lines were forwarded:
+/// [`Self::drain_output`] is what orders them before `run.app.exit`.
+struct AppChild {
+    process: Child,
+    forwarders: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl AppChild {
+    /// Wait, at most [`OUTPUT_DRAIN_TIMEOUT`], until every forwarder has
+    /// emitted the last line of its stream. Call it after the process is
+    /// reaped and before reporting that it exited.
+    fn drain_output(&mut self) {
+        drain_forwarders(&mut self.forwarders, OUTPUT_DRAIN_TIMEOUT);
+    }
+}
+
+impl std::ops::Deref for AppChild {
+    type Target = Child;
+
+    fn deref(&self) -> &Child {
+        &self.process
+    }
+}
+
+impl std::ops::DerefMut for AppChild {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.process
+    }
+}
+
+/// Join the forwarders that finish within `timeout`; the rest stay detached.
+fn drain_forwarders(forwarders: &mut Vec<std::thread::JoinHandle<()>>, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while forwarders.iter().any(|handle| !handle.is_finished()) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for handle in std::mem::take(forwarders) {
+        if handle.is_finished() {
+            let _ = handle.join();
+        }
+    }
 }
 
 /// Forward one of the app's output streams as `run.app.log` events.
-fn forward_app_stream<R: std::io::Read + Send + 'static>(stream: &'static str, reader: R) {
+///
+/// Returns the forwarding thread, which ends when the stream reaches its end.
+fn forward_app_stream<R: std::io::Read + Send + 'static>(
+    stream: &'static str,
+    reader: R,
+) -> Option<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name(format!("flui-app-{stream}"))
         .spawn(move || {
@@ -873,7 +939,7 @@ fn forward_app_stream<R: std::io::Read + Send + 'static>(stream: &'static str, r
                 }
             }
         })
-        .ok();
+        .ok()
 }
 
 /// Wait for a child process to exit, with a timeout to prevent infinite blocking.
@@ -928,7 +994,7 @@ impl ReloadStrategy for ProcessRestart {
         ]
     }
 
-    fn build_and_spawn(&mut self, child: &mut Option<Child>) -> CliResult<()> {
+    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
         if !timed_build(|| run_cargo_build(self.profile.as_deref(), self.verbose)) {
             return Ok(());
         }
@@ -938,7 +1004,7 @@ impl ReloadStrategy for ProcessRestart {
         Ok(())
     }
 
-    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<Child>) -> CliResult<()> {
+    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
         stop_and_report(child);
         ui::step("Rebuilding...")?;
         self.build_and_spawn(child)?;
@@ -1087,7 +1153,7 @@ impl ReloadStrategy for BrowserSession {
         ]
     }
 
-    fn build_and_spawn(&mut self, _child: &mut Option<Child>) -> CliResult<()> {
+    fn build_and_spawn(&mut self, _child: &mut Option<AppChild>) -> CliResult<()> {
         self.built = self.build()?;
         if !self.built {
             return Ok(());
@@ -1113,7 +1179,7 @@ impl ReloadStrategy for BrowserSession {
         Ok(())
     }
 
-    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<Child>) -> CliResult<()> {
+    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
         ui::step("Rebuilding...")?;
         self.build_and_spawn(child)?;
         ui::emit(
@@ -1130,7 +1196,7 @@ impl ReloadStrategy for BrowserSession {
         "Rebuild and reload the page"
     }
 
-    fn is_running(&self, _child: Option<&Child>) -> bool {
+    fn is_running(&self, _child: Option<&AppChild>) -> bool {
         self.built
     }
 }
@@ -1285,7 +1351,7 @@ impl AndroidSession {
         Ok(apk)
     }
 
-    fn install_and_start(&self, apk: &Path) -> CliResult<Child> {
+    fn install_and_start(&self, apk: &Path) -> CliResult<AppChild> {
         ui::step(format!("Installing on {}...", self.device.name))?;
         self.adb_ok(
             &["install", "-r", &apk.display().to_string()],
@@ -1367,7 +1433,7 @@ impl ReloadStrategy for AndroidSession {
         ]
     }
 
-    fn build_and_spawn(&mut self, child: &mut Option<Child>) -> CliResult<()> {
+    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
         let Some(apk) = self.build()? else {
             return Ok(());
         };
@@ -1375,7 +1441,7 @@ impl ReloadStrategy for AndroidSession {
         Ok(())
     }
 
-    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<Child>) -> CliResult<()> {
+    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
         stop_and_report(child);
         ui::step("Rebuilding...")?;
         self.build_and_spawn(child)?;
@@ -1417,7 +1483,7 @@ fn run_cargo_build(profile: Option<&str>, verbose: bool) -> bool {
 }
 
 /// Spawn the application as a child process.
-fn spawn_app(profile: Option<&str>, verbose: bool) -> CliResult<Child> {
+fn spawn_app(profile: Option<&str>, verbose: bool) -> CliResult<AppChild> {
     let mut cmd = Command::new("cargo");
     cmd.arg("run");
 
@@ -1493,7 +1559,7 @@ impl WorkerHost {
         Ok(staged)
     }
 
-    fn spawn_host(&self, staged: &Path) -> CliResult<Child> {
+    fn spawn_host(&self, staged: &Path) -> CliResult<AppChild> {
         spawn_host_package(
             &self.project.config.host_package,
             staged,
@@ -1517,7 +1583,7 @@ impl ReloadStrategy for WorkerHost {
         paths
     }
 
-    fn build_and_spawn(&mut self, child: &mut Option<Child>) -> CliResult<()> {
+    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
         if !self.build_both() {
             return Ok(());
         }
@@ -1536,7 +1602,7 @@ impl ReloadStrategy for WorkerHost {
         Ok(())
     }
 
-    fn on_change(&mut self, paths: &[PathBuf], child: &mut Option<Child>) -> CliResult<()> {
+    fn on_change(&mut self, paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
         let types_changed = self
             .types_src()
             .is_some_and(|types| paths.iter().any(|p| p.starts_with(&types)));
@@ -1569,7 +1635,7 @@ impl ReloadStrategy for WorkerHost {
             return Ok(());
         }
         let staged = self.publish()?;
-        let host_alive = matches!(child.as_mut().map(Child::try_wait), Some(Ok(None)));
+        let host_alive = matches!(child.as_mut().map(|host| host.try_wait()), Some(Ok(None)));
         if host_alive {
             ui::success("Worker rebuilt — host will hot-reload on next frame (~500ms)")?;
             ui::emit(
@@ -1761,7 +1827,7 @@ fn spawn_host_package(
     worker_plugin: &Path,
     profile: Option<&str>,
     verbose: bool,
-) -> CliResult<Child> {
+) -> CliResult<AppChild> {
     let mut cmd = Command::new("cargo");
     cmd.args(["run", "-p", package]);
 
@@ -2156,7 +2222,79 @@ pub(crate) fn execute_scene(
 mod tests {
     #[cfg(unix)]
     use super::HotKey;
+    use super::{drain_forwarders, forward_app_stream};
     use super::{env, fnv1a, has_flui_dependency, is_host_device, stage_worker_artifact};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// A stream whose last line arrives only after `delay`, the way a pipe
+    /// still holds an exited app's final output while the forwarder is behind.
+    struct LateStream {
+        delay: Duration,
+        line: Option<&'static [u8]>,
+        ended: Arc<AtomicBool>,
+    }
+
+    impl std::io::Read for LateStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let Some(line) = self.line.take() else {
+                self.ended.store(true, Ordering::SeqCst);
+                return Ok(0);
+            };
+            std::thread::sleep(self.delay);
+            buf[..line.len()].copy_from_slice(line);
+            Ok(line.len())
+        }
+    }
+
+    /// A stream that never ends, the way a pipe stays open when the app left
+    /// a process behind that inherited it.
+    struct EndlessStream(std::sync::mpsc::Receiver<()>);
+
+    impl std::io::Read for EndlessStream {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            let _ = self.0.recv();
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn draining_waits_for_the_last_line_of_a_late_stream() {
+        let ended = Arc::new(AtomicBool::new(false));
+        let stream = LateStream {
+            delay: Duration::from_millis(300),
+            line: Some(b"FLUI_LAST_LINE\n"),
+            ended: Arc::clone(&ended),
+        };
+        let mut forwarders: Vec<_> = forward_app_stream("stdout", stream).into_iter().collect();
+        drain_forwarders(&mut forwarders, Duration::from_secs(10));
+        assert!(
+            ended.load(Ordering::SeqCst),
+            "the exit must not be reported before the stream was read to its end"
+        );
+        assert!(forwarders.is_empty());
+    }
+
+    #[test]
+    fn draining_gives_up_on_a_stream_held_open() {
+        let (release, held) = std::sync::mpsc::channel();
+        let mut forwarders: Vec<_> = forward_app_stream("stdout", EndlessStream(held))
+            .into_iter()
+            .collect();
+        let started = Instant::now();
+        drain_forwarders(&mut forwarders, Duration::from_millis(100));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a pipe held open must not stall the exit report: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            forwarders.is_empty(),
+            "an unfinished forwarder stays detached"
+        );
+        drop(release);
+    }
 
     /// The env-var names are duplicated from `flui-hot-reload` so the CLI
     /// does not link the framework; this is the only place that proves they
