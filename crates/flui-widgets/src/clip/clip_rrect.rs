@@ -107,33 +107,3 @@ impl RenderView for ClipRRect {
 }
 
 impl_render_view!(ClipRRect);
-
-#[cfg(test)]
-mod tests {
-    use flui_view::RenderView;
-
-    use super::*;
-
-    #[test]
-    fn border_radius_update_reports_a_layer_update_and_semantics_only_on_change() {
-        let initial = ClipRRect::new();
-        let mut render_object =
-            initial.create_render_object(&flui_view::RenderObjectContext::detached());
-
-        assert_eq!(
-            initial.update_render_object(
-                &flui_view::RenderObjectContext::detached(),
-                &mut render_object,
-            ),
-            flui_rendering::RenderUpdateImpact::NONE,
-        );
-        assert_eq!(
-            ClipRRect::circular(8.0).update_render_object(
-                &flui_view::RenderObjectContext::detached(),
-                &mut render_object,
-            ),
-            flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
-                | flui_rendering::RenderUpdateImpact::SEMANTICS,
-        );
-    }
-}

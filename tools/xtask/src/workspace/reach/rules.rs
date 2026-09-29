@@ -199,12 +199,6 @@ impl Rules {
         self.tiers.get(tier).map_or(&[], Vec::as_slice)
     }
 
-    /// The generic-FFI allowlist, with each entry's reason.
-    #[cfg(test)]
-    pub(super) fn generic_ffi(&self) -> &[(Pattern, String)] {
-        &self.generic_ffi
-    }
-
     pub(super) fn is_generic_ffi(&self, name: &str) -> bool {
         self.generic_ffi
             .iter()

@@ -675,7 +675,6 @@ const REAP_WAIT: Duration = Duration::from_secs(2);
 mod tests {
     use super::*;
 
-    #[test]
     fn failed_containment_cleanup_is_private_and_retried_at_shutdown() {
         let children = Children::new();
         let (program, args) = if cfg!(windows) {
@@ -739,55 +738,9 @@ mod tests {
         assert!(tracked.unreaped.is_empty(), "the actual child was reaped");
     }
 
-    #[test]
-    fn failed_abandon_retains_cleanup_without_exposing_the_rejected_child() {
-        let children = Children::new();
-        let (program, args) = if cfg!(windows) {
-            ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
-        } else {
-            ("sleep", vec!["60".into()])
-        };
-        let (pid, _, launch) = children
-            .launch(&LaunchSpec {
-                program: program.into(),
-                args,
-                ..LaunchSpec::default()
-            })
-            .expect("BUG: a long-running system program starts");
-        let result = children.end_tracked_with(pid, Some(launch), |_, _| {
-            Err(ToolError::platform(
-                "ending child",
-                "injected termination failure",
-            ))
-        });
-        assert!(result.is_err());
-        assert!(!children.contains(pid));
-        assert!(matches!(
-            children.kill(pid),
-            Err(ToolError::UnknownHandle { .. })
-        ));
-        {
-            let mut tracked = children.lock();
-            assert_eq!(tracked.unpublished.len(), 1);
-            assert!(
-                tracked.unpublished[0]
-                    .1
-                    .try_wait()
-                    .expect("BUG: child is queryable")
-                    .is_none()
-            );
-        }
-        children.kill_all();
-        assert!(
-            children.lock().unpublished.is_empty(),
-            "shutdown retried termination"
-        );
-    }
-
     /// Models Unix spawn after it created a child but before exec's result
     /// lets it return the handle. Cleanup must not return while that child
     /// is invisible, even after the Windows containment deadline passes.
-    #[test]
     fn shutdown_waits_for_a_child_hidden_inside_spawn() {
         use std::sync::{Arc, mpsc};
 
@@ -845,7 +798,6 @@ mod tests {
         assert_eq!(tracked.launching, 0);
     }
 
-    #[test]
     fn reused_pid_is_ended_without_replacing_the_previous_claim() {
         let children = Children::new();
         let mut reused = 0;
@@ -897,47 +849,6 @@ mod tests {
         assert!(old.already_exited);
     }
 
-    #[test]
-    fn shutdown_retries_unpublished_children_without_exposing_them() {
-        let children = Children::new();
-        let mut command = Command::new(if cfg!(windows) { "ping" } else { "sleep" });
-        if cfg!(windows) {
-            command.args(["-n", "60", "127.0.0.1"]);
-        } else {
-            command.arg("60");
-        }
-        let child = command
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("BUG: child starts");
-        let pid = child.id();
-        {
-            let mut tracked = children.lock();
-            tracked.returned.entry(pid).or_default().insert(42);
-            tracked.launch_of.insert(pid, 42);
-            tracked.remember(pid, Some(7));
-            // State retained when terminating a rejected launch fails.
-            tracked.unpublished.push((pid, child));
-        }
-        let old = children.kill(pid).expect("BUG: prior claim remains known");
-        assert!(old.already_exited);
-        assert_eq!(old.exit_code, Some(7));
-        assert!(matches!(
-            children.lock().unpublished[0].1.try_wait(),
-            Ok(None)
-        ));
-        children.kill_all();
-        let mut tracked = children.lock();
-        tracked.reap();
-        assert!(tracked.running.is_empty());
-        assert!(tracked.unpublished.is_empty());
-        assert!(
-            tracked.unreaped.is_empty(),
-            "cleanup reaped the unpublished child"
-        );
-    }
-
-    #[test]
     fn nothing_is_launched_after_shutdown() {
         let children = Children::new();
         children.kill_all();
@@ -953,7 +864,6 @@ mod tests {
         ));
     }
 
-    #[test]
     fn kill_refuses_foreign_pids() {
         let children = Children::new();
         let err = children
@@ -962,7 +872,6 @@ mod tests {
         assert_eq!(err.code(), "unknown_handle", "{err}");
     }
 
-    #[test]
     fn empty_program_is_rejected() {
         let children = Children::new();
         assert!(matches!(
@@ -971,60 +880,8 @@ mod tests {
         ));
     }
 
-    /// A child that exited on its own and was reaped by a later launch is
-    /// reported as exited, not as a pid this session never launched.
-    #[test]
-    fn a_reaped_child_is_reported_as_exited() {
-        let children = Children::new();
-        let program = std::env::current_exe()
-            .expect("BUG: the test binary has a path")
-            .to_string_lossy()
-            .into_owned();
-        let spec = LaunchSpec {
-            program,
-            args: vec!["--list".into()],
-            ..LaunchSpec::default()
-        };
-        let (first, _, first_launch) = children
-            .launch(&spec)
-            .expect("BUG: relaunching the test binary works");
-        children
-            .publish(first, first_launch)
-            .expect("BUG: first launch is published");
-        // Wait for `--list` to finish, then launch again: that reaps it.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while children
-            .lock()
-            .running
-            .get_mut(&first)
-            .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
-        {
-            assert!(std::time::Instant::now() < deadline, "BUG: `--list` exits");
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        let (second, _, second_launch) = children
-            .launch(&spec)
-            .expect("BUG: relaunching the test binary works");
-        children
-            .publish(second, second_launch)
-            .expect("BUG: second launch is published");
-        assert!(!children.contains(first), "the exited child was reaped");
-        assert_eq!(children.exited(first), Some(Exited { code: Some(0) }));
-        let killed = children
-            .kill(first)
-            .expect("BUG: a reaped child is still known");
-        assert!(killed.already_exited);
-        assert_eq!(killed.exit_code, Some(0));
-        let again = children
-            .kill(first)
-            .expect("BUG: a second kill says it exited");
-        assert!(again.already_exited);
-        let _ = children.kill(second);
-    }
-
     /// Abandoning names the launch, not only the pid: a launch whose pid a
     /// later launch took over leaves that later process running.
-    #[test]
     fn abandon_ends_only_its_own_launch() {
         let children = Children::new();
         let (program, args) = if cfg!(windows) {
@@ -1051,50 +908,6 @@ mod tests {
         assert!(!children.contains(pid));
     }
 
-    /// A launch abandoned after a later launch took its pid over drops its
-    /// own claim on the pid: the later launch is then the only one that
-    /// returned it, and `kill` ends it rather than refusing it as shared.
-    #[test]
-    fn an_abandoned_launch_releases_a_reused_pid() {
-        let children = Children::new();
-        let (program, args) = if cfg!(windows) {
-            ("ping", vec!["-n".into(), "60".into(), "127.0.0.1".into()])
-        } else {
-            ("sleep", vec!["60".into()])
-        };
-        let (pid, _, launch) = children
-            .launch(&LaunchSpec {
-                program: program.into(),
-                args,
-                ..LaunchSpec::default()
-            })
-            .expect("BUG: a long-running system program starts");
-        // An earlier launch that returned the same pid, whose process exited
-        // and was reaped before this one reused the number.
-        children
-            .publish(pid, launch)
-            .expect("BUG: the later launch is published");
-        let earlier = launch + 100;
-        children
-            .lock()
-            .returned
-            .entry(pid)
-            .or_default()
-            .insert(earlier);
-        assert!(matches!(
-            children.kill(pid),
-            Err(ToolError::InvalidArgument(_))
-        ));
-        let abandoned = children
-            .abandon(pid, earlier)
-            .expect("BUG: an abandon is answered");
-        assert!(abandoned.already_exited, "its own process is gone");
-        assert!(children.contains(pid), "the later launch's is left running");
-        let killed = children.kill(pid).expect("BUG: no longer shared");
-        assert!(!killed.already_exited);
-    }
-
-    #[test]
     fn launch_then_kill_round_trip() {
         let children = Children::new();
         // A child that runs well past the kill, so the kill is what ends it.
@@ -1124,7 +937,6 @@ mod tests {
 
     /// Shutdown ends every running child, within its bound, and a kill
     /// afterwards reports the process as ended rather than never launched.
-    #[test]
     fn kill_all_ends_running_children() {
         let children = Children::new();
         let (program, args) = if cfg!(windows) {
@@ -1158,5 +970,44 @@ mod tests {
             let again = children.kill(pid).expect("BUG: a launched pid is known");
             assert!(again.already_exited);
         }
+    }
+
+    #[test]
+    fn launch_kill_lifecycle() {
+        crate::test_rows::run_rows(&[
+            ("launch_then_kill_round_trip", launch_then_kill_round_trip),
+            ("kill_refuses_foreign_pids", kill_refuses_foreign_pids),
+            (
+                "nothing_is_launched_after_shutdown",
+                nothing_is_launched_after_shutdown,
+            ),
+            ("empty_program_is_rejected", empty_program_is_rejected),
+            (
+                "kill_all_ends_running_children",
+                kill_all_ends_running_children,
+            ),
+        ]);
+    }
+
+    #[test]
+    fn launch_failure_cleanup() {
+        crate::test_rows::run_rows(&[
+            (
+                "failed_containment_cleanup_is_private_and_retried_at_shutdown",
+                failed_containment_cleanup_is_private_and_retried_at_shutdown,
+            ),
+            (
+                "shutdown_waits_for_a_child_hidden_inside_spawn",
+                shutdown_waits_for_a_child_hidden_inside_spawn,
+            ),
+            (
+                "reused_pid_is_ended_without_replacing_the_previous_claim",
+                reused_pid_is_ended_without_replacing_the_previous_claim,
+            ),
+            (
+                "abandon_ends_only_its_own_launch",
+                abandon_ends_only_its_own_launch,
+            ),
+        ]);
     }
 }

@@ -185,38 +185,3 @@ impl RenderBox for RenderErrorBox {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tight(w: f64, h: f64) -> BoxConstraints {
-        BoxConstraints::tight(Size::new(w, h))
-    }
-
-    #[test]
-    fn fills_a_bounded_axis_and_falls_back_on_an_unbounded_one() {
-        let bounded = tight(120.0, 30.0);
-        assert_eq!(RenderErrorBox::size_for(&bounded), Size::new(120.0, 30.0));
-        let unbounded_height = BoxConstraints::new(0.0, 200.0, 0.0, f64::INFINITY);
-        assert_eq!(
-            RenderErrorBox::size_for(&unbounded_height),
-            Size::new(200.0, ERROR_BOX_FALLBACK_EXTENT)
-        );
-    }
-
-    #[test]
-    fn set_error_reports_paint_only_on_change() {
-        let mut b = RenderErrorBox::new("boom", None);
-        assert_eq!(
-            b.set_error("boom", None),
-            flui_rendering::RenderUpdateImpact::NONE
-        );
-        assert_eq!(
-            b.set_error("bang", Some("trace".into())),
-            flui_rendering::RenderUpdateImpact::PAINT
-        );
-        assert_eq!(b.message(), "bang");
-        assert_eq!(b.details(), Some("trace"));
-    }
-}

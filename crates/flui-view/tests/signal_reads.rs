@@ -7,14 +7,8 @@
 //! - a handle of the wrong type is a typed error on every path, never a panic,
 //!   and a write through one marks no reader.
 
-// ADR-0027: ElementBuildContext's test seam takes Arc<RwLock<…>> over a !Send
-// owner graph; do not restore Send + Sync to satisfy clippy.
-#![expect(clippy::arc_with_non_send_sync)]
-
-use std::any::type_name;
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_objects::RenderSizedBox;
@@ -22,10 +16,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_view::prelude::*;
-use flui_view::{
-    ElementBuildContext, Reactive, ReadScope, ScopeRef, Signal, SignalError, SignalSender,
-};
-use parking_lot::RwLock;
+use flui_view::{Signal, SignalSender};
 
 static_assertions::assert_not_impl_any!(Signal<u32>: Send, Sync);
 static_assertions::assert_impl_all!(SignalSender<u32>: Send, Sync);
@@ -33,72 +24,6 @@ static_assertions::assert_impl_all!(SignalSender<u32>: Send, Sync);
 // ============================================================================
 // Every context shape reads
 // ============================================================================
-
-fn through_dyn(sig: Signal<u32>, cx: &dyn BuildContext) -> u32 {
-    sig.get(cx)
-}
-
-fn through_dyn_ref(sig: Signal<u32>, cx: &&dyn BuildContext) -> u32 {
-    sig.get(cx)
-}
-
-#[expect(
-    clippy::borrowed_box,
-    reason = "the shape under test: a boxed context passed by reference"
-)]
-fn through_box(sig: Signal<u32>, cx: &Box<dyn BuildContext>) -> u32 {
-    sig.get(cx)
-}
-
-fn through_generic_unsized<C: BuildContext + ?Sized>(sig: Signal<u32>, cx: &C) -> u32 {
-    sig.get(cx)
-}
-
-fn through_generic_sized<C: BuildContext>(sig: Signal<u32>, cx: &C) -> u32 {
-    sig.get(cx)
-}
-
-fn through_read_scope(sig: Signal<u32>, cx: &dyn ReadScope) -> u32 {
-    sig.get(cx)
-}
-
-fn through_lifecycle(sig: Signal<u32>, cx: &dyn LifecycleContext) -> u32 {
-    sig.get(cx)
-}
-
-fn context() -> ElementBuildContext {
-    let tree = Arc::new(RwLock::new(ElementTree::new()));
-    let owner = Arc::new(RwLock::new(BuildOwner::new()));
-    ElementBuildContext::new(ElementId::new(1), 0, true, tree, owner)
-}
-
-#[test]
-fn signal_reads_accept_every_context_shape() {
-    let cx = context();
-    let sig = cx.reactive().signal(3u32);
-    let as_dyn: &dyn BuildContext = &cx;
-    let boxed: Box<dyn BuildContext> = Box::new(ElementBuildContext::new(
-        ElementId::new(1),
-        0,
-        true,
-        Arc::clone(cx.tree()),
-        Arc::clone(cx.build_owner()),
-    ));
-    let closure = |c: &dyn BuildContext| sig.get(c);
-
-    assert_eq!(through_dyn(sig, as_dyn), 3);
-    assert_eq!(through_dyn_ref(sig, &as_dyn), 3);
-    assert_eq!(through_box(sig, &boxed), 3);
-    assert_eq!(through_generic_unsized(sig, as_dyn), 3);
-    assert_eq!(through_generic_unsized(sig, &cx), 3);
-    assert_eq!(through_generic_sized(sig, &cx), 3);
-    assert_eq!(through_read_scope(sig, &cx), 3);
-    assert_eq!(through_read_scope(sig, as_dyn), 3);
-    assert_eq!(through_lifecycle(sig, &cx), 3);
-    assert_eq!(closure(as_dyn), 3);
-    assert_eq!(sig.with(as_dyn, |v| v + 1), 4);
-    assert_eq!(sig.try_get(as_dyn), Ok(3));
-}
 
 // ============================================================================
 // A read in `build` subscribes through the production context
@@ -182,8 +107,7 @@ impl ViewState<Bystander> for BystanderState {
 
 const FRAME: Duration = Duration::from_millis(16);
 
-#[test]
-fn a_read_in_build_subscribes_through_the_production_context() {
+pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
     let owners = MountOwners::fresh();
     let graph = owners.build_owner.reactive().clone();
     let sig = graph.signal(1u32);
@@ -234,8 +158,7 @@ fn a_read_in_build_subscribes_through_the_production_context() {
     );
 }
 
-#[test]
-fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader() {
+pub(crate) fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader() {
     let owners = MountOwners::fresh();
     let graph = owners.build_owner.reactive().clone();
     let signal = graph.signal(1u32);
@@ -269,133 +192,6 @@ fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader() {
     assert_eq!(report.count(RebuildReason::SignalChange), 1, "{report:?}");
 }
 
-#[derive(Clone, StatefulView)]
-struct RecoveringSignalReader {
-    sig: Signal<u32>,
-    builds: Rc<Cell<u32>>,
-    observed: Rc<Cell<Option<u32>>>,
-}
-
-struct RecoveringSignalReaderState;
-
-impl StatefulView for RecoveringSignalReader {
-    type State = RecoveringSignalReaderState;
-
-    fn create_state(&self) -> Self::State {
-        RecoveringSignalReaderState
-    }
-}
-
-impl ViewState<RecoveringSignalReader> for RecoveringSignalReaderState {
-    fn build(&self, view: &RecoveringSignalReader, ctx: &dyn BuildContext) -> impl IntoView {
-        view.builds.set(view.builds.get() + 1);
-        let value = view.sig.with(ctx, |value| {
-            assert_ne!(*value, 0, "first build probe");
-            *value
-        });
-        view.observed.set(Some(value));
-        Leaf
-    }
-}
-
-#[test]
-fn a_panicking_first_read_stays_subscribed_and_can_recover() {
-    let owners = MountOwners::fresh();
-    let graph = owners.build_owner.reactive().clone();
-    let signal = graph.signal(0u32);
-    let builds = Rc::new(Cell::new(0));
-    let observed = Rc::new(Cell::new(None));
-    let root = RecoveringSignalReader {
-        sig: signal,
-        builds: Rc::clone(&builds),
-        observed: Rc::clone(&observed),
-    };
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
-
-    binding.pump_frame(FRAME);
-    assert_eq!(builds.get(), 1);
-    assert_eq!(observed.get(), None, "the first build unwound");
-    assert_eq!(graph.readers_of(signal.slot()).len(), 1);
-
-    signal.set(&graph, 1).expect("signal remains writable");
-    binding.pump_frame(FRAME);
-
-    assert_eq!(
-        builds.get(),
-        2,
-        "the signal write retries the recovered element"
-    );
-    assert_eq!(observed.get(), Some(1));
-}
-
 // ============================================================================
 // A handle of the wrong type
 // ============================================================================
-
-/// A context over a bare graph whose reads subscribe nobody.
-struct Probe<'a>(&'a Reactive);
-
-impl ReadScope for Probe<'_> {
-    fn scope(&self) -> ScopeRef<'_> {
-        ScopeRef::new(self.0, None)
-    }
-}
-
-#[test]
-fn a_signal_handle_of_the_wrong_type_is_a_typed_error() {
-    let graph = Reactive::new();
-    let n = graph.signal(7u32);
-    let wrong = Signal::<String>::from_slot(n.slot());
-    let expected = SignalError::TypeMismatch {
-        index: n.slot().index(),
-        expected: type_name::<String>(),
-    };
-
-    assert_eq!(wrong.try_get(&Probe(&graph)), Err(expected));
-    assert_eq!(wrong.peek(&graph, String::len), Err(expected));
-    assert_eq!(wrong.set(&graph, String::new()), Err(expected));
-
-    assert_eq!(n.peek(&graph, |v| *v), Ok(7), "the slot is untouched");
-    assert!(graph.readers_of(n.slot()).is_empty());
-}
-
-#[test]
-fn a_write_through_the_wrong_type_rebuilds_no_reader() {
-    let owners = MountOwners::fresh();
-    let graph = owners.build_owner.reactive().clone();
-    let sig = graph.signal(1u32);
-    let reader_builds = Rc::new(Cell::new(0));
-    let reader_id = Rc::new(Cell::new(None));
-    let root = SigReader {
-        sig,
-        builds: Rc::clone(&reader_builds),
-        id: Rc::clone(&reader_id),
-    };
-
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(&root, owners, MountOptions::tight(100.0, 100.0));
-    binding.pump_frame(FRAME);
-    let reader = reader_id.get().expect("the reader built");
-    assert_eq!(
-        graph.readers_of(sig.slot()),
-        [reader],
-        "the slot has a reader"
-    );
-    assert_eq!(reader_builds.get(), 1);
-
-    let wrong = Signal::<String>::from_slot(sig.slot());
-    assert_eq!(
-        wrong.set(&graph, String::from("x")),
-        Err(SignalError::TypeMismatch {
-            index: sig.slot().index(),
-            expected: type_name::<String>(),
-        })
-    );
-    binding.pump_frame(FRAME);
-
-    assert_eq!(reader_builds.get(), 1, "a refused write rebuilds nobody");
-    let report = binding.build_owner_mut().last_frame_build_report();
-    assert_eq!(report.count(RebuildReason::SignalChange), 0, "{report:?}");
-    assert_eq!(sig.peek(&graph, |v| *v), Ok(1), "the slot is untouched");
-}

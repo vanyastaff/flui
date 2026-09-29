@@ -437,229 +437,6 @@ fn size(path: &Path) -> BuildResult<u64> {
     fs::read_dir(path)?.try_fold(0u64, |total, entry| Ok(total + size(&entry?.path())?))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn token() -> Arc<AtomicU8> {
-        Arc::new(AtomicU8::new(RUNNING))
-    }
-    fn archive(root: &Path, name: &str) -> PathBuf {
-        let path = root.join(name);
-        fs::write(&path, name).expect("archive");
-        path
-    }
-    #[test]
-    fn slice_planning_rejects_missing_duplicate_and_unsupported_inputs() {
-        let dir = tempfile::tempdir().expect("temp");
-        let path = archive(dir.path(), "input.a");
-        assert!(plan(&[], &[]).is_err());
-        assert!(plan(&["aarch64-apple-ios".into()], &[]).is_err());
-        assert!(
-            plan(
-                &["aarch64-apple-darwin".into()],
-                std::slice::from_ref(&path)
-            )
-            .is_err()
-        );
-        assert!(
-            plan(
-                &["aarch64-apple-ios".into(), "aarch64-apple-ios".into()],
-                &[path.clone(), path.clone()]
-            )
-            .is_err()
-        );
-        let groups = plan(
-            &[
-                "aarch64-apple-ios".into(),
-                "aarch64-apple-ios-sim".into(),
-                "x86_64-apple-ios".into(),
-            ],
-            &[path.clone(), path.clone(), path],
-        )
-        .expect("groups");
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[1].inputs.len(), 2);
-    }
-    #[test]
-    fn publication_rolls_back_and_retains_backup_when_rollback_fails() {
-        for rollback_fails in [false, true] {
-            let dir = tempfile::tempdir().expect("temp");
-            let output = dir.path().join("flui.xcframework");
-            fs::create_dir(&output).expect("old");
-            fs::write(output.join("sentinel"), "old").expect("sentinel");
-            let mut work = Work::new(dir.path(), token()).expect("work");
-            let scratch = work.path().to_path_buf();
-            let staged = scratch.join("new");
-            fs::create_dir(&staged).expect("new");
-            let mut calls = 0;
-            let error = publish(&mut work, &staged, &output, |from, to| {
-                calls += 1;
-                if calls == 2 || (calls == 3 && rollback_fails) {
-                    Err(std::io::Error::other("injected rename failure"))
-                } else {
-                    fs::rename(from, to)
-                }
-            })
-            .expect_err("publication failure");
-            drop(work);
-            if rollback_fails {
-                assert!(error.to_string().contains(scratch.to_str().expect("path")));
-                assert_eq!(
-                    fs::read(scratch.join("previous-output/sentinel")).expect("retained backup"),
-                    b"old"
-                );
-                fs::remove_dir_all(scratch).expect("test cleanup");
-            } else {
-                assert_eq!(
-                    fs::read(output.join("sentinel")).expect("restored old"),
-                    b"old"
-                );
-                assert!(!scratch.exists());
-            }
-        }
-    }
-    #[test]
-    fn cancelled_before_commit_preserves_destination() {
-        let dir = tempfile::tempdir().expect("temp");
-        let output = dir.path().join("flui.xcframework");
-        fs::create_dir(&output).expect("output");
-        fs::write(output.join("sentinel"), "old").expect("sentinel");
-        let state = token();
-        let mut work = Work::new(dir.path(), Arc::clone(&state)).expect("work");
-        let staged = work.path().join("new");
-        fs::create_dir(&staged).expect("new");
-        drop(CancelOnDrop(state));
-        assert!(commit(&mut work, &staged, &output).is_err());
-        assert_eq!(
-            fs::read(output.join("sentinel")).expect("old output"),
-            b"old"
-        );
-        let state = token();
-        state.store(COMMITTING, Ordering::Release);
-        drop(CancelOnDrop(Arc::clone(&state)));
-        assert_eq!(state.load(Ordering::Acquire), COMMITTING);
-    }
-    #[cfg(unix)]
-    fn process_gone(pid: &str) -> bool {
-        !Command::new("kill")
-            .args(["-0", pid])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("query child")
-            .success()
-    }
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn abandoned_waiter_reaps_running_child_before_scratch_cleanup() {
-        let dir = tempfile::tempdir().expect("temp");
-        let state = token();
-        let cancel = CancelOnDrop(Arc::clone(&state));
-        let mut work = Work::new(dir.path(), state).expect("work");
-        let scratch = work.path().to_path_buf();
-        let marker = scratch.join("started");
-        let marker_arg = marker.clone();
-        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let finished = Arc::clone(&done);
-        let waiter = tokio::spawn(async move {
-            let _cancel = cancel;
-            tokio::task::spawn_blocking(move || {
-                let result = work.command(
-                    "sh",
-                    &[
-                        "-c".into(),
-                        "echo $$ > \"$1\"; exec sleep 30".into(),
-                        "probe".into(),
-                        marker_arg.into_os_string(),
-                    ],
-                );
-                drop(work);
-                finished.store(true, Ordering::Release);
-                result
-            })
-            .await
-        });
-        let until = Instant::now() + Duration::from_secs(5);
-        while !marker.exists() {
-            assert!(Instant::now() < until, "child started");
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let pid = fs::read_to_string(&marker).expect("pid");
-        waiter.abort();
-        assert!(waiter.await.expect_err("cancelled waiter").is_cancelled());
-        while !done.load(Ordering::Acquire) {
-            assert!(Instant::now() < until, "worker completed cancellation");
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(process_gone(pid.trim()), "child reaped");
-        assert!(!scratch.exists(), "cleanup after child wait");
-    }
-    #[cfg(unix)]
-    #[test]
-    fn tool_deadline_and_worker_unwind_reap_before_cleanup() {
-        let dir = tempfile::tempdir().expect("temp");
-        let mut work = Work::new(dir.path(), token()).expect("work");
-        assert!(
-            work.command_with_timeout("sleep", &["30".into()], Duration::from_millis(20))
-                .is_err()
-        );
-        assert!(work.child.is_none(), "deadline observed terminal status");
-        let scratch = work.path().to_path_buf();
-        work.child = Some(Command::new("sleep").arg("30").spawn().expect("child"));
-        let pid = work.child.as_ref().expect("child").id().to_string();
-        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            let _work = work;
-            panic!("worker failure");
-        }));
-        assert!(unwound.is_err());
-        assert!(process_gone(&pid));
-        assert!(!scratch.exists());
-    }
-    fn metadata(variant: Option<&str>) -> serde_json::Value {
-        let mut entry = serde_json::json!({"LibraryIdentifier":"slice", "LibraryPath":"libflui.a", "SupportedPlatform":"ios", "SupportedArchitectures":["arm64"]});
-        if let Some(variant) = variant {
-            entry["SupportedPlatformVariant"] = variant.into();
-        }
-        serde_json::json!({"AvailableLibraries":[entry]})
-    }
-    #[test]
-    fn plist_validation_rejects_wrong_variant_duplicates_and_escaping_paths() {
-        let dir = tempfile::tempdir().expect("temp");
-        let source = archive(dir.path(), "source.a");
-        fs::create_dir(dir.path().join("slice")).expect("slice");
-        fs::copy(&source, dir.path().join("slice/libflui.a")).expect("copy");
-        let groups =
-            plan(&["aarch64-apple-ios".into()], std::slice::from_ref(&source)).expect("plan");
-        let libs = BTreeMap::from([(Variant::Device, source)]);
-        validate(dir.path(), &metadata(None), &groups, &libs).expect("valid");
-        assert!(validate(dir.path(), &metadata(Some("simulator")), &groups, &libs).is_err());
-        let mut duplicate = metadata(None);
-        let entry = duplicate["AvailableLibraries"][0].clone();
-        duplicate["AvailableLibraries"]
-            .as_array_mut()
-            .expect("array")
-            .push(entry);
-        assert!(validate(dir.path(), &duplicate, &groups, &libs).is_err());
-        for path in ["../source.a", "/source.a"] {
-            let mut bad = metadata(None);
-            bad["AvailableLibraries"][0]["LibraryPath"] = path.into();
-            assert!(validate(dir.path(), &bad, &groups, &libs).is_err());
-        }
-    }
-    #[cfg(unix)]
-    #[test]
-    fn symlinks_never_redirect_destination_or_library_reads() {
-        let dir = tempfile::tempdir().expect("temp");
-        let outside = archive(dir.path(), "outside");
-        let output = dir.path().join("flui.xcframework");
-        std::os::unix::fs::symlink(&outside, &output).expect("link");
-        assert!(no_symlink_destination(&output).is_err());
-        fs::remove_file(&outside).expect("dangling");
-        assert!(no_symlink_destination(&output).is_err());
-        assert!(checked_child(dir.path(), "flui.xcframework").is_err());
-    }
-}
-
 /// Application delivery uses the same child/scratch/publication ownership as libraries.
 pub(crate) async fn package_application(
     ctx: &BuilderContext,
@@ -806,34 +583,79 @@ fn macho_minimum(text: &str, expected: &str) -> BuildResult<String> {
 }
 
 #[cfg(test)]
-mod app_tests {
+mod tests {
     use super::*;
-    #[test]
-    fn actual_macho_metadata_is_required_and_conflicts_are_rejected() {
-        assert_eq!(
-            macho_minimum(" platform IOSSIMULATOR\n minos 14.0\n", "IOSSIMULATOR")
-                .expect("metadata"),
-            "14.0"
-        );
-        for text in [
-            "",
-            "platform IOS\nminos 14.0",
-            "platform IOSSIMULATOR\nminos bad",
-            "platform IOSSIMULATOR\nplatform IOS\nminos 14.0",
-            "platform IOSSIMULATOR\nminos 14.0\nminos 15.0",
-        ] {
-            assert!(macho_minimum(text, "IOSSIMULATOR").is_err());
+    fn token() -> Arc<AtomicU8> {
+        Arc::new(AtomicU8::new(RUNNING))
+    }
+    fn publication_rolls_back_and_retains_backup_when_rollback_fails() {
+        for rollback_fails in [false, true] {
+            let dir = tempfile::tempdir().expect("temp");
+            let output = dir.path().join("flui.xcframework");
+            fs::create_dir(&output).expect("old");
+            fs::write(output.join("sentinel"), "old").expect("sentinel");
+            let mut work = Work::new(dir.path(), token()).expect("work");
+            let scratch = work.path().to_path_buf();
+            let staged = scratch.join("new");
+            fs::create_dir(&staged).expect("new");
+            let mut calls = 0;
+            let error = publish(&mut work, &staged, &output, |from, to| {
+                calls += 1;
+                if calls == 2 || (calls == 3 && rollback_fails) {
+                    Err(std::io::Error::other("injected rename failure"))
+                } else {
+                    fs::rename(from, to)
+                }
+            })
+            .expect_err("publication failure");
+            drop(work);
+            if rollback_fails {
+                assert!(error.to_string().contains(scratch.to_str().expect("path")));
+                assert_eq!(
+                    fs::read(scratch.join("previous-output/sentinel")).expect("retained backup"),
+                    b"old"
+                );
+                fs::remove_dir_all(scratch).expect("test cleanup");
+            } else {
+                assert_eq!(
+                    fs::read(output.join("sentinel")).expect("restored old"),
+                    b"old"
+                );
+                assert!(!scratch.exists());
+            }
         }
     }
+    fn cancelled_before_commit_preserves_destination() {
+        let dir = tempfile::tempdir().expect("temp");
+        let output = dir.path().join("flui.xcframework");
+        fs::create_dir(&output).expect("output");
+        fs::write(output.join("sentinel"), "old").expect("sentinel");
+        let state = token();
+        let mut work = Work::new(dir.path(), Arc::clone(&state)).expect("work");
+        let staged = work.path().join("new");
+        fs::create_dir(&staged).expect("new");
+        drop(CancelOnDrop(state));
+        assert!(commit(&mut work, &staged, &output).is_err());
+        assert_eq!(
+            fs::read(output.join("sentinel")).expect("old output"),
+            b"old"
+        );
+        let state = token();
+        state.store(COMMITTING, Ordering::Release);
+        drop(CancelOnDrop(Arc::clone(&state)));
+        assert_eq!(state.load(Ordering::Acquire), COMMITTING);
+    }
     #[test]
-    fn bundle_identity_rejects_path_escape_and_underscore_identifier() {
-        for name in ["../bad", "/outside", "x\\bad", ""] {
-            assert!(validate_bundle(&crate::build::AppBundle::new(name, "org.test")).is_err());
-        }
-        let mut bundle = crate::build::AppBundle::new("counter-app", "org.test");
-        assert_eq!(bundle.identifier, "org.test.counter-app");
-        validate_bundle(&bundle).expect("valid");
-        bundle.identifier = "org.test.counter_app".into();
-        assert!(validate_bundle(&bundle).is_err());
+    fn publication_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "publication rolls back and retains backup when rollback fails",
+                publication_rolls_back_and_retains_backup_when_rollback_fails,
+            ),
+            (
+                "cancelled before commit preserves destination",
+                cancelled_before_commit_preserves_destination,
+            ),
+        ]);
     }
 }

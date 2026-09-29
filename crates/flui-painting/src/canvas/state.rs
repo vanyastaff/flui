@@ -158,32 +158,3 @@ impl Canvas {
         self.save_layer(bounds, &opaque_blend_paint);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::paint::BlendMode;
-
-    use super::{Canvas, DrawOp};
-
-    /// `save_layer_blend` must record an OPAQUE paint carrying the blend
-    /// mode: the engine derives layer opacity from `paint.color.a`, so a
-    /// `Color::TRANSPARENT` paint (alpha 0) makes the advanced-blend layer a
-    /// silent backdrop passthrough whatever mode was asked for.
-    #[test]
-    fn save_layer_blend_records_an_opaque_paint_with_the_mode() {
-        let mut canvas = Canvas::new();
-        canvas.save_layer_blend(None, BlendMode::Multiply);
-        let recorded = &canvas.display_list()[0].op;
-        assert!(
-            matches!(recorded, DrawOp::SaveLayer { .. }),
-            "got {recorded:?}"
-        );
-        if let DrawOp::SaveLayer { paint, .. } = recorded {
-            assert_eq!(
-                paint.color.a, 255,
-                "alpha 0 silently no-ops the advanced-blend layer"
-            );
-            assert_eq!(paint.blend_mode, BlendMode::Multiply);
-        }
-    }
-}

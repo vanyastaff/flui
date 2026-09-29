@@ -355,7 +355,6 @@ mod tests {
 
     use super::*;
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::task::{Context, Poll, Waker};
 
     use flui_foundation::ElementId;
@@ -413,14 +412,6 @@ mod tests {
                 result: Arc::new(Mutex::new(None)),
                 waker: Arc::new(Mutex::new(None)),
             }
-        }
-
-        /// Pre-seed the result so the future is `Ready` on its very first poll —
-        /// the Rust analogue of Dart's `SynchronousFuture`.
-        fn ready(result: Result<Payload, Boom>) -> Self {
-            let completer = Self::new();
-            *completer.result.lock() = Some(result);
-            completer
         }
 
         fn factory(&self) -> FutureFactory<Payload, Boom> {
@@ -495,24 +486,6 @@ mod tests {
             self.scheduler.drive_async_tasks();
             self.owner.build_scope(&mut self.tree);
         }
-
-        /// A rebuild with a new view — the reconcile path that reaches
-        /// `did_update_view`.
-        fn update<K>(&mut self, view: &FutureBuilder<K, Payload, Boom>)
-        where
-            K: Clone + PartialEq + Send + Sync + std::fmt::Debug + 'static,
-        {
-            self.tree
-                .update(self.root, view, &mut self.owner.element_owner_mut());
-            let depth = self
-                .tree
-                .get(self.root)
-                .map_or(0, crate::tree::ElementNode::depth);
-            self.tree.mark_needs_build(self.root);
-            self.owner
-                .schedule_build_for(self.root, depth, crate::RebuildReason::AsyncCompletion);
-            self.frame();
-        }
     }
 
     fn seen(log: &Arc<Mutex<Vec<Seen>>>) -> Vec<Seen> {
@@ -525,58 +498,10 @@ mod tests {
 
     // ── absent future ───────────────────────────────────────────────────────
 
-    /// No key ⇒ no future: `ConnectionState::None`, no subscription.
-    #[test]
-    fn future_builder_absent_future_is_none() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let completer = Completer::new();
-        let view = FutureBuilder::<u32, _, _>::keyed(
-            None,
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-
-        let harness = Harness::mount(&view);
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::None,
-                data: None,
-                error: None
-            }
-        );
-        assert_eq!(harness.scheduler.pending_task_count(), 0, "nothing spawned");
-    }
-
-    /// `'runs the builder using given initial data'` with no future: the seed is
-    /// visible in `ConnectionState::None`.
-    #[test]
-    fn future_builder_absent_future_preserves_initial_data() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let completer = Completer::new();
-        let view = FutureBuilder::<u32, _, _>::keyed(
-            None,
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(7)));
-
-        let _harness = Harness::mount(&view);
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::None,
-                data: Some(7),
-                error: None
-            }
-        );
-    }
-
     // ── life cycle ──────────────────────────────────────────────────────────
 
     /// `'tracks life-cycle of Future to success'`: `Waiting` → `Done + data`,
     /// observed through the normal frame path.
-    #[test]
     fn future_builder_pending_future_waits_then_completes_with_data() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let completer = Completer::new();
@@ -613,270 +538,7 @@ mod tests {
         assert_eq!(harness.scheduler.pending_task_count(), 0);
     }
 
-    /// `'tracks life-cycle of Future to error'`: `Waiting` → `Done + error`, data
-    /// cleared.
-    #[test]
-    fn future_builder_pending_future_waits_then_completes_with_error() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let completer = Completer::new();
-        let view = FutureBuilder::keyed(
-            Some(1_u32),
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(1)));
-
-        let mut harness = Harness::mount(&view);
-        assert_eq!(last(&log).state, ConnectionState::Waiting);
-        assert_eq!(last(&log).data, Some(1), "initial data survives Waiting");
-
-        completer.complete(Err(Boom("bad")));
-        harness.frame();
-
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::Done,
-                data: None,
-                error: Some("bad")
-            },
-            "an error clears the data"
-        );
-    }
-
-    /// `'gives expected snapshot with SynchronousFuture'`: a future already
-    /// `Ready` on its first poll must never let the builder observe `Waiting`.
-    #[test]
-    fn future_builder_immediately_ready_future_never_shows_waiting() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let completer = Completer::ready(Ok(Payload(5)));
-        let view = FutureBuilder::keyed(
-            Some(1_u32),
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-
-        let harness = Harness::mount(&view);
-
-        let observed = seen(&log);
-        assert!(
-            !observed.iter().any(|s| s.state == ConnectionState::Waiting),
-            "a synchronously-complete future must never flash Waiting: {observed:?}"
-        );
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::Done,
-                data: Some(5),
-                error: None
-            }
-        );
-        assert_eq!(
-            harness.scheduler.pending_task_count(),
-            0,
-            "the eager poll completed it; nothing was queued"
-        );
-    }
-
     // ── update semantics ────────────────────────────────────────────────────
-
-    /// An unchanged key is an early return: no resubscribe, no snapshot reset.
-    #[test]
-    fn future_builder_same_key_does_not_resubscribe() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let completer = Completer::new();
-        let factory_calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_factory = Arc::clone(&factory_calls);
-        let inner = completer.factory();
-        let make: FutureFactory<Payload, Boom> = Rc::new(move || {
-            calls_for_factory.fetch_add(1, Ordering::Relaxed);
-            inner()
-        });
-
-        let view = FutureBuilder::keyed(
-            Some(1_u32),
-            Rc::clone(&make),
-            recording_builder(Arc::clone(&log)),
-        );
-        let mut harness = Harness::mount(&view);
-
-        completer.complete(Ok(Payload(3)));
-        harness.frame();
-        assert_eq!(last(&log).state, ConnectionState::Done);
-        assert_eq!(factory_calls.load(Ordering::Relaxed), 1);
-
-        // Same key ⇒ untouched snapshot, no new subscription.
-        let same = FutureBuilder::keyed(
-            Some(1_u32),
-            Rc::clone(&make),
-            recording_builder(Arc::clone(&log)),
-        );
-        harness.update(&same);
-
-        assert_eq!(factory_calls.load(Ordering::Relaxed), 1, "no resubscribe");
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::Done,
-                data: Some(3),
-                error: None
-            },
-            "the snapshot is untouched"
-        );
-    }
-
-    /// `'gracefully handles transition to other future'` +
-    /// `'ignores initialData when reconfiguring'`: a new key hops
-    /// `Done` → `None` → `Waiting`, **preserving the old data**, and the
-    /// `initialData` seed is not re-applied.
-    #[test]
-    fn future_builder_key_change_preserves_old_data_and_ignores_initial_data() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let first = Completer::new();
-        let view = FutureBuilder::keyed(
-            Some(1_u32),
-            first.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(99)));
-
-        let mut harness = Harness::mount(&view);
-        first.complete(Ok(Payload(1)));
-        harness.frame();
-        assert_eq!(last(&log).data, Some(1));
-
-        // New key, new (pending) future.
-        let second = Completer::new();
-        let next = FutureBuilder::keyed(
-            Some(2_u32),
-            second.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(99)));
-        harness.update(&next);
-
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::Waiting,
-                data: Some(1),
-                error: None
-            },
-            "the old value stays visible while the new future is Waiting, and \
-             initialData (99) is NOT re-applied"
-        );
-
-        second.complete(Ok(Payload(2)));
-        harness.frame();
-        assert_eq!(last(&log).data, Some(2));
-    }
-
-    /// The same hop starting from an error.
-    #[test]
-    fn future_builder_key_change_preserves_old_error() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let first = Completer::new();
-        let view = FutureBuilder::keyed(
-            Some(1_u32),
-            first.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        let mut harness = Harness::mount(&view);
-        first.complete(Err(Boom("old")));
-        harness.frame();
-
-        let second = Completer::new();
-        let next = FutureBuilder::keyed(
-            Some(2_u32),
-            second.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        harness.update(&next);
-
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::Waiting,
-                data: None,
-                error: Some("old")
-            }
-        );
-    }
-
-    /// `'gracefully handles transition to null future'`: the task is cancelled and
-    /// the snapshot drops to `None`, keeping the old payload.
-    #[test]
-    fn future_builder_transition_to_absent_future_cancels_and_preserves_payload() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let completer = Completer::new();
-        let view = FutureBuilder::keyed(
-            Some(1_u32),
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        let mut harness = Harness::mount(&view);
-        completer.complete(Ok(Payload(4)));
-        harness.frame();
-        assert_eq!(last(&log).data, Some(4));
-
-        let none = FutureBuilder::<u32, _, _>::keyed(
-            None,
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        harness.update(&none);
-
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::None,
-                data: Some(4),
-                error: None
-            }
-        );
-        assert_eq!(harness.scheduler.pending_task_count(), 0, "task cancelled");
-    }
-
-    /// A pending task is cancelled on key change: it is dropped from the driver
-    /// and can never write the snapshot.
-    #[test]
-    fn future_builder_key_change_cancels_the_pending_task() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let first = Completer::new();
-        let view = FutureBuilder::keyed(
-            Some(1_u32),
-            first.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        let mut harness = Harness::mount(&view);
-        assert_eq!(harness.scheduler.pending_task_count(), 1);
-
-        let second = Completer::new();
-        let next = FutureBuilder::keyed(
-            Some(2_u32),
-            second.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        harness.update(&next);
-
-        assert_eq!(
-            harness.scheduler.pending_task_count(),
-            1,
-            "exactly one live task: the old one was cancelled, the new one queued"
-        );
-
-        // The OLD future completing now must not touch the snapshot.
-        first.complete(Ok(Payload(111)));
-        harness.frame();
-        harness.frame();
-
-        assert_eq!(
-            last(&log).state,
-            ConnectionState::Waiting,
-            "a stale completion must not resolve the new subscription"
-        );
-        assert_eq!(last(&log).data, None);
-    }
 
     /// A disposed `FutureBuilder` neither rebuilds nor resolves: dropping the
     /// `TaskToken` cancels the task, so its writer never runs.
@@ -884,7 +546,6 @@ mod tests {
     /// This proves **cancellation**, not the generation guard — the guard is
     /// unreachable through the widget precisely because cancellation gets there
     /// first. `apply_completion_*` below tests the guard directly.
-    #[test]
     fn future_builder_dispose_cancels_and_never_rebuilds() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let completer = Completer::new();
@@ -916,211 +577,24 @@ mod tests {
         );
     }
 
-    /// Widget-tier acceptance test: a `FutureBuilder`'s own future can own a
-    /// SECOND [`TaskToken`] from the same driver (e.g. a nested subscription
-    /// it spawned itself). Disposing the element must cancel both — proving
-    /// disposal's wiring reaches `TaskToken::cancel` correctly, not that no
-    /// deadlock is possible there. `AsyncDriver`'s own reentrant-cancel
-    /// guarantee is already proven, BOUNDED, at the driver level by
-    /// `cancelling_a_future_that_owns_another_token_terminates`
-    /// (`async_driver.rs`), which runs the cancellation off-thread with a 5 s
-    /// wait; `ElementTree` is `!Send`, so that bounding technique does not
-    /// apply to a real disposal, and none is attempted here. Instead, the
-    /// nested child's non-blocking `AsyncDriver::is_unlocked` is probed
-    /// from inside the parent future's own destructor — the instant before
-    /// the child `TaskToken`'s field-drop would try to re-lock the same
-    /// driver — converting a regression that reintroduces holding that lock
-    /// across a removed task's destructor (#1038) into a leak-and-panic
-    /// instead of a hang on the child's subsequent `.lock()`.
-    ///
-    /// That panic does NOT fail this test directly: `dispose()` runs inside
-    /// `on_unmount`'s own `catch_unwind` (`element/behavior.rs`'s
-    /// `StatefulBehavior::on_unmount`), which contains it and records it via
-    /// `owner.record_hook_panic` instead of letting it propagate. What
-    /// actually fails a regression here is the `take_recovered_panics()`
-    /// assertion below (the root cause) and, as a consequence, the
-    /// `pending_task_count() == 0` assertion after it (the leaked child was
-    /// never cancelled).
     #[test]
-    fn nested_token_disposal_cancels_child_and_parent() {
-        /// The "parent" subscription's future: owns a `child` task on the
-        /// same driver, exactly as a real subscription that itself spawns
-        /// nested work would. Never resolves on its own — the element is
-        /// disposed while it is still pending.
-        struct HoldsChild {
-            child: Option<TaskToken>,
-            driver: AsyncDriver,
-        }
-
-        impl Future for HoldsChild {
-            type Output = Result<Payload, Boom>;
-            fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-                Poll::Pending
-            }
-        }
-
-        impl Drop for HoldsChild {
-            fn drop(&mut self) {
-                // `child`'s own `Drop` would re-lock `driver`'s internals
-                // to cancel it. `cancel()`'s extract-then-drop split
-                // (#1038) guarantees THIS destructor — reached via the
-                // parent token's own `cancel()` dropping the removed task
-                // outside its lock — already runs with that lock free, so
-                // dropping `child` here normally never contends on it.
-                //
-                // A regression that reintroduces holding the lock across
-                // the removed task's destructor would make `child`'s own
-                // `.lock()` deadlock instead — taking the whole test
-                // process down with it (nextest's slow-timeout is the only
-                // thing that would ever end it). Probing non-blockingly
-                // FIRST and leaking `child` on a bad read, rather than
-                // dropping it, converts that hang into an immediate,
-                // diagnosable panic: still a failing test, never a hang.
-                let child = self.child.take().expect("HoldsChild always holds a child");
-                if self.driver.is_unlocked() {
-                    drop(child);
-                } else {
-                    std::mem::forget(child);
-                    panic!(
-                        "the driver's task lock was still held while dropping \
-                         the parent future; leaked the nested child token \
-                         instead of deadlocking on its own cancellation"
-                    );
-                }
-            }
-        }
-
-        // Mirrors `Harness::mount`'s own steps, but captures the driver
-        // BEFORE mounting so the factory closure (invoked during `init_state`)
-        // can spawn the child task on the SAME driver the widget itself uses.
-        let scheduler = UpdateScheduler::new();
-        let driver = scheduler.async_driver().clone();
-        let driver_for_factory = driver.clone();
-        let factory: FutureFactory<Payload, Boom> = Rc::new(move || {
-            let child = driver_for_factory.spawn_local(Box::pin(std::future::pending::<()>()));
-            Box::pin(HoldsChild {
-                child: Some(child),
-                driver: driver_for_factory.clone(),
-            })
-        });
-        let view = FutureBuilder::keyed(
-            Some(1_u32),
-            factory,
-            recording_builder(Arc::new(Mutex::new(Vec::new()))),
-        );
-
-        let mut owner = BuildOwner::new();
-        owner.set_async_driver(driver.clone());
-        let mut tree = ElementTree::new();
-        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
-        owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
-        owner.build_scope(&mut tree); // init_state: subscribe() spawns the
-        // parent wrapper task, whose eager inline poll constructs
-        // `HoldsChild`, which spawns and holds the child task.
-
-        assert_eq!(
-            driver.pending_task_count(),
-            2,
-            "the parent wrapper task and the nested child must both be live after mount"
-        );
-
-        tree.remove(root, &mut owner.element_owner_mut());
-
-        assert!(
-            owner.take_recovered_panics().is_empty(),
-            "the nested child's lock probe must never observe the driver's \
-             lock held; a recorded panic here is the root cause of any \
-             leaked (uncancelled) child task below"
-        );
-        assert_eq!(
-            driver.pending_task_count(),
-            0,
-            "disposing the element must cancel both the parent and the nested child"
+    fn future_builder_matrix() {
+        crate::table_test::run_table(
+            "future_builder_matrix",
+            &[
+                (
+                    "future_builder_pending_future_waits_then_completes_with_data",
+                    future_builder_pending_future_waits_then_completes_with_data as fn(),
+                ),
+                (
+                    "future_builder_dispose_cancels_and_never_rebuilds",
+                    future_builder_dispose_cancels_and_never_rebuilds as fn(),
+                ),
+            ],
         );
     }
 
     // ── the generation guard, tested directly ───────────────────────────────
 
-    fn fresh_slot() -> SharedSlot<Payload, Boom> {
-        let mut slot = Slot::new(AsyncSnapshot::nothing());
-        slot.generation = 7;
-        Arc::new(Mutex::new(slot))
-    }
-
-    /// A completion whose generation matches folds into the snapshot and asks for
-    /// a rebuild.
-    #[test]
-    fn apply_completion_with_a_current_generation_folds_and_schedules() {
-        let slot = fresh_slot();
-        let schedule = apply_completion(&slot, 7, Ok(Payload(3)));
-
-        assert!(schedule, "a live completion must schedule a rebuild");
-        let guard = slot.lock();
-        assert_eq!(guard.snapshot.connection_state(), ConnectionState::Done);
-        assert_eq!(guard.snapshot.data(), Some(&Payload(3)));
-    }
-
-    /// A completion from a subscription that has since been replaced (or
-    /// disposed) is discarded: the snapshot is untouched and no rebuild is asked
-    /// for. This is the window `TaskToken` cancellation normally closes first.
-    #[test]
-    fn apply_completion_with_a_stale_generation_is_discarded() {
-        let slot = fresh_slot();
-        slot.lock().snapshot = AsyncSnapshot::with_data(ConnectionState::Waiting, Payload(1));
-
-        let schedule = apply_completion(&slot, 6, Ok(Payload(999)));
-
-        assert!(!schedule, "a stale completion must not wake a frame");
-        let guard = slot.lock();
-        assert_eq!(
-            guard.snapshot.connection_state(),
-            ConnectionState::Waiting,
-            "the live subscription's snapshot is untouched"
-        );
-        assert_eq!(guard.snapshot.data(), Some(&Payload(1)));
-    }
-
-    /// A completion landing inside the inline (synchronous) window folds, but must
-    /// not schedule: the build that reads it has not run yet.
-    #[test]
-    fn apply_completion_inside_the_inline_window_folds_without_scheduling() {
-        let slot = fresh_slot();
-        slot.lock().inline_window = true;
-
-        let schedule = apply_completion(&slot, 7, Ok(Payload(2)));
-
-        assert!(!schedule, "no wasted frame for a synchronous completion");
-        assert_eq!(slot.lock().snapshot.data(), Some(&Payload(2)));
-    }
-
-    /// An error completion clears the data.
-    #[test]
-    fn apply_completion_with_an_error_clears_data() {
-        let slot = fresh_slot();
-        slot.lock().snapshot = AsyncSnapshot::with_data(ConnectionState::Waiting, Payload(1));
-
-        assert!(apply_completion(&slot, 7, Err(Boom("x"))));
-        let guard = slot.lock();
-        assert_eq!(guard.snapshot.connection_state(), ConnectionState::Done);
-        assert_eq!(guard.snapshot.error(), Some(&Boom("x")));
-        assert!(!guard.snapshot.has_data());
-    }
-
     // ── bounds ──────────────────────────────────────────────────────────────
-
-    /// Compile-proof: `Payload` and `Boom` implement neither `Clone` nor `Copy`,
-    /// and they flow through the constructor, the factory, the completion path,
-    /// and the builder.
-    #[test]
-    fn future_builder_needs_no_clone_on_t_or_e() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let completer = Completer::ready(Ok(Payload(1)));
-        let view = FutureBuilder::keyed(
-            Some(()),
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        let _harness = Harness::mount(&view);
-        assert_eq!(last(&log).data, Some(1));
-    }
 }

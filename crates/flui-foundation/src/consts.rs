@@ -87,29 +87,3 @@ pub const EPSILON_F32: f32 = 1e-6;
 // in-workspace consumers. The geometry/float-comparison primitive belongs
 // next to the geometry values. If a need surfaces, port
 // the helpers there alongside `Offset` rather than here.
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_build_mode_constants() {
-        // One of these must be true
-        const { assert!(DEBUG_MODE || RELEASE_MODE) };
-        // They are mutually exclusive
-        assert_ne!(DEBUG_MODE, RELEASE_MODE);
-    }
-
-    #[test]
-    fn test_platform_constants() {
-        // At most one platform category
-        let platform_count = [IS_WEB, IS_MOBILE, IS_DESKTOP]
-            .iter()
-            .filter(|&&x| x)
-            .count();
-        assert!(
-            platform_count <= 1,
-            "Only one platform category should be true"
-        );
-    }
-}

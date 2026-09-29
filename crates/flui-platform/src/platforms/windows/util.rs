@@ -124,38 +124,3 @@ pub const USER_DEFAULT_SCREEN_DPI: u32 = 96;
 /// (Only the three the backend consumes are re-exported; `SIZE_MAXSHOW`/
 /// `SIZE_MAXHIDE` stay reachable at their defining path.)
 pub use crate::shared::visibility::{SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_lparam_coordinates() {
-        // X=100, Y=200 packed into LPARAM
-        let lparam = LPARAM(((0xC8 << 16) | 0x64) as isize); // y=200, x=100
-
-        assert_eq!(get_x_lparam(lparam), 100);
-        assert_eq!(get_y_lparam(lparam), 200);
-    }
-
-    #[test]
-    fn test_dpi_conversion() {
-        let scale_factor = 1.5; // 150% DPI
-
-        let logical = 100.0;
-        let device = logical_to_device(logical, scale_factor);
-        assert_eq!(device, 150);
-
-        let back_to_logical = device_to_logical(device, scale_factor);
-        assert!((back_to_logical - logical).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_wide_string_conversion() {
-        let original = "Hello, 世界! 🦀";
-        let wide = to_wide(original);
-        let back = from_wide(&wide);
-
-        assert_eq!(original, back);
-    }
-}

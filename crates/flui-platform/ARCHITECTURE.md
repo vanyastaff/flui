@@ -79,9 +79,9 @@ record, which Win32 documents as liable to fail; with an owner it is on the
 documented path. If the window cannot be created, sessions fall back to a
 `NULL` owner and log an error.
 
-Tests: `a_null_owner_open_on_another_thread_fails_while_a_session_is_open`
-(fails with a `NULL` owner) and `another_opener_can_empty_a_clipboard_flui_owns`
-(fails when the owner thread does not pump).
+Test: `a_null_owner_open_on_another_thread_fails_while_a_session_is_open`
+(fails with a `NULL` owner). The owner thread's message pump is not covered by
+a test.
 
 ### Win32 callbacks live in the window's owner-thread context; off-owner registration is refused
 
@@ -120,15 +120,10 @@ one for Win32 makes that safe without changing a signature.
 The other backends still store `Send` callbacks behind locks until their own
 steps.
 
-Tests (Windows host; CI only type-checks Win32):
-`off_owner_registration_is_refused_and_dropped_on_the_registering_thread`,
-`registration_after_destroy_is_refused_not_parked_on_the_wrapper`,
-`off_owner_keyboard_layout_hook_is_refused`, `off_owner_open_window_is_refused`
-and `window_event_handler_replaced_from_inside_itself_keeps_the_replacement`
-each fail on the previous storage;
-`owner_registration_runs_and_is_released_on_the_owner`,
-`quit_callback_runs_once_on_owner_after_owner_window_closes` and
-`owner_turn_runs_on_the_owner_and_is_released_there` guard the owner path.
+Tests (CI only type-checks Win32): the owner-affinity refusal order is pinned
+by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
+(run by `the_owner_thread_machinery_honours_its_contracts` in `shared/handlers.rs`), and the callback panic and re-entrancy rules by
+`tests/window_callback_unwind.rs`.
 
 ### AppKit reopen signals use a loop-owned serialized callback pump
 
@@ -218,10 +213,9 @@ risk a second panic during unwinding. Resource cleanup after such a panic is
 best effort, while the guard still detaches its own delegate.
 
 Native window release now executes inline on its owner, including after the
-loop returns, through the same panic boundary used by lifecycle cleanup. The
-`inline_cleanup_contains_hostile_panic_and_unwinds_local_resources` test injects
-a panic payload whose destructor also panics: the boundary retains that payload
-without destruction while ordinary local resource destructors still execute. `windowWillClose:` pins its receiver with an extra retain transferred
+loop returns, through the same panic boundary used by lifecycle cleanup: a
+panic payload whose destructor also panics is retained without destruction
+while ordinary local resource destructors still execute. `windowWillClose:` pins its receiver with an extra retain transferred
 to the surrounding autorelease pool before callbacks can drop the final wrapper.
 That prevents deallocation under the native close stack. Worker drops remain
 nonblocking queued tails; if the owner no longer services them, that existing
@@ -341,8 +335,7 @@ and `ui-events-winit`'s own source, not against the survey.
 **Replacement coverage:** `platforms/winit/events/keyboard_tests.rs`'s
 `keyboard_conversion_tests` module (`every_winit_keycode_maps_to_a_canonical_code`
 over all 194 winit 0.30.13 `KeyCode` variants — length- and
-duplicate-checked against the winit source — plus the issue's
-acceptance-criteria spot pairs and the location/logical-key spot checks) and
+duplicate-checked against the winit source) and
 `cross_backend_physical_key_agreement` (winit vs. Win32 vs. AppKit on a
 shared physical-key set). Before this change, `convert_physical_key`'s hand
 table mapped 71 of winit 0.30.13's 194 `KeyCode` variants to `Code` (the

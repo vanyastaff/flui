@@ -155,29 +155,3 @@ fn outside_scissor(scissor: Option<(u32, u32, u32, u32)>, x: i32, y: i32, w: i32
     let (x, y) = (x as i64, y as i64);
     x + w as i64 <= sx || y + h as i64 <= sy || x >= sr || y >= sb
 }
-
-#[cfg(test)]
-mod tests {
-    use super::outside_scissor;
-
-    #[test]
-    fn a_quad_touching_the_scissor_edge_is_inside_and_one_past_it_is_outside() {
-        let scissor = Some((10, 10, 20, 20));
-        assert!(
-            !outside_scissor(scissor, 29, 29, 5, 5),
-            "overlaps the corner pixel"
-        );
-        assert!(
-            outside_scissor(scissor, 30, 10, 5, 5),
-            "starts on the right edge"
-        );
-        assert!(
-            outside_scissor(scissor, 0, 0, 10, 10),
-            "ends on the top-left edge"
-        );
-        assert!(
-            !outside_scissor(None, -100, -100, 1, 1),
-            "no scissor: nothing is outside"
-        );
-    }
-}

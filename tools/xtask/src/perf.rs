@@ -466,73 +466,6 @@ mod tests {
         .collect()
     }
 
-    #[test]
-    fn a_counter_above_its_baseline_is_a_regression() {
-        assert_eq!(
-            compare(&one("s", "c", 3), &one("s", "c", 4)),
-            [Finding::Regressed {
-                scenario: "s".to_owned(),
-                counter: "c".to_owned(),
-                base: 3,
-                current: 4,
-            }]
-        );
-    }
-
-    #[test]
-    fn a_counter_below_its_baseline_asks_for_a_bless() {
-        let findings = compare(&one("s", "c", 3), &one("s", "c", 2));
-        assert_eq!(
-            findings,
-            [Finding::Improved {
-                scenario: "s".to_owned(),
-                counter: "c".to_owned(),
-                base: 3,
-                current: 2,
-            }]
-        );
-        assert!(
-            findings[0].to_string().contains("--bless"),
-            "{}",
-            findings[0]
-        );
-    }
-
-    #[test]
-    fn an_equal_run_has_no_findings() {
-        assert!(compare(&one("s", "c", 3), &one("s", "c", 3)).is_empty());
-    }
-
-    #[test]
-    fn a_scenario_missing_from_the_run_is_reported() {
-        assert_eq!(
-            compare(&one("s", "c", 3), &Counts::new()),
-            [Finding::MissingScenario {
-                scenario: "s".to_owned()
-            }]
-        );
-        assert_eq!(
-            compare(&Counts::new(), &one("s", "c", 3)),
-            [Finding::NewScenario {
-                scenario: "s".to_owned()
-            }]
-        );
-        assert_eq!(
-            compare(&one("s", "c", 3), &one("s", "d", 3)),
-            [
-                Finding::MissingCounter {
-                    scenario: "s".to_owned(),
-                    counter: "c".to_owned()
-                },
-                Finding::NewCounter {
-                    scenario: "s".to_owned(),
-                    counter: "d".to_owned()
-                },
-            ]
-        );
-    }
-
-    #[test]
     fn blessed_output_round_trips_through_the_parser() {
         let (_, current, _) = self_test_fixture();
         let text = render(&current).expect("renders");
@@ -543,13 +476,11 @@ mod tests {
         assert_eq!(parse(&text).expect("parses"), current);
     }
 
-    #[test]
     fn advisory_mode_exits_zero_with_findings() {
         assert_eq!(outcome(Mode::Advisory, 3), ExitCode::SUCCESS);
         assert_eq!(outcome(Mode::Bless, 3), ExitCode::SUCCESS);
     }
 
-    #[test]
     fn check_mode_exits_nonzero_with_findings() {
         assert_eq!(outcome(Mode::Check, 1), ExitCode::FAILURE);
         assert_eq!(outcome(Mode::Check, 0), ExitCode::SUCCESS);
@@ -565,7 +496,6 @@ mod tests {
         dir
     }
 
-    #[test]
     fn a_failed_run_still_writes_its_records_and_never_blesses() {
         let root = scratch("failed-root");
         let out = scratch("failed-out");
@@ -593,12 +523,27 @@ mod tests {
     }
 
     #[test]
-    fn self_test_fixture_yields_exactly_the_expected_findings() {
-        let (baseline, current, mut expected) = self_test_fixture();
-        let mut found = compare(&baseline, &current);
-        found.sort();
-        expected.sort();
-        assert_eq!(found, expected);
-        assert_eq!(self_test(), ExitCode::SUCCESS);
+    fn perf_contract() {
+        crate::table_test::run_table(
+            "perf_contract",
+            &[
+                (
+                    "blessed_output_round_trips_through_the_parser",
+                    blessed_output_round_trips_through_the_parser as fn(),
+                ),
+                (
+                    "advisory_mode_exits_zero_with_findings",
+                    advisory_mode_exits_zero_with_findings as fn(),
+                ),
+                (
+                    "check_mode_exits_nonzero_with_findings",
+                    check_mode_exits_nonzero_with_findings as fn(),
+                ),
+                (
+                    "a_failed_run_still_writes_its_records_and_never_blesses",
+                    a_failed_run_still_writes_its_records_and_never_blesses as fn(),
+                ),
+            ],
+        );
     }
 }

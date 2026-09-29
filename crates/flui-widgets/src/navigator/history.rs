@@ -883,23 +883,6 @@ impl RouteHistory {
         (id, result)
     }
 
-    /// Flutter's `NavigatorState.pushReplacement` (`:5245-5268`): complete the
-    /// current top with `is_replaced = true` (so it emits **no** `did_remove`),
-    /// append the new route in `PushReplace`, then a single flush.
-    #[cfg(test)]
-    pub(crate) fn push_replacement<R: Route>(
-        &mut self,
-        route: R,
-        result: Option<AnyResult>,
-    ) -> (RouteId, RouteResult<R::Output>) {
-        self.push_replacement_with_id(
-            RouteId::next(),
-            Some(ReplaceTarget::CurrentTop),
-            route,
-            result,
-        )
-    }
-
     /// `push_replacement`, under an id the caller minted —
     /// the [`push_with_id`](Self::push_with_id) split, so `NavigatorHandle` can bind
     /// the route and insert its overlay entry before the flush.
@@ -956,64 +939,6 @@ impl RouteHistory {
         self.entries.push(entry);
         self.flush(true);
         (id, route_result)
-    }
-
-    /// Flutter's `NavigatorState.pushAndRemoveUntil` → `_pushEntryAndRemoveUntil`
-    /// (`navigator.dart:5347-5371`): append the new route, then walk **downward**
-    /// from the old top completing every present route with `None` until `keep`
-    /// says stop — all before a **single** flush.
-    ///
-    /// This is the one Flutter API that puts an addition and several deletions in
-    /// one flush, which is what makes the additions-before-deletions ordering and
-    /// the deletions' FIFO drain observable.
-    #[cfg(test)]
-    pub(crate) fn push_and_remove_until<R: Route>(
-        &mut self,
-        route: R,
-        keep: impl Fn(RouteId) -> bool,
-    ) -> (RouteId, RouteResult<R::Output>) {
-        self.push_and_remove_until_with_id(RouteId::next(), route, keep)
-    }
-
-    /// `push_and_remove_until`, under an id the caller minted — the
-    /// [`push_with_id`](Self::push_with_id) split.
-    ///
-    /// Test-only. Production (`NavigatorHandle::push_and_remove_until`) uses
-    /// the split [`push_for_remove_until_with_id`](Self::push_for_remove_until_with_id)
-    /// and [`complete_removed_and_flush`](Self::complete_removed_and_flush)
-    /// pair instead, so `keep` never runs inside this module's lock. This
-    /// single-locked-section shape stays for the `RouteHistory`-direct
-    /// harness in `tests.rs`, which targets flush ordering, not the
-    /// `NavigatorHandle` locking concern.
-    #[cfg(test)]
-    pub(crate) fn push_and_remove_until_with_id<R: Route>(
-        &mut self,
-        id: RouteId,
-        route: R,
-        keep: impl Fn(RouteId) -> bool,
-    ) -> (RouteId, RouteResult<R::Output>) {
-        let mut index = self.entries.len() as isize - 1;
-
-        let (erased, result) = RouteRecord::erase_with_id(id, route);
-        self.entries
-            .push(RouteEntry::new(erased, RouteLifecycle::Push));
-
-        let mut displaced = Vec::new();
-        while index >= 0 && !keep(self.entries[index as usize].id()) {
-            let entry = &mut self.entries[index as usize];
-            if entry.state.is_present() {
-                // Removed routes complete with `None` (`navigator.dart:5360`).
-                let armed = entry.arm_complete(None, false);
-                displaced.extend(armed.undelivered);
-            }
-            index -= 1;
-        }
-        for result in displaced {
-            self.record_undelivered(Some(result));
-        }
-
-        self.flush(true);
-        (id, result)
     }
 
     /// The push half of `NavigatorHandle::push_and_remove_until`, split from

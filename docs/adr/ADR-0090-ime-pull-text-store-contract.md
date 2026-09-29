@@ -263,14 +263,12 @@ set is unverified.
 In place:
 
 - §1: `flui-platform-api` `text_store::utf16::tests` (surrogates, combining marks, ZWJ, flags,
-  round trips, refusals), `text_store::lock::tests` (`sync_inside_a_session_is_refused`,
-  `async_inside_a_session_runs_on_release`, `async_while_the_gate_is_shut_waits_for_run_deferred`,
-  `a_new_arbiter_is_open_until_a_gate_is_installed`, `deferred_run_in_fifo_order`, `a_full_queue_refuses_with_deferred_queue_full`,
-  `a_panicking_grant_releases_the_lock`, `clear_drops_pending_grants_unrun`), and the
+  round trips, refusals), `text_store::lock::tests` (a sync request inside a session is refused,
+  deferred grants run FIFO, a full queue refuses, and `a_panicking_grant_releases_the_lock`), and the
   `compile_fail` doctest on `text_store::lock`.
 - §2: `text_store::projection::tests` (preedit, cursor mapping and clamping, `cursor: None`,
   empty preedit with and without a composition, X11 start/end, commit, direct commit,
-  `Disabled`, `a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor`);
+  `Disabled`, and a push event while commits are closed applying in order at the next anchor);
   `flui-interaction` `dispatch_projects_preedit_and_commit_onto_the_active_store`,
   `enabled_runs_on_session_start_and_edits_nothing`,
   `an_attached_store_follows_the_owners_frame_transaction` (the reference store, unwrapped),

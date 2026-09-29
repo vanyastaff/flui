@@ -129,8 +129,8 @@ publishes nothing. Reusing the same slot is a no-op. This identity-only operatio
 does not invalidate geometry or replace the child. `AnchoredBox` calls it during
 render-object updates, so reconciliation preserves child state when its anchor changes.
 This extends FLUI's identity proxy contract; there is no direct Flutter render-object
-counterpart. The `harness_subtree_anchor_rebinds_while_mounted_and_after_detach` test
-covers publication lifetime, and the widgets `anchored_box` regression rebuilds the
+counterpart. The `harness_subtree_anchor_attach_*` and `harness_subtree_anchor_detach_*` rows of
+`family_layer_links` cover publication lifetime, and the widgets `anchored_box` regression rebuilds the
 real element tree and checks preserved render IDs and child state.
 
 ---

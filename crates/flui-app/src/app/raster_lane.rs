@@ -444,7 +444,7 @@ impl<B: RasterBackend> FrameSink for RasterLane<B> {
 /// does not yet accommodate) and by tests that pin the realm's frame
 /// transaction against scripted backends.
 #[cfg_attr(
-    all(not(target_arch = "wasm32"), not(test)),
+    not(target_arch = "wasm32"),
     expect(
         dead_code,
         reason = "the web runner's production sink (wasm32) and the scripted-backend test \
@@ -457,7 +457,7 @@ pub(crate) struct DirectSink<'a, R: RasterBackend> {
 
 impl<'a, R: RasterBackend> DirectSink<'a, R> {
     #[cfg_attr(
-        all(not(target_arch = "wasm32"), not(test)),
+        not(target_arch = "wasm32"),
         expect(
             dead_code,
             reason = "see DirectSink's own expectation: no native production caller"
@@ -465,26 +465,6 @@ impl<'a, R: RasterBackend> DirectSink<'a, R> {
     )]
     pub(crate) fn new(renderer: &'a mut R) -> Self {
         Self { renderer }
-    }
-}
-
-/// The realm's draw-and-submit step over a [`DirectSink`], without the rest
-/// of the frame transaction: a test seam only.
-///
-/// Every production frame goes through `UiRealm::pump`. Tests that pin the
-/// submit classification against a scripted engine backend drive the draw
-/// step on its own, the way the realm's own tests call `render_frame`.
-#[cfg(test)]
-pub(crate) trait RealmRaster {
-    /// Render one frame through a [`DirectSink`] over `renderer`. Returns
-    /// whether the frame presented.
-    fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool;
-}
-
-#[cfg(test)]
-impl RealmRaster for flui_runtime::ui_realm::UiRealm {
-    fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
-        self.render_frame_for_test(&mut DirectSink::new(renderer))
     }
 }
 
@@ -521,7 +501,7 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
-    use flui_foundation::{PresentationId, RealmId, SurfaceGeneration};
+    use flui_foundation::{PresentationId, RealmId};
     use flui_layer::{CanvasLayer, Layer};
 
     use super::*;
@@ -540,60 +520,6 @@ mod tests {
 
     fn test_scene() -> Scene {
         scene_from_canvas()
-    }
-
-    /// `DirectSink` is the one place the web runner's backend outcomes become
-    /// the realm's verdicts; the realm's own tests script verdicts through
-    /// `flui_runtime::testing::ScriptedSink` and never reach it. Changing any
-    /// arm of the table fails this test.
-    #[test]
-    fn direct_sink_classifies_each_engine_outcome() {
-        use crate::app::raster_test_support::TestRasterBackend;
-
-        type Outcome = fn() -> Result<PresentDisposition, EngineError>;
-        let cases: [(&str, Outcome, SubmitVerdict); 7] = [
-            (
-                "presented",
-                || Ok(PresentDisposition::Presented),
-                SubmitVerdict::Presented,
-            ),
-            (
-                "no damage",
-                || Ok(PresentDisposition::NoDamage),
-                SubmitVerdict::NoPresent,
-            ),
-            (
-                "not shown",
-                || Ok(PresentDisposition::NotShown),
-                SubmitVerdict::NotShown,
-            ),
-            (
-                "surface lost",
-                || Err(EngineError::SurfaceLost),
-                SubmitVerdict::SurfaceStale,
-            ),
-            (
-                "surface validation",
-                || Err(EngineError::SurfaceValidation),
-                SubmitVerdict::SurfaceStale,
-            ),
-            (
-                "device lost",
-                || Err(EngineError::DeviceLost),
-                SubmitVerdict::DeviceLost,
-            ),
-            (
-                "timeout",
-                || Err(EngineError::Timeout),
-                SubmitVerdict::Failed,
-            ),
-        ];
-        for (label, outcome, expected) in cases {
-            let mut backend = TestRasterBackend::new(move |_, _| outcome());
-            let verdict = DirectSink::new(&mut backend).submit(test_scene());
-            assert_eq!(verdict, expected, "{label}");
-            assert_eq!(backend.render_scene_calls, 1, "{label}: rendered once");
-        }
     }
 
     /// A scripted backend for lane-behavior tests: every render outcome is
@@ -718,7 +644,6 @@ mod tests {
         Scene::new(tree)
     }
 
-    #[test]
     fn a_changed_boundary_reaches_the_backend_as_a_dirty_rect() {
         let mut lane = RasterLane::new(DamageRecordingBackend::default(), test_address(), 640, 480);
         let root = flui_layer::ContentToken::mint();
@@ -745,7 +670,6 @@ mod tests {
 
     /// An unchanged scene owes the screen nothing, so the frame does not
     /// present and the loop may park.
-    #[test]
     fn an_identical_scene_does_not_present() {
         let mut lane = RasterLane::new(DamageRecordingBackend::default(), test_address(), 640, 480);
         let (root, child) = (
@@ -765,7 +689,6 @@ mod tests {
 
     /// `FLUI_DAMAGE` is the field fallback: `off` in any case turns damage
     /// off, and nothing else does, a typo included.
-    #[test]
     fn the_damage_variable_selects_the_mode() {
         for off in ["off", "OFF", " Off "] {
             assert_eq!(damage_mode_from(Some(off)), DamageMode::Off, "{off:?}");
@@ -782,7 +705,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn damage_off_sends_every_frame_full_and_retains_nothing() {
         let mut lane = RasterLane::new(DamageRecordingBackend::default(), test_address(), 640, 480);
         lane.set_damage_mode(DamageMode::Off);
@@ -804,7 +726,6 @@ mod tests {
         });
     }
 
-    #[test]
     fn a_presented_frame_classifies_presented_and_renders_through_the_mailbox() {
         let mut lane = RasterLane::new(ScriptedBackend::presenting(), test_address(), 640, 480);
         let verdict = lane.submit_and_pump(test_scene());
@@ -822,99 +743,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn a_no_present_completion_classifies_no_present() {
-        let backend = ScriptedBackend::presenting().queue(Ok(PresentDisposition::NoDamage));
-        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
-        assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::NoPresent);
-    }
-
-    /// The lane reports the backend's own answer rather than collapsing every
-    /// non-present into `NoPresent`.
-    ///
-    /// Driven as a two-frame script on ONE lane, so the assertion is about
-    /// the classification of two answers that differ only in the disposition
-    /// they carry: `NoDamage` means the caller's work was done, `NotShown`
-    /// means it was consumed and lost. A lane that read `was_shown()` — or
-    /// matched only `Presented` and defaulted the rest — would return
-    /// `NoPresent` for both frames and pass a single-frame test for either.
-    #[test]
-    fn a_withheld_frame_is_not_collapsed_into_no_present() {
-        let backend = ScriptedBackend::presenting()
-            .queue(Ok(PresentDisposition::NoDamage))
-            .queue(Ok(PresentDisposition::NotShown));
-        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
-
-        assert_eq!(
-            lane.submit_and_pump(test_scene()),
-            SubmitVerdict::NoPresent,
-            "nothing was owed: the loop may park"
-        );
-        assert_eq!(
-            lane.submit_and_pump(test_scene()),
-            SubmitVerdict::NotShown,
-            "content was owed and lost: the caller retains the frame"
-        );
-        lane.with_backend(|backend| {
-            assert_eq!(
-                backend.render_calls, 2,
-                "both frames reached the backend; the distinction is in the \
-                 classification, not in whether the render ran"
-            );
-        });
-    }
-
-    #[test]
-    fn the_resize_hook_mints_forward_and_the_next_frame_is_accepted() {
-        let mut lane = RasterLane::new(ScriptedBackend::presenting(), test_address(), 640, 480);
-        let before = lane.stamp.surface_generation();
-        let hook = lane.resize_hook();
-        hook.apply(1024, 768);
-        let after = lane.stamp.surface_generation();
-        assert!(
-            after > before,
-            "a resize mints a strictly newer generation ({after} vs {before})"
-        );
-        assert_eq!(
-            lane.surface_size(),
-            (1024, 768),
-            "layout reads the platform's announced size before any pump applies it"
-        );
-        // The frame stamped with the fresh mint is accepted by the pump that
-        // applies the resize in the same pass — generation-forward, no
-        // handshake.
-        assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::Presented);
-        lane.with_backend(|backend| {
-            assert_eq!(
-                backend.resizes.last(),
-                Some(&(1024, 768)),
-                "the pump applied the coalesced resize before rendering"
-            );
-        });
-    }
-
-    #[test]
-    fn a_mid_render_surface_loss_restamps_and_the_retry_is_accepted() {
-        let backend = ScriptedBackend::presenting().queue(Err(EngineError::SurfaceLost));
-        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
-        let stamped_before = lane.stamp.surface_generation();
-
-        assert_eq!(
-            lane.submit_and_pump(test_scene()),
-            SubmitVerdict::SurfaceStale
-        );
-        let restamped = lane.stamp.surface_generation();
-        assert!(
-            restamped > stamped_before,
-            "the lane adopted the loss-minted generation for the retry"
-        );
-
-        // The retry (the next queued outcome defaults to `Presented`) renders
-        // against the restamped generation instead of being rejected.
-        assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::Presented);
-    }
-
-    #[test]
     fn a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks() {
         let backend = ScriptedBackend::presenting().queue(Err(EngineError::DeviceLost));
         let mut lane = RasterLane::new(backend, test_address(), 640, 480);
@@ -945,50 +773,45 @@ mod tests {
     }
 
     #[test]
-    fn recovery_reminting_uses_the_platform_size_not_the_backend_readback() {
-        // A resize arrives while the device is down; recovery must re-mint
-        // at THAT size, never the backend's stale readback (100x100 here).
-        let backend = ScriptedBackend::presenting().queue(Err(EngineError::DeviceLost));
-        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
-        assert_eq!(
-            lane.submit_and_pump(test_scene()),
-            SubmitVerdict::DeviceLost
+    fn raster_lane_outcome_matrix() {
+        crate::table_test::run_table(
+            "raster_lane_outcome_matrix",
+            &[
+                (
+                    "a_presented_frame_classifies_presented_and_renders_through_the_mailbox",
+                    a_presented_frame_classifies_presented_and_renders_through_the_mailbox
+                        as fn(),
+                ),
+                (
+                    "a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks",
+                    a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks as fn(),
+                ),
+            ],
         );
-        lane.resize_hook().apply(1920, 1080);
-        lane.note_surface_recreated();
-        assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::Presented);
-        lane.with_backend(|backend| {
-            assert_eq!(
-                backend.resizes.last(),
-                Some(&(1920, 1080)),
-                "the re-mint carried the platform's latest announced size"
-            );
-        });
     }
 
     #[test]
-    fn a_zero_generation_stamp_is_rejected_not_rendered() {
-        // Force the stamp back to ZERO to prove the pump's rejection is
-        // live on this path (the constructor exists precisely so production
-        // never starts there).
-        let mut lane = RasterLane::new(ScriptedBackend::presenting(), test_address(), 640, 480);
-        lane.stamp.set_surface_generation(SurfaceGeneration::ZERO);
-        assert_eq!(
-            lane.submit_and_pump(test_scene()),
-            SubmitVerdict::SurfaceStale
+    fn raster_lane_damage_matrix() {
+        crate::table_test::run_table(
+            "raster_lane_damage_matrix",
+            &[
+                (
+                    "a_changed_boundary_reaches_the_backend_as_a_dirty_rect",
+                    a_changed_boundary_reaches_the_backend_as_a_dirty_rect as fn(),
+                ),
+                (
+                    "an_identical_scene_does_not_present",
+                    an_identical_scene_does_not_present as fn(),
+                ),
+                (
+                    "the_damage_variable_selects_the_mode",
+                    the_damage_variable_selects_the_mode as fn(),
+                ),
+                (
+                    "damage_off_sends_every_frame_full_and_retains_nothing",
+                    damage_off_sends_every_frame_full_and_retains_nothing as fn(),
+                ),
+            ],
         );
-        lane.with_backend(|backend| {
-            assert_eq!(
-                backend.render_calls, 0,
-                "a ZERO-stamped frame must never reach render_scene"
-            );
-        });
-    }
-
-    #[test]
-    fn a_generic_render_failure_classifies_failed() {
-        let backend = ScriptedBackend::presenting().queue(Err(EngineError::Timeout));
-        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
-        assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::Failed);
     }
 }

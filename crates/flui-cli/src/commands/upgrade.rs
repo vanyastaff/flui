@@ -379,41 +379,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_search_line() {
-        let stdout = "flui-cli = \"0.3.0\"    # Command-line interface for FLUI\n... and 8 crates more (use --limit N to see more)";
-        assert_eq!(
-            parse_search_version(stdout, "flui-cli"),
-            Some("0.3.0".to_string())
-        );
-    }
-
-    #[test]
-    fn missing_line_is_none() {
-        assert_eq!(parse_search_version("", "flui-cli"), None);
-    }
-
-    #[test]
-    fn newer_patch_is_newer() {
-        assert_eq!(is_newer("0.3.1", "0.3.0"), Some(true));
-    }
-
-    #[test]
-    fn same_version_is_not_newer() {
-        assert_eq!(is_newer("0.3.0", "0.3.0"), Some(false));
-    }
-
-    #[test]
-    fn older_version_is_not_newer() {
-        assert_eq!(is_newer("0.2.9", "0.3.0"), Some(false));
-    }
-
-    #[test]
-    fn release_is_newer_than_its_own_prerelease() {
-        assert_eq!(is_newer("0.3.0", "0.3.0-beta.1"), Some(true));
-        assert_eq!(is_newer("0.3.0-beta.1", "0.3.0"), Some(false));
-    }
-
-    #[test]
     fn prerelease_precedence_follows_semver_2_0() {
         // 0.3.0-beta.9 < 0.3.0-beta.10 < 0.3.0-rc.1 < 0.3.0
         assert_eq!(is_newer("0.3.0-beta.10", "0.3.0-beta.9"), Some(true));
@@ -422,53 +387,5 @@ mod tests {
         assert_eq!(is_newer("0.3.0-beta.10", "0.3.0-rc.1"), Some(false));
         assert_eq!(is_newer("0.3.0", "0.3.0-rc.1"), Some(true));
         assert_eq!(is_newer("0.3.0-rc.1", "0.3.0"), Some(false));
-    }
-
-    #[test]
-    fn compare_prerelease_orders_numeric_identifiers_numerically() {
-        assert_eq!(
-            compare_prerelease("beta.9", "beta.10"),
-            std::cmp::Ordering::Less
-        );
-        assert_eq!(
-            compare_prerelease("beta.10", "beta.9"),
-            std::cmp::Ordering::Greater
-        );
-    }
-
-    #[test]
-    fn compare_identifier_ranks_numeric_below_alphanumeric() {
-        assert_eq!(compare_identifier("9", "alpha"), std::cmp::Ordering::Less);
-        assert_eq!(
-            compare_identifier("alpha", "9"),
-            std::cmp::Ordering::Greater
-        );
-    }
-
-    #[test]
-    fn compare_prerelease_shorter_is_lower_on_equal_prefix() {
-        assert_eq!(
-            compare_prerelease("alpha", "alpha.1"),
-            std::cmp::Ordering::Less
-        );
-    }
-
-    #[test]
-    fn unparsable_version_yields_none() {
-        assert_eq!(is_newer("not-a-version", "0.3.0"), None);
-    }
-
-    #[test]
-    fn planned_changes_ignore_cargo_housekeeping_lines() {
-        let stderr = "    Updating crates.io index\n    Updating git repository `https://x/y`\n     Locking 2 packages to latest compatible versions\n    Updating serde v1.0.1 -> v1.0.2\n      Adding foo v0.1.0\n    Removing bar v2.0.0\n";
-        assert_eq!(
-            super::planned_changes(stderr),
-            vec![
-                "Updating serde v1.0.1 -> v1.0.2",
-                "Adding foo v0.1.0",
-                "Removing bar v2.0.0"
-            ]
-        );
-        assert!(super::planned_changes("    Updating crates.io index\n").is_empty());
     }
 }

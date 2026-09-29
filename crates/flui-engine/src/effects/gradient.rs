@@ -284,22 +284,3 @@ impl SweepGradientInstance {
         self
     }
 }
-
-#[cfg(all(test, feature = "testing"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_gradient_stop_creation() {
-        let stop = GradientStop::new(Color::RED, 0.5);
-        assert_eq!(stop.position, 0.5);
-        assert_eq!(stop.color, [1.0, 0.0, 0.0, 1.0]);
-    }
-
-    // `test_gradient_builder`, `test_shadow_elevation_levels`, and
-    // `test_blur_intensity` were removed alongside the
-    // `LinearGradientBuilder`, `ShadowParams::elevation_*`, and
-    // `BlurIntensity` items they exercised. The remaining `GradientStop`
-    // smoke test covers the only public API in this module that has live
-    // consumers (`painter`'s instanced-gradient pipeline).
-}

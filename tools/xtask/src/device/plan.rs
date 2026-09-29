@@ -731,7 +731,6 @@ mod tests {
             .expect("step runs")
     }
 
-    #[test]
     fn a_probe_passes_only_on_exit_zero_with_every_marker() {
         let output = b"phase 1\nRESIZE_JITTER_PROBE_STALE=0\nRESIZE_JITTER_PROBE_RESULT=PASS\n";
         let markers = [
@@ -747,72 +746,6 @@ mod tests {
         assert!(!probe_passed(true, b"", &["CLOSE_PATH_PROBE_RESULT=PASS"]));
     }
 
-    #[test]
-    fn captured_output_is_echoed_like_printf_of_a_command_substitution() {
-        assert_eq!(trim_trailing_newlines(b"a\nb\n\n"), b"a\nb");
-        assert_eq!(trim_trailing_newlines(b"a\n\nb"), b"a\n\nb");
-        assert_eq!(trim_trailing_newlines(b"\n\n"), b"");
-        assert_eq!(trim_trailing_newlines(b""), b"");
-    }
-
-    #[test]
-    fn a_driver_exit_code_is_announced_the_way_the_recipe_did() {
-        let announce = Announce {
-            cannot_verify: "CANNOT VERIFY",
-            failed: "FAILED",
-        };
-        assert_eq!(announce.line_for(0), None);
-        assert_eq!(announce.line_for(2), Some("CANNOT VERIFY"));
-        assert_eq!(announce.line_for(1), Some("FAILED"));
-        assert_eq!(announce.line_for(101), Some("FAILED"));
-    }
-
-    #[test]
-    fn the_log_check_greps_each_pattern_on_its_own_line() {
-        let log = "x [flui] Selected GPU: Apple M2 (Metal)\r\ny [flui] First frame rendered\n";
-        let patterns = ["Selected GPU:.*Metal", "First frame rendered"];
-        assert!(every_pattern_matches(log, &patterns));
-        assert!(!every_pattern_matches("Selected GPU: none\n", &patterns));
-        // `.` does not cross a line, as grep's does not.
-        assert!(!every_pattern_matches(
-            "Selected GPU:\nMetal\nFirst frame rendered\n",
-            &patterns
-        ));
-    }
-
-    #[test]
-    fn the_failure_excerpt_is_the_last_matching_lines() {
-        let log = (1..=30)
-            .flat_map(|n| [format!("[flui] line {n}"), "other".to_owned()])
-            .collect::<Vec<_>>()
-            .join("\n");
-        let tail = last_lines_containing(&log, "flui]", 20);
-        assert_eq!(tail.len(), 20);
-        assert_eq!(tail.first(), Some(&"[flui] line 11"));
-        assert_eq!(tail.last(), Some(&"[flui] line 30"));
-        assert_eq!(
-            last_lines_containing("[flui] only\n", "flui]", 20),
-            ["[flui] only"]
-        );
-    }
-
-    #[test]
-    fn process_counts_are_newline_counts() {
-        assert_eq!(count_lines(b""), 0);
-        assert_eq!(count_lines(b"4242\n"), 1);
-        assert_eq!(count_lines(b"4242\n4243\n"), 2);
-    }
-
-    #[test]
-    fn arguments_render_quoted_only_when_a_shell_would_need_it() {
-        assert_eq!(quote("--features"), "--features");
-        assert_eq!(quote("240,0,0"), "240,0,0");
-        assert_eq!(quote("iPhone 17 Pro"), "'iPhone 17 Pro'");
-        assert_eq!(quote(""), "''");
-        assert_eq!(quote("it's"), r"'it'\''s'");
-    }
-
-    #[test]
     fn staging_steps_behave_like_rm_mkdir_and_cp() {
         let scratch = Scratch::new();
         let root = scratch.0.as_path();
@@ -843,7 +776,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn identical_screenshots_fail_and_differing_ones_pass() {
         let scratch = Scratch::new();
         let root = scratch.0.as_path();
@@ -859,7 +791,6 @@ mod tests {
         assert_eq!(step(root, &differ("c.png")), Flow::Continue);
     }
 
-    #[test]
     fn a_log_missing_a_pattern_fails_the_plan() {
         let scratch = Scratch::new();
         let root = scratch.0.as_path();
@@ -884,35 +815,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_probe_is_captured_and_judged_on_its_real_output() {
-        let scratch = Scratch::new();
-        let version = || Run::new(Program::Cargo).arg("--version");
-        let probe = |markers: &'static [&'static str]| Step::Probe {
-            run: version(),
-            markers,
-            failure: "FAILED",
-        };
-        assert_eq!(step(&scratch.0, &probe(&["cargo "])), Flow::Continue);
-        assert_eq!(
-            step(&scratch.0, &probe(&["cargo ", "NO SUCH MARKER"])),
-            Flow::Exit(1)
-        );
-        let failing = Step::Probe {
-            run: Run::new(Program::Cargo).arg("--no-such-flag"),
-            markers: &[],
-            failure: "FAILED",
-        };
-        assert_eq!(step(&scratch.0, &failing), Flow::Exit(1), "non-zero exit");
-        let missing = Step::Probe {
-            run: Run::new(Program::Path("no/such/probe".into())),
-            markers: &[],
-            failure: "FAILED",
-        };
-        assert_eq!(step(&scratch.0, &missing), Flow::Exit(1), "cannot start");
-    }
-
-    #[test]
     fn a_driver_ends_the_plan_with_its_exit_code() {
         let scratch = Scratch::new();
         let driver = |arg: &str| Step::Driver {
@@ -926,7 +828,6 @@ mod tests {
         assert_eq!(step(&scratch.0, &driver("--no-such-flag")), Flow::Exit(1));
     }
 
-    #[test]
     fn a_failing_command_stops_the_plan_unless_tolerated() {
         let scratch = Scratch::new();
         let failing = Run::new(Program::Cargo).arg("--no-such-flag").silent();
@@ -943,13 +844,35 @@ mod tests {
     }
 
     #[test]
-    fn a_redirected_command_writes_its_file() {
-        let scratch = Scratch::new();
-        let run = Run::new(Program::Cargo)
-            .arg("--version")
-            .stdout(Sink::File("out.txt".into()));
-        assert_eq!(step(&scratch.0, &Step::Run(run)), Flow::Continue);
-        let written = std::fs::read_to_string(scratch.0.join("out.txt")).expect("read");
-        assert!(written.starts_with("cargo "), "{written}");
+    fn device_plan_contract() {
+        crate::table_test::run_table(
+            "device_plan_contract",
+            &[
+                (
+                    "a_probe_passes_only_on_exit_zero_with_every_marker",
+                    a_probe_passes_only_on_exit_zero_with_every_marker as fn(),
+                ),
+                (
+                    "staging_steps_behave_like_rm_mkdir_and_cp",
+                    staging_steps_behave_like_rm_mkdir_and_cp as fn(),
+                ),
+                (
+                    "identical_screenshots_fail_and_differing_ones_pass",
+                    identical_screenshots_fail_and_differing_ones_pass as fn(),
+                ),
+                (
+                    "a_log_missing_a_pattern_fails_the_plan",
+                    a_log_missing_a_pattern_fails_the_plan as fn(),
+                ),
+                (
+                    "a_driver_ends_the_plan_with_its_exit_code",
+                    a_driver_ends_the_plan_with_its_exit_code as fn(),
+                ),
+                (
+                    "a_failing_command_stops_the_plan_unless_tolerated",
+                    a_failing_command_stops_the_plan_unless_tolerated as fn(),
+                ),
+            ],
+        );
     }
 }

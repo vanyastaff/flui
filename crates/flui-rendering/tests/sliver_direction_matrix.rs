@@ -75,8 +75,7 @@ impl RenderSliver for DirectionProbe {
 
 impl flui_foundation::Diagnosticable for DirectionProbe {}
 
-#[test]
-fn sliver_direction_matrix_eight_by_three() {
+pub(crate) fn sliver_direction_matrix_eight_by_three() {
     let cases = [
         (
             TopToBottom,

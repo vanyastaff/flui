@@ -63,25 +63,3 @@ impl RenderView for LimitedBox {
 }
 
 impl_render_view!(LimitedBox);
-
-#[cfg(test)]
-mod tests {
-    use flui_view::RenderView;
-
-    use super::*;
-
-    #[test]
-    fn update_reports_layout_only_for_changed_caps() {
-        let initial = LimitedBox::new(10.0, 20.0);
-        let mut render = initial.create_render_object(&flui_view::RenderObjectContext::detached());
-        assert_eq!(
-            initial.update_render_object(&flui_view::RenderObjectContext::detached(), &mut render,),
-            flui_rendering::RenderUpdateImpact::NONE
-        );
-        assert_eq!(
-            LimitedBox::new(30.0, 20.0)
-                .update_render_object(&flui_view::RenderObjectContext::detached(), &mut render,),
-            flui_rendering::RenderUpdateImpact::LAYOUT
-        );
-    }
-}

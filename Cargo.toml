@@ -232,9 +232,6 @@ web-time = "1.1"
 # and the `PlatformAccessibility` trait they implement is flui-semantics'.
 # One required dependency of its own (uuid), MIT OR Apache-2.0.
 accesskit = "0.25"
-# The tree model every AccessKit adapter reads through; tests use it to see
-# a node the way UI Automation, AT-SPI and NSAccessibility are handed it.
-accesskit_consumer = "0.39"
 
 # Win32 bindings: the Windows platform backend, hot-reload's library loader,
 # and xtask's UI Automation client. Each member names the API families it uses.
@@ -252,9 +249,6 @@ schemars = "1.0"
 cargo_metadata = "0.23.1"
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
-
-# BUILDER UTILITIES - Used by widgets
-bon = "3.8"
 
 # APPLE BINDINGS - the versions wgpu-hal already pins; flui-platform's macOS
 # backend and the facade's lifecycle probe both take them from here, with
@@ -461,11 +455,6 @@ insta = "1"
 # PROPERTY-BASED TESTING - invariant/roundtrip/idempotence properties over
 # generated inputs (test-minimization effort). Test-only; not compiled in release.
 proptest = "1"
-
-# PARAMETERIZED TESTING - #[case] tables replacing near-identical example
-# tests that vary only in input literals (test-minimization effort).
-# Test-only; not compiled in release.
-rstest = "0.27"
 
 # Workspace-wide lints for consistent code quality (Rust 1.74+)
 [workspace.lints.rust]
@@ -692,8 +681,6 @@ flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
 
 # === Test support (for the vertical_slice_demo acceptance test) ===
 flui-testing = { workspace = true }
-# `lay_out` for tests/todo_example.rs, which then runs in the default feature
-# set instead of only under `flui/testing`.
 flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev", features = ["testing"] }
 # Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
 insta = { workspace = true }

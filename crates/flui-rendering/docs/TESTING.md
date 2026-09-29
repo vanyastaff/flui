@@ -17,7 +17,7 @@ The module is **off by default** so it never lands in release builds.
 ```bash
 cargo test -p flui-rendering
 cargo test -p flui-objects --test render_object_harness
-cargo test -p flui-rendering --test rendering_it harness_animation
+cargo test -p flui-rendering --test rendering_it animation_pipeline
 ```
 
 ## Design
@@ -258,7 +258,7 @@ assert!((run.opacity_alpha().unwrap() - 0.5).abs() < 0.01);
 
 ### `AnimationController` integration
 
-See [`tests/harness_animation.rs`](../tests/harness_animation.rs): call
+See [`tests/animation_pipeline.rs`](../tests/animation_pipeline.rs): call
 `ctrl.tick_at(t)` then `run.advance_layout` and assert `offset` /
 `picture_bounds` each frame. Finish with `run.pump_idle_frames(2)` to prove
 the pipeline settles.
@@ -429,16 +429,15 @@ assert!(has_overflow(&run, run.id("fitted")));   // 100×100 child in 50×50 box
 ### Dogfood integration tests
 
 [`flui-objects/tests/harness_snapshot.rs`](../../flui-objects/tests/harness_snapshot.rs) covers paint-logic-heavy objects
-(not tautological single-rect tests):
+(not tautological single-rect tests) in the `paint_snapshots` test:
 
-| Test | Object | What the snapshot proves |
-|------|--------|--------------------------|
-| `snapshot_decorated_box` | `RenderDecoratedBox` | Shadow → fill → border command order |
-| `snapshot_clip_layer` | `RenderClipRect` | Clip-layer scoping (structural, not just a rect) |
-| `snapshot_opacity_layer` | `RenderOpacity` | Opacity layer alpha value (invisible to `structure()`) |
+| Snapshot | Object | What the snapshot proves |
+|----------|--------|--------------------------|
+| `colored_box` | `RenderColoredBox` | Structural paint snapshot of a plain fill |
+| `decorated_box` | `RenderDecoratedBox` | Shadow → fill → border command order |
 
 The same file's `scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded`
-(not a snapshot test) proves `RenderSliverList`'s render-side windowing math tracks scroll
+(a row of `family_sliver_lists`, not a snapshot) proves `RenderSliverList`'s render-side windowing math tracks scroll
 position and stays bounded; the paint-layer claim it replaces (bounded materialization end to
 end, through a real `ChildManager`) is covered by
 [`flui-widgets/tests/lazy_list.rs`](../../flui-widgets/tests/lazy_list.rs)

@@ -84,17 +84,9 @@ static_assertions = { workspace = true }
 # The adapter is isolated from the production realm-activation stack, but the
 # fixture tests still share assumptions about explicit install/clear pairing.
 serial_test = "4"
-# Exercises the
-# `#[derive(StatelessView, ::bon::Builder)]` attribute stack
-# (the catalog's most-common future authoring pattern). The
-# workspace already pins `bon = "3.8"`; we pull it in only at the
-# `flui-view` dev boundary so non-test builds do not link it.
-bon = { workspace = true }
 # trybuild drives the `tests/ui/` compile-fail corpus: the column! 17-children
 # case and the `#[diagnostic::on_unimplemented]` messages on the view traits.
 trybuild = { workspace = true }
-# `InMemoryClipboard`, the clipboard the `clipboard_handle` test installs.
-flui-platform-api = { workspace = true }
 
 [[test]]
 name = "view_it"

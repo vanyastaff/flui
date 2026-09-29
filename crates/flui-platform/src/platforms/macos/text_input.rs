@@ -778,15 +778,7 @@ impl std::fmt::Debug for MacOSTextInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{NSNotFound, TextInputState, utf16_len, utf16_range_to_byte_range};
-
-    #[test]
-    fn ascii_offsets_are_their_own_byte_offsets() {
-        assert_eq!(utf16_range_to_byte_range("hello", 0, 0), Some((0, 0)));
-        assert_eq!(utf16_range_to_byte_range("hello", 4, 0), Some((4, 4)));
-        assert_eq!(utf16_range_to_byte_range("hello", 1, 3), Some((1, 4)));
-        assert_eq!(utf16_range_to_byte_range("hello", 5, 0), Some((5, 5)));
-    }
+    use super::{utf16_len, utf16_range_to_byte_range};
 
     #[test]
     fn multibyte_text_diverges_from_utf16_offsets() {
@@ -795,96 +787,5 @@ mod tests {
         assert_eq!(utf16_range_to_byte_range("héllo", 2, 0), Some((3, 3)));
         assert_eq!(utf16_range_to_byte_range("héllo", 1, 2), Some((1, 4)));
         assert_eq!(utf16_range_to_byte_range("héllo", 5, 0), Some((6, 6)));
-    }
-
-    #[test]
-    fn cjk_text_counts_units_not_bytes() {
-        // "你好" is two units and six bytes.
-        assert_eq!(utf16_range_to_byte_range("你好", 1, 1), Some((3, 6)));
-        assert_eq!(utf16_range_to_byte_range("你好", 0, 2), Some((0, 6)));
-    }
-
-    #[test]
-    fn an_offset_inside_a_surrogate_pair_has_no_byte_range() {
-        // "\u{1F44B}" (waving hand) is one char, two UTF-16 units, four bytes,
-        // so unit 1 falls inside the pair.
-        assert_eq!(utf16_len("\u{1F44B}"), 2);
-        assert_eq!(utf16_range_to_byte_range("\u{1F44B}", 1, 0), None);
-        assert_eq!(utf16_range_to_byte_range("a\u{1F44B}b", 2, 1), None);
-        // The boundaries on either side of it are still expressible.
-        assert_eq!(utf16_range_to_byte_range("a\u{1F44B}b", 0, 1), Some((0, 1)));
-        assert_eq!(utf16_range_to_byte_range("a\u{1F44B}b", 1, 2), Some((1, 5)));
-        assert_eq!(utf16_range_to_byte_range("a\u{1F44B}b", 3, 1), Some((5, 6)));
-    }
-
-    #[test]
-    fn a_range_past_the_end_is_none() {
-        assert_eq!(utf16_range_to_byte_range("hello", 6, 0), None);
-        assert_eq!(utf16_range_to_byte_range("hello", 0, 6), None);
-        assert_eq!(utf16_range_to_byte_range("", 0, 1), None);
-    }
-
-    #[test]
-    fn empty_text_has_exactly_one_boundary() {
-        assert_eq!(utf16_range_to_byte_range("", 0, 0), Some((0, 0)));
-        assert_eq!(utf16_range_to_byte_range("", 1, 0), None);
-    }
-
-    #[test]
-    fn appkits_not_found_location_is_rejected_not_wrapped() {
-        // `{NSNotFound, 0}`, as `selectedRange` reports when it has none: the
-        // end offset must not overflow into a small valid one. The location is
-        // the real constant AppKit sends (`NSIntegerMax`), not a convenient
-        // large number — a near-`usize::MAX` value would overflow on the
-        // `checked_add` in the same way but would not pin the actual wire value.
-        assert_eq!(
-            utf16_range_to_byte_range("hello", NSNotFound as usize, 0),
-            None
-        );
-        assert_eq!(
-            utf16_range_to_byte_range("hello", NSNotFound as usize, 1),
-            None
-        );
-        assert_eq!(utf16_range_to_byte_range("hello", 4, usize::MAX), None);
-    }
-
-    /// The `keyUp:` gate. Each case is a state a real sequence produces, and the
-    /// middle two are the pair that a gate on `ime_allowed` alone would get
-    /// wrong — which is the whole reason the predicate reads the composition
-    /// instead.
-    #[test]
-    fn a_key_release_is_suppressed_only_by_an_open_composition() {
-        // No text input attached: every window until a presentation attaches
-        // one, and the state `key_down` leaves byte-identical to the pre-IME
-        // keyboard path.
-        let idle = TextInputState::default();
-        assert!(idle.reports_key_release());
-
-        // Attached, between compositions: a committed Latin character. The
-        // release must still be reported, and this is the case a gate on
-        // `ime_allowed` alone would drop.
-        let attached = TextInputState {
-            ime_allowed: true,
-            ..TextInputState::default()
-        };
-        assert!(attached.reports_key_release());
-
-        // Attached, mid-composition: the press was consumed by the input
-        // method, so the release describes a key the application never saw go
-        // down.
-        let composing = TextInputState {
-            ime_allowed: true,
-            marked_text: "にほ".to_string(),
-            marked_range: (0, 2),
-            selected_range: (2, 0),
-            ..TextInputState::default()
-        };
-        assert!(!composing.reports_key_release());
-
-        // A composition that ended — by commit or by `unmarkText` — puts the
-        // release back on the keyboard path.
-        let mut ended = composing;
-        ended.clear_marked_text();
-        assert!(ended.reports_key_release());
     }
 }

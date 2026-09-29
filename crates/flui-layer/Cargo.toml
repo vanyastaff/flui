@@ -34,9 +34,6 @@ bitflags = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-# Compile-time pins of the raster-boundary auto traits (`Send + Sync` on
-# `Layer`, `LayerTree`, `Scene`, `SceneSnapshot`).
-static_assertions.workspace = true
 # The `damage_diff` bench.
 criterion = { workspace = true }
 

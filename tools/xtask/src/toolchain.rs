@@ -215,14 +215,12 @@ mod tests {
         }
     }
 
-    #[test]
     fn consistent_tree_passes_and_counts_templates() {
         let report = check(&consistent()).expect("consistent");
         assert_eq!(report.channel_minor, "1.98");
         assert_eq!(report.template_count, 1);
     }
 
-    #[test]
     fn each_mismatch_names_its_source() {
         let mut sources = consistent();
         sources.cargo = "rust-version = \"1.90\"\n".to_owned();
@@ -241,7 +239,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn missing_declarations_are_errors() {
         let mut sources = consistent();
         sources.templates.clear();
@@ -254,11 +251,35 @@ mod tests {
         );
     }
 
-    #[test]
     fn unparsable_channel_is_reported() {
         let mut sources = consistent();
         sources.toolchain = "channel = \"stable\"\n".to_owned();
         let errors = check(&sources).expect_err("unparsable");
         assert!(errors[0].starts_with("could not parse"), "{errors:?}");
+    }
+
+    #[test]
+    fn toolchain_contract() {
+        crate::table_test::run_table(
+            "toolchain_contract",
+            &[
+                (
+                    "consistent_tree_passes_and_counts_templates",
+                    consistent_tree_passes_and_counts_templates as fn(),
+                ),
+                (
+                    "each_mismatch_names_its_source",
+                    each_mismatch_names_its_source as fn(),
+                ),
+                (
+                    "missing_declarations_are_errors",
+                    missing_declarations_are_errors as fn(),
+                ),
+                (
+                    "unparsable_channel_is_reported",
+                    unparsable_channel_is_reported as fn(),
+                ),
+            ],
+        );
     }
 }

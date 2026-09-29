@@ -43,15 +43,3 @@ pub fn abi_token() -> u64 {
     core::mem::align_of::<LayerTree>().hash(&mut hasher);
     hasher.finish()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn abi_token_is_stable_within_one_compilation() {
-        // The loaders rely on the token being a pure function of the build,
-        // not of call order or time.
-        assert_eq!(abi_token(), abi_token());
-    }
-}

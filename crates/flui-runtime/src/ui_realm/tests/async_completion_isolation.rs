@@ -70,8 +70,7 @@ impl flui_view::View for AsyncCaptureProbeView {
 /// with). This test proves it end to end rather than resting on
 /// that code reading alone: no fix was needed here, and this test is
 /// the evidence for that, not a description of one.
-#[test]
-fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach() {
+pub(crate) fn async_completion_after_presentation_teardown_fails_closed_no_sibling_reach() {
     let mut realm = UiRealm::for_test();
     // `realm` starts with exactly one presentation; call it "A" and
     // install a second, "B", to observe.

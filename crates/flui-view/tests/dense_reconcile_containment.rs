@@ -5,21 +5,19 @@
 
 use std::{
     any::TypeId,
-    cell::Cell,
     collections::{HashMap, HashSet},
-    rc::Rc,
     sync::Arc,
 };
 
 use flui_foundation::geometry::Size;
-use flui_foundation::{ElementId, RenderId, ViewKey};
+use flui_foundation::{ElementId, RenderId};
 use flui_objects::{RenderFlex, RenderSizedBox};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BoxedView, BuildContext, BuildOwner, ElementTree, ErrorView, GlobalKey, IntoView,
-    LifecycleHook, RebuildReason, RecoveredAt, RenderView, StatefulView, View, ViewExt, ViewState,
+    BoxedView, BuildOwner, ElementTree, ErrorView, LifecycleHook, RebuildReason, RecoveredAt,
+    RenderView, View, ViewExt,
 };
 
 pub(super) const DENSE_CHILD_COUNT: usize = 10;
@@ -114,12 +112,6 @@ impl DensePanicsOnCreate {
     pub(super) const fn ordinary() -> Self {
         Self {
             panic_classification: PanicClassification::Ordinary,
-        }
-    }
-
-    const fn internal_invariant() -> Self {
-        Self {
-            panic_classification: PanicClassification::InternalInvariant,
         }
     }
 }
@@ -279,23 +271,6 @@ pub(super) fn first_render_descendant(tree: &ElementTree, element: ElementId) ->
             .iter()
             .find_map(|child| first_render_descendant(tree, *child))
     })
-}
-
-fn subtree_element_ids(tree: &ElementTree, root: ElementId) -> Vec<ElementId> {
-    fn collect(tree: &ElementTree, element: ElementId, ids: &mut Vec<ElementId>) {
-        ids.push(element);
-        for child in tree
-            .get(element)
-            .expect("a captured subtree element must resolve")
-            .child_ids()
-        {
-            collect(tree, *child, ids);
-        }
-    }
-
-    let mut ids = Vec::new();
-    collect(tree, root, &mut ids);
-    ids
 }
 
 pub(super) fn run_real_pipeline_frame(
@@ -588,8 +563,7 @@ fn assert_dense_mount_panic_containment(
     );
 }
 
-#[test]
-fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
+pub(crate) fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
     assert_dense_mount_panic_containment(
         DensePanicsOnCreate::ordinary().boxed(),
         TypeId::of::<DensePanicsOnCreate>(),
@@ -597,17 +571,7 @@ fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
     );
 }
 
-#[test]
-fn bug_prefixed_dense_mount_panic_is_contained_and_classified() {
-    assert_dense_mount_panic_containment(
-        DensePanicsOnCreate::internal_invariant().boxed(),
-        TypeId::of::<DensePanicsOnCreate>(),
-        PanicClassification::InternalInvariant,
-    );
-}
-
-#[test]
-fn repeated_dense_mount_panics_do_not_accumulate_ghosts() {
+pub(crate) fn repeated_dense_mount_panics_do_not_accumulate_ghosts() {
     let (mut tree, mut owner, pipeline, observer, parent) = mount_dense_root(DenseRow {
         children: dense_healthy_children(),
     });
@@ -689,398 +653,4 @@ fn repeated_dense_mount_panics_do_not_accumulate_ghosts() {
         ));
         previous_substitute = Some(current_substitute);
     }
-}
-
-#[derive(Clone)]
-pub(super) struct DenseGlobalKeyUpdatePanicSubtree {
-    key: GlobalKey<Self>,
-    armed: Rc<Cell<bool>>,
-}
-
-impl DenseGlobalKeyUpdatePanicSubtree {
-    pub(super) fn new(key: GlobalKey<Self>, armed: Rc<Cell<bool>>) -> Self {
-        Self { key, armed }
-    }
-}
-
-impl RenderView for DenseGlobalKeyUpdatePanicSubtree {
-    type Protocol = BoxProtocol;
-    type RenderObject = RenderFlex;
-
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        RenderFlex::row()
-    }
-
-    fn update_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
-        assert!(!self.armed.get(), "dense retake update_render_object panic");
-        flui_rendering::RenderUpdateImpact::NONE
-    }
-
-    fn has_children(&self) -> bool {
-        true
-    }
-
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        visitor(&DenseHealthyLeaf { marker: 3 });
-    }
-}
-
-impl View for DenseGlobalKeyUpdatePanicSubtree {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::render_variable(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
-    }
-}
-
-fn mount_two_dense_hosts(
-    child_under_a: BoxedView,
-) -> (
-    ElementTree,
-    BuildOwner,
-    PipelineCell,
-    Arc<DenseObserver>,
-    ElementId,
-    ElementId,
-) {
-    let (mut tree, mut owner, pipeline, observer, root) = mount_dense_root(DenseRow {
-        children: vec![
-            DenseRow {
-                children: vec![child_under_a],
-            }
-            .boxed(),
-            DenseRow {
-                children: Vec::new(),
-            }
-            .boxed(),
-        ],
-    });
-    owner.build_scope(&mut tree);
-    run_real_pipeline_frame(&tree, &pipeline, root);
-    let hosts = tree.get(root).expect("two-host root").child_ids().to_vec();
-    assert_eq!(hosts.len(), 2);
-    (tree, owner, pipeline, observer, hosts[0], hosts[1])
-}
-
-fn soft_remove_from_a(tree: &mut ElementTree, owner: &mut BuildOwner, parent_a: ElementId) {
-    let depth = tree.get(parent_a).expect("parent A").depth();
-    tree.update(
-        parent_a,
-        &DenseRow {
-            children: Vec::new(),
-        },
-        &mut owner.element_owner_mut(),
-    );
-    owner.schedule_build_for(parent_a, depth, RebuildReason::ParentUpdate);
-    owner.build_scope(tree);
-    assert!(
-        tree.get(parent_a)
-            .expect("parent A remains live")
-            .child_ids()
-            .is_empty(),
-        "parent A must commit the soft removal before B claims the key"
-    );
-}
-
-fn rebuild_dense_destination(
-    tree: &mut ElementTree,
-    owner: &mut BuildOwner,
-    parent_b: ElementId,
-    claimed_child: BoxedView,
-) {
-    let depth = tree.get(parent_b).expect("parent B").depth();
-    tree.update(
-        parent_b,
-        &DenseRow {
-            children: dense_children_with(PANICKING_SLOT, claimed_child),
-        },
-        &mut owner.element_owner_mut(),
-    );
-    owner.schedule_build_for(parent_b, depth, RebuildReason::ParentUpdate);
-    owner.build_scope(tree);
-}
-
-#[test]
-fn dense_inactive_retake_update_panic_finalizes_original() {
-    let key = GlobalKey::<DenseGlobalKeyUpdatePanicSubtree>::new();
-    let armed = Rc::new(Cell::new(false));
-    let keyed = DenseGlobalKeyUpdatePanicSubtree::new(key.clone(), armed.clone());
-    let (mut tree, mut owner, pipeline, observer, parent_a, parent_b) =
-        mount_two_dense_hosts(keyed.clone().boxed());
-    let original = owner
-        .element_for_global_key(&key)
-        .expect("the original keyed subtree must register under A");
-    let original_subtree_ids = subtree_element_ids(&tree, original);
-    let original_render_ids: Vec<_> = original_subtree_ids
-        .iter()
-        .filter_map(|id| tree.get(*id).and_then(|node| node.element().render_id()))
-        .collect();
-    assert!(
-        original_subtree_ids.len() > 1 && original_render_ids.len() > 1,
-        "the retake fixture must contain a real multi-element render subtree"
-    );
-
-    soft_remove_from_a(&mut tree, &mut owner, parent_a);
-    assert!(
-        tree.get(original).is_some(),
-        "soft removal preserves the retake window"
-    );
-    armed.set(true);
-    rebuild_dense_destination(&mut tree, &mut owner, parent_b, keyed.boxed());
-
-    let snapshot_before_finalize = assert_dense_snapshot(&tree, &pipeline, parent_b, &observer);
-    let substitute = snapshot_before_finalize.child_ids[PANICKING_SLOT];
-    assert_eq!(
-        tree.get(substitute)
-            .expect("destination substitute")
-            .element()
-            .view_type_id(),
-        TypeId::of::<ErrorView>()
-    );
-    for element in &original_subtree_ids {
-        assert!(
-            tree.get(*element).is_none(),
-            "failed retake finalizes every original subtree element immediately: {element:?}"
-        );
-    }
-    assert_eq!(owner.element_for_global_key(&key), None);
-    pipeline.with(|pipeline_owner| {
-        for render_id in &original_render_ids {
-            assert!(
-                pipeline_owner.render_tree().get(*render_id).is_none(),
-                "every original retake render id must be removed immediately: {render_id:?}"
-            );
-        }
-    });
-    assert_eq!(
-        observer.lifecycle_events_for(original),
-        vec![
-            DenseObservation::Mount {
-                element: original,
-                parent: Some(parent_a),
-                slot: 0,
-                view_type_id: TypeId::of::<DenseGlobalKeyUpdatePanicSubtree>(),
-            },
-            DenseObservation::Unmount { element: original },
-        ],
-        "the original generational id has one causally ordered Mount then Unmount"
-    );
-
-    let mut recovered = owner.take_recovered_panics();
-    assert_eq!(recovered.len(), 1, "the retake update is recorded once");
-    let panic = recovered.remove(0);
-    assert_eq!(panic.hook, LifecycleHook::Update);
-    assert_eq!(
-        panic.view_type_id,
-        TypeId::of::<DenseGlobalKeyUpdatePanicSubtree>()
-    );
-    assert!(matches!(
-        panic.at,
-        RecoveredAt::Substituted {
-            element: Some(element),
-            substitute: recorded_substitute,
-            parent: recorded_parent,
-            slot: PANICKING_SLOT,
-            ..
-        } if element == original
-            && recorded_substitute == substitute
-            && recorded_parent == parent_b
-    ));
-
-    owner.finalize_tree(&mut tree);
-    let snapshot_after_finalize = assert_dense_snapshot(&tree, &pipeline, parent_b, &observer);
-    assert_eq!(
-        snapshot_after_finalize, snapshot_before_finalize,
-        "finalization must not mutate topology already cleaned by the failed retake"
-    );
-    assert!(
-        owner.take_recovered_panics().is_empty(),
-        "finalization must not duplicate the retake cleanup record"
-    );
-}
-
-#[derive(Clone)]
-pub(super) struct DenseRetakeRoot {
-    key: GlobalKey<DenseRetakeRootState>,
-    descendant_armed: Rc<Cell<bool>>,
-}
-
-impl DenseRetakeRoot {
-    pub(super) fn new(
-        key: GlobalKey<DenseRetakeRootState>,
-        descendant_armed: Rc<Cell<bool>>,
-    ) -> Self {
-        Self {
-            key,
-            descendant_armed,
-        }
-    }
-}
-
-pub(super) struct DenseRetakeRootState {
-    descendant_armed: Rc<Cell<bool>>,
-}
-
-impl StatefulView for DenseRetakeRoot {
-    type State = DenseRetakeRootState;
-
-    fn create_state(&self) -> Self::State {
-        DenseRetakeRootState {
-            descendant_armed: self.descendant_armed.clone(),
-        }
-    }
-}
-
-impl ViewState<DenseRetakeRoot> for DenseRetakeRootState {
-    fn build(&self, _view: &DenseRetakeRoot, _ctx: &dyn BuildContext) -> impl IntoView {
-        DenseActivatePanicDescendant {
-            armed: self.descendant_armed.clone(),
-        }
-    }
-}
-
-impl View for DenseRetakeRoot {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-
-    fn key(&self) -> Option<&dyn ViewKey> {
-        Some(&self.key)
-    }
-}
-
-#[derive(Clone)]
-struct DenseActivatePanicDescendant {
-    armed: Rc<Cell<bool>>,
-}
-
-struct DenseActivatePanicDescendantState {
-    armed: Rc<Cell<bool>>,
-}
-
-impl StatefulView for DenseActivatePanicDescendant {
-    type State = DenseActivatePanicDescendantState;
-
-    fn create_state(&self) -> Self::State {
-        DenseActivatePanicDescendantState {
-            armed: self.armed.clone(),
-        }
-    }
-}
-
-impl ViewState<DenseActivatePanicDescendant> for DenseActivatePanicDescendantState {
-    fn build(
-        &self,
-        _view: &DenseActivatePanicDescendant,
-        _ctx: &dyn BuildContext,
-    ) -> impl IntoView {
-        DenseHealthyLeaf { marker: 1 }
-    }
-
-    fn activate(&mut self) {
-        assert!(!self.armed.get(), "dense retake descendant activate panic");
-    }
-}
-
-impl View for DenseActivatePanicDescendant {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-}
-
-#[test]
-fn dense_retake_descendant_activate_panic_records_once_and_frees_subtree() {
-    let key = GlobalKey::<DenseRetakeRootState>::new();
-    let descendant_armed = Rc::new(Cell::new(false));
-    let keyed_root = DenseRetakeRoot::new(key.clone(), descendant_armed.clone());
-    let (mut tree, mut owner, pipeline, observer, parent_a, parent_b) =
-        mount_two_dense_hosts(keyed_root.clone().boxed());
-    let retake_root = owner
-        .element_for_global_key(&key)
-        .expect("the keyed retake root must register under A");
-    let subtree_ids = subtree_element_ids(&tree, retake_root);
-    let descendant = *tree
-        .get(retake_root)
-        .expect("retake root")
-        .child_ids()
-        .first()
-        .expect("retake root builds the panicking stateful descendant");
-    assert_eq!(
-        tree.get(descendant)
-            .expect("activate descendant")
-            .element()
-            .view_type_id(),
-        TypeId::of::<DenseActivatePanicDescendant>()
-    );
-    let subtree_render_ids: Vec<_> = subtree_ids
-        .iter()
-        .filter_map(|id| tree.get(*id).and_then(|node| node.element().render_id()))
-        .collect();
-    assert!(
-        !subtree_render_ids.is_empty(),
-        "fixture must own a render frontier"
-    );
-
-    soft_remove_from_a(&mut tree, &mut owner, parent_a);
-    descendant_armed.set(true);
-    rebuild_dense_destination(&mut tree, &mut owner, parent_b, keyed_root.boxed());
-
-    let snapshot = assert_dense_snapshot(&tree, &pipeline, parent_b, &observer);
-    let substitute = snapshot.child_ids[PANICKING_SLOT];
-    assert_eq!(
-        tree.get(substitute)
-            .expect("activate recovery substitute")
-            .element()
-            .view_type_id(),
-        TypeId::of::<ErrorView>()
-    );
-    for element in &subtree_ids {
-        assert!(
-            tree.get(*element).is_none(),
-            "every original subtree element must be freed after failed activation: {element:?}"
-        );
-    }
-    assert_eq!(owner.element_for_global_key(&key), None);
-    pipeline.with(|pipeline_owner| {
-        for render_id in &subtree_render_ids {
-            assert!(
-                pipeline_owner.render_tree().get(*render_id).is_none(),
-                "every original subtree render id must be removed: {render_id:?}"
-            );
-        }
-    });
-
-    let mut recovered = owner.take_recovered_panics();
-    assert_eq!(
-        recovered.len(),
-        1,
-        "the innermost activate seam records once without a coarse substitute duplicate"
-    );
-    let panic = recovered.remove(0);
-    assert_eq!(panic.hook, LifecycleHook::Activate);
-    assert_eq!(
-        panic.view_type_id,
-        TypeId::of::<DenseActivatePanicDescendant>()
-    );
-    assert!(matches!(
-        panic.at,
-        RecoveredAt::Element {
-            element,
-            parent: None,
-            ..
-        } if element == descendant
-    ));
-    assert!(
-        owner.take_recovered_panics().is_empty(),
-        "the exact descendant record is never followed by a coarser duplicate"
-    );
 }

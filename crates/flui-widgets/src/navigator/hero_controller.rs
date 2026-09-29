@@ -72,9 +72,7 @@
 //! The private surface stays out of the public API: `HeroTag`, `HeroRegistry`,
 //! `HeroScope`, `HeroHandle`, `HeroFlightManifest`, and the flight machinery live in
 //! crate-private modules, nameable only through the doc-hidden, temporary
-//! `__test_access` (ADR-0083 §4), and
-//! `navigator_tests::public_no_internal_route_stack_exports` fails if any is exported
-//! from `lib.rs` or `navigator/mod.rs`.
+//! `__test_access` (ADR-0083 §4).
 //!
 //! Cross-navigator hero matching is live: [`MeasurementPass::collect_manifests`]
 //! matches against [`ModalHandle::all_heroes`](super::modal_route::ModalHandle::all_heroes),

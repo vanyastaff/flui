@@ -45,7 +45,7 @@ use std::thread::ThreadId;
 use flui_foundation::PresentationAddress;
 use flui_painting::FontCollection;
 use flui_platform::OwnerPlatform;
-#[cfg(any(test, target_os = "android"))]
+#[cfg(target_os = "android")]
 use flui_platform::traits::WindowExecutionState;
 use flui_platform::traits::{Clipboard, PlatformWindow};
 use flui_semantics::AccessibilityFeatures;
@@ -86,13 +86,10 @@ pub(crate) struct SharedEngineServices {
     /// OS-level accessibility flags (reduced motion, high contrast, ...).
     /// Process-scoped and read-mostly — re-homed here from the retired
     /// `SemanticsBinding` singleton (see this struct's own doc comment).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "this change only creates the resolution seam; a later \
+    #[expect(
+        dead_code,
+        reason = "this change only creates the resolution seam; a later \
                       change wires the first real consumer"
-        )
     )]
     pub(super) accessibility_features: RwLock<AccessibilityFeatures>,
     /// The app's font collection. Every realm built on this thread gets a
@@ -102,34 +99,6 @@ pub(crate) struct SharedEngineServices {
 }
 
 impl SharedEngineServices {
-    /// Current accessibility features (by value — mirrors the retired
-    /// `SemanticsBinding::accessibility_features` accessor's shape).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "this change only creates the resolution seam; a later \
-                      change wires the first real consumer"
-        )
-    )]
-    pub(super) fn accessibility_features(&self) -> AccessibilityFeatures {
-        *self.accessibility_features.read()
-    }
-
-    /// Updates the accessibility features, typically called by the
-    /// platform embedder when OS accessibility settings change.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "this change only creates the resolution seam; a later \
-                      change wires the first real consumer"
-        )
-    )]
-    pub(super) fn set_accessibility_features(&self, features: AccessibilityFeatures) {
-        *self.accessibility_features.write() = features;
-    }
-
     /// Resolves the process-level services that survive a scheduler that is
     /// no longer process-global. Called once per owner thread
     /// (`ensure_services`'s `OnceCell::get_or_init`), the same steal-proof,
@@ -345,7 +314,7 @@ enum RealmMapMutation {
     )]
     Install(RealmId, Box<RealmSlot>, Arc<dyn PlatformWindow>),
     /// Remove one realm from the registry (a window closing while siblings
-    /// stay open — see `uninstall_platform_realm` in `super::runner`).
+    /// stay open — see `request_realm_uninstall` in `super::runner`).
     Uninstall(RealmId),
 }
 
@@ -709,7 +678,7 @@ pub(crate) struct AppRuntime {
     /// ignored (with a warning) if execution services already exist.
     pending_host_executors: Option<HostExecutors>,
     /// Whether a redraw has been requested since the last
-    /// [`Self::mark_rendered`] — the loop-scoped half of the retired
+    /// `mark_rendered` — the loop-scoped half of the retired
     /// `AppBinding.needs_redraw` flag, re-homed here as part of `AppBinding`'s
     /// dissolution. Loop-scoped, not realm-scoped: a hot-restart that tears
     /// down and reinstalls a realm on this same thread must not lose a
@@ -867,16 +836,6 @@ impl AppRuntime {
             .get_or_init(SharedEngineServices::resolve)
             .fonts
             .clone()
-    }
-
-    /// Test-only introspection: whether `SharedEngineServices` has been
-    /// resolved yet. `services` itself is private to this module, and
-    /// `runner.rs`'s tests (a sibling module tree, with the real
-    /// `install_owner_platform`/`install_platform_realm` bootstrap) need to
-    /// assert on it without reaching into a private field directly.
-    #[cfg(test)]
-    pub(super) fn services_resolved(&self) -> bool {
-        self.services.get().is_some()
     }
 
     /// Stash the host's executors ahead of the first realm install (the
@@ -1457,7 +1416,7 @@ impl AppRuntime {
     /// Owner-thread poke used only to continue bounded owner work. Unlike a
     /// frame wake it does not mark the realm dirty; operations in the batch
     /// request a frame themselves when their effects require one.
-    #[cfg(any(test, target_os = "android"))]
+    #[cfg(target_os = "android")]
     pub(super) fn owner_turn_window_poke(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
         let redraw_window = Arc::clone(&self.redraw_window);
         Arc::new(move || {
@@ -1527,32 +1486,6 @@ impl AppRuntime {
     )]
     pub(super) fn request_redraw(&self) {
         self.needs_redraw.store(true, Ordering::Relaxed);
-    }
-
-    /// Whether a redraw is needed.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "production reads go through UiRealm::needs_redraw, sharing \
-                      this same needs_redraw atomic via needs_redraw_handle"
-        )
-    )]
-    pub(super) fn needs_redraw(&self) -> bool {
-        self.needs_redraw.load(Ordering::Relaxed)
-    }
-
-    /// Mark the frame as rendered, clearing the redraw flag.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "production clears go through UiRealm::mark_rendered, sharing \
-                      this same needs_redraw atomic via needs_redraw_handle"
-        )
-    )]
-    pub(super) fn mark_rendered(&self) {
-        self.needs_redraw.store(false, Ordering::Relaxed);
     }
 
     /// A clone of the `needs_redraw` flag, for a `UiRealm`'s own
@@ -1678,17 +1611,6 @@ impl AppRuntime {
         }
         clipboard
     }
-
-    /// Test-only: a clone of the exact `Arc<Mutex<...>>` slot [`Self::clipboard`]
-    /// reads from. A fake `Clipboard` stored in this slot must be `'static +
-    /// Send + Sync`, so it cannot safely borrow the owner `AppRuntime` back
-    /// through the slot it occupies; cloning the slot instead lets a test
-    /// reproduce [`Self::clipboard`]'s exact lock-then-clone-then-drop
-    /// sequence without a self-reference.
-    #[cfg(test)]
-    pub(super) fn platform_clipboard_slot(&self) -> Arc<Mutex<Option<Arc<dyn Clipboard>>>> {
-        Arc::clone(&self.platform_clipboard)
-    }
 }
 
 impl Drop for AppRuntime {
@@ -1705,567 +1627,18 @@ impl Drop for AppRuntime {
 }
 
 #[cfg(all(test, not(target_os = "ios")))]
-mod app_runtime_tests {
-    use std::num::NonZeroU32;
-
+mod font_collection_tests {
     use super::*;
 
+    /// Every realm builds its `TextContext` over the app's one collection
+    /// (ADR-0092 §2): repeated calls hand out clones of the same one, never
+    /// a fresh collection per realm.
     #[test]
-    fn app_runtime_owns_registry_and_realm_slot() {
+    fn font_collection_is_the_one_the_services_own() {
         let runtime = AppRuntime::new();
-
-        assert!(
-            runtime.realms.is_empty(),
-            "a freshly constructed AppRuntime hosts no realm yet"
-        );
-        assert!(
-            runtime.owner_platform.is_none(),
-            "a freshly constructed AppRuntime hosts no owner platform yet"
-        );
-        assert!(
-            runtime.registry.is_empty(),
-            "AppRuntime owns the WindowRegistry directly -- a fresh one has no mappings"
-        );
-        assert!(
-            runtime
-                .realms
-                .get(&RealmId::new_gen(0, NonZeroU32::new(1).unwrap()))
-                .is_none(),
-            "the RealmId-keyed registry must return None when no realm is installed"
-        );
-    }
-
-    /// `AppRuntime::new` must NOT resolve `SharedEngineServices` -- that is
-    /// the entire point of moving resolution behind `OnceCell` +
-    /// `ensure_services`. Red before the fix: `new()` used to call
-    /// `SharedEngineServices::resolve()` directly, so `services` was always
-    /// `Some` immediately after construction; this assertion would have
-    /// failed against that shape.
-    #[test]
-    fn app_runtime_new_does_not_resolve_services() {
-        let runtime = AppRuntime::new();
-
-        assert!(
-            runtime.services.get().is_none(),
-            "AppRuntime::new must not resolve SharedEngineServices -- doing so \
-             makes every first touch of the TLS slot (including an \
-             OwnerHostClearGuard::drop during an unwind) run singleton \
-             construction and full system-font enumeration"
-        );
-    }
-
-    /// `ensure_services` must actually populate both `SharedEngineServices`
-    /// fields with live, usable handles -- reading each one here (rather
-    /// than only asserting the struct compiles) is what proves the
-    /// resolution seam works, not just that it type-checks. There is no
-    /// `scheduler` field to read any more: each realm now owns its own
-    /// `UpdateScheduler` (see `installed_realm_phase_tests`, below).
-    #[test]
-    fn ensure_services_resolves_both_and_caches_them() {
-        let mut runtime = AppRuntime::new();
-
-        let services = runtime.ensure_services();
-        let _accessibility_features = services.accessibility_features();
-
-        assert!(
-            runtime.services.get().is_some(),
-            "ensure_services must cache the resolved value, not re-resolve on \
-             every call"
-        );
         assert!(
             FontCollection::ptr_eq(&runtime.font_collection(), &runtime.font_collection()),
             "every realm must get the app's one font collection, not a fresh one per call"
-        );
-    }
-
-    /// `accessibility_features` is now a value `SharedEngineServices` owns
-    /// directly (no `SemanticsBinding` singleton underneath it any more) --
-    /// a set/get round-trip is the seam's own regression guard.
-    #[test]
-    fn set_accessibility_features_round_trips_through_shared_engine_services() {
-        use flui_semantics::AccessibilityFeatures;
-
-        let mut runtime = AppRuntime::new();
-        let services = runtime.ensure_services();
-
-        assert_eq!(
-            services.accessibility_features(),
-            AccessibilityFeatures::default(),
-            "a freshly resolved SharedEngineServices starts with default accessibility features"
-        );
-
-        services.set_accessibility_features(AccessibilityFeatures {
-            reduce_motion: true,
-            ..Default::default()
-        });
-
-        assert!(services.accessibility_features().reduce_motion);
-    }
-
-    /// A `OwnerHostClearGuard`-shaped operation that touches ONLY
-    /// `owner_platform` -- never `ensure_services` -- must leave `services`
-    /// unresolved. Mirrors `OwnerHostClearGuard::drop`'s actual field touch
-    /// (`runner.rs`) without depending on `runner.rs`'s platform machinery.
-    #[test]
-    fn guard_only_arm_and_drop_cycle_never_resolves_services() {
-        let mut runtime = AppRuntime::new();
-
-        // The clear-guard's drop body: `self.owner_platform.take();` and
-        // nothing else.
-        runtime.owner_platform.take();
-
-        assert!(
-            runtime.services.get().is_none(),
-            "a guard-only arm/drop cycle (owner_platform touch only) must \
-             never resolve SharedEngineServices -- that would reintroduce \
-             the double-panic-during-unwind hazard this shape closes"
-        );
-    }
-}
-
-#[cfg(all(test, not(target_os = "ios")))]
-mod wake_and_clipboard_tests {
-    use super::*;
-
-    /// `wake_frame` must set `needs_redraw` even when no window is stored
-    /// (the window lock is a leaf that is independently optional).
-    #[test]
-    fn wake_frame_sets_needs_redraw_without_window() {
-        let runtime = AppRuntime::new();
-        runtime.mark_rendered();
-        assert!(!runtime.needs_redraw(), "precondition: no redraw pending");
-
-        runtime.wake_frame();
-
-        assert!(
-            runtime.needs_redraw(),
-            "wake_frame must set needs_redraw even without an active window"
-        );
-    }
-
-    /// `wake_frame` must call `PlatformWindow::request_redraw` when a window
-    /// is installed.
-    #[test]
-    fn wake_frame_calls_platform_request_redraw() {
-        use flui_foundation::geometry::Size;
-
-        let window = crate::app::window_test_support::TestWindow::new()
-            .with_sizes(Size::new(800, 600), Size::new(800.0, 600.0));
-        let redraw_count = window.redraw_calls_handle();
-
-        let runtime = AppRuntime::new();
-        runtime.mark_rendered();
-        runtime.set_redraw_window(Arc::new(window));
-
-        runtime.wake_frame();
-
-        assert!(runtime.needs_redraw(), "wake_frame must set needs_redraw");
-        assert_eq!(
-            redraw_count.load(Ordering::Relaxed),
-            1,
-            "wake_frame must call PlatformWindow::request_redraw exactly once"
-        );
-    }
-
-    /// A continuation actuator may acknowledge only a native callback that
-    /// the platform can actually deliver. Android consumes redraw flags while
-    /// paused, so accepting a suspended window would strand the carried batch.
-    #[test]
-    fn owner_turn_poke_refuses_suspended_window_before_acknowledging() {
-        use std::sync::atomic::AtomicUsize;
-
-        let window = crate::app::window_test_support::headless_test_window();
-        let mock = window
-            .as_any()
-            .downcast_ref::<flui_platform::MockWindow>()
-            .expect("headless platform windows are MockWindow values");
-        let frame_requests = Arc::new(AtomicUsize::new(0));
-        let observed = Arc::clone(&frame_requests);
-        window.on_request_frame(Box::new(move || {
-            observed.fetch_add(1, Ordering::Relaxed);
-        }));
-
-        let runtime = AppRuntime::new();
-        runtime.set_redraw_window(Arc::clone(&window));
-        let poke = runtime.owner_turn_window_poke();
-
-        mock.simulate_execution_state(WindowExecutionState::Suspended);
-        assert!(
-            !poke(),
-            "suspended native execution cannot accept a continuation"
-        );
-        assert_eq!(frame_requests.load(Ordering::Relaxed), 0);
-
-        mock.simulate_execution_state(WindowExecutionState::Running);
-        assert!(poke(), "running native execution can accept a continuation");
-        assert_eq!(frame_requests.load(Ordering::Relaxed), 1);
-    }
-
-    /// The frame wake pokes the platform window from whatever thread completed
-    /// the future — the violation of `PlatformWindow::request_redraw`'s
-    /// owner-thread rule that issue #949 is about, made executable.
-    ///
-    /// **This test is green because the defect is present.** It pins the
-    /// current behaviour, not the desired one. `frame_wake_callback` is
-    /// deliberately `Send + Sync` and is installed as the scheduler's
-    /// `on_frame_scheduled` hook and handed to spawned futures' wakers, so in
-    /// production this poke lands on an executor thread; on the macOS backend
-    /// that reaches `-[NSView setNeedsDisplay:]` off the main thread, which is
-    /// what makes `MacOSWindow`'s `unsafe impl Send` justification untrue.
-    ///
-    /// When the `PlatformProxy` redraw verb lands (ADR-0045 decision 5, scoped
-    /// with #559/#551) this test must be **re-targeted, not deleted** — it is
-    /// the mechanical trigger that makes the fix visible here instead of
-    /// silently passing either way. It can fail in two shapes, and each
-    /// assertion below says which: the poke arrives on the owner thread
-    /// (invert the thread assertion), or no direct poke happens at all because
-    /// the worker posted to the proxy (re-point the test at the proxy).
-    ///
-    /// The sibling `wake_frame_calls_platform_request_redraw` covers the
-    /// same-thread call; a counter alone cannot distinguish the two, which is
-    /// why `TestWindow` records the calling thread.
-    #[test]
-    fn the_frame_wake_pokes_the_window_from_the_thread_that_fired_it() {
-        use flui_foundation::geometry::Size;
-
-        let window = crate::app::window_test_support::TestWindow::new()
-            .with_sizes(Size::new(800, 600), Size::new(800.0, 600.0));
-        let redraw_threads = window.redraw_threads_handle();
-
-        let runtime = AppRuntime::new();
-        runtime.set_redraw_window(Arc::new(window));
-
-        // The production shape: the `Send + Sync` closure, fired from a thread
-        // that is not the one owning the runtime.
-        let wake = runtime.frame_wake_callback();
-        let worker = std::thread::spawn(move || {
-            wake();
-            std::thread::current().id()
-        });
-        let worker_id = worker.join().expect("the wake must not panic off-thread");
-
-        let observed = redraw_threads.lock().clone();
-        assert_eq!(
-            observed.len(),
-            1,
-            "the wake must poke the installed window exactly once. A 0 here is \
-             the OTHER way the fix shows up: the worker posted to the proxy \
-             instead of poking, or got `Unsupported` back. That is #949 \
-             progressing, not a regression -- re-target this test at the proxy \
-             rather than restoring the direct poke."
-        );
-        assert_eq!(
-            observed[0], worker_id,
-            "TODAY the window is poked on the firing thread, not the owner \
-             thread -- this is issue #949's defect, pinned deliberately. If \
-             this now fails because the poke arrived on the owner thread, the \
-             relay has landed: invert this assertion rather than restoring it."
-        );
-    }
-
-    /// `AppRuntime::clipboard()` reaching the platform clipboard installed
-    /// via `set_platform_clipboard` — migrated from the retired
-    /// `AppBinding`'s test module.
-    #[test]
-    fn app_runtime_clipboard_reaches_the_installed_platform_clipboard() {
-        let runtime = AppRuntime::new();
-        assert!(
-            runtime.clipboard().is_none(),
-            "no platform installed yet must read back as None"
-        );
-
-        let clipboard = flui_platform::headless_platform().clipboard();
-        runtime.set_platform_clipboard(Arc::clone(&clipboard));
-
-        let reached = runtime
-            .clipboard()
-            .expect("set_platform_clipboard must make the clipboard reachable");
-        reached.write_text("clipboard-reachability".to_string());
-
-        assert_eq!(
-            runtime
-                .clipboard()
-                .expect("still installed")
-                .read_text()
-                .as_deref(),
-            Some("clipboard-reachability"),
-            "AppRuntime::clipboard() must reach through to the SAME platform \
-             clipboard instance set_platform_clipboard installed"
-        );
-    }
-
-    #[test]
-    fn clipboard_with_no_platform_installed_is_none_not_a_panic() {
-        let runtime = AppRuntime::new();
-        assert!(runtime.clipboard().is_none());
-    }
-
-    /// Teardown symmetry: after `clear_platform_clipboard`, the slot reads
-    /// back `None` again.
-    #[test]
-    fn clear_platform_clipboard_removes_the_installed_clipboard() {
-        let runtime = AppRuntime::new();
-        runtime.set_platform_clipboard(flui_platform::headless_platform().clipboard());
-        assert!(runtime.clipboard().is_some());
-
-        runtime.clear_platform_clipboard();
-
-        assert!(
-            runtime.clipboard().is_none(),
-            "clear_platform_clipboard must remove the installed clipboard"
-        );
-    }
-
-    /// The last-resort `Drop` clear: dropping an `AppRuntime` with a
-    /// clipboard still installed must not panic, and must clear the slot.
-    #[test]
-    fn drop_clears_the_installed_clipboard_as_a_last_resort() {
-        let runtime = AppRuntime::new();
-        let slot = runtime.platform_clipboard_slot();
-        runtime.set_platform_clipboard(flui_platform::headless_platform().clipboard());
-        assert!(slot.lock().is_some());
-
-        drop(runtime);
-
-        assert!(
-            slot.lock().is_none(),
-            "Drop for AppRuntime must clear the clipboard slot as a last resort"
-        );
-    }
-
-    /// A reentrant read through the exact same slot must not deadlock — the
-    /// clone-then-drop-guard discipline `clipboard()` follows.
-    #[test]
-    fn clipboard_reentrant_read_does_not_deadlock() {
-        use std::sync::mpsc;
-        use std::time::Duration;
-
-        struct ReentrantClipboard {
-            slot: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
-        }
-
-        impl Clipboard for ReentrantClipboard {
-            fn read_text(&self) -> Option<String> {
-                let reentered = self.slot.lock().clone();
-                assert!(
-                    reentered.is_some(),
-                    "reentrant read through the same slot must still see the installed clipboard"
-                );
-                Some("reentrant".to_string())
-            }
-
-            fn write_text(&self, _text: String) {}
-        }
-
-        let (result_tx, result_rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let runtime = AppRuntime::new();
-            let slot = runtime.platform_clipboard_slot();
-            runtime.set_platform_clipboard(Arc::new(ReentrantClipboard { slot }));
-
-            let reached = runtime.clipboard().expect("clipboard installed above");
-            let text = reached.read_text();
-            let _ = result_tx.send(text);
-        });
-
-        let text = result_rx.recv_timeout(Duration::from_secs(5)).expect(
-            "AppRuntime::clipboard() deadlocked: a reentrant read_text call must not block on \
-             the platform_clipboard lock it itself just released",
-        );
-        assert_eq!(text.as_deref(), Some("reentrant"));
-    }
-
-    /// `AppRuntime::frame_wake_callback()` must be usable as the install-time
-    /// `Send + Sync` handle wired onto a scheduler's `on_frame_scheduled`
-    /// hook (what `UiRealm::construct` does against the realm's own
-    /// `UpdateScheduler`, using the same `wake` its presentation and command
-    /// sender carry), never a callback that re-resolves this thread-local
-    /// `AppRuntime` when the hook fires.
-    ///
-    /// This test owns only the *handle* half of that contract: that the
-    /// callback survives being fired from a foreign thread. It deliberately
-    /// wires its own stand-in scheduler, so it says nothing about whether
-    /// production installs the hook at all — `UiRealm`'s
-    /// `a_scheduler_frame_request_reaches_the_realms_platform_wake` and its
-    /// cross-thread sibling own that half, through a realm built by the real
-    /// constructor.
-    ///
-    /// Proof shape: wire the handle onto a scheduler built right here (a
-    /// stand-in for a realm's own), spawn a task on it, capture its `Waker`,
-    /// then fire that `Waker` from an OS thread that never touches `runtime`
-    /// or `APP_RUNTIME` at all — and observe `needs_redraw` flip on the
-    /// ORIGINAL runtime anyway. A hook built by re-resolving `APP_RUNTIME` at
-    /// fire time instead of capturing this `Send` handle would see an empty
-    /// thread-local on the foreign thread and never flip this flag — the
-    /// revert recipe for this test. Presentation lifecycle reconciliation
-    /// uses the same captured wake path when restoring frame eligibility.
-    #[test]
-    fn frame_wake_callback_survives_a_cross_thread_fire_once_wired_to_a_scheduler() {
-        use std::sync::mpsc;
-        use std::task::Waker;
-        use std::time::Duration;
-
-        let runtime = AppRuntime::new();
-        assert!(!runtime.needs_redraw(), "precondition: no redraw pending");
-
-        // Stand-in for a realm's own scheduler. In production `UiRealm::
-        // construct` performs this same wiring with the realm's `wake`.
-        let scheduler = flui_scheduler::UpdateScheduler::new();
-        scheduler.set_on_frame_scheduled(Some(runtime.frame_wake_callback()));
-
-        let stored_waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
-        let stored_for_task = Arc::clone(&stored_waker);
-        let _token = scheduler.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-            let _prev = stored_for_task.lock().replace(cx.waker().clone());
-            std::task::Poll::<()>::Pending
-        })));
-
-        // `spawn_local` itself already requested (and thus already woke) a
-        // frame; consume that pending flag as a real frame would, so the
-        // cross-thread wake below is the false->true edge under test.
-        scheduler.handle_begin_frame(flui_scheduler::Instant::now());
-        scheduler.drive_async_tasks();
-        runtime.mark_rendered();
-        assert!(
-            !runtime.needs_redraw(),
-            "consuming the spawn-time wake must not leave a stale flag"
-        );
-
-        let waker = stored_waker
-            .lock()
-            .clone()
-            .expect("waker stored by the poll above");
-
-        let (fired_tx, fired_rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            // Deliberately touches nothing but the waker itself: no
-            // `runtime`, no `APP_RUNTIME`, no thread-local scheduler lookup
-            // on this thread.
-            waker.wake();
-            let _ = fired_tx.send(());
-        });
-        fired_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("the foreign thread must be able to fire the waker without blocking");
-
-        assert!(
-            runtime.needs_redraw(),
-            "the wake hook wired onto the scheduler must be a Send handle captured \
-             at install time, not one resolved from a thread-local at fire time -- a foreign \
-             OS thread has no such thread-local to resolve"
-        );
-    }
-}
-
-#[cfg(test)]
-mod execution_wiring_tests {
-    use super::*;
-    use flui_runtime::execution::DeterministicExecutors;
-
-    #[test]
-    fn ensure_execution_defaults_to_owned_pools() {
-        let mut runtime = AppRuntime::new();
-        assert!(
-            runtime.execution().is_none(),
-            "nothing resolved before ensure"
-        );
-        let services = runtime.ensure_execution();
-        assert!(
-            services.owns_default_pools(),
-            "with no stashed host executors, the runtime owns the default pools"
-        );
-    }
-
-    /// The injection order the bootstrap relies on: a host bundle stashed
-    /// BEFORE the first `ensure_execution` makes the resolved services route
-    /// to the host — the default pools are never constructed.
-    #[test]
-    fn stashed_host_executors_win_over_default_pools() {
-        let deterministic = DeterministicExecutors::new();
-        let mut runtime = AppRuntime::new();
-        runtime.install_host_executors(deterministic.host_executors());
-        let services = runtime.ensure_execution();
-        assert!(
-            !services.owns_default_pools(),
-            "a stashed host bundle must be the resolved backend"
-        );
-        assert!(!services.default_pools_started());
-
-        // Round-trip: work spawned through the resolved services runs on
-        // the injected executor, when IT is driven.
-        let ran = std::sync::Arc::new(AtomicBool::new(false));
-        let ran_for_job = std::sync::Arc::clone(&ran);
-        services
-            .spawn_compute(Box::new(move || {
-                ran_for_job.store(true, Ordering::Release);
-            }))
-            .expect("spawn must be admitted");
-        assert!(!ran.load(Ordering::Acquire));
-        deterministic.run_until_idle();
-        assert!(ran.load(Ordering::Acquire));
-    }
-
-    /// A bundle arriving after resolution is ignored, never a silent rebuild
-    /// that would strand running pools.
-    #[test]
-    fn late_host_executors_are_ignored() {
-        let mut runtime = AppRuntime::new();
-        let _ = runtime.ensure_execution();
-        runtime.install_host_executors(DeterministicExecutors::new().host_executors());
-        let services = runtime.ensure_execution();
-        assert!(
-            services.owns_default_pools(),
-            "executors injected after resolution must not replace the live backend"
-        );
-    }
-
-    /// `shutdown_execution` shuts the services down AND clears the slot,
-    /// so the next loop on this thread re-resolves fresh, working services
-    /// — including honoring a host bundle stashed for that next loop. A
-    /// shutdown that left the dead instance in place would refuse every
-    /// spawn of the second loop and silently ignore its injected
-    /// executors.
-    #[test]
-    fn shutdown_execution_resets_the_slot_for_a_later_loop() {
-        let mut runtime = AppRuntime::new();
-        let _ = runtime.ensure_execution();
-        runtime.shutdown_execution(std::time::Duration::from_secs(5));
-        assert!(
-            runtime.execution().is_none(),
-            "loop-exit shutdown must clear the slot, not leave a dead instance"
-        );
-
-        // "Second loop": a fresh install with its own injected executors.
-        let deterministic = DeterministicExecutors::new();
-        runtime.install_host_executors(deterministic.host_executors());
-        let services = runtime.ensure_execution();
-        assert!(
-            !services.owns_default_pools(),
-            "the second loop's host bundle must be honored, not ignored as late"
-        );
-        let ran = std::sync::Arc::new(AtomicBool::new(false));
-        let ran_for_job = std::sync::Arc::clone(&ran);
-        services
-            .spawn_compute(Box::new(move || {
-                ran_for_job.store(true, Ordering::Release);
-            }))
-            .expect("the second loop's admission must be open");
-        deterministic.run_until_idle();
-        assert!(ran.load(Ordering::Acquire));
-    }
-
-    /// A host stash the exiting loop never resolved is discarded at
-    /// shutdown: injection is per-run configuration, and the next run
-    /// stashes its own.
-    #[test]
-    fn shutdown_execution_discards_an_unresolved_stash() {
-        let mut runtime = AppRuntime::new();
-        runtime.install_host_executors(DeterministicExecutors::new().host_executors());
-        runtime.shutdown_execution(std::time::Duration::from_secs(5));
-        let services = runtime.ensure_execution();
-        assert!(
-            services.owns_default_pools(),
-            "a stash for a torn-down loop must not leak into the next loop's resolution"
         );
     }
 }
@@ -2363,37 +1736,5 @@ mod service_lifecycle_wiring_tests {
             exit,
             "a completed keep-alive service must not hold the loop"
         );
-    }
-
-    /// `shutdown_lifecycles` delivers the staged shutdown through the
-    /// runtime seam: the service observes cancellation, flushes, and the
-    /// evidence says every service completed.
-    #[test]
-    fn shutdown_lifecycles_cancels_and_joins_registered_services() {
-        let mut runtime = AppRuntime::new();
-        let flushed = Arc::new(AtomicBool::new(false));
-        let flushed_in_service = Arc::clone(&flushed);
-        runtime
-            .start_service(&ServiceDefinition::new(
-                "flushing",
-                ServiceLifetime::KeepsAppAlive,
-                move |context| {
-                    let signal = context.cancellation().clone();
-                    let flushed = Arc::clone(&flushed_in_service);
-                    Box::pin(async move {
-                        signal.cancelled().await;
-                        flushed.store(true, Ordering::Release);
-                    })
-                },
-            ))
-            .expect("service must start");
-
-        let report = runtime.shutdown_lifecycles(std::time::Duration::from_secs(10));
-        assert!(report.all_completed(), "report: {report:?}");
-        assert!(
-            flushed.load(Ordering::Acquire),
-            "the service must get its flush window before shutdown_lifecycles returns"
-        );
-        runtime.shutdown_execution(std::time::Duration::from_secs(5));
     }
 }

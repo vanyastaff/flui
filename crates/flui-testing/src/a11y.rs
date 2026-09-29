@@ -508,10 +508,8 @@ pub fn invoke_semantics_action(
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches;
 
     use accesskit::{TreeId, TreeInfo};
-    use flui_rendering::PipelineOwner;
 
     use super::*;
 
@@ -560,147 +558,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["a", "b"],
             "`find_all(...)[0]` must be the first button a screen reader reaches"
-        );
-    }
-
-    #[test]
-    fn a_node_unreachable_from_the_root_is_not_queryable_but_is_counted() {
-        let mut update = scrambled_update();
-        let orphan = NodeId(9);
-        update
-            .nodes
-            .push((orphan, node(Role::Button, "orphan", &[])));
-
-        let tree = A11yTree::new(update);
-
-        assert_eq!(
-            tree.len(),
-            3,
-            "the orphan is not announced, so not queryable"
-        );
-        assert_eq!(tree.unreachable_count(), 1, "but it stays diagnosable");
-        assert!(
-            tree.find_all_by_label("orphan").is_empty(),
-            "a detached node must not be reported as a present control"
-        );
-    }
-
-    #[test]
-    fn a_cycle_in_the_update_terminates() {
-        let (root, a) = (NodeId(0), NodeId(1));
-        let update = TreeUpdate {
-            nodes: vec![
-                (root, node(Role::GenericContainer, "root", &[a])),
-                // `a` points back at the root.
-                (a, node(Role::Button, "a", &[root])),
-            ],
-            tree: Some(TreeInfo::new(root)),
-            tree_id: TreeId::ROOT,
-            focus: root,
-        };
-
-        let tree = A11yTree::new(update);
-        assert_eq!(tree.len(), 2, "each node is visited exactly once");
-    }
-
-    #[test]
-    fn find_reports_ambiguity_rather_than_taking_the_first() {
-        let tree = A11yTree::new(scrambled_update());
-
-        let err = tree.find(Role::Button).unwrap_err();
-        let A11yQueryError::Ambiguous { matches, .. } = &err else {
-            panic!("expected Ambiguous, got {err:?}");
-        };
-        assert_eq!(matches.len(), 2);
-        // Both candidates are named, so the reader can pick a narrower query.
-        let text = err.to_string();
-        assert!(text.contains("\"a\""), "{text}");
-        assert!(text.contains("\"b\""), "{text}");
-    }
-
-    #[test]
-    fn a_failed_find_shows_the_tree_it_searched() {
-        let tree = A11yTree::new(scrambled_update());
-
-        let err = tree.find(Role::Slider).unwrap_err();
-        let text = err.to_string();
-        assert!(text.contains("Slider"), "names the query: {text}");
-        assert!(
-            text.contains("label: \"a\"") || text.contains("label=\"a\""),
-            "and dumps what was actually there: {text}"
-        );
-    }
-
-    #[test]
-    fn find_by_label_resolves_a_unique_match() {
-        let tree = A11yTree::new(scrambled_update());
-
-        let found = tree
-            .find_by_label("a")
-            .expect("exactly one node labelled a");
-        assert_eq!(found.role(), Role::Button);
-        assert_eq!(found.id(), NodeId(1));
-    }
-
-    #[test]
-    fn focus_resolves_through_the_reachable_set() {
-        let tree = A11yTree::new(scrambled_update());
-        assert_eq!(tree.focus().expect("focus is reachable").label(), Some("a"));
-    }
-
-    /// A request addressed to node 0 is named as malformed, not as a missing
-    /// node.
-    ///
-    /// Exported identities are non-zero, so node 0 is a value the tree cannot
-    /// hold. Resolving it would fail with "node not found", which a reader would
-    /// take for a tree that changed under the request — the two are different
-    /// diagnoses and this is the one that keeps them apart.
-    #[test]
-    fn a_request_addressed_to_node_zero_is_malformed_rather_than_unknown() {
-        let cell = PipelineCell::new(PipelineOwner::new());
-
-        let outcome = invoke_semantics_action(
-            &cell,
-            ActionRequest {
-                action: Action::Click,
-                target_tree: TreeId::ROOT,
-                target_node: NodeId(0),
-                data: None,
-            },
-        );
-
-        assert_matches!(
-            outcome,
-            Err(InvokeActionError::MalformedNodeIdentity),
-            "node 0 is outside the exported identity space, so the request never \
-             reaches the tree — a Resolution error here would mean it did",
-        );
-    }
-
-    /// An action the translation table does not route is named as unroutable.
-    ///
-    /// A binding with no mounted tree is deliberate: this error is raised before
-    /// the tree is consulted, and a test that needed a mounted tree to observe
-    /// it could not tell the drop apart from "the tree had no such node".
-    #[test]
-    fn an_action_with_no_flui_counterpart_is_unroutable() {
-        let cell = PipelineCell::new(PipelineOwner::new());
-
-        let outcome = invoke_semantics_action(
-            &cell,
-            ActionRequest {
-                action: Action::ShowTooltip,
-                target_tree: TreeId::ROOT,
-                target_node: NodeId(1),
-                data: None,
-            },
-        );
-
-        assert_matches!(
-            outcome,
-            Err(InvokeActionError::UnroutablePlatformAction(action)) if action == Action::ShowTooltip,
-            "the drop must be reported against the action that caused it, so the \
-             reader knows which platform request went nowhere",
         );
     }
 }

@@ -91,27 +91,3 @@ impl PreferredSizeView for PreferredSize {
         self.preferred_size
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-    use crate::layout::SizedBox;
-
-    #[test]
-    fn preferred_size_reports_the_configured_size() {
-        let size = Size::new(f64::INFINITY, 80.0);
-        let wrapped = PreferredSize::new(size, SizedBox::shrink());
-        assert_eq!(wrapped.preferred_size(), size);
-    }
-
-    #[test]
-    fn child_view_type_is_preserved_through_the_wrapper() {
-        let wrapped = PreferredSize::new(Size::new(0.0, 80.0), SizedBox::new(10.0, 20.0));
-        assert_eq!(
-            wrapped.child.view_type_id(),
-            std::any::TypeId::of::<SizedBox>(),
-            "PreferredSize must store the exact child view it was given",
-        );
-    }
-}

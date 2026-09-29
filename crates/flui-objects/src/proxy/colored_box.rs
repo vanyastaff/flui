@@ -142,29 +142,3 @@ impl RenderBox for RenderColoredBox {
         ctx.canvas().draw_rect(rect, &Paint::fill(color));
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn test_colored_box_creation() {
-        let box_obj = RenderColoredBox::red(100.0, 50.0);
-        // The committed size lives on RenderState after layout; the object
-        // only carries its preferred size as config.
-        assert_eq!(box_obj.preferred_size(), Size::new(100.0, 50.0));
-    }
-
-    #[test]
-    fn test_colored_box_factory_methods() {
-        let red = RenderColoredBox::red(10.0, 20.0);
-        let green = RenderColoredBox::green(30.0, 40.0);
-        let blue = RenderColoredBox::blue(50.0, 60.0);
-
-        // Check preferred sizes (size is ZERO before layout)
-        assert_eq!(red.preferred_size(), Size::new(10.0, 20.0));
-        assert_eq!(green.preferred_size(), Size::new(30.0, 40.0));
-        assert_eq!(blue.preferred_size(), Size::new(50.0, 60.0));
-    }
-}

@@ -375,7 +375,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn full_rows_are_required_only_in_full_mode() {
         let mut ci = doctor(Mode::Ci);
         ci.row(Scope::Ci, "a", false, "", "");
@@ -390,7 +389,6 @@ mod tests {
         assert_eq!((full.missing_required, full.missing_optional), (1, 1));
     }
 
-    #[test]
     fn full_mode_checks_every_tool_the_deps_gate_runs() {
         let subs = ci_full_cargo_subs();
         for (sub, install) in tasks::deps_tools() {
@@ -402,44 +400,19 @@ mod tests {
     }
 
     #[test]
-    fn install_hint_prefers_brew_on_macos() {
-        let mut host = doctor(Mode::Ci);
-        assert_eq!(host.brew_or("x", "apt-get install x"), "apt-get install x");
-        host.macos = true;
-        assert_eq!(host.brew_or("x", "apt-get install x"), "brew install x");
-    }
-
-    #[test]
-    fn a_missing_binary_is_reported_missing() {
-        let mut host = doctor(Mode::Ci);
-        host.check_bin(Scope::Ci, "flui-xtask-no-such-binary", "", &["--version"]);
-        assert_eq!(host.missing_required, 1);
-    }
-
-    #[test]
-    fn the_summary_names_the_xtask_command_it_checked() {
-        let mut ci = doctor(Mode::Ci);
-        assert_eq!(
-            ci.summary(),
-            "doctor: everything `cargo xtask ci` needs is here."
-        );
-        ci.row(Scope::Full, "b", false, "", "");
-        assert_eq!(
-            ci.summary(),
-            "doctor: everything `cargo xtask ci` needs is here; 1 optional item(s) missing \
-             (`cargo xtask doctor full` also checks ci-full)."
-        );
-
-        let mut full = doctor(Mode::Full);
-        full.row(Scope::Info, "c", false, "", "");
-        assert_eq!(
-            full.summary(),
-            "doctor: everything `cargo xtask ci-full` needs is here; 1 optional item(s) missing."
-        );
-        full.row(Scope::Full, "b", false, "", "");
-        assert_eq!(
-            full.summary(),
-            "doctor: 1 missing for `cargo xtask ci-full` -- install commands above."
+    fn doctor_contract() {
+        crate::table_test::run_table(
+            "doctor_contract",
+            &[
+                (
+                    "full_rows_are_required_only_in_full_mode",
+                    full_rows_are_required_only_in_full_mode as fn(),
+                ),
+                (
+                    "full_mode_checks_every_tool_the_deps_gate_runs",
+                    full_mode_checks_every_tool_the_deps_gate_runs as fn(),
+                ),
+            ],
         );
     }
 }

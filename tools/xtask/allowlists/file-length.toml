@@ -5,6 +5,6 @@
 
 [[allow]]
 path = "crates/flui-scheduler/src/scheduler.rs"
-lines = 3541
+lines = 3531
 reason = "the production impl of UpdateScheduler is one block of about 2400 lines"
 exit = "W1-A5"

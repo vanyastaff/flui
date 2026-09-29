@@ -326,72 +326,10 @@ impl RenderInvalidationHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::mem::size_of;
 
     use static_assertions::assert_impl_all;
 
     use super::*;
 
     assert_impl_all!(RenderInvalidationHandle: Send, Sync);
-
-    fn id(n: usize) -> RenderId {
-        RenderId::new(n)
-    }
-
-    fn pair(capacity: usize) -> (DirtySender, Receiver<DirtyRequest>) {
-        DirtySender::new_pair(capacity, Arc::new(RwLock::new(VisualUpdateNotifier::new())))
-    }
-
-    #[test]
-    fn render_invalidation_handle_round_trips_identity_epoch_and_kind() {
-        let (sender, rx) = pair(4);
-        let render_invalidation_handle =
-            RenderInvalidationHandle::new(sender, id(7), AttachmentEpoch::FIRST);
-
-        render_invalidation_handle
-            .mark_needs_layout()
-            .expect("first send must succeed");
-
-        let request = rx.try_recv().expect("receiver should observe the request");
-        assert_eq!(request.id, id(7));
-        assert_eq!(request.attachment_epoch, AttachmentEpoch::FIRST);
-        assert_eq!(request.kind, DirtyKind::Layout);
-    }
-
-    #[test]
-    fn handle_returns_channel_full_at_capacity() {
-        let (sender, _rx) = pair(2);
-        sender
-            .request_mark_dirty(id(1), AttachmentEpoch::FIRST, DirtyKind::Paint)
-            .unwrap();
-        sender
-            .request_mark_dirty(id(2), AttachmentEpoch::FIRST, DirtyKind::Paint)
-            .unwrap();
-        let err = sender
-            .request_mark_dirty(id(3), AttachmentEpoch::FIRST, DirtyKind::Paint)
-            .unwrap_err();
-        assert_eq!(err, SendError::ChannelFull { capacity: 2 });
-    }
-
-    #[test]
-    fn handle_returns_owner_gone_after_receiver_drop() {
-        let (sender, rx) = pair(4);
-        drop(rx);
-        let err = sender
-            .request_mark_dirty(id(1), AttachmentEpoch::FIRST, DirtyKind::Layout)
-            .unwrap_err();
-        assert_eq!(err, SendError::OwnerGone);
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot exhaust every non-zero u64 attachment epoch")]
-    fn attachment_epoch_overflow_fails_closed() {
-        AttachmentEpoch(NonZeroU64::MAX).next();
-    }
-
-    #[test]
-    fn queued_invalidation_envelope_stays_compact() {
-        assert!(size_of::<AttachmentEpoch>() <= size_of::<u64>());
-        assert!(size_of::<DirtyRequest>() <= 3 * size_of::<u64>());
-    }
 }

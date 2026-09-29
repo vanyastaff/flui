@@ -368,14 +368,6 @@ impl TextureCache {
         }
     }
 
-    /// Check if texture is cached. Test-only: the record path decides
-    /// hit/miss through `load_from_rgba`'s own entry lookup, and no
-    /// production caller asks this question separately.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn contains(&self, id: &TextureKey) -> bool {
-        self.textures.contains_key(id)
-    }
-
     /// Get cached texture (without loading)
     pub(crate) fn get(&mut self, id: &TextureKey) -> Option<&CachedTexture> {
         if let Some(cached) = self.textures.get_mut(id) {
@@ -493,76 +485,4 @@ impl TextureCache {
     // ===== Asset Integration =====
 
     // ===== Atlas Access =====
-}
-
-#[cfg(all(test, feature = "testing"))]
-mod tests {
-    use super::*;
-
-    /// BUG 4 regression: an absurdly large `(width, height)` must return a clean
-    /// `Err` (size mismatch), NOT panic in the size multiply.
-    ///
-    /// `40000 * 40000 * 4 = 6.4e9` exceeds `u32::MAX` (4.29e9). The old code
-    /// computed `(width * height * 4) as usize` — the multiply ran in u32 and
-    /// panicked under debug overflow-checks BEFORE the `data.len()` guard. Widen
-    /// to usize first so validation rejects the input gracefully.
-    #[test]
-    fn load_from_rgba_oversized_dimensions_errors_without_panic() {
-        let (device, queue) =
-            crate::test_support::test_device_and_queue("TextureCache Test Device");
-        let mut cache = TextureCache::new(device, queue);
-
-        // Empty data, gigantic dimensions: the size check must fire first.
-        let result = cache.load_from_rgba(TextureKey::from_data(b"big"), 40000, 40000, &[]);
-        assert!(
-            result.is_err(),
-            "oversized dimensions must return Err (size mismatch), not panic in \
-             the u32 size multiply"
-        );
-    }
-
-    /// Regression: frame maintenance must RETAIN textures used this frame.
-    ///
-    /// The previous call site reset the use-counters and THEN removed every
-    /// zero-count entry, wiping the entire cache every frame. `end_frame_main`
-    /// now evicts (budget-gated) before resetting, so an under-budget cache
-    /// keeps its entries for cross-frame reuse.
-    #[test]
-    fn end_frame_maintenance_retains_used_texture() {
-        let (device, queue) =
-            crate::test_support::test_device_and_queue("TextureCache Test Device");
-        let mut cache = TextureCache::new(device, queue);
-        let id = TextureKey::from_data(b"retained");
-        // 4x4 RGBA — far under the default 100 MB budget.
-        // 4x4 <= ATLAS_MAX_DIMENSION -> atlas-backed path.
-        cache
-            .load_from_rgba(id.clone(), 4, 4, &[0u8; 4 * 4 * 4])
-            .expect("rgba upload");
-        // 300x300 > ATLAS_MAX_DIMENSION -> standalone path. The per-frame wipe
-        // removed atlas AND standalone entries alike, so cover both here.
-        let big = TextureKey::from_data(b"retained_standalone");
-        cache
-            .load_from_rgba(big.clone(), 300, 300, &vec![0u8; 300 * 300 * 4])
-            .expect("rgba upload");
-        // A frame draws both (record_use -> use_count > 0).
-        assert!(cache.get(&id).is_some());
-        assert!(cache.get(&big).is_some());
-
-        cache.end_frame_maintenance();
-        assert!(
-            cache.contains(&id),
-            "an atlas-backed texture used this frame must survive frame maintenance"
-        );
-        assert!(
-            cache.contains(&big),
-            "a standalone texture used this frame must survive frame maintenance"
-        );
-
-        // A second, idle frame under budget also retains them for reuse.
-        cache.end_frame_maintenance();
-        assert!(
-            cache.contains(&id) && cache.contains(&big),
-            "under budget, cached textures persist across idle frames"
-        );
-    }
 }

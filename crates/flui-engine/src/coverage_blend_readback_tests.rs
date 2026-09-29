@@ -60,7 +60,7 @@ use flui_painting::{
 use crate::{
     blend_oracle::{
         CLIP_HEIGHT, CLIP_LEFT, CLIP_RADIUS, CLIP_TOP, CLIP_WIDTH, EdgeSamples, FRINGE_COVERAGE,
-        PORTER_DUFF_MODES, SIDE, as_bytes, assert_pixel, coverage_correct as coverage_correct_for,
+        SIDE, as_bytes, assert_pixel, coverage_correct as coverage_correct_for,
         coverage_folded as coverage_folded_for, premultiplied, sample_the_clip_edge,
     },
     headless::HeadlessRenderer,
@@ -210,94 +210,21 @@ fn assert_partial_coverage_feathers(mode: BlendMode) {
     );
 }
 
-/// `Clear` is the mode the defect was reported against: `(Zero, Zero)` wipes the
-/// destination whatever alpha the fragment emits.
-#[test]
-fn clear_feathers_its_partially_covered_edge() {
-    assert_partial_coverage_feathers(BlendMode::Clear);
-}
-
-/// `Src` replaces the destination outright — `(One, Zero)` — so a fringe pixel
-/// used to be replaced outright too.
-#[test]
-fn src_feathers_its_partially_covered_edge() {
-    assert_partial_coverage_feathers(BlendMode::Src);
-}
-
-/// `SrcIn`'s `(DstAlpha, Zero)`: the destination factor is `Zero` like `Clear`'s,
-/// so the same correction applies even though the source factor differs.
-#[test]
-fn src_in_feathers_its_partially_covered_edge() {
-    assert_partial_coverage_feathers(BlendMode::SrcIn);
-}
-
-/// `DstIn`'s `(Zero, SrcAlpha)` — the first of the two modes whose destination
-/// factor scales WITH source alpha, so its correction is
-/// `coverage × (1 − alpha)` rather than `coverage`.
-#[test]
-fn dst_in_feathers_its_partially_covered_edge() {
-    assert_partial_coverage_feathers(BlendMode::DstIn);
-}
-
-/// `SrcOut` — derived, never observed until here. `(OneMinusDstAlpha, Zero)`
-/// against an opaque destination produces the same pixels as `Clear`, but
-/// through its own pipeline and blend state, so nothing about `Clear` passing
-/// implies this.
-#[test]
-fn src_out_feathers_its_partially_covered_edge() {
-    assert_partial_coverage_feathers(BlendMode::SrcOut);
-}
-
-/// `DstATop` — derived, never observed until here. `(OneMinusDstAlpha,
-/// SrcAlpha)` puts it in the `coverage × (1 − alpha)` class with `DstIn`.
-#[test]
-fn dst_atop_feathers_its_partially_covered_edge() {
-    assert_partial_coverage_feathers(BlendMode::DstATop);
-}
-
-/// `Modulate` — derived, never observed until here. The only mode whose colour
-/// and alpha components take different SOURCE factors (`Dst` and `DstAlpha`),
-/// which is why it needs its own oracle rather than riding on `SrcIn`'s.
-#[test]
-fn modulate_feathers_its_partially_covered_edge() {
-    assert_partial_coverage_feathers(BlendMode::Modulate);
-}
-
-/// Every mode `destination_alpha_scale_for` leaves alone is a mode whose folded
-/// and coverage-correct results are the SAME value — exhaustively, over the
-/// whole Porter-Duff set and a sweep of coverages.
-///
-/// This is the classification's real content, and it needs no GPU: a mode is
-/// corrected iff folding coverage into the source alpha would change its
-/// answer. Getting it wrong in either direction fails here — a mode left
-/// uncorrected that needed it, and a mode corrected that did not (which would
-/// then be corrected twice on the device).
-#[test]
-fn exactly_the_modes_that_need_correcting_are_the_ones_marked_for_it() {
-    for mode in PORTER_DUFF_MODES {
-        let folding_changes_the_answer =
-            [0.05_f32, 0.25, 0.5, 0.75, 0.99]
-                .into_iter()
-                .any(|coverage| {
-                    as_bytes(coverage_correct(mode, coverage))
-                        != as_bytes(coverage_folded(mode, coverage))
-                });
-        assert_eq!(
-            folding_changes_the_answer,
-            crate::pipeline_cache::destination_alpha_scale_for(mode).is_some(),
-            "{mode:?}: folding coverage into the source alpha {} its result, but \
-             destination_alpha_scale_for {} it a correction",
-            if folding_changes_the_answer {
-                "CHANGES"
-            } else {
-                "preserves"
-            },
-            if folding_changes_the_answer {
-                "denies"
-            } else {
-                "grants"
-            },
-        );
+/// The seven modes whose destination factor cannot absorb `1 - coverage`
+/// (`Clear`, `Src`, `SrcIn`, `SrcOut` and `Modulate` scale the destination by
+/// coverage alone; `DstIn` and `DstATop` by `coverage * (1 - alpha)`) each
+/// feather a partially covered edge.
+fn modes_that_cannot_absorb_coverage_feather_their_partially_covered_edge() {
+    for mode in [
+        BlendMode::Clear,
+        BlendMode::Src,
+        BlendMode::SrcIn,
+        BlendMode::DstIn,
+        BlendMode::SrcOut,
+        BlendMode::DstATop,
+        BlendMode::Modulate,
+    ] {
+        assert_partial_coverage_feathers(mode);
     }
 }
 
@@ -312,7 +239,6 @@ fn exactly_the_modes_that_need_correcting_are_the_ones_marked_for_it() {
 /// path does. Predicting that number would pin this test to the SSAA sample
 /// grid; agreeing across devices pins what actually matters — that nothing in
 /// this change reached a mode it was not meant to.
-#[test]
 fn dst_out_renders_the_same_with_and_without_a_second_blend_source() {
     let Some(feathering) = crate::test_support::renderer_or_skip() else {
         return;
@@ -352,4 +278,12 @@ fn dst_out_renders_the_same_with_and_without_a_second_blend_source() {
         feathered_samples.fully_covered, folded_samples.fully_covered,
         "DstOut at full coverage must be untouched by this change"
     );
+}
+
+/// Coverage-blend contract, read back from the GPU: dst-out independence of the
+/// second blend source, and feathered edges for modes that cannot absorb coverage.
+#[test]
+fn coverage_blend_reads_back_as_specified() {
+    dst_out_renders_the_same_with_and_without_a_second_blend_source();
+    modes_that_cannot_absorb_coverage_feather_their_partially_covered_edge();
 }

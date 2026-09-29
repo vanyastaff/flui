@@ -81,9 +81,7 @@ dispatch point: the engine pushed translations for `Offset`, `Transform`, `Opaci
 and `Leader`, while the resolver summed only `Offset` and `Transform` — so a follower nested under
 its own leader rendered double-translated. `Layer::local_translation` is now the one place the set
 of translating variants is written down; `resolve_follower_offset` sums it along both chains
-inclusive of the common ancestor (which cancels), exactly as `_establishTransform` does, and
-`flui-engine`'s `every_variant_pushes_exactly_its_local_translation` pins that the walk's pushes
-equal it. Known limitations, named rather than silent: a `Transform` contributes only its
+inclusive of the common ancestor (which cancels), exactly as `_establishTransform` does. Known limitations, named rather than silent: a `Transform` contributes only its
 translation (the follower system is offset-only), and a follower on another follower's chain
 contributes zero.
 

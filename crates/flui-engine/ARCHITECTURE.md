@@ -125,11 +125,8 @@ share the explicit-stack traversal in `layer_walk.rs`, parameterised by a
 two-step visitor (`enter` answers `Descend` or `SkipSubtree`; `exit` runs the
 node's post-children cleanup). A Rust stack overflow is a process abort, not
 a panic, so one frame per layer would take the render path down on a
-deep-but-valid chain; `layer_walk.rs`'s own tests pin paint order, the
-cleanup-after-subtree ordering, the no-descend/no-cleanup rule for
-`SkipSubtree`, and a 10 000-deep walk on a small stack. The GPU-side
-evidence is the readback suite plus
-`a_deep_layer_chain_captures_without_overflowing_a_small_stack`.
+deep-but-valid chain; `a_deep_chain_survives_a_small_stack` in
+`layer_walk.rs` pins a 10 000-deep walk on a small stack.
 
 ---
 
@@ -370,8 +367,7 @@ once for the whole capture.
 `RasterOwner::resize(0, h)` returns `None` instead of a fresh
 `SurfaceGeneration` that every subsequent submit would be rejected against;
 the caller (`flui-app`'s raster lane) keeps its last generation. A window
-minimised to zero is a pause, not a new surface epoch
-(`a_zero_sized_resize_mints_nothing_and_queues_nothing`).
+minimised to zero is a pause, not a new surface epoch.
 
 ### 13. Frame failure does not leak painter state
 
@@ -424,8 +420,8 @@ captured by a filter or advanced shape over everything, `seal_text_tail`,
 one render pass per text-bearing segment, and the sRGB→linear colour
 conversion glyphon applied to text on a gamma-space target
 (`glyph_colour_lands_as_recorded`). A rotated or anisotropic CTM reaches
-the glyphs: each quad carries the CTM's linear part over the raster scale
-(`anisotropic_scale_squashes_glyphs_on_one_axis`). The engine names no
+the glyphs: each quad carries the CTM's linear part over the raster scale.
+The engine names no
 cosmic-text type
 (`the_engine_does_not_shape`); `etagere` stays behind `glyph_atlas.rs` the
 way `lyon` stays behind `tessellator.rs`.
@@ -443,13 +439,8 @@ which panics under the default error handler. A glyph that fails the grow
 check is dropped from the cache, as after a `None`, so its next use asks
 again; its allocation is freed at the end of the frame if the frame already
 drew from it, so no other glyph is packed into a region a recorded draw
-samples (`an_image_whose_data_does_not_match_its_size_is_not_placed`, the
-three `*_on_grow_is_not_uploaded` tests). The cosmic-text path draws the
-same image for a key every time, so the checks never fire on it: its three
-atlas tests (`a_slot_is_shared_by_equal_keys_and_an_empty_glyph_takes_no_space`,
-`eviction_reclaims_slots_before_the_page_grows`,
-`a_page_grows_within_a_frame_and_earlier_slots_keep_their_place`) pass
-unchanged.
+samples. `swash_glyphs_land_and_equal_keys_share_a_slot` pins the placement
+path a real rasterizer takes.
 
 ### 17. One rounding rule per purpose: hard edges snap, bounds cover — [ADR-0098 §6](../../docs/adr/ADR-0098-owned-f64-geometry-values.md)
 
@@ -467,7 +458,8 @@ what the rectangle is for:
   a path clip's bounding box, backdrop-filter and advanced-blend copy
   regions, filter offscreens and SSAA tiles. None of them may lose a partly
   covered pixel: behind an SDF that pixel carries the feathered fringe
-  (`dst_atop_feathers_its_partially_covered_edge` samples it).
+  (`modes_that_cannot_absorb_coverage_feather_their_partially_covered_edge`
+samples it).
 
 This replaced three rules that disagreed: the identity-transform scissor
 truncated every edge (keeping column 0 of a clip starting at 0.75 and
@@ -475,9 +467,8 @@ dropping column 10 of one ending at 10.75), the transformed scissor floored
 the origin and ceiled the extent, and the backdrop copies rounded half away
 from zero. Flutter has no single rule to follow here (Impeller and Skia each
 round per call site). Content quads are not yet snapped; see Open items.
-Locked by `a_hard_rect_clip_keeps_the_pixels_whose_centres_are_inside`,
-`a_rotated_rect_clip_covers_its_device_bounding_box` and
-`clip_rect_enclosing_grows_outward_on_both_branches` (`src/state_stack.rs`).
+Locked by `a_hard_rect_clip_keeps_the_pixels_whose_centres_are_inside`
+(`src/state_stack.rs`).
 
 ### 18. Partial frames render into a retained target and blit — [ADR-0087 §4](../../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md)
 

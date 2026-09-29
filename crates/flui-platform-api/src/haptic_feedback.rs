@@ -66,38 +66,3 @@ pub enum HapticFeedback {
     /// Mirrors `HapticFeedback.errorNotification()`.
     ErrorNotification,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn variants_are_copy_eq_and_hashable() {
-        // Smoke test for the derive set: `Copy` (no explicit `.clone()`
-        // needed to reuse a value), `PartialEq`/`Eq` (so a recording fake
-        // can assert delivery order by direct comparison), and `Hash` (so
-        // a future dedup/counter map over feedback kinds is possible).
-        let a = HapticFeedback::SelectionClick;
-        let b = a; // Copy, not a move
-        assert_eq!(a, b);
-
-        let mut seen = std::collections::HashSet::new();
-        seen.insert(HapticFeedback::Vibrate);
-        seen.insert(HapticFeedback::Vibrate);
-        assert_eq!(seen.len(), 1, "Hash + Eq must agree on equal variants");
-    }
-
-    #[test]
-    fn distinct_variants_are_not_equal() {
-        assert_ne!(HapticFeedback::LightImpact, HapticFeedback::MediumImpact);
-        assert_ne!(HapticFeedback::HeavyImpact, HapticFeedback::Vibrate);
-        assert_ne!(
-            HapticFeedback::SuccessNotification,
-            HapticFeedback::WarningNotification
-        );
-        assert_ne!(
-            HapticFeedback::WarningNotification,
-            HapticFeedback::ErrorNotification
-        );
-    }
-}

@@ -199,7 +199,7 @@ pub(super) fn ensure_surface<L: SurfaceLifecycle>(
 
 /// The label [`SurfaceRecreationRetry`]'s backoff logs under.
 #[cfg_attr(
-    not(any(test, target_os = "android", target_os = "ios")),
+    not(any(target_os = "android", target_os = "ios")),
     expect(
         dead_code,
         reason = "driven by the Android/iOS runners and by this module's tests"
@@ -217,7 +217,7 @@ pub(super) const SURFACE_RECREATION_LABEL: &str = "wgpu surface recreation";
 /// designed answer on a backend where the availability signal arrives before
 /// any window exists, and the next signal recreates correctly.
 #[cfg_attr(
-    not(any(test, target_os = "android", target_os = "ios")),
+    not(any(target_os = "android", target_os = "ios")),
     expect(
         dead_code,
         reason = "driven by the Android/iOS runners and by this module's tests -- see module doc"
@@ -248,7 +248,7 @@ impl SurfaceSettlement {
     /// signal and `Recreated`/`Failed` only for a `true` one), so the
     /// classification is a function of the outcome alone.
     #[cfg_attr(
-        not(any(test, target_os = "android", target_os = "ios")),
+        not(any(target_os = "android", target_os = "ios")),
         expect(
             dead_code,
             reason = "driven by the Android/iOS runners and by this module's tests"
@@ -278,7 +278,7 @@ impl SurfaceSettlement {
     /// is guaranteed noise on a path working as designed. A genuine
     /// [`Self::Failed`] is a `WARN` naming the retry that now polls it.
     #[cfg_attr(
-        not(any(test, target_os = "android", target_os = "ios")),
+        not(any(target_os = "android", target_os = "ios")),
         expect(
             dead_code,
             reason = "driven by the Android/iOS runners and by this module's tests"
@@ -329,7 +329,7 @@ impl SurfaceSettlement {
 // without tests (and every other target) sees it as unused -- same gate as
 // `SurfaceLifecycleOutcome` above.
 #[cfg_attr(
-    not(any(test, target_os = "android", target_os = "ios")),
+    not(any(target_os = "android", target_os = "ios")),
     expect(
         dead_code,
         reason = "driven by the Android/iOS runners and by this module's tests -- see module doc"
@@ -345,7 +345,7 @@ pub(super) struct SurfaceRecreationRetry {
 
 impl SurfaceRecreationRetry {
     #[cfg_attr(
-        not(any(test, target_os = "android", target_os = "ios")),
+        not(any(target_os = "android", target_os = "ios")),
         expect(
             dead_code,
             reason = "driven by the Android/iOS runners and by this module's tests"
@@ -368,7 +368,7 @@ impl SurfaceRecreationRetry {
     /// - A genuine `Failed` while a surface is still expected arms the
     ///   deadline-paced retry.
     #[cfg_attr(
-        not(any(test, target_os = "android", target_os = "ios")),
+        not(any(target_os = "android", target_os = "ios")),
         expect(
             dead_code,
             reason = "driven by the Android/iOS runners and by this module's tests"
@@ -402,7 +402,7 @@ impl SurfaceRecreationRetry {
     /// `dirty` predicate and the wake-deadline hook — the same two consumers
     /// device recovery has.
     #[cfg_attr(
-        not(any(test, target_os = "android", target_os = "ios")),
+        not(any(target_os = "android", target_os = "ios")),
         expect(
             dead_code,
             reason = "driven by the Android/iOS runners and by this module's tests"
@@ -420,7 +420,7 @@ impl SurfaceRecreationRetry {
     /// expected. The frame closure reads this to decide whether a released
     /// surface is one a retry may build.
     #[cfg_attr(
-        not(any(test, target_os = "android", target_os = "ios")),
+        not(any(target_os = "android", target_os = "ios")),
         expect(
             dead_code,
             reason = "driven by the Android/iOS runners and by this module's tests"
@@ -446,7 +446,7 @@ impl SurfaceRecreationRetry {
     /// surface, so pacing it on this platform's own idle wait is the only
     /// non-blocking option (see [`super::retry_backoff::RetryBackoff`]'s doc).
     #[cfg_attr(
-        not(any(test, target_os = "android", target_os = "ios")),
+        not(any(target_os = "android", target_os = "ios")),
         expect(
             dead_code,
             reason = "driven by the Android/iOS runners and by this module's tests"
@@ -497,7 +497,7 @@ impl SurfaceRecreationRetry {
 /// [`report_surface_settlement`].
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(
-    not(any(test, target_os = "android", target_os = "ios")),
+    not(any(target_os = "android", target_os = "ios")),
     expect(
         dead_code,
         reason = "driven by the Android/iOS runners and by this module's tests"
@@ -529,7 +529,7 @@ where
 /// classification earns ([`SurfaceSettlement::report_level`]). Called after
 /// the caller's lane lock is released.
 #[cfg_attr(
-    not(any(test, target_os = "android", target_os = "ios")),
+    not(any(target_os = "android", target_os = "ios")),
     expect(
         dead_code,
         reason = "driven by the Android/iOS runners and by this module's tests"
@@ -570,7 +570,7 @@ pub(super) fn report_surface_settlement(platform: &'static str, outcome: &Surfac
 /// that repaints, rather than queueing another task behind themselves.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(
-    not(any(test, target_os = "android", target_os = "ios")),
+    not(any(target_os = "android", target_os = "ios")),
     expect(
         dead_code,
         reason = "driven by the Android/iOS runners and by this module's tests"
@@ -614,18 +614,10 @@ where
     not(target_arch = "wasm32")
 ))]
 mod surface_lifecycle_tests {
-    use std::time::Duration;
 
     use flui_engine::{EngineError, PresentDisposition, RasterBackend};
-    use parking_lot::Mutex;
-    use web_time::Instant;
 
-    use super::{
-        SurfaceLifecycle, SurfaceLifecycleOutcome, SurfaceRecreationRetry, SurfaceSettlement,
-        ensure_surface, report_surface_settlement, retry_surface_recreation,
-        settle_surface_availability,
-    };
-    use crate::app::raster_lane::RasterLane;
+    use super::{SurfaceLifecycle, SurfaceLifecycleOutcome, ensure_surface};
 
     /// One verb the seam asked a scripted backend for, in the order asked.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -706,19 +698,6 @@ mod surface_lifecycle_tests {
         }
     }
 
-    /// Wraps a scripted backend in the raster lane the runner helpers drive.
-    fn lane_over(backend: ScriptedSurfaceBackend) -> RasterLane<ScriptedSurfaceBackend> {
-        RasterLane::new(
-            backend,
-            flui_foundation::PresentationAddress {
-                realm_id: flui_foundation::RealmId::new(1),
-                presentation_id: flui_foundation::PresentationId::new(1),
-            },
-            800,
-            600,
-        )
-    }
-
     impl SurfaceLifecycle for ScriptedSurfaceBackend {
         fn release_surface(&mut self) {
             self.calls.push(SurfaceCall::Release);
@@ -739,35 +718,6 @@ mod surface_lifecycle_tests {
         }
     }
 
-    /// The `false` edge. The second request is deliberately NOT skipped: the
-    /// seam carries no state to skip with, and a `false` may be lost, so the
-    /// release has to be requested from the event rather than from a
-    /// remembered state. What makes the repeat harmless is the lease's own
-    /// `release` (its `releasing_twice_releases_once_and_a_replacement_is_held_again`
-    /// test), not anything here.
-    #[test]
-    fn a_release_request_reaches_the_renderer_and_a_repeat_is_not_skipped() {
-        let mut backend = ScriptedSurfaceBackend::holding_a_surface();
-
-        let first = ensure_surface(&mut backend, false);
-        let second = ensure_surface(&mut backend, false);
-
-        assert!(
-            matches!(first, SurfaceLifecycleOutcome::Released),
-            "a release request reports Released, got {first:?}"
-        );
-        assert!(
-            matches!(second, SurfaceLifecycleOutcome::Released),
-            "a repeated release request reports Released again, got {second:?}"
-        );
-        assert_eq!(
-            backend.calls,
-            vec![SurfaceCall::Release, SurfaceCall::Release],
-            "both requests reach the renderer"
-        );
-        assert_eq!(backend.held, None, "the released post-state holds");
-    }
-
     /// The `true` edge: an acquire asks for a recreation even though a
     /// surface is already held, and on this scripted backend the surface it
     /// ends up holding is a different one. The outcome is `Recreated`, which
@@ -783,7 +733,6 @@ mod surface_lifecycle_tests {
     /// being aborted inside `wgpu-hal`'s `create_surface_android`. The
     /// scripted backend succeeds unconditionally because the property under
     /// test is the seam's, not the driver's.
-    #[test]
     fn an_acquire_request_recreates_over_a_held_surface_and_reports_recreated() {
         let mut backend = ScriptedSurfaceBackend::holding_a_surface();
         let before = backend.held;
@@ -810,7 +759,6 @@ mod surface_lifecycle_tests {
     /// the seam hands the renderer's own error to its caller, which owns the
     /// log line, and leaves the presentation released — no surface is
     /// committed, and no extra release is issued to "clean up" after it.
-    #[test]
     fn a_failed_recreation_carries_the_error_and_leaves_the_presentation_released() {
         let mut backend =
             ScriptedSurfaceBackend::whose_recreation_fails(EngineError::SurfaceCreation(Box::new(
@@ -838,25 +786,22 @@ mod surface_lifecycle_tests {
         );
     }
 
-    /// One full cycle as the Android arms produce it — release, then rebuild
-    /// — records exactly those two calls and nothing else.
     #[test]
-    fn a_release_then_acquire_cycle_records_exactly_those_calls() {
-        let mut backend = ScriptedSurfaceBackend::holding_a_surface();
-
-        let released = ensure_surface(&mut backend, false);
-        let rebuilt = ensure_surface(&mut backend, true);
-
-        assert!(matches!(released, SurfaceLifecycleOutcome::Released));
-        assert!(matches!(rebuilt, SurfaceLifecycleOutcome::Recreated));
-        assert_eq!(
-            backend.calls,
-            vec![SurfaceCall::Release, SurfaceCall::Recreate],
-            "the cycle is exactly a release and a recreate"
-        );
-        assert!(
-            backend.held.is_some(),
-            "the renderer presents again after the cycle"
+    fn surface_lifecycle_matrix() {
+        crate::table_test::run_table(
+            "surface_lifecycle_matrix",
+            &[
+                (
+                    "an_acquire_request_recreates_over_a_held_surface_and_reports_recreated",
+                    an_acquire_request_recreates_over_a_held_surface_and_reports_recreated
+                        as fn(),
+                ),
+                (
+                    "a_failed_recreation_carries_the_error_and_leaves_the_presentation_released",
+                    a_failed_recreation_carries_the_error_and_leaves_the_presentation_released
+                        as fn(),
+                ),
+            ],
         );
     }
 
@@ -864,354 +809,11 @@ mod surface_lifecycle_tests {
     // Automatic retry of a failed recreation (`SurfaceRecreationRetry`)
     // ------------------------------------------------------------------
 
-    /// One millisecond before `deadline` — the last instant an attempt is
-    /// still deferred.
-    fn just_before(deadline: Instant) -> Instant {
-        deadline
-            .checked_sub(Duration::from_millis(1))
-            .expect("a deadline armed from `now` lies well after the clock's epoch")
-    }
-
-    fn scripted_error(message: &str) -> EngineError {
-        EngineError::SurfaceCreation(Box::new(std::io::Error::other(message.to_string())))
-    }
-
-    /// The expected case: a failure while the platform expects a surface arms
-    /// the retry, and a due attempt that succeeds reports `Recreated` and
-    /// clears itself.
-    #[test]
-    fn a_genuine_failure_arms_a_retry_that_recovers() {
-        let retry = SurfaceRecreationRetry::new();
-        let now = Instant::now();
-        let error = scripted_error("transient");
-
-        retry.note_availability(true, SurfaceSettlement::Failed, Some(&error), now);
-        let deadline = retry
-            .next_attempt_at()
-            .expect("a genuine failure with an expected surface must arm a retry");
-
-        let mut backend = ScriptedSurfaceBackend::holding_a_surface();
-        assert!(
-            retry.attempt_if_due(&mut backend, deadline).is_some(),
-            "the attempt is due at its deadline"
-        );
-        assert!(
-            retry.next_attempt_at().is_none(),
-            "a successful retry clears the armed deadline"
-        );
-    }
-
-    /// A retry before its deadline is deferred without touching the backend —
-    /// the deadline is a check, never a sleep.
-    #[test]
-    fn an_attempt_before_the_deadline_is_deferred() {
-        let retry = SurfaceRecreationRetry::new();
-        let now = Instant::now();
-        let error = scripted_error("transient");
-        retry.note_availability(true, SurfaceSettlement::Failed, Some(&error), now);
-        let deadline = retry.next_attempt_at().expect("armed");
-
-        let mut backend = ScriptedSurfaceBackend::holding_a_surface();
-        assert!(
-            retry
-                .attempt_if_due(&mut backend, just_before(deadline))
-                .is_none(),
-            "an attempt before the deadline must be deferred"
-        );
-        assert!(
-            backend.calls.is_empty(),
-            "a deferred attempt must not touch the backend"
-        );
-    }
-
-    /// A release, a successful recreation, or a failure while no surface is
-    /// expected all clear the retry: nothing is owed.
-    #[test]
-    fn non_failure_settlements_clear_the_retry() {
-        for settlement in [SurfaceSettlement::Released, SurfaceSettlement::Recreated] {
-            let retry = SurfaceRecreationRetry::new();
-            let now = Instant::now();
-            let error = scripted_error("transient");
-            // Arm it first, then settle.
-            retry.note_availability(true, SurfaceSettlement::Failed, Some(&error), now);
-            assert!(retry.next_attempt_at().is_some(), "precondition: armed");
-
-            retry.note_availability(true, settlement, None, now);
-            assert!(
-                retry.next_attempt_at().is_none(),
-                "{settlement:?} must clear the retry"
-            );
-        }
-    }
-
-    /// A failure that arrives while the platform does NOT expect a surface is
-    /// not retried: the next availability signal recreates unconditionally, so
-    /// polling would build a surface the platform just said not to.
-    #[test]
-    fn a_failure_while_no_surface_is_expected_is_not_retried() {
-        let retry = SurfaceRecreationRetry::new();
-        let now = Instant::now();
-        let error = scripted_error("no window yet");
-
-        retry.note_availability(false, SurfaceSettlement::Failed, Some(&error), now);
-        assert!(
-            retry.next_attempt_at().is_none(),
-            "a failure with no surface expected must not arm a retry"
-        );
-
-        let mut backend = ScriptedSurfaceBackend::holding_a_surface();
-        assert!(
-            retry
-                .attempt_if_due(&mut backend, now + Duration::from_secs(60))
-                .is_none(),
-            "no retry may be attempted while no surface is expected"
-        );
-        assert!(
-            backend.calls.is_empty(),
-            "the backend must not be touched when no surface is expected"
-        );
-    }
-
-    /// A later `false` disarms a retry armed by an earlier failure: the signal
-    /// is authoritative over the failure.
-    #[test]
-    fn a_later_release_disarms_an_armed_retry() {
-        let retry = SurfaceRecreationRetry::new();
-        let now = Instant::now();
-        let error = scripted_error("transient");
-        retry.note_availability(true, SurfaceSettlement::Failed, Some(&error), now);
-        assert!(retry.next_attempt_at().is_some(), "precondition: armed");
-
-        retry.note_availability(false, SurfaceSettlement::Released, None, now);
-        assert!(
-            retry.next_attempt_at().is_none(),
-            "a release must disarm the retry"
-        );
-
-        let mut backend = ScriptedSurfaceBackend::whose_recreation_fails(scripted_error("x"));
-        assert!(
-            retry
-                .attempt_if_due(&mut backend, now + Duration::from_secs(60))
-                .is_none(),
-            "a disarmed retry must not attempt"
-        );
-        assert!(backend.calls.is_empty(), "the backend must be untouched");
-    }
-
     // ------------------------------------------------------------------
     // Classification (`SurfaceSettlement::classify`)
     // ------------------------------------------------------------------
 
-    /// The one place the expected-vs-genuine distinction is made: the probe's
-    /// own `SurfaceTargetUnavailable` is expected, every other error is
-    /// genuine, and the two non-failure outcomes map to their own settlements.
-    #[test]
-    fn classify_separates_the_expected_failure_from_a_genuine_one() {
-        assert_eq!(
-            SurfaceSettlement::classify(&SurfaceLifecycleOutcome::Released),
-            SurfaceSettlement::Released
-        );
-        assert_eq!(
-            SurfaceSettlement::classify(&SurfaceLifecycleOutcome::Recreated),
-            SurfaceSettlement::Recreated
-        );
-        assert_eq!(
-            SurfaceSettlement::classify(&SurfaceLifecycleOutcome::Failed(
-                EngineError::SurfaceTargetUnavailable {
-                    source: raw_window_handle::HandleError::Unavailable
-                }
-            )),
-            SurfaceSettlement::TargetUnavailable,
-            "the probe's own answer is expected, not late"
-        );
-        assert_eq!(
-            SurfaceSettlement::classify(&SurfaceLifecycleOutcome::Failed(scripted_error(
-                "driver refused"
-            ))),
-            SurfaceSettlement::Failed,
-            "any other rebuild error is genuine"
-        );
-    }
-
-    /// The expected failure is traced, a genuine one warned, and the two
-    /// non-failures log nothing here.
-    #[test]
-    fn report_level_downgrades_only_the_expected_failure() {
-        assert_eq!(SurfaceSettlement::Released.report_level(), None);
-        assert_eq!(SurfaceSettlement::Recreated.report_level(), None);
-        assert_eq!(
-            SurfaceSettlement::TargetUnavailable.report_level(),
-            Some(tracing::Level::TRACE)
-        );
-        assert_eq!(
-            SurfaceSettlement::Failed.report_level(),
-            Some(tracing::Level::WARN)
-        );
-        // The reporter itself accepts every outcome without panicking; the
-        // level it picks is the pure decision above.
-        report_surface_settlement("test", &SurfaceLifecycleOutcome::Released);
-        report_surface_settlement("test", &SurfaceLifecycleOutcome::Recreated);
-        report_surface_settlement(
-            "test",
-            &SurfaceLifecycleOutcome::Failed(scripted_error("driver refused")),
-        );
-        report_surface_settlement(
-            "test",
-            &SurfaceLifecycleOutcome::Failed(EngineError::SurfaceTargetUnavailable {
-                source: raw_window_handle::HandleError::Unavailable,
-            }),
-        );
-    }
-
     // ------------------------------------------------------------------
     // The runner helpers over a raster lane
     // ------------------------------------------------------------------
-
-    /// The callback body: a `true` signal rebuilds through the seam, and a
-    /// genuine failure leaves the retry armed for the frame path to drive.
-    #[test]
-    fn settling_a_genuine_failure_arms_the_retry() {
-        let retry = SurfaceRecreationRetry::new();
-        let mut lane = lane_over(ScriptedSurfaceBackend::whose_recreation_fails(
-            scripted_error("driver refused"),
-        ));
-        let now = Instant::now();
-
-        let outcome = settle_surface_availability(&mut lane, &retry, true, now);
-
-        assert!(matches!(outcome, SurfaceLifecycleOutcome::Failed(_)));
-        assert_eq!(
-            lane.with_backend(|b| b.calls.clone()),
-            vec![SurfaceCall::Recreate],
-            "the signal reached the backend as one recreate"
-        );
-        assert!(
-            retry.next_attempt_at().is_some(),
-            "a genuine failure while a surface is expected arms the retry"
-        );
-    }
-
-    /// The expected failure — no window yet — settles without arming
-    /// anything: the next signal brings the window.
-    #[test]
-    fn settling_the_expected_failure_arms_nothing() {
-        let retry = SurfaceRecreationRetry::new();
-        let mut lane = lane_over(ScriptedSurfaceBackend::whose_recreation_fails(
-            EngineError::SurfaceTargetUnavailable {
-                source: raw_window_handle::HandleError::Unavailable,
-            },
-        ));
-
-        let outcome = settle_surface_availability(&mut lane, &retry, true, Instant::now());
-
-        assert!(matches!(outcome, SurfaceLifecycleOutcome::Failed(_)));
-        assert!(
-            retry.next_attempt_at().is_none(),
-            "the probe's own answer must not be polled"
-        );
-    }
-
-    /// A release settles as a release and disarms any retry a previous
-    /// failure left behind.
-    #[test]
-    fn settling_a_release_disarms_the_retry() {
-        let retry = SurfaceRecreationRetry::new();
-        let now = Instant::now();
-        retry.note_availability(
-            true,
-            SurfaceSettlement::Failed,
-            Some(&scripted_error("earlier")),
-            now,
-        );
-        assert!(retry.next_attempt_at().is_some(), "precondition: armed");
-        let mut lane = lane_over(ScriptedSurfaceBackend::holding_a_surface());
-
-        let outcome = settle_surface_availability(&mut lane, &retry, false, now);
-
-        assert!(matches!(outcome, SurfaceLifecycleOutcome::Released));
-        assert_eq!(
-            lane.with_backend(|b| b.calls.clone()),
-            vec![SurfaceCall::Release]
-        );
-        assert!(
-            retry.next_attempt_at().is_none(),
-            "a release disarms the retry"
-        );
-    }
-
-    /// The frame-path helper: nothing armed means the lane is never locked
-    /// or touched.
-    #[test]
-    fn the_frame_path_retry_is_a_no_op_when_nothing_is_armed() {
-        let retry = SurfaceRecreationRetry::new();
-        let lane = Mutex::new(lane_over(ScriptedSurfaceBackend::holding_a_surface()));
-
-        assert!(retry_surface_recreation(&lane, &retry, Instant::now()).is_none());
-        assert!(
-            lane.lock().with_backend(|b| b.calls.is_empty()),
-            "an unarmed retry must not touch the backend"
-        );
-    }
-
-    /// The frame-path helper: a due retry rebuilds through the lane, clears
-    /// itself, and reports `Recreated` so the caller owes a full repaint.
-    #[test]
-    fn the_frame_path_retry_recreates_once_due() {
-        let retry = SurfaceRecreationRetry::new();
-        let now = Instant::now();
-        retry.note_availability(
-            true,
-            SurfaceSettlement::Failed,
-            Some(&scripted_error("earlier")),
-            now,
-        );
-        let deadline = retry.next_attempt_at().expect("armed");
-        let lane = Mutex::new(lane_over(ScriptedSurfaceBackend::holding_a_surface()));
-
-        assert!(
-            retry_surface_recreation(&lane, &retry, just_before(deadline)).is_none(),
-            "not yet due: deferred"
-        );
-        assert!(lane.lock().with_backend(|b| b.calls.is_empty()));
-
-        let outcome = retry_surface_recreation(&lane, &retry, deadline);
-        assert!(matches!(outcome, Some(SurfaceLifecycleOutcome::Recreated)));
-        assert_eq!(
-            lane.lock().with_backend(|b| b.calls.clone()),
-            vec![SurfaceCall::Recreate]
-        );
-        assert!(
-            retry.next_attempt_at().is_none(),
-            "a successful retry clears itself"
-        );
-    }
-
-    /// The frame-path helper: a lane already held by an outer frame dispatch
-    /// is skipped, not blocked on, and the deadline stays armed for the next
-    /// wake.
-    #[test]
-    fn the_frame_path_retry_skips_a_held_lane_and_stays_armed() {
-        let retry = SurfaceRecreationRetry::new();
-        let now = Instant::now();
-        retry.note_availability(
-            true,
-            SurfaceSettlement::Failed,
-            Some(&scripted_error("earlier")),
-            now,
-        );
-        let deadline = retry.next_attempt_at().expect("armed");
-        let lane = Mutex::new(lane_over(ScriptedSurfaceBackend::holding_a_surface()));
-
-        let held = lane.lock();
-        assert!(
-            retry_surface_recreation(&lane, &retry, deadline).is_none(),
-            "a held lane is skipped"
-        );
-        drop(held);
-        assert_eq!(
-            retry.next_attempt_at(),
-            Some(deadline),
-            "the skipped attempt leaves the deadline armed, not re-armed"
-        );
-    }
 }

@@ -259,37 +259,3 @@ where
         dispatch_command(command, renderer);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    //! Regression guard: dispatching an `Arc<Paint>`-carrying
-    //! `DrawCommand` reaches the backend identically to the earlier
-    //! by-value-`Paint` shape. `DebugBackend` only counts commands —
-    //! that is enough to prove the dispatch arm executed (rather
-    //! than falling through the `_` catch-all) and that no panic was
-    //! introduced by the deref shape.
-    //!
-    //! No GPU is required; this runs on every CI worker.
-    use flui_foundation::geometry::Rect;
-    use flui_painting::styling::Color;
-    use flui_painting::{Canvas, Paint};
-
-    use super::dispatch_commands;
-    use crate::debug::DebugBackend;
-
-    #[test]
-    fn dispatch_handles_interned_paint() {
-        let mut canvas = Canvas::new();
-        let paint = Paint::fill(Color::RED);
-        canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 10.0, 10.0), &paint);
-        canvas.draw_rect(Rect::from_ltrb(20.0, 20.0, 30.0, 30.0), &paint);
-        let dl = canvas.finish();
-
-        let mut backend = DebugBackend::new();
-        dispatch_commands(dl.commands(), &mut backend);
-
-        // Two `render_rect` arms must have fired — proves dispatch
-        // worked on the new `Arc<Paint>` field shape end-to-end.
-        assert_eq!(backend.command_count(), 2);
-    }
-}

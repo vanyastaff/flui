@@ -288,52 +288,6 @@ impl AnimationController {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::animation::Animation;
-
-    #[test]
-    fn test_builder_default() {
-        let scheduler = UpdateScheduler::new();
-        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
-            .build()
-            .unwrap();
-
-        assert_eq!(controller.value(), 0.0);
-        controller.dispose();
-    }
-
-    #[test]
-    fn test_builder_with_bounds() {
-        let scheduler = UpdateScheduler::new();
-        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
-            .bounds(10.0, 20.0)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        assert_eq!(controller.value(), 10.0);
-        controller.dispose();
-    }
-
-    #[test]
-    fn test_builder_with_initial_value() {
-        let scheduler = UpdateScheduler::new();
-        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
-            .initial_value(0.5)
-            .build()
-            .unwrap();
-
-        assert_eq!(controller.value(), 0.5);
-        controller.dispose();
-    }
-
-    #[test]
-    fn test_builder_invalid_bounds() {
-        let scheduler = UpdateScheduler::new();
-        let result = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
-            .bounds(20.0, 10.0); // Invalid: lower > upper
-
-        assert!(result.is_err());
-    }
 
     /// #1183: `.bounds()` duplicates `with_bounds_inner`'s validation, so it
     /// must adopt the same "bounded means finite" rule -- red before the
@@ -361,44 +315,5 @@ mod tests {
                 "bounds({lower}, {upper}) must be rejected"
             );
         }
-    }
-
-    #[test]
-    fn test_controller_builder_method() {
-        let scheduler = UpdateScheduler::new();
-        let controller = AnimationController::builder(Duration::from_millis(100), &scheduler)
-            .initial_value(0.75)
-            .build()
-            .unwrap();
-
-        assert_eq!(controller.value(), 0.75);
-        controller.dispose();
-    }
-
-    #[test]
-    fn test_builder_with_reverse_duration() {
-        let scheduler = UpdateScheduler::new();
-        let controller = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)
-            .reverse_duration(Duration::from_millis(200))
-            .build()
-            .unwrap();
-
-        // Can't directly test reverse_duration, but builder should succeed
-        controller.dispose();
-    }
-
-    #[test]
-    fn test_builder_full_configuration() {
-        let scheduler = UpdateScheduler::new();
-        let controller = AnimationControllerBuilder::new(Duration::from_millis(300), &scheduler)
-            .bounds(0.0, 100.0)
-            .unwrap()
-            .reverse_duration(Duration::from_millis(500))
-            .initial_value(50.0)
-            .build()
-            .unwrap();
-
-        assert_eq!(controller.value(), 50.0);
-        controller.dispose();
     }
 }

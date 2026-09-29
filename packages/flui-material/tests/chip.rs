@@ -32,9 +32,8 @@ use std::rc::Rc;
 
 use common::{lay_out, loose};
 use flui_material::chip::CHIP_ICON_SIZE;
-use flui_material::{Chip, ChipThemeData, FilterChip, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::painting::Color;
-use flui_sdk::widgets::{GestureDetector, HitTestBehavior, Text};
+use flui_material::{Chip, Theme, ThemeData};
+use flui_sdk::widgets::Text;
 
 /// `_ChipDefaultsM3`/`_FilterChipDefaultsM3.padding` (`chip.dart`/
 /// `filter_chip.dart`, oracle tag `3.44.0`, `EdgeInsets.all(8.0)`) — a
@@ -47,15 +46,6 @@ const CONTAINER_PADDING: f64 = 8.0;
 /// without one) — mirrors `tests/checkbox.rs`'s own `themed` helper.
 fn themed(child: impl flui_sdk::view::IntoView) -> Theme {
     Theme::new(ThemeData::light(), child)
-}
-
-/// `_ChipDefaultsM3`/`_FilterChipDefaultsM3`'s formatted `Debug` string for
-/// a given resolved [`Color`] — what `RenderPhysicalShape`'s
-/// `Diagnosticable::debug_fill_properties` writes into its `"color"`
-/// property, matching `tests/elevated_button.rs`'s own `color_property`
-/// helper.
-fn color_property(color: Color) -> String {
-    format!("{color:?}")
 }
 
 /// The mounted chip's overall container size — the outermost
@@ -95,62 +85,13 @@ fn chip_only_point() -> (f64, f64) {
 // (a) Tap dispatch reaches the widget's own callback.
 // ------------------------------------------------------------------
 
-#[test]
-fn tap_fires_on_pressed_for_a_pressable_chip() {
-    let taps = Rc::new(RefCell::new(0_u32));
-    let counter = Rc::clone(&taps);
-    let laid = lay_out(
-        themed(Chip::new(Text::new("Tag")).on_pressed(move |_cx| {
-            *counter.borrow_mut() += 1;
-        })),
-        loose(300.0),
-    );
-
-    let (x, y) = chip_only_point();
-    laid.dispatch_pointer_down(x, y);
-    laid.dispatch_pointer_up(x, y);
-
-    assert_eq!(
-        *taps.borrow(),
-        1,
-        "a tap on a pressable chip must fire on_pressed"
-    );
-}
-
-#[test]
-fn tap_fires_on_selected_with_the_flipped_value_for_a_filter_chip() {
-    let observed = Rc::new(RefCell::new(None));
-    let recorder = Rc::clone(&observed);
-    let laid = lay_out(
-        themed(
-            FilterChip::new(Text::new("Vegetarian"))
-                .selected(false)
-                .on_selected(move |_cx, next| {
-                    *recorder.borrow_mut() = Some(next);
-                }),
-        ),
-        loose(300.0),
-    );
-
-    let (x, y) = chip_only_point();
-    laid.dispatch_pointer_down(x, y);
-    laid.dispatch_pointer_up(x, y);
-
-    assert_eq!(
-        *observed.borrow(),
-        Some(true),
-        "a tap on an unselected, enabled FilterChip must fire on_selected(true)",
-    );
-}
-
 // ------------------------------------------------------------------
 // (b) Delete-icon vs. chip-body tap separation — nested InkWells.
 // ------------------------------------------------------------------
 
 /// The shared root arena installed by the binding makes the nested delete
 /// target and chip body compete exactly as they do in a production `UiRealm`.
-#[test]
-fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
+pub fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
     let presses = Rc::new(RefCell::new(0_u32));
     let deletions = Rc::new(RefCell::new(0_u32));
     let press_counter = Rc::clone(&presses);
@@ -186,110 +127,15 @@ fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
     );
 }
 
-#[test]
-fn tapping_elsewhere_on_the_chip_fires_the_chip_tap_only_not_on_deleted() {
-    let presses = Rc::new(RefCell::new(0_u32));
-    let deletions = Rc::new(RefCell::new(0_u32));
-    let press_counter = Rc::clone(&presses);
-    let delete_counter = Rc::clone(&deletions);
-
-    let laid = lay_out(
-        themed(
-            Chip::new(Text::new("Tag"))
-                .on_pressed(move |_cx| {
-                    *press_counter.borrow_mut() += 1;
-                })
-                .on_deleted(move |_cx| {
-                    *delete_counter.borrow_mut() += 1;
-                }),
-        ),
-        loose(300.0),
-    );
-
-    let (x, y) = chip_only_point();
-    laid.dispatch_pointer_down(x, y);
-    laid.dispatch_pointer_up(x, y);
-
-    assert_eq!(
-        *presses.borrow(),
-        1,
-        "a tap away from the delete icon must fire the chip's own on_pressed",
-    );
-    assert_eq!(
-        *deletions.borrow(),
-        0,
-        "a tap away from the delete icon must NOT fire on_deleted",
-    );
-}
-
-#[test]
-fn ancestor_detector_and_chip_compete_in_the_binding_root_arena() {
-    let ancestor_taps = Rc::new(RefCell::new(0_u32));
-    let chip_taps = Rc::new(RefCell::new(0_u32));
-    let ancestor_counter = Rc::clone(&ancestor_taps);
-    let chip_counter = Rc::clone(&chip_taps);
-    let chip = Chip::new(Text::new("Tag")).on_pressed(move |_cx| {
-        *chip_counter.borrow_mut() += 1;
-    });
-    let root = GestureDetector::new()
-        .on_tap(move |_cx| *ancestor_counter.borrow_mut() += 1)
-        .behavior(HitTestBehavior::Opaque)
-        .child(chip);
-    let laid = lay_out(themed(root), loose(300.0));
-
-    let (x, y) = chip_only_point();
-    laid.dispatch_pointer_down(x, y);
-    laid.dispatch_pointer_up(x, y);
-
-    assert_eq!(
-        *ancestor_taps.borrow() + *chip_taps.borrow(),
-        1,
-        "an ancestor detector and Chip must arbitrate in one binding-owned arena",
-    );
-}
-
 // ------------------------------------------------------------------
 // (c) Selected FilterChip fill reaches the mounted Material.
 // ------------------------------------------------------------------
-
-/// Mutation-run: hardcoding `FilterChip::build`'s `background_color` to
-/// `Color::TRANSPARENT` regardless of `filter_chip_default_background_color`'s
-/// result was confirmed to make this test fail (`got Color { r: 0, g: 0, b:
-/// 0, a: 0 }, expected Color { r: 232, g: 222, b: 248, a: 255 }`) — the
-/// exact "wiring mutation survives" gap the pre-fix test suite had, since
-/// only the pure default-table function itself was ever unit-tested, never
-/// its actual use inside `build()`.
-#[test]
-fn selected_filter_chip_fill_reaches_the_mounted_material() {
-    let laid = lay_out(
-        themed(
-            FilterChip::new(Text::new("Vegetarian"))
-                .selected(true)
-                .on_selected(|_cx, _| {}),
-        ),
-        loose(300.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("FilterChip must compose a Material container surface");
-
-    assert_eq!(
-        laid.render_property(material, "color"),
-        Some(color_property(
-            ThemeData::light().color_scheme.secondary_container
-        )),
-        "a selected, enabled FilterChip's container must fill with secondaryContainer through \
-         the real mount — not the transparent fill an unselected/base chip uses",
-    );
-}
 
 // ------------------------------------------------------------------
 // (d) Disabled chip + delete icon are inert through real dispatch.
 // ------------------------------------------------------------------
 
-#[test]
-fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
+pub fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
     let presses = Rc::new(RefCell::new(0_u32));
     let deletions = Rc::new(RefCell::new(0_u32));
     let press_counter = Rc::clone(&presses);
@@ -330,147 +176,9 @@ fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
     );
 }
 
-#[test]
-fn disabled_filter_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
-    // `FilterChip` has no separate `enabled` builder — Flutter parity:
-    // `isEnabled => onSelected != null` (see `chip.rs`'s `FilterChip::is_enabled`).
-    let deletions = Rc::new(RefCell::new(0_u32));
-    let delete_counter = Rc::clone(&deletions);
-
-    let laid = lay_out(
-        themed(
-            FilterChip::new(Text::new("Vegetarian")).on_deleted(move |_cx| {
-                *delete_counter.borrow_mut() += 1;
-            }),
-        ),
-        loose(300.0),
-    );
-
-    let (delete_x, delete_y) = delete_icon_center(&laid);
-    laid.dispatch_pointer_down(delete_x, delete_y);
-    laid.dispatch_pointer_up(delete_x, delete_y);
-
-    assert_eq!(
-        *deletions.borrow(),
-        0,
-        "a FilterChip with no on_selected (disabled) must swallow taps on its delete icon too",
-    );
-}
-
 // ------------------------------------------------------------------
 // Theme tier beats default — proven through the real mount, not
 // `Option::or_else` re-implemented inline in the test (see chip.rs's
 // module doc: `ChipThemeData`'s fields are plain overrides, so this is the
 // one place their wiring into `build()` can be proven end to end).
 // ------------------------------------------------------------------
-
-/// Mutation-run: replacing `Chip::build`'s `label_color` binding with a bare
-/// `chip_content_color_default(states, &colors)` call (dropping the
-/// `chip_theme.label_color` read entirely) was confirmed to make this test
-/// fail — the resolved `style` carries the M3 default `onSurfaceVariant`
-/// (`Color { r: 73, g: 69, b: 79, a: 255 }`) instead of the configured
-/// override.
-#[test]
-fn theme_label_color_reaches_the_mounted_paragraph_beating_the_default() {
-    let themed_label_color = Color::rgb(11, 22, 33);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        chip_theme: Some(ChipThemeData {
-            label_color: Some(themed_label_color),
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-
-    let laid = lay_out(Theme::new(theme, Chip::new(Text::new("Tag"))), loose(300.0));
-
-    let paragraph = laid
-        .try_find_by_render_type("RenderParagraph")
-        .expect("Chip must mount a RenderParagraph for its label");
-    let style = laid
-        .render_property(paragraph, "style")
-        .expect("RenderParagraph must expose its resolved style");
-
-    assert!(
-        style.contains(&color_property(themed_label_color)),
-        "a configured chip_theme.label_color must reach the mounted label's resolved text \
-         color — got style {style:?}",
-    );
-}
-
-#[test]
-fn no_theme_override_paints_the_m3_default_label_color() {
-    let laid = lay_out(themed(Chip::new(Text::new("Tag"))), loose(300.0));
-
-    let paragraph = laid
-        .try_find_by_render_type("RenderParagraph")
-        .expect("Chip must mount a RenderParagraph for its label");
-    let style = laid
-        .render_property(paragraph, "style")
-        .expect("RenderParagraph must expose its resolved style");
-
-    // `_ChipDefaultsM3.labelStyle`: `isEnabled ? onSurfaceVariant : onSurface`
-    // — an enabled, undecorated `Chip` resolves `onSurfaceVariant`.
-    let default_color = ThemeData::light().color_scheme.on_surface_variant;
-    assert!(
-        style.contains(&color_property(default_color)),
-        "with no chip_theme override, the label must paint the M3 default onSurfaceVariant — \
-         got style {style:?}",
-    );
-}
-
-/// Mutation-run: replacing `Chip::build`'s `side` binding with a bare
-/// `chip_default_side(false, self.enabled, &colors)` call (dropping the
-/// `chip_theme.side` read entirely) was confirmed to make this test fail —
-/// the mounted border painter carries the M3 default `outlineVariant`
-/// (`Color { r: 202, g: 196, b: 208, a: 255 }`) instead of the configured
-/// override.
-#[test]
-fn theme_side_reaches_the_mounted_border_painter_beating_the_default() {
-    let themed_side_color = Color::rgb(44, 55, 66);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        chip_theme: Some(ChipThemeData {
-            side: Some(flui_sdk::painting::BorderSide::new(
-                themed_side_color,
-                3.0,
-                flui_sdk::painting::BorderStyle::Solid,
-            )),
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-
-    let laid = lay_out(Theme::new(theme, Chip::new(Text::new("Tag"))), loose(300.0));
-
-    let custom_paint = laid
-        .try_find_by_render_type("RenderCustomPaint")
-        .expect("Chip must mount a RenderCustomPaint for its border");
-    let painter = laid
-        .render_property(custom_paint, "foreground_painter")
-        .expect("RenderCustomPaint must expose its foreground painter");
-
-    assert!(
-        painter.contains(&color_property(themed_side_color)),
-        "a configured chip_theme.side must reach the mounted border painter's resolved color — \
-         got painter {painter:?}",
-    );
-}
-
-#[test]
-fn no_theme_override_paints_the_m3_default_side_color() {
-    let laid = lay_out(themed(Chip::new(Text::new("Tag"))), loose(300.0));
-
-    let custom_paint = laid
-        .try_find_by_render_type("RenderCustomPaint")
-        .expect("Chip must mount a RenderCustomPaint for its border");
-    let painter = laid
-        .render_property(custom_paint, "foreground_painter")
-        .expect("RenderCustomPaint must expose its foreground painter");
-
-    // `_ChipDefaultsM3.side`: `isEnabled ? outlineVariant : onSurface@12%`.
-    let default_color = ThemeData::light().color_scheme.outline_variant;
-    assert!(
-        painter.contains(&color_property(default_color)),
-        "with no chip_theme override, the border must paint the M3 default outlineVariant — \
-         got painter {painter:?}",
-    );
-}

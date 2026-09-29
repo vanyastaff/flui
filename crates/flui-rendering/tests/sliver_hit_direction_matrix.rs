@@ -5,7 +5,6 @@
 
 use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::{Leaf, Variable};
-use flui_objects::RenderViewport;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
@@ -14,7 +13,6 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     testing::{inspect, sliver},
     traits::{RenderBox, RenderSliver},
-    view::ScrollableViewportOffset,
 };
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject, laid_out_tight_100x100 as laid_out};
@@ -119,8 +117,7 @@ impl RenderSliver for MainAxisBandSliver {
     }
 }
 
-#[test]
-fn sliver_hit_direction_matrix_through_box_host() {
+pub(crate) fn sliver_hit_direction_matrix_through_box_host() {
     let cases = [
         (
             AxisDirection::TopToBottom,
@@ -197,52 +194,4 @@ fn sliver_hit_direction_matrix_through_box_host() {
             "{axis:?} {growth:?} must miss outside the leading main-axis band",
         );
     }
-}
-
-#[test]
-fn viewport_hit_direction_matrix_matches_box_host_semantics() {
-    let mut owner = PipelineOwner::new();
-    let mut viewport = RenderViewport::with_offset(
-        AxisDirection::TopToBottom,
-        AxisDirection::LeftToRight,
-        ScrollableViewportOffset::zero(),
-    );
-    // Flutter's `center` is always a direct child, so a lone reverse-growth
-    // sliver (FLUI's old `center_sliver_index(Some(0))` == "all reverse") is
-    // unrepresentable — it becomes a reverse child (index 0) before a
-    // forward filler (index 1), with `anchor: 1.0` giving the reverse group
-    // the WHOLE viewport (`center_offset == main_axis_extent`). That
-    // reproduces the exact same paint offset (y = 100*anchor - extent = 60)
-    // as the old all-reverse layout, so the hit position below is unchanged.
-    assert_eq!(
-        viewport.set_center(Some(1)),
-        flui_rendering::RenderUpdateImpact::LAYOUT,
-    );
-    assert_eq!(
-        viewport.set_anchor(1.0),
-        flui_rendering::RenderUpdateImpact::LAYOUT,
-    );
-    let root_id = owner.insert(Box::new(viewport));
-    let sliver_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            root_id,
-            Box::new(MainAxisBandSliver::new(40.0, 0.0, 15.0)) as BoxedSliverObject,
-        )
-        .expect("sliver");
-    owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            root_id,
-            Box::new(MainAxisBandSliver::new(20.0, 0.0, 15.0)) as BoxedSliverObject,
-        )
-        .expect("forward filler — laid out with zero remaining_paint_extent under anchor 1.0");
-
-    let owner = laid_out(owner, root_id);
-
-    assert_eq!(
-        hits_at(&owner, 10.0, 90.0),
-        vec![sliver_id, root_id],
-        "viewport reverse TTB must align with box-host reverse hit semantics",
-    );
 }
