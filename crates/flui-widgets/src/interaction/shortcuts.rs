@@ -43,11 +43,11 @@ use super::actions::{
     NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, chain_at, resolve,
 };
 use super::focus::Focus;
-use crate::support::{EventCallback, event_callback};
+use crate::support::event_callback;
 
 /// A callback bound to a [`SingleActivator`] in [`CallbackShortcuts`]: it
 /// receives the key event's [`EventCx`] (ADR-0086).
-pub type ShortcutCallback = EventCallback;
+pub type ShortcutCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 
 // ============================================================================
 // SingleActivator
