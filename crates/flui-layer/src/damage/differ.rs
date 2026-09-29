@@ -249,7 +249,7 @@ impl Frame {
                 filters.push(ForegroundFilter {
                     parent: ctx.filter,
                     input: None,
-                    reach: filter_reach(filter.filter()) * max_scale(&ctx.transform),
+                    reach: device_reach(filter.filter(), &ctx.transform),
                 });
                 ctx.filter = Some(filters.len() - 1);
             }
@@ -359,7 +359,7 @@ impl Frame {
                     clipped = false;
                     let bounds = DamageExtent::rect(backdrop.bounds());
                     if let Some(rect) = place(bounds, &ctx, full, false) {
-                        let reach = filter_reach(backdrop.filter()) * max_scale(&ctx.transform);
+                        let reach = device_reach(backdrop.filter(), &ctx.transform);
                         frame.backdrops.push((rect, reach));
                     }
                     Some(bounds)
@@ -630,6 +630,33 @@ fn filter_reach(filter: &ImageFilter) -> f64 {
         ImageFilter::Blur { sigma_x, sigma_y } => 3.0 * sigma_x.abs().max(sigma_y.abs()),
         ImageFilter::Dilate { radius } | ImageFilter::Erode { radius } => radius.abs(),
         ImageFilter::Compose(filters) => filters.iter().map(filter_reach).sum(),
+        _ => 0.0,
+    }
+}
+
+/// How far past its input `filter` reaches in surface pixels under
+/// `transform`: the larger of its local reach scaled by the transform and the
+/// growth the GPU renderer gives it.
+///
+/// The renderer takes a filter's sigma and radius as physical pixels
+/// whatever the transform, and grows its output by the kernel half-width:
+/// `ceil(sqrt(3) x sigma)` for a blur (`flui-engine`'s `kernel_radius`),
+/// `ceil(radius)` for a morphology, summed through a composition. Under a
+/// shrinking transform that exceeds the scaled local reach; under a
+/// magnifying one the scaled reach is larger. Damage takes whichever is
+/// further, so it covers either reading of the sigma.
+fn device_reach(filter: &ImageFilter, transform: &Matrix4) -> f64 {
+    (filter_reach(filter) * max_scale(transform)).max(renderer_growth(filter))
+}
+
+/// The growth the GPU renderer gives `filter`, in physical pixels.
+fn renderer_growth(filter: &ImageFilter) -> f64 {
+    match filter {
+        ImageFilter::Blur { sigma_x, sigma_y } => {
+            (3.0_f64.sqrt() * sigma_x.abs().max(sigma_y.abs())).ceil()
+        }
+        ImageFilter::Dilate { radius } | ImageFilter::Erode { radius } => radius.abs().ceil(),
+        ImageFilter::Compose(filters) => filters.iter().map(renderer_growth).sum(),
         _ => 0.0,
     }
 }

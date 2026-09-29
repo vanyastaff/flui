@@ -218,6 +218,7 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `a_shader_mask_damages_its_whole_bounds`,
   `a_shader_mask_under_a_clip_damages_its_unclipped_bounds`,
   `damage_meeting_a_foreground_blur_takes_its_footprint`,
+  `a_shrunk_blurs_footprint_reaches_the_renderers_kernel`,
   `layers_that_paint_transparent_pixels_damage_everything`,
   `a_shadow_under_a_non_uniform_scale_damages_its_blur_on_both_axes`,
   `a_leader_move_damages_its_follower`, `damage_meeting_a_backdrop_includes_the_backdrop`,
@@ -246,6 +247,7 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `a_removed_clear_shader_mask_leaves_nothing_behind`,
   `a_removed_offscreen_effect_under_a_clip_leaves_nothing_behind`,
   `a_change_beside_a_foreground_blur_matches_a_full_frame`,
+  `a_change_in_a_shrunk_blurs_halo_matches_a_full_frame`,
   `a_removed_destination_affecting_layer_leaves_nothing_behind`,
   `a_damage_edge_through_an_advanced_blend_matches_a_full_frame`,
   `a_frame_outside_the_protocol_is_followed_by_a_full_one`), which drive the same

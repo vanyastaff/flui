@@ -1498,3 +1498,64 @@ fn a_removed_destination_affecting_layer_leaves_nothing_behind() {
         );
     }
 }
+
+/// A change in the halo of a foreground blur under a shrinking transform
+/// presents the same pixels as a full frame. The renderer blurs with the
+/// filter's sigma in physical pixels whatever the transform, so its halo
+/// reaches `ceil(sqrt(3) x sigma)` pixels even where the transform shrinks
+/// the content to a quarter, and damage there must take in the blur.
+#[test]
+fn a_change_in_a_shrunk_blurs_halo_matches_a_full_frame() {
+    use flui_layer::ImageFilterLayer;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background, blurred, moving) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let build = |at: Offset<f64>| {
+        backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
+            let boundary = tree.push_child(
+                root_id,
+                LayerNode::new(Layer::from(TransformLayer::new(Matrix4::scaling(
+                    0.25, 0.25, 1.0,
+                ))))
+                .with_boundary(id(4), blurred.clone()),
+            );
+            let filter = tree.push_child(boundary, Layer::from(ImageFilterLayer::blur(8.0)));
+            // Device rect (40, 40)-(70, 70).
+            tree.push_child(
+                filter,
+                rect_picture(Rect::from_xywh(160.0, 160.0, 120.0, 120.0), Color::RED),
+            );
+            let mover = tree.push_child(
+                root_id,
+                LayerNode::new(Layer::from(OffsetLayer::new(at)))
+                    .with_boundary(id(2), moving.clone()),
+            );
+            tree.push_child(
+                mover,
+                rect_picture(Rect::from_xywh(0.0, 0.0, 4.0, 4.0), Color::BLUE),
+            );
+        })
+    };
+    // Beside the blur, 8 to 12 px past its edge: inside the renderer's
+    // 14 px halo, outside a quarter-scaled three-sigma reach of 6 px.
+    let (before, after) = (
+        build(Offset::new(78.0, 50.0)),
+        build(Offset::new(78.0, 56.0)),
+    );
+    let full_before = full_frame_pixels(&renderer, &before);
+    assert_ne!(
+        px(&full_before, 77, 62),
+        GREEN,
+        "precondition: the halo reaches past the quarter-scaled reach"
+    );
+    let (partial, full) = partial_and_full(&renderer, &before, &after);
+    let stale = mismatches(&partial, &full, 2);
+    assert!(stale.is_empty(), "stale pixels at {stale:?}");
+}

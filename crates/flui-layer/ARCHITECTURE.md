@@ -146,7 +146,9 @@ are damaged every frame; a shader mask or backdrop filter's bounds are not clipp
 above it (the engine composites the offscreen unscissored), and an opacity layer whose blend
 changes pixels under a transparent source, or a colour filter that paints transparent black,
 damages the whole surface; damage that meets a foreground image filter's footprint (its
-children's extents grown by the filter's reach) joins that footprint, since the engine re-renders
+children's extents grown by the filter's reach: the larger of its local reach scaled by the
+transform and the renderer's physical-pixel kernel growth, `ceil(sqrt(3) x sigma)` for a blur)
+joins that footprint, since the engine re-renders
 the filter from children recorded under the damage scissor; a backdrop filter whose blur-widened bounds meet the damage
 joins it until nothing more does. The result is `Full` for an unpairable frame (first frame,
 surface size change, unstamped root, root boundary or placement change, a boundary stamped

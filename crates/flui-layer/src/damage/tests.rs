@@ -516,6 +516,36 @@ fn damage_meeting_a_foreground_blur_takes_its_footprint() {
     );
 }
 
+/// Under a shrinking transform a foreground blur's footprint still reaches
+/// the renderer's kernel half-width in physical pixels, `ceil(sqrt(3) x
+/// sigma)`, which there exceeds three sigma scaled down.
+#[test]
+fn a_shrunk_blurs_footprint_reaches_the_renderers_kernel() {
+    let (root, blurred) = (ContentToken::mint(), ContentToken::mint());
+    let build = |moving: &ContentToken, at: Offset<f64>| {
+        let mut frame = Frame::new(1.0, &root);
+        let parent = frame.root();
+        let node = LayerNode::new(Layer::from(TransformLayer::new(Matrix4::scaling(
+            0.25, 0.25, 1.0,
+        ))))
+        .with_boundary(id(3), blurred.clone());
+        let boundary = frame.tree.push_child(parent, node);
+        let filter = frame.push(boundary, crate::ImageFilterLayer::blur(8.0));
+        // Device rect (100, 100)-(150, 150).
+        frame.push(filter, picture(Rect::from_xywh(400.0, 400.0, 200.0, 200.0)));
+        frame.boundary(parent, 2, moving, at, Size::new(4.0, 4.0));
+        frame.scene()
+    };
+    let moving = ContentToken::mint();
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&moving, Offset::new(158.0, 120.0)), SURFACE);
+    // 14 px of kernel past the device rect, not 3 x 8 x 0.25 = 6.
+    assert_eq!(
+        partial(differ.diff(&build(&moving, Offset::new(158.0, 124.0)), SURFACE)),
+        covering(86.0, 86.0, 164.0, 164.0)
+    );
+}
+
 /// A layer whose composite changes pixels its children never inked (an
 /// opacity layer with a `Src` blend, a colour filter painting transparent
 /// pixels) damages the whole surface when it changes.
