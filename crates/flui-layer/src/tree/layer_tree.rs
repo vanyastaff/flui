@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 use flui_foundation::{Diagnosticable, LayerId, RenderId};
 
+use super::stamp::{BoundaryStamp, ContentToken};
 use crate::{LayerLink, layer::Layer};
 
 /// A [`Layer`] plus its position in the tree.
@@ -24,18 +25,20 @@ pub struct LayerNode {
     parent: Option<LayerId>,
     children: Vec<LayerId>,
     layer: Layer,
-    /// The repaint boundary whose paint produced this layer, when one did.
+    /// The repaint boundary whose paint produced this layer, and the version
+    /// of the content it painted, when a boundary did.
     ///
     /// This is what lets two consecutive frames be compared: each frame builds
     /// a fresh tree with fresh ids, so `LayerId` pairs nothing, and damage has
     /// to come from comparing layer trees rather than from which render
-    /// objects repainted (ADR-0061). `None` on every layer no boundary
-    /// originated — structural layers a fragment pushed — so a pairing pass
-    /// cannot mistake one for a boundary. The root carries a stamp only when
-    /// the root render object is itself a repaint boundary (as `RenderView`
-    /// is); a plain `RenderFlex` root, as most test fixtures mount, leaves it
-    /// `None`.
-    render_id: Option<RenderId>,
+    /// objects repainted (ADR-0061). The `RenderId` pairs a layer with the
+    /// previous frame's; the [`ContentToken`] says whether its content changed
+    /// (ADR-0087 §3). `None` on every layer no boundary originated —
+    /// structural layers a fragment pushed — so a pairing pass cannot mistake
+    /// one for a boundary. The root carries a stamp only when the root render
+    /// object is itself a repaint boundary (as `RenderView` is); a plain
+    /// `RenderFlex` root, as most test fixtures mount, leaves it `None`.
+    boundary: Option<BoundaryStamp>,
 }
 
 impl Diagnosticable for LayerNode {
@@ -43,8 +46,8 @@ impl Diagnosticable for LayerNode {
     /// with the boundary stamp.
     fn to_diagnostics_node(&self) -> flui_foundation::DiagnosticsNode {
         let mut node = self.layer.to_diagnostics_node();
-        if let Some(render_id) = self.render_id {
-            node = node.property("render_id", format!("{render_id:?}"));
+        if let Some(stamp) = &self.boundary {
+            node = node.property("render_id", format!("{:?}", stamp.render_id()));
         }
         node
     }
@@ -57,15 +60,15 @@ impl LayerNode {
             parent: None,
             children: Vec::new(),
             layer,
-            render_id: None,
+            boundary: None,
         }
     }
 
-    /// Stamps this node with the repaint boundary that produced it — see
-    /// [`Self::render_id`].
+    /// Stamps this node with the repaint boundary that produced it and the
+    /// version of the content it painted — see [`Self::boundary`].
     #[must_use]
-    pub fn with_render_id(mut self, render_id: RenderId) -> Self {
-        self.render_id = Some(render_id);
+    pub fn with_boundary(mut self, render_id: RenderId, content: ContentToken) -> Self {
+        self.boundary = Some(BoundaryStamp::new(render_id, content));
         self
     }
 
@@ -87,10 +90,24 @@ impl LayerNode {
         &self.layer
     }
 
-    /// The repaint boundary this layer came from — see [`Self::render_id`].
+    /// The repaint boundary this layer came from, with its content version;
+    /// `None` on a layer no boundary originated.
+    #[inline]
+    pub fn boundary(&self) -> Option<&BoundaryStamp> {
+        self.boundary.as_ref()
+    }
+
+    /// The repaint boundary this layer came from — see [`Self::boundary`].
     #[inline]
     pub fn render_id(&self) -> Option<RenderId> {
-        self.render_id
+        self.boundary.as_ref().map(BoundaryStamp::render_id)
+    }
+
+    /// The version of the content the boundary painted — see
+    /// [`Self::boundary`].
+    #[inline]
+    pub fn content_token(&self) -> Option<&ContentToken> {
+        self.boundary.as_ref().map(BoundaryStamp::content)
     }
 }
 
@@ -492,14 +509,21 @@ mod tests {
     #[test]
     fn render_id_stamp_survives_insertion() {
         let render_id = RenderId::new(7);
-        let mut tree = LayerTree::new(LayerNode::new(offset()).with_render_id(render_id));
+        let content = ContentToken::mint();
+        let mut tree =
+            LayerTree::new(LayerNode::new(offset()).with_boundary(render_id, content.clone()));
         let root = tree.root();
         let leaf = tree.push_child(root, offset());
         assert_eq!(
             tree.get(root).and_then(LayerNode::render_id),
             Some(render_id)
         );
+        assert_eq!(
+            tree.get(root).and_then(LayerNode::content_token),
+            Some(&content)
+        );
         assert_eq!(tree.get(leaf).and_then(LayerNode::render_id), None);
+        assert!(tree.get(leaf).and_then(LayerNode::boundary).is_none());
     }
 
     #[test]

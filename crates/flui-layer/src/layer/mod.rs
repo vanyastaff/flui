@@ -211,6 +211,36 @@ impl Layer {
         }
     }
 
+    /// Whether `self` and `other` apply the same effect to the subtree under
+    /// them: the same variant with equal parameters.
+    ///
+    /// The question a damage differ asks of the layers above a repaint
+    /// boundary: if an ancestor's opacity, clip or filter changed, the pixels
+    /// the boundary's content lands on changed even though the content did
+    /// not. Leaves (`Picture`, `Canvas`, `Texture`, `PlatformView`,
+    /// `PerformanceOverlay`) apply no effect to a subtree and answer `false`;
+    /// an `AnnotatedRegion` changes no pixel and answers `true` for any two.
+    #[must_use]
+    pub fn same_effect(&self, other: &Layer) -> bool {
+        match (self, other) {
+            (Layer::ClipRect(a), Layer::ClipRect(b)) => a == b,
+            (Layer::ClipRRect(a), Layer::ClipRRect(b)) => a == b,
+            (Layer::ClipPath(a), Layer::ClipPath(b)) => a == b,
+            (Layer::ClipSuperellipse(a), Layer::ClipSuperellipse(b)) => a == b,
+            (Layer::Offset(a), Layer::Offset(b)) => a == b,
+            (Layer::Transform(a), Layer::Transform(b)) => a == b,
+            (Layer::Opacity(a), Layer::Opacity(b)) => a == b,
+            (Layer::ColorFilter(a), Layer::ColorFilter(b)) => a == b,
+            (Layer::ImageFilter(a), Layer::ImageFilter(b)) => a == b,
+            (Layer::ShaderMask(a), Layer::ShaderMask(b)) => a == b,
+            (Layer::BackdropFilter(a), Layer::BackdropFilter(b)) => a == b,
+            (Layer::Leader(a), Layer::Leader(b)) => a == b,
+            (Layer::Follower(a), Layer::Follower(b)) => a == b,
+            (Layer::AnnotatedRegion(_), Layer::AnnotatedRegion(_)) => true,
+            _ => false,
+        }
+    }
+
     /// The leader payload, if this is a `Leader`.
     #[inline]
     pub fn as_leader(&self) -> Option<&LeaderLayer> {
@@ -375,6 +405,36 @@ mod tests {
         assert_eq!(
             Layer::from(ClipRectLayer::new(Rect::ZERO, Clip::HardEdge)).local_translation(),
             Offset::ZERO
+        );
+    }
+
+    #[test]
+    fn same_effect_compares_variant_and_parameters() {
+        let half = Layer::from(OpacityLayer::new(0.5));
+        assert!(half.same_effect(&Layer::from(OpacityLayer::new(0.5))));
+        assert!(!half.same_effect(&Layer::from(OpacityLayer::new(0.25))));
+        assert!(!half.same_effect(&Layer::from(ColorFilterLayer::identity())));
+        let clip = |w| {
+            Layer::from(ClipRectLayer::new(
+                Rect::from_xywh(0.0, 0.0, w, 10.0),
+                flui_painting::paint::Clip::HardEdge,
+            ))
+        };
+        assert!(clip(10.0).same_effect(&clip(10.0)));
+        assert!(!clip(10.0).same_effect(&clip(20.0)));
+        let backdrop = |sigma| {
+            Layer::from(BackdropFilterLayer::new(
+                flui_painting::paint::ImageFilter::blur(sigma),
+                flui_painting::paint::BlendMode::SrcOver,
+                Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            ))
+        };
+        assert!(backdrop(2.0).same_effect(&backdrop(2.0)));
+        assert!(!backdrop(2.0).same_effect(&backdrop(3.0)));
+        let picture = Layer::from(PictureLayer::default());
+        assert!(
+            !picture.same_effect(&picture.clone()),
+            "a leaf is no effect"
         );
     }
 

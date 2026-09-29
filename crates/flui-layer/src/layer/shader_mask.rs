@@ -37,7 +37,7 @@ use flui_painting::paint::{BlendMode, Shader};
 ///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
 /// );
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ShaderMaskLayer {
     /// Shader (gradient, solid, etc.)
     shader: Shader,
