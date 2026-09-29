@@ -26,8 +26,8 @@ pub fn record(f: impl FnOnce(&mut Canvas)) -> DisplayList {
 }
 
 /// How many handles hold `fonts`: the caller's own clones plus one inside
-/// each [`TextContext`](crate::TextContext) built from it. A consumer's
-/// tests use it to pin who holds the collection and when they let go.
+/// each [`TextContext`] built from it. A consumer's tests use it to pin who
+/// holds the collection and when they let go.
 #[must_use]
 pub fn font_collection_holders(fonts: &FontCollection) -> usize {
     fonts.holders()

@@ -233,6 +233,10 @@ impl TextContext {
     /// Records one measurement made through this context. Counted only in
     /// test builds, where it shows which context a layout measured on.
     #[inline]
+    #[cfg_attr(
+        not(any(test, feature = "testing")),
+        expect(clippy::unused_self, reason = "only test builds count the loans")
+    )]
     pub(crate) fn note_lent(&mut self) {
         #[cfg(any(test, feature = "testing"))]
         {
