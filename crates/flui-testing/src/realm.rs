@@ -328,6 +328,10 @@ impl HeadlessRealm {
             1.0,
             Arc::new(AtomicBool::new(false)),
             Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
+            // A collection of its own, built the way the app's composition
+            // root builds the shared one: the realm owns a `TextContext` over
+            // it (ADR-0092 §3), exactly as a hosted realm does.
+            &flui_painting::FontCollection::new(),
             ClockSource::Manual(clock.clone()),
         )
         .expect("BUG: interaction lane identity exhausted");

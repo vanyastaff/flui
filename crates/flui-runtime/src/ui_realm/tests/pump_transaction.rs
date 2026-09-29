@@ -278,6 +278,7 @@ fn manual_clock_realm(clock: &ManualClock) -> UiRealm {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        &flui_painting::FontCollection::new(),
         flui_scheduler::ClockSource::Manual(clock.clone()),
     )
     .expect("runtime")

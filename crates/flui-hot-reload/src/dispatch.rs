@@ -114,6 +114,12 @@ impl<'a> WorkerBuildEnv<'a> {
     }
 }
 
+/// Serializes this crate's unit tests that install a rebuild hook:
+/// [`REQUEST_REBUILD`] is process-global, and `cargo test` runs a binary's
+/// tests on parallel threads.
+#[cfg(test)]
+pub(crate) static REBUILD_HOOK_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::AtomicUsize;
@@ -122,6 +128,7 @@ mod tests {
 
     #[test]
     fn replacing_registration_is_generation_safe_for_racing_old_clone() {
+        let _registry = REBUILD_HOOK_TEST_LOCK.lock();
         let a_calls = Arc::new(AtomicUsize::new(0));
         let a_in_hook = Arc::clone(&a_calls);
         let registration_a = register_request_rebuild(move || {

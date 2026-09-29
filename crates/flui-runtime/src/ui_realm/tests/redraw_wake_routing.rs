@@ -34,6 +34,7 @@ fn redraw_request_from_a_does_not_wake_bs_window() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        &flui_painting::FontCollection::new(),
         flui_scheduler::ClockSource::Platform,
     )
     .expect("realm constructs");
@@ -113,6 +114,7 @@ fn a_scheduler_frame_request_reaches_the_realms_platform_wake() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        &flui_painting::FontCollection::new(),
         flui_scheduler::ClockSource::Platform,
     )
     .expect("realm constructs");
@@ -153,6 +155,7 @@ fn a_cross_thread_frame_request_reaches_the_realms_platform_wake() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        &flui_painting::FontCollection::new(),
         flui_scheduler::ClockSource::Platform,
     )
     .expect("realm constructs");
@@ -191,6 +194,7 @@ fn a_pipeline_visual_update_flips_the_schedulers_frame_scheduled_edge() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        &flui_painting::FontCollection::new(),
         flui_scheduler::ClockSource::Platform,
     )
     .expect("realm constructs");
@@ -234,6 +238,7 @@ fn a_pipeline_visual_update_during_the_realm_frame_does_not_redraw_immediately()
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        &flui_painting::FontCollection::new(),
         flui_scheduler::ClockSource::Platform,
     )
     .expect("realm constructs");

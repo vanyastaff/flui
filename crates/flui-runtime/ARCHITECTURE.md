@@ -160,12 +160,19 @@ host.
   must make the compiler name the realm's match site and every host's
   mapping, and a wildcard arm would swallow it (pinned by the enum's
   doctest, which matches every variant from outside the crate).
+- **A realm owns one text context over the app's font collection.**
+  `UiRealm::new` takes the app's `FontCollection` (the host's shared engine
+  services hold it), and `RealmServices::construct` builds the realm's one
+  `TextContext` over it (ADR-0092 §3). A presentation builds none, no static
+  holds one, and the context drops with the realm. Pinned by
+  `ui_realm::tests::text_context`.
 - **Test hooks stay behind `test-support`.** Items that exist for tests, or
   that have no production caller yet (`HeldPointerQueue::append`/`len`,
   `SemanticsHost::ensure_semantics`, `outstanding_handles`,
   `ExecutionServices::with_limits`/`owns_default_pools`/`default_pools_started` and
   `platform_semantics_enabled`, the announce/event delivery, the realm's
-  `for_test` constructors and `*_for_test` probes, the `testing` doubles),
+  `for_test` constructors and `*_for_test` probes such as
+  `text_context_for_test`, the `testing` doubles),
   compile only under `cfg(test)` or the `test-support` feature, which only
   dev edges enable. Wiring one into production removes its gate in the same
   change. The exception is what the headless test driver reads on its normal

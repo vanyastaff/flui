@@ -1,0 +1,232 @@
+//! `Draggable`'s callbacks run inside a write the widget's `WriterSource`
+//! opens (ADR-0086): each receives an `EventCx`, writes signals, and a
+//! refused write is reported rather than panicked. An unmount mid-drag
+//! cancels from `finalize_tree`, outside any build, so its callbacks' writes
+//! land too.
+
+use std::cell::Cell;
+use std::rc::Rc;
+
+use flui_interaction::DragUpdateDetails;
+use flui_painting::styling::Color;
+use flui_view::prelude::*;
+use flui_widgets::Draggable;
+use flui_widgets::{
+    ColoredBox, DraggableCanceledDetails, DraggableDetails, InsertPosition, Overlay, OverlayEntry,
+    OverlayHandle, SizedBox, Text,
+};
+
+use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
+
+/// How a test wires the draggable's callbacks to the probe's signals.
+type Configure = Rc<dyn Fn(Draggable<u32>, ProbeSignals) -> Draggable<u32>>;
+
+/// A probe whose child is an `Overlay` hosting one entry: the draggable
+/// under test (so its feedback has an overlay to go into), or, once `show`
+/// is cleared and the entry rebuilt, nothing.
+struct Rig {
+    probe: SignalProbe,
+    show: Rc<Cell<bool>>,
+    entry: OverlayEntry,
+}
+
+fn rig(configure: impl Fn(Draggable<u32>, ProbeSignals) -> Draggable<u32> + 'static) -> Rig {
+    let configure: Configure = Rc::new(configure);
+    let show = Rc::new(Cell::new(true));
+    let signals: Rc<Cell<Option<ProbeSignals>>> = Rc::new(Cell::new(None));
+
+    let entry = {
+        let show = Rc::clone(&show);
+        let signals = Rc::clone(&signals);
+        OverlayEntry::new(move |_ctx| {
+            if !show.get() {
+                return SizedBox::shrink().into_view().boxed();
+            }
+            let signals = signals.get().expect("the probe built before its overlay");
+            let draggable = Draggable::new(ColoredBox::new(Color::rgb(10, 20, 30)))
+                .data(7_u32)
+                .feedback(|| Text::new("feedback").into_view().boxed());
+            configure(draggable, signals).into_view().boxed()
+        })
+    };
+    let handle = OverlayHandle::new();
+    handle.insert(&entry, &InsertPosition::Top);
+
+    let probe = SignalProbe::new(move |probe_signals| {
+        signals.set(Some(probe_signals));
+        Overlay::new(handle.clone())
+    });
+    Rig { probe, show, entry }
+}
+
+fn mounted(rig: &Rig) -> LaidOut {
+    lay_out(rig.probe.view(), tight(400.0, 400.0))
+}
+
+/// Down, then far enough past the slop that the drag has certainly started
+/// and moved.
+fn start_drag(app: &LaidOut) {
+    app.dispatch_pointer_down(50.0, 50.0);
+    app.dispatch_pointer_move(50.0, 90.0);
+    app.dispatch_pointer_move(50.0, 130.0);
+}
+
+/// `started` adds 1, each update 10, `end` 100 and `canceled` 1000, so the
+/// final value says exactly which callbacks ran and how often.
+#[test]
+fn drag_callbacks_write_signals_and_rebuild_their_reader() {
+    let rig = rig(|draggable, ProbeSignals { count, .. }| {
+        draggable
+            .on_drag_started(move |cx| count.update(cx, |n| *n += 1))
+            .on_drag_update(move |cx, _details| count.update(cx, |n| *n += 10))
+            .on_drag_end(move |cx, details: DraggableDetails| {
+                assert!(!details.was_accepted, "nothing accepts a drop over nothing");
+                count.update(cx, |n| *n += 100)
+            })
+            .on_draggable_canceled(move |cx, _details| count.update(cx, |n| *n += 1000))
+            .on_drag_completed(move |cx| count.set(cx, 0))
+    });
+    let mut app = mounted(&rig);
+
+    start_drag(&app);
+    let during = rig.probe.value().expect("the probe's signal is live");
+    assert_eq!(during % 10, 1, "on_drag_started wrote once: {during}");
+    let updates = during / 10;
+    assert!(updates >= 1, "on_drag_update wrote per move: {during}");
+
+    app.dispatch_pointer_up(50.0, 130.0);
+    let value = rig.probe.value().expect("the probe's signal is live");
+    assert_eq!(
+        value,
+        1 + 10 * updates + 100 + 1000,
+        "on_drag_end and on_draggable_canceled each wrote once, on_drag_completed never"
+    );
+
+    app.tick();
+    assert_eq!(
+        rig.probe.reads().last(),
+        Some(&value),
+        "the reader rebuilt with the drag's writes"
+    );
+}
+
+#[test]
+fn a_refused_drag_write_is_reported_not_panicked() {
+    let rig = rig(|draggable, ProbeSignals { count, released }| {
+        draggable
+            .on_drag_update(move |cx, _details| released.set(cx, 1))
+            .on_drag_end(move |cx, _details| count.set(cx, 1))
+    });
+    let mut app = mounted(&rig);
+
+    let ((), log) = flui_testing::log_capture::capture(|| start_drag(&app));
+    assert!(
+        log.contains("an event callback's signal write was refused"),
+        "the refusal is logged at the dispatch boundary: {log}"
+    );
+
+    app.dispatch_pointer_up(50.0, 130.0);
+    assert_eq!(rig.probe.value(), Ok(1), "the drag still ended normally");
+    app.tick();
+    assert_eq!(rig.probe.reads().last(), Some(&1));
+}
+
+/// An unmount mid-drag cancels the drag from `dispose`, which runs in
+/// `finalize_tree` after the build, so `on_draggable_canceled`'s write is
+/// accepted rather than refused as a write during build. The feedback layer
+/// the drag put into the overlay goes with it.
+#[test]
+fn unmounting_mid_drag_reports_cancel_through_cx() {
+    let rig = rig(|draggable, ProbeSignals { count, .. }| {
+        draggable.on_draggable_canceled(move |cx, details: DraggableCanceledDetails| {
+            assert_eq!(details.velocity.pixels_per_second.dx, 0.0);
+            count.set(cx, 5)
+        })
+    });
+    let mut app = mounted(&rig);
+
+    start_drag(&app);
+    app.tick();
+    assert!(
+        app.find_text("feedback").is_some(),
+        "premise: the drag's feedback is showing in the overlay"
+    );
+
+    rig.show.set(false);
+    rig.entry.mark_needs_build();
+    let ((), log) = flui_testing::log_capture::capture(|| app.tick());
+
+    assert_eq!(
+        rig.probe.value(),
+        Ok(5),
+        "the cancel wrote through its cx: {log}"
+    );
+    assert!(
+        !log.contains("refused"),
+        "the unmount-time write was not refused: {log}"
+    );
+    app.tick();
+    assert!(
+        app.find_text("feedback").is_none(),
+        "the feedback layer left with the draggable"
+    );
+    assert_eq!(rig.probe.reads().last(), Some(&5), "the reader rebuilt");
+}
+
+/// Closures bound with `let` before they reach a setter name their value
+/// through `callback_with`, including the single cancel value.
+#[test]
+fn a_let_bound_drag_callback_compiles_through_callback_with() {
+    let rig = rig(|draggable, ProbeSignals { count, .. }| {
+        let on_update =
+            callback_with(move |cx, _details: DragUpdateDetails| count.update(cx, |n| *n += 1));
+        let on_canceled = callback_with(move |cx, canceled: DraggableCanceledDetails| {
+            count.update(cx, |n| *n += 100 + canceled.offset.dy as u32)
+        });
+        draggable
+            .on_drag_update(on_update)
+            .on_draggable_canceled(on_canceled)
+    });
+    let app = mounted(&rig);
+
+    start_drag(&app);
+    let updates = rig.probe.value().expect("live");
+    assert!(updates >= 1, "the update closure ran");
+    app.dispatch_pointer_up(50.0, 130.0);
+
+    let value = rig.probe.value().expect("live");
+    assert!(
+        value > updates + 100,
+        "the cancel closure ran with the drag's displacement: {value}"
+    );
+}
+
+/// A drag callback that panics while the unmount cancels the drag must not
+/// leave the drag's feedback layer in the overlay: `dispose` removes the
+/// layer before the cancel runs any user code. Whether the unmount path
+/// contains the panic or lets it escape the frame, the next frame proceeds
+/// without the layer.
+#[test]
+fn a_panicking_cancel_during_unmount_does_not_leak_the_feedback_layer() {
+    let rig = rig(|draggable, _signals| {
+        draggable.on_drag_end(|_cx, _details| -> () { panic!("intentional on_drag_end panic") })
+    });
+    let mut app = mounted(&rig);
+
+    start_drag(&app);
+    app.tick();
+    assert!(
+        app.find_text("feedback").is_some(),
+        "premise: the drag's feedback is showing in the overlay"
+    );
+
+    rig.show.set(false);
+    rig.entry.mark_needs_build();
+    let _contained_or_not = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
+
+    app.tick();
+    assert!(
+        app.find_text("feedback").is_none(),
+        "the feedback layer was removed before the panicking callback ran"
+    );
+}

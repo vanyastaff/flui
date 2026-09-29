@@ -71,17 +71,40 @@ GestureArenaScope"*. Building both packages together makes cargo unify the graph
 once, so both binaries link one instance and the `TypeId`s agree. The reload path
 rebuilds both for the same reason (the host is unchanged and is not relinked).
 
+### How the host drives the reload
+
+`flui-app` names no reload crate. The host installs the worker driver on its
+configuration, and the runner drives it through the `DevReloadHook` trait
+(`flui::view::dev_reload`, [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md) §1):
+
+```rust,ignore
+use flui::hot_reload::WorkerReloadHook;
+
+let config = AppConfig::new().with_dev_reload(WorkerReloadHook::new(worker_path));
+run_app_with_config(root, config);
+```
+
+The loop attaches the hook once, before the first window, and detaches it when
+it ends. Every realm polls it at its frame boundary, on the owner thread; a
+reload (or a worker's `request_rebuild`) is applied once to every realm, as a
+reassemble that keeps `State`. A hook that panics is dropped and the app keeps
+running without reload. An idle window applies a reload when it next draws.
+The Android `--scene` host installs `flui::hot_reload::ScenePluginHook` the
+same way; the Android runner calls only its `scene_frame`, so a worker hook
+does nothing there, and it warns when a scene plugin is on the device but no
+hook is installed.
+
 ### The host watches the artifact, not the clock
 
-`poll_and_apply` runs at a frame boundary, which is enough while the app is
+The poll runs at a frame boundary, which is enough while the app is
 animating but wrong when it is idle: an idle event loop produces no frames, and
 an unfocused or occluded window receives no AppKit display pass at all, so an
 edit would not be noticed until something unrelated produced a frame (a click on
-the window, in the observed failure). The desktop host therefore runs a small
-**background watcher thread** (`WorkerReload::spawn_watcher`) that polls the
+the window, in the observed failure). `WorkerReloadHook` therefore runs a small
+**background watcher thread** from `attach` that polls the
 worker artifact's `(path, mtime)` stamp — the same identity the driver resolves
-through the sidecar — and fires the realm's `wake` on a change. `wake` requests a
-frame; that frame's `poll_and_apply` then performs the actual owner-thread
+through the sidecar — and calls the host's `wake` on a change. `wake` requests a
+frame; that frame's poll then performs the actual owner-thread
 `dlopen`, exactly as before.
 
 This is still layer 2: the watcher watches the **artifact**, never `src/` (layer
@@ -164,7 +187,7 @@ Runs Build → Layout → Paint inside the `.so` via `PluginPipeline`. Hot reloa
 
 | Crate | Responsibility |
 |-------|----------------|
-| **`flui-hot-reload`** | Runtime half, linked by the app: `DynLib`, `ScenePlugin`, `HotReloadDriver`, `ReloadStrategy`, the worker/host ABI |
+| **`flui-hot-reload`** | Runtime half, linked by the app: `DynLib`, `ScenePlugin`, `HotReloadDriver`, `ReloadStrategy`, the worker/host ABI, and `WorkerReloadHook`/`ScenePluginHook`, the `DevReloadHook`s a host installs with `AppConfig::with_dev_reload` |
 | **`flui-cli`** | Dev-machine half: the `SourceWatcher` (`src/watch.rs`), the build pipeline (`src/build/`, once `flui-build`), `flui run`, `flui run --scene` |
 
 Do **not** add a second file-watcher implementation. Extend `flui-cli`'s `watch::SourceWatcher`. The env-var names the CLI sets (`FLUI_HOT_RELOAD`, `FLUI_WORKER_PLUGIN`) are duplicated from `flui_hot_reload::{strategy, engine}::env` and pinned by a test in `commands/run.rs`.

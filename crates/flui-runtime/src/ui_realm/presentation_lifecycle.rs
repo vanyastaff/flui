@@ -676,6 +676,7 @@ mod tests {
             1.0,
             Arc::new(AtomicBool::new(false)),
             crate::presentation::test_clipboard(),
+            &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         )
         .expect("hidden realm");
@@ -707,6 +708,7 @@ mod tests {
                 1.0,
                 Arc::new(AtomicBool::new(false)),
                 crate::presentation::test_clipboard(),
+                &flui_painting::FontCollection::new(),
                 flui_scheduler::ClockSource::Platform,
             )
             .expect("realm");

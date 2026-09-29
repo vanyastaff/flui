@@ -6,8 +6,8 @@ use super::frame_pacing::{
     BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
 };
 use super::host::{
-    APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_needs_redraw_handle,
-    runtime_wake_callback, with_owner_platform,
+    APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_wake_callback,
+    with_owner_platform,
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmTask, dispatch_platform_realm, install_platform_realm,
@@ -75,7 +75,7 @@ fn run_android<V>(root: V, config: AppConfig, app: android_activity::AndroidApp)
 where
     V: View + StatelessView + Clone + 'static,
 {
-    use std::{path::PathBuf, sync::Arc};
+    use std::sync::Arc;
 
     use flui_engine::Renderer;
     use flui_platform::{
@@ -88,14 +88,9 @@ where
 
     tracing::info!("Starting Android platform via flui-platform");
 
-    // Hot-reload: build plugin path from app's internal data directory
-    let plugin_path: PathBuf = app.internal_data_path().map_or_else(
-        || PathBuf::from("/data/local/tmp/libflui_scene.so"),
-        |p| p.join("libflui_scene.so"),
-    );
-
-    // Inert unless this build carries the `hot-reload` feature.
-    let hot_reload = ScenePlugin::new(&plugin_path);
+    // The application's development reload hook may own frames with a scene
+    // plugin (`flui run --scene`); inert unless one is installed.
+    let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
 
     let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
 
@@ -133,7 +128,7 @@ where
         }
 
         // 0. The platform clipboard (ADR-0038 §9) was installed with the
-        // owner platform; the realm below takes it through `runtime_clipboard`.
+        // owner platform; the realm below takes it through `build_runtime_realm`.
         //
         // 0b. This window's device-recovery backoff, constructed here (not
         // down at step 6 alongside the renderer it paces) so the
@@ -205,20 +200,14 @@ where
         // before returning.
         let scale_factor = window.scale_factor() as f64;
         let wake = runtime_wake_callback();
-        let ui_realm = match crate::app::ui_realm::UiRealm::new(
-            Arc::clone(&wake),
-            presentation_window,
-            scale_factor,
-            runtime_needs_redraw_handle(),
-            super::host::runtime_clipboard(),
-            flui_scheduler::ClockSource::Platform,
-        ) {
-            Ok(realm) => realm,
-            Err(error) => {
-                tracing::error!(%error, "UiRealm construction failed");
-                return Err(anyhow::anyhow!(error).context("UiRealm construction failed"));
-            }
-        };
+        let ui_realm =
+            match super::host::build_runtime_realm(&wake, presentation_window, scale_factor) {
+                Ok(realm) => realm,
+                Err(error) => {
+                    tracing::error!(%error, "UiRealm construction failed");
+                    return Err(anyhow::anyhow!(error).context("UiRealm construction failed"));
+                }
+            };
 
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.
@@ -325,8 +314,8 @@ where
 
                         // If a scene plugin is live it owns this presentation frame,
                         // but the callback still executes inside the realm entry
-                        // scope. Always `false` in a build without the `hot-reload`
-                        // feature. The plugin renders through the backend directly
+                        // scope. Always `false` without an installed development
+                        // reload hook. The plugin renders through the backend directly
                         // (its own diagnostic scene, not a realm-produced frame),
                         // so it goes through the lane's scoped backend access —
                         // per ADR-0045 decision 6 the plugin path is one of the
@@ -667,7 +656,7 @@ where
         // 10. Request initial redraw, now that the window is stored.
         wake();
 
-        tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
+        tracing::info!("Android platform initialized with callbacks");
         Ok(())
     }
 

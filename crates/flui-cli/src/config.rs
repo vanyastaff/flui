@@ -73,9 +73,9 @@ impl FluiConfig {
 /// Host/worker hot reload layout.
 ///
 /// When present, `flui run` keeps the host process alive, rebuilds only the
-/// worker `cdylib` on source changes, and relies on
-/// `flui_hot_reload::WorkerReloadDriver` in the host runner to apply the
-/// reload.
+/// worker `cdylib` on source changes, and relies on the
+/// `flui_hot_reload::WorkerReloadHook` the host installs with
+/// `AppConfig::with_dev_reload` to apply the reload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct HotReloadConfig {
     /// Host binary crate (`cargo run -p …`).

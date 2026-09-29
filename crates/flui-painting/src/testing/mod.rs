@@ -15,7 +15,7 @@
 //! assert_eq!(list.len(), 1);
 //! ```
 
-use crate::{Canvas, DisplayList};
+use crate::{Canvas, DisplayList, FontCollection};
 
 /// Records drawing commands into a fresh [`DisplayList`]: runs `f` against
 /// a new [`Canvas`] and finishes it.
@@ -23,6 +23,14 @@ pub fn record(f: impl FnOnce(&mut Canvas)) -> DisplayList {
     let mut canvas = Canvas::new();
     f(&mut canvas);
     canvas.finish()
+}
+
+/// How many handles hold `fonts`: the caller's own clones plus one inside
+/// each [`TextContext`](crate::TextContext) built from it. A consumer's
+/// tests use it to pin who holds the collection and when they let go.
+#[must_use]
+pub fn font_collection_holders(fonts: &FontCollection) -> usize {
+    fonts.holders()
 }
 
 #[cfg(test)]

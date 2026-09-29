@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use flui_foundation::{PresentationId, RealmId};
+use flui_painting::{FontCollection, TextContext};
 use flui_platform_api::Clipboard;
 use flui_scheduler::{AsyncDriver, ClockSource, LocalPostFrameLane, UpdateScheduler};
 
@@ -24,6 +25,9 @@ pub(crate) struct RealmServices {
     /// Where the realm reads time: its frame-time origin, and every
     /// presentation's gesture arena and frame clock.
     pub(crate) clock: ClockSource,
+    /// The realm's text service (ADR-0092 §3): one per realm, built from the
+    /// app's [`FontCollection`] and dropped with the realm.
+    pub(crate) text: TextContext,
 }
 
 impl RealmServices {
@@ -33,8 +37,17 @@ impl RealmServices {
     /// strong root, torn down when the realm drops.
     ///
     /// `clipboard` is the platform clipboard the realm's presentations hand
-    /// their widgets; a realm always has one. `clock` is where it reads time.
-    pub(crate) fn construct(clipboard: Arc<dyn Clipboard>, clock: ClockSource) -> Self {
+    /// their widgets; a realm always has one.
+    ///
+    /// `fonts` is the app's font collection; the realm gets its own
+    /// [`TextContext`] over it, so a face registered on the collection
+    /// reaches this realm as it reaches every other. `clock` is where it
+    /// reads time.
+    pub(crate) fn construct(
+        clipboard: Arc<dyn Clipboard>,
+        fonts: &FontCollection,
+        clock: ClockSource,
+    ) -> Self {
         let scheduler = UpdateScheduler::new();
         Self {
             local_post_frame: scheduler.new_local_post_frame_lane(),
@@ -42,6 +55,7 @@ impl RealmServices {
             scheduler,
             clipboard,
             clock,
+            text: TextContext::new(fonts),
         }
     }
 }

@@ -1,52 +1,62 @@
-//! [`Actions`] resolution against a mounted tree: the nearest enabled action
-//! wins, a disabled one stops resolution at its own scope, and a lookup with no
-//! binding reports `false`.
+//! [`Actions`] resolution against a mounted tree, driven the way an action is
+//! invoked: a key the focused subtree ignored reaches a `Shortcuts`, which
+//! maps it to an intent and invokes the nearest enabled action with the key
+//! event's `EventCx`. The nearest enabled action wins, a disabled one stops
+//! resolution at its own scope, and a lookup with no binding leaves the key
+//! unconsumed.
 
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_view::element::ElementKind;
+use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
+use flui_interaction::routing::FocusNode;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;
-use flui_widgets::interaction::{Action, ActionOutcome, Actions, CallbackAction, Intent};
+use flui_widgets::interaction::{
+    Action, ActionOutcome, Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator,
+};
 
-use crate::common::harness::mount;
+use crate::common::harness::{Harness, mount};
+use crate::common::{ProbeSignals, SignalProbe};
 
 struct AddToCounter(usize);
 impl Intent for AddToCounter {}
 
-/// A leaf whose build invokes `intent` through the ambient chain — the
-/// only place a `BuildContext` exists.
-#[derive(Clone)]
-struct InvokeProbe {
-    amount: usize,
-    ran: Arc<AtomicUsize>,
-}
-
-impl View for InvokeProbe {
-    fn create_element(&self) -> ElementKind {
-        ElementKind::stateless(self)
+/// Ctrl+A, the key every test here binds to `AddToCounter`.
+fn ctrl_a() -> KeyEvent {
+    KeyEvent {
+        state: KeyState::Down,
+        key: Key::Character("a".into()),
+        modifiers: Modifiers::CONTROL,
+        ..KeyEvent::default()
     }
 }
 
-impl StatelessView for InvokeProbe {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        if Actions::maybe_invoke(ctx, &AddToCounter(self.amount)) {
-            self.ran.fetch_add(1, Ordering::SeqCst);
-        }
-        SizedBox::new(1.0, 1.0)
-    }
+/// A focusable leaf under a `Shortcuts` that maps Ctrl+A to
+/// `AddToCounter(amount)`. Whatever `Actions` wrap it resolve the intent.
+fn invoker(amount: usize, field: &Rc<FocusNode>) -> Shortcuts {
+    Shortcuts::new(Focus::new(SizedBox::new(1.0, 1.0)).focus_node(Rc::clone(field))).shortcut(
+        SingleActivator::character("a").control(),
+        AddToCounter(amount),
+    )
 }
 
-/// An action that reports disabled, to prove fall-through.
+/// Focus `field` and press Ctrl+A. Returns whether the key was consumed —
+/// `true` only when an enabled action ran.
+fn press(harness: &Harness, field: &Rc<FocusNode>) -> bool {
+    field.request_focus();
+    harness.focus_manager().dispatch_key_event(&ctrl_a())
+}
+
+/// An action that reports disabled, to prove the search stops at it.
 struct Disabled;
 impl Action<AddToCounter> for Disabled {
     fn is_enabled(&self, _intent: &AddToCounter) -> bool {
         false
     }
-    fn invoke(&self, _intent: &AddToCounter) -> ActionOutcome {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &AddToCounter) -> ActionOutcome {
         unreachable!("BUG: a disabled action must never be invoked (actions.dart:1032-1044)");
     }
 }
@@ -58,35 +68,31 @@ impl Action<AddToCounter> for Disabled {
 /// the outer counter moves and the inner assertion flips.
 ///
 /// Flutter parity (`actions_test.dart`, tag `3.44.0`): covers
-/// `'Actions widget can invoke actions with default dispatcher'` and
-/// `'Actions widget can invoke actions with default dispatcher and
-/// maybeInvoke'` — FLUI has one dispatch path (no replaceable
-/// `ActionDispatcher`, ADR-0023 deferred), so both oracle cases collapse
-/// onto this one.
+/// `'Actions widget can invoke actions with default dispatcher'` — FLUI has
+/// one dispatch path (no replaceable `ActionDispatcher`, ADR-0023 deferred).
 #[test]
 fn the_nearest_enabled_action_wins_and_receives_the_payload() {
-    let ran = Arc::new(AtomicUsize::new(0));
     let outer_sum = Arc::new(AtomicUsize::new(0));
     let inner_sum = Arc::new(AtomicUsize::new(0));
+    let field = FocusNode::with_debug_label("nearest-field");
 
     let outer_counter = Arc::clone(&outer_sum);
     let inner_counter = Arc::clone(&inner_sum);
-    let _harness = mount(
-        Actions::new(
-            Actions::new(InvokeProbe {
-                amount: 5,
-                ran: Arc::clone(&ran),
-            })
-            .action(CallbackAction::new(move |intent: &AddToCounter| {
+    let harness = mount(
+        Actions::new(Actions::new(invoker(5, &field)).action(CallbackAction::new(
+            move |_cx, intent: &AddToCounter| {
                 inner_counter.fetch_add(intent.0, Ordering::SeqCst);
-            })),
-        )
-        .action(CallbackAction::new(move |intent: &AddToCounter| {
+            },
+        )))
+        .action(CallbackAction::new(move |_cx, intent: &AddToCounter| {
             outer_counter.fetch_add(intent.0, Ordering::SeqCst);
         })),
     );
 
-    assert_eq!(ran.load(Ordering::SeqCst), 1, "maybe_invoke reported true");
+    assert!(
+        press(&harness, &field),
+        "an enabled action consumed the key"
+    );
     assert_eq!(
         inner_sum.load(Ordering::SeqCst),
         5,
@@ -103,21 +109,19 @@ fn the_nearest_enabled_action_wins_and_receives_the_payload() {
 /// `'CallbackAction passes correct intent when invoked.'`.
 #[test]
 fn callback_action_accepts_owner_local_rc_state() {
-    let ran = Arc::new(AtomicUsize::new(0));
     let total = Rc::new(Cell::new(0));
     let total_for_action = Rc::clone(&total);
+    let field = FocusNode::with_debug_label("owner-local-field");
 
-    let _harness = mount(
-        Actions::new(InvokeProbe {
-            amount: 11,
-            ran: Arc::clone(&ran),
-        })
-        .action(CallbackAction::new(move |intent: &AddToCounter| {
-            total_for_action.set(total_for_action.get() + intent.0);
-        })),
+    let harness = mount(
+        Actions::new(invoker(11, &field)).action(CallbackAction::new(
+            move |_cx, intent: &AddToCounter| {
+                total_for_action.set(total_for_action.get() + intent.0);
+            },
+        )),
     );
 
-    assert_eq!(ran.load(Ordering::SeqCst), 1, "maybe_invoke ran");
+    assert!(press(&harness, &field), "the action ran");
     assert_eq!(total.get(), 11, "owner-local callback captured Rc<Cell<_>>");
 }
 
@@ -132,32 +136,26 @@ fn callback_action_accepts_owner_local_rc_state() {
 ///
 /// Red-check: merge `own` into the enclosing chain as a fallback list
 /// instead of an outright replace (i.e. keep the outer entry reachable
-/// once the inner one is checked) — `outer_sum` becomes `7` and `ran`
-/// becomes `1`, silently reintroducing the fall-through this test pins
+/// once the inner one is checked) — `outer_sum` becomes `7` and the key is
+/// consumed, silently reintroducing the fall-through this test pins
 /// against.
 #[test]
 fn a_disabled_nearer_action_stops_resolution_at_its_own_scope() {
-    let ran = Arc::new(AtomicUsize::new(0));
     let outer_sum = Arc::new(AtomicUsize::new(0));
+    let field = FocusNode::with_debug_label("disabled-field");
 
     let outer_counter = Arc::clone(&outer_sum);
-    let _harness = mount(
-        Actions::new(
-            Actions::new(InvokeProbe {
-                amount: 7,
-                ran: Arc::clone(&ran),
-            })
-            .action(Disabled),
-        )
-        .action(CallbackAction::new(move |intent: &AddToCounter| {
-            outer_counter.fetch_add(intent.0, Ordering::SeqCst);
-        })),
+    let harness = mount(
+        Actions::new(Actions::new(invoker(7, &field)).action(Disabled)).action(
+            CallbackAction::new(move |_cx, intent: &AddToCounter| {
+                outer_counter.fetch_add(intent.0, Ordering::SeqCst);
+            }),
+        ),
     );
 
-    assert_eq!(
-        ran.load(Ordering::SeqCst),
-        0,
-        "maybe_invoke reported false: the disabled nearer mapping stopped the search"
+    assert!(
+        !press(&harness, &field),
+        "the key is unconsumed: the disabled nearer mapping stopped the search"
     );
     assert_eq!(
         outer_sum.load(Ordering::SeqCst),
@@ -166,18 +164,59 @@ fn a_disabled_nearer_action_stops_resolution_at_its_own_scope() {
     );
 }
 
-/// No binding anywhere: `maybe_invoke` reports `false` and nothing runs.
+/// No binding anywhere: the key is not consumed and nothing runs.
 ///
 /// Flutter parity (`actions_test.dart`, tag `3.44.0`): stands in for
-/// `'maybeInvoke returns null when no action is found'` — FLUI's
-/// `maybe_invoke` reports "did anything run" as a `bool` rather than
-/// Dart's `Object?`, so "returns null" ports as "returns `false`".
+/// `'maybeInvoke returns null when no action is found'`. FLUI has no
+/// `maybeInvoke` (an invocation needs the key event's `EventCx`, which
+/// `build` does not have; ADR-0086), so "returns null" ports as "the key
+/// keeps bubbling".
 #[test]
-fn maybe_invoke_without_a_binding_reports_false() {
-    let ran = Arc::new(AtomicUsize::new(0));
-    let _harness = mount(InvokeProbe {
-        amount: 1,
-        ran: Arc::clone(&ran),
+fn an_intent_without_a_binding_leaves_the_key_unconsumed() {
+    let field = FocusNode::with_debug_label("unbound-field");
+    let harness = mount(invoker(1, &field));
+    assert!(!press(&harness, &field), "nothing to invoke");
+}
+
+/// A `CallbackAction` runs inside the key event's dispatch: it writes a
+/// signal through the `cx` it receives, and the signal's reader rebuilds.
+#[test]
+fn callback_action_writes_through_the_key_events_cx() {
+    let field = FocusNode::with_debug_label("writing-field");
+    let probe_field = Rc::clone(&field);
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        Actions::new(invoker(3, &probe_field)).action(CallbackAction::new(
+            move |cx, intent: &AddToCounter| count.update(cx, |n| *n += intent.0 as u32),
+        ))
     });
-    assert_eq!(ran.load(Ordering::SeqCst), 0, "nothing to invoke");
+    let mut harness = mount(probe.view());
+
+    assert!(press(&harness, &field), "the action consumed the key");
+    assert_eq!(probe.value(), Ok(3), "the write landed at dispatch");
+    harness.tick();
+    assert_eq!(probe.reads(), [0, 3], "and the reader rebuilt once");
+}
+
+/// A refused write inside an action is reported at the dispatch boundary,
+/// not panicked, and the action still counts as performed.
+#[test]
+fn a_refused_write_in_a_callback_action_is_reported_not_panicked() {
+    let field = FocusNode::with_debug_label("refused-field");
+    let probe_field = Rc::clone(&field);
+    let probe = SignalProbe::new(move |ProbeSignals { released, .. }| {
+        Actions::new(invoker(1, &probe_field)).action(CallbackAction::new(
+            move |cx, _: &AddToCounter| released.set(cx, 1),
+        ))
+    });
+    let mut harness = mount(probe.view());
+
+    let (consumed, log) = flui_testing::log_capture::capture(|| press(&harness, &field));
+
+    assert!(consumed, "the action ran and consumed the key");
+    assert!(
+        log.contains("an event callback's signal write was refused"),
+        "the refusal is logged at the dispatch boundary: {log}"
+    );
+    harness.tick();
+    assert_eq!(probe.value(), Ok(0), "other state is intact");
 }

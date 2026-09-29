@@ -2048,64 +2048,6 @@ fn teardown_drops_queued_destructors_outside_tls_borrow() {
     assert!(*owner_queue_dropped.borrow());
 }
 
-#[cfg(feature = "hot-reload")]
-#[test]
-fn old_registered_hot_reload_hook_cannot_touch_recreated_realm() {
-    use flui_hot_reload::{register_request_rebuild, request_rebuild};
-
-    use crate::app::hot_reload::queued_hot_reload_hook;
-
-    let runtime_a = crate::app::ui_realm::UiRealm::for_test();
-    let sender_a = runtime_a.command_sender();
-    let old_a_hook = queued_hot_reload_hook(sender_a.clone());
-    let registration_a = register_request_rebuild(queued_hot_reload_hook(sender_a));
-    let _realm_a = install_platform_realm(runtime_a, &test_window());
-    teardown_platform_realm();
-
-    let runtime_b = crate::app::ui_realm::UiRealm::for_test();
-    let sender_b = runtime_b.command_sender();
-    let realm_b = install_platform_realm(runtime_b, &test_window());
-    let registration_b = register_request_rebuild(queued_hot_reload_hook(sender_b));
-    drop(registration_a);
-
-    old_a_hook();
-    let after_old = Rc::new(RefCell::new(None));
-    let after_old_in_frame = Rc::clone(&after_old);
-    dispatch_platform_realm(
-        realm_b,
-        RealmTask::Frame(Box::new(move |realm| {
-            *after_old_in_frame.borrow_mut() = Some(realm.drain_commands());
-        })),
-    )
-    .expect("B frame dispatches");
-    assert_eq!(
-        *after_old.borrow(),
-        Some(crate::app::ui_realm::DrainReport::default()),
-        "stale A hook must not enqueue into B"
-    );
-
-    std::thread::spawn(request_rebuild)
-        .join()
-        .expect("worker-side rebuild request");
-    let after_current = Rc::new(RefCell::new(None));
-    let after_current_in_frame = Rc::clone(&after_current);
-    dispatch_platform_realm(
-        realm_b,
-        RealmTask::Frame(Box::new(move |realm| {
-            *after_current_in_frame.borrow_mut() = Some(realm.drain_commands());
-        })),
-    )
-    .expect("B frame dispatches");
-    assert_eq!(
-        after_current.borrow().as_ref().map(|report| report.invoked),
-        Some(1),
-        "current B hook must dispatch exactly once"
-    );
-
-    drop(registration_b);
-    teardown_platform_realm();
-}
-
 #[test]
 fn whole_frame_event_keeps_realm_global_key_scope_active() {
     let realm = crate::app::ui_realm::UiRealm::for_test();
@@ -3361,6 +3303,63 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
         })),
     )
     .expect("B dispatches independently of A");
+
+    teardown_platform_realm();
+}
+
+/// Every realm a runner builds shapes over the app's one font collection
+/// (ADR-0092 §2): two `SeparateRealms` windows go through
+/// `host::build_runtime_realm`, the one call every runner site (desktop, web,
+/// Android, iOS, secondary windows) builds its realm with, and each realm's
+/// `TextContext` must be built over `runtime_font_collection()`. Realm A comes
+/// from `UiRealm::for_test`, which builds its own collection, so it is not
+/// asserted on. Fails if that call hands a realm a fresh collection, or if
+/// the runtime resolves a new one per call.
+#[test]
+fn separate_realm_windows_shape_over_the_runtimes_font_collection() {
+    let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
+
+    for _ in 0..2 {
+        open_secondary_window(AppConfig::default(), WindowPolicy::SeparateRealms)
+            .expect("WindowPolicy::SeparateRealms must install a second realm cleanly");
+    }
+
+    let secondaries: Vec<RealmDispatcher> = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        let owner_thread = state.owner_thread.expect("the owner platform is installed");
+        state
+            .realms
+            .iter()
+            .filter(|(id, _)| *id != dispatcher_a.address.realm_id)
+            .map(|(_, slot)| RealmDispatcher {
+                owner_thread,
+                address: slot.address,
+            })
+            .collect()
+    });
+    assert_eq!(
+        secondaries.len(),
+        2,
+        "two SeparateRealms windows, two realms"
+    );
+
+    let app_fonts = super::super::host::runtime_font_collection();
+    for dispatcher in secondaries {
+        let app_fonts = app_fonts.clone();
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert!(
+                    flui_painting::FontCollection::ptr_eq(
+                        realm.text_context_for_test().fonts(),
+                        &app_fonts,
+                    ),
+                    "a runner-built realm must own a text context over the app's font collection"
+                );
+            })),
+        )
+        .expect("the secondary realm dispatches");
+    }
 
     teardown_platform_realm();
 }

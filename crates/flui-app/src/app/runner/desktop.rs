@@ -1,4 +1,4 @@
-use crate::app::hot_reload::{RebuildHookGuard, WorkerReload};
+use crate::app::hot_reload::WorkerReload;
 use flui_engine::Renderer;
 use flui_platform::traits::{DispatchEventResult, HostWindow, PlatformInput, PlatformWindow};
 use flui_scheduler::AppLifecycleState;
@@ -16,7 +16,7 @@ use super::frame_pacing::{
 };
 use super::host::{
     APP_RUNTIME, desktop_secondary_wake_deadline, install_wake_deadline_hook, merge_wake_deadlines,
-    runtime_needs_redraw_handle, runtime_wake_callback,
+    runtime_wake_callback,
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
@@ -27,7 +27,6 @@ use crate::app::AppConfig;
 pub(super) struct RenderedMain {
     pub(super) window: Arc<dyn PlatformWindow>,
     pub(super) address: flui_foundation::PresentationAddress,
-    pub(super) _rebuild_registration: RebuildHookGuard,
 }
 
 struct InstallRollback {
@@ -123,14 +122,8 @@ where
     // and the first frame agree on the scale from construction.
     let scale_factor = window.scale_factor();
     let wake = runtime_wake_callback();
-    let ui_realm = match crate::app::ui_realm::UiRealm::new(
-        Arc::clone(&wake),
-        presentation_window,
-        scale_factor,
-        runtime_needs_redraw_handle(),
-        super::host::runtime_clipboard(),
-        flui_scheduler::ClockSource::Platform,
-    ) {
+    let ui_realm = match super::host::build_runtime_realm(&wake, presentation_window, scale_factor)
+    {
         Ok(realm) => realm,
         Err(e) => {
             tracing::error!(error = %e, "UiRealm construction failed");
@@ -160,6 +153,7 @@ where
             source: Arc::new(e),
         });
     }
+    worker_reload.register_realm(&ui_realm);
 
     // 3b. Wire the wake chain (E0a).
     //
@@ -210,7 +204,6 @@ where
         inbox_capacity = ui_realm.command_sender().capacity(),
         "UiRealm constructed"
     );
-    let hot_reload_sender = ui_realm.command_sender();
     let realm_dispatch = install_realm_alongside(ui_realm, &window).map_err(|error| {
         crate::app::AppWindowError::Mount {
             source: Arc::new(error),
@@ -228,7 +221,6 @@ where
         &window,
         config.close_request_handler.clone(),
     );
-    let rebuild_registration = worker_reload.register_rebuild_hook(hot_reload_sender);
 
     // 3c2. The frame-pacing fallback (ADR-0058): a non-blocking bound on
     // ticker-driven wakes that present nothing, anchored to this
@@ -742,7 +734,6 @@ where
     Ok(RenderedMain {
         window,
         address: realm_dispatch.address,
-        _rebuild_registration: rebuild_registration,
     })
 }
 

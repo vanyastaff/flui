@@ -26,6 +26,34 @@ pub(super) fn runtime_clipboard() -> Arc<dyn flui_platform::traits::Clipboard> {
         .expect("BUG: the runner installs the platform clipboard before it builds a realm")
 }
 
+/// The app's font collection for [`crate::app::ui_realm::UiRealm::new`]'s
+/// `fonts` parameter (ADR-0092 §2). Same borrow rule as
+/// [`runtime_wake_callback`]. The first call on a thread resolves the shared
+/// engine services.
+pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
+    APP_RUNTIME.with(|slot| slot.borrow().font_collection())
+}
+
+/// Builds a runner's realm over the runtime's shared services: `wake`, the
+/// loop's `needs_redraw` flag, the platform clipboard and the app's font
+/// collection. Every runner site builds its realm through this one call, so
+/// a realm cannot be handed a stand-in for any of them.
+pub(super) fn build_runtime_realm(
+    wake: &Arc<dyn Fn() + Send + Sync>,
+    window: impl Into<crate::app::presentation::PresentationWindow>,
+    scale_factor: f64,
+) -> Result<crate::app::ui_realm::UiRealm, crate::app::ui_realm::UiRealmError> {
+    crate::app::ui_realm::UiRealm::new(
+        Arc::clone(wake),
+        window,
+        scale_factor,
+        runtime_needs_redraw_handle(),
+        runtime_clipboard(),
+        &runtime_font_collection(),
+        flui_scheduler::ClockSource::Platform,
+    )
+}
+
 /// A clone of the loop-scoped `needs_redraw` flag, for [`crate::app::ui_realm::UiRealm::new`]'s
 /// `needs_redraw` parameter.
 pub(super) fn runtime_needs_redraw_handle() -> Arc<AtomicBool> {
@@ -54,9 +82,10 @@ thread_local! {
     /// any reason, including `OwnerHostClearGuard::drop` firing during an
     /// unwind on a thread that never reached platform init -- can never
     /// itself trigger singleton construction or full system-font
-    /// enumeration. Real service resolution happens only via the explicit
-    /// `ensure_services` call in `install_platform_realm` below, when a
-    /// realm is actually installed.
+    /// enumeration. Real service resolution happens only when a realm is
+    /// built or installed: `build_runtime_realm`, which every runner calls
+    /// to build its realm, or the explicit `ensure_services` call in
+    /// `install_platform_realm` below.
     pub(super) static APP_RUNTIME: std::cell::RefCell<AppRuntime> =
         std::cell::RefCell::new(AppRuntime::new());
 }

@@ -328,6 +328,7 @@ mod tests {
             1.0,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             crate::app::presentation::test_clipboard(),
+            &flui_painting::FontCollection::new(),
             flui_scheduler::ClockSource::Platform,
         )
         .expect("realm");

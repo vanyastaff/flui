@@ -1081,7 +1081,6 @@ fn the_tiers_match_the_adr_0081_table() {
         })
         .collect();
     let seeded: BTreeSet<(&str, &str, &str)> = [
-        ("flui-app", "flui-hot-reload", "ADR-0094"),
         ("flui", "flui-hot-reload", "ADR-0094"),
         ("flui", "flui-material", "ADR-0088"),
         ("flui", "flui-cupertino", "ADR-0088"),
