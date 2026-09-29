@@ -65,10 +65,12 @@ doc comment names the invariant (§5's `DevicePixelRatio` is one).
 
 - **`f64` everywhere logical.** Layout, constraints, sliver protocol, scroll positions and
   physics, paint offsets, hit-testing and semantics bounds all use `f64`.
-- **One narrowing point.** `flui-painting` narrows to `f32` in one function when a command is
-  recorded into the display list. At that point coordinates are relative to the current layer,
-  so they are small. The display list, the engine and the GPU stay `f32`. This mirrors
-  Flutter's `double` framework over a `float` engine.
+- **One narrowing point.** The display list records `f64`; `flui-engine` narrows to `f32` where
+  it ingests a command (the kurbo-to-lyon adapter, instance baking, uniform packing). By then
+  coordinates are relative to the current layer, so they are small. The GPU stays `f32`. This
+  mirrors Flutter's `double` framework over a `float` engine. Narrowing at record time instead
+  would halve `DrawOp` (224 bytes now) but split the conversion across every recorder; measure
+  before moving it.
 - **One widening point.** Parley's `f32` metrics widen at the text boundary; widening is exact.
 - **Tolerances follow Flutter's scale.** Scroll-axis comparisons use Flutter's
   `precisionErrorTolerance` (1e-10). Every `EPSILON_F32` and `1e-3` layout tolerance is
@@ -81,7 +83,7 @@ doc comment names the invariant (§5's `DevicePixelRatio` is one).
 | Type | Fields | Notes |
 |---|---|---|
 | `Point` | `x, y` | a position |
-| `Offset` | `dx, dy` | a displacement; `Point - Point = Offset`, `Point + Offset = Point`, and there is no `Point + Point` |
+| `Offset` | `dx, dy` | a displacement; `Point ± Offset = Point`, and there is no `Point + Point`. `Point - Point` yields a `Vec2` until `Vec2` folds into `Offset` (Implementation status) |
 | `Size` | `width, height` | never a displacement |
 | `Rect` | `min: Point, max: Point` | with `left()`, `top()`, `right()`, `bottom()`, `width()`, `height()` and Flutter's constructors (`from_ltwh`, `from_ltrb`, `from_center`, `from_points`) |
 | `EdgeInsets` | `left, top, right, bottom` | inward; the constructor order stays today's `new(top, right, bottom, left)` and `symmetric(vertical, horizontal)` |
@@ -91,9 +93,11 @@ doc comment names the invariant (§5's `DevicePixelRatio` is one).
 
 Rules:
 
-- **Layout.** All fields are `pub`, the structs are `#[repr(C)]` with kurbo's field order, and
-  there are no generics or space markers. Constants (`Offset::ZERO`, `Size::INFINITY`) and
-  inherent methods are FLUI's.
+- **Layout.** All fields are `pub`, in kurbo's order. The types are generic over their scalar
+  only, defaulting to `f64` (`Point<T = f64>`): `Point<i32>`, `Size<i32>` and `Rect<i32>` are
+  the device-grid types, so the scalar alone keeps logical and device values apart and no
+  space marker is needed. Constants (`Offset::ZERO`, `Size::INFINITY`) and inherent methods
+  are FLUI's.
 - **Semantics are chosen on their merits**, not copied from Flutter or from an upstream crate.
   Each rule is pinned by a test, and each difference from Flutter is recorded in the owning
   crate's `## Mapping decisions`:
@@ -128,9 +132,8 @@ Rules:
 
 - **Physical types live only in platform and engine code.** Inside the framework everything is
   logical. The physical side has its own types in `flui_foundation::geometry`:
-  - `DevicePoint` (`i32`);
-  - `DeviceSize` (`u32` extents);
-  - `DeviceRect` (`i32`);
+  - `DevicePoint`, `DeviceSize` and `DeviceRect`: `Point<i32>`, `Size<i32>` and `Rect<i32>`
+    (signed extents, so a clamp to the attachment is a subtraction that cannot wrap);
   - `DevicePixelRatio`, a newtype whose constructor rejects non-finite, zero and negative values.
 
   Continuous physical coordinates (the engine's device-space maths) are private to `flui-engine`.
@@ -176,8 +179,9 @@ fractional ratios ([flutter#151065](https://github.com/flutter/flutter/issues/15
 
 ### 7. Painting values belong to `flui-painting`
 
-- **Shapes:** `RRect`, `RSuperellipse`, and `Path`, `Paint`, shaders, gradients, images,
-  decorations, borders, shadows and typography.
+- **Painting values:** `Path`, `Paint`, shaders, gradients, images, decorations, borders,
+  shadows and typography. `RRect` and `RSuperellipse` stay geometry values (§8): layers and
+  the engine clip with them.
 - **`Path` wraps a private `kurbo::BezPath` plus a shape hint.**
   - The hint is `Rect`, oval or `RRect`, set by the matching constructors and cleared by any
     other edit, so the analytic rounded-rect shadow keeps working.
@@ -208,15 +212,18 @@ fractional ratios ([flutter#151065](https://github.com/flutter/flutter/issues/15
 | Today | Owner |
 |---|---|
 | geometry values, `Matrix4`, device types, `DevicePixelRatio`, `canonical_bits` | `flui_foundation::geometry` (foundation and geometry both have 29 dependents, so rebuild fan-out does not grow; foundation gains `glam`) |
-| `RRect`, `RSuperellipse`, `Path`, paint, shaders, gradients, images, colours, decorations, borders, shadows, typography | `flui-painting` |
+| `Path`, paint, shaders, gradients, images, colours, decorations, borders, shadows, typography | `flui-painting` |
+| `RRect`, `RSuperellipse` | `flui_foundation::geometry`: rendering, layers and the engine clip with them, below painting's consumers |
 | `Alignment`, `BoxFit`, `BoxShape`, `TextBaseline` | `flui-painting` |
 | snapping, the physical-coordinate maths, the kurbo-to-lyon adapter | `flui-engine` |
-| box and sliver constraints, flex/stack/table/wrap enums, `AxisDirection`, `CacheExtentStyle` | `flui-rendering` |
+| box and sliver constraints, `AxisDirection`, `TableCellVerticalAlignment`, `CacheExtentStyle` | `flui-rendering` (the protocol and parent data read them) |
+| flex, stack, wrap and table-column enums, `VerticalDirection` | `flui-objects`, beside the render objects that read them; `flui-rendering` never does |
 | simulations | `flui-animation` (duplicates deleted) |
 | gesture details, `Velocity`, `PointerDeviceKind` | `flui-interaction` |
 | IME, haptics, `Brightness`, `Locale`, `TargetPlatform` | `flui-platform-api` |
 | `MaterialColors` and design-system colours | `flui-material` / `flui-cupertino` |
-| `PointerData`, `DeviceOrientation`, `FractionalOffset`, `Orientation`, Bézier types, `Line`, `Circle`, `Vec2`, `Bounds`, text-path types | deleted (no consumer, or replaced by kurbo inside painting) |
+| `PointerData`, `OffsetPair`, `DeviceOrientation`, `FractionalOffset`, `Orientation`, `MaterialColors`, Bézier types, text-path types, and `flui-types`' duplicates of `BoxConstraints`, `FlexFit`, `CacheExtentStyle` and the simulations | deleted (no consumer, or an in-use counterpart) |
+| `Line`, `Circle`, `Vec2`, `Bounds` | still in `flui_foundation::geometry`; pruning them to the census's consumers is follow-up work |
 
 - Both crates leave the workspace once `cargo tree -i` and a source search find no dependent.
 - No family becomes its own crate.
@@ -240,6 +247,47 @@ Each step is one PR that builds and passes `cargo xtask check-changed`:
 5. `flui-geometry` is deleted.
 6. §7, then the `flui-types` families by §8, one family per PR. `flui-types` is deleted.
 7. The census reruns with the same commands.
+
+## Implementation status
+
+The migration landed on one branch, in the steps of §9. What shipped:
+
+- **§1–§2.** No unit types, no `px()`; every logical value is `f64`, including scroll and the
+  sliver protocol. Scroll-axis tolerances use `flui_foundation::EPSILON` (1e-10).
+- **§3–§5.** The values live in `flui_foundation::geometry`, with the one `Axis`. Float
+  types are neither `Eq` nor `Hash`; `canonical_bits` covers `f32` and `f64`. `DevicePixelRatio`
+  and the device aliases exist, and the compile-fail suite
+  (`crates/flui-painting/tests/compile_fail/`) rejects `Point + Point`, a `Size` as an
+  `Offset`, a `DevicePoint` as a `Point`, a literal `DevicePixelRatio`, and mixing `f64` with
+  `i32` geometry.
+- **§6.** `geometry::{snap, snap_edges, cover, device_rect_covering, device_size,
+  resolve_stroke_width}`, pinned for negative, half-way and non-finite input. The engine's
+  scissors, damage, backdrop and blend copy regions go through them: a hard rect clip snaps its
+  edges under a translation plus a positive scale, and every bound in front of an SDF or a copy
+  covers (`crates/flui-engine/ARCHITECTURE.md` mapping decision 17).
+- **§7.** `Path` is a kurbo `BezPath` plus a shape hint, with exact winding, tight bounds and
+  arcs built at a fixed tolerance, and one kurbo-to-lyon adapter in the engine. `Color::lerp`
+  is premultiplied (`crates/flui-painting/ARCHITECTURE.md` mapping decision 13).
+- **§8.** Both crates are deleted; the owner table above is what the code does.
+
+What is deferred, each with its reason:
+
+- **Content snapping** (solid, gradient and image quads; animated layers unsnapped), **border
+  and stroke widths resolved in layout** (`resolve_stroke_width` exists, nothing calls it yet)
+  and **text baseline snapping**. Together they move every readback and need the engine to
+  know which layers animate; they land as one change with readbacks that tell a snapped edge
+  from an antialiased one (`crates/flui-engine/ARCHITECTURE.md`, Open items).
+- **Platform sizing formulas** (Windows physical-first, Wayland n/120, the web's
+  `devicePixelContentBoxSize`). Backend changes that only the Linux path runs in CI; each needs
+  its platform's smoke run.
+- **§3's semantic changes**: a half-open `Rect::contains`, empty rectangles counted by
+  `expand_to_include`, `intersect` returning `Option`. Each changes hit-testing or bounds
+  results across the widget catalog and needs its own pass over the harness.
+- **`Color` in `f32` storage behind the `color` crate, and gradient interpolation spaces**
+  (Oklab, premultiplied). `Color` stays four `u8` channels, which are already lawfully
+  `Eq + Hash`; wide-gamut and gradient-space work change the engine's shaders and belong
+  together. peniko is not added: the display list stores no peniko type.
+- **Pruning `Vec2`, `Bounds`, `Line`, `Circle`** and the scalar traits to their consumers.
 
 ## Alternatives considered
 
@@ -277,14 +325,18 @@ Each step is one PR that builds and passes `cargo xtask check-changed`:
   - Float-holding types lose `Eq` and `Hash` (`Color` keeps them).
 - **Behaviour changes.** Each has a test and, where it differs from Flutter, a mapping-decision
   entry:
-  - `Rect::contains` becomes half-open;
-  - negative ties snap toward +∞;
-  - rectangle widths come from snapped edges;
-  - border and stroke widths resolve to device pixels during layout;
-  - `Color::lerp` becomes premultiplied;
-  - gradients default to premultiplied Oklab.
+  - a hard rect clip keeps exactly the pixels whose centres are inside, and every covering
+    bound (damage, SDF scissors, backdrop copies) keeps every partly covered pixel;
+  - `Color::lerp` is premultiplied;
+  - `Path` bounds are tight (a curve's extremes, not its control points), and arcs are curves
+    built to 1e-3 logical px;
+  - completed animation runs end exactly on their last frame (elapsed time is taken on the
+    clock's integer grid).
+
+  §3's rectangle semantics, content snapping, layout-time stroke widths and Oklab gradients
+  follow (Implementation status).
 - **Memory.** Layout values double in size. Paths in `f64` are about twice their current
-  memory. The display list stays `f32`.
+  memory, and so is the display list until narrowing moves to record time (§2).
 - **Code size.** About 5–6k lines of value code remain, across foundation and painting, in place
   of 33.8k.
 - **Dependencies.** No upstream crate enters a Stable signature. Foundation gains `glam`, and

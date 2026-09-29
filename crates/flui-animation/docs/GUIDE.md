@@ -234,9 +234,9 @@ let value = tween.transform(0.5);  // 50.0
 
 ```rust,ignore
 use flui_animation::*;
-use flui_types::styling::Color;
-use flui_types::geometry::{Size, Offset, Rect};
-use flui_types::layout::{Alignment, EdgeInsets};
+use flui_foundation::geometry::{EdgeInsets, Offset, Rect, Size};
+use flui_painting::Alignment;
+use flui_painting::styling::{BorderRadius, BorderRadiusExt, Color};
 
 // Numeric
 FloatTween::new(0.0, 100.0)

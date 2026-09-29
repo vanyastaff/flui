@@ -43,7 +43,7 @@
 // crates/flui_app/src/binding/gesture.rs
 
 use flui_interaction::{EventRouter, HitTestable};
-use flui_types::events::{Event, PointerEvent, KeyEvent};
+use flui_interaction::events::{Event, KeyboardEvent, PointerEvent};
 use parking_lot::RwLock;
 use std::sync::Arc;
 
@@ -65,7 +65,7 @@ impl GestureBinding {
     }
 
     /// Handle keyboard event from platform
-    pub fn handle_key_event(&self, event: KeyEvent, root: &mut dyn HitTestable) {
+    pub fn handle_key_event(&self, event: KeyboardEvent, root: &mut dyn HitTestable) {
         let mut router = self.event_router.write();
         router.route_event(root, &Event::Key(event));
     }
@@ -361,7 +361,7 @@ recognizer.on_tap.call();
 ## Dependency Graph
 
 ```
-flui_types (base types)
+flui_foundation (geometry, ids) + flui_platform_api (platform vocabulary)
     ↓
 flui_interaction (events, hit test, focus)
     ↓

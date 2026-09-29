@@ -166,8 +166,8 @@ cargo ndk -t arm64-v8a build -p flui-android-demo
 ## Verify the Toolchain
 
 ```bash
-cargo check -p flui-types
 cargo check -p flui-foundation
+cargo check -p flui-painting
 cargo check -p flui-platform
 ```
 

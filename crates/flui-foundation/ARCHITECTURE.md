@@ -522,8 +522,8 @@ switch (defaultTargetPlatform) {
 }
 ```
 
-**FLUI:** `TargetPlatform` lives in `flui-types::platform::target_platform`
-(canonical home — Constitution Principle 2 "Strict Crate Dependency DAG").
+**FLUI:** `TargetPlatform` lives in `flui_platform_api::TargetPlatform`
+(the platform-contracts crate, above this one).
 The enum is marked `#[non_exhaustive]` and ships seven variants:
 `iOS`, `Android`, `Linux`, `MacOS`, `Windows`, `Fuchsia`, `Unknown`.
 
@@ -618,7 +618,8 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 | `GlobalKey<T>` | `GlobalKey<T>` | `flui-view/src/key/global_key.rs` |
 | `ObjectKey` | `ObjectKey` | `flui-view/src/key/object_key.rs` |
 | ID types | `Id<T: Marker>` | `flui-foundation/src/id.rs` |
-| `TargetPlatform` | `Platform` enum | `flui_types` |
+| `TargetPlatform` | `TargetPlatform` enum | `flui-platform-api/src/target_platform.rs` |
+| `dart:ui` `Offset`, `Size`, `Rect`, `RRect`, `Radius`; `EdgeInsets` | `geometry` module | `flui-foundation/src/geometry/` |
 
 ### To Implement
 
@@ -641,6 +642,19 @@ return SynchronousFuture<RestorationBucket?>(_rootBucket);
 | `PersistentHashMap` | Use `im` crate if needed |
 | `LicenseEntry` | Implement when needed |
 | `BindingBase` (mixin-singleton hierarchy) | FLUI briefly had an equivalent (`BindingBase`/`HasInstance`/`impl_binding_singleton!`, this crate's now-deleted `binding.rs`), but the whole singleton-binding pattern was retired: every binding-shaped value (`RenderingFlutterBinding`, the painting/semantics state) is now explicitly constructed and owned per `UiRealm`/`AppRuntime` instead of process-global |
+
+---
+
+## The geometry values (`geometry`)
+
+`flui_foundation::geometry` holds the geometry values every layer shares (ADR-0098): `Point`,
+`Offset`, `Size`, `Rect`, `RRect`/`Radius`, `Edges`/`EdgeInsets`, `Matrix4` (glam inside, no
+glam type in a signature), the one `Axis`, and `canonical_bits` for float-keyed caches. A
+logical length is a plain `f64`; the types are generic only over their scalar, and the `i32`
+instantiations are the device-pixel grid (`DevicePoint`, `DeviceSize`, `DeviceRect`).
+`DevicePixelRatio` rejects non-finite, zero and negative ratios. Rounding to the device grid
+lives here too: `snap`, `snap_point`, `snap_edges`, `cover`, `device_rect_covering`,
+`device_size` and `resolve_stroke_width`; the engine decides where they apply.
 
 ---
 

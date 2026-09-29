@@ -49,7 +49,7 @@ their tests, measured at `431c8757c` (2026-09-26):
 | Crate | Leaf paths | SDK path |
 |---|---|---|
 | `flui_widgets` | 90 | `widgets` (whole crate) |
-| `flui_types` | 37 | `types` (whole crate) |
+| `flui_types` (split by owner, ADR-0098 §8) | 37 | `geometry` (the whole `flui_foundation::geometry` module); `painting::{Alignment, Clip, Paint, Path, Border, BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, Color, FontWeight, TextDirection, TextStyle}` from `flui_painting`; `platform::{Brightness, Locale}` from `flui_platform_api` |
 | `flui_view` | 29 | `view` (whole crate); its macros expand through `$crate::`, so they work through the re-export |
 | `flui_animation` | 19 | `animation` (whole crate) |
 | `flui_foundation` | 7 | `foundation` (whole crate) |

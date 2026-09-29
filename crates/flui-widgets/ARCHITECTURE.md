@@ -1199,8 +1199,8 @@ different kinds of gap, not one undifferentiated "not yet":
   not a structural gap.
 
 A `BoxDecoration` border's thickness is separately still not folded into the
-effective padding (`_paddingIncludingDecoration`) because `flui-types`'
-`BoxDecoration` exposes no border insets. Flutter also `assert`s that `color`
+effective padding (`_paddingIncludingDecoration`) because
+`flui_painting::styling::BoxDecoration` exposes no border insets. Flutter also `assert`s that `color`
 and `decoration` are mutually exclusive; FLUI accepts both and paints color
 over the decoration — the order the widget stack would have produced
 (`DecoratedBox` enclosing `ColoredBox`) — rather than panicking.

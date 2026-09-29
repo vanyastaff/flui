@@ -11,7 +11,7 @@ use flui_widgets::{column, row}; // the ViewSeq macros (shadow std's same-named)
 
 Container::new()
     .color(Color::rgb(18, 18, 24))
-    .padding(EdgeInsets::all(px(24.0)))
+    .padding(EdgeInsets::all(24.0))
     .child(Column::new(column![
         Text::new("Hello, FLUI"),
         SizedBox::height(12.0),

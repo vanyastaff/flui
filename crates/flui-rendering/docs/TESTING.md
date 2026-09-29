@@ -139,11 +139,9 @@ require a prior layout pass, but you can call them after `run_layout` or
 ```rust
 use flui_objects::{RenderColoredBox, RenderOpacity};
 use flui_rendering::testing::{BoxQueryRun, RenderTester, box_node};
-use flui_types::{Size, geometry::px};
+use flui_foundation::geometry::Size;
 
-let constraints = flui_rendering::constraints::BoxConstraints::new(
-    px(0.0), px(200.0), px(0.0), px(200.0),
-);
+let constraints = flui_rendering::constraints::BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
 let mut run = RenderTester::mount(
     box_node(RenderOpacity::opaque())
         .child(box_node(RenderColoredBox::red(40.0, 40.0))),
@@ -154,7 +152,7 @@ let mut run = RenderTester::mount(
 assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 40.0);
 assert_eq!(
     run.dry_layout(run.root(), constraints),
-    Size::new(px(40.0), px(40.0)),
+    Size::new(40.0, 40.0),
 );
 ```
 
@@ -180,17 +178,17 @@ Snapshot returned by `pump` / `advance_*` / `simulate`: `painted`, `structure`
 ```rust
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::testing::{RenderTester, Probe, box_node};
-use flui_types::{Offset, Size, geometry::px};
+use flui_foundation::geometry::{Offset, Size};
 
 let run = RenderTester::mount(
     box_node(RenderPadding::all(5.0))
         .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
 )
-.with_size(Size::new(px(200.0), px(200.0)))
+.with_size(Size::new(200.0, 200.0))
 .run_frame();
 
 let child = run.id("child");
-assert_eq!(run.offset(child), Offset::new(px(5.0), px(5.0)));
+assert_eq!(run.offset(child), Offset::new(5.0, 5.0));
 assert_eq!(run.structure(), vec!["Offset", "Picture"]);
 assert!(run.painted());
 ```
@@ -199,7 +197,7 @@ assert!(run.painted());
 
 ```rust
 let run = RenderTester::mount(/* … */).run_layout();
-assert_eq!(run.box_geometry(run.root()), Size::new(px(200.0), px(200.0)));
+assert_eq!(run.box_geometry(run.root()), Size::new(200.0, 200.0));
 ```
 
 ### Stack positioned child (`ParentDataSeed`)
@@ -218,7 +216,7 @@ let run = RenderTester::mount(
                 .label("positioned"),
         ),
 )
-.with_size(Size::new(px(120.0), px(120.0)))
+.with_size(Size::new(120.0, 120.0))
 .run_layout();
 
 assert_eq!(run.hit_first(25.0, 20.0), Some(run.id("positioned")));
@@ -232,12 +230,12 @@ let pad = run.root();
 let child = run.id("child");
 
 run.simulate([0.0, 0.5, 1.0], |t, run| {
-    let padding = 5.0 + 50.0 * t as f32;
+    let padding = 5.0 + 50.0 * t;
     run.update::<RenderPadding>(pad, |p| {
-        p.set_padding(EdgeInsets::all(px(padding)));
+        p.set_padding(EdgeInsets::all(padding));
     });
 });
-assert_eq!(run.offset(child), Offset::new(px(55.0), px(55.0)));
+assert_eq!(run.offset(child), Offset::new(55.0, 55.0));
 ```
 
 ### Paint-only (color / opacity)
@@ -311,7 +309,7 @@ use flui_rendering::testing::{RenderTester, box_node};
 
 // cheapest handle that exposes the painted layer tree
 let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-    .with_size(flui_types::Size::new(flui_types::geometry::px(40.0), flui_types::geometry::px(40.0)))
+    .with_size(flui_foundation::geometry::Size::new(40.0, 40.0))
     .run_to_paint();
 assert!(run.layer_tree().is_some());
 
@@ -349,10 +347,10 @@ Offset dx=0.00 dy=0.00
 ```rust
 use flui_objects::RenderDecoratedBox;
 use flui_rendering::testing::{DrawKind, RenderTester, box_node};
-use flui_types::{Size, geometry::px};
+use flui_foundation::geometry::Size;
 
 let run = RenderTester::mount(box_node(RenderDecoratedBox::new(/* decoration */)))
-    .with_size(Size::new(px(80.0), px(60.0)))
+    .with_size(Size::new(80.0, 60.0))
     .run_to_paint();                    // or .run_frame()
 
 insta::assert_snapshot!("my_widget", run.snapshot());    // pinned to tests/snapshots/
@@ -398,7 +396,7 @@ use flui_rendering::testing::{RenderTester, box_node};
 
 // PanicPaintBox is any RenderObject whose paint_raw panics.
 let err = RenderTester::mount(box_node(PanicPaintBox::new()))
-    .with_size(flui_types::Size::new(flui_types::geometry::px(10.0), flui_types::geometry::px(10.0)))
+    .with_size(flui_foundation::geometry::Size::new(10.0, 10.0))
     .try_run_frame()
     .expect_err("a panicking paint must yield Err");
 
@@ -414,14 +412,15 @@ not an error variant.
 ```rust
 use flui_objects::{RenderColoredBox, RenderFittedBox};
 use flui_rendering::testing::{RenderTester, box_node, has_overflow};
-use flui_types::{Alignment, Size, geometry::px, layout::BoxFit, painting::Clip};
+use flui_foundation::geometry::Size;
+use flui_painting::{Alignment, BoxFit, paint::Clip};
 
 let run = RenderTester::mount(
     box_node(RenderFittedBox::new(BoxFit::None, Alignment::CENTER, Clip::None))
         .label("fitted")
         .child(box_node(RenderColoredBox::red(100.0, 100.0))),
 )
-.with_size(Size::new(px(50.0), px(50.0)))
+.with_size(Size::new(50.0, 50.0))
 .run_layout();
 
 assert!(has_overflow(&run, run.id("fitted")));   // 100×100 child in 50×50 box

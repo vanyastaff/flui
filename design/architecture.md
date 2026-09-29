@@ -86,8 +86,9 @@ then narrowed it. The target is:
 
 What this architecture deliberately does **not** do:
 
-- merge crates to hit a count (geometry into types, animation into scheduler, semantics into
-  rendering, backends into app);
+- merge crates to hit a count (animation into scheduler, semantics into rendering, backends
+  into app); a crate goes only when its types have owners, as ADR-0098 gave geometry and the
+  value types;
 - create `flui-text` before a post-Parley measurement;
 - lay out in parallel inside a realm;
 - delete `HeadlessRenderer`, `StateCell`, the CLI's `test`/`analyze`, or the current hot-reload path
@@ -137,7 +138,7 @@ manifest-as-source rule stays).
 ```mermaid
 flowchart BT
   subgraph V["V: values (no OS, no tokio, no wgpu; wasm-clean)"]
-    geometry[flui-geometry]; types[flui-types]; macros[flui-macros]; foundation["flui-foundation<br/>(+ tree markers, read contract)"]
+    macros[flui-macros]; foundation["flui-foundation<br/>(+ geometry, tree markers, read contract)"]
   end
   subgraph C["C: contracts (stable)"]
     papi[flui-platform-api]; proto[flui-protocol]
@@ -233,9 +234,9 @@ inline test modules are large.
 
 | Crate | Today (layer, src lines) | Target tier / kind | Fate | Why |
 |---|---|---|---|---|
-| flui-geometry | 0, 19.3k | V / internal | Keep, shrink | Drop unused GPUI-era vocabulary and the no-op `mint` feature; fix `Pixels` Eq/Hash consistency (§15). Merging into types is rejected: types has many more dependents. [ADR-0098](../docs/adr/ADR-0098-owned-f64-geometry-values.md) (Proposed) would delete the crate: `Pixels` and the unit generics go, and plain `f64` value types move to `flui_foundation::geometry`, with shapes going to `flui-painting`. |
-| flui-types | 0, 21.8k | V / internal | Keep, compress | Physics duplicates `flui-animation`'s simulations; the second `BoxConstraints` and `MaterialColors` move to their owners. Rule: a type lives here only with two consumers. [ADR-0098](../docs/adr/ADR-0098-owned-f64-geometry-values.md) (Proposed) §8 would move every family to its owner and delete the crate. |
-| flui-foundation | 1, 11.3k | V / internal | Keep, absorb tree markers | Takes the arity markers and `IndexedSlot` (done 2026-09-26; `Depth` and `Slot` had no user and were deleted). Runtime-protocol identities go behind `#[doc(hidden)]`. Carries `links = "flui_train"` (§6.2). Takes the signal read contract (`read_scope`, ADR-0085 §2); the reactive graph does **not** go here: a foundation edit re-checks 15 crates, a graph edit in `flui-view` 3 (`cargo check -p flui-app`, one run). |
+| flui-geometry | 0, 19.3k | — | **Deleted** ([ADR-0098](../docs/adr/ADR-0098-owned-f64-geometry-values.md)); values in `flui_foundation::geometry` | No scalar unit types: logical lengths are plain `f64`, and `Point`, `Offset`, `Size`, `Rect`, `RRect`, `Matrix4`, the `i32` device-grid aliases and `DevicePixelRatio` live in `flui_foundation::geometry`. Float values are neither `Eq` nor `Hash`; caches key on `canonical_bits` (§15). |
+| flui-types | 0, 21.8k | — | **Deleted** ([ADR-0098](../docs/adr/ADR-0098-owned-f64-geometry-values.md) §8); each family with its owner | Paint, styling and typography values in `flui-painting`; constraints and `AxisDirection` in `flui-rendering`; flex, stack, wrap and table enums in `flui-objects`; gesture details and `Velocity` in `flui-interaction`; IME, haptics, `Brightness`, `Locale`, `TargetPlatform` in `flui-platform-api`; simulations in `flui-animation`. |
+| flui-foundation | 1, 11.3k | V / internal | Keep, absorb tree markers and geometry | Owns the geometry values (`geometry`, ADR-0098). Takes the arity markers and `IndexedSlot` (done 2026-09-26; `Depth` and `Slot` had no user and were deleted). Runtime-protocol identities go behind `#[doc(hidden)]`. Carries `links = "flui_train"` (§6.2). Takes the signal read contract (`read_scope`, ADR-0085 §2); the reactive graph does **not** go here: a foundation edit re-checks 15 crates, a graph edit in `flui-view` 3 (`cargo check -p flui-app`, one run). |
 | flui-macros | 1, 0.9k | V / internal | Keep, extend | `RenderView`, `Store`, `Catalog` and `Routable` derives, `#[flui::main]`, `#[flui::test]`. Already resolves its runtime path through `proc_macro_crate` with a fallback to `flui` (`crates/flui-macros/src/runtime_path.rs:21-24`), so derives work from packages. |
 | flui-tree | 2, 6.9k | — | **Deleted 2026-09-26** (ADR-0081); markers merged into foundation | The `TreeRead`/`TreeNav`/`TreeWrite` traits had eight implementations, all on the layer, render and semantics trees, and no generic consumer; the call sites became inherent methods on those trees. |
 | flui-platform | 3, 46.3k | H / internal | **Split**: contracts to `flui-platform-api`, backends stay | Its only production import below the app is `crates/flui-interaction/src/text_input.rs:27`. Delete the no-op `desktop = ["dep:winit"]` feature (`crates/flui-platform/Cargo.toml:303`, zero `feature = "desktop"` sites in `src/`) and `LinuxPlatform` (`crates/flui-platform/src/platforms/linux/mod.rs:108`, whose methods are `unimplemented!`). `PlatformAccessibility` lives in `flui_semantics::platform` (internal, tier S), re-exported at `flui_platform::traits`, and never in `flui-platform-api`; that edge is why the crate sits at layer 3 ([ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) §2, amended). |
@@ -380,8 +381,8 @@ pub mod testing;     // WidgetTester, finders, goldens, conformance kits
 
 `flui-sdk` is the package-author surface (owner decision 2,
 [ADR-0088](../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)). It exists, with no
-consumer yet: whole-module re-exports of `animation`, `foundation`, `types`, `view` and `widgets`,
-subsets of the facade's curated `interaction`, `painting` and `rendering` modules at the same
+consumer yet: whole-module re-exports of `animation`, `foundation`, `geometry`, `view` and `widgets`,
+subsets of the facade's curated `platform`, `interaction`, `painting` and `rendering` modules at the same
 paths, and three Evolving items in `pipeline`, measured from what Material and Cupertino import
 (`crates/flui-sdk/ARCHITECTURE.md`). The train guard below is on `flui-foundation`.
 
@@ -417,7 +418,7 @@ paths, and three Evolving items in `pipeline`, measured from what Material and C
 
 The order is generated from tiers and in-tier order, never kept by hand:
 
-V (geometry, types, macros, foundation) → C (platform-api, protocol) → S (log,
+V (macros, foundation) → C (platform-api, protocol) → S (log,
 scheduler, painting, interaction, semantics, animation, assets) → R (layer, rendering, objects,
 engine) → K (view, widgets, runtime, testing, sdk) → H (platform, app, flui) → pkg (official
 packages, same run).
@@ -1211,7 +1212,7 @@ does not cover each gate they add.
 | File length | ≤ 3000 lines, allowlist that only shrinks | — |
 | Unsafe in named islands | per-module ledger; `undocumented_unsafe_blocks` switched on module by module; Miri on the subtree arena; a live-run record for unexecuted backends | backends CI does not execute |
 | Panics are classified | a lint: an `expect`/`panic!` literal starts with `BUG:` or names its `try_` twin; `guarded_call(node, phase, f)` also wraps hit-test, intrinsics and semantics | — |
-| Eq and Hash agree | property tests | `Pixels` derives `PartialEq` on `f32` but hashes the bits, so `0.0` and `-0.0` are equal and hash differently (`crates/flui-geometry/src/units.rs:91,575,592-595`) |
+| Eq and Hash agree | property tests | float geometry values implement neither `Eq` nor `Hash`; float-keyed caches use `flui_foundation::geometry::canonical_bits`, and `Color` normalises at construction ([ADR-0098](../docs/adr/ADR-0098-owned-f64-geometry-values.md) §4) |
 | Determinism | realm-scoped IDs for anything serialised; per-realm fonts; a seeded executor in `#[flui::test]` | static ID counters (whether they reach snapshots is unverified) |
 | Devtools is not an attack surface | debug builds only; named pipe or Unix socket with a launch token; `flui mcp` over stdio | — |
 | Docs do not lie | ADR front-matter validation; process-marker scan | free text |
@@ -1279,7 +1280,7 @@ as an optional, desktop-only, dev-only convenience:
 | `flui-tree` (the trait trio; done 2026-09-26) | markers in `flui-foundation`, inherent methods |
 | `flui-localizations` (done 2026-09-26) | a widgets module; strings, when there are any, in packages; `flui-i18n` (ICU4X, H1) |
 | `ElementBuildContext`, `__private`, `ListenerRegistry`, `ViewId`, the second `Window` family in `flui-platform/src/window.rs`, `PlatformEmbedder`, `PlatformCapabilities`, `LinuxPlatform`, dead features, `BuildContext::reactive()` | — |
-| physics, the second `BoxConstraints` and `MaterialColors` in types; GPUI-era vocabulary in geometry | their owners in animation and rendering |
+| `flui-geometry` and `flui-types` (done, [ADR-0098](../docs/adr/ADR-0098-owned-f64-geometry-values.md)) | plain-`f64` values in `flui_foundation::geometry`; every other family with its owner (painting, rendering, objects, interaction, platform-api, animation) |
 | `HeadlessBinding::pump_frame` | the runtime transaction under a manual clock |
 | the `HeadlessRenderer` walker, after the CPU backend passes conformance | any backend rendering into the caller's target |
 | cosmic-text, `FONT_SYSTEM`, unicode-segmentation | Parley, fontique, HarfRust, ICU4X |
@@ -1293,7 +1294,7 @@ as an optional, desktop-only, dev-only convenience:
 | the facade's `material`, `cupertino`, `localizations` and `hot-reload` features | explicit package dependencies |
 
 **Kept explicitly**, against proposals to delete or merge them: `flui-assets`, `flui-log`,
-`flui-semantics`, `flui-animation`, `flui-geometry`, `StateCell`/`StateHandle` (demoted),
+`flui-semantics`, `flui-animation`, `StateCell`/`StateHandle` (demoted),
 `HeadlessRenderer` (until conformance), `flui-hot-reload` and `flui-devtools` (until replaced), the
 CLI's `test` and `analyze`, the OS backends in their own crate.
 
