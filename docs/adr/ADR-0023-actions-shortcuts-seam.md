@@ -4,6 +4,8 @@
 - **Date:** 2026-07-10
 - **Related:** ADR-0026 (focus widgets and traversal; Tab is an intent built on this)
 - **Superseded in part by:** ADR-0079 (intents resolve at the primary focus)
+- **Amended by:** ADR-0086 (event context on `Action::invoke` and on `CallbackShortcuts`
+  callbacks; `Actions::maybe_invoke` removed)
 
 ## Context
 
@@ -30,14 +32,22 @@ above a field is its ancestor and sees what the field ignores.
 **2. `SingleActivator` and `CallbackShortcuts`.** `SingleActivator::new(key)` with
 `.control()`/`.shift()`/`.alt()`/`.meta()`/`.allow_repeats(bool)`; `matches` is Flutter's
 `accepts`: key-down or an allowed repeat, trigger equality, and an **exact** match on all four
-modifiers. `CallbackShortcuts` binds activators straight to `Rc<dyn Fn()>` callbacks inside a
+modifiers. `CallbackShortcuts` binds activators straight to callbacks inside a
 `Focus::new(child).can_request_focus(false).on_key_event(…)` wrapper, as Flutter builds it: the
 first matching binding fires, and the key is handled iff one fired.
+
+*Amended by ADR-0086:* a binding's callback is `Fn(&mut EventCx<'_>) -> R` with `R:
+EventOutcome`, and receives the key event's `EventCx` from the `Focus` key handler it runs in.
 
 **3. `Intent` / `Action` / `Actions`.** `trait Intent: Any` is a marker keyed by `TypeId`, as
 Flutter keys by `Type`; the downcast happens inside a typed wrapper, never against a view.
 `Action<T: Intent>` has `is_enabled`, `invoke(&T) -> ActionOutcome` and a defaulted
-`to_key_event_result` (ADR-0026 §4); `CallbackAction<T>` wraps a closure. Each `Actions` widget
+`to_key_event_result` (ADR-0026 §4); `CallbackAction<T>` wraps a closure. *Amended by ADR-0086:*
+`invoke` is `invoke(&self, cx: &mut EventCx<'_>, intent: &T)` — the action runs inside the key
+event's dispatch and writes through its `EventCx` — and `CallbackAction::new` takes
+`Fn(&mut EventCx<'_>, &T) -> R`. `Actions::maybe_invoke` is removed: its only caller could be
+`build`, which has no event context; `is_enabled` and `to_key_event_result` stay queries. Each
+`Actions` widget
 layers its bindings over the enclosing chain at provide time — `HashMap<TypeId, ErasedAction>`,
 a nearer scope's mapping for a type **replacing** the enclosing one — so a single
 nearest-provider lookup gives what Flutter's ancestor walk gives. As in Flutter, a disabled

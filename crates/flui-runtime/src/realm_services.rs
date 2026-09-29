@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use flui_foundation::{PresentationId, RealmId};
+use flui_painting::{FontCollection, TextContext};
 use flui_platform_api::Clipboard;
 use flui_scheduler::{AsyncDriver, LocalPostFrameLane, UpdateScheduler};
 
@@ -21,6 +22,9 @@ pub(crate) struct RealmServices {
     /// The platform clipboard every presentation of this realm hands its
     /// widgets (`LifecycleContext::clipboard_handle`).
     pub(crate) clipboard: Arc<dyn Clipboard>,
+    /// The realm's text service (ADR-0092 §3): one per realm, built from the
+    /// app's [`FontCollection`] and dropped with the realm.
+    pub(crate) text: TextContext,
 }
 
 impl RealmServices {
@@ -31,13 +35,18 @@ impl RealmServices {
     ///
     /// `clipboard` is the platform clipboard the realm's presentations hand
     /// their widgets; a realm always has one.
-    pub(crate) fn construct(clipboard: Arc<dyn Clipboard>) -> Self {
+    ///
+    /// `fonts` is the app's font collection; the realm gets its own
+    /// [`TextContext`] over it, so a face registered on the collection
+    /// reaches this realm as it reaches every other.
+    pub(crate) fn construct(clipboard: Arc<dyn Clipboard>, fonts: &FontCollection) -> Self {
         let scheduler = UpdateScheduler::new();
         Self {
             local_post_frame: scheduler.new_local_post_frame_lane(),
             async_driver: scheduler.async_driver().clone(),
             scheduler,
             clipboard,
+            text: TextContext::new(fonts),
         }
     }
 }
@@ -57,19 +66,4 @@ pub(crate) fn next_identity() -> (RealmId, PresentationId) {
         RealmId::new_gen(0, generation),
         PresentationId::new_gen(0, generation),
     )
-}
-
-#[cfg(test)]
-mod identity_tests {
-    use super::*;
-
-    #[test]
-    fn next_identity_mints_distinct_generations() {
-        let (realm_a, _) = next_identity();
-        let (realm_b, _) = next_identity();
-        assert_ne!(
-            realm_a, realm_b,
-            "every mint must produce a fresh generation, never repeating"
-        );
-    }
 }

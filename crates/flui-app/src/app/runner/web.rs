@@ -3,8 +3,7 @@ use flui_view::{StatelessView, View};
 
 use super::frame_pacing::{FallbackGate, WakeAction, wake_action};
 use super::host::{
-    APP_RUNTIME, install_owner_platform, runtime_needs_redraw_handle, runtime_wake_callback,
-    with_owner_platform,
+    APP_RUNTIME, install_owner_platform, runtime_wake_callback, with_owner_platform,
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmTask, dispatch_platform_realm, install_platform_realm,
@@ -67,7 +66,7 @@ where
         }
 
         // 0. The platform clipboard (ADR-0038 §9) was installed with the
-        // owner platform; the realm below takes it through `runtime_clipboard`.
+        // owner platform; the realm below takes it through `build_runtime_realm`.
         //
         // 1. Open window (creates canvas). `Ready` is guaranteed inside
         // `on_ready` (ADR-0039 §1).
@@ -118,19 +117,14 @@ where
         // DPR to the freshly built pipeline before returning.
         let scale_factor = window.scale_factor() as f64;
         let wake = runtime_wake_callback();
-        let ui_realm = match crate::app::ui_realm::UiRealm::new(
-            Arc::clone(&wake),
-            presentation_window,
-            scale_factor,
-            runtime_needs_redraw_handle(),
-            super::host::runtime_clipboard(),
-        ) {
-            Ok(realm) => realm,
-            Err(error) => {
-                tracing::error!(%error, "UiRealm construction failed");
-                return Err(anyhow::anyhow!(error).context("UiRealm construction failed"));
-            }
-        };
+        let ui_realm =
+            match super::host::build_runtime_realm(&wake, presentation_window, scale_factor) {
+                Ok(realm) => realm,
+                Err(error) => {
+                    tracing::error!(%error, "UiRealm construction failed");
+                    return Err(anyhow::anyhow!(error).context("UiRealm construction failed"));
+                }
+            };
 
         // Debug overlay: `Some` stats IS the enable flag, so this is the
         // single point that turns the frame path's overlay work on.

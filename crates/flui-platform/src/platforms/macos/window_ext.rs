@@ -284,30 +284,3 @@ impl MacOSCollectionBehavior {
 // ============================================================================
 // Tests
 // ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_window_level_values() {
-        assert_eq!(MacOSWindowLevel::Normal.to_ns_value(), 0);
-        assert_eq!(MacOSWindowLevel::Floating.to_ns_value(), 3);
-        assert_eq!(MacOSWindowLevel::ModalPanel.to_ns_value(), 8);
-        assert_eq!(MacOSWindowLevel::Status.to_ns_value(), 25);
-    }
-
-    #[test]
-    fn test_collection_behavior_bits() {
-        let behavior =
-            MacOSCollectionBehavior::CAN_FULLSCREEN.with(MacOSCollectionBehavior::MANAGED);
-
-        assert_eq!(behavior.bits(), (1 << 7) | (1 << 2));
-    }
-
-    #[test]
-    fn test_collection_behavior_default() {
-        let default = MacOSCollectionBehavior::DEFAULT;
-        assert_eq!(default.bits(), 0);
-    }
-}

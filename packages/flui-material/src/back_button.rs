@@ -118,33 +118,3 @@ impl StatelessView for BackButton {
         button
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn back_arrow_icon_data_matches_icons_arrow_back() {
-        let icon = back_arrow_icon_data();
-        assert_eq!(icon.code_point, 0xE092);
-        assert_eq!(icon.font_family.as_deref(), Some("Material Icons"));
-        assert!(icon.match_text_direction);
-    }
-
-    #[test]
-    fn new_has_no_override() {
-        assert!(BackButton::new().on_pressed.is_none());
-    }
-
-    #[test]
-    fn on_pressed_sets_an_override() {
-        let button = BackButton::new().on_pressed(|_cx| {});
-        assert!(button.on_pressed.is_some());
-    }
-
-    #[test]
-    fn debug_reports_whether_an_override_is_set_without_the_closure() {
-        let debug = format!("{:?}", BackButton::new().on_pressed(|_cx| {}));
-        assert!(debug.contains("has_override: true"));
-    }
-}

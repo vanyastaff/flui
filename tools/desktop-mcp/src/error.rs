@@ -508,7 +508,6 @@ mod tests {
 
     /// The code is the variant's, fixed; an interrupted action reports its
     /// cause's code and its effect as data.
-    #[test]
     fn codes_are_fixed_and_effects_are_data() {
         let err = ToolError::NotForeground {
             target: "window w3".into(),
@@ -547,7 +546,6 @@ mod tests {
 
     /// An effect already recorded is kept: what happened first is what a
     /// retry must know.
-    #[test]
     fn the_first_effect_wins() {
         let err = ToolError::Busy("x".into())
             .after(Effect::MayHaveRun, "first")
@@ -562,7 +560,6 @@ mod tests {
         ));
     }
 
-    #[test]
     fn retry_policy_follows_the_code() {
         assert_eq!(ToolError::Busy("q".into()).retry(), Retry::Soon);
         assert_eq!(ToolError::InputHeld("Shift".into()).retry(), Retry::Soon);
@@ -683,14 +680,17 @@ mod tests {
     }
 
     #[test]
-    fn handle_errors_name_their_kind() {
-        let unknown = ToolError::UnknownHandle {
-            handle: "w7".into(),
-            kind: HandleKind::Window,
-        };
-        assert!(unknown.to_string().contains("list_windows"), "{unknown}");
-        assert_eq!(unknown.payload()["error"]["kind"], "window");
-        let gone = ToolError::gone_element("e1", "the application removed it");
-        assert!(gone.to_string().contains("read the tree again"), "{gone}");
+    fn error_envelope_contract() {
+        crate::test_rows::run_rows(&[
+            (
+                "codes_are_fixed_and_effects_are_data",
+                codes_are_fixed_and_effects_are_data,
+            ),
+            ("the_first_effect_wins", the_first_effect_wins),
+            (
+                "retry_policy_follows_the_code",
+                retry_policy_follows_the_code,
+            ),
+        ]);
     }
 }

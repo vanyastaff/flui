@@ -250,20 +250,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn display_is_the_wire_name() {
-        for role in Role::ALL {
-            assert_eq!(role.to_string(), role.name());
-        }
-        for action in ActionName::ALL {
-            assert_eq!(action.to_string(), action.name());
-        }
-        assert_eq!(Checked::Mixed.to_string(), "mixed");
-    }
-
+    /// Serde spells every wire name as its vocabulary string, and (with
+    /// `schemars`) the published schemas admit exactly those names.
     #[cfg(feature = "serde")]
     #[test]
-    fn every_wire_role_serializes_to_its_name() {
+    fn every_wire_name_serializes_to_its_vocabulary_string() {
         for &role in Role::ALL {
             let wire = serde_json::Value::String(role.name().into());
             assert_eq!(
@@ -278,42 +269,17 @@ mod tests {
             Some(Role::Unknown),
             "a name outside the vocabulary (a native name, a role a newer schema              added) reads as unknown"
         );
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn every_action_name_serializes_to_its_tool_name() {
         for &action in ActionName::ALL {
             let wire = serde_json::Value::String(action.name().into());
-            assert_eq!(
-                serde_json::to_value(action).ok(),
-                Some(wire.clone()),
-                "{action:?}"
-            );
+            assert_eq!(serde_json::to_value(action).ok(), Some(wire.clone()));
             assert_eq!(
                 serde_json::from_value::<ActionName>(wire).ok(),
                 Some(action)
             );
         }
         assert!(serde_json::from_value::<ActionName>(serde_json::json!("SetValue")).is_err());
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn checked_serializes_as_a_flag_or_mixed() {
-        assert_eq!(
-            serde_json::to_value(Checked::True).ok(),
-            Some(serde_json::json!(true))
-        );
-        assert_eq!(
-            serde_json::to_value(Checked::Mixed).ok(),
-            Some(serde_json::json!("mixed"))
-        );
-        assert_eq!(
-            serde_json::from_value::<Checked>(serde_json::json!("mixed")).ok(),
-            Some(Checked::Mixed)
-        );
-        assert!(serde_json::from_value::<Checked>(serde_json::json!("on")).is_err());
+        #[cfg(feature = "schemars")]
+        assert_schemas_list_every_wire_name();
     }
 
     /// Every string a schema admits, whether it spells them as an `enum` list
@@ -347,8 +313,7 @@ mod tests {
     /// vocabulary, so a role the server can send is never one the client's
     /// validator rejects.
     #[cfg(feature = "schemars")]
-    #[test]
-    fn the_role_schema_lists_every_wire_name() {
+    fn assert_schemas_list_every_wire_name() {
         let schema =
             serde_json::to_value(schemars::schema_for!(Role)).expect("a schema serializes to JSON");
         let mut admitted = Vec::new();

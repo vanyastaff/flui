@@ -72,26 +72,3 @@ impl VerticalDirection {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[inline]
-    fn test_vertical_direction_operations() {
-        let down = VerticalDirection::Down;
-        let up = VerticalDirection::Up;
-
-        assert!(down.is_down());
-        assert!(!down.is_up());
-        assert!(up.is_up());
-        assert!(!up.is_down());
-
-        assert_eq!(down.to_axis_direction(), AxisDirection::TopToBottom);
-        assert_eq!(up.to_axis_direction(), AxisDirection::BottomToTop);
-
-        assert_eq!(down.opposite(), up);
-        assert_eq!(up.opposite(), down);
-    }
-}

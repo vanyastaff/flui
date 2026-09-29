@@ -76,8 +76,6 @@ full = ["profiling", "timeline", "inspector"]
 # tests call so a sibling test cannot poison their callsites' cached interest,
 # and `HeadlessBinding`, which the end-to-end tests drive real frames through.
 flui-testing = { workspace = true }
-# The frame clock the `timeline` unit tests build real `FrameSnapshot`s with.
-flui-scheduler = { path = "../../crates/flui-scheduler", version = "=0.2.0-dev" }
 # The end-to-end tests' one-leaf tree: a `RenderView` over `RenderSizedBox`,
 # and the pipeline owner the binding lays it out with. Neither is SDK surface.
 flui-objects = { path = "../../crates/flui-objects", version = "=0.2.0-dev" }

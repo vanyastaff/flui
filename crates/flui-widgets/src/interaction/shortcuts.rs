@@ -36,15 +36,18 @@ use flui_interaction::routing::{FocusNode, KeyEventResult};
 use flui_platform_api::TargetPlatform;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
+use flui_view::{EventCx, EventOutcome};
 
 use super::actions::{
     ActionChainProvider, Actions, ActivateIntent, CopySelectionTextIntent, Intent, NextFocusAction,
     NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, chain_at, resolve,
 };
 use super::focus::Focus;
+use crate::support::event_callback;
 
-/// A callback bound to a [`SingleActivator`] in [`CallbackShortcuts`].
-pub type ShortcutCallback = Rc<dyn Fn()>;
+/// A callback bound to a [`SingleActivator`] in [`CallbackShortcuts`]: it
+/// receives the key event's [`EventCx`] (ADR-0086).
+pub type ShortcutCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 
 // ============================================================================
 // SingleActivator
@@ -193,10 +196,15 @@ impl CallbackShortcuts {
     }
 
     /// Fire `callback` whenever `activator` matches a key the focused subtree
-    /// ignored.
+    /// ignored. It runs inside the key event's dispatch and receives its
+    /// `cx`, so it writes signals like any other event callback (ADR-0086).
     #[must_use]
-    pub fn binding(mut self, activator: SingleActivator, callback: impl Fn() + 'static) -> Self {
-        self.bindings.push((activator, Rc::new(callback)));
+    pub fn binding<F, R>(mut self, activator: SingleActivator, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.bindings.push((activator, event_callback(callback)));
         self
     }
 }
@@ -230,11 +238,11 @@ impl StatelessView for CallbackShortcuts {
         Focus::new(self.child.clone())
             .can_request_focus(false)
             .debug_label("CallbackShortcuts")
-            .on_key_event(move |_cx, event| {
+            .on_key_event(move |cx, event| {
                 let mut handled = false;
                 for (activator, callback) in &bindings {
                     if activator.matches(event) {
-                        callback();
+                        callback(cx);
                         handled = true;
                     }
                 }
@@ -361,7 +369,7 @@ impl ViewState<Shortcuts> for ShortcutsState {
         focus
             .can_request_focus(false)
             .debug_label("Shortcuts")
-            .on_key_event(move |_cx, event| {
+            .on_key_event(move |cx, event| {
                 // `_find` (`shortcuts.dart:892-899`): the FIRST matching
                 // activator decides; an unresolvable intent falls through as
                 // ignored, it does not try later activators (`:922-938`).
@@ -383,7 +391,7 @@ impl ViewState<Shortcuts> for ShortcutsState {
                     // One call: invoke and read `to_key_event_result` off what
                     // it actually did (`actions.dart:312-314`), so the key
                     // result cannot disagree with the invocation.
-                    Some(action) => action.invoke_for_key(intent),
+                    Some(action) => action.invoke_for_key(cx, intent),
                     None => KeyEventResult::Ignored,
                 }
             })
@@ -564,141 +572,3 @@ impl ViewState<DefaultFocusTraversal> for DefaultFocusTraversalState {
 }
 
 // The mounted `Shortcuts` suites live in `crates/flui-widgets/tests/shortcuts.rs`.
-#[cfg(test)]
-mod tests {
-    use flui_interaction::events::{KeyState, Modifiers};
-
-    use super::*;
-
-    fn key_down(character: &str, modifiers: Modifiers) -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Character(character.into()),
-            modifiers,
-            ..KeyEvent::default()
-        }
-    }
-
-    /// `_shouldAcceptModifiers` demands **equality** per modifier
-    /// (`shortcuts.dart:560-565`): Ctrl+C matches Ctrl+C only — not bare C,
-    /// not Ctrl+Shift+C — and never a key-up. Repeats match unless opted out
-    /// (`:461`, `:576-581`).
-    ///
-    /// Flutter parity (`shortcuts_test.dart`, tag `3.44.0`, `SingleActivator`
-    /// group): this single assertion set covers what that oracle spreads
-    /// across five separate `testWidgets` cases exercising the same
-    /// per-event exact-modifier-match contract through a real
-    /// `HardwareKeyboard` pressed-key simulator instead of direct
-    /// `KeyEvent` construction — `'isActivatedBy works as expected'`,
-    /// `'handles Ctrl-C'`, `'handles repeated events'`, `'rejects repeated
-    /// events if requested'`, `'handles Shift-Ctrl-C'`. Not duplicated here:
-    /// FLUI's `SingleActivator::matches` reads modifiers straight off the
-    /// event it is given, so the oracle's own multi-key press/release
-    /// *sequencing* (physical Ctrl held across several key events) has no
-    /// separate code path to pin — each event's modifier snapshot is all
-    /// `matches` ever sees.
-    #[test]
-    fn single_activator_matches_exact_modifiers_only() {
-        let ctrl_c = SingleActivator::character("c").control();
-
-        assert!(ctrl_c.matches(&key_down("c", Modifiers::CONTROL)));
-        assert!(
-            !ctrl_c.matches(&key_down("c", Modifiers::empty())),
-            "bare c"
-        );
-        assert!(
-            !ctrl_c.matches(&key_down("c", Modifiers::CONTROL | Modifiers::SHIFT)),
-            "an extra modifier disqualifies — exact match, not superset"
-        );
-        assert!(
-            !ctrl_c.matches(&key_down("d", Modifiers::CONTROL)),
-            "wrong key"
-        );
-        assert!(
-            !ctrl_c.matches(&KeyEvent {
-                state: KeyState::Up,
-                ..key_down("c", Modifiers::CONTROL)
-            }),
-            "key-up never triggers"
-        );
-
-        let repeat = KeyEvent {
-            repeat: true,
-            ..key_down("c", Modifiers::CONTROL)
-        };
-        assert!(ctrl_c.matches(&repeat), "repeats match by default");
-        assert!(
-            !ctrl_c.clone().allow_repeats(false).matches(&repeat),
-            "allow_repeats(false) rejects repeats"
-        );
-    }
-
-    /// A letter trigger names the key, not the character it produced: Caps
-    /// Lock turns Ctrl+C into a `"C"` event, which must still match, while
-    /// the exact Shift check keeps Ctrl+Shift+C apart.
-    #[test]
-    fn a_character_activator_matches_regardless_of_caps_lock() {
-        let ctrl_c = SingleActivator::character("c").control();
-
-        assert!(ctrl_c.matches(&key_down("C", Modifiers::CONTROL)));
-        assert!(
-            !ctrl_c.matches(&key_down("C", Modifiers::CONTROL | Modifiers::SHIFT)),
-            "Shift is still compared exactly"
-        );
-        assert!(
-            SingleActivator::character("c")
-                .control()
-                .shift()
-                .matches(&key_down("C", Modifiers::CONTROL | Modifiers::SHIFT)),
-            "Ctrl+Shift+C still has its own binding"
-        );
-        assert!(
-            !SingleActivator::character("+").matches(&key_down("=", Modifiers::empty())),
-            "a non-letter compares exactly"
-        );
-    }
-
-    /// Cmd on the Apple platforms, Control everywhere else — checked for
-    /// every platform, whichever host runs the suite.
-    #[test]
-    fn clipboard_activators_map_every_platform() {
-        let platforms = [
-            TargetPlatform::Android,
-            TargetPlatform::Fuchsia,
-            TargetPlatform::iOS,
-            TargetPlatform::Linux,
-            TargetPlatform::MacOS,
-            TargetPlatform::Windows,
-            TargetPlatform::Unknown,
-        ];
-        for platform in platforms {
-            let apple = matches!(platform, TargetPlatform::MacOS | TargetPlatform::iOS);
-            let modifier = if apple {
-                Modifiers::META
-            } else {
-                Modifiers::CONTROL
-            };
-            let bindings = clipboard_activators(platform);
-            for (key, expected) in [
-                ("c", ClipboardBinding::Copy),
-                ("x", ClipboardBinding::Cut),
-                ("v", ClipboardBinding::Paste),
-            ] {
-                let (activator, binding) = bindings
-                    .iter()
-                    .find(|(activator, _)| activator.matches(&key_down(key, modifier)))
-                    .unwrap_or_else(|| panic!("{platform:?}: no binding for {key}"));
-                assert_eq!(*binding, expected, "{platform:?}: {key}");
-                let other = if apple {
-                    Modifiers::CONTROL
-                } else {
-                    Modifiers::META
-                };
-                assert!(
-                    !activator.matches(&key_down(key, other)),
-                    "{platform:?}: {key} under the other platform's modifier"
-                );
-            }
-        }
-    }
-}

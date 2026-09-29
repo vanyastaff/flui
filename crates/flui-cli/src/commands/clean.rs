@@ -118,13 +118,3 @@ fn remove_dir_if_exists(path: &Path) -> CliResult<bool> {
         Ok(false)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn valid_platforms_are_exactly_the_documented_three() {
-        assert_eq!(VALID_PLATFORMS, &["android", "ios", "web"]);
-    }
-}

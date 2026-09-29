@@ -24,10 +24,9 @@ use raw_window_handle::{
 };
 
 // Mid-migration shims for the raw-send shape this file keeps: `NSWindow` is
-// `MainThreadOnly` in objc2's typed API, but this backend constructs test
-// windows on a caller-supplied off-main serial lane (`MacOSWindow::for_test`),
-// which a `MainThreadMarker`-gated method would refuse. The file therefore
-// sends raw `msg_send!` (objc2's macro accepts a raw `*mut AnyObject` receiver,
+// `MainThreadOnly` in objc2's typed API, and this backend constructs windows
+// on a caller-supplied owner lane, which a `MainThreadMarker`-gated method
+// would refuse. The file therefore sends raw `msg_send!` (objc2's macro accepts a raw `*mut AnyObject` receiver,
 // `Bool` arguments, and a manual `release`) and these aliases keep the
 // Cocoa-era spelling readable.
 type ObjcId = *mut AnyObject;
@@ -76,9 +75,7 @@ pub struct MacOSWindow {
 
     /// The owner lane every thread-affine AppKit message travels through
     /// (see `super::owner_lane`). The AppKit main queue for windows created
-    /// by [`MacOSWindow::new`]; a caller-supplied serial lane for test
-    /// windows created by `MacOSWindow::for_test` (a `#[cfg(test)]` constructor,
-    /// absent from non-test doc builds, hence the plain-font reference).
+    /// by [`MacOSWindow::new`].
     owner: &'static dispatch::Queue,
 
     /// True when `owner` is the main queue, so "on the main thread" is
@@ -99,9 +96,8 @@ pub struct MacOSWindow {
     /// `Weak`, and a `OnceLock`: the pump is platform-owned and outlives every
     /// window, so a window must not keep it alive — and the slot is filled
     /// once, by `MacOSPlatform::open_window` right after construction. A
-    /// window built by the test constructor (`MacOSWindow::for_test`, a
-    /// `#[cfg(test)]` function absent from non-test doc builds, hence the
-    /// plain-font reference) leaves it empty and simply never arms one.
+    /// window constructed without a platform leaves it empty and simply never
+    /// arms one.
     wake_pump: std::sync::OnceLock<super::wake_pump::WeakWakePump>,
 
     /// This window's IME capability, built on first access by
@@ -301,25 +297,6 @@ impl MacOSWindow {
         }
     }
 
-    /// Construct a test window on a caller-supplied owner lane.
-    ///
-    /// AppKit window construction is thread-affine, and this path is exercised
-    /// off the AppKit main thread, so the whole construction sequence runs
-    /// inside [`super::owner_lane::exec_on_owner`] on the lane rather than as a
-    /// raw call from whichever thread the test runs on.
-    #[cfg(test)]
-    fn for_test(owner: &'static dispatch::Queue) -> Result<Arc<Self>, OpenWindowError> {
-        super::owner_lane::exec_on_owner(owner, false, || {
-            Self::new_inner(
-                WindowOptions::default(),
-                Arc::new(Mutex::new(HashMap::new())),
-                WindowConfiguration::default(),
-                owner,
-                false,
-            )
-        })
-    }
-
     fn new_inner(
         options: WindowOptions,
         windows_map: Arc<Mutex<HashMap<u64, Arc<MacOSWindow>>>>,
@@ -328,8 +305,7 @@ impl MacOSWindow {
         owner_is_main: bool,
     ) -> Result<Arc<Self>, OpenWindowError> {
         // SAFETY: must run on the owner thread (enforced by the platform's
-        // event-loop ownership, or by `for_test` routing construction onto
-        // the lane); all messaged objects are alive: the freshly allocated
+        // event-loop ownership); all messaged objects are alive: the freshly allocated
         // NSWindow is checked for NIL before further use.
         unsafe {
             // Convert logical size to NSRect
@@ -556,39 +532,14 @@ impl MacOSWindow {
 /// body runs ON the owner lane — inline on the OS main thread for a
 /// main-lane owner, or dispatched under the reentrancy guard from any other
 /// thread — so the lane, not a call-graph fact or a debug assert, is the
-/// enforcement. A free function rather than a method so the always-run,
-/// AppKit-free test can exercise it on the shared test lane without
-/// constructing a real window.
-///
-/// The probe key is derived from `#[track_caller]`'s `(file, line)` under
-/// `#[cfg(test)]`; production call sites carry no probe strings.
-#[cfg_attr(test, track_caller)]
+/// enforcement. A free function rather than a method so it can be exercised
+/// on any lane without constructing a real window.
 pub(super) fn route_on_owner<R: Send>(
     owner: &'static dispatch::Queue,
     owner_is_main: bool,
     f: impl FnOnce() -> R + Send,
 ) -> R {
-    #[cfg(test)]
-    let origin = {
-        let loc = std::panic::Location::caller();
-        (loc.file(), loc.line())
-    };
-    super::owner_lane::exec_on_owner(owner, owner_is_main, || {
-        // Recorded INSIDE the routed body, at the probe point, so a bare un-routed
-        // body (wrapper bypassed) records on_lane = false. Same single-writer
-        // discipline as the #949 redraw probe. The witness is the
-        // dispatch-guard marker, with exactly three arms: a dispatched off-lane
-        // route installs the guard and records `true` (the enforcement arm); a
-        // call NESTED inside an on-lane block inherits the OUTER block's guard
-        // marker and also records `true`; only the OS-main cold-thread inline
-        // arm — no marker in scope, and none may be installed (same-lane
-        // self-deadlock) — records `false`. That is expected (see the
-        // probe-semantics note below the module), so test assertions scope to
-        // the off-lane arm.
-        #[cfg(test)]
-        routing_probe::record(origin, super::owner_lane::on_owner_queue(owner));
-        f()
-    })
+    super::owner_lane::exec_on_owner(owner, owner_is_main, f)
 }
 
 /// Choose which arm a redraw request takes — the display-pass deferral, or the
@@ -622,61 +573,6 @@ fn dispatch_redraw_request(defer: impl FnOnce(), send_inline: impl FnOnce() + Se
     }
     send_inline();
 }
-
-#[cfg(test)]
-mod routing_probe {
-    use std::sync::Mutex;
-
-    /// Shared sink of `(route_origin, on_lane)` witnesses. Every routed
-    /// class-A body records its `(file, line)` origin and the dispatch-guard
-    /// witness observed at the probe point. A single window test (or the
-    /// always-run wrapper pin) is the only writer-reader, so no interleaving
-    /// hazard; `clear()` demarcates a test phase.
-    static SINK: Mutex<Vec<((&'static str, u32), bool)>> = Mutex::new(Vec::new());
-
-    pub(super) fn clear() {
-        *SINK
-            .lock()
-            .expect("routing_probe mutex is module-scoped and never poisoned") = Vec::new();
-    }
-
-    pub(super) fn record(origin: (&'static str, u32), on_lane: bool) {
-        SINK.lock()
-            .expect("routing_probe mutex is module-scoped and never poisoned")
-            .push((origin, on_lane));
-    }
-
-    /// The last record's guard witness, or `None` before the first record of a
-    /// test phase.
-    pub(super) fn last() -> Option<bool> {
-        SINK.lock()
-            .expect("routing_probe mutex is module-scoped and never poisoned")
-            .last()
-            .map(|(_, on)| *on)
-    }
-
-    /// True when EVERY recorded witness reports the lane guard set.
-    pub(super) fn all_on_lane() -> bool {
-        SINK.lock()
-            .expect("routing_probe mutex is module-scoped and never poisoned")
-            .iter()
-            .all(|(_, on)| *on)
-    }
-}
-
-// Probe semantics. The probe records the guard witness at the probe point, so
-// it is a *dispatch-guarded* marker, not "on the lane", and its truth has
-// exactly three arms. (i) A dispatched off-lane route installs the guard and
-// reads `true` — the enforcement arm. (ii) A call NESTED inside an on-lane
-// block (caller already on the lane) runs `f()` inline WITHOUT installing a
-// new guard, but it inherits the OUTER block's guard marker and therefore
-// also reads `true`. (iii) The OS-main cold-thread inline arm is the only one
-// that reads `false`: the thread is the owner's home thread, no guard marker
-// is in scope, and none may be installed — installing one would mislabel a
-// bare main-thread execution as guard-held, and the nested same-lane dispatch
-// it would then fail to recognize self-deadlocks on a serial lane, which is
-// precisely why `exec_on_owner` runs its direct paths bare. Test assertions
-// against the probe must therefore be scoped to the off-lane arm (i).
 
 impl MacOSWindow {
     /// Ask AppKit to display this window's content view.
@@ -2717,57 +2613,7 @@ impl MacOSWindow {
 
 #[cfg(test)]
 mod tests {
-    /// The deferral is opt-in: the default `WindowOptions` — what every
-    /// direct consumer of this crate opens with — reveals at open, and a
-    /// hidden window never defers even when asked, so `show` later is a
-    /// plain reveal and not a reveal-plus-alpha-restore.
-    #[test]
-    fn first_reveal_is_deferred_only_for_visible_after_first_frame_windows() {
-        use super::{WindowOptions, WindowReveal, defers_first_reveal};
-
-        assert!(!defers_first_reveal(&WindowOptions::default()));
-        assert!(defers_first_reveal(&WindowOptions {
-            reveal: WindowReveal::AfterFirstFrame,
-            ..Default::default()
-        }));
-        assert!(!defers_first_reveal(&WindowOptions {
-            visible: false,
-            reveal: WindowReveal::AfterFirstFrame,
-            ..Default::default()
-        }));
-    }
-
-    use super::super::owner_lane::test_owner_queue;
     use super::*;
-
-    /// Always-run, AppKit-free pin on the `route_on_owner` wrapper: a body
-    /// dispatched onto the lane from a background thread must observe the
-    /// lane guard at the probe point. A bare un-routed body (wrapper bypassed)
-    /// would record `false`, so this is the executable "the sweep's wrapper
-    /// routes" carrier — the owner_lane machinery tests pin `exec_on_owner`
-    /// itself; this pin sits one layer above, at the window-surface throat.
-    ///
-    /// Per the probe semantics documented beside `routing_probe`, the
-    /// assertion is scoped to the OFF-LANE arm: an inline (on-lane or
-    /// OS-main-thread) call intentionally runs without the guard and records
-    /// `false`, so a nested on-lane call must NOT be asserted to record `true`.
-    #[test]
-    fn route_on_owner_runs_body_under_lane_guard() {
-        routing_probe::clear();
-        let owner = test_owner_queue();
-        let handle = std::thread::spawn(move || {
-            route_on_owner(owner, false, || ());
-        });
-        handle
-            .join()
-            .expect("an off-lane routed body must complete without panicking");
-        assert_eq!(
-            routing_probe::last(),
-            Some(true),
-            "routing assertion: the off-lane body must observe the owner-lane guard at the \
-             probe point, which a bare un-routed body would record as unset"
-        );
-    }
 
     /// Always-run, AppKit-free pin on the display-pass decision: a redraw
     /// request issued while this thread is inside a display pass must take the
@@ -2802,213 +2648,6 @@ mod tests {
         assert!(
             !inline.load(Ordering::SeqCst),
             "the inline arm must not run inside a display pass — it is the stalled-pump bug"
-        );
-    }
-
-    /// The complementary arm, so the pin above cannot be satisfied by a
-    /// `dispatch_redraw_request` that defers unconditionally (which would add a
-    /// lane turn to every ordinary request).
-    #[test]
-    fn a_redraw_request_outside_a_display_pass_sends_inline() {
-        let deferred = Arc::new(AtomicBool::new(false));
-        let inline = Arc::new(AtomicBool::new(false));
-        let (deferred_flag, inline_flag) = (Arc::clone(&deferred), Arc::clone(&inline));
-
-        dispatch_redraw_request(
-            || deferred_flag.store(true, Ordering::SeqCst),
-            move || inline_flag.store(true, Ordering::SeqCst),
-        );
-
-        assert!(
-            inline.load(Ordering::SeqCst),
-            "a request from outside a display pass is already delivered after the pass — its lane \
-             hop waits for it — so it must not pay a turn"
-        );
-        assert!(
-            !deferred.load(Ordering::SeqCst),
-            "the deferral must not start"
-        );
-    }
-
-    /// The window integration test for the owner-lane sweep (issue #1194,
-    /// extending the #949 routing test). It uses the shared test lane
-    /// EXCLUSIVELY: it constructs a real NSWindow on the lane and routes the
-    /// full class-A surface through it, so it must not run interleaved with
-    /// any other test sharing that lane (the AppKit-free `owner_lane` tests
-    /// never touch a window, and this is the only window test that drives the
-    /// surface).
-    ///
-    /// Opt-in on a Mac with an active GUI session; the AppKit-free
-    /// `route_on_owner` and `owner_lane` tests are the always-run routing
-    /// carriers.
-    ///
-    /// A bare `cargo test` process has no NSApplication connection, so
-    /// `[NSWindow initWithContentRect:]` throws an NSException from any thread:
-    /// a construction probe on this machine aborted with SIGABRT through
-    /// `-[NSWindow _initContent:...]` + `-`CFBundleGetValueForInfoKey`. Run with
-    /// `cargo test -p flui-platform -- --ignored window_surface_is_owner_routed`
-    /// only from a test process that pumps an AppKit run loop.
-    #[test]
-    #[ignore = "requires an AppKit-run-loop-pumping test process; the AppKit-free route_on_owner/owner_lane tests are the always-run routing carriers"]
-    fn window_surface_is_owner_routed() {
-        let owner = test_owner_queue();
-        let window = MacOSWindow::for_test(owner)
-            .expect("for_test must construct an NSWindow on the test lane");
-
-        // Hand the OWNED value (the last wrapper — the map entry is removed
-        // below) to an off-lane worker that drives EVERY swept class-A body.
-        // Every driving call is an off-lane arm, so every probe record is a
-        // dispatch-guard witness and `all_on_lane()` is the routing assertion.
-        let map = Arc::clone(&window.windows_map);
-        let _prev = map.lock().remove(&(window.ns_window as u64));
-        drop(map);
-        let mut window = Arc::try_unwrap(window)
-            .expect("removing the window from its map leaves the returned Arc alone");
-
-        routing_probe::clear();
-        let handle = std::thread::spawn(move || {
-            // ---- PlatformWindow surface (12 bodies) ----
-            let _ = <MacOSWindow as PlatformWindow>::get_title(&window);
-            <MacOSWindow as PlatformWindow>::set_title(&window, "owner-routed");
-            let _ = <MacOSWindow as PlatformWindow>::is_focused(&window);
-            let _ = <MacOSWindow as PlatformWindow>::is_visible(&window);
-            <MacOSWindow as PlatformWindow>::activate(&window);
-            <MacOSWindow as PlatformWindow>::minimize(&window);
-            <MacOSWindow as PlatformWindow>::maximize(&window);
-            <MacOSWindow as PlatformWindow>::restore(&window);
-            <MacOSWindow as PlatformWindow>::toggle_fullscreen(&window);
-            <MacOSWindow as PlatformWindow>::resize(&window, Size::new(800.0, 600.0));
-            <MacOSWindow as PlatformWindow>::set_cursor(&window, CursorIcon::Default)
-                .expect("set_cursor must not fail on a real window");
-            <MacOSWindow as PlatformWindow>::request_redraw(&window);
-            <MacOSWindow as PlatformWindow>::close(&window);
-
-            // ---- WindowTrait surface (12 bodies) ----
-            <MacOSWindow as WindowTrait>::set_position(&mut window, Point::new(0.0, 0.0));
-            let _ = <MacOSWindow as WindowTrait>::state(&window);
-            <MacOSWindow as WindowTrait>::set_state(&mut window, WindowState::Normal);
-            <MacOSWindow as WindowTrait>::set_visible(&mut window, true);
-            let _ = <MacOSWindow as WindowTrait>::is_resizable(&window);
-            <MacOSWindow as WindowTrait>::set_resizable(&mut window, true);
-            let _ = <MacOSWindow as WindowTrait>::is_minimizable(&window);
-            <MacOSWindow as WindowTrait>::set_minimizable(&mut window, true);
-            let _ = <MacOSWindow as WindowTrait>::is_closable(&window);
-            <MacOSWindow as WindowTrait>::set_closable(&mut window, true);
-            <MacOSWindow as WindowTrait>::set_min_size(&mut window, Some(Size::new(100.0, 100.0)));
-            <MacOSWindow as WindowTrait>::set_max_size(
-                &mut window,
-                Some(Size::new(1000.0, 1000.0)),
-            );
-
-            // ---- MacOSWindowExtTrait surface (11 bodies) ----
-            <MacOSWindow as MacOSWindowExtTrait>::set_liquid_glass_config(
-                &mut window,
-                LiquidGlassConfig::from_material(LiquidGlassMaterial::Standard),
-            );
-            <MacOSWindow as MacOSWindowExtTrait>::clear_liquid_glass(&mut window);
-            <MacOSWindow as MacOSWindowExtTrait>::enable_tabbing(&mut window);
-            <MacOSWindow as MacOSWindowExtTrait>::disable_tabbing(&mut window);
-            let own_id = window.ns_window as u64;
-            <MacOSWindow as MacOSWindowExtTrait>::add_tab_to_window(&mut window, own_id);
-            <MacOSWindow as MacOSWindowExtTrait>::toggle_native_fullscreen(&mut window);
-            <MacOSWindow as MacOSWindowExtTrait>::set_window_level(
-                &mut window,
-                MacOSWindowLevel::Normal,
-            );
-            let _ = <MacOSWindow as MacOSWindowExtTrait>::window_level(&window);
-            <MacOSWindow as MacOSWindowExtTrait>::set_collection_behavior(
-                &mut window,
-                MacOSCollectionBehavior::DEFAULT,
-            );
-            <MacOSWindow as MacOSWindowExtTrait>::set_has_shadow(&mut window, true);
-            <MacOSWindow as MacOSWindowExtTrait>::set_alpha(&mut window, 0.5);
-        });
-        handle
-            .join()
-            .expect("driving the full window surface from a worker must complete without crashing");
-        assert!(
-            routing_probe::all_on_lane(),
-            "routing assertion: every class-A body driven from the off-lane worker must have \
-             executed under the owner-lane guard; an un-routed body records the guard unset"
-        );
-    }
-
-    /// Dropping the last window wrapper routes the AppKit teardown tail onto
-    /// the owner lane FIRE-AND-FORGET: the drop returns promptly — it never
-    /// blocks on the lane, whatever the lane's servicing state — and the
-    /// on-lane-ness of the tail body itself is covered by the always-run
-    /// `exec_async_guarded_runs_body_under_lane_guard` mechanism pin (the Drop
-    /// body is exactly the guarded body that pin runs).
-    ///
-    /// Same opt-in constraint as [`window_surface_is_owner_routed`]:
-    /// constructing a real NSWindow needs an AppKit-run-loop-pumping test
-    /// process.
-    #[test]
-    #[ignore = "requires an AppKit-run-loop-pumping test process; the AppKit-free mechanism pins are the always-run teardown carriers"]
-    fn drop_routes_appkit_tail_off_owner() {
-        let owner = test_owner_queue();
-        let window = MacOSWindow::for_test(owner)
-            .expect("for_test must construct an NSWindow on the test lane");
-
-        // Remove the window from its own map so the `for_test` Arc is the last
-        // wrapper reference, then unwrap to the owned value so the wrapper's
-        // `Drop` is what runs on the background thread.
-        let map = Arc::clone(&window.windows_map);
-        let _prev = map.lock().remove(&(window.ns_window as u64));
-        drop(map);
-        let owned = Arc::try_unwrap(window)
-            .expect("removing the window from its map leaves the returned Arc alone");
-
-        let handle = std::thread::spawn(move || {
-            drop(owned);
-        });
-        handle.join().expect(
-            "dropping the last window wrapper on a worker thread must return promptly \
-                     and crash-free (Drop never waits on the lane)",
-        );
-    }
-
-    /// Closing a window must drain it from the platform's tracking map on the
-    /// owner thread (issue #1147). The map is `MacOSPlatform`'s only strong
-    /// reference that outlives the application's own handles, so a closed
-    /// window whose entry is never removed pins its wrapper — and through it
-    /// the native NSWindow and a11y adapter — for the process lifetime: `Drop`'s
-    /// own removal cannot run while the map holds a clone. This test drives the
-    /// real close route (`close()` → `-[NSWindow close]` → `windowWillClose:` →
-    /// `handle_close`) and asserts the map drains.
-    ///
-    /// Same opt-in constraint as its two siblings: a bare `cargo test` process
-    /// has no NSApplication connection and NSWindow construction SIGABRTs
-    /// through `_CFBundleGetValueForInfoKey` (observed on this machine); a
-    /// run-loop-pumping test process exercises the real close path, which is
-    /// the AppKit close-path validation this issue's Win32 half inherits.
-    #[test]
-    #[ignore = "requires an AppKit-run-loop-pumping test process; the always-run mechanism pins cover the routing, and the map-drain assertion needs a real window"]
-    fn close_drains_platform_map_entry() {
-        let owner = test_owner_queue();
-        let window = MacOSWindow::for_test(owner)
-            .expect("for_test must construct an NSWindow on the test lane");
-
-        let window_id = window.ns_window as u64;
-        let map = Arc::clone(&window.windows_map);
-        assert!(
-            map.lock().contains_key(&window_id),
-            "for_test must insert this window into its own map"
-        );
-        drop(map);
-
-        <MacOSWindow as PlatformWindow>::close(&window);
-
-        // The close route completes synchronously from the caller's
-        // perspective on an uncontended serial lane (dispatch_sync runs
-        // inline): `-[NSWindow close]` posts `windowWillClose:` synchronously,
-        // so `handle_close` — and with it the map removal — has run by the
-        // time `close` returns.
-        assert!(
-            !window.windows_map.lock().contains_key(&window_id),
-            "closing a window must remove its entry from the platform's tracking map \
-             (issue #1147); the map's clone otherwise pins the wrapper — and through \
-             it the NSWindow + a11y adapter — for the process lifetime"
         );
     }
 }

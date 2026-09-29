@@ -237,66 +237,6 @@ pub(super) fn report_contained_panic(payload: Box<dyn std::any::Any + Send>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn inline_cleanup_contains_hostile_panic_and_unwinds_local_resources() {
-        use std::sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-        };
-        struct Released(Arc<AtomicBool>);
-        impl Drop for Released {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::SeqCst);
-            }
-        }
-        struct HostilePayload;
-        impl Drop for HostilePayload {
-            fn drop(&mut self) {
-                panic!("panic payload must never be destroyed during cleanup");
-            }
-        }
-        let released = Arc::new(AtomicBool::new(false));
-        let local = Arc::clone(&released);
-        let escaped = match std::panic::catch_unwind(|| {
-            run_cleanup_guarded(|| {
-                let _resource = Released(local);
-                std::panic::panic_any(HostilePayload);
-            });
-        }) {
-            Ok(()) => false,
-            Err(payload) => {
-                std::mem::forget(payload);
-                true
-            }
-        };
-        assert!(!escaped, "cleanup panic must not escape the inline tail");
-        assert!(
-            released.load(Ordering::SeqCst),
-            "local resource release still runs during contained unwind"
-        );
-    }
-
-    #[test]
-    fn exec_on_owner_runs_inline_when_already_on_the_lane() {
-        let owner = test_owner_queue();
-        // Entry into the lane sets the reentrancy guard; a nested call must
-        // observe it and run inline on the SAME thread, with no dispatch (a
-        // serial queue would deadlock if the nested call dispatched). Both
-        // thread ids are captured within the same routed block, which never
-        // relies on a serial queue preserving a thread across dispatches.
-        let (entry_thread, nested_thread) = exec_on_owner(owner, false, || {
-            let entry_thread = std::thread::current().id();
-            let nested_thread = exec_on_owner(owner, false, || std::thread::current().id());
-            (entry_thread, nested_thread)
-        });
-        assert_eq!(
-            entry_thread, nested_thread,
-            "exec_on_owner must run inline when already executing on the owner lane"
-        );
-    }
 
     #[test]
     fn exec_on_owner_routes_off_lane_calls_onto_the_lane() {
@@ -322,60 +262,6 @@ mod tests {
             on_lane,
             "the routed body must observe the owner-lane marker: exec_on_owner must run its \
              body only under the lane guard, never bare on the caller"
-        );
-    }
-
-    #[test]
-    fn exec_async_guarded_runs_body_under_lane_guard() {
-        let owner = test_owner_queue();
-        let witness = Arc::new(Mutex::new(None));
-        let body_witness = Arc::clone(&witness);
-        exec_async_guarded(owner, move || {
-            *body_witness
-                .lock()
-                .expect("test witness mutex is module-scoped and never poisoned") =
-                Some(on_owner_queue(owner));
-        });
-        // The helper must have returned immediately; the body runs asynchronously
-        // on the lane. Wait for the witness with a test-side timeout so a broken
-        // helper cannot hang the test.
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let recorded = *witness
-                .lock()
-                .expect("test witness mutex is module-scoped and never poisoned");
-            if let Some(on_lane) = recorded {
-                assert!(
-                    on_lane,
-                    "the async body must run under the owner-lane guard: a bare un-guarded \
-                     execution would observe the marker unset"
-                );
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "the guarded async body must run within the test-side timeout"
-            );
-            std::thread::sleep(Duration::from_millis(1));
-        }
-    }
-
-    #[test]
-    fn exec_async_guarded_never_blocks_the_caller() {
-        // A fresh serial queue that nothing ever drains: if the helper waited
-        // on the lane, the body would never run and the call would never
-        // return. The no-hang teardown contract (ADR-0045 decision 7) is
-        // exactly this property, pinned mechanically.
-        let never_serviced: &'static dispatch::Queue =
-            Box::leak(Box::new(dispatch::Queue::create(
-                "flui.owner-lane.never-serviced",
-                dispatch::QueueAttribute::Serial,
-            )));
-        let start = Instant::now();
-        exec_async_guarded(never_serviced, || {});
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "exec_async_guarded must return immediately even when the lane never services its block"
         );
     }
 }

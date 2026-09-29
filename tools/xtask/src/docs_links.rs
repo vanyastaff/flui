@@ -328,7 +328,6 @@ pub(crate) fn install_hint() -> String {
 mod tests {
     use super::*;
 
-    #[test]
     fn archival_roots_are_left_out() {
         let listed = [
             "README.md",
@@ -360,32 +359,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_checkout_root_is_a_file_url() {
-        assert_eq!(
-            file_url("/home/runner/work/flui/flui"),
-            "file:///home/runner/work/flui/flui"
-        );
-        let windows = format!("D:{}flui-wt", std::path::MAIN_SEPARATOR);
-        assert_eq!(file_url(&windows), "file:///D:/flui-wt");
-        assert_eq!(file_url("/tmp/a b#1/$x%"), "file:///tmp/a%20b%231/%24x%25");
-    }
-
-    #[test]
-    fn lychee_runs_offline_with_the_self_url_remapped() {
-        assert_eq!(
-            lychee_args("/repo").join(" "),
-            "--offline --no-progress --include-fragments=anchor-only --root-dir /repo \
-             --remap ^https://github\\.com/vanyastaff/flui/(?:blob|tree)/main/(.*)$ file:///repo/$1 \
-             --files-from -"
-        );
-        assert_eq!(
-            dump_args("/copy").join(" "),
-            "--dump --verbose --no-progress --root-dir /copy --files-from .lychee-inputs"
-        );
-    }
-
-    #[test]
     fn a_dumped_link_outside_the_copy_climbed_out() {
         let copy = "xtask-docs-links-7-0-9";
         let dumped = |line| outside(line, copy).expect("parses");
@@ -413,7 +386,6 @@ mod tests {
         assert!(error.to_string().contains("file:///tmp/x.md"), "{error}");
     }
 
-    #[test]
     fn a_missing_lychee_fails_only_under_strict() {
         let root = repo_root();
         let absent = || Command::new("flui-xtask-no-such-lychee");
@@ -427,7 +399,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn ci_installs_the_version_doctor_names() {
         let ci = crate::util::read(".github/workflows/ci.yml").expect("ci.yml");
         let pinned = ci
@@ -440,7 +411,6 @@ mod tests {
     /// The flags against a real lychee: each kind of broken link fails, and
     /// the good ones pass. Skipped without lychee; the `checks` CI job, which
     /// installs it before running these tests, is where it always runs.
-    #[test]
     fn lychee_catches_each_kind_of_broken_link() {
         if Command::new("lychee").arg("--version").output().is_err() {
             eprintln!("lychee not installed: skipped");
@@ -489,5 +459,34 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(&base).expect("scratch dir removed");
+    }
+
+    #[test]
+    fn docs_links_contract() {
+        crate::table_test::run_table(
+            "docs_links_contract",
+            &[
+                (
+                    "archival_roots_are_left_out",
+                    archival_roots_are_left_out as fn(),
+                ),
+                (
+                    "a_dumped_link_outside_the_copy_climbed_out",
+                    a_dumped_link_outside_the_copy_climbed_out as fn(),
+                ),
+                (
+                    "a_missing_lychee_fails_only_under_strict",
+                    a_missing_lychee_fails_only_under_strict as fn(),
+                ),
+                (
+                    "ci_installs_the_version_doctor_names",
+                    ci_installs_the_version_doctor_names as fn(),
+                ),
+                (
+                    "lychee_catches_each_kind_of_broken_link",
+                    lychee_catches_each_kind_of_broken_link as fn(),
+                ),
+            ],
+        );
     }
 }

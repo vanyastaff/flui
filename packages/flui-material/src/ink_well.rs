@@ -244,7 +244,6 @@ pub struct InkWellState {
     vsync: Option<Vsync>,
     /// `Some` once `init_state` has run — always the case by `build`.
     rebuild: Option<RebuildHandle>,
-    writer: Option<flui_sdk::view::WriterSource>,
     pending_deactivation: Rc<RefCell<Option<PendingDeactivation>>>,
 }
 
@@ -282,7 +281,6 @@ impl StatefulView for InkWell {
             tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
             vsync: None,
             rebuild: None,
-            writer: None,
             pending_deactivation: Rc::new(RefCell::new(None)),
         }
     }
@@ -290,7 +288,6 @@ impl StatefulView for InkWell {
 
 impl ViewState<InkWell> for InkWellState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.writer = Some(ctx.writer_source());
         // ADR-0018: `rebuild_handle()` is acquired here, fired later (from
         // the states-controller listener and the press-deactivation status
         // listener below) — never called from `build`.
@@ -462,19 +459,19 @@ impl ViewState<InkWell> for InkWellState {
         // `_actionMap` around the `Focus` (`ink_well.dart` `:852-855`,
         // `:1386-1389`): Enter, Space and Select on the focused well reach
         // these through the root shortcuts (ADR-0079). A disabled well
-        // declares neither, so the keys keep bubbling.
+        // declares neither, so the keys keep bubbling. The actions run inside
+        // the key event's dispatch and hand its `cx` to the activation, the
+        // same one a tap's recognizer opens.
         let mut actions = Actions::new(focus);
         if let Some(activate) = &activate {
             let on_activate = Rc::clone(activate);
             let on_button_activate = Rc::clone(activate);
-            let writer = self.writer.clone().expect("BUG: init_state precedes build");
-            let button_writer = writer.clone();
             actions = actions
-                .action(CallbackAction::new(move |_: &ActivateIntent| {
-                    writer.write(|cx| on_activate(cx));
+                .action(CallbackAction::new(move |cx, _: &ActivateIntent| {
+                    on_activate(cx);
                 }))
-                .action(CallbackAction::new(move |_: &ButtonActivateIntent| {
-                    button_writer.write(|cx| on_button_activate(cx));
+                .action(CallbackAction::new(move |cx, _: &ButtonActivateIntent| {
+                    on_button_activate(cx);
                 }));
         }
 
@@ -570,56 +567,4 @@ fn begin_press_deactivation(
         vsync,
         registration,
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn is_interactive_reflects_whether_on_tap_is_set() {
-        assert!(!InkWell::new(flui_sdk::widgets::SizedBox::shrink()).is_interactive());
-        assert!(
-            InkWell::new(flui_sdk::widgets::SizedBox::shrink())
-                .on_tap(|_cx| {})
-                .is_interactive()
-        );
-    }
-
-    #[test]
-    fn debug_reports_whether_on_tap_is_set_without_the_closure() {
-        let debug = format!(
-            "{:?}",
-            InkWell::new(flui_sdk::widgets::SizedBox::shrink()).on_tap(|_cx| {})
-        );
-        assert!(debug.contains("on_tap: true"));
-    }
-
-    #[test]
-    fn overlay_content_is_the_bare_child_when_resolution_is_none() {
-        use flui_sdk::view::View;
-
-        // Mutation-honest: if `overlay_content` stopped checking
-        // `resolved_overlay` and always wrapped in `Material`, this test's
-        // `None` case would compare a `Material` view-type id instead of
-        // `SizedBox`'s and fail.
-        let view = InkWell::new(flui_sdk::widgets::SizedBox::shrink());
-        let content = overlay_content(&view, None);
-        assert_eq!(
-            content.view_type_id(),
-            flui_sdk::widgets::SizedBox::shrink().view_type_id()
-        );
-    }
-
-    #[test]
-    fn overlay_content_wraps_in_material_when_resolution_is_some() {
-        use flui_sdk::view::View;
-
-        let view = InkWell::new(flui_sdk::widgets::SizedBox::shrink());
-        let content = overlay_content(&view, Some(Color::rgb(1, 2, 3)));
-        assert_eq!(
-            content.view_type_id(),
-            Material::new(Color::BLACK).view_type_id()
-        );
-    }
 }

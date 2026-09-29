@@ -5,8 +5,12 @@
   `flui-sdk` alone from `packages/flui-material`, `flui-cupertino` builds on `flui-sdk` alone
   from `packages/flui-cupertino`, and the FLUI derives resolve through the SDK first. On
   2026-09-27 `flui-devtools` moved onto `flui-sdk` alone from `packages/flui-devtools`;
-  `flui-hot-reload` stays in `crates/` until the runtime hook of ADR-0094 exists (move 4)
-  ([migration plan](../plans/2026-09-25-architecture-migration-plan.md)).
+  `flui-hot-reload` stays in `crates/` (move 4). On 2026-09-29 ADR-0094's hook landed and
+  `flui-app` stopped naming it; the facade's edges and the move wait on the blockers in move 4
+  ([migration plan](../plans/2026-09-25-architecture-migration-plan.md)). Move 5's first half
+  landed the same day: the facade's `default` is `[]`; the `material`/`cupertino` features,
+  re-exports and the Material prelude half remain until `flui_material::prelude` and the example
+  move (move 5b).
 - **Date:** 2026-09-25
 - **Supersedes in part (on acceptance):** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) — the
   placement of Material and Cupertino as core-workspace crates, and the exemption set
@@ -59,7 +63,8 @@ The facade publicly re-exports Material: `pub use flui_material as material` beh
 (`src/lib.rs:146-149`) and a Material half of the prelude (`src/lib.rs:267-276`). The facade
 also carries a `hot-reload` feature that pulls `flui-hot-reload` and `flui-app/hot-reload`
 (`Cargo.toml:630`), and `flui-app` has its own optional edge to `flui-hot-reload`
-(`crates/flui-app/Cargo.toml:65`, `:108`). `flui-material` has no `prelude` module.
+(`crates/flui-app/Cargo.toml:65`, `:108`; since removed, see move 4).
+`flui-material` has no `prelude` module.
 
 Other edges from core crates to what the review classifies as official packages:
 
@@ -124,7 +129,7 @@ already reads; no parallel allowlist is added, and an entry that admits nothing 
   | Edge | Reason | Exit |
   |---|---|---|
   | `flui-testing` dev → `flui-devtools` | observation-seam test links both halves | expired: the test moved into `packages/flui-devtools` with move 4 |
-  | `flui-app` optional → `flui-hot-reload` | reload driver | the change that moves `flui-hot-reload` into `packages/` ([ADR-0094](ADR-0094-hot-reload-through-subsecond.md) §2) |
+  | `flui-app` optional → `flui-hot-reload` | reload driver | expired: `flui-app` reaches a reload tool only through an installed `DevReloadHook` ([ADR-0094](ADR-0094-hot-reload-through-subsecond.md) §1) |
   | `flui` optional → `flui-hot-reload` (`hot-reload` feature) | facade feature | the same change (ADR-0094 §2) |
   | `flui` dev → `flui-hot-reload` (`Cargo.toml:554`) | a root-package example and test that name it (`examples/scene_render.rs`, `tests/facade_consumer.rs`) | the same change; the example moves with the package |
   | `flui` optional → `flui-material`, `flui-cupertino` | facade features | removed by §6 |
@@ -240,14 +245,15 @@ Five moves, each of which leaves `main` green and merges on its own. The
 | Move | What changes | Waits on |
 |---|---|---|
 | 1. SDK and guard (in place) | `crates/flui-sdk` is created: tier K, `tier-kind = "evolving"`, `order = 6`, layer 6, `version = "0.1.0-dev"`, with the measured surface of §4 and no consumer yet. `flui-foundation` declares `links = "flui_train"` with a build script that does nothing else (§5). `cargo xtask workspace` requires an evolving crate's own `0.N` version and the guard on `flui-foundation` alone; `cargo xtask reach` states that `flui-foundation` is in the SDK's and the facade's builds | — |
-| 2. Material (in place) | `flui-material`'s nine internal normal dependencies become `flui-sdk` (plus `tracing`), its imports move to SDK paths, and it moves to `packages/flui-material` in the same change, with its dev-dependency paths rewritten. Done when no `flui_(widgets\|view\|types\|objects\|rendering\|foundation\|animation\|interaction\|scheduler\|painting)::` path is left in its `src`. Its examples stay with the facade until move 5. **Outcome:** done, with no change to the SDK's surface; the view, inherited and animation derives resolve through `flui-sdk` first, so a package on the SDK alone can use them (the `Diagnosticable` derive has no SDK path yet); the kind rule of §2 is checked, and Material's `allowed-dependents` lists are replaced by it. It landed ahead of the parity command of §3, which still waits | move 1; the `cargo package` parity command of §3 |
+| 2. Material (in place) | `flui-material`'s nine internal normal dependencies become `flui-sdk` (plus `tracing`), its imports move to SDK paths, and it moves to `packages/flui-material` in the same change, with its dev-dependency paths rewritten. Done when no `flui_(widgets\|view\|types\|objects\|rendering\|foundation\|animation\|interaction\|scheduler\|painting)::` path is left in its `src`. Its examples stay with the facade until move 5b. **Outcome:** done, with no change to the SDK's surface; the view, inherited and animation derives resolve through `flui-sdk` first, so a package on the SDK alone can use them (the `Diagnosticable` derive has no SDK path yet); the kind rule of §2 is checked, and Material's `allowed-dependents` lists are replaced by it. It landed ahead of the parity command of §3, which still waits | move 1; the `cargo package` parity command of §3 |
 | 3. Cupertino (in place) | The same for `flui-cupertino`, which moves to `packages/flui-cupertino`. **Outcome:** done, with no change to the SDK's surface: its normal dependencies are `flui-sdk` and `tracing`, and its six seeded internal-crate exceptions and `allowed-dependents` lists are gone | move 1; independent of move 2 |
-| 4. Devtools and hot reload | `flui-devtools` moves onto the SDK and the observation-seam test moves into it, removing `flui-testing`'s dev edge. `flui-hot-reload` moves together with the `DevReloadHook` of ADR-0094 §2, which deletes the `flui-app` edge and the facade's `hot-reload` feature. **Outcome for devtools:** done. Its normal dependencies are `flui-sdk` plus six third-party crates, and its two internal-crate exceptions are gone. The SDK gained `hooks` with one item, `FrameSnapshot`, which the timeline records; the facade has no scheduler module, so the item is Evolving. No public API produces a `FrameSnapshot` yet (only `flui-app`'s crate-private presentation calls `FrameClock::frames_since`), so the timeline bridge is reachable from tests only; a public snapshot source, a frame-telemetry capability on the realm or on `LifecycleContext`, is the follow-up, recorded in `docs/plans/2026-09-25-architecture-migration-plan.md`, and lands after the realm moves into `flui-runtime`. The observation seam (ADR-0040) needed no new item: `foundation::observe` and `foundation::RebuildReason` are Stable paths inside the whole `foundation` re-export, and putting them in `hooks` would break the facade-path rule of §4. The seam test and the observer-overhead bench moved from `flui-testing` to `packages/flui-devtools`. **Hot reload stays in `crates/`:** `flui-app` names it (its `hot-reload` feature, the presentation's `apply_hot_reload`, and the runner code that installs its drivers), and so does the facade; deleting those edges needs the runtime hook of ADR-0094 §1, which as specified cannot host the dlopen worker or the Android scene plugin without amending ADR-0094, and whose Subsecond path is blocked by ADR-0094 §5. Its imports (`flui_layer::Scene` in the plugin ABI, `PipelineOwner`, `WidgetsBinding`, `flui-view/runtime-internals`) are not package-author items: SDK re-exports would add Evolving surface for a path ADR-0094 deletes, and enabling `runtime-internals` from the SDK would leak it to every package. Its two `reach-exceptions` and six `globals` entries, all exiting through ADR-0094, are more than a member under `packages/` may carry | move 1; for hot reload also `flui-view`'s `runtime-internals` feature replaced by a hidden module, and the runtime hook of ADR-0094 |
-| 5. Facade | §6: `default = []`, no `material`/`cupertino` features, dependencies, `edge-exceptions`, re-exports or Material prelude half; `flui_material::prelude`; `flui create` adds `flui-material`, with a CLI test that checks the generated project; Material examples move to `packages/flui-material/examples`; `cargo xtask facade-combos` and the documents from the `rg` list of the Consequences are updated; the CI Material example build changes with the owner's sign-off | moves 2 and 3 |
+| 4. Devtools and hot reload | `flui-devtools` moves onto the SDK and the observation-seam test moves into it, removing `flui-testing`'s dev edge. `flui-hot-reload` moves together with the `DevReloadHook` of ADR-0094 §2, which deletes the `flui-app` edge and the facade's `hot-reload` feature. **Outcome for devtools:** done. Its normal dependencies are `flui-sdk` plus six third-party crates, and its two internal-crate exceptions are gone. The SDK gained `hooks` with one item, `FrameSnapshot`, which the timeline records; the facade has no scheduler module, so the item is Evolving. No public API produces a `FrameSnapshot` yet (only `flui-app`'s crate-private presentation calls `FrameClock::frames_since`), so the timeline bridge is reachable from tests only; a public snapshot source, a frame-telemetry capability on the realm or on `LifecycleContext`, is the follow-up, recorded in `docs/plans/2026-09-25-architecture-migration-plan.md`, and lands after the realm moves into `flui-runtime`. The observation seam (ADR-0040) needed no new item: `foundation::observe` and `foundation::RebuildReason` are Stable paths inside the whole `foundation` re-export, and putting them in `hooks` would break the facade-path rule of §4. The seam test and the observer-overhead bench moved from `flui-testing` to `packages/flui-devtools`. **Hot reload stays in `crates/`.** `flui-app` no longer names it: ADR-0094's hook landed in its driver half (ADR-0094, "§1 as implemented"), the dlopen worker and the Android scene plugin implement it, and the application installs it on its `AppConfig`, reaching the trait as `flui_sdk::view::dev_reload` with no new SDK item. The facade still names it (its `hot-reload` feature, optional and dev edges). Three things block the move: the `app-plugin` half needs `flui-view/runtime-internals`, which a package on the SDK alone cannot turn on, until that feature becomes a hidden module; the plugin ABI's imports (`flui_layer::{Scene, LayerTree}`, `PipelineCell`, `PipelineOwner`) are not package-author items, and SDK re-exports would add Evolving surface for a path ADR-0094 deletes, so the move needs this record amended to add them or the plugin half split out; and CI's wasm32 check of the facade names the `hot-reload` feature, which would stay as an empty deprecated name until the workflow changes. Its two `reach-exceptions` and six `globals` entries do not block it: ADR-0081's table lets a `pkg` crate carry named exceptions, and `cargo xtask workspace` refuses only `edge-exceptions` under `packages/` | move 1; for hot reload also `flui-view`'s `runtime-internals` feature replaced by a hidden module, an amendment of this record for the plugin ABI's SDK items, and the workflow's wasm32 facade check |
+| 5a. Facade defaults (in place) | §6: `default = []`. **Outcome:** done. Every catalog is opt-in: the facade's examples and tests already declared `required-features`; `examples/web_counter`, the local and fast-lane test scopes and `cargo xtask demo-snapshots` name `material` (and `cupertino`) explicitly. The `flui create` templates use no catalog yet, so a generated project names none and turns Material on by hand (`features = ["material"]` on `flui`) until 5b | moves 2 and 3 |
+| 5b. Facade names no package | §6: no `material`/`cupertino` features, dependencies, `edge-exceptions`, re-exports or Material prelude half; `flui_material::prelude`; `flui create` adds `flui-material`, with a CLI test that checks the generated project; Material examples move to `packages/flui-material/examples`; `cargo xtask facade-combos` and the documents from the `rg` list of the Consequences are updated; the CI Material example build changes with the owner's sign-off | move 5a |
 
 Material's and Cupertino's `allowed-dependents` lists were replaced in moves 2 and 3 by the kind
 rule of §2, which refuses every edge they refused: a core crate names either design system only
-through a named exception (the facade's edges are such exceptions until move 5), and another
+through a named exception (the facade's edges are such exceptions until move 5b), and another
 official package names one, in any dependency kind, only through a declared exception, none of
 which exists.
 
@@ -333,24 +339,36 @@ In place with moves 2 and 3:
   that names an official package (normal and dev planted), on an official package whose normal
   edge leaves the SDK, on an official package's dev edge to another official package, and on a member under `packages/` that is not official or lists
   `edge-exceptions`; excepted edges and a `tool` crate's edge stay silent.
-- **The design systems on the SDK alone.** `the_design_systems_build_on_the_sdk_alone` in
-  `tools/xtask` reads the real metadata: the manifests are `packages/flui-material/Cargo.toml`
-  and `packages/flui-cupertino/Cargo.toml`, and each one's normal and build dependencies are
-  exactly `flui-sdk` and `tracing`; `the_design_systems_carry_no_dependents_list` checks that
-  neither keeps an `allowed-dependents` list.
+- **The design systems on the SDK alone.** The manifests are
+  `packages/flui-material/Cargo.toml` and `packages/flui-cupertino/Cargo.toml`, and each one's
+  normal and build dependencies are `flui-sdk` and `tracing`; the kind rule above fails
+  `cargo xtask workspace` on any other framework edge, and neither keeps an
+  `allowed-dependents` list.
 - **Derives through the SDK.** `sdk_consumers_derive_through_the_sdk_even_beside_the_facade` in
   `tests/facade_consumer.rs` builds a consumer on `flui-sdk` alone (plain and renamed) and one
   with the facade as a dev-dependency, each using the FLUI derives.
 
 In place with move 4 (devtools):
 
-- **Devtools on the SDK alone.** `devtools_builds_on_the_sdk_alone` in `tools/xtask` reads the
-  real metadata: the manifest is `packages/flui-devtools/Cargo.toml`, it lists no
-  `edge-exceptions`, and its normal and build dependencies are exactly `flui-sdk`,
-  `parking_lot`, `serde`, `serde_json`, `tracing`, `tracing-subscriber` and `web-time`. The
-  seeded exception set in `the_tiers_match_the_adr_0081_table` no longer holds devtools' or
+- **Devtools on the SDK alone.** The manifest is `packages/flui-devtools/Cargo.toml`, it lists
+  no `edge-exceptions`, and its only framework normal dependency is `flui-sdk` (the rest are
+  `parking_lot`, `serde`, `serde_json`, `tracing`, `tracing-subscriber` and `web-time`), held
+  by the kind rule. The seeded `edge-exceptions` no longer hold devtools' or
   `flui-testing`'s entries, and `crates/flui-sdk/tests/surface.rs` pins `hooks::FrameSnapshot`
   and names the `foundation::observe` items.
+
+In place with move 5a:
+
+- **No default feature.** `the_facade_turns_no_feature_on_by_default` in `tools/xtask` reads the
+  real metadata and requires the facade's `default` to be absent or empty.
+- **An outside consumer gets no catalog.** `ordinary_facade_graph_excludes_test_support` in
+  `tests/facade_consumer.rs` resolves a consumer's normal graph with and without
+  `default-features` and requires neither `flui-material` nor `flui-cupertino` in it.
+- **Generated projects pull in no catalog yet.** Until `flui create` adds `flui-material`
+  (move 5b), the template checks in
+  `crates/flui-cli/tests/cli_create.rs` resolve every generated project's normal graph and
+  require no `flui-testing`, `flui-material` or `flui-cupertino` in it, after `cargo check`
+  proves the project builds with the features its manifest names.
 
 Not yet in place:
 

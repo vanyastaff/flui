@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use proc_macro2::TokenStream;
 use serde_json::json;
 
-use super::fixture::{EXPECTED, Memory};
+use super::fixture::Memory;
 use super::scan::{Def, Target, Truth, eval_cfg, macro_statics, scan_target};
 use super::*;
 
@@ -56,38 +56,9 @@ fn tokens(text: &str) -> TokenStream {
 // ---------------------------------------------------------------------------
 // self-test
 
-#[test]
-fn self_test_reports_exactly_the_planted_findings() {
-    let (missed, extra) = self_test_diff(&EXPECTED);
-    assert_eq!((missed, extra), (Vec::new(), Vec::new()));
-    assert_eq!(self_test(), ExitCode::SUCCESS);
-}
-
-#[test]
-fn self_test_diff_names_a_missing_and_an_unexpected_finding() {
-    // one planted finding no longer expected: it is a false positive
-    let (missed, extra) = self_test_diff(&EXPECTED[1..]);
-    assert!(missed.is_empty(), "{missed:?}");
-    let (krate, item, kind) = EXPECTED[0];
-    assert_eq!(
-        extra,
-        vec![(krate.to_owned(), item.to_owned(), kind.to_owned())]
-    );
-    // one expected finding nothing plants: it is missed
-    let mut more = EXPECTED.to_vec();
-    more.push((HOST, "NOT_PLANTED", NEW));
-    let (missed, extra) = self_test_diff(&more);
-    assert_eq!(
-        missed,
-        vec![(HOST.to_owned(), "NOT_PLANTED".to_owned(), NEW.to_owned())]
-    );
-    assert!(extra.is_empty(), "{extra:?}");
-}
-
 // ---------------------------------------------------------------------------
 // scan and cfg
 
-#[test]
 fn cfg_truth_table() {
     for (predicate, truth) in [
         ("test", Truth::False),
@@ -105,7 +76,6 @@ fn cfg_truth_table() {
     }
 }
 
-#[test]
 fn fn_local_statics_are_keyed_by_enclosing_path() {
     let keys = keys(&[
         ("src/lib.rs", "mod m;"),
@@ -128,7 +98,6 @@ fn fn_local_statics_are_keyed_by_enclosing_path() {
     );
 }
 
-#[test]
 fn thread_local_body_parses_const_blocks_expr_initializers_and_per_entry_cfg() {
     let source = r"
         thread_local! {
@@ -165,7 +134,6 @@ fn thread_local_body_parses_const_blocks_expr_initializers_and_per_entry_cfg() {
     );
 }
 
-#[test]
 fn lifetime_static_in_macro_tokens_is_not_an_item() {
     let found: Vec<String> = macro_statics(tokens(
         "fn f() -> &'static str { \"static X: u8\" } static REAL: u8 = 0; static mut M: u8 = 0; \
@@ -178,7 +146,6 @@ fn lifetime_static_in_macro_tokens_is_not_an_item() {
     assert_eq!(found, ["REAL", "M", "$name"]);
 }
 
-#[test]
 fn quote_interpolated_static_in_macro_tokens_is_an_item() {
     let found: Vec<String> = macro_statics(tokens(
         "quote! { static #name: ::std::sync::Mutex<u8> = ::std::sync::Mutex::new(0); \
@@ -190,7 +157,6 @@ fn quote_interpolated_static_in_macro_tokens_is_an_item() {
     assert_eq!(found, ["#name", "#counter"]);
 }
 
-#[test]
 fn module_walk_follows_path_attributes_and_mod_rs_rules() {
     let lock = "static X: std::sync::Mutex<u8> = std::sync::Mutex::new(0);";
     let named = |name: &str| lock.replace('X', name);
@@ -248,7 +214,6 @@ fn module_walk_follows_path_attributes_and_mod_rs_rules() {
     );
 }
 
-#[test]
 fn same_key_under_the_same_cfg_is_ambiguous() {
     let lock = "static X: std::sync::Mutex<u8> = std::sync::Mutex::new(0);";
     let two_impls = format!(
@@ -273,7 +238,6 @@ fn same_key_under_the_same_cfg_is_ambiguous() {
     assert_eq!(problems(&files, &[krate("flui-widgets", &entry)]), []);
 }
 
-#[test]
 fn unresolvable_mod_is_an_error() {
     let error = scan(&[("src/lib.rs", "mod gone;")]).expect_err("an unresolved mod fails");
     assert!(
@@ -294,7 +258,6 @@ fn unresolvable_mod_is_an_error() {
     );
 }
 
-#[test]
 fn a_file_the_walk_cannot_follow_is_an_error() {
     let state = "static S: std::sync::Mutex<u8> = std::sync::Mutex::new(0);";
     for (root, needle) in [
@@ -334,7 +297,6 @@ fn a_file_the_walk_cannot_follow_is_an_error() {
 // ---------------------------------------------------------------------------
 // the counter rule
 
-#[test]
 fn counter_rule_rejects_each_non_fetch_add_use() {
     let declaration = "use std::sync::atomic::{AtomicU64, Ordering::Relaxed};\n\
                        static C: AtomicU64 = AtomicU64::new(1);\n";
@@ -424,7 +386,6 @@ fn trampoline(item: &str) -> serde_json::Value {
     json!({ "item": item, "grant": "ADR-0097", "class": "trampoline", "reason": "a test" })
 }
 
-#[test]
 fn trampoline_limits() {
     let cell = |name: &str| {
         format!(
@@ -510,7 +471,6 @@ fn trampoline_limits() {
     );
 }
 
-#[test]
 fn entry_schema_rejects_both_exit_and_grant_unknown_adr_grant_without_class_empty_reason_duplicate_item()
  {
     let adrs = fixture::adrs();
@@ -570,7 +530,6 @@ fn entry_schema_rejects_both_exit_and_grant_unknown_adr_grant_without_class_empt
     }
 }
 
-#[test]
 fn immutable_class_refuses_interior_mutable_types() {
     let source = r"
         use std::sync::{Arc, LazyLock, Mutex, OnceLock, atomic::AtomicU32};
@@ -600,7 +559,6 @@ fn immutable_class_refuses_interior_mutable_types() {
     }
 }
 
-#[test]
 fn counter_and_diagnostic_classes_check_their_shapes() {
     let source = r#"
         use std::sync::{Once, atomic::{AtomicBool, AtomicU64, Ordering::Relaxed}};
@@ -642,4 +600,69 @@ fn counter_and_diagnostic_classes_check_their_shapes() {
     assert!(fits(Class::Diagnostic, "SEEN"));
     assert!(!fits(Class::Diagnostic, "STATE"));
     assert!(fits(Class::Process, "STATE"));
+}
+
+#[test]
+fn globals_contract() {
+    crate::table_test::run_table(
+        "globals_contract",
+        &[
+            (
+                "cfg_truth_table",
+                cfg_truth_table as fn(),
+            ),
+            (
+                "fn_local_statics_are_keyed_by_enclosing_path",
+                fn_local_statics_are_keyed_by_enclosing_path as fn(),
+            ),
+            (
+                "thread_local_body_parses_const_blocks_expr_initializers_and_per_entry_cfg",
+                thread_local_body_parses_const_blocks_expr_initializers_and_per_entry_cfg as fn(),
+            ),
+            (
+                "lifetime_static_in_macro_tokens_is_not_an_item",
+                lifetime_static_in_macro_tokens_is_not_an_item as fn(),
+            ),
+            (
+                "quote_interpolated_static_in_macro_tokens_is_an_item",
+                quote_interpolated_static_in_macro_tokens_is_an_item as fn(),
+            ),
+            (
+                "module_walk_follows_path_attributes_and_mod_rs_rules",
+                module_walk_follows_path_attributes_and_mod_rs_rules as fn(),
+            ),
+            (
+                "same_key_under_the_same_cfg_is_ambiguous",
+                same_key_under_the_same_cfg_is_ambiguous as fn(),
+            ),
+            (
+                "unresolvable_mod_is_an_error",
+                unresolvable_mod_is_an_error as fn(),
+            ),
+            (
+                "a_file_the_walk_cannot_follow_is_an_error",
+                a_file_the_walk_cannot_follow_is_an_error as fn(),
+            ),
+            (
+                "counter_rule_rejects_each_non_fetch_add_use",
+                counter_rule_rejects_each_non_fetch_add_use as fn(),
+            ),
+            (
+                "trampoline_limits",
+                trampoline_limits as fn(),
+            ),
+            (
+                "entry_schema_rejects_both_exit_and_grant_unknown_adr_grant_without_class_empty_reason_duplicate_item",
+                entry_schema_rejects_both_exit_and_grant_unknown_adr_grant_without_class_empty_reason_duplicate_item as fn(),
+            ),
+            (
+                "immutable_class_refuses_interior_mutable_types",
+                immutable_class_refuses_interior_mutable_types as fn(),
+            ),
+            (
+                "counter_and_diagnostic_classes_check_their_shapes",
+                counter_and_diagnostic_classes_check_their_shapes as fn(),
+            ),
+        ],
+    );
 }

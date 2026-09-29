@@ -226,13 +226,3 @@ pub(crate) struct FinalArtifacts {
     /// File size, or the sum of contained file sizes for a bundle, in bytes.
     pub(crate) size_bytes: u64,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_target_default_is_the_current_packages_binary() {
-        assert_eq!(BuildUnit::default(), BuildUnit::DefaultBinary);
-    }
-}

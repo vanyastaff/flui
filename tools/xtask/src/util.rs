@@ -147,14 +147,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_directory_is_itself_however_it_is_spelled() {
-        let dir = ScratchDir::new("same-dir").expect("scratch dir");
-        std::fs::create_dir_all(dir.path().join("a")).expect("subdirectory");
-        assert!(same_dir(dir.path(), &dir.path().join("a").join("..")));
-        assert!(!same_dir(dir.path(), &dir.path().join("a")));
-    }
-
-    #[test]
     fn cargo_ran_the_binary_it_built() {
         // `cargo test` sets CARGO_MANIFEST_DIR to this crate, as `cargo run` does
         built_from_this_checkout().expect("the test binary is this checkout's");

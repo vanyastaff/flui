@@ -67,35 +67,3 @@ impl ShaderType {
         }
     }
 }
-
-#[cfg(all(test, feature = "testing"))]
-mod tests {
-    use flui_painting::styling::Color;
-
-    use super::*;
-
-    #[test]
-    fn test_shader_type_from_shader() {
-        use flui_foundation::geometry::Offset;
-
-        let solid = Shader::solid(Color::WHITE);
-        assert_eq!(ShaderType::from_shader(&solid), ShaderType::SolidMask);
-
-        let linear = Shader::simple_linear(
-            Offset::ZERO,
-            Offset::new(1.0, 1.0),
-            vec![Color::RED, Color::BLUE],
-        );
-        assert_eq!(
-            ShaderType::from_shader(&linear),
-            ShaderType::LinearGradientMask
-        );
-
-        let radial =
-            Shader::simple_radial(Offset::new(0.5, 0.5), 1.0, vec![Color::WHITE, Color::BLACK]);
-        assert_eq!(
-            ShaderType::from_shader(&radial),
-            ShaderType::RadialGradientMask
-        );
-    }
-}

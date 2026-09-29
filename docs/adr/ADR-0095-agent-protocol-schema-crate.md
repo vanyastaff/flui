@@ -195,19 +195,16 @@ rather than a misplaced one.
 For the accepted part:
 
 - `cargo nextest run -p flui-protocol --all-features`:
-  `every_role_is_listed_once_and_valued_by_its_index`,
-  `every_action_is_one_distinct_unreserved_bit`, `the_advertised_action_names_are_adr_0080s`,
-  `every_wire_role_serializes_to_its_name`, `every_action_name_serializes_to_its_tool_name`,
-  `the_role_schema_lists_every_wire_name` and `checked_serializes_as_a_flag_or_mixed`. The
-  serde and schemars tests compile only with those features.
-- `cargo nextest run -p flui-semantics`: `every_role_but_none_maps_to_an_accesskit_role` (the
+  `the_advertised_action_names_are_adr_0080s`,
+  `every_wire_name_serializes_to_its_vocabulary_string` (which also checks the schemars
+  schemas when that feature is on). The serde test compiles only with its feature.
+- `cargo nextest run -p flui-semantics`: `roles_and_checkbox_states_translate_to_accesskit` (the
   pin for the mapping now that `explicit_role` ends in a wildcard) and
   `every_wire_action_routes_to_a_semantics_action` (every `ActionName` reaches a FLUI action
   through AccessKit's Windows adapter).
 - `cargo nextest run -p flui-desktop-mcp`: `every_action_name_has_a_uia_pattern`, and the
   server's reply and schema tests pass unchanged on the lifted types.
-- `cargo xtask workspace` places `flui-protocol` in tier C;
-  `the_tiers_match_the_adr_0081_table` lists it.
+- `cargo xtask workspace` places `flui-protocol` in tier C, its `tier` in the manifest.
 
 - `cargo nextest run -p flui-protocol --all-features`: `the_wire_schema_is_the_one_its_version_published`,
   `every_published_schema_is_additive_to_the_next` and

@@ -47,6 +47,9 @@ pub mod app;
 pub mod bindings;
 pub mod embedder;
 
+#[cfg(test)]
+mod table_test;
+
 // Primary exports - Flutter naming
 pub use app::{
     AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config,

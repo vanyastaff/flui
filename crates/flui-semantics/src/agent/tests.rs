@@ -284,6 +284,64 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
     }
 }
 
+/// Every tool of the ADR-0080 wire vocabulary, as accesskit_windows 0.35.0
+/// turns its UI Automation call into an AccessKit action (`node.rs`), and the
+/// FLUI action that action reaches. The in-process route
+/// (`semantics_action_for_wire`) must reach the same FLUI action, so an
+/// agent's `invoke` means one thing whichever backend carries it.
+///
+/// `set_value` lands on `SetText` (mapping decision 3); `expand` and
+/// `collapse` land on the tap handler, which is how FLUI toggles an
+/// expandable node (mapping decision 5).
+#[test]
+fn every_wire_action_routes_to_a_semantics_action() {
+    use crate::accesskit_translation::semantics_action_for;
+    use accesskit::Action as Ak;
+
+    let table: &[(ActionName, Ak, SemanticsAction)] = &[
+        // `Invoke` -> `click()` -> Click (node.rs:1340-1343, 953).
+        (ActionName::Invoke, Ak::Click, SemanticsAction::Tap),
+        // `Toggle` -> `click()` -> Click (node.rs:1336-1338, 953).
+        (ActionName::Toggle, Ak::Click, SemanticsAction::Tap),
+        // `Value`/`RangeValue.SetValue` -> SetValue (node.rs:1352, 1366).
+        (ActionName::SetValue, Ak::SetValue, SemanticsAction::SetText),
+        // `SelectionItem.Select` -> Click (node.rs:977-997).
+        (ActionName::Select, Ak::Click, SemanticsAction::Tap),
+        // `SetFocus` -> Focus (node.rs:1130).
+        (ActionName::Focus, Ak::Focus, SemanticsAction::Focus),
+        // `ExpandCollapse` -> Expand / Collapse, only toward the state the
+        // node lacks (node.rs:955-975).
+        (ActionName::Expand, Ak::Expand, SemanticsAction::Tap),
+        (ActionName::Collapse, Ak::Collapse, SemanticsAction::Tap),
+        // `ScrollItem` -> ScrollIntoView (node.rs:1374).
+        (
+            ActionName::ScrollIntoView,
+            Ak::ScrollIntoView,
+            SemanticsAction::ShowOnScreen,
+        ),
+    ];
+
+    let listed: Vec<ActionName> = table.iter().map(|(name, _, _)| *name).collect();
+    assert_eq!(
+        listed,
+        ActionName::ALL,
+        "one row per wire action, in ActionName::ALL's order: a wire action \
+         without a row here has no pinned route into FLUI",
+    );
+    for &(name, platform, expected) in table {
+        assert_eq!(
+            semantics_action_for(platform),
+            Some(expected),
+            "`{name}` arrives as {platform:?} and must reach {expected:?}",
+        );
+        assert_eq!(
+            semantics_action_for_wire(name),
+            Some(expected),
+            "`{name}` routes differently in process than through UI Automation",
+        );
+    }
+}
+
 #[test]
 fn a_read_before_the_first_assembly_is_no_tree_and_busy() {
     let owner = SemanticsOwner::new_without_callback();

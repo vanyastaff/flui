@@ -30,10 +30,11 @@ Press, selection and value-change setters accept `&mut EventCx` and an
 `EventOutcome` result (ADR-0086). Composed controls pass the context they
 receive from `InkWell` or the input widget; they do not open a new write
 scope per wrapper. Query callbacks keep their return values and receive no
-writer. `InkWell` obtains a `WriterSource` in `init_state` for its keyboard
-`CallbackAction` bridge, since the action protocol carries an intent rather
-than an event context. Pointer activation forwards the gesture's context.
-Both paths retain pressed-state-before-callback ordering.
+writer. `InkWell`'s keyboard activation is a `CallbackAction`, which runs
+inside the key event's dispatch and receives its context (ADR-0086, amending
+ADR-0023), so it opens no write scope of its own. Pointer activation forwards
+the gesture's context. Both paths retain pressed-state-before-callback
+ordering.
 
 `FloatingActionButton::new(child).on_pressed(callback)` uses the same disabled
 default and setter shape as the other buttons. An optional generic callback

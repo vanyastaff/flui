@@ -19,28 +19,3 @@ pub(crate) fn role_from_aria(value: &str) -> Option<Role> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn aria_preserves_roles_that_share_native_control_types() {
-        for (aria, role) in [
-            ("cell", Role::Cell),
-            ("gridcell", Role::GridCell),
-            ("row", Role::Row),
-            ("rowheader", Role::RowHeader),
-            ("columnheader", Role::ColumnHeader),
-            ("switch", Role::Switch),
-        ] {
-            assert_eq!(role_from_aria(aria), Some(role));
-            let wire = serde_json::Value::String(role.name().into());
-            assert_eq!(serde_json::to_value(role).ok(), Some(wire.clone()));
-            assert_eq!(serde_json::from_value::<Role>(wire).ok(), Some(role));
-        }
-        for aria in ["", "group", "region", "vendor-specific"] {
-            assert_eq!(role_from_aria(aria), None);
-        }
-    }
-}

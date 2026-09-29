@@ -132,8 +132,9 @@ and the gate reports any other H → `pkg` edge.
 The tier assignment had six refused edges, each seeded as an `edge-exceptions` entry.
 `flui-interaction -> flui-platform` and `flui-widgets -> flui-platform` (the widget harness,
 optional under `testing`) exited with ADR-0082: both now name `flui-platform-api` (tier C), and
-their entries are gone. Four remain: `flui-app -> flui-hot-reload` and
-`flui -> flui-hot-reload` exit with ADR-0094; `flui -> flui-material` and
+their entries are gone. `flui-app -> flui-hot-reload` exited with ADR-0094's hook (2026-09-29:
+`flui-app` reaches a reload tool only through an installed `DevReloadHook`). Three remain:
+`flui -> flui-hot-reload` exits with ADR-0094; `flui -> flui-material` and
 `flui -> flui-cupertino` exit with ADR-0088. In K, `flui-widgets` names `flui-testing` as an
 optional normal dependency (`crates/flui-widgets/Cargo.toml:89`), so `flui-testing` has the
 smaller `order`; moving the harness above the runtime removes that edge first.
@@ -190,8 +191,8 @@ equivalent of `--target all`) and resolves each **root build** itself, as
 build edges kept, and every declared entry for one dependency counts, whatever its target.
 Cargo's own resolution in that output cannot be used: it unifies features across the whole
 workspace, so an example that depends on the facade with its defaults turns them on for every
-root, and `flui-app`'s `hot-reload` is on in every build. The `--all-features` graph still lists
-every edge any root can activate, and a test pins the resolver to `cargo tree -e normal,build
+root (as `flui-app`'s `hot-reload` feature was, while it existed). The `--all-features` graph
+still lists every edge any root can activate, and a test pins the resolver to `cargo tree -e normal,build
 --target all` for five roots.
 
 The roots are the facade under every combination `cargo xtask facade-combos` builds, the facade
@@ -230,9 +231,11 @@ finding, when E reaches no `to` in any root build, or when in no root build anyt
 (itself included) is forbidden to E or to a crate with a tier that reaches E. So the list only
 shrinks: once the change an `exit` names lands, its entry becomes stale and must go.
 
-`TREE_FACTS` moved into `reach` as ordinary facts over one root's build: `flui-hot-reload` is
-absent from `flui-app` at its defaults, present under `flui-app --features hot-reload`, and
-`hot-reload-counter-host`'s build enables `flui-app/hot-reload`. A fact that names an unknown
+`TREE_FACTS` moved into `reach` as ordinary facts over one root's build. Since ADR-0094's hook
+removed `flui-app`'s feature (2026-09-29) they read: `flui-hot-reload` is absent from `flui-app`
+at its defaults and with `--all-features`, present under
+`flui --no-default-features --features hot-reload`, and `hot-reload-counter-host`'s build enables
+`flui-hot-reload/app-plugin`. A fact that names an unknown
 root, package or feature is an error, not a pass. The facts now run in `cargo xtask checks`
 instead of only in the heavy feature-matrix job.
 
@@ -268,10 +271,11 @@ from the first day, with named, dated exceptions:
 
 - `flui-testing` dev -> `flui-devtools`: exited when the observation-seam test moved into
   `packages/flui-devtools` (ADR-0088 move 4);
-- `flui-app` optional -> `flui-hot-reload` (`crates/flui-app/Cargo.toml:65,108`), the facade's
-  optional edge and `hot-reload` feature (`Cargo.toml:553,664`) and the facade's dev-dependency
-  (`Cargo.toml:588`): exit in the change that moves `flui-hot-reload` into the official packages
-  (ADR-0094 §2);
+- `flui-app` optional -> `flui-hot-reload` (`crates/flui-app/Cargo.toml:65,108`): exited when
+  ADR-0094's `DevReloadHook` landed (2026-09-29);
+- the facade's optional edge and `hot-reload` feature (`Cargo.toml:553,664`) and the facade's
+  dev-dependency (`Cargo.toml:588`): exit in the change that moves `flui-hot-reload` into the
+  official packages (ADR-0094 §2);
 - the facade's optional `material`/`cupertino` edges, features and default
   (`Cargo.toml:559-560,632,639-640`): exit with ADR-0088 §6, which sequences the facade change
   after the packages build on `flui-sdk`.
@@ -382,16 +386,13 @@ For the accepted part:
   cross-tier edge, an in-tier edge against `order`, an H → `pkg` edge without an exception, a
   stale exception, a missing `tier-kind`, a duplicate `order` and an edge onto a `tool`; it
   fails unless exactly those are reported. `cargo xtask checks` runs it before `workspace`.
-- `cargo nextest run -p xtask workspace`: `an_upward_tier_edge_is_refused`,
-  `an_in_tier_edge_to_a_larger_order_is_refused`, `an_in_tier_edge_to_a_smaller_order_is_allowed`,
-  `a_dev_edge_may_point_up_a_tier`, `a_dev_cycle_inside_a_tier_is_allowed`,
-  `a_crate_without_tier_order_or_kind_is_reported`, `an_unknown_tier_or_kind_is_reported`,
-  `two_crates_sharing_an_order_in_a_tier_are_reported`, `an_example_declares_only_the_tool_kind`,
-  `nothing_depends_on_a_tool_kind_crate`, `an_edge_exception_admits_one_upward_edge`,
-  `a_stale_edge_exception_is_reported`, `an_edge_exception_citing_a_missing_adr_is_reported`,
-  `the_self_test_reports_exactly_the_planted_findings`, and
-  `the_tiers_match_the_adr_0081_table`, which pins the table above and the four remaining
-  seeded exceptions against the real manifests.
+- `cargo nextest run -p xtask workspace`: the table test `workspace_gate_contract` runs the layer,
+  manifest and ADR-citation rules over throwaway workspaces, among them
+  `a_dev_cycle_inside_a_tier_is_allowed`, `a_crate_without_tier_order_or_kind_is_reported`,
+  `an_unknown_tier_or_kind_is_reported`, `an_example_declares_only_the_tool_kind`,
+  `a_stale_edge_exception_is_reported` and `an_edge_exception_citing_a_missing_adr_is_reported`;
+  the tier rule's own rejection cases (upward edge, in-tier order, duplicate order, an edge onto
+  a `tool`) are the self-test's planted findings above.
 - `cargo xtask reach` is green with the three seeded `reach-exceptions` entries of §2; removing
   `flui-engine`'s grant makes it fail with
   ``flui-engine (tier R) reaches wgpu under `flui --no-default-features`: flui-engine -> wgpu``
@@ -406,8 +407,7 @@ For the accepted part:
   reaching `wgpu` through its grant and an excused path, and fails unless exactly the planted findings are reported. `cargo xtask checks` runs it,
   then `reach`, after `workspace`; the pinned list test in `tools/xtask/src/tasks/checks.rs` names
   both.
-- `cargo nextest run -p xtask reach`: `a_k_crate_that_reaches_winit_is_reported`,
-  `a_dev_dependency_reaches_nothing`,
+- `cargo nextest run -p xtask reach`: the table test `reach_gate_contract`, whose cases include
   `an_optional_dependency_reaches_only_under_a_feature_that_enables_it`,
   `a_weak_feature_does_not_activate_its_dependency`,
   `a_strong_feature_enables_the_same_named_feature_whatever_it_lists`,
@@ -415,16 +415,13 @@ For the accepted part:
   `a_dependency_is_matched_by_package_name_not_library_name`,
   `a_target_specific_dependency_counts_on_every_target`, `a_build_dependency_reaches`,
   `features_combine_within_one_root_and_not_across_roots`,
-  `selection_parses_every_facade_combo`, `a_generic_ffi_crate_matches_no_glob`,
+  `a_generic_ffi_crate_matches_no_glob`,
   `an_exact_forbid_entry_naming_a_generic_ffi_crate_is_an_error`,
-  `the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio`, `only_a_grant_lets_an_r_crate_reach_wgpu`,
-  `an_extends_cycle_or_unknown_tier_is_an_error`, `reach_forbid_adds_to_the_tier_set`,
-  `a_reach_exception_excuses_only_paths_through_its_crate`,
-  `a_reach_exception_whose_edge_is_gone_is_stale`, `a_reach_exception_that_excuses_nothing_is_stale`,
-  `a_reach_exception_needs_exactly_one_of_exit_or_grant`, `a_reach_exception_citing_a_missing_adr_is_reported`,
-  `each_fact_reads_the_build_both_ways`, `the_self_test_reports_exactly_the_planted_findings`,
-  `the_forbid_sets_match_the_adr_0081_table`, `the_seeded_reach_exceptions_are_the_known_debt`
-  and `the_resolver_agrees_with_cargo_tree`, which compares the resolved package set with
+  `the_r_tier_inherits_wgpu_and_the_v_tier_refuses_tokio`,
+  `an_extends_cycle_or_unknown_tier_is_an_error`,
+  `a_reach_exception_needs_exactly_one_of_exit_or_grant`,
+  `each_fact_reads_the_build_both_ways` and
+  `the_resolver_agrees_with_cargo_tree`, which compares the resolved package set with
   `cargo tree -e normal,build --target all` for `flui` (no features, defaults, all features),
   `flui-widgets --all-features` and `flui-app`.
 

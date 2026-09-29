@@ -1,487 +1,386 @@
-//! The development-reload seam.
+//! The host half of the development-reload seam (ADR-0094 §1).
 //!
-//! Hot reload is a development capability. `flui-hot-reload` is therefore an
-//! **optional** dependency of this crate, enabled by the `hot-reload` feature,
-//! and an ordinary production graph does not contain it (`cargo tree -p
-//! flui-app` shows no `flui-hot-reload` unless the feature is on).
+//! `flui-app` names no reload tool. An application that wants hot reload
+//! installs a [`DevReloadHook`] on its configuration
+//! ([`AppConfig::with_dev_reload`]); this module is the only code that calls
+//! it, and every runner goes through the crate-private wrappers below:
 //!
-//! Everything in the runner that would otherwise name a `flui_hot_reload` item
-//! goes through the types here, so the platform bootstraps stay single-version
-//! instead of splitting into feature-forked copies:
+//! - `WorkerReload` (desktop and iOS): attaches the hook once per loop,
+//!   polls it at each realm's frame boundary and applies a patch once to
+//!   every realm;
+//! - `ScenePlugin` (Android): lets the hook's scene plugin own a frame. It
+//!   calls only `scene_frame`; the Android runner never attaches or polls.
 //!
-//! - [`WorkerReload`] — the desktop worker-dylib driver, plus the
-//!   [`RebuildHookGuard`] whose `Drop` detaches the rebuild hook.
-//! - `ScenePlugin` (Android only) — the scene-plugin driver, which may take
-//!   over a frame entirely.
+//! With no hook installed every wrapper is inert: attaching starts nothing,
+//! polling never reloads, and no scene plugin claims a frame. The web runner
+//! drives no hook.
 //!
-//! With the feature off all three are inert: constructing one is a no-op,
-//! polling never reports a reload, and the scene plugin never claims a frame.
-//! The inert implementations name no `flui_hot_reload` item at all, which is
-//! what makes the absent dependency compile.
+//! # Failure containment
+//!
+//! The hook is user code. Each call runs with the hook lent out of its slot
+//! and no lock held, so a hook that re-enters the host (a `wake` whose
+//! redraw pumps a frame synchronously) finds the slot empty and the nested
+//! call is a no-op instead of a deadlock. A call that panics is logged, and
+//! the hook is dropped — inside its own containment, because its `Drop` may
+//! panic too — and never called again; the frame that caught the panic
+//! continues, and the realm is untouched.
 
-// Each type is scoped to the runner that consumes it — `WorkerReload` to the
-// desktop bootstrap, `ScenePlugin` to the Android one — so a target that does
-// not consume it does not carry it as dead code. The repeated
-// `not(android)/not(ios)/not(wasm32)` triple mirrors `run_desktop`'s own cfg in
-// `runner.rs`; keep them in step.
-#[cfg(all(target_os = "android", feature = "hot-reload"))]
-pub(crate) use enabled::ScenePlugin;
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_arch = "wasm32"),
-    feature = "hot-reload"
-))]
-pub(crate) use enabled::{RebuildHookGuard, WorkerReload, WorkerWatcherGuard};
-// Reached only by the runner's rebuild-hook lifecycle test.
-#[cfg(all(
-    test,
-    not(target_os = "android"),
-    not(target_arch = "wasm32"),
-    feature = "hot-reload"
-))]
-pub(crate) use enabled::queued_hot_reload_hook;
+#[cfg(not(target_arch = "wasm32"))]
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::{collections::HashMap, fmt, sync::Arc};
 
-#[cfg(all(target_os = "android", not(feature = "hot-reload")))]
-pub(crate) use disabled::ScenePlugin;
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_arch = "wasm32"),
-    not(feature = "hot-reload")
-))]
-pub(crate) use disabled::{RebuildHookGuard, WorkerReload, WorkerWatcherGuard};
+use flui_view::dev_reload::DevReloadHook;
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+use flui_view::dev_reload::ReloadEvent;
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+use flui_view::dev_reload::ReloadWake;
+use parking_lot::Mutex;
 
-#[cfg(feature = "hot-reload")]
-mod enabled {
-    #[cfg(target_os = "android")]
-    use std::path::Path;
-    #[cfg(any(
-        target_os = "android",
-        all(not(target_os = "android"), not(target_arch = "wasm32"))
-    ))]
-    use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::app::AppConfig;
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+use crate::app::ui_realm::UiRealm;
+use flui_foundation::RealmId;
+use flui_runtime::reload::ReloadTier;
 
-    #[cfg(target_os = "android")]
-    use flui_hot_reload::HotReloadDriver;
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    use flui_hot_reload::{
-        HotReloadTier, RebuildHookRegistration, WorkerPollOutcome, WorkerReloadDriver, engine::env,
-        register_request_rebuild, strategy::timing, worker_artifact_stamp,
-    };
-    #[cfg(any(
-        target_os = "android",
-        all(not(target_os = "android"), not(target_arch = "wasm32"))
-    ))]
-    use parking_lot::Mutex;
+/// A development reload driver installed on an [`AppConfig`].
+///
+/// Built by [`AppConfig::with_dev_reload`]. `Clone` shares the one hook and
+/// its bookkeeping, so every window opened with clones of the same
+/// configuration is driven by the same hook: attached once per loop, polled
+/// at each realm's frame boundary, and each patch applied once to every
+/// realm.
+#[derive(Clone)]
+pub struct DevReload(Arc<Mutex<Slot>>);
 
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    use crate::app::{
-        AppConfig,
-        ui_realm::{UiCommandSender, UiRealm},
-    };
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    use flui_runtime::reload::ReloadTier;
+// The web runner drives no hook, and the Android runner only asks it for
+// scene frames, so neither reads the realm bookkeeping.
+#[cfg_attr(
+    any(target_arch = "wasm32", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "only the desktop and iOS runners poll the hook for realms"
+    )
+)]
+struct Slot {
+    /// `None` while a call has the hook lent out, and for good once it
+    /// panicked.
+    hook: Option<Box<dyn DevReloadHook>>,
+    /// Between a successful `attach` and its `detach`.
+    attached: bool,
+    /// A `detach` arrived while the hook was lent; the lender runs it when
+    /// the call returns.
+    detach_owed: bool,
+    /// Advances once per `Patched` poll.
+    epoch: u64,
+    /// The epoch of the latest patch, and the tier it asks for.
+    patched_at: u64,
+    patched_tier: Option<ReloadTier>,
+    /// The epoch each realm last caught up to. Cleared when the loop ends.
+    seen: HashMap<RealmId, u64>,
+}
 
-    /// The realm's reload tier for a driver's: the realm lives in
-    /// `flui-runtime`, which may not name `flui-hot-reload`, so the tier is
-    /// translated here, at the host. Exhaustive, so a new driver tier does not
-    /// compile until it is given a meaning.
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    const fn reload_tier(tier: HotReloadTier) -> ReloadTier {
-        match tier {
-            HotReloadTier::HotReload => ReloadTier::Reassemble,
-            HotReloadTier::HotRestart => ReloadTier::Restart,
-            HotReloadTier::FullRestart => ReloadTier::ProcessRestart,
-        }
+impl DevReload {
+    pub(crate) fn new(hook: impl DevReloadHook) -> Self {
+        Self(Arc::new(Mutex::new(Slot {
+            hook: Some(Box::new(hook)),
+            attached: false,
+            detach_owed: false,
+            epoch: 0,
+            patched_at: 0,
+            patched_tier: None,
+            seen: HashMap::new(),
+        })))
     }
+}
 
-    /// Turn a worker-side rebuild request into a queued hot-reload command on
-    /// the realm's inbox.
-    ///
-    /// The hook fires on whatever thread the file watcher runs on, so it may
-    /// only *enqueue*: the reassemble itself commits on the owner thread, at
-    /// the next Idle drain.
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    pub(crate) fn queued_hot_reload_hook(
-        sender: UiCommandSender,
-    ) -> impl Fn() + Send + Sync + 'static {
-        move || {
-            if let Err(error) = sender.request_hot_reload(reload_tier(HotReloadTier::HotReload)) {
-                tracing::warn!(
-                    ?error,
-                    "ignoring hot-reload request for a dead or busy realm"
-                );
+impl fmt::Debug for DevReload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let slot = self.0.lock();
+        f.debug_struct("DevReload")
+            .field("installed", &slot.hook.is_some())
+            .field("attached", &slot.attached)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What lending the hook for one call produced.
+#[cfg(not(target_arch = "wasm32"))]
+enum Lent<R> {
+    /// No hook: none was installed, a call already has it, or it panicked
+    /// earlier.
+    Absent,
+    /// The call returned.
+    Returned(R),
+    /// The call panicked; the hook is gone.
+    Panicked,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DevReload {
+    /// Run `call` on the hook with the hook out of the slot and no lock
+    /// held. See the module docs for why.
+    fn lend<R>(
+        &self,
+        what: &'static str,
+        call: impl FnOnce(&mut dyn DevReloadHook) -> R,
+    ) -> Lent<R> {
+        let Some(mut hook) = self.0.lock().hook.take() else {
+            return Lent::Absent;
+        };
+        match catch_unwind(AssertUnwindSafe(|| call(hook.as_mut()))) {
+            Ok(value) => {
+                let owed = std::mem::take(&mut self.0.lock().detach_owed);
+                if owed && catch_unwind(AssertUnwindSafe(|| hook.detach())).is_err() {
+                    disable("detach", hook);
+                    return Lent::Returned(value);
+                }
+                self.0.lock().hook = Some(hook);
+                Lent::Returned(value)
+            }
+            Err(payload) => {
+                // The payload's own `Drop` may panic; never run it.
+                std::mem::forget(payload);
+                disable(what, hook);
+                Lent::Panicked
             }
         }
     }
 
-    /// Keeps a registered rebuild hook attached; dropping it detaches.
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    pub(crate) struct RebuildHookGuard(#[expect(dead_code)] Option<RebuildHookRegistration>);
-
-    /// The desktop worker-plugin driver, shared between the bootstrap and the
-    /// per-frame callback. `Clone` shares the underlying driver.
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    #[derive(Clone)]
-    pub(crate) struct WorkerReload {
-        driver: Arc<Mutex<Option<WorkerReloadDriver>>>,
-        active: bool,
-        /// Canonical worker path the watcher thread watches. `None` when no
-        /// worker is configured (the whole capability is inert).
-        watch_path: Option<std::path::PathBuf>,
-    }
-
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    impl WorkerReload {
-        /// Resolve the worker dylib from the application config, falling back
-        /// to `FLUI_WORKER_PLUGIN` for CLI compatibility.
-        pub(crate) fn from_config(config: &AppConfig) -> Self {
-            let path = config
-                .worker_plugin_path
-                .clone()
-                .or_else(|| std::env::var(env::WORKER_PLUGIN).ok().map(Into::into));
-            let driver = path.clone().map(WorkerReloadDriver::new);
-            Self {
-                active: driver.is_some(),
-                driver: Arc::new(Mutex::new(driver)),
-                watch_path: path,
-            }
-        }
-
-        /// Start a background thread that watches the worker artifact and
-        /// wakes the owner when it is rebuilt.
-        ///
-        /// [`Self::poll_and_apply`] runs at a frame boundary, which is enough
-        /// while the app is animating but wrong when it is idle: an idle event
-        /// loop produces no frames at all, so an edit would not be noticed
-        /// until something unrelated produced one — the developer clicking the
-        /// window, in the observed failure. This watcher closes that gap from
-        /// the other side: it polls the artifact's stamp off-thread and, on a
-        /// change, fires `wake`, which requests a frame; the next frame's
-        /// `poll_and_apply` then performs the actual `dlopen` on the owner
-        /// thread, exactly as before.
-        ///
-        /// Deliberately does no loading: the `dlopen`/`dlclose` cycle stays on
-        /// the owner thread inside [`WorkerReloadDriver::poll`]. This watches
-        /// the **artifact**, not `src/` — layer 1 (the CLI) already watches
-        /// sources and owns the rebuild; layer 2 (this) only notices the new
-        /// artifact, per the two-layer rule in `docs/hot-reload.md`. The
-        /// mechanism is the same mtime/identity check the driver already uses,
-        /// merely run where it can wake a sleeping loop rather than only at a
-        /// frame nothing is producing.
-        ///
-        /// Returns `None` when no worker is configured. The returned guard
-        /// stops the thread when dropped; it must outlive the event loop.
-        pub(crate) fn spawn_watcher(
-            &self,
-            wake: Arc<dyn Fn() + Send + Sync>,
-        ) -> Option<WorkerWatcherGuard> {
-            let path = self.watch_path.clone()?;
-            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let stop_thread = Arc::clone(&stop);
-            let thread_path = path.clone();
-
-            let handle = std::thread::Builder::new()
-                .name("flui-worker-watch".to_string())
-                .spawn(move || {
-                    let mut last = worker_artifact_stamp(&thread_path);
-                    while !stop_thread.load(std::sync::atomic::Ordering::Acquire) {
-                        std::thread::sleep(timing::WATCHER_POLL);
-                        if stop_thread.load(std::sync::atomic::Ordering::Acquire) {
-                            break;
-                        }
-                        let now = worker_artifact_stamp(&thread_path);
-                        if now != last {
-                            let changed_path = now.0.clone();
-                            last = now;
-                            tracing::debug!(
-                                path = %changed_path.display(),
-                                "hot reload: worker artifact changed; waking owner"
-                            );
-                            wake();
-                        }
-                    }
-                })
-                .ok()?;
-
-            tracing::info!(
-                path = %path.display(),
-                "hot reload: background worker watcher started"
-            );
-            Some(WorkerWatcherGuard {
-                stop,
-                handle: Some(handle),
-            })
-        }
-
-        /// Attach the rebuild hook for this realm, if a worker dylib is
-        /// actually configured. The returned guard must outlive the event
-        /// loop; dropping it detaches the hook.
-        pub(crate) fn register_rebuild_hook(&self, sender: UiCommandSender) -> RebuildHookGuard {
-            RebuildHookGuard(
-                self.active
-                    .then(|| register_request_rebuild(queued_hot_reload_hook(sender))),
-            )
-        }
-
-        /// Poll the worker driver at a frame boundary and reassemble the realm
-        /// when the dylib has been rebuilt.
-        ///
-        /// Every outcome is surfaced. `Reloaded` reassembles. `Degraded` (the
-        /// worker's shared-type layout changed) and `ReloadFailed` are *not*
-        /// silently dropped: the host keeps rendering the last good tree, and a
-        /// loud warning names the required action — restart the host — so a
-        /// developer is never left wondering why their edit had no effect. A
-        /// full `HotRestart` remount that would adopt the new layout is not
-        /// implemented; this is the honest interim behaviour, not a claim it is.
-        pub(crate) fn poll_and_apply(&self, realm: &UiRealm) {
-            let Some(ref mut driver) = *self.driver.lock() else {
+    /// The loop ended: detach the hook and forget every realm.
+    #[cfg(not(target_os = "android"))]
+    fn detach(&self) {
+        {
+            let mut slot = self.0.lock();
+            if !slot.attached {
                 return;
-            };
-            match driver.poll() {
-                WorkerPollOutcome::Reloaded { reload_count } => {
-                    tracing::info!(reload_count, "hot reload: worker reloaded; reassembling");
-                    realm.perform_hot_reload_entered(reload_tier(HotReloadTier::HotReload));
-                }
-                WorkerPollOutcome::Degraded {
-                    old_fingerprint,
-                    new_fingerprint,
-                } => {
-                    tracing::error!(
-                        old_fingerprint,
-                        new_fingerprint,
-                        "hot reload: the worker's shared-type layout changed, so the new \
-                         build functions cannot be called against this host's state. \
-                         Restart the host to adopt them (hot restart is not wired yet). \
-                         The current frame keeps rendering the last good tree."
-                    );
-                }
-                WorkerPollOutcome::ReloadFailed => {
-                    tracing::warn!(
-                        "hot reload: the worker dylib changed but reload failed (locked or \
-                         missing symbols); fix the build and save again"
-                    );
-                }
-                WorkerPollOutcome::NoChange => {}
             }
+            slot.attached = false;
+            slot.seen.clear();
         }
-    }
-
-    /// Stops the background worker-artifact watcher on drop. Must outlive the
-    /// event loop, alongside [`RebuildHookGuard`].
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    pub(crate) struct WorkerWatcherGuard {
-        stop: Arc<std::sync::atomic::AtomicBool>,
-        handle: Option<std::thread::JoinHandle<()>>,
-    }
-
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    #[cfg(test)]
-    impl WorkerWatcherGuard {
-        pub(crate) fn test_lifetime(
-            &self,
-        ) -> (std::thread::ThreadId, Arc<std::sync::atomic::AtomicBool>) {
-            (
-                self.handle
-                    .as_ref()
-                    .expect("watcher is live until Drop")
-                    .thread()
-                    .id(),
-                Arc::clone(&self.stop),
-            )
-        }
-    }
-
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    impl Drop for WorkerWatcherGuard {
-        fn drop(&mut self) {
-            // Signal first, then join: the thread sleeps in short intervals, so
-            // the join is bounded by one poll period, and joining keeps a
-            // detached thread from touching the artifact path during teardown.
-            self.stop.store(true, std::sync::atomic::Ordering::Release);
-            if let Some(handle) = self.handle.take() {
-                let _ = handle.join();
-            }
-        }
-    }
-
-    /// The Android scene-plugin driver: a rebuilt dylib may render the frame
-    /// itself, bypassing the widget tree entirely.
-    #[cfg(target_os = "android")]
-    #[derive(Clone)]
-    pub(crate) struct ScenePlugin {
-        driver: Arc<Mutex<HotReloadDriver>>,
-    }
-
-    #[cfg(target_os = "android")]
-    impl ScenePlugin {
-        pub(crate) fn new(plugin_path: &Path) -> Self {
-            Self {
-                driver: Arc::new(Mutex::new(HotReloadDriver::new(plugin_path))),
-            }
-        }
-
-        /// Poll for a plugin update and, if a plugin is live, let it own this
-        /// frame. Returns `true` when the plugin rendered, in which case the
-        /// caller must not run the widget pipeline for this frame.
-        pub(crate) fn try_render_frame(
-            &self,
-            renderer: &mut flui_engine::Renderer,
-            width: f64,
-            height: f64,
-        ) -> bool {
-            let mut driver = self.driver.lock();
-
-            // Poll for plugin updates (mtime check, auto-reload).
-            driver.poll(width, height);
-
-            // SAFETY: `HotReloadDriver::build_scene` reclaims a Box the plugin
-            // allocated, so host and plugin must agree on `Scene`'s layout and
-            // allocator, and the scene must be dropped before the library is
-            // unloaded. Both hold here: the plugin is built from this workspace
-            // by the same toolchain, and `scene` is consumed by `render_scene`
-            // and dropped inside this block, while `driver` (owning the
-            // library) outlives it. See that method's `# Safety` for why this
-            // cannot be a safe call.
-            #[expect(unsafe_code)]
-            let built = unsafe { driver.build_scene(width, height) };
-
-            let Some(scene) = built else {
-                return false;
-            };
-            if let Err(error) = renderer.render_scene(&scene) {
-                tracing::error!(?error, "Plugin render failed");
-            }
-            true
-        }
-    }
-
-    #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
-    mod tests {
-        use super::{HotReloadTier, ReloadTier, reload_tier};
-
-        #[test]
-        fn each_driver_tier_maps_to_the_realm_tier_that_applies_it() {
-            assert_eq!(
-                reload_tier(HotReloadTier::HotReload),
-                ReloadTier::Reassemble
-            );
-            assert_eq!(reload_tier(HotReloadTier::HotRestart), ReloadTier::Restart);
-            assert_eq!(
-                reload_tier(HotReloadTier::FullRestart),
-                ReloadTier::ProcessRestart
-            );
+        if let Lent::Absent = self.lend("detach", DevReloadHook::detach) {
+            // A call has the hook lent (or it is gone for good, where this
+            // flag is never read): that call's lender runs the detach.
+            self.0.lock().detach_owed = true;
         }
     }
 }
 
-#[cfg(not(feature = "hot-reload"))]
-mod disabled {
-    #[cfg(target_os = "android")]
-    use std::path::Path;
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    use std::sync::Arc;
+/// Log a hook's panic and drop the hook without letting its `Drop` unwind
+/// into the frame.
+#[cfg(not(target_arch = "wasm32"))]
+fn disable(what: &'static str, hook: Box<dyn DevReloadHook>) {
+    contain(|| {
+        tracing::error!(
+            call = what,
+            "development reload hook panicked; hot reload is disabled until the app restarts"
+        );
+    });
+    contain(|| drop(hook));
+}
 
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    use crate::app::{
-        AppConfig,
-        ui_realm::{UiCommandSender, UiRealm},
-    };
+/// Run `body`, swallowing a panic without running its payload's `Drop`,
+/// which may panic too. (`application_control::contain` does the same, but
+/// is not compiled for Android.)
+#[cfg(not(target_arch = "wasm32"))]
+fn contain(body: impl FnOnce()) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(body)) {
+        std::mem::forget(payload);
+    }
+}
 
-    /// Inert stand-in for a rebuild-hook registration.
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    pub(crate) struct RebuildHookGuard;
+/// The realm reload an event asks for. Exhaustive, so a new event does not
+/// compile until it is given a meaning here.
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+const fn reload_tier(event: ReloadEvent) -> Option<ReloadTier> {
+    match event {
+        ReloadEvent::Unchanged => None,
+        ReloadEvent::Patched => Some(ReloadTier::Reassemble),
+    }
+}
 
-    // The real guard detaches the hook on drop, and the runner drops this value
-    // deliberately when the event loop exits. Keeping the `Drop` impl on both
-    // sides means that call site reads identically in either build.
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    impl Drop for RebuildHookGuard {
-        fn drop(&mut self) {}
+/// The desktop and iOS driver: the configuration's hook, if any.
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+#[derive(Clone)]
+pub(crate) struct WorkerReload(Option<DevReload>);
+
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+impl WorkerReload {
+    pub(crate) fn from_config(config: &AppConfig) -> Self {
+        if config.dev_reload.is_none() && std::env::var_os("FLUI_WORKER_PLUGIN").is_some() {
+            tracing::warn!(
+                "FLUI_WORKER_PLUGIN is set, but no DevReloadHook is installed on the AppConfig, so \
+                 the worker will not be loaded; install one with `AppConfig::with_dev_reload`"
+            );
+        }
+        Self(config.dev_reload.clone())
     }
 
-    /// Inert stand-in for the desktop worker-plugin driver.
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    #[derive(Clone)]
-    pub(crate) struct WorkerReload;
-
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    impl WorkerReload {
-        pub(crate) fn from_config(_config: &AppConfig) -> Self {
-            // The typed configuration API does not exist without the feature,
-            // but the CLI may still leave its environment variable behind.
-            // Surface that mismatch instead of silently ignoring it.
-            if std::env::var_os("FLUI_WORKER_PLUGIN").is_some() {
+    /// Attach the hook for this loop, handing it `wake` to request a frame
+    /// with. The returned guard detaches it when dropped, so it must outlive
+    /// the event loop.
+    ///
+    /// `None` when no hook is installed, when it is already attached to a
+    /// live loop (refused with a warning: the hook's contract is one attach
+    /// per detach), or when `attach` panicked.
+    pub(crate) fn spawn_watcher(
+        &self,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Option<WorkerWatcherGuard> {
+        let reload = self.0.as_ref()?;
+        {
+            let mut slot = reload.0.lock();
+            slot.hook.as_ref()?;
+            if slot.attached {
+                drop(slot);
                 tracing::warn!(
-                    "FLUI_WORKER_PLUGIN is set, but flui-app was built without the `hot-reload` \
-                     feature — the plugin will not be loaded"
+                    "development reload hook is already attached to a running loop; this loop \
+                     runs without hot reload"
+                );
+                return None;
+            }
+            slot.attached = true;
+        }
+        let wake = ReloadWake::new(move || wake());
+        match reload.lend("attach", |hook| hook.attach(wake)) {
+            Lent::Returned(()) => Some(WorkerWatcherGuard {
+                reload: reload.clone(),
+            }),
+            Lent::Absent | Lent::Panicked => {
+                reload.0.lock().attached = false;
+                None
+            }
+        }
+    }
+
+    /// Record a realm the runner has just mounted as current with the latest
+    /// patch: its tree was built from the code loaded now, so it must apply
+    /// every later patch, including one another realm's boundary polls
+    /// before this realm's first frame. The runner calls this right after
+    /// the root attaches.
+    pub(crate) fn register_realm(&self, realm: &UiRealm) {
+        let Some(reload) = &self.0 else {
+            return;
+        };
+        let mut slot = reload.0.lock();
+        let epoch = slot.epoch;
+        slot.seen.insert(realm.realm_id(), epoch);
+    }
+
+    /// Poll the hook at `realm`'s frame boundary and reassemble the realm
+    /// if a patch has arrived that it has not applied yet.
+    ///
+    /// A patch reaches every realm exactly once: the poll that sees it
+    /// advances an epoch, and each realm applies the latest patch when its
+    /// own boundary finds it behind. A realm the runner did not
+    /// [register](Self::register_realm) starts at the epoch of its first
+    /// poll, so it never replays a patch older than itself.
+    pub(crate) fn poll_and_apply(&self, realm: &UiRealm) {
+        let Some(reload) = &self.0 else {
+            return;
+        };
+        let id = realm.realm_id();
+        {
+            let mut slot = reload.0.lock();
+            let epoch = slot.epoch;
+            slot.seen.entry(id).or_insert(epoch);
+        }
+        let event = reload.lend("poll", DevReloadHook::poll);
+        let apply = {
+            let mut slot = reload.0.lock();
+            if let Lent::Returned(event) = event
+                && let Some(tier) = reload_tier(event)
+            {
+                slot.epoch += 1;
+                slot.patched_at = slot.epoch;
+                slot.patched_tier = Some(tier);
+            }
+            let epoch = slot.epoch;
+            let patched_at = slot.patched_at;
+            let behind = slot
+                .seen
+                .insert(id, epoch)
+                .is_some_and(|seen| seen < patched_at);
+            behind.then_some(slot.patched_tier).flatten()
+        };
+        if let Some(tier) = apply {
+            tracing::info!(?tier, "hot reload: reassembling");
+            realm.perform_hot_reload_entered(tier);
+        }
+    }
+}
+
+/// Detaches the loop's hook when dropped. Must outlive the event loop.
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+pub(crate) struct WorkerWatcherGuard {
+    reload: DevReload,
+}
+
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+impl Drop for WorkerWatcherGuard {
+    fn drop(&mut self) {
+        self.reload.detach();
+    }
+}
+
+/// The Android scene-plugin driver: the configuration's hook, if any, may
+/// render a frame itself, bypassing the widget tree.
+#[cfg(target_os = "android")]
+#[derive(Clone)]
+pub(crate) struct ScenePlugin(Option<DevReload>);
+
+#[cfg(target_os = "android")]
+impl ScenePlugin {
+    /// `internal_data_path` is the app's internal files directory, where
+    /// `flui run --scene` pushes the plugin (`/data/local/tmp` without one);
+    /// it is read only to warn about a pushed plugin nothing will load.
+    pub(crate) fn from_config(
+        config: &AppConfig,
+        internal_data_path: Option<&std::path::Path>,
+    ) -> Self {
+        // `flui_hot_reload::ScenePluginHook::LIBRARY_NAME`; this crate does not
+        // name the reload tool.
+        const SCENE_LIBRARY: &str = "libflui_scene.so";
+        if config.dev_reload.is_some() {
+            tracing::info!(
+                "development reload hook installed; the Android runner drives only its                  `scene_frame` (no attach, poll or detach)"
+            );
+        } else {
+            let pushed = internal_data_path
+                .unwrap_or_else(|| std::path::Path::new("/data/local/tmp"))
+                .join(SCENE_LIBRARY);
+            if pushed.exists() {
+                tracing::warn!(
+                    path = %pushed.display(),
+                    "a scene plugin is on the device, but no DevReloadHook is installed on the                      AppConfig, so it will not be loaded; install                      `flui::hot_reload::ScenePluginHook` with `AppConfig::with_dev_reload`"
                 );
             }
-            Self
         }
-
-        #[expect(
-            clippy::unused_self,
-            reason = "signature must mirror the enabled implementation"
-        )]
-        pub(crate) fn register_rebuild_hook(&self, _sender: UiCommandSender) -> RebuildHookGuard {
-            RebuildHookGuard
-        }
-
-        #[expect(
-            clippy::unused_self,
-            reason = "signature must mirror the enabled implementation"
-        )]
-        pub(crate) fn poll_and_apply(&self, _realm: &UiRealm) {}
-
-        /// Inert: with no worker machinery linked there is nothing to watch,
-        /// so no thread is spawned and the guard is never needed.
-        #[expect(
-            clippy::unused_self,
-            reason = "signature must mirror the enabled implementation"
-        )]
-        pub(crate) fn spawn_watcher(
-            &self,
-            _wake: Arc<dyn Fn() + Send + Sync>,
-        ) -> Option<WorkerWatcherGuard> {
-            None
-        }
+        Self(config.dev_reload.clone())
     }
 
-    /// Inert stand-in for the background worker-artifact watcher guard.
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    pub(crate) struct WorkerWatcherGuard;
-
-    // Keep the `Drop` impl on both sides so the runner's teardown reads
-    // identically in either build (mirrors `RebuildHookGuard`).
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    impl Drop for WorkerWatcherGuard {
-        fn drop(&mut self) {}
-    }
-
-    /// Inert stand-in for the Android scene-plugin driver.
-    #[cfg(target_os = "android")]
-    #[derive(Clone)]
-    pub(crate) struct ScenePlugin;
-
-    #[cfg(target_os = "android")]
-    impl ScenePlugin {
-        pub(crate) fn new(_plugin_path: &Path) -> Self {
-            Self
-        }
-
-        /// Always `false`: with no plugin machinery linked, the widget
-        /// pipeline owns every frame.
-        #[expect(
-            clippy::unused_self,
-            reason = "signature must mirror the enabled implementation"
-        )]
-        pub(crate) fn try_render_frame(
-            &self,
-            _renderer: &mut flui_engine::Renderer,
-            _width: f64,
-            _height: f64,
-        ) -> bool {
-            false
-        }
+    /// Let the hook's scene plugin own this frame. Returns `true` when it
+    /// rendered, in which case the caller must not run the widget pipeline
+    /// for this frame.
+    pub(crate) fn try_render_frame(
+        &self,
+        renderer: &mut flui_engine::Renderer,
+        width: f64,
+        height: f64,
+    ) -> bool {
+        let Some(reload) = &self.0 else {
+            return false;
+        };
+        let rendered = reload.lend("scene_frame", |hook| {
+            hook.scene_frame(width, height, &mut |scene| {
+                if let Err(error) = renderer.render_scene(scene) {
+                    tracing::error!(?error, "Plugin render failed");
+                }
+            })
+        });
+        matches!(rendered, Lent::Returned(true))
     }
 }
+
+#[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
+mod tests;

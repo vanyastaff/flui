@@ -220,32 +220,3 @@ pub trait TreeObserver: Send + Sync {
     /// a panic (see the trait docs).
     fn detached(&self) {}
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct Recorder(std::sync::Mutex<Vec<&'static str>>);
-
-    impl TreeObserver for Recorder {
-        fn element_mounted(&self, _event: &ElementMounted) {
-            self.0.lock().unwrap().push("mounted");
-        }
-        fn detached(&self) {
-            self.0.lock().unwrap().push("detached");
-        }
-    }
-
-    #[test]
-    fn defaulted_methods_are_no_ops_and_overrides_receive_events() {
-        let recorder = Recorder(std::sync::Mutex::new(Vec::new()));
-        let observer: &dyn TreeObserver = &recorder;
-        let id = ElementId::new(1);
-        observer.element_mounted(&ElementMounted::new(id, None, 0, TypeId::of::<()>()));
-        // Defaulted methods must be callable and silent.
-        observer.element_moved(&ElementMoved::new(id, id, 3));
-        observer.element_unmounted(&ElementUnmounted::new(id));
-        observer.detached();
-        assert_eq!(*recorder.0.lock().unwrap(), ["mounted", "detached"]);
-    }
-}

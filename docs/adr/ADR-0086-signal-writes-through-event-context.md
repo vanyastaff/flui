@@ -3,12 +3,22 @@
 - **Status:** Proposed; the pilot passed (§9) and acceptance is the owner's call. Implemented:
   `EventCx`, `Writer`, `WriterSource`, lifecycle and render-context writer acquisition,
   callback inference helpers, typed `Signal` writes beside the transitional `&Reactive`
-  target, and the owner-local catalog migration described below. The rollback trigger
-  was evaluated and not met (§9). Outstanding: `&Reactive` removal and both `reactive()`
-  accessors (§8 step 3); the shared callback families and local-history contract listed
-  below; listener and post-frame `cx` (§5); `UiCommand::SignalWrite` opening its write
-  through a `WriterSource` (the ADR-0074 §5.8 amendment; the command still runs
-  `FnMut(&Reactive)`); `StateCell::schedule` refused during `build` (§7).
+  target, and the owner-local catalog migration described below, including `Draggable`,
+  `PageView::on_page_changed` (delivered on the local post-frame lane) and the
+  `Action::invoke`/`CallbackAction`/`CallbackShortcuts` family. The rollback trigger was
+  evaluated and not met (§9). Outstanding, each named again before the `!Send` flip of
+  ADR-0091 §1:
+  - `DragTarget`'s `on_accept`/`on_leave`/`on_move`, which need owner-local
+    `HitTestEntry::metadata`;
+  - the raw `Semantics` action handlers, which need `RenderView::RenderObject` and
+    `SemanticsActionHandler` to drop `Send + Sync`;
+  - `LocalHistoryEntry::on_remove`: a public surface and its navigation-flush write contract;
+  - listener, animation-status and post-frame `cx` (§5), `TabController::add_listener`
+    included;
+  - `UiCommand::SignalWrite` opening its write through a `WriterSource` (the ADR-0074 §5.8
+    amendment; the command still runs `FnMut(&Reactive)`);
+  - `&Reactive` removal and both `reactive()` accessors (§8 step 3);
+  - `StateCell::schedule` refused during `build` (§7).
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-28 — the transitional `SignalWrite` callback is a retained `FnMut`
   envelope invoked at most once; success disposes captures after redraw demand is durable, while
@@ -19,6 +29,9 @@
   it and does not replace it), §5.8 (`UiCommand::SignalWrite` opens its write through the
   realm's `WriterSource`; pending, see Status); [ADR-0078](ADR-0078-rules-live-in-types-and-lints.md) §1 (one new
   `LifecycleContext` capability, `writer_source`)
+- **Amends:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md) §2 and §3 (`CallbackShortcuts`
+  callbacks and `Action::invoke` receive the key event's `EventCx`; `Actions::maybe_invoke` is
+  removed)
 - **Related:** [ADR-0018](ADR-0018-async-builder-seam.md) (`RebuildHandle` stays a run-time
   capability), [ADR-0027](ADR-0027-owner-affine-ui-realms.md) §2 and §9 (UI callbacks are meant to
   be `!Send`), [ADR-0075](ADR-0075-derived-state-and-effects.md) (`WrittenDuringCompute`),
@@ -208,7 +221,7 @@ classification, with the command above as its census:
 |---|---|---|---|---|
 | widgets `animated/animated_size.rs` | `on_end` | event | no | **`build`** (`animated_size.rs:201-209`); moves to a status listener or post-frame first |
 | widgets `interaction/dismissible.rs` | `on_resize`, `on_dismissed`, `on_update` | event | no | not yet audited |
-| widgets `interaction/draggable.rs` | `on_drag_started`, `on_drag_update`, `on_draggable_canceled`, `on_drag_end`, `on_drag_completed` | event | yes | not yet audited |
+| widgets `interaction/draggable.rs` | `on_drag_started`, `on_drag_update`, `on_draggable_canceled`, `on_drag_end`, `on_drag_completed` | event | no (was yes) | recognizer handle, through the draggable's `WriterSource`; the unmount cancel runs from `dispose` in `finalize_tree`, outside any build |
 | widgets `interaction/drag_target.rs` | `on_accept`, `on_leave`, `on_move` | event | yes | not yet audited |
 | widgets `interaction/drag_target.rs` | `on_will_accept` (`-> bool`) | **query** | yes | — |
 | widgets `interaction/focus.rs` | `on_focus_change`, `on_key_event` (`-> KeyEventResult`) | event | no | not yet audited |
@@ -220,7 +233,7 @@ classification, with the command above as its census:
 | widgets `interaction/mouse_region.rs` | `on_enter`, `on_hover`, `on_exit` | event | no | not yet audited |
 | widgets `navigator/navigator.rs` | `on_generate_route`, `on_unknown_route` (`-> Option<GeneratedRoute>`) | **query** | no | — |
 | widgets `navigator/pop_scope.rs` | `on_pop_invoked` | event | no | not yet audited |
-| widgets `scroll/page_view.rs` | `on_page_changed` | event | yes | not yet audited |
+| widgets `scroll/page_view.rs` | `on_page_changed` | event | no (was yes) | the controller listener records the page; delivered on the local post-frame lane |
 | widgets `scroll/refresh_indicator.rs` | `on_refresh` | event | no | not yet audited |
 | widgets `semantics/mod.rs` | 14: `on_tap`, `on_long_press`, `on_scroll_{left,right,up,down}`, `on_increase`, `on_decrease`, `on_show_on_screen`, `on_focus`, `on_blur`, `on_set_text`, `on_scroll_to_offset`, `on_action` | event | yes | assistive-technology action dispatch |
 | widgets `text/editable_text.rs`, `text/text_field.rs` | `on_submitted` ×2 | event | no | not yet audited |
@@ -231,6 +244,11 @@ classification, with the command above as its census:
 | material `text_field.rs`, `text_form_field.rs` | `on_changed`, `on_saved`, `on_reset`, `on_submitted` | event | no | as the widgets rows above |
 | material (19 files) | 25: `on_pressed` ×7, `on_tap` ×4, `on_changed` ×3, `on_deleted` ×2, `on_selected`, `on_select_changed`, `on_select_all`, `on_open_changed`, `on_destination_selected`, `on_drawer_changed`, `on_end_drawer_changed`, `on_closed`, `on_submitted` | event | no | not yet audited |
 | cupertino (2 files) | `on_tap`, `on_pressed`, `on_long_press` | event | no | not yet audited |
+
+`CallbackShortcuts::binding` and `CallbackAction::new` are not `on_*` setters, so the census
+does not count them, but they are event callbacks run from `Focus::on_key_event`, and they and
+`Action::invoke` receive the key event's `cx`. `Action::is_enabled` and
+`Action::to_key_event_result` are queries and get none.
 
 Totals: 101 event, 5 query, 106 in all. (The grep prints 108: besides `on_drag_start`, it
 counts `TextFormFieldInput::on_changed` in `form/text_form_field_core.rs`, a method that returns
@@ -266,15 +284,18 @@ the signatures and production dispatch sites decide the event/query classificati
 | ScaffoldMessenger completion | Direct removal stays synchronous; build-observed completion uses the existing local post-frame lane. Disposal cancels pending completion. No inline fallback during build. |
 | AnimatedSize and Dismissible | Build/layout-observed effects use local post-frame delivery. Dismissible's direct input-time dismissal remains synchronous. |
 | InteractiveViewer, RefreshIndicator, PopScope | Gesture/scroll/pop dispatch; query signatures stay unchanged, and owner-local bridges supply the writer where the lower-level protocol has no context. |
+| Draggable | The owner-local drag session opens each callback's write through the draggable's `WriterSource`. The config is `Rc<RefCell<_>>`, never borrowed across user code. An unmount cancels from `dispose` in `finalize_tree`, where the writes land; the feedback layer is removed before that cancel runs user code. |
+| PageView | The `Send + Sync` controller listener only records the page and schedules a rebuild; `build` hands each recorded page to the local post-frame lane, one entry per page, and delivery reads the current callback. No lane: dropped with a warning, never run inside `build`. |
+| Actions and CallbackShortcuts | `Focus::on_key_event` hands its `cx` to `CallbackShortcuts` callbacks and to `Action::invoke`. `Actions::maybe_invoke` is removed: its only possible caller was `build`. InkWell's keyboard activation drops its writer bridge. |
 
 The following remain explicit separate contracts, not adapters that silently
-manufacture an unrelated writer: `PageView::on_page_changed` is stored in a
-send-safe scroll listener; Draggable/DragTarget callbacks cross shared hit-test
-metadata; raw Semantics action handlers are send-safe. Their migrations must
-move callback ownership before removing `Send` bounds. `LocalHistoryEntry`
-is an unmounted navigation primitive whose removal also runs through navigator
-flush; its originating-context contract must be settled with that dispatch path.
-These boundaries follow §5 rather than weakening types or adding an ambient graph.
+manufacture an unrelated writer: DragTarget callbacks travel in `Send + Sync`
+hit-test metadata, and raw Semantics action handlers are stored in a `Send + Sync`
+render object. Their migrations must move callback ownership before removing `Send`
+bounds. `LocalHistoryEntry` is an unmounted navigation primitive whose removal also
+runs through navigator flush; its originating-context contract must be settled with
+that dispatch path. These boundaries follow §5 rather than weakening types or adding
+an ambient graph.
 
 `FloatingActionButton::new(child).on_pressed(callback)` replaces the optional
 generic constructor callback: nested `Some(closure)` prevented higher-ranked

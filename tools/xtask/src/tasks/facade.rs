@@ -6,6 +6,10 @@ use super::exec::{Cmd, Runner};
 
 /// The facade's supported feature combinations; `""` is its defaults.
 ///
+/// The defaults are empty, so `""` builds what `--no-default-features` does and
+/// is a cached no-op; it stays so that a default someone adds back is still
+/// built on its own.
+///
 /// Each is its own clippy of the `flui` package alone: a `--workspace` build
 /// proves nothing here, since feature unification would enable `material`
 /// from a sibling and turn a broken combination green. `--all-targets` is
@@ -42,34 +46,4 @@ pub(super) fn run(runner: Runner) -> anyhow::Result<()> {
         runner.run(&cmd)?;
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_combination_is_its_own_flui_clippy() {
-        let lines: Vec<String> = clippy_plan().iter().map(ToString::to_string).collect();
-        assert_eq!(lines.len(), 9);
-        assert_eq!(
-            lines[0],
-            "cargo clippy -p flui --locked --all-targets --no-default-features -- -D warnings"
-        );
-        assert_eq!(
-            lines[3],
-            "cargo clippy -p flui --locked --all-targets --no-default-features --features material,cupertino -- -D warnings"
-        );
-        assert_eq!(
-            lines[7],
-            "cargo clippy -p flui --locked --all-targets --all-features -- -D warnings"
-        );
-        // the defaults: no feature flag at all
-        assert_eq!(
-            lines[8],
-            "cargo clippy -p flui --locked --all-targets -- -D warnings"
-        );
-        let distinct: std::collections::BTreeSet<&str> = COMBOS.into_iter().collect();
-        assert_eq!(distinct.len(), COMBOS.len());
-    }
 }

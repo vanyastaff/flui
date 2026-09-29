@@ -570,26 +570,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_listener_id() {
-        let id1 = ListenerId::new(1);
-        let id2 = ListenerId::new(2);
-
-        assert!(id1 < id2);
-        assert_eq!(id1.get(), 1);
-        assert_eq!(format!("{id1}"), "Listener(1)");
-    }
-
-    #[test]
-    fn test_listener_id_conversions() {
-        let id = ListenerId::new(42);
-        assert_eq!(id.get(), 42);
-
-        let n: usize = id.into();
-        assert_eq!(n, 42);
-    }
-
-    #[test]
     fn test_change_notifier() {
         let notifier = ChangeNotifier::new();
         let counter = Arc::new(AtomicUsize::new(0));
@@ -610,227 +590,6 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 
-    #[test]
-    fn test_change_notifier_debug() {
-        let notifier = ChangeNotifier::new();
-        let debug = format!("{notifier:?}");
-        assert!(debug.contains("ChangeNotifier"));
-    }
-
-    #[test]
-    fn test_change_notifier_remove() {
-        let notifier = ChangeNotifier::new();
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        let counter_clone = Arc::clone(&counter);
-        let id = notifier.add_listener(Arc::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        notifier.notify_listeners();
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-        notifier.remove_listener(id);
-        assert!(!notifier.has_listeners());
-        assert!(notifier.is_empty());
-
-        notifier.notify_listeners();
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn test_value_notifier() {
-        let mut notifier = ValueNotifier::new(0);
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        let counter_clone = Arc::clone(&counter);
-        let _ = notifier.add_listener(Arc::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        notifier.set_value(5);
-        assert_eq!(*notifier.value(), 5);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-        notifier.set_value(5);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-        notifier.set_value_force(5);
-        assert_eq!(counter.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn test_value_notifier_deref() {
-        let notifier = ValueNotifier::new(42);
-        assert_eq!(*notifier, 42);
-
-        let value: &i32 = notifier.as_ref();
-        assert_eq!(*value, 42);
-    }
-
-    #[test]
-    fn test_value_notifier_debug() {
-        let notifier = ValueNotifier::new(42);
-        let debug = format!("{notifier:?}");
-        assert!(debug.contains("ValueNotifier"));
-        assert!(debug.contains("42"));
-    }
-
-    #[test]
-    fn test_value_notifier_display() {
-        let notifier = ValueNotifier::new(42);
-        assert_eq!(format!("{notifier}"), "42");
-    }
-
-    #[test]
-    fn valuenotifier_new_creates_distinct_notifiers() {
-        // `Default for ValueNotifier<T>` was removed, so notifiers are
-        // constructed explicitly with `new`. Two notifiers built from the
-        // same value are `==` by value but are observably distinct objects
-        // (independent listener registries) — the exact surprise a `Default`
-        // impl would have hidden.
-        let a = ValueNotifier::new(0u32);
-        let b = ValueNotifier::new(0u32);
-        assert_eq!(a, b, "equal by value");
-
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter_clone = Arc::clone(&counter);
-        let _ = a.add_listener(Arc::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
-        // `a` has a listener; `b` must not — distinct identities.
-        assert_eq!(a.len(), 1);
-        assert_eq!(b.len(), 0);
-        a.notify();
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-        b.notify();
-        assert_eq!(
-            counter.load(Ordering::SeqCst),
-            1,
-            "b is a distinct notifier; notifying it must not touch a's listener"
-        );
-    }
-
-    #[test]
-    fn test_value_notifier_equality() {
-        let notifier1 = ValueNotifier::new(42);
-        let notifier2 = ValueNotifier::new(42);
-        let notifier3 = ValueNotifier::new(100);
-
-        assert_eq!(notifier1, notifier2);
-        assert_ne!(notifier1, notifier3);
-    }
-
-    #[test]
-    fn test_value_notifier_into_value() {
-        let notifier = ValueNotifier::new(42);
-        let value = notifier.into_value();
-        assert_eq!(value, 42);
-    }
-
-    #[test]
-    fn test_value_notifier_take() {
-        let mut notifier = ValueNotifier::new(42);
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        let counter_clone = Arc::clone(&counter);
-        let _ = notifier.add_listener(Arc::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        let value = notifier.take();
-        assert_eq!(value, 42);
-        assert_eq!(*notifier, 0);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn test_value_notifier_replace() {
-        let mut notifier = ValueNotifier::new(10);
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        let counter_clone = Arc::clone(&counter);
-        let _ = notifier.add_listener(Arc::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        let old = notifier.replace(20);
-        assert_eq!(old, 10);
-        assert_eq!(*notifier, 20);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn test_value_notifier_value_mut() {
-        let mut notifier = ValueNotifier::new(10);
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        let counter_clone = Arc::clone(&counter);
-        let _ = notifier.add_listener(Arc::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        *notifier.value_mut() = 20;
-        assert_eq!(*notifier, 20);
-        assert_eq!(counter.load(Ordering::SeqCst), 0);
-
-        notifier.notify();
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn test_value_notifier_update() {
-        let mut notifier = ValueNotifier::new(0);
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        let counter_clone = Arc::clone(&counter);
-        let _ = notifier.add_listener(Arc::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        notifier.update(|val| *val += 10);
-        assert_eq!(*notifier.value(), 10);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn removed_listener_does_not_fire_during_notify() {
-        // A listener removed *during* iteration (by a previously-fired
-        // listener) must NOT fire. Given listeners A and B, where A removes B
-        // mid-notify, B must not fire (post-removal skip).
-        use std::sync::atomic::AtomicBool;
-
-        use parking_lot::Mutex;
-
-        let notifier = ChangeNotifier::new();
-        let fired_b = Arc::new(AtomicBool::new(false));
-        let fired_b_clone = Arc::clone(&fired_b);
-        let notifier_clone = notifier.clone();
-
-        let id_b_cell = Arc::new(Mutex::new(None::<ListenerId>));
-        let id_b_cell_clone = Arc::clone(&id_b_cell);
-
-        let id_a = notifier.add_listener(Arc::new(move || {
-            let id = *id_b_cell_clone.lock();
-            if let Some(id) = id {
-                notifier_clone.remove_listener(id);
-            }
-        }));
-
-        let id_b = notifier.add_listener(Arc::new(move || {
-            fired_b_clone.store(true, Ordering::SeqCst);
-        }));
-        let _prev = id_b_cell.lock().replace(id_b);
-
-        notifier.notify_listeners();
-        assert!(
-            !fired_b.load(Ordering::SeqCst),
-            "removed listener must not fire"
-        );
-        let _ = id_a;
-    }
-
-    #[test]
     fn listener_fires_after_panic() {
         // A panicking listener must NOT abort the remaining listeners.
         // Given 3 listeners: panic-1, listener-2, listener-3 — listener-2 and
@@ -862,82 +621,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn notify_listeners_fires_all_when_no_panic() {
-        // TRIANGULATE: 3 listeners, no panics, all 3 fire.
-        let notifier = ChangeNotifier::new();
-        let count = Arc::new(AtomicUsize::new(0));
-        for _ in 0..3 {
-            let c = Arc::clone(&count);
-            let _ = notifier.add_listener(Arc::new(move || {
-                c.fetch_add(1, Ordering::SeqCst);
-            }));
-        }
-        notifier.notify_listeners();
-        assert_eq!(count.load(Ordering::SeqCst), 3);
-    }
-
-    #[test]
-    fn notify_listeners_empty() {
-        // TRIANGULATE: no listeners registered; no panic, no-op.
-        let notifier = ChangeNotifier::new();
-        notifier.notify_listeners();
-        assert_eq!(notifier.len(), 0);
-    }
-
-    #[test]
-    fn notify_listeners_skips_all_removed() {
-        // TRIANGULATE: all listeners removed before notify; none fire.
-        let notifier = ChangeNotifier::new();
-        let count = Arc::new(AtomicUsize::new(0));
-        let mut ids = Vec::new();
-        for _ in 0..3 {
-            let c = Arc::clone(&count);
-            ids.push(notifier.add_listener(Arc::new(move || {
-                c.fetch_add(1, Ordering::SeqCst);
-            })));
-        }
-        for id in ids {
-            notifier.remove_listener(id);
-        }
-        notifier.notify_listeners();
-        assert_eq!(count.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn test_multiple_listeners() {
-        let notifier = ChangeNotifier::new();
-        let counter1 = Arc::new(AtomicUsize::new(0));
-        let counter2 = Arc::new(AtomicUsize::new(0));
-
-        let c1 = Arc::clone(&counter1);
-        let c2 = Arc::clone(&counter2);
-
-        let _ = notifier.add_listener(Arc::new(move || {
-            c1.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        let _ = notifier.add_listener(Arc::new(move || {
-            c2.fetch_add(2, Ordering::SeqCst);
-        }));
-
-        notifier.notify_listeners();
-
-        assert_eq!(counter1.load(Ordering::SeqCst), 1);
-        assert_eq!(counter2.load(Ordering::SeqCst), 2);
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn test_listener_id_serde() {
-        let id = ListenerId::new(42);
-        let json = serde_json::to_string(&id).unwrap();
-        assert_eq!(json, "42");
-
-        let deserialized: ListenerId = serde_json::from_str(&json).unwrap();
-        assert_eq!(id, deserialized);
-    }
-
     // ------------------------------------------------------------------
     // ChangeNotifier::dispose + disposed-state assertion
     //
@@ -946,60 +629,6 @@ mod tests {
     // and :376 (dispose).
     // ------------------------------------------------------------------
 
-    #[cfg(debug_assertions)]
-    #[test]
-    #[should_panic(expected = "ChangeNotifier used after dispose")]
-    fn dispose_then_add_listener_debug_asserts() {
-        let notifier = ChangeNotifier::new();
-        notifier.dispose();
-        // Must panic in debug builds (release degrades to tracing::warn! +
-        // no-op; release-mode behavior is sanity-checked separately).
-        let _ = notifier.add_listener(Arc::new(|| {}));
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    #[should_panic(expected = "ChangeNotifier used after dispose")]
-    fn dispose_then_notify_debug_asserts() {
-        let notifier = ChangeNotifier::new();
-        notifier.dispose();
-        notifier.notify_listeners();
-    }
-
-    #[test]
-    fn dispose_then_remove_listener_is_a_silent_no_op() {
-        // Flutter parity: `ChangeNotifier.removeListener` carries no
-        // `debugAssertNotDisposed`, unlike `addListener`/`notifyListeners`/
-        // `dispose` — its doc comment explains that teardown code must be
-        // able to detach from an already-disposed listenable. Must not
-        // panic in debug OR release; behavior is identical in both.
-        let notifier = ChangeNotifier::new();
-        let id = notifier.add_listener(Arc::new(|| {}));
-        notifier.dispose();
-        notifier.remove_listener(id); // must not panic
-        notifier.remove_listener(ListenerId::new(9999)); // unknown id: also fine
-    }
-
-    #[test]
-    fn dispose_is_idempotent() {
-        let notifier = ChangeNotifier::new();
-        let _ = notifier.add_listener(Arc::new(|| {}));
-        assert_eq!(notifier.len(), 1);
-
-        notifier.dispose();
-        assert_eq!(notifier.len(), 0, "dispose must clear listeners");
-        assert!(
-            notifier.is_disposed(),
-            "is_disposed must be true after dispose"
-        );
-
-        // Second dispose is a no-op — must NOT panic.
-        notifier.dispose();
-        assert_eq!(notifier.len(), 0);
-        assert!(notifier.is_disposed());
-    }
-
-    #[test]
     fn dispose_during_notify_iteration_safe() {
         // Reentrancy guarantee: a listener-callback may call `dispose` on the
         // notifier mid-`notify_listeners`. The snapshot-then-fire path at
@@ -1038,5 +667,17 @@ mod tests {
         // After the iteration, the notifier is disposed.
         assert!(notifier.is_disposed());
         assert_eq!(notifier.len(), 0, "dispose cleared listeners");
+    }
+
+    #[test]
+    fn change_notifier_contract() {
+        crate::test_cases::run_cases(&[
+            ("test change notifier", test_change_notifier),
+            ("listener fires after panic", listener_fires_after_panic),
+            (
+                "dispose during notify iteration safe",
+                dispose_during_notify_iteration_safe,
+            ),
+        ]);
     }
 }

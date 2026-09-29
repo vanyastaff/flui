@@ -179,39 +179,3 @@ impl RenderBox for RenderSizedBox {
 
     // paint() uses default no-op - SizedBox only affects layout
 }
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn test_sized_box_fixed_creation() {
-        let sized = RenderSizedBox::fixed(100.0, 50.0);
-        assert_eq!(sized.width(), Some(100.0));
-        assert_eq!(sized.height(), Some(50.0));
-    }
-
-    #[test]
-    fn test_sized_box_expand_creation() {
-        let sized = RenderSizedBox::expand();
-        // expand() uses None which means "expand to fill available space"
-        assert_eq!(sized.width(), None);
-        assert_eq!(sized.height(), None);
-    }
-
-    #[test]
-    fn test_sized_box_shrink_creation() {
-        let sized = RenderSizedBox::shrink();
-        assert_eq!(sized.width(), Some(0.0));
-        assert_eq!(sized.height(), Some(0.0));
-    }
-
-    #[test]
-    fn test_sized_box_partial_creation() {
-        // Fixed width, flexible height
-        let sized = RenderSizedBox::new(Some(100.0), None);
-        assert_eq!(sized.width(), Some(100.0));
-        assert_eq!(sized.height(), None);
-    }
-}

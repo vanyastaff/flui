@@ -149,7 +149,6 @@ Part 2: `a_truncated_paragraph_paints_exactly_the_lines_it_measured`
 `max_lines_one_reaches_the_composited_picture_as_one_line` (widgets parity
 tier — the `Text` widget wires `max_lines` but not `TextOverflow::Ellipsis`,
 a gap this ADR names and does not close);
-`truncated_paragraph_leaves_no_ink_below_its_line` (engine readback) and
 the mechanical `the_engine_does_not_shape`
 (`crates/flui-engine/src/paragraph_readback_tests.rs`).
 Flutter's `text_painter_test.dart` maxLines/intrinsics block is

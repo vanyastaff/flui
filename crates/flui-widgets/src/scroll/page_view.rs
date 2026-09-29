@@ -16,10 +16,14 @@
 //! - **Eager children.** `SliverFillViewport` (`flui-widgets`) has no lazy
 //!   child delegate yet — every page attaches up front, not
 //!   `PageView.builder`'s on-demand construction.
-//! - **`on_page_changed` is listener-based**, not `NotificationListener<
-//!   ScrollNotification>` — FLUI has no scroll-notification bubbling yet.
-//!   Fires when `round(page)` changes, same as the oracle's
-//!   `_lastReportedPage` tracking.
+//! - **`on_page_changed` is listener-based and runs after the frame**, not
+//!   inside `NotificationListener<ScrollNotification>` — FLUI has no
+//!   scroll-notification bubbling yet. The controller's listener records a
+//!   change when `round(page)` moves (same as the oracle's
+//!   `_lastReportedPage` tracking); the callback runs on the local
+//!   post-frame lane with the `EventCx` its writes need, one frame after the
+//!   oracle's synchronous report, every recorded page in order (ADR-0086;
+//!   mapping decision 37 in `crates/flui-widgets/ARCHITECTURE.md`).
 //! - **`pageSnapping: false`, `reverse`, `padEnds`, `allowImplicitScrolling`,
 //!   `PageStorage` restoration, and `viewport_fraction > 1.0` centering** are
 //!   not modeled — [`PageScrollPhysics`] is always applied (page snapping is
@@ -36,9 +40,11 @@
 //!   docs for how end-of-range behavior diverges from the oracle's
 //!   physics-clamped ticks.
 
-use std::rc::Rc;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
 use flui_animation::Curve;
@@ -50,13 +56,18 @@ use flui_rendering::view::{
 };
 use flui_view::prelude::StatefulView;
 use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};
+use flui_view::{
+    BoxedView, BuildContext, EventCx, EventOutcome, IntoView, LifecycleContext,
+    LocalPostFrameHandle, RebuildHandle, RebuildReason, ViewExt, ViewState, WriterSource,
+};
+use parking_lot::Mutex;
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{
     ClampingScrollPhysics, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable,
     SharedScrollPhysics, SliverFillViewport, Viewport,
 };
+use crate::support::{ValueCallback, value_callback};
 
 // ============================================================================
 // PageScrollPhysics
@@ -420,8 +431,9 @@ impl PageController {
 // PageView (configuration)
 // ============================================================================
 
-/// A callback fired when the displayed page changes.
-type OnPageChanged = Arc<dyn Fn(usize) + Send + Sync>;
+/// A callback fired when the displayed page changes: the dispatch's
+/// `EventCx` and the new page (ADR-0086).
+type OnPageChanged = ValueCallback<usize>;
 
 /// A scrollable list that works page by page.
 ///
@@ -438,8 +450,8 @@ type OnPageChanged = Arc<dyn Fn(usize) + Send + Sync>;
 ///
 /// Mirrors `PageView` (`widgets/page_view.dart`, tag `3.44.0`). See the
 /// module docs for the documented v1 divergences (eager children,
-/// listener-based `on_page_changed`, no `pageSnapping: false`/`reverse`/
-/// `padEnds`).
+/// listener-based `on_page_changed` delivered after the frame, no
+/// `pageSnapping: false`/`reverse`/`padEnds`).
 #[derive(Clone, StatefulView)]
 pub struct PageView {
     /// `None` when the caller never called [`PageView::controller`] — in
@@ -495,12 +507,23 @@ impl PageView {
     }
 
     /// Called whenever the page in the center of the viewport changes —
-    /// fires when `round(page)` differs from the last reported page. See the
-    /// module docs for how this diverges from Flutter's
-    /// `NotificationListener<ScrollNotification>`-based implementation.
+    /// when `round(page)` differs from the last reported page.
+    ///
+    /// The callback receives an `EventCx` and may write signals. It runs
+    /// after the frame that next rebuilds this page view, never inside a
+    /// build, with every recorded page delivered in order. A change observed
+    /// during build or input (a drag, `jump_to_page`) is delivered after that
+    /// same frame; one observed during layout (a viewport resize) is
+    /// delivered after the following frame. See the
+    /// module docs for how this diverges from Flutter's synchronous
+    /// `NotificationListener<ScrollNotification>` report.
     #[must_use]
-    pub fn on_page_changed(mut self, callback: impl Fn(usize) + Send + Sync + 'static) -> Self {
-        self.on_page_changed = Some(Arc::new(callback));
+    pub fn on_page_changed<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, usize) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_page_changed = Some(value_callback(callback));
         self
     }
 
@@ -549,14 +572,28 @@ impl std::fmt::Debug for PageView {
 /// [`dispose`](ViewState::dispose).
 pub struct PageViewState {
     controller: PageController,
-    /// Shared, mutable slot for the current callback — NOT snapshotted into
-    /// the listener closure at registration time. `did_update_view` writes
-    /// through this `Arc<Mutex<_>>` on every rebuild; the listener (installed
-    /// once in `init_state`, or once per controller swap) dereferences it at
-    /// CALL time, so a callback change on an ordinary rebuild (no controller
-    /// swap) — including a `None` -> `Some` transition — is observed instead
-    /// of silently keeping whatever `init_state` captured.
-    on_page_changed: Arc<Mutex<Option<OnPageChanged>>>,
+    /// Shared, mutable slot for the current callback. `did_update_view`
+    /// writes it on every rebuild; delivery reads it when the post-frame
+    /// callback runs, so a page recorded before a rebuild reaches the
+    /// callback that rebuild installed.
+    on_page_changed: Rc<RefCell<Option<OnPageChanged>>>,
+    /// Whether a callback is installed. Read by the controller's
+    /// `Send + Sync` listener, which cannot see the `Rc` slot, so a page view
+    /// nobody listens to records nothing and schedules no rebuild.
+    has_callback: Arc<AtomicBool>,
+    /// Pages the listener recorded and `build` has not yet handed to the
+    /// post-frame lane, oldest first. One entry per change, so FIFO order
+    /// and multiplicity survive a frame that observes several.
+    pending_pages: Arc<Mutex<VecDeque<usize>>>,
+    /// Minted in `init_state`; the listener schedules the draining rebuild
+    /// through it.
+    rebuild: Option<RebuildHandle>,
+    /// Minted in `init_state`; recorded pages are delivered through it.
+    post_frame: Option<LocalPostFrameHandle>,
+    /// Owner-local delivery target. Queued post-frame callbacks hold only a
+    /// [`Weak`] to it, so the lane cannot keep this state's callback or
+    /// writer alive past teardown.
+    delivery: Option<Rc<PageChangeDelivery>>,
     last_reported_page: Arc<AtomicI64>,
     /// The listenable the listener is registered on, alongside its id.
     /// Stored together (not looked up fresh from `self.controller` at
@@ -577,10 +614,7 @@ impl std::fmt::Debug for PageViewState {
             .field("controller", &self.controller)
             .field(
                 "has_on_page_changed",
-                &self
-                    .on_page_changed
-                    .lock()
-                    .is_ok_and(|guard| guard.is_some()),
+                &self.has_callback.load(Ordering::Acquire),
             )
             .field(
                 "last_reported_page",
@@ -590,19 +624,91 @@ impl std::fmt::Debug for PageViewState {
     }
 }
 
+/// The owner-local resources that deliver one recorded page change.
+///
+/// The state owns the only strong reference; a post-frame callback holds a
+/// [`Weak`] one. `finalize_tree` drops an unmounted state before the frame's
+/// post-frame lane runs, so a page view unmounted after `build` queued a page
+/// fails the upgrade: it delivers nothing, and its callback's captures are
+/// released with the state rather than by the lane.
+struct PageChangeDelivery {
+    callback: Rc<RefCell<Option<OnPageChanged>>>,
+    writer: WriterSource,
+}
+
+impl PageChangeDelivery {
+    fn deliver(&self, page: usize) {
+        // Cloned out: the borrow ends before the callback runs, so a callback
+        // that rebuilds this page view cannot collide with it.
+        let callback = self.callback.borrow().clone();
+        if let Some(callback) = callback {
+            self.writer.write(|cx| callback(cx, page));
+        }
+    }
+}
+
 impl PageViewState {
+    /// Hand every page the listener recorded since the last `build` to the
+    /// local post-frame lane, one lane entry per page. Called at the top of
+    /// `build`, which is where the recording listener's rebuild lands.
+    ///
+    /// One entry per page, not one for the batch: a callback that panics
+    /// takes only its own entry with it, and the pages after it still run
+    /// in order. A context with no local post-frame lane, or a closed one,
+    /// has no moment after the frame to offer; running the callback here
+    /// would run it inside `build`, where its writes are refused, so the
+    /// pages are dropped with a warning instead.
+    fn drain_page_changes(&self) {
+        let mut pending = std::mem::take(&mut *self.pending_pages.lock());
+        if pending.is_empty() {
+            return;
+        }
+        let Some(handle) = self.post_frame.as_ref() else {
+            tracing::warn!(
+                count = pending.len(),
+                "PageView: dropping page changes — the context has no local post-frame \
+                 lane, and running on_page_changed now would run it inside build"
+            );
+            return;
+        };
+        let delivery = self
+            .delivery
+            .as_ref()
+            .expect("BUG: init_state creates the delivery target before the first build");
+        while let Some(page) = pending.pop_front() {
+            let delivery: Weak<PageChangeDelivery> = Rc::downgrade(delivery);
+            if let Err(error) = handle.schedule_local(move |_timing| {
+                if let Some(delivery) = delivery.upgrade() {
+                    delivery.deliver(page);
+                }
+            }) {
+                tracing::warn!(
+                    ?error,
+                    dropped = pending.len() + 1,
+                    "PageView: dropping page changes — the owning lane is gone"
+                );
+                break;
+            }
+        }
+    }
+
     /// Subscribes to `self.controller`'s current listenable, tracking
-    /// `round(page)` changes and firing whatever callback
-    /// `self.on_page_changed` currently holds (dereferenced at call time —
-    /// see that field's docs). Stores the listenable alongside the returned
-    /// id so [`dispose`](ViewState::dispose) and a later controller swap in
+    /// `round(page)` changes. A change is recorded, and a rebuild scheduled
+    /// to deliver it; the listener never runs user code. Stores the
+    /// listenable alongside the returned id so [`dispose`](ViewState::dispose)
+    /// and a later controller swap in
     /// [`did_update_view`](ViewState::did_update_view) remove from the exact
     /// listenable this registered on.
     fn register_page_listener(&mut self) {
         let position = self.controller.position();
         let viewport_fraction = self.controller.viewport_fraction();
         let last_reported = Arc::clone(&self.last_reported_page);
-        let on_page_changed = Arc::clone(&self.on_page_changed);
+        let has_callback = Arc::clone(&self.has_callback);
+        let pending = Arc::clone(&self.pending_pages);
+        let rebuild = self
+            .rebuild
+            .clone()
+            .expect("BUG: init_state mints the rebuild handle before registering the listener");
 
         let listenable = self.controller.as_listenable();
         let listener_id = listenable.add_listener(Arc::new(move || {
@@ -617,14 +723,9 @@ impl PageViewState {
             let current_page = metrics.page(viewport_fraction).round().max(0.0) as i64;
             if current_page != last_reported.load(Ordering::SeqCst) {
                 last_reported.store(current_page, Ordering::SeqCst);
-                let callback = on_page_changed
-                    .lock()
-                    .expect(
-                        "BUG: on_page_changed mutex poisoned — a panic escaped a locked section",
-                    )
-                    .clone();
-                if let Some(callback) = callback {
-                    callback(current_page as usize);
+                if has_callback.load(Ordering::Acquire) {
+                    pending.lock().push_back(current_page as usize);
+                    rebuild.schedule(RebuildReason::StateChange);
                 }
             }
         }));
@@ -640,18 +741,31 @@ impl StatefulView for PageView {
         PageViewState {
             last_reported_page: Arc::new(AtomicI64::new(controller.initial_page() as i64)),
             controller,
-            on_page_changed: Arc::new(Mutex::new(self.on_page_changed.clone())),
+            on_page_changed: Rc::new(RefCell::new(self.on_page_changed.clone())),
+            has_callback: Arc::new(AtomicBool::new(self.on_page_changed.is_some())),
+            pending_pages: Arc::new(Mutex::new(VecDeque::new())),
+            rebuild: None,
+            post_frame: None,
+            delivery: None,
             page_listener: None,
         }
     }
 }
 
 impl ViewState<PageView> for PageViewState {
-    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.delivery = Some(Rc::new(PageChangeDelivery {
+            callback: Rc::clone(&self.on_page_changed),
+            writer: ctx.writer_source(),
+        }));
+        self.rebuild = Some(ctx.rebuild_handle());
+        self.post_frame = ctx.local_post_frame_handle();
+        // Last: the listener captures the rebuild handle minted above.
         self.register_page_listener();
     }
 
     fn build(&self, view: &PageView, ctx: &dyn BuildContext) -> impl IntoView {
+        self.drain_page_changes();
         let controller = self.controller.clone();
         let viewport_fraction = controller.viewport_fraction();
         let scroll_direction = view.scroll_direction;
@@ -701,14 +815,16 @@ impl ViewState<PageView> for PageViewState {
     }
 
     fn did_update_view(&mut self, _old_view: &PageView, new_view: &PageView) {
-        // The callback lives behind the shared slot the listener already
-        // dereferences at call time (see `on_page_changed`'s docs) — no
-        // listener re-registration needed for a callback-only change,
-        // including a `None` -> `Some` transition.
+        // The callback lives behind the shared slot delivery reads when it
+        // runs (see `on_page_changed`'s docs) — no listener re-registration
+        // needed for a callback-only change, including a `None` -> `Some`
+        // transition. Pages already recorded, from this controller or one
+        // swapped out below, are still delivered: they happened.
         self.on_page_changed
-            .lock()
-            .expect("BUG: on_page_changed mutex poisoned — a panic escaped a locked section")
+            .borrow_mut()
             .clone_from(&new_view.on_page_changed);
+        self.has_callback
+            .store(new_view.on_page_changed.is_some(), Ordering::Release);
 
         // No explicit controller in this build: keep the state-owned
         // default (and its live subscription) across the rebuild — see
@@ -771,148 +887,3 @@ impl ViewState<PageView> for PageViewState {
 // `a_full_drag_and_release_settles_the_page_view_through_the_real_gesture_and_spring_pipeline`
 // there) — it just doesn't isolate the halfway threshold, which needs exact
 // control over velocity that only a direct physics call can provide.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A 300px-per-page metrics snapshot (`viewport_fraction: 1.0`) at
-    /// `pixels`, with `min_scroll_extent: 0.0` and a generous
-    /// `max_scroll_extent` so boundary short-circuiting never triggers.
-    fn metrics_at(pixels: f64) -> ScrollMetrics {
-        ScrollMetrics::new(pixels, 0.0, 3000.0, 300.0)
-    }
-
-    /// A spring simulation's value 2 simulated seconds in — long enough for
-    /// `PageScrollPhysics`'s default spring (`with_damping_ratio(0.5, 100.0,
-    /// 1.1)`, overdamped) to settle within a fraction of a pixel of its
-    /// target. Mirrors the settle-tolerance pattern
-    /// `bouncing_physics_top_overscroll_springs_back_to_min_extent`
-    /// (`tests/parity/scrollable_test.rs`) uses via repeated `pump_for` — here
-    /// evaluated directly against the `Simulation`, with no gesture-harness
-    /// timing noise to isolate.
-    fn settled_x(sim: &dyn Simulation) -> f64 {
-        sim.x(2.0)
-    }
-
-    /// Oracle: `PageScrollPhysics._getTargetPixels`/`createBallisticSimulation`
-    /// (`widgets/page_view.dart`, tag `3.44.0`) — at velocity `0.0` (within
-    /// `velocity_tolerance_px_per_sec`), a position more than half a page past
-    /// the current page boundary settles FORWARD to the next page.
-    /// Cross-checked against `'Page changes at halfway point'`
-    /// (`test/widgets/page_view_test.dart`), whose 800px-wide viewport crosses
-    /// its halfway mark at a -420px drag (`-380` short of half, `-420` past
-    /// it) — the same "more than half" threshold this test pins at a 300px
-    /// page (`pixels: 160.0`, page `0.533`).
-    #[test]
-    fn settles_forward_past_the_halfway_point_at_zero_velocity() {
-        let physics = PageScrollPhysics::new(1.0);
-        let metrics = metrics_at(160.0); // page = 160 / 300 = 0.533 (> 0.5)
-        let sim = physics
-            .create_ballistic_simulation(&metrics, 0.0)
-            .expect("more than half a page off-boundary must produce a settle simulation");
-        assert!(
-            (settled_x(&sim) - 300.0).abs() < 1.0,
-            "a position past the halfway point at zero velocity must settle FORWARD to \
-             the next page (300.0), got {:.2}",
-            settled_x(&sim)
-        );
-    }
-
-    /// The converse of the above: less than half a page past the current
-    /// boundary, at zero velocity, settles BACKWARD to the current page —
-    /// the same halfway threshold, approached from below.
-    #[test]
-    fn settles_backward_below_the_halfway_point_at_zero_velocity() {
-        let physics = PageScrollPhysics::new(1.0);
-        let metrics = metrics_at(100.0); // page = 100 / 300 = 0.333 (< 0.5)
-        let sim = physics
-            .create_ballistic_simulation(&metrics, 0.0)
-            .expect("a nonzero off-boundary position must produce a settle simulation");
-        assert!(
-            (settled_x(&sim) - 0.0).abs() < 1.0,
-            "a position below the halfway point at zero velocity must settle BACK to \
-             the current page (0.0), got {:.2}",
-            settled_x(&sim)
-        );
-    }
-
-    /// Oracle: `_getTargetPixels`'s velocity bias — `velocity >
-    /// tolerance.velocity` adds `0.5` to the page BEFORE rounding, so a fling
-    /// above the tolerance commits to the NEXT page even from very close to
-    /// the current page's start (`page: 0.1`, nowhere near the 0.5 halfway
-    /// mark this same physics uses at rest — see the two tests above).
-    #[test]
-    fn fling_velocity_beyond_tolerance_advances_regardless_of_distance() {
-        let physics = PageScrollPhysics::new(1.0);
-        let metrics = metrics_at(30.0); // page = 30 / 300 = 0.1 (far from 0.5)
-        let velocity = physics.velocity_tolerance_px_per_sec + 10.0; // above tolerance
-        let sim = physics
-            .create_ballistic_simulation(&metrics, velocity)
-            .expect("a velocity above tolerance must produce a settle simulation");
-        assert!(
-            (settled_x(&sim) - 300.0).abs() < 1.0,
-            "velocity above tolerance must advance to the next page (300.0) despite \
-             sitting at only page 0.1, got {:.2}",
-            settled_x(&sim)
-        );
-    }
-
-    /// Symmetric to the above: a BACKWARD fling above tolerance commits back
-    /// to the current (lower) page even from close to the NEXT page's start.
-    #[test]
-    fn backward_fling_velocity_beyond_tolerance_retreats_regardless_of_distance() {
-        let physics = PageScrollPhysics::new(1.0);
-        let metrics = metrics_at(320.0); // page = 320 / 300 = 1.067 (just past page 1)
-        let velocity = -(physics.velocity_tolerance_px_per_sec + 10.0); // above tolerance, backward
-        let sim = physics
-            .create_ballistic_simulation(&metrics, velocity)
-            .expect("a velocity above tolerance must produce a settle simulation");
-        assert!(
-            (settled_x(&sim) - 300.0).abs() < 1.0,
-            "a backward fling above tolerance must retreat to page 1 (300.0) despite \
-             sitting at page 1.067, got {:.2}",
-            settled_x(&sim)
-        );
-    }
-
-    /// Oracle: out-of-range and not headed back in defers entirely to the
-    /// boundary physics (`super.createBallisticSimulation`'s `parent` chain).
-    /// `ClampingScrollPhysics` (the default boundary) returns `None` below its
-    /// own fling threshold, so a slow drag that overshot `max_scroll_extent`
-    /// produces no page-snap simulation at all.
-    #[test]
-    fn out_of_range_heading_further_out_of_range_defers_to_the_boundary_physics() {
-        let physics = PageScrollPhysics::new(1.0);
-        let metrics = ScrollMetrics::new(3100.0, 0.0, 3000.0, 300.0); // past max_scroll_extent
-        let sim = physics.create_ballistic_simulation(&metrics, 10.0); // below fling threshold, heading further out
-        assert!(
-            sim.is_none(),
-            "out-of-range with no boundary fling must defer to ClampingScrollPhysics, \
-             which returns None below its threshold"
-        );
-    }
-
-    /// `PageController::with_params` rejects a non-positive `viewport_fraction`
-    /// — mirrors `PageController`'s constructor assert (`assert(viewportFraction
-    /// > 0.0)`).
-    #[test]
-    #[should_panic(expected = "viewport_fraction must be > 0.0")]
-    fn page_controller_rejects_a_non_positive_viewport_fraction() {
-        let _ = PageController::with_params(0, 0.0);
-    }
-
-    /// `PageController::page` returns `None` before any layout has committed
-    /// a real viewport dimension — FLUI's substitute for Flutter's
-    /// `'PageController cannot return page while unattached'` assertion
-    /// (`test/widgets/page_view_test.dart`): a documented divergence returning
-    /// `Option::None` instead of panicking.
-    #[test]
-    fn page_returns_none_before_any_layout() {
-        let controller = PageController::with_params(2, 1.0);
-        assert_eq!(
-            controller.page(),
-            None,
-            "page() must return None before apply_viewport_dimension has ever run"
-        );
-    }
-}

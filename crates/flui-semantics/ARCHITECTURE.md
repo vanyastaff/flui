@@ -380,7 +380,7 @@ no state guard: sending it the transition the node does not advertise toggles it
 this crate ends in a wildcard and the compiler no longer catches a forgotten arm. A role
 without an arm would silently fall back to the flag cascade.
 
-**Test.** `every_role_but_none_maps_to_an_accesskit_role` walks `SemanticsRole::ALL`, and
+**Test.** `roles_and_checkbox_states_translate_to_accesskit` walks `SemanticsRole::ALL`, and
 asserts that exactly `DragHandle` and `HotKey` map to `GenericContainer`; deleting the
 `Form` arm makes it fail with `form maps to no AccessKit role`.
 

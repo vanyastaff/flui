@@ -26,8 +26,8 @@ workspace = true
 # which enable it on their dev edge. Never on a normal edge.
 test-support = []
 # `reload::ReloadTier`, the development reload the realm applies. Names no
-# hot-reload crate; `flui-app`'s `hot-reload` feature turns it on alongside its
-# optional `flui-hot-reload` edge and translates the driver's tier into it.
+# hot-reload crate; `flui-app` always turns it on and translates an installed
+# `DevReloadHook`'s event into it (ADR-0094 §1).
 hot-reload = []
 
 [dependencies]
@@ -45,7 +45,8 @@ flui-protocol = { workspace = true }
 # `PlatformWindow` and its capability traits, the window contract a
 # presentation drives; no backend (ADR-0082).
 flui-platform-api = { workspace = true }
-# Window sizes and geometry.
+# Window sizes and geometry; `FontCollection`/`TextContext`, the text service
+# each realm owns over the app's font collection (ADR-0092 §3).
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # The realm core (ADR-0083 move 4): the widget tree a presentation hosts
 # (`WidgetsBinding`, `GlobalKeyScope`; `runtime-internals` is the seam a
@@ -84,16 +85,10 @@ wasm-bindgen-futures = { workspace = true }
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
 # held-input tests queue.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
-# `log_capture::disarm_interest_cache`, so a sibling test cannot poison the
-# callsites the semantics-host privacy tests capture. Once `flui-testing`
-# depends on this crate (ADR-0083 §4) this is a dev-only cycle, as
-# `flui-view`'s and `flui-interaction`'s are; no type crosses it, so the second
-# copy of this crate in the test build never meets the first.
-flui-testing = { workspace = true }
-# Capturing emitted fields is how the semantics host's privacy contract on its
-# announce/event fallbacks, and what a contained frame failure reports to the
-# log, are checked.
-tracing-subscriber = { workspace = true }
+# `log_capture::capture`, which the semantics agent's privacy test calls so a
+# sibling test cannot poison the callsites it captures.
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
+flui-testing = { path = "../flui-testing" }
 # The realm tests: the headless platform's windows and capability fakes
 # (`headless_platform`, `FakeTextInput`, `FakeHaptics`, `FakeAccessibility`),
 # a dev edge only, so the shipped crate still links no backend; the concrete
@@ -101,7 +96,6 @@ tracing-subscriber = { workspace = true }
 # an adapter would; and `!Send` pins on the realm.
 flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
-accesskit = { workspace = true }
 static_assertions = { workspace = true }
 # A semantics agent's read round-trips through JSON in its tests.
 flui-protocol = { workspace = true, features = ["serde"] }
@@ -110,6 +104,9 @@ serde_json = { workspace = true }
 # request_for_test`, `register_layout_builder_for_test`.
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
+# `testing::font_collection_holders`, which pins who holds the app's font
+# collection and when a realm lets go of it.
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
 
 # Executing wasm32 unit tests: the execution services' sequential backend is
 # pinned by lib tests that run on wasm32 (`cargo xtask wasm-test`). Pinned to

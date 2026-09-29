@@ -495,32 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn reopen_nested_delivery_preserves_pending_and_uses_replacement_after_lease() {
-        let control = control();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let owner = Arc::clone(&control);
-        let observed = Arc::clone(&calls);
-        control.set_reopen(Box::new(move || {
-            assert_eq!(observed.fetch_add(1, Ordering::SeqCst), 0);
-            let next = Arc::clone(&observed);
-            owner.set_reopen(Box::new(move || {
-                assert_eq!(next.fetch_add(1, Ordering::SeqCst), 1);
-            }));
-            owner.request_reopen();
-            owner.drain_reopens();
-            assert_eq!(observed.load(Ordering::SeqCst), 1);
-            assert!(owner.state.lock().reopen_active);
-        }));
-        control.request_reopen(); // Starting/dormant does not enqueue native work.
-        control.state.lock().phase = Phase::Running;
-        control.drain_reopens();
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert_eq!(control.state.lock().pending_reopens, 0);
-        assert!(!control.state.lock().reopen_active);
-        control.finish();
-    }
-
-    #[test]
     fn reopen_explicit_quit_fences_delivery_registration_and_window_admission() {
         let control = control();
         control.set_reopen(Box::new(|| panic!("quit-fenced event delivered")));

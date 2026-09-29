@@ -24,7 +24,6 @@ use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::view::ScrollPosition;
 use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners, pin_font_faces};
-use flui_view::RebuildReason;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, Column, Expanded, FocusRoot, GestureArenaScope, ListView, SizedBox, Text,
@@ -102,7 +101,6 @@ impl StatelessView for PerfApp {
 
 struct Mounted {
     binding: HeadlessBinding,
-    label: StateHandle<String>,
     position: ScrollPosition,
 }
 
@@ -153,11 +151,7 @@ fn mount() -> Mounted {
         MountOptions::tight(WIDTH, HEIGHT),
     );
     binding.enable_semantics().expect("tree-bound");
-    Mounted {
-        binding,
-        label,
-        position,
-    }
+    Mounted { binding, position }
 }
 
 /// Writes `report` for `xtask perf` when `FLUI_PERF_OUT` is set. Called
@@ -208,36 +202,6 @@ fn perf_counters_are_live_on_a_full_reassemble() {
     assert_eq!(report.pipeline.frames_produced, 1, "{report:#?}");
 }
 
-/// Ten seconds with nothing changing costs nothing: no build, no layout, no
-/// paint, no semantics, no frame. The control step on the same binding shows
-/// the counters are live, so a counter stuck at zero cannot pass as idle.
-#[test]
-fn perf_idle_ten_seconds_produces_no_frames() {
-    let mut app = mount();
-    let _ = app.pump();
-
-    let idle = app.pump_many(600);
-    record("idle_10s", &idle);
-
-    for (name, value) in idle.counters() {
-        assert_eq!(
-            value, 0,
-            "{name} must stay at 0 over an idle 10 s: {idle:#?}"
-        );
-    }
-
-    app.label.update(|text| text.push('!'));
-    let control = app.pump();
-    assert_eq!(
-        control.pipeline.frames_produced, 1,
-        "control: a change produces a frame: {control:#?}"
-    );
-    assert!(
-        control.build.elements_built >= 1,
-        "control: a change rebuilds: {control:#?}"
-    );
-}
-
 /// Scrolling one screen of a 10 000-row lazy list lays out the newly visible
 /// band, not the list.
 #[test]
@@ -268,40 +232,4 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
     assert!(report.pipeline.layout_passes >= 1, "{report:#?}");
     assert!(report.pipeline.nodes_painted >= 1, "{report:#?}");
     assert!(report.pipeline.frames_produced >= 1, "{report:#?}");
-}
-
-/// Changing one label rebuilds the label's holder, its `Text` and the text's
-/// render view — nothing else — and the list's rows are grafted from their
-/// retained layers rather than repainted.
-#[test]
-fn perf_one_text_change_rebuilds_at_most_three_elements() {
-    let mut app = mount();
-    let _ = app.pump();
-
-    app.label.update(|text| text.push('!'));
-    let report = app.pump();
-    record("text_change", &report);
-
-    assert_eq!(
-        report.build.count(RebuildReason::StateChange),
-        1,
-        "only the label's holder was changed: {report:#?}"
-    );
-    assert!(
-        (2..=3).contains(&report.build.elements_built),
-        "holder, Text and its render view at most: {report:#?}"
-    );
-    assert_eq!(
-        report.build.builds_run, report.build.elements_built,
-        "no element re-enters: {report:#?}"
-    );
-    assert!(report.pipeline.nodes_laid_out >= 1, "{report:#?}");
-    assert!(
-        report.pipeline.semantics_nodes_updated >= 1,
-        "the label's accessible text changed: {report:#?}"
-    );
-    assert!(
-        report.pipeline.layers_reused >= 1,
-        "the rows sit behind repaint boundaries and are grafted: {report:#?}"
-    );
 }

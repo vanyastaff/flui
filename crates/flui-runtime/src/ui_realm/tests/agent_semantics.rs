@@ -9,7 +9,9 @@ use std::sync::atomic::AtomicU32;
 use flui_protocol::{
     ActionName, ActionRequest, ElementId, ErrorCode, ReadQuery, Retry, Tree, outline,
 };
-use flui_semantics::SemanticsConfiguration;
+use flui_semantics::{
+    AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner,
+};
 use flui_view::Signal;
 use flui_widgets::{Column, RawButton, Text, column};
 
@@ -438,7 +440,7 @@ fn an_agent_for_a_closed_presentation_answers_gone() {
 
 #[test]
 fn a_full_inbox_answers_busy() {
-    let realm = new_runtime_with_capacity(2, noop_wake()).expect("runtime with a tiny inbox");
+    let realm = new_runtime_with_capacity(2, Arc::new(|| {})).expect("runtime with a tiny inbox");
     let agent = realm
         .semantics_agent(realm.presentation_id())
         .expect("the realm hosts its primary presentation");

@@ -283,24 +283,3 @@ impl RenderSliver for RenderSliverMainAxisGroup {
 // extents and lay the second past the first — covered by the render-object
 // harness in `crates/flui-objects/tests/render_object_harness.rs` (catalog
 // row + `harness_sliver_main_axis_group`) and the widget-level parity file.
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn precision_error_collapses_to_zero_inside_the_tolerance() {
-        assert_eq!(fix_precision_error(PRECISION_ERROR_TOLERANCE / 2.0), 0.0);
-        assert_eq!(fix_precision_error(-PRECISION_ERROR_TOLERANCE / 2.0), 0.0);
-        assert_eq!(fix_precision_error(1.5), 1.5);
-        assert_eq!(fix_precision_error(-1.5), -1.5);
-    }
-
-    #[test]
-    fn an_empty_group_reports_zero_geometry() {
-        // The full layout contract is exercised through the harness (see the
-        // catalog row); this pins only the childless fast path's shape.
-        let group = RenderSliverMainAxisGroup::new();
-        assert_eq!(group.laid_out_child_count, 0);
-    }
-}

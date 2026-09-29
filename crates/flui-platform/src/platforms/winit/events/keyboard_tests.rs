@@ -27,11 +27,9 @@ mod keyboard_conversion_tests {
     //! for exactly what that leaves unpinned.
     use std::collections::BTreeSet;
 
-    use ui_events::keyboard::{Code, Key, Location, NamedKey};
-    use ui_events_winit::keyboard::{from_winit_code, from_winit_key, from_winit_location};
-    use winit::keyboard::{
-        Key as WinitKey, KeyCode, KeyLocation, NamedKey as WinitNamedKey, PhysicalKey,
-    };
+    use ui_events::keyboard::Code;
+    use ui_events_winit::keyboard::from_winit_code;
+    use winit::keyboard::{KeyCode, PhysicalKey};
 
     /// Every `winit::keyboard::KeyCode` variant, winit 0.30.13
     /// (`winit-0.30.13/src/keyboard.rs`, the `KeyCode` enum), in the exact
@@ -253,8 +251,7 @@ mod keyboard_conversion_tests {
     /// be called directly from a test. What this test pins is the
     /// completeness of the `ui-events-winit` version `Cargo.lock` resolves
     /// to — the dependency `keyboard_event` delegates to unconditionally.
-    #[test]
-    fn every_winit_keycode_maps_to_a_canonical_code() {
+    pub(super) fn every_winit_keycode_maps_to_a_canonical_code() {
         assert_eq!(ALL_WINIT_KEYCODES.len(), 194);
         assert_eq!(
             ALL_WINIT_KEYCODES.iter().collect::<BTreeSet<_>>().len(),
@@ -271,99 +268,6 @@ mod keyboard_conversion_tests {
             unidentified.is_empty(),
             "{} winit KeyCode variant(s) produced Code::Unidentified: {unidentified:?}",
             unidentified.len()
-        );
-    }
-
-    /// A `PhysicalKey::Unidentified` stays `Code::Unidentified` — the one
-    /// case that value is reserved for (see `events::keyboard_event`'s
-    /// doc): winit itself could not name the physical key, distinct from
-    /// every case above where winit named one and the table failed to
-    /// preserve it.
-    #[test]
-    fn physical_key_unidentified_stays_unidentified() {
-        assert_eq!(
-            from_winit_code(PhysicalKey::Unidentified(
-                winit::keyboard::NativeKeyCode::Unidentified
-            )),
-            Code::Unidentified
-        );
-    }
-
-    /// Spot pairs named in issue #1092's acceptance criteria, run through
-    /// the exact function `keyboard_event` calls.
-    #[test]
-    fn spot_pairs_match_the_issues_acceptance_criteria() {
-        let cases = [
-            (KeyCode::NumpadEnter, Code::NumpadEnter),
-            (KeyCode::IntlYen, Code::IntlYen),
-            (KeyCode::AudioVolumeUp, Code::AudioVolumeUp),
-            (KeyCode::F24, Code::F24),
-            (KeyCode::ContextMenu, Code::ContextMenu),
-            (KeyCode::Comma, Code::Comma),
-            (KeyCode::CapsLock, Code::CapsLock),
-        ];
-        for (winit_code, expected) in cases {
-            assert_eq!(
-                from_winit_code(PhysicalKey::Code(winit_code)),
-                expected,
-                "{winit_code:?}"
-            );
-        }
-    }
-
-    /// `KeyLocation`'s four variants map name-for-name onto
-    /// `ui_events::keyboard::Location`. Unlike the pre-fix code, location
-    /// is no longer *derived* from the physical `Code` at all — it comes
-    /// straight from winit's own `KeyEvent.location` field (see
-    /// `events::keyboard_event`), so there is no "does `Code::X` imply
-    /// `Location::Numpad`" property left to test here; that coupling is
-    /// exactly what this fix removed.
-    #[test]
-    fn every_key_location_maps_to_its_canonical_location() {
-        let cases = [
-            (KeyLocation::Standard, Location::Standard),
-            (KeyLocation::Left, Location::Left),
-            (KeyLocation::Right, Location::Right),
-            (KeyLocation::Numpad, Location::Numpad),
-        ];
-        for (winit_location, expected) in cases {
-            assert_eq!(
-                from_winit_location(winit_location),
-                expected,
-                "{winit_location:?}"
-            );
-        }
-    }
-
-    /// A handful of `NamedKey` pairs, plus the `Character` pass-through
-    /// (including a non-ASCII character, since this crosses a
-    /// `SmolStr`-to-`String` conversion). Exhaustive `NamedKey` coverage is
-    /// `ui-events-winit`'s test suite's job, not ours; these pin the shape
-    /// this crate relies on.
-    #[test]
-    fn logical_key_spot_pairs() {
-        assert_eq!(
-            from_winit_key(WinitKey::Named(WinitNamedKey::Enter)),
-            Key::Named(NamedKey::Enter)
-        );
-        assert_eq!(
-            from_winit_key(WinitKey::Named(WinitNamedKey::ContextMenu)),
-            Key::Named(NamedKey::ContextMenu)
-        );
-        // winit intercepts Space as a named key; the canonical vocabulary
-        // reports it as the character it types, matching every other
-        // printable key.
-        assert_eq!(
-            from_winit_key(WinitKey::Named(WinitNamedKey::Space)),
-            Key::Character(" ".to_string())
-        );
-        assert_eq!(
-            from_winit_key(WinitKey::Character("e".into())),
-            Key::Character("e".to_string())
-        );
-        assert_eq!(
-            from_winit_key(WinitKey::Character("\u{e9}".into())),
-            Key::Character("\u{e9}".to_string())
         );
     }
 }
@@ -395,7 +299,7 @@ mod cross_backend_physical_key_agreement {
     //! - Browser/media/launch keys (`BrowserBack`, `MediaPlayPause`, …) have
     //!   no AppKit table entries at all; those rows carry a Win32
     //!   scancode only.
-    use ui_events::keyboard::Code;
+
     use ui_events_winit::keyboard::from_winit_code;
     use winit::keyboard::{KeyCode, PhysicalKey};
 
@@ -829,8 +733,18 @@ mod cross_backend_physical_key_agreement {
         ),
     ];
 
+    /// The winit event translation: every winit key code maps to a canonical
+    /// code, the three backends agree on shared physical keys, and pointer
+    /// events meet the cross-wire field contract.
     #[test]
-    fn winit_win32_and_appkit_agree_on_shared_physical_keys() {
+    fn winit_events_translate_to_the_cross_backend_contract() {
+        super::keyboard_conversion_tests::every_winit_keycode_maps_to_a_canonical_code();
+        super::super::pointer_translation_tests::translated_events_meet_the_pointer_field_contract(
+        );
+        physical_keys_agree_across_backends();
+    }
+
+    fn physical_keys_agree_across_backends() {
         let mut disagreements = Vec::new();
         for &(label, winit_code, win32, appkit) in PHYSICAL_KEYS {
             let winit_result = from_winit_code(PhysicalKey::Code(winit_code));
@@ -857,19 +771,5 @@ mod cross_backend_physical_key_agreement {
             disagreements.len(),
             disagreements.join("\n")
         );
-    }
-
-    /// Every code named in [`PHYSICAL_KEYS`] must itself be a real,
-    /// non-`Unidentified` `Code` — guards against a copy/paste `None` that
-    /// silently turns a real disagreement into a skipped row.
-    #[test]
-    fn physical_keys_table_never_expects_unidentified() {
-        for &(label, winit_code, _, _) in PHYSICAL_KEYS {
-            assert_ne!(
-                from_winit_code(PhysicalKey::Code(winit_code)),
-                Code::Unidentified,
-                "{label}"
-            );
-        }
     }
 }

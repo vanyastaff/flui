@@ -18,14 +18,13 @@
 //!
 //! # Hot-reload
 //!
-//! iOS runs the same host/worker split as desktop and Android: `bootstrap_ios`
-//! loads a worker dylib when one is configured, watches the artifact, and
-//! reassembles on change. The `dlopen` path is the shared `flui-hot-reload`
-//! `DynLib`; on iOS this is usable in the Simulator (and for a dev-signed
-//! build), while a production App Store build has no mutable dylib to load and
-//! simply runs static — `AppConfig`'s worker field is `None` and the whole
-//! capability is inert. See [`super::hot_reload`] for the seam and
-//! `docs/hot-reload.md` for the two-layer model.
+//! iOS drives the application's development reload hook the way desktop
+//! does: the loop attaches it once, and `bootstrap_ios` polls it at every
+//! frame boundary and reassembles the realm on a patch. A worker hook's
+//! `dlopen` is usable in the Simulator (and for a dev-signed build), while a
+//! production App Store build installs no hook and the whole capability is
+//! inert. See [`super::hot_reload`] for the seam and `docs/hot-reload.md` for
+//! the two-layer model.
 
 use flui_platform::HostWindow;
 use flui_platform::platforms::ios::{IOSSceneEvent, IOSSceneSessionId};
@@ -37,8 +36,8 @@ use super::frame_pacing::{
     BACKGROUNDED_PUMP_PACE, FallbackGate, WakeAction, frame_is_dirty, wake_action,
 };
 use super::host::{
-    APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_needs_redraw_handle,
-    runtime_wake_callback, with_owner_platform,
+    APP_RUNTIME, OwnerHostClearGuard, install_owner_platform, runtime_wake_callback,
+    with_owner_platform,
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
@@ -285,13 +284,8 @@ where
     // transform maps to physical.
     let scale_factor = window.scale_factor();
     let wake = runtime_wake_callback();
-    let ui_realm = match crate::app::ui_realm::UiRealm::new(
-        Arc::clone(&wake),
-        presentation_window,
-        scale_factor,
-        runtime_needs_redraw_handle(),
-        super::host::runtime_clipboard(),
-    ) {
+    let ui_realm = match super::host::build_runtime_realm(&wake, presentation_window, scale_factor)
+    {
         Ok(realm) => realm,
         Err(error) => {
             tracing::error!(%error, "UiRealm construction failed");
@@ -310,7 +304,7 @@ where
         tracing::error!("Root widget attach failed: {:?}", e);
         return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
     }
-    let hot_reload_sender = ui_realm.command_sender();
+    worker_reload.register_realm(&ui_realm);
     let realm_dispatch = install_realm_alongside(ui_realm, &window)?;
     struct ProvisionalRealm(Option<RealmDispatcher>);
     impl Drop for ProvisionalRealm {
@@ -321,9 +315,6 @@ where
         }
     }
     let mut provisional = ProvisionalRealm(Some(realm_dispatch));
-
-    let rebuild_guard: crate::app::hot_reload::RebuildHookGuard =
-        worker_reload.register_rebuild_hook(hot_reload_sender);
 
     // 4. Adopt the raster mailbox (ADR-0045's inline lane).
     let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
@@ -531,7 +522,6 @@ where
     );
 
     window.on_close(Box::new(move || {
-        contain(|| drop(rebuild_guard));
         close_this_window(realm_dispatch);
     }));
 

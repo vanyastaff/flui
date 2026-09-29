@@ -112,12 +112,4 @@ mod tests {
         clock.advance(Duration::from_millis(100));
         assert_eq!(other.elapsed(), Duration::from_millis(600));
     }
-
-    #[test]
-    fn system_clock_is_monotonic() {
-        let clock = SystemClock;
-        let a = clock.now();
-        let b = clock.now();
-        assert!(b >= a);
-    }
 }

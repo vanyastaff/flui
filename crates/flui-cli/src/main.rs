@@ -50,6 +50,8 @@ mod proc;
 mod runner;
 mod serve;
 mod templates;
+#[cfg(test)]
+mod test_cases;
 mod types;
 mod ui;
 mod watch;
@@ -246,7 +248,7 @@ enum Commands {
         /// Build a named example instead of the current package's binary.
         ///
         /// Needed inside the FLUI source tree, where the runnable entry points
-        /// are examples (`material_demo`, `widgets_gallery`, ...) rather than
+        /// are examples (`widgets_gallery`, `counter`, ...) rather than
         /// one application package.
         #[arg(long)]
         example: Option<String>,
@@ -427,7 +429,7 @@ pub(crate) enum Template {
     /// Counter app: a stateful widget, a button, and a widget test (default)
     #[default]
     Counter,
-    /// "Hello, FLUI!" stateless app with a Material theme
+    /// "Hello, FLUI!" stateless app
     Basic,
     /// The smallest runnable app: one `main` that shows one `Text`
     Empty,
@@ -451,7 +453,7 @@ impl Template {
     #[must_use]
     pub(crate) const fn description(&self) -> &'static str {
         match self {
-            Self::Basic => "Hello, FLUI! stateless app with a Material theme",
+            Self::Basic => "Hello, FLUI! stateless app",
             Self::Counter => "Counter app with a stateful widget and a widget test",
             Self::Widget => "Reusable widget library with a widget test",
             Self::Empty => "Smallest runnable app",
@@ -823,22 +825,4 @@ fn format_error_chain(error: &dyn std::error::Error) -> String {
         source = cause.source();
     }
     message
-}
-
-#[cfg(test)]
-mod desktop_error_tests {
-    #[test]
-    fn command_context_keeps_the_actionable_build_cause() {
-        let error = crate::error::CliError::context(
-            crate::build::error::BuildError::path_not_found(
-                "/custom target/app".into(),
-                "Cargo executable absent",
-            ),
-            "failed to build the binary",
-        );
-        let text = super::format_error_chain(&error);
-        assert!(text.contains("failed to build the binary"));
-        assert!(text.contains("/custom target/app"));
-        assert!(text.contains("Cargo executable absent"));
-    }
 }

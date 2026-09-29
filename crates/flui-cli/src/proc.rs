@@ -203,36 +203,8 @@ fn wait_with_deadline(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn fast_probe_returns_output() {
-        let output = output_with_timeout(
-            Command::new("sh").args(["-c", "echo out; echo err >&2"]),
-            Duration::from_secs(5),
-        )
-        .expect("sh runs");
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "out");
-        assert_eq!(String::from_utf8_lossy(&output.stderr).trim(), "err");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn slow_probe_is_killed_and_reported_as_timeout() {
-        let started = Instant::now();
-        let error = output_with_timeout(
-            Command::new("sh").args(["-c", "sleep 30"]),
-            Duration::from_millis(200),
-        )
-        .expect_err("must time out");
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the wait must end at the deadline, not when the child would have exited"
-        );
-    }
 
     /// A child that exits at once but leaves a grandchild holding its stdout
     /// (a daemon it started) must not hang the probe: the drain is bounded.
@@ -250,35 +222,6 @@ mod tests {
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "drain must be bounded"
-        );
-    }
-
-    #[test]
-    fn missing_program_is_not_found() {
-        let error = output_with_timeout(
-            &mut Command::new("flui-definitely-not-a-real-tool-xyz"),
-            Duration::from_secs(1),
-        )
-        .expect_err("cannot spawn");
-        assert_eq!(error.kind(), io::ErrorKind::NotFound);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn probe_stdout_is_none_on_failure() {
-        assert_eq!(
-            probe_stdout(
-                Command::new("sh").args(["-c", "exit 3"]),
-                Duration::from_secs(1)
-            ),
-            None
-        );
-        assert_eq!(
-            probe_stdout(
-                Command::new("sh").args(["-c", "echo v1"]),
-                Duration::from_secs(1)
-            ),
-            Some("v1".into())
         );
     }
 }

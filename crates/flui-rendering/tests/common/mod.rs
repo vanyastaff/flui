@@ -79,17 +79,3 @@ pub fn vertical_constraints(scroll_offset: f64) -> SliverConstraints {
         .cache_origin(-20.0)
         .build()
 }
-
-/// Horizontal counterpart of [`vertical_constraints`]: a 300-long main
-/// axis, 100 px cross axis, 320 px cache window starting 20 px before the
-/// leading edge.
-pub fn horizontal_constraints(scroll_offset: f64) -> SliverConstraints {
-    sliver_presets::horizontal()
-        .scroll_offset(scroll_offset)
-        .remaining_paint_extent(300.0)
-        .cross_axis_extent(100.0)
-        .viewport_main_axis_extent(300.0)
-        .remaining_cache_extent(320.0)
-        .cache_origin(-20.0)
-        .build()
-}

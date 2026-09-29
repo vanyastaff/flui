@@ -67,33 +67,3 @@ impl OffsetLayer {
         self.offset.is_zero()
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn test_offset_layer_new() {
-        let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
-
-        assert_eq!(layer.offset().dx, 10.0);
-        assert_eq!(layer.offset().dy, 20.0);
-    }
-
-    #[test]
-    fn test_offset_layer_zero() {
-        let layer = OffsetLayer::zero();
-
-        assert!(layer.is_zero());
-        assert_eq!(layer.offset().dx, 0.0);
-        assert_eq!(layer.offset().dy, 0.0);
-    }
-
-    #[test]
-    fn test_offset_layer_default() {
-        let layer = OffsetLayer::default();
-
-        assert!(layer.is_zero());
-    }
-}

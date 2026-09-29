@@ -4,8 +4,7 @@ use super::*;
 /// produced `LayerTree`), never a rebuild/flush count — B's own
 /// render output, not merely whether B ran, must be byte-for-byte
 /// unaffected by A closing.
-#[test]
-fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
+pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
     let mut realm = UiRealm::for_test();
     let a_id = realm.presentation_id();
     let b_id = realm.install_second_presentation_for_test();
@@ -76,45 +75,5 @@ fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
         "B's own layer tree must be byte-for-byte identical before and \
          after A closes -- nothing about B's content changed, so \
          nothing about its render output may either"
-    );
-}
-
-/// A `RenderInvalidationHandle` obtained from presentation A's pipeline BEFORE
-/// A closes, and still held afterward, must fail closed
-/// (`DirtySendError::OwnerGone`) rather than panic when used — the
-/// underlying `PipelineOwner`'s dirty-request channel receiver drops
-/// along with A's `PresentationState`, so the handle's sender side
-/// simply finds nobody listening.
-#[test]
-fn dropped_presentations_surviving_pipeline_handles_fail_closed() {
-    let mut realm = UiRealm::for_test();
-    let a_id = realm.presentation_id();
-
-    let render_id = realm.presentations.primary().pipeline().with_mut(|owner| {
-        owner.insert::<flui_rendering::protocol::BoxProtocol>(Box::new(
-            flui_objects::RenderColoredBox::red(10.0, 10.0),
-        ))
-    });
-    let render_invalidation_handle = realm
-        .presentations
-        .primary()
-        .pipeline()
-        .with(|owner| owner.render_invalidation_handle(render_id))
-        .expect("a freshly inserted node has a live repaint handle");
-
-    assert!(
-        render_invalidation_handle.mark_needs_layout().is_ok(),
-        "precondition: the handle works while A is still alive"
-    );
-
-    assert!(realm.close_presentation_entered(a_id), "A was installed");
-
-    assert!(
-        matches!(
-            render_invalidation_handle.mark_needs_layout(),
-            Err(flui_rendering::pipeline::DirtySendError::OwnerGone)
-        ),
-        "a RenderInvalidationHandle surviving its presentation's teardown must \
-         fail closed, not panic and not silently succeed"
     );
 }

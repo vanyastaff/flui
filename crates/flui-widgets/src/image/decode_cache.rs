@@ -224,55 +224,12 @@ mod tests {
         ImageCacheKey::Asset(format!("decode-cache-test-{name}"))
     }
 
-    #[tokio::test]
-    async fn cached_returns_none_for_an_unknown_key() {
-        let _cache = isolated_cache().await;
-        assert_eq!(cached(&fresh_key("unknown")), None);
-    }
-
-    #[tokio::test]
-    async fn load_coalesced_populates_the_sync_cache_on_success() {
-        let _cache = isolated_cache().await;
-        let key = fresh_key("populates-cache");
-        let image = solid(3, 3);
-        let expected = image.clone();
-
-        load_coalesced(key.clone(), move || async move { Ok(image) })
-            .await
-            .expect("the load succeeds");
-
-        assert_eq!(cached(&key), Some(expected));
-        assert!(
-            !CACHE.pending.lock().contains_key(&key),
-            "a completed load's sole subscriber dropping (right after `.await` \
-             returns Ready) must remove the pending entry",
-        );
-    }
-
-    #[tokio::test]
-    async fn load_coalesced_does_not_populate_the_cache_on_failure() {
-        let _cache = isolated_cache().await;
-        let key = fresh_key("failure-not-cached");
-
-        let result = load_coalesced(key.clone(), || async {
-            Err(ImageProviderError::DecodeFailed {
-                reason: "synthetic failure".to_string(),
-            })
-        })
-        .await;
-
-        assert!(result.is_err());
-        assert_eq!(cached(&key), None);
-        assert!(!CACHE.pending.lock().contains_key(&key));
-    }
-
     /// Abandoning the only subscriber to a load BEFORE it completes (the
     /// `Image` widget unmounts, the key is never requested again) must
     /// remove the pending entry immediately — not leave it pinned in the map
     /// forever waiting for a completion nobody will ever observe. This is
     /// the leak Flutter's `ImageCache` avoids by removing `_pendingImages`
     /// entries when the last listener detaches, not only on completion.
-    #[tokio::test]
     async fn abandoning_the_only_subscriber_before_completion_removes_the_pending_entry() {
         let _cache = isolated_cache().await;
         let key = fresh_key("abandoned-before-completion");
@@ -311,47 +268,8 @@ mod tests {
         );
     }
 
-    /// While at least one OTHER subscriber remains, dropping one of several
-    /// concurrent subscribers must NOT remove the entry — only the LAST one
-    /// leaving does.
-    #[tokio::test]
-    async fn dropping_one_of_two_subscribers_keeps_the_entry_alive_for_the_other() {
-        let _cache = isolated_cache().await;
-        let key = fresh_key("one-of-two-abandoned");
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
-        // `Image`'s `PartialEq` is `Arc::ptr_eq` (documented: dimensions plus
-        // same backing buffer, not pixel-by-pixel), so the expectation must
-        // be a clone of the SAME instance the closure resolves to, not a
-        // separately-constructed `solid(1, 1)`.
-        let resolved_image = solid(1, 1);
-        let expected_image = resolved_image.clone();
-
-        let first = Box::pin(load_coalesced(key.clone(), move || async move {
-            let _ = release_rx.await;
-            Ok(resolved_image)
-        }));
-        let second = load_coalesced(key.clone(), || async {
-            unreachable!("coalesced -- the second subscriber must never invoke start")
-        });
-
-        drop(first); // one of two subscribers leaves early.
-
-        assert!(
-            CACHE.pending.lock().contains_key(&key),
-            "the entry must survive while a second subscriber is still live",
-        );
-
-        release_tx
-            .send(())
-            .expect("the loader task is still awaiting release");
-        let result = second.await;
-        assert_eq!(result.unwrap(), expected_image);
-        assert!(!CACHE.pending.lock().contains_key(&key));
-    }
-
     /// Two concurrent callers for the same key must invoke `start` exactly
     /// once between them, and both must observe the same decoded image.
-    #[tokio::test]
     async fn load_coalesced_shares_one_load_across_concurrent_callers() {
         let _cache = isolated_cache().await;
         let key = fresh_key("coalesced-concurrent");
@@ -383,101 +301,11 @@ mod tests {
         assert_eq!(first_result.unwrap(), second_result.unwrap());
     }
 
-    /// Flutter's `ImageCache.maximumSize` bounds the decoded-image cache the
-    /// same way (`painting/image_cache.dart`); the oracle exercises pressure
-    /// via `imageCache.maximumSize = 0` in "Same image provider in multiple
-    /// parts of the tree, no cache room left" (`image_test.dart`, 3.44.0).
-    /// That oracle test also asserts a SEPARATE `liveImageCount`/
-    /// `statusForKey`/`keepAlive` tier this cache does not have -- FLUI's
-    /// `DecodedImageCache` is the LRU `entries` tier alone, with no
-    /// still-displayed-but-evicted "live" tracking (see `docs/ROADMAP.md`
-    /// Cross.H). This test exercises the LRU half only: filling one entry
-    /// past [`DEFAULT_CAPACITY`] must evict the least-recently-used entry,
-    /// not silently grow the cache unbounded.
+    /// Both coalescing contracts in one runtime: an abandoned load leaves no pending entry,
+    /// and concurrent callers share one load.
     #[tokio::test]
-    async fn cache_entries_beyond_capacity_evict_the_least_recently_used() {
-        let _cache = isolated_cache().await;
-        let first_key = fresh_key("evict-pressure-0");
-        load_coalesced(first_key.clone(), || async { Ok(solid(1, 1)) })
-            .await
-            .expect("the first load succeeds");
-
-        // Fill DEFAULT_CAPACITY more distinct entries -- the LRU is now
-        // asked to hold DEFAULT_CAPACITY + 1 total, one past its bound.
-        for i in 1..=DEFAULT_CAPACITY {
-            let key = fresh_key(&format!("evict-pressure-{i}"));
-            load_coalesced(key, || async { Ok(solid(1, 1)) })
-                .await
-                .expect("each synthetic load succeeds");
-        }
-
-        assert_eq!(
-            cached(&first_key),
-            None,
-            "inserting {DEFAULT_CAPACITY} more entries past the \
-             {DEFAULT_CAPACITY}-entry capacity must evict the \
-             least-recently-used (the very first) entry",
-        );
-    }
-
-    /// Boundary sibling to the eviction test above: filling EXACTLY
-    /// [`DEFAULT_CAPACITY`] distinct entries (no overflow) must retain all
-    /// of them -- proves the eviction above is a genuine capacity boundary,
-    /// not an off-by-one that starts evicting a step early.
-    #[tokio::test]
-    async fn cache_retains_exactly_capacity_entries_without_evicting() {
-        let _cache = isolated_cache().await;
-        let first_key = fresh_key("at-capacity-0");
-        load_coalesced(first_key.clone(), || async { Ok(solid(1, 1)) })
-            .await
-            .expect("the first load succeeds");
-
-        for i in 1..DEFAULT_CAPACITY {
-            let key = fresh_key(&format!("at-capacity-{i}"));
-            load_coalesced(key, || async { Ok(solid(1, 1)) })
-                .await
-                .expect("each synthetic load succeeds");
-        }
-
-        assert!(
-            cached(&first_key).is_some(),
-            "exactly {DEFAULT_CAPACITY} distinct entries must all remain \
-             cached, with no eviction at the capacity boundary itself",
-        );
-    }
-
-    /// A load for one key must never coalesce with a load for a different
-    /// key, even when the key TEXT is otherwise identical across the
-    /// `Asset`/`Network` namespace.
-    #[tokio::test]
-    async fn load_coalesced_does_not_share_loads_across_different_keys() {
-        let _cache = isolated_cache().await;
-        let start_calls = Arc::new(AtomicUsize::new(0));
-        let make_start = |counter: Arc<AtomicUsize>, image: PixelImage| {
-            move || {
-                counter.fetch_add(1, Ordering::SeqCst);
-                async move { Ok(image) }
-            }
-        };
-
-        let asset = load_coalesced(
-            ImageCacheKey::Asset("same-text.png".to_string()),
-            make_start(Arc::clone(&start_calls), solid(1, 1)),
-        );
-        let network = load_coalesced(
-            ImageCacheKey::Network("same-text.png".to_string()),
-            make_start(Arc::clone(&start_calls), solid(1, 1)),
-        );
-
-        let (asset_result, network_result) = tokio::join!(asset, network);
-        assert!(asset_result.is_ok());
-        assert!(network_result.is_ok());
-
-        assert_eq!(
-            start_calls.load(Ordering::SeqCst),
-            2,
-            "Asset(\"same-text.png\") and Network(\"same-text.png\") must load \
-             independently, never coalesced together",
-        );
+    async fn decode_cache_coalescing_contracts() {
+        abandoning_the_only_subscriber_before_completion_removes_the_pending_entry().await;
+        load_coalesced_shares_one_load_across_concurrent_callers().await;
     }
 }

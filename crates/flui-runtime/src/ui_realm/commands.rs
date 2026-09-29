@@ -37,21 +37,6 @@ pub enum CommandSendError {
     },
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "payload recovery is exercised by the protocol tests"
-    )
-)]
-impl CommandSendError {
-    pub(super) fn into_rejected(self) -> UiCommand {
-        match self {
-            Self::ChannelFull { rejected, .. } | Self::OwnerGone { rejected } => rejected,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------

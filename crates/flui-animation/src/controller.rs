@@ -2179,14 +2179,6 @@ impl AnimationController {
         self.inner.lock().status_listeners.len()
     }
 
-    /// Whether the "received a non-finite value" latch has already fired.
-    /// Test-only: pins that the latch is set-once, not a per-call flag —
-    /// the warning it gates fires at most once per controller.
-    #[cfg(test)]
-    pub(crate) fn debug_non_finite_warned(&self) -> bool {
-        self.inner.lock().non_finite_warned
-    }
-
     /// Reset run state and (re)start the ticker for a fresh run from epoch 0.
     ///
     /// Returns `false` iff this controller has no ticker at all — the

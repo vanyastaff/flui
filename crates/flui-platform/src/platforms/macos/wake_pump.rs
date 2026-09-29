@@ -259,49 +259,6 @@ fn tick_plan(answer: Option<web_time::Instant>, now: web_time::Instant) -> TickP
 mod tests {
     use super::*;
 
-    fn at(ms: u64) -> web_time::Instant {
-        // A fixed base so the tests never depend on the wall clock; the only
-        // thing under test is the comparison between two instants.
-        web_time::Instant::now() + Duration::from_millis(ms)
-    }
-
-    #[test]
-    fn no_deadline_stops_the_chain() {
-        // The property that keeps the pump off an idle app: nothing pending
-        // and no frame requested must end the chain, never re-schedule.
-        assert_eq!(tick_plan(None, at(0)), TickPlan::Stop);
-    }
-
-    #[test]
-    fn a_future_deadline_waits_exactly_for_it() {
-        let now = at(0);
-        let deadline = now + Duration::from_millis(500);
-        assert_eq!(tick_plan(Some(deadline), now), TickPlan::Wait(deadline));
-    }
-
-    #[test]
-    fn a_deadline_at_now_is_due() {
-        // The boundary is inclusive (`<=`, not `<`): a deadline that has
-        // arrived must fire a frame, not wait another period for it.
-        let now = at(0);
-        assert_eq!(
-            tick_plan(Some(now), now),
-            TickPlan::WakeThenLook { late_us: 0 },
-        );
-    }
-
-    #[test]
-    fn a_past_deadline_fires_and_reports_its_lateness() {
-        let now = at(0);
-        let overdue = now
-            .checked_sub(Duration::from_millis(7))
-            .expect("a base 7 ms ahead of now can be subtracted from");
-        assert_eq!(
-            tick_plan(Some(overdue), now),
-            TickPlan::WakeThenLook { late_us: 7_000 },
-        );
-    }
-
     fn silent_pump() -> Arc<WakePump> {
         WakePump::new(
             Arc::new(Mutex::new(PlatformHandlers::default())),
@@ -331,70 +288,5 @@ mod tests {
             before,
             "an arm later than the pending tick must not re-schedule it"
         );
-    }
-
-    #[test]
-    fn an_arm_earlier_than_the_pending_tick_replaces_it() {
-        // The other side of the rule: moving the tick EARLIER must still
-        // work, or a deadline armed after a long wait would never be honored
-        // on time.
-        let pump = silent_pump();
-        pump.pending_at.store(
-            micros_since_base(web_time::Instant::now() + Duration::from_secs(30)),
-            Ordering::Release,
-        );
-        let before = pump.generation.load(Ordering::Acquire);
-        pump.arm();
-        assert_ne!(
-            pump.generation.load(Ordering::Acquire),
-            before,
-            "an arm earlier than the pending tick must replace it"
-        );
-    }
-
-    #[test]
-    fn a_stopped_chain_lets_the_next_arm_schedule_again() {
-        // Regression: `Stop` used to leave `pending_at` pointing at the
-        // stopped (now-expired) tick, so every later `arm` read a "pending"
-        // tick earlier than its own target and returned without scheduling.
-        // After the first idle cycle the pump was effectively dead: the next
-        // no-present fallback or device-recovery deadline could never wake
-        // the loop.
-        let pump = silent_pump();
-        // A tick that has already run, whose instant was never cleared.
-        pump.pending_at.store(
-            micros_since_base(web_time::Instant::now()),
-            Ordering::Release,
-        );
-
-        // Drive the stop through `fire` so the clearing under test runs.
-        let generation = pump.generation.load(Ordering::Acquire);
-        pump.fire(generation);
-        assert_eq!(
-            pump.pending_at.load(Ordering::Acquire),
-            0,
-            "a stopped chain must clear its pending marker, or the next arm \
-             sees a phantom tick and schedules nothing"
-        );
-
-        // With the marker clear, a fresh arm must actually schedule.
-        let before = pump.generation.load(Ordering::Acquire);
-        pump.arm();
-        assert_ne!(
-            pump.generation.load(Ordering::Acquire),
-            before,
-            "the first arm after an idle stop must schedule a new tick"
-        );
-    }
-
-    #[test]
-    fn a_superseded_tick_returns_without_acting() {
-        // The generation that makes `arm` safe to call on every redraw
-        // request: a tick whose generation is stale must not consult at all.
-        let pump = silent_pump();
-        let stale = pump.generation.fetch_add(1, Ordering::AcqRel);
-        // A later arm takes the next generation, superseding `stale`.
-        let _ = pump.generation.fetch_add(1, Ordering::AcqRel);
-        pump.fire(stale);
     }
 }

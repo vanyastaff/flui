@@ -239,64 +239,6 @@ impl WgpuPainter {
         tracing::trace!("WgpuPainter::reset_frame_state: per-frame state cleared");
     }
 
-    /// Returns the current scissor rect for testing purposes.
-    ///
-    /// Gated to match its sole consumer (`reset_frame_state_clears_damage_scissor`)
-    /// so it is never dead code in either build configuration.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn current_scissor_for_test(&self) -> Option<(u32, u32, u32, u32)> {
-        self.state.current_scissor()
-    }
-
-    /// Returns the `dst_rect` field `[x, y, w, h]` of each pending external-image
-    /// instance in the current segment.  Used by regression tests to verify that
-    /// `draw_texture` transforms the destination rect through `current_transform`.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn external_image_rects_for_test(&self) -> Vec<[f32; 4]> {
-        self.current_segment
-            .external_images
-            .iter()
-            .map(|(_, inst, _)| inst.dst_rect)
-            .collect()
-    }
-
-    /// Returns the scissor stored alongside each pending external-image instance.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn external_image_scissors_for_test(&self) -> Vec<crate::command_ir::ScissorRect> {
-        self.current_segment
-            .external_images
-            .iter()
-            .map(|(_, _, scissor)| *scissor)
-            .collect()
-    }
-
-    /// Returns a copy of the tessellated vertex positions accumulated in the
-    /// current segment.  Used by the transform-baking regression test to verify
-    /// that `submit_transformed_geometry` is applied exactly once.
-    ///
-    /// Gated to `#[cfg(all(test, feature = "testing"))]` so it is
-    /// never dead code in production builds.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn tess_vertices_for_test(&self) -> Vec<[f32; 2]> {
-        self.current_segment
-            .vertices
-            .iter()
-            .map(|v| v.position)
-            .collect()
-    }
-
-    /// The tessellator's current flatten scale — to assert a draw call primed it.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn tessellator_max_scale_for_test(&self) -> f32 {
-        self.batcher.tessellator.max_scale()
-    }
-
-    /// Force a stale tessellator scale to set up the prime-on-draw regression.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn set_tessellator_max_scale_for_test(&mut self, scale: f32) {
-        self.batcher.tessellator.set_max_scale(scale);
-    }
-
     /// Returns `true` if any surface-reading draw item in the current `draw_order`
     /// has bounds that STRADDLE the given `damage` rect.
     ///
@@ -360,31 +302,6 @@ impl WgpuPainter {
         })
     }
 
-    /// The composite `bounds` and backing texture pixel size of every pending
-    /// [`DrawItem::OffscreenTexture`] in the draw order, in draw order. Used by
-    /// the HiDPI shader-mask / backdrop regression tests to assert an offscreen
-    /// result is allocated at device resolution (`extent * dpr`) and composited
-    /// at the device-space rect (`bounds * dpr`), not the logical rect.
-    ///
-    /// Returns `(bounds, texture_width, texture_height)`.
-    /// Return all `DrawItem::AdvancedShape` operations in the current draw order.
-    ///
-    /// Used by the image/atlas routing unit tests to assert that advanced
-    /// blend draws produce exactly one `AdvancedShape` per call rather than zero
-    /// (silent SrcOver fall-through) or more than one (per-tile leak).
-    ///
-    /// Gated to test builds; must never be called from production code.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn advanced_shapes_for_test(&self) -> Vec<&crate::command_ir::AdvancedShapeOp> {
-        self.draw_order
-            .iter()
-            .filter_map(|item| match item {
-                DrawItem::AdvancedShape(op) => Some(op),
-                _ => None,
-            })
-            .collect()
-    }
-
     #[cfg(all(test, feature = "testing"))]
     pub(crate) fn offscreen_results_for_test(&self) -> Vec<(Rect<f64>, u32, u32)> {
         self.draw_order
@@ -396,109 +313,6 @@ impl WgpuPainter {
                 _ => None,
             })
             .collect()
-    }
-
-    /// Returns the number of resolved [`DrawItem::Filter`] entries in the current
-    /// draw order.
-    ///
-    /// A filter entry is placed by [`Self::restore_layer`] after a corresponding
-    /// [`Self::save_layer_with_image_filter`] when the image-filter layer had at
-    /// least one draw item inside it (non-empty content). Callers that check for
-    /// zero verify that the filter layer was either culled or was empty.
-    ///
-    /// Gated to test builds; must never be called from production code.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn filter_op_count_for_test(&self) -> usize {
-        self.draw_order
-            .iter()
-            .filter(|item| matches!(item, DrawItem::Filter(_)))
-            .count()
-    }
-
-    /// Finalise the current segment and drain all recorded draw items, returning them
-    /// as cloned [`DrawSegment`] values.
-    ///
-    /// Only `DrawItem::Segment` variants are exposed; `OffscreenTexture` and
-    /// `OpacityLayer` variants (which carry live GPU handles in `PooledTexture`) are
-    /// skipped because they are not cloneable.  The deterministic-replay test uses a
-    /// draw scene that produces only `Segment` items, so all items in the drain are
-    /// returned.
-    ///
-    /// This accessor exists solely to feed the deterministic-replay tests.  It is gated to
-    /// `#[cfg(all(test, feature = "testing"))]` and must never be called
-    /// from production code.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn drain_segments_for_test(&mut self) -> Vec<DrawSegment> {
-        self.finish_current_segment();
-        self.draw_order
-            .drain(..)
-            .filter_map(|item| match item {
-                DrawItem::Segment(seg) => Some(seg),
-                // SsaaPath carries the path's tessellated DrawSegment internally;
-                // surface it so the deterministic-replay drain covers path
-                // geometry too (rather than silently omitting it if a future test
-                // scene adds a SrcOver arbitrary-path fill).
-                DrawItem::SsaaPath(op) => Some(op.segment),
-                DrawItem::OffscreenTexture(_)
-                | DrawItem::OpacityLayer(_)
-                | DrawItem::AdvancedShape(_) => None,
-                // Surface the filter's input segment so drain covers Filter
-                // geometry; the grown_bounds / passes are test-infrastructure
-                // concerns and are not needed by the deterministic-replay drain.
-                DrawItem::Filter(op) => Some(op.input),
-            })
-            .collect()
-    }
-
-    /// Return clones of all [`FilterOp`]s in the current draw order.
-    ///
-    /// Used by structural tests (flatten-nesting, cumulative-bounds) to inspect
-    /// the `passes` and `grown_bounds` fields emitted by `restore_layer` without
-    /// needing GPU execution.  Finalises the current segment first so that any
-    /// in-progress content is in the draw order.
-    ///
-    /// Gated to test builds; must never be called from production code.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn filter_ops_for_test(&mut self) -> Vec<crate::command_ir::FilterOp> {
-        self.finish_current_segment();
-        self.draw_order
-            .iter()
-            .filter_map(|item| match item {
-                DrawItem::Filter(op) => Some(op.clone()),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Replay a caller-supplied list of `DrawItem`s onto `view` using `encoder`.
-    ///
-    /// This is a thin wrapper around `GpuReplay::submit` that exposes the replay
-    /// path to the deterministic-replay test.  Two independent calls with
-    /// two independent encoders + views and the **same logical IR** (same content,
-    /// different clones) must produce byte-identical pixel outputs — that is what
-    /// the deterministic-replay tests assert.
-    ///
-    /// Production code does not call this: `WgpuPainter::render` drives the
-    /// normal path.  This is gated to `#[cfg(all(test, feature = "testing"))]`.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn replay_items_for_test(
-        &mut self,
-        items: Vec<DrawItem>,
-        view: &wgpu::TextureView,
-        encoder: &mut wgpu::CommandEncoder,
-    ) -> crate::error::EngineResult<()> {
-        self.replay.submit(
-            items,
-            self.size,
-            self.surface_format,
-            &self.device,
-            &self.queue,
-            &mut self.pipelines,
-            &mut self.resources,
-            &self.glyph_atlas,
-            encoder,
-            crate::render_target::RenderTarget::view_only(view),
-        )
     }
 
     // ===== Offscreen Compositing =====

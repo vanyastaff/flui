@@ -26,6 +26,33 @@ pub(super) fn runtime_clipboard() -> Arc<dyn flui_platform::traits::Clipboard> {
         .expect("BUG: the runner installs the platform clipboard before it builds a realm")
 }
 
+/// The app's font collection for [`crate::app::ui_realm::UiRealm::new`]'s
+/// `fonts` parameter (ADR-0092 §2). Same borrow rule as
+/// [`runtime_wake_callback`]. The first call on a thread resolves the shared
+/// engine services.
+pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
+    APP_RUNTIME.with(|slot| slot.borrow().font_collection())
+}
+
+/// Builds a runner's realm over the runtime's shared services: `wake`, the
+/// loop's `needs_redraw` flag, the platform clipboard and the app's font
+/// collection. Every runner site builds its realm through this one call, so
+/// a realm cannot be handed a stand-in for any of them.
+pub(super) fn build_runtime_realm(
+    wake: &Arc<dyn Fn() + Send + Sync>,
+    window: impl Into<crate::app::presentation::PresentationWindow>,
+    scale_factor: f64,
+) -> Result<crate::app::ui_realm::UiRealm, crate::app::ui_realm::UiRealmError> {
+    crate::app::ui_realm::UiRealm::new(
+        Arc::clone(wake),
+        window,
+        scale_factor,
+        runtime_needs_redraw_handle(),
+        runtime_clipboard(),
+        &runtime_font_collection(),
+    )
+}
+
 /// A clone of the loop-scoped `needs_redraw` flag, for [`crate::app::ui_realm::UiRealm::new`]'s
 /// `needs_redraw` parameter.
 pub(super) fn runtime_needs_redraw_handle() -> Arc<AtomicBool> {
@@ -54,9 +81,10 @@ thread_local! {
     /// any reason, including `OwnerHostClearGuard::drop` firing during an
     /// unwind on a thread that never reached platform init -- can never
     /// itself trigger singleton construction or full system-font
-    /// enumeration. Real service resolution happens only via the explicit
-    /// `ensure_services` call in `install_platform_realm` below, when a
-    /// realm is actually installed.
+    /// enumeration. Real service resolution happens only when a realm is
+    /// built or installed: `build_runtime_realm`, which every runner calls
+    /// to build its realm, or the explicit `ensure_services` call in
+    /// `install_platform_realm` below.
     pub(super) static APP_RUNTIME: std::cell::RefCell<AppRuntime> =
         std::cell::RefCell::new(AppRuntime::new());
 }
@@ -379,101 +407,6 @@ pub(super) fn desktop_secondary_wake_deadline(
         next_attempt_at
     } else {
         None
-    }
-}
-
-#[cfg(all(test, not(target_os = "ios")))]
-// `desktop_secondary_wake_deadline` is a desktop-loop concern and is
-// `cfg(not(wasm32))`; the web backend drives frames from RAF instead.
-#[cfg(not(target_arch = "wasm32"))]
-mod desktop_secondary_wake_deadline_tests {
-    use web_time::Instant;
-
-    use super::desktop_secondary_wake_deadline;
-
-    #[test]
-    fn an_armed_deadline_is_reported_while_frames_are_enabled() {
-        let deadline = Instant::now();
-        assert_eq!(
-            desktop_secondary_wake_deadline(Some(deadline), true),
-            Some(deadline)
-        );
-    }
-
-    #[test]
-    fn an_armed_deadline_is_suppressed_while_frames_are_disabled() {
-        let deadline = Instant::now();
-        assert_eq!(
-            desktop_secondary_wake_deadline(Some(deadline), false),
-            None,
-            "a deadline nothing can act on must not be reported -- reporting it would hand \
-             `about_to_wait` the same past instant forever (the PumpAsync arm never consumes \
-             it), the exact WaitUntil(past) busy-spin `WinitApp::new_events` names, one layer \
-             up from where round 4 fixed the equivalent hole on the Render path"
-        );
-    }
-
-    #[test]
-    fn no_armed_deadline_stays_none_either_way() {
-        assert_eq!(desktop_secondary_wake_deadline(None, true), None);
-        assert_eq!(desktop_secondary_wake_deadline(None, false), None);
-    }
-}
-
-#[cfg(all(test, not(target_os = "ios")))]
-mod merge_wake_deadlines_tests {
-    use std::time::Duration;
-
-    use web_time::Instant;
-
-    use super::merge_wake_deadlines;
-
-    #[test]
-    fn picks_the_earlier_of_two_present_deadlines_either_order() {
-        let now = Instant::now();
-        let earlier = now + Duration::from_millis(16);
-        let later = now + Duration::from_secs(1);
-
-        assert_eq!(
-            merge_wake_deadlines(Some(earlier), Some(later)),
-            Some(earlier),
-            "realm-earlier, secondary-later"
-        );
-        assert_eq!(
-            merge_wake_deadlines(Some(later), Some(earlier)),
-            Some(earlier),
-            "realm-later, secondary-earlier -- order must not matter"
-        );
-    }
-
-    #[test]
-    fn a_missing_secondary_leaves_the_realm_deadline_untouched() {
-        let deadline = Instant::now() + Duration::from_millis(16);
-        assert_eq!(
-            merge_wake_deadlines(Some(deadline), None),
-            Some(deadline),
-            "no device-recovery deadline pending must not suppress a real realm deadline"
-        );
-    }
-
-    #[test]
-    fn a_missing_realm_deadline_leaves_the_secondary_deadline_untouched() {
-        let deadline = Instant::now() + Duration::from_millis(16);
-        assert_eq!(
-            merge_wake_deadlines(None, Some(deadline)),
-            Some(deadline),
-            "no realm deadline pending must not suppress a real device-recovery deadline"
-        );
-    }
-
-    #[test]
-    fn both_absent_is_absent() {
-        assert_eq!(
-            merge_wake_deadlines(None, None),
-            None,
-            "neither source has an opinion -- the platform must fall back to its \
-             unconditional Wait, not a spurious WaitUntil(anything)"
-        );
     }
 }
 

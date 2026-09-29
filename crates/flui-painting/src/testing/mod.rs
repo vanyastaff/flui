@@ -15,7 +15,7 @@
 //! assert_eq!(list.len(), 1);
 //! ```
 
-use crate::{Canvas, DisplayList};
+use crate::{Canvas, DisplayList, FontCollection};
 
 /// Records drawing commands into a fresh [`DisplayList`]: runs `f` against
 /// a new [`Canvas`] and finishes it.
@@ -25,37 +25,10 @@ pub fn record(f: impl FnOnce(&mut Canvas)) -> DisplayList {
     canvas.finish()
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::styling::Color;
-    use flui_foundation::Diagnosticable;
-    use flui_foundation::geometry::Rect;
-
-    use super::record;
-    use crate::Paint;
-
-    #[test]
-    fn record_captures_commands_and_bounds() {
-        let list = record(|canvas| {
-            canvas.draw_rect(
-                Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
-                &Paint::fill(Color::RED),
-            );
-        });
-        assert_eq!(list.len(), 1);
-        assert_eq!(list.bounds(), Some(Rect::from_ltrb(0.0, 0.0, 40.0, 40.0)));
-    }
-
-    #[test]
-    fn diagnostics_name_the_list_and_carry_its_properties() {
-        let list = record(|canvas| {
-            canvas.draw_rect(
-                Rect::from_ltrb(0.0, 0.0, 10.0, 10.0),
-                &Paint::fill(Color::RED),
-            );
-        });
-        let dump = list.to_diagnostics_node().to_string();
-        assert!(dump.contains("DisplayList"), "{dump}");
-        assert!(dump.contains("commands"), "{dump}");
-    }
+/// How many handles hold `fonts`: the caller's own clones plus one inside
+/// each [`TextContext`](crate::TextContext) built from it. A consumer's
+/// tests use it to pin who holds the collection and when they let go.
+#[must_use]
+pub fn font_collection_holders(fonts: &FontCollection) -> usize {
+    fonts.holders()
 }

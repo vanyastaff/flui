@@ -149,21 +149,20 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
---features flui/cupertino,flui-painting/parley`, run as the two stages below.
+--features flui/material,flui/cupertino,flui-painting/parley`, run as the two stages below.
 `flui-painting/parley` is on so the Parley raster path's oracle test runs until
 ADR-0092 §10 makes that path the default.
 Two choices in it differ from CI on purpose:
 
-- **One feature slice.** The facade's non-default catalog (`cupertino`)
-  joins the workspace run through feature unification. The
+- **One feature slice.** The facade turns no catalog on by default, so both
+  (`material`, `cupertino`) are named and join the workspace run through
+  feature unification. The
   alternative, a second `cargo nextest run -p flui --features ...`, resolves
   features for `flui`'s own graph, without the dev-dependency features other
   members switch on (`testing` and friends), so every crate the two runs share
   was built twice under different hashes. No test is lost: the root crate has
-  no `cfg(not(feature = ...))` code, so the default-feature facade's tests are
-  a subset of these. **Not covered locally:** the facade in its default
-  configuration (Material only, no Cupertino). CI's `test`
-  job and `feature-matrix` build and test it; `cargo xtask feature-matrix` does too.
+  no `cfg(not(feature = ...))` code, so the no-feature facade's tests are a
+  subset of these, and `cargo xtask facade-combos` lints that build.
 - **Examples are not linked.** `cargo nextest run` with no target flags builds
   every example of every package it tests: about 60 binaries, each linking the
   whole render stack, on every run. `--lib --bins --tests` selects exactly the
@@ -191,10 +190,7 @@ the trybuild `compile_fail` suites (`flui-engine`, `flui-rendering`,
 `flui-painting`, `flui-view`'s `trybuild_ui`), the
 `flui-cli` template tests (`cli_create::generated_*`), and every
 `flui::facade_consumer` test. Locally, with their build caches cold, most take
-one to five minutes; the other ~9,700 tests are quick. Tests that spawn a
-`cargo` only for a trivial crate (`flui-cli`'s `cli_maintenance`, which runs
-`cargo new` and tests an empty project in seconds) are deliberately left out
-of the group. `.config/nextest.toml`
+one to five minutes; the rest are quick. `.config/nextest.toml`
 names them with one filter, in the override that puts them in the nextest
 test group `nested-cargo`; `cargo nextest show-config test-groups` lists the
 group's members. Selecting by group needs nextest 0.9.133 or newer (the
@@ -511,6 +507,12 @@ The constitution requires `///` doc comments on every public item and `//!` over
   declares it once, as `mod common;` in `tests/main.rs`, and each suite imports it
   with `use crate::common;`: a `mod common;` inside every `#[path]`-loaded suite
   would load the same file once per suite, which `clippy::duplicate_mod` rejects.
+- **A family of scenarios is one table test.** `flui-view`, `flui-runtime`, `flui-app`,
+  `flui-scheduler` and `flui-testing` run related scenarios (a failure-recovery matrix, a
+  realm-isolation family) as rows of a single `#[test]` through a small `run_table`
+  helper: each row is a named `fn()`, every row runs even after one fails, and the panic
+  lists the failing row names. The rows keep their own assertions; the table keeps the
+  set small enough that a refactor touches a table, not a hundred tests.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
 - **Demo composition tests** live in `tests/demo_layer_snapshots.rs`: each demo mounts headless and its committed `LayerTree` is compared, as structured text, against an `insta` snapshot. See [Demo composition snapshots](#demo-composition-snapshots) below for the run/review workflow and why they are structural rather than pixels.
 - **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.
@@ -604,7 +606,6 @@ Pair with `AnimationController::tick_at(t)` inside `simulate` for
 production-faithful animation tests. Assert per frame via `Probe` (`offset`,
 `box_geometry`, `picture_bounds`, `property`) and layer helpers
 (`opacity_alpha`, `has_picture_layer`). See
-`crates/flui-rendering/tests/harness_animation.rs` and
 `crates/flui-rendering/tests/animation_pipeline.rs`.
 
 ## Headless frames and widget trees
@@ -801,7 +802,7 @@ each changes those lines and fails the matching test, naming the layer and the
 command.
 
 No GPU, no device-specific baseline: CI's `test` job (its scope turns
-`flui/cupertino` on) runs the suite
+`flui/material` and `flui/cupertino` on) runs the suite
 like any other test, and it takes about a tenth of a second.
 
 ### Why structural and not pixels

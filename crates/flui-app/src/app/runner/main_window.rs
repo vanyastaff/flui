@@ -639,9 +639,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::ExitPolicy;
-    use flui_platform::{HeadlessPlatform, Platform, PlatformWindow};
+
     use std::sync::atomic::AtomicUsize;
+
+    use flui_platform::{HeadlessPlatform, Platform};
+
+    use crate::app::runtime::ExitPolicy;
 
     fn install_test_controller(
         owner: flui_platform::OwnerPlatform,
@@ -681,7 +684,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn main_window_pending_coalesces_and_recovers_after_installer_panic() {
         let _owner = OwnerHostClearGuard::arm();
         let _cleanup = Cleanup;
@@ -736,600 +738,6 @@ mod tests {
     }
     use std::cell::Cell;
 
-    #[test]
-    fn main_window_error_observer_panic_retires_it_without_poisoning_admission() {
-        let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = Cleanup;
-        let platform = HeadlessPlatform::new();
-        let turns = platform.owner_turns();
-        let observed = Rc::new(Cell::new(0));
-        let witness = Rc::clone(&observed);
-        let saved = Rc::new(RefCell::new(None));
-        let output = Rc::clone(&saved);
-        Box::new(platform)
-            .run(Box::new(move |owner| {
-                let handle = install_test_controller(
-                    owner,
-                    Box::new(|_, _, _| Err(AppWindowError::Cancelled)),
-                    Some(Box::new(move |_| {
-                        witness.set(witness.get() + 1);
-                        panic!("observer failure");
-                    })),
-                );
-                output.replace(Some(handle));
-                Ok(())
-            }))
-            .expect("bootstrap");
-        let handle = saved.take().expect("control");
-        for _ in 0..2 {
-            let mut request = handle
-                .request_show_main_window()
-                .expect("admission survives");
-            turns.drive();
-            assert!(matches!(
-                request.try_result(),
-                Some(Err(AppWindowError::Cancelled))
-            ));
-        }
-        assert_eq!(observed.get(), 1);
-    }
-    #[test]
-    fn main_window_shutdown_isolates_factory_and_observer_capture_destruction() {
-        const CHILD: &str = "FLUI_MAIN_CAPTURE_DROP_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
-                .args(["--exact", "app::runner::main_window::tests::main_window_shutdown_isolates_factory_and_observer_capture_destruction", "--nocapture"])
-                .env(CHILD, "1")
-                .status().expect("child starts");
-            assert!(
-                status.success(),
-                "capture cleanup must not abort normal shutdown"
-            );
-            return;
-        }
-        struct Hostile(Rc<Cell<usize>>);
-        impl Drop for Hostile {
-            fn drop(&mut self) {
-                self.0.set(self.0.get() + 1);
-                panic!("independent capture destruction");
-            }
-        }
-        let drops = Rc::new(Cell::new(0));
-        let factory_capture = Hostile(Rc::clone(&drops));
-        let observer_capture = Hostile(Rc::clone(&drops));
-        let app = Application::new(move |_| {
-            let _capture = &factory_capture;
-            flui_widgets::Text::new("not mounted")
-        })
-        .with_startup_window(StartupWindow::None)
-        .on_window_error(move |_| {
-            let _capture = &observer_capture;
-        })
-        .on_ready(|handle| handle.request_quit().expect("quit"));
-        run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("normal shutdown");
-        assert_eq!(drops.get(), 2);
-    }
-    #[test]
-    fn main_window_ready_quit_suppresses_reserved_startup_factory() {
-        let calls = Rc::new(Cell::new(0));
-        let factory_calls = Rc::clone(&calls);
-        let app = Application::new(move |_| {
-            factory_calls.set(factory_calls.get() + 1);
-            flui_widgets::Text::new("never mounted")
-        })
-        .on_ready(|handle| handle.request_quit().expect("quit admitted"));
-        run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("ordinary return");
-        assert_eq!(calls.get(), 0);
-    }
-    #[test]
-    fn main_window_failed_post_reports_once_after_terminal_cleanup() {
-        struct ExitOnFailure {
-            handle: AppHandle,
-            automatic: bool,
-            rejected: Arc<AtomicBool>,
-        }
-        impl Wake for ExitOnFailure {
-            fn wake(self: Arc<Self>) {
-                self.wake_by_ref();
-            }
-            fn wake_by_ref(self: &Arc<Self>) {
-                if self.automatic {
-                    self.rejected
-                        .store(!self.handle.ingress.try_auto_quit(), Ordering::Release);
-                } else {
-                    self.rejected
-                        .store(self.handle.request_quit().is_err(), Ordering::Release);
-                }
-            }
-        }
-        for mode in 0..3 {
-            for observer_panics in [false, true] {
-                let _owner = OwnerHostClearGuard::arm();
-                let _cleanup = Cleanup;
-                let platform = HeadlessPlatform::new();
-                let deferred = platform.enable_deferred_window_open();
-                let turns = platform.owner_turns();
-                let saved = Rc::new(RefCell::new(None::<AppHandle>));
-                let output = Rc::clone(&saved);
-                let observer_handle = Rc::clone(&saved);
-                let observations = Rc::new(Cell::new(0));
-                let observed = Rc::clone(&observations);
-                let admitted_after_quit = Rc::new(Cell::new(false));
-                let late_admission = Rc::clone(&admitted_after_quit);
-                let quit_rejected = Arc::new(AtomicBool::new(false));
-                let closes = Arc::new(AtomicUsize::new(0));
-                let closed_before_observer = Arc::clone(&closes);
-                Box::new(platform)
-                    .run(Box::new(move |owner| {
-                        output.replace(Some(install_test_controller(
-                            owner,
-                            Box::new(|_, _, _| panic!("failed completion must not install")),
-                            Some(Box::new(move |error| {
-                                assert!(matches!(error, AppWindowError::Native { .. }));
-                                assert_eq!(closed_before_observer.load(Ordering::SeqCst), 1);
-                                observed.set(observed.get() + 1);
-                                if mode != 2 {
-                                    late_admission.set(
-                                        observer_handle
-                                            .borrow()
-                                            .as_ref()
-                                            .expect("handle")
-                                            .request_show_main_window()
-                                            .is_ok(),
-                                    );
-                                }
-                                drive_main_window();
-                                assert!(!observer_panics, "observer panic after recording");
-                            })),
-                        )));
-                        Ok(())
-                    }))
-                    .expect("bootstrap");
-                let handle = saved.borrow().as_ref().expect("handle").clone();
-                let mut request = handle.request_show_main_window().expect("show");
-                if mode != 2 {
-                    let waker = Waker::from(Arc::new(ExitOnFailure {
-                        handle: handle.clone(),
-                        automatic: mode == 0,
-                        rejected: Arc::clone(&quit_rejected),
-                    }));
-                    assert!(
-                        Pin::new(&mut request)
-                            .poll(&mut Context::from_waker(&waker))
-                            .is_pending()
-                    );
-                }
-                turns.drive();
-                turns.fail_next_wake();
-                let window = deferred.resolve_next().expect("resolve");
-                let closed = Arc::clone(&closes);
-                window.on_close(Box::new(move || {
-                    closed.fetch_add(1, Ordering::SeqCst);
-                }));
-                assert!(matches!(
-                    request.try_result(),
-                    Some(Err(AppWindowError::Native { .. }))
-                ));
-                assert!(!quit_rejected.load(Ordering::Acquire));
-                if mode == 1 {
-                    drive_main_window();
-                } // !is_current cancellation entrance
-                turns.drive();
-                assert_eq!(
-                    observations.get(),
-                    1,
-                    "failure observer must survive terminal cancellation"
-                );
-                assert_eq!(closes.load(Ordering::SeqCst), 1);
-                assert!(!admitted_after_quit.get());
-                if mode == 2 {
-                    handle.request_quit().expect("ordinary recovery then quit");
-                }
-                turns.drive();
-                shutdown_main_window();
-                assert_eq!(
-                    observations.get(),
-                    1,
-                    "consumed failure must never be replayed"
-                );
-            }
-        }
-    }
-    #[test]
-    fn main_window_failed_completion_post_settles_without_unrelated_input() {
-        let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = Cleanup;
-        let platform = HeadlessPlatform::new();
-        let deferred = Arc::new(platform.enable_deferred_window_open());
-        let turns = platform.owner_turns();
-        let saved = Rc::new(RefCell::new(None));
-        let output = Rc::clone(&saved);
-        let installs = Rc::new(Cell::new(0));
-        let observed = Rc::clone(&installs);
-        Box::new(platform)
-            .run(Box::new(move |owner| {
-                output.replace(Some(install_test_controller(
-                    owner,
-                    Box::new(move |_, _, _| {
-                        observed.set(observed.get() + 1);
-                        Err(AppWindowError::Cancelled)
-                    }),
-                    None,
-                )));
-                Ok(())
-            }))
-            .expect("bootstrap");
-        let handle = saved.take().expect("handle");
-        let mut request = handle.request_show_main_window().expect("admit");
-        turns.drive();
-        let old_waker = APP_RUNTIME.with(|slot| {
-            Arc::clone(
-                slot.borrow()
-                    .main_controller
-                    .as_ref()
-                    .expect("controller")
-                    .pending_wake
-                    .as_ref()
-                    .expect("waker"),
-            )
-        });
-        turns.fail_next_wake();
-        let worker_completion = Arc::clone(&deferred);
-        let window =
-            std::thread::spawn(move || worker_completion.resolve_next().expect("completion"))
-                .join()
-                .expect("worker");
-        let closes = Arc::new(AtomicUsize::new(0));
-        let observed = Arc::clone(&closes);
-        window.on_close(Box::new(move || {
-            observed.fetch_add(1, Ordering::SeqCst);
-        }));
-        assert!(
-            matches!(
-                request.try_result(),
-                Some(Err(AppWindowError::Native { .. }))
-            ),
-            "failed post must settle without an unrelated owner event"
-        );
-        turns.drive(); // Only the recovery notification may schedule this turn.
-        assert_eq!(closes.load(Ordering::SeqCst), 1);
-        assert_eq!(installs.get(), 0);
-        let mut next = handle
-            .request_show_main_window()
-            .expect("new batch admitted");
-        turns.drive();
-        old_waker.wake_by_ref();
-        assert!(
-            next.try_result().is_none(),
-            "old failure cannot settle replacement batch"
-        );
-        deferred.resolve_next().expect("next native completion");
-        turns.drive();
-        assert!(matches!(
-            next.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-        assert_eq!(installs.get(), 1, "later batch reaches installer");
-        handle.request_quit().expect("quit remains usable");
-        turns.drive();
-    }
-    #[test]
-    fn main_window_quit_closes_ready_unpolled_window_and_cancels_reply() {
-        let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = Cleanup;
-        let platform = HeadlessPlatform::new();
-        let deferred = platform.enable_deferred_window_open();
-        let turns = platform.owner_turns();
-        let saved = Rc::new(RefCell::new(None));
-        let output = Rc::clone(&saved);
-        Box::new(platform)
-            .run(Box::new(move |owner| {
-                output.replace(Some(install_test_controller(
-                    owner,
-                    Box::new(|_, _, _| panic!("must not install after quit")),
-                    None,
-                )));
-                Ok(())
-            }))
-            .expect("bootstrap");
-        let handle = saved.take().expect("control");
-        let mut request = handle.request_show_main_window().expect("admit");
-        turns.drive();
-        let window = deferred.resolve_next().expect("native completion");
-        let closes = Arc::new(AtomicUsize::new(0));
-        let closed = Arc::clone(&closes);
-        window.on_close(Box::new(move || {
-            closed.fetch_add(1, Ordering::SeqCst);
-        }));
-        handle.request_quit().expect("quit takes priority");
-        turns.drive();
-        assert_eq!(closes.load(Ordering::SeqCst), 1);
-        assert!(matches!(
-            request.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-        assert!(handle.request_show_main_window().is_err());
-    }
-
-    #[test]
-    fn main_window_suspended_loop_snapshot_reaches_new_installer() {
-        let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = Cleanup;
-        let platform = HeadlessPlatform::new();
-        let turns = platform.owner_turns();
-        let observed = Rc::new(RefCell::new(Vec::new()));
-        let witness = Rc::clone(&observed);
-        let saved = Rc::new(RefCell::new(None));
-        let output = Rc::clone(&saved);
-        Box::new(platform)
-            .run(Box::new(move |owner| {
-                output.replace(Some(install_test_controller(
-                    owner,
-                    Box::new(move |_, _, host| {
-                        witness.borrow_mut().push(host);
-                        Err(AppWindowError::Cancelled)
-                    }),
-                    None,
-                )));
-                APP_RUNTIME.with(|slot| {
-                    slot.borrow_mut().main_host_lifecycle =
-                        flui_scheduler::AppLifecycleState::Paused;
-                });
-                Ok(())
-            }))
-            .expect("bootstrap");
-        let handle = saved.take().expect("control");
-        let _request = handle.request_show_main_window().expect("admit");
-        turns.drive();
-        assert_eq!(
-            &*observed.borrow(),
-            &[flui_scheduler::AppLifecycleState::Paused]
-        );
-    }
-
-    #[test]
-    fn main_window_reentrant_close_during_show_drops_stale_open_and_recreates() {
-        let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = Cleanup;
-        let platform = HeadlessPlatform::new();
-        let turns = platform.owner_turns();
-        let calls = Rc::new(Cell::new(0));
-        let installations = Rc::clone(&calls);
-        let saved = Rc::new(RefCell::new(None));
-        let output = Rc::clone(&saved);
-        Box::new(platform)
-            .run(Box::new(move |owner| {
-                let handle = install_test_controller(
-                    owner,
-                    Box::new(move |_, window, host| {
-                        installations.set(installations.get() + 1);
-                        let presentation = super::super::presentation_window(Arc::clone(&window));
-                        let window: Arc<dyn PlatformWindow> = window;
-                        // This fixture exercises controller ownership with a registered
-                        // realm; the separate native fixture proves actual GPU rendering.
-                        let realm = crate::app::ui_realm::UiRealm::new(
-                            Arc::new(|| {}),
-                            presentation,
-                            1.0,
-                            Arc::new(AtomicBool::new(false)),
-                            crate::app::presentation::test_clipboard(),
-                        )
-                        .expect("realm");
-                        realm.enter(|realm| realm.update_host_lifecycle(host));
-                        let sender = realm.command_sender();
-                        let dispatch =
-                            super::super::realm_dispatch::install_realm_alongside(realm, &window)
-                                .expect("install realm");
-                        let id = window.id();
-                        window.on_close(Box::new(move || {
-                            main_window_closing(dispatch.address);
-                            super::super::realm_dispatch::close_this_window(dispatch);
-                            main_window_closed(dispatch.address);
-                        }));
-                        let wrapped: Arc<dyn PlatformWindow> = Arc::new(
-                            crate::app::window_test_support::TestWindow::new()
-                                .with_id(id.0)
-                                .with_show_callback(Arc::new(move || window.close())),
-                        );
-                        Ok(RenderedMain {
-                            window: wrapped,
-                            address: dispatch.address,
-                            _rebuild_registration: WorkerReload::from_config(&AppConfig::new())
-                                .register_rebuild_hook(sender),
-                        })
-                    }),
-                    None,
-                );
-                output.replace(Some(handle));
-                Ok(())
-            }))
-            .expect("bootstrap");
-        let handle = saved.take().expect("control");
-        let mut first = handle.request_show_main_window().expect("first");
-        turns.drive();
-        assert!(matches!(first.try_result(), Some(Ok(_))));
-        let mut reveal = handle.request_show_main_window().expect("show existing");
-        turns.drive();
-        assert!(matches!(
-            reveal.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-        assert_eq!(calls.get(), 1);
-        let mut next = handle
-            .request_show_main_window()
-            .expect("recreate after callback close");
-        turns.drive();
-        assert!(matches!(next.try_result(), Some(Ok(_))));
-        assert_eq!(
-            calls.get(),
-            2,
-            "closed window must not remain the main target"
-        );
-    }
-
-    #[test]
-    fn main_window_show_requested_during_close_waits_for_fresh_install() {
-        for deferred_disposal in [false, true] {
-            let _owner = OwnerHostClearGuard::arm();
-            let _cleanup = Cleanup;
-            let platform = HeadlessPlatform::new();
-            let turns = platform.owner_turns();
-            let calls = Rc::new(Cell::new(0));
-            let installations = Rc::clone(&calls);
-            let requested = Arc::new(parking_lot::Mutex::new(Vec::new()));
-            let next_requests = Arc::clone(&requested);
-            let saved = Rc::new(RefCell::new(None));
-            let output = Rc::clone(&saved);
-            Box::new(platform)
-                .run(Box::new(move |owner| {
-                    let handle = install_test_controller(
-                        owner,
-                        Box::new(move |handle, window, host| {
-                            installations.set(installations.get() + 1);
-                            let presentation =
-                                super::super::presentation_window(Arc::clone(&window));
-                            let window: Arc<dyn PlatformWindow> = window;
-                            // This fixture exercises controller ownership with a registered
-                            // realm; the separate native fixture proves actual GPU rendering.
-                            let realm = crate::app::ui_realm::UiRealm::new(
-                                Arc::new(|| {}),
-                                presentation,
-                                1.0,
-                                Arc::new(AtomicBool::new(false)),
-                                crate::app::presentation::test_clipboard(),
-                            )
-                            .expect("realm");
-                            realm.enter(|realm| realm.update_host_lifecycle(host));
-                            let sender = realm.command_sender();
-                            let dispatch = super::super::realm_dispatch::install_realm_alongside(
-                                realm, &window,
-                            )
-                            .expect("install realm");
-                            let id = window.id();
-                            let control = handle.clone();
-                            let requests = Arc::clone(&next_requests);
-                            window.on_close(Box::new(move || {
-                                main_window_closing(dispatch.address);
-                                let during = control
-                                    .request_show_main_window()
-                                    .expect("show during close admitted");
-                                requests.lock().push(during);
-                                super::super::realm_dispatch::close_this_window(dispatch);
-                                main_window_closed(dispatch.address);
-                                let after = control
-                                    .request_show_main_window()
-                                    .expect("show after close before old reveal returns");
-                                requests.lock().push(after);
-                            }));
-                            let wrapped: Arc<dyn PlatformWindow> = Arc::new(
-                                crate::app::window_test_support::TestWindow::new()
-                                    .with_id(id.0)
-                                    .with_show_callback(Arc::new(move || {
-                                        if deferred_disposal {
-                                            let closing = Arc::clone(&window);
-                                            super::super::realm_dispatch::dispatch_platform_realm(
-                                                dispatch,
-                                                super::super::realm_dispatch::RealmTask::Frame(
-                                                    Box::new(move |_| closing.close()),
-                                                ),
-                                            )
-                                            .expect("owner dispatch");
-                                        } else {
-                                            window.close();
-                                        }
-                                    })),
-                            );
-                            Ok(RenderedMain {
-                                window: wrapped,
-                                address: dispatch.address,
-                                _rebuild_registration: WorkerReload::from_config(&AppConfig::new())
-                                    .register_rebuild_hook(sender),
-                            })
-                        }),
-                        None,
-                    );
-                    output.replace(Some(handle));
-                    Ok(())
-                }))
-                .expect("bootstrap");
-            let handle = saved.take().expect("control");
-            let mut first = handle.request_show_main_window().expect("first");
-            turns.drive();
-            assert!(matches!(first.try_result(), Some(Ok(_))));
-            let mut reveal = handle.request_show_main_window().expect("show existing");
-            turns.drive();
-            assert!(matches!(
-                reveal.try_result(),
-                Some(Err(AppWindowError::Cancelled))
-            ));
-            assert_eq!(calls.get(), 1);
-            let mut pending = std::mem::take(&mut *requested.lock());
-            assert_eq!(pending.len(), 2, "both close phases admitted requests");
-            assert!(
-                pending.iter_mut().all(|reply| reply.try_result().is_none()),
-                "old reveal must not settle the next-generation requests"
-            );
-            turns.drive();
-            assert!(
-                pending
-                    .iter_mut()
-                    .all(|reply| matches!(reply.try_result(), Some(Ok(_))))
-            );
-            assert_eq!(
-                calls.get(),
-                2,
-                "closed window must not remain the main target"
-            );
-        }
-    }
-
-    #[test]
-    fn main_window_loop_replacement_during_install_cancels_old_result_without_restoring_old_controller()
-     {
-        let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = Cleanup;
-        let platform = HeadlessPlatform::new();
-        let turns = platform.owner_turns();
-        let closes = Arc::new(AtomicUsize::new(0));
-        let closed = Arc::clone(&closes);
-        let saved = Rc::new(RefCell::new(None));
-        let output = Rc::clone(&saved);
-        Box::new(platform)
-            .run(Box::new(move |owner| {
-                output.replace(Some(install_test_controller(
-                    owner,
-                    Box::new(move |_, window, _| {
-                        let closed = Arc::clone(&closed);
-                        window.on_close(Box::new(move || {
-                            closed.fetch_add(1, Ordering::SeqCst);
-                        }));
-                        Box::new(HeadlessPlatform::new())
-                            .run(Box::new(|owner| {
-                                install_owner_platform(owner)?;
-                                Ok(())
-                            }))
-                            .expect("replacement loop");
-                        Err(AppWindowError::Cancelled)
-                    }),
-                    None,
-                )));
-                Ok(())
-            }))
-            .expect("bootstrap");
-        let handle = saved.take().expect("control");
-        let mut request = handle.request_show_main_window().expect("admit old intent");
-        turns.drive();
-        assert_eq!(closes.load(Ordering::SeqCst), 1);
-        assert!(matches!(
-            request.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-        assert!(handle.request_show_main_window().is_err());
-        assert!(APP_RUNTIME.with(|slot| slot.borrow().main_controller.is_none()));
-        assert!(with_owner_platform(|_| true).expect("replacement owner remains installed"));
-    }
-
-    #[test]
     fn main_window_factory_panic_is_typed_and_initial_window_is_fatal() {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory witness");
@@ -1344,54 +752,58 @@ mod tests {
     }
 
     #[test]
-    fn main_window_error_observer_capture_drop_panic_does_not_leak_reservation() {
-        struct HostileDrop(Rc<Cell<usize>>);
-        impl Drop for HostileDrop {
-            fn drop(&mut self) {
-                self.0.set(self.0.get() + 1);
-                panic!("observer capture drop");
-            }
-        }
-        let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = Cleanup;
-        let platform = HeadlessPlatform::new();
-        let turns = platform.owner_turns();
-        let drops = Rc::new(Cell::new(0));
-        let capture = HostileDrop(Rc::clone(&drops));
-        let saved = Rc::new(RefCell::new(None));
-        let output = Rc::clone(&saved);
-        Box::new(platform)
-            .run(Box::new(move |owner| {
-                output.replace(Some(install_test_controller(
-                    owner,
-                    Box::new(|_, _, _| Err(AppWindowError::Cancelled)),
-                    Some(Box::new(move |_| {
-                        let _capture = &capture;
-                        panic!("observer body");
-                    })),
-                )));
-                Ok(())
-            }))
-            .expect("bootstrap");
-        let handle = saved.take().expect("control");
-        let mut request = handle.request_show_main_window().expect("admit");
-        turns.drive();
-        assert_eq!(drops.get(), 1);
-        assert!(matches!(
-            request.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-        assert!(
-            handle.request_show_main_window().is_ok(),
-            "reservation released after both panics"
+    fn main_window_installer_matrix() {
+        crate::table_test::run_table(
+            "main_window_installer_matrix",
+            &[
+                (
+                    "main_window_pending_coalesces_and_recovers_after_installer_panic",
+                    main_window_pending_coalesces_and_recovers_after_installer_panic as fn(),
+                ),
+                (
+                    "main_window_factory_panic_is_typed_and_initial_window_is_fatal",
+                    main_window_factory_panic_is_typed_and_initial_window_is_fatal as fn(),
+                ),
+                (
+                    "main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop",
+                    main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop as fn(),
+                ),
+            ],
         );
     }
 
-    #[cfg(feature = "hot-reload")]
-    #[test]
-    fn main_window_active_artifact_watcher_survives_failed_reopens_and_stops_with_loop() {
-        let lifetime = Rc::new(RefCell::new(None));
-        let captured = Rc::clone(&lifetime);
+    /// The loop's development reload hook is attached once, when the loop
+    /// starts, stays attached while main-window opens fail and are retried,
+    /// and is detached exactly once, when the loop ends.
+    fn main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop() {
+        #[derive(Default)]
+        struct Counts {
+            attaches: AtomicUsize,
+            detaches: AtomicUsize,
+        }
+        impl Counts {
+            fn get(&self) -> (usize, usize) {
+                (
+                    self.attaches.load(Ordering::SeqCst),
+                    self.detaches.load(Ordering::SeqCst),
+                )
+            }
+        }
+        struct Counting(Arc<Counts>);
+        impl flui_view::dev_reload::DevReloadHook for Counting {
+            fn attach(&mut self, _wake: flui_view::dev_reload::ReloadWake) {
+                self.0.attaches.fetch_add(1, Ordering::SeqCst);
+            }
+            fn detach(&mut self) {
+                self.0.detaches.fetch_add(1, Ordering::SeqCst);
+            }
+            fn poll(&mut self) -> flui_view::dev_reload::ReloadEvent {
+                flui_view::dev_reload::ReloadEvent::Unchanged
+            }
+        }
+
+        let counts = Arc::new(Counts::default());
+        let observed = Arc::clone(&counts);
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory failure before GPU setup");
         })
@@ -1399,20 +811,20 @@ mod tests {
         .with_config(
             AppConfig::new()
                 .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_worker_plugin_path("/nonexistent/flui-resident-test-worker.dylib"),
+                .with_dev_reload(Counting(Arc::clone(&counts))),
         )
         .on_ready(move |handle| {
-            let initial = APP_RUNTIME.with(|slot| {
-                slot.borrow()
+            assert_eq!(observed.get(), (1, 0), "attached when the loop starts");
+            assert!(
+                APP_RUNTIME.with(|slot| slot
+                    .borrow()
                     .main_controller
                     .as_ref()
                     .expect("controller installed")
                     .watcher
-                    .as_ref()
-                    .expect("real configured watcher")
-                    .test_lifetime()
-            });
-            assert!(!initial.1.load(Ordering::Acquire));
+                    .is_some()),
+                "the loop holds the attachment"
+            );
             for _ in 0..2 {
                 let mut request = handle.request_show_main_window().expect("admit retry");
                 drive_main_window();
@@ -1420,60 +832,18 @@ mod tests {
                     request.try_result(),
                     Some(Err(AppWindowError::FactoryPanicked { .. }))
                 ));
-                let current = APP_RUNTIME.with(|slot| {
-                    slot.borrow()
-                        .main_controller
-                        .as_ref()
-                        .expect("controller restored")
-                        .watcher
-                        .as_ref()
-                        .expect("watcher retained")
-                        .test_lifetime()
-                });
                 assert_eq!(
-                    current.0, initial.0,
-                    "same actual worker thread across retries"
+                    observed.get(),
+                    (1, 0),
+                    "a failed open neither re-attaches nor detaches"
                 );
-                assert!(Arc::ptr_eq(&current.1, &initial.1));
-                assert!(!current.1.load(Ordering::Acquire));
             }
-            captured.replace(Some(initial));
         });
         run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("ordinary owner teardown");
-        let (_, stopped) = lifetime.take().expect("observed real watcher");
-        assert!(
-            stopped.load(Ordering::Acquire),
-            "loop teardown stopped and joined the real watcher"
+        assert_eq!(
+            counts.get(),
+            (1, 1),
+            "loop teardown detached the hook exactly once"
         );
-    }
-
-    #[test]
-    fn main_window_empty_start_services_once_without_factory() {
-        let starts = Arc::new(AtomicUsize::new(0));
-        let started = Arc::clone(&starts);
-        let config = AppConfig::new()
-            .with_exit_policy(ExitPolicy::ExplicitQuit)
-            .with_service(crate::app::ServiceDefinition::new(
-                "resident-test",
-                crate::app::ServiceLifetime::KeepsAppAlive,
-                move |context| {
-                    started.fetch_add(1, Ordering::SeqCst);
-                    Box::pin(async move {
-                        context.cancellation().cancelled().await;
-                    })
-                },
-            ));
-        let factories = Rc::new(Cell::new(0));
-        let called = Rc::clone(&factories);
-        let app = Application::new(move |_| {
-            called.set(called.get() + 1);
-            flui_widgets::Text::new("unused")
-        })
-        .with_config(config)
-        .with_startup_window(StartupWindow::None);
-        run_with_platform(app, Box::new(HeadlessPlatform::new()))
-            .expect("headless owner lifetime completes");
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-        assert_eq!(factories.get(), 0);
     }
 }

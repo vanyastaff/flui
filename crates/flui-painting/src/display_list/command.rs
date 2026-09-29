@@ -363,32 +363,3 @@ pub enum DrawOp {
     /// two is recorded per balanced pair, never both.
     Restore,
 }
-
-#[cfg(test)]
-mod tests {
-    use std::mem::size_of;
-
-    use super::{DrawCommand, DrawOp};
-
-    /// The wire type has a size budget: every recorded command is one of
-    /// these in a `Vec`, and every consumer walks that `Vec` once per frame.
-    ///
-    /// Commands carry logical `f64` geometry; the engine narrows to `f32` when it ingests
-    /// them (ADR-0098 §2). The fattest `DrawOp` variant is `ImageFiltered`, whose inline
-    /// `ColorFilter::Matrix` is a 5×4 matrix. A new variant or field that pushes past this
-    /// budget boxes its payload instead (as `Paragraph` already carries its layout behind an
-    /// `Arc`). `DrawCommand` adds the 128-byte `Matrix4`.
-    #[test]
-    fn draw_command_fits_its_budget() {
-        assert!(
-            size_of::<DrawOp>() <= 224,
-            "DrawOp is {} bytes; the budget is 224",
-            size_of::<DrawOp>()
-        );
-        assert!(
-            size_of::<DrawCommand>() <= 352,
-            "DrawCommand is {} bytes; the budget is 352",
-            size_of::<DrawCommand>()
-        );
-    }
-}

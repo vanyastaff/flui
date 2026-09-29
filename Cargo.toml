@@ -232,8 +232,8 @@ web-time = "1.1"
 # and the `PlatformAccessibility` trait they implement is flui-semantics'.
 # One required dependency of its own (uuid), MIT OR Apache-2.0.
 accesskit = "0.25"
-# The tree model every AccessKit adapter reads through; tests use it to see
-# a node the way UI Automation, AT-SPI and NSAccessibility are handed it.
+# The tree model every AccessKit adapter reads through: flui-semantics' agent
+# read projects the published tree with the adapters' own predicates.
 accesskit_consumer = "0.39"
 
 # Win32 bindings: the Windows platform backend, hot-reload's library loader,
@@ -252,9 +252,6 @@ schemars = "1.0"
 cargo_metadata = "0.23.1"
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
-
-# BUILDER UTILITIES - Used by widgets
-bon = "3.8"
 
 # APPLE BINDINGS - the versions wgpu-hal already pins; flui-platform's macOS
 # backend and the facade's lifecycle probe both take them from here, with
@@ -461,11 +458,6 @@ insta = "1"
 # PROPERTY-BASED TESTING - invariant/roundtrip/idempotence properties over
 # generated inputs (test-minimization effort). Test-only; not compiled in release.
 proptest = "1"
-
-# PARAMETERIZED TESTING - #[case] tables replacing near-identical example
-# tests that vary only in input literals (test-minimization effort).
-# Test-only; not compiled in release.
-rstest = "0.27"
 
 # Workspace-wide lints for consistent code quality (Rust 1.74+)
 [workspace.lints.rust]
@@ -692,8 +684,6 @@ flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
 
 # === Test support (for the vertical_slice_demo acceptance test) ===
 flui-testing = { workspace = true }
-# `lay_out` for tests/todo_example.rs, which then runs in the default feature
-# set instead of only under `flui/testing`.
 flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev", features = ["testing"] }
 # Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
 insta = { workspace = true }
@@ -733,12 +723,11 @@ dispatch2.workspace = true
 
 [features]
 testing = ["dep:flui-testing", "flui-widgets/testing", "flui-rendering/testing"]
-# Material-first by default: `cargo add flui` keeps working exactly as the
-# README and the crate-level docs teach it. An author who wants a different
-# catalog — or none — turns the default off and selects explicitly. The base
-# widget surface (`flui::widgets`, `flui::prelude` minus the Material glob,
-# `flui::run_app`) needs no feature at all.
-default = ["material"]
+# No catalog, tool or capability is on by default: an application names what it
+# uses (ADR-0088 §6). The base widget surface (`flui::widgets`, `flui::prelude`
+# minus the Material glob, `flui::run_app`) needs no feature at all;
+# `cargo xtask facade-combos` builds every combination.
+default = []
 
 # === Catalogs and localization ===
 # Each gates both the Cargo edge and the matching `flui::<module>` re-export.
@@ -764,9 +753,11 @@ localizations = []
 gpu-readback-tests = []
 
 # Development-only reload machinery, off in an ordinary production graph. This
-# activates the facade's reload API and the application's reload driver.
-# Without it the normal application graph excludes flui-hot-reload.
-hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-app/hot-reload"]
+# re-exports flui-hot-reload as `flui::hot_reload`; the application installs
+# its hook with `AppConfig::with_dev_reload` (ADR-0094 §1), and flui-app names
+# no reload crate. Without it the normal application graph excludes
+# flui-hot-reload.
+hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-hot-reload/host-hook"]
 
 # Native accessibility: the per-OS AccessKit adapters that hand the semantics
 # tree to VoiceOver / Narrator / Orca. Off by default (the Linux adapter
@@ -819,8 +810,7 @@ path = "examples/todo.rs"
 name = "two_screens"
 path = "examples/two_screens.rs"
 
-# `default = ["material"]` does not make this redundant: `cargo xtask facade-combos`
-# builds every isolated feature combination with `--no-default-features`, and
+# `cargo xtask facade-combos` builds every isolated feature combination, and
 # `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme` from the Material
 # catalog, so an isolated non-material build fails with E0433 without this.
 [[example]]
@@ -899,16 +889,16 @@ name = "facade_serde"
 path = "tests/facade_serde.rs"
 required-features = ["serde"]
 
-# Structural snapshots of the demo trees' painted layer trees. Needs both
-# catalogs because it snapshots the Material and Cupertino demos; both are
-# named directly rather than through an alias feature, so the target's
-# requirements are readable at the target. CI's "facade non-default catalogs"
-# step (`--features cupertino`, Material being default) runs it.
 [[test]]
 name = "composited_layer_update_readback"
 path = "tests/composited_layer_update_readback.rs"
 required-features = ["gpu-readback-tests"]
 
+# Structural snapshots of the demo trees' painted layer trees. Needs both
+# catalogs because it snapshots the Material and Cupertino demos; both are
+# named directly rather than through an alias feature, so the target's
+# requirements are readable at the target. `cargo xtask test`'s scope
+# (`flui/material,flui/cupertino`) runs it.
 [[test]]
 name = "demo_layer_snapshots"
 path = "tests/demo_layer_snapshots.rs"

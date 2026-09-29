@@ -33,8 +33,8 @@ application frame loop, not a plugin point". The seam is real and already used t
 `RasterBackend: Send` (`crates/flui-engine/src/raster.rs:100`) returns
 `Result<PresentDisposition, EngineError>` (`raster.rs:111`), `PresentDisposition` is defined next
 to it (`raster.rs:54`), and it has one production implementation (`impl RasterBackend for
-crate::Renderer`, `raster.rs:179`) and eight test doubles, five in `flui-app`
-(`crates/flui-app/src/app/raster_lane.rs:501`, `raster_test_support.rs:111`,
+crate::Renderer`, `raster.rs:179`) and seven test doubles, four in `flui-app`
+(`crates/flui-app/src/app/raster_lane.rs:501`,
 `runner/device_recovery.rs:412,718`, `runner/surface_lifecycle.rs:685`) and three in
 `flui-engine` (`raster.rs:230`, `raster_owner.rs:1775`,
 `tests/raster_backpressure_allocation.rs:95`), plus a bench and a compile-fail fixture.

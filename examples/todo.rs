@@ -17,7 +17,6 @@
 //! callbacks receive the `cx` they pass on to it.
 //!
 //! Run with: cargo run --example todo
-//! (`tests/todo_example.rs` mounts this file's tree headless.)
 
 use flui::prelude::*;
 use flui::view::SignalError;

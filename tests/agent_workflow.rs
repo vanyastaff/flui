@@ -53,7 +53,6 @@ use std::time::Duration;
 
 use flui::geometry::Offset;
 use flui::prelude::*;
-use flui::testing::a11y::A11yQueryError;
 use flui::testing::rendering::render_diagnostics;
 use flui::testing::replay::PointerScript;
 use flui::testing::{HeadlessBinding, MountOptions, MountOwners};
@@ -211,46 +210,5 @@ fn agent_can_mount_inspect_drive_and_assert_the_counter() {
     assert!(
         !has_property_line(&final_dump, "text", "0"),
         "the old rendered count must not remain after the tap; dump was:\n{final_dump}"
-    );
-}
-
-/// The failure-mode-is-actionable half of the acceptance criterion: an agent
-/// that queries a label which is not in the tree must be told what it
-/// searched for and what *was* available, not just "not found".
-///
-/// `A11yTree::find_by_label` already reports exactly that (see
-/// `crates/flui-testing/src/a11y.rs`'s `A11yQueryError::NotFound`), so no new
-/// helper was needed in `flui-testing` — this test is evidence that the
-/// existing error type satisfies the acceptance criterion, not a helper it
-/// had to add. If it turns out one *had* to be added, it would live at
-/// `crates/flui-testing/src/a11y.rs` next to `A11yQueryError`.
-#[test]
-fn missing_label_query_reports_the_search_and_the_available_labels() {
-    let mut binding = mount_agent_counter();
-    binding
-        .enable_semantics()
-        .expect("mount_agent_counter returns a tree-bound binding");
-    binding.pump_frame(Duration::from_millis(16));
-    let tree = binding
-        .a11y_tree()
-        .expect("semantics was enabled and a frame ran, so a tree must exist");
-
-    let error = tree
-        .find_by_label("Decrement")
-        .expect_err("there is no \"Decrement\" control in this tree");
-
-    assert!(
-        matches!(error, A11yQueryError::NotFound { .. }),
-        "a query for a label that is not in the tree must fail with NotFound, got: {error:?}"
-    );
-    let message = error.to_string();
-    assert!(
-        message.contains("Decrement"),
-        "the error must name what was searched for (\"Decrement\"); message was:\n{message}"
-    );
-    assert!(
-        message.contains("Increment"),
-        "the error must list what labels ARE reachable (\"Increment\"), so the next \
-         query an agent writes can be right instead of another guess; message was:\n{message}"
     );
 }

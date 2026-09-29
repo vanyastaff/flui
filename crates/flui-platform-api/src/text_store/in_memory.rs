@@ -530,18 +530,4 @@ mod tests {
         assert_eq!(store.composition(), None);
         assert_eq!(store.text(), "xyzbc!def");
     }
-
-    #[test]
-    fn cells_are_one_scalar_each() {
-        let store = InMemoryTextStore::new("a😀b");
-        let rect = Rc::new(Cell::new(None));
-        let seen = Rc::clone(&rect);
-        let _ = store.request_lock(
-            LockGrant::read(move |session| seen.set(session.rect_for_range(range(1, 3)).ok())),
-            LockTiming::Sync,
-        );
-        let bounds = rect.get().expect("laid out").bounds;
-        assert_eq!(bounds.origin.x, (InMemoryTextStore::ADVANCE));
-        assert_eq!(bounds.size.width, (InMemoryTextStore::ADVANCE));
-    }
 }

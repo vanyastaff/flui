@@ -518,7 +518,6 @@ fn clear_receiver(line: &str) -> &str {
 /// The clear count is asserted before the binding it is tied to, so a tree
 /// without the site goes red on "missing exit-path clear" rather than on the
 /// extraction that follows.
-#[test]
 fn android_run_clears_the_window_callbacks_between_its_loop_and_the_quit_hook() {
     let region = exit_region();
 
@@ -548,7 +547,6 @@ fn android_run_clears_the_window_callbacks_between_its_loop_and_the_quit_hook() 
 
 /// The platform's own reference goes before the clear, so that after the
 /// release no arm and no tail can find a window to dispatch to.
-#[test]
 fn android_run_releases_its_own_window_reference_before_clearing() {
     let region = exit_region();
 
@@ -562,4 +560,12 @@ fn android_run_releases_its_own_window_reference_before_clearing() {
          `complete_close`: dispatch close, drop the platform's tracking entry, then clear)"
     );
     assert_only_the_expected_lines_name_the_binding(&region, take_index, clear_index, binding);
+}
+
+/// The exit region of `run` releases the platform's window reference, then
+/// clears the callbacks, in the unfused shape.
+#[test]
+fn android_run_exit_region_releases_then_clears() {
+    android_run_clears_the_window_callbacks_between_its_loop_and_the_quit_hook();
+    android_run_releases_its_own_window_reference_before_clearing();
 }

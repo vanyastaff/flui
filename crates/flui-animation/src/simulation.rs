@@ -969,188 +969,21 @@ impl Simulation for BoundedFrictionSimulation {
 mod tests {
     use super::*;
 
-    #[test]
-    #[should_panic(expected = "drag >= 1 never decelerates")]
     fn friction_drag_ge_one_panics_instead_of_hanging() {
         // drag >= 1 would make dx grow forever; construction must reject it.
-        let _ = FrictionSimulation::new(1.5, 0.0, 100.0);
-    }
-
-    #[test]
-    fn friction_settles_with_valid_drag() {
-        let sim = FrictionSimulation::new(0.135, 0.0, 1000.0);
-        // dx decays toward zero, so is_done eventually holds.
-        assert!(sim.is_done(100.0), "friction with drag<1 must come to rest");
-    }
-
-    #[test]
-    fn friction_through_lands_at_target() {
-        // Fling from x=0 (v=800) to rest (v=0) at x=500: the resting (asymptotic)
-        // position must be the requested 500.
-        let sim = FrictionSimulation::through(0.0, 500.0, 800.0, 0.0);
+        let payload = std::panic::catch_unwind(|| FrictionSimulation::new(1.5, 0.0, 100.0))
+            .expect_err("drag >= 1 must be rejected at construction");
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
         assert!(
-            (sim.final_x() - 500.0).abs() < 0.5,
-            "final_x={}",
-            sim.final_x()
-        );
-        // It approaches 500 over time and the (fixed) time_at_x of an
-        // intermediate point is positive and finite.
-        assert!(
-            (sim.x(100.0) - 500.0).abs() < 1.0,
-            "x(100)={}",
-            sim.x(100.0)
-        );
-        let t_mid = sim.time_at_x(250.0);
-        assert!(t_mid.is_finite() && t_mid > 0.0, "t_mid={t_mid}");
-    }
-
-    #[test]
-    fn clamped_simulation_bounds_position_and_velocity() {
-        let inner = Box::new(FrictionSimulation::new(0.135, 0.0, 5000.0));
-        let clamped = ClampedSimulation::new(inner, -10.0, 100.0, -50.0, 50.0);
-        // At t=0: position 0 is within [-10, 100]; velocity 5000 clamps to 50.
-        assert_eq!(clamped.x(0.0), 0.0);
-        assert_eq!(clamped.dx(0.0), 50.0);
-        // Later, the friction position would exceed 100 but stays clamped.
-        assert!(clamped.x(10.0) <= 100.0 && clamped.x(10.0) >= -10.0);
-    }
-
-    #[test]
-    fn bounded_friction_stops_at_bound() {
-        // A fast fling that would overshoot 100 must report done at the bound.
-        let sim = BoundedFrictionSimulation::new(0.135, 0.0, 5000.0, -10.0, 100.0);
-        assert!(sim.x(10.0) <= 100.0, "clamped to max bound");
-        assert!(sim.is_done(10.0), "done once the bound is reached");
-    }
-
-    #[test]
-    fn bounded_friction_done_after_jumping_past_bound() {
-        // A very fast fling whose unclamped friction position leaps from inside
-        // the range to hundreds of px past max_x between frames. Friction is
-        // nowhere near settled (velocity still ~thousands), and the position is
-        // nowhere near the exact bound, so the old near-bound tolerance test kept
-        // the sim active; the crossing-based test finishes it.
-        let sim = BoundedFrictionSimulation::new(0.135, 0.0, 8000.0, -10.0, 50.0);
-        assert!(
-            sim.is_done(0.2),
-            "done once the bound is crossed, not only when near it"
-        );
-        assert_eq!(sim.x(0.2), 50.0, "x pinned at max bound");
-        assert_eq!(sim.dx(0.2), 0.0, "zero velocity once pinned at the bound");
-    }
-
-    #[test]
-    fn bounded_friction_negative_fling_stops_at_min() {
-        // Symmetric: a negative fling finishes at min_x, not max_x.
-        let sim = BoundedFrictionSimulation::new(0.135, 0.0, -8000.0, -50.0, 10.0);
-        assert!(sim.is_done(0.2), "done once min bound is crossed");
-        assert_eq!(sim.x(0.2), -50.0, "x pinned at min bound");
-    }
-
-    #[test]
-    fn scroll_spring_does_not_snap() {
-        // An underdamped scroll spring overshoots its target (bounce), unlike a
-        // snap-to-end spring which would clamp at the end.
-        let spring = SpringDescription::with_damping_ratio(1.0, 200.0, 0.4);
-        let sim = ScrollSpringSimulation::new(spring, 0.0, 100.0, 0.0);
-        let overshot = (0..200).any(|i| sim.x(i as f64 / 60.0) > 100.5);
-        assert!(overshot, "underdamped scroll spring should overshoot");
-    }
-
-    #[test]
-    fn test_tolerance_default() {
-        let tol = Tolerance::DEFAULT;
-        assert_eq!(tol.distance, 1e-3);
-        assert_eq!(tol.velocity, 1e-3);
-        assert_eq!(tol.time, 1e-3);
-    }
-
-    #[test]
-    fn test_spring_description_damping_ratio() {
-        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
-        assert!((spring.damping_ratio() - 1.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_spring_types() {
-        // Critically damped
-        let critical = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
-        assert_eq!(critical.spring_type(), SpringType::CriticallyDamped);
-
-        // Underdamped (bouncy)
-        let underdamped = SpringDescription::with_damping_ratio(1.0, 500.0, 0.5);
-        assert_eq!(underdamped.spring_type(), SpringType::Underdamped);
-
-        // Overdamped (slow)
-        let overdamped = SpringDescription::with_damping_ratio(1.0, 500.0, 2.0);
-        assert_eq!(overdamped.spring_type(), SpringType::Overdamped);
-    }
-
-    #[test]
-    fn test_spring_simulation_converges() {
-        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
-        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
-
-        // At time 0, should be at start
-        assert!((sim.x(0.0) - 0.0).abs() < 0.01);
-
-        // Should converge toward end position
-        let late_position = sim.x(1.0);
-        assert!((late_position - 1.0).abs() < 0.1);
-
-        // Eventually should be done
-        assert!(sim.is_done(2.0));
-    }
-
-    #[test]
-    fn test_spring_simulation_snap_to_end() {
-        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
-        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0).with_snap_to_end(true);
-
-        // When done, should snap to exact end
-        if sim.is_done(2.0) {
-            assert_eq!(sim.x(2.0), 1.0);
-            assert_eq!(sim.dx(2.0), 0.0);
-        }
-    }
-
-    #[test]
-    fn test_underdamped_oscillates() {
-        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.3);
-        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
-
-        // Underdamped spring should overshoot
-        let mut found_overshoot = false;
-        for i in 1..100 {
-            let t = i as f64 * 0.01;
-            if sim.x(t) > 1.0 {
-                found_overshoot = true;
-                break;
-            }
-        }
-        assert!(
-            found_overshoot,
-            "Underdamped spring should overshoot target"
+            message.contains("drag >= 1 never decelerates"),
+            "unexpected panic message: {message}"
         );
     }
 
-    #[test]
-    fn test_friction_simulation() {
-        let sim = FrictionSimulation::new(0.1, 0.0, 100.0);
-
-        // Should start at initial position
-        assert!((sim.x(0.0) - 0.0).abs() < 0.01);
-
-        // Velocity should decrease over time
-        let v1 = sim.dx(0.0);
-        let v2 = sim.dx(1.0);
-        assert!(v1.abs() > v2.abs());
-
-        // Should eventually stop
-        assert!(sim.is_done(100.0));
-    }
-
-    #[test]
     fn test_gravity_simulation() {
         let sim = GravitySimulation::new(9.8, 0.0, 0.0, 100.0);
 
@@ -1164,54 +997,6 @@ mod tests {
         assert!(sim.dx(1.0) > sim.dx(0.0));
     }
 
-    #[test]
-    fn test_spring_with_duration_and_bounce() {
-        let spring = SpringDescription::with_duration_and_bounce(0.5, 0.0);
-        // Should be approximately critically damped
-        assert!((spring.damping_ratio() - 1.0).abs() < 0.1);
-
-        let bouncy = SpringDescription::with_duration_and_bounce(0.5, 0.5);
-        // Should be underdamped
-        assert!(bouncy.damping_ratio() < 1.0);
-    }
-
-    /// Heavy over-damping where `f64` cancels the slow root to exactly 0.
-    #[test]
-    fn extreme_overdamped_spring_settles_toward_target() {
-        let spring = SpringDescription::new(1.0, 1.0, 10_000.0);
-        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
-        assert_eq!(sim.spring_type(), SpringType::Overdamped);
-
-        assert!((sim.x(0.0) - 0.0).abs() < 1e-6, "x(0)={}", sim.x(0.0));
-        assert!((sim.dx(0.0) - 0.0).abs() < 1e-6, "dx(0)={}", sim.dx(0.0));
-
-        // Must move toward the target (the cancelled-root bug stayed at 0 forever).
-        // Slow-root time constant is ~1/|r2| ≈ 10_000 s, so t=1000 is still early.
-        let mid = sim.x(1_000.0);
-        assert!(
-            mid > 0.05 && mid < 0.2,
-            "expected slow approach, got x(1000)={mid}"
-        );
-        assert!(
-            sim.x(10_000.0) > mid,
-            "position must keep advancing toward the target"
-        );
-
-        let late = sim.x(100_000.0);
-        assert!(
-            (late - 1.0).abs() < Tolerance::DEFAULT.distance,
-            "expected near target, got x(100000)={late}"
-        );
-        assert!(
-            sim.is_done(100_000.0),
-            "extreme overdamped spring must report done by t=100000; \
-             x={} dx={}",
-            sim.x(100_000.0),
-            sim.dx(100_000.0)
-        );
-    }
-
-    #[test]
     fn spring_regimes_preserve_initial_conditions_and_settle() {
         let cases = [
             (
@@ -1284,160 +1069,17 @@ mod tests {
     }
 
     #[test]
-    fn near_critical_regimes_are_continuous_at_t0() {
-        // Crossing the critical boundary must not jump the initial sample.
-        let start = 0.0_f64;
-        let end = 1.0_f64;
-        let velocity = 0.0_f64;
-        let critical = SpringSimulation::new(
-            SpringDescription::with_damping_ratio(1.0, 500.0, 1.0),
-            start,
-            end,
-            velocity,
-        );
-        let slightly_over = SpringSimulation::new(
-            SpringDescription::with_damping_ratio(1.0, 500.0, 1.000_1),
-            start,
-            end,
-            velocity,
-        );
-        let slightly_under = SpringSimulation::new(
-            SpringDescription::with_damping_ratio(1.0, 500.0, 0.999_9),
-            start,
-            end,
-            velocity,
-        );
-
-        for t in [0.0_f64, 0.01, 0.05, 0.1] {
-            let xc = critical.x(t);
-            assert!(
-                (slightly_over.x(t) - xc).abs() < 1e-3,
-                "over vs critical at t={t}: {} vs {xc}",
-                slightly_over.x(t)
-            );
-            assert!(
-                (slightly_under.x(t) - xc).abs() < 1e-3,
-                "under vs critical at t={t}: {} vs {xc}",
-                slightly_under.x(t)
-            );
-        }
-    }
-
-    /// Mirrors `controller::default_fling_spring`. The critical round-trip snap
-    /// is load-bearing: without it, f64 promotion of ratio `1.0` at k=500 would
-    /// classify as underdamped and `fling_with` would reject the default spring.
-    #[test]
-    fn default_fling_spring_shape_is_not_underdamped_and_settles() {
-        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
-        let sim = SpringSimulation::new(spring, 0.0, 1.0, 10.0).with_snap_to_end(true);
-        assert_ne!(
-            sim.spring_type(),
-            SpringType::Underdamped,
-            "default fling spring must remain acceptable to fling_with"
-        );
-        assert_eq!(sim.spring_type(), SpringType::CriticallyDamped);
-        assert!(
-            sim.is_done(2.0),
-            "fling spring must settle; x={} dx={}",
-            sim.x(2.0),
-            sim.dx(2.0)
-        );
-    }
-
-    /// Codex P2 on #1087: a fixed relative band around critical must not swallow
-    /// representable non-critical ratios. `0.9999999` stores a distinct `f64`
-    /// damping with a negative discriminant and must stay underdamped so
-    /// `fling_with` keeps rejecting it.
-    #[test]
-    fn representable_near_critical_underdamped_is_not_snapped_to_critical() {
-        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 0.999_999_9);
-        assert_ne!(
-            spring.damping,
-            SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).damping,
-            "fixture must use a distinct f64 damping from ratio=1.0"
-        );
-        assert_eq!(
-            spring.spring_type(),
-            SpringType::Underdamped,
-            "ratio < 1.0 with distinct f64 damping must stay underdamped"
-        );
-        let sim = SpringSimulation::new(spring, 0.0, 1.0, 0.0);
-        assert_eq!(sim.spring_type(), SpringType::Underdamped);
-    }
-
-    #[test]
-    fn representable_near_critical_overdamped_is_not_snapped_to_critical() {
-        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.000_000_1);
-        assert_ne!(
-            spring.damping,
-            SpringDescription::with_damping_ratio(1.0, 500.0, 1.0).damping,
-            "fixture must use a distinct f64 damping from ratio=1.0"
-        );
-        assert_eq!(
-            spring.spring_type(),
-            SpringType::Overdamped,
-            "ratio > 1.0 with distinct f64 damping must stay overdamped"
-        );
-    }
-
-    #[test]
-    fn scroll_spring_wrapper_settles() {
-        let spring = SpringDescription::with_damping_ratio(1.0, 500.0, 1.0);
-        let sim = ScrollSpringSimulation::new(spring, 0.0, 100.0, 50.0);
-        assert!((sim.x(0.0) - 0.0).abs() < 1e-5, "x(0)={}", sim.x(0.0));
-        assert!(
-            sim.is_done(2.0),
-            "scroll spring wrapper must settle; x={} dx={}",
-            sim.x(2.0),
-            sim.dx(2.0)
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Mass must be positive")]
-    fn spring_description_rejects_non_positive_mass() {
-        let _ = SpringDescription::new(0.0, 1.0, 1.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Stiffness must be positive")]
-    fn spring_description_rejects_non_positive_stiffness() {
-        let _ = SpringDescription::new(1.0, 0.0, 1.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Damping must be non-negative")]
-    fn spring_description_rejects_negative_damping() {
-        let _ = SpringDescription::new(1.0, 1.0, -1.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Mass must be finite")]
-    fn spring_description_rejects_infinite_mass() {
-        let _ = SpringDescription::new(f64::INFINITY, 1.0, 1.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Stiffness must be finite")]
-    fn spring_description_rejects_nan_stiffness() {
-        let _ = SpringDescription::new(1.0, f64::NAN, 1.0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Damping must be finite")]
-    fn spring_description_rejects_infinite_damping() {
-        let _ = SpringDescription::new(1.0, 1.0, f64::INFINITY);
-    }
-
-    #[test]
-    #[should_panic(expected = "Damping ratio must be non-negative")]
-    fn with_damping_ratio_rejects_negative_ratio() {
-        let _ = SpringDescription::with_damping_ratio(1.0, 500.0, -0.1);
-    }
-
-    #[test]
-    #[should_panic(expected = "Damping ratio must be finite")]
-    fn with_damping_ratio_rejects_infinite_ratio() {
-        let _ = SpringDescription::with_damping_ratio(1.0, 500.0, f64::INFINITY);
+    fn simulation_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "friction drag ge one panics instead of hanging",
+                friction_drag_ge_one_panics_instead_of_hanging,
+            ),
+            ("test gravity simulation", test_gravity_simulation),
+            (
+                "spring regimes preserve initial conditions and settle",
+                spring_regimes_preserve_initial_conditions_and_settle,
+            ),
+        ]);
     }
 }

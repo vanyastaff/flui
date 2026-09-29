@@ -85,8 +85,9 @@ tests under `tests/` also use `flui-widgets`' and `flui-interaction`'s `testing`
   already inside the whole `foundation` re-export at the facade's path, so the `measured`
   module names them and `src/lib.rs` gains no line for them.
 
-`the_design_systems_build_on_the_sdk_alone` and `devtools_builds_on_the_sdk_alone` in
-`tools/xtask` pin the three manifests.
+The kind rule of `cargo xtask workspace` (ADR-0081 §3, ADR-0088 §2) keeps the three
+manifests on the SDK: an official package's normal and build dependencies are `flui-sdk` and
+the contract crates, and its self-test plants each way of leaving it.
 
 An item a package needs that is not here is added by ADR-0088 §4 (at the facade's path when the
 facade has one, otherwise in an Evolving module: `pipeline` for render internals, `hooks` for
@@ -103,10 +104,9 @@ normal dependency beside `flui-sdk` as a dev-dependency only, has no instance
 (`crates/flui-macros/ARCHITECTURE.md`, "Resolve runtime paths"). The `Diagnosticable` derive
 itself has no SDK path; its expansion still resolves through the SDK.
 
-Because `flui-sdk`'s dev-dependency on the facade reaches `flui-material` through the facade's
-default `material` feature, a unit test inside this crate would see a second copy of
-`flui_sdk` (the one Material links). The same holds for Cupertino whenever a build enables
-`flui/cupertino`, as an `--all-features` test run does. The surface test is an integration test
+Whenever a build enables `flui/material` or `flui/cupertino` (the test scope and `--all-features`
+do), `flui-sdk`'s dev-dependency on the facade reaches that catalog, and a unit test inside this
+crate would see a second copy of `flui_sdk` (the one the catalog links). The surface test is an integration test
 and is not affected.
 
 The count is from source, not from rustdoc JSON; the rustdoc measurement ADR-0088 §4 asks for

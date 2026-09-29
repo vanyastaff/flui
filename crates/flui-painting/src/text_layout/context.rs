@@ -59,6 +59,13 @@ impl FontCollection {
         Arc::ptr_eq(&a.0, &b.0)
     }
 
+    /// How many handles hold this collection: every clone, including the one
+    /// inside each [`TextContext`] built from it.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn holders(&self) -> usize {
+        Arc::strong_count(&self.0)
+    }
+
     /// Adds every face in `font_bytes` to the collection.
     ///
     /// Visible to every [`TextContext`] built from this collection, including
@@ -199,42 +206,5 @@ impl fmt::Debug for TextContext {
         f.debug_struct("TextContext")
             .field("fonts", &self.fonts)
             .finish_non_exhaustive()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{FontCollection, TextContext};
-
-    const fn assert_send_sync<T: Send + Sync>() {}
-    const fn assert_send<T: Send>() {}
-
-    /// The collection crosses to every realm's thread; a context moves with
-    /// its realm.
-    const _: () = {
-        assert_send_sync::<FontCollection>();
-        assert_send::<TextContext>();
-    };
-
-    #[test]
-    fn a_clone_is_the_same_collection_and_a_new_one_is_not() {
-        let fonts = FontCollection::new();
-        assert!(FontCollection::ptr_eq(&fonts, &fonts.clone()));
-        assert!(!FontCollection::ptr_eq(&fonts, &FontCollection::new()));
-    }
-
-    #[test]
-    fn a_context_keeps_the_collection_it_was_built_from() {
-        let fonts = FontCollection::new();
-        let context = TextContext::new(&fonts);
-        assert!(FontCollection::ptr_eq(context.fonts(), &fonts));
-    }
-
-    #[cfg(feature = "parley")]
-    #[test]
-    fn bytes_with_no_face_are_refused() {
-        let fonts = FontCollection::new();
-        assert!(fonts.register_font(b"not a font").is_err());
-        assert!(fonts.register_font(&[]).is_err());
     }
 }

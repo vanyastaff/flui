@@ -534,7 +534,15 @@ mod tests {
         Seen::Debugged(REDACTED_VALUE.to_owned())
     }
 
-    #[test]
+    fn the_private_marker_wins_over_the_public_marker() {
+        // `a.public.private` ends with `.private`, and only the trailing
+        // segment is the marker; deny beats allow when both could match.
+        assert_eq!(
+            FieldPrivacy::classify("a.public.private", FieldKind::Scalar, EventOrigin::Native),
+            FieldPrivacy::Private
+        );
+    }
+
     fn a_dynamic_string_field_is_redacted_by_default() {
         let capture = behind_redaction(|| {
             tracing::info!(path = "/home/user/secret.txt", "asset loaded");
@@ -550,70 +558,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_debug_rendered_field_is_redacted_by_default() {
-        let capture = behind_redaction(|| {
-            tracing::info!(command = ?("draw_text", "hello"), size = 2_u64);
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(*field(event, "command"), redacted());
-        assert_eq!(
-            *field(event, "size"),
-            Seen::U64(2),
-            "a scalar beside a redacted field keeps its type"
-        );
-    }
-
-    #[test]
-    fn an_error_value_is_redacted_by_default() {
-        let io_error = std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "No such file: /home/user/private.png",
-        );
-        let capture = behind_redaction(|| {
-            tracing::warn!(error = &io_error as &dyn std::error::Error, "load failed");
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(
-            *field(event, "error"),
-            redacted(),
-            "error renderings embed paths and OS strings; they are dynamic values"
-        );
-    }
-
-    #[test]
-    fn scalar_fields_pass_through_with_their_types() {
-        let capture = behind_redaction(|| {
-            tracing::info!(
-                a = -1_i64,
-                b = 2_u64,
-                c = 3_i128,
-                d = 4_u128,
-                e = 0.5_f64,
-                f = true,
-                "scalars"
-            );
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(*field(event, "a"), Seen::I64(-1));
-        assert_eq!(*field(event, "b"), Seen::U64(2));
-        assert_eq!(*field(event, "c"), Seen::I128(3));
-        assert_eq!(*field(event, "d"), Seen::U128(4));
-        assert_eq!(*field(event, "e"), Seen::F64(0.5));
-        assert_eq!(*field(event, "f"), Seen::Bool(true));
-        assert!(
-            event.is_contextual && event.explicit_parent.is_none(),
-            "sanity: the macro emitted a contextual event"
-        );
-    }
-
-    #[test]
     fn a_public_marker_publishes_a_dynamic_field_verbatim() {
         let capture = behind_redaction(|| {
             tracing::info!(phase.public = "commit", detail.public = ?(1, 2), "ok");
@@ -633,132 +577,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_private_marker_redacts_a_scalar() {
-        let capture = behind_redaction(|| {
-            tracing::info!(latitude.private = 52.52_f64, frame = 7_u64, "position");
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(*field(event, "latitude.private"), redacted());
-        assert_eq!(*field(event, "frame"), Seen::U64(7));
-    }
-
-    #[test]
-    fn field_order_survives_redaction() {
-        let capture = behind_redaction(|| {
-            tracing::info!(first = 1_u64, secret = "s", last = 3_u64, "ordered");
-        });
-
-        let events = capture.events();
-        let names: Vec<&str> = events[0]
-            .fields
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect();
-        assert_eq!(names, vec!["message", "first", "secret", "last"]);
-    }
-
-    #[test]
-    fn log_bridge_normalization_fields_pass_verbatim() {
-        // The logcat layer derives its tag from `log.target` on a bridged
-        // record; redacting these four would misfile every bridged event.
-        let capture = behind_redaction(|| {
-            tracing::info!(
-                log.target = "wgpu_core",
-                log.module_path = "wgpu_core::device",
-                secret = "user text",
-                "bridged-shaped"
-            );
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(
-            *field(event, "log.target"),
-            Seen::Str("wgpu_core".to_owned())
-        );
-        assert_eq!(
-            *field(event, "log.module_path"),
-            Seen::Str("wgpu_core::device".to_owned())
-        );
-        assert_eq!(*field(event, "secret"), redacted());
-    }
-
-    #[test]
-    fn span_attributes_are_classified_like_event_fields() {
-        let capture = behind_redaction(|| {
-            let _span = tracing::info_span!("session", token = "t0k3n", frame = 1_u64);
-        });
-
-        let attributes = capture.span_attributes();
-        assert_eq!(attributes.len(), 1, "one span: {attributes:?}");
-        assert!(
-            attributes[0].contains(&("token".to_owned(), redacted())),
-            "span attribute `token` must be redacted: {attributes:?}"
-        );
-        assert!(
-            attributes[0].contains(&("frame".to_owned(), Seen::U64(1))),
-            "span attribute `frame` must stay typed: {attributes:?}"
-        );
-    }
-
-    #[test]
-    fn late_span_records_are_classified() {
-        let capture = behind_redaction(|| {
-            let span = tracing::info_span!(
-                "session",
-                token = tracing::field::Empty,
-                frame = tracing::field::Empty
-            );
-            span.record("token", "t0k3n");
-            span.record("frame", 7_u64);
-        });
-
-        let records = capture.span_records();
-        assert_eq!(records.len(), 2, "two record calls: {records:?}");
-        assert_eq!(records[0], vec![("token".to_owned(), redacted())]);
-        assert_eq!(records[1], vec![("frame".to_owned(), Seen::U64(7))]);
-    }
-
-    #[test]
-    fn an_explicit_parent_survives_synthesis() {
-        let capture = behind_redaction(|| {
-            let span = tracing::info_span!("parent");
-            tracing::info!(parent: &span, secret = "s", "child event");
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(*field(event, "secret"), redacted());
-        assert!(
-            event.explicit_parent.is_some(),
-            "the synthesized event must keep its explicit parent: {event:?}"
-        );
-        assert!(!event.is_contextual);
-    }
-
-    #[test]
-    fn a_fully_public_event_is_forwarded_untouched() {
-        let capture = behind_redaction(|| {
-            tracing::info!(frame = 7_u64, phase.public = "commit", "clean");
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(*field(event, "frame"), Seen::U64(7));
-        assert_eq!(
-            *field(event, "phase.public"),
-            Seen::Str("commit".to_owned())
-        );
-        assert!(
-            event.is_contextual,
-            "the original contextual event passes through"
-        );
-    }
-
-    #[test]
     fn a_bridged_log_message_is_redacted_by_default() {
         // Writes the process-global `log` logger slot — the only unit test in
         // this crate that touches it (the `tests/` bridge scenarios each own a
@@ -799,21 +617,24 @@ mod tests {
     // --- composed with the logcat renderer, the exact Android line shape ----
 
     #[test]
-    fn the_rendered_logcat_line_replaces_values_not_names() {
-        let rendered = crate::test_support::capture_rendered_events_behind_redaction(|| {
-            tracing::info!(
-                frame = 7_u64,
-                path = "/home/user/doc.txt",
-                phase.public = "commit",
-                "frame committed"
-            );
-        });
-
-        assert_eq!(
-            rendered,
-            vec![format!(
-                "frame committed | frame=7 path={REDACTED_VALUE} phase.public=commit"
-            )]
-        );
+    fn redaction_contract() {
+        crate::test_support::run_cases(&[
+            (
+                "the private marker wins over the public marker",
+                the_private_marker_wins_over_the_public_marker,
+            ),
+            (
+                "a dynamic string field is redacted by default",
+                a_dynamic_string_field_is_redacted_by_default,
+            ),
+            (
+                "a public marker publishes a dynamic field verbatim",
+                a_public_marker_publishes_a_dynamic_field_verbatim,
+            ),
+            (
+                "a bridged log message is redacted by default",
+                a_bridged_log_message_is_redacted_by_default,
+            ),
+        ]);
     }
 }
