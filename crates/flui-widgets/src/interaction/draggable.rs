@@ -143,28 +143,28 @@ use flui_interaction::{
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
     MultiDragUpdateDetails, PointerEventExt as _, PointerId, Velocity,
 };
-use flui_view::RebuildHandle;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
+use flui_view::{EventCx, EventOutcome, RebuildHandle, WriterSource};
 use parking_lot::Mutex;
 
 use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
+use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
 use crate::{
     DragPosition, DragTargetSlot, ErasedDragData, GestureArenaScope, IgnorePointer, Listener,
     Positioned, Stack, StackFit,
 };
 
-/// A no-argument callback retained in the current shared drag-config snapshot.
-///
-/// `MultiDragHandle` itself is owner-local; these `Arc` bounds are legacy
-/// storage shape, not a cross-thread callback contract.
-type StartedCallback = Arc<dyn Fn() + Send + Sync>;
+/// A no-argument drag callback: started, completed. Owner-local, like the
+/// [`MultiDragHandle`] that invokes it, and run inside a write the
+/// draggable's [`WriterSource`] opens (ADR-0086).
+type StartedCallback = EventCallback;
 /// Called for each pointer move while a drag is in progress.
-type DragUpdateCallback = Arc<dyn Fn(DragUpdateDetails) + Send + Sync>;
+type DragUpdateCallback = ValueCallback<DragUpdateDetails>;
 /// Called once when a drag ends, accepted or not.
-type DragEndCallback = Arc<dyn Fn(DraggableDetails) + Send + Sync>;
+type DragEndCallback = ValueCallback<DraggableDetails>;
 /// Called when a drag ends without being accepted by a target.
-type DraggableCanceledCallback = Arc<dyn Fn(Velocity, Offset<f64>) + Send + Sync>;
+type DraggableCanceledCallback = ValueCallback<DraggableCanceledDetails>;
 
 /// Details for [`Draggable::on_drag_end`] — the velocity and position at
 /// release, and whether a [`DragTarget`](crate::DragTarget) accepted the drop.
@@ -183,6 +183,22 @@ pub struct DraggableDetails {
     /// divergence note #4: the oracle's `_lastOffset` adds the draggable's
     /// global origin on top of this sum; this port does not (a named,
     /// pinned divergence, not a raw position either way).
+    pub offset: Offset<f64>,
+}
+
+/// Details for [`Draggable::on_draggable_canceled`]: the velocity and the
+/// displacement at the moment the drag ended without a target accepting it.
+///
+/// Flutter's `DraggableCanceledCallback` takes the two as separate
+/// arguments. One value keeps the callback's shape `|cx, details|`, which a
+/// `let`-bound closure can name through [`callback_with`];
+/// see mapping decision 38 in `crates/flui-widgets/ARCHITECTURE.md`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DraggableCanceledDetails {
+    /// Velocity at release; zero for a cancelled pointer or an unmount.
+    pub velocity: Velocity,
+    /// Displacement since the drag started, with the same meaning as
+    /// [`DraggableDetails::offset`].
     pub offset: Offset<f64>,
 }
 
@@ -292,40 +308,50 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
     /// Down and therefore starts without movement. With competitors (for
     /// example, inside a scrollable), movement past the recognizer's slop can
     /// be what resolves the competition.
+    ///
+    /// Every drag callback receives the dispatch's `&mut EventCx<'_>` first
+    /// and may return `()` or a `Result` whose refusal is reported (ADR-0086).
     #[must_use]
-    pub fn on_drag_started(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_drag_started = Some(Arc::new(callback));
+    pub fn on_drag_started<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_drag_started = Some(event_callback(callback));
         self
     }
 
     /// Called for each pointer move while the drag is in progress.
     #[must_use]
-    pub fn on_drag_update(
-        mut self,
-        callback: impl Fn(DragUpdateDetails) + Send + Sync + 'static,
-    ) -> Self {
-        self.on_drag_update = Some(Arc::new(callback));
+    pub fn on_drag_update<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, DragUpdateDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_drag_update = Some(value_callback(callback));
         self
     }
 
     /// Called when the drag ends without a target accepting it — including
-    /// every cancel, and every drop over nothing.
+    /// every cancel, every drop over nothing, and an unmount mid-drag.
     #[must_use]
-    pub fn on_draggable_canceled(
-        mut self,
-        callback: impl Fn(Velocity, Offset<f64>) + Send + Sync + 'static,
-    ) -> Self {
-        self.on_draggable_canceled = Some(Arc::new(callback));
+    pub fn on_draggable_canceled<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, DraggableCanceledDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_draggable_canceled = Some(value_callback(callback));
         self
     }
 
     /// Called once the drag ends, accepted or not.
     #[must_use]
-    pub fn on_drag_end(
-        mut self,
-        callback: impl Fn(DraggableDetails) + Send + Sync + 'static,
-    ) -> Self {
-        self.on_drag_end = Some(Arc::new(callback));
+    pub fn on_drag_end<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, DraggableDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_drag_end = Some(value_callback(callback));
         self
     }
 
@@ -333,8 +359,12 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
     /// [`on_draggable_canceled`](Self::on_draggable_canceled), never
     /// alongside it.
     #[must_use]
-    pub fn on_drag_completed(mut self, callback: impl Fn() + Send + Sync + 'static) -> Self {
-        self.on_drag_completed = Some(Arc::new(callback));
+    pub fn on_drag_completed<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_drag_completed = Some(event_callback(callback));
         self
     }
 }
@@ -350,7 +380,7 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     active_count: Arc<AtomicUsize>,
     /// The live config the recognizer's `on_start` closure reads at drag-start
     /// time (data, callbacks, axis, max-drags). Refreshed each `build`.
-    config: Arc<Mutex<DragConfig>>,
+    config: Rc<RefCell<DragConfig>>,
     /// The nearest ancestor `Overlay`'s handle, if any — resolved in
     /// `did_change_dependencies` (a lifecycle hook, per
     /// ADR-0018's pattern), not in `build` or from inside the
@@ -416,8 +446,8 @@ pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// before-mount/after-unmount no-op).
     feedback_entry: Rc<RefCell<Option<OverlayEntry>>>,
     /// `feedback`/`feedback_offset`, refreshed each `build` — read by
-    /// `on_start` at drag-start time. Owner-local (`Rc<RefCell<_>>`): see
-    /// [`FeedbackConfig`]'s docs on why it cannot live in [`DragConfig`].
+    /// `on_start` at drag-start time. Owner-local (`Rc<RefCell<_>>`), like
+    /// [`DragConfig`]; see [`FeedbackConfig`] for why the two are separate.
     feedback_config: Rc<RefCell<FeedbackConfig>>,
     /// Built once in `init_state` against the presentation arena.
     recognizer: Option<Arc<MultiDragGestureRecognizer>>,
@@ -436,19 +466,21 @@ impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for DraggableState<T> {
 }
 
 /// The live, per-rebuild configuration a drag session reads at start time and
-/// throughout its lifetime. `Send + Sync` because it is read from inside a
-/// [`MultiDragHandle`] impl.
+/// throughout its lifetime.
+///
+/// Owner-local: the handle is `!Send` (it holds the `Rc` event callbacks), as
+/// is the [`MultiDragHandle`] that reads it. Every reader clones what it
+/// needs out of the cell and releases the borrow before any user callback
+/// runs, so a callback that rebuilds the widget cannot collide with a live
+/// borrow.
 ///
 /// `Draggable::data` is carried **erased** (`ErasedDragData`): a session hands
 /// it to targets that cannot name `T`, and `Arc<dyn Any + Send + Sync>` is
-/// what a hit-test-discovered target's callbacks downcast from. What a live
-/// drag reads is its own [`DragStart`] snapshot, not this.
-/// `feedback`/`feedback_offset` are **not** carried here,
-/// even though a session does read them at start: `feedback` is
-/// `Rc<dyn Fn() -> BoxedView>`, which is `!Send` (owner-local, ADR-0027) and
-/// would make this whole `Send + Sync`-bound struct `!Send` by infection —
-/// see [`FeedbackConfig`], the separate owner-local cell `on_start` (itself
-/// `Rc`-based, not `Send`-bound) reads directly instead.
+/// what a hit-test-discovered target's callbacks downcast from — the payload
+/// still crosses hit-test metadata, which stays `Send + Sync` until that
+/// metadata becomes owner-local. What a live drag reads is its own
+/// [`DragStart`] snapshot, not this. `feedback`/`feedback_offset` live in the
+/// separate [`FeedbackConfig`] cell.
 struct DragConfig {
     axis: Option<Axis>,
     max_simultaneous_drags: Option<usize>,
@@ -486,10 +518,9 @@ impl DragConfig {
     }
 }
 
-/// `feedback`/`feedback_offset`, refreshed each `build` — split out of
-/// [`DragConfig`] because `Rc<dyn Fn() -> BoxedView>` is `!Send` (ADR-0027);
-/// only `on_start` (itself `Rc`-based, not `Send`-bound — see its call site)
-/// ever reads this.
+/// `feedback`/`feedback_offset`, refreshed each `build`. Kept apart from
+/// [`DragConfig`], which a live session reads throughout the drag: only
+/// `on_start` reads this, once, and a session never sees it.
 struct FeedbackConfig {
     feedback: Option<Rc<dyn Fn() -> BoxedView>>,
     feedback_offset: Offset<f64>,
@@ -852,7 +883,11 @@ struct DragStart {
 struct DragSession {
     active_count: Arc<AtomicUsize>,
     rebuild: RebuildHandle,
-    config: Arc<Mutex<DragConfig>>,
+    config: Rc<RefCell<DragConfig>>,
+    /// Opens the `EventCx` each user callback runs in (ADR-0086). A session
+    /// ended by unmount runs its callbacks from `finalize_tree`, outside any
+    /// build, so those writes land too.
+    writer: WriterSource,
     /// The contact this session follows. Every transition a target receives
     /// is keyed by it, which is what keeps simultaneous drags independent.
     pointer: PointerId,
@@ -1081,7 +1116,7 @@ impl DragSession {
 
 impl MultiDragHandle for DragSession {
     fn update(&self, details: MultiDragUpdateDetails) {
-        let axis = self.config.lock().axis;
+        let axis = self.config.borrow().axis;
         let restricted = restrict_axis_delta(details.delta, axis);
         let moved = restricted.dx != 0.0 || restricted.dy != 0.0;
         if moved {
@@ -1107,20 +1142,22 @@ impl MultiDragHandle for DragSession {
         // Flutter's `update` passes the RAW (unrestricted) `details` through
         // to `onDragUpdate` unchanged — only the *gate* ("did the restricted
         // position move") is axis-aware, not the reported delta.
-        let on_drag_update = self.config.lock().on_drag_update.clone();
+        // Cloned out: the borrow ends before the callback runs.
+        let on_drag_update = self.config.borrow().on_drag_update.clone();
         if let Some(callback) = on_drag_update {
             let primary_delta = match axis {
                 Some(Axis::Horizontal) => details.delta.dx,
                 Some(Axis::Vertical) => details.delta.dy,
                 None => 0.0,
             };
-            callback(DragUpdateDetails {
+            let update = DragUpdateDetails {
                 global_position: details.global_position,
                 local_position: details.local_position,
                 delta: details.delta,
                 primary_delta,
                 kind: details.kind,
-            });
+            };
+            self.writer.write(|cx| callback(cx, update));
         }
     }
 
@@ -1130,8 +1167,9 @@ impl MultiDragHandle for DragSession {
         let was_accepted = self.finish_drag(true);
         self.end_active();
 
+        // Cloned out: the borrow ends before any callback runs.
         let (velocity, on_drag_end, on_drag_completed, on_draggable_canceled) = {
-            let config = self.config.lock();
+            let config = self.config.borrow();
             (
                 Velocity {
                     pixels_per_second: restrict_axis(
@@ -1146,18 +1184,20 @@ impl MultiDragHandle for DragSession {
         };
         let offset = *self.offset.lock();
         if let Some(callback) = on_drag_end {
-            callback(DraggableDetails {
+            let details = DraggableDetails {
                 was_accepted,
                 velocity,
                 offset,
-            });
+            };
+            self.writer.write(|cx| callback(cx, details));
         }
         if was_accepted {
             if let Some(callback) = on_drag_completed {
-                callback();
+                self.writer.write(|cx| callback(cx));
             }
         } else if let Some(callback) = on_draggable_canceled {
-            callback(velocity, offset);
+            let details = DraggableCanceledDetails { velocity, offset };
+            self.writer.write(|cx| callback(cx, details));
         }
     }
 
@@ -1172,8 +1212,9 @@ impl MultiDragHandle for DragSession {
         // which fires `onDragEnd` unconditionally (zero velocity, not
         // accepted, but the real `_lastOffset` — not zero) before
         // `onDraggableCanceled` — not a cancel-only path.
+        // Cloned out: the borrow ends before any callback runs.
         let (on_drag_end, on_draggable_canceled) = {
-            let config = self.config.lock();
+            let config = self.config.borrow();
             (
                 config.on_drag_end.clone(),
                 config.on_draggable_canceled.clone(),
@@ -1181,14 +1222,19 @@ impl MultiDragHandle for DragSession {
         };
         let offset = *self.offset.lock();
         if let Some(callback) = on_drag_end {
-            callback(DraggableDetails {
+            let details = DraggableDetails {
                 was_accepted: false,
                 velocity: Velocity::ZERO,
                 offset,
-            });
+            };
+            self.writer.write(|cx| callback(cx, details));
         }
         if let Some(callback) = on_draggable_canceled {
-            callback(Velocity::ZERO, offset);
+            let details = DraggableCanceledDetails {
+                velocity: Velocity::ZERO,
+                offset,
+            };
+            self.writer.write(|cx| callback(cx, details));
         }
     }
 }
@@ -1199,7 +1245,7 @@ impl<T: Clone + Send + Sync + 'static> StatefulView for Draggable<T> {
     fn create_state(&self) -> Self::State {
         DraggableState {
             active_count: Arc::new(AtomicUsize::new(0)),
-            config: Arc::new(Mutex::new(DragConfig::from_view(self))),
+            config: Rc::new(RefCell::new(DragConfig::from_view(self))),
             overlay: Arc::new(Mutex::new(None)),
             hit_test: Rc::new(RefCell::new(None)),
             listener_node: Rc::new(Cell::new(None)),
@@ -1216,6 +1262,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let arena = GestureArenaScope::of(ctx);
         let rebuild = ctx.rebuild_handle();
+        let writer = ctx.writer_source();
 
         // The *initial* resolution, not just re-resolution: `depend_on`
         // (which `Overlay::maybe_of` calls) only registers this element as a
@@ -1229,7 +1276,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let _prev = std::mem::replace(&mut *self.pipeline.borrow_mut(), ctx.pipeline_owner());
 
         let active_count = Arc::clone(&self.active_count);
-        let config = Arc::clone(&self.config);
+        let config = Rc::clone(&self.config);
         let overlay = Arc::clone(&self.overlay);
         let feedback_entry_slot = Rc::clone(&self.feedback_entry);
         let feedback_config = Rc::clone(&self.feedback_config);
@@ -1238,7 +1285,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
         let pipeline = Rc::clone(&self.pipeline);
         let on_start: MultiDragStartCallback = Rc::new(move |pointer, initial_position| {
             {
-                let guard = config.lock();
+                let guard = config.borrow();
                 if let Some(max) = guard.max_simultaneous_drags
                     && active_count.load(Ordering::Acquire) >= max
                 {
@@ -1247,9 +1294,10 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             }
             active_count.fetch_add(1, Ordering::AcqRel);
             rebuild.schedule(flui_view::RebuildReason::StateChange);
-            let callback = config.lock().on_drag_started.clone();
+            // Cloned out: the borrow ends before the callback runs.
+            let callback = config.borrow().on_drag_started.clone();
             if let Some(callback) = callback {
-                callback();
+                writer.write(|cx| callback(cx));
             }
 
             // A feedback layer needs both a builder to paint and somewhere to
@@ -1277,14 +1325,15 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
             // value the entry above was mounted with, so the probe and the
             // visible layer cannot disagree.
             let start = DragStart {
-                data: config.lock().data.clone(),
+                data: config.borrow().data.clone(),
                 feedback_offset,
             };
 
             Some(Box::new(DragSession {
                 active_count: Arc::clone(&active_count),
                 rebuild: rebuild.clone(),
-                config: Arc::clone(&config),
+                config: Rc::clone(&config),
+                writer: writer.clone(),
                 pointer,
                 hit_test: Rc::clone(&hit_test),
                 start,
@@ -1321,7 +1370,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     }
 
     fn build(&self, view: &Draggable<T>, _ctx: &dyn BuildContext) -> impl IntoView {
-        let _prev = std::mem::replace(&mut *self.config.lock(), DragConfig::from_view(view));
+        let _prev = std::mem::replace(&mut *self.config.borrow_mut(), DragConfig::from_view(view));
         let _prev = std::mem::replace(
             &mut *self.feedback_config.borrow_mut(),
             FeedbackConfig::from_view(view),
@@ -1413,13 +1462,18 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     /// (`DragSession::end_active`), but this element is unmounting — no
     /// later `build` will ever run to act on it (see `build`'s own teardown
     /// check), so this is the last chance.
+    ///
+    /// The layer goes first. The cancel runs the user's `on_drag_end` and
+    /// `on_draggable_canceled` (from `finalize_tree`, outside any build, so
+    /// their writes land); a callback that panics there must not leave the
+    /// overlay entry behind.
     fn dispose(&mut self) {
-        if let Some(recognizer) = self.recognizer.as_ref() {
-            recognizer.dispose();
-        }
         let stale = self.feedback_entry.borrow_mut().take();
         if let Some(entry) = stale {
             entry.remove();
+        }
+        if let Some(recognizer) = self.recognizer.as_ref() {
+            recognizer.dispose();
         }
     }
 }

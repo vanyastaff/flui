@@ -5005,9 +5005,7 @@ fn harness_layout_builder_publishes_the_real_incoming_constraints() {
 
 #[test]
 fn catalog_covers_every_render_object_name() {
-    let source = include_str!("render_object_harness.rs").replace("
-", "
-");
+    let source = include_str!("render_object_harness.rs").replace('\r', "");
     for &type_name in RENDER_OBJECT_TYPES {
         // A row body ends at the first closing brace in column 0; the family
         // tables and these guards sit after the last row and must not count.

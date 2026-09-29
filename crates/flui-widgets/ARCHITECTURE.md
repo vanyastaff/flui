@@ -2,8 +2,10 @@
 
 ## Event callback phase boundary
 
-`InteractiveViewer`, `RefreshIndicator`, `PopScope`, `AnimatedSize` and
-`Dismissible` event setters receive `EventCx` (ADR-0086). Composite input
+`InteractiveViewer`, `RefreshIndicator`, `PopScope`, `AnimatedSize`,
+`Dismissible`, `Draggable` and `PageView` event setters receive `EventCx`
+(ADR-0086), and so do `CallbackShortcuts` bindings and `Action::invoke`, which
+run inside the key event's dispatch. Composite input
 handlers forward their child's context; wheel and pinch claim handlers keep
 their query signature and open the viewer's lifecycle-acquired `WriterSource`
 only for the interaction notifications. `PopScope` preserves synchronous
@@ -33,18 +35,28 @@ target. Teardown therefore releases the live callbacks and presentation-bound
 writer even when an aborted or absent frame leaves the queue entry pending;
 draining that entry later is an inert no-op.
 
+`Draggable`'s drag session opens each callback's write through the widget's
+`WriterSource`; its configuration cell is owner-local and never borrowed across
+user code. An unmount mid-drag cancels from `dispose`, which runs in
+`finalize_tree` outside any build, so the cancel callbacks' writes land; the
+feedback layer is removed before that cancel runs user code. `PageView`'s
+controller listener is still `Send + Sync`, so it only records each page change
+and schedules a rebuild; `build` queues one post-frame entry per recorded page,
+and delivery reads the current callback (mapping decision 37).
+
 Tests: `animated_size_completion_writes_a_signal_after_build`,
 `dismissible_layout_notifications_write_signals_and_dismiss_once`,
 `interactive_viewer_wheel_callbacks_write_in_order_in_the_dispatching_presentation`,
-`refresh_callback_writes_a_signal_in_the_dispatching_presentation`, and
-`pop_scope_callback_writes_through_its_presentations_context`.
+`refresh_callback_writes_a_signal_in_the_dispatching_presentation`,
+`pop_scope_callback_writes_through_its_presentations_context`,
+`tests/draggable_events.rs`, `tests/page_view_events.rs`, and the
+`event_cx_tests` module of `tests/shortcuts.rs`.
 
-This does not migrate `PageView`'s shared controller listener, the drag-target
-hit-test payload callbacks, semantics action handlers, or the unmounted
-`LocalHistoryEntry::on_remove` navigation primitive. The first three require
-their owner/shared topology to change with the callback contract; the last
-needs an explicit navigation write-context contract rather than an invented
-ambient writer.
+This does not migrate the drag-target hit-test payload callbacks, the raw
+semantics action handlers, or the unmounted `LocalHistoryEntry::on_remove`
+navigation primitive. The first two travel in `Send + Sync` render-object
+metadata and change with it (ADR-0091 §1); the last needs an explicit
+navigation write-context contract rather than an invented ambient writer.
 
 The user-facing widget catalog: configuration objects over the `flui-objects`
 render catalog, plus the stateful widgets that own gesture, focus, routing and
@@ -142,10 +154,12 @@ structural:
 **Consequences:**
 
 - **`DragTarget`'s four transition callbacks change from `Rc<dyn Fn …>` to
-  `Arc<dyn Fn … + Send + Sync>`** — a breaking public-API change. It makes
-  `DragTarget` consistent with `Draggable`, whose callbacks already carried
-  those bounds, and it puts the target's cross-thread contract in the type
-  system instead of resting on GC. The *builder* stays `Rc`: it produces a
+  `Arc<dyn Fn … + Send + Sync>`** — a breaking public-API change, forced by
+  the `Send + Sync` hit-test payload above; it puts the target's cross-thread
+  contract in the type system instead of resting on GC. `Draggable`'s
+  callbacks, which never cross the payload, are owner-local and take
+  `EventCx`; `DragTarget` keeps `Send + Sync` until the metadata becomes
+  owner-local (ADR-0086 Status). The *builder* stays `Rc`: it produces a
   `BoxedView`, which is owner-local by construction, and it is only ever called
   from `build`.
 - The veto (`on_will_accept`) stays **synchronous**, which a deferred
@@ -1355,20 +1369,19 @@ storage, so it has to be met somewhere, and this is where it is met:
   `RenderObject<_> + Send + Sync + 'static`
   (`crates/flui-view/src/view/render.rs`), so the annotation render object the
   widget wraps cannot hold a `!Send` closure either.
-- The catalog's **dominant** callback convention is `Rc<dyn Fn(..)>`, owner-thread-local: 56 such
-  type aliases across `flui-widgets/src` (44) and `flui-material/src` (12), counted as
-  `type <name> = Rc<dyn Fn…>` declarations *including* those whose `Rc<dyn Fn` sits on a
-  continuation line (`pub trait`-style wrapping is common on these signatures, so a same-line read
-  under-counts them: 34/11). This bound is stricter than that convention, and a
-  caller meets it on the first handler they write.
-- It is **not unprecedented**, and the precedent is worth reading rather than rediscovering. Ten
-  public builders already take `impl Fn(..) + Send + Sync + 'static`: `interaction/draggable.rs`
-  (5), `interaction/drag_target.rs` (4), `scroll/page_view.rs` (1). `draggable.rs` names the
-  rationale outright, calling those `Arc` bounds a "legacy storage shape, not a cross-thread callback
-  contract" — which is precisely an action handler's situation. Each of those ten stores the
-  callback as `Arc::new(<the caller's closure>)`; none of them shows the hoist pattern a caller
-  needs when the closure must be shared with something else, so `on_action`'s own docs carry that
-  example instead of pointing at them.
+- The catalog's **dominant** callback convention is `Rc<dyn Fn(..)>`, owner-thread-local: the
+  callback type aliases in `flui-widgets/src` and `flui-material/src` are `Rc<dyn Fn…>`, spelled
+  out or through `support::EventCallback`/`ValueCallback`
+  (`git grep -nE "type \w+(<[^=]*>)? = (Rc<dyn Fn|EventCallback|ValueCallback)" --
+  crates/flui-widgets/src packages/flui-material/src` lists them). This bound is stricter than
+  that convention, and a caller meets it on the first handler they write.
+- It is **not unprecedented**. The one other public family that takes `impl Fn(..) + Send + Sync
+  + 'static` is `interaction/drag_target.rs` (4 builders), for the same reason: its callbacks
+  ride `Send + Sync` render-object metadata. `Draggable` and `PageView::on_page_changed` used
+  to, and moved to owner-local `EventCx` callbacks once nothing `Send` stored them. Each
+  `DragTarget` builder stores the callback as `Arc::new(<the caller's closure>)`; none shows the
+  hoist pattern a caller needs when the closure must be shared with something else, so
+  `on_action`'s own docs carry that example instead of pointing at them.
 
 **Consequences, named rather than left to be discovered:**
 
@@ -2152,3 +2165,57 @@ presentation's URL waits for ADR-0093 step 3's `RouterScope`. **Tests:**
 `rebuilt_widgets_app_router_keeps_its_stack`,
 `switching_widgets_app_from_home_to_router_releases_the_navigator`, and the
 navigation and localization cases); `tests/routable_ui/fail/router_app_takes_no_navigator.rs`.
+
+### 37. `PageView` reports page changes after the frame, in order
+
+**Oracle:** `widgets/page_view.dart` (tag `3.44.0`) reports `onPageChanged`
+from a `NotificationListener<ScrollNotification>`, synchronously, as the
+scroll update that crosses a page's midpoint is dispatched.
+
+**Choice:** the controller's listener is `Send + Sync` (a foundation
+`ListenerCallback`) and cannot hold the owner-local callback or its writer. It
+keeps the synchronous `round(page)` dedupe, records the page and schedules the
+page view's rebuild. `build` hands every recorded page to the local post-frame
+lane, one entry per page. Each entry holds only a weak reference to the
+state's delivery target and runs the callback current at that moment inside
+a write the state's `WriterSource` opens. So the callback runs after the
+frame that next rebuilds the page view (one frame later than Flutter's for a
+change seen during input; two for one seen during layout, whose rebuild
+lands in the next frame), never inside a build, with every page a frame
+recorded in order. A page recorded before a rebuild reaches the rebuilt
+callback. A page view unmounted before its rebuild records nothing to the
+lane, and one unmounted after its rebuild queued a page fails the upgrade,
+because `finalize_tree` drops the state before the lane runs; either way it
+delivers nothing. Without a post-frame lane the pages are dropped with a
+warning. A callback that panics loses only its own page, and the panic
+leaves the frame on the post-frame lane rather than from inside a scroll
+listener, as Flutter's would; the pages after it run on the next frame. The
+same accepted latency as `AnimatedSize` and `Dismissible`. **Tests:**
+`tests/page_view_events.rs`.
+
+### 38. `on_draggable_canceled` takes one `DraggableCanceledDetails`
+
+**Oracle:** `DraggableCanceledCallback = void Function(Velocity velocity,
+Offset offset)`.
+
+**Choice:** the callback is `Fn(&mut EventCx<'_>, DraggableCanceledDetails)`,
+a `Copy` value with the same `velocity` and `offset`. The catalog's event
+callbacks take `cx` and at most one value, which is the shape
+`callback_with` fixes for a `let`-bound closure; two value arguments would
+need a closure annotation there. **Tests:** `tests/draggable_events.rs`
+(`a_let_bound_drag_callback_compiles_through_callback_with`).
+
+### 39. Actions are invoked with the key event's `EventCx`; `maybe_invoke` has no counterpart
+
+**Oracle:** `Action.invoke(T intent)` runs from `ShortcutManager` or from any
+code holding a `BuildContext` through `Actions.maybeInvoke`/`Actions.invoke`.
+
+**Choice:** `Action::invoke(&self, cx: &mut EventCx<'_>, intent: &T)`; the
+`Shortcuts` key handler passes its own `cx`, as `CallbackShortcuts` passes it
+to its bindings (ADR-0086, amending ADR-0023). `Actions::maybe_invoke` is
+removed: its only caller could hold a `BuildContext` only in `build`, which
+has no event context, and a write there is refused. An invoker resolved at
+build time and called from an event (Flutter's `Actions.handler`) is deferred
+until a consumer needs one. `is_enabled` and `to_key_event_result` stay
+queries. **Tests:** `tests/actions.rs` (resolution through key dispatch),
+`tests/shortcuts.rs`'s `event_cx_tests`.

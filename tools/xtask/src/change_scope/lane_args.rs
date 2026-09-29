@@ -581,10 +581,13 @@ mod tests {
             [Lane::Docs, Lane::Tooling, Lane::Fast, Lane::Wide]
         );
         // feature-gated edges into many dependents need feature-matrix
-        assert_eq!(pr_lane(&["crates/flui-view/src/lib.rs"], false), Lane::Wide);
+        assert_eq!(
+            pr_lane(&["crates/flui-layer/src/lib.rs"], false),
+            Lane::Wide
+        );
         let a = plan_args(
             repo(),
-            &scope(&["crates/flui-view/src/lib.rs"]),
+            &scope(&["crates/flui-layer/src/lib.rs"]),
             Event::PullRequest,
             false,
         )
@@ -709,6 +712,13 @@ mod tests {
     fn default_on_optional_edges_need_no_per_feature_pass() {
         // `flui` takes flui-material through its default `material` feature
         assert_eq!(args(&["packages/flui-material/src/lib.rs"]).hack_args, "");
+    }
+
+    fn many_feature_gated_dependents_take_the_wide_lane() {
+        let a = args(&["crates/flui-layer/src/lib.rs"]);
+        assert!(a.heavy_required);
+        assert_eq!(a.lane, Lane::Wide);
+        assert!(a.reason.contains("feature-matrix"));
     }
 
     fn ios_leg_when_flui_app_or_the_facade_is_in_scope() {
@@ -863,6 +873,10 @@ mod tests {
                 (
                     "per_feature_pass_covers_feature_gated_dependents",
                     per_feature_pass_covers_feature_gated_dependents as fn(),
+                ),
+                (
+                    "many_feature_gated_dependents_take_the_wide_lane",
+                    many_feature_gated_dependents_take_the_wide_lane as fn(),
                 ),
                 (
                     "default_on_optional_edges_need_no_per_feature_pass",

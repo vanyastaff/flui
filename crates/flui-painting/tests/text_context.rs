@@ -11,6 +11,7 @@ use std::thread;
 use std::time::Instant;
 
 use flui_painting::parley_text::{ParagraphLayout, ParagraphSpec};
+use flui_painting::testing::font_collection_holders;
 use flui_painting::typography::{FontWeight, TextDirection, TextStyle};
 use flui_painting::{FontCollection, TextContext, TextLayoutResult};
 
@@ -148,11 +149,34 @@ fn a_face_registered_after_the_fork_shapes_in_every_realm() {
     );
 }
 
+/// A clone is the same collection and a new one is not; every clone and
+/// every context built from it counts as a holder until it drops; bytes with
+/// no face are refused.
+fn collection_handles_are_shared_and_counted() {
+    let fonts = FontCollection::new();
+    assert!(FontCollection::ptr_eq(&fonts, &fonts.clone()));
+    assert!(!FontCollection::ptr_eq(&fonts, &FontCollection::new()));
+
+    assert_eq!(font_collection_holders(&fonts), 1);
+    let context = TextContext::new(&fonts);
+    assert!(FontCollection::ptr_eq(context.fonts(), &fonts));
+    assert_eq!(font_collection_holders(&fonts), 2);
+    drop(context);
+    assert_eq!(font_collection_holders(&fonts), 1);
+
+    assert!(fonts.register_font(b"not a font").is_err());
+    assert!(fonts.register_font(&[]).is_err());
+}
+
 #[test]
 fn text_context_contract() {
     cases::run_cases(
         "text_context",
         &[
+            (
+                "collection_handles_are_shared_and_counted",
+                collection_handles_are_shared_and_counted,
+            ),
             ("two_realms_shape_in_parallel", two_realms_shape_in_parallel),
             (
                 "a_face_registered_after_the_fork_shapes_in_every_realm",

@@ -424,6 +424,20 @@ binding by value (ADR-0083). Pinned by
 `global_key_lookup_from_dispose_during_detach_returns_instead_of_deadlocking` (`binding.rs`), and
 through the realm by `ui_realm/tests/global_key_lookup_during_frame.rs` in `flui-runtime`.
 
+### The development-reload hook lives here, not in the runtime
+
+`dev_reload::DevReloadHook` (ADR-0094 §1) is the only seam between a host and a reload tool.
+It sits in this crate, below the runtime, so the host (`flui-app`) and the tool
+(`flui-hot-reload`) each name it without naming each other, and a package reaches it through
+`flui-sdk`'s whole `view` re-export with no new SDK item. Flutter has no counterpart: its
+reload is the VM's, not a framework trait. The trait is the driver half — `attach`, `detach`,
+`poll` and `scene_frame`; the per-call seam a code patcher needs arrives with its first
+producer. Its bound is `Send + 'static` because the instance travels in the application's
+configuration; it is only ever called on the owner thread. `scene_frame` lends the scene to a
+callback so a scene built by a plugin image cannot outlive it. Pinned by
+`scene_frame_default_never_calls_render` and by the host's tests in `flui-app`
+(`app/hot_reload/tests.rs`).
+
 ### Not adopted
 
 A branded `Cx<'build>` token (its role is taken by the `BuildContext`/`LifecycleContext` split,

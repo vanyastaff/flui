@@ -30,6 +30,8 @@ mod composition;
 mod custom_multi_child_layout;
 #[path = "directionality_dependency.rs"]
 mod directionality_dependency;
+#[path = "draggable_events.rs"]
+mod draggable_events;
 #[path = "editable_text.rs"]
 mod editable_text;
 #[path = "editable_text_clipboard.rs"]
@@ -87,6 +89,8 @@ mod navigator_public;
 mod overlay;
 #[path = "page_route.rs"]
 mod page_route;
+#[path = "page_view_events.rs"]
+mod page_view_events;
 #[path = "parent_data_ancestry.rs"]
 mod parent_data_ancestry;
 #[path = "raw_button.rs"]

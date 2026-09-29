@@ -59,6 +59,13 @@ impl FontCollection {
         Arc::ptr_eq(&a.0, &b.0)
     }
 
+    /// How many handles hold this collection: every clone, including the one
+    /// inside each [`TextContext`] built from it.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn holders(&self) -> usize {
+        Arc::strong_count(&self.0)
+    }
+
     /// Adds every face in `font_bytes` to the collection.
     ///
     /// Visible to every [`TextContext`] built from this collection, including

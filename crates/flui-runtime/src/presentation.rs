@@ -250,7 +250,7 @@ pub struct PresentationState {
     /// callbacks unconditionally (production write); `UiRealm::construct`
     /// reads `platform_semantics_enabled_handle()` to wire the realm's
     /// renderer fan-out (production read) — announce/event delivery itself
-    /// still has no production caller (see [`Self::semantics_host`]'s doc).
+    /// still has no production caller.
     semantics: SemanticsHost,
     /// Owner-local widget framework state. One instance per presentation
     /// (ADR-0043) — the realm-level singular binding this used to be

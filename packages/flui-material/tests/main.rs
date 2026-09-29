@@ -125,6 +125,10 @@ fn action_component_contracts() {
             ink_well::pointer_and_keyboard_activation_write_the_owning_signal,
         ),
         (
+            "ink_well::enter on a focused elevated button writes a signal and rebuilds its reader",
+            ink_well::enter_on_a_focused_elevated_button_writes_a_signal_and_rebuilds_its_reader,
+        ),
+        (
             "floating_action_button::fab theme slot reaches the mounted materials color and elevation",
             floating_action_button::fab_theme_slot_reaches_the_mounted_materials_color_and_elevation,
         ),

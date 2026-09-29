@@ -1141,7 +1141,7 @@ impl Action<CopySelectionTextIntent> for ClipboardTextAction {
             && self.controller.borrow().has_selection()
     }
 
-    fn invoke(&self, intent: &CopySelectionTextIntent) -> ActionOutcome {
+    fn invoke(&self, _cx: &mut EventCx<'_>, intent: &CopySelectionTextIntent) -> ActionOutcome {
         let Some(clipboard) = &self.clipboard else {
             return ActionOutcome::NotPerformed;
         };
@@ -1165,7 +1165,7 @@ impl Action<PasteTextIntent> for ClipboardTextAction {
         self.clipboard.is_some() && self.enabled() && !self.controller.borrow().is_composing()
     }
 
-    fn invoke(&self, _intent: &PasteTextIntent) -> ActionOutcome {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &PasteTextIntent) -> ActionOutcome {
         let Some(clipboard) = &self.clipboard else {
             return ActionOutcome::NotPerformed;
         };

@@ -27,6 +27,7 @@ pub(crate) fn a_cross_thread_frame_request_reaches_the_realms_platform_wake() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        &flui_painting::FontCollection::new(),
     )
     .expect("realm constructs");
     // Clear the `frame_scheduled` latch so the request below is a real

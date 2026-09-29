@@ -94,7 +94,7 @@ pub(super) fn preserve_first_input_panic(
     }
 }
 
-/// Whether [`UiRealm::handle_input_entered`] must drop `input` outright,
+/// Whether the realm's input entry point must drop `input` outright,
 /// before ever reaching the per-kind dispatch above, given the
 /// presentation's current lifecycle. Moved here from the retired
 /// `AppBinding`, unchanged — the match arms below are the per-lifecycle

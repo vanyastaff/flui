@@ -85,3 +85,41 @@ fn enter() -> flui_interaction::events::KeyEvent {
         ..flui_interaction::events::KeyEvent::default()
     }
 }
+
+fn tab() -> flui_interaction::events::KeyEvent {
+    flui_interaction::events::KeyEvent {
+        key: flui_interaction::events::Key::Named(flui_interaction::events::NamedKey::Tab),
+        ..enter()
+    }
+}
+
+/// Enter on a focused `ElevatedButton` reaches its `InkWell`'s activation
+/// action, which runs inside the key event's own dispatch and hands its `cx`
+/// to `on_pressed` — no separate writer bridge. The write lands at dispatch
+/// and the signal's reader rebuilds on the next frame (a tick, which dirties
+/// nothing itself).
+pub fn enter_on_a_focused_elevated_button_writes_a_signal_and_rebuilds_its_reader() {
+    use flui_material::{ElevatedButton, Theme, ThemeData};
+    use flui_sdk::widgets::Text;
+
+    let probe = common::SignalProbe::new(|signals| {
+        Theme::new(
+            ThemeData::light(),
+            ElevatedButton::new(Text::new("Save"))
+                .on_pressed(move |cx| signals.count.update(cx, |count| *count += 1)),
+        )
+    });
+    let mut laid = lay_out(probe.view(), tight(120.0, 48.0));
+
+    assert!(
+        laid.focus_manager().dispatch_key_event(&tab()),
+        "the first Tab focuses the button"
+    );
+    assert!(
+        laid.focus_manager().dispatch_key_event(&enter()),
+        "Enter is consumed"
+    );
+    assert_eq!(probe.value(), Ok(1), "the activation wrote at dispatch");
+    laid.tick();
+    assert_eq!(probe.reads(), [0, 1], "and the reader rebuilt once");
+}

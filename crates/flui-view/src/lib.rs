@@ -89,6 +89,7 @@ extern crate self as flui_view;
 pub mod binding;
 pub mod child;
 pub mod context;
+pub mod dev_reload;
 pub mod element;
 pub mod key;
 pub mod macros;

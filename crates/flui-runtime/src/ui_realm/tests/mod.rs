@@ -38,6 +38,7 @@ fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmErro
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        &flui_painting::FontCollection::new(),
     )
 }
 
@@ -52,6 +53,7 @@ fn new_runtime_with_capacity(
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        &flui_painting::FontCollection::new(),
     )
 }
 
@@ -450,3 +452,10 @@ fn frame_failure_containment_matrix() {
         ],
     );
 }
+
+// ========================================================================
+// Each realm owns one `TextContext` over the app's `FontCollection`
+// (ADR-0092 §3): built at construction, dropped with the realm, none per
+// presentation.
+// ========================================================================
+mod text_context;
