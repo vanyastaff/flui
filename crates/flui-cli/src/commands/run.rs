@@ -2088,7 +2088,10 @@ fn ensure_flui_project() -> CliResult<Project> {
 ///
 /// Watches the scene crate's `src/` directory for changes and rebuilds/pushes
 /// the scene plugin `.so` to the device without restarting the app.
-/// The host app detects the new `.so` via mtime polling and reloads automatically.
+/// A host app that installs `flui::hot_reload::ScenePluginHook` with
+/// `AppConfig::with_dev_reload` detects the new `.so` via mtime polling and
+/// reloads it; the Android runner warns when the library is on the device but
+/// no hook is installed.
 pub(crate) fn execute_scene(
     scene_crate: &str,
     package: &str,
@@ -2106,6 +2109,9 @@ pub(crate) fn execute_scene(
         style(target).cyan(),
         style(mode).cyan()
     ))?;
+    ui::info(
+        "The app loads the plugin only if it installs `flui::hot_reload::ScenePluginHook`          with `AppConfig::with_dev_reload`",
+    )?;
 
     let workspace_root = std::env::current_dir()?;
     let builder = AndroidBuilder::new(&workspace_root).map_err(|e| CliError::BuildFailed {

@@ -8,7 +8,8 @@
 //! - `WorkerReload` (desktop and iOS): attaches the hook once per loop,
 //!   polls it at each realm's frame boundary and applies a patch once to
 //!   every realm;
-//! - `ScenePlugin` (Android): lets the hook's scene plugin own a frame.
+//! - `ScenePlugin` (Android): lets the hook's scene plugin own a frame. It
+//!   calls only `scene_frame`; the Android runner never attaches or polls.
 //!
 //! With no hook installed every wrapper is inert: attaching starts nothing,
 //! polling never reloads, and no scene plugin claims a frame. The web runner
@@ -330,7 +331,31 @@ pub(crate) struct ScenePlugin(Option<DevReload>);
 
 #[cfg(target_os = "android")]
 impl ScenePlugin {
-    pub(crate) fn from_config(config: &AppConfig) -> Self {
+    /// `internal_data_path` is the app's internal files directory, where
+    /// `flui run --scene` pushes the plugin (`/data/local/tmp` without one);
+    /// it is read only to warn about a pushed plugin nothing will load.
+    pub(crate) fn from_config(
+        config: &AppConfig,
+        internal_data_path: Option<&std::path::Path>,
+    ) -> Self {
+        // `flui_hot_reload::ScenePluginHook::LIBRARY_NAME`; this crate does not
+        // name the reload tool.
+        const SCENE_LIBRARY: &str = "libflui_scene.so";
+        if config.dev_reload.is_some() {
+            tracing::info!(
+                "development reload hook installed; the Android runner drives only its                  `scene_frame` (no attach, poll or detach)"
+            );
+        } else {
+            let pushed = internal_data_path
+                .unwrap_or_else(|| std::path::Path::new("/data/local/tmp"))
+                .join(SCENE_LIBRARY);
+            if pushed.exists() {
+                tracing::warn!(
+                    path = %pushed.display(),
+                    "a scene plugin is on the device, but no DevReloadHook is installed on the                      AppConfig, so it will not be loaded; install                      `flui::hot_reload::ScenePluginHook` with `AppConfig::with_dev_reload`"
+                );
+            }
+        }
         Self(config.dev_reload.clone())
     }
 

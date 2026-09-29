@@ -90,7 +90,7 @@ where
 
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
-    let hot_reload = ScenePlugin::from_config(&config);
+    let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
 
     let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
 

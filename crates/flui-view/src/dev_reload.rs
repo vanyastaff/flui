@@ -10,13 +10,29 @@
 //!
 //! # What the host promises
 //!
+//! Which methods a host calls depends on the platform:
+//!
+//! | Host | `attach` / `detach` | `poll` | `scene_frame` |
+//! |------|---------------------|--------|---------------|
+//! | desktop, iOS | yes | yes | no |
+//! | Android | no | no | yes, every frame |
+//! | web | no | no | no |
+//!
+//! So a worker hook ([`DevReloadHook::poll`]-driven) does nothing on Android,
+//! and a scene plugin ([`DevReloadHook::scene_frame`]) draws only there; the
+//! Android host logs which calls it makes when a hook is installed. Where a
+//! host calls them:
+//!
 //! - [`DevReloadHook::attach`] runs once per event loop, on the owner thread,
 //!   before the first window opens; [`DevReloadHook::detach`] runs once when
 //!   that loop ends. A hook is never attached twice without a detach between.
 //! - [`DevReloadHook::poll`] runs on the owner thread at each realm's frame
 //!   boundary, before the frame's own work. A [`ReloadEvent::Patched`] it
 //!   returns is applied once to every realm the host drives, each at its own
-//!   next boundary, and never to a realm created after the poll.
+//!   next boundary (an idle window applies it when it next draws), and never
+//!   to a realm mounted after the poll.
+//! - [`DevReloadHook::scene_frame`] runs on the owner thread at the start of
+//!   each frame, before the widget pipeline.
 //! - A hook that panics in any method is dropped and never called again; the
 //!   frame that caught the panic continues without a reload.
 //!
