@@ -657,9 +657,10 @@ fn zero_duration_retarget_lays_out_the_new_target_on_the_same_pump() {
     );
 
     let animated_builder_rebuilds = Arc::new(AnimatedBuilderRebuildCounter::default());
-    laid.build_owner_mut()
-        .set_tree_observer(Arc::clone(&animated_builder_rebuilds)
+    laid.with_build_owner_mut(|owner| {
+        owner.set_tree_observer(Arc::clone(&animated_builder_rebuilds)
             as Arc<dyn flui_foundation::observe::TreeObserver>);
+    });
 
     *side.lock() = 100.0;
     laid.pump();
@@ -678,13 +679,13 @@ fn zero_duration_retarget_lays_out_the_new_target_on_the_same_pump() {
          count, are the actual #1180 discriminators (WHEN it built, not how many times)"
     );
     assert_eq!(
-        laid.build_owner_mut().pending_external_builds(),
+        laid.with_build_owner_mut(|owner| owner.pending_external_builds()),
         0,
         "same-drain absorption must leave nothing queued for the next pump — red before \
          #1180's fix: the notification is still sitting in the inbox here"
     );
     assert!(
-        !laid.build_owner_mut().has_dirty_elements(),
+        !laid.with_build_owner_mut(|owner| owner.has_dirty_elements()),
         "nothing should be left dirty after the retargeting pump"
     );
     assert!(

@@ -294,14 +294,16 @@ impl Scenario {
             .pipeline_owner()
             .with(flui_rendering::pipeline::PipelineOwner::layout_roots_total);
         Measured {
-            build: self.laid.build_owner_mut().last_frame_build_report(),
+            build: self
+                .laid
+                .with_build_owner_mut(|owner| owner.last_frame_build_report()),
             layout_roots: (after - before) as usize,
         }
     }
 }
 
 fn reactive(laid: &mut LaidOut) -> Reactive {
-    laid.build_owner_mut().reactive().clone()
+    laid.with_build_owner_mut(|owner| owner.reactive().clone())
 }
 
 fn mount_b<V: View>(make: impl FnOnce(&Reactive) -> V) -> LaidOut {

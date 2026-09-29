@@ -234,16 +234,42 @@ fn pressed_state_clears_immediately_without_an_ambient_vsync() {
     // END state (not pressed) is reached synchronously, with no dangling
     // "still pressed forever" bug from a timer that never fires without a
     // driving vsync.
+    //
+    // Mounted on the substrate driver: a realm always wraps its root in a
+    // `VsyncScope`, so under the realm harness there is always a clock.
+    use flui_interaction::events::{PointerType, make_down_event_for_id, make_up_event_for_id};
+    use flui_interaction::{HitTestResult, PointerId};
+    use flui_sdk::geometry::Offset;
+    use flui_sdk::widgets::GestureArenaScope;
+    use flui_testing::HeadlessBinding;
+    use flui_testing::bootstrap::{MountOptions, MountOwners};
+
     let states = WidgetStatesController::default();
-    let laid = lay_out(
+    let mut binding = HeadlessBinding::new();
+    let owners = MountOwners::fresh();
+    let pipeline = owners.pipeline_owner.clone();
+    let root = GestureArenaScope::new(
+        binding.arena().clone(),
         InkWell::new(SizedBox::new(60.0, 40.0))
             .on_tap(|_cx| {})
             .states_controller(states.clone()),
-        tight(60.0, 40.0),
     );
-
-    laid.dispatch_pointer_down(30.0, 20.0);
-    laid.dispatch_pointer_up(30.0, 20.0);
+    let _mounted = binding.mount_root(&root, owners, MountOptions::tight(60.0, 40.0));
+    let hit_test = |position| {
+        let mut result = HitTestResult::new();
+        pipeline.with(|owner| owner.hit_test(position, &mut result));
+        result
+    };
+    let contact = PointerId::new(1).expect("pointer ids start at one");
+    let at = Offset::new(30.0, 20.0);
+    binding.dispatch_pointer(
+        &make_down_event_for_id(contact, at, PointerType::Mouse),
+        hit_test,
+    );
+    binding.dispatch_pointer(
+        &make_up_event_for_id(contact, at, PointerType::Mouse),
+        hit_test,
+    );
 
     assert!(
         !states.value().contains_state(WidgetState::Pressed),

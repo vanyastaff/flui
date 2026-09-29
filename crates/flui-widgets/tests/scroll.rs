@@ -873,11 +873,10 @@ fn scrollable_content_dimension_feedback_supplies_extents_and_notifies_a_listene
         .controller(controller.clone())
         .child(SizedBox::new(300.0, 800.0));
 
-    let mut scoped = lay_out(widget, tight(300.0, 300.0));
+    let scoped = lay_out(widget, tight(300.0, 300.0));
 
     // Extents write through to the shared state SYNCHRONOUSLY during layout
-    // (only the listener notification is deferred) — readable immediately,
-    // no pump required.
+    // (only the listener notification is deferred) — readable immediately.
     assert!(
         controller.max_scroll_extent() > 0.0,
         "RenderViewport::perform_layout must commit a nonzero max_scroll_extent (300px \
@@ -885,16 +884,8 @@ fn scrollable_content_dimension_feedback_supplies_extents_and_notifies_a_listene
          zero update_dimensions calls; got {:.1}",
         controller.max_scroll_extent()
     );
-    assert_eq!(
-        listener_fired.load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "the coalesced flush must not have run before any frame completed"
-    );
-
-    // Drive a completed frame: drains the scheduler's post-frame queue,
-    // firing the coalesced flush.
-    scoped.pump_for(Duration::ZERO);
-
+    // The mount is a complete realm frame, so its end-frame phase already
+    // drained the scheduler's post-frame queue and fired the coalesced flush.
     assert!(
         listener_fired.load(std::sync::atomic::Ordering::SeqCst) >= 1,
         "a listener registered via ScrollController::as_listenable() must observe the \

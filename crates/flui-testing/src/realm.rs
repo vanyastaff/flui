@@ -188,12 +188,15 @@ impl PlatformTextInput for RecordingTextInput {
 }
 
 /// The accessibility bridge of a [`HeadlessRealm`]'s window: assistive
-/// technology attaches when a test asks, and published trees are dropped
-/// (the harness reads the assembled tree from the pipeline instead).
+/// technology attaches when a test asks, published trees are dropped (the
+/// harness reads the assembled tree from the pipeline instead), and the
+/// action listener the realm registers is handed to a test that plays the
+/// adapter.
 #[derive(Default)]
 struct HeadlessAccessibility {
     active: AtomicBool,
     activation: Mutex<Option<AccessibilityActivationListener>>,
+    action: Mutex<Option<AccessibilityActionListener>>,
 }
 
 impl HeadlessAccessibility {
@@ -220,7 +223,9 @@ impl PlatformAccessibility for HeadlessAccessibility {
         *self.activation.lock() = Some(listener);
     }
 
-    fn set_action_listener(&self, _listener: AccessibilityActionListener) {}
+    fn set_action_listener(&self, listener: AccessibilityActionListener) {
+        *self.action.lock() = Some(listener);
+    }
 }
 
 /// The frame sink of a [`HeadlessRealm`]: a surface of fixed size that
@@ -461,6 +466,15 @@ impl HeadlessRealm {
     /// tree.
     pub fn enable_semantics(&self) {
         self.accessibility.attach();
+    }
+
+    /// The listener the realm registered for actions assistive technology
+    /// requests. It is `Send + Sync`: a test plays the platform adapter by
+    /// calling it, from any thread, and the realm queues the request in its
+    /// owner inbox for the next pump to apply.
+    #[must_use]
+    pub fn accessibility_action_listener(&self) -> Option<AccessibilityActionListener> {
+        self.accessibility.action.lock().clone()
     }
 
     /// Run `f` inside the realm's owner scope (its interaction lane, global

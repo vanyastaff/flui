@@ -44,6 +44,8 @@ mod owner_scope;
 mod pointer_script_replay;
 #[path = "post_frame_after_layout.rs"]
 mod post_frame_after_layout;
+#[path = "realm_driver.rs"]
+mod realm_driver;
 #[path = "self_rescheduling_local_post_frame.rs"]
 mod self_rescheduling_local_post_frame;
 #[path = "text_store_kit.rs"]

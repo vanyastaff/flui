@@ -369,9 +369,10 @@ fn hidden_default_without_ambient_vsync_preserves_pass_through_behavior() {
     let controller = animation_controller();
     let (probe, found_ambient, _init_count, _dispose_count) = animation_probe(&controller);
 
-    let _laid = lay_out(
+    // On the substrate driver: a realm always installs a root `VsyncScope`.
+    let _tree = crate::substrate::mount(
         Visibility::new(probe).maintain_state(true).visible(false),
-        loose(100.0),
+        flui_testing::bootstrap::BuildCapabilities::Installed,
     );
 
     assert_eq!(

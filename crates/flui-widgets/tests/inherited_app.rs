@@ -104,15 +104,18 @@ fn media_query_of_returns_ancestor_data() {
 
 /// `MediaQuery::maybe_of` returns `None` when no `MediaQuery` ancestor is
 /// present. Proves the lookup is honest, not returning a hidden default.
+///
+/// Mounted on the substrate driver: a realm always installs a root
+/// `MediaQuery`, so under one there is always an ancestor.
 #[test]
 fn media_query_maybe_of_returns_none_without_ancestor() {
     let captured: Arc<Mutex<Option<Option<MediaQueryData>>>> = Arc::new(Mutex::new(None));
 
-    let _laid = lay_out(
+    let _tree = crate::substrate::mount(
         MediaQueryCapture {
             captured: Arc::clone(&captured),
         },
-        loose(100.0),
+        flui_testing::bootstrap::BuildCapabilities::Installed,
     );
 
     let outer = captured.lock().unwrap().clone();

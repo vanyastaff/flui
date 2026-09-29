@@ -911,7 +911,7 @@ fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_fram
         .repaint_boundaries(false)
     };
     let mut laid = lay_out(SizedBox::square(10.0), tight(200.0, 600.0));
-    laid.build_owner_mut().set_lazy_band_pass_budget_for_test(1);
+    laid.with_build_owner_mut(|owner| owner.set_lazy_band_pass_budget_for_test(1));
 
     laid.pump_widget(list());
     // `try_size`: a deferred item exists in the render tree (the safety net
@@ -977,7 +977,7 @@ fn lazy_list_view_builder_exhausted_budget_evicts_stale_residents_before_paint()
         "the head band is painted before the jump"
     );
 
-    laid.build_owner_mut().set_lazy_band_pass_budget_for_test(0);
+    laid.with_build_owner_mut(|owner| owner.set_lazy_band_pass_budget_for_test(0));
     laid.pump_widget(list(JUMP_ROW as f64 * EXTENT));
     let after_jump = painted_rect_colors(&laid);
     let stale: Vec<usize> = (0..JUMP_ROW)

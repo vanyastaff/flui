@@ -64,17 +64,12 @@ struct PostFrameProbeState {
     unrelated_scheduler: UpdateScheduler,
 }
 
+/// Acquires the owner-local post-frame handle and the pipeline in
+/// `init_state`, and schedules one callback that captures `Rc` state and
+/// reads the committed geometry of a box of the size its build asks for.
 #[derive(Clone)]
 struct LocalPostFrameProbe {
-    pipeline: flui_rendering::pipeline::PipelineCell,
     observed_committed_geometry: Arc<AtomicBool>,
-    desired_width: Arc<AtomicUsize>,
-    rebuild: Arc<Mutex<Option<flui_view::RebuildHandle>>>,
-    /// The caller's own render id, the same value `LaidOut::root()` names —
-    /// set by the test itself once it exists (mounting hasn't produced it
-    /// yet when `init_state` schedules the callback below). `None` until
-    /// then.
-    logical_root: Rc<Cell<Option<flui_foundation::RenderId>>>,
 }
 
 impl View for LocalPostFrameProbe {
@@ -88,60 +83,47 @@ impl StatefulView for LocalPostFrameProbe {
 
     fn create_state(&self) -> Self::State {
         LocalPostFrameProbeState {
-            pipeline: self.pipeline.clone(),
             observed_committed_geometry: Arc::clone(&self.observed_committed_geometry),
-            desired_width: Arc::clone(&self.desired_width),
-            rebuild: Arc::clone(&self.rebuild),
-            logical_root: Rc::clone(&self.logical_root),
         }
     }
 }
 
 struct LocalPostFrameProbeState {
-    pipeline: flui_rendering::pipeline::PipelineCell,
     observed_committed_geometry: Arc<AtomicBool>,
-    desired_width: Arc<AtomicUsize>,
-    rebuild: Arc<Mutex<Option<flui_view::RebuildHandle>>>,
-    logical_root: Rc<Cell<Option<flui_foundation::RenderId>>>,
 }
+
+/// The size [`LocalPostFrameProbe`] builds, and its callback looks for.
+const LOCAL_PROBE_SIZE: flui_foundation::geometry::Size =
+    flui_foundation::geometry::Size::new(32.0, 18.0);
 
 impl ViewState<LocalPostFrameProbe> for LocalPostFrameProbeState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let _prev = self.rebuild.lock().replace(ctx.rebuild_handle());
         let handle = ctx
             .local_post_frame_handle()
-            .expect("the binding must install a LocalPostFrameHandle");
-        let pipeline = self.pipeline.clone();
+            .expect("the realm must install a LocalPostFrameHandle");
+        let pipeline = ctx
+            .pipeline_owner()
+            .expect("the realm must install its pipeline");
         let observed = Arc::clone(&self.observed_committed_geometry);
-        let logical_root = Rc::clone(&self.logical_root);
         let owner_local = Rc::new(Cell::new(false));
         let callback_local = Rc::clone(&owner_local);
 
         handle
             .schedule_local(move |_timing| {
                 callback_local.set(true);
-                observed.store(
-                    pipeline.with(|owner| {
-                        // The probe's own render id — the same value the
-                        // test asserts against via `LaidOut::root()` before
-                        // the rebuild — set by the test itself once mounting
-                        // (which runs before this callback ever fires) has
-                        // produced it. Committed geometry there must be
-                        // 64×18 after the rebuild.
-                        let expected = flui_foundation::geometry::Size::new(64.0, 18.0);
-                        let Some(root) = logical_root.get() else {
-                            return false;
-                        };
-                        callback_local.get() && owner.box_size(root) == Some(expected)
-                    }),
-                    Ordering::SeqCst,
-                );
+                let committed = pipeline.with(|owner| {
+                    owner
+                        .render_tree()
+                        .iter()
+                        .any(|(id, _)| owner.box_size(id) == Some(LOCAL_PROBE_SIZE))
+                });
+                observed.store(callback_local.get() && committed, Ordering::SeqCst);
             })
-            .expect("init_state runs inside the headless owner scope");
+            .expect("init_state runs inside the realm's owner scope");
     }
 
     fn build(&self, _view: &LocalPostFrameProbe, _ctx: &dyn BuildContext) -> impl IntoView {
-        SizedBox::new(self.desired_width.load(Ordering::SeqCst) as f64, 18.0)
+        SizedBox::new(LOCAL_PROBE_SIZE.width, LOCAL_PROBE_SIZE.height)
     }
 }
 
@@ -275,52 +257,24 @@ fn the_scheduled_callback_observes_this_frames_committed_layout() {
 }
 
 /// Owner-local callbacks may capture `Rc` state and still observe geometry committed
-/// by the same real headless frame. Registration happens in `init_state`, proving the
-/// binding activates its owner scope around lifecycle work rather than only around a
-/// test helper call immediately before scheduling.
+/// by the same real frame. Registration happens in `init_state`, proving the
+/// realm activates its owner scope around lifecycle work rather than only around a
+/// test helper call immediately before scheduling; the callback runs at the end of
+/// the mount frame, after that frame's pipeline committed the box it built (before
+/// the frame, nothing was laid out at all).
 #[test]
 fn an_owner_local_post_frame_callback_observes_committed_geometry() {
-    let pipeline =
-        flui_rendering::pipeline::PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
     let observed = Arc::new(AtomicBool::new(false));
-    let desired_width = Arc::new(AtomicUsize::new(32));
-    let rebuild = Arc::new(Mutex::new(None));
-    let logical_root = Rc::new(Cell::new(None));
-    let mut laid = crate::common::lay_out_with_pipeline_owner(
+    let laid = lay_out(
         LocalPostFrameProbe {
-            pipeline: pipeline.clone(),
             observed_committed_geometry: Arc::clone(&observed),
-            desired_width: Arc::clone(&desired_width),
-            rebuild: Arc::clone(&rebuild),
-            logical_root: Rc::clone(&logical_root),
         },
         loose(100.0),
-        pipeline.clone(),
     );
-
-    assert_eq!(
-        pipeline.with(|owner| owner.box_size(laid.root())),
-        Some(flui_foundation::geometry::Size::new(32.0, 18.0,)),
-        "bootstrap geometry must differ from the geometry expected by the callback"
-    );
-    // Only available now: `LaidOut::root()` resolves the caller's own render
-    // id by walking the ELEMENT tree for the probe's concrete type
-    // (`resolve_logical_render_root`), which the probe's own callback has no
-    // way to do from inside `init_state` (mounting isn't finished yet, and
-    // the callback only ever captures the `PipelineCell`). Hand it the same
-    // value this assertion just used.
-    logical_root.set(Some(laid.root()));
-    desired_width.store(64, Ordering::SeqCst);
-    rebuild
-        .lock()
-        .as_ref()
-        .expect("init_state captured a rebuild handle")
-        .schedule(flui_view::RebuildReason::StateChange);
-
-    laid.pump_for(Duration::from_millis(16));
 
     assert!(
         observed.load(Ordering::SeqCst),
         "the owner-local callback must run after this frame commits geometry"
     );
+    assert_eq!(laid.size(laid.root()), LOCAL_PROBE_SIZE);
 }

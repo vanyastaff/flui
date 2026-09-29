@@ -408,12 +408,16 @@ fn modal_setting_offstage_to_the_same_value_is_a_noop() {
     let built = Built::default();
     let route = modal(&built, &Arc::new(AtomicUsize::new(0)));
     let modal_handle = route.handle();
+    let transition = route.transition_handle();
     let _result = navigator.push(route);
     harness.tick();
-    // Focus activation is delivered after the navigator history lock is
-    // released and schedules the route scope's normal focus-state rebuild for
-    // the next frame. Settle that independent work before measuring whether
-    // the offstage setter itself dirties the entry.
+    // The realm ticks the navigator's registry, so the entrance transition
+    // runs and rebuilds the page on every frame until it completes, as
+    // Flutter's does. Finish it, then settle the focus activation delivered
+    // after the navigator history lock is released (it schedules the route
+    // scope's focus-state rebuild for the next frame), before measuring
+    // whether the offstage setter itself dirties the entry.
+    complete_entrance(&transition, &mut harness);
     harness.tick();
     let settled_builds = built.get();
 

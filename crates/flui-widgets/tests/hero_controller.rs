@@ -27,7 +27,9 @@ use flui_widgets::navigator::{
 };
 use flui_widgets::{Center, SizedBox};
 
-use crate::common::harness::{Harness, PostFrameCapability, mount, mount_with_capabilities};
+use crate::common::harness::{Harness, mount};
+use crate::substrate;
+use flui_testing::bootstrap::BuildCapabilities;
 
 /// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page fills
 /// its `Stack(fit: expand)` — so a route's subtree measures the screen.
@@ -505,13 +507,12 @@ fn every_eligible_top_change_gets_its_own_measurement() {
 fn without_a_post_frame_capability_the_destination_is_left_onstage() {
     let navigator = seeded_navigator();
     let controller = install(&navigator);
-    let mut harness = mount_with_capabilities(
+    let mut harness = substrate::mount(
         Root {
             navigator: navigator.clone(),
             show: true,
         },
-        PostFrameCapability::Absent,
-        crate::common::harness::TextInputCapability::Absent,
+        BuildCapabilities::AsyncDriverOnly,
     );
 
     // The controller attached, so it is not the `navigator == None` path being tested.

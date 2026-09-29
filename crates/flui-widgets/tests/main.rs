@@ -3,6 +3,8 @@
 //! link time and target/ disk. The shared harness is mounted once as `crate::common`.
 
 mod common;
+/// The substrate driver, for configurations a realm cannot express.
+mod substrate;
 
 #[path = "absorb_pointer.rs"]
 mod absorb_pointer;

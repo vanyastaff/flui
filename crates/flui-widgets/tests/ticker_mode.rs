@@ -134,7 +134,11 @@ fn a_ticker_mode_without_an_ambient_scope_leaves_the_subtree_alone() {
     let animation = controller();
     let (probe, found) = probe(&animation);
 
-    let _harness = mount(TickerMode::new(probe).into_view().boxed());
+    // On the substrate driver: a realm always installs a root `VsyncScope`.
+    let _tree = crate::substrate::mount(
+        TickerMode::new(probe).into_view().boxed(),
+        flui_testing::bootstrap::BuildCapabilities::Installed,
+    );
 
     assert_eq!(
         *found.lock(),

@@ -2,21 +2,24 @@
 //!
 //! [`lay_out`](super::lay_out) is the canonical geometry harness, but route,
 //! overlay and text-editing code needs element-tree probes (`children_of`,
-//! `view_type_of`) and withholdable IME/post-frame capabilities that
+//! `view_type_of`) and the text-input capability, which
 //! [`LaidOut`](super::LaidOut) deliberately does not expose. This is the
-//! trimmed element-level equivalent: it keeps `lay_out`'s load-bearing
-//! ordering (**binding first, so the async driver is installed before the
-//! mount `build_scope`**), drops the geometry helpers, and shares the
-//! pointer-contact identity and sample-interval policy with the canonical
-//! harness via [`PointerContacts`] / [`POINTER_SAMPLE_INTERVAL`].
+//! trimmed element-level equivalent: the same realm host (every frame is
+//! `UiRealm::pump`), an 800 × 600 surface with the root aligned top-left, no
+//! geometry helpers, and the same pointer-contact identity and
+//! sample-interval policy as the canonical harness via [`PointerContacts`] /
+//! [`POINTER_SAMPLE_INTERVAL`].
+//!
+//! [`mount_with_ime`] gives the realm's window a recording text input, so the
+//! realm's presentation owns the IME session and its frames are text-store
+//! transactions exactly as on screen: commits close for the frame's
+//! duration, and the grants queued meanwhile run once it returns.
 
 use std::any::TypeId;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::HeadlessBinding;
-use crate::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
 use flui_foundation::ElementId;
 use flui_foundation::geometry::Bounds;
 use flui_foundation::geometry::Offset;
@@ -26,212 +29,98 @@ use flui_interaction::events::{
     make_up_event_for_id,
 };
 use flui_painting::Alignment;
-use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_view::{ElementNode, RootRenderView, View};
+use flui_platform_api::PlatformInput;
+use flui_rendering::pipeline::PipelineCell;
+use flui_view::{ElementNode, View, ViewExt};
+use flui_widgets::Align;
 
+use super::host::WidgetHost;
 use super::{POINTER_SAMPLE_INTERVAL, PointerContacts};
-use flui_widgets::{Align, FocusRoot, GestureArenaScope};
+use crate::realm::HeadlessWindow;
+
+/// The surface every [`Harness`] mounts into.
+const SURFACE: (u32, u32) = (800, 600);
 
 /// A mounted, laid-out widget tree.
 pub struct Harness {
-    binding: HeadlessBinding,
-    /// Focus owner of the exact `BuildOwner` backing this mounted tree.
-    focus_manager: Rc<flui_interaction::FocusManager>,
-    /// Mounted `RootRenderView`, retained as the root-swap target.
-    root_element: ElementId,
-    /// Logical size seeded into the bootstrap `RootRenderView`.
-    root_view_size: (f64, f64),
+    host: WidgetHost,
     /// Concrete type of the caller's logical root below presentation
     /// infrastructure. Element-structure probes resolve this node lazily.
     logical_root_type: TypeId,
     pipeline_owner: PipelineCell,
-    /// Every `TextInputHandle::set_cursor_area` call recorded by the
-    /// installed IME capability, in delivery order. `None` when the harness
-    /// was mounted with [`TextInputCapability::Absent`] — there is nothing
-    /// to record.
-    cursor_area_calls: Option<Arc<parking_lot::Mutex<Vec<Bounds<f64>>>>>,
-    /// Every platform IME enable/disable transition recorded by the harness.
-    ime_allowed_calls: Option<Arc<parking_lot::Mutex<Vec<bool>>>>,
-    /// Owner-local state backing the installed IME capability.
-    text_input_owner: Option<Rc<flui_interaction::TextInputOwner>>,
-    /// Per-contact pointer identity, shared with [`super::LaidOut`] so
-    /// the two cannot drift.
+    /// Per-contact pointer identity, shared with [`super::LaidOut`] so the
+    /// two cannot drift.
     contacts: PointerContacts,
-    /// The clipboard installed in the build owner, as a realm installs its
-    /// platform's: always present.
-    clipboard: Arc<flui_platform_api::InMemoryClipboard>,
 }
 
 impl std::fmt::Debug for Harness {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Harness")
-            .field("root_element", &self.root_element)
-            .field("root_view_size", &self.root_view_size)
-            .field("text_input_installed", &self.text_input_owner.is_some())
+            .field("realm", self.host.realm())
             .finish_non_exhaustive()
     }
 }
 
-/// Mount `root` as the render-tree root and drive one frame.
+/// Mount `root` as the render-tree root and drive one frame. The realm's
+/// window offers no text input, so a field attaches to a session no
+/// platform input method serves.
 pub fn mount(root: impl View) -> Harness {
-    mount_with_capabilities(
-        root,
-        PostFrameCapability::Installed,
-        TextInputCapability::Absent,
-    )
+    mount_in(root, HeadlessWindow::new(SURFACE.0, SURFACE.1))
 }
 
-/// [`mount`], but with a working `LifecycleContext::text_input_handle()` — the
-/// only capability [`mount`] withholds by default. The installed handle
-/// wraps a harness-owned `flui_interaction::TextInputOwner` directly (no
-/// `flui-app`/`PlatformWindow` involved, so `set_ime_allowed` toggling is
-/// out of reach here — that half is covered at the `flui-app` layer); it
-/// exists so `EditableText`'s own attach/detach/dispatch wiring is testable
-/// from this crate without standing up a full binding.
+/// [`mount`], with a window that offers a recording text input: the realm's
+/// presentation owns the IME session, [`Harness::dispatch_ime`] delivers
+/// platform IME events to it, and [`Harness::cursor_area_calls`] /
+/// [`Harness::ime_allowed_calls`] read back what it asked of the platform.
 pub fn mount_with_ime(root: impl View) -> Harness {
-    mount_with_capabilities(
+    mount_in(
         root,
-        PostFrameCapability::Installed,
-        TextInputCapability::Installed,
+        HeadlessWindow::new(SURFACE.0, SURFACE.1).with_text_input(),
     )
 }
 
-/// Whether the binding hands `BuildContext` a [`TextInputHandle`] at all.
-///
-/// [`TextInputHandle`]: flui_interaction::TextInputHandle
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextInputCapability {
-    /// A working handle over a harness-owned `TextInputOwner`, recording
-    /// every cursor-area and IME-allowed call.
-    Installed,
-    /// No handle: `LifecycleContext::text_input_handle()` returns `None`.
-    Absent,
-}
-
-/// Whether the binding hands `BuildContext` a [`PostFrameHandle`]/
-/// [`LocalPostFrameHandle`] at all — `Absent` withholds both, together.
-///
-/// `LifecycleContext::post_frame_handle()`/`local_post_frame_handle()` return an
-/// `Option`, so "no post-frame capability" is a real, reachable configuration
-/// — an embedder that drives frames itself, or any binding that simply never
-/// calls `install_build_capabilities`. Code that acquires either handle must
-/// behave when it is absent, and the only way to test that is to mount
-/// without one.
-///
-/// [`PostFrameHandle`]: flui_scheduler::PostFrameHandle
-/// [`LocalPostFrameHandle`]: flui_scheduler::LocalPostFrameHandle
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PostFrameCapability {
-    /// Both post-frame handles are installed, as a real binding does.
-    Installed,
-    /// Neither handle is installed.
-    Absent,
-}
-
-/// [`mount`], but able to withhold the post-frame and/or text-input
-/// capability.
-pub fn mount_with_capabilities(
-    root: impl View,
-    post_frame: PostFrameCapability,
-    text_input: TextInputCapability,
-) -> Harness {
+fn mount_in(root: impl View, window: HeadlessWindow) -> Harness {
     let logical_root_type = root.view_type_id();
-    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-    let mut owners = MountOwners::with_pipeline_owner(pipeline_owner.clone());
-    let focus_manager = owners.build_owner.focus_manager();
-    let clipboard = super::install_clipboard(&mut owners.build_owner);
-    let build_owner = &mut owners.build_owner;
-
-    let mut binding = HeadlessBinding::new();
-    let capabilities = match post_frame {
-        PostFrameCapability::Installed => BuildCapabilities::Installed,
-        PostFrameCapability::Absent => BuildCapabilities::AsyncDriverOnly,
-    };
-    let (cursor_area_calls, ime_allowed_calls, text_input_owner) =
-        if text_input == TextInputCapability::Installed {
-            struct HarnessTextInput {
-                cursor_areas: Arc<parking_lot::Mutex<Vec<Bounds<f64>>>>,
-                ime_allowed: Arc<parking_lot::Mutex<Vec<bool>>>,
-            }
-
-            impl flui_platform_api::PlatformTextInput for HarnessTextInput {
-                fn set_ime_allowed(&self, allowed: bool) {
-                    self.ime_allowed.lock().push(allowed);
-                }
-
-                fn set_ime_cursor_area(&self, area: Bounds<f64>) {
-                    self.cursor_areas.lock().push(area);
-                }
-            }
-
-            let recorded: Arc<parking_lot::Mutex<Vec<Bounds<f64>>>> =
-                Arc::new(parking_lot::Mutex::new(Vec::new()));
-            let ime_allowed = Arc::new(parking_lot::Mutex::new(Vec::new()));
-            let platform: Arc<dyn flui_platform_api::PlatformTextInput> = // headless harness supplies the same direct OS-capability boundary as a presentation.
-            Arc::new(HarnessTextInput {
-                cursor_areas: Arc::clone(&recorded),
-                ime_allowed: Arc::clone(&ime_allowed),
-            });
-            let owner = flui_interaction::TextInputOwner::new(Some(platform));
-            build_owner.set_text_input_handle(owner.handle());
-            (Some(recorded), Some(ime_allowed), Some(owner))
-        } else {
-            (None, None, None)
-        };
-
-    let scoped = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
-    let root = Align::new(Alignment::TOP_LEFT).child(scoped);
-    let mounted = binding.mount_root(
-        &root,
-        owners,
-        MountOptions::tight(800.0, 600.0).with_capabilities(capabilities),
-    );
-    let root_element = mounted.root_element;
-    let root_view_size = mounted.root_view_size;
-
+    let host = WidgetHost::mount(aligned(root), window);
+    let pipeline_owner = host.pipeline().clone();
     Harness {
-        binding,
-        focus_manager,
-        root_element,
-        root_view_size,
+        host,
         logical_root_type,
         pipeline_owner,
-        cursor_area_calls,
-        ime_allowed_calls,
-        text_input_owner,
         contacts: PointerContacts::new(),
-        clipboard,
     }
+}
+
+/// The harness's one wrapper: the root at its own size in the top-left.
+fn aligned(root: impl View) -> flui_view::BoxedView {
+    Align::new(Alignment::TOP_LEFT).child(root).boxed()
 }
 
 impl Harness {
     /// Focus manager that owns this harness's mounted tree.
     pub fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
-        Rc::clone(&self.focus_manager)
+        self.host
+            .realm()
+            .realm()
+            .widgets()
+            .with_build_owner(flui_view::BuildOwner::focus_manager)
     }
 
     /// The clipboard this tree's widgets reach through
     /// `LifecycleContext::clipboard_handle`.
     pub fn clipboard(&self) -> Arc<flui_platform_api::InMemoryClipboard> {
-        Arc::clone(&self.clipboard)
+        self.host.realm().clipboard()
     }
 
-    /// Run an owner-side test action under the binding's full local scope.
+    /// Run an owner-side test action inside the realm's owner scope.
     pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
-        self.binding.enter_owner_scope(callback)
+        self.host.realm().enter(|_| callback())
     }
 
     /// Turn semantics on, as a platform adapter does when assistive
     /// technology attaches; the next frame assembles the tree.
-    ///
-    /// # Panics
-    ///
-    /// If the binding is not bound to a tree, which a mounted harness always
-    /// is.
     pub fn enable_semantics(&mut self) {
-        self.binding
-            .enable_semantics()
-            .expect("a mounted Harness is tree-bound");
+        self.host.realm().enable_semantics();
     }
 
     /// The accessibility tree as a platform adapter would receive it, or
@@ -239,18 +128,18 @@ impl Harness {
     /// called and a frame has run since.
     #[must_use]
     pub fn a11y_tree(&self) -> Option<crate::A11yTree> {
-        self.binding.a11y_tree()
+        super::a11y_tree(&self.pipeline_owner)
     }
 
-    /// Advance the binding's virtual clock by the shared
+    /// Advance the realm's virtual clock by the shared
     /// [`POINTER_SAMPLE_INTERVAL`] before a synthetic Move that records a new
     /// velocity sample — the same mechanism (and same 8ms rationale) as
-    /// [`super::LaidOut`]. `DragGestureRecognizer` timestamps its
-    /// velocity samples from `RecognizerBase::now()`, which reads this SAME
-    /// clock-bound `GestureArena` via `binding.arena()` above, so a spin-wait
-    /// on the real clock (which made sample spacing depend on however much
-    /// wall-clock time the test process happened to be scheduled between
-    /// dispatch calls) is neither necessary nor correct.
+    /// [`super::LaidOut`]. `DragGestureRecognizer` timestamps its velocity
+    /// samples from `RecognizerBase::now()`, which reads the realm's
+    /// clock-bound `GestureArena`, so a spin-wait on the real clock (which
+    /// made sample spacing depend on however much wall-clock time the test
+    /// process happened to be scheduled between dispatch calls) is neither
+    /// necessary nor correct.
     ///
     /// Only a Move calls this: `DragGestureRecognizer::handle_down` always
     /// resets the velocity tracker before recording its own sample, so a Down
@@ -258,36 +147,15 @@ impl Harness {
     /// there would only cost deadline-timing tests virtual time they did not
     /// ask to spend.
     fn advance_pointer_clock(&self) {
-        self.binding.clock().advance(POINTER_SAMPLE_INTERVAL);
-    }
-
-    fn begin_contact(&self) -> PointerId {
-        self.contacts.begin()
-    }
-
-    fn current_contact(&self) -> PointerId {
-        self.contacts.current()
-    }
-
-    fn hit_test_pointer(
-        &self,
-        position: Offset<f64>,
-    ) -> flui_rendering::hit_testing::HitTestResult {
-        use flui_rendering::hit_testing::HitTestResult;
-
-        let mut result = HitTestResult::new();
-        self.pipeline_owner
-            .with(|owner| owner.hit_test(position, &mut result));
-        result
+        self.host.clock().advance(POINTER_SAMPLE_INTERVAL);
     }
 
     /// Begin a new mouse contact at logical `(x, y)`, hit-testing the mounted
     /// render tree.
     pub fn dispatch_pointer_down(&self, x: f64, y: f64) {
         let event =
-            make_down_event_for_id(self.begin_contact(), Offset::new(x, y), PointerType::Mouse);
-        self.binding
-            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+            make_down_event_for_id(self.contacts.begin(), Offset::new(x, y), PointerType::Mouse);
+        self.host.dispatch_pointer(&event);
     }
 
     /// Move the in-flight contact to logical `(x, y)`, one sample interval
@@ -299,8 +167,7 @@ impl Harness {
             Offset::new(x, y),
             PointerType::Mouse,
         );
-        self.binding
-            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.host.dispatch_pointer(&event);
     }
 
     /// Lift the in-flight contact at logical `(x, y)`.
@@ -310,8 +177,7 @@ impl Harness {
             Offset::new(x, y),
             PointerType::Mouse,
         );
-        self.binding
-            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.host.dispatch_pointer(&event);
     }
 
     /// Cancel the in-flight contact — the platform withdrawing a gesture
@@ -319,80 +185,65 @@ impl Harness {
     /// position, matching `make_cancel_event_for_id`.
     pub fn dispatch_pointer_cancel(&self) {
         let event = make_cancel_event_for_id(self.current_contact(), PointerType::Mouse);
-        self.binding
-            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.host.dispatch_pointer(&event);
     }
 
-    /// Every `TextInputHandle::set_cursor_area` call recorded so far, in
-    /// delivery order.
+    fn current_contact(&self) -> PointerId {
+        self.contacts.current()
+    }
+
+    /// Every IME cursor area the realm reported to the window, in delivery
+    /// order.
     ///
     /// # Panics
     ///
-    /// Panics if the harness was mounted with [`TextInputCapability::Absent`]
-    /// (via [`mount`] rather than [`mount_with_ime`]) — that configuration
-    /// installs no `TextInputHandle` at all, so there is nothing to record,
-    /// and a test reading this without IME installed is testing the wrong
-    /// harness.
+    /// Panics if the harness was mounted with [`mount`] rather than
+    /// [`mount_with_ime`]: that window offers no text input, so there is
+    /// nothing to record, and a test reading this without it is testing the
+    /// wrong harness.
     pub fn cursor_area_calls(&self) -> Vec<Bounds<f64>> {
-        self.cursor_area_calls
-            .as_ref()
-            .expect(
-                "cursor_area_calls requires mounting with TextInputCapability::Installed \
-                 (mount_with_ime, not mount)",
-            )
-            .lock()
-            .clone()
+        self.host.realm().window().ime_cursor_areas().expect(
+            "cursor_area_calls requires a window with a text input (mount_with_ime, not mount)",
+        )
     }
 
     /// Platform IME enable/disable calls in delivery order.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::cursor_area_calls`].
     pub fn ime_allowed_calls(&self) -> Vec<bool> {
-        self.ime_allowed_calls
-            .as_ref()
+        self.host
+            .realm()
+            .window()
+            .ime_allowed_calls()
             .expect("ime_allowed_calls requires mount_with_ime")
-            .lock()
-            .clone()
     }
 
-    /// Deliver an IME event to this harness's active text client.
+    /// Deliver an IME event to the realm's primary presentation, as the
+    /// platform delivers one between frames.
     pub fn dispatch_ime(&self, event: &flui_platform_api::ImeEvent) {
-        self.text_input_owner
-            .as_ref()
-            .expect("dispatch_ime requires mount_with_ime")
-            .dispatch(event);
+        self.host
+            .realm()
+            .dispatch(PlatformInput::Ime(event.clone()));
     }
 
-    /// Number of active clients in this harness's presentation-local registry.
+    /// Number of active clients in the realm's presentation-local registry
+    /// (zero or one).
     pub fn active_ime_clients(&self) -> usize {
-        self.text_input_owner
-            .as_ref()
-            .expect("active_ime_clients requires mount_with_ime")
-            .active_count()
+        usize::from(self.active_text_store().is_some())
     }
 
     /// The text store of the field attached as the IME client, if any: the
     /// surface a platform input method pulls from (ADR-0090).
     pub fn active_text_store(&self) -> Option<Rc<dyn flui_platform_api::TextStore>> {
-        self.text_input_owner
-            .as_ref()
-            .expect("active_text_store requires mount_with_ime")
-            .active_store()
+        self.host.realm().realm().active_text_store()
     }
 
-    /// Open or close the presentation's frame transaction, inside which a
-    /// text store cannot commit. [`Self::tick`] brackets its frame with it.
-    pub fn set_transaction_open(&self, open: bool) {
-        if let Some(owner) = &self.text_input_owner {
-            owner.set_transaction_open(open);
-        }
-    }
     /// The root element id.
     pub fn root(&mut self) -> ElementId {
-        let logical_root_type = self.logical_root_type;
-        self.binding
-            .tree_mut()
-            .iter_nodes()
-            .filter(|(_, node)| node.element().view_type_id() == logical_root_type)
-            .min_by_key(|(_, node)| node.element().depth())
+        self.host
+            .shallowest(self.logical_root_type)
             .map(|(id, _)| id)
             .expect("the caller's logical root must remain mounted below presentation scopes")
     }
@@ -402,51 +253,42 @@ impl Harness {
     /// rebuilds. Every rebuild assertion depends on this: a root-dirtying pump
     /// would rebuild the whole tree and prove nothing.
     ///
-    /// The frame is a transaction for text stores, as `flui-app`'s is: commits
-    /// close for its duration, and the grants queued meanwhile run once it
-    /// returns.
+    /// The frame is the realm's `UiRealm::pump`, so it is a transaction for
+    /// text stores as on screen: commits close for its duration, and the
+    /// grants queued meanwhile run once it returns.
     pub fn tick(&mut self) {
-        self.set_transaction_open(true);
-        self.binding.pump_frame(Duration::ZERO);
-        self.set_transaction_open(false);
-        if let Some(owner) = &self.text_input_owner {
-            let _ran = owner.run_deferred_grants();
-        }
+        self.host.pump(Duration::ZERO);
     }
 
     /// Replace the root view and settle.
     ///
-    /// Goes through `ElementTree::update`, whose dispatch is keyed by `TypeId`, so
-    /// the root's *type* must not change between frames. Toggling a field on one
-    /// root type is how a subtree gets unmounted.
+    /// The harness root rebuilds with `new_root` under the same `Align`, so a
+    /// root of the same type updates in place; toggling a field on one root
+    /// type is how a subtree gets unmounted.
     pub fn swap_root(&mut self, new_root: impl View) {
-        let scoped = GestureArenaScope::new(self.binding.arena().clone(), FocusRoot::new(new_root));
-        let aligned = Align::new(Alignment::TOP_LEFT).child(scoped);
-        let root = RootRenderView::new(aligned, self.root_view_size.0, self.root_view_size.1);
-        self.binding.swap_root_view(self.root_element, &root);
-        self.binding.pump_frame(Duration::ZERO);
+        self.logical_root_type = new_root.view_type_id();
+        self.host.swap(aligned(new_root));
     }
 
     /// The ordered children of `parent`, read through the public `ElementNode`
     /// surface (`parent()` + `slot()`); `child_ids()` is crate-private.
     pub fn children_of(&mut self, parent: ElementId) -> Vec<ElementId> {
-        let mut kids: Vec<(usize, ElementId)> = self
-            .binding
-            .tree_mut()
-            .iter_nodes()
-            .filter(|(_, node)| node.parent() == Some(parent))
-            .map(|(id, node)| (node.slot(), id))
-            .collect();
+        let mut kids: Vec<(usize, ElementId)> = self.host.with_tree(|tree| {
+            tree.iter_nodes()
+                .filter(|(_, node)| node.parent() == Some(parent))
+                .map(|(id, node)| (node.slot(), id))
+                .collect()
+        });
         kids.sort_unstable();
         kids.into_iter().map(|(_, id)| id).collect()
     }
 
-    /// The binding's **own** scheduler — never `UpdateScheduler::instance()`.
+    /// The realm's **own** scheduler — never `UpdateScheduler::instance()`.
     ///
-    /// A post-frame callback registered here is drained by `pump_frame`'s
-    /// `UpdateScheduler::drive_frame`, after the pipeline commits layout.
+    /// A post-frame callback registered here is drained by the realm's
+    /// frame, after the pipeline commits layout.
     pub fn scheduler(&self) -> &flui_scheduler::UpdateScheduler {
-        self.binding.scheduler()
+        self.host.realm().realm().scheduler()
     }
 
     /// The shared pipeline owner, so a post-frame callback can read committed
@@ -455,16 +297,17 @@ impl Harness {
         self.pipeline_owner.clone()
     }
 
-    /// The owner-local post-frame handle installed on this harness's
+    /// The owner-local post-frame handle the realm installed on this tree's
     /// `BuildOwner`, so a test can `schedule_local` a callback that captures
     /// the (`!Send`) [`PipelineCell`] — `add_post_frame_callback`'s `Send`
     /// bound cannot carry it.
     pub fn local_post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
-        self.binding
-            .build_owner_mut()
-            .local_post_frame_handle()
-            .expect("owner-local post-frame handle installed by mount_with_capabilities")
-            .clone()
+        self.host
+            .realm()
+            .realm()
+            .widgets()
+            .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
+            .expect("the realm installs an owner-local post-frame handle")
     }
 
     /// The `debug_name()` of every render object currently in the tree.
@@ -484,29 +327,27 @@ impl Harness {
 
     /// The concrete view type behind element `id`.
     pub fn view_type_of(&mut self, id: ElementId) -> TypeId {
-        self.binding
-            .tree_mut()
-            .get(id)
-            .map(|node| node.element().view_type_id())
-            .expect("the probed element must be mounted")
+        self.host.with_tree(|tree| {
+            tree.get(id)
+                .map(|node| node.element().view_type_id())
+                .expect("the probed element must be mounted")
+        })
     }
 
     /// The parent of element `id`, if any.
     pub fn parent_of(&mut self, id: ElementId) -> Option<ElementId> {
-        self.binding
-            .tree_mut()
-            .get(id)
-            .and_then(ElementNode::parent)
+        self.host
+            .with_tree(|tree| tree.get(id).and_then(ElementNode::parent))
     }
 
     /// Every mounted element whose view is of type `ty`, in arbitrary order.
     pub fn elements_of_type(&mut self, ty: TypeId) -> Vec<ElementId> {
-        self.binding
-            .tree_mut()
-            .iter_nodes()
-            .filter(|(_, node)| node.element().view_type_id() == ty)
-            .map(|(id, _)| id)
-            .collect()
+        self.host.with_tree(|tree| {
+            tree.iter_nodes()
+                .filter(|(_, node)| node.element().view_type_id() == ty)
+                .map(|(id, _)| id)
+                .collect()
+        })
     }
 
     /// The only child of `parent`.

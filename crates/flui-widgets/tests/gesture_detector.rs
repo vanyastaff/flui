@@ -507,13 +507,12 @@ mod event_cx {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use crate::common::harness::{
-        PostFrameCapability, TextInputCapability, mount_with_capabilities,
-    };
     use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
+    use crate::substrate;
     use flui_interaction::{DragEndDetails, DragUpdateDetails};
     use flui_painting::styling::Color;
     use flui_rendering::pipeline::PipelineCell;
+    use flui_testing::bootstrap::BuildCapabilities;
     use flui_testing::{A11yTree, Action, ActionRequest, TreeId, invoke_semantics_action};
     use flui_view::prelude::*;
     use flui_widgets::{ColoredBox, GestureDetector, Semantics, Text};
@@ -895,11 +894,7 @@ mod event_cx {
                 count.set(cx, 1)
             }))
         });
-        let mut app = mount_with_capabilities(
-            probe.view(),
-            PostFrameCapability::Absent,
-            TextInputCapability::Absent,
-        );
+        let mut app = substrate::mount(probe.view(), BuildCapabilities::AsyncDriverOnly);
         app.enable_semantics();
         app.tick();
         let tree = app.a11y_tree().expect("semantics enabled before the frame");

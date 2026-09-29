@@ -444,7 +444,7 @@ fn a_build_that_panics_before_reading_keeps_its_dependency() {
     fail.set(true);
     laid.pump_widget(MediaQuery::new(data(900.0, 1.0), wrap(&reader)));
     assert_eq!(builds.get(), 2, "the size change reached the reader");
-    let _ = laid.build_owner_mut().take_recovered_panics();
+    let _ = laid.with_build_owner_mut(flui_view::BuildOwner::take_recovered_panics);
 
     // Condition fixed: the next size change must still rebuild it.
     fail.set(false);

@@ -5,14 +5,20 @@
 //! It mounts a root [`View`] (a widget tree) as the render-tree root, runs a
 //! build pass (reconciling and mounting the whole subtree's render objects),
 //! then drives a real headless frame and exposes the resulting render-node
-//! geometry. No GPU, no window, no process-global binding, so the tests are
-//! order-independent and run in parallel.
+//! geometry. The tree is the root of a [`HeadlessRealm`](crate::HeadlessRealm):
+//! every frame is the realm's own `UiRealm::pump` on a manual clock, under
+//! the realm's root scopes (`GestureArenaScope`, `VsyncScope`, `FocusRoot`,
+//! `MediaQuery`), exactly as a runner drives it on screen. No GPU, no OS
+//! window, no process-global state, so the tests are order-independent and
+//! run in parallel.
 //!
 //! This module is the single canonical harness: the per-crate
 //! `tests/common/mod.rs` files are thin re-export shims over it, so mount
 //! ordering, pointer-contact identity and virtual-clock policy cannot drift
 //! apart between crates.
+
 pub mod harness;
+mod host;
 mod signal_probe;
 
 pub use signal_probe::{ProbeRoot, ProbeRootState, ProbeSignals, SignalProbe};
@@ -24,13 +30,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::HeadlessBinding;
-use crate::bootstrap::{MountOptions, MountOwners};
 use flui_animation::{AnimationController, Vsync};
+use flui_foundation::RenderId;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
 use flui_foundation::geometry::{Offset, RRect, Rect, Size};
-use flui_foundation::{ElementId, RenderId};
 use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerButtons, PointerEvent, PointerType, make_cancel_event_for_id, make_down_event_for_id,
@@ -48,45 +52,43 @@ use flui_painting::paint::Clip;
 use flui_painting::styling::BorderRadius;
 use flui_platform_api::InMemoryClipboard;
 use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
-use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::storage::IntrinsicDimension;
 use flui_rendering::testing::inspect;
 use flui_view::BoxedView;
 use flui_view::InheritedView;
-use flui_view::RootRenderView;
 use flui_view::View;
 use flui_view::ViewExt;
 use flui_view::element::InheritedElementAccess;
 
-use flui_widgets::{Align, ConstrainedBox, FocusRoot, GestureArenaScope, UnconstrainedBox};
+use flui_widgets::{Align, ConstrainedBox, UnconstrainedBox};
 
-/// A laid-out widget tree, holding the element + render trees alive (inside a
-/// tree-bound [`HeadlessBinding`]) so geometry can be queried after layout — and
-/// re-driven via [`LaidOut::pump`] / [`LaidOut::tick`] / [`LaidOut::pump_for`].
+use self::host::WidgetHost;
+use crate::realm::HeadlessWindow;
+
+/// A laid-out widget tree, mounted in a [`HeadlessRealm`](crate::HeadlessRealm)
+/// so geometry can be queried after layout, and re-driven with
+/// [`LaidOut::pump`] / [`LaidOut::tick`] / [`LaidOut::pump_for`]. Every frame
+/// is the realm's own `UiRealm::pump`.
 ///
-/// `pipeline_owner` is the harness's own clone of the same shared
-/// `PipelineCell` the binding drives, so geometry reads observe the
-/// frame the binding just ran.
+/// `pipeline_owner` is a clone of the realm's own `PipelineCell`, so
+/// geometry reads observe the frame the realm just ran.
 pub struct LaidOut {
-    binding: HeadlessBinding,
-    focus_manager: Rc<flui_interaction::FocusManager>,
+    host: WidgetHost,
     pipeline_owner: PipelineCell,
     root_render_id: RenderId,
-    root_element_id: ElementId,
-    /// Logical size seeded into the bootstrap [`RootRenderView`].
-    root_view_size: (f64, f64),
     /// Concrete identity of the caller's root below the presentation scopes.
     logical_root_type: TypeId,
     /// Whether this mount wrapped the caller in [`Align`] so a non-tight
     /// [`lay_out`] request actually reaches the widget. [`Self::pump_widget`]
-    /// must keep the same wrapper: `RootRenderView` swaps require the same
-    /// child type as the original mount.
+    /// keeps the same wrappers, so a swap reconciles them in place.
     loosen_with_align: bool,
-    /// Additional constraints re-applied under the [`Align`] loosener when
-    /// the caller asked for a non-zero minimum. `Align` loosens to `0..=max`,
-    /// which would drop that minimum (e.g. `StackFit::Passthrough` under
-    /// min 50). [`ConstrainedBox`] sits above the logical root so it does
-    /// not steal `find_by_render_type("RenderConstrainedBox")`.
+    /// The caller's constraints, re-applied under the [`Align`] loosener
+    /// when the surface cannot carry them itself: a non-zero minimum (`Align`
+    /// loosens to `0..=max`, which would drop it, e.g.
+    /// `StackFit::Passthrough` under min 50) or a fractional maximum (the
+    /// surface is whole pixels). [`ConstrainedBox`] sits above the logical
+    /// root so it does not steal `find_by_render_type("RenderConstrainedBox")`.
     reapply_constraints: Option<BoxConstraints>,
     /// How [`UnconstrainedBox`] restores infinite caller maxes after the
     /// pipeline `RenderView` tight-fills a finite surface. Ancestor of the
@@ -95,25 +97,21 @@ pub struct LaidOut {
     unconstrained_wrap: UnconstrainedWrap,
     /// Per-contact pointer identity for the synthetic dispatch helpers.
     contacts: PointerContacts,
-    /// The clipboard installed in the build owner, as a realm installs its
-    /// platform's: the headless platform's type, read back by tests.
-    clipboard: Arc<InMemoryClipboard>,
 }
 
 impl std::fmt::Debug for LaidOut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The binding/pipeline internals are deliberately opaque here — a
+        // The realm/pipeline internals are deliberately opaque here — a
         // harness value in a test failure message is identified by what it
         // mounted, not by the machinery driving it.
         f.debug_struct("LaidOut")
             .field("root_render_id", &self.root_render_id)
-            .field("root_element_id", &self.root_element_id)
             .finish_non_exhaustive()
     }
 }
 
 /// Pointer-contact identity for synthetic dispatch: every Down gets a fresh
-/// pointer id so sequential contacts cannot collide in the binding-owned
+/// pointer id so sequential contacts cannot collide in the realm-owned
 /// arena (matching production, where the platform never recycles an id into
 /// a still-tracked gesture), while the contact's own Move/Up/Cancel share
 /// the id its Down allocated.
@@ -191,7 +189,7 @@ impl PointerContacts {
 /// coalesced input is replayed toward the frame, a different quantity from
 /// how far apart a test spaces the raw samples it feeds in.
 ///
-/// Advancing the binding's virtual clock by this fixed amount before each
+/// Advancing the realm's virtual clock by this fixed amount before each
 /// such dispatch means the spacing the velocity tracker records never depends
 /// on how much real time the test process happened to be scheduled between
 /// calls.
@@ -232,10 +230,11 @@ fn unconstrained_wrap_for(constraints: &BoxConstraints) -> UnconstrainedWrap {
     }
 }
 
-/// Presentation wrap under [`RootRenderView`]: optional `Align` loosener,
-/// then `UnconstrainedBox` for infinite axes, then `ConstrainedBox` for a
-/// non-zero minimum. Always boxed so [`LaidOut::pump_widget`] can swap the
-/// same `RootRenderView<BoxedView>` child type it mounted.
+/// Presentation wrap under the realm's root scopes: optional `Align`
+/// loosener, then `UnconstrainedBox` for infinite axes, then `ConstrainedBox`
+/// for the caller's constraints when the surface cannot carry them. Always
+/// boxed, so [`LaidOut::pump_widget`] hands the harness root the same shape
+/// it mounted.
 fn wrap_presentation(
     scoped: impl View,
     loosen_with_align: bool,
@@ -268,96 +267,81 @@ fn wrap_presentation(
     tree
 }
 
-/// Build `root`, mount it as the render-tree root, and lay it out under
-/// `constraints`. Panics on any pipeline error so a regression is loud.
-pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
-    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-    lay_out_with_pipeline_owner_and_binding(
-        root,
-        constraints,
-        pipeline_owner,
-        HeadlessBinding::new(),
-    )
-}
+/// Surface size used when a constraint axis is unbounded: the production
+/// `WidgetsBinding` default root-view seed (800×600).
+const DEFAULT_SURFACE: (u32, u32) = (800, 600);
 
-/// [`lay_out`] with a caller-provided pipeline owner, for probes that must retain
-/// the same owner before their lifecycle callback is mounted.
-pub fn lay_out_with_pipeline_owner(
-    root: impl View,
-    constraints: BoxConstraints,
-    pipeline_owner: PipelineCell,
-) -> LaidOut {
-    lay_out_with_pipeline_owner_and_binding(
-        root,
-        constraints,
-        pipeline_owner,
-        HeadlessBinding::new(),
-    )
-}
-
-fn lay_out_with_pipeline_owner_and_binding(
-    root: impl View,
-    constraints: BoxConstraints,
-    pipeline_owner: PipelineCell,
-    mut binding: HeadlessBinding,
-) -> LaidOut {
-    let logical_root_type = root.view_type_id();
-    let mut owners = MountOwners::with_pipeline_owner(pipeline_owner.clone());
-    let focus_manager = owners.build_owner.focus_manager();
-    let clipboard = install_clipboard(&mut owners.build_owner);
-
-    // Presentation scopes are this crate's to supply — `flui-testing` owns the
-    // mount ordering (including the RootRenderView wrap), not the widget
-    // catalog. The pipeline `RenderView` tight-fills a finite surface (unbounded
-    // axes fall back to 800×600). Tight `lay_out` requests must reach the
-    // caller as tight, so they skip the loosener. Non-tight requests wrap
-    // `Align` so the widget can shrink-wrap; a non-zero minimum is re-applied
-    // with `ConstrainedBox` under that Align (ancestor of the logical root,
-    // so `find_by_render_type("RenderConstrainedBox")` still names the
-    // caller's node). Infinite max on an axis is restored with
-    // `UnconstrainedBox` — otherwise ListBody/Flex see the clamped view
-    // height and trip "must have unlimited space along its main axis".
-    let loosen_with_align = !(constraints.has_tight_width() && constraints.has_tight_height());
-    let reapply_constraints =
-        if loosen_with_align && (constraints.min_width > 0.0 || constraints.min_height > 0.0) {
-            Some(constraints)
+/// The whole-pixel surface a mount under `constraints` presents into: the
+/// biggest finite size, rounded up, or [`DEFAULT_SURFACE`] per unbounded axis.
+fn surface_for(constraints: &BoxConstraints) -> (u32, u32) {
+    let axis = |extent: f64, fallback: u32| {
+        if extent.is_finite() {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a test surface is a small, non-negative pixel count"
+            )]
+            let pixels = extent.ceil().max(0.0) as u32;
+            pixels
         } else {
-            None
-        };
+            fallback
+        }
+    };
+    let biggest = constraints.biggest();
+    (
+        axis(biggest.width, DEFAULT_SURFACE.0),
+        axis(biggest.height, DEFAULT_SURFACE.1),
+    )
+}
+
+/// Build `root`, mount it under a headless realm, and lay it out under
+/// `constraints` with one realm frame. A frame the realm drops (a panic or a
+/// pipeline error) is raised, so a regression is loud.
+///
+/// The realm's surface is the constraints' biggest finite size in whole
+/// pixels (800×600 per unbounded axis), and the realm tight-fills it. A tight
+/// whole-pixel request reaches the caller as it is; anything else goes
+/// through an `Align` loosener, with the caller's constraints re-applied
+/// below it where the surface cannot carry them. Infinite maxes are restored
+/// with `UnconstrainedBox`, so a `ListBody` or `Flex` does not see the
+/// clamped surface and trip "must have unlimited space along its main axis".
+pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
+    let logical_root_type = root.view_type_id();
+    let surface = surface_for(&constraints);
+    let exact_surface =
+        BoxConstraints::tight(Size::new(f64::from(surface.0), f64::from(surface.1)));
+    let loosen_with_align = constraints != exact_surface;
+    let fractional_max = [constraints.max_width, constraints.max_height]
+        .iter()
+        .any(|max| max.is_finite() && max.fract() != 0.0);
+    let reapply_constraints = if loosen_with_align
+        && (constraints.min_width > 0.0 || constraints.min_height > 0.0 || fractional_max)
+    {
+        Some(constraints)
+    } else {
+        None
+    };
     let unconstrained_wrap = unconstrained_wrap_for(&constraints);
-    let scoped = GestureArenaScope::new(binding.arena().clone(), FocusRoot::new(root));
     let wrapped = wrap_presentation(
-        scoped,
+        root,
         loosen_with_align,
         reapply_constraints,
         unconstrained_wrap,
     );
-    let options = MountOptions::new(constraints);
-    let mounted = binding.mount_root(&wrapped, owners, options);
-    let root_render_id = resolve_logical_render_root(&mut binding, logical_root_type);
+    let host = WidgetHost::mount(wrapped, HeadlessWindow::new(surface.0, surface.1));
+    let pipeline_owner = host.pipeline().clone();
+    let root_render_id = resolve_logical_render_root(&host, logical_root_type);
 
     LaidOut {
-        binding,
-        focus_manager,
+        host,
         pipeline_owner,
         root_render_id,
-        root_element_id: mounted.root_element,
-        root_view_size: mounted.root_view_size,
         logical_root_type,
         loosen_with_align,
         reapply_constraints,
         unconstrained_wrap,
         contacts: PointerContacts::new(),
-        clipboard,
     }
-}
-
-/// Install a fresh in-memory clipboard in `build_owner`, as every realm
-/// installs its platform's, and return it for read-back.
-fn install_clipboard(build_owner: &mut flui_view::BuildOwner) -> Arc<InMemoryClipboard> {
-    let clipboard = Arc::new(InMemoryClipboard::new());
-    build_owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(clipboard.clone()));
-    clipboard
 }
 
 /// Shallowest mounted element of `logical_root_type` → its render id.
@@ -368,101 +352,108 @@ fn install_clipboard(build_owner: &mut flui_view::BuildOwner) -> Arc<InMemoryCli
 /// names the caller's outermost laid-out box (Flutter's "size of the
 /// widget"). [`Container`](flui_widgets::Container) is a `RenderView` and takes the
 /// direct path.
-fn resolve_logical_render_root(
-    binding: &mut HeadlessBinding,
-    logical_root_type: TypeId,
-) -> RenderId {
-    let tree = binding.tree_mut();
-    let logical_root_id = tree
-        .iter_nodes()
-        .filter(|(_, node)| node.element().view_type_id() == logical_root_type)
-        .min_by_key(|(_, node)| node.depth())
-        .map(|(id, _)| id)
+fn resolve_logical_render_root(host: &WidgetHost, logical_root_type: TypeId) -> RenderId {
+    let (logical_root_id, _) = host
+        .shallowest(logical_root_type)
         .expect("the caller's logical root must remain mounted below presentation scopes");
-
-    if let Some(render_id) = tree
-        .get(logical_root_id)
-        .and_then(|node| node.element().render_id())
-    {
-        return render_id;
-    }
-
-    // Level-order: the outermost composed render object is the first child that
-    // owns one (`AnimatedContainer` → `RenderContainer`, …), not a deeper leaf.
-    let mut queue: Vec<_> = tree
-        .get(logical_root_id)
-        .map(|node| node.child_ids().to_vec())
-        .unwrap_or_default();
-    let mut index = 0;
-    while index < queue.len() {
-        let id = queue[index];
-        index += 1;
-        let Some(node) = tree.get(id) else {
-            continue;
-        };
-        if let Some(render_id) = node.element().render_id() {
+    host.with_tree(|tree| {
+        if let Some(render_id) = tree
+            .get(logical_root_id)
+            .and_then(|node| node.element().render_id())
+        {
             return render_id;
         }
-        queue.extend(node.child_ids().iter().copied());
-    }
 
-    panic!(
-        "BUG: the caller's logical root must own a render object, or compose one, after bootstrap"
-    );
+        // Level-order: the outermost composed render object is the first child
+        // that owns one (`AnimatedContainer` → `RenderContainer`, …), not a
+        // deeper leaf.
+        let mut queue: Vec<_> = tree
+            .get(logical_root_id)
+            .map(|node| node.child_ids().to_vec())
+            .unwrap_or_default();
+        let mut index = 0;
+        while index < queue.len() {
+            let id = queue[index];
+            index += 1;
+            let Some(node) = tree.get(id) else {
+                continue;
+            };
+            if let Some(render_id) = node.element().render_id() {
+                return render_id;
+            }
+            queue.extend(node.child_ids().iter().copied());
+        }
+
+        panic!(
+            "BUG: the caller's logical root must own a render object, or compose one, after \
+             bootstrap"
+        );
+    })
 }
 
-/// Like [`lay_out`], but drives implicitly-animated widgets: the binding adopts
-/// `vsync` so it ticks every controller a descendant `VsyncScope` (built from
-/// the same `vsync`) registered during the mount build pass.
+/// Like [`lay_out`], but drives implicitly-animated widgets under a registry
+/// the caller built: the harness adopts `vsync` and ticks it at every frame's
+/// time, beside the realm's own registry, so every controller a descendant
+/// `VsyncScope` (built from the same `vsync`) registered advances.
 ///
 /// The caller threads `vsync` into the root widget (so its build wraps the
 /// animated subtree in `VsyncScope::new(vsync.clone(), …)`) AND passes the same
-/// handle here, so the scope a descendant reads and the registry the binding
-/// drives are one and the same.
+/// handle here, so the scope a descendant reads and the registry the harness
+/// drives are one and the same. A widget below no scope of its own registers
+/// with the realm's registry, which the realm ticks itself.
 pub fn lay_out_animated(root: impl View, constraints: BoxConstraints, vsync: Vsync) -> LaidOut {
-    let mut laid = lay_out(root, constraints);
-    laid.binding.adopt_vsync(vsync);
+    let laid = lay_out(root, constraints);
+    laid.host.adopt_vsync(vsync);
     laid
 }
 
 impl LaidOut {
     /// Focus manager that owns this mounted widget tree.
     pub fn focus_manager(&self) -> Rc<flui_interaction::FocusManager> {
-        Rc::clone(&self.focus_manager)
+        self.host
+            .realm()
+            .realm()
+            .widgets()
+            .with_build_owner(flui_view::BuildOwner::focus_manager)
     }
 
     /// The clipboard this tree's widgets reach through
     /// `LifecycleContext::clipboard_handle`.
     pub fn clipboard(&self) -> Arc<InMemoryClipboard> {
-        Arc::clone(&self.clipboard)
+        self.host.realm().clipboard()
     }
 
-    /// This binding's own scheduler, for a probe that must observe frame
+    /// The realm's own scheduler, for a probe that must observe frame
     /// ordering directly (e.g. whether a callback fired from inside
     /// [`LaidOut::pump_widget`]'s postframe recheck lands in the SAME
-    /// frame's post-frame phase or a later one). `UpdateScheduler` is `Arc`-backed
-    /// and `Clone`, so cloning it merely shares a handle to the same
-    /// binding-local callback queues [`HeadlessBinding::scheduler`] already
-    /// owns.
+    /// frame's post-frame phase or a later one). `UpdateScheduler` is
+    /// `Arc`-backed and `Clone`, so cloning it merely shares a handle to the
+    /// same realm-owned callback queues.
     pub fn scheduler(&self) -> flui_scheduler::UpdateScheduler {
-        self.binding.scheduler().clone()
+        self.host.realm().realm().scheduler().clone()
     }
 
-    /// Run an owner-side action under the headless binding's local runtime scope.
+    /// Run an owner-side action inside the realm's owner scope.
     pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
-        self.binding.enter_owner_scope(callback)
+        self.host.realm().enter(|_| callback())
     }
 
-    /// The owner-local post-frame handle installed on this harness's
+    /// The owner-local post-frame handle the realm installed on this tree's
     /// `BuildOwner`, so a test can `schedule_local` a callback that captures
     /// the (`!Send`) [`PipelineCell`] — `PostFrameHandle::schedule`'s `Send`
     /// bound cannot carry it.
     pub fn local_post_frame_handle(&mut self) -> flui_scheduler::LocalPostFrameHandle {
-        self.binding
-            .build_owner_mut()
-            .local_post_frame_handle()
-            .expect("owner-local post-frame handle installed by install_build_capabilities")
-            .clone()
+        self.host
+            .realm()
+            .realm()
+            .widgets()
+            .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
+            .expect("the realm installs an owner-local post-frame handle")
+    }
+
+    /// The realm this tree is mounted in.
+    pub fn realm(&self) -> &crate::HeadlessRealm {
+        self.host.realm()
     }
     /// The render id of the root widget's render object.
     pub fn root(&self) -> RenderId {
@@ -503,10 +494,11 @@ impl LaidOut {
     /// `SparseChildren::evict` + `finalize_tree` fully drains lazy children from
     /// both trees, not just the render tree.
     pub fn element_node_count(&mut self) -> usize {
-        self.binding.tree_mut().len()
+        self.host.with_tree(|tree| tree.len())
     }
 
-    /// Count live elements whose concrete view type is `V`.
+    /// Count live elements whose concrete view type is `V` in the tree under
+    /// test (the realm's root scopes above it are not counted).
     ///
     /// Build failures are recovered in the element tree as `ErrorView`
     /// substitutions and need not remove an outer presentation wrapper's
@@ -514,11 +506,11 @@ impl LaidOut {
     /// recovery — build-error assertions inspect the element tree directly.
     pub fn count_elements_by_view_type<V: View>(&mut self) -> usize {
         let expected = TypeId::of::<V>();
-        self.binding
-            .tree_mut()
-            .iter_nodes()
-            .filter(|(_id, node)| node.element().view_type_id() == expected)
-            .count()
+        self.host.with_tree_under_test(|tree, under_test| {
+            tree.iter_nodes()
+                .filter(|(id, node)| node.element().view_type_id() == expected && under_test(*id))
+                .count()
+        })
     }
 
     /// How many elements depend on the mounted inherited view of type `V`.
@@ -541,17 +533,16 @@ impl LaidOut {
     /// refused rather than guessed.
     pub fn inherited_dependent_count<V: InheritedView>(&mut self) -> usize {
         let expected = TypeId::of::<V>();
-        let counts: Vec<usize> = self
-            .binding
-            .tree_mut()
-            .iter_nodes()
-            .filter(|(_id, node)| node.element().view_type_id() == expected)
-            .filter_map(|(_id, node)| {
-                node.element()
-                    .as_inherited()
-                    .map(InheritedElementAccess::dependent_count)
-            })
-            .collect();
+        let counts: Vec<usize> = self.host.with_tree_under_test(|tree, under_test| {
+            tree.iter_nodes()
+                .filter(|(id, node)| node.element().view_type_id() == expected && under_test(*id))
+                .filter_map(|(_id, node)| {
+                    node.element()
+                        .as_inherited()
+                        .map(InheritedElementAccess::dependent_count)
+                })
+                .collect()
+        });
         match counts.as_slice() {
             [only] => *only,
             [] => panic!(
@@ -665,16 +656,11 @@ impl LaidOut {
     ///
     /// Off by default: a harness that never asks pays nothing for the phase.
     /// It must be called BEFORE the frame that should carry the tree — the
-    /// phase it controls has already run for the mount frame.
-    ///
-    /// # Panics
-    ///
-    /// If the binding is not bound to a tree, which a mounted `LaidOut`
-    /// always is.
+    /// phase it controls has already run for the mount frame. It attaches
+    /// assistive technology to the realm's window, as a platform adapter
+    /// does, and the next frame reconciles that onto the pipeline.
     pub fn enable_semantics(&mut self) {
-        self.binding
-            .enable_semantics()
-            .expect("a mounted LaidOut is tree-bound");
+        self.host.realm().enable_semantics();
     }
 
     /// The accessibility tree exactly as a platform adapter would receive it,
@@ -686,7 +672,7 @@ impl LaidOut {
     /// capability here" gap are describing its absence.
     #[must_use]
     pub fn a11y_tree(&self) -> Option<crate::A11yTree> {
-        self.binding.a11y_tree()
+        a11y_tree(&self.pipeline_owner)
     }
 
     /// Drive one more frame after external state has changed — the headless
@@ -695,33 +681,18 @@ impl LaidOut {
     /// `setState` (contract C1) test, where the root's `ViewState` reads a value
     /// mutated between frames.
     ///
-    /// `Duration::ZERO` is faithful: today's `pump` advances no clock, it only
-    /// drives a frame — so step 1 is a no-op, step 2 finds no crossed deadline,
-    /// step 3 ticks the (here empty) registry, then `build_scope` + `run_frame`.
+    /// The frame advances no time.
     pub fn pump(&mut self) {
-        let logical_root_type = self.logical_root_type;
-        let (logical_root, logical_depth) = self
-            .binding
-            .tree_mut()
-            .iter_nodes()
-            .filter(|(_, node)| node.element().view_type_id() == logical_root_type)
-            .min_by_key(|(_, node)| node.depth())
-            .map(|(id, node)| (id, node.depth()))
+        let logical_root = self
+            .host
+            .shallowest(self.logical_root_type)
             .expect("the caller's logical root must remain mounted below presentation scopes");
-
-        if let Some(node) = self.binding.tree_mut().get_mut(logical_root) {
-            node.element_mut().mark_needs_build();
-        }
-        self.binding.build_owner_mut().schedule_build_for(
-            logical_root,
-            logical_depth,
-            flui_view::RebuildReason::StateChange,
-        );
-        self.binding.pump_frame(Duration::ZERO);
+        self.host.schedule_rebuild(logical_root);
+        self.host.pump(Duration::ZERO);
     }
 
     /// Drive a frame WITHOUT marking the root dirty — the headless equivalent of
-    /// a vsync/animation tick. `build_scope` (inside `pump_frame`) absorbs
+    /// a vsync/animation tick. The frame's build absorbs
     /// whatever the external inbox holds (an `AnimatedView` scheduled by a
     /// listenable change) throughout the drain — both entries already queued
     /// between frames and ones a build in this same tick schedules mid-drain
@@ -729,7 +700,7 @@ impl LaidOut {
     /// This is what distinguishes an animation-driven rebuild from a
     /// `setState`/`pump` one.
     pub fn tick(&mut self) {
-        self.binding.pump_frame(Duration::ZERO);
+        self.host.pump(Duration::ZERO);
     }
 
     /// Hot-reload entry point: mark every mounted element dirty, without
@@ -739,7 +710,9 @@ impl LaidOut {
     /// [`reassemble_render_tree`](Self::reassemble_render_tree) this is the
     /// headless twin of production `PresentationState::apply_hot_reload`.
     pub fn perform_reassemble(&mut self) {
-        self.binding.perform_reassemble();
+        self.host
+            .realm()
+            .enter(|realm| realm.widgets().perform_reassemble());
     }
 
     /// Hot-reload render half: mark the render tree's layout + paint dirty.
@@ -747,20 +720,23 @@ impl LaidOut {
     /// Call before [`pump`](Self::pump) after
     /// [`perform_reassemble`](Self::perform_reassemble).
     pub fn reassemble_render_tree(&self) {
-        self.binding.reassemble_render_tree();
+        self.pipeline_owner
+            .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
     }
 
-    /// Register `controller` with the binding so each [`pump`](Self::pump) /
-    /// [`tick`](Self::tick) / [`pump_for`](Self::pump_for) advances it on the
-    /// virtual timeline (restart-aware). Register before starting the controller.
+    /// Register `controller` with the realm's registry so each
+    /// [`pump`](Self::pump) / [`tick`](Self::tick) / [`pump_for`](Self::pump_for)
+    /// advances it at the frame's time (restart-aware). Register before
+    /// starting the controller.
     pub fn register_controller(&mut self, controller: AnimationController) {
-        self.binding.register_controller(controller);
+        let _registration = self.host.realm().realm().vsync().register(controller);
     }
 
-    /// Adopt `vsync` into the presentation binding. Descendants must receive
-    /// the same handle through their `VsyncScope`.
+    /// Adopt `vsync`: every frame ticks it at the frame's time, beside the
+    /// realm's own registry. Descendants must receive the same handle through
+    /// their `VsyncScope`. Replaces a registry adopted before.
     pub fn adopt_vsync(&mut self, vsync: Vsync) {
-        self.binding.adopt_vsync(vsync);
+        self.host.adopt_vsync(vsync);
     }
 
     /// Advance `dt` of virtual time and drive a frame — the animation-frame
@@ -770,22 +746,27 @@ impl LaidOut {
     /// notification a build in this tick triggers, not just ones already
     /// queued (issue #1180) — and re-runs layout/paint. No root dirtying.
     pub fn pump_for(&mut self, dt: Duration) {
-        self.binding.pump_frame(dt);
+        self.host.pump(dt);
     }
 
-    /// The tree's `BuildOwner`, for a test that needs to reach a knob the
-    /// public widget surface does not expose (the fixpoint's lazy-band pass
-    /// budget, a planted layout-builder entry).
-    pub fn build_owner_mut(&mut self) -> &mut flui_view::BuildOwner {
-        self.binding.build_owner_mut()
+    /// Run `f` over the tree's `BuildOwner`, for a test that needs to reach a
+    /// knob the public widget surface does not expose (the fixpoint's
+    /// lazy-band pass budget, a planted layout-builder entry). The realm
+    /// holds the owner behind its widgets binding, so the access is a
+    /// closure, not a borrow.
+    pub fn with_build_owner_mut<R>(
+        &mut self,
+        f: impl FnOnce(&mut flui_view::BuildOwner) -> R,
+    ) -> R {
+        self.host.realm().realm().widgets().with_build_owner_mut(f)
     }
 
-    /// The binding's **own** scheduler — never `UpdateScheduler::instance()`.
+    /// The realm's **own** scheduler — never `UpdateScheduler::instance()`.
     ///
     /// `pump_for` drives this one; a post-frame callback parked anywhere else is
     /// never drained.
     pub fn binding_scheduler(&self) -> flui_scheduler::UpdateScheduler {
-        self.binding.scheduler().clone()
+        self.scheduler()
     }
 
     /// The shared pipeline owner, so a post-frame callback can read committed
@@ -1173,23 +1154,20 @@ impl LaidOut {
     /// Replace the root widget with `new_root` and drive a frame — Flutter's
     /// `tester.pumpWidget(w2)` called a second time (root-swap).
     ///
-    /// Delegates to [`HeadlessBinding::swap_root_view`] which updates the stored
-    /// view config on the root element via a split borrow, schedules a rebuild,
-    /// then [`pump_frame(ZERO)`](HeadlessBinding::pump_frame) settles the tree.
+    /// The harness root rebuilds with `new_root` under the same constraint
+    /// wrappers, so a root of the same type updates in place (its state
+    /// kept) and one of another type replaces the old; one frame at the same
+    /// instant settles the tree.
     pub fn pump_widget(&mut self, new_root: impl View) {
         self.logical_root_type = new_root.view_type_id();
-        let scoped = GestureArenaScope::new(self.binding.arena().clone(), FocusRoot::new(new_root));
         let wrapped = wrap_presentation(
-            scoped,
+            new_root,
             self.loosen_with_align,
             self.reapply_constraints,
             self.unconstrained_wrap,
         );
-        let root = RootRenderView::new(wrapped, self.root_view_size.0, self.root_view_size.1);
-        self.binding.swap_root_view(self.root_element_id, &root);
-        self.binding.pump_frame(std::time::Duration::ZERO);
-        self.root_render_id =
-            resolve_logical_render_root(&mut self.binding, self.logical_root_type);
+        self.host.swap(wrapped);
+        self.root_render_id = resolve_logical_render_root(&self.host, self.logical_root_type);
     }
 
     /// Every `RenderSemanticsAnnotations` node that describes a control —
@@ -1257,19 +1235,20 @@ impl LaidOut {
     /// that need parent/child shape rather than a flat list — upstream's
     /// `fitted_box_test.dart` walks a single-child *container chain* and asserts
     /// `firstChild == lastChild` at every step, which a flattened list cannot
-    /// express. Same "a frame must have been pumped" precondition.
+    /// express. It is the scene the realm last submitted to its sink, retained
+    /// across frames that painted nothing.
     pub fn layer_tree(&self) -> Option<&flui_rendering::layer::LayerTree> {
-        self.binding.layer_tree()
+        self.host.realm().sink().layer_tree()
     }
 
     /// Whether the immediately preceding harness frame repainted.
     pub fn did_paint_last_frame(&self) -> bool {
-        self.binding.did_paint_last_frame()
+        self.host.did_paint_last_frame()
     }
 
     /// Number of harness frames that produced a fresh layer tree.
     pub fn painted_frame_count(&self) -> u64 {
-        self.binding.painted_frame_count()
+        self.host.realm().sink().submits()
     }
 
     /// The kinds of every layer the most recent pumped frame composited, in
@@ -1284,13 +1263,9 @@ impl LaidOut {
     /// matrix collapses to identity has a render object and no
     /// `TransformLayer`.
     ///
-    /// **A frame must have been pumped.** `lay_out` drives the mount frame
-    /// through the pipeline directly and discards its output, and a frame over a
-    /// tree with nothing dirty composites nothing at all — so call
-    /// [`pump`](Self::pump) (or any other pump) before reading, and expect an
-    /// empty vec otherwise. This is stricter than Flutter, where `pumpWidget`
-    /// itself is the frame; the extra call is the honest price of not having the
-    /// mount path retain a tree nothing downstream consumes.
+    /// The mount is itself a frame, as Flutter's `pumpWidget` is, so the
+    /// layers are there from [`lay_out`] on; a later frame over a tree with
+    /// nothing dirty composites nothing new, and the last scene stands.
     pub fn layer_kinds(&self) -> Vec<&'static str> {
         self.layer_tree()
             .map(inspect::layer_structure)
@@ -1300,10 +1275,6 @@ impl LaidOut {
     /// The transform matrix of every `Layer::Transform` in the most recent
     /// pumped frame's layer tree, in the same depth-first pre-order as
     /// [`layer_kinds`](Self::layer_kinds).
-    ///
-    /// **A frame must have been pumped** — see [`layer_kinds`](Self::layer_kinds)
-    /// for why; the same precondition applies here, and an unpumped frame
-    /// answers with an empty vec.
     pub fn transform_layer_matrices(&self) -> Vec<Matrix4> {
         self.layer_tree()
             .map(inspect::transform_matrices)
@@ -1313,10 +1284,6 @@ impl LaidOut {
     /// The rounded rectangle of every `Layer::ClipRRect` in the most recent
     /// pumped frame's layer tree, in the same depth-first pre-order as
     /// [`layer_kinds`](Self::layer_kinds).
-    ///
-    /// **A frame must have been pumped** — see [`layer_kinds`](Self::layer_kinds)
-    /// for why; the same precondition applies here, and an unpumped frame
-    /// answers with an empty vec.
     pub fn clip_rrect_layers(&self) -> Vec<RRect> {
         self.layer_tree()
             .map(inspect::clip_rrects)
@@ -1429,23 +1396,23 @@ impl LaidOut {
     }
 
     /// Hit-test at a root-local position and return the canonical data-only
-    /// path to the binding-owned input pipeline.
+    /// path, as the realm's input path would route it.
     ///
-    /// Hit-testing runs inside the binding's interaction-lane scope:
-    /// production (`crates/flui-app/src/app/runner.rs`,
-    /// `realm.enter(|realm| event.run(realm))`) hit-tests and dispatches from
-    /// inside the same lane entry, and hit-testing itself can now resolve
-    /// lane-registered owner-local state (`ClipPath`'s custom path clipper via
-    /// `resolve_path_clip_target`) — scoping only the dispatch half left
-    /// `hit_test` silently falling back to the default (whole-box) clip
-    /// whenever a caller hit-tested outside an active lane.
+    /// Hit-testing runs inside the realm's owner scope: production
+    /// (`UiRealm::enter` around every addressed event) hit-tests and
+    /// dispatches from inside the same entry, and hit-testing itself can
+    /// resolve lane-registered owner-local state (`ClipPath`'s custom path
+    /// clipper via `resolve_path_clip_target`), which falls back to the
+    /// default (whole-box) clip outside an active lane.
     pub fn hit_test_pointer(&self, position: Offset) -> flui_rendering::hit_testing::HitTestResult {
         use flui_rendering::hit_testing::HitTestResult;
 
-        let mut result = HitTestResult::new();
-        self.pipeline_owner.with(|owner| {
-            owner.hit_test(position, &mut result);
-            result
+        self.host.realm().enter(|_| {
+            let mut result = HitTestResult::new();
+            self.pipeline_owner.with(|owner| {
+                owner.hit_test(position, &mut result);
+                result
+            })
         })
     }
 
@@ -1453,27 +1420,22 @@ impl LaidOut {
     /// (winit `CursorLeft`): sweep hover state — every hovered
     /// `MouseRegion` gets its `on_exit`, and the cursor resets.
     pub fn dispatch_window_hover_left(&self) {
-        // Inside the owner-lane scope, matching how the production realm
-        // wraps every addressed window signal (`UiRealm::enter`) and how
-        // `dispatch_pointer` above enters it for pointer input.
-        self.binding
-            .enter_owner_scope(|| self.binding.gestures().handle_pointer_left_window());
+        self.host.realm().dispatch_hover_left();
     }
 
-    /// Dispatch an already-constructed pointer event through the same complete
-    /// binding pipeline as platform input.
+    /// Dispatch an already-constructed pointer event through the realm's
+    /// input path, as platform input arrives.
     pub fn dispatch_pointer_event(&self, event: &PointerEvent) {
-        self.binding
-            .dispatch_pointer(event, |position| self.hit_test_pointer(position));
+        self.host.dispatch_pointer(event);
     }
 
-    /// Advance the binding's virtual clock by `dt` before a synthetic Move
+    /// Advance the realm's virtual clock by `dt` before a synthetic Move
     /// that records a new velocity sample.
     ///
     /// `DragGestureRecognizer` timestamps its velocity samples from
     /// `RecognizerBase::now()`, which reads the SAME clock-bound
-    /// `GestureArena` this harness hands the tree via `GestureArenaScope`
-    /// (`binding.arena()` — see `lay_out`). Advancing that clock explicitly,
+    /// `GestureArena` the realm hands the tree via its root
+    /// `GestureArenaScope`, on the realm's clock. Advancing that clock explicitly,
     /// instead of spin-waiting on `Instant::now()` to tick, means consecutive
     /// samples get a fixed, deterministic spacing no matter how much real
     /// wall-clock time the test process happens to be scheduled between
@@ -1488,7 +1450,7 @@ impl LaidOut {
     /// there would only cost deadline-timing tests (long-press/double-tap
     /// window boundaries) virtual time they did not ask to spend.
     fn advance_pointer_clock(&self, dt: Duration) {
-        self.binding.clock().advance(dt);
+        self.host.clock().advance(dt);
     }
 
     /// Allocate a fresh pointer id for a new contact and remember it.
@@ -1511,16 +1473,14 @@ impl LaidOut {
     /// `advance_pointer_clock`.
     pub fn dispatch_pointer_down(&self, x: f64, y: f64) {
         let event = make_down_event_for_id(self.begin_contact(), offset(x, y), PointerType::Mouse);
-        self.binding
-            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.host.dispatch_pointer(&event);
     }
 
     /// As [`dispatch_pointer_down`](Self::dispatch_pointer_down), but a
     /// pointer-up — to assert `on_pointer_up` routing.
     pub fn dispatch_pointer_up(&self, x: f64, y: f64) {
         let event = make_up_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
-        self.binding
-            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.host.dispatch_pointer(&event);
         self.contacts.end();
     }
 
@@ -1542,8 +1502,7 @@ impl LaidOut {
         self.advance_pointer_clock(dt);
         let event =
             make_move_event_for_id(self.current_contact(), offset(x, y), PointerType::Mouse);
-        self.binding
-            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.host.dispatch_pointer(&event);
     }
 
     /// A mouse hover move to `(x, y)` with no active contact.
@@ -1617,8 +1576,7 @@ impl LaidOut {
             PointerType::Mouse,
             PointerButton::Secondary,
         );
-        self.binding
-            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.host.dispatch_pointer(&event);
     }
 
     /// As [`dispatch_secondary_down`](Self::dispatch_secondary_down), but a
@@ -1632,8 +1590,7 @@ impl LaidOut {
             PointerType::Mouse,
             PointerButton::Secondary,
         );
-        self.binding
-            .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
+        self.host.dispatch_pointer(&event);
         self.contacts.end();
     }
 }
@@ -1674,4 +1631,15 @@ pub fn offset(dx: f64, dy: f64) -> Offset {
 /// growing the library's public surface for a test-only concern).
 fn base_type_name(type_name: &str) -> &str {
     type_name.split('<').next().unwrap_or(type_name)
+}
+
+/// The accessibility tree the pipeline last assembled, translated as a
+/// platform adapter receives it; `None` until semantics is on and a frame ran.
+fn a11y_tree(pipeline: &PipelineCell) -> Option<crate::A11yTree> {
+    let update = pipeline.with(|owner| {
+        owner
+            .semantics_owner()
+            .and_then(|semantics| semantics.to_accesskit_tree_update(None))
+    })?;
+    Some(crate::A11yTree::new(update))
 }

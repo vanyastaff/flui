@@ -2370,7 +2370,7 @@ mod text_store {
     };
     use flui_widgets::{EditableText, TextEditingController};
 
-    use super::{ImeUnmountRoot, character_key_event, dispatch_ime};
+    use super::{ImeUnmountRoot, character_key_event};
     use crate::common::harness::{Harness, mount_with_ime};
 
     /// "a", a supplementary emoji, "e" plus a combining acute, a ZWJ family
@@ -2685,20 +2685,44 @@ mod text_store {
         );
     }
 
+    /// A commit the input method sent inside a frame is queued; when that
+    /// frame fails before its commit anchor, the commit is still queued as
+    /// the next key arrives, and the key lands after it.
+    ///
     /// Red-check: drop `run_deferred_before_app_edit` from the key handler —
     /// the key lands while the commit is still queued and the text reads "b".
     #[test]
     fn typing_after_a_deferred_commit_lands_after_the_commit() {
         let controller = TextEditingController::new();
-        let (harness, _focus) = focused(&controller);
+        let (mut harness, _focus) = focused(&controller);
+        let field = store(&harness);
+        let text_in_frame = Rc::new(RefCell::new(None));
+        let (observed_controller, observed_text) = (controller.clone(), Rc::clone(&text_in_frame));
+        harness
+            .local_post_frame_handle()
+            .schedule_local(move |_| {
+                let outcome = flui_platform_api::text_store::project_ime_event(
+                    &*field,
+                    &flui_platform_api::ImeEvent::Commit("A".to_owned()),
+                );
+                assert_eq!(outcome, Ok(LockOutcome::Deferred));
+                *observed_text.borrow_mut() = Some(observed_controller.text());
+                panic!("the frame fails after the commit was queued");
+            })
+            .expect("post-frame handle installed");
 
-        harness.set_transaction_open(true);
-        dispatch_ime(
-            &harness,
-            &flui_platform_api::ImeEvent::Commit("A".to_owned()),
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| harness.tick()));
+        assert!(failed.is_err(), "the failing frame is raised");
+        assert_eq!(
+            text_in_frame.borrow().as_deref(),
+            Some(""),
+            "inside the frame the commit waits for the anchor"
         );
-        assert_eq!(controller.text(), "", "the commit waits for the anchor");
-        harness.set_transaction_open(false);
+        assert_eq!(
+            controller.text(),
+            "",
+            "the failed frame never reached its anchor, so the commit is still queued"
+        );
 
         let handled = harness
             .focus_manager()
@@ -2718,7 +2742,7 @@ mod event_cx {
     use flui_view::prelude::*;
     use flui_widgets::{EditableText, TextEditingController};
 
-    use super::{character_key_event, dispatch_ime, enter_key_event};
+    use super::{character_key_event, enter_key_event};
     use crate::common::harness::{Harness, mount_with_ime};
     use crate::common::{ProbeSignals, SignalProbe};
 
@@ -2782,14 +2806,28 @@ mod event_cx {
                 .on_changed(move |cx, text| count.set(cx, text.len() as u32))
         });
 
-        harness.set_transaction_open(true);
-        dispatch_ime(
-            &harness,
-            &flui_platform_api::ImeEvent::Commit("abc".to_owned()),
-        );
-        assert_eq!(probe.value(), Ok(0), "the commit waits for the frame");
+        let field = harness
+            .active_text_store()
+            .expect("the focused field is the active IME client");
+        let value_in_frame = Rc::new(std::cell::Cell::new(None));
+        let (frame_probe, frame_value) = (probe.clone(), Rc::clone(&value_in_frame));
+        harness
+            .local_post_frame_handle()
+            .schedule_local(move |_| {
+                let _outcome = flui_platform_api::text_store::project_ime_event(
+                    &*field,
+                    &flui_platform_api::ImeEvent::Commit("abc".to_owned()),
+                );
+                frame_value.set(Some(frame_probe.value()));
+            })
+            .expect("post-frame handle installed");
         harness.tick();
 
+        assert_eq!(
+            value_in_frame.get(),
+            Some(Ok(0)),
+            "the commit waits for the frame"
+        );
         assert_eq!(controller.text(), "abc");
         assert_eq!(probe.value(), Ok(3), "the deferred commit wrote");
     }

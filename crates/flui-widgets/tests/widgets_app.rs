@@ -362,11 +362,18 @@ fn widgets_app_does_not_install_a_media_query() {
     // realm-installed; WidgetsApp must not re-own it (the oracle agrees
     // since 3.7 — the View widget owns MediaQuery, not WidgetsApp).
     let (probe, captured) = capture(MediaQuery::maybe_of);
-    mount(WidgetsApp::new(probe));
+    let mut harness = mount(WidgetsApp::new(probe));
     assert_eq!(
-        captured_value(&captured).expect("home must build"),
-        None,
-        "WidgetsApp must not introduce its own MediaQuery"
+        harness.elements_of_type(TypeId::of::<MediaQuery>()).len(),
+        1,
+        "the realm's root MediaQuery is the only one: WidgetsApp must not introduce its own"
+    );
+    assert_eq!(
+        captured_value(&captured)
+            .expect("home must build")
+            .map(|data| data.size),
+        Some(flui_foundation::geometry::Size::new(800.0, 600.0)),
+        "home reads the realm's MediaQuery, sized to the window"
     );
 }
 
