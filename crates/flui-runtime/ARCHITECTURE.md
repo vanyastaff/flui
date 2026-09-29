@@ -285,3 +285,41 @@ signal command, command-capture destructor, and addressed keyboard/IME tests.
 `execution` has no Flutter counterpart to map: runtime and scheduling
 topology, including background execution, is outside Flutter's reference
 (ADR-0027), and ADR-0047 records its design.
+
+### Agents read the committed tree through the owner inbox
+
+**Rule.** `UiRealm::semantics_agent` vends a `SemanticsAgent` (`Clone + Send + Sync`) for one
+presentation. Its `read` and `act` enqueue `UiCommand::SemanticsRead` and
+`UiCommand::SemanticsAgentAction` on the realm's bounded inbox and return an `AgentReply` the
+owner fills at its next drain, a frame boundary. A read projects the pipeline's semantics owner
+as it stands after the last committed frame (`flui_semantics::SemanticsOwner::read_wire`); an
+action is resolved against that same tree and dispatched through
+`PresentationState::dispatch_semantics_action`, the path an assistive technology's action
+takes. An action's `Ok` means it was delivered to the element's semantics handler, not that its
+effect happened: a `GestureDetector` runs a semantics tap in the frame after the drain, so the
+effect reads two frames on. No lock guards per-node state: the owner reads its own tree on its
+own thread, and the agent's side holds only its channel ends and the record of handles its reads
+reported, which tells `gone` from `unknown_handle`. The record keeps the newest generation
+reported per render slot, so it is bounded by the slots the presentation has used, not by how
+many elements came and went. Element handles are render identities, scoped to the one
+presentation; a server that spans windows keeps its own table over them (ADR-0095 §3).
+
+**Enablement.** Every clone of an agent shares one `SemanticsHandle`, so semantics are
+collected while any clone lives, whatever assistive technology does; the tree an agent reads is
+the one published to assistive technology. Vending requests a frame, and until the first
+semantics frame commits a read answers `NoTreeYet` (`busy`, retry `soon`). Dropping the last
+clone lets the next frame's reconcile stop collection; an unanswered `AgentReply` holds only the
+record of handles, not the semantics handle.
+
+**Failure.** A panic while the owner serves an agent's action answers that action first, then
+re-arms the owner's wake if the inbox still holds a tail, then resumes the original panic, which
+stays the one that escapes. The answer is `HandlerPanicked` (`may_have_run`) when the handler had
+been invoked, and `ResolvePanicked` when the owner panicked before reaching it. A handler that
+defers its work to a later frame, as a `GestureDetector` does, has already answered `Ok`; a panic
+there belongs to that frame. A reply whose receiver is gone
+is traced by element id and error code only, never a label or a value, and the drain goes on.
+Pinned by `src/ui_realm/tests/agent_semantics.rs`.
+
+**Wiring.** Nothing calls `semantics_agent` in production yet. The planned follow-up has
+`flui-app` vend it through its development hook and `flui-devtools` serve it over a local
+endpoint ([migration plan](../../docs/plans/2026-09-25-architecture-migration-plan.md)).

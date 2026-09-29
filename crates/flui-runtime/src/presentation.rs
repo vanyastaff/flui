@@ -901,6 +901,17 @@ impl PresentationState {
         self.text_input.handle()
     }
 
+    /// This presentation's semantics enablement gate and platform
+    /// accessibility delivery — the per-window home the retired
+    /// `SemanticsBinding` singleton's enablement/announce/event state moved
+    /// into. `UiRealm::semantics_agent` acquires its enablement handle
+    /// here; announce/event delivery itself still has no production caller
+    /// (future platform-embedder wiring).
+    #[must_use]
+    pub(crate) fn semantics_host(&self) -> &SemanticsHost {
+        &self.semantics
+    }
+
     // ========================================================================
     // Window access, haptics (moved from the retired `AppBinding`)
     // ========================================================================

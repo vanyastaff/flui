@@ -574,6 +574,111 @@ mod tests {
         assert_eq!(ToolError::ShuttingDown.retry(), Retry::Never);
     }
 
+    /// One value of every variant. The match below names each variant with
+    /// no wildcard, so a variant added without a line here stops this
+    /// compiling.
+    fn one_of_each() -> Vec<ToolError> {
+        let all = vec![
+            ToolError::InvalidArgument("x".into()),
+            ToolError::NotSupported("x".into()),
+            ToolError::NotFound("x".into()),
+            ToolError::UnknownHandle {
+                handle: "e1".into(),
+                kind: HandleKind::Element,
+            },
+            ToolError::gone_element("e1", "removed"),
+            ToolError::Disabled {
+                element: "e1".into(),
+                action: "invoke",
+            },
+            ToolError::ActionUnsupported {
+                element: "e1".into(),
+                action: "toggle",
+                supported: Vec::new(),
+                unread: Vec::new(),
+            },
+            ToolError::NotForeground {
+                target: "window w3".into(),
+                foreground: None,
+            },
+            ToolError::FocusElsewhere {
+                target: "window w3".into(),
+                holder: 7,
+            },
+            ToolError::OutsideTarget {
+                x: 1,
+                y: 2,
+                reason: "x".into(),
+                covered_by: None,
+            },
+            ToolError::Timeout {
+                timeout_ms: 1,
+                what: "x".into(),
+                summary: String::new(),
+            },
+            ToolError::Busy("x".into()).after(Effect::MayHaveRun, "x"),
+            ToolError::Busy("x".into()),
+            ToolError::InputHeld("Shift".into()),
+            ToolError::ShuttingDown,
+            ToolError::Cancelled,
+            ToolError::platform("x", "y"),
+        ];
+        for error in &all {
+            match error {
+                ToolError::InvalidArgument(_)
+                | ToolError::NotSupported(_)
+                | ToolError::NotFound(_)
+                | ToolError::UnknownHandle { .. }
+                | ToolError::Gone { .. }
+                | ToolError::Disabled { .. }
+                | ToolError::ActionUnsupported { .. }
+                | ToolError::NotForeground { .. }
+                | ToolError::FocusElsewhere { .. }
+                | ToolError::OutsideTarget { .. }
+                | ToolError::Timeout { .. }
+                | ToolError::Interrupted { .. }
+                | ToolError::Busy(_)
+                | ToolError::InputHeld(_)
+                | ToolError::ShuttingDown
+                | ToolError::Cancelled
+                | ToolError::Platform { .. } => {}
+            }
+        }
+        all
+    }
+
+    /// The desktop server speaks flui-protocol's error codes and retry
+    /// advice: every code it sends is one `ErrorCode` names, spelled the same.
+    /// `cancelled` is the exception: it answers a request the client itself
+    /// cancelled, which no client reads.
+    #[test]
+    fn every_code_is_a_protocol_error_code() {
+        let protocol: Vec<&str> = flui_protocol::ErrorCode::ALL
+            .iter()
+            .map(|code| code.name())
+            .collect();
+        for error in one_of_each() {
+            let code = error.code();
+            if code == "cancelled" {
+                continue;
+            }
+            assert!(
+                protocol.contains(&code),
+                "`{code}` ({error:?}) is not a flui-protocol error code"
+            );
+            assert_eq!(
+                serde_json::to_value(error.retry()).ok(),
+                serde_json::to_value(match error.retry() {
+                    Retry::Never => flui_protocol::Retry::Never,
+                    Retry::Soon => flui_protocol::Retry::Soon,
+                    Retry::WhenAppears => flui_protocol::Retry::WhenAppears,
+                })
+                .ok(),
+                "retry advice is spelled as flui-protocol spells it"
+            );
+        }
+    }
+
     #[test]
     fn error_envelope_contract() {
         crate::test_rows::run_rows(&[

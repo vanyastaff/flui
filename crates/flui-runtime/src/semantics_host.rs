@@ -13,7 +13,9 @@
 //! lives on `SharedEngineServices` (`flui-app`'s `app::runtime`) instead — see
 //! that module's own field for the other half of the retired binding's state.
 //!
-//! Handle acquisition, announcements and event delivery have no production
+//! Handle acquisition keeps semantics collected while an agent reads the
+//! tree: `UiRealm::semantics_agent` holds one handle for all clones of the
+//! agent it vends. Announcements and event delivery have no production
 //! caller yet: they are compiled only for tests and the `test-support`
 //! feature until a platform embedder wires them through a presentation.
 
@@ -32,15 +34,12 @@ use parking_lot::RwLock;
 /// shape, now scoped to one presentation instead of a process-wide
 /// singleton.
 ///
-/// Constructed only by [`SemanticsHost::ensure_semantics`], which has no
-/// production caller yet (see the module doc).
-#[cfg(any(test, feature = "test-support"))]
-#[doc(hidden)]
-pub struct SemanticsHandle {
+/// Constructed only by [`SemanticsHost::ensure_semantics`]; the realm's
+/// semantics agent holds one while any clone of it is alive.
+pub(crate) struct SemanticsHandle {
     counter: Arc<AtomicUsize>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl SemanticsHandle {
     fn new(counter: Arc<AtomicUsize>) -> Self {
         // Relaxed: bare presence counter -- see `SemanticsHost::semantics_enabled`.
@@ -49,7 +48,6 @@ impl SemanticsHandle {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl Drop for SemanticsHandle {
     fn drop(&mut self) {
         // Relaxed: nothing is freed or torn down when the count reaches
@@ -58,7 +56,6 @@ impl Drop for SemanticsHandle {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
 impl std::fmt::Debug for SemanticsHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SemanticsHandle")
@@ -162,10 +159,8 @@ impl SemanticsHost {
     /// Creates a new `SemanticsHandle` and enables semantics collection.
     ///
     /// The returned handle keeps semantics enabled until it is dropped.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
     #[must_use]
-    pub fn ensure_semantics(&self) -> SemanticsHandle {
+    pub(crate) fn ensure_semantics(&self) -> SemanticsHandle {
         SemanticsHandle::new(Arc::clone(&self.handle_count))
     }
 
