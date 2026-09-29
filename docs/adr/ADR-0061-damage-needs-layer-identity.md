@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-16
+- **Amended by:** [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md) §3 (the producer)
 
 *Damage cannot be derived from which render objects repainted, because the ones
 that always repaint cover the screen. It has to come from comparing consecutive
@@ -106,3 +107,19 @@ it is the renderer's runtime state, and the layer crate defines only the seam me
 unobservable. A multi-scissor consumer reintroduces multi-rect accumulation together with the
 code that reads it. Everything else above stands: the consuming half is written and tested, the
 producer is the missing piece, and `damage_scissor` remains the baseline.
+
+## Amendment (2026-09-29): the producer exists
+
+ADR-0087 §3 built it. `LayerNode` carries a `BoundaryStamp` (the boundary's `RenderId` and a
+`ContentToken`) on the root and on every repaint boundary's layer, and `flui_layer::LayerDiffer`
+compares consecutive frames' stamps into `DamageRegion::Partial`, `Unchanged` or `Full`;
+`flui-app`'s raster lane sends that instead of `Full`, and `RasterOwner::pump` hands it to
+`mark_dirty`. The consequences above that say `DamageRegion` stays `Full`-only and that
+`mark_dirty` has no production caller are historical.
+
+One premise above did not hold: `Arc::ptr_eq` on pictures is not the cheap "unchanged" test.
+An enclosing boundary re-records its inline pictures whenever a boundary nested in it is dirty,
+so the pointer changes on frames whose content did not. The paint pass certifies a
+`ContentToken` instead, on exactly the fact grafting rests on (absence from the paint queue).
+The decision itself stands: damage comes from comparing layer trees, not from which render
+objects repainted.

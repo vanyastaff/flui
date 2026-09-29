@@ -142,7 +142,11 @@ mod tests {
                 "base"
             ]
         );
-        let plain = ("flui-layer".to_owned(), "damage_diff".to_owned(), Vec::new());
+        let plain = (
+            "flui-layer".to_owned(),
+            "damage_diff".to_owned(),
+            Vec::new(),
+        );
         assert!(!bench_args(&plain, "base").contains(&"--features".to_owned()));
     }
 }

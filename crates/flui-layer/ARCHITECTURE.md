@@ -24,7 +24,7 @@ not line numbers.
 | `AnnotatedRegionLayer<T>` | `annotated_region.rs` | Writer half only; see [Producers](#producers). |
 | `ui.SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is built through the tree (decision 5). |
 | `ui.Scene` | [`src/scene.rs`](src/scene.rs) `Scene` | A frozen `LayerTree` (decision 6). |
-| retained rendering: `_needsAddToScene`, `addRetained`, `EngineLayer`, `Layer.dispose` | none | The engine rebuilds every frame from the tree; cross-frame reuse is keyed on `LayerNode::render_id` (ADR-0061) and `Arc` identity of `PictureLayer` content, consumed by `flui-rendering`'s `FragmentComposer::capture`/`graft`. |
+| retained rendering: `_needsAddToScene`, `addRetained`, `EngineLayer`, `Layer.dispose` | none | The engine rebuilds every frame from the tree. Cross-frame reuse of painted output is `flui-rendering`'s (`FragmentComposer::capture`/`graft`, keyed on the boundary's `RenderId`); cross-frame damage is `LayerDiffer`'s comparison of boundary stamps (`RenderId` plus `ContentToken`, decision 8), not a retained engine layer. |
 | `Layer.addCompositionCallback` | none | Fires after `addToScene`, a step this architecture does not have. |
 | no analog | `Layer::Canvas(CanvasLayer)` | A live recorder inside the tree; see [Producers](#producers). |
 
@@ -119,12 +119,43 @@ that the type is nameable without an engine dependency — not its field set.
 ### 7. Runtime state lives with its owner
 
 `DamageTracker` (the renderer's per-frame dirty accumulator, ADR-0061's consuming half) moved to
-`flui-engine/src/damage.rs`; only the seam message `DamageRegion` is defined here. Its
+`flui-engine/src/damage.rs`; the seam message `DamageRegion` and its producer, `LayerDiffer`
+(decision 8), are defined here. Its
 three-rect merge was removed with the move: the one consumer reads `damage_rect()`, the bounding
 union, through which the merge was unobservable. `PerformanceStats` (a clock-bearing frame-time
 window) moved to `flui-app`; `PerformanceOverlayLayer::update_stats(fps, frame_time_ms,
 total_frames)` takes the numbers, and `PerformanceOverlayOption` crosses the engine boundary as
 itself rather than as a `u32`.
+
+### 8. Damage is a diff of boundary stamps — [ADR-0087 §3](../../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md)
+
+A repaint boundary's layer carries a `BoundaryStamp`: its `RenderId`, which pairs the layer with
+the previous frame's (every frame's `LayerId`s are fresh), and a `ContentToken`, which the paint
+pass keeps while the boundary is clean and mints otherwise (`flui-rendering`'s
+`ARCHITECTURE.md`, "Paint certifies a boundary's content token"). `LayerDiffer::diff` walks the
+frozen tree once with an explicit stack, recording per stamp its token, its placement (the
+accumulated transform and the effect layers above it, compared with `Layer::same_effect`) and its
+own region in surface pixels (its subtree minus nested boundaries' subtrees, from each picture's
+`DisplayList::damage_extent`, clipped; content under an image filter or a perspective transform
+takes the clip). A changed token or placement damages the old and new regions, an added or
+removed boundary its one region; textures, platform views, canvases, overlays and anything under
+a follower are damaged every frame; a backdrop filter whose blur-widened bounds meet the damage
+joins it until nothing more does. The result is `Full` for an unpairable frame (first frame,
+surface size change, unstamped root, root boundary or placement change, a boundary stamped
+twice) or above `DamageMode::On::full_above`, `Unchanged` for nothing, and otherwise one
+`DamageRect` in whole pixels, rounded outward with a 1 px anti-aliasing margin. `DamageMode::Off`
+retains nothing and does not walk.
+
+Why a token rather than `Arc::ptr_eq` on pictures: an outer boundary re-records its inline
+pictures whenever a nested boundary is dirty, so pointer identity reports it changed on frames
+whose content did not. Why an `Arc<()>` rather than a counter: a counter restarts with each
+`PipelineOwner`, and the differ, holding the previous frame's clones, makes an allocation
+address impossible to reuse while compared. Flutter's `DiffContext` (flutter/flutter 3.44.0,
+`engine/src/flutter/flow/diff_context.cc`) pairs retained layers by unique id and keys paint
+regions on it; FLUI pairs by the boundary `RenderId` and decides "unchanged" by the token, and
+the granularity is one boundary's own region, not a layer. `damage_diff` bench: about 200 µs for
+1,000 boundaries, 4 ns with the mode off. Tests: `src/damage/tests.rs`,
+`scene_snapshot.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`.
 
 ### Deleted, with the reason
 
@@ -161,6 +192,8 @@ inside the output vocabulary that `PictureLayer` already covers. Whether each is
 | `LayerTree::leaders` | `HashMap<LayerLink, LayerId>` | Owned, filled during the build |
 | `Scene`, `SceneSnapshot` | by value | Moved across the raster boundary; `Send + Sync` plain data, pinned by `static_assertions` in `scene_snapshot.rs` |
 | `LayerLink::new` | `static AtomicU64`, `Relaxed` | Identity only; the RMW is atomic under every ordering and publishes nothing else |
+| `ContentToken` | `Arc<()>`, compared by `Arc::ptr_eq` | Identity only; no data behind the pointer, no `static` |
+| `LayerDiffer` | owned records of one frame | Single owner (the host's raster lane); no lock |
 
 No `unsafe`, no `Arc<Mutex<_>>`, no interior mutability in the crate. The one `dyn` is
 `AnnotationValue = Arc<dyn Any + Send + Sync>`.
