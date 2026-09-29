@@ -13,11 +13,12 @@ categories = ["gui", "accessibility"]
 
 [features]
 default = []
-# Serialize the wire vocabulary (`Role`, `ActionName`, `Checked`) in the
-# spelling ADR-0080 fixed.
+# Serialize the wire vocabulary (`Role`, `ActionName`, `Checked`) and schema
+# (`Node`, `Tree`, `ActionRequest`, `ErrorCode`, ...) in the spelling ADR-0080
+# fixed.
 serde = ["dep:serde"]
-# JSON schemas for the wire vocabulary. Implies `serde`, because schemars reads
-# serde's `rename_all` to name the variants.
+# JSON schemas for the wire vocabulary and schema. Implies `serde`, because
+# schemars reads serde's `rename_all` to name the variants.
 schemars = ["dep:schemars", "serde"]
 
 [dependencies]
