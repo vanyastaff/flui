@@ -3350,10 +3350,9 @@ fn separate_realm_windows_shape_over_the_runtimes_font_collection() {
             dispatcher,
             RealmTask::Frame(Box::new(move |realm| {
                 assert!(
-                    flui_painting::FontCollection::ptr_eq(
-                        realm.text_context_for_test().fonts(),
-                        &app_fonts,
-                    ),
+                    realm.text_context_for_test().with(|text| {
+                        flui_painting::FontCollection::ptr_eq(text.fonts(), &app_fonts)
+                    }),
                     "a runner-built realm must own a text context over the app's font collection"
                 );
             })),
