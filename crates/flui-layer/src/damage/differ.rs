@@ -23,7 +23,8 @@ use crate::{
 /// contributes damage when it was added (its new region), removed (its old
 /// region), or kept with a different token or placement (both), or kept but
 /// painted in a different order relative to the other kept boundaries (both:
-/// see [`moved_in_paint_order`]). Content that
+/// every kept boundary outside the longest run still in its old order).
+/// Content that
 /// cannot be vouched for by a token — textures (a texture layer or a picture's
 /// texture draw), platform views, live canvases, performance overlays and
 /// anything under a follower — is damaged on every frame at its old and new
