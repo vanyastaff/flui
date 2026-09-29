@@ -211,6 +211,7 @@ where
             scale_factor,
             runtime_needs_redraw_handle(),
             super::host::runtime_clipboard(),
+            &super::host::runtime_font_collection(),
         ) {
             Ok(realm) => realm,
             Err(error) => {

@@ -978,6 +978,7 @@ fn finish_open_secondary_window(
                 scale_factor,
                 runtime_needs_redraw_handle(),
                 super::host::runtime_clipboard(),
+                &super::host::runtime_font_collection(),
             )
             .map_err(mount_error)?;
             ui_realm.set_frame_failure_detail(frame_failure_detail);

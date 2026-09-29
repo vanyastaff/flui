@@ -26,6 +26,14 @@ pub(super) fn runtime_clipboard() -> Arc<dyn flui_platform::traits::Clipboard> {
         .expect("BUG: the runner installs the platform clipboard before it builds a realm")
 }
 
+/// The app's font collection for [`crate::app::ui_realm::UiRealm::new`]'s
+/// `fonts` parameter (ADR-0092 §2). Same borrow rule as
+/// [`runtime_wake_callback`]. The first call on a thread resolves the shared
+/// engine services.
+pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
+    APP_RUNTIME.with(|slot| slot.borrow().font_collection())
+}
+
 /// A clone of the loop-scoped `needs_redraw` flag, for [`crate::app::ui_realm::UiRealm::new`]'s
 /// `needs_redraw` parameter.
 pub(super) fn runtime_needs_redraw_handle() -> Arc<AtomicBool> {
@@ -54,9 +62,10 @@ thread_local! {
     /// any reason, including `OwnerHostClearGuard::drop` firing during an
     /// unwind on a thread that never reached platform init -- can never
     /// itself trigger singleton construction or full system-font
-    /// enumeration. Real service resolution happens only via the explicit
-    /// `ensure_services` call in `install_platform_realm` below, when a
-    /// realm is actually installed.
+    /// enumeration. Real service resolution happens only when a realm is
+    /// built or installed: `runtime_font_collection`, which a runner calls
+    /// for `UiRealm::new`, or the explicit `ensure_services` call in
+    /// `install_platform_realm` below.
     pub(super) static APP_RUNTIME: std::cell::RefCell<AppRuntime> =
         std::cell::RefCell::new(AppRuntime::new());
 }

@@ -43,6 +43,7 @@ use std::sync::atomic::AtomicBool;
 use std::thread::ThreadId;
 
 use flui_foundation::PresentationAddress;
+use flui_painting::FontCollection;
 use flui_platform::OwnerPlatform;
 #[cfg(any(test, target_os = "android"))]
 use flui_platform::traits::WindowExecutionState;
@@ -65,8 +66,11 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// [`SharedEngineServices::resolve`] — never re-resolved on every access, and
 /// never reached ambiently from inside `UiRealm`.
 ///
-/// Owns the process-level accessibility flags and initializes the shared font
-/// system through [`flui_painting::shared_font_system`]. Semantics state belongs
+/// Owns the process-level accessibility flags and the app's one
+/// [`FontCollection`] (ADR-0092 §2), which every realm builds its own
+/// `TextContext` from, and initializes the shared font system through
+/// [`flui_painting::shared_font_system`]. "Per owner thread" is per app while
+/// ADR-0091 fixes one owner thread per process. Semantics state belongs
 /// to each presentation's `SemanticsHost`; scheduling belongs to each realm
 /// (see `flui_runtime`'s `RealmServices::construct`). The retired `SemanticsBinding`
 /// singleton no longer exists at all (its enablement/announce/event state
@@ -91,6 +95,12 @@ pub(crate) struct SharedEngineServices {
         )
     )]
     pub(super) accessibility_features: RwLock<AccessibilityFeatures>,
+    /// The app's font collection. Every realm built on this thread gets a
+    /// clone (`UiRealm::new`'s `fonts`) and owns a `TextContext` over it, so
+    /// a face registered here reaches every realm. It outlives realm
+    /// teardown: a hot-restarted realm builds a new context over the same
+    /// collection.
+    pub(super) fonts: FontCollection,
 }
 
 impl SharedEngineServices {
@@ -129,7 +139,8 @@ impl SharedEngineServices {
     /// thread-local initializer gave.
     fn resolve() -> Self {
         // `SharedEngineServices::resolve()` -- reached only through
-        // `AppRuntime::ensure_services()`, at the realm-install point -- is
+        // `AppRuntime::ensure_services()` and `AppRuntime::font_collection()`,
+        // just before the first realm is built -- is
         // the CONSTRUCTING owner of the free-standing `FONT_SYSTEM`
         // `OnceLock` slot (`flui-painting/src/text_layout/layout.rs`):
         // initialize it explicitly, here, at a known point, rather than
@@ -142,6 +153,7 @@ impl SharedEngineServices {
 
         Self {
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
+            fonts: FontCollection::new(),
         }
     }
 }
@@ -732,9 +744,10 @@ impl AppRuntime {
     /// Called as the `APP_RUNTIME` TLS slot's own initializer (`runner.rs`),
     /// so simply *touching* the thread-local -- for any reason, on any
     /// thread -- can never itself run singleton construction or full
-    /// system-font enumeration. Real service resolution happens only via the
-    /// explicit [`Self::ensure_services`] call from `install_platform_realm`
-    /// -- when a realm is actually installed -- never from an incidental
+    /// system-font enumeration. Real service resolution happens only when a
+    /// realm is built or installed -- [`Self::font_collection`] for
+    /// `UiRealm::new`, or the explicit [`Self::ensure_services`] call from
+    /// `install_platform_realm` -- never from an incidental
     /// first touch such as `OwnerHostClearGuard::drop` unwinding through a
     /// virgin thread, and never from `install_owner_platform` either (every
     /// backend calls that, including `run_direct`, which never installs a
@@ -816,9 +829,11 @@ impl AppRuntime {
     }
 
     /// Resolves and caches [`SharedEngineServices`] on first call; returns
-    /// the cached value on every later call. Called only from
+    /// the cached value on every later call. Called from
     /// `install_platform_realm`, when a realm is actually about to be
-    /// installed on this thread -- `install_owner_platform` deliberately
+    /// installed on this thread; [`Self::font_collection`] resolves the same
+    /// cell a step earlier, when the runner builds that realm --
+    /// `install_owner_platform` deliberately
     /// does NOT call this (see its own doc): every backend calls that,
     /// including `run_direct`, which opens a window but never installs a
     /// realm and never consumes painting/semantics/scheduler services, so
@@ -839,6 +854,21 @@ impl AppRuntime {
     /// clear-guard drop.
     pub(super) fn ensure_services(&mut self) -> &SharedEngineServices {
         self.services.get_or_init(SharedEngineServices::resolve)
+    }
+
+    /// The app's font collection, for `UiRealm::new`'s `fonts`: a clone of
+    /// the one [`SharedEngineServices`] owns, resolving the services first if
+    /// no realm has been built yet. Every call returns the same collection.
+    ///
+    /// Takes `&self` (`OnceCell::get_or_init` needs no more), so a runner
+    /// reaches it through the same shared `APP_RUNTIME` borrow as the
+    /// clipboard. A panic inside the resolution leaves the cell empty and
+    /// the next call retries, as [`Self::ensure_services`] does.
+    pub(super) fn font_collection(&self) -> FontCollection {
+        self.services
+            .get_or_init(SharedEngineServices::resolve)
+            .fonts
+            .clone()
     }
 
     /// Test-only introspection: whether `SharedEngineServices` has been
@@ -1743,6 +1773,10 @@ mod app_runtime_tests {
             runtime.services.get().is_some(),
             "ensure_services must cache the resolved value, not re-resolve on \
              every call"
+        );
+        assert!(
+            FontCollection::ptr_eq(&runtime.font_collection(), &runtime.font_collection()),
+            "every realm must get the app's one font collection, not a fresh one per call"
         );
     }
 

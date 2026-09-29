@@ -14,6 +14,7 @@ use crate::realm_services::RealmServices;
 use crossbeam_channel::bounded;
 use flui_foundation::{PresentationId, RealmId};
 use flui_interaction::InteractionLane;
+use flui_painting::FontCollection;
 use flui_platform_api::Clipboard;
 #[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
@@ -47,6 +48,10 @@ impl UiRealm {
     /// production it is `AppRuntime::clipboard()`, installed before any realm
     /// is built.
     ///
+    /// `fonts` is the app's shared font collection (`AppRuntime`'s
+    /// `SharedEngineServices` in production). The realm owns a `TextContext`
+    /// built from it (ADR-0092 §3), which lives exactly as long as the realm.
+    ///
     /// # Errors
     ///
     /// [`UiRealmError::InteractionLane`] if the owner-local interaction lane
@@ -57,6 +62,7 @@ impl UiRealm {
         device_pixel_ratio: f64,
         needs_redraw: Arc<AtomicBool>,
         clipboard: Arc<dyn Clipboard>,
+        fonts: &FontCollection,
     ) -> Result<Self, UiRealmError> {
         Self::with_capacity(
             DEFAULT_COMMAND_CAPACITY,
@@ -65,6 +71,7 @@ impl UiRealm {
             device_pixel_ratio,
             needs_redraw,
             clipboard,
+            fonts,
         )
     }
 
@@ -86,10 +93,11 @@ impl UiRealm {
         device_pixel_ratio: f64,
         needs_redraw: Arc<AtomicBool>,
         clipboard: Arc<dyn Clipboard>,
+        fonts: &FontCollection,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
         let identity = crate::realm_services::next_identity();
-        let services = RealmServices::construct(clipboard);
+        let services = RealmServices::construct(clipboard, fonts);
         Self::construct(
             capacity,
             wake,
@@ -141,6 +149,7 @@ impl UiRealm {
             async_driver,
             scheduler,
             clipboard,
+            text,
         } = services;
 
         // The realm's scheduler fires the SAME platform wake its presentation
@@ -201,6 +210,7 @@ impl UiRealm {
             needs_redraw,
             wake: Arc::clone(&wake),
             clipboard,
+            text,
             #[cfg(any(test, feature = "test-support"))]
             now_secs_override: AtomicU64::new(0),
             rx,
@@ -257,7 +267,10 @@ impl UiRealm {
             identity,
             window,
             None,
-            RealmServices::construct(crate::presentation::test_clipboard()),
+            RealmServices::construct(
+                crate::presentation::test_clipboard(),
+                &FontCollection::new(),
+            ),
             needs_redraw,
         )
         .expect("test UiRealm should create an interaction lane")
@@ -269,6 +282,14 @@ impl UiRealm {
     #[cfg(test)]
     pub(crate) fn pipeline_for_test(&self) -> PipelineCell {
         self.presentations.primary().pipeline().clone()
+    }
+
+    /// Test-only: this realm's text context, so a test can check which font
+    /// collection it was built from.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn text_context_for_test(&self) -> &flui_painting::TextContext {
+        &self.text
     }
 
     /// This incarnation's generational realm identity.

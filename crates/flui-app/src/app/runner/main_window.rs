@@ -1113,6 +1113,7 @@ mod tests {
                             1.0,
                             Arc::new(AtomicBool::new(false)),
                             crate::app::presentation::test_clipboard(),
+                            &flui_painting::FontCollection::new(),
                         )
                         .expect("realm");
                         realm.enter(|realm| realm.update_host_lifecycle(host));
@@ -1197,6 +1198,7 @@ mod tests {
                                 1.0,
                                 Arc::new(AtomicBool::new(false)),
                                 crate::app::presentation::test_clipboard(),
+                                &flui_painting::FontCollection::new(),
                             )
                             .expect("realm");
                             realm.enter(|realm| realm.update_host_lifecycle(host));

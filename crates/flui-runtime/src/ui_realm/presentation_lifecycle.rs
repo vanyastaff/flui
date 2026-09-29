@@ -676,6 +676,7 @@ mod tests {
             1.0,
             Arc::new(AtomicBool::new(false)),
             crate::presentation::test_clipboard(),
+            &flui_painting::FontCollection::new(),
         )
         .expect("hidden realm");
         let history = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -706,6 +707,7 @@ mod tests {
                 1.0,
                 Arc::new(AtomicBool::new(false)),
                 crate::presentation::test_clipboard(),
+                &flui_painting::FontCollection::new(),
             )
             .expect("realm");
             realm.synchronize_window_lifecycle();

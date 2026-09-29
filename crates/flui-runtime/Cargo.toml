@@ -42,7 +42,8 @@ flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 # `PlatformWindow` and its capability traits, the window contract a
 # presentation drives; no backend (ADR-0082).
 flui-platform-api = { workspace = true }
-# Window sizes and geometry.
+# Window sizes and geometry; `FontCollection`/`TextContext`, the text service
+# each realm owns over the app's font collection (ADR-0092 §3).
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # The realm core (ADR-0083 move 4): the widget tree a presentation hosts
 # (`WidgetsBinding`, `GlobalKeyScope`; `runtime-internals` is the seam a
@@ -104,6 +105,9 @@ static_assertions = { workspace = true }
 # request_for_test`, `register_layout_builder_for_test`.
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
+# `testing::font_collection_holders`, which pins who holds the app's font
+# collection and when a realm lets go of it.
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
 
 # Executing wasm32 unit tests: the execution services' sequential backend is
 # pinned by lib tests that run on wasm32 (`cargo xtask wasm-test`). Pinned to

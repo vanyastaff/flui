@@ -3365,6 +3365,62 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
     teardown_platform_realm();
 }
 
+/// Every realm a runner builds shapes over the app's one font collection
+/// (ADR-0092 §2): two `SeparateRealms` windows go through the production
+/// `UiRealm::new` call in `secondary_window.rs`, and each realm's
+/// `TextContext` must be built over `runtime_font_collection()`. Realm A comes
+/// from `UiRealm::for_test`, which builds its own collection, so it is not
+/// asserted on. Fails if the production site hands a realm a fresh
+/// collection, or if the runtime resolves a new one per call.
+#[test]
+fn separate_realm_windows_shape_over_the_runtimes_font_collection() {
+    let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
+
+    for _ in 0..2 {
+        open_secondary_window(AppConfig::default(), WindowPolicy::SeparateRealms)
+            .expect("WindowPolicy::SeparateRealms must install a second realm cleanly");
+    }
+
+    let secondaries: Vec<RealmDispatcher> = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        let owner_thread = state.owner_thread.expect("the owner platform is installed");
+        state
+            .realms
+            .iter()
+            .filter(|(id, _)| *id != dispatcher_a.address.realm_id)
+            .map(|(_, slot)| RealmDispatcher {
+                owner_thread,
+                address: slot.address,
+            })
+            .collect()
+    });
+    assert_eq!(
+        secondaries.len(),
+        2,
+        "two SeparateRealms windows, two realms"
+    );
+
+    let app_fonts = super::super::host::runtime_font_collection();
+    for dispatcher in secondaries {
+        let app_fonts = app_fonts.clone();
+        dispatch_platform_realm(
+            dispatcher,
+            RealmTask::Frame(Box::new(move |realm| {
+                assert!(
+                    flui_painting::FontCollection::ptr_eq(
+                        realm.text_context_for_test().fonts(),
+                        &app_fonts,
+                    ),
+                    "a runner-built realm must own a text context over the app's font collection"
+                );
+            })),
+        )
+        .expect("the secondary realm dispatches");
+    }
+
+    teardown_platform_realm();
+}
+
 /// `WindowPolicy::SharedRealm`, driven through the REAL embedder seam
 /// (`open_secondary_window`) — proves this really is forest-membership
 /// routing (a second PRESENTATION of the SAME realm), not a second realm
