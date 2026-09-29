@@ -14,6 +14,7 @@ pub mod command;
 pub mod command_ops;
 
 pub use command::{DrawCommand, DrawOp};
+pub use command_ops::DamageExtent;
 // The paint vocabulary the commands carry; defined in `crate::paint`.
 pub(crate) use crate::paint::{
     BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId,
@@ -42,6 +43,17 @@ pub struct DisplayList {
     /// comparing equal to `Rect::ZERO`, which a degenerate command can
     /// legitimately produce.
     pub(crate) bounds: Option<Rect<f64>>,
+
+    /// Cached conservative extent of every pixel the list can change, or
+    /// `None` while no command has drawn anything — see
+    /// [`Self::damage_extent`].
+    ///
+    /// Kept apart from `bounds` because the two answer different questions:
+    /// `bounds` is the layout-facing box (a paragraph's laid-out size, no
+    /// entry for a full-canvas fill), while this one must never fall short of
+    /// the ink, since a damage region computed from it decides which pixels a
+    /// partial repaint may leave untouched.
+    pub(crate) damage: Option<DamageExtent>,
 }
 
 /// Folds one command's bounds into an accumulating union: the one place that
@@ -51,6 +63,15 @@ fn accumulate_bounds(acc: &mut Option<Rect<f64>>, cmd_bounds: Rect<f64>) {
     *acc = Some(match *acc {
         Some(current) => current.union(&cmd_bounds),
         None => cmd_bounds,
+    });
+}
+
+/// Folds one command's damage extent into an accumulating one; the
+/// counterpart of [`accumulate_bounds`] for [`DisplayList::damage_extent`].
+fn accumulate_damage(acc: &mut Option<DamageExtent>, extent: DamageExtent) {
+    *acc = Some(match *acc {
+        Some(current) => current.union(extent),
+        None => extent,
     });
 }
 
@@ -67,6 +88,7 @@ impl DisplayList {
         Self {
             commands: Vec::new(),
             bounds: None,
+            damage: None,
         }
     }
 
@@ -101,9 +123,27 @@ impl DisplayList {
         self.bounds
     }
 
+    /// A conservative extent of every pixel replaying this list can change,
+    /// in the list's own coordinate space; `None` when no command draws.
+    ///
+    /// Unlike [`Self::bounds`], this never falls short of the ink: a paragraph
+    /// contributes its glyph overflow as well as its laid-out box, a shadow
+    /// its blur, a stroke its joins, and a full-canvas fill (`drawColor`,
+    /// `drawPaint`, an unbounded save-layer) makes the extent
+    /// [`DamageExtent::Unbounded`]. Clips are ignored, which only ever makes
+    /// the answer larger. This is what a damage region is built from: a rect
+    /// that misses a pixel the list changed leaves that pixel stale.
+    #[must_use]
+    pub fn damage_extent(&self) -> Option<DamageExtent> {
+        self.damage
+    }
+
     pub(crate) fn push(&mut self, command: DrawCommand) {
         if let Some(cmd_bounds) = command.bounds() {
             accumulate_bounds(&mut self.bounds, cmd_bounds);
+        }
+        if let Some(extent) = command.damage_extent() {
+            accumulate_damage(&mut self.damage, extent);
         }
         self.commands.push(command);
     }
@@ -111,6 +151,7 @@ impl DisplayList {
     pub(crate) fn clear(&mut self) {
         self.commands.clear();
         self.bounds = None;
+        self.damage = None;
     }
 
     /// Moves every command of `other` onto the end of this list, unioning
@@ -124,10 +165,14 @@ impl DisplayList {
         if self.commands.is_empty() {
             std::mem::swap(&mut self.commands, &mut other.commands);
             self.bounds = other.bounds;
+            self.damage = other.damage;
         } else if !other.commands.is_empty() {
             self.commands.append(&mut other.commands);
             if let Some(other_bounds) = other.bounds {
                 accumulate_bounds(&mut self.bounds, other_bounds);
+            }
+            if let Some(other_damage) = other.damage {
+                accumulate_damage(&mut self.damage, other_damage);
             }
         }
     }

@@ -289,3 +289,105 @@ fn save_and_restore_carry_no_state_but_the_clip_scope() {
     // informational only; nothing reads them.
     assert_eq!(cmds[0].transform, Matrix4::translation(1.0, 0.0, 0.0));
 }
+
+fn bounded(list: &DisplayList) -> Rect<f64> {
+    match list.damage_extent() {
+        Some(flui_painting::DamageExtent::Bounded(rect)) => rect,
+        other => panic!("expected a bounded damage extent, got {other:?}"),
+    }
+}
+
+/// A full-canvas fill has no `bounds()` (it is not a layout box), but it
+/// changes every pixel its clip allows, so a damage region built from the
+/// layout answer would leave the rest of the fill stale.
+#[test]
+fn a_color_fill_makes_the_extent_unbounded() {
+    let rect = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
+    let list = flui_painting::testing::record(|canvas| {
+        canvas.draw_rect(rect, &Paint::fill(Color::RED));
+        canvas.draw_color(Color::BLUE, flui_painting::paint::BlendMode::SrcOver);
+    });
+    assert_eq!(list.bounds(), Some(rect), "the layout box ignores the fill");
+    assert_eq!(
+        list.damage_extent(),
+        Some(flui_painting::DamageExtent::Unbounded)
+    );
+
+    let paint_fill = flui_painting::testing::record(|canvas| {
+        canvas.draw_paint(&Paint::fill(Color::RED));
+    });
+    assert_eq!(
+        paint_fill.damage_extent(),
+        Some(flui_painting::DamageExtent::Unbounded)
+    );
+    let unbounded_layer = flui_painting::testing::record(|canvas| {
+        canvas.save_layer(None, &Paint::fill(Color::RED));
+        canvas.restore();
+    });
+    assert_eq!(
+        unbounded_layer.damage_extent(),
+        Some(flui_painting::DamageExtent::Unbounded)
+    );
+    assert_eq!(
+        flui_painting::testing::record(|canvas| canvas.clip_rect(rect)).damage_extent(),
+        None,
+        "a clip draws nothing"
+    );
+}
+
+/// Glyph ink reaches past the laid-out box: the extent covers the box grown
+/// by half its height on every side.
+#[test]
+fn paragraph_extent_covers_ink_overflow() {
+    use flui_foundation::geometry::Offset;
+    use flui_painting::TextPainter;
+    use flui_painting::typography::{TextDirection, TextSpan};
+
+    let mut painter = TextPainter::new()
+        .with_text(TextSpan::new("Hello, FLUI!"))
+        .with_text_direction(TextDirection::Ltr);
+    painter.layout(0.0, f64::INFINITY);
+    let size = painter.size();
+    let origin = Offset::new(40.0, 50.0);
+    let mut canvas = Canvas::new();
+    painter.paint(&mut canvas, origin);
+    let list = canvas.finish();
+
+    let layout_box = list.bounds().expect("a painted span has bounds");
+    let extent = bounded(&list);
+    assert_eq!(extent, layout_box.expand(size.height * 0.5));
+    assert!(
+        extent.top() < layout_box.top() && extent.left() < layout_box.left(),
+        "the extent must reach past the layout box: {extent:?} vs {layout_box:?}"
+    );
+}
+
+/// A stroke's miter reaches a full width past the geometry (the layout box
+/// adds half), and a shadow's blur spreads twice its elevation (the layout
+/// box adds one).
+#[test]
+fn stroke_and_shadow_extents_cover_their_outsets() {
+    let rect = Rect::from_xywh(100.0, 100.0, 50.0, 50.0);
+    let stroked = flui_painting::testing::record(|canvas| {
+        canvas.draw_rect(rect, &Paint::stroke(Color::RED, 8.0));
+    });
+    assert_eq!(stroked.bounds(), Some(rect.expand(4.0)));
+    assert_eq!(bounded(&stroked), rect.expand(8.0));
+
+    let path = flui_painting::paint::Path::rectangle(rect);
+    let shadow = flui_painting::testing::record(|canvas| {
+        canvas.draw_shadow(&path, Color::BLACK, 6.0);
+    });
+    assert_eq!(shadow.bounds(), Some(rect.expand(6.0)));
+    assert_eq!(bounded(&shadow), rect.expand(12.0));
+
+    // A transform maps the widened local rect, as `bounds()` does.
+    let scaled = flui_painting::testing::record(|canvas| {
+        canvas.scale(2.0, 2.0);
+        canvas.draw_rect(rect, &Paint::stroke(Color::RED, 8.0));
+    });
+    assert_eq!(
+        bounded(&scaled),
+        Matrix4::scaling(2.0, 2.0, 1.0).transform_rect(&rect.expand(8.0))
+    );
+}
