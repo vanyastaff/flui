@@ -2169,14 +2169,21 @@ scroll update that crosses a page's midpoint is dispatched.
 `ListenerCallback`) and cannot hold the owner-local callback or its writer. It
 keeps the synchronous `round(page)` dedupe, records the page and schedules the
 page view's rebuild. `build` hands every recorded page to the local post-frame
-lane, one entry per page, and each delivery re-checks that the state is
-mounted and runs the callback current at that moment inside a write the
-state's `WriterSource` opens. So the callback runs one frame later than
-Flutter's, never inside a build, with every page a frame recorded in order;
-a callback that panics loses only its own page; a page recorded before a
-rebuild reaches the rebuilt callback; a disposed page view delivers nothing;
-without a post-frame lane the pages are dropped with a warning. The same
-accepted latency as `AnimatedSize` and `Dismissible`. **Tests:**
+lane, one entry per page. Each entry holds only a weak reference to the
+state's delivery target and runs the callback current at that moment inside
+a write the state's `WriterSource` opens. So the callback runs after the
+frame that next rebuilds the page view (one frame later than Flutter's for a
+change seen during input; two for one seen during layout, whose rebuild
+lands in the next frame), never inside a build, with every page a frame
+recorded in order. A page recorded before a rebuild reaches the rebuilt
+callback. A page view unmounted before its rebuild records nothing to the
+lane, and one unmounted after its rebuild queued a page fails the upgrade,
+because `finalize_tree` drops the state before the lane runs; either way it
+delivers nothing. Without a post-frame lane the pages are dropped with a
+warning. A callback that panics loses only its own page, and the panic
+leaves the frame on the post-frame lane rather than from inside a scroll
+listener, as Flutter's would; the pages after it run on the next frame. The
+same accepted latency as `AnimatedSize` and `Dismissible`. **Tests:**
 `tests/page_view_events.rs`.
 
 ### 38. `on_draggable_canceled` takes one `DraggableCanceledDetails`

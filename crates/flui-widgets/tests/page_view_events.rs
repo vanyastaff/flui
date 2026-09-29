@@ -11,7 +11,7 @@ use flui_painting::styling::Color;
 use flui_rendering::view::ViewportOffset as _;
 use flui_view::BoxedView;
 use flui_view::prelude::*;
-use flui_widgets::{ColoredBox, PageController, PageView, SizedBox};
+use flui_widgets::{ColoredBox, ListView, PageController, PageView, SizedBox};
 
 use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
 
@@ -89,16 +89,21 @@ fn page_changes_in_one_frame_are_delivered_in_order() {
     assert_eq!(probe.value(), Ok(12), "each wrote through its own cx");
 }
 
-/// A change recorded but not yet delivered when the page view unmounts is
-/// dropped, and the callback's captures are released with the state.
-#[test]
-fn a_disposed_page_view_drops_its_pending_change() {
-    struct DropProbe(Rc<Cell<u32>>);
-    impl Drop for DropProbe {
-        fn drop(&mut self) {
-            self.0.set(self.0.get() + 1);
-        }
+/// Counts its drops, so a test can see when a callback's captures go.
+struct DropProbe(Rc<Cell<u32>>);
+
+impl Drop for DropProbe {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
     }
+}
+
+/// A change recorded, then the page view unmounted by its parent's rebuild
+/// before its own rebuild could hand the page to the post-frame lane: the
+/// page is never queued, never delivered, and the callback's captures are
+/// released with the state.
+#[test]
+fn a_page_view_unmounted_before_it_rebuilds_drops_its_recorded_change() {
 
     let controller = PageController::new();
     let show = Rc::new(Cell::new(true));
@@ -134,6 +139,75 @@ fn a_disposed_page_view_drops_its_pending_change() {
         Ok(0),
         "the pending change was never delivered"
     );
+    assert!(
+        drops.get() > drops_while_mounted,
+        "the mounted callback's capture was released"
+    );
+}
+
+/// A page view that queues a page in its own `build` and is then unmounted
+/// later in the same frame delivers nothing. Here it is the first item of a
+/// lazy list whose offset jumps in the same frame: the build phase rebuilds
+/// it (queueing the page), then the list's layout evicts it. `finalize_tree`
+/// drops the state before the post-frame lane runs, and the queued entry
+/// holds only a weak reference to the delivery target.
+#[test]
+fn a_page_view_unmounted_after_queueing_a_change_delivers_nothing() {
+    const ITEMS: usize = 20;
+    let controller = PageController::new();
+    let offset = Rc::new(Cell::new(0.0));
+    let delivered = Rc::new(RefCell::new(Vec::new()));
+    let drops = Rc::new(Cell::new(0));
+    let probe = {
+        let controller = controller.clone();
+        let offset = Rc::clone(&offset);
+        let delivered = Rc::clone(&delivered);
+        let drops = Rc::clone(&drops);
+        SignalProbe::new(move |ProbeSignals { count, .. }| {
+            let controller = controller.clone();
+            let delivered = Rc::clone(&delivered);
+            let drops = Rc::clone(&drops);
+            ListView::builder(ITEMS, PAGE, move |index| {
+                if index >= ITEMS {
+                    return None;
+                }
+                if index > 0 {
+                    return Some(SizedBox::new(PAGE, PAGE).into_view().boxed());
+                }
+                let delivered = Rc::clone(&delivered);
+                let held = DropProbe(Rc::clone(&drops));
+                let pages = page_view(&controller).on_page_changed(move |cx, page| {
+                    let _held = &held;
+                    delivered.borrow_mut().push(page);
+                    count.set(cx, page as u32)
+                });
+                Some(SizedBox::new(PAGE, PAGE).child(pages).into_view().boxed())
+            })
+            .offset(offset.get())
+        })
+    };
+    let mut app = mounted(&probe);
+    let drops_while_mounted = drops.get();
+
+    // The page is recorded now. The pump rebuilds the root, moving the
+    // list's offset far past the first item; the build phase still reaches
+    // the mounted page view, whose `build` queues the page, and the list's
+    // layout then evicts it.
+    controller.jump_to_page(2);
+    offset.set(PAGE * 10.0);
+    let ((), log) = flui_testing::log_capture::capture(|| app.pump());
+    app.tick();
+
+    assert!(
+        !log.contains("dropping page changes"),
+        "premise: the page was queued, not dropped for want of a lane: {log}"
+    );
+    assert_eq!(
+        *delivered.borrow(),
+        [] as [usize; 0],
+        "the queued page did not reach the unmounted page view's callback"
+    );
+    assert_eq!(probe.value(), Ok(0), "and nothing was written");
     assert!(
         drops.get() > drops_while_mounted,
         "the mounted callback's capture was released"

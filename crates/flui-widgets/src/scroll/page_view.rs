@@ -40,7 +40,7 @@
 //!   docs for how end-of-range behavior diverges from the oracle's
 //!   physics-clamped ticks.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -510,8 +510,11 @@ impl PageView {
     /// when `round(page)` differs from the last reported page.
     ///
     /// The callback receives an `EventCx` and may write signals. It runs
-    /// after the frame in which the change was observed, never inside a
-    /// build, with every page the frame recorded delivered in order. See the
+    /// after the frame that next rebuilds this page view, never inside a
+    /// build, with every recorded page delivered in order. A change observed
+    /// during build or input (a drag, `jump_to_page`) is delivered after that
+    /// same frame; one observed during layout (a viewport resize) is
+    /// delivered after the following frame. See the
     /// module docs for how this diverges from Flutter's synchronous
     /// `NotificationListener<ScrollNotification>` report.
     #[must_use]
@@ -623,20 +626,18 @@ impl std::fmt::Debug for PageViewState {
 
 /// The owner-local resources that deliver one recorded page change.
 ///
-/// The state owns this target; a post-frame callback holds only a [`Weak`]
-/// reference, and re-checks `mounted`, so a disposed page view delivers
-/// nothing and its callback's captures are released with the state.
+/// The state owns the only strong reference; a post-frame callback holds a
+/// [`Weak`] one. `finalize_tree` drops an unmounted state before the frame's
+/// post-frame lane runs, so a page view unmounted after `build` queued a page
+/// fails the upgrade: it delivers nothing, and its callback's captures are
+/// released with the state rather than by the lane.
 struct PageChangeDelivery {
     callback: Rc<RefCell<Option<OnPageChanged>>>,
     writer: WriterSource,
-    mounted: Cell<bool>,
 }
 
 impl PageChangeDelivery {
     fn deliver(&self, page: usize) {
-        if !self.mounted.get() {
-            return;
-        }
         // Cloned out: the borrow ends before the callback runs, so a callback
         // that rebuilds this page view cannot collide with it.
         let callback = self.callback.borrow().clone();
@@ -756,7 +757,6 @@ impl ViewState<PageView> for PageViewState {
         self.delivery = Some(Rc::new(PageChangeDelivery {
             callback: Rc::clone(&self.on_page_changed),
             writer: ctx.writer_source(),
-            mounted: Cell::new(true),
         }));
         self.rebuild = Some(ctx.rebuild_handle());
         self.post_frame = ctx.local_post_frame_handle();
@@ -860,9 +860,6 @@ impl ViewState<PageView> for PageViewState {
     }
 
     fn dispose(&mut self) {
-        if let Some(delivery) = self.delivery.as_ref() {
-            delivery.mounted.set(false);
-        }
         if let Some((listenable, id)) = self.page_listener.take() {
             listenable.remove_listener(id);
         }
