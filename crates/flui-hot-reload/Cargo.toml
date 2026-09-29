@@ -34,7 +34,7 @@ app-plugin = [
 # implement for a host to install (ADR-0094 §1). The SDK is an official
 # package's own edge (ADR-0088 §2), so it needs no exception.
 flui-sdk = { workspace = true }
-flui-layer ={ path = "../flui-layer", version = "=0.2.0-dev" }
+flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev", optional = true }
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", optional = true }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", optional = true }

@@ -83,7 +83,8 @@ flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 flui-engine = { path = "../flui-engine", version = "=0.2.0-dev" }
-flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }# Widget catalog: provides `VsyncScope`, which `AppBinding::attach_root_widget*`
+flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
+# Widget catalog: provides `VsyncScope`, which `AppBinding::attach_root_widget*`
 # auto-wraps the root in so implicit-animation widgets work with zero boilerplate.
 # Zero new link-time deps: every crate flui-widgets pulls is already transitively
 # present in flui-app's closure (verified via `cargo tree -p flui-app`); this adds
