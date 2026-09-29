@@ -1059,6 +1059,7 @@ mod tests {
                     "deterministic_drive_recovers_after_a_panicking_job",
                     deterministic_drive_recovers_after_a_panicking_job as fn(),
                 ),
+                #[cfg(not(target_arch = "wasm32"))]
                 (
                     "pool_start_failure_refuses_the_spawn_and_recovers",
                     pool_start_failure_refuses_the_spawn_and_recovers as fn(),

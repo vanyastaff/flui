@@ -663,7 +663,7 @@ pub(super) fn drain_pending_secondary_window_completions() {
 /// (embedders address the window only through dispatched events, never a
 /// held handle); this module's own tests need it to drive a REAL close
 /// (`window.close()`) instead of reaching for the internal
-/// `close_this_window`/`uninstall_platform_realm` primitives directly, which
+/// `close_this_window`/`request_realm_uninstall` primitives directly, which
 /// would prove the primitives work without proving THIS function's own
 /// `on_close` wiring calls them.
 ///
@@ -1025,7 +1025,7 @@ fn finish_open_secondary_window(
     // realm (its sole presentation); `SharedRealm` removes just this
     // presentation from the shared realm's forest while the primary (and
     // any other sibling) survives untouched -- never a blind
-    // `uninstall_platform_realm`, which would tear down the WHOLE shared
+    // `request_realm_uninstall`, which would tear down the WHOLE shared
     // realm out from under a still-open sibling window.
     //
     // No `on_quit` registration here — that is a single platform-level

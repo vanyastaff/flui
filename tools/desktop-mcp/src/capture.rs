@@ -333,7 +333,7 @@ pub use backend::{monitor_snapshot, screenshot, windows};
 
 /// Windows capture is in physical pixels before our explicit downscale.
 /// Cropped pixels cannot be mapped by stretching them over the original rect.
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn physical_size_matches(size: (u32, u32), source: Rect) -> ToolResult<()> {
     if size != (source.width, source.height) {
         return Err(ToolError::Busy(format!(

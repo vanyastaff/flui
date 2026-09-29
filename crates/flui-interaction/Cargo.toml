@@ -58,11 +58,6 @@ dpi = "0.1.2"
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 static_assertions = { workspace = true }
-# `tracing-subscriber` is a dev-only dependency — the observability tests
-# install a `fmt::TestWriter` subscriber to exercise span emission on hot
-# paths. End users configure their subscriber at the app boundary via
-# `flui_foundation::log::Logger`, not via this crate.
-tracing-subscriber = { workspace = true }
 # Criterion — hot-path regression guards. Benches cover VelocityTracker
 # (per-pointer-move), GestureArena (per-pointer-up), TapGestureRecognizer
 # (per-pointer-event), PointerEventResampler (per-raw-input), and

@@ -3452,23 +3452,20 @@ fn harness_sliver_opacity_alpha_zero_emits_no_opacity_layer() {
 
 // ── RenderSliverAnimatedOpacity ──────────────────────────────────────────
 
-fn animated_opacity_sliver_spec(controller: AnimationController) -> TreeNode {
-    sliver_node(RenderSliverAnimatedOpacity::new(
-        animation_from(&controller),
-        false,
-    ))
-    .label("opacity")
-    .child(fixed_extent_list(
-        30.0,
-        vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
-    ))
-}
-
 fn harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255() {
     for (value, expect_layer) in [(0.0, false), (0.5, true), (1.0, false)] {
-        let run = RenderTester::mount(viewport(animated_opacity_sliver_spec(ticking_controller(
-            100, value,
-        ))))
+        let controller = ticking_controller(100, value);
+        let run = RenderTester::mount(viewport(
+            sliver_node(RenderSliverAnimatedOpacity::new(
+                animation_from(&controller),
+                false,
+            ))
+            .label("opacity")
+            .child(fixed_extent_list(
+                30.0,
+                vec![box_node(RenderColoredBox::red(300.0, 1000.0))],
+            )),
+        ))
         .with_size(Size::new(300.0, 100.0))
         .run_frame();
 
@@ -5008,7 +5005,9 @@ fn harness_layout_builder_publishes_the_real_incoming_constraints() {
 
 #[test]
 fn catalog_covers_every_render_object_name() {
-    let source = include_str!("render_object_harness.rs");
+    let source = include_str!("render_object_harness.rs").replace("
+", "
+");
     for &type_name in RENDER_OBJECT_TYPES {
         // A row body ends at the first closing brace in column 0; the family
         // tables and these guards sit after the last row and must not count.

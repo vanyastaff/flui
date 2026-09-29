@@ -2220,9 +2220,6 @@ pub(crate) fn execute_scene(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use super::HotKey;
-
     use super::env;
 
     /// The env-var names are duplicated from `flui-hot-reload` so the CLI

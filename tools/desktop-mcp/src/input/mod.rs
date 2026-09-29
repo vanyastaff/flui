@@ -102,7 +102,7 @@ fn lerp(a: i32, b: i32, i: i32, steps: i32) -> i32 {
 /// Ctrl+Alt is AltGr): `+` is Shift+`=` on a US layout, so `ctrl+plus` must
 /// hold Shift too.
 #[cfg_attr(
-    not(any(target_os = "windows", test)),
+    not(target_os = "windows"),
     expect(
         dead_code,
         reason = "only the Windows layout lookup reports shift states"

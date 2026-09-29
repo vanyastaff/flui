@@ -6,7 +6,7 @@
 //! on Linux); until then [`Unsupported`] answers every call with the reason.
 
 // Only the UI Automation backend reads ARIA roles.
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 mod role;
 #[cfg(target_os = "windows")]
 mod uia;

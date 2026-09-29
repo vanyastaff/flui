@@ -304,7 +304,7 @@ enum RealmMapMutation {
     )]
     Install(RealmId, Box<RealmSlot>, Arc<dyn PlatformWindow>),
     /// Remove one realm from the registry (a window closing while siblings
-    /// stay open — see `uninstall_platform_realm` in `super::runner`).
+    /// stay open — see `request_realm_uninstall` in `super::runner`).
     Uninstall(RealmId),
 }
 
@@ -668,7 +668,7 @@ pub(crate) struct AppRuntime {
     /// ignored (with a warning) if execution services already exist.
     pending_host_executors: Option<HostExecutors>,
     /// Whether a redraw has been requested since the last
-    /// [`Self::mark_rendered`] — the loop-scoped half of the retired
+    /// `mark_rendered` — the loop-scoped half of the retired
     /// `AppBinding.needs_redraw` flag, re-homed here as part of `AppBinding`'s
     /// dissolution. Loop-scoped, not realm-scoped: a hot-restart that tears
     /// down and reinstalls a realm on this same thread must not lose a

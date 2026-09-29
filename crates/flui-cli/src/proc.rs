@@ -203,6 +203,8 @@ fn wait_with_deadline(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::*;
 
     /// A child that exits at once but leaves a grandchild holding its stdout
     /// (a daemon it started) must not hang the probe: the drain is bounded.

@@ -19,7 +19,7 @@ pub struct Rect {
 
 impl Rect {
     /// From left/top/right/bottom edges; an inverted rect is empty.
-    #[cfg(any(target_os = "windows", test))]
+    #[cfg(target_os = "windows")]
     pub fn from_ltrb(left: i32, top: i32, right: i32, bottom: i32) -> Self {
         Self {
             x: left,
@@ -30,7 +30,7 @@ impl Rect {
     }
 
     /// The centre point.
-    #[cfg(any(target_os = "windows", test))]
+    #[cfg(target_os = "windows")]
     pub fn center(&self) -> (i32, i32) {
         (
             self.x + (self.width / 2) as i32,

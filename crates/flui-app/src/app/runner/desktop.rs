@@ -590,7 +590,7 @@ where
     // ever removes it — and the exit-policy hook would report "don't
     // exit" on every subsequent window close, including the very last
     // one, silently hanging the app open with no window left at all.
-    // `close_this_window` (not `uninstall_platform_realm` directly): the
+    // `close_this_window` (not `request_realm_uninstall` directly): the
     // primary window closing while a `WindowPolicy::SharedRealm` sibling
     // survives must remove only THIS presentation, never the whole
     // realm out from under that sibling; `close_this_window` reduces to

@@ -42,8 +42,6 @@ flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 # `PlatformWindow` and its capability traits, the window contract a
 # presentation drives; no backend (ADR-0082).
 flui-platform-api = { workspace = true }
-# Window sizes and geometry.
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # The realm core (ADR-0083 move 4): the widget tree a presentation hosts
 # (`WidgetsBinding`, `GlobalKeyScope`; `runtime-internals` is the seam a
 # realm drives it through), its render pipeline, the realm-owned scheduler,
@@ -81,16 +79,6 @@ wasm-bindgen-futures = { workspace = true }
 # `flui_interaction::events::make_*_event`, the synthetic pointer events the
 # held-input tests queue.
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
-# `log_capture::disarm_interest_cache`, so a sibling test cannot poison the
-# callsites the semantics-host privacy tests capture. Once `flui-testing`
-# depends on this crate (ADR-0083 §4) this is a dev-only cycle, as
-# `flui-view`'s and `flui-interaction`'s are; no type crosses it, so the second
-# copy of this crate in the test build never meets the first.
-flui-testing = { workspace = true }
-# Capturing emitted fields is how the semantics host's privacy contract on its
-# announce/event fallbacks, and what a contained frame failure reports to the
-# log, are checked.
-tracing-subscriber = { workspace = true }
 # The realm tests: the headless platform's windows and capability fakes
 # (`headless_platform`, `FakeTextInput`, `FakeHaptics`, `FakeAccessibility`),
 # a dev edge only, so the shipped crate still links no backend; the concrete
@@ -98,7 +86,6 @@ tracing-subscriber = { workspace = true }
 # an adapter would; and `!Send` pins on the realm.
 flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
-accesskit = { workspace = true }
 static_assertions = { workspace = true }
 # The test-only hooks of the crates the realm drives: `push_pending_child_
 # request_for_test`, `register_layout_builder_for_test`.

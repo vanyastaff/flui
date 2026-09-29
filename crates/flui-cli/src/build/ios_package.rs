@@ -645,17 +645,6 @@ mod tests {
         drop(CancelOnDrop(Arc::clone(&state)));
         assert_eq!(state.load(Ordering::Acquire), COMMITTING);
     }
-    #[cfg(unix)]
-    fn process_gone(pid: &str) -> bool {
-        !Command::new("kill")
-            .args(["-0", pid])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .expect("query child")
-            .success()
-    }
-
     #[test]
     fn publication_contract() {
         crate::test_cases::run_cases(&[

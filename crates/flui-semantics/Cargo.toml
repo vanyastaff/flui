@@ -38,9 +38,6 @@ accesskit = { workspace = true }
 # Slab storage for O(1) access
 slab = "0.4"
 
-# Thread-safe primitives
-parking_lot = "0.12"
-
 # Tracing for diagnostics
 tracing = "0.1"
 
@@ -60,8 +57,8 @@ thiserror.workspace = true
 workspace = true
 
 [dev-dependencies]
-accesskit_consumer = { workspace = true }
 criterion = { workspace = true }
+parking_lot = "0.12"
 
 # Cost of a semantics-enabled frame as a function of tree size — the number the
 # pipeline's scalability work has to beat.

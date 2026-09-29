@@ -781,7 +781,7 @@ pub(super) enum InstallPresentationError {
 /// [`InstallPresentationError::DispatchInFlight`] if a dispatch or
 /// hot-restart visit is currently in flight on this thread: **named gap,
 /// not a silent one** — unlike [`install_realm_alongside`]/
-/// [`uninstall_platform_realm`], this path does not yet defer to loop idle
+/// `request_realm_uninstall`, this path does not yet defer to loop idle
 /// through `AppRuntime::pending_realm_mutations`; [`open_secondary_window`](super::secondary_window::open_secondary_window)
 /// (its production caller, under
 /// [`crate::app::runtime::WindowPolicy::SharedRealm`]) never calls this from
@@ -896,7 +896,7 @@ pub(super) fn install_presentation_alongside(
 
 /// Requests that one presentation be closed and removed from `dispatcher`'s
 /// realm — a single window closing out of a realm that hosts more than one,
-/// without tearing down the realm itself (contrast [`uninstall_platform_realm`],
+/// without tearing down the realm itself (contrast `request_realm_uninstall`,
 /// which removes a whole realm). Request-shaped, like every other realm-map
 /// mutation in this module: this function only enqueues
 /// [`RealmTask::ClosePresentation`] and (if the realm is currently idle)
@@ -947,7 +947,7 @@ fn close_presentation(
 /// [`WindowPolicy::SeparateRealms`](crate::app::runtime::WindowPolicy::SeparateRealms) window, or the last surviving
 /// presentation of a [`WindowPolicy::SharedRealm`](crate::app::runtime::WindowPolicy::SharedRealm) group), or removes just
 /// that one presentation while its realm and any sibling presentation
-/// survive otherwise — never [`uninstall_platform_realm`] directly, which
+/// survive otherwise — never `request_realm_uninstall` directly, which
 /// would tear down an ENTIRE `SharedRealm` group out from under a still-open
 /// sibling window.
 #[cfg_attr(
