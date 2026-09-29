@@ -14,18 +14,11 @@ package-author surface, the same one a third-party design system builds on.
 
 ## Enable via the `flui` facade
 
-`flui`'s `material` feature is enabled by default, so most consumers need nothing extra:
+`flui` turns no catalog on by default, so request Material explicitly:
 
 ```toml
 [dependencies]
-flui = "0.2"
-```
-
-With default features off, request it explicitly:
-
-```toml
-[dependencies]
-flui = { version = "0.2", default-features = false, features = ["material"] }
+flui = { version = "0.2", features = ["material"] }
 ```
 
 This crate isn't published to crates.io yet; until the first release, depend

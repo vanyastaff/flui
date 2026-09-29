@@ -12,7 +12,7 @@ package-author surface, the same one a third-party design system builds on.
 
 ## Enable via the `flui` facade
 
-`flui`'s default feature set is Material-only, so Cupertino needs an explicit opt-in:
+`flui` turns no catalog on by default, so request Cupertino explicitly:
 
 ```toml
 [dependencies]

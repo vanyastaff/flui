@@ -938,6 +938,26 @@ fn the_design_systems_build_on_the_sdk_alone() {
     }
 }
 
+/// The facade turns no catalog, tool or capability on by default (ADR-0088
+/// §6): an application names the features it uses.
+#[test]
+fn the_facade_turns_no_feature_on_by_default() {
+    let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
+    let facade = metadata
+        .workspace_packages()
+        .into_iter()
+        .find(|package| package.name.as_str() == "flui")
+        .expect("the facade is a workspace member");
+    let defaults = facade
+        .features
+        .get("default")
+        .map_or(&[][..], Vec::as_slice);
+    assert!(
+        defaults.is_empty(),
+        "the `flui` facade must have `default = []` (ADR-0088 §6), found {defaults:?}"
+    );
+}
+
 /// Devtools is an official package on the SDK (ADR-0088 move 4): it lives
 /// under `packages/`, and its only framework normal dependency is `flui-sdk`;
 /// the rest are third-party crates for timing, locking, export and tracing.
