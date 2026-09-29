@@ -45,9 +45,12 @@ impl PartialEq for ContentToken {
 
 impl Eq for ContentToken {}
 
+/// Opaque: an address would make every `Debug` dump of a layer tree differ
+/// between runs and between two realms painting the same thing, and the
+/// structural comparisons built on those dumps would stop meaning anything.
 impl fmt::Debug for ContentToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ContentToken({:p})", Arc::as_ptr(&self.0))
+        f.write_str("ContentToken")
     }
 }
 
