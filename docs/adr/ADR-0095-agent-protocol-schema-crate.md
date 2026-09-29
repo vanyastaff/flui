@@ -1,11 +1,16 @@
 # ADR-0095: flui-protocol is the typed schema shared by tests, devtools and agents
 
-- **Status:** Accepted in part (2026-09-26): §1 as far as the crate itself goes (tier C,
-  `stable`, `serde` and `schemars` behind features, no upstream type), and from §2 the lift
-  of the wire `Role`, `ActionName` and `Checked` out of the desktop server and the move of
-  `SemanticsRole` and `SemanticsAction` into the crate (with ADR-0089 §3's `ALL` rule). Still
-  Proposed: the rest of §1's schema, the `flui-mcp` library, the semantics-to-wire role
-  mapping, `flui-testing`'s query types, and §§3–5.
+- **Status:** Accepted in part (2026-09-26, extended 2026-09-29): §1 as far as the crate
+  itself goes (tier C, `stable`, `serde` and `schemars` behind features, no upstream type),
+  and §1's schema for handles, nodes, the tree, the read query, the action request, the error
+  codes and the protocol version; from §2 the lift of the wire `Role`, `ActionName` and
+  `Checked` out of the desktop server, the move of `SemanticsRole` and `SemanticsAction` into
+  the crate (with ADR-0089 §3's `ALL` rule), and the semantics-to-wire mapping, amended below
+  to live in `flui-semantics`; from §3 the realm half of the in-process backend (a
+  `SemanticsAgent` that reads and acts through the realm's owner inbox). Still Proposed: §1's
+  finder criteria, handle kinds beyond elements and windows, `effect`, widget catalog and
+  event-log shapes; the `flui-mcp` library; `flui-testing`'s query types; §3's server in
+  `flui-devtools`, its transport and `flui mcp`; and §§4–5.
 - **Date:** 2026-09-25
 - **Amends (on acceptance of §3, not yet accepted):** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md)
   (settles its "Not decided here" in-process transport; the wire contract is unchanged)
@@ -19,8 +24,13 @@
 
 The accepted part added `crates/flui-protocol` (tier C, order 2, `stable`), moved
 `SemanticsRole` and `SemanticsAction` into it (`flui-semantics` re-exports them), and made
-`tools/desktop-mcp` take its wire vocabulary from it. Line citations in Context are to
-`d7007f547`, before that change.
+`tools/desktop-mcp` take its wire vocabulary from it. It then added the schema a read and an
+action need (`ElementId`, `WindowId`, `Node`, `Tree`, `ReadQuery`, `ActionRequest`,
+`ErrorCode`, `Retry`, `outline`, `PROTOCOL_VERSION`), the semantics-to-wire projection in
+`flui-semantics` (`SemanticsOwner::read_wire` and `resolve_wire_action`), and
+`flui_runtime::SemanticsAgent`, which no production path vends yet: the next step has
+`flui-app` vend it through its development hook and `flui-devtools` serve it. Line citations
+in Context are to `d7007f547`, before that change.
 
 ## Context
 
@@ -81,10 +91,17 @@ feature).
 The desktop server's `Role` and action names move into `flui-protocol` unchanged in their wire
 spelling. `tools/desktop-mcp` becomes a library plus a thin binary (the MCP server package,
 `flui-mcp`) that uses them. The in-process backend maps FLUI semantics (role plus flags) onto
-the same wire `Role`, and the mapping is a function in `flui-protocol`, pinned by a test over
-every semantics role (the own-vocabulary rule and the move of `SemanticsRole` itself are
-ADR-0089's). `flui-testing`'s queries take `flui-protocol` types instead of re-exporting
-AccessKit's.
+the same wire `Role`, pinned by a test over every semantics role (the own-vocabulary rule and
+the move of `SemanticsRole` itself are ADR-0089's). `flui-testing`'s queries take
+`flui-protocol` types instead of re-exporting AccessKit's.
+
+*Amended on acceptance:* the mapping is a function in `flui-semantics`, not in
+`flui-protocol`. It projects the AccessKit node `flui-semantics` publishes to the platform
+adapter, read through `accesskit_consumer` with the adapters' own filter and pattern
+predicates, and folds each AccessKit role to the wire role the desktop server reads for it
+through UI Automation. `flui-protocol` can see neither FLUI's flags nor AccessKit (ADR-0089),
+and a second cascade over the flags beside the one that feeds AccessKit would drift from what
+the OS reports (`crates/flui-semantics/ARCHITECTURE.md`, mapping decision 7).
 
 ### 3. The in-process transport
 
@@ -118,6 +135,19 @@ format, not the wire: replies still carry `role` and `native_role` exactly as AD
 A finder built from `flui-protocol` query types runs in `flui test` against the headless
 backend and through `flui mcp` against a live app with the same meaning. A normalized outline
 recorded by one is a valid golden file for the other.
+
+### Versioning
+
+The schema carries its own version, `flui_protocol::PROTOCOL_VERSION` (`0.1`), serialized
+as the `protocol` field of a `Tree`. Each version's JSON schema is a golden file
+(`crates/flui-protocol/tests/schema/protocol-<version>.json`), and a test refuses a schema that
+differs from its version's file. Any change to the schema bumps `minor` and adds a golden
+file; a change additive in ADR-0080's sense needs nothing more, and a test checks that each
+published schema is contained in the next. A change that is not additive is listed in
+`version::BREAKING` with the ADR that decided it; after 1.0 it also bumps `major` and that ADR
+supersedes ADR-0080. Two fields are additive under ADR-0080 and new here: `protocol`, and
+`coordinates` (`screen`, left out, or `surface` for the in-process backend, which knows no
+window position).
 
 ## Alternatives considered
 
@@ -168,13 +198,38 @@ For the accepted part:
 - `cargo xtask workspace` places `flui-protocol` in tier C;
   `the_tiers_match_the_adr_0081_table` lists it.
 
+- `cargo nextest run -p flui-protocol --all-features`: `the_wire_schema_is_the_one_its_version_published`,
+  `every_published_schema_is_additive_to_the_next` and
+  `the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_required_one`
+  (`tests/wire_schema.rs`); `the_error_codes_are_adr_0080s`,
+  `element_ids_serialize_as_e_handles_and_refuse_other_spellings`,
+  `a_node_at_its_defaults_serializes_only_role_id_and_native_role` and
+  `outline_is_one_line_per_element`.
+- **Mapping pinned.** `cargo nextest run -p flui-semantics agent`:
+  `every_role_but_the_documented_ones_reads_as_a_wire_role` walks every semantics role (`none`,
+  `drag_handle` and `hot_key` are the documented exceptions, published as a container the wire
+  lifts), with `every_role_bearing_flag_reads_as_the_role_uia_reports`,
+  `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes`,
+  `generic_containers_are_lifted_and_hidden_subtrees_dropped`,
+  `advertised_actions_follow_the_uia_patterns`, `expand_on_an_expanded_node_is_action_unsupported`,
+  `set_value_reaches_set_text_with_its_text`, `a_disabled_node_refuses_with_disabled`,
+  `read_honours_max_depth_and_max_nodes_and_says_truncated` and
+  `a_read_tree_round_trips_through_json`.
+- **The realm half of §3.** `cargo nextest run -p flui-runtime agent_semantics`: a counter's
+  tree read as wire nodes, a tap through the agent reaching the widget's handler and its
+  signal, `busy` before the first semantics frame, collection stopping with the last agent,
+  `gone` for a node that left the tree and for a closed window, `unknown_handle` for a handle
+  no read reported, `busy` on a full inbox, a panicking handler failing its reply first and
+  leaving the queued read for the next drain, and traces without labels or values.
+- **Round trip against the wire, in part.** `cargo nextest run -p flui-desktop-mcp`:
+  `the_desktop_node_is_a_protocol_node` (the desktop server's node JSON reads as
+  `flui_protocol::Node`, writes back unchanged, and outlines the same) and
+  `every_code_is_a_protocol_error_code`.
+
 Not yet built:
 
-- **Round trip against the wire.** Every reply type in `flui-protocol` serializes to the JSON the
-  desktop server emits today; the server's existing reply tests pass unchanged after it switches
-  to the lifted types.
-- **Mapping pinned.** A test walks every semantics role and asserts it maps to a wire `Role`
-  other than `unknown`, except the roles documented as having no counterpart.
+- **Round trip against the wire, the rest.** The desktop server switches its replies to the
+  lifted types and its existing reply tests pass unchanged.
 - **Projection equality.** On Windows, `cargo xtask device windows-a11y` runs a FLUI example,
   reads it through the UIA backend and through the in-process backend, and asserts the two
   normalized outlines are equal. A deliberately broken mapping (one role swapped) must make the
