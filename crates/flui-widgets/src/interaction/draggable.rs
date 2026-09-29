@@ -191,7 +191,7 @@ pub struct DraggableDetails {
 ///
 /// Flutter's `DraggableCanceledCallback` takes the two as separate
 /// arguments. One value keeps the callback's shape `|cx, details|`, which a
-/// `let`-bound closure can name through [`callback_with`](flui_view::callback_with);
+/// `let`-bound closure can name through [`callback_with`];
 /// see mapping decision 38 in `crates/flui-widgets/ARCHITECTURE.md`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DraggableCanceledDetails {

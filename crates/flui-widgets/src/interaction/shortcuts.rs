@@ -46,7 +46,7 @@ use super::focus::Focus;
 use crate::support::{EventCallback, event_callback};
 
 /// A callback bound to a [`SingleActivator`] in [`CallbackShortcuts`]: it
-/// receives the key event's [`EventCx`](flui_view::EventCx) (ADR-0086).
+/// receives the key event's [`EventCx`] (ADR-0086).
 pub type ShortcutCallback = EventCallback;
 
 // ============================================================================
