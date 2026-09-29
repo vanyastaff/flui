@@ -42,15 +42,13 @@ use crate::app::ui_realm::UiRealm;
 use flui_foundation::RealmId;
 use flui_runtime::reload::ReloadTier;
 
-/// A development reload driver installed on an [`AppConfig`](crate::AppConfig).
+/// A development reload driver installed on an [`AppConfig`].
 ///
 /// Built by [`AppConfig::with_dev_reload`]. `Clone` shares the one hook and
 /// its bookkeeping, so every window opened with clones of the same
 /// configuration is driven by the same hook: attached once per loop, polled
 /// at each realm's frame boundary, and each patch applied once to every
 /// realm.
-///
-/// [`AppConfig::with_dev_reload`]: crate::AppConfig::with_dev_reload
 #[derive(Clone)]
 pub struct DevReload(Arc<Mutex<Slot>>);
 
