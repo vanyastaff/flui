@@ -25,7 +25,7 @@ use flui_foundation::geometry::Bounds;
 /// (enable/disable IME, place the candidate window). The document the input
 /// method reads and edits is the field's [`TextStore`](crate::TextStore)
 /// (ADR-0090), attached through `flui-interaction`'s presentation-owned
-/// text-input owner, which projects incoming [`flui_platform_api::ImeEvent`]s onto
+/// text-input owner, which projects incoming [`ImeEvent`](crate::ImeEvent)s onto
 /// it. A backend cannot hold that store through this trait yet: the trait is
 /// `Send + Sync` and the store is owner-thread (ADR-0082 §4).
 pub trait PlatformTextInput: Send + Sync {

@@ -355,21 +355,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-types/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "crates/flui-types/src/styling/color.rs"
-class = "pr-label"
-count = 1
-
-[[allow]]
-path = "crates/flui-types/src/styling/color.rs"
-class = "slice"
-count = 1
-
-[[allow]]
 path = "crates/flui-view/src/element/dispatch.rs"
 class = "wave"
 count = 1

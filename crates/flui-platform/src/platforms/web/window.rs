@@ -54,8 +54,8 @@ fn layout_size(canvas: &web_sys::HtmlCanvasElement) -> Option<(f64, f64, f64)> {
 /// surface renders one texel per device pixel. Skipped when unchanged:
 /// assigning `width`/`height` clears a canvas even to the same value.
 fn apply_backing_size(canvas: &web_sys::HtmlCanvasElement, width: f64, height: f64, scale: f64) {
-    let phys_width = (f64::from(width) * scale).round() as u32;
-    let phys_height = (f64::from(height) * scale).round() as u32;
+    let phys_width = (width * scale).round() as u32;
+    let phys_height = (height * scale).round() as u32;
     if canvas.width() != phys_width {
         canvas.set_width(phys_width);
     }
@@ -227,7 +227,7 @@ impl LayoutSync {
         }
         apply_backing_size(&self.canvas, width, height, scale_factor);
         self.callbacks
-            .dispatch_resize(Size::new(width, height), scale_factor as f64);
+            .dispatch_resize(Size::new(width, height), scale_factor);
         self.callbacks.dispatch_request_frame();
     }
 }
@@ -255,8 +255,8 @@ impl PlatformWindow for WebWindow {
         // pixel ratios (981 CSS px at 1.5 is 1472, not 1471).
         let state = self.state.lock();
         Size::new(
-            ((f64::from(state.width) * state.scale_factor).round() as i32),
-            ((f64::from(state.height) * state.scale_factor).round() as i32),
+            (state.width * state.scale_factor).round() as i32,
+            (state.height * state.scale_factor).round() as i32,
         )
     }
 

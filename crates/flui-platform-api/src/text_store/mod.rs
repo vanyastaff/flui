@@ -18,7 +18,7 @@
 //!   presentation's frame transaction as that machine reads it.
 //! - [`TextStore`] and [`TextStoreObserver`]: the field side and the
 //!   platform side of the connection.
-//! - [`project_ime_event`]: a push-model [`ImeEvent`](flui_platform_api::ImeEvent)
+//! - [`project_ime_event`]: a push-model [`ImeEvent`](crate::ImeEvent)
 //!   (winit) applied as store edits, so there is one editing path.
 //! - [`InMemoryTextStore`]: a complete store over a `String`, the
 //!   conformance kit's reference and a backend test's field.

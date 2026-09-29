@@ -366,7 +366,7 @@ use std::sync::{
 };
 
 use flui::hot_reload::{WorkerBuildEnv, hot_reload_worker, request_rebuild};
-use flui::types::Color;
+use flui::painting::styling::Color;
 use flui::prelude::*;
 use flui::widgets::{ColoredBox, Column, GestureDetector, Padding, Text};
 use __TYPES_CRATE__::{CounterApp, CounterState, TYPE_FINGERPRINT};

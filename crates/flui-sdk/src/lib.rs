@@ -9,11 +9,12 @@
 //! train, and its surface may change on any train without a `flui` major.
 //!
 //! - **Whole modules** at the facade's paths: [`animation`], [`foundation`],
-//!   [`types`], [`view`] and [`widgets`] are the internal crates themselves,
-//!   so `flui_sdk::widgets::Text` and `flui::widgets::Text` are one type.
-//! - **Curated modules** at the facade's paths: [`interaction`], [`painting`]
-//!   and [`rendering`] hold the subset of the facade's module that packages
-//!   use, as the same items, not wrappers.
+//!   [`geometry`], [`view`] and [`widgets`] are the internal crates (or, for
+//!   `geometry`, foundation's module) themselves, so `flui_sdk::widgets::Text`
+//!   and `flui::widgets::Text` are one type.
+//! - **Curated modules** at the facade's paths: [`interaction`], [`painting`],
+//!   [`platform`] and [`rendering`] hold the subset of the facade's module that
+//!   packages use, as the same items, not wrappers.
 //! - **Evolving modules** [`pipeline`] and [`hooks`]: render-object internals
 //!   and development hooks the facade does not expose. A package's exposure to
 //!   them is `grep -E 'flui_sdk::(pipeline|hooks)::'`.

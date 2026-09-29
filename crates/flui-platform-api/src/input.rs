@@ -112,7 +112,7 @@ pub enum PlatformInput {
     /// Keyboard event
     Keyboard(KeyboardEvent),
 
-    /// IME composition/commit event. See [`flui_platform_api::ImeEvent`] for the
+    /// IME composition/commit event. See [`ImeEvent`](crate::ImeEvent) for the
     /// vocabulary and [`crate::PlatformTextInput`] for the
     /// window-side capability this pairs with.
     Ime(crate::ImeEvent),

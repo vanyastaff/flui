@@ -26,9 +26,6 @@ testing = []
 # Foundation - canonical ID types (SemanticsId)
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 
-# Types - geometry, semantics types
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
-
 # The semantics vocabulary (`SemanticsRole`, `SemanticsAction`), shared with
 # tests, devtools and agents; re-exported from `role` and `action`.
 flui-protocol = { workspace = true }
