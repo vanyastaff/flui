@@ -772,6 +772,38 @@ directly, this stops holding and captures would need invalidating on device
 loss. The property is not enforced by anything today beyond the layer types
 themselves.
 
+### Paint certifies a boundary's content token
+
+**Rule:** a repaint boundary's stamped layer carries a `flui_layer::ContentToken`
+next to its `RenderId`, and the damage differ (`flui_layer::LayerDiffer`,
+ADR-0087 §3) treats an unchanged token as "this boundary's own pixels did not
+change". Something has to vouch for that.
+
+**Choice:** the paint walk does, with the same fact the graft already rests on
+(absence from the paint queue means unchanged content). At each boundary child,
+before its layer is pushed, the boundary keeps the token of its retained
+capture when it is absent from the FULL queue (a composited-layer update counts,
+since a patched graft changes pixels) and has a capture; otherwise it mints a
+new token. The capture stores its token (`RetainedSubtree::content`), so every
+eviction path drops the token with it, and a graft that served a layer update
+writes the new token back with its patches. The root is never captured, so its
+token lives in `PipelineOwner::root_content` under the same rule. Minted tokens
+commit with the frame; an errored frame drops them, and the retry, still
+queued, mints again. Nested boundaries keep their stamp (token included)
+through an enclosing boundary's graft.
+
+**Why not pointer identity of the pictures:** `run_paint` always descends from
+the root, and an outer boundary refuses reuse while anything nested in it is
+dirty, re-recording its inline pictures. Their `Arc`s change on every such
+frame although the content did not, so `Arc::ptr_eq` would report the root
+changed on every real frame (`an_outer_boundary_redescended_for_a_nested_repaint_keeps_its_token`
+pins the re-recording as well as the kept token).
+
+**Accepted trade-off:** a clean node that paints differently breaks this rule
+exactly as it already breaks grafting. A boundary whose capture was refused
+(it holds a leader or follower) mints every frame and is always damaged.
+Tests: `tests/boundary_content_tokens.rs`.
+
 ### Layout marks semantics once per walk, at the dirty root
 
 **Rule:** Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in *both* of

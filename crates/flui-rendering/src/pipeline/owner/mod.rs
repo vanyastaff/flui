@@ -218,6 +218,17 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// misses the map.
     retained_boundaries: FxHashMap<RenderId, paint::RetainedSubtree>,
 
+    /// The root boundary's committed content token, with the root it belongs
+    /// to.
+    ///
+    /// Every other boundary keeps its token in its retained capture, so the
+    /// token dies with the capture on every eviction path. The root is never
+    /// captured (it has no parent to graft it), so its token lives here:
+    /// kept on a frame that did not queue the root, replaced on one that did
+    /// (see `run_paint` and `flui-rendering`'s `ARCHITECTURE.md`, "Paint
+    /// certifies a boundary's content token").
+    root_content: Option<(RenderId, flui_layer::ContentToken)>,
+
     /// `RenderId`s of `Layer::Follower` nodes correlated during the last
     /// paint phase that resolved to `None` (unlinked with
     /// `show_when_unlinked == false`) — the follower hit-test side table's companion to
@@ -341,6 +352,7 @@ where
         last_layer_tree: from.last_layer_tree,
         last_follower_offsets: from.last_follower_offsets,
         retained_boundaries: from.retained_boundaries,
+        root_content: from.root_content,
         last_hidden_follower_ids: from.last_hidden_follower_ids,
         device_pixel_ratio: from.device_pixel_ratio,
         dirty_sender: from.dirty_sender,

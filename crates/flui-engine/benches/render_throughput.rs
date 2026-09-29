@@ -2,7 +2,7 @@
 // missing_docs on a bench binary is noise (no external consumers of the items).
 //! Render-throughput and per-frame allocation micro-benchmarks for flui-engine.
 //!
-//! Two benchmark groups:
+//! Benchmark groups (the damage ones are documented on their functions):
 //!
 //! ## `render_throughput`
 //!
@@ -382,7 +382,163 @@ fn damage_scissor(c: &mut Criterion) {
     group.finish();
 }
 
+/// `damage_retained_target`: what a partial frame costs end to end once it
+/// renders through the retained target (ADR-0087 §4), against the full
+/// direct frame it replaces, at 1920x1080.
+///
+/// - `full_direct/N`: the whole frame straight into the "swapchain" texture.
+/// - `partial_blit_128px/N`: the scissored clear and the N layers, scissored
+///   to a 128 px damage, into the retained target, then the full-surface
+///   blit onto the "swapchain" texture — the path a partial frame takes.
+/// - `blit_only`: the blit alone, the fixed cost every retained frame adds.
+///
+/// The retained target's memory is printed once: it is the per-window cost
+/// ADR-0087 §4 asks to record. Bandwidth on tile-based mobile GPUs is not
+/// measured here; a desktop adapter says nothing about it.
+fn damage_retained_target(c: &mut Criterion) {
+    let Some((device, queue)) = try_create_gpu() else {
+        println!("skipping damage_retained_target: no GPU available");
+        return;
+    };
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let (width, height) = (1920_u32, 1080_u32);
+    let target = |label: &str, usage: wgpu::TextureUsages| {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    };
+    let (_surface, surface_view) = target(
+        "retained-bench-surface",
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let (retained, retained_view) = target(
+        "retained-bench-target",
+        wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
+    );
+    println!(
+        "damage_retained_target: retained target {} bytes at {width}x{height}",
+        u64::from(width) * u64::from(height) * 4
+    );
+
+    let mut painter = WgpuPainter::with_shared_device(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        format,
+        (width, height),
+    );
+    let mut offscreen =
+        flui_engine::OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue), format);
+
+    fn record(painter: &mut WgpuPainter, layers: u32, damage: Option<f64>, w: f64, h: f64) {
+        painter.save();
+        if let Some(side) = damage {
+            let rect = Rect::from_xywh(0.0, 0.0, side, side);
+            painter.clip_rect(rect, flui_painting::paint::Clip::HardEdge);
+            // The partial frame's clear, as `damage::begin_partial` draws it.
+            painter.draw_rect(rect.expand(1.0), &Paint::fill(Color::WHITE));
+        }
+        for i in 0..layers {
+            let f = f64::from(i);
+            painter.draw_rect(
+                Rect::from_xywh(f * 2.0, f * 1.5, w, h),
+                &Paint::fill(Color::rgba(0, 0, 255, 40)),
+            );
+        }
+        painter.restore();
+    }
+    let finish = |encoder: wgpu::CommandEncoder| {
+        queue.submit([encoder.finish()]);
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    };
+    let encoder = |label: &str| {
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) })
+    };
+
+    let mut group = c.benchmark_group("damage_retained_target");
+    for &layers in &[4_u32, 16, 64] {
+        // Warm both paths before timing either (see `damage_scissor`).
+        for _ in 0..2 {
+            record(
+                &mut painter,
+                layers,
+                None,
+                f64::from(width),
+                f64::from(height),
+            );
+            let mut enc = encoder("retained-warmup");
+            let _ = painter.render_to_view(&surface_view, &mut enc);
+            finish(enc);
+            record(
+                &mut painter,
+                layers,
+                Some(128.0),
+                f64::from(width),
+                f64::from(height),
+            );
+            let mut enc = encoder("retained-warmup");
+            let _ = painter.render_to_view(&retained_view, &mut enc);
+            finish(enc);
+            offscreen.blit_to_surface(&retained, &surface_view, format);
+        }
+        group.bench_function(format!("full_direct/{layers}"), |b| {
+            b.iter(|| {
+                record(
+                    &mut painter,
+                    layers,
+                    None,
+                    f64::from(width),
+                    f64::from(height),
+                );
+                let mut enc = encoder("retained-full");
+                let result = painter.render_to_view(&surface_view, &mut enc);
+                finish(enc);
+                black_box(result)
+            });
+        });
+        group.bench_function(format!("partial_blit_128px/{layers}"), |b| {
+            b.iter(|| {
+                record(
+                    &mut painter,
+                    layers,
+                    Some(128.0),
+                    f64::from(width),
+                    f64::from(height),
+                );
+                let mut enc = encoder("retained-partial");
+                let result = painter.render_to_view(&retained_view, &mut enc);
+                finish(enc);
+                offscreen.blit_to_surface(&retained, &surface_view, format);
+                let _ = device.poll(wgpu::PollType::wait_indefinitely());
+                black_box(result)
+            });
+        });
+    }
+    group.bench_function("blit_only", |b| {
+        b.iter(|| {
+            offscreen.blit_to_surface(&retained, &surface_view, format);
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(benches, render_throughput);
 criterion_group!(alloc_benches, alloc_micro);
-criterion_group!(damage_benches, damage_scissor);
+criterion_group!(damage_benches, damage_scissor, damage_retained_target);
 criterion_main!(benches, damage_benches, alloc_benches);

@@ -96,7 +96,7 @@ pub use alignment::{Alignment, AlignmentDirectional, AlignmentGeometry};
 pub use box_fit::{BoxFit, BoxShape, FittedSizes};
 pub use canvas::Canvas;
 pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
-pub use display_list::{DisplayList, DrawCommand, DrawOp};
+pub use display_list::{DamageExtent, DisplayList, DrawCommand, DrawOp};
 pub use error::RegisterFontError;
 // `ResolvedFont` carries a `Family`, and a consumer that cannot name it
 // cannot hold the result. The one cosmic-text type on this crate's surface

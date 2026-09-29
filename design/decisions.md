@@ -233,7 +233,8 @@ first, and `RasterOwner` stays in `flui-engine` through H0.
 
 **Decision.** Each repaint boundary is an `Arc` subtree keyed by `RenderId`; a differ over
 retained trees yields `DamageRegion::Partial` with a `Full` fallback. The contract closes before
-H3; the work follows D1 and D2.
+H3; the work follows D1 and D2. What the differ compares is a paint-certified `ContentToken` on
+each boundary stamp, not the `Arc` pointer (ADR-0087 §3 as amended).
 
 **Alternatives rejected.** Damage as the first breaking change in H0.
 

@@ -508,6 +508,78 @@ pub struct TextLayout {
     direction: TextDirection,
     /// Whether `with_overflow` truncated the text to a max line count.
     truncated: bool,
+    /// Every glyph's ink, relative to the layout's origin; `None` when a
+    /// face gives no bounds to take it from. See [`Self::ink_bounds`].
+    ink: Option<Rect<f64>>,
+}
+
+/// The tangent of the 14° skew cosmic-text's rasterizer applies to a glyph
+/// it synthesises an italic for (`CacheKeyFlags::FAKE_ITALIC`), rounded up.
+const FAKE_ITALIC_SLANT: f32 = 0.25;
+
+/// What a glyph's bitmap may add around its outline's bounds: the snap of
+/// its origin to a pixel, hinting, and the coverage of partly covered edge
+/// pixels, in logical pixels.
+const GLYPH_INK_MARGIN: f32 = 2.0;
+
+/// A box covering the ink of every glyph `buffer` places, relative to its
+/// origin; `None` when a glyph's face is missing or its `head` table has no
+/// bounds.
+///
+/// A glyph's outline lies within its face's `head` bounds (the union of every
+/// glyph in the face), scaled to the glyph's size and placed at its pen
+/// position on the baseline. A synthesised italic is widened by the skew its
+/// rasterizer applies, and every glyph by [`GLYPH_INK_MARGIN`] plus a
+/// twentieth of an em for a variable face's instance reaching past its
+/// default one's bounds.
+fn glyph_ink_bounds(buffer: &Buffer, font_system: &mut FontSystem) -> Option<Rect<f64>> {
+    let mut faces: std::collections::HashMap<
+        (cosmic_text::fontdb::ID, cosmic_text::fontdb::Weight),
+        Option<[f32; 4]>,
+    > = std::collections::HashMap::new();
+    let mut ink: Option<Rect<f64>> = None;
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            let em_bounds = *faces
+                .entry((glyph.font_id, glyph.font_weight))
+                .or_insert_with(|| {
+                    let font = font_system.get_font(glyph.font_id, glyph.font_weight)?;
+                    let metrics = font.metrics();
+                    let units = f32::from(metrics.units_per_em);
+                    let bounds = metrics.bounds?;
+                    (units > 0.0).then(|| {
+                        [
+                            bounds.x_min / units,
+                            bounds.y_min / units,
+                            bounds.x_max / units,
+                            bounds.y_max / units,
+                        ]
+                    })
+                });
+            let [x_min, y_min, x_max, y_max] = em_bounds?;
+            let size = glyph.font_size;
+            let pen = glyph.x + size * glyph.x_offset;
+            let baseline = run.line_y + glyph.y - size * glyph.y_offset;
+            let slant = if glyph
+                .cache_key_flags
+                .contains(cosmic_text::CacheKeyFlags::FAKE_ITALIC)
+            {
+                FAKE_ITALIC_SLANT * y_max.abs().max(y_min.abs()) * size
+            } else {
+                0.0
+            };
+            let margin = GLYPH_INK_MARGIN + 0.05 * size;
+            let rect = Rect::from_ltrb(
+                f64::from(pen + x_min * size - slant - margin),
+                f64::from(baseline - y_max * size - margin),
+                f64::from(pen + x_max * size + slant + margin),
+                f64::from(baseline - y_min * size + margin),
+            );
+            ink = Some(ink.map_or(rect, |ink| ink.union(&rect)));
+        }
+    }
+    // A layout with no glyph draws no ink.
+    Some(ink.unwrap_or(Rect::from_ltrb(0.0, 0.0, 0.0, 0.0)))
 }
 
 /// Converts FLUI `TextStyle` to cosmic-text `Attrs`.
@@ -724,6 +796,7 @@ impl TextLayout {
                 line_height,
                 direction,
                 truncated: false,
+                ink: None,
             };
             let font_system = shaper.font_system();
             this.shape_runs(font_system);
@@ -732,6 +805,7 @@ impl TextLayout {
             {
                 this.enforce_max_lines(font_system, max_lines, ellipsis, max_width);
             }
+            this.ink = glyph_ink_bounds(&this.buffer, font_system);
             this
         })
     }
@@ -930,6 +1004,20 @@ impl TextLayout {
                 }
             })
         })
+    }
+
+    /// A box covering every pixel the paragraph's glyphs can ink, relative
+    /// to the layout's origin, or `None` when a face gives no bounds to take
+    /// it from.
+    ///
+    /// The laid-out box is where lines sit, not where glyphs end: under a
+    /// line height tighter than the face's ascent and descent, or for a
+    /// swash, an italic overhang or a stacked mark, the ink reaches past it.
+    /// A damage extent is built from this, since a rect that misses a
+    /// glyph's pixel leaves it stale on a partial repaint.
+    #[must_use]
+    pub(crate) fn ink_bounds(&self) -> Option<Rect<f64>> {
+        self.ink
     }
 
     /// Returns the computed metrics for this layout.

@@ -79,6 +79,15 @@ pub enum SubmitVerdict {
 /// The trait is object-safe: the realm is generic over its sink today, and
 /// will drive it as `&mut dyn FrameSink` through the proposed `Realm::pump`
 /// (ADR-0083).
+///
+/// # Damage
+///
+/// A submitted scene is always the whole frame; the realm computes no damage.
+/// A host sink that wants partial repaint owns the comparison: `flui-app`'s
+/// raster lane runs a `flui_layer::LayerDiffer` over each scene it is handed
+/// and stamps the result on the frame (ADR-0087 §3). That damage is relative
+/// to the scene submitted before it, not to the one last presented, so the
+/// backend accumulates the damage of every frame it has not yet presented.
 pub trait FrameSink {
     /// Physical surface size in pixels, as layout's root constraints input.
     fn surface_size(&mut self) -> (u32, u32);

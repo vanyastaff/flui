@@ -52,6 +52,7 @@
 #![warn(clippy::return_self_not_must_use)]
 
 mod compositor;
+mod damage;
 mod layer;
 mod link;
 mod scene;
@@ -61,6 +62,7 @@ pub mod testing;
 mod tree;
 
 pub use compositor::SceneBuilder;
+pub use damage::{DamageMode, LayerDiffer};
 pub use flui_foundation::LayerId;
 pub use layer::{
     AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, CanvasLayer, ClipPathLayer,
@@ -72,5 +74,5 @@ pub use layer::{
 };
 pub use link::{LayerLink, resolve_follower_offset};
 pub use scene::Scene;
-pub use scene_snapshot::{DamageRegion, SceneSnapshot};
-pub use tree::{LayerNode, LayerTree};
+pub use scene_snapshot::{DamageRect, DamageRegion, SceneSnapshot};
+pub use tree::{BoundaryStamp, ContentToken, LayerNode, LayerTree};

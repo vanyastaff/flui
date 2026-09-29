@@ -1,6 +1,7 @@
 # ADR-0087: One raster contract in `flui-layer` with wgpu and CPU backends; retained layer identity drives damage
 
-- **Status:** Proposed
+- **Status:** Accepted in part (2026-09-29): §3 and §4, as amended below; §1, §2 and §5 remain
+  Proposed
 - **Date:** 2026-09-25
 - **Amends (on acceptance):** [ADR-0006](ADR-0006-c-ir-record-replay-seam.md) §5 (the scene-level backend trait
   and the GPU-free lowering move to `flui-layer`; the Command IR stays in the engine),
@@ -108,21 +109,40 @@ engine (`crates/flui-engine/src/damage.rs:22`) with `mark_dirty`, `mark_full_rep
 
 ### 3. Retained layer identity is the damage producer
 
-- A repaint boundary's layer subtree is retained across frames as an `Arc` subtree keyed by the
-  boundary's `RenderId`, the stamp the paint pass already writes.
-- A differ in `flui-layer` compares the new frame's boundary subtrees with the retained ones.
-  Same `RenderId` and pointer-identical content (`Arc::ptr_eq`, ADR-0061's cheap comparison)
-  contributes nothing. A changed, moved, added or removed subtree contributes the union of its
-  old and new bounds in surface coordinates.
-- The result is `DamageRegion::Partial(..)`, a new variant (`DamageRegion` is already
-  `#[non_exhaustive]`). `Full` remains the fallback for the first frame, a resize or surface
-  generation change, a root change, a subtree the differ cannot pair, and damage above a
-  threshold.
+- A repaint boundary's layer carries a `BoundaryStamp`: the boundary's `RenderId`, which the
+  paint pass already wrote, and a `ContentToken` (`Arc<()>`, equal only as clones of one mint).
+  The paint pass certifies the token: a boundary keeps it while it is absent from the paint
+  queue (a composited-layer update counts) and has a retained capture, and mints a new one
+  otherwise; the root keeps its token under the same rule without a capture.
+- *Amended (2026-09-29):* pointer identity of the content (`Arc::ptr_eq`, ADR-0061's cheap
+  comparison) cannot be the "unchanged" test. `run_paint` always descends from the root, and an
+  outer boundary refuses reuse while any nested boundary is dirty and re-records its inline
+  pictures, so their `Arc`s change on every such frame and a pointer differ would answer `Full`
+  for every real frame. The token is exactly as sound as the retention the graft already relies
+  on. Damage bounds still come from the layer-tree diff, so ADR-0061's rejection of
+  paint-derived bounds stands.
+- A differ in `flui-layer` (`LayerDiffer`) walks the frozen scene once and records, per stamp,
+  its token, its placement (accumulated transform and effect layers above it) and its own region
+  (the subtree minus nested stamped subtrees) in surface pixels. Same `RenderId`, same token and
+  same placement contributes nothing. A changed or moved boundary contributes the union of its
+  old and new regions, an added or removed one its one region. Textures, platform views,
+  canvases, overlays and content under a follower are damaged every frame; a backdrop filter
+  whose bounds meet the damage joins it.
+- The result is `DamageRegion::Partial(DamageRect)` (a whole-pixel rectangle, never empty,
+  rounded outward with a 1 px anti-aliasing margin) or `DamageRegion::Unchanged`, both new
+  variants (`DamageRegion` is `#[non_exhaustive]`), with `DamageRegion::union` for
+  accumulation. `Full` remains the fallback for the first frame, a surface size change, an
+  unstamped root, a root boundary or placement change, a boundary stamped twice, and damage
+  above a threshold (half the surface by default, a hypothesis the benches measure).
 - The raster lane stops constructing `Full` unconditionally. `DamageTracker` stays crate-private
   in the engine; multi-rect accumulation returns only together with a consumer that reads more
   than the bounding union, as ADR-0061's amendment requires.
 - Damage has a real off switch: with it off, no subtree is retained, no differ runs and the cost
   per frame is the same as today.
+
+*Amended (2026-09-29):* the switch is the `FLUI_DAMAGE` environment variable (`off`), which
+`flui-app`'s raster lane reads when it is built, so every window of the process renders in full
+without a rebuild. A per-app `AppConfig` switch can replace it; damage is on by default.
 
 ### 4. The retained render target is conditional
 
@@ -131,6 +151,16 @@ and blits it to the swapchain. The retained target is used only when damage is `
 below the threshold; a `Full` frame renders straight to the swapchain. The threshold, and the
 bandwidth cost of the blit on tile-based mobile GPUs, are hypotheses to be measured before the
 contract closes.
+
+*Amended (2026-09-29):* the target is allocated lazily, by the first frame that renders through
+it. A full frame rendered directly leaves it invalid, so the first partial frame after one renders
+in full into the target (the warm-up) and only later ones are scissored. A surface without
+`COPY_SRC` renders every frame through the target, where a full frame costs nothing extra. The
+target is invalid from the start of a frame until that frame is submitted, and on a resize, a
+reconfigure, a surface recreation, a device recovery or a surface release. No native
+present-damage hint (`VK_KHR_incremental_present`, DXGI dirty rects) is used: wgpu exposes none.
+Measured on one desktop adapter at 1920×1080: the retained target is 8.3 MB per window and the
+blit alone 144 µs; see `flui-engine`'s `ARCHITECTURE.md`, mapping decision 18.
 
 ### 5. Timing
 
@@ -174,7 +204,61 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
 
 ## Verification
 
-None of these exist yet.
+§3 and §4 are verified by the tests below, headless: the GPU readbacks ran on one desktop adapter
+(DX12), and no partial frame has been observed in a real window yet. The rest does not exist yet.
+
+- §3: `flui-layer`'s `src/damage/tests.rs` (`first_frame_is_full`,
+  `identical_tokens_are_unchanged`, `a_new_token_damages_that_boundary_in_physical_pixels`,
+  `a_moved_boundary_damages_old_and_new`, `removed_and_added_boundaries`,
+  `an_ancestor_opacity_change_damages_nested_boundaries`, `clip_bounds_the_region`,
+  `unbounded_picture_takes_the_clip`, `unstamped_root_is_full`, `root_id_change_is_full`,
+  `size_change_is_full`, `textures_and_overlays_are_damaged_every_frame`,
+  `a_pictures_texture_draw_is_damaged_every_frame`,
+  `a_paint_order_swap_of_overlapping_siblings_damages_their_overlap`,
+  `a_shader_mask_damages_its_whole_bounds`,
+  `a_shader_mask_under_a_clip_damages_its_unclipped_bounds`,
+  `damage_meeting_a_foreground_blur_takes_its_footprint`,
+  `a_shrunk_blurs_footprint_reaches_the_renderers_kernel`,
+  `layers_that_paint_transparent_pixels_damage_everything`,
+  `a_shadow_under_a_non_uniform_scale_damages_its_blur_on_both_axes`,
+  `a_leader_move_damages_its_follower`, `damage_meeting_a_backdrop_includes_the_backdrop`,
+  `damage_disjoint_from_a_backdrop_does_not_expand`, `damage_over_threshold_is_full`,
+  `off_retains_nothing_and_is_always_full`, `a_boundary_stamped_twice_is_full`),
+  `scene_snapshot.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`;
+  `flui-rendering`'s `tests/boundary_content_tokens.rs` (the token rule, and
+  `pipeline_frames_diff_to_the_changed_boundary_rect` end to end); `flui-painting`'s
+  `a_color_fill_makes_the_extent_unbounded`, `paragraph_extent_covers_every_rasterized_glyph`,
+  `stroke_and_shadow_extents_cover_their_outsets`,
+  `shadow_extent_spreads_by_the_largest_scale_on_both_axes`,
+  `fill_style_lines_and_points_reach_their_stroke_width`, `atlas_extent_covers_the_sprite_destination`; `flui-app`'s raster-lane tests
+  `a_changed_boundary_reaches_the_backend_as_a_dirty_rect`, `an_identical_scene_does_not_present`,
+  `damage_off_sends_every_frame_full_and_retains_nothing`, `the_damage_variable_selects_the_mode`.
+- §4: `flui-engine`'s `damage_readback_tests.rs`
+  (`a_moved_box_repaints_its_old_and_new_positions_only`,
+  `the_partial_clear_runs_before_content`, `an_invalid_target_promotes_to_full`,
+  `partial_equals_full_inside_damage`, `a_removed_shadow_leaves_no_penumbra`,
+  `a_removed_shadow_under_a_non_uniform_scale_leaves_no_penumbra`,
+  `removed_text_under_a_tight_line_height_leaves_no_ink`,
+  `an_updated_texture_repaints_under_an_unchanged_picture`,
+  `overlapping_boundaries_that_swap_order_repaint_the_overlap`,
+  `a_removed_atlas_sprite_leaves_nothing_at_its_destination`,
+  `removed_fill_style_lines_and_points_leave_nothing`,
+  `a_removed_translated_src_save_layer_leaves_nothing_behind`,
+  `a_removed_clear_shader_mask_leaves_nothing_behind`,
+  `a_removed_offscreen_effect_under_a_clip_leaves_nothing_behind`,
+  `a_change_beside_a_foreground_blur_matches_a_full_frame`,
+  `a_change_in_a_shrunk_blurs_halo_matches_a_full_frame`,
+  `a_removed_destination_affecting_layer_leaves_nothing_behind`,
+  `a_damage_edge_through_an_advanced_blend_matches_a_full_frame`,
+  `a_frame_outside_the_protocol_is_followed_by_a_full_one`), which drive the same
+  `FrameProtocol` the windowed renderer runs; `damage::tests::plan_frame_table`; and the
+  `raster_owner` tests `the_owner_applies_partial_damage_as_a_dirty_rect`,
+  `superseded_damage_folds_into_the_survivor`, `rejected_frame_damage_reaches_the_backend`,
+  `render_error_marks_full`. The windowed swapchain path runs only on a developer machine.
+- Benches: `flui-layer`'s `damage_diff`; `render_throughput`'s `damage_retained_target`,
+  collected with `cargo xtask bench-collect --with-features`.
+
+Still to do:
 
 - `wgpu` is absent from the normal closures of `flui-layer` and `flui-engine-cpu`, stated by
   tier R's set in the ADR-0081 reach gate (§2), which only `flui-engine`'s grant excuses.
@@ -182,11 +266,10 @@ None of these exist yet.
   check: it errors on an absent package.
 - The `flui-layer` conformance suite passes on both backends, including `BackdropFilter`,
   `ShaderMask` and `Follower`, or lists each as a named gap.
-- Differ unit tests: an unchanged boundary yields no damage; a changed boundary yields its
-  bounds; a moved boundary yields the union of old and new bounds; an unpaired subtree yields
-  `Full`.
-- A readback test whose sample points distinguish correct partial damage from broken damage:
-  move one boundary between frames and assert that its old position is cleared and pixels outside
-  the damage are untouched. Damage computed from the new bounds only must fail it.
-- A test that with damage switched off no subtree is retained and every frame sends `Full`.
-- `damage_scissor` rerun against the producer, recorded against today's baseline.
+- A per-app `AppConfig` off switch in place of `FLUI_DAMAGE`. A hot-reload plugin frame needs
+  no `forget()`: `Renderer::render_scene`, the path it renders through, makes the next frame
+  full.
+- A partial frame observed in a real window (`RUST_LOG=flui.gpu=trace` shows
+  `Damage scissor applied`), and a readback run on a second adapter and backend.
+- `damage_scissor` rerun on the machine that recorded ADR-0061's baseline, against a frame
+  whose damage the producer computed.

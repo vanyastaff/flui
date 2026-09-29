@@ -23,6 +23,8 @@ mod color_blend;
 mod color_property;
 #[path = "compile_fail.rs"]
 mod compile_fail;
+#[path = "damage_extent.rs"]
+mod damage_extent;
 #[path = "decoration_unit.rs"]
 mod decoration_unit;
 #[path = "recording.rs"]
@@ -86,6 +88,43 @@ fn recording_contract() {
             (
                 "a_finished_display_list_is_sendable_to_another_thread",
                 recording::a_finished_display_list_is_sendable_to_another_thread,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn damage_extent_contract() {
+    run_cases(
+        "damage_extent",
+        &[
+            (
+                "a_color_fill_makes_the_extent_unbounded",
+                damage_extent::a_color_fill_makes_the_extent_unbounded,
+            ),
+            (
+                "paragraph_extent_covers_every_rasterized_glyph",
+                damage_extent::paragraph_extent_covers_every_rasterized_glyph,
+            ),
+            (
+                "stroke_and_shadow_extents_cover_their_outsets",
+                damage_extent::stroke_and_shadow_extents_cover_their_outsets,
+            ),
+            (
+                "shadow_extent_spreads_by_the_largest_scale_on_both_axes",
+                damage_extent::shadow_extent_spreads_by_the_largest_scale_on_both_axes,
+            ),
+            (
+                "fill_style_lines_and_points_reach_their_stroke_width",
+                damage_extent::fill_style_lines_and_points_reach_their_stroke_width,
+            ),
+            (
+                "atlas_extent_covers_the_sprite_destination",
+                damage_extent::atlas_extent_covers_the_sprite_destination,
+            ),
+            (
+                "transparent_source_and_transparent_black_predicates",
+                damage_extent::transparent_source_and_transparent_black_predicates,
             ),
         ],
     );

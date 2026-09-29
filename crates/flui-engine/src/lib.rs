@@ -267,6 +267,9 @@ mod damage;
 mod effects;
 mod effects_pipeline;
 mod external_texture_registry;
+/// The frame protocol the windowed renderer and the headless retained
+/// capture share: damage, retained target, and the plan-to-GPU sequence.
+mod frame_protocol;
 /// Per-channel sRGB ↔ linear-light gamma transfer filter pass:
 /// [`gamma::apply_gamma`] applies a [`command_ir::LayerFilter::Gamma`] to a
 /// premultiplied layer offscreen (unpremul → transfer per RGB → clamp →
@@ -328,6 +331,7 @@ mod renderer;
 /// `submit` dispatch loop, and `flush_opacity_layer` recursion.
 pub(crate) mod replay;
 pub(crate) mod resources;
+mod retained_target;
 /// naga_oil shader composition helper: resolves `#import` directives
 /// in WGSL at pipeline-init time via [`shader_composer::compose_wgsl_shader`].
 /// Used by `mode/pipeline.rs` and `advanced_blend/pipeline.rs` to
@@ -398,6 +402,10 @@ mod clip_layer_readback_tests;
 // The engine paints the paragraph it is handed and shapes nothing (ADR-0065).
 #[cfg(test)]
 mod paragraph_readback_tests;
+// Partial frames through the retained target, read back; `cfg(test)` alone
+// like the suites above, self-skipping without an adapter.
+#[cfg(test)]
+mod damage_readback_tests;
 
 // The CPU model of the fixed-function blender that every readback suite
 // asserting an exact blended byte predicts against.

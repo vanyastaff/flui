@@ -107,7 +107,7 @@ count = 1
 [[allow]]
 path = "crates/flui-engine/src/renderer.rs"
 class = "pr-label"
-count = 2
+count = 1
 
 [[allow]]
 path = "crates/flui-engine/src/replay/mod.rs"
