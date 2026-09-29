@@ -92,7 +92,7 @@ impl DrawOp {
     /// Every pixel this op may change, in its own (pre-transform) coordinate
     /// space; `None` for an op that draws nothing.
     ///
-    /// Starts from [`Self::local_bounds`] and widens it wherever that box is
+    /// Starts from `local_bounds` and widens it wherever that box is
     /// the layout answer rather than the ink:
     ///
     /// - a stroke reaches a full stroke width past its geometry (a miter

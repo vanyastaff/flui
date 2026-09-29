@@ -13,7 +13,7 @@
 //! (Slint keeps up to three) is a change to the consumer, and the tracker
 //! grows with it.
 //!
-//! [`plan_frame`] turns the tracker's answer into where a frame renders.
+//! [`plan_frame`](crate::damage::plan_frame) turns the tracker's answer into where a frame renders.
 //! wgpu does not expose a swapchain image's age, so the pixels outside a
 //! scissor on a freshly acquired swapchain image are whatever an older frame
 //! left there; a partial frame therefore renders into a
