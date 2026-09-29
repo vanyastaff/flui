@@ -12,9 +12,9 @@
 //!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md
 //!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 
+use flui_foundation::geometry::Size;
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, traits::RenderObject};
-use flui_types::{Size, geometry::px};
 
 // ============================================================================
 // run_layout actually lays out via layout_dirty_root + root_constraints
@@ -43,12 +43,7 @@ fn run_layout_uses_root_constraints_to_drive_first_frame() {
 
     owner.set_root_id(Some(padding_id));
     // Bind root constraints: 0..200 × 0..200 loose.
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     // Transition to Layout phase and run.
     let mut owner = owner.into_layout();
@@ -63,7 +58,7 @@ fn run_layout_uses_root_constraints_to_drive_first_frame() {
         .expect("padding still in tree");
     assert_eq!(
         padding_node.geometry_box(),
-        Some(Size::new(px(50.0), px(50.0))),
+        Some(Size::new(50.0, 50.0)),
         "post-run_layout Padding(5) wrapping ColoredBox(40×40) must \
          have geometry 50×50 — verifies run_layout actually invokes \
          per-node layout via layout_dirty_root (before the rewrite this \
@@ -94,12 +89,7 @@ fn run_layout_uses_cached_constraints_on_frame_two() {
         .expect("colored child insert");
 
     owner.set_root_id(Some(padding_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(300.0),
-        px(0.0),
-        px(300.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 300.0, 0.0, 300.0)));
 
     // Frame 1.
     let mut owner = owner.into_layout();
@@ -108,7 +98,7 @@ fn run_layout_uses_cached_constraints_on_frame_two() {
         .render_tree()
         .get(padding_id)
         .and_then(flui_rendering::storage::RenderNode::geometry_box);
-    assert_eq!(frame_1_size, Some(Size::new(px(64.0), px(34.0))));
+    assert_eq!(frame_1_size, Some(Size::new(64.0, 34.0)));
 
     // Clear root_constraints to prove frame 2 doesn't depend on it.
     let mut owner = owner.into_idle();
@@ -176,7 +166,7 @@ fn root_constraints_setter_round_trip() {
     let mut owner = PipelineOwner::new();
     assert_eq!(owner.root_constraints(), None);
 
-    let c = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let c = BoxConstraints::tight(Size::new(100.0, 100.0));
     owner.set_root_constraints(Some(c));
     assert_eq!(owner.root_constraints(), Some(c));
 
@@ -204,7 +194,7 @@ fn set_root_constraints_auto_marks_root_dirty() {
     assert!(!owner.has_dirty_nodes());
 
     // Setting root_constraints to Some(_) auto-marks root dirty.
-    let c = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+    let c = BoxConstraints::tight(Size::new(100.0, 100.0));
     owner.set_root_constraints(Some(c));
     assert!(
         owner.has_dirty_nodes(),
@@ -251,12 +241,7 @@ fn run_layout_skips_already_cleaned_dirty_entries() {
         .expect("child insert");
 
     owner.set_root_id(Some(padding_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     let mut owner = owner.into_layout();
     // Pre-fix: both parent + child entries get layout_dirty_root invoked.
@@ -273,7 +258,7 @@ fn run_layout_skips_already_cleaned_dirty_entries() {
         .render_tree()
         .get(padding_id)
         .and_then(flui_rendering::storage::RenderNode::geometry_box);
-    assert_eq!(padding_geom, Some(Size::new(px(50.0), px(50.0))));
+    assert_eq!(padding_geom, Some(Size::new(50.0, 50.0)));
     // No way to count perform_layout invocations from integration test,
     // but the skip path is exercised (covered by lib-scoped test if
     // we wanted to assert the trace! event explicitly).

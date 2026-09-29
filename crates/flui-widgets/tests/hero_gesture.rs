@@ -43,7 +43,7 @@ fn hero_tag() -> HeroTag {
 
 /// A `PageRoute` whose page centres one `Hero` tagged `"shared"`, sized
 /// `width`x`height` so two pages never accidentally share a bounding rect.
-fn hero_page(opt_in: bool, width: f32, height: f32) -> PageRoute<i32> {
+fn hero_page(opt_in: bool, width: f64, height: f64) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _p, _s| {
         Center::new()
             .child(

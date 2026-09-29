@@ -51,7 +51,7 @@ impl DependencySource {
         }
         let mut required = vec!["flui-app", "flui-view", "flui-widgets"];
         if hot_reload {
-            required.extend(["flui-hot-reload", "flui-types"]);
+            required.push("flui-hot-reload");
         }
         for name in required {
             let member = format!("crates/{name}");

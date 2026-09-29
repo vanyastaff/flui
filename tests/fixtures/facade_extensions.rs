@@ -1,6 +1,5 @@
 #![cfg(test)]
 
-use flui::geometry::px;
 use flui::painting::{Canvas, CustomPainter, DrawOp, Paint};
 use flui::prelude::*;
 use flui::rendering::{
@@ -8,7 +7,7 @@ use flui::rendering::{
     RenderBox, RenderUpdateImpact, Single,
 };
 use flui::testing::widgets::{lay_out, loose};
-use flui::types::{Point, Rect, Size};
+use flui::geometry::{Point, Rect, Size};
 use flui::view::{RenderObjectContext, RenderView};
 use flui::widgets::AnimatedBuilder;
 use std::sync::{
@@ -48,7 +47,7 @@ impl CustomPainter for RectanglePainter {
 #[test]
 fn custom_painter_records_a_rectangle() {
     let mut canvas = Canvas::new();
-    RectanglePainter.paint(&mut canvas, Size::new(px(24.0), px(16.0)));
+    RectanglePainter.paint(&mut canvas, Size::new(24.0, 16.0));
     let recording = canvas.finish();
     assert_eq!(recording.commands().len(), 1);
     let DrawOp::Rect { rect, paint } = &recording.commands()[0].op else {
@@ -56,7 +55,7 @@ fn custom_painter_records_a_rectangle() {
     };
     assert_eq!(
         *rect,
-        Rect::from_origin_size(Point::ZERO, Size::new(px(24.0), px(16.0)))
+        Rect::from_origin_size(Point::ZERO, Size::new(24.0, 16.0))
     );
     assert_eq!(paint.color, Color::rgb(10, 20, 30));
 }
@@ -71,7 +70,7 @@ impl RenderBox for SolidLeaf {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        ctx.constrain(Size::new(px(24.0), px(16.0)))
+        ctx.constrain(Size::new(24.0, 16.0))
     }
 
     fn compute_dry_layout(
@@ -79,7 +78,7 @@ impl RenderBox for SolidLeaf {
         constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> Size {
-        constraints.constrain(Size::new(px(24.0), px(16.0)))
+        constraints.constrain(Size::new(24.0, 16.0))
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {
@@ -124,7 +123,7 @@ fn custom_render_view_mounts_lays_out_and_paints() {
         },
         loose(100.0),
     );
-    assert_eq!(tree.size(tree.root()), Size::new(px(24.0), px(16.0)));
+    assert_eq!(tree.size(tree.root()), Size::new(24.0, 16.0));
     assert_eq!(paints.load(Ordering::SeqCst), 1);
 }
 
@@ -157,8 +156,8 @@ fn proxy_macros_forward_live_and_dry_layout() {
     .with_constraints(loose(100.0))
     .run_layout();
     let root = run.root();
-    assert_eq!(run.box_geometry(root), Size::new(px(24.0), px(16.0)));
-    let forced = Size::new(px(37.0), px(19.0));
+    assert_eq!(run.box_geometry(root), Size::new(24.0, 16.0));
+    let forced = Size::new(37.0, 19.0);
     assert_eq!(run.dry_layout(root, BoxConstraints::tight(forced)), forced);
 }
 
@@ -167,7 +166,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     use flui::interaction::{
         GestureRecognizer, GestureSettings, LongPressGestureRecognizer, PointerId,
     };
-    use flui::types::Offset;
+    use flui::geometry::Offset;
     let mut binding = flui::testing::HeadlessBinding::new();
     let fired = Arc::new(AtomicUsize::new(0));
     let callback = fired.clone();
@@ -178,7 +177,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     .with_on_long_press_start(move |_details: flui::interaction::LongPressStartDetails| {
         callback.fetch_add(1, Ordering::SeqCst);
     });
-    let position = Offset::new(px(8.0), px(8.0));
+    let position = Offset::new(8.0, 8.0);
     recognizer.add_pointer(
         PointerId::new(1).expect("nonzero pointer"),
         position,
@@ -210,19 +209,19 @@ fn pointer_input_schedules_a_widget_rebuild() {
             })
             .behavior(HitTestBehavior::Opaque)
             .child(SizedBox::new(
-                40.0 + read.load(Ordering::SeqCst) as f32,
+                40.0 + read.load(Ordering::SeqCst) as f64,
                 30.0,
             ))
     });
     let mut tree = lay_out(view, loose(100.0));
     let initial_builds = builds.load(Ordering::SeqCst);
-    assert_eq!(tree.size(tree.root()).width, px(40.0));
+    assert_eq!(tree.size(tree.root()).width, 40.0);
     tree.dispatch_pointer_down(10.0, 10.0);
     tree.dispatch_pointer_up(10.0, 10.0);
     tree.tick();
     assert_eq!(value.load(Ordering::SeqCst), 1);
     assert!(builds.load(Ordering::SeqCst) > initial_builds);
-    assert_eq!(tree.size(tree.root()).width, px(41.0));
+    assert_eq!(tree.size(tree.root()).width, 41.0);
 }
 
 #[test]
@@ -246,7 +245,7 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
 #[derive(Clone, Debug)]
 struct DistanceRecognizer {
     base: flui::interaction::RecognizerBase,
-    threshold: f32,
+    threshold: f64,
     accepted: Arc<AtomicUsize>,
     rejected: Arc<AtomicUsize>,
 }
@@ -267,8 +266,8 @@ impl flui::interaction::GestureRecognizer for DistanceRecognizer {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: flui::interaction::PointerId,
-        position: flui::types::Offset,
-        global_position: flui::types::Offset,
+        position: flui::geometry::Offset,
+        global_position: flui::geometry::Offset,
     ) {
         self.base
             .start_tracking(pointer, position, global_position, self);
@@ -278,7 +277,7 @@ impl flui::interaction::GestureRecognizer for DistanceRecognizer {
         use flui::interaction::{PointerEvent, PointerEventExt};
         if let PointerEvent::Move(_) = dispatch.local {
             let origin = self.base.initial_position().expect("tracked pointer");
-            if (dispatch.local.position().dx - origin.dx).get() >= self.threshold {
+            if dispatch.local.position().dx - origin.dx >= self.threshold {
                 self.base.accept_tracked();
             }
         }
@@ -298,7 +297,7 @@ impl flui::interaction::GestureRecognizer for DistanceRecognizer {
 fn downstream_custom_recognizer_competes_in_the_arena() {
     use flui::interaction::{GestureArenaMember, GestureRecognizer, PointerId, RecognizerBase};
     use flui::testing::replay::{PointerPhase, ScriptedPointer};
-    use flui::types::Offset;
+    use flui::geometry::Offset;
     use flui::widgets::PointerDispatch;
 
     let binding = flui::testing::HeadlessBinding::new();
@@ -328,7 +327,7 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
             Duration::ZERO,
             pointer,
             PointerPhase::Move,
-            Offset::new(px(x), px(0.0)),
+            Offset::new(x, 0.0),
         )
         .to_event()
     };

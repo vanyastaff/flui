@@ -51,13 +51,13 @@ use flui_rendering::view::ScrollPosition;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollMetrics {
     /// Current scroll offset in logical pixels.
-    pub pixels: f32,
+    pub pixels: f64,
     /// The smallest in-range value for `pixels`.
-    pub min_scroll_extent: f32,
+    pub min_scroll_extent: f64,
     /// The largest in-range value for `pixels`.
-    pub max_scroll_extent: f32,
+    pub max_scroll_extent: f64,
     /// The viewport's length along the scroll axis.
-    pub viewport_dimension: f32,
+    pub viewport_dimension: f64,
 }
 
 impl ScrollMetrics {
@@ -74,10 +74,10 @@ impl ScrollMetrics {
     /// get `0.0` from every fixture that forgot to set it.
     #[must_use]
     pub fn new(
-        pixels: f32,
-        min_scroll_extent: f32,
-        max_scroll_extent: f32,
-        viewport_dimension: f32,
+        pixels: f64,
+        min_scroll_extent: f64,
+        max_scroll_extent: f64,
+        viewport_dimension: f64,
     ) -> Self {
         Self {
             pixels,
@@ -110,7 +110,7 @@ impl ScrollMetrics {
     /// `ScrollPosition::cached_page`, falling back to this formula only when
     /// the viewport isn't currently collapsed.
     #[must_use]
-    pub fn page(&self, viewport_fraction: f32) -> f32 {
+    pub fn page(&self, viewport_fraction: f64) -> f64 {
         let clamped = self
             .pixels
             .clamp(self.min_scroll_extent, self.max_scroll_extent);
@@ -128,7 +128,7 @@ impl ScrollMetrics {
     /// forward computation, not a division, so there is no zero-denominator
     /// hazard to guard against.
     #[must_use]
-    pub fn pixels_from_page(&self, viewport_fraction: f32, page: f32) -> f32 {
+    pub fn pixels_from_page(&self, viewport_fraction: f64, page: f64) -> f64 {
         page * self.viewport_dimension * viewport_fraction
     }
 }
@@ -179,7 +179,7 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     /// value)`: the sign difference is that Flutter returns the _rejected_
     /// overshoot; FLUI returns the _accepted_ position. The net visual result
     /// is identical.
-    fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f32) -> f32;
+    fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64;
 
     /// Create a `Simulation` that coasts the viewport to rest after the user
     /// lifts their finger.
@@ -200,7 +200,7 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     fn create_ballistic_simulation(
         &self,
         metrics: &ScrollMetrics,
-        velocity_px_per_sec: f32,
+        velocity_px_per_sec: f64,
     ) -> Option<Box<dyn Simulation>>;
 }
 
@@ -228,11 +228,11 @@ pub struct ClampingScrollPhysics {
     /// Flutter default is ~50 px/s; 0 px/s disables the threshold (always
     /// fling). Kept as a field rather than a constant so callers can tune it
     /// without a full custom implementation.
-    pub min_fling_velocity_px_per_sec: f32,
+    pub min_fling_velocity_px_per_sec: f64,
     /// Friction drag coefficient for the fling deceleration. Must be in `(0,
     /// 1)`. Flutter uses a value corresponding to approximately `0.135` in
     /// `BoundedFrictionSimulation`.
-    pub fling_drag_coefficient: f32,
+    pub fling_drag_coefficient: f64,
 }
 
 impl ClampingScrollPhysics {
@@ -257,14 +257,14 @@ impl Default for ClampingScrollPhysics {
 }
 
 impl ScrollPhysics for ClampingScrollPhysics {
-    fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f32) -> f32 {
+    fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
         proposed_pixels.clamp(metrics.min_scroll_extent, metrics.max_scroll_extent)
     }
 
     fn create_ballistic_simulation(
         &self,
         metrics: &ScrollMetrics,
-        velocity_px_per_sec: f32,
+        velocity_px_per_sec: f64,
     ) -> Option<Box<dyn Simulation>> {
         // Skip fling below the configured threshold.
         if velocity_px_per_sec.abs() < self.min_fling_velocity_px_per_sec {
@@ -305,7 +305,7 @@ impl ScrollPhysics for ClampingScrollPhysics {
 pub struct BouncingScrollPhysics {
     /// Resistance applied when dragging past the edge. Flutter hard-codes
     /// 0.52 in `applyPhysicsToUserOffset`. Range `(0, 1)`: smaller = stiffer.
-    pub overscroll_spring_coefficient: f32,
+    pub overscroll_spring_coefficient: f64,
     /// Spring configuration used for the snap-back animation.
     ///
     /// Flutter's `ScrollSpringSimulation` uses
@@ -314,9 +314,9 @@ pub struct BouncingScrollPhysics {
     pub spring: SpringDescription,
     /// Below this absolute velocity (px/s) no fling is started. Flutter's
     /// bouncing physics also skips a fling for low velocities.
-    pub min_fling_velocity_px_per_sec: f32,
+    pub min_fling_velocity_px_per_sec: f64,
     /// Friction drag coefficient for in-bounds fling deceleration.
-    pub fling_drag_coefficient: f32,
+    pub fling_drag_coefficient: f64,
 }
 
 impl BouncingScrollPhysics {
@@ -339,7 +339,7 @@ impl Default for BouncingScrollPhysics {
 }
 
 impl ScrollPhysics for BouncingScrollPhysics {
-    fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f32) -> f32 {
+    fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
         if proposed_pixels < metrics.min_scroll_extent {
             // Allow overscroll past the top/left, but dampen it.
             let overscroll = proposed_pixels - metrics.min_scroll_extent;
@@ -356,7 +356,7 @@ impl ScrollPhysics for BouncingScrollPhysics {
     fn create_ballistic_simulation(
         &self,
         metrics: &ScrollMetrics,
-        velocity_px_per_sec: f32,
+        velocity_px_per_sec: f64,
     ) -> Option<Box<dyn Simulation>> {
         // If the position is past an edge, spring back regardless of velocity.
         if metrics.pixels < metrics.min_scroll_extent {
@@ -403,7 +403,7 @@ mod tests {
     /// Builds a `ScrollMetrics` with the given `pixels`/`min`/`max`, passing
     /// `viewport_dimension: 0.0` explicitly — unused by the boundary/
     /// ballistic math under test here.
-    fn metrics(pixels: f32, min_scroll_extent: f32, max_scroll_extent: f32) -> ScrollMetrics {
+    fn metrics(pixels: f64, min_scroll_extent: f64, max_scroll_extent: f64) -> ScrollMetrics {
         ScrollMetrics::new(pixels, min_scroll_extent, max_scroll_extent, 0.0)
     }
 
@@ -465,7 +465,7 @@ mod tests {
             allowed > -100.0 && allowed < 0.0,
             "overscroll past min should be partially allowed with damping, got {allowed}"
         );
-        let expected = -100.0_f32 * 0.52;
+        let expected = -100.0_f64 * 0.52;
         assert!(
             (allowed - expected).abs() < 0.001,
             "bouncing resistance at -100 should be {expected}, got {allowed}"
@@ -478,7 +478,7 @@ mod tests {
         // Propose 80 px past the bottom (max = 400).
         let allowed = physics.apply_boundary_conditions(&metrics(0.0, 0.0, 400.0), 480.0);
         // Resistance: 80 * 0.52 = 41.6 → allowed = 400 + 41.6 = 441.6.
-        let expected = 400.0 + 80.0_f32 * 0.52;
+        let expected = 400.0 + 80.0_f64 * 0.52;
         assert!(
             (allowed - expected).abs() < 0.001,
             "bouncing resistance at 480 (max=400) should be {expected}, got {allowed}"
@@ -553,7 +553,7 @@ mod tests {
         let mut writer_position = position.clone();
         let writer_stop = Arc::clone(&stop);
         let writer = std::thread::spawn(move || {
-            let mut min = 0.0_f32;
+            let mut min = 0.0_f64;
             while !writer_stop.load(Ordering::Relaxed) {
                 writer_position.apply_content_dimensions(min, min + 100.0);
                 min += 1.0;

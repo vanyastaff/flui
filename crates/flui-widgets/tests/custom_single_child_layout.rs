@@ -5,8 +5,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::{lay_out, loose, offset, size};
+use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::constraints::BoxConstraints;
-use flui_types::{Offset, Size};
 use flui_widgets::{CustomSingleChildLayout, SingleChildLayoutDelegate, SizedBox};
 
 #[derive(Debug)]

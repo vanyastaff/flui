@@ -45,8 +45,8 @@ mod text;
 // --- flat re-exports (layout) ---
 pub use layout::{
     AnimatedSizeState, CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize,
-    OverflowBoxFit, PositionedSpec, StackFit, TranslationFraction, WrapAlignment,
-    WrapCrossAlignment,
+    OverflowBoxFit, PositionedSpec, StackFit, TableColumnWidth, TranslationFraction,
+    VerticalDirection, WrapAlignment, WrapCrossAlignment,
 };
 pub use layout::{
     AspectRatioFactor, BuildDuringLayoutCell, FractionFactor, HeaderShrink, HeaderShrinkCell,

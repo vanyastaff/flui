@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use flui_foundation::Single;
-use flui_types::{Offset, Pixels, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::{BoxConstraints, Constraints},
@@ -29,7 +29,7 @@ pub struct RenderCustomSingleChildLayoutBox {
     delegate: Arc<dyn SingleChildLayoutDelegate>,
     has_child: bool,
     child_offset: Offset,
-    child_baselines: [Option<f32>; 2],
+    child_baselines: [Option<f64>; 2],
 }
 
 impl RenderCustomSingleChildLayoutBox {
@@ -87,28 +87,18 @@ impl RenderCustomSingleChildLayoutBox {
         }
     }
 
-    fn intrinsic_width(&self, height: f32) -> f32 {
+    fn intrinsic_width(&self, height: f64) -> f64 {
         let width = self
-            .get_size(BoxConstraints::tight_for_finite(
-                Pixels::INFINITY,
-                Pixels::new(height),
-            ))
+            .get_size(BoxConstraints::tight_for_finite(f64::INFINITY, height))
             .width;
-        if width.is_finite() { width.get() } else { 0.0 }
+        if width.is_finite() { width } else { 0.0 }
     }
 
-    fn intrinsic_height(&self, width: f32) -> f32 {
+    fn intrinsic_height(&self, width: f64) -> f64 {
         let height = self
-            .get_size(BoxConstraints::tight_for_finite(
-                Pixels::new(width),
-                Pixels::INFINITY,
-            ))
+            .get_size(BoxConstraints::tight_for_finite(width, f64::INFINITY))
             .height;
-        if height.is_finite() {
-            height.get()
-        } else {
-            0.0
-        }
+        if height.is_finite() { height } else { 0.0 }
     }
 
     fn clear_child_state(&mut self) {
@@ -157,27 +147,27 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
         size
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         let index = match baseline {
             TextBaseline::Alphabetic => 0,
             TextBaseline::Ideographic => 1,
         };
-        self.child_baselines[index].map(|raw| raw + self.child_offset.dy.get())
+        self.child_baselines[index].map(|raw| raw + self.child_offset.dy)
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_width(height)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_width(height)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_height(width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.intrinsic_height(width)
     }
 
@@ -194,7 +184,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -207,7 +197,7 @@ impl RenderBox for RenderCustomSingleChildLayoutBox {
         };
         let size = self.get_size(constraints);
         let child_offset = self.delegate.get_position_for_child(size, child_size);
-        Some(child_baseline + child_offset.dy.get())
+        Some(child_baseline + child_offset.dy)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

@@ -60,7 +60,6 @@ use std::sync::Arc;
 
 use flui_foundation::Variable;
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-use flui_types::geometry::px;
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, grid_child_paint_offset},
@@ -118,11 +117,11 @@ enum CacheWindow {
     /// `NaN` or `+∞` leading edge — empty retain band.
     PoisonLeading,
     /// Finite leading and trailing edges.
-    Bounded { cache_start: f32, cache_end: f32 },
+    Bounded { cache_start: f64, cache_end: f64 },
     /// Finite leading, intentional `+∞` trailing (shrink-wrap / unbounded).
-    UnboundedTrailing { cache_start: f32 },
+    UnboundedTrailing { cache_start: f64 },
     /// Finite leading, but `NaN` / `−∞` trailing — not an unbounded window.
-    PoisonTrailing { cache_start: f32 },
+    PoisonTrailing { cache_start: f64 },
 }
 
 /// Classify the cache-extended window without converting floats to indices.
@@ -360,7 +359,7 @@ impl RenderSliver for RenderSliverGrid {
             CacheWindow::UnboundedTrailing { cache_start } => {
                 // An infinite window end means "no upper bound" and must not
                 // reach the delegate: it divides infinity by the stride,
-                // saturates the `f32 as usize` cast at `usize::MAX`, and
+                // saturates the `f64 as usize` cast at `usize::MAX`, and
                 // overflows the index product. The oracle expresses the same
                 // thing by not asking at all —
                 // `sliver_grid.dart:608-610` passes a null `targetLastIndex` —
@@ -534,9 +533,9 @@ impl RenderSliver for RenderSliverGrid {
                     grid_child_paint_offset(
                         &constraints,
                         &geometry,
-                        px(tile_scroll_offset),
-                        px(tile_layout.child_main_axis_extent),
-                        px(tile_cross_offset),
+                        tile_scroll_offset,
+                        tile_layout.child_main_axis_extent,
+                        tile_cross_offset,
                     ),
                 );
 
@@ -580,10 +579,10 @@ impl RenderSliver for RenderSliverGrid {
 mod tests {
     use std::any::Any;
 
+    use flui_rendering::constraints::AxisDirection;
     use flui_rendering::constraints::{GrowthDirection, SliverConstraints};
     use flui_rendering::delegates::{SliverGridDelegateWithFixedCrossAxisCount, SliverGridLayout};
     use flui_rendering::view::ScrollDirection;
-    use flui_types::layout::AxisDirection;
 
     use super::*;
 
@@ -626,9 +625,9 @@ mod tests {
     }
 
     fn vertical_constraints(
-        scroll_offset: f32,
-        viewport_height: f32,
-        cross_axis_extent: f32,
+        scroll_offset: f64,
+        viewport_height: f64,
+        cross_axis_extent: f64,
     ) -> SliverConstraints {
         SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -825,9 +824,9 @@ mod tests {
     // ── Non-finite scroll-window classification ───────────────────────────────
 
     fn window_constraints(
-        scroll_offset: f32,
-        cache_origin: f32,
-        remaining_cache_extent: f32,
+        scroll_offset: f64,
+        cache_origin: f64,
+        remaining_cache_extent: f64,
     ) -> SliverConstraints {
         SliverConstraints {
             scroll_offset,
@@ -845,10 +844,10 @@ mod tests {
     #[test]
     fn classify_rejects_poison_leading_edges() {
         for (scroll_offset, cache_origin) in [
-            (f32::INFINITY, 0.0),
-            (f32::NAN, 0.0),
-            (0.0, f32::NAN),
-            (f32::NEG_INFINITY, f32::INFINITY), // sum is NaN
+            (f64::INFINITY, 0.0),
+            (f64::NAN, 0.0),
+            (0.0, f64::NAN),
+            (f64::NEG_INFINITY, f64::INFINITY), // sum is NaN
         ] {
             assert_eq!(
                 classify_cache_window(&window_constraints(scroll_offset, cache_origin, 250.0)),
@@ -862,7 +861,7 @@ mod tests {
     #[test]
     fn classify_clamps_negative_infinite_leading_edge_to_origin() {
         assert_eq!(
-            classify_cache_window(&window_constraints(f32::NEG_INFINITY, 0.0, 250.0)),
+            classify_cache_window(&window_constraints(f64::NEG_INFINITY, 0.0, 250.0)),
             CacheWindow::Bounded {
                 cache_start: 0.0,
                 cache_end: 250.0,
@@ -873,7 +872,7 @@ mod tests {
     /// `NaN` / `−∞` trailing edges are not the shrink-wrap unbounded contract.
     #[test]
     fn classify_rejects_poison_trailing_edges() {
-        for remaining_cache_extent in [f32::NAN, f32::NEG_INFINITY] {
+        for remaining_cache_extent in [f64::NAN, f64::NEG_INFINITY] {
             assert_eq!(
                 classify_cache_window(&window_constraints(0.0, 0.0, remaining_cache_extent)),
                 CacheWindow::PoisonTrailing { cache_start: 0.0 },
@@ -886,7 +885,7 @@ mod tests {
     #[test]
     fn classify_keeps_positive_infinite_trailing_as_unbounded() {
         assert_eq!(
-            classify_cache_window(&window_constraints(0.0, 0.0, f32::INFINITY)),
+            classify_cache_window(&window_constraints(0.0, 0.0, f64::INFINITY)),
             CacheWindow::UnboundedTrailing { cache_start: 0.0 }
         );
     }

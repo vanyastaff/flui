@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use flui_assets::AssetRegistry;
-use flui_types::painting::Image as PixelImage;
+use flui_painting::paint::Image as PixelImage;
 
 use super::cache_key::ImageCacheKey;
 use super::decode_cache;

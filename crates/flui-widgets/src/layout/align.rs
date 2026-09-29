@@ -2,8 +2,8 @@
 //! multiple of the child's size.
 
 use flui_objects::RenderAlign;
+use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Alignment;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Aligns its child within itself.
@@ -16,8 +16,8 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 #[derive(Clone, Debug)]
 pub struct Align {
     alignment: Alignment,
-    width_factor: Option<f32>,
-    height_factor: Option<f32>,
+    width_factor: Option<f64>,
+    height_factor: Option<f64>,
     child: Child,
 }
 
@@ -34,14 +34,14 @@ impl Align {
 
     /// Size this box to `factor` × the child's width (must be `>= 0`).
     #[must_use]
-    pub fn width_factor(mut self, factor: f32) -> Self {
+    pub fn width_factor(mut self, factor: f64) -> Self {
         self.width_factor = Some(factor);
         self
     }
 
     /// Size this box to `factor` × the child's height (must be `>= 0`).
     #[must_use]
-    pub fn height_factor(mut self, factor: f32) -> Self {
+    pub fn height_factor(mut self, factor: f64) -> Self {
         self.height_factor = Some(factor);
         self
     }

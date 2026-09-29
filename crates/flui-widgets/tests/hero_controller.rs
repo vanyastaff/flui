@@ -31,10 +31,7 @@ use crate::common::harness::{Harness, PostFrameCapability, mount, mount_with_cap
 
 /// `Harness::mount` roots the tree at tight 800x600, and a `ModalRoute`'s page fills
 /// its `Stack(fit: expand)` — so a route's subtree measures the screen.
-const SCREEN: flui_types::Size = flui_types::Size::new(
-    flui_types::geometry::px(800.0),
-    flui_types::geometry::px(600.0),
-);
+const SCREEN: flui_foundation::geometry::Size = flui_foundation::geometry::Size::new(800.0, 600.0);
 
 const TRANSITION: Duration = Duration::from_millis(300);
 
@@ -596,7 +593,7 @@ fn dead_local_lane_never_strands_the_destination_offstage() {
 /// `Center` because a `ModalRoute`'s page fills the screen under `Stack(fit: expand)`;
 /// without it every hero would measure 800x600 and the two rects would be
 /// indistinguishable.
-fn hero_page_route(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> {
+fn hero_page_route(tag_name: &'static str, w: f64, h: f64) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
         Center::new()
             .child(Hero::new(ValueKey::new(tag_name), SizedBox::new(w, h)))
@@ -649,12 +646,12 @@ fn controller_collects_matching_tags_and_records_one_manifest() {
     assert_eq!(manifest.direction, Some(FlightDirection::Push));
 
     assert_eq!(
-        (manifest.from_rect.width().0, manifest.from_rect.height().0),
+        (manifest.from_rect.width(), manifest.from_rect.height()),
         (30.0, 20.0),
         "the source hero, in the source route's space"
     );
     assert_eq!(
-        (manifest.to_rect.width().0, manifest.to_rect.height().0),
+        (manifest.to_rect.width(), manifest.to_rect.height()),
         (60.0, 45.0),
         "the destination hero, in the destination route's space"
     );
@@ -662,8 +659,8 @@ fn controller_collects_matching_tags_and_records_one_manifest() {
 
     // Both heroes are centred in their own 800x600 route, so neither sits at the
     // origin — which is what a swapped `transform_to` would produce.
-    assert!(manifest.from_rect.min.x.0 > 0.0 && manifest.from_rect.min.y.0 > 0.0);
-    assert!(manifest.to_rect.min.x.0 > 0.0 && manifest.to_rect.min.y.0 > 0.0);
+    assert!(manifest.from_rect.min.x > 0.0 && manifest.from_rect.min.y > 0.0);
+    assert!(manifest.to_rect.min.x > 0.0 && manifest.to_rect.min.y > 0.0);
 }
 
 /// `HeroController.didChangeTop`'s own guard (`heroes.dart:861`): "Don't

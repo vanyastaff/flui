@@ -47,11 +47,11 @@
 //! - **`shadowColor`/`surfaceTintColor` overrides** — not exposed as builder
 //!   methods, because [`Material`] has nowhere to put them yet.
 
-use flui_sdk::types::Color;
-use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::geometry::{Radius, px};
-use flui_sdk::types::painting::Clip;
-use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::geometry::Radius;
+use flui_sdk::painting::BorderRadius;
+use flui_sdk::painting::Clip;
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::Padding;
 
@@ -61,11 +61,11 @@ use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
 /// `_CardDefaultsM3`'s corner radius (`card.dart`, oracle tag `3.44.0`).
-const DEFAULT_CORNER_RADIUS: f32 = 12.0;
+const DEFAULT_CORNER_RADIUS: f64 = 12.0;
 /// `_CardDefaultsM3`'s elevation (`card.dart`, oracle tag `3.44.0`).
-const DEFAULT_ELEVATION: f32 = 1.0;
+const DEFAULT_ELEVATION: f64 = 1.0;
 /// `_CardDefaultsM3`'s margin (`card.dart`, oracle tag `3.44.0`).
-const DEFAULT_MARGIN: f32 = 4.0;
+const DEFAULT_MARGIN: f64 = 4.0;
 
 /// A Material Design elevated card — a panel with rounded corners and an
 /// elevation shadow, wrapped in a fixed outer margin.
@@ -82,7 +82,7 @@ const DEFAULT_MARGIN: f32 = 4.0;
 #[derive(Clone, StatelessView)]
 pub struct Card {
     color: Option<Color>,
-    elevation: Option<f32>,
+    elevation: Option<f64>,
     shape: Option<MaterialShape>,
     clip_behavior: Option<Clip>,
     margin: Option<EdgeInsets>,
@@ -125,7 +125,7 @@ impl Card {
     /// Overrides the card's elevation. Must be non-negative (the same
     /// contract [`Material::elevation`] enforces on its render object).
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = Some(elevation);
         self
     }
@@ -161,7 +161,7 @@ impl Card {
 /// widget tree.
 struct ResolvedCardStyle {
     color: Color,
-    elevation: f32,
+    elevation: f64,
     shape: MaterialShape,
     margin: EdgeInsets,
 }
@@ -175,7 +175,7 @@ struct ResolvedCardStyle {
 fn resolve_style(
     theme: &ThemeData,
     color: Option<Color>,
-    elevation: Option<f32>,
+    elevation: Option<f64>,
     shape: Option<MaterialShape>,
     margin: Option<EdgeInsets>,
 ) -> ResolvedCardStyle {
@@ -190,13 +190,11 @@ fn resolve_style(
     let shape = shape
         .or_else(|| card_theme.and_then(|t| t.shape))
         .unwrap_or_else(|| {
-            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(
-                DEFAULT_CORNER_RADIUS,
-            ))))
+            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(DEFAULT_CORNER_RADIUS)))
         });
     let margin = margin
         .or_else(|| card_theme.and_then(|t| t.margin))
-        .unwrap_or_else(|| EdgeInsets::all(px(DEFAULT_MARGIN)));
+        .unwrap_or_else(|| EdgeInsets::all(DEFAULT_MARGIN));
 
     ResolvedCardStyle {
         color,
@@ -247,13 +245,13 @@ mod tests {
             .elevation(9.0)
             .shape(MaterialShape::Stadium)
             .clip_behavior(Clip::AntiAlias)
-            .margin(EdgeInsets::all(px(10.0)));
+            .margin(EdgeInsets::all(10.0));
 
         assert_eq!(card.color, Some(Color::rgb(1, 2, 3)));
         assert_eq!(card.elevation, Some(9.0));
         assert_eq!(card.shape, Some(MaterialShape::Stadium));
         assert_eq!(card.clip_behavior, Some(Clip::AntiAlias));
-        assert_eq!(card.margin, Some(EdgeInsets::all(px(10.0))));
+        assert_eq!(card.margin, Some(EdgeInsets::all(10.0)));
     }
 
     /// `_CardDefaultsM3`'s shape: `RoundedRectangleBorder(borderRadius:
@@ -286,11 +284,9 @@ mod tests {
         // through to its own M3 default independently.
         assert_eq!(
             resolved.shape,
-            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(px(
-                DEFAULT_CORNER_RADIUS
-            ))))
+            MaterialShape::RoundedRect(BorderRadius::all(Radius::circular(DEFAULT_CORNER_RADIUS)))
         );
-        assert_eq!(resolved.margin, EdgeInsets::all(px(DEFAULT_MARGIN)));
+        assert_eq!(resolved.margin, EdgeInsets::all(DEFAULT_MARGIN));
     }
 
     #[test]

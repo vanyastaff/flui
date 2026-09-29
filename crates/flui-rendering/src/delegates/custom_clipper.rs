@@ -6,7 +6,7 @@
 
 use std::{any::Any, fmt::Debug};
 
-use flui_types::{Point, Rect, Size};
+use flui_foundation::geometry::{Point, Rect, Size};
 
 /// A delegate that defines a custom clipping shape.
 ///
@@ -19,11 +19,11 @@ use flui_types::{Point, Rect, Size};
 ///
 /// ```ignore
 /// use flui_rendering::delegates::CustomClipper;
-/// use flui_types::{Rect, Size};
+/// use flui_foundation::geometry::{Rect, Size};
 ///
 /// #[derive(Debug)]
 /// struct InsetClipper {
-///     inset: f32,
+///     inset: f64,
 /// }
 ///
 /// impl CustomClipper<Rect> for InsetClipper {
@@ -110,22 +110,21 @@ impl CustomClipper<Rect> for RectClipper {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
     #[derive(Debug)]
     struct InsetClipper {
-        inset: f32,
+        inset: f64,
     }
 
     impl CustomClipper<Rect> for InsetClipper {
         fn get_clip(&self, size: Size) -> Rect {
             Rect::from_ltrb(
-                px(self.inset),
-                px(self.inset),
-                size.width - px(self.inset),
-                size.height - px(self.inset),
+                self.inset,
+                self.inset,
+                size.width - self.inset,
+                size.height - self.inset,
             )
         }
 
@@ -145,25 +144,25 @@ mod tests {
     #[test]
     fn test_rect_clipper() {
         let clipper = RectClipper;
-        let size = Size::new(px(100.0), px(200.0));
+        let size = Size::new(100.0, 200.0);
         let clip = clipper.get_clip(size);
 
-        assert_eq!(clip.left(), px(0.0));
-        assert_eq!(clip.top(), px(0.0));
-        assert_eq!(clip.right(), px(100.0));
-        assert_eq!(clip.bottom(), px(200.0));
+        assert_eq!(clip.left(), 0.0);
+        assert_eq!(clip.top(), 0.0);
+        assert_eq!(clip.right(), 100.0);
+        assert_eq!(clip.bottom(), 200.0);
     }
 
     #[test]
     fn test_inset_clipper() {
         let clipper = InsetClipper { inset: 10.0 };
-        let size = Size::new(px(100.0), px(200.0));
+        let size = Size::new(100.0, 200.0);
         let clip = clipper.get_clip(size);
 
-        assert_eq!(clip.left(), px(10.0));
-        assert_eq!(clip.top(), px(10.0));
-        assert_eq!(clip.right(), px(90.0));
-        assert_eq!(clip.bottom(), px(190.0));
+        assert_eq!(clip.left(), 10.0);
+        assert_eq!(clip.top(), 10.0);
+        assert_eq!(clip.right(), 90.0);
+        assert_eq!(clip.bottom(), 190.0);
     }
 
     #[test]

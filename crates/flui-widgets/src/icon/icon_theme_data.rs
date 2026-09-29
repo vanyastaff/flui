@@ -5,8 +5,8 @@
 
 use std::fmt;
 
-use flui_types::Color;
-use flui_types::typography::TextShadow;
+use flui_painting::styling::Color;
+use flui_painting::typography::TextShadow;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 
@@ -24,7 +24,7 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 pub struct IconThemeData {
     /// Icon side length in logical pixels (icons are square: this sizes both
     /// width and height).
-    pub size: Option<f32>,
+    pub size: Option<f64>,
 
     /// Icon color, before `opacity` is applied.
     pub color: Option<Color>,
@@ -35,7 +35,7 @@ pub struct IconThemeData {
     /// **Deferred:** [`Icon`](crate::Icon)'s `build` does not yet fold this
     /// into the resolved color; the field is carried for forward
     /// compatibility with that follow-up.
-    pub opacity: Option<f32>,
+    pub opacity: Option<f64>,
 
     /// `FILL` font-variation axis (`0.0` unfilled .. `1.0` filled). No effect
     /// if the icon font doesn't expose the axis.

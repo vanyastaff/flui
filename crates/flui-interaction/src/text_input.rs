@@ -46,10 +46,10 @@ use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
+use flui_foundation::geometry::Bounds;
+use flui_platform_api::ImeEvent;
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::text_store::{CommitGate, TextStore, project_ime_event};
-use flui_types::ImeEvent;
-use flui_types::geometry::{Bounds, Pixels};
 
 /// Identity returned by [`TextInputHandle::attach`].
 ///
@@ -264,7 +264,7 @@ impl TextInputOwner {
         }
     }
 
-    fn set_cursor_area(&self, area: Bounds<Pixels>) -> Result<(), TextInputError> {
+    fn set_cursor_area(&self, area: Bounds<f64>) -> Result<(), TextInputError> {
         self.ensure_open()?;
         let platform = self.platform.as_ref().ok_or(TextInputError::Unsupported)?;
         platform.set_ime_cursor_area(area);
@@ -469,7 +469,7 @@ impl TextInputHandle {
     }
 
     /// Update the platform IME candidate/composition area.
-    pub fn set_cursor_area(&self, area: Bounds<Pixels>) -> Result<(), TextInputError> {
+    pub fn set_cursor_area(&self, area: Bounds<f64>) -> Result<(), TextInputError> {
         self.owner()?.set_cursor_area(area)
     }
 }
@@ -486,11 +486,11 @@ impl std::fmt::Debug for TextInputHandle {
 mod tests {
     use std::cell::RefCell;
 
+    use flui_foundation::geometry::{Point, Size};
     use flui_platform_api::text_store::{
         InMemoryTextStore, LockGrant, LockTiming, Selection, TextStoreError, TextStoreStatus,
         Utf16Offset,
     };
-    use flui_types::geometry::{Point, Size, px};
     use parking_lot::Mutex;
 
     use super::*;
@@ -501,7 +501,7 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     enum PlatformCall {
         Allowed(bool),
-        CursorArea(Bounds<Pixels>),
+        CursorArea(Bounds<f64>),
     }
 
     #[derive(Default)]
@@ -520,7 +520,7 @@ mod tests {
             self.calls.lock().push(PlatformCall::Allowed(allowed));
         }
 
-        fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+        fn set_ime_cursor_area(&self, area: Bounds<f64>) {
             self.calls.lock().push(PlatformCall::CursorArea(area));
         }
     }
@@ -734,10 +734,7 @@ mod tests {
     #[test]
     fn cursor_area_targets_the_owned_platform_capability() {
         let (owner, platform) = owner_with_recorder();
-        let area = Bounds::new(
-            Point::new(px(10.0), px(20.0)),
-            Size::new(px(30.0), px(40.0)),
-        );
+        let area = Bounds::new(Point::new(10.0, 20.0), Size::new(30.0, 40.0));
 
         owner
             .handle()

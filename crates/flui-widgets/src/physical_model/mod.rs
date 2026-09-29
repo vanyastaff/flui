@@ -1,7 +1,7 @@
 //! Physical-layer widgets — a clipped, shadow-casting, filled surface around
 //! a single child, over `flui-objects`' `RenderPhysicalModelBase<C>` family.
 //! Layout is a pass-through; only painting is affected. [`PhysicalModel`]
-//! clips to a [`flui_types::layout::BoxShape`] (optionally rounded);
+//! clips to a [`flui_painting::BoxShape`] (optionally rounded);
 //! [`PhysicalShape`] clips to an arbitrary user-supplied `Path`.
 
 mod physical_model;

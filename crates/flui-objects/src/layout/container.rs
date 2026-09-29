@@ -46,10 +46,11 @@
 //! See `crates/flui-widgets/ARCHITECTURE.md` mapping decision 15.
 
 use flui_foundation::Single;
+use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
+use flui_painting::Alignment;
+use flui_painting::styling::BoxDecoration;
+use flui_painting::styling::Color;
 use flui_painting::{DecorationPaintOptions, Paint, box_decoration_hit_test, paint_box_decoration};
-use flui_types::geometry::px;
-use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color, EdgeInsets, Matrix4, Offset, Pixels, Point, Rect, Size};
 
 use flui_rendering::{
     RenderUpdateImpact,
@@ -91,7 +92,7 @@ pub struct RenderContainer {
     padding: Option<EdgeInsets>,
     margin: EdgeInsets,
     color: Option<Color>,
-    decoration: Option<BoxDecoration<Pixels>>,
+    decoration: Option<BoxDecoration<f64>>,
     additional_constraints: Option<BoxConstraints>,
     transform: Option<Matrix4>,
 
@@ -110,7 +111,7 @@ pub struct RenderContainer {
     content_size: Size,
     /// Child baselines captured during layout, indexed by [`TextBaseline`]
     /// (0 = alphabetic, 1 = ideographic).
-    child_baselines: [Option<f32>; 2],
+    child_baselines: [Option<f64>; 2],
 }
 
 impl RenderContainer {
@@ -148,7 +149,7 @@ impl RenderContainer {
     }
 
     /// Returns the decoration, if any.
-    pub fn decoration(&self) -> Option<&BoxDecoration<Pixels>> {
+    pub fn decoration(&self) -> Option<&BoxDecoration<f64>> {
         self.decoration.as_ref()
     }
 
@@ -228,10 +229,7 @@ impl RenderContainer {
     }
 
     /// Sets the decoration painted behind the child.
-    pub fn set_decoration(
-        &mut self,
-        decoration: Option<BoxDecoration<Pixels>>,
-    ) -> RenderUpdateImpact {
+    pub fn set_decoration(&mut self, decoration: Option<BoxDecoration<f64>>) -> RenderUpdateImpact {
         if self.decoration == decoration {
             return RenderUpdateImpact::NONE;
         }
@@ -243,7 +241,7 @@ impl RenderContainer {
     /// ones.
     ///
     /// Rounds through [`BoxConstraints::round_for_cache`] the same way
-    /// [`crate::RenderConstrainedBox`] does, so user-supplied `f32` width/
+    /// [`crate::RenderConstrainedBox`] does, so user-supplied `f64` width/
     /// height do not thrash the layout cache.
     pub fn set_additional_constraints(
         &mut self,
@@ -327,7 +325,7 @@ impl RenderContainer {
 
     /// Builder form of [`set_decoration`](Self::set_decoration).
     #[must_use]
-    pub fn with_decoration(mut self, decoration: BoxDecoration<Pixels>) -> Self {
+    pub fn with_decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
         let _ = self.set_decoration(Some(decoration));
         self
     }
@@ -442,7 +440,7 @@ impl RenderContainer {
     fn paint_translation(&self) -> Offset {
         self.transform
             .and_then(|matrix| matrix.as_translation())
-            .map_or(Offset::ZERO, |(dx, dy)| Offset::new(px(dx), px(dy)))
+            .map_or(Offset::ZERO, |(dx, dy)| Offset::new(dx, dy))
     }
 }
 
@@ -517,25 +515,24 @@ impl RenderBox for RenderContainer {
         outer_size
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         let index = match baseline {
             TextBaseline::Alphabetic => 0,
             TextBaseline::Ideographic => 1,
         };
-        self.child_baselines[index].map(|raw| raw + self.child_offset.dy.get())
+        self.child_baselines[index].map(|raw| raw + self.child_offset.dy)
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         // Tight additional width answers the query; asking the child would
         // hit LayoutBuilder's unsupported-intrinsics path even though the
         // result is discarded (same short-circuit as RenderConstrainedBox).
         if self.additional_width_is_tight() {
             return self.intrinsic_width(0.0);
         }
-        let content_height = (height
-            - self.margin.vertical_total().get()
-            - self.effective_padding().vertical_total().get())
-        .max(0.0);
+        let content_height =
+            (height - self.margin.vertical_total() - self.effective_padding().vertical_total())
+                .max(0.0);
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
@@ -544,14 +541,13 @@ impl RenderBox for RenderContainer {
         self.intrinsic_width(content)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if self.additional_width_is_tight() {
             return self.intrinsic_width(0.0);
         }
-        let content_height = (height
-            - self.margin.vertical_total().get()
-            - self.effective_padding().vertical_total().get())
-        .max(0.0);
+        let content_height =
+            (height - self.margin.vertical_total() - self.effective_padding().vertical_total())
+                .max(0.0);
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
@@ -560,14 +556,13 @@ impl RenderBox for RenderContainer {
         self.intrinsic_width(content)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if self.additional_height_is_tight() {
             return self.intrinsic_height(0.0);
         }
-        let content_width = (width
-            - self.margin.horizontal_total().get()
-            - self.effective_padding().horizontal_total().get())
-        .max(0.0);
+        let content_width =
+            (width - self.margin.horizontal_total() - self.effective_padding().horizontal_total())
+                .max(0.0);
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
@@ -576,14 +571,13 @@ impl RenderBox for RenderContainer {
         self.intrinsic_height(content)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if self.additional_height_is_tight() {
             return self.intrinsic_height(0.0);
         }
-        let content_width = (width
-            - self.margin.horizontal_total().get()
-            - self.effective_padding().horizontal_total().get())
-        .max(0.0);
+        let content_width =
+            (width - self.margin.horizontal_total() - self.effective_padding().horizontal_total())
+                .max(0.0);
         let content = if ctx.child_count() == 0 {
             0.0
         } else {
@@ -621,7 +615,7 @@ impl RenderBox for RenderContainer {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -637,16 +631,10 @@ impl RenderBox for RenderContainer {
                 let dy = alignment.along_size(content_size - child_size).dy;
                 (loose, dy)
             }
-            None => (content_constraints, Pixels::ZERO),
+            None => (content_constraints, 0.0),
         };
         let child_baseline = ctx.child_dry_baseline(0, child_constraints, baseline)?;
-        Some(
-            child_baseline
-                + self
-                    .child_offset_for(Offset::new(Pixels::ZERO, align_dy))
-                    .dy
-                    .get(),
-        )
+        Some(child_baseline + self.child_offset_for(Offset::new(0.0, align_dy)).dy)
     }
 
     fn skip_paint(&self) -> bool {
@@ -720,7 +708,7 @@ impl RenderBox for RenderContainer {
         if let Some(matrix) = self.transform {
             *transform *= matrix;
         }
-        *transform *= Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
+        *transform *= Matrix4::translation(child_offset.dx, child_offset.dy, 0.0);
     }
 
     fn hit_test_transform(&self, _size: Size) -> Option<Matrix4> {
@@ -748,9 +736,9 @@ impl RenderBox for RenderContainer {
         };
 
         let size = ctx.own_size();
-        let inside = position.dx >= Pixels::ZERO
+        let inside = position.dx >= 0.0
             && position.dx < size.width
-            && position.dy >= Pixels::ZERO
+            && position.dy >= 0.0
             && position.dy < size.height;
         if !inside {
             return false;
@@ -863,34 +851,34 @@ impl RenderContainer {
 
     /// Applies the additional constraints and the margin to a content-level
     /// intrinsic width, mirroring `RenderConstrainedBox`'s own intrinsics.
-    fn intrinsic_width(&self, content: f32) -> f32 {
-        let padded = content + self.effective_padding().horizontal_total().get();
+    fn intrinsic_width(&self, content: f64) -> f64 {
+        let padded = content + self.effective_padding().horizontal_total();
         let constrained = match self.additional_constraints {
             Some(additional) if additional.has_bounded_width() && additional.has_tight_width() => {
-                additional.min_width.get()
+                additional.min_width
             }
             Some(additional) if !additional.has_infinite_width() => {
-                additional.constrain_width(px(padded)).get()
+                additional.constrain_width(padded)
             }
             _ => padded,
         };
-        constrained + self.margin.horizontal_total().get()
+        constrained + self.margin.horizontal_total()
     }
 
     /// Height counterpart of [`intrinsic_width`](Self::intrinsic_width).
-    fn intrinsic_height(&self, content: f32) -> f32 {
-        let padded = content + self.effective_padding().vertical_total().get();
+    fn intrinsic_height(&self, content: f64) -> f64 {
+        let padded = content + self.effective_padding().vertical_total();
         let constrained = match self.additional_constraints {
             Some(additional)
                 if additional.has_bounded_height() && additional.has_tight_height() =>
             {
-                additional.min_height.get()
+                additional.min_height
             }
             Some(additional) if !additional.has_infinite_height() => {
-                additional.constrain_height(px(padded)).get()
+                additional.constrain_height(padded)
             }
             _ => padded,
         };
-        constrained + self.margin.vertical_total().get()
+        constrained + self.margin.vertical_total()
     }
 }

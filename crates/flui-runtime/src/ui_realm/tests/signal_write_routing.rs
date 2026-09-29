@@ -38,7 +38,7 @@ impl flui_view::View for Reader {
 impl StatelessView for Reader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.fetch_add(1, Ordering::Relaxed);
-        SizedBox::square(self.sig.get(ctx) as f32)
+        SizedBox::square(self.sig.get(ctx) as f64)
     }
 }
 

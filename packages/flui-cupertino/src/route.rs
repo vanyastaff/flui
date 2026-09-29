@@ -77,8 +77,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_sdk::animation::{Animation, ArcCurve, Curve, CurvedAnimation, Curves, Tween, animate};
+use flui_sdk::painting::Color;
 use flui_sdk::pipeline::TranslationFraction;
-use flui_sdk::types::Color;
 use flui_sdk::view::prelude::BuildContext;
 use flui_sdk::view::{BoxedView, ViewExt};
 use flui_sdk::widgets::{
@@ -171,7 +171,7 @@ fn cupertino_page_transitions(
             ArcCurve::new(Curves::FastEaseInToSlowEaseOut),
         )
         .with_reverse_curve(ArcCurve::new(Curves::FastEaseInToSlowEaseOut.flipped()));
-        let curved: Arc<dyn Animation<f32>> = Arc::new(curved);
+        let curved: Arc<dyn Animation<f64>> = Arc::new(curved);
         animate(right_middle_tween(), curved)
     };
 
@@ -180,7 +180,7 @@ fn cupertino_page_transitions(
     } else {
         let curved = CurvedAnimation::new(Arc::clone(secondary), Curves::LinearToEaseOut)
             .with_reverse_curve(Curves::EaseInToLinear);
-        let curved: Arc<dyn Animation<f32>> = Arc::new(curved);
+        let curved: Arc<dyn Animation<f64>> = Arc::new(curved);
         animate(middle_left_tween(), curved)
     };
 

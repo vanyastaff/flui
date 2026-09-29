@@ -2591,7 +2591,7 @@ mod tests {
     #[test]
     fn run_pointer_lifecycle_closes_on_down_and_sweeps_on_up() {
         use crate::events::{PointerType, make_down_event, make_up_event};
-        use flui_types::{Offset, geometry::px};
+        use flui_foundation::geometry::Offset;
 
         let arena = GestureArena::binding_driven(Arc::new(SystemClock));
         let pointer = PointerId::PRIMARY;
@@ -2599,7 +2599,7 @@ mod tests {
         arena.add(pointer, member.clone());
 
         // Down closes the arena and queues the lone default winner.
-        let down = make_down_event(Offset::new(px(1.0), px(1.0)), PointerType::Touch);
+        let down = make_down_event(Offset::new(1.0, 1.0), PointerType::Touch);
         run_pointer_lifecycle(&arena, &down);
         assert!(!arena.is_open(pointer), "down must close the arena");
         assert!(
@@ -2610,7 +2610,7 @@ mod tests {
         assert!(member.was_accepted());
 
         // Up sweeps the (resolved) entry away.
-        let up = make_up_event(Offset::new(px(1.0), px(1.0)), PointerType::Touch);
+        let up = make_up_event(Offset::new(1.0, 1.0), PointerType::Touch);
         run_pointer_lifecycle(&arena, &up);
         assert!(!arena.contains(pointer), "up must sweep the entry");
     }

@@ -12,10 +12,7 @@
 //! `active_transform` save, balanced by `LayerDispatcher`'s own `Drop`) must not
 //! false-positive-panic, and a `Drop` panic during unwind would trigger an abort.
 
-use flui_types::{
-    Offset, Point, Rect,
-    geometry::{Pixels, RRect, px},
-};
+use flui_foundation::geometry::{self, Offset, Point, RRect, Rect};
 
 /// GPU draw state and complete snapshots for nested save/restore scopes.
 ///
@@ -28,7 +25,11 @@ pub(super) struct GpuStateStack {
     saved: Vec<SavedState>,
 
     /// Current accumulated transform (CTM). Identity at frame start.
-    current_transform: glam::Mat4,
+    ///
+    /// Composed in `f64`, the precision the display list records offsets in,
+    /// and narrowed to `f32` only when read: a large ancestor offset and its
+    /// child's nearly cancelling one keep their residual.
+    current_transform: glam::DMat4,
 
     /// Current active scissor rectangle in physical pixels `(x, y, w, h)`.
     /// `None` means no axis-aligned scissor clip is active.
@@ -68,7 +69,7 @@ pub(super) struct GpuStateStack {
 
 #[derive(Debug, Clone, Copy)]
 struct SavedState {
-    transform: glam::Mat4,
+    transform: glam::DMat4,
     scissor: Option<(u32, u32, u32, u32)>,
     rrect_clip: [f32; 8],
     rsuperellipse_clip: [f32; 12],
@@ -114,7 +115,7 @@ impl GpuStateStack {
     pub(super) fn new() -> Self {
         Self {
             saved: Vec::new(),
-            current_transform: glam::Mat4::IDENTITY,
+            current_transform: glam::DMat4::IDENTITY,
             current_scissor: None,
             current_rrect_clip: [0.0; 8],
             current_clip_hard: false,
@@ -149,7 +150,7 @@ impl GpuStateStack {
         self.current_clip_inv = CLIP_INV_IDENTITY;
         // Identity is the construction-time value. Reset to the same initial
         // value so no cross-frame CTM leak can occur.
-        self.current_transform = glam::Mat4::IDENTITY;
+        self.current_transform = glam::DMat4::IDENTITY;
         self.saved.clear();
     }
 
@@ -231,12 +232,12 @@ impl GpuStateStack {
     // =========================================================================
 
     /// Post-multiply the CTM by a translation.
-    pub(super) fn translate(&mut self, offset: Offset<Pixels>) {
+    pub(super) fn translate(&mut self, offset: Offset<f64>) {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::translate: offset={:?}", offset);
 
-        let translation = glam::Mat4::from_translation(glam::vec3(offset.dx.0, offset.dy.0, 0.0));
-        self.current_transform *= translation;
+        self.current_transform *=
+            glam::DMat4::from_translation(glam::dvec3(offset.dx, offset.dy, 0.0));
     }
 
     /// Post-multiply the CTM by a Z-axis rotation.
@@ -244,19 +245,18 @@ impl GpuStateStack {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::rotate: angle={}", angle_radians);
 
-        let rotation = glam::Mat4::from_rotation_z(angle_radians);
-        self.current_transform *= rotation;
+        self.current_transform *= glam::DMat4::from_rotation_z(f64::from(angle_radians));
     }
 
     /// Post-multiply the CTM by an arbitrary matrix — the whole matrix, so a
-    /// skew or a perspective row survives. `Matrix4` and `glam::Mat4` are
-    /// both column-major `[f32; 16]`; the conversion is a reinterpretation of
-    /// the sixteen floats, the inverse of [`Self::current_transform_matrix`].
-    pub(super) fn concat(&mut self, matrix: &flui_types::Matrix4) {
+    /// skew or a perspective row survives. `Matrix4` and `glam::DMat4` are
+    /// both column-major `[f64; 16]`; the conversion is a reinterpretation of
+    /// the sixteen values, the inverse of [`Self::current_transform_matrix`].
+    pub(super) fn concat(&mut self, matrix: &flui_foundation::geometry::Matrix4) {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::concat: matrix={:?}", matrix);
 
-        self.current_transform *= glam::Mat4::from_cols_array(&matrix.m);
+        self.current_transform *= glam::DMat4::from_cols_array(&matrix.m);
     }
 
     /// Post-multiply the CTM by a uniform scale.
@@ -264,8 +264,8 @@ impl GpuStateStack {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::scale: sx={}, sy={}", sx, sy);
 
-        let scaling = glam::Mat4::from_scale(glam::vec3(sx, sy, 1.0));
-        self.current_transform *= scaling;
+        self.current_transform *=
+            glam::DMat4::from_scale(glam::dvec3(f64::from(sx), f64::from(sy), 1.0));
     }
 
     // =========================================================================
@@ -278,36 +278,31 @@ impl GpuStateStack {
     /// painter fields (e.g. `current_segment`) without a borrow conflict.
     #[inline]
     pub(super) fn current_transform(&self) -> glam::Mat4 {
-        self.current_transform
+        self.current_transform.as_mat4()
     }
 
-    /// The accumulated CTM as a [`flui_types::Matrix4`] (column-major).
+    /// The accumulated CTM as a [`flui_foundation::geometry::Matrix4`] (column-major).
     ///
-    /// Both `glam::Mat4` and `flui_types::Matrix4` are column-major `[f32; 16]`,
-    /// so the conversion is a direct reinterpret of the 16 floats.
-    ///
-    /// Ported verbatim from `WgpuPainter::current_transform_matrix` — the
-    /// float column ordering is **not** changed; round-4/5 transform-bake and
-    /// HiDPI device-sizing correctness depend on the exact layout.
-    pub(super) fn current_transform_matrix(&self) -> flui_types::Matrix4 {
-        let c = self.current_transform.to_cols_array();
-        flui_types::Matrix4::new(
-            c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11], c[12], c[13],
-            c[14], c[15],
-        )
+    /// Both `glam::DMat4` and `flui_foundation::geometry::Matrix4` are column-major
+    /// `[f64; 16]`, so the conversion is a direct reinterpret of the 16 values, at full
+    /// precision. Transform baking and HiDPI device sizing depend on that layout.
+    pub(super) fn current_transform_matrix(&self) -> flui_foundation::geometry::Matrix4 {
+        flui_foundation::geometry::Matrix4 {
+            m: self.current_transform.to_cols_array(),
+        }
     }
 
     /// Apply the CTM to a local-space point and return the screen-space result.
-    pub(super) fn apply_transform(&self, point: Point<Pixels>) -> Point<Pixels> {
-        let p = self.current_transform * glam::vec4(point.x.0, point.y.0, 0.0, 1.0);
-        Point::new(px(p.x), px(p.y))
+    pub(super) fn apply_transform(&self, point: Point<f64>) -> Point<f64> {
+        let p = self.current_transform * glam::dvec4(point.x, point.y, 0.0, 1.0);
+        Point::new(p.x, p.y)
     }
 
     /// `true` when the current transform has no rotation or skew component.
     ///
     /// When `false`, rects must be tessellated rather than instanced.
     pub(super) fn is_axis_aligned(&self) -> bool {
-        let m = self.current_transform;
+        let m = self.current_transform();
         m.x_axis.y.abs() < 1e-6 && m.y_axis.x.abs() < 1e-6
     }
 
@@ -321,7 +316,7 @@ impl GpuStateStack {
     /// (e.g. `scale(0.5, 10)`) `max_scale()` returns 10, squaring to 100,
     /// while the true area scale is 5. Use [`Self::area_scale`] for area thresholds.
     pub(super) fn max_scale(&self) -> f32 {
-        let m = self.current_transform;
+        let m = self.current_transform();
         let col_x = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
         let col_y = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
         col_x.max(col_y)
@@ -338,7 +333,7 @@ impl GpuStateStack {
     /// more accurate than `max_scale²`, which overestimates under anisotropic
     /// scale (e.g. `scale(0.5, 10)` → `area_scale=5`, `max_scale²=100`).
     pub(super) fn area_scale(&self) -> f32 {
-        let m = self.current_transform;
+        let m = self.current_transform();
         (m.x_axis.x * m.y_axis.y - m.x_axis.y * m.y_axis.x).abs()
     }
 
@@ -365,14 +360,16 @@ impl GpuStateStack {
     /// parameter rather than stored on the stack so the painter remains the
     /// single owner of the surface dimensions.
     ///
-    /// A fractional edge TRUNCATES: a clip ending at column 10.75 ends the
-    /// scissor at column 10, so the outer fraction of that column is lost.
-    /// Every clip that reaches here carries something behind it that makes
-    /// that acceptable — a rounded or squircle clip has its exact SDF, and a
-    /// rect clip's own edge is what the caller asked to cut on. A clip with
-    /// NOTHING behind it must not lose that fraction; see
+    /// A hard edge (ADR-0098 §6): under a translation plus a positive
+    /// axis-aligned scale each device edge snaps to the nearest pixel boundary,
+    /// so a pixel is kept exactly when its centre is inside the clip — Skia's
+    /// non-antialiased clip. A clip ending at column 10.75 keeps column 10
+    /// (centre 10.5) and one starting at 0.75 drops column 0 (centre 0.5).
+    /// Under rotation, skew or a reflection the device bounding box is covered
+    /// instead, since no pixel grid lines up with the clip's edges. A clip with
+    /// nothing behind it that must keep every partly covered pixel uses
     /// [`Self::clip_rect_enclosing`].
-    pub(super) fn clip_rect(&mut self, rect: Rect<Pixels>, surface_size: (u32, u32)) {
+    pub(super) fn clip_rect(&mut self, rect: Rect<f64>, surface_size: (u32, u32)) {
         let (x, y, width, height) = self.scissor_of(rect, surface_size);
         self.commit_scissor(rect, (x, y, width, height), surface_size);
     }
@@ -393,14 +390,46 @@ impl GpuStateStack {
     /// non-integer offset, and every node at all under a fractional device
     /// pixel ratio. Growing before the transform is not merely insufficient,
     /// it is inert.
-    pub(super) fn clip_rect_enclosing(&mut self, rect: Rect<Pixels>, surface_size: (u32, u32)) {
-        let (min_x, min_y, max_x, max_y) = self.device_aabb(rect);
-        let x = min_x.floor().max(0.0).min(surface_size.0 as f32) as u32;
-        let y = min_y.floor().max(0.0).min(surface_size.1 as f32) as u32;
-        let right = max_x.ceil().max(0.0).min(surface_size.0 as f32) as u32;
-        let bottom = max_y.ceil().max(0.0).min(surface_size.1 as f32) as u32;
-        let scissor = (x, y, right.saturating_sub(x), bottom.saturating_sub(y));
+    pub(super) fn clip_rect_enclosing(&mut self, rect: Rect<f64>, surface_size: (u32, u32)) {
+        let scissor =
+            Self::clamp_to_surface(geometry::cover(self.device_bounds(rect)), surface_size);
         self.commit_scissor(rect, scissor, surface_size);
+    }
+
+    /// `true` when the transform is a translation plus a positive axis-aligned
+    /// scale: the only transforms under which device edges can be snapped
+    /// (ADR-0098 §6). A rotation, skew, reflection or perspective term fails it.
+    pub(super) fn is_translate_scale(&self) -> bool {
+        let m = self.current_transform();
+        m.x_axis.y.abs() < 1e-6
+            && m.y_axis.x.abs() < 1e-6
+            && m.x_axis.x > 0.0
+            && m.y_axis.y > 0.0
+            && m.x_axis.w == 0.0
+            && m.y_axis.w == 0.0
+            && m.w_axis.w == 1.0
+    }
+
+    /// The clip rect's device bounding box as a [`Rect`].
+    fn device_bounds(&self, rect: Rect<f64>) -> Rect<f64> {
+        let (min_x, min_y, max_x, max_y) = self.device_aabb(rect);
+        Rect::from_ltrb(
+            f64::from(min_x),
+            f64::from(min_y),
+            f64::from(max_x),
+            f64::from(max_y),
+        )
+    }
+
+    /// A pixel-aligned device rect clamped to the attachment, as a scissor
+    /// `(x, y, width, height)`.
+    fn clamp_to_surface(rect: Rect<f64>, (width, height): (u32, u32)) -> (u32, u32, u32, u32) {
+        let clamp = |v: f64, max: u32| v.clamp(0.0, f64::from(max)) as u32;
+        let x = clamp(rect.left(), width);
+        let y = clamp(rect.top(), height);
+        let right = clamp(rect.right(), width);
+        let bottom = clamp(rect.bottom(), height);
+        (x, y, right.saturating_sub(x), bottom.saturating_sub(y))
     }
 
     /// The clip rect's axis-aligned bounding box in device space, unrounded.
@@ -408,16 +437,33 @@ impl GpuStateStack {
     /// The identity case is exact; otherwise the four corners are transformed
     /// and their AABB taken, which is conservative for a rotation — the box
     /// around a rotated box is larger than the box.
-    fn device_aabb(&self, rect: Rect<Pixels>) -> (f32, f32, f32, f32) {
-        let transform = self.current_transform;
+    fn device_aabb(&self, rect: Rect<f64>) -> (f32, f32, f32, f32) {
+        let transform = self.current_transform();
         if transform == glam::Mat4::IDENTITY {
-            return (rect.left().0, rect.top().0, rect.right().0, rect.bottom().0);
+            return (
+                (rect.left() as f32),
+                (rect.top() as f32),
+                (rect.right() as f32),
+                (rect.bottom() as f32),
+            );
         }
         let corners = [
-            transform.transform_point3(glam::Vec3::new(rect.left().0, rect.top().0, 0.0)),
-            transform.transform_point3(glam::Vec3::new(rect.right().0, rect.top().0, 0.0)),
-            transform.transform_point3(glam::Vec3::new(rect.right().0, rect.bottom().0, 0.0)),
-            transform.transform_point3(glam::Vec3::new(rect.left().0, rect.bottom().0, 0.0)),
+            transform.transform_point3(glam::Vec3::new(rect.left() as f32, rect.top() as f32, 0.0)),
+            transform.transform_point3(glam::Vec3::new(
+                rect.right() as f32,
+                rect.top() as f32,
+                0.0,
+            )),
+            transform.transform_point3(glam::Vec3::new(
+                rect.right() as f32,
+                rect.bottom() as f32,
+                0.0,
+            )),
+            transform.transform_point3(glam::Vec3::new(
+                rect.left() as f32,
+                rect.bottom() as f32,
+                0.0,
+            )),
         ];
         (
             corners.iter().map(|c| c.x).fold(f32::INFINITY, f32::min),
@@ -433,30 +479,16 @@ impl GpuStateStack {
         )
     }
 
-    /// The truncating rounding [`Self::clip_rect`] has always used, kept
-    /// bit-for-bit: the identity fast path floors every edge independently,
-    /// and the transformed branch floors the origin and ceils the EXTENT. The
-    /// two do not agree on a fractional rect, and unifying them would move the
-    /// scissor of every rect, rounded and squircle clip in the engine.
-    fn scissor_of(&self, rect: Rect<Pixels>, surface_size: (u32, u32)) -> (u32, u32, u32, u32) {
-        let transform = self.current_transform;
-        if transform == glam::Mat4::IDENTITY {
-            let x = rect.left().0.max(0.0) as u32;
-            let y = rect.top().0.max(0.0) as u32;
-            let right = rect.right().0.min(surface_size.0 as f32) as u32;
-            let bottom = rect.bottom().0.min(surface_size.1 as f32) as u32;
-            return (x, y, right.saturating_sub(x), bottom.saturating_sub(y));
-        }
-        let (min_x, min_y, max_x, max_y) = self.device_aabb(rect);
-        let x = min_x.max(0.0) as u32;
-        let y = min_y.max(0.0) as u32;
-        let w = (max_x.min(surface_size.0 as f32) - min_x.max(0.0))
-            .ceil()
-            .max(0.0) as u32;
-        let h = (max_y.min(surface_size.1 as f32) - min_y.max(0.0))
-            .ceil()
-            .max(0.0) as u32;
-        (x, y, w, h)
+    /// The hard-edge scissor of [`Self::clip_rect`]: edges snapped under a
+    /// translation plus a positive scale, the bounding box covered otherwise.
+    fn scissor_of(&self, rect: Rect<f64>, surface_size: (u32, u32)) -> (u32, u32, u32, u32) {
+        let device = self.device_bounds(rect);
+        let aligned = if self.is_translate_scale() {
+            geometry::snap_edges(device)
+        } else {
+            geometry::cover(device)
+        };
+        Self::clamp_to_surface(aligned, surface_size)
     }
 
     /// Intersect a freshly computed scissor with any active one, clamp it to
@@ -469,7 +501,7 @@ impl GpuStateStack {
     /// `surface - origin` extent subtraction from underflowing.
     fn commit_scissor(
         &mut self,
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         scissor: (u32, u32, u32, u32),
         surface_size: (u32, u32),
     ) {
@@ -524,25 +556,14 @@ impl GpuStateStack {
         // per-instance `clip_kind` level.
         self.current_rsuperellipse_clip = [0.0; 12];
 
-        // Bounding-box scissor for early rasterizer rejection. Conservative
-        // under rotation — `clip_rect` takes the AABB of all four transformed
-        // corners — which is exactly what a coarse pre-pass should be now that
-        // the SDF does the precise work.
-        // Exact bounds, deliberately, even though this is nominally a coarse
-        // early reject in front of an SDF that does the precise work.
-        //
-        // Padding it outward so the anti-aliased fringe is never cut was tried
-        // and reverted: for a rectangular clip the scissor IS the clip (a
-        // rect clip installs no SDF), so a pixel of pad lets every primitive
-        // render outside the clip — visible — to recover half a pixel of
-        // feather at the boundary — not. The cost of exactness is that a
-        // fractional edge truncates (10.75 ends the scissor at column 10) and
-        // the outer half of the feather is lost there.
-        //
-        // The pad becomes correct the moment text routes through the same mask;
-        // that is what #848 stays open for.
+        // Bounding-box scissor in front of the SDF, covering every pixel the
+        // clip touches (ADR-0098 §6): the SDF does the exact work, so the
+        // scissor must not cut the feathered fringe on either side. Snapping
+        // the edges here instead drops a half-covered edge column the SDF
+        // would have feathered. Text does not read the SDF yet, so a glyph can
+        // show in a partly covered edge pixel; that is what #848 stays open for.
         let _ = hard;
-        self.clip_rect(rrect.rect, surface_size);
+        self.clip_rect_enclosing(rrect.rect, surface_size);
     }
 
     /// Apply a rounded clip's bounding-box scissor and hand the clip itself
@@ -573,7 +594,7 @@ impl GpuStateStack {
         // Soft, always: the mode is `AntiAliasWithSaveLayer`, and a hard edge
         // would threshold the coverage the composite exists to feather.
         let resolved = self.resolve_rrect_clip(rrect, false);
-        self.clip_rect(rrect.rect, surface_size);
+        self.clip_rect_enclosing(rrect.rect, surface_size);
         resolved
     }
 
@@ -600,22 +621,22 @@ impl GpuStateStack {
         // approximation left here: a corner made elliptical by a non-uniform
         // CTM stays circular in this space and the mapping produces the
         // ellipse, which is exact.
-        let max_radius = (rect.width().0 * 0.5).min(rect.height().0 * 0.5).max(0.0);
-        let collapse = |rx: f32, ry: f32| rx.max(ry).min(max_radius);
+        let max_radius = (rect.width() * 0.5).min(rect.height() * 0.5).max(0.0);
+        let collapse = |rx: f32, ry: f32| rx.max(ry).min(max_radius as f32);
 
         ResolvedClip {
             rrect: [
-                rect.left().0,
-                rect.top().0,
-                rect.width().0,
-                rect.height().0,
-                collapse(rrect.top_left.x.0, rrect.top_left.y.0),
-                collapse(rrect.top_right.x.0, rrect.top_right.y.0),
-                collapse(rrect.bottom_right.x.0, rrect.bottom_right.y.0),
-                collapse(rrect.bottom_left.x.0, rrect.bottom_left.y.0),
+                (rect.left() as f32),
+                (rect.top() as f32),
+                (rect.width() as f32),
+                (rect.height() as f32),
+                collapse(rrect.top_left.x as f32, rrect.top_left.y as f32),
+                collapse(rrect.top_right.x as f32, rrect.top_right.y as f32),
+                collapse(rrect.bottom_right.x as f32, rrect.bottom_right.y as f32),
+                collapse(rrect.bottom_left.x as f32, rrect.bottom_left.y as f32),
             ],
             kind: [1, 0, u32::from(hard), 0],
-            device_to_local: Self::device_to_local(self.current_transform),
+            device_to_local: Self::device_to_local(self.current_transform()),
         }
     }
 
@@ -665,7 +686,7 @@ impl GpuStateStack {
     /// and ry per corner, so nothing collapses here at all.
     pub(super) fn clip_rsuperellipse(
         &mut self,
-        rse: flui_types::geometry::RSuperellipse,
+        rse: flui_foundation::geometry::RSuperellipse,
         surface_size: (u32, u32),
         hard: bool,
     ) {
@@ -676,14 +697,14 @@ impl GpuStateStack {
         let rect = rse.outer_rect();
 
         self.current_rsuperellipse_clip = Self::rsuperellipse_slots(rse);
-        self.current_clip_inv = Self::device_to_local(self.current_transform);
+        self.current_clip_inv = Self::device_to_local(self.current_transform());
         // Clear the rrect clip to prevent `apply_active_clip` from falling
         // back to it. Mirror of the corresponding clear in `clip_rrect`.
         self.current_rrect_clip = [0.0; 8];
 
-        // Exact, for the reason spelled out in `clip_rrect`.
+        // Covering, for the reason spelled out in `clip_rrect`.
         let _ = hard;
-        self.clip_rect(rect, surface_size);
+        self.clip_rect_enclosing(rect, surface_size);
     }
 
     // =========================================================================
@@ -698,25 +719,25 @@ impl GpuStateStack {
     /// [`Self::resolve_rrect_clip`]'s doc gives about its own pair: a second
     /// copy of this arithmetic would let the per-draw and at-composite routes
     /// disagree about where the same clip is, with nothing failing.
-    fn rsuperellipse_slots(rse: flui_types::geometry::RSuperellipse) -> [f32; 12] {
+    fn rsuperellipse_slots(rse: flui_foundation::geometry::RSuperellipse) -> [f32; 12] {
         let rect = rse.outer_rect();
         let tl_r = rse.tl_radius();
         let tr_r = rse.tr_radius();
         let br_r = rse.br_radius();
         let bl_r = rse.bl_radius();
         [
-            rect.left().0,
-            rect.top().0,
-            rect.width().0,
-            rect.height().0,
-            tl_r.x.0,
-            tl_r.y.0,
-            tr_r.x.0,
-            tr_r.y.0,
-            br_r.x.0,
-            br_r.y.0,
-            bl_r.x.0,
-            bl_r.y.0,
+            (rect.left() as f32),
+            (rect.top() as f32),
+            (rect.width() as f32),
+            (rect.height() as f32),
+            (tl_r.x as f32),
+            (tl_r.y as f32),
+            ((tr_r.x) as f32),
+            ((tr_r.y) as f32),
+            ((br_r.x) as f32),
+            ((br_r.y) as f32),
+            ((bl_r.x) as f32),
+            ((bl_r.y) as f32),
         ]
     }
 
@@ -736,7 +757,7 @@ impl GpuStateStack {
     /// `sdRoundedSuperellipse` through `clipAlpha` in `common/clip.wgsl`.
     pub(super) fn clip_rsuperellipse_at_composite(
         &mut self,
-        rse: flui_types::geometry::RSuperellipse,
+        rse: flui_foundation::geometry::RSuperellipse,
         surface_size: (u32, u32),
     ) -> ResolvedClip {
         // Soft, always, for the reason `clip_rrect_at_composite` gives: the
@@ -745,9 +766,9 @@ impl GpuStateStack {
         let resolved = ResolvedClip {
             rrect: crate::instancing::reduce_superellipse_clip(Self::rsuperellipse_slots(rse)),
             kind: [2, 0, 0, 0],
-            device_to_local: Self::device_to_local(self.current_transform),
+            device_to_local: Self::device_to_local(self.current_transform()),
         };
-        self.clip_rect(rse.outer_rect(), surface_size);
+        self.clip_rect_enclosing(rse.outer_rect(), surface_size);
         resolved
     }
 
@@ -804,7 +825,7 @@ impl GpuStateStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::Offset;
+    use flui_foundation::geometry::Offset;
 
     fn identity_stack() -> GpuStateStack {
         GpuStateStack::new()
@@ -824,17 +845,11 @@ mod tests {
         let surface = (64, 64);
 
         // An enclosing per-draw clip, as `Clip::AntiAlias` would leave it.
-        let ancestor = RRect::from_rect_circular(
-            Rect::from_xywh(px(8.0), px(8.0), px(48.0), px(48.0)),
-            px(16.0),
-        );
+        let ancestor = RRect::from_rect_circular(Rect::from_xywh(8.0, 8.0, 48.0, 48.0), 16.0);
         stack.clip_rrect(ancestor, surface, false);
         let ancestor_clip = stack.active_clip();
 
-        let inner = RRect::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(32.0), px(64.0)),
-            px(4.0),
-        );
+        let inner = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 32.0, 64.0), 4.0);
         let at_composite = stack.clip_rrect_at_composite(inner, surface);
 
         assert_eq!(
@@ -863,6 +878,25 @@ mod tests {
              ancestor's, so the compositing bounds derived from it cannot \
              admit anything an ancestor already excluded"
         );
+    }
+
+    /// Nested translations compose at the display list's `f64` precision.
+    ///
+    /// `f32` spaces values near 5e7 four units apart, so an ancestor at -5e7
+    /// and a child at 5e7 + 1 would each round and cancel to 0; composed in
+    /// `f64` they leave the child's one-pixel residual.
+    #[test]
+    fn nested_translations_keep_their_residual() {
+        let mut stack = identity_stack();
+        stack.translate(Offset::new(-5.0e7, 0.0));
+        stack.translate(Offset::new(5.0e7 + 1.0, 0.5));
+
+        assert_eq!(
+            stack.apply_transform(Point::new(0.0, 0.0)),
+            Point::new(1.0, 0.5)
+        );
+        assert_eq!(stack.current_transform().w_axis.x, 1.0);
+        assert_eq!(stack.current_transform_matrix().m[12], 1.0);
     }
 
     /// (1) `debug_assert_balanced` panics in debug mode on an unbalanced stack.
@@ -925,12 +959,7 @@ mod tests {
 
         // Now set a scissor.
         let surface = (800, 600);
-        let clip_rect = Rect::from_ltrb(
-            flui_types::geometry::px(10.0),
-            flui_types::geometry::px(10.0),
-            flui_types::geometry::px(200.0),
-            flui_types::geometry::px(200.0),
-        );
+        let clip_rect = Rect::from_ltrb(10.0, 10.0, 200.0, 200.0);
         stack.clip_rect(clip_rect, surface);
         assert!(
             stack.current_scissor().is_some(),
@@ -961,23 +990,23 @@ mod tests {
         };
         let mut stack = GpuStateStack::new();
         let initial = snapshot(&stack);
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         stack.save();
-        stack.translate(Offset::new(px(10.0), px(20.0)));
-        stack.clip_rrect(RRect::from_rect_circular(bounds, px(8.0)), (400, 400), true);
+        stack.translate(Offset::new(10.0, 20.0));
+        stack.clip_rrect(RRect::from_rect_circular(bounds, 8.0), (400, 400), true);
         let rounded_rect = snapshot(&stack);
 
         stack.save();
         stack.scale(2.0, 3.0);
         stack.clip_rsuperellipse(
-            flui_types::geometry::RSuperellipse::from_rect_circular(bounds, px(12.0)),
+            flui_foundation::geometry::RSuperellipse::from_rect_circular(bounds, 12.0),
             (400, 400),
             false,
         );
         let superellipse = snapshot(&stack);
         stack.save();
         stack.rotate(0.5);
-        stack.clip_rrect(RRect::from_rect_circular(bounds, px(4.0)), (400, 400), true);
+        stack.clip_rrect(RRect::from_rect_circular(bounds, 4.0), (400, 400), true);
 
         stack.restore();
         assert_eq!(snapshot(&stack), superellipse);
@@ -995,10 +1024,7 @@ mod tests {
         let mut stack = identity_stack();
 
         // Apply a non-identity transform and save.
-        stack.translate(Offset::new(
-            flui_types::geometry::px(42.0),
-            flui_types::geometry::px(7.0),
-        ));
+        stack.translate(Offset::new(42.0, 7.0));
         stack.save();
         stack.scale(2.0, 3.0);
 
@@ -1101,12 +1127,7 @@ mod tests {
     fn scissor_survives_nested_save_restore() {
         let mut stack = identity_stack();
         let surface = (800, 600);
-        let outer_rect = Rect::from_ltrb(
-            flui_types::geometry::px(0.0),
-            flui_types::geometry::px(0.0),
-            flui_types::geometry::px(400.0),
-            flui_types::geometry::px(300.0),
-        );
+        let outer_rect = Rect::from_ltrb(0.0, 0.0, 400.0, 300.0);
 
         // Set outer scissor.
         stack.clip_rect(outer_rect, surface);
@@ -1118,12 +1139,7 @@ mod tests {
         assert_eq!(stack.depth(), 1);
 
         // Apply a smaller inner clip.
-        let inner_rect = Rect::from_ltrb(
-            flui_types::geometry::px(50.0),
-            flui_types::geometry::px(50.0),
-            flui_types::geometry::px(200.0),
-            flui_types::geometry::px(200.0),
-        );
+        let inner_rect = Rect::from_ltrb(50.0, 50.0, 200.0, 200.0);
         stack.clip_rect(inner_rect, surface);
         let inner_scissor = stack.current_scissor();
         assert_ne!(
@@ -1160,12 +1176,7 @@ mod tests {
     #[test]
     fn clip_rect_enclosing_grows_outward_on_both_branches() {
         let surface = (64, 64);
-        let fractional = Rect::from_ltrb(
-            flui_types::geometry::px(8.2),
-            flui_types::geometry::px(8.2),
-            flui_types::geometry::px(32.6),
-            flui_types::geometry::px(32.6),
-        );
+        let fractional = Rect::from_ltrb(8.2, 8.2, 32.6, 32.6);
 
         let mut identity = identity_stack();
         identity.clip_rect_enclosing(fractional, surface);
@@ -1178,10 +1189,7 @@ mod tests {
         );
 
         let mut translated = identity_stack();
-        translated.translate(Offset::new(
-            flui_types::geometry::px(0.5),
-            flui_types::geometry::px(0.5),
-        ));
+        translated.translate(Offset::new(0.5, 0.5));
         translated.clip_rect_enclosing(fractional, surface);
         assert_eq!(
             translated.current_scissor(),
@@ -1190,6 +1198,60 @@ mod tests {
              rect to whole pixels BEFORE the transform cannot produce this — a \
              fractional translation re-fractions it"
         );
+    }
+
+    /// A hard rect clip keeps a pixel exactly when its centre is inside, under
+    /// the identity and under a translation plus a positive scale alike: edges
+    /// snap to the nearest pixel boundary, ties toward +∞ (ADR-0098 §6).
+    ///
+    /// Red-check: truncating every edge (the rule this replaced) gives
+    /// `(0, 0, 10, 10)` for the identity case, keeping column 0 whose centre
+    /// is outside and dropping column 10 whose centre is inside.
+    #[test]
+    fn a_hard_rect_clip_keeps_the_pixels_whose_centres_are_inside() {
+        let surface = (64, 64);
+
+        let mut identity = identity_stack();
+        identity.clip_rect(Rect::from_ltrb(0.75, 0.75, 10.75, 10.75), surface);
+        assert_eq!(identity.current_scissor(), Some((1, 1, 10, 10)));
+
+        // Half-way edges: 0.5 and 10.5 both snap up, so the width stays 10.
+        let mut half = identity_stack();
+        half.clip_rect(Rect::from_ltrb(0.5, 0.5, 10.5, 10.5), surface);
+        assert_eq!(half.current_scissor(), Some((1, 1, 10, 10)));
+
+        // Under scale(2) + translate(0.1): [0.3, 5.3] → device [0.7, 10.7] → [1, 11).
+        let mut scaled = identity_stack();
+        scaled.translate(Offset::new(0.1, 0.1));
+        scaled.scale(2.0, 2.0);
+        scaled.clip_rect(Rect::from_ltrb(0.3, 0.3, 5.3, 5.3), surface);
+        assert_eq!(scaled.current_scissor(), Some((1, 1, 10, 10)));
+    }
+
+    /// Under a rotation no pixel grid lines up with the clip's edges, so the
+    /// hard clip falls back to covering its device bounding box.
+    #[test]
+    fn a_rotated_rect_clip_covers_its_device_bounding_box() {
+        let surface = (64, 64);
+        let mut rotated = identity_stack();
+        rotated.translate(Offset::new(32.0, 32.0));
+        rotated.rotate(std::f32::consts::FRAC_PI_4);
+        assert!(!rotated.is_translate_scale());
+        rotated.clip_rect(Rect::from_ltrb(-4.0, -4.0, 4.0, 4.0), surface);
+        // The rotated square's bounding box is ±4√2 ≈ ±5.66 around 32: [26.34, 37.66] → [26, 38).
+        assert_eq!(rotated.current_scissor(), Some((26, 26, 12, 12)));
+    }
+
+    #[test]
+    fn translate_scale_rejects_reflection_and_skew() {
+        let mut reflected = identity_stack();
+        reflected.scale(-1.0, 1.0);
+        assert!(!reflected.is_translate_scale());
+
+        let mut scaled = identity_stack();
+        scaled.translate(Offset::new(3.5, 1.25));
+        scaled.scale(1.5, 2.0);
+        assert!(scaled.is_translate_scale());
     }
 
     /// The degenerate inputs `Path::compute_bounds` can hand a scissor.
@@ -1203,25 +1265,26 @@ mod tests {
     #[test]
     fn clip_rect_enclosing_survives_the_bounds_a_degenerate_path_produces() {
         let surface = (64, 64);
-        let px = flui_types::geometry::px;
 
         for (name, rect) in [
             ("empty path", Rect::ZERO),
-            (
-                "negative origin",
-                Rect::from_ltrb(px(-12.5), px(-12.5), px(20.0), px(20.0)),
-            ),
+            ("negative origin", Rect::from_ltrb(-12.5, -12.5, 20.0, 20.0)),
             (
                 "entirely past the surface",
-                Rect::from_ltrb(px(900.0), px(900.0), px(950.0), px(950.0)),
+                Rect::from_ltrb(900.0, 900.0, 950.0, 950.0),
             ),
             (
                 "inverted, right < left",
-                Rect::from_ltrb(px(40.0), px(40.0), px(10.0), px(10.0)),
+                Rect::from_ltrb(40.0, 40.0, 10.0, 10.0),
             ),
             (
                 "non-finite, as an all-NaN axis yields",
-                Rect::from_ltrb(px(0.0), px(f32::INFINITY), px(20.0), px(f32::NEG_INFINITY)),
+                Rect::from_ltrb(
+                    0.0,
+                    f64::from(f32::INFINITY),
+                    20.0,
+                    f64::from(f32::NEG_INFINITY),
+                ),
             ),
         ] {
             let mut stack = identity_stack();
@@ -1250,12 +1313,7 @@ mod tests {
     fn clip_rect_entirely_past_right_edge_clamps_origin_into_bounds() {
         let mut stack = identity_stack();
         let surface = (800, 600);
-        let far_right_rect = Rect::from_ltrb(
-            flui_types::geometry::px(900.0),
-            flui_types::geometry::px(0.0),
-            flui_types::geometry::px(950.0),
-            flui_types::geometry::px(50.0),
-        );
+        let far_right_rect = Rect::from_ltrb(900.0, 0.0, 950.0, 50.0);
 
         stack.clip_rect(far_right_rect, surface);
 
@@ -1279,10 +1337,7 @@ mod tests {
     #[test]
     fn an_unscaled_clip_keeps_its_radii_bit_exact() {
         let mut stack = GpuStateStack::new_for_test();
-        let rrect = RRect::from_rect_circular(
-            Rect::from_xywh(px(10.0), px(20.0), px(80.0), px(40.0)),
-            px(7.5),
-        );
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(10.0, 20.0, 80.0, 40.0), 7.5);
 
         stack.clip_rrect(rrect, (400, 400), false);
 
@@ -1308,10 +1363,7 @@ mod tests {
     #[test]
     fn a_scaled_clip_keeps_its_shape_and_scales_through_the_mapping() {
         let mut stack = GpuStateStack::new_for_test();
-        let circle = RRect::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-            px(50.0),
-        );
+        let circle = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 50.0);
 
         stack.scale(2.0, 3.0);
         stack.clip_rrect(circle, (600, 600), false);
@@ -1345,10 +1397,7 @@ mod tests {
     #[test]
     fn a_rotated_clip_populates_the_slot_and_maps_back() {
         let mut stack = GpuStateStack::new_for_test();
-        let rrect = RRect::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-            px(10.0),
-        );
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 10.0);
 
         stack.rotate(std::f32::consts::FRAC_PI_2);
         stack.clip_rrect(rrect, (400, 400), false);
@@ -1396,10 +1445,7 @@ mod tests {
         let mut stack = GpuStateStack::new_for_test();
         stack.scale(1e-4, 1e-4);
         stack.clip_rrect(
-            RRect::from_rect_circular(
-                Rect::from_xywh(px(0.0), px(0.0), px(1.0e6), px(1.0e6)),
-                px(1.0e5),
-            ),
+            RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 1.0e6, 1.0e6), 1.0e5),
             (400, 400),
             false,
         );
@@ -1422,10 +1468,14 @@ mod tests {
     /// concat keeps it, which is what `push_transform` relies on.
     #[test]
     fn concat_keeps_a_skew_the_trs_decomposition_would_drop() {
-        let skew = flui_types::Matrix4::skew_2d(0.3, 0.0);
+        let skew = flui_foundation::geometry::Matrix4::skew_2d(0.3, 0.0);
         let mut stack = GpuStateStack::new();
         stack.concat(&skew);
-        assert_eq!(stack.current_transform_matrix(), skew);
+        // The GPU stack holds f32: the skew survives exactly as narrowed on upload.
+        assert_eq!(
+            stack.current_transform().to_cols_array(),
+            skew.to_cols_array_f32()
+        );
         assert_ne!(
             stack.current_transform(),
             glam::Mat4::IDENTITY,
@@ -1436,14 +1486,16 @@ mod tests {
     #[test]
     fn concat_composes_like_the_primitive_ops() {
         let mut composed = GpuStateStack::new();
-        composed.translate(Offset::new(Pixels(10.0), Pixels(20.0)));
+        composed.translate(Offset::new(10.0, 20.0));
         composed.rotate(0.5);
         composed.scale(2.0, 3.0);
 
         let mut concatenated = GpuStateStack::new();
-        concatenated.concat(&flui_types::Matrix4::translation(10.0, 20.0, 0.0));
-        concatenated.concat(&flui_types::Matrix4::rotation_z(0.5));
-        concatenated.concat(&flui_types::Matrix4::scaling(2.0, 3.0, 1.0));
+        concatenated.concat(&flui_foundation::geometry::Matrix4::translation(
+            10.0, 20.0, 0.0,
+        ));
+        concatenated.concat(&flui_foundation::geometry::Matrix4::rotation_z(0.5));
+        concatenated.concat(&flui_foundation::geometry::Matrix4::scaling(2.0, 3.0, 1.0));
 
         let lhs = composed.current_transform().to_cols_array();
         let rhs = concatenated.current_transform().to_cols_array();
@@ -1459,10 +1511,7 @@ mod tests {
         let mut stack = GpuStateStack::new_for_test();
         stack.scale(0.0, 1.0);
         stack.clip_rrect(
-            RRect::from_rect_circular(
-                Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-                px(10.0),
-            ),
+            RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 10.0),
             (400, 400),
             false,
         );

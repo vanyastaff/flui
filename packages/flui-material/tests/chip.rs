@@ -33,7 +33,7 @@ use std::rc::Rc;
 use common::{lay_out, loose};
 use flui_material::chip::CHIP_ICON_SIZE;
 use flui_material::{Chip, ChipThemeData, FilterChip, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::widgets::{GestureDetector, HitTestBehavior, Text};
 
 /// `_ChipDefaultsM3`/`_FilterChipDefaultsM3.padding` (`chip.dart`/
@@ -41,7 +41,7 @@ use flui_sdk::widgets::{GestureDetector, HitTestBehavior, Text};
 /// local re-citation of the oracle constant `chip.rs`'s own `PADDING` is
 /// (correctly) private, needed here only to locate the delete icon's
 /// rendered position from the outside.
-const CONTAINER_PADDING: f32 = 8.0;
+const CONTAINER_PADDING: f64 = 8.0;
 
 /// Every `Chip`/`FilterChip` needs a [`Theme`] ancestor (`Theme::of` panics
 /// without one) — mirrors `tests/checkbox.rs`'s own `themed` helper.
@@ -62,7 +62,7 @@ fn color_property(color: Color) -> String {
 /// `RenderSemanticsAnnotations` node, which sizes to its `CustomPaint`/
 /// `Material`/content chain in full (mirrors `tests/checkbox.rs`'s own
 /// semantics-node-as-container-size assertion).
-fn container_size(laid: &common::LaidOut) -> flui_sdk::types::Size {
+fn container_size(laid: &common::LaidOut) -> flui_sdk::geometry::Size {
     // The wrapper node is the chip's own; its `GestureDetector`s add
     // action-only annotations beneath it for assistive technology.
     let semantics = laid
@@ -76,18 +76,18 @@ fn container_size(laid: &common::LaidOut) -> flui_sdk::types::Size {
 /// The approximate on-screen center of the delete icon in a mounted chip
 /// with no avatar: the icon sits flush against the container's right edge,
 /// inset only by the container's own outer padding.
-fn delete_icon_center(laid: &common::LaidOut) -> (f32, f32) {
+fn delete_icon_center(laid: &common::LaidOut) -> (f64, f64) {
     let size = container_size(laid);
     (
-        size.width.get() - CONTAINER_PADDING - CHIP_ICON_SIZE / 2.0,
-        size.height.get() / 2.0,
+        size.width - CONTAINER_PADDING - CHIP_ICON_SIZE / 2.0,
+        size.height / 2.0,
     )
 }
 
 /// A point safely inside the chip's own tap target but well clear of the
 /// delete icon's small box at the right edge — near the left edge, inside
 /// the outlined border.
-fn chip_only_point() -> (f32, f32) {
+fn chip_only_point() -> (f64, f64) {
     (CONTAINER_PADDING + 2.0, 16.0)
 }
 
@@ -429,10 +429,10 @@ fn theme_side_reaches_the_mounted_border_painter_beating_the_default() {
     let themed_side_color = Color::rgb(44, 55, 66);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         chip_theme: Some(ChipThemeData {
-            side: Some(flui_sdk::types::styling::BorderSide::new(
+            side: Some(flui_sdk::painting::BorderSide::new(
                 themed_side_color,
-                flui_sdk::types::geometry::px(3.0),
-                flui_sdk::types::styling::BorderStyle::Solid,
+                3.0,
+                flui_sdk::painting::BorderStyle::Solid,
             )),
             ..Default::default()
         }),

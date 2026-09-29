@@ -4,7 +4,7 @@
 //! Flutter parity: `widgets/preferred_size.dart` `PreferredSizeWidget` /
 //! `PreferredSize` (oracle tag `3.44.0`).
 
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 use flui_view::prelude::*;
 
 /// A view that can report the size it would prefer if it were otherwise
@@ -46,12 +46,11 @@ pub trait PreferredSizeView: View {
 /// # Examples
 ///
 /// ```rust
-/// use flui_types::geometry::px;
-/// use flui_types::Size;
+/// use flui_foundation::geometry::Size;
 /// use flui_widgets::layout::PreferredSize;
 /// use flui_widgets::SizedBox;
 ///
-/// let _bar = PreferredSize::new(Size::new(px(f32::INFINITY), px(80.0)), SizedBox::shrink());
+/// let _bar = PreferredSize::new(Size::new((f64::INFINITY), 80.0), SizedBox::shrink());
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct PreferredSize {
@@ -95,21 +94,20 @@ impl PreferredSizeView for PreferredSize {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
     use crate::layout::SizedBox;
 
     #[test]
     fn preferred_size_reports_the_configured_size() {
-        let size = Size::new(px(f32::INFINITY), px(80.0));
+        let size = Size::new(f64::INFINITY, 80.0);
         let wrapped = PreferredSize::new(size, SizedBox::shrink());
         assert_eq!(wrapped.preferred_size(), size);
     }
 
     #[test]
     fn child_view_type_is_preserved_through_the_wrapper() {
-        let wrapped = PreferredSize::new(Size::new(px(0.0), px(80.0)), SizedBox::new(10.0, 20.0));
+        let wrapped = PreferredSize::new(Size::new(0.0, 80.0), SizedBox::new(10.0, 20.0));
         assert_eq!(
             wrapped.child.view_type_id(),
             std::any::TypeId::of::<SizedBox>(),

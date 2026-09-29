@@ -4,8 +4,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::common::{lay_out, loose, offset, size};
+use flui_foundation::geometry::{Matrix4, Size};
 use flui_rendering::constraints::BoxConstraints;
-use flui_types::{Matrix4, Size};
 use flui_widgets::row;
 use flui_widgets::{Flow, FlowDelegate, FlowPaintingContext, SizedBox};
 
@@ -14,7 +14,7 @@ use flui_widgets::{Flow, FlowDelegate, FlowPaintingContext, SizedBox};
 /// exercises the transform, not the layout offset.
 #[derive(Debug)]
 struct StepDelegate {
-    step: f32,
+    step: f64,
 }
 
 impl FlowDelegate for StepDelegate {
@@ -32,7 +32,7 @@ impl FlowDelegate for StepDelegate {
 
     fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
         for i in 0..context.child_count() {
-            context.paint_child(i, Matrix4::translation(i as f32 * self.step, 0.0, 0.0));
+            context.paint_child(i, Matrix4::translation(i as f64 * self.step, 0.0, 0.0));
         }
     }
 
@@ -49,7 +49,7 @@ impl FlowDelegate for StepDelegate {
     }
 }
 
-fn step_delegate(step: f32) -> Arc<dyn FlowDelegate> {
+fn step_delegate(step: f64) -> Arc<dyn FlowDelegate> {
     Arc::new(StepDelegate { step })
 }
 

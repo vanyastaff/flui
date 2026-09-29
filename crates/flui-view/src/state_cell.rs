@@ -457,7 +457,6 @@ mod tests {
         pipeline::{PipelineCell, PipelineOwner},
         protocol::BoxProtocol,
     };
-    use flui_types::geometry::px;
 
     use super::{StateCell, StateHandle};
     use crate::{
@@ -529,7 +528,7 @@ mod tests {
             &self,
             _ctx: &crate::RenderObjectContext<'_>,
         ) -> Self::RenderObject {
-            RenderSizedBox::new(Some(px(1.0)), Some(px(1.0)))
+            RenderSizedBox::new(Some(1.0), Some(1.0))
         }
 
         fn update_render_object(

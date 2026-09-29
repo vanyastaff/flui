@@ -4,7 +4,7 @@
 use std::hash::{Hash, Hasher};
 
 use flui_foundation::RenderId;
-use flui_types::Offset;
+use flui_foundation::geometry::{Offset, canonical_bits_f64};
 
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
@@ -19,12 +19,12 @@ use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 #[derive(Debug, Clone, PartialEq)]
 pub struct SliverLogicalParentData {
     /// Logical offset in scrollable axis.
-    pub layout_offset: f32,
+    pub layout_offset: f64,
 }
 
 impl SliverLogicalParentData {
     /// Create with specific layout offset.
-    pub const fn new(layout_offset: f32) -> Self {
+    pub const fn new(layout_offset: f64) -> Self {
         Self { layout_offset }
     }
 
@@ -34,7 +34,7 @@ impl SliverLogicalParentData {
     }
 
     /// Builder: set layout offset.
-    pub const fn with_layout_offset(mut self, offset: f32) -> Self {
+    pub const fn with_layout_offset(mut self, offset: f64) -> Self {
         self.layout_offset = offset;
         self
     }
@@ -61,7 +61,7 @@ impl ParentData for SliverLogicalParentData {}
 
 impl Hash for SliverLogicalParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.layout_offset.to_bits().hash(state);
+        canonical_bits_f64(self.layout_offset).hash(state);
     }
 }
 
@@ -158,7 +158,7 @@ impl SliverSlot {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SliverMultiBoxAdaptorParentData {
     /// Logical offset in scrollable axis.
-    pub layout_offset: f32,
+    pub layout_offset: f64,
 
     /// Index of this child in the list.
     pub index: usize,
@@ -213,7 +213,7 @@ impl SliverMultiBoxAdaptorParentData {
     }
 
     /// Builder: set layout offset.
-    pub const fn with_layout_offset(mut self, offset: f32) -> Self {
+    pub const fn with_layout_offset(mut self, offset: f64) -> Self {
         self.layout_offset = offset;
         self
     }
@@ -245,7 +245,7 @@ impl Default for SliverMultiBoxAdaptorParentData {
 
 impl Hash for SliverMultiBoxAdaptorParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.layout_offset.to_bits().hash(state);
+        canonical_bits_f64(self.layout_offset).hash(state);
         self.index.hash(state);
     }
 }
@@ -262,7 +262,7 @@ impl crate::parent_data::base::ParentData for SliverMultiBoxAdaptorParentData {}
 #[derive(Debug, Clone, PartialEq)]
 pub struct TreeSliverNodeParentData {
     /// Logical offset in scrollable axis.
-    pub layout_offset: f32,
+    pub layout_offset: f64,
 
     /// Index of this child in the tree.
     pub index: usize,
@@ -307,7 +307,7 @@ impl Default for TreeSliverNodeParentData {
 
 impl Hash for TreeSliverNodeParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.layout_offset.to_bits().hash(state);
+        canonical_bits_f64(self.layout_offset).hash(state);
         self.index.hash(state);
         self.depth.hash(state);
     }
@@ -325,7 +325,7 @@ impl crate::parent_data::base::ParentData for TreeSliverNodeParentData {}
 #[derive(Debug, Clone, PartialEq)]
 pub struct SliverLogicalContainerParentData {
     /// Logical offset in scrollable axis.
-    pub layout_offset: f32,
+    pub layout_offset: f64,
 
     /// Container mixin for sibling pointers.
     pub container: ContainerParentDataMixin<RenderId>,
@@ -333,7 +333,7 @@ pub struct SliverLogicalContainerParentData {
 
 impl SliverLogicalContainerParentData {
     /// Create with layout offset.
-    pub const fn new(layout_offset: f32) -> Self {
+    pub const fn new(layout_offset: f64) -> Self {
         Self {
             layout_offset,
             container: ContainerParentDataMixin::new(),
@@ -346,7 +346,7 @@ impl SliverLogicalContainerParentData {
     }
 
     /// Builder: set layout offset.
-    pub const fn with_layout_offset(mut self, offset: f32) -> Self {
+    pub const fn with_layout_offset(mut self, offset: f64) -> Self {
         self.layout_offset = offset;
         self
     }
@@ -362,7 +362,7 @@ impl ParentData for SliverLogicalContainerParentData {}
 
 impl Hash for SliverLogicalContainerParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.layout_offset.to_bits().hash(state);
+        canonical_bits_f64(self.layout_offset).hash(state);
         self.container.hash(state);
     }
 }
@@ -415,8 +415,8 @@ impl ParentData for SliverPhysicalParentData {}
 
 impl Hash for SliverPhysicalParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.paint_offset.dx.to_bits().hash(state);
-        self.paint_offset.dy.to_bits().hash(state);
+        canonical_bits_f64(self.paint_offset.dx).hash(state);
+        canonical_bits_f64(self.paint_offset.dy).hash(state);
     }
 }
 
@@ -469,8 +469,8 @@ impl ParentData for SliverPhysicalContainerParentData {}
 
 impl Hash for SliverPhysicalContainerParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.paint_offset.dx.to_bits().hash(state);
-        self.paint_offset.dy.to_bits().hash(state);
+        canonical_bits_f64(self.paint_offset.dx).hash(state);
+        canonical_bits_f64(self.paint_offset.dy).hash(state);
         self.container.hash(state);
     }
 }
@@ -482,8 +482,6 @@ impl Hash for SliverPhysicalContainerParentData {
 #[cfg(test)]
 mod tests {
     use std::hash::{DefaultHasher, Hash, Hasher};
-
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -627,8 +625,8 @@ mod tests {
 
     #[test]
     fn test_sliver_physical_parent_data() {
-        let data = SliverPhysicalParentData::new(Offset::new(px(10.0), px(20.0)));
-        assert_eq!(data.paint_offset.dx, px(10.0));
+        let data = SliverPhysicalParentData::new(Offset::new(10.0, 20.0));
+        assert_eq!(data.paint_offset.dx, 10.0);
     }
 
     #[test]
@@ -639,17 +637,16 @@ mod tests {
         );
         assert!(SliverPhysicalParentData::zero().is_zero());
 
-        let data =
-            SliverPhysicalParentData::zero().with_paint_offset(Offset::new(px(5.0), px(6.0)));
+        let data = SliverPhysicalParentData::zero().with_paint_offset(Offset::new(5.0, 6.0));
         assert!(!data.is_zero());
-        assert_eq!(data.paint_offset, Offset::new(px(5.0), px(6.0)));
+        assert_eq!(data.paint_offset, Offset::new(5.0, 6.0));
     }
 
     #[test]
     fn sliver_physical_parent_data_hash_matches_for_equal_values() {
-        let a = SliverPhysicalParentData::new(Offset::new(px(1.0), px(2.0)));
-        let b = SliverPhysicalParentData::new(Offset::new(px(1.0), px(2.0)));
-        let c = SliverPhysicalParentData::new(Offset::new(px(1.0), px(3.0)));
+        let a = SliverPhysicalParentData::new(Offset::new(1.0, 2.0));
+        let b = SliverPhysicalParentData::new(Offset::new(1.0, 2.0));
+        let c = SliverPhysicalParentData::new(Offset::new(1.0, 3.0));
 
         assert_eq!(a, b);
         assert_eq!(hash_of(&a), hash_of(&b));
@@ -668,16 +665,16 @@ mod tests {
         assert!(zero.container.is_first_child());
         assert!(zero.container.is_last_child());
 
-        let data = SliverPhysicalContainerParentData::new(Offset::new(px(1.0), px(2.0)))
-            .with_paint_offset(Offset::new(px(3.0), px(4.0)));
-        assert_eq!(data.paint_offset, Offset::new(px(3.0), px(4.0)));
+        let data = SliverPhysicalContainerParentData::new(Offset::new(1.0, 2.0))
+            .with_paint_offset(Offset::new(3.0, 4.0));
+        assert_eq!(data.paint_offset, Offset::new(3.0, 4.0));
     }
 
     #[test]
     fn sliver_physical_container_parent_data_hash_matches_for_equal_values() {
-        let a = SliverPhysicalContainerParentData::new(Offset::new(px(1.0), px(2.0)));
-        let b = SliverPhysicalContainerParentData::new(Offset::new(px(1.0), px(2.0)));
-        let c = SliverPhysicalContainerParentData::new(Offset::new(px(9.0), px(2.0)));
+        let a = SliverPhysicalContainerParentData::new(Offset::new(1.0, 2.0));
+        let b = SliverPhysicalContainerParentData::new(Offset::new(1.0, 2.0));
+        let c = SliverPhysicalContainerParentData::new(Offset::new(9.0, 2.0));
 
         assert_eq!(a, b);
         assert_eq!(hash_of(&a), hash_of(&b));

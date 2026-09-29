@@ -24,26 +24,26 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use flui_foundation::geometry::Offset;
+use flui_interaction::PointerDeviceKind;
 use flui_interaction::processing::{
     ImpulseVelocityTracker, IosFlingVelocityTracker, OneEuroFilter2D, VelocityTracker,
 };
-use flui_types::geometry::{Offset, Pixels};
-use flui_types::gestures::PointerDeviceKind;
 
 /// Build a deterministic linear swipe: `samples` positions equally spaced
 /// over `duration_ms`, with `dx` advancing `slope_px_per_s` per second.
 fn linear_swipe(
     samples: usize,
     duration_ms: u64,
-    slope_px_per_s: f32,
-) -> Vec<(Instant, Offset<Pixels>)> {
+    slope_px_per_s: f64,
+) -> Vec<(Instant, Offset<f64>)> {
     let start = Instant::now();
     let dt = Duration::from_millis(duration_ms / samples as u64);
     (0..samples)
         .map(|i| {
             let t = start + dt * i as u32;
-            let x = slope_px_per_s * (i as f32 * dt.as_secs_f32());
-            (t, Offset::new(Pixels(x), Pixels(0.0)))
+            let x = slope_px_per_s * (i as f64 * dt.as_secs_f64());
+            (t, Offset::new(x, 0.0))
         })
         .collect()
 }
@@ -187,7 +187,7 @@ fn bench_one_euro_step(c: &mut Criterion) {
         b.iter(|| {
             i = i.wrapping_add(1);
             let t = start + Duration::from_millis(8) * i;
-            let p = Offset::new(Pixels(i as f32 * 0.5), Pixels(50.0));
+            let p = Offset::new(i as f64 * 0.5, 50.0);
             black_box(filter.filter(black_box(t), black_box(p)))
         });
     });

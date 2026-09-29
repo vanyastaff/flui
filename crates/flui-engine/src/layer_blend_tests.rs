@@ -19,7 +19,8 @@
 
 #[cfg(test)]
 mod unit_tests {
-    use flui_types::{Rect, painting::BlendMode};
+    use flui_foundation::geometry::Rect;
+    use flui_painting::paint::BlendMode;
 
     use crate::{
         command_ir::{DrawItem, DrawSegment, LayerFilterChain, PendingOpacityLayer},
@@ -248,8 +249,9 @@ mod unit_tests {
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::Rect;
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, geometry::Pixels, painting::BlendMode};
+    use flui_painting::{paint::BlendMode, styling::Color};
 
     use crate::{painter::WgpuPainter, render_target::RenderTarget};
 
@@ -341,12 +343,12 @@ mod gpu_tests {
     }
 
     /// Full-surface bounds for W×H.
-    fn full_surface_bounds() -> Rect<Pixels> {
+    fn full_surface_bounds() -> Rect<f64> {
         Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(SURFACE_WIDTH as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         )
     }
 
@@ -671,16 +673,16 @@ mod gpu_tests {
 
         let half_width = SURFACE_WIDTH / 2;
         let left_bounds = Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(half_width as f32),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(half_width as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         );
         let right_bounds = Rect::from_xywh(
-            Pixels(half_width as f32),
-            Pixels(0.0),
-            Pixels(half_width as f32),
-            Pixels(SURFACE_HEIGHT as f32),
+            f64::from(half_width as f32),
+            0.0,
+            f64::from(half_width as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         // Opaque red → Multiply with green backdrop → dark output.

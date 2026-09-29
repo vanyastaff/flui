@@ -11,7 +11,7 @@ use std::time::Duration;
 use common::{lay_out_animated, tight};
 use flui_cupertino::cupertino_page_route;
 use flui_sdk::animation::{Curve, Curves, Vsync};
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{ColoredBox, Navigator, NavigatorHandle, SimpleRoute, VsyncScope};
 
@@ -46,15 +46,15 @@ fn seeded_navigator() -> NavigatorHandle {
 /// Parses `RenderFractionalTranslation`'s `"translation"` diagnostic
 /// (`format!("({}, {})", dx, dy)`, `fractional_translation.rs`) back into
 /// its two components.
-fn parse_translation(property: &str) -> (f32, f32) {
+fn parse_translation(property: &str) -> (f64, f64) {
     let trimmed = property.trim_matches(['(', ')']);
     let mut parts = trimmed.split(", ");
-    let dx: f32 = parts
+    let dx: f64 = parts
         .next()
         .expect("translation has a dx component")
         .parse()
         .expect("dx is a float");
-    let dy: f32 = parts
+    let dy: f64 = parts
         .next()
         .expect("translation has a dy component")
         .parse()
@@ -69,7 +69,7 @@ fn parse_translation(property: &str) -> (f32, f32) {
 /// this route). The primary is whichever of the two reads the larger `|dx|`
 /// at any given moment — true by construction, since the secondary never
 /// moves in this scenario.
-fn primary_slide_dx(laid: &common::LaidOut) -> f32 {
+fn primary_slide_dx(laid: &common::LaidOut) -> f64 {
     let nodes = laid.find_all_by_render_type("RenderFractionalTranslation");
     assert_eq!(
         nodes.len(),
@@ -86,7 +86,7 @@ fn primary_slide_dx(laid: &common::LaidOut) -> f32 {
             )
             .0
         })
-        .fold(0.0_f32, |largest, dx| {
+        .fold(0.0_f64, |largest, dx| {
             if dx.abs() > largest.abs() {
                 dx
             } else {
@@ -195,7 +195,7 @@ fn a_covered_pages_secondary_slide_drifts_toward_negative_one_third() {
         4,
         "two pushed cupertino_page_routes each mount a primary + secondary FractionalTranslation"
     );
-    let dxs: Vec<f32> = nodes
+    let dxs: Vec<f64> = nodes
         .iter()
         .map(|&id| {
             parse_translation(
@@ -211,9 +211,9 @@ fn a_covered_pages_secondary_slide_drifts_toward_negative_one_third() {
         .iter()
         .copied()
         .min_by(|a, b| {
-            (a - (-1.0_f32 / 3.0))
+            (a - (-1.0_f64 / 3.0))
                 .abs()
-                .total_cmp(&(b - (-1.0_f32 / 3.0)).abs())
+                .total_cmp(&(b - (-1.0_f64 / 3.0)).abs())
         })
         .expect("four FractionalTranslation nodes exist");
     assert!(

@@ -10,13 +10,13 @@
 
 use std::any::TypeId;
 
+use flui_foundation::geometry::Size;
 use flui_foundation::{ElementId, RenderId};
 use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     storage::RenderNode,
     view::{RenderView as RenderViewObject, RenderViewAdapter, ViewConfiguration},
 };
-use flui_types::{Size, geometry::px};
 
 use crate::{
     element::{Lifecycle, RenderTreeRootElement},
@@ -42,7 +42,7 @@ pub struct RootRenderView<V: View + Clone> {
     /// The child widget to render
     child: V,
     /// Window/view size
-    size: (f32, f32),
+    size: (f64, f64),
 }
 
 impl<V: View + Clone + std::fmt::Debug> std::fmt::Debug for RootRenderView<V> {
@@ -56,7 +56,7 @@ impl<V: View + Clone + std::fmt::Debug> std::fmt::Debug for RootRenderView<V> {
 
 impl<V: View + Clone> RootRenderView<V> {
     /// Create a new RootRenderView wrapping the given child.
-    pub fn new(child: V, width: f32, height: f32) -> Self {
+    pub fn new(child: V, width: f64, height: f64) -> Self {
         Self {
             child,
             size: (width, height),
@@ -196,7 +196,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         // so the configuration and the paint root's scale agree.
         let (width, height) = self.view.size;
         let mut render_view = RenderViewObject::new();
-        let logical_size = Size::new(px(width), px(height));
+        let logical_size = Size::new(width, height);
         let dpr = self
             .pipeline_owner
             .as_ref()
@@ -310,7 +310,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
                             .downcast_mut::<RenderViewObject>()
                         {
                             let (width, height) = self.view.size;
-                            let logical_size = Size::new(px(width), px(height));
+                            let logical_size = Size::new(width, height);
                             let config = ViewConfiguration::from_size(logical_size, dpr);
                             render_view.set_configuration(config);
                         }

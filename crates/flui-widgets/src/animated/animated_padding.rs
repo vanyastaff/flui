@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{Animatable, Animation};
-use flui_geometry::EdgeInsets;
+use flui_foundation::geometry::EdgeInsets;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
 

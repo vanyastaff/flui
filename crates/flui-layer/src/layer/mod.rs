@@ -37,8 +37,8 @@ pub use clip_rect::ClipRectLayer;
 pub use clip_rrect::ClipRRectLayer;
 pub use clip_superellipse::ClipSuperellipseLayer;
 pub use color_filter::ColorFilterLayer;
+use flui_foundation::geometry::{Offset, Rect};
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsNode};
-use flui_types::geometry::{Offset, Pixels, Rect};
 pub use follower::FollowerLayer;
 pub use image_filter::ImageFilterLayer;
 pub use leader::LeaderLayer;
@@ -64,10 +64,11 @@ pub use transform::TransformLayer;
 ///
 /// ```rust
 /// use flui_layer::{ClipRectLayer, Layer, OpacityLayer};
-/// use flui_types::{geometry::{Rect, px}, painting::Clip};
+/// use flui_foundation::geometry::Rect;
+/// use flui_painting::paint::Clip;
 ///
 /// let clip = Layer::from(ClipRectLayer::new(
-///     Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
 ///     Clip::HardEdge,
 /// ));
 /// let opacity = Layer::from(OpacityLayer::new(0.5));
@@ -122,7 +123,7 @@ impl Layer {
     /// Transform-like and effect-only containers (`Offset`, `Transform`,
     /// `Opacity`, `ColorFilter`, `ImageFilter`) have no bounds of their own,
     /// and a `Follower`'s depend on composite-time resolution.
-    pub fn bounds(&self) -> Option<Rect<Pixels>> {
+    pub fn bounds(&self) -> Option<Rect<f64>> {
         match self {
             Layer::Canvas(layer) => layer.bounds(),
             Layer::Picture(layer) => layer.bounds(),
@@ -156,12 +157,12 @@ impl Layer {
     /// contributes only its translation (the follower system is offset-only);
     /// a `Follower` contributes zero because its own translation is resolved
     /// by the walk rather than stored on the layer.
-    pub fn local_translation(&self) -> Offset<Pixels> {
+    pub fn local_translation(&self) -> Offset<f64> {
         match self {
             Layer::Offset(layer) => layer.offset(),
             Layer::Transform(layer) => {
                 let (dx, dy, _dz) = layer.transform().translation_component();
-                Offset::new(Pixels::new(dx), Pixels::new(dy))
+                Offset::new(dx, dy)
             }
             Layer::Opacity(layer) => layer.offset(),
             Layer::ImageFilter(layer) => layer.offset(),
@@ -275,11 +276,11 @@ impl Diagnosticable for Layer {
 
 /// Normalises a caller-supplied alpha into `0.0..=1.0`.
 ///
-/// `f32::clamp` lets `NaN` through, which would leave an `OpacityLayer` or
+/// `f64::clamp` lets `NaN` through, which would leave an `OpacityLayer` or
 /// `TextureLayer` outside the range its type promises. `NaN` becomes 1.0 —
 /// the effect disappears rather than the content — and a debug build trips,
 /// since a `NaN` alpha is a caller bug.
-pub(crate) fn unit_alpha(alpha: f32) -> f32 {
+pub(crate) fn unit_alpha(alpha: f64) -> f64 {
     debug_assert!(!alpha.is_nan(), "BUG: alpha must be a number in 0.0..=1.0");
     if alpha.is_nan() {
         1.0
@@ -332,10 +333,8 @@ layer_from_impls! {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{
-        geometry::{Size, px},
-        painting::Clip,
-    };
+    use flui_foundation::geometry::Size;
+    use flui_painting::paint::Clip;
 
     use super::*;
     use crate::LayerLink;
@@ -343,24 +342,24 @@ mod tests {
     #[test]
     fn bounds_come_from_the_payload() {
         let layer = Layer::from(ClipRectLayer::new(
-            Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)),
+            Rect::from_xywh(10.0, 20.0, 100.0, 50.0),
             Clip::HardEdge,
         ));
         assert_eq!(
             layer.bounds(),
-            Some(Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)))
+            Some(Rect::from_xywh(10.0, 20.0, 100.0, 50.0))
         );
         assert_eq!(Layer::from(OpacityLayer::new(0.5)).bounds(), None);
     }
 
     #[test]
     fn local_translation_covers_every_offset_carrying_variant() {
-        let offset = Offset::new(px(3.0), px(4.0));
+        let offset = Offset::new(3.0, 4.0);
         let translating: [Layer; 5] = [
             OffsetLayer::new(offset).into(),
             TransformLayer::translation(3.0, 4.0).into(),
             OpacityLayer::with_offset(0.5, offset).into(),
-            ImageFilterLayer::with_offset(flui_types::painting::ImageFilter::blur(1.0), offset)
+            ImageFilterLayer::with_offset(flui_painting::paint::ImageFilter::blur(1.0), offset)
                 .into(),
             LeaderLayer::with_offset(LayerLink::new(), Size::ZERO, offset).into(),
         ];
@@ -396,7 +395,7 @@ mod tests {
     #[test]
     #[cfg_attr(debug_assertions, should_panic(expected = "alpha must be a number"))]
     fn nan_alpha_never_escapes_the_unit_range() {
-        assert_eq!(unit_alpha(f32::NAN), 1.0);
+        assert_eq!(unit_alpha(f64::NAN), 1.0);
     }
 
     #[test]
@@ -404,16 +403,17 @@ mod tests {
         assert_eq!(unit_alpha(-2.0), 0.0);
         assert_eq!(unit_alpha(0.25), 0.25);
         assert_eq!(unit_alpha(7.0), 1.0);
-        assert_eq!(OpacityLayer::new(f32::INFINITY).alpha(), 1.0);
+        assert_eq!(OpacityLayer::new(f64::INFINITY).alpha(), 1.0);
     }
 
     /// The enum's footprint is a hot-path number: every node holds one inline.
     /// `Canvas` stays boxed (a live recorder is ~184 B); everything else fits
-    /// the budget unboxed. Re-measure before boxing more — a box is one heap
+    /// the budget unboxed. The widest inline variant carries an `f64` `Matrix4`
+    /// (128 B, ADR-0098 §2). Re-measure before boxing more — a box is one heap
     /// allocation per layer per frame.
     #[test]
     fn layer_fits_the_inline_budget() {
-        const BUDGET: usize = 128;
+        const BUDGET: usize = 208;
         let size = std::mem::size_of::<Layer>();
         assert!(size <= BUDGET, "size_of::<Layer>() = {size} > {BUDGET}");
     }

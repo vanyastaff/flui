@@ -15,16 +15,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::events::PointerType;
 use flui_interaction::settings::GestureSettings;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
 use flui_testing::HeadlessBinding;
 use flui_testing::replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};
-use flui_types::Offset;
-use flui_types::geometry::px;
 
-fn at(x: f32, y: f32) -> Offset {
-    Offset::new(px(x), px(y))
+fn at(x: f64, y: f64) -> Offset {
+    Offset::new(x, y)
 }
 
 /// A long-press recognizer on `binding`'s clock-bound arena, plus the flag its

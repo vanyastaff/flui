@@ -12,7 +12,7 @@
 //! (Slint keeps up to three) is a change to the consumer, and the tracker
 //! grows with it.
 
-use flui_types::geometry::{Pixels, Rect};
+use flui_foundation::geometry::Rect;
 
 /// Accumulates the area that changed since the last frame.
 ///
@@ -20,7 +20,7 @@ use flui_types::geometry::{Pixels, Rect};
 /// [`DamageTracker::reset`] starts the next frame clean.
 #[derive(Debug, Clone)]
 pub(crate) struct DamageTracker {
-    bounds: Option<Rect<Pixels>>,
+    bounds: Option<Rect<f64>>,
     full_repaint: bool,
 }
 
@@ -35,8 +35,8 @@ impl DamageTracker {
     }
 
     /// Adds `rect` to the damaged area. A zero-sized rect is a no-op.
-    pub(crate) fn mark_dirty(&mut self, rect: Rect<Pixels>) {
-        if rect.width().0 <= 0.0 || rect.height().0 <= 0.0 {
+    pub(crate) fn mark_dirty(&mut self, rect: Rect<f64>) {
+        if rect.width() <= 0.0 || rect.height() <= 0.0 {
             return;
         }
         self.bounds = Some(match self.bounds {
@@ -59,7 +59,7 @@ impl DamageTracker {
     /// The scissor for a partial repaint: `None` when the whole frame
     /// repaints (or nothing is dirty), else the union of every marked rect.
     #[must_use]
-    pub(crate) fn damage_rect(&self) -> Option<Rect<Pixels>> {
+    pub(crate) fn damage_rect(&self) -> Option<Rect<f64>> {
         if self.full_repaint {
             return None;
         }
@@ -81,12 +81,11 @@ impl DamageTracker {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
-    fn rect(l: f32, t: f32, r: f32, b: f32) -> Rect<Pixels> {
-        Rect::from_ltrb(px(l), px(t), px(r), px(b))
+    fn rect(l: f32, t: f32, r: f32, b: f32) -> Rect<f64> {
+        Rect::from_ltrb(f64::from(l), f64::from(t), f64::from(r), f64::from(b))
     }
 
     #[test]

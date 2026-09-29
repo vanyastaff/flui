@@ -12,10 +12,8 @@
 
 use std::sync::Arc;
 
-use flui_types::{
-    Matrix4, Pixels, Point, RRect, Rect, Size,
-    painting::{Clip, Path},
-};
+use flui_foundation::geometry::{Matrix4, Point, RRect, Rect, Size};
+use flui_painting::paint::{Clip, Path};
 
 use crate::hit_testing::PathClipTarget;
 
@@ -79,7 +77,8 @@ use crate::hit_testing::PathClipTarget;
 ///
 /// ```
 /// use flui_rendering::traits::{PaintClip, PaintEffects, PaintOpacity};
-/// use flui_types::{Rect, painting::Clip};
+/// use flui_foundation::geometry::Rect;
+/// use flui_painting::paint::Clip;
 ///
 /// let effects = PaintEffects::NONE
 ///     .with_opacity(PaintOpacity::new(128))
@@ -201,7 +200,7 @@ pub enum PaintClip {
     /// Axis-aligned rectangular clip.
     Rect {
         /// The clip rectangle, in the node's own coordinate space.
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         /// How to handle content outside the clip boundary.
         behavior: Clip,
     },

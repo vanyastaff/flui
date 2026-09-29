@@ -41,7 +41,7 @@ impl StatelessView for Gallery {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         Container::new()
             .color(Color::rgb(18, 18, 24))
-            .padding(EdgeInsets::all(px(24.0)))
+            .padding(EdgeInsets::all(24.0))
             .alignment(Alignment::TOP_LEFT)
             .child(Column::new(column![
                 Text::new("FLUI widget gallery"),
@@ -64,7 +64,7 @@ impl StatelessView for Gallery {
                 SizedBox::height(24.0),
                 Container::new()
                     .color(Color::rgb(38, 38, 48))
-                    .padding(EdgeInsets::all(px(16.0)))
+                    .padding(EdgeInsets::all(16.0))
                     .child(Center::new().child(Text::new("centered in a card"))),
             ]))
     }

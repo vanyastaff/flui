@@ -47,14 +47,11 @@ use std::sync::Arc;
 
 use flui_sdk::foundation::ListenerId;
 use flui_sdk::foundation::notifier::Listenable;
-use flui_sdk::types::EdgeInsets;
-use flui_sdk::types::Pixels;
-use flui_sdk::types::geometry::{Radius, px};
-use flui_sdk::types::platform::Brightness;
-use flui_sdk::types::styling::{
-    Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color,
-};
-use flui_sdk::types::typography::TextStyle;
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::geometry::Radius;
+use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::{Border, BorderRadius, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, CrossAxisAlignment, DecoratedBox, MouseRegion, Padding, Text, WidgetState,
@@ -145,30 +142,28 @@ fn default_fill_color(colors: ColorScheme) -> WidgetStateProperty<Option<Color>>
 /// M3 default `activeIndicatorBorder` (the bottom underline) —
 /// `_InputDecoratorDefaultsM3.activeIndicatorBorder`
 /// (`input_decorator.dart:5972-5992`).
-fn default_active_indicator(
-    colors: ColorScheme,
-) -> WidgetStateProperty<Option<BorderSide<Pixels>>> {
+fn default_active_indicator(colors: ColorScheme) -> WidgetStateProperty<Option<BorderSide<f64>>> {
     WidgetStateProperty::resolve_with(move |states| {
         Some(if states.contains_state(WidgetState::Disabled) {
             BorderSide::new(
                 colors.on_surface.with_opacity(0.38),
-                px(1.0),
+                1.0,
                 BorderStyle::Solid,
             )
         } else if states.contains_state(WidgetState::Error) {
             if states.contains_state(WidgetState::Focused) {
-                BorderSide::new(colors.error, px(2.0), BorderStyle::Solid)
+                BorderSide::new(colors.error, 2.0, BorderStyle::Solid)
             } else if states.contains_state(WidgetState::Hovered) {
-                BorderSide::new(colors.on_error_container, px(1.0), BorderStyle::Solid)
+                BorderSide::new(colors.on_error_container, 1.0, BorderStyle::Solid)
             } else {
-                BorderSide::new(colors.error, px(1.0), BorderStyle::Solid)
+                BorderSide::new(colors.error, 1.0, BorderStyle::Solid)
             }
         } else if states.contains_state(WidgetState::Focused) {
-            BorderSide::new(colors.primary, px(2.0), BorderStyle::Solid)
+            BorderSide::new(colors.primary, 2.0, BorderStyle::Solid)
         } else if states.contains_state(WidgetState::Hovered) {
-            BorderSide::new(colors.on_surface, px(1.0), BorderStyle::Solid)
+            BorderSide::new(colors.on_surface, 1.0, BorderStyle::Solid)
         } else {
-            BorderSide::new(colors.on_surface_variant, px(1.0), BorderStyle::Solid)
+            BorderSide::new(colors.on_surface_variant, 1.0, BorderStyle::Solid)
         })
     })
 }
@@ -253,7 +248,7 @@ fn default_error_style(
 /// `EdgeInsets.fromLTRB(12, 8, 12, 8)` (`InputDecoration.contentPadding`'s
 /// doc comment, `input_decorator.dart:3333-3334`, tag `3.44.0`).
 fn default_content_padding() -> EdgeInsets {
-    EdgeInsets::new(px(8.0), px(12.0), px(8.0), px(12.0))
+    EdgeInsets::new(8.0, 12.0, 8.0, 12.0)
 }
 
 /// `ThemeData.hoverColor`'s default (`theme_data.dart:468`, tag `3.44.0`):
@@ -509,7 +504,7 @@ impl ViewState<InputDecorator> for InputDecoratorState {
         // rendering: a rounded fill, a straight underline stroke.
         let box_decoration = BoxDecoration::new()
             .set_color(Some(blended_fill))
-            .set_border_radius(Some(BorderRadius::top(Radius::circular(px(4.0)))))
+            .set_border_radius(Some(BorderRadius::top(Radius::circular(4.0))))
             .set_border(Some(Border::new(None, None, Some(indicator), None)));
 
         let content_padding = decoration
@@ -621,10 +616,10 @@ mod tests {
     fn default_content_padding_matches_m3_filled_non_dense_value() {
         // `EdgeInsets.fromLTRB(12, 8, 12, 8)` (`input_decorator.dart:3333-3334`).
         let padding = default_content_padding();
-        assert_eq!(padding.left, px(12.0));
-        assert_eq!(padding.top, px(8.0));
-        assert_eq!(padding.right, px(12.0));
-        assert_eq!(padding.bottom, px(8.0));
+        assert_eq!(padding.left, 12.0);
+        assert_eq!(padding.top, 8.0);
+        assert_eq!(padding.right, 12.0);
+        assert_eq!(padding.bottom, 8.0);
     }
 
     // ========================================================================
@@ -664,27 +659,27 @@ mod tests {
 
         let plain = resolve(&property, WidgetStates::NONE).expect("plain branch");
         assert_eq!(plain.color, colors.on_surface_variant);
-        assert_eq!(plain.width, px(1.0));
+        assert_eq!(plain.width, 1.0);
 
         let disabled =
             resolve(&property, WidgetStates::from(WidgetState::Disabled)).expect("disabled branch");
         assert_eq!(disabled.color, colors.on_surface.with_opacity(0.38));
-        assert_eq!(disabled.width, px(1.0));
+        assert_eq!(disabled.width, 1.0);
 
         let focused =
             resolve(&property, WidgetStates::from(WidgetState::Focused)).expect("focused branch");
         assert_eq!(focused.color, colors.primary);
-        assert_eq!(focused.width, px(2.0));
+        assert_eq!(focused.width, 2.0);
 
         let hovered =
             resolve(&property, WidgetStates::from(WidgetState::Hovered)).expect("hovered branch");
         assert_eq!(hovered.color, colors.on_surface);
-        assert_eq!(hovered.width, px(1.0));
+        assert_eq!(hovered.width, 1.0);
 
         let error =
             resolve(&property, WidgetStates::from(WidgetState::Error)).expect("error branch");
         assert_eq!(error.color, colors.error);
-        assert_eq!(error.width, px(1.0));
+        assert_eq!(error.width, 1.0);
 
         // Combined-state pins: within `error`, `focused` beats `hovered`
         // beats plain — and `error+focused` uses a 2.0 width (unlike the
@@ -696,7 +691,7 @@ mod tests {
         )
         .expect("error+focused branch");
         assert_eq!(error_focused.color, colors.error);
-        assert_eq!(error_focused.width, px(2.0));
+        assert_eq!(error_focused.width, 2.0);
 
         let error_hovered = resolve(
             &property,
@@ -704,7 +699,7 @@ mod tests {
         )
         .expect("error+hovered branch");
         assert_eq!(error_hovered.color, colors.on_error_container);
-        assert_eq!(error_hovered.width, px(1.0));
+        assert_eq!(error_hovered.width, 1.0);
 
         // Top-level combined-state pin: focused+hovered resolves the
         // focused (2.0, primary) branch, not hovered's — the oracle's own
@@ -715,7 +710,7 @@ mod tests {
         )
         .expect("focused+hovered branch");
         assert_eq!(focused_hovered.color, colors.primary);
-        assert_eq!(focused_hovered.width, px(2.0));
+        assert_eq!(focused_hovered.width, 2.0);
 
         // Disabled outranks every other state, including error.
         let disabled_error = resolve(
@@ -724,7 +719,7 @@ mod tests {
         )
         .expect("disabled+error branch");
         assert_eq!(disabled_error.color, colors.on_surface.with_opacity(0.38));
-        assert_eq!(disabled_error.width, px(1.0));
+        assert_eq!(disabled_error.width, 1.0);
     }
 
     /// Mutation-style red-check: swapping the `error`/`focused` branch order

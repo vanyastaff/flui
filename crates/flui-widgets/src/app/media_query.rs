@@ -16,9 +16,9 @@
 //! These require platform event plumbing (accessibility bridge, IME state)
 //! that lives above this layer.
 
-use flui_geometry::{EdgeInsets, px};
-use flui_types::Size;
-use flui_types::platform::Brightness;
+use flui_foundation::geometry::EdgeInsets;
+use flui_foundation::geometry::Size;
+use flui_platform_api::Brightness;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherited_view};
 
@@ -43,7 +43,7 @@ use flui_view::{BoxedView, FieldMask, InheritedData, InheritedView, impl_inherit
 /// |---|---|
 /// | [`size`](Self::size) | `MediaQueryData.size` |
 /// | [`device_pixel_ratio`](Self::device_pixel_ratio) | `MediaQueryData.devicePixelRatio` |
-/// | [`text_scale_factor`](Self::text_scale_factor) | `MediaQueryData.textScaler` (flat `f32`, not `TextScaler`) |
+/// | [`text_scale_factor`](Self::text_scale_factor) | `MediaQueryData.textScaler` (flat `f64`, not `TextScaler`) |
 /// | [`padding`](Self::padding) | `MediaQueryData.padding` |
 /// | [`view_insets`](Self::view_insets) | `MediaQueryData.viewInsets` |
 /// | [`platform_brightness`](Self::platform_brightness) | `MediaQueryData.platformBrightness` |
@@ -57,11 +57,11 @@ pub struct MediaQueryData {
 
     /// Physical pixels per logical pixel (e.g. `2.0` on a Retina display,
     /// `3.0` on some high-DPI phones). Always positive and finite.
-    pub device_pixel_ratio: f32,
+    pub device_pixel_ratio: f64,
 
     /// User-configured font scaling factor. `1.0` is the system default;
     /// values above `1.0` enlarge text for accessibility.
-    pub text_scale_factor: f32,
+    pub text_scale_factor: f64,
 
     /// Safe-area insets from the window edges reserved by the OS (notch,
     /// home indicator, status bar). App content should avoid rendering
@@ -82,7 +82,7 @@ pub struct MediaQueryData {
 impl Default for MediaQueryData {
     fn default() -> Self {
         Self {
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             device_pixel_ratio: 1.0,
             text_scale_factor: 1.0,
             padding: EdgeInsets::ZERO,
@@ -181,7 +181,7 @@ impl MediaQuery {
 
     /// The device pixel ratio, depending on `device_pixel_ratio` only.
     #[must_use]
-    pub fn device_pixel_ratio_of(ctx: &dyn BuildContext) -> Option<f32> {
+    pub fn device_pixel_ratio_of(ctx: &dyn BuildContext) -> Option<f64> {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_DEVICE_PIXEL_RATIO, |d| {
             d.device_pixel_ratio
         })
@@ -189,7 +189,7 @@ impl MediaQuery {
 
     /// The text scale factor, depending on `text_scale_factor` only.
     #[must_use]
-    pub fn text_scale_factor_of(ctx: &dyn BuildContext) -> Option<f32> {
+    pub fn text_scale_factor_of(ctx: &dyn BuildContext) -> Option<f64> {
         Self::depend_on_fields(ctx, MediaQueryData::FIELD_TEXT_SCALE_FACTOR, |d| {
             d.text_scale_factor
         })

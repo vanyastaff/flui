@@ -40,8 +40,8 @@ mod appkit_frame_pump_probe {
     use std::sync::{Arc, Weak};
     use std::time::{Duration, Instant};
 
+    use flui_foundation::geometry::Size;
     use flui_platform::Platform;
-    use flui_types::geometry::{Size, px};
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     /// How long the primer may keep poking before the pump is declared
@@ -104,7 +104,7 @@ mod appkit_frame_pump_probe {
         // started" from "started and stalled".
         let window = match owner.open_window(flui_platform::WindowOptions {
             title: "FLUI frame-pump probe".to_string(),
-            size: Size::new(px(480.0), px(320.0)),
+            size: Size::new(480.0, 320.0),
             resizable: false,
             visible: true,
             decorated: true,

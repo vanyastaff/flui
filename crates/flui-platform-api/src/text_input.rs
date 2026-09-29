@@ -15,7 +15,7 @@
 //! template (`PlatformWindow::haptics`, ADR-0031); `PlatformSystemChrome`
 //! is deferred (ADR-0031) with no target date.
 
-use flui_types::geometry::{Bounds, Pixels};
+use flui_foundation::geometry::Bounds;
 
 /// Platform capability for IME-driven text input on one window.
 ///
@@ -25,7 +25,7 @@ use flui_types::geometry::{Bounds, Pixels};
 /// (enable/disable IME, place the candidate window). The document the input
 /// method reads and edits is the field's [`TextStore`](crate::TextStore)
 /// (ADR-0090), attached through `flui-interaction`'s presentation-owned
-/// text-input owner, which projects incoming [`flui_types::ImeEvent`]s onto
+/// text-input owner, which projects incoming [`ImeEvent`](crate::ImeEvent)s onto
 /// it. A backend cannot hold that store through this trait yet: the trait is
 /// `Send + Sync` and the store is owner-thread (ADR-0082 §4).
 pub trait PlatformTextInput: Send + Sync {
@@ -42,5 +42,5 @@ pub trait PlatformTextInput: Send + Sync {
     /// Tell the platform IME where to draw its candidate/composition
     /// window, in logical window coordinates (origin + size, matching
     /// [`PlatformWindow::bounds`](crate::PlatformWindow::bounds)'s convention).
-    fn set_ime_cursor_area(&self, area: Bounds<Pixels>);
+    fn set_ime_cursor_area(&self, area: Bounds<f64>);
 }

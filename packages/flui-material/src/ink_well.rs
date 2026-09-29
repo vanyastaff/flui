@@ -107,7 +107,7 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::interaction::FocusNode;
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
@@ -511,7 +511,7 @@ fn overlay_content(view: &InkWell, resolved_overlay: Option<Color>) -> BoxedView
         Some(color) => BoxedView(Box::new(
             Material::new(color)
                 .shape(view.shape)
-                .clip_behavior(flui_sdk::types::painting::Clip::AntiAlias)
+                .clip_behavior(flui_sdk::painting::Clip::AntiAlias)
                 .child(view.child.clone()),
         )),
         None => view.child.clone(),

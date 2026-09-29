@@ -1,6 +1,6 @@
 //! Web display implementation
 
-use flui_types::geometry::{Bounds, DevicePixels, Point, Size, device_px};
+use flui_foundation::geometry::{Bounds, Point, Size};
 
 use crate::traits::{DisplayId, PlatformDisplay};
 
@@ -34,11 +34,8 @@ impl PlatformDisplay for WebDisplay {
         "Browser Screen".to_string()
     }
 
-    fn bounds(&self) -> Bounds<DevicePixels> {
-        Bounds::new(
-            Point::new(device_px(0), device_px(0)),
-            Size::new(device_px(self.width), device_px(self.height)),
-        )
+    fn bounds(&self) -> Bounds<i32> {
+        Bounds::new(Point::new(0, 0), Size::new(self.width, self.height))
     }
 
     fn scale_factor(&self) -> f64 {

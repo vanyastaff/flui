@@ -7,6 +7,7 @@
 //! reaching the pipeline owner, if the semantics phase stops assembling, or if
 //! the translation stops being invoked.
 
+use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::prelude::*;
@@ -14,7 +15,6 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_semantics::{SemanticsConfiguration, SemanticsRole};
 use flui_testing::HeadlessBinding;
 use flui_testing::a11y::Role;
-use flui_types::{Size, geometry::px};
 use flui_view::{BuildOwner, tree::ElementTree};
 
 /// A leaf carrying whatever semantics the test wants to see come out the other
@@ -37,7 +37,7 @@ impl RenderBox for SemanticLeaf {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        Size::new(px(10.0), px(10.0))
+        Size::new(10.0, 10.0)
     }
 
     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
@@ -55,12 +55,7 @@ fn binding_with(leaf: SemanticLeaf) -> HeadlessBinding {
     let mut owner = PipelineOwner::new();
     let root = owner.insert::<BoxProtocol>(Box::new(leaf));
     owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     HeadlessBinding::with_tree(
         BuildOwner::new(),
@@ -109,7 +104,7 @@ impl RenderBox for SemanticContainer {
         let constraints = *ctx.constraints();
         if ctx.child_count() > 0 {
             let size = ctx.layout_child(0, constraints);
-            ctx.position_child(0, flui_types::Offset::ZERO);
+            ctx.position_child(0, flui_foundation::geometry::Offset::ZERO);
             size
         } else {
             constraints.smallest()
@@ -143,12 +138,7 @@ fn binding_with_child(leaf: SemanticLeaf) -> HeadlessBinding {
         .insert_child_render_object(root, Box::new(leaf))
         .expect("the container accepts one child");
     owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     HeadlessBinding::with_tree(
         BuildOwner::new(),
@@ -338,12 +328,7 @@ fn binding_with_chain(middle: SemanticContainer, leaf: SemanticLeaf) -> Headless
         .insert_child_render_object(middle_id, Box::new(leaf))
         .expect("middle accepts one child");
     owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     HeadlessBinding::with_tree(
         BuildOwner::new(),

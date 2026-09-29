@@ -55,7 +55,7 @@
 //!   route the user could neither see nor touch.
 
 use flui_foundation::Variable;
-use flui_types::{Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -137,11 +137,11 @@ impl RenderTheater {
     fn max_onstage_intrinsic(
         &self,
         ctx: &mut BoxIntrinsicsCtx<'_>,
-        extent: f32,
-        mut query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f32) -> f32,
-    ) -> f32 {
+        extent: f64,
+        mut query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f64) -> f64,
+    ) -> f64 {
         let child_count = ctx.child_count();
-        let mut max = 0.0f32;
+        let mut max = 0.0_f64;
         for i in self.first_onstage(child_count)..child_count {
             max = max.max(query(ctx, i, extent));
         }
@@ -207,25 +207,25 @@ impl RenderBox for RenderTheater {
         Self::theater_size(constraints)
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.max_onstage_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.max_onstage_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.max_onstage_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.max_onstage_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
         })

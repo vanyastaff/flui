@@ -18,7 +18,7 @@
 //! [`RenderSizedBox::shrink`] is the explicit `(0, 0)` counterpart.
 
 use flui_foundation::Leaf;
-use flui_types::{Pixels, Size};
+use flui_foundation::geometry::Size;
 
 use flui_rendering::{
     constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,
@@ -33,13 +33,12 @@ use flui_rendering::{
 /// # Example
 ///
 /// ```ignore
-/// use flui_types::geometry::px;
 ///
 /// // Fixed 100x100 box
-/// let sized = RenderSizedBox::new(Some(px(100.0)), Some(px(100.0)));
+/// let sized = RenderSizedBox::new(Some(100.0), Some(100.0));
 ///
 /// // Fixed width, flexible height
-/// let wide = RenderSizedBox::new(Some(px(200.0)), None);
+/// let wide = RenderSizedBox::new(Some(200.0), None);
 ///
 /// // Expand to fill available space
 /// let expand = RenderSizedBox::expand();
@@ -47,22 +46,22 @@ use flui_rendering::{
 #[derive(Debug, Clone)]
 pub struct RenderSizedBox {
     /// Fixed width, or None for flexible.
-    width: Option<Pixels>,
+    width: Option<f64>,
     /// Fixed height, or None for flexible.
-    height: Option<Pixels>,
+    height: Option<f64>,
 }
 
 impl RenderSizedBox {
     /// Creates a sized box with optional fixed dimensions.
-    pub fn new(width: Option<Pixels>, height: Option<Pixels>) -> Self {
+    pub fn new(width: Option<f64>, height: Option<f64>) -> Self {
         Self { width, height }
     }
 
     /// Updates the fixed dimensions.
     pub fn set_size(
         &mut self,
-        width: Option<Pixels>,
-        height: Option<Pixels>,
+        width: Option<f64>,
+        height: Option<f64>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.width == width && self.height == height {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -73,7 +72,7 @@ impl RenderSizedBox {
     }
 
     /// Creates a sized box with fixed dimensions.
-    pub fn fixed(width: Pixels, height: Pixels) -> Self {
+    pub fn fixed(width: f64, height: f64) -> Self {
         Self::new(Some(width), Some(height))
     }
 
@@ -84,21 +83,21 @@ impl RenderSizedBox {
 
     /// Creates a sized box that shrinks to zero.
     pub fn shrink() -> Self {
-        Self::fixed(Pixels::ZERO, Pixels::ZERO)
+        Self::fixed(0.0, 0.0)
     }
 
     /// Creates a square sized box.
-    pub fn square(dimension: Pixels) -> Self {
+    pub fn square(dimension: f64) -> Self {
         Self::fixed(dimension, dimension)
     }
 
     /// Returns the fixed width, if any.
-    pub fn width(&self) -> Option<Pixels> {
+    pub fn width(&self) -> Option<f64> {
         self.width
     }
 
     /// Returns the fixed height, if any.
-    pub fn height(&self) -> Option<Pixels> {
+    pub fn height(&self) -> Option<f64> {
         self.height
     }
 
@@ -140,34 +139,34 @@ impl RenderBox for RenderSizedBox {
 
     fn compute_min_intrinsic_width(
         &self,
-        _height: f32,
+        _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        self.width.map_or(0.0, Pixels::get)
+    ) -> f64 {
+        self.width.unwrap_or(0.0)
     }
 
     fn compute_max_intrinsic_width(
         &self,
-        _height: f32,
+        _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        self.width.map_or(0.0, Pixels::get)
+    ) -> f64 {
+        self.width.unwrap_or(0.0)
     }
 
     fn compute_min_intrinsic_height(
         &self,
-        _width: f32,
+        _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        self.height.map_or(0.0, Pixels::get)
+    ) -> f64 {
+        self.height.unwrap_or(0.0)
     }
 
     fn compute_max_intrinsic_height(
         &self,
-        _width: f32,
+        _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
-        self.height.map_or(0.0, Pixels::get)
+    ) -> f64 {
+        self.height.unwrap_or(0.0)
     }
 
     fn compute_dry_layout(
@@ -183,15 +182,14 @@ impl RenderBox for RenderSizedBox {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
     #[test]
     fn test_sized_box_fixed_creation() {
-        let sized = RenderSizedBox::fixed(px(100.0), px(50.0));
-        assert_eq!(sized.width(), Some(px(100.0)));
-        assert_eq!(sized.height(), Some(px(50.0)));
+        let sized = RenderSizedBox::fixed(100.0, 50.0);
+        assert_eq!(sized.width(), Some(100.0));
+        assert_eq!(sized.height(), Some(50.0));
     }
 
     #[test]
@@ -205,15 +203,15 @@ mod tests {
     #[test]
     fn test_sized_box_shrink_creation() {
         let sized = RenderSizedBox::shrink();
-        assert_eq!(sized.width(), Some(Pixels::ZERO));
-        assert_eq!(sized.height(), Some(Pixels::ZERO));
+        assert_eq!(sized.width(), Some(0.0));
+        assert_eq!(sized.height(), Some(0.0));
     }
 
     #[test]
     fn test_sized_box_partial_creation() {
         // Fixed width, flexible height
-        let sized = RenderSizedBox::new(Some(px(100.0)), None);
-        assert_eq!(sized.width(), Some(px(100.0)));
+        let sized = RenderSizedBox::new(Some(100.0), None);
+        assert_eq!(sized.width(), Some(100.0));
         assert_eq!(sized.height(), None);
     }
 }

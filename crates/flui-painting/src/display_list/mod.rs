@@ -7,15 +7,15 @@
 
 use std::ops::Index;
 
+use flui_foundation::geometry::Rect;
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-use flui_types::geometry::{Pixels, Rect};
 
 pub mod command;
 pub mod command_ops;
 
 pub use command::{DrawCommand, DrawOp};
-// The paint vocabulary the commands carry; defined in `flui_types::painting`.
-pub(crate) use flui_types::painting::{
+// The paint vocabulary the commands carry; defined in `crate::paint`.
+pub(crate) use crate::paint::{
     BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId,
     image::{ColorFilter, ImageRepeat},
 };
@@ -41,13 +41,13 @@ pub struct DisplayList {
     /// empty, which asks a different question, and never on the rect
     /// comparing equal to `Rect::ZERO`, which a degenerate command can
     /// legitimately produce.
-    pub(crate) bounds: Option<Rect<Pixels>>,
+    pub(crate) bounds: Option<Rect<f64>>,
 }
 
 /// Folds one command's bounds into an accumulating union: the one place that
 /// decides whether a rect *seeds* the union or *joins* it, shared by
 /// [`DisplayList::push`] and [`DisplayList::append`].
-fn accumulate_bounds(acc: &mut Option<Rect<Pixels>>, cmd_bounds: Rect<Pixels>) {
+fn accumulate_bounds(acc: &mut Option<Rect<f64>>, cmd_bounds: Rect<f64>) {
     *acc = Some(match *acc {
         Some(current) => current.union(&cmd_bounds),
         None => cmd_bounds,
@@ -97,7 +97,7 @@ impl DisplayList {
     /// none has — a list of only clips, saves, or `DrawPaint`s has no extent,
     /// which is a different answer from an empty rect at the origin.
     #[must_use]
-    pub fn bounds(&self) -> Option<Rect<Pixels>> {
+    pub fn bounds(&self) -> Option<Rect<f64>> {
         self.bounds
     }
 

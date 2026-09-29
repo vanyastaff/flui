@@ -25,7 +25,6 @@ use std::sync::Arc;
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_types::geometry::px;
 use flui_view::{
     BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementTree, IntoView,
     RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
@@ -100,8 +99,8 @@ impl View for LabeledView {
 /// with a `PipelineOwner` attached at the root.
 #[derive(Clone)]
 struct SizedBoxView {
-    width: f32,
-    height: f32,
+    width: f64,
+    height: f64,
 }
 
 impl RenderView for SizedBoxView {
@@ -112,7 +111,7 @@ impl RenderView for SizedBoxView {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderSizedBox::new(Some(px(self.width)), Some(px(self.height)))
+        RenderSizedBox::new(Some(self.width), Some(self.height))
     }
 
     fn update_render_object(
@@ -120,7 +119,7 @@ impl RenderView for SizedBoxView {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.set_size(Some(px(self.width)), Some(px(self.height)))
+        render_object.set_size(Some(self.width), Some(self.height))
     }
 }
 

@@ -13,12 +13,10 @@ use std::{
 };
 
 use cursor_icon::CursorIcon;
+use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, claim_slot};
+use flui_platform_api::HapticFeedback;
 use flui_platform_api::InMemoryClipboard;
-use flui_types::{
-    HapticFeedback,
-    geometry::{Bounds, DevicePixels, Pixels, Point, Size},
-};
 use parking_lot::Mutex;
 
 use crate::{
@@ -758,12 +756,12 @@ struct MockWindowState {
     /// once per presented frame, before the present".
     pre_present_notifies: u64,
     title: String,
-    bounds: Bounds<Pixels>,
+    bounds: Bounds<f64>,
     scale_factor: f64,
     focused: bool,
     visible: bool,
     execution: crate::WindowExecutionState,
-    safe_area: flui_types::geometry::EdgeInsets,
+    safe_area: flui_foundation::geometry::EdgeInsets,
     maximized: bool,
     minimized: bool,
     closed: bool,
@@ -815,7 +813,7 @@ impl MockWindow {
                 scale_factor: 1.0,
                 focused: true,
                 execution: crate::WindowExecutionState::Running,
-                safe_area: flui_types::geometry::EdgeInsets::ZERO,
+                safe_area: flui_foundation::geometry::EdgeInsets::ZERO,
                 visible: options.visible,
                 maximized: false,
                 minimized: false,
@@ -1017,10 +1015,9 @@ impl MockWindow {
 
     /// Simulate a resize for testing.
     /// Fires the registered `on_resize` callback.
-    pub fn simulate_resize(&self, width: f32, height: f32) {
-        use flui_types::geometry::px;
-        let size = Size::new(px(width), px(height));
-        let scale = self.state.lock().scale_factor as f32;
+    pub fn simulate_resize(&self, width: f64, height: f64) {
+        let size = Size::new(width, height);
+        let scale = self.state.lock().scale_factor;
         self.state.lock().bounds.size = size;
         self.callbacks.dispatch_resize(size, scale);
     }
@@ -1036,7 +1033,7 @@ impl MockWindow {
             state.scale_factor = scale_factor;
             state.bounds.size
         };
-        self.callbacks.dispatch_resize(size, scale_factor as f32);
+        self.callbacks.dispatch_resize(size, scale_factor);
     }
 
     /// Simulate focus change for testing.
@@ -1048,7 +1045,7 @@ impl MockWindow {
 
     /// Simulate an owner-thread safe-area report; the callback fires without
     /// holding window state. Closed and detached windows ignore the report.
-    pub fn simulate_safe_area(&self, insets: flui_types::geometry::EdgeInsets) {
+    pub fn simulate_safe_area(&self, insets: flui_foundation::geometry::EdgeInsets) {
         {
             let mut state = self.state.lock();
             if state.closed
@@ -1145,17 +1142,15 @@ impl PlatformWindow for MockWindow {
         self.id
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
-        use flui_types::geometry::device_px;
-
+    fn physical_size(&self) -> Size<i32> {
         let state = self.state.lock();
         Size::new(
-            device_px((state.bounds.size.width.0 * state.scale_factor as f32) as i32),
-            device_px((state.bounds.size.height.0 * state.scale_factor as f32) as i32),
+            (state.bounds.size.width * state.scale_factor) as i32,
+            (state.bounds.size.height * state.scale_factor) as i32,
         )
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
+    fn logical_size(&self) -> Size<f64> {
         self.state.lock().bounds.size
     }
 
@@ -1175,7 +1170,7 @@ impl PlatformWindow for MockWindow {
         self.state.lock().focused
     }
 
-    fn safe_area_insets(&self) -> flui_types::geometry::EdgeInsets {
+    fn safe_area_insets(&self) -> flui_foundation::geometry::EdgeInsets {
         self.state.lock().safe_area
     }
 
@@ -1194,11 +1189,11 @@ impl PlatformWindow for MockWindow {
 
     // ==================== Query Methods (US2) ====================
 
-    fn bounds(&self) -> Bounds<Pixels> {
+    fn bounds(&self) -> Bounds<f64> {
         self.state.lock().bounds
     }
 
-    fn content_size(&self) -> Size<Pixels> {
+    fn content_size(&self) -> Size<f64> {
         self.state.lock().bounds.size
     }
 
@@ -1229,7 +1224,7 @@ impl PlatformWindow for MockWindow {
         self.state.lock().hovered
     }
 
-    fn mouse_position(&self) -> Point<Pixels> {
+    fn mouse_position(&self) -> Point<f64> {
         Point::default()
     }
 
@@ -1305,7 +1300,7 @@ impl PlatformWindow for MockWindow {
         }
     }
 
-    fn resize(&self, size: Size<Pixels>) {
+    fn resize(&self, size: Size<f64>) {
         self.state.lock().bounds.size = size;
     }
 
@@ -1471,7 +1466,7 @@ pub struct FakeTextInput {
 #[derive(Default, Clone)]
 struct FakeTextInputState {
     ime_allowed_calls: Vec<bool>,
-    cursor_area_calls: Vec<Bounds<Pixels>>,
+    cursor_area_calls: Vec<Bounds<f64>>,
 }
 
 impl FakeTextInput {
@@ -1495,7 +1490,7 @@ impl FakeTextInput {
 
     /// Every `set_ime_cursor_area` call, in delivery order.
     #[must_use]
-    pub fn cursor_area_calls(&self) -> Vec<Bounds<Pixels>> {
+    pub fn cursor_area_calls(&self) -> Vec<Bounds<f64>> {
         self.state.lock().cursor_area_calls.clone()
     }
 }
@@ -1515,7 +1510,7 @@ impl PlatformTextInput for FakeTextInput {
         self.state.lock().ime_allowed_calls.push(allowed);
     }
 
-    fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+    fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         self.state.lock().cursor_area_calls.push(area);
     }
 }
@@ -1591,14 +1586,9 @@ impl crate::traits::PlatformDisplay for MockDisplay {
         "Mock Display".to_string()
     }
 
-    fn bounds(&self) -> Bounds<DevicePixels> {
-        use flui_types::geometry::device_px;
-
+    fn bounds(&self) -> Bounds<i32> {
         // Mock display: 1920x1080 at origin (0, 0)
-        Bounds::new(
-            Point::new(device_px(0), device_px(0)),
-            Size::new(device_px(1920), device_px(1080)),
-        )
+        Bounds::new(Point::new(0, 0), Size::new(1920, 1080))
     }
 
     fn scale_factor(&self) -> f64 {
@@ -1983,21 +1973,12 @@ mod tests {
 
         let options = WindowOptions {
             title: "Test".to_string(),
-            size: Size::new(
-                flui_types::geometry::px(800.0),
-                flui_types::geometry::px(600.0),
-            ),
+            size: Size::new(800.0, 600.0),
             ..Default::default()
         };
 
         let window = platform.open_window(options).unwrap();
-        assert_eq!(
-            window.logical_size(),
-            Size::new(
-                flui_types::geometry::px(800.0),
-                flui_types::geometry::px(600.0)
-            )
-        );
+        assert_eq!(window.logical_size(), Size::new(800.0, 600.0));
         assert!(window.is_focused());
         assert!(window.is_visible());
     }
@@ -2043,8 +2024,8 @@ mod tests {
         let called_clone = called.clone();
 
         window.on_resize(Box::new(move |size, _scale| {
-            assert_eq!(size.width.0, 1024.0);
-            assert_eq!(size.height.0, 768.0);
+            assert_eq!(size.width, 1024.0);
+            assert_eq!(size.height, 768.0);
             called_clone.store(true, Ordering::SeqCst);
         }));
 
@@ -2453,7 +2434,7 @@ mod tests {
     /// installed.
     #[test]
     fn test_on_safe_area_change() {
-        use flui_types::geometry::{EdgeInsets, px};
+        use flui_foundation::geometry::EdgeInsets;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
@@ -2475,7 +2456,7 @@ mod tests {
             "a window without native inset reporting starts at zero"
         );
 
-        let insets = EdgeInsets::new(px(44.0), px(0.0), px(34.0), px(0.0));
+        let insets = EdgeInsets::new(44.0, 0.0, 34.0, 0.0);
         window.simulate_safe_area(insets);
         assert_eq!(
             dispatches.load(Ordering::SeqCst),
@@ -2501,7 +2482,7 @@ mod tests {
         );
 
         assert!(window.simulate_close(), "nothing vetoes this close");
-        window.simulate_safe_area(EdgeInsets::new(px(1.0), px(1.0), px(1.0), px(1.0)));
+        window.simulate_safe_area(EdgeInsets::new(1.0, 1.0, 1.0, 1.0));
         assert_eq!(
             dispatches.load(Ordering::SeqCst),
             1,
@@ -2529,25 +2510,23 @@ mod tests {
 
     #[test]
     fn test_window_bounds_query() {
-        use flui_types::geometry::px;
-
         let window = MockWindow::new(
             WindowId(0),
             WindowOptions {
-                size: Size::new(px(800.0), px(600.0)),
+                size: Size::new(800.0, 600.0),
                 ..Default::default()
             },
             Weak::new(),
         );
 
         let bounds = window.bounds();
-        assert_eq!(bounds.size.width.0, 800.0);
-        assert_eq!(bounds.size.height.0, 600.0);
+        assert_eq!(bounds.size.width, 800.0);
+        assert_eq!(bounds.size.height, 600.0);
 
-        assert_eq!(window.content_size(), Size::new(px(800.0), px(600.0)));
+        assert_eq!(window.content_size(), Size::new(800.0, 600.0));
 
         match window.window_bounds() {
-            WindowBounds::Windowed(b) => assert_eq!(b.size.width.0, 800.0),
+            WindowBounds::Windowed(b) => assert_eq!(b.size.width, 800.0),
             _ => panic!("Expected Windowed"),
         }
     }
@@ -2582,11 +2561,9 @@ mod tests {
 
     #[test]
     fn test_resize() {
-        use flui_types::geometry::px;
-
         let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
-        window.resize(Size::new(px(1920.0), px(1080.0)));
-        assert_eq!(window.logical_size(), Size::new(px(1920.0), px(1080.0)));
+        window.resize(Size::new(1920.0, 1080.0));
+        assert_eq!(window.logical_size(), Size::new(1920.0, 1080.0));
     }
 
     #[test]
@@ -2599,17 +2576,14 @@ mod tests {
 
     #[test]
     fn text_input_reaches_the_same_fake_across_calls_and_records_delivered_values() {
-        use flui_types::geometry::{Bounds, Point, Size, px};
+        use flui_foundation::geometry::{Bounds, Point, Size};
 
         let window = MockWindow::new(WindowId(0), WindowOptions::default(), Weak::new());
         let fake = Arc::clone(&window.text_input);
         let text_input = window.text_input().expect("headless backend supports IME");
 
         text_input.set_ime_allowed(true);
-        text_input.set_ime_cursor_area(Bounds::new(
-            Point::new(px(10.0), px(20.0)),
-            Size::new(px(30.0), px(40.0)),
-        ));
+        text_input.set_ime_cursor_area(Bounds::new(Point::new(10.0, 20.0), Size::new(30.0, 40.0)));
         window
             .text_input()
             .expect("headless backend supports IME")

@@ -44,7 +44,6 @@ gpu-profiler = ["dep:wgpu-profiler"]
 testing = []
 
 [dependencies]
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
@@ -141,8 +140,8 @@ image = { workspace = true }
 # Compile-fail fixtures pinning ADR-0045 decision 1: an unwrapped raw
 # platform handle breaks `Renderer`'s derived `Send`, and a `!Send` backend
 # cannot implement `RasterBackend` now that `Send` is a supertrait. Same
-# crate/version flui-types already uses for its unit-mixing compile-fail
-# suite (`crates/flui-types/tests/unit_mixing_compile_fail.rs`).
+# crate/version flui-painting uses for its compile-fail suite
+# (`crates/flui-painting/tests/compile_fail.rs`).
 trybuild = { workspace = true }
 
 # Executing wasm32 tests for the frame-timing helper (issue #1045). Pinned

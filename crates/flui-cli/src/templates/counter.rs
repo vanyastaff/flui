@@ -139,10 +139,10 @@ mod tests {
     ///
     /// The data describes the surface the constraints describe, with no
     /// insets, so the geometry assertions below are exact.
-    fn app_tree(width: f32, height: f32) -> MediaQuery {
+    fn app_tree(width: f64, height: f64) -> MediaQuery {
         MediaQuery::new(
             MediaQueryData {
-                size: Size::new(px(width), px(height)),
+                size: Size::new(width, height),
                 ..MediaQueryData::default()
             },
             CounterApp,
@@ -157,8 +157,8 @@ mod tests {
             let label = app.find_text("Increment").expect("increment button label");
             let offset = app.absolute_offset(label);
             let size = app.size(label);
-            let x = offset.dx.get() + size.width.get() / 2.0;
-            let y = offset.dy.get() + size.height.get() / 2.0;
+            let x = offset.dx + size.width / 2.0;
+            let y = offset.dy + size.height / 2.0;
             app.dispatch_pointer_down(x, y);
             app.dispatch_pointer_up(x, y);
             app.tick();
@@ -191,16 +191,16 @@ mod tests {
     /// surface's, within a pixel of rounding.
     #[test]
     fn counter_content_is_centred() {
-        const WIDTH: f32 = 480.0;
-        const HEIGHT: f32 = 320.0;
+        const WIDTH: f64 = 480.0;
+        const HEIGHT: f64 = 320.0;
         let app = lay_out(app_tree(WIDTH, HEIGHT), tight(WIDTH, HEIGHT));
 
         let top = app
             .find_text("You have pushed the button this many times:")
             .expect("prompt text");
         let bottom = app.find_text("Increment").expect("increment button label");
-        let top_offset = app.absolute_offset(top).dy.get();
-        let bottom_edge = app.absolute_offset(bottom).dy.get() + app.size(bottom).height.get();
+        let top_offset = app.absolute_offset(top).dy;
+        let bottom_edge = app.absolute_offset(bottom).dy + app.size(bottom).height;
 
         let content_centre = (top_offset + bottom_edge) / 2.0;
         assert!(

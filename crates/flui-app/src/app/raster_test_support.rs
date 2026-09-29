@@ -19,8 +19,8 @@
 //! [`with_size`]: TestRasterBackend::with_size
 
 use flui_engine::{EngineError, PresentDisposition, RasterBackend};
+use flui_foundation::geometry::Rect;
 use flui_layer::Scene;
-use flui_types::geometry::{Pixels, Rect};
 
 /// The scripted `render_scene` behavior a [`TestRasterBackend`] carries:
 /// zero-based call index and submitted scene in, what became of the frame
@@ -102,7 +102,7 @@ impl RasterBackend for TestRasterBackend {
     fn is_device_lost(&self) -> bool {
         false
     }
-    fn mark_dirty(&mut self, _rect: Rect<Pixels>) {}
+    fn mark_dirty(&mut self, _rect: Rect<f64>) {}
     fn mark_full_repaint(&mut self) {}
     fn has_damage(&self) -> bool {
         true

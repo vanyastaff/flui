@@ -3,7 +3,7 @@
 //! Flutter parity: `shifted_box.dart` `RenderBaseline`.
 
 use flui_foundation::Single;
-use flui_types::{Offset, Pixels, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -17,14 +17,14 @@ use flui_rendering::{
 #[derive(Debug, Clone)]
 pub struct RenderBaseline {
     baseline: TextBaseline,
-    baseline_offset: Pixels,
+    baseline_offset: f64,
     has_child: bool,
     child_offset: Offset,
 }
 
 impl RenderBaseline {
     /// Creates a baseline container for `baseline` at `baseline_offset`.
-    pub fn new(baseline: TextBaseline, baseline_offset: Pixels) -> Self {
+    pub fn new(baseline: TextBaseline, baseline_offset: f64) -> Self {
         Self {
             baseline,
             baseline_offset,
@@ -39,7 +39,7 @@ impl RenderBaseline {
     }
 
     /// Distance from the top of this box to the aligned baseline.
-    pub fn baseline_offset(&self) -> Pixels {
+    pub fn baseline_offset(&self) -> f64 {
         self.baseline_offset
     }
 
@@ -53,7 +53,7 @@ impl RenderBaseline {
     }
 
     /// Sets the baseline offset. Caller marks layout dirty.
-    pub fn set_baseline_offset(&mut self, offset: Pixels) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_baseline_offset(&mut self, offset: f64) -> flui_rendering::RenderUpdateImpact {
         if self.baseline_offset == offset {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
@@ -65,10 +65,7 @@ impl RenderBaseline {
 impl flui_foundation::Diagnosticable for RenderBaseline {
     fn debug_fill_properties(&self, properties: &mut flui_foundation::DiagnosticsBuilder) {
         properties.add_enum("baseline", self.baseline);
-        properties.add(
-            "baseline_offset",
-            format!("{:.0}px", self.baseline_offset.get()),
-        );
+        properties.add("baseline_offset", format!("{:.0}px", self.baseline_offset));
     }
 }
 
@@ -99,18 +96,18 @@ impl RenderBox for RenderBaseline {
         // child.height` (= `baseline_offset` plus any descent below the baseline).
         let baseline_distance = ctx
             .child_distance_to_actual_baseline(0, self.baseline)
-            .map_or(child_size.height, Pixels::new);
+            .unwrap_or(child_size.height);
         let top = self.baseline_offset - baseline_distance;
-        self.child_offset = Offset::new(Pixels::ZERO, top);
+        self.child_offset = Offset::new(0.0, top);
         let size = Size::new(child_size.width, top + child_size.height);
 
         ctx.position_child(0, self.child_offset);
         constraints.constrain(size)
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         if baseline == self.baseline {
-            Some(self.baseline_offset.get())
+            Some(self.baseline_offset)
         } else {
             None
         }
@@ -121,7 +118,7 @@ impl RenderBox for RenderBaseline {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -135,7 +132,7 @@ impl RenderBox for RenderBaseline {
         let loosened = constraints.loosen();
         let requested = ctx.child_dry_baseline(0, loosened, baseline)?;
         let own = ctx.child_dry_baseline(0, loosened, self.baseline)?;
-        Some(self.baseline_offset.get() + requested - own)
+        Some(self.baseline_offset + requested - own)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

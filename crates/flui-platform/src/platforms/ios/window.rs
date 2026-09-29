@@ -29,7 +29,7 @@ use objc2_foundation::{NSDefaultRunLoopMode, NSObjectProtocol, NSRunLoop, NSSet}
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{UITouch, UIView, UIViewController, UIWindow, UIWindowScene};
 
-use flui_types::geometry::{DevicePixels, EdgeInsets, Pixels, Size, device_px, px};
+use flui_foundation::geometry::{EdgeInsets, Size};
 
 use super::events::touch_to_pointer_events;
 use super::native_owner::NativeOwner;
@@ -308,18 +308,13 @@ impl FluiView {
         let bounds = self.bounds();
         let insets = self.safeAreaInsets();
         let next = WindowMetrics {
-            size: Size::new(px(bounds.size.width as f32), px(bounds.size.height as f32)),
+            size: Size::new(bounds.size.width, bounds.size.height),
             scale: self.contentScaleFactor(),
-            safe_area: EdgeInsets::new(
-                px(insets.top as f32),
-                px(insets.right as f32),
-                px(insets.bottom as f32),
-                px(insets.left as f32),
-            ),
+            safe_area: EdgeInsets::new(insets.top, insets.right, insets.bottom, insets.left),
         };
         if self.ivars().sampling.get() != admission
-            || next.size.width.0 <= 0.0
-            || next.size.height.0 <= 0.0
+            || next.size.width <= 0.0
+            || next.size.height <= 0.0
         {
             return;
         }
@@ -329,7 +324,7 @@ impl FluiView {
         };
         if previous.size != next.size || previous.scale != next.scale {
             self.callbacks()
-                .dispatch_metrics_resize(next.size, next.scale as f32);
+                .dispatch_metrics_resize(next.size, next.scale);
         }
         if self.ivars().sampling.get() != admission {
             // The resize dispatch above retired this view, so this snapshot's
@@ -384,7 +379,7 @@ pub(super) enum LifecycleObservation {
 
 #[derive(Clone, Copy, PartialEq)]
 struct WindowMetrics {
-    size: Size<Pixels>,
+    size: Size<f64>,
     scale: f64,
     safe_area: EdgeInsets,
 }
@@ -429,7 +424,7 @@ impl IOSWindow {
     pub(super) fn new(mtm: MainThreadMarker, id: WindowId) -> Self {
         let callbacks = Arc::new(WindowCallbacks::new());
         let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
-            size: Size::new(px(0.0), px(0.0)),
+            size: Size::new(0.0, 0.0),
             scale: 1.0,
             safe_area: EdgeInsets::ZERO,
         }));
@@ -758,15 +753,15 @@ impl PlatformWindow for IOSWindow {
         self.id
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
+    fn physical_size(&self) -> Size<i32> {
         let metrics = *self.metrics.lock();
         Size::new(
-            device_px((f64::from(metrics.size.width.0) * metrics.scale).round() as i32),
-            device_px((f64::from(metrics.size.height.0) * metrics.scale).round() as i32),
+            (metrics.size.width * metrics.scale).round() as i32,
+            (metrics.size.height * metrics.scale).round() as i32,
         )
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
+    fn logical_size(&self) -> Size<f64> {
         self.metrics.lock().size
     }
     fn scale_factor(&self) -> f64 {

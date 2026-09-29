@@ -324,7 +324,7 @@ impl UiRealm {
                 .gestures()
                 .handle_pointer_event(pointer_event, |position| {
                     let mut result = flui_interaction::routing::HitTestResult::new();
-                    let offset = flui_types::Offset::new(position.dx, position.dy);
+                    let offset = flui_foundation::geometry::Offset::new(position.dx, position.dy);
                     presentation
                         .renderer()
                         .hit_test_in_view(&mut result, offset, 0);

@@ -12,8 +12,8 @@
 
 use std::time::Instant;
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize tracing for tests
@@ -42,7 +42,7 @@ fn test_platform_event_contract() {
     // Create a test window
     let options = WindowOptions {
         title: "Test T061 - Event Contract".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: true,
         visible: false,
         decorated: true,
@@ -70,9 +70,9 @@ fn test_platform_event_contract() {
     // ============================================================================
 
     // All platforms must:
-    // - Report PointerEvent positions in LOGICAL pixels (Pixels)
+    // - Report PointerEvent positions in LOGICAL pixels (f64)
     // - Convert OS coordinates: logical = physical / scale_factor
-    // - Report window sizes in PHYSICAL pixels (DevicePixels)
+    // - Report window sizes in PHYSICAL pixels (i32)
     // - Provide scale_factor for conversion
 
     let physical_size = window.physical_size();
@@ -87,11 +87,11 @@ fn test_platform_event_contract() {
     );
 
     // Verify coordinate conversion is consistent
-    let expected_logical_width = (physical_size.width.0 as f64) / scale_factor;
-    let expected_logical_height = (physical_size.height.0 as f64) / scale_factor;
+    let expected_logical_width = (physical_size.width as f64) / scale_factor;
+    let expected_logical_height = (physical_size.height as f64) / scale_factor;
 
-    let width_diff = (logical_size.width.0 - expected_logical_width as f32).abs();
-    let height_diff = (logical_size.height.0 - expected_logical_height as f32).abs();
+    let width_diff = (logical_size.width - expected_logical_width as f64).abs();
+    let height_diff = (logical_size.height - expected_logical_height as f64).abs();
 
     assert!(
         width_diff < 2.0,
@@ -169,7 +169,7 @@ fn test_platform_event_contract() {
     // ============================================================================
 
     // All platforms must:
-    // - Emit WindowEvent::Resized with Size<DevicePixels>
+    // - Emit WindowEvent::Resized with DeviceSize
     // - Emit WindowEvent::ScaleFactorChanged with new scale
     // - Emit WindowEvent::CloseRequested on close button
     // - Emit WindowEvent::FocusChanged on focus change
@@ -201,12 +201,12 @@ fn test_cross_platform_event_consistency() {
     // Create identical window options for all platforms
     let options = WindowOptions {
         title: format!("Event Consistency Test - {platform_name}"),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         resizable: true,
         visible: false,
         decorated: true,
-        min_size: Some(Size::new(px(320.0), px(240.0))),
-        max_size: Some(Size::new(px(1920.0), px(1080.0))),
+        min_size: Some(Size::new(320.0, 240.0)),
+        max_size: Some(Size::new(1920.0, 1080.0)),
         ..Default::default()
     };
 
@@ -233,19 +233,19 @@ fn test_cross_platform_event_consistency() {
     // 3. Report valid scale factor (> 0.0)
     // 4. Support the same PlatformWindow API
 
-    assert!(physical_size.width.0 > 0, "Invalid physical width");
-    assert!(physical_size.height.0 > 0, "Invalid physical height");
-    assert!(logical_size.width.0 > 0.0, "Invalid logical width");
-    assert!(logical_size.height.0 > 0.0, "Invalid logical height");
+    assert!(physical_size.width > 0, "Invalid physical width");
+    assert!(physical_size.height > 0, "Invalid physical height");
+    assert!(logical_size.width > 0.0, "Invalid logical width");
+    assert!(logical_size.height > 0.0, "Invalid logical height");
     assert!(scale_factor > 0.0, "Invalid scale factor");
     assert!(scale_factor <= 3.0, "Unrealistic scale factor");
 
     // Verify coordinate conversion consistency
-    let computed_logical_width = (physical_size.width.0 as f64) / scale_factor;
-    let computed_logical_height = (physical_size.height.0 as f64) / scale_factor;
+    let computed_logical_width = (physical_size.width as f64) / scale_factor;
+    let computed_logical_height = (physical_size.height as f64) / scale_factor;
 
-    let width_error = (logical_size.width.0 - computed_logical_width as f32).abs();
-    let height_error = (logical_size.height.0 - computed_logical_height as f32).abs();
+    let width_error = (logical_size.width - computed_logical_width as f64).abs();
+    let height_error = (logical_size.height - computed_logical_height as f64).abs();
 
     tracing::info!(
         "Coordinate conversion errors: width={:.2}, height={:.2}",
@@ -284,7 +284,7 @@ fn test_event_dispatch_latency_benchmark() {
     // Create a test window
     let options = WindowOptions {
         title: "Latency Benchmark".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: false,
         visible: false,
         decorated: true,
@@ -361,7 +361,7 @@ fn test_event_handling_performance_baseline() {
     for i in 0..window_count {
         let options = WindowOptions {
             title: format!("Perf Test Window {i}"),
-            size: Size::new(px(400.0), px(300.0)),
+            size: Size::new(400.0, 300.0),
             resizable: false,
             visible: false,
             decorated: true,
@@ -391,8 +391,8 @@ fn test_event_handling_performance_baseline() {
         let scale = window.scale_factor();
         tracing::info!("Window {}: size={:?}, scale={}", i, size, scale);
 
-        assert!(size.width.0 > 0);
-        assert!(size.height.0 > 0);
+        assert!(size.width > 0);
+        assert!(size.height > 0);
         assert!(scale > 0.0);
     }
 

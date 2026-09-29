@@ -27,7 +27,7 @@ fn registered_controller_advances_fade_opacity_frame_to_frame() {
     // The `Arc<dyn Animation>` handed to the FadeTransition and the clone
     // registered with the binding share the same inner notifier, so a binding
     // tick notifies the transition's listener.
-    let opacity: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let opacity: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
 
     let mut laid = lay_out(
         FadeTransition::new(opacity, SizedBox::new(100.0, 50.0)),

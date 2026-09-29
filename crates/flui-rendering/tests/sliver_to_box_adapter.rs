@@ -10,6 +10,7 @@
 //! 4. commit the child's paint offset so hit-test/paint use the same source.
 
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_objects::RenderSliverToBoxAdapter;
 use flui_rendering::{
     constraints::{GrowthDirection, SliverConstraints},
@@ -19,7 +20,6 @@ use flui_rendering::{
     testing::inspect,
     traits::RenderBox,
 };
-use flui_types::{Offset, Rect, Size, geometry::px};
 
 use crate::common::{
     BoxedRenderObject, BoxedSliverObject, laid_out_tight_300x100 as laid_out, sliver_geometry,
@@ -35,8 +35,8 @@ fn render_offset(
 
 fn hits(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    cross: f32,
-    main: f32,
+    cross: f64,
+    main: f64,
 ) -> Vec<flui_foundation::RenderId> {
     inspect::hit_path(owner, cross, main)
 }
@@ -47,9 +47,9 @@ struct FixedHitBox {
 }
 
 impl FixedHitBox {
-    fn new(width: f32, height: f32) -> Self {
+    fn new(width: f64, height: f64) -> Self {
         Self {
-            desired: Size::new(px(width), px(height)),
+            desired: Size::new(width, height),
         }
     }
 }
@@ -66,7 +66,7 @@ impl RenderBox for FixedHitBox {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         ctx.is_within_bounds(Rect::from_origin_size(
-            flui_types::Point::ZERO,
+            flui_foundation::geometry::Point::ZERO,
             ctx.own_size(),
         ))
     }
@@ -88,15 +88,12 @@ impl RenderBox for VerticalBandHitBox {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
-        ctx.constraints().constrain(Size::new(px(300.0), px(180.0)))
+        ctx.constraints().constrain(Size::new(300.0, 180.0))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         let local = ctx.offset();
-        local.dx >= px(0.0)
-            && local.dx < ctx.own_size().width
-            && local.dy >= px(120.0)
-            && local.dy < px(140.0)
+        local.dx >= 0.0 && local.dx < ctx.own_size().width && local.dy >= 120.0 && local.dy < 140.0
     }
 }
 
@@ -165,12 +162,12 @@ impl RenderBox for SliverHost {
 fn sliver_constraints_as_box_constraints_tightens_cross_axis_vertically() {
     let constraints = vertical_constraints(0.0);
 
-    let box_constraints = constraints.as_box_constraints(0.0, f32::INFINITY, None);
+    let box_constraints = constraints.as_box_constraints(0.0, f64::INFINITY, None);
 
-    assert_eq!(box_constraints.min_width, px(300.0));
-    assert_eq!(box_constraints.max_width, px(300.0));
-    assert_eq!(box_constraints.min_height, px(0.0));
-    assert_eq!(box_constraints.max_height, px(f32::INFINITY));
+    assert_eq!(box_constraints.min_width, 300.0);
+    assert_eq!(box_constraints.max_width, 300.0);
+    assert_eq!(box_constraints.min_height, 0.0);
+    assert_eq!(box_constraints.max_height, (f64::INFINITY));
 }
 
 #[test]
@@ -208,7 +205,7 @@ fn sliver_to_box_adapter_lays_out_box_child_and_commits_geometry() {
     );
     assert_eq!(
         render_offset(&owner, child_id),
-        Offset::new(px(0.0), px(-40.0)),
+        Offset::new(0.0, -40.0),
         "forward vertical adapter positions the Box child at -scroll_offset",
     );
 }

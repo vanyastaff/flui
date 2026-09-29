@@ -16,8 +16,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform, traits::PlatformWindow};
-use flui_types::geometry::{Size, px};
 
 /// GPU state created from a PlatformWindow
 struct GpuState {
@@ -73,8 +73,8 @@ impl GpuState {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
-            width: size.width.0 as u32,
-            height: size.height.0 as u32,
+            width: size.width as u32,
+            height: size.height as u32,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -176,7 +176,7 @@ fn main() {
 
     let options = WindowOptions {
         title: "FLUI Platform + wgpu".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: true,
         visible: true,
         decorated: true,
@@ -208,8 +208,8 @@ fn main() {
     // Register resize callback
     let gpu_for_resize = Arc::clone(&gpu);
     window.on_resize(Box::new(move |size, scale_factor| {
-        let width = (size.width.0 * scale_factor) as u32;
-        let height = (size.height.0 * scale_factor) as u32;
+        let width = (size.width * scale_factor) as u32;
+        let height = (size.height * scale_factor) as u32;
         gpu_for_resize.lock().unwrap().resize(width, height);
     }));
 

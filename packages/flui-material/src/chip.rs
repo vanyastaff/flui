@@ -46,7 +46,7 @@
 //! slots are all `Option<WidgetStateProperty<Option<Color>>>` — because
 //! their own oracle theme types (`checkbox_theme.dart` and siblings)
 //! genuinely type those fields as `WidgetStateProperty`, [`crate::ChipThemeData`]'s
-//! fields are **plain** (`Option<Color>`, `Option<BorderSide<Pixels>>`, …).
+//! fields are **plain** (`Option<Color>`, `Option<BorderSide<f64>>`, …).
 //! This mirrors `chip_theme.dart` exactly: every `ChipThemeData` field
 //! except `color` (the container fill, not ported to the theme tier here —
 //! see below) is a plain, non-resolved value in the oracle too. Per-state
@@ -180,18 +180,20 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::painting::Canvas;
+use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::{BorderSide, BorderStyle};
+use flui_sdk::painting::{Paint, Path};
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::geometry::px;
-use flui_sdk::types::painting::{Paint, Path};
-use flui_sdk::types::styling::{BorderSide, BorderStyle};
-use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Color, EdgeInsets, Pixels, Point, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::icon::IconData;
 use flui_sdk::widgets::{
     ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
     IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, WidgetState,
     WidgetStates,
+};
+use flui_sdk::{
+    geometry::{EdgeInsets, Point, Size},
+    painting::Color,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -202,21 +204,21 @@ use crate::theme::Theme;
 
 /// The container's target height when its content fits within it. Flutter
 /// parity: `_kChipHeight` (`chip.dart`, oracle tag `3.44.0`).
-pub const CHIP_HEIGHT: f32 = 32.0;
+pub const CHIP_HEIGHT: f64 = 32.0;
 
 /// The container's corner radius. Flutter parity: `_ChipDefaultsM3.shape` /
 /// `_FilterChipDefaultsM3`'s constructor, both
 /// `RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(8.0)))`.
-const CORNER_RADIUS: f32 = 8.0;
+const CORNER_RADIUS: f64 = 8.0;
 
 /// The avatar/delete-icon/checkmark side length. Flutter parity:
 /// `_ChipDefaultsM3.iconTheme`/`_FilterChipDefaultsM3.iconTheme`'s
 /// `size: 18.0`.
-pub const CHIP_ICON_SIZE: f32 = 18.0;
+pub const CHIP_ICON_SIZE: f64 = 18.0;
 
 /// The default container padding. Flutter parity: `_ChipDefaultsM3.padding`/
 /// `_FilterChipDefaultsM3.padding`, `EdgeInsets.all(8.0)`.
-const PADDING: f32 = 8.0;
+const PADDING: f64 = 8.0;
 
 /// The default label padding (horizontal only). Flutter parity: the
 /// text-scale-1x tier of `_ChipDefaultsM3.labelPadding`/
@@ -225,7 +227,7 @@ const PADDING: f32 = 8.0;
 /// simplification (no `MediaQuery` text-scaling substrate consumed here,
 /// the same gap [`crate::elevated_button`]'s own `scaled_padding_1x` docs
 /// already name for button padding).
-const LABEL_PADDING_HORIZONTAL: f32 = 8.0;
+const LABEL_PADDING_HORIZONTAL: f64 = 8.0;
 
 /// `Icons.cancel`'s codepoint (`MaterialIcons`), [`Chip`]'s default delete
 /// glyph. Flutter parity: `_kDefaultDeleteIcon = Icon(Icons.cancel)`
@@ -242,13 +244,13 @@ const DELETE_ICON_CLEAR_CODEPOINT: u32 = 0xE168;
 /// Flutter parity: `_kDisabledAlpha` (`chip.dart`, `0x61`) — see the module
 /// docs' "Disabled content" section for why this is steady-state behavior,
 /// not merely a transition artifact this V1 is entitled to snap away.
-const DISABLED_CONTENT_ALPHA: f32 = 0x61 as f32 / 255.0;
+const DISABLED_CONTENT_ALPHA: f64 = 0x61 as f64 / 255.0;
 
 /// The content opacity for a chip in `enabled`'s state — `1.0` enabled,
 /// [`DISABLED_CONTENT_ALPHA`] disabled. Extracted as its own pure function
 /// (not left inline in `build`) so the two-value table is unit-testable
 /// without mounting a widget tree.
-fn disabled_content_opacity(enabled: bool) -> f32 {
+fn disabled_content_opacity(enabled: bool) -> f64 {
     if enabled { 1.0 } else { DISABLED_CONTENT_ALPHA }
 }
 
@@ -375,15 +377,15 @@ fn chip_icon_color_default(states: WidgetStates, colors: &ColorScheme) -> Color 
 /// Because of this real branch-order difference, `side` is resolved from
 /// plain `(bool, bool)` parameters rather than a [`WidgetStates`] query —
 /// see the module docs' "`ChipThemeData`: plain overrides" section.
-fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> BorderSide<Pixels> {
+fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> BorderSide<f64> {
     if selected {
-        BorderSide::new(Color::TRANSPARENT, px(1.0), BorderStyle::Solid)
+        BorderSide::new(Color::TRANSPARENT, 1.0, BorderStyle::Solid)
     } else if enabled {
-        BorderSide::new(colors.outline_variant, px(1.0), BorderStyle::Solid)
+        BorderSide::new(colors.outline_variant, 1.0, BorderStyle::Solid)
     } else {
         BorderSide::new(
             colors.on_surface.with_opacity(0.12),
-            px(1.0),
+            1.0,
             BorderStyle::Solid,
         )
     }
@@ -392,22 +394,22 @@ fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> Bor
 /// The default container shape: an 8dp rounded rectangle. Flutter parity:
 /// `_ChipDefaultsM3`/`_FilterChipDefaultsM3`'s constructor `shape:`.
 fn chip_default_shape() -> MaterialShape {
-    use flui_sdk::types::styling::BorderRadius;
-    MaterialShape::RoundedRect(BorderRadius::all(
-        flui_sdk::types::geometry::Radius::circular(px(CORNER_RADIUS)),
-    ))
+    use flui_sdk::painting::BorderRadius;
+    MaterialShape::RoundedRect(BorderRadius::all(flui_sdk::geometry::Radius::circular(
+        CORNER_RADIUS,
+    )))
 }
 
 /// The default container padding: `EdgeInsets.all(8.0)`. Flutter parity:
 /// `_ChipDefaultsM3.padding`/`_FilterChipDefaultsM3.padding`.
 fn chip_default_padding() -> EdgeInsets {
-    EdgeInsets::all(px(PADDING))
+    EdgeInsets::all(PADDING)
 }
 
 /// The default label padding: `EdgeInsets.symmetric(horizontal: 8.0)` — the
 /// text-scale-1x tier (see the module doc on [`LABEL_PADDING_HORIZONTAL`]).
 fn chip_default_label_padding() -> EdgeInsets {
-    EdgeInsets::symmetric(px(0.0), px(LABEL_PADDING_HORIZONTAL))
+    EdgeInsets::symmetric(0.0, LABEL_PADDING_HORIZONTAL)
 }
 
 /// The container's minimum content height (excludes `padding`, includes
@@ -420,9 +422,9 @@ fn chip_default_label_padding() -> EdgeInsets {
 /// `ConstrainedBox` + `Row` composition already accommodates by growing
 /// past the floor when the label needs more room, without needing to
 /// compute `rawLabelSize` up front).
-fn chip_content_min_height(padding: EdgeInsets, label_padding: EdgeInsets) -> Pixels {
-    let floor = CHIP_HEIGHT - padding.vertical_total().get() + label_padding.vertical_total().get();
-    px(floor.max(0.0))
+fn chip_content_min_height(padding: EdgeInsets, label_padding: EdgeInsets) -> f64 {
+    let floor = CHIP_HEIGHT - padding.vertical_total() + label_padding.vertical_total();
+    floor.max(0.0)
 }
 
 /// A tap/press callback taking no arguments. `Rc`-based (owner-local, per
@@ -857,7 +859,7 @@ impl StatelessView for FilterChip {
         let leading = match filter_chip_leading_content(selected, self.avatar.is_some()) {
             FilterChipLeading::Checkmark => Some(
                 CustomPaint::new()
-                    .size(Size::new(px(CHIP_ICON_SIZE), px(CHIP_ICON_SIZE)))
+                    .size(Size::new(CHIP_ICON_SIZE, CHIP_ICON_SIZE))
                     .painter(Arc::new(ChipCheckmarkPainter {
                         color: checkmark_color,
                     }) as Arc<dyn CustomPainter>)
@@ -961,10 +963,10 @@ fn build_chip_row(
 /// floor on the content row.
 fn chip_content_constraints(padding: EdgeInsets, label_padding: EdgeInsets) -> BoxConstraints {
     BoxConstraints::new(
-        px(0.0),
-        Pixels::INFINITY,
+        0.0,
+        f64::INFINITY,
         chip_content_min_height(padding, label_padding),
-        Pixels::INFINITY,
+        f64::INFINITY,
     )
 }
 
@@ -975,17 +977,17 @@ fn chip_content_constraints(padding: EdgeInsets, label_padding: EdgeInsets) -> B
 /// [`Material`]'s own missing border-side paint path.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ChipBorderPainter {
-    side: BorderSide<Pixels>,
+    side: BorderSide<f64>,
     shape: MaterialShape,
 }
 
 impl CustomPainter for ChipBorderPainter {
     fn paint(&self, canvas: &mut Canvas, size: Size) {
-        if !self.side.style.is_solid() || self.side.width.get() <= 0.0 {
+        if !self.side.style.is_solid() || self.side.width <= 0.0 {
             return;
         }
         let outer = self.shape.to_rrect(size);
-        let inner = outer.inflate(px(-self.side.width.get()));
+        let inner = outer.inflate(-self.side.width);
         canvas.draw_drrect(outer, inner, &Paint::fill(self.side.color));
     }
 
@@ -1026,7 +1028,7 @@ struct ChipCheckmarkPainter {
 
 impl CustomPainter for ChipCheckmarkPainter {
     fn paint(&self, canvas: &mut Canvas, size: Size) {
-        let cell = size.height.get();
+        let cell = size.height;
         // Flutter parity: `_kCheckmarkStrokeWidth * avatar.size.height /
         // 24.0` (`chip.dart`) — the FULL cell height, not `check_size`.
         let stroke_width = 2.0 * cell / 24.0;
@@ -1038,7 +1040,7 @@ impl CustomPainter for ChipCheckmarkPainter {
         // struct's own doc comment.
         let check_size = cell * 0.75;
         let origin_offset = cell * 0.125;
-        let point = |dx: f32, dy: f32| Point::new(px(origin_offset + dx), px(origin_offset + dy));
+        let point = |dx: f64, dy: f64| Point::new(origin_offset + dx, origin_offset + dy);
         let mut path = Path::new();
         path.move_to(point(check_size * 0.15, check_size * 0.45));
         path.line_to(point(check_size * 0.4, check_size * 0.7));
@@ -1254,7 +1256,7 @@ mod tests {
     fn default_side_unselected_enabled_is_outline_variant() {
         let side = chip_default_side(false, true, &light());
         assert_eq!(side.color, light().outline_variant);
-        assert_eq!(side.width, px(1.0));
+        assert_eq!(side.width, 1.0);
     }
 
     #[test]
@@ -1373,14 +1375,14 @@ mod tests {
     #[test]
     fn content_min_height_with_default_padding_is_16() {
         let height = chip_content_min_height(chip_default_padding(), chip_default_label_padding());
-        assert_eq!(height, px(CHIP_HEIGHT - 2.0 * PADDING));
+        assert_eq!(height, (CHIP_HEIGHT - 2.0 * PADDING));
     }
 
     #[test]
     fn content_min_height_never_goes_negative_under_oversized_padding() {
-        let oversized = EdgeInsets::all(px(100.0));
+        let oversized = EdgeInsets::all(100.0);
         let height = chip_content_min_height(oversized, chip_default_label_padding());
-        assert_eq!(height, px(0.0));
+        assert_eq!(height, 0.0);
     }
 
     // ------------------------------------------------------------------
@@ -1399,32 +1401,32 @@ mod tests {
     #[test]
     fn disabled_content_opacity_disabled_is_the_m3_disabled_alpha() {
         let opacity = disabled_content_opacity(false);
-        assert!((opacity - 0x61 as f32 / 255.0).abs() < f32::EPSILON);
+        assert!((opacity - 0x61 as f64 / 255.0).abs() < f64::EPSILON);
         assert_ne!(opacity, 1.0);
     }
 
     #[test]
     fn default_shape_is_an_8dp_rounded_rectangle() {
-        let size = Size::new(px(80.0), px(CHIP_HEIGHT));
+        let size = Size::new(80.0, CHIP_HEIGHT);
         let rrect = chip_default_shape().to_rrect(size);
         assert_eq!(
             rrect.top_left,
-            flui_sdk::types::geometry::Radius::circular(px(CORNER_RADIUS))
+            flui_sdk::geometry::Radius::circular(CORNER_RADIUS)
         );
     }
 
     #[test]
     fn default_padding_is_8dp_all_sides() {
         let padding = chip_default_padding();
-        assert_eq!(padding.top, px(PADDING));
-        assert_eq!(padding.left, px(PADDING));
+        assert_eq!(padding.top, (PADDING));
+        assert_eq!(padding.left, (PADDING));
     }
 
     #[test]
     fn default_label_padding_is_horizontal_only() {
         let padding = chip_default_label_padding();
-        assert_eq!(padding.top, px(0.0));
-        assert_eq!(padding.left, px(LABEL_PADDING_HORIZONTAL));
+        assert_eq!(padding.top, 0.0);
+        assert_eq!(padding.left, (LABEL_PADDING_HORIZONTAL));
     }
 
     // Theme tier beats default (the widget/theme/default cascade for
@@ -1449,11 +1451,11 @@ mod tests {
     #[test]
     fn border_painter_draws_nothing_for_a_zero_width_side() {
         let painter = ChipBorderPainter {
-            side: BorderSide::new(Color::BLACK, px(0.0), BorderStyle::Solid),
+            side: BorderSide::new(Color::BLACK, 0.0, BorderStyle::Solid),
             shape: chip_default_shape(),
         };
         let mut canvas = Canvas::new();
-        painter.paint(&mut canvas, Size::new(px(80.0), px(32.0)));
+        painter.paint(&mut canvas, Size::new(80.0, 32.0));
         assert!(canvas.display_list().is_empty());
     }
 
@@ -1462,11 +1464,11 @@ mod tests {
         use flui_sdk::painting::DrawOp;
 
         let painter = ChipBorderPainter {
-            side: BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid),
+            side: BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid),
             shape: chip_default_shape(),
         };
         let mut canvas = Canvas::new();
-        painter.paint(&mut canvas, Size::new(px(80.0), px(32.0)));
+        painter.paint(&mut canvas, Size::new(80.0, 32.0));
         assert!(
             canvas
                 .display_list()
@@ -1478,7 +1480,7 @@ mod tests {
     #[test]
     fn border_painter_should_repaint_is_true_when_the_side_changes() {
         let old = ChipBorderPainter {
-            side: BorderSide::new(Color::BLACK, px(1.0), BorderStyle::Solid),
+            side: BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid),
             shape: chip_default_shape(),
         };
         let mut new = old;
@@ -1494,10 +1496,7 @@ mod tests {
             color: Color::BLACK,
         };
         let mut canvas = Canvas::new();
-        painter.paint(
-            &mut canvas,
-            Size::new(px(CHIP_ICON_SIZE), px(CHIP_ICON_SIZE)),
-        );
+        painter.paint(&mut canvas, Size::new(CHIP_ICON_SIZE, CHIP_ICON_SIZE));
         assert!(
             canvas
                 .display_list()
@@ -1529,7 +1528,7 @@ mod tests {
             color: Color::BLACK,
         };
         let mut canvas = Canvas::new();
-        painter.paint(&mut canvas, Size::new(px(cell), px(cell)));
+        painter.paint(&mut canvas, Size::new(cell, cell));
 
         let mut path = canvas
             .display_list()
@@ -1554,32 +1553,32 @@ mod tests {
 
         let epsilon = 0.01;
         assert!(
-            (bounds.min_x().get() - expected_min_x).abs() < epsilon,
+            (bounds.min_x() - expected_min_x).abs() < epsilon,
             "min x: got {}, expected {expected_min_x}",
-            bounds.min_x().get()
+            bounds.min_x()
         );
         assert!(
-            (bounds.max_x().get() - expected_max_x).abs() < epsilon,
+            (bounds.max_x() - expected_max_x).abs() < epsilon,
             "max x: got {}, expected {expected_max_x}",
-            bounds.max_x().get()
+            bounds.max_x()
         );
         assert!(
-            (bounds.min_y().get() - expected_min_y).abs() < epsilon,
+            (bounds.min_y() - expected_min_y).abs() < epsilon,
             "min y: got {}, expected {expected_min_y}",
-            bounds.min_y().get()
+            bounds.min_y()
         );
         assert!(
-            (bounds.max_y().get() - expected_max_y).abs() < epsilon,
+            (bounds.max_y() - expected_max_y).abs() < epsilon,
             "max y: got {}, expected {expected_max_y}",
-            bounds.max_y().get()
+            bounds.max_y()
         );
 
         // The whole mark must stay strictly inside the cell — never
         // touching the full-cell edges the pre-fix version reached.
-        assert!(bounds.max_x().get() < cell);
-        assert!(bounds.max_y().get() < cell);
-        assert!(bounds.min_x().get() > 0.0);
-        assert!(bounds.min_y().get() > 0.0);
+        assert!(bounds.max_x() < cell);
+        assert!(bounds.max_y() < cell);
+        assert!(bounds.min_x() > 0.0);
+        assert!(bounds.min_y() > 0.0);
     }
 
     #[test]

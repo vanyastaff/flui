@@ -22,7 +22,7 @@ use std::sync::{
     mpsc::{Receiver, Sender, channel},
 };
 
-use flui_types::{Size, geometry::Pixels};
+use flui_foundation::geometry::Size;
 
 /// Texture descriptor key for matching pooled textures
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -339,15 +339,15 @@ impl TexturePool {
         }
     }
 
-    /// Acquire a texture sized from a `Size<Pixels>` value
+    /// Acquire a texture sized from a `Size` value
     #[must_use]
     pub(crate) fn acquire_from_size(
         &mut self,
-        size: Size<Pixels>,
+        size: Size<f64>,
         format: wgpu::TextureFormat,
     ) -> PooledTexture {
-        let w = size.width.0.ceil().max(1.0) as u32;
-        let h = size.height.0.ceil().max(1.0) as u32;
+        let w = size.width.ceil().max(1.0) as u32;
+        let h = size.height.ceil().max(1.0) as u32;
         self.acquire(w, h, format)
     }
 

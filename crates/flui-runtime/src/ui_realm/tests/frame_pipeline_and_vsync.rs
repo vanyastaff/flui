@@ -1,8 +1,6 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool as StdAtomicBool, AtomicUsize};
 
-use flui_types::geometry::px;
-
 use super::*;
 
 /// Minimal leaf view/element so a headless `attach_root_widget` has
@@ -26,10 +24,7 @@ impl flui_view::RenderView for LeafView {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.set_size(
-            Some(flui_types::Pixels::ZERO),
-            Some(flui_types::Pixels::ZERO),
-        )
+        render_object.set_size(Some(0.0), Some(0.0))
     }
 }
 
@@ -40,7 +35,7 @@ impl flui_view::View for LeafView {
 }
 
 fn test_constraints() -> BoxConstraints {
-    BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+    BoxConstraints::tight(flui_foundation::geometry::Size::new(800.0, 600.0))
 }
 
 #[derive(Clone)]
@@ -243,7 +238,7 @@ fn transform_to_resolves_through_the_root_hop_after_standard_bootstrap() {
         );
         assert_eq!(
             transform,
-            Some(flui_types::Matrix4::IDENTITY),
+            Some(flui_foundation::geometry::Matrix4::IDENTITY),
             "LeafView (RenderSizedBox::shrink(), zero offset) composes to the identity \
              transform into root space"
         );
@@ -430,7 +425,7 @@ fn pointer_input_is_dropped_while_suspended_but_keyboard_flows() {
     realm.mark_rendered();
     realm.update_host_lifecycle(AppLifecycleState::Hidden);
 
-    let position = flui_types::Offset::new(px(50.0), px(50.0));
+    let position = flui_foundation::geometry::Offset::new(50.0, 50.0);
     realm.enter(|realm| {
         realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
             position,
@@ -452,7 +447,7 @@ fn pointer_input_is_dropped_while_suspended_but_keyboard_flows() {
     // (unlike the pointer early-return above) always requests a
     // redraw.
     realm.enter(|realm| {
-        realm.handle_input_entered(PlatformInput::Ime(flui_types::ImeEvent::Commit(
+        realm.handle_input_entered(PlatformInput::Ime(flui_platform_api::ImeEvent::Commit(
             "suspended-ime".to_string(),
         )));
     });
@@ -490,7 +485,7 @@ fn all_input_dropped_after_close() {
     let realm = UiRealm::for_test();
     realm.stop_presentations();
 
-    let position = flui_types::Offset::new(px(50.0), px(50.0));
+    let position = flui_foundation::geometry::Offset::new(50.0, 50.0);
     realm.enter(|realm| {
         realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
             position,
@@ -508,7 +503,7 @@ fn all_input_dropped_after_close() {
     );
 
     realm.enter(|realm| {
-        realm.handle_input_entered(PlatformInput::Ime(flui_types::ImeEvent::Commit(
+        realm.handle_input_entered(PlatformInput::Ime(flui_platform_api::ImeEvent::Commit(
             "closed-ime".to_string(),
         )));
     });
@@ -533,12 +528,12 @@ fn input_lifecycle_gate_is_exhaustive_and_explicit() {
     use super::super::super::presentation::PresentationLifecycle;
 
     let pointer = PlatformInput::Pointer(make_down_event(
-        flui_types::Offset::new(px(0.0), px(0.0)),
+        flui_foundation::geometry::Offset::new(0.0, 0.0),
         PointerType::Mouse,
     ));
     let keyboard =
         PlatformInput::Keyboard(KeyEventBuilder::new(flui_interaction::events::Code::KeyA).build());
-    let ime = PlatformInput::Ime(flui_types::ImeEvent::Commit("x".to_string()));
+    let ime = PlatformInput::Ime(flui_platform_api::ImeEvent::Commit("x".to_string()));
     let drag_drop = PlatformInput::DragDrop(DragDropEvent::Exited {
         id: flui_foundation::DataTransferId::new(1),
     });
@@ -600,7 +595,7 @@ fn input_lifecycle_gate_is_exhaustive_and_explicit() {
 #[test]
 fn shell_installed_arena_resolves_nested_tap_detectors_to_one_winner() {
     use flui_interaction::events::{PointerType, make_down_event, make_up_event};
-    use flui_types::Color;
+    use flui_painting::styling::Color;
     use flui_widgets::{ColoredBox, GestureDetector};
 
     let realm = UiRealm::for_test();
@@ -643,7 +638,7 @@ fn shell_installed_arena_resolves_nested_tap_detectors_to_one_winner() {
     // Production input arrives inside the realm (runner.rs's
     // PlatformToUi dispatch enters it before calling handle_input),
     // so the synthetic tap does the same.
-    let position = flui_types::Offset::new(px(50.0), px(50.0));
+    let position = flui_foundation::geometry::Offset::new(50.0, 50.0);
     realm.enter(|realm| {
         realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
             position,
@@ -675,9 +670,9 @@ fn shell_installed_arena_resolves_nested_tap_detectors_to_one_winner() {
 /// on the arena's `SweepModel` directly.
 #[test]
 fn root_gesture_scope_arbitrates_overlapping_detectors_once() {
+    use flui_foundation::geometry::Offset;
     use flui_interaction::arena::SweepModel;
     use flui_interaction::events::{PointerType, make_down_event, make_up_event};
-    use flui_types::geometry::{Offset, Pixels};
     use flui_widgets::{GestureDetector, HitTestBehavior, SizedBox};
 
     let realm = UiRealm::for_test();
@@ -713,7 +708,7 @@ fn root_gesture_scope_arbitrates_overlapping_detectors_once() {
             .is_empty()
     );
 
-    let position = Offset::new(Pixels(10.0), Pixels(10.0));
+    let position = Offset::new(10.0, 10.0);
     let down = make_down_event(position, PointerType::Touch);
     let up = make_up_event(position, PointerType::Touch);
     realm.enter(|realm| {
@@ -740,15 +735,15 @@ fn root_gesture_scope_arbitrates_overlapping_detectors_once() {
 /// pipeline/presentation/gesture-binding triple) is supposed to give.
 #[test]
 fn realm_input_dispatch_keeps_gesture_state_isolated() {
+    use flui_foundation::geometry::Offset;
     use flui_interaction::PointerId;
     use flui_interaction::events::{PointerType, make_down_event_for_id, make_up_event_for_id};
     use flui_interaction::routing::PointerRouteHandler;
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm_a = UiRealm::for_test();
     let realm_b = UiRealm::for_test();
     let pointer = PointerId::new(9001).expect("nonzero pointer id");
-    let position = Offset::new(Pixels(10.0), Pixels(10.0));
+    let position = Offset::new(10.0, 10.0);
 
     let fired = Rc::new(Cell::new(0));
     let fired_by_route = Rc::clone(&fired);
@@ -819,9 +814,9 @@ impl flui_interaction::sealed::CustomGestureRecognizer for CountingArenaAcceptan
 /// one-member case.
 #[test]
 fn pointer_input_boundary_drains_a_lone_deferred_winner() {
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_down_event_for_id};
     use flui_interaction::routing::PointerRouteHandler;
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm = UiRealm::for_test();
     let pointer = flui_interaction::PointerId::new(9002).expect("nonzero pointer id");
@@ -841,11 +836,7 @@ fn pointer_input_boundary_drains_a_lone_deferred_winner() {
         .pointer_router()
         .add_route(pointer, Rc::clone(&handler));
 
-    let down = make_down_event_for_id(
-        pointer,
-        Offset::new(Pixels(10.0), Pixels(10.0)),
-        PointerType::Touch,
-    );
+    let down = make_down_event_for_id(pointer, Offset::new(10.0, 10.0), PointerType::Touch);
     realm.enter(|realm| {
         realm.handle_input_entered(PlatformInput::Pointer(down));
     });
@@ -883,7 +874,7 @@ fn long_press_fires_at_its_deadline_with_no_further_input() {
     use std::time::{Duration, Instant as StdInstant};
 
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::Color;
+    use flui_painting::styling::Color;
     use flui_widgets::{ColoredBox, GestureDetector};
 
     let realm = UiRealm::for_test();
@@ -919,7 +910,7 @@ fn long_press_fires_at_its_deadline_with_no_further_input() {
     // arrives inside the realm (runner.rs's RealmEvent dispatch
     // enters it before calling handle_input), so the synthetic down
     // does the same.
-    let position = flui_types::Offset::new(px(50.0), px(50.0));
+    let position = flui_foundation::geometry::Offset::new(50.0, 50.0);
     realm.enter(|realm| {
         realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
             position,
@@ -963,12 +954,12 @@ fn long_press_fires_at_its_deadline_with_no_further_input() {
 fn resampled_contact_motion_keeps_the_frame_wake_gate_open() {
     use std::time::Duration;
 
+    use flui_foundation::geometry::Offset;
     use flui_interaction::{
         events::{PointerType, make_down_event, make_move_event, make_up_event},
         processing::SamplingClock,
         routing::HitTestResult,
     };
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm = UiRealm::for_test();
     realm.mark_rendered();
@@ -985,7 +976,7 @@ fn resampled_contact_motion_keeps_the_frame_wake_gate_open() {
             period: Duration::from_millis(8),
         });
 
-        let position = Offset::new(Pixels(8.0), Pixels(13.0));
+        let position = Offset::new(8.0, 13.0);
         realm
             .gestures()
             .handle_pointer_event(&make_down_event(position, PointerType::Touch), |_| {
@@ -1522,7 +1513,7 @@ impl flui_rendering::traits::RenderBox for PanicOnLayoutBox {
     fn perform_layout(
         &mut self,
         _ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> flui_types::Size {
+    ) -> flui_foundation::geometry::Size {
         panic!("PanicOnLayoutBox::perform_layout -- intentional test panic");
     }
 }

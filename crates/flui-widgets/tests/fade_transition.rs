@@ -17,7 +17,7 @@ fn fade_transition_reads_animation_opacity_on_each_tick() {
     controller.set_value(0.25);
     // The controller's clone shares its notifier, so `set_value` on the handle
     // below notifies the listener the FadeTransition registers on this `Arc`.
-    let opacity: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let opacity: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
 
     let mut laid = lay_out(
         FadeTransition::new(opacity, SizedBox::new(100.0, 50.0)),
@@ -50,7 +50,7 @@ fn fade_transition_reads_animation_opacity_on_each_tick() {
 fn fade_transition_lays_its_child_out_as_a_passthrough() {
     let controller = AnimationController::without_ticker(Duration::from_millis(300));
     controller.set_value(1.0);
-    let opacity: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let opacity: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
 
     // Opacity is paint-only; the child keeps its size and the transition sizes
     // to it.

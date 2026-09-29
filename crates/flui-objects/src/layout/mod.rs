@@ -20,16 +20,21 @@ mod layout_builder;
 mod layout_constraints_cell;
 mod limited_box;
 mod list_body;
+mod main_axis_size;
 mod overflow_box;
 mod padding;
 mod rotated_box;
 pub(crate) mod shifted_box;
 mod sized_box;
 mod stack;
+mod stack_fit;
 mod table;
+mod table_column;
 mod theater;
 mod transform;
+mod vertical_direction;
 mod wrap;
+mod wrap_alignment;
 
 // Public items are re-exported through lib.rs; pub use here so that
 // `pub use layout::X` in lib.rs has a pub path to resolve.
@@ -63,6 +68,8 @@ pub use rotated_box::*;
 pub use sized_box::*;
 pub use stack::*;
 pub use table::*;
+pub use table_column::TableColumnWidth;
 pub use theater::*;
 pub use transform::*;
+pub use vertical_direction::VerticalDirection;
 pub use wrap::*;

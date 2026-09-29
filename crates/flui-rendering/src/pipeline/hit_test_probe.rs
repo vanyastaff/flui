@@ -9,8 +9,8 @@
 //! The capability is declared in `flui-interaction`, where realm identity and
 //! thread affinity already live, and implemented here, where the tree is.
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::{HitTestProbe, HitTestResult, InteractionDispatchError};
-use flui_types::{Offset, Pixels};
 
 use super::{PipelineCell, WeakPipelineCell};
 
@@ -57,7 +57,7 @@ impl PipelineHitTestProbe {
 impl HitTestProbe for PipelineHitTestProbe {
     fn probe(
         &self,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         result: &mut HitTestResult,
     ) -> Result<(), InteractionDispatchError> {
         // `try_with`, not `with`: a frame phase holding the tree checked out
@@ -83,8 +83,8 @@ impl HitTestProbe for PipelineHitTestProbe {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::geometry::{Offset, Size};
     use flui_interaction::{HitTestProbe, HitTestResult, InteractionDispatchError};
-    use flui_types::{Offset, Pixels, Size, geometry::px};
 
     use super::{PipelineCell, PipelineHitTestProbe};
     use crate::{
@@ -150,10 +150,10 @@ mod tests {
     fn laid_out_cell() -> PipelineCell {
         let mut owner = PipelineOwner::new();
         let root = owner.insert(Box::new(HittableLeaf {
-            size: Size::new(px(20.0), px(20.0)),
+            size: Size::new(20.0, 20.0),
         }) as Box<dyn RenderObject<BoxProtocol>>);
         owner.set_root_id(Some(root));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(20.0), px(20.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(20.0, 20.0))));
 
         let cell = PipelineCell::new(owner);
         cell.with_mut(|o| {
@@ -163,10 +163,10 @@ mod tests {
         cell
     }
 
-    fn snapshot_at(probe: &PipelineHitTestProbe, x: f32, y: f32) -> Vec<RenderId> {
+    fn snapshot_at(probe: &PipelineHitTestProbe, x: f64, y: f64) -> Vec<RenderId> {
         let mut result = HitTestResult::new();
         probe
-            .probe(Offset::new(Pixels(x), Pixels(y)), &mut result)
+            .probe(Offset::new(x, y), &mut result)
             .expect("tree is free");
         result.path().iter().map(|entry| entry.target).collect()
     }
@@ -207,7 +207,7 @@ mod tests {
             let probe = PipelineHitTestProbe::new(&cell, std::rc::Rc::downgrade(&open));
             let mut warm = HitTestResult::new();
             probe
-                .probe(Offset::new(Pixels(10.0), Pixels(10.0)), &mut warm)
+                .probe(Offset::new(10.0, 10.0), &mut warm)
                 .expect("answers while the tree is alive");
             probe
         };
@@ -215,7 +215,7 @@ mod tests {
         let mut result = HitTestResult::new();
         assert_eq!(
             probe
-                .probe(Offset::new(Pixels(10.0), Pixels(10.0)), &mut result)
+                .probe(Offset::new(10.0, 10.0), &mut result)
                 .unwrap_err(),
             InteractionDispatchError::OwnerGone,
             "once the last strong holder drops the tree, the probe must report \
@@ -244,7 +244,7 @@ mod tests {
 
         let mut warm = HitTestResult::new();
         probe
-            .probe(Offset::new(Pixels(10.0), Pixels(10.0)), &mut warm)
+            .probe(Offset::new(10.0, 10.0), &mut warm)
             .expect("answers while the presentation is open");
 
         // The presentation closes. `cell` is still held here, standing in for
@@ -254,7 +254,7 @@ mod tests {
         let mut result = HitTestResult::new();
         assert_eq!(
             probe
-                .probe(Offset::new(Pixels(10.0), Pixels(10.0)), &mut result)
+                .probe(Offset::new(10.0, 10.0), &mut result)
                 .unwrap_err(),
             InteractionDispatchError::OwnerGone,
             "a closed presentation must report itself gone even while someone \
@@ -272,7 +272,7 @@ mod tests {
         // Hold the tree the way a frame phase does, then ask from inside.
         let verdict = cell.with_mut(|_owner| {
             let mut result = HitTestResult::new();
-            probe.probe(Offset::new(Pixels(10.0), Pixels(10.0)), &mut result)
+            probe.probe(Offset::new(10.0, 10.0), &mut result)
         });
 
         assert_eq!(
@@ -298,11 +298,11 @@ mod tests {
     fn a_render_objects_payload_rides_out_on_the_hit_entry() {
         let mut owner = PipelineOwner::new();
         let root = owner.insert(Box::new(TaggedLeaf {
-            size: Size::new(px(20.0), px(20.0)),
+            size: Size::new(20.0, 20.0),
             tag: std::sync::Arc::new(DropTarget("inbox")),
         }) as Box<dyn RenderObject<BoxProtocol>>);
         owner.set_root_id(Some(root));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(20.0), px(20.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(20.0, 20.0))));
 
         let cell = PipelineCell::new(owner);
         cell.with_mut(|o| {
@@ -314,7 +314,7 @@ mod tests {
         let probe = PipelineHitTestProbe::new(&cell, std::rc::Rc::downgrade(&open));
         let mut result = HitTestResult::new();
         probe
-            .probe(Offset::new(Pixels(10.0), Pixels(10.0)), &mut result)
+            .probe(Offset::new(10.0, 10.0), &mut result)
             .expect("tree is free");
 
         let found: Vec<&DropTarget> = result
@@ -336,7 +336,7 @@ mod tests {
         let probe = PipelineHitTestProbe::new(&cell, std::rc::Rc::downgrade(&open));
         let mut result = HitTestResult::new();
         probe
-            .probe(Offset::new(Pixels(10.0), Pixels(10.0)), &mut result)
+            .probe(Offset::new(10.0, 10.0), &mut result)
             .expect("tree is free");
 
         assert!(

@@ -16,15 +16,15 @@
 //! convention with no compile-side enforcement.
 //!
 //! This port introduces a dedicated [`TranslationFraction`] newtype so
-//! "fraction of child size" is visible in the API surface. Pixels
+//! "fraction of child size" is visible in the API surface. Lengths
 //! never appear in the translation slot; the conversion happens once
 //! inside `paint`/`hit_test` against the driver-supplied size (from
 //! `RenderState`). The intent collapses into the type system instead of
 //! the docstring.
 
 use flui_foundation::Single;
-use flui_types::geometry::Lerp;
-use flui_types::{Matrix4, Offset, Size, geometry::px};
+use flui_foundation::geometry::Lerp;
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 
 use flui_rendering::{context::BoxHitTestContext, parent_data::BoxParentData, traits::RenderBox};
 
@@ -37,15 +37,15 @@ use flui_rendering::{context::BoxHitTestContext, parent_data::BoxParentData, tra
 ///
 /// `TranslationFraction { dx: -0.5, dy: 0.0 }` shifts the subject left
 /// by half its own width; `{ dx: 1.0, dy: 0.0 }` shifts it right by
-/// its full width (off-stage). The fractions are unit-less `f32`,
-/// not pixels — distinguishing them from `Offset` which carries
-/// concrete `Pixels`.
+/// its full width (off-stage). The fractions are unit-less `f64`,
+/// not pixels — distinguishing them from `Offset`, which carries
+/// logical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct TranslationFraction {
     /// Horizontal fraction (multiplied by `size.width` at use site).
-    pub dx: f32,
+    pub dx: f64,
     /// Vertical fraction (multiplied by `size.height` at use site).
-    pub dy: f32,
+    pub dy: f64,
 }
 
 impl TranslationFraction {
@@ -55,31 +55,28 @@ impl TranslationFraction {
     /// Creates a new fractional offset.
     #[inline]
     #[must_use]
-    pub const fn new(dx: f32, dy: f32) -> Self {
+    pub const fn new(dx: f64, dy: f64) -> Self {
         Self { dx, dy }
     }
 
     /// Resolves this fraction against a concrete `size`, producing a
-    /// `Pixels`-typed [`Offset`] suitable for canvas math.
+    /// logical-pixel [`Offset`] suitable for canvas math.
     #[inline]
     #[must_use]
     pub fn resolve(&self, size: Size) -> Offset {
-        Offset::new(
-            px(size.width.get() * self.dx),
-            px(size.height.get() * self.dy),
-        )
+        Offset::new(size.width * self.dx, size.height * self.dy)
     }
 }
 
 impl Lerp for TranslationFraction {
     /// Component-wise linear interpolation — the fraction itself is a plain
-    /// unitless `f32` pair, so this is the same `a + (b - a) * t` every other
+    /// unitless `f64` pair, so this is the same `a + (b - a) * t` every other
     /// `Lerp` scalar uses. Lets an `Animation<TranslationFraction>` (e.g.
     /// `flui-widgets`' `SlideTransition`) drive a `Tween<TranslationFraction>`
     /// directly instead of animating pixel-typed offsets and dividing back
     /// out by a size that may not be known yet.
     #[inline]
-    fn lerp_to(&self, other: &Self, t: f32) -> Self {
+    fn lerp_to(&self, other: &Self, t: f64) -> Self {
         Self {
             dx: self.dx + (other.dx - self.dx) * t,
             dy: self.dy + (other.dy - self.dy) * t,
@@ -220,7 +217,7 @@ impl RenderBox for RenderFractionalTranslation {
         transform: &mut Matrix4,
     ) {
         let offset = self.pixel_offset(size);
-        *transform *= Matrix4::translation(offset.dx.0, offset.dy.0, 0.0);
+        *transform *= Matrix4::translation(offset.dx, offset.dy, 0.0);
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
@@ -255,7 +252,6 @@ impl RenderBox for RenderFractionalTranslation {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -264,25 +260,22 @@ mod tests {
     #[test]
     fn fractional_offset_zero_resolves_to_zero() {
         let off = TranslationFraction::ZERO;
-        assert_eq!(
-            off.resolve(Size::new(px(200.0), px(100.0))),
-            Offset::new(px(0.0), px(0.0))
-        );
+        assert_eq!(off.resolve(Size::new(200.0, 100.0)), Offset::new(0.0, 0.0));
     }
 
     #[test]
     fn fractional_offset_resolves_to_fraction_of_size() {
         let off = TranslationFraction::new(-0.5, 0.25);
-        let r = off.resolve(Size::new(px(200.0), px(100.0)));
-        assert_eq!(r.dx, px(-100.0));
-        assert_eq!(r.dy, px(25.0));
+        let r = off.resolve(Size::new(200.0, 100.0));
+        assert_eq!(r.dx, -100.0);
+        assert_eq!(r.dy, 25.0);
     }
 
     #[test]
     fn fractional_offset_one_shifts_by_full_size() {
         let off = TranslationFraction::new(1.0, 1.0);
-        let r = off.resolve(Size::new(px(80.0), px(40.0)));
-        assert_eq!(r, Offset::new(px(80.0), px(40.0)));
+        let r = off.resolve(Size::new(80.0, 40.0));
+        assert_eq!(r, Offset::new(80.0, 40.0));
     }
 
     // ---------- RenderFractionalTranslation -------------------------------
@@ -316,8 +309,8 @@ mod tests {
         // 0.25 × 100 = 25.
         let node = RenderFractionalTranslation::translated(TranslationFraction::new(-0.5, 0.25));
         assert_eq!(
-            node.pixel_offset(Size::new(px(200.0), px(100.0))),
-            Offset::new(px(-100.0), px(25.0)),
+            node.pixel_offset(Size::new(200.0, 100.0)),
+            Offset::new(-100.0, 25.0),
         );
     }
 

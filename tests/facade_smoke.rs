@@ -21,11 +21,10 @@
 //! smoke check for the facade surface itself.
 
 use flui::prelude::*;
+use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::constraints::BoxConstraints;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
-use flui_types::Size;
-use flui_types::geometry::px;
 
 /// A trivial tree authored entirely off `flui::prelude::*` — the same import
 /// shape `src/lib.rs`'s crate-level doc-test demonstrates.
@@ -41,7 +40,7 @@ impl StatelessView for FacadeSmokeApp {
 }
 
 fn root_constraints() -> BoxConstraints {
-    BoxConstraints::tight(Size::new(px(320.0), px(240.0)))
+    BoxConstraints::tight(Size::new(320.0, 240.0))
 }
 
 #[test]
@@ -89,8 +88,8 @@ fn cupertino_module_resolves_through_the_facade() {
 /// global one (Arabic resolves right-to-left), not the always-LTR default.
 #[test]
 fn global_widgets_localizations_resolve_through_flui_widgets() {
-    use flui::types::platform::Locale;
-    use flui::types::typography::TextDirection;
+    use flui::painting::typography::TextDirection;
+    use flui::platform::Locale;
     use flui::widgets::{GlobalWidgetsLocalizationsDelegate, LocalizationsDelegate};
 
     let resources = GlobalWidgetsLocalizationsDelegate.load(&Locale::new("ar", None::<&str>));
@@ -143,6 +142,17 @@ fn material_app_shell_resolves_through_the_facade() {
 #[test]
 fn cupertino_app_shell_resolves_through_the_facade() {
     let theme = flui::cupertino::CupertinoThemeData::new()
-        .with_brightness(flui::types::platform::Brightness::Dark);
+        .with_brightness(flui::platform::Brightness::Dark);
     let _app = flui::cupertino::CupertinoApp::new(SizedBox::shrink()).theme(theme);
+}
+
+/// A gesture payload that names a device kind is buildable from the facade alone:
+/// `TapDownDetails::with_kind` takes a `PointerDeviceKind`, so the facade exports both.
+#[test]
+fn tap_details_take_a_device_kind_through_the_facade() {
+    use flui::interaction::{PointerDeviceKind, TapDownDetails};
+
+    let details = TapDownDetails::new(Offset::new(4.0, 2.0), Offset::new(1.0, 0.5))
+        .with_kind(PointerDeviceKind::Mouse);
+    assert_eq!(details.kind, PointerDeviceKind::Mouse);
 }

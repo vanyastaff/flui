@@ -1,4 +1,4 @@
-//! `TweenAnimation` - maps f32 animations to any type T.
+//! `TweenAnimation` - maps f64 animations to any type T.
 
 use crate::animation::{Animation, ParentSubscription, StatusCallback, link_parent};
 use crate::status::AnimationStatus;
@@ -9,13 +9,13 @@ use std::sync::Arc;
 
 /// An animation that applies a Tween to a parent animation.
 ///
-/// Takes an `Animation<f32>` (0.0 to 1.0) and applies a Tween to transform
+/// Takes an `Animation<f64>` (0.0 to 1.0) and applies a Tween to transform
 /// it into an `Animation<T>` for any type T that implements `Animatable`.
 ///
 /// # Type Parameters
 ///
 /// * `T` - The output type (e.g., Color, Size, Offset)
-/// * `A` - The Tween type that can transform f32 to T
+/// * `A` - The Tween type that can transform f64 to T
 ///
 /// # Examples
 ///
@@ -35,7 +35,7 @@ use std::sync::Arc;
 /// let tween = FloatTween::new(0.0, 100.0);
 /// let float_animation = TweenAnimation::new(
 ///     tween,
-///     controller as Arc<dyn Animation<f32>>,
+///     controller as Arc<dyn Animation<f64>>,
 /// );
 /// ```
 #[derive(Clone)]
@@ -45,7 +45,7 @@ where
     A: Animatable<T> + Clone + Send + Sync + 'static,
 {
     tween: A,
-    parent: Arc<dyn Animation<f32>>,
+    parent: Arc<dyn Animation<f64>>,
     notifier: Arc<ChangeNotifier>,
     /// Re-emits parent value changes to our listeners; removed on last drop.
     _parent_sub: Arc<ParentSubscription>,
@@ -61,10 +61,10 @@ where
     ///
     /// # Arguments
     ///
-    /// * `tween` - The tween that maps f32 → T
+    /// * `tween` - The tween that maps f64 → T
     /// * `parent` - The parent animation (typically 0.0 to 1.0)
     #[must_use]
-    pub fn new(tween: A, parent: Arc<dyn Animation<f32>>) -> Self {
+    pub fn new(tween: A, parent: Arc<dyn Animation<f64>>) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
         let parent_sub = link_parent(&parent, &notifier);
 
@@ -87,7 +87,7 @@ where
     /// Get a reference to the parent animation.
     #[inline]
     #[must_use]
-    pub fn parent(&self) -> &Arc<dyn Animation<f32>> {
+    pub fn parent(&self) -> &Arc<dyn Animation<f64>> {
         &self.parent
     }
 }
@@ -152,7 +152,7 @@ where
 /// Helper function to create a `TweenAnimation` from a Tween and parent animation.
 ///
 /// This is a convenience function for the common case.
-pub fn animate<T, A>(tween: A, parent: Arc<dyn Animation<f32>>) -> TweenAnimation<T, A>
+pub fn animate<T, A>(tween: A, parent: Arc<dyn Animation<f64>>) -> TweenAnimation<T, A>
 where
     T: Clone + Send + Sync + 'static,
     A: Animatable<T> + Clone + Send + Sync + 'static,
@@ -177,7 +177,7 @@ mod tests {
         ));
 
         let tween = FloatTween::new(0.0, 100.0);
-        let animation = TweenAnimation::new(tween, controller.clone() as Arc<dyn Animation<f32>>);
+        let animation = TweenAnimation::new(tween, controller.clone() as Arc<dyn Animation<f64>>);
 
         controller.set_value(0.0);
         assert_eq!(animation.value(), 0.0);
@@ -200,7 +200,7 @@ mod tests {
         ));
 
         let tween = FloatTween::new(0.0, 100.0);
-        let animation = TweenAnimation::new(tween, controller.clone() as Arc<dyn Animation<f32>>);
+        let animation = TweenAnimation::new(tween, controller.clone() as Arc<dyn Animation<f64>>);
 
         assert_eq!(animation.status(), AnimationStatus::Dismissed);
 
@@ -224,7 +224,7 @@ mod tests {
             &scheduler,
         ));
         let tween = FloatTween::new(0.0, 100.0);
-        let animation = TweenAnimation::new(tween, controller.clone() as Arc<dyn Animation<f32>>);
+        let animation = TweenAnimation::new(tween, controller.clone() as Arc<dyn Animation<f64>>);
 
         let hits = Arc::new(AtomicUsize::new(0));
         let hits2 = Arc::clone(&hits);
@@ -254,7 +254,7 @@ mod tests {
         {
             let _animation = TweenAnimation::new(
                 FloatTween::new(0.0, 1.0),
-                controller.clone() as Arc<dyn Animation<f32>>,
+                controller.clone() as Arc<dyn Animation<f64>>,
             );
             assert_eq!(
                 controller.debug_value_listener_count(),
@@ -279,7 +279,7 @@ mod tests {
         ));
 
         let tween = FloatTween::new(10.0, 20.0);
-        let animation = animate(tween, controller.clone() as Arc<dyn Animation<f32>>);
+        let animation = animate(tween, controller.clone() as Arc<dyn Animation<f64>>);
 
         controller.set_value(0.5);
         assert_eq!(animation.value(), 15.0);

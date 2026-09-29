@@ -39,7 +39,7 @@
 //!   throws *"LayoutBuilder does not support returning intrinsic dimensions"*
 //!   outside `RenderObject.debugCheckingIntrinsics`. FLUI returns the same
 //!   `0.0`. **Documented divergence:** FLUI logs via `tracing::error!` instead of
-//!   panicking — an intrinsic query returns `f32` with no error channel, and
+//!   panicking — an intrinsic query returns `f64` with no error channel, and
 //!   `docs/PANIC-POLICY.md` reserves panics for internal invariants, not caller
 //!   misuse. FLUI also has no `debugCheckingIntrinsics` flag to distinguish
 //!   Flutter's own intrinsic-checking probe from real use.
@@ -55,7 +55,7 @@
 use std::sync::Arc;
 
 use flui_foundation::Single;
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -106,7 +106,7 @@ impl RenderLayoutBuilder {
 }
 
 /// Flutter throws `'LayoutBuilder does not support returning intrinsic dimensions'`
-/// here; FLUI has no error channel on an `f32`-returning intrinsic, so it logs.
+/// here; FLUI has no error channel on an `f64`-returning intrinsic, so it logs.
 #[cold]
 fn report_unsupported_intrinsics() {
     tracing::error!(
@@ -184,22 +184,22 @@ impl RenderBox for RenderLayoutBuilder {
     // cannot be answered without building speculatively. Flutter throws in debug
     // and returns 0.0; FLUI logs and returns 0.0 (see the module docs).
 
-    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         report_unsupported_intrinsics();
         0.0
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         report_unsupported_intrinsics();
         0.0
     }
 
-    fn compute_min_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         report_unsupported_intrinsics();
         0.0
     }
 
-    fn compute_max_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         report_unsupported_intrinsics();
         0.0
     }

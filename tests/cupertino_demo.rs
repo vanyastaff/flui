@@ -22,20 +22,19 @@ use std::time::{Duration, Instant};
 
 use flui_cupertino::{CupertinoTabController, CupertinoTheme, CupertinoThemeData};
 use flui_foundation::RenderId;
+use flui_foundation::geometry::{Offset, Size};
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
-use flui_types::geometry::px;
-use flui_types::{Offset, Size};
 use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, VsyncScope};
 
 /// The mounted root's logical width.
-const ROOT_WIDTH: f32 = 400.0;
+const ROOT_WIDTH: f64 = 400.0;
 /// The mounted root's logical height.
-const ROOT_HEIGHT: f32 = 800.0;
+const ROOT_HEIGHT: f64 = 800.0;
 
 /// `CupertinoRouteTransitionMixin.kTransitionDuration` (`route.dart`, oracle
 /// tag `3.44.0`) — the push transition's duration.
@@ -50,7 +49,7 @@ const PUSH_PUMPS: usize = (PUSH_TRANSITION.as_millis() / FRAME.as_millis()) as u
 const SWIPE_PUMPS: usize = (SWIPE_RELEASE_DURATION.as_millis() / FRAME.as_millis()) as usize + 2;
 
 fn root_constraints() -> BoxConstraints {
-    BoxConstraints::tight(Size::new(px(ROOT_WIDTH), px(ROOT_HEIGHT)))
+    BoxConstraints::tight(Size::new(ROOT_WIDTH, ROOT_HEIGHT))
 }
 
 /// Everything the test needs to drive and inspect the mounted demo tree.
@@ -134,16 +133,16 @@ impl MountedDemo {
             .dispatch_pointer(&event, |position| self.hit_test(position));
     }
 
-    fn tap_down(&self, x: f32, y: f32) {
+    fn tap_down(&self, x: f64, y: f64) {
         self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
-    fn tap_up(&self, x: f32, y: f32) {
+    fn tap_up(&self, x: f64, y: f64) {
         self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
     /// A full tap (down + up) at `(x, y)`.
-    fn tap(&self, x: f32, y: f32) {
+    fn tap(&self, x: f64, y: f64) {
         self.tap_down(x, y);
         self.tap_up(x, y);
     }
@@ -151,25 +150,25 @@ impl MountedDemo {
     /// Taps the center of `id`'s rendered box.
     fn tap_node(&self, id: RenderId) {
         let position = self.absolute_position(id);
-        self.tap(position.dx.get() + 1.0, position.dy.get() + 1.0);
+        self.tap(position.dx + 1.0, position.dy + 1.0);
     }
 
     /// Start a drag through the binding-owned input pipeline. The binding
     /// captures the Down route and reuses it for every subsequent Move/Up,
     /// even after an edge swipe leaves the detector's narrow hit-test strip.
-    fn begin_drag(&self, x: f32, y: f32) {
+    fn begin_drag(&self, x: f64, y: f64) {
         advance_gesture_clock();
         self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Continue the binding-captured drag route at `(x, y)`.
-    fn continue_drag(&self, x: f32, y: f32) {
+    fn continue_drag(&self, x: f64, y: f64) {
         advance_gesture_clock();
         self.dispatch_pointer(make_move_event(offset(x, y), PointerType::Mouse));
     }
 
     /// Complete the binding-captured drag route at `(x, y)`.
-    fn end_drag(&self, x: f32, y: f32) {
+    fn end_drag(&self, x: f64, y: f64) {
         self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
     }
 
@@ -224,15 +223,15 @@ impl MountedDemo {
     fn absolute_position(&self, id: RenderId) -> Offset {
         self.pipeline_owner.with(|owner| {
             let render_tree = owner.render_tree();
-            let mut x = 0.0f32;
-            let mut y = 0.0f32;
+            let mut x = 0.0_f64;
+            let mut y = 0.0_f64;
             let mut current = id;
             loop {
                 if let Some(offset) =
                     flui_rendering::testing::inspect::render_offset(owner, current)
                 {
-                    x += offset.dx.get();
-                    y += offset.dy.get();
+                    x += offset.dx;
+                    y += offset.dy;
                 }
                 match render_tree.parent(current) {
                     Some(parent) => current = parent,
@@ -244,8 +243,8 @@ impl MountedDemo {
     }
 }
 
-fn offset(x: f32, y: f32) -> Offset {
-    Offset::new(px(x), px(y))
+fn offset(x: f64, y: f64) -> Offset {
+    Offset::new(x, y)
 }
 
 /// Spin until `Instant::now()` returns a value strictly greater than the one
@@ -268,7 +267,7 @@ fn advance_gesture_clock() {
 /// route nothing covers) — see `flui-cupertino/tests/route.rs`'s identical
 /// helper and its doc for why this, not raw layout offset, is the right
 /// probe for a paint-time transform.
-fn primary_slide_dx(demo: &MountedDemo) -> f32 {
+fn primary_slide_dx(demo: &MountedDemo) -> f64 {
     let nodes = demo.find_all_by_render_type("RenderFractionalTranslation");
     assert_eq!(
         nodes.len(),
@@ -282,7 +281,7 @@ fn primary_slide_dx(demo: &MountedDemo) -> f32 {
                 .render_property(id, "translation")
                 .expect("FractionalTranslation always reports its translation");
             let trimmed = property.trim_matches(['(', ')']);
-            let dx: f32 = trimmed
+            let dx: f64 = trimmed
                 .split(", ")
                 .next()
                 .expect("translation has a dx component")
@@ -290,7 +289,7 @@ fn primary_slide_dx(demo: &MountedDemo) -> f32 {
                 .expect("dx is a float");
             dx
         })
-        .fold(0.0_f32, |largest, dx| {
+        .fold(0.0_f64, |largest, dx| {
             if dx.abs() > largest.abs() {
                 dx
             } else {

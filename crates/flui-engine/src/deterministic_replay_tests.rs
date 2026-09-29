@@ -50,8 +50,9 @@
 mod tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::Rect;
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, geometry::px, styling::Color as StyledColor};
+    use flui_painting::styling::{Color, Color as StyledColor};
 
     use crate::{
         command_ir::{DrawItem, DrawSegment},
@@ -114,14 +115,11 @@ mod tests {
         let red = Color::rgba(255, 0, 0, 255);
 
         // Phase 1: instanced rect
-        painter.draw_rect(
-            Rect::from_xywh(px(10.0), px(10.0), px(20.0), px(20.0)),
-            &Paint::fill(white),
-        );
+        painter.draw_rect(Rect::from_xywh(10.0, 10.0, 20.0, 20.0), &Paint::fill(white));
 
         // Phase 2: instanced circle
         painter.draw_circle(
-            flui_types::Point::new(px(48.0), px(48.0)),
+            flui_foundation::geometry::Point::new(48.0, 48.0),
             10.0,
             &Paint::fill(red),
         );
@@ -129,7 +127,7 @@ mod tests {
         // Phase 3: linear gradient rect — exercises the gradient flush phase
         let blue = StyledColor::rgba(0, 0, 255, 255);
         let transparent = StyledColor::rgba(0, 0, 255, 0);
-        let rect = Rect::from_xywh(px(5.0), px(30.0), px(30.0), px(30.0));
+        let rect = Rect::from_xywh(5.0, 30.0, 30.0, 30.0);
         painter.draw_rect(
             rect,
             &crate::test_support::linear_gradient_fill(
@@ -333,7 +331,7 @@ mod tests {
         // the baseline `DrawItem::Segment` will also draw, enabling G3 comparison.
         let mut seg = DrawSegment::new();
         let instance = crate::instancing::RectInstance::rect(
-            Rect::from_ltrb(px(10.0), px(10.0), px(30.0), px(30.0)),
+            Rect::from_ltrb(10.0, 10.0, 30.0, 30.0),
             Color::rgba(255, 255, 255, 255),
         );
         let _ = seg.rect_batch.add(instance);
@@ -342,7 +340,7 @@ mod tests {
         // replay/flush.rs `for region in &segment.rect_scissors` issues zero draws.
         DrawSegment::push_scissor_region(&mut seg.rect_scissors, None);
 
-        let content_bounds = Rect::from_ltrb(px(10.0), px(10.0), px(30.0), px(30.0));
+        let content_bounds = Rect::from_ltrb(10.0, 10.0, 30.0, 30.0);
 
         let op = FilterOp {
             input: seg,
@@ -376,7 +374,7 @@ mod tests {
     fn build_baseline_segment_items() -> Vec<DrawItem> {
         let mut seg = DrawSegment::new();
         let instance = crate::instancing::RectInstance::rect(
-            Rect::from_ltrb(px(10.0), px(10.0), px(30.0), px(30.0)),
+            Rect::from_ltrb(10.0, 10.0, 30.0, 30.0),
             Color::rgba(255, 255, 255, 255),
         );
         let _ = seg.rect_batch.add(instance);
@@ -590,12 +588,12 @@ mod tests {
             use crate::command_ir::FilterOp;
             let mut seg = DrawSegment::new();
             let instance = crate::instancing::RectInstance::rect(
-                Rect::from_ltrb(px(10.0), px(10.0), px(30.0), px(30.0)),
+                Rect::from_ltrb(10.0, 10.0, 30.0, 30.0),
                 Color::rgba(255, 255, 255, 255),
             );
             let _ = seg.rect_batch.add(instance);
             DrawSegment::push_scissor_region(&mut seg.rect_scissors, None);
-            let content_bounds = Rect::from_ltrb(px(10.0), px(10.0), px(30.0), px(30.0));
+            let content_bounds = Rect::from_ltrb(10.0, 10.0, 30.0, 30.0);
             FilterOp {
                 input: seg,
                 passes: smallvec::SmallVec::new(), // empty fold — same round-trip, zero passes

@@ -6,8 +6,8 @@
 //!
 //! Run with: cargo run --example platform_window
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -44,7 +44,7 @@ fn main() {
 
             let window_options = WindowOptions {
                 title: "FLUI Platform Window".to_string(),
-                size: Size::new(px(800.0), px(600.0)),
+                size: Size::new(800.0, 600.0),
                 resizable: true,
                 visible: true,
                 decorated: true,

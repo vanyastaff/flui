@@ -34,7 +34,6 @@
 //! `titlePadding` overrides, and the M3 `isScrolledUnder` tint. Each is an
 //! additive knob on this same skeleton.
 
-use flui_sdk::types::{Alignment, EdgeInsets};
 use flui_sdk::view::BuildContextExt as _;
 use flui_sdk::view::prelude::StatelessView;
 use flui_sdk::view::{
@@ -44,6 +43,7 @@ use flui_sdk::widgets::{
     Align, DefaultTextStyle, Directionality, Opacity, Padding, Positioned, SizedBox, Stack,
     Transform,
 };
+use flui_sdk::{geometry::EdgeInsets, painting::Alignment};
 
 /// The collapse state a [`FlexibleSpaceBar`] interpolates over — provided by
 /// the enclosing `SliverAppBar` delegate on every build-during-layout
@@ -51,13 +51,13 @@ use flui_sdk::widgets::{
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FlexibleSpaceBarData {
     /// The extent the bar collapses to.
-    pub min_extent: f32,
+    pub min_extent: f64,
     /// The extent the bar expands to.
-    pub max_extent: f32,
+    pub max_extent: f64,
     /// The bar's extent right now, `min_extent..=max_extent`.
-    pub current_extent: f32,
+    pub current_extent: f64,
     /// The toolbar content's opacity, for delegates that fade it late.
-    pub toolbar_opacity: f32,
+    pub toolbar_opacity: f64,
 }
 
 /// Inherited scope carrying [`FlexibleSpaceBarData`] — Flutter's
@@ -123,7 +123,7 @@ pub struct FlexibleSpaceBar {
     title: Option<BoxedView>,
     background: Option<BoxedView>,
     center_title: bool,
-    expanded_title_scale: f32,
+    expanded_title_scale: f64,
 }
 
 impl FlexibleSpaceBar {
@@ -163,7 +163,7 @@ impl FlexibleSpaceBar {
     /// How much larger the title renders fully expanded (Flutter default
     /// 1.5).
     #[must_use]
-    pub fn expanded_title_scale(mut self, scale: f32) -> Self {
+    pub fn expanded_title_scale(mut self, scale: f64) -> Self {
         self.expanded_title_scale = scale;
         self
     }
@@ -186,7 +186,7 @@ impl std::fmt::Debug for FlexibleSpaceBar {
 
 /// `Interval(fade_start, 1).transform(t)` for the background fade — the
 /// only piece of Flutter's `Interval` curve this widget needs.
-fn interval_transform(fade_start: f32, t: f32) -> f32 {
+fn interval_transform(fade_start: f64, t: f64) -> f64 {
     if fade_start >= 1.0 {
         return if t >= 1.0 { 1.0 } else { 0.0 };
     }
@@ -244,9 +244,8 @@ impl StatelessView for FlexibleSpaceBar {
             // Start/end resolve through the ambient Directionality — a
             // leading-aligned title sits at the RIGHT edge under RTL, and
             // its 72px leading inset moves with it.
-            let rtl = Directionality::maybe_of(ctx).is_some_and(|direction| {
-                direction == flui_sdk::types::typography::TextDirection::Rtl
-            });
+            let rtl = Directionality::maybe_of(ctx)
+                .is_some_and(|direction| direction == flui_sdk::painting::TextDirection::Rtl);
             let alignment = if self.center_title {
                 Alignment::BOTTOM_CENTER
             } else if rtl {
@@ -258,10 +257,10 @@ impl StatelessView for FlexibleSpaceBar {
             // inset when leading-aligned (past the leading slot).
             let start_inset = if self.center_title { 0.0 } else { 72.0 };
             let padding = EdgeInsets {
-                top: px_f(0.0),
-                right: px_f(if rtl { start_inset } else { 0.0 }),
-                bottom: px_f(16.0),
-                left: px_f(if rtl { 0.0 } else { start_inset }),
+                top: 0.0,
+                right: if rtl { start_inset } else { 0.0 },
+                bottom: 16.0,
+                left: if rtl { 0.0 } else { start_inset },
             };
             // The Material title style, faded by the delegate's toolbar
             // opacity (see the module doc's named divergence).
@@ -292,11 +291,6 @@ impl StatelessView for FlexibleSpaceBar {
 
         Stack::new(layers)
     }
-}
-
-/// Local shorthand: `EdgeInsets` is pixel-typed.
-fn px_f(value: f32) -> flui_sdk::types::geometry::Pixels {
-    flui_sdk::types::geometry::px(value)
 }
 
 #[cfg(test)]

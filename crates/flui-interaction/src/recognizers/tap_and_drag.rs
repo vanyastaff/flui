@@ -40,10 +40,7 @@
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use flui_types::{
-    Offset,
-    geometry::{PixelDelta, Pixels},
-};
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
@@ -65,9 +62,9 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct TapDragDownDetails {
     /// Global position where pointer contacted the screen.
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Local position (relative to widget).
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Pointer device kind.
     pub kind: PointerType,
 }
@@ -76,9 +73,9 @@ pub struct TapDragDownDetails {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TapDragUpDetails {
     /// Global position where pointer was released.
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Local position (relative to widget).
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Pointer device kind.
     pub kind: PointerType,
 }
@@ -87,9 +84,9 @@ pub struct TapDragUpDetails {
 #[derive(Debug, Clone)]
 pub struct TapDragStartDetails {
     /// Global position where the drag started (down position).
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Local position.
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Pointer device kind.
     pub kind: PointerType,
 }
@@ -98,11 +95,11 @@ pub struct TapDragStartDetails {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TapDragUpdateDetails {
     /// Current global position.
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Current local position.
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Delta since the previous update.
-    pub delta: Offset<PixelDelta>,
+    pub delta: Offset<f64>,
     /// Pointer device kind.
     pub kind: PointerType,
 }
@@ -113,9 +110,9 @@ pub struct TapDragEndDetails {
     /// Velocity at the end of the drag.
     pub velocity: Velocity,
     /// Final global position.
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Final local position.
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
 }
 
 // ============================================================================
@@ -171,15 +168,15 @@ struct TapDragCallbacks {
 #[derive(Debug, Clone)]
 struct DragState {
     /// Initial position at down.
-    initial: Option<Offset<Pixels>>,
+    initial: Option<Offset<f64>>,
     /// The same contact as `initial`, in the root's space — stored because
     /// dispatch localises the event before this recognizer sees it, so the
     /// global position exists only on arrival (issue #908).
-    initial_global: Option<Offset<Pixels>>,
+    initial_global: Option<Offset<f64>>,
     /// Last update position.
-    last: Option<Offset<Pixels>>,
+    last: Option<Offset<f64>>,
     /// The same contact as `last`, in the root's space.
-    last_global: Option<Offset<Pixels>>,
+    last_global: Option<Offset<f64>>,
     /// Velocity tracker for end-of-drag velocity.
     velocity_tracker: VelocityTracker,
     /// `true` while a tap outcome is still possible. Set `false` once the
@@ -277,7 +274,7 @@ impl TapAndDragGestureRecognizer {
     /// tier instead (`:1410`); if this recognizer ever grows a vertical- or
     /// horizontal-only mode, that mode reads [`Self::tap_slop`]'s tier, not
     /// this one.
-    fn drag_slop(&self, kind: PointerType) -> f32 {
+    fn drag_slop(&self, kind: PointerType) -> f64 {
         self.settings.lock().pan_slop_for(kind)
     }
 
@@ -285,7 +282,7 @@ impl TapAndDragGestureRecognizer {
     ///
     /// The tap-viability check is a *hit* test, not a pan one, so it takes the
     /// plain tier — `computeHitSlop` at `tap_and_drag.dart:532`.
-    fn tap_slop(&self, kind: PointerType) -> f32 {
+    fn tap_slop(&self, kind: PointerType) -> f64 {
         self.settings.lock().hit_slop(kind)
     }
 
@@ -365,10 +362,10 @@ impl TapAndDragGestureRecognizer {
     }
 
     /// Distance from initial position to `current` (or 0 if no initial).
-    fn distance_from_initial(&self, current: Offset<Pixels>) -> f32 {
+    fn distance_from_initial(&self, current: Offset<f64>) -> f64 {
         let initial = self.drag_state.lock().initial;
         match initial {
-            Some(initial) => (current - initial).distance().0,
+            Some(initial) => (current - initial).distance(),
             None => 0.0,
         }
     }
@@ -378,8 +375,8 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: PointerId,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
     ) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
@@ -435,13 +432,13 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         match event {
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
+                let position = Offset::new(pos.x, pos.y);
                 let kind = data.pointer.pointer_type;
                 self.handle_move(position, global_position, kind);
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
+                let position = Offset::new(pos.x, pos.y);
                 self.handle_up(position, global_position, data.pointer.pointer_type);
             }
             PointerEvent::Cancel(info) => {
@@ -473,12 +470,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
 }
 
 impl TapAndDragGestureRecognizer {
-    fn handle_move(
-        &self,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
-        kind: PointerType,
-    ) {
+    fn handle_move(&self, position: Offset<f64>, global_position: Offset<f64>, kind: PointerType) {
         let phase = *self.phase.lock();
         match phase {
             Phase::Down => {
@@ -501,7 +493,7 @@ impl TapAndDragGestureRecognizer {
                     };
                     let Some(initial) = initial_opt else {
                         tracing::warn!(
-                            target: "flui_interaction::tap_and_drag",
+                            target: "crate::tap_and_drag",
                             "drag_state.initial unset in handle_move; \
                              add_pointer must be called before any move event"
                         );
@@ -562,7 +554,7 @@ impl TapAndDragGestureRecognizer {
                 let last = self.drag_state.lock().last;
                 let delta = match last {
                     Some(last_pos) => (position - last_pos).to_delta(),
-                    None => Offset::new(PixelDelta::ZERO, PixelDelta::ZERO),
+                    None => Offset::new(0.0, 0.0),
                 };
                 {
                     let mut ds = self.drag_state.lock();
@@ -583,12 +575,7 @@ impl TapAndDragGestureRecognizer {
         }
     }
 
-    fn handle_up(
-        &self,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
-        kind: PointerType,
-    ) {
+    fn handle_up(&self, position: Offset<f64>, global_position: Offset<f64>, kind: PointerType) {
         let phase = *self.phase.lock();
         match phase {
             Phase::Down => {
@@ -652,8 +639,8 @@ impl TapAndDragGestureRecognizer {
 
     fn handle_cancel(
         &self,
-        position: Option<Offset<Pixels>>,
-        global_position: Option<Offset<Pixels>>,
+        position: Option<Offset<f64>>,
+        global_position: Option<Offset<f64>>,
         _kind: PointerType,
     ) {
         let phase = *self.phase.lock();
@@ -774,19 +761,15 @@ mod tests {
             });
 
         let pointer = PointerId::PRIMARY;
-        rec.add_pointer(
-            pointer,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
 
         // Move 20px: past tap slop (10) but under drag slop (30) — voids the tap.
         rec.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(Pixels(20.0), Pixels(0.0)),
+            Offset::new(20.0, 0.0),
             PointerType::Touch,
         )));
         rec.handle_event(PointerDispatch::at_root(&make_up_event(
-            Offset::new(Pixels(20.0), Pixels(0.0)),
+            Offset::new(20.0, 0.0),
             PointerType::Touch,
         )));
 
@@ -820,12 +803,12 @@ mod tests {
             });
 
         let pointer = PointerId::PRIMARY;
-        let pos = Offset::new(Pixels(50.0), Pixels(50.0));
+        let pos = Offset::new(50.0, 50.0);
         rec.add_pointer(pointer, pos, pos);
 
         // Tiny move (5px) — well under both tap and drag slop.
         rec.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(Pixels(53.0), Pixels(52.0)),
+            Offset::new(53.0, 52.0),
             PointerType::Touch,
         )));
 
@@ -855,13 +838,13 @@ mod tests {
         let touch = GestureSettings::touch_defaults();
         // Between the mouse and touch value of each tier — the only region
         // where the assertion can distinguish which tier was read.
-        let pan_probe = f32::midpoint(DEFAULT_MOUSE_PAN_SLOP, touch.pan_slop());
+        let pan_probe = f64::midpoint(DEFAULT_MOUSE_PAN_SLOP, touch.pan_slop());
         // The hit probe carries a second constraint the pan probe does not: it
         // must ALSO stay under the mouse *pan* slop, or a mouse starts dragging
         // at this distance and the drag masks the tap-voiding it is meant to
         // show. That upper bound (2 px) is tighter than the touch hit slop
         // (18 px), so the midpoint of the two hit tiers does not qualify.
-        let hit_probe = f32::midpoint(DEFAULT_MOUSE_SLOP, DEFAULT_MOUSE_PAN_SLOP);
+        let hit_probe = f64::midpoint(DEFAULT_MOUSE_SLOP, DEFAULT_MOUSE_PAN_SLOP);
         assert!(pan_probe > DEFAULT_MOUSE_PAN_SLOP && pan_probe < touch.pan_slop());
         assert!(
             hit_probe > DEFAULT_MOUSE_SLOP
@@ -870,16 +853,16 @@ mod tests {
         );
 
         // Move `dx` and report (drag_start fired, tap still viable).
-        let drive = |dx: f32, kind: PointerType| {
+        let drive = |dx: f64, kind: PointerType| {
             let drag_start = Arc::new(Mutex::new(false));
             let started = drag_start.clone();
             let rec = TapAndDragGestureRecognizer::new(GestureArena::new())
                 .with_on_drag_start(move |_| *started.lock() = true);
 
-            let origin = Offset::new(Pixels(0.0), Pixels(0.0));
+            let origin = Offset::new(0.0, 0.0);
             rec.add_pointer(PointerId::PRIMARY, origin, origin);
             rec.handle_event(PointerDispatch::at_root(&make_move_event(
-                Offset::new(Pixels(dx), Pixels(0.0)),
+                Offset::new(dx, 0.0),
                 kind,
             )));
 
@@ -946,11 +929,11 @@ mod tests {
             });
 
         let pointer = PointerId::PRIMARY;
-        let pos = Offset::new(Pixels(0.0), Pixels(0.0));
+        let pos = Offset::new(0.0, 0.0);
         rec.add_pointer(pointer, pos, pos);
 
         // Big move (40px) — past the default 18px drag slop.
-        let big_pos = Offset::new(Pixels(40.0), Pixels(0.0));
+        let big_pos = Offset::new(40.0, 0.0);
         rec.handle_event(PointerDispatch::at_root(&make_move_event(
             big_pos,
             PointerType::Touch,
@@ -965,7 +948,7 @@ mod tests {
 
         // One more move.
         rec.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(Pixels(60.0), Pixels(0.0)),
+            Offset::new(60.0, 0.0),
             PointerType::Touch,
         )));
 
@@ -975,7 +958,7 @@ mod tests {
 
         // Up — drag ends.
         rec.handle_event(PointerDispatch::at_root(&make_up_event(
-            Offset::new(Pixels(60.0), Pixels(0.0)),
+            Offset::new(60.0, 0.0),
             PointerType::Touch,
         )));
         assert!(*drag_end.lock(), "drag_end fires on pointer up");
@@ -992,11 +975,7 @@ mod tests {
         });
 
         let pointer = PointerId::PRIMARY;
-        rec.add_pointer(
-            pointer,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
 
         // Drive a cancel event. We need a cancel-shaped PointerEvent
         // — pull from the events module.
@@ -1015,8 +994,8 @@ mod tests {
             .with_on_cancel(|| panic!("tap and drag cancel panic"));
         recognizer.add_pointer(
             PointerId::PRIMARY,
-            Offset::new(Pixels(1.0), Pixels(2.0)),
-            Offset::new(Pixels(1.0), Pixels(2.0)),
+            Offset::new(1.0, 2.0),
+            Offset::new(1.0, 2.0),
         );
         arena.close(PointerId::PRIMARY);
 
@@ -1036,7 +1015,7 @@ mod tests {
         let arena = GestureArena::new();
         let rec = TapAndDragGestureRecognizer::new(arena);
         let pointer = PointerId::PRIMARY;
-        let pos = Offset::new(Pixels(0.0), Pixels(0.0));
+        let pos = Offset::new(0.0, 0.0);
 
         rec.add_pointer(pointer, pos, pos);
         rec.handle_event(PointerDispatch::at_root(&make_up_event(
@@ -1052,17 +1031,17 @@ mod tests {
         let arena = GestureArena::new();
         let rec = TapAndDragGestureRecognizer::new(arena);
         let pointer = PointerId::PRIMARY;
-        let pos = Offset::new(Pixels(0.0), Pixels(0.0));
+        let pos = Offset::new(0.0, 0.0);
 
         rec.add_pointer(pointer, pos, pos);
         // Cross slop.
         rec.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(Pixels(40.0), Pixels(0.0)),
+            Offset::new(40.0, 0.0),
             PointerType::Touch,
         )));
         // End drag.
         rec.handle_event(PointerDispatch::at_root(&make_up_event(
-            Offset::new(Pixels(40.0), Pixels(0.0)),
+            Offset::new(40.0, 0.0),
             PointerType::Touch,
         )));
 
@@ -1091,11 +1070,11 @@ mod tests {
 
         // No add_pointer — primary_pointer() is None.
         rec.handle_event(PointerDispatch::at_root(&make_move_event(
-            Offset::new(Pixels(40.0), Pixels(0.0)),
+            Offset::new(40.0, 0.0),
             PointerType::Touch,
         )));
         rec.handle_event(PointerDispatch::at_root(&make_up_event(
-            Offset::new(Pixels(40.0), Pixels(0.0)),
+            Offset::new(40.0, 0.0),
             PointerType::Touch,
         )));
 
@@ -1158,15 +1137,11 @@ mod tests {
                 move |_| *f.lock() = true
             });
 
-        rec.add_pointer(
-            pointer,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        ); // later member
+        rec.add_pointer(pointer, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0)); // later member
         // Plain tap (no move past slop): the up resolves the arena, and the
         // earlier competitor — not this recogniser — wins.
         rec.handle_event(PointerDispatch::at_root(&make_up_event(
-            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(0.0, 0.0),
             PointerType::Touch,
         )));
 
@@ -1223,22 +1198,22 @@ mod clock_source_tests {
 
     /// Drive a fixed 240px horizontal drag whose samples are `step` of virtual
     /// time apart, and return the reported horizontal speed.
-    fn drag_velocity_over(step: Duration) -> f32 {
+    fn drag_velocity_over(step: Duration) -> f64 {
         let clock = ManualClock::new();
         let arena = GestureArena::with_clock(Arc::new(clock.clone()));
 
-        let reported = Arc::new(Mutex::new(0.0_f32));
+        let reported = Arc::new(Mutex::new(0.0_f64));
         let sink = Arc::clone(&reported);
         let recognizer = TapAndDragGestureRecognizer::new(arena).with_on_drag_end(move |details| {
-            *sink.lock() = details.velocity.pixels_per_second.dx.get();
+            *sink.lock() = details.velocity.pixels_per_second.dx;
         });
 
-        let at = |x: f32| Offset::new(Pixels(x), Pixels(0.0));
+        let at = |x: f64| Offset::new(x, 0.0);
         recognizer.add_pointer(PointerId::PRIMARY, at(0.0), at(0.0));
         for sample in 1..=6 {
             clock.advance(step);
             recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
-                at(40.0 * sample as f32),
+                at(40.0 * sample as f64),
                 PointerType::Touch,
             )));
         }

@@ -326,7 +326,7 @@ impl LayerTree {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::{Size, px};
+    use flui_foundation::geometry::Size;
 
     use super::*;
     use crate::{LeaderLayer, OffsetLayer, PictureLayer};
@@ -463,7 +463,7 @@ mod tests {
         let root = tree.root();
         let leader = tree.push_child(
             root,
-            Layer::from(LeaderLayer::new(link, Size::new(px(10.0), px(10.0)))),
+            Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
         );
         assert_eq!(tree.leader(link), Some(leader));
         assert_eq!(tree.leader(other), None);
@@ -473,7 +473,7 @@ mod tests {
     #[cfg(debug_assertions)]
     fn rejected_duplicate_leader_preserves_the_index() {
         let link = LayerLink::new();
-        let leader = Layer::from(LeaderLayer::new(link, Size::new(px(10.0), px(10.0))));
+        let leader = Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0)));
         let mut tree = LayerTree::new(leader.clone());
         let root = tree.root();
         let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

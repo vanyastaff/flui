@@ -268,7 +268,7 @@ fn make_pointer_state(
     // screen arrived at (540, 1284) in a 411×914 logical viewport: past
     // its edge, hit-testing nothing (the first Android emulator run,
     // 2026-09-22, docs/BETA.md).
-    let (x, y) = logical_position(pointer.x(), pointer.y(), scale_factor);
+    let (x, y) = logical_position(f64::from(pointer.x()), f64::from(pointer.y()), scale_factor);
 
     // Pressure: Android returns 0.0-1.0 for touch, 0.0 for no contact
     let pressure = pointer.pressure();
@@ -306,8 +306,8 @@ fn make_pointer_state(
 
 /// The framework-facing position for a pointer Android reports at physical
 /// `(x, y)` on a screen of `scale_factor` device pixels per logical pixel.
-fn logical_position(x: f32, y: f32, scale_factor: f64) -> (f64, f64) {
-    (f64::from(x) / scale_factor, f64::from(y) / scale_factor)
+fn logical_position(x: f64, y: f64, scale_factor: f64) -> (f64, f64) {
+    (x / scale_factor, y / scale_factor)
 }
 
 /// Convert Android `ToolType` to W3C `PointerType`.

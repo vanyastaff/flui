@@ -3,7 +3,7 @@
 
 use std::{any::Any, fmt, sync::Arc};
 
-use flui_types::geometry::{Pixels, Rect};
+use flui_foundation::geometry::Rect;
 
 /// Type-erased annotation value.
 pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
@@ -40,15 +40,15 @@ pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
 /// use std::sync::Arc;
 ///
 /// use flui_layer::{AnnotatedRegionLayer, SystemUiOverlayStyle};
-/// use flui_types::geometry::{Rect, px};
+/// use flui_foundation::geometry::Rect;
 ///
 /// let style = Arc::new(SystemUiOverlayStyle::Dark);
-/// let layer = AnnotatedRegionLayer::new(Rect::from_xywh(px(0.0), px(0.0), px(400.0), px(24.0)), style);
+/// let layer = AnnotatedRegionLayer::new(Rect::from_xywh(0.0, 0.0, 400.0, 24.0), style);
 /// ```
 #[derive(Clone)]
 pub struct AnnotatedRegionLayer {
     /// The annotated region bounds
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
 
     /// The annotation value (type-erased)
     value: AnnotationValue,
@@ -60,7 +60,7 @@ pub struct AnnotatedRegionLayer {
 impl AnnotatedRegionLayer {
     /// Attaches `value` to `rect` for a reader above the tree to find.
     #[inline]
-    pub fn new<T: Any + Send + Sync>(rect: Rect<Pixels>, value: Arc<T>) -> Self {
+    pub fn new<T: Any + Send + Sync>(rect: Rect<f64>, value: Arc<T>) -> Self {
         Self {
             rect,
             value,
@@ -80,7 +80,7 @@ impl AnnotatedRegionLayer {
 
     /// The region bounds (`Rect::ZERO` when sized by the parent).
     #[inline]
-    pub fn bounds(&self) -> Rect<Pixels> {
+    pub fn bounds(&self) -> Rect<f64> {
         self.rect
     }
 
@@ -149,7 +149,6 @@ impl From<String> for SemanticLabel {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -166,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_annotated_region_new() {
-        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
         let value = Arc::new(SystemUiOverlayStyle::Dark);
         let layer = AnnotatedRegionLayer::new(rect, value);
 
@@ -186,10 +185,7 @@ mod tests {
     #[test]
     fn test_annotated_region_with_semantic_label() {
         let label = Arc::new(SemanticLabel::new("Submit Button"));
-        let layer = AnnotatedRegionLayer::new(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(44.0)),
-            label,
-        );
+        let layer = AnnotatedRegionLayer::new(Rect::from_xywh(0.0, 0.0, 100.0, 44.0), label);
 
         let value = layer.value().downcast_ref::<SemanticLabel>().unwrap();
         assert_eq!(value.text(), "Submit Button");

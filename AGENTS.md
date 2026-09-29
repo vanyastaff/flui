@@ -42,20 +42,21 @@ now and expensive once consumers exist, so fix a bad shape instead of working ar
 
 ## Codebase map
 
-26 crates under `crates/`, the official packages under `packages/`, and the `flui` facade
+24 crates under `crates/`, the official packages under `packages/`, and the `flui` facade
 (`src/`), strictly layered. Each manifest
 declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtask workspace`);
 `docs/crates.md` is the readable version. Bottom to top:
 
-- **Values & primitives** — `flui-geometry`, `flui-types`, `flui-foundation`, `flui-macros`
-  (View derives).
+- **Values & primitives** — `flui-macros` (View derives), `flui-foundation` (IDs, and the
+  plain-`f64` geometry values in `flui_foundation::geometry`; ADR-0098).
 - **Contracts** — `flui-platform-api` (platform contracts: capability traits and window/input
   vocabulary, no OS code; ADR-0082), `flui-protocol` (semantics roles and actions, the
   agent-protocol wire vocabulary; ADR-0095).
 - **Substrate** — `flui-platform` (the backends behind those
   contracts: windows, input, IME, clipboard; every `windows::*`/`objc2::*` type stays inside it;
   only `flui-app` depends on it), `flui-scheduler` (frame phases),
-  `flui-painting` (records into a `DisplayList`), `flui-interaction` (event routing, gestures),
+  `flui-painting` (paint, styling and typography values; records into a `DisplayList`),
+  `flui-interaction` (event routing, gestures),
   `flui-assets`, `flui-log`.
 - **Compositing** — `flui-layer`, `flui-semantics`, `flui-animation`.
 - **Render machine** — `flui-rendering` (the `RenderBox`/`RenderSliver` protocols),
@@ -153,7 +154,7 @@ memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only c
 | No lock guard held across an `if let`/`match` arm | `clippy::significant_drop_in_scrutinee` |
 | No `todo!`/`unimplemented!`/`dbg!` in production (linux/ios/android init stubs carry an `#[expect]`) | clippy `todo`/`unimplemented`/`dbg_macro` |
 | No `println!`/`eprintln!` in `flui-foundation`/`flui-macros` | clippy `print_stdout`/`print_stderr` |
-| No `From<f32>` for `flui-geometry` unit wrappers | `compile_fail` doctests in `flui-geometry` |
+| Logical and device geometry don't mix: no `Point + Point`, no `Size` as an `Offset`, no `DevicePoint` as a `Point`, no literal `DevicePixelRatio`, no `f64`/`i32` geometry mixing (ADR-0098) | trybuild suite `crates/flui-painting/tests/compile_fail/` |
 | No bare `unwrap()` in production; by convention `expect("BUG: <invariant>")` for internal invariants, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | `clippy::unwrap_used`; the conventions are review |
 | Crate layering (a normal or build dependency points to a lower tier, or a smaller `order` in the same tier, unless the dependent lists it in `edge-exceptions` with the ADR that removes it; and, until `layer` is removed, to the same layer or lower — ADR-0081); no framework crate but `flui-app`, `flui-cli` and the facade links `flui-log`; none but `flui-app` depends on `flui-platform` (ADR-0082); only applications name an official package, in any dependency kind, an official package names another only through a declared exception, and an official package's normal and build dependencies are `flui-sdk` and the contract crates, each refused edge needing the dependent's `edge-exceptions` entry; a member under `packages/` is official and lists no exception (the kind rule, ADR-0081 §3, ADR-0088 §2); manifests inherit the workspace keys and lints, except that a `tier-kind = "evolving"` crate sets its own `0.N` version; `flui-foundation`, and no other member, declares the train guard `links = "flui_train"` (ADR-0088 §5); no unreachable test file; unique ADR numbers | `cargo xtask workspace` (`[package.metadata.flui]` in each manifest) |
 | No crate reaches what its tier forbids (`[workspace.metadata.flui.reach]`, where H forbids nothing, plus its own `reach-forbid`) in any root build, over normal and build edges on every target, except through a `reach-exceptions` entry that names its ADR and still excuses something; hot reload stays out of `flui-app`'s default graph (ADR-0081 §2) | `cargo xtask reach` |

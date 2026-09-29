@@ -12,8 +12,8 @@ use std::time::Instant;
 
 use flui_painting::parley_text::{ParagraphLayout, ParagraphSpec};
 use flui_painting::text_layout::font_system_initialized;
+use flui_painting::typography::{FontWeight, TextDirection, TextStyle};
 use flui_painting::{FontCollection, TextContext, TextLayoutResult};
-use flui_types::typography::{FontWeight, TextDirection, TextStyle};
 
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 /// Every word is narrower than the widths the tests break at, so no line
@@ -42,11 +42,11 @@ fn shape(context: &mut TextContext, text: &str, max_width: Option<f32>) -> Parag
 /// The fields a shaped paragraph reports, as one comparable tuple.
 fn key(metrics: &TextLayoutResult) -> (f32, f32, usize, f32, f32) {
     (
-        metrics.width,
-        metrics.height,
+        ((metrics.width) as f32),
+        ((metrics.height) as f32),
         metrics.line_count,
-        metrics.alphabetic_baseline,
-        metrics.ideographic_baseline,
+        ((metrics.alphabetic_baseline) as f32),
+        ((metrics.ideographic_baseline) as f32),
     )
 }
 
@@ -153,13 +153,13 @@ fn a_face_registered_after_the_fork_shapes_in_every_realm() {
     for (name, context) in [("a", &mut a), ("b", &mut b)] {
         let after = width(context);
         assert!(
-            (after - 4.0 * SIZE).abs() < 0.01,
+            (after - f64::from(4.0 * SIZE)).abs() < 0.01,
             "realm {name}: four one-em `A`s are {} px wide, got {after}",
             4.0 * SIZE
         );
     }
     assert!(
-        (before - 4.0 * SIZE).abs() > 1.0,
+        (before - f64::from(4.0 * SIZE)).abs() > 1.0,
         "before registration the probe family falls back to Roboto, got {before}"
     );
 }
@@ -173,7 +173,7 @@ fn a_paragraph_wraps_at_its_max_width() {
     let mut context = TextContext::new(&fonts);
     let metrics = shape(&mut context, LATIN, Some(MAX)).metrics();
     assert!(metrics.line_count > 1, "{metrics:?}");
-    assert!(metrics.width <= MAX + 0.01, "{metrics:?}");
+    assert!(metrics.width <= f64::from(MAX + 0.01), "{metrics:?}");
     assert!(metrics.width > 0.0, "{metrics:?}");
     assert!(
         0.0 < metrics.alphabetic_baseline && metrics.alphabetic_baseline < metrics.height,

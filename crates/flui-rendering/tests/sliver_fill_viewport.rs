@@ -1,7 +1,9 @@
 //! `RenderSliverFillViewport` — direct Box children with viewport-sized extents.
 
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_objects::RenderSliverFillViewport;
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::SliverConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -10,7 +12,6 @@ use flui_rendering::{
     testing::inspect,
     traits::RenderBox,
 };
-use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
 
 use crate::common::{
     BoxedRenderObject, BoxedSliverObject, horizontal_constraints,
@@ -33,8 +34,8 @@ fn render_offset(
 
 fn hits(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    cross: f32,
-    main: f32,
+    cross: f64,
+    main: f64,
 ) -> Vec<flui_foundation::RenderId> {
     inspect::hit_path(owner, cross, main)
 }
@@ -45,9 +46,9 @@ struct FixedHitBox {
 }
 
 impl FixedHitBox {
-    fn new(width: f32, height: f32) -> Self {
+    fn new(width: f64, height: f64) -> Self {
         Self {
-            desired: Size::new(px(width), px(height)),
+            desired: Size::new(width, height),
         }
     }
 }
@@ -64,7 +65,7 @@ impl RenderBox for FixedHitBox {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         ctx.is_within_bounds(Rect::from_origin_size(
-            flui_types::Point::ZERO,
+            flui_foundation::geometry::Point::ZERO,
             ctx.own_size(),
         ))
     }
@@ -101,7 +102,7 @@ impl RenderBox for SliverHost {
 
 fn fill_viewport_tree(
     constraints: SliverConstraints,
-    viewport_fraction: f32,
+    viewport_fraction: f64,
     child_count: usize,
 ) -> (
     PipelineOwner<flui_rendering::pipeline::phase::Layout>,
@@ -147,30 +148,12 @@ fn sliver_fill_viewport_sizes_children_to_viewport_fraction() {
     assert_eq!(geometry.cache_extent, 120.0);
     assert!(geometry.has_visual_overflow);
 
-    assert_eq!(
-        box_size(&owner, child_ids[0]),
-        Size::new(px(300.0), px(50.0))
-    );
-    assert_eq!(
-        box_size(&owner, child_ids[1]),
-        Size::new(px(300.0), px(50.0))
-    );
-    assert_eq!(
-        box_size(&owner, child_ids[2]),
-        Size::new(px(300.0), px(50.0))
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[0]),
-        Offset::new(px(0.0), px(-40.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[1]),
-        Offset::new(px(0.0), px(10.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[2]),
-        Offset::new(px(0.0), px(60.0)),
-    );
+    assert_eq!(box_size(&owner, child_ids[0]), Size::new(300.0, 50.0));
+    assert_eq!(box_size(&owner, child_ids[1]), Size::new(300.0, 50.0));
+    assert_eq!(box_size(&owner, child_ids[2]), Size::new(300.0, 50.0));
+    assert_eq!(render_offset(&owner, child_ids[0]), Offset::new(0.0, -40.0),);
+    assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(0.0, 10.0),);
+    assert_eq!(render_offset(&owner, child_ids[2]), Offset::new(0.0, 60.0),);
 }
 
 #[test]
@@ -195,22 +178,10 @@ fn sliver_fill_viewport_supports_horizontal_axis() {
     let (owner, _root_id, _sliver_id, child_ids) =
         fill_viewport_tree(horizontal_constraints(30.0), 0.25, 2);
 
-    assert_eq!(
-        box_size(&owner, child_ids[0]),
-        Size::new(px(75.0), px(100.0))
-    );
-    assert_eq!(
-        box_size(&owner, child_ids[1]),
-        Size::new(px(75.0), px(100.0))
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[0]),
-        Offset::new(px(-30.0), px(0.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[1]),
-        Offset::new(px(45.0), px(0.0)),
-    );
+    assert_eq!(box_size(&owner, child_ids[0]), Size::new(75.0, 100.0));
+    assert_eq!(box_size(&owner, child_ids[1]), Size::new(75.0, 100.0));
+    assert_eq!(render_offset(&owner, child_ids[0]), Offset::new(-30.0, 0.0),);
+    assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(45.0, 0.0),);
 }
 
 #[test]
@@ -219,18 +190,9 @@ fn sliver_fill_viewport_reverse_axis_uses_right_way_up_offsets() {
     constraints.axis_direction = AxisDirection::BottomToTop;
     let (owner, root_id, sliver_id, child_ids) = fill_viewport_tree(constraints, 0.5, 3);
 
-    assert_eq!(
-        render_offset(&owner, child_ids[0]),
-        Offset::new(px(0.0), px(90.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[1]),
-        Offset::new(px(0.0), px(40.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[2]),
-        Offset::new(px(0.0), px(-10.0)),
-    );
+    assert_eq!(render_offset(&owner, child_ids[0]), Offset::new(0.0, 90.0),);
+    assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(0.0, 40.0),);
+    assert_eq!(render_offset(&owner, child_ids[2]), Offset::new(0.0, -10.0),);
     assert_eq!(
         hits(&owner, 10.0, 20.0),
         vec![child_ids[2], sliver_id, root_id]

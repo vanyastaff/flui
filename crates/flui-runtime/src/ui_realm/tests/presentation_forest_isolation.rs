@@ -157,7 +157,7 @@ fn reassemble_fans_out_to_all_presentations_in_mount_order() {
     // drain both before reassembling, or the oracle below cannot
     // tell "still pending from mount" apart from "reassemble
     // actually re-marked it dirty".
-    let constraints = BoxConstraints::tight(flui_types::Size::new(px(50.0), px(50.0)));
+    let constraints = BoxConstraints::tight(flui_foundation::geometry::Size::new(50.0, 50.0));
     let _ = realm.draw_frame(constraints);
     assert!(
         !realm.widgets().has_pending_builds(),
@@ -228,7 +228,7 @@ fn hot_reload_via_the_command_inbox_fans_out_to_all_presentations_in_mount_order
         })
         .expect("B mounts");
 
-    let constraints = BoxConstraints::tight(flui_types::Size::new(px(50.0), px(50.0)));
+    let constraints = BoxConstraints::tight(flui_foundation::geometry::Size::new(50.0, 50.0));
     let _ = realm.draw_frame(constraints);
     assert!(
         !realm.widgets().has_pending_builds(),
@@ -300,7 +300,7 @@ fn dropping_the_realm_closes_every_presentation() {
 }
 
 fn segment_constraints() -> BoxConstraints {
-    BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+    BoxConstraints::tight(flui_foundation::geometry::Size::new(800.0, 600.0))
 }
 
 /// Oracle: FLUSH COUNTS (`PresentationState::flush_count`), never

@@ -197,13 +197,13 @@ where
                 return Err(anyhow::anyhow!(e).context("GPU init failed"));
             }
         };
-        renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+        renderer.resize(phys_size.width as u32, phys_size.height as u32);
 
         // 3. Mount root widget (used when no plugin is active) at the
         // LOGICAL size; the paint root's DPR transform maps to physical.
         // `UiRealm::new` applies the DPR to the freshly built pipeline
         // before returning.
-        let scale_factor = window.scale_factor() as f32;
+        let scale_factor = window.scale_factor() as f64;
         let wake = runtime_wake_callback();
         let ui_realm = match crate::app::ui_realm::UiRealm::new(
             Arc::clone(&wake),
@@ -230,11 +230,7 @@ where
 
         let logical = window.logical_size();
         let attach = ui_realm.enter(|realm| {
-            realm.attach_root_widget_with_size(
-                &root,
-                logical.width.0 as f32,
-                logical.height.0 as f32,
-            )
+            realm.attach_root_widget_with_size(&root, logical.width as f64, logical.height as f64)
         });
         if let Err(e) = attach {
             tracing::error!("Root widget attach failed: {:?}", e);
@@ -271,8 +267,8 @@ where
         let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
             renderer,
             realm_dispatch.address,
-            phys_size.width.0 as u32,
-            phys_size.height.0 as u32,
+            phys_size.width as u32,
+            phys_size.height as u32,
         )));
 
         // Install the registration-lifetime surface applier alongside the
@@ -283,8 +279,8 @@ where
             install_surface_applier(
                 realm_dispatch.address.realm_id,
                 move |size, scale_factor| {
-                    let w = (size.width.0 * scale_factor) as u32;
-                    let h = (size.height.0 * scale_factor) as u32;
+                    let w = (size.width * scale_factor) as u32;
+                    let h = (size.height * scale_factor) as u32;
                     resize_hook.apply(w, h);
                 },
             );
@@ -344,7 +340,7 @@ where
                             };
                             let plugin_rendered = lane.with_backend(|r| {
                                 let (w, h) = r.size();
-                                hot_reload_frame.try_render_frame(r, w as f32, h as f32)
+                                hot_reload_frame.try_render_frame(r, w as f64, h as f64)
                             });
                             if plugin_rendered {
                                 return (WakeAction::Skip, now);

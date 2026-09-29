@@ -58,10 +58,10 @@ fn test_displays_enumeration() {
             idx + 1,
             id,
             name,
-            bounds.size.width.0,
-            bounds.size.height.0,
-            bounds.origin.x.0,
-            bounds.origin.y.0,
+            bounds.size.width,
+            bounds.size.height,
+            bounds.origin.x,
+            bounds.origin.y,
             scale,
             refresh,
             is_primary
@@ -71,7 +71,7 @@ fn test_displays_enumeration() {
         assert!(!name.is_empty(), "Display name should not be empty");
 
         assert!(
-            bounds.size.width.0 > 0 && bounds.size.height.0 > 0,
+            bounds.size.width > 0 && bounds.size.height > 0,
             "Display size must be positive"
         );
 
@@ -125,8 +125,8 @@ fn test_primary_display_detection() {
     tracing::info!(
         "Primary display: '{}' ({}x{} @ {})",
         primary_from_list.name(),
-        primary_from_list.bounds().size.width.0,
-        primary_from_list.bounds().size.height.0,
+        primary_from_list.bounds().size.width,
+        primary_from_list.bounds().size.height,
         primary_from_list.scale_factor()
     );
 
@@ -139,7 +139,7 @@ fn test_primary_display_detection() {
     // Primary display should have valid bounds
     let bounds = primary_from_list.bounds();
     assert!(
-        bounds.size.width.0 > 0 && bounds.size.height.0 > 0,
+        bounds.size.width > 0 && bounds.size.height > 0,
         "Primary display must have valid size"
     );
 
@@ -147,8 +147,8 @@ fn test_primary_display_detection() {
     // (but this isn't guaranteed on all platforms)
     tracing::info!(
         "Primary display origin: ({}, {})",
-        bounds.origin.x.0,
-        bounds.origin.y.0
+        bounds.origin.x,
+        bounds.origin.y
     );
 
     tracing::info!("✓ PASS: Primary display validated");
@@ -183,8 +183,8 @@ fn test_high_dpi_scale_factor() {
         tracing::info!(
             "Display '{}': {}x{} @ {}x scale",
             name,
-            bounds.size.width.0,
-            bounds.size.height.0,
+            bounds.size.width,
+            bounds.size.height,
             scale
         );
 
@@ -203,11 +203,11 @@ fn test_high_dpi_scale_factor() {
 
             // Verify logical size calculation
             let logical_size = display.logical_size();
-            let expected_logical_width = bounds.size.width.0 as f32 / scale as f32;
-            let expected_logical_height = bounds.size.height.0 as f32 / scale as f32;
+            let expected_logical_width = bounds.size.width as f64 / scale;
+            let expected_logical_height = bounds.size.height as f64 / scale;
 
-            let width_diff = (logical_size.width.0 - expected_logical_width).abs();
-            let height_diff = (logical_size.height.0 - expected_logical_height).abs();
+            let width_diff = (logical_size.width - expected_logical_width).abs();
+            let height_diff = (logical_size.height - expected_logical_height).abs();
 
             assert!(
                 width_diff < 1.0 && height_diff < 1.0,
@@ -216,8 +216,8 @@ fn test_high_dpi_scale_factor() {
 
             tracing::info!(
                 "  → Logical size: {}x{} (physical / scale)",
-                logical_size.width.0,
-                logical_size.height.0
+                logical_size.width,
+                logical_size.height
             );
         } else {
             found_standard = true;
@@ -265,33 +265,33 @@ fn test_usable_bounds_exclude_system_ui() {
         tracing::info!("Display '{}':", name);
         tracing::info!(
             "  Full bounds: {}x{}+{}+{}",
-            full_bounds.size.width.0,
-            full_bounds.size.height.0,
-            full_bounds.origin.x.0,
-            full_bounds.origin.y.0
+            full_bounds.size.width,
+            full_bounds.size.height,
+            full_bounds.origin.x,
+            full_bounds.origin.y
         );
         tracing::info!(
             "  Usable bounds: {}x{}+{}+{}",
-            usable_bounds.size.width.0,
-            usable_bounds.size.height.0,
-            usable_bounds.origin.x.0,
-            usable_bounds.origin.y.0
+            usable_bounds.size.width,
+            usable_bounds.size.height,
+            usable_bounds.origin.x,
+            usable_bounds.origin.y
         );
 
         // Usable bounds should be within full bounds
         assert!(
-            usable_bounds.size.width.0 <= full_bounds.size.width.0,
+            usable_bounds.size.width <= full_bounds.size.width,
             "Usable width should not exceed full width"
         );
 
         assert!(
-            usable_bounds.size.height.0 <= full_bounds.size.height.0,
+            usable_bounds.size.height <= full_bounds.size.height,
             "Usable height should not exceed full height"
         );
 
         // Calculate difference (taskbar/menu bar space)
-        let width_diff = full_bounds.size.width.0 - usable_bounds.size.width.0;
-        let height_diff = full_bounds.size.height.0 - usable_bounds.size.height.0;
+        let width_diff = full_bounds.size.width - usable_bounds.size.width;
+        let height_diff = full_bounds.size.height - usable_bounds.size.height;
 
         if width_diff > 0 || height_diff > 0 {
             tracing::info!("  → System UI takes {}x{} pixels", width_diff, height_diff);
@@ -301,7 +301,7 @@ fn test_usable_bounds_exclude_system_ui() {
 
         // Usable bounds should be positive
         assert!(
-            usable_bounds.size.width.0 > 0 && usable_bounds.size.height.0 > 0,
+            usable_bounds.size.width > 0 && usable_bounds.size.height > 0,
             "Usable bounds must have positive size"
         );
     }
@@ -334,22 +334,22 @@ fn test_windows_enum_display_monitors() {
         tracing::info!(
             "Windows display: '{}' at {}x{}+{}+{}",
             disp.name(),
-            bounds.size.width.0,
-            bounds.size.height.0,
-            bounds.origin.x.0,
-            bounds.origin.y.0
+            bounds.size.width,
+            bounds.size.height,
+            bounds.origin.x,
+            bounds.origin.y
         );
 
         // Windows displays should have reasonable bounds
         assert!(
-            bounds.size.width.0 >= 640 && bounds.size.height.0 >= 480,
+            bounds.size.width >= 640 && bounds.size.height >= 480,
             "Display should be at least 640x480"
         );
 
         // Windows should provide usable bounds (work area)
         let usable = disp.usable_bounds();
         assert!(
-            usable.size.width.0 > 0 && usable.size.height.0 > 0,
+            usable.size.width > 0 && usable.size.height > 0,
             "Windows usable bounds should be valid"
         );
     }
@@ -395,8 +395,8 @@ fn test_macos_nsscreen_enumeration() {
         tracing::info!(
             "macOS display: '{}' at {}x{} @ {}x",
             disp.name(),
-            bounds.size.width.0,
-            bounds.size.height.0,
+            bounds.size.width,
+            bounds.size.height,
             scale
         );
 
@@ -407,7 +407,7 @@ fn test_macos_nsscreen_enumeration() {
 
         // macOS should provide menu bar exclusion in usable bounds
         let usable = disp.usable_bounds();
-        let menu_bar_height = bounds.size.height.0 - usable.size.height.0;
+        let menu_bar_height = bounds.size.height - usable.size.height;
 
         if menu_bar_height > 0 {
             tracing::info!("  → Menu bar height: {} pixels", menu_bar_height);
@@ -462,10 +462,10 @@ fn test_multi_monitor_bounds_arrangement() {
             "Display {}: '{}' at {}x{}+{}+{}",
             i + 1,
             display1.name(),
-            bounds1.size.width.0,
-            bounds1.size.height.0,
-            bounds1.origin.x.0,
-            bounds1.origin.y.0
+            bounds1.size.width,
+            bounds1.size.height,
+            bounds1.origin.x,
+            bounds1.origin.y
         );
 
         // Check against other displays
@@ -477,19 +477,18 @@ fn test_multi_monitor_bounds_arrangement() {
             let bounds2 = display2.bounds();
 
             // Calculate if displays are adjacent or overlapping
-            let horizontal_gap = if bounds1.origin.x.0 + bounds1.size.width.0 <= bounds2.origin.x.0
-            {
-                bounds2.origin.x.0 - (bounds1.origin.x.0 + bounds1.size.width.0)
-            } else if bounds2.origin.x.0 + bounds2.size.width.0 <= bounds1.origin.x.0 {
-                bounds1.origin.x.0 - (bounds2.origin.x.0 + bounds2.size.width.0)
+            let horizontal_gap = if bounds1.origin.x + bounds1.size.width <= bounds2.origin.x {
+                bounds2.origin.x - (bounds1.origin.x + bounds1.size.width)
+            } else if bounds2.origin.x + bounds2.size.width <= bounds1.origin.x {
+                bounds1.origin.x - (bounds2.origin.x + bounds2.size.width)
             } else {
                 0 // Overlapping or aligned
             };
 
-            let vertical_gap = if bounds1.origin.y.0 + bounds1.size.height.0 <= bounds2.origin.y.0 {
-                bounds2.origin.y.0 - (bounds1.origin.y.0 + bounds1.size.height.0)
-            } else if bounds2.origin.y.0 + bounds2.size.height.0 <= bounds1.origin.y.0 {
-                bounds1.origin.y.0 - (bounds2.origin.y.0 + bounds2.size.height.0)
+            let vertical_gap = if bounds1.origin.y + bounds1.size.height <= bounds2.origin.y {
+                bounds2.origin.y - (bounds1.origin.y + bounds1.size.height)
+            } else if bounds2.origin.y + bounds2.size.height <= bounds1.origin.y {
+                bounds1.origin.y - (bounds2.origin.y + bounds2.size.height)
             } else {
                 0 // Overlapping or aligned
             };

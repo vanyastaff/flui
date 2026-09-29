@@ -28,6 +28,7 @@
 use std::sync::Arc;
 
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_objects::RenderSliverGrid;
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
@@ -38,7 +39,6 @@ use flui_rendering::{
     testing::{inspect, sliver as sliver_presets},
     traits::RenderBox,
 };
-use flui_types::{Offset, Rect, Size, geometry::px};
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject, sliver_geometry};
 
@@ -52,9 +52,9 @@ struct FixedHitBox {
 }
 
 impl FixedHitBox {
-    fn new(width: f32, height: f32) -> Self {
+    fn new(width: f64, height: f64) -> Self {
         Self {
-            desired: Size::new(px(width), px(height)),
+            desired: Size::new(width, height),
         }
     }
 }
@@ -71,7 +71,7 @@ impl RenderBox for FixedHitBox {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         ctx.is_within_bounds(Rect::from_origin_size(
-            flui_types::Point::ZERO,
+            flui_foundation::geometry::Point::ZERO,
             ctx.own_size(),
         ))
     }
@@ -154,7 +154,7 @@ fn build_grid_tree(
     }
 
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let mut owner = owner.into_layout();
     owner.run_layout().expect("layout succeeds");
 
@@ -212,22 +212,22 @@ fn sliver_grid_golden_in_band_children_are_2_to_5() {
     // In-band tiles are 100×100 (tight constraints from delegate).
     assert_eq!(
         box_size(&owner, children[2]),
-        Size::new(px(100.0), px(100.0)),
+        Size::new(100.0, 100.0),
         "child 2 (row 1, col 0) must be 100×100",
     );
     assert_eq!(
         box_size(&owner, children[3]),
-        Size::new(px(100.0), px(100.0)),
+        Size::new(100.0, 100.0),
         "child 3 (row 1, col 1) must be 100×100",
     );
     assert_eq!(
         box_size(&owner, children[4]),
-        Size::new(px(100.0), px(100.0)),
+        Size::new(100.0, 100.0),
         "child 4 (row 2, col 0) must be 100×100",
     );
     assert_eq!(
         box_size(&owner, children[5]),
-        Size::new(px(100.0), px(100.0)),
+        Size::new(100.0, 100.0),
         "child 5 (row 2, col 1) must be 100×100",
     );
 }
@@ -279,22 +279,22 @@ fn sliver_grid_golden_paint_offsets() {
 
     assert_eq!(
         render_offset(&owner, children[2]),
-        Offset::new(px(0.0), px(0.0)),
+        Offset::new(0.0, 0.0),
         "child 2 (row 1, col 0): paint offset (0, 0)",
     );
     assert_eq!(
         render_offset(&owner, children[3]),
-        Offset::new(px(100.0), px(0.0)),
+        Offset::new(100.0, 0.0),
         "child 3 (row 1, col 1): paint offset (100, 0)",
     );
     assert_eq!(
         render_offset(&owner, children[4]),
-        Offset::new(px(0.0), px(100.0)),
+        Offset::new(0.0, 100.0),
         "child 4 (row 2, col 0): paint offset (0, 100)",
     );
     assert_eq!(
         render_offset(&owner, children[5]),
-        Offset::new(px(100.0), px(100.0)),
+        Offset::new(100.0, 100.0),
         "child 5 (row 2, col 1): paint offset (100, 100)",
     );
 }
@@ -316,7 +316,7 @@ fn sliver_grid_golden_cross_axis_offset_is_nonzero_for_col_1() {
         "child 3 sits in column 1: its cross-axis offset (dx) must be 100, \
          not zero (would be zero if the position pass were absent)",
     );
-    assert_eq!(offset_child3.dx, px(100.0));
+    assert_eq!(offset_child3.dx, 100.0);
 }
 
 // ── horizontal axis ───────────────────────────────────────────────────────────
@@ -340,21 +340,12 @@ fn sliver_grid_horizontal_axis_places_cross_on_dy() {
 
     let (owner, _root, _grid, children) = build_grid_tree(constraints, two_column_delegate(), 4);
 
-    assert_eq!(
-        render_offset(&owner, children[0]),
-        Offset::new(px(0.0), px(0.0))
-    );
-    assert_eq!(
-        render_offset(&owner, children[1]),
-        Offset::new(px(0.0), px(100.0))
-    );
-    assert_eq!(
-        render_offset(&owner, children[2]),
-        Offset::new(px(100.0), px(0.0))
-    );
+    assert_eq!(render_offset(&owner, children[0]), Offset::new(0.0, 0.0));
+    assert_eq!(render_offset(&owner, children[1]), Offset::new(0.0, 100.0));
+    assert_eq!(render_offset(&owner, children[2]), Offset::new(100.0, 0.0));
     assert_eq!(
         render_offset(&owner, children[3]),
-        Offset::new(px(100.0), px(100.0))
+        Offset::new(100.0, 100.0)
     );
 }
 
@@ -369,7 +360,7 @@ fn sliver_grid_rtl_mirrors_cross_axis_offsets() {
     // Vertical forward, scroll_offset=0, all 4 tiles in band.
     // child 0 (col 0 RTL): Offset(100, 0)
     // child 1 (col 1 RTL): Offset(0, 0)
-    use flui_types::layout::AxisDirection;
+    use flui_rendering::constraints::AxisDirection;
 
     let constraints = SliverConstraints {
         scroll_offset: 0.0,
@@ -386,13 +377,13 @@ fn sliver_grid_rtl_mirrors_cross_axis_offsets() {
     // Column 0 in RTL sits at cross offset 100 (the far end).
     assert_eq!(
         render_offset(&owner, children[0]).dx,
-        px(100.0),
+        100.0,
         "RTL col 0 must mirror to cross offset 100",
     );
     // Column 1 in RTL sits at cross offset 0 (the near end).
     assert_eq!(
         render_offset(&owner, children[1]).dx,
-        px(0.0),
+        0.0,
         "RTL col 1 must mirror to cross offset 0",
     );
 }
@@ -419,13 +410,13 @@ fn sliver_grid_cross_axis_spacing_reduces_tile_width() {
     // Tile cross extent = 90 → tight width for a vertical sliver.
     assert_eq!(
         box_size(&owner, children[0]).width,
-        px(90.0),
+        90.0,
         "cross_axis_spacing=20 must reduce per-tile cross extent to 90px",
     );
     // Col 1 cross offset = stride(110) × 1 = 110.
     assert_eq!(
         render_offset(&owner, children[1]).dx,
-        px(110.0),
+        110.0,
         "col 1 must start at cross offset 110 (90 tile + 20 spacing)",
     );
 }

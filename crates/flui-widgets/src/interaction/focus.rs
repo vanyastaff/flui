@@ -43,14 +43,13 @@ use crate::anchored_box::AnchoredBox;
 use crate::semantics::Semantics;
 use crate::support::value_callback;
 use flui_foundation::ListenerId;
-use flui_geometry::Rect;
+use flui_foundation::geometry::Rect;
 use flui_interaction::events::KeyEvent;
 use flui_interaction::routing::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
     KeyEventHandler, KeyEventResult, RectProvider,
 };
 use flui_objects::SubtreeAnchor;
-use flui_types::geometry::px;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
@@ -1003,12 +1002,7 @@ pub fn install_rect_provider(
             let size = owner.box_size(render_id)?;
             let root = owner.root_id()?;
             let transform = owner.transform_to(render_id, root)?;
-            Some(transform.transform_rect(&Rect::from_ltwh(
-                px(0.0),
-                px(0.0),
-                size.width,
-                size.height,
-            )))
+            Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height)))
         })
     });
     let registration = node.register_rect_provider(Rc::clone(&provider));

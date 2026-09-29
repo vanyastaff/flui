@@ -1,7 +1,7 @@
 //! Animation curves for interpolation.
 
 use smallvec::SmallVec;
-use std::f32::consts::PI;
+use std::f64::consts::PI;
 use std::fmt;
 use std::sync::Arc;
 
@@ -18,7 +18,7 @@ use std::sync::Arc;
 /// struct MyCurve;
 ///
 /// impl Curve for MyCurve {
-///     fn transform(&self, t: f32) -> f32 {
+///     fn transform(&self, t: f64) -> f64 {
 ///         t * t // quadratic ease-in
 ///     }
 /// }
@@ -32,7 +32,7 @@ pub trait Curve {
     /// Returns the value of the curve at point `t`.
     ///
     /// The value of `t` must be between 0.0 and 1.0, inclusive.
-    fn transform(&self, t: f32) -> f32;
+    fn transform(&self, t: f64) -> f64;
 
     /// Returns a new curve that is the flipped version of this one.
     ///
@@ -65,7 +65,7 @@ pub trait Curve {
 /// Similar to Flutter's `ParametricCurve<T>`.
 pub trait ParametricCurve<T> {
     /// Returns the value of the curve at point `t`.
-    fn transform(&self, t: f32) -> T;
+    fn transform(&self, t: f64) -> T;
 }
 
 /// A curve that maps a value in the unit interval to a 2D point.
@@ -73,7 +73,7 @@ pub trait ParametricCurve<T> {
 /// Similar to Flutter's `Curve2D`.
 pub trait Curve2D {
     /// Returns the point on the curve at parameter `t`.
-    fn transform(&self, t: f32) -> Curve2DSample;
+    fn transform(&self, t: f64) -> Curve2DSample;
 }
 
 /// A sample point on a 2D curve.
@@ -83,16 +83,16 @@ pub trait Curve2D {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Curve2DSample {
     /// The value of the curve at this point.
-    pub value: f32,
+    pub value: f64,
     /// The derivative (slope) of the curve at this point.
-    pub derivative: f32,
+    pub derivative: f64,
 }
 
 impl Curve2DSample {
     /// Creates a new 2D curve sample.
     #[inline]
     #[must_use]
-    pub const fn new(value: f32, derivative: f32) -> Self {
+    pub const fn new(value: f64, derivative: f64) -> Self {
         Self { value, derivative }
     }
 }
@@ -110,7 +110,7 @@ pub struct Linear;
 
 impl Curve for Linear {
     #[inline]
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         t.clamp(0.0, 1.0)
     }
 }
@@ -136,9 +136,9 @@ impl SawTooth {
 
 impl Curve for SawTooth {
     #[inline]
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
-        (t * self.count as f32).fract()
+        (t * self.count as f64).fract()
     }
 }
 
@@ -150,9 +150,9 @@ impl Curve for SawTooth {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Interval<C: Curve + Copy = Linear> {
     /// The start of the interval (0.0 to 1.0).
-    pub begin: f32,
+    pub begin: f64,
     /// The end of the interval (0.0 to 1.0).
-    pub end: f32,
+    pub end: f64,
     /// The curve to apply within the interval.
     pub curve: C,
 }
@@ -161,7 +161,7 @@ impl<C: Curve + Copy> Interval<C> {
     /// Creates a new interval curve.
     #[inline]
     #[must_use]
-    pub fn new(begin: f32, end: f32, curve: C) -> Self {
+    pub fn new(begin: f64, end: f64, curve: C) -> Self {
         assert!(
             (0.0..=1.0).contains(&begin),
             "begin must be in range [0.0, 1.0]"
@@ -179,13 +179,13 @@ impl Interval<Linear> {
     /// Creates a new interval curve with a linear curve.
     #[inline]
     #[must_use]
-    pub fn linear(begin: f32, end: f32) -> Self {
+    pub fn linear(begin: f64, end: f64) -> Self {
         Self::new(begin, end, Linear)
     }
 }
 
 impl<C: Curve + Copy> Curve for Interval<C> {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
 
         if t < self.begin {
@@ -208,14 +208,14 @@ impl<C: Curve + Copy> Curve for Interval<C> {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Threshold {
     /// The threshold at which the curve jumps to 1.0.
-    pub threshold: f32,
+    pub threshold: f64,
 }
 
 impl Threshold {
     /// Creates a new threshold curve.
     #[inline]
     #[must_use]
-    pub fn new(threshold: f32) -> Self {
+    pub fn new(threshold: f64) -> Self {
         assert!(
             (0.0..=1.0).contains(&threshold),
             "threshold must be in range [0.0, 1.0]"
@@ -226,7 +226,7 @@ impl Threshold {
 
 impl Curve for Threshold {
     #[inline]
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         if t < self.threshold { 0.0 } else { 1.0 }
     }
@@ -243,26 +243,26 @@ impl Curve for Threshold {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Cubic {
     /// The x coordinate of the first control point.
-    pub a: f32,
+    pub a: f64,
     /// The y coordinate of the first control point.
-    pub b: f32,
+    pub b: f64,
     /// The x coordinate of the second control point.
-    pub c: f32,
+    pub c: f64,
     /// The y coordinate of the second control point.
-    pub d: f32,
+    pub d: f64,
 }
 
 impl Cubic {
     /// Creates a new cubic curve.
     #[must_use]
-    pub const fn new(a: f32, b: f32, c: f32, d: f32) -> Self {
+    pub const fn new(a: f64, b: f64, c: f64, d: f64) -> Self {
         Self { a, b, c, d }
     }
 }
 
 /// Evaluates the cubic bezier curve at t.
 #[inline]
-fn evaluate_cubic(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
+fn evaluate_cubic(t: f64, p0: f64, p1: f64, p2: f64, p3: f64) -> f64 {
     let t2 = t * t;
     let t3 = t2 * t;
     let one_minus_t = 1.0 - t;
@@ -274,7 +274,7 @@ fn evaluate_cubic(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
 
 /// Derivative with respect to `t` of [`evaluate_cubic`].
 #[inline]
-fn evaluate_cubic_derivative(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 {
+fn evaluate_cubic_derivative(t: f64, p0: f64, p1: f64, p2: f64, p3: f64) -> f64 {
     let one_minus_t = 1.0 - t;
     3.0 * (one_minus_t * one_minus_t * (p1 - p0)
         + 2.0 * one_minus_t * t * (p2 - p1)
@@ -282,7 +282,7 @@ fn evaluate_cubic_derivative(t: f32, p0: f32, p1: f32, p2: f32, p3: f32) -> f32 
 }
 
 /// Absolute solver tolerance for the cubic-bezier x-inversion.
-const CUBIC_SOLVE_EPSILON: f32 = 1e-6;
+const CUBIC_SOLVE_EPSILON: f64 = 1e-6;
 
 impl Cubic {
     /// Solves `x(s) = x` for the bezier parameter `s` over `[0, 1]`.
@@ -292,7 +292,7 @@ impl Cubic {
     /// progress. This is the standard WebKit `UnitBezier` solver and replaces a
     /// plain 8-iteration bisection: same result within tolerance, fewer
     /// iterations on the dominant per-frame curve path.
-    fn solve_x(&self, x: f32) -> f32 {
+    fn solve_x(&self, x: f64) -> f64 {
         // Newton-Raphson from `x` as the initial guess (good because x(s) ≈ s).
         let mut s = x;
         for _ in 0..8 {
@@ -308,7 +308,7 @@ impl Cubic {
         }
 
         // Bounded bisection fallback (worst case for near-flat segments).
-        let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+        let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
         let mut s = x.clamp(lo, hi);
         for _ in 0..32 {
             let estimate = evaluate_cubic(s, 0.0, self.a, self.c, 1.0);
@@ -320,14 +320,14 @@ impl Cubic {
             } else {
                 hi = s;
             }
-            s = f32::midpoint(lo, hi);
+            s = f64::midpoint(lo, hi);
         }
         s
     }
 }
 
 impl Curve for Cubic {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         // Rust's `clamp` propagates NaN, which would silently NaN both the
         // Newton loop and the bisection fallback; canonicalize to the left
         // endpoint instead of poisoning every downstream animation value.
@@ -351,18 +351,18 @@ impl Curve for Cubic {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ThreePointCubic {
     /// First control point of the first segment (tangent at `(0, 0)`).
-    pub a1: (f32, f32),
+    pub a1: (f64, f64),
     /// Second control point of the first segment (tangent into `midpoint`).
-    pub b1: (f32, f32),
+    pub b1: (f64, f64),
     /// The shared point both segments pass through.
     ///
     /// `midpoint.0` must lie strictly inside `(0, 1)` — both segment widths
     /// are used as divisors.
-    pub midpoint: (f32, f32),
+    pub midpoint: (f64, f64),
     /// First control point of the second segment (tangent out of `midpoint`).
-    pub a2: (f32, f32),
+    pub a2: (f64, f64),
     /// Second control point of the second segment (tangent at `(1, 1)`).
-    pub b2: (f32, f32),
+    pub b2: (f64, f64),
 }
 
 impl ThreePointCubic {
@@ -381,11 +381,11 @@ impl ThreePointCubic {
     /// a compile error.
     #[must_use]
     pub const fn new(
-        a1: (f32, f32),
-        b1: (f32, f32),
-        midpoint: (f32, f32),
-        a2: (f32, f32),
-        b2: (f32, f32),
+        a1: (f64, f64),
+        b1: (f64, f64),
+        midpoint: (f64, f64),
+        a2: (f64, f64),
+        b2: (f64, f64),
     ) -> Self {
         assert!(
             midpoint.0 > 0.0 && midpoint.0 < 1.0 && midpoint.1 > 0.0 && midpoint.1 < 1.0,
@@ -403,7 +403,7 @@ impl ThreePointCubic {
 }
 
 impl Curve for ThreePointCubic {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         // NaN canonicalization mirrors `Cubic::transform`.
         if t.is_nan() {
             return 0.0;
@@ -453,7 +453,7 @@ impl Curve for ThreePointCubic {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Split<B: Curve = Linear, E: Curve = Cubic> {
     /// The progress value separating the two curves. In `[0, 1]`.
-    pub split: f32,
+    pub split: f64,
     /// The curve used before `split`.
     pub begin_curve: B,
     /// The curve used at and after `split`.
@@ -464,7 +464,7 @@ impl Split<Linear, Cubic> {
     /// Creates a split curve with Flutter's defaults: linear before `split`,
     /// `Curves::EaseOutCubic` after.
     #[must_use]
-    pub fn new(split: f32) -> Self {
+    pub fn new(split: f64) -> Self {
         Self::with_curves(split, Linear, Curves::EaseOutCubic)
     }
 }
@@ -472,7 +472,7 @@ impl Split<Linear, Cubic> {
 impl<B: Curve, E: Curve> Split<B, E> {
     /// Creates a split curve with explicit segment curves.
     #[must_use]
-    pub fn with_curves(split: f32, begin_curve: B, end_curve: E) -> Self {
+    pub fn with_curves(split: f64, begin_curve: B, end_curve: E) -> Self {
         assert!(
             (0.0..=1.0).contains(&split),
             "split must be in range [0.0, 1.0]"
@@ -487,7 +487,7 @@ impl<B: Curve, E: Curve> Split<B, E> {
 
 impl<B: Curve, E: Curve> Curve for Split<B, E> {
     #[expect(clippy::float_cmp)] // Intentional exact comparisons per the Flutter contract
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         if t.is_nan() {
             return 0.0;
         }
@@ -521,13 +521,13 @@ impl<B: Curve, E: Curve> Curve for Split<B, E> {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElasticInCurve {
     /// The period of oscillation.
-    pub period: f32,
+    pub period: f64,
 }
 
 impl ElasticInCurve {
     /// Creates a new elastic-in curve with the given period.
     #[must_use]
-    pub const fn new(period: f32) -> Self {
+    pub const fn new(period: f64) -> Self {
         Self { period }
     }
 }
@@ -540,7 +540,7 @@ impl Default for ElasticInCurve {
 
 impl Curve for ElasticInCurve {
     #[expect(clippy::float_cmp)] // Intentional exact comparison after clamp
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         // Guarantee exact boundary values per Curve contract
         if t == 0.0 {
@@ -551,7 +551,7 @@ impl Curve for ElasticInCurve {
         }
         let s = self.period / 4.0;
         let t = t - 1.0;
-        -((2.0_f32).powf(10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin())
+        -((2.0_f64).powf(10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin())
     }
 }
 
@@ -562,13 +562,13 @@ impl Curve for ElasticInCurve {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElasticOutCurve {
     /// The period of oscillation.
-    pub period: f32,
+    pub period: f64,
 }
 
 impl ElasticOutCurve {
     /// Creates a new elastic-out curve with the given period.
     #[must_use]
-    pub const fn new(period: f32) -> Self {
+    pub const fn new(period: f64) -> Self {
         Self { period }
     }
 }
@@ -581,7 +581,7 @@ impl Default for ElasticOutCurve {
 
 impl Curve for ElasticOutCurve {
     #[expect(clippy::float_cmp)] // Intentional exact comparison after clamp
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         // Guarantee exact boundary values per Curve contract
         if t == 0.0 {
@@ -591,7 +591,7 @@ impl Curve for ElasticOutCurve {
             return 1.0;
         }
         let s = self.period / 4.0;
-        (2.0_f32).powf(-10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin() + 1.0
+        (2.0_f64).powf(-10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin() + 1.0
     }
 }
 
@@ -603,13 +603,13 @@ impl Curve for ElasticOutCurve {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElasticInOutCurve {
     /// The period of oscillation.
-    pub period: f32,
+    pub period: f64,
 }
 
 impl ElasticInOutCurve {
     /// Creates a new elastic-in-out curve with the given period.
     #[must_use]
-    pub const fn new(period: f32) -> Self {
+    pub const fn new(period: f64) -> Self {
         Self { period }
     }
 }
@@ -622,7 +622,7 @@ impl Default for ElasticInOutCurve {
 
 impl Curve for ElasticInOutCurve {
     #[expect(clippy::float_cmp)] // Intentional exact comparison after clamp
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         // Guarantee exact boundary values per Curve contract
         if t == 0.0 {
@@ -635,9 +635,9 @@ impl Curve for ElasticInOutCurve {
         let t = 2.0 * t - 1.0;
 
         if t < 0.0 {
-            -0.5 * ((2.0_f32).powf(10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin())
+            -0.5 * ((2.0_f64).powf(10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin())
         } else {
-            0.5 * ((2.0_f32).powf(-10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin()) + 1.0
+            0.5 * ((2.0_f64).powf(-10.0 * t) * ((t - s) * (2.0 * PI) / self.period).sin()) + 1.0
         }
     }
 }
@@ -654,7 +654,7 @@ impl Curve for ElasticInOutCurve {
 pub struct BounceOutCurve;
 
 impl Curve for BounceOutCurve {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         bounce_out(t)
     }
@@ -668,7 +668,7 @@ impl Curve for BounceOutCurve {
 pub struct BounceInCurve;
 
 impl Curve for BounceInCurve {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         1.0 - bounce_out(1.0 - t)
     }
@@ -682,7 +682,7 @@ impl Curve for BounceInCurve {
 pub struct BounceInOutCurve;
 
 impl Curve for BounceInOutCurve {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         if t < 0.5 {
             (1.0 - bounce_out(1.0 - t * 2.0)) * 0.5
@@ -694,9 +694,9 @@ impl Curve for BounceInOutCurve {
 
 /// Helper function for bounce calculations.
 #[inline]
-fn bounce_out(t: f32) -> f32 {
-    const N1: f32 = 7.5625;
-    const D1: f32 = 2.75;
+fn bounce_out(t: f64) -> f64 {
+    const N1: f64 = 7.5625;
+    const D1: f64 = 2.75;
 
     if t < 1.0 / D1 {
         N1 * t * t
@@ -725,7 +725,7 @@ pub struct DecelerateCurve;
 
 impl Curve for DecelerateCurve {
     #[inline]
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
         1.0 - (1.0 - t) * (1.0 - t)
     }
@@ -745,16 +745,16 @@ impl Curve for DecelerateCurve {
 pub struct CatmullRomCurve {
     /// The control points of the curve.
     /// Stack-allocated for up to 8 points, heap-allocated for more.
-    pub points: SmallVec<[(f32, f32); 8]>,
+    pub points: SmallVec<[(f64, f64); 8]>,
     /// The tension parameter (0.0 = no tension, 0.5 = Catmull-Rom, 1.0 = tight).
-    pub tension: f32,
+    pub tension: f64,
 }
 
 impl CatmullRomCurve {
     /// Creates a new Catmull-Rom curve.
     #[inline]
     #[must_use]
-    pub fn new(points: impl Into<SmallVec<[(f32, f32); 8]>>, tension: f32) -> Self {
+    pub fn new(points: impl Into<SmallVec<[(f64, f64); 8]>>, tension: f64) -> Self {
         let points = points.into();
         assert!(points.len() >= 2, "Must have at least 2 points");
         Self { points, tension }
@@ -763,13 +763,13 @@ impl CatmullRomCurve {
     /// Creates a Catmull-Rom curve with default tension (0.0).
     #[inline]
     #[must_use]
-    pub fn with_points(points: impl Into<SmallVec<[(f32, f32); 8]>>) -> Self {
+    pub fn with_points(points: impl Into<SmallVec<[(f64, f64); 8]>>) -> Self {
         Self::new(points, 0.0)
     }
 }
 
 impl Curve for CatmullRomCurve {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
 
         if self.points.len() == 1 {
@@ -778,9 +778,9 @@ impl Curve for CatmullRomCurve {
 
         // Find the segment
         let segment_count = self.points.len() - 1;
-        let t_scaled = t * segment_count as f32;
+        let t_scaled = t * segment_count as f64;
         let segment = (t_scaled.floor() as usize).min(segment_count - 1);
-        let local_t = t_scaled - segment as f32;
+        let local_t = t_scaled - segment as f64;
 
         // Get the 4 control points for this segment
         let p0 = if segment > 0 {
@@ -835,7 +835,7 @@ impl CatmullRomSpline {
 }
 
 impl Curve2D for CatmullRomSpline {
-    fn transform(&self, t: f32) -> Curve2DSample {
+    fn transform(&self, t: f64) -> Curve2DSample {
         let t = t.clamp(0.0, 1.0);
 
         if self.points.len() == 1 {
@@ -844,9 +844,9 @@ impl Curve2D for CatmullRomSpline {
 
         // Find the segment
         let segment_count = self.points.len() - 1;
-        let t_scaled = t * segment_count as f32;
+        let t_scaled = t * segment_count as f64;
         let segment = (t_scaled.floor() as usize).min(segment_count - 1);
-        let local_t = t_scaled - segment as f32;
+        let local_t = t_scaled - segment as f64;
 
         // Get the 4 control points for this segment
         let p0 = if segment > 0 {
@@ -916,7 +916,7 @@ impl<C: Curve> FlippedCurve<C> {
 
 impl<C: Curve> Curve for FlippedCurve<C> {
     #[inline]
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         1.0 - self.curve.transform(1.0 - t)
     }
 }
@@ -944,7 +944,7 @@ impl<C: Curve> ReverseCurve<C> {
 
 impl<C: Curve> Curve for ReverseCurve<C> {
     #[inline]
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         self.curve.transform(1.0 - t)
     }
 }
@@ -1166,7 +1166,7 @@ impl ArcCurve {
 }
 
 impl Curve for ArcCurve {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         self.0.transform(t)
     }
 }
@@ -1184,7 +1184,7 @@ impl fmt::Debug for ArcCurve {
 ///
 /// [`CurvedAnimation`]: crate::CurvedAnimation
 impl Curve for Arc<dyn Curve + Send + Sync> {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         (**self).transform(t)
     }
 }
@@ -1195,11 +1195,11 @@ mod tests {
 
     /// Reference solver: the plain 8-iteration bisection the Newton solver
     /// replaces. Used to prove the new `transform` matches the old behavior.
-    fn reference_bisection_transform(cubic: &Cubic, t: f32) -> f32 {
+    fn reference_bisection_transform(cubic: &Cubic, t: f64) -> f64 {
         let t = t.clamp(0.0, 1.0);
-        let (mut start, mut end) = (0.0_f32, 1.0_f32);
+        let (mut start, mut end) = (0.0_f64, 1.0_f64);
         for _ in 0..8 {
-            let mid = f32::midpoint(start, end);
+            let mid = f64::midpoint(start, end);
             let x = evaluate_cubic(mid, 0.0, cubic.a, cubic.c, 1.0);
             if (x - t).abs() < 1e-6 {
                 return evaluate_cubic(mid, 0.0, cubic.b, cubic.d, 1.0);
@@ -1210,7 +1210,7 @@ mod tests {
                 end = mid;
             }
         }
-        evaluate_cubic(f32::midpoint(start, end), 0.0, cubic.b, cubic.d, 1.0)
+        evaluate_cubic(f64::midpoint(start, end), 0.0, cubic.b, cubic.d, 1.0)
     }
 
     #[test]
@@ -1223,7 +1223,7 @@ mod tests {
             Cubic::new(0.0, 0.0, 0.58, 1.0),  // EaseOut
         ] {
             for i in 0..=1000 {
-                let t = i as f32 / 1000.0;
+                let t = i as f64 / 1000.0;
                 let s = cubic.solve_x(t);
                 let x = evaluate_cubic(s, 0.0, cubic.a, cubic.c, 1.0);
                 assert!((x - t).abs() < 1e-3, "x({s})={x} != t={t}");
@@ -1241,7 +1241,7 @@ mod tests {
         // accuracy gate; this only proves there is no gross divergence.
         let cubic = Cubic::new(0.42, 0.0, 0.58, 1.0); // EaseInOut
         for i in 0..=1000 {
-            let t = i as f32 / 1000.0;
+            let t = i as f64 / 1000.0;
             let new = cubic.transform(t);
             let old = reference_bisection_transform(&cubic, t);
             assert!((new - old).abs() < 1e-2, "t={t}: new={new} old={old}");
@@ -1279,7 +1279,9 @@ mod tests {
         let curve = Interval::linear(0.2, 0.8);
         assert_eq!(curve.transform(0.0), 0.0);
         assert_eq!(curve.transform(0.2), 0.0);
-        assert_eq!(curve.transform(0.5), 0.5);
+        // (0.5 - 0.2) / (0.8 - 0.2): 0.3 and 0.6 are inexact, so the midpoint is exact
+        // only to a few ulps.
+        assert!((curve.transform(0.5) - 0.5).abs() < 1e-12);
         assert_eq!(curve.transform(0.8), 1.0);
         assert_eq!(curve.transform(1.0), 1.0);
     }
@@ -1366,11 +1368,11 @@ mod tests {
     fn cubic_nan_input_is_canonicalized() {
         // Rust's clamp propagates NaN; the solver must not.
         let c = Curves::EaseInOut;
-        assert_eq!(c.transform(f32::NAN), 0.0);
+        assert_eq!(c.transform(f64::NAN), 0.0);
         let tp = Curves::EaseInOutCubicEmphasized;
-        assert_eq!(tp.transform(f32::NAN), 0.0);
+        assert_eq!(tp.transform(f64::NAN), 0.0);
         let split = Split::new(0.5);
-        assert_eq!(split.transform(f32::NAN), 0.0);
+        assert_eq!(split.transform(f64::NAN), 0.0);
     }
 
     #[test]

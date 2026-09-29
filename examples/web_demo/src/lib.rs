@@ -25,10 +25,7 @@ pub fn start() {
     // Create canvas window before running the event loop
     let options = flui_platform::WindowOptions {
         title: "FLUI Web Demo".to_string(),
-        size: flui_types::geometry::Size::new(
-            flui_types::geometry::px(800.0),
-            flui_types::geometry::px(600.0),
-        ),
+        size: flui_foundation::geometry::Size::new(800.0, 600.0),
         ..Default::default()
     };
 
@@ -39,8 +36,8 @@ pub fn start() {
     web_sys::console::log_1(
         &format!(
             "Window created: {}x{} (scale: {})",
-            window.logical_size().width.0,
-            window.logical_size().height.0,
+            window.logical_size().width,
+            window.logical_size().height,
             window.scale_factor()
         )
         .into(),
@@ -103,11 +100,7 @@ pub fn start() {
     // Register resize callback
     window.on_resize(Box::new(|size, scale| {
         web_sys::console::log_1(
-            &format!(
-                "Resize: {}x{} (scale: {scale})",
-                size.width.0, size.height.0
-            )
-            .into(),
+            &format!("Resize: {}x{} (scale: {scale})", size.width, size.height).into(),
         );
     }));
 

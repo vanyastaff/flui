@@ -3,7 +3,6 @@
 use flui_objects::RenderConstrainedBox;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::geometry::px;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A box with a specific size that forces its child to that size.
@@ -14,14 +13,14 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// that axis (`BoxConstraints.tightFor`).
 #[derive(Clone, Debug, Default)]
 pub struct SizedBox {
-    width: Option<f32>,
-    height: Option<f32>,
+    width: Option<f64>,
+    height: Option<f64>,
     child: Child,
 }
 
 impl SizedBox {
     /// A box that forces both `width` and `height` on its child.
-    pub fn new(width: f32, height: f32) -> Self {
+    pub fn new(width: f64, height: f64) -> Self {
         Self {
             width: Some(width),
             height: Some(height),
@@ -30,12 +29,12 @@ impl SizedBox {
     }
 
     /// A square box of the given side length.
-    pub fn square(dimension: f32) -> Self {
+    pub fn square(dimension: f64) -> Self {
         Self::new(dimension, dimension)
     }
 
     /// A box that forces only its width; height passes through.
-    pub fn width(width: f32) -> Self {
+    pub fn width(width: f64) -> Self {
         Self {
             width: Some(width),
             height: None,
@@ -44,7 +43,7 @@ impl SizedBox {
     }
 
     /// A box that forces only its height; width passes through.
-    pub fn height(height: f32) -> Self {
+    pub fn height(height: f64) -> Self {
         Self {
             width: None,
             height: Some(height),
@@ -55,7 +54,7 @@ impl SizedBox {
     /// A box that becomes as large as its parent allows (infinite tight on
     /// both axes — Flutter's `SizedBox.expand`).
     pub fn expand() -> Self {
-        Self::new(f32::INFINITY, f32::INFINITY)
+        Self::new(f64::INFINITY, f64::INFINITY)
     }
 
     /// A box that becomes as small as its parent allows (zero on both axes —
@@ -76,12 +75,12 @@ impl SizedBox {
     fn tight_constraints(&self) -> BoxConstraints {
         let mut constraints = BoxConstraints::UNCONSTRAINED;
         if let Some(width) = self.width {
-            constraints.min_width = px(width);
-            constraints.max_width = px(width);
+            constraints.min_width = width;
+            constraints.max_width = width;
         }
         if let Some(height) = self.height {
-            constraints.min_height = px(height);
-            constraints.max_height = px(height);
+            constraints.min_height = height;
+            constraints.max_height = height;
         }
         constraints
     }

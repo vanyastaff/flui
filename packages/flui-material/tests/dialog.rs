@@ -11,9 +11,9 @@ use common::{lay_out, tight};
 use flui_material::{
     AlertDialog, Dialog, DialogThemeData, MaterialShape, Theme, ThemeData, ThemeDataOverrides,
 };
-use flui_sdk::types::Color;
-use flui_sdk::types::geometry::{Radius, px};
-use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::geometry::Radius;
+use flui_sdk::painting::BorderRadius;
+use flui_sdk::painting::Color;
 use flui_sdk::view::ViewExt;
 use flui_sdk::widgets::{ColoredBox, GestureDetector, SizedBox, Text};
 
@@ -21,10 +21,10 @@ use flui_sdk::widgets::{ColoredBox, GestureDetector, SizedBox, Text};
 /// Material's top-left corner. See
 /// [`default_corner_radius_reaches_the_mounted_material`] for how it is
 /// derived from `p >= r * (1 - 1/sqrt(2))`.
-const PROBE: f32 = 7.6;
+const PROBE: f64 = 7.6;
 
 /// `_DialogDefaultsM3`'s formatted `Debug` string for a resolved
-/// [`Color`](flui_sdk::types::Color) — the same helper `tests/card.rs`/
+/// [`Color`](flui_sdk::painting::Color) — the same helper `tests/card.rs`/
 /// `tests/elevated_button.rs` use for `RenderPhysicalShape`'s `"color"`
 /// diagnostics property.
 fn color_property(color: Color) -> String {
@@ -61,7 +61,7 @@ fn dialog_material_matches_dialog_defaults_m3() {
         .render_property(material, "elevation")
         .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
     assert_eq!(
-        elevation.parse::<f32>(),
+        elevation.parse::<f64>(),
         Ok(6.0),
         "_DialogDefaultsM3 constructs with elevation: 6.0"
     );
@@ -106,7 +106,7 @@ fn dialog_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let elevation = laid
         .render_property(material, "elevation")
         .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
-    assert_eq!(elevation.parse::<f32>(), Ok(2.0));
+    assert_eq!(elevation.parse::<f64>(), Ok(2.0));
 }
 
 /// `Dialog.build`'s fallback `constraints` (`BoxConstraints(minWidth:
@@ -124,7 +124,7 @@ fn default_constraints_enforce_a_280px_minimum_width() {
         .expect("Dialog must compose a Material surface");
 
     assert_eq!(
-        laid.size(material).width.get(),
+        laid.size(material).width,
         280.0,
         "BoxConstraints(minWidth: 280.0) must widen a 1px-wide child's Material to 280px"
     );
@@ -190,8 +190,8 @@ fn default_corner_radius_reaches_the_mounted_material() {
         .expect("Dialog must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
-    laid.dispatch_pointer_down(origin.dx.get() + PROBE, origin.dy.get() + PROBE);
-    laid.dispatch_pointer_up(origin.dx.get() + PROBE, origin.dy.get() + PROBE);
+    laid.dispatch_pointer_down(origin.dx + PROBE, origin.dy + PROBE);
+    laid.dispatch_pointer_up(origin.dx + PROBE, origin.dy + PROBE);
 
     assert_eq!(
         taps.load(Ordering::SeqCst),
@@ -221,7 +221,7 @@ fn an_overridden_24dp_corner_radius_includes_the_same_probe_point() {
                     .child(ColoredBox::new(Color::rgb(5, 5, 5)).child(SizedBox::new(50.0, 50.0))),
             )
             .shape(MaterialShape::RoundedRect(BorderRadius::all(
-                Radius::circular(px(24.0)),
+                Radius::circular(24.0),
             ))),
         ),
         tight(1000.0, 1000.0),
@@ -232,8 +232,8 @@ fn an_overridden_24dp_corner_radius_includes_the_same_probe_point() {
         .expect("Dialog must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
-    laid.dispatch_pointer_down(origin.dx.get() + PROBE, origin.dy.get() + PROBE);
-    laid.dispatch_pointer_up(origin.dx.get() + PROBE, origin.dy.get() + PROBE);
+    laid.dispatch_pointer_down(origin.dx + PROBE, origin.dy + PROBE);
+    laid.dispatch_pointer_up(origin.dx + PROBE, origin.dy + PROBE);
 
     assert_eq!(
         taps.load(Ordering::SeqCst),
@@ -316,8 +316,8 @@ fn a_tap_on_an_action_fires_its_handler() {
         .expect("the action's ColoredBox must mount");
     let origin = laid.absolute_offset(action);
     let size = laid.size(action);
-    let center_x = origin.dx.get() + size.width.get() / 2.0;
-    let center_y = origin.dy.get() + size.height.get() / 2.0;
+    let center_x = origin.dx + size.width / 2.0;
+    let center_y = origin.dy + size.height / 2.0;
 
     laid.dispatch_pointer_down(center_x, center_y);
     laid.dispatch_pointer_up(center_x, center_y);

@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use flui_geometry::EdgeInsets;
+use flui_foundation::geometry::EdgeInsets;
 use flui_view::prelude::StatelessView;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
@@ -153,7 +153,7 @@ impl StatelessView for SafeArea {
         };
 
         // `EdgeInsets::new(top, right, bottom, left)` — field order matches
-        // `Edges::new` in `flui-geometry`.
+        // `Edges::new` in `flui_foundation::geometry`.
         let insets = EdgeInsets::new(
             effective_top,
             effective_right,
@@ -161,16 +161,16 @@ impl StatelessView for SafeArea {
             effective_left,
         );
         if self.left {
-            media.padding.left = flui_geometry::px(0.0);
+            media.padding.left = 0.0;
         }
         if self.top {
-            media.padding.top = flui_geometry::px(0.0);
+            media.padding.top = 0.0;
         }
         if self.right {
-            media.padding.right = flui_geometry::px(0.0);
+            media.padding.right = 0.0;
         }
         if self.bottom {
-            media.padding.bottom = flui_geometry::px(0.0);
+            media.padding.bottom = 0.0;
         }
         Padding::new(insets).child(MediaQuery::new(media, self.child.clone()))
     }

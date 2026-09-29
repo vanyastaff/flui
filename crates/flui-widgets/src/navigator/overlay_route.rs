@@ -60,7 +60,7 @@ pub type RouteContentBuilder = Rc<dyn Fn(&dyn BuildContext) -> BoxedView>;
 /// leaves. The **secondary** animation is the primary animation of the route
 /// *above* this one, when the two coordinate — Flutter's `secondaryAnimation`
 /// (`routes.dart:197`, `:422-496`).
-pub type RouteAnimation = Arc<dyn Animation<f32>>;
+pub type RouteAnimation = Arc<dyn Animation<f64>>;
 
 /// Builds a route's page. Flutter's `RoutePageBuilder` / `ModalRoute.buildPage`
 /// (`routes.dart:1455-1459`).

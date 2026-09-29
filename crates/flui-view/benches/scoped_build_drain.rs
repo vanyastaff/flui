@@ -14,7 +14,6 @@ use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     protocol::BoxProtocol,
 };
-use flui_types::geometry::px;
 use flui_view::{
     BuildOwner, RebuildReason, RenderObjectContext, RenderView, View, element::ElementKind,
     tree::ElementTree,
@@ -53,7 +52,7 @@ struct Fixture {
 }
 
 fn constraints() -> BoxConstraints {
-    BoxConstraints::tight_for(Some(px(100.0)), Some(px(100.0)))
+    BoxConstraints::tight_for(Some(100.0), Some(100.0))
 }
 
 fn insert_child(

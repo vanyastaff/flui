@@ -21,15 +21,14 @@
 
 use std::time::Duration;
 
-use flui_types::geometry::Pixels;
-use flui_types::platform::TargetPlatform;
+use flui_platform_api::TargetPlatform;
 use ui_events::pointer::PointerType;
 
 /// Default touch slop for touch devices (18 logical pixels).
 ///
 /// Touch slop is the maximum distance a pointer can move before it's
 /// considered a drag rather than a tap.
-pub const DEFAULT_TOUCH_SLOP: f32 = 18.0;
+pub const DEFAULT_TOUCH_SLOP: f64 = 18.0;
 
 /// Default touch slop for mouse devices (1 logical pixel).
 ///
@@ -38,7 +37,7 @@ pub const DEFAULT_TOUCH_SLOP: f32 = 18.0;
 /// `3.44.0`) — the threshold `computeHitSlop` returns for
 /// `PointerDeviceKind.mouse`, used by `VerticalDragGestureRecognizer` and
 /// `HorizontalDragGestureRecognizer`.
-pub const DEFAULT_MOUSE_SLOP: f32 = 1.0;
+pub const DEFAULT_MOUSE_SLOP: f64 = 1.0;
 
 /// Default pan slop for mouse devices (2 logical pixels).
 ///
@@ -47,13 +46,13 @@ pub const DEFAULT_MOUSE_SLOP: f32 = 1.0;
 /// `computePanSlop` returns for `PointerDeviceKind.mouse`, used by
 /// `PanGestureRecognizer` (free-direction drag). Free movement gets double
 /// the axis-constrained hit slop.
-pub const DEFAULT_MOUSE_PAN_SLOP: f32 = DEFAULT_MOUSE_SLOP * 2.0;
+pub const DEFAULT_MOUSE_PAN_SLOP: f64 = DEFAULT_MOUSE_SLOP * 2.0;
 
 /// Default touch slop for pen/stylus devices (8 logical pixels).
-pub const DEFAULT_PEN_SLOP: f32 = 8.0;
+pub const DEFAULT_PEN_SLOP: f64 = 8.0;
 
 /// Default pan slop (same as touch slop by default).
-pub const DEFAULT_PAN_SLOP: f32 = 18.0;
+pub const DEFAULT_PAN_SLOP: f64 = 18.0;
 
 /// Default vertical-only pan slop.
 ///
@@ -61,13 +60,13 @@ pub const DEFAULT_PAN_SLOP: f32 = 18.0;
 /// for vertical drag. Same numeric value as [`DEFAULT_PAN_SLOP`] by default
 /// — the split exists so apps can tune vertical drag more aggressively than
 /// free pan (or vice versa) without touching the other.
-pub const DEFAULT_PAN_SLOP_VERTICAL: f32 = 18.0;
+pub const DEFAULT_PAN_SLOP_VERTICAL: f64 = 18.0;
 
 /// Default horizontal-only pan slop.
 ///
 /// See [`DEFAULT_PAN_SLOP_VERTICAL`] for the rationale behind the per-axis
 /// split (Flutter parity).
-pub const DEFAULT_PAN_SLOP_HORIZONTAL: f32 = 18.0;
+pub const DEFAULT_PAN_SLOP_HORIZONTAL: f64 = 18.0;
 
 /// Default scale slop (minimum scale factor change to start scaling).
 ///
@@ -75,7 +74,7 @@ pub const DEFAULT_PAN_SLOP_HORIZONTAL: f32 = 18.0;
 /// `max(a / b, b / a) > 1.05` (`gestures/scale.dart`), and this is that
 /// `0.05`. It is dimensionless, which is why — unlike every other slop here —
 /// it has no per-kind variant: a 5% pinch is 5% whatever moved.
-pub const DEFAULT_SCALE_SLOP: f32 = 0.05;
+pub const DEFAULT_SCALE_SLOP: f64 = 0.05;
 
 /// Default span slop for imprecise devices (18 logical pixels).
 ///
@@ -84,17 +83,17 @@ pub const DEFAULT_SCALE_SLOP: f32 = 0.05;
 /// mouse. This is the *absolute* distance the span between two pointers must
 /// change by, the tier [`DEFAULT_SCALE_SLOP`]'s ratio cannot express: a pinch
 /// starting from a wide span moves a long way before it moves 5%.
-pub const DEFAULT_SPAN_SLOP: f32 = DEFAULT_TOUCH_SLOP;
+pub const DEFAULT_SPAN_SLOP: f64 = DEFAULT_TOUCH_SLOP;
 
 /// Default span slop for mouse devices (1 logical pixel).
 ///
 /// Matches Flutter's `kPrecisePointerScaleSlop = kPrecisePointerHitSlop`
 /// (`gestures/constants.dart`, tag `3.44.0`) — what `computeScaleSlop` returns
 /// for `PointerDeviceKind.mouse`.
-pub const DEFAULT_MOUSE_SPAN_SLOP: f32 = DEFAULT_MOUSE_SLOP;
+pub const DEFAULT_MOUSE_SPAN_SLOP: f64 = DEFAULT_MOUSE_SLOP;
 
 /// Default double-tap distance tolerance (100 logical pixels).
-pub const DEFAULT_DOUBLE_TAP_SLOP: f32 = 100.0;
+pub const DEFAULT_DOUBLE_TAP_SLOP: f64 = 100.0;
 
 /// Default double-tap timeout (300ms).
 pub const DEFAULT_DOUBLE_TAP_TIMEOUT: Duration = Duration::from_millis(300);
@@ -103,10 +102,10 @@ pub const DEFAULT_DOUBLE_TAP_TIMEOUT: Duration = Duration::from_millis(300);
 pub const DEFAULT_LONG_PRESS_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Default minimum fling velocity (50 pixels/second).
-pub const DEFAULT_MIN_FLING_VELOCITY: f32 = 50.0;
+pub const DEFAULT_MIN_FLING_VELOCITY: f64 = 50.0;
 
 /// Default maximum fling velocity (8000 pixels/second).
-pub const DEFAULT_MAX_FLING_VELOCITY: f32 = 8000.0;
+pub const DEFAULT_MAX_FLING_VELOCITY: f64 = 8000.0;
 
 /// Device-specific gesture settings.
 ///
@@ -138,28 +137,28 @@ pub const DEFAULT_MAX_FLING_VELOCITY: f32 = 8000.0;
 #[non_exhaustive]
 pub struct GestureSettings {
     /// Maximum distance for a tap gesture (device-specific).
-    touch_slop: f32,
+    touch_slop: f64,
 
     /// Maximum distance for starting a pan gesture (free direction).
-    pan_slop: f32,
+    pan_slop: f64,
 
     /// Maximum vertical-only distance to start a vertical drag.
     ///
     /// Per-axis split lets the recogniser use a different tolerance for
     /// vertical-only drags than for free pans. Defaults to
     /// [`DEFAULT_PAN_SLOP_VERTICAL`].
-    pan_slop_vertical: f32,
+    pan_slop_vertical: f64,
 
     /// Maximum horizontal-only distance to start a horizontal drag.
     ///
     /// See [`Self::pan_slop_vertical`] — same rationale, horizontal axis.
-    pan_slop_horizontal: f32,
+    pan_slop_horizontal: f64,
 
     /// Minimum scale factor change to start scaling.
-    scale_slop: f32,
+    scale_slop: f64,
 
     /// Maximum distance between taps for a double-tap.
-    double_tap_slop: f32,
+    double_tap_slop: f64,
 
     /// Maximum time between taps for a double-tap.
     double_tap_timeout: Duration,
@@ -168,10 +167,10 @@ pub struct GestureSettings {
     long_press_timeout: Duration,
 
     /// Minimum velocity to trigger a fling.
-    min_fling_velocity: f32,
+    min_fling_velocity: f64,
 
     /// Maximum velocity for a fling (clamped).
-    max_fling_velocity: f32,
+    max_fling_velocity: f64,
 }
 
 impl Default for GestureSettings {
@@ -184,14 +183,14 @@ impl GestureSettings {
     /// Create settings with custom values.
     #[expect(clippy::too_many_arguments)]
     pub fn new(
-        touch_slop: f32,
-        pan_slop: f32,
-        scale_slop: f32,
-        double_tap_slop: f32,
+        touch_slop: f64,
+        pan_slop: f64,
+        scale_slop: f64,
+        double_tap_slop: f64,
         double_tap_timeout: Duration,
         long_press_timeout: Duration,
-        min_fling_velocity: f32,
-        max_fling_velocity: f32,
+        min_fling_velocity: f64,
+        max_fling_velocity: f64,
     ) -> Self {
         // Per-axis slops default to the free pan slop so existing
         // callers (pre-per-axis-split) keep their current tolerance.
@@ -383,13 +382,13 @@ impl GestureSettings {
 
     /// Get the touch slop (maximum movement for a tap).
     #[inline]
-    pub fn touch_slop(&self) -> f32 {
+    pub fn touch_slop(&self) -> f64 {
         self.touch_slop
     }
 
     /// Get the pan slop (minimum movement to start panning).
     #[inline]
-    pub fn pan_slop(&self) -> f32 {
+    pub fn pan_slop(&self) -> f64 {
         self.pan_slop
     }
 
@@ -419,7 +418,7 @@ impl GestureSettings {
     /// shipped platform.
     #[inline]
     #[must_use]
-    pub fn hit_slop(&self, kind: PointerType) -> f32 {
+    pub fn hit_slop(&self, kind: PointerType) -> f64 {
         match kind {
             PointerType::Mouse => DEFAULT_MOUSE_SLOP,
             _ => self.touch_slop(),
@@ -439,7 +438,7 @@ impl GestureSettings {
     /// wrong in production.
     #[inline]
     #[must_use]
-    pub fn pan_slop_for(&self, kind: PointerType) -> f32 {
+    pub fn pan_slop_for(&self, kind: PointerType) -> f64 {
         match kind {
             PointerType::Mouse => DEFAULT_MOUSE_PAN_SLOP,
             _ => self.pan_slop(),
@@ -452,7 +451,7 @@ impl GestureSettings {
     /// drag crosses the acceptance threshold. Returns the same value as
     /// [`Self::pan_slop`] unless explicitly set via [`Self::with_pan_slop_vertical`].
     #[inline]
-    pub fn pan_slop_vertical(&self) -> f32 {
+    pub fn pan_slop_vertical(&self) -> f64 {
         self.pan_slop_vertical
     }
 
@@ -460,7 +459,7 @@ impl GestureSettings {
     ///
     /// See [`Self::pan_slop_vertical`] — same rationale, horizontal axis.
     #[inline]
-    pub fn pan_slop_horizontal(&self) -> f32 {
+    pub fn pan_slop_horizontal(&self) -> f64 {
         self.pan_slop_horizontal
     }
 
@@ -469,7 +468,7 @@ impl GestureSettings {
     /// A ratio, not a distance — see [`DEFAULT_SCALE_SLOP`]. Compare through
     /// [`Self::exceeds_scale_slop`] rather than against a measured distance.
     #[inline]
-    pub fn scale_slop(&self) -> f32 {
+    pub fn scale_slop(&self) -> f64 {
         self.scale_slop
     }
 
@@ -487,7 +486,7 @@ impl GestureSettings {
     /// before it reaches 5%, and a small pinch crosses the ratio tier while
     /// barely moving.
     #[inline]
-    pub fn span_slop_for(&self, kind: PointerType) -> f32 {
+    pub fn span_slop_for(&self, kind: PointerType) -> f64 {
         match kind {
             PointerType::Mouse => DEFAULT_MOUSE_SPAN_SLOP,
             _ => DEFAULT_SPAN_SLOP,
@@ -496,7 +495,7 @@ impl GestureSettings {
 
     /// Get the double-tap slop (maximum distance between taps).
     #[inline]
-    pub fn double_tap_slop(&self) -> f32 {
+    pub fn double_tap_slop(&self) -> f64 {
         self.double_tap_slop
     }
 
@@ -514,13 +513,13 @@ impl GestureSettings {
 
     /// Get the minimum fling velocity.
     #[inline]
-    pub fn min_fling_velocity(&self) -> f32 {
+    pub fn min_fling_velocity(&self) -> f64 {
         self.min_fling_velocity
     }
 
     /// Get the maximum fling velocity.
     #[inline]
-    pub fn max_fling_velocity(&self) -> f32 {
+    pub fn max_fling_velocity(&self) -> f64 {
         self.max_fling_velocity
     }
 
@@ -530,14 +529,14 @@ impl GestureSettings {
 
     /// Set the touch slop.
     #[inline]
-    pub fn with_touch_slop(mut self, slop: f32) -> Self {
+    pub fn with_touch_slop(mut self, slop: f64) -> Self {
         self.touch_slop = slop;
         self
     }
 
     /// Set the pan slop.
     #[inline]
-    pub fn with_pan_slop(mut self, slop: f32) -> Self {
+    pub fn with_pan_slop(mut self, slop: f64) -> Self {
         self.pan_slop = slop;
         self
     }
@@ -548,7 +547,7 @@ impl GestureSettings {
     /// drag without affecting free pan. Use this in vertical-only widgets
     /// (e.g. scroll views).
     #[inline]
-    pub fn with_pan_slop_vertical(mut self, slop: f32) -> Self {
+    pub fn with_pan_slop_vertical(mut self, slop: f64) -> Self {
         self.pan_slop_vertical = slop;
         self
     }
@@ -557,21 +556,21 @@ impl GestureSettings {
     ///
     /// See [`Self::with_pan_slop_vertical`] — same rationale, horizontal axis.
     #[inline]
-    pub fn with_pan_slop_horizontal(mut self, slop: f32) -> Self {
+    pub fn with_pan_slop_horizontal(mut self, slop: f64) -> Self {
         self.pan_slop_horizontal = slop;
         self
     }
 
     /// Set the scale slop.
     #[inline]
-    pub fn with_scale_slop(mut self, slop: f32) -> Self {
+    pub fn with_scale_slop(mut self, slop: f64) -> Self {
         self.scale_slop = slop;
         self
     }
 
     /// Set the double-tap slop.
     #[inline]
-    pub fn with_double_tap_slop(mut self, slop: f32) -> Self {
+    pub fn with_double_tap_slop(mut self, slop: f64) -> Self {
         self.double_tap_slop = slop;
         self
     }
@@ -592,14 +591,14 @@ impl GestureSettings {
 
     /// Set the minimum fling velocity.
     #[inline]
-    pub fn with_min_fling_velocity(mut self, velocity: f32) -> Self {
+    pub fn with_min_fling_velocity(mut self, velocity: f64) -> Self {
         self.min_fling_velocity = velocity;
         self
     }
 
     /// Set the maximum fling velocity.
     #[inline]
-    pub fn with_max_fling_velocity(mut self, velocity: f32) -> Self {
+    pub fn with_max_fling_velocity(mut self, velocity: f64) -> Self {
         self.max_fling_velocity = velocity;
         self
     }
@@ -610,33 +609,33 @@ impl GestureSettings {
 
     /// Check if a distance exceeds the touch slop.
     #[inline]
-    pub fn exceeds_touch_slop(&self, distance: Pixels) -> bool {
-        distance.0 > self.touch_slop
+    pub fn exceeds_touch_slop(&self, distance: f64) -> bool {
+        distance > self.touch_slop
     }
 
     /// Check if a distance exceeds the pan slop.
     #[inline]
-    pub fn exceeds_pan_slop(&self, distance: Pixels) -> bool {
-        distance.0 > self.pan_slop
+    pub fn exceeds_pan_slop(&self, distance: f64) -> bool {
+        distance > self.pan_slop
     }
 
     /// Check if a scale factor exceeds the scale slop.
     ///
     /// Scale slop is applied symmetrically around 1.0.
     #[inline]
-    pub fn exceeds_scale_slop(&self, scale: f32) -> bool {
+    pub fn exceeds_scale_slop(&self, scale: f64) -> bool {
         (scale - 1.0).abs() > self.scale_slop
     }
 
     /// Clamp a fling velocity to the configured range.
     #[inline]
-    pub fn clamp_fling_velocity(&self, velocity: f32) -> f32 {
+    pub fn clamp_fling_velocity(&self, velocity: f64) -> f64 {
         velocity.clamp(self.min_fling_velocity, self.max_fling_velocity)
     }
 
     /// Check if a velocity is fast enough for a fling.
     #[inline]
-    pub fn is_fling_velocity(&self, velocity: f32) -> bool {
+    pub fn is_fling_velocity(&self, velocity: f64) -> bool {
         velocity.abs() >= self.min_fling_velocity
     }
 }
@@ -749,9 +748,9 @@ mod tests {
     fn test_exceeds_touch_slop() {
         let settings = GestureSettings::default();
 
-        assert!(!settings.exceeds_touch_slop(Pixels(10.0)));
-        assert!(!settings.exceeds_touch_slop(Pixels(18.0))); // Equal is not exceeded
-        assert!(settings.exceeds_touch_slop(Pixels(19.0)));
+        assert!(!settings.exceeds_touch_slop(10.0));
+        assert!(!settings.exceeds_touch_slop(18.0)); // Equal is not exceeded
+        assert!(settings.exceeds_touch_slop(19.0));
     }
 
     #[test]

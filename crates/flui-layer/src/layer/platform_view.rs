@@ -1,7 +1,7 @@
 //! `PlatformViewLayer` — a native view (Android `View`, iOS `UIView`) the embedder
 //! composites at a rectangle.
 
-use flui_types::geometry::{Pixels, Rect};
+use flui_foundation::geometry::Rect;
 
 /// Unique identifier for a platform view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,18 +69,18 @@ pub enum PlatformViewHitTestBehavior {
 ///
 /// ```rust
 /// use flui_layer::{PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer};
-/// use flui_types::geometry::{Rect, px};
+/// use flui_foundation::geometry::Rect;
 ///
 /// // Embed a map view
 /// let map_view = PlatformViewLayer::new(
 ///     PlatformViewId::new(1),
-///     Rect::from_xywh(px(0.0), px(0.0), px(400.0), px(300.0)),
+///     Rect::from_xywh(0.0, 0.0, 400.0, 300.0),
 /// );
 ///
 /// // Embed a web view with custom hit testing
 /// let web_view = PlatformViewLayer::new(
 ///     PlatformViewId::new(2),
-///     Rect::from_xywh(px(0.0), px(0.0), px(800.0), px(600.0)),
+///     Rect::from_xywh(0.0, 0.0, 800.0, 600.0),
 /// )
 /// .with_hit_test_behavior(PlatformViewHitTestBehavior::Defer);
 /// ```
@@ -90,7 +90,7 @@ pub struct PlatformViewLayer {
     view_id: PlatformViewId,
 
     /// Rectangle where the platform view is displayed
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
 
     /// Hit test behavior
     hit_test_behavior: PlatformViewHitTestBehavior,
@@ -99,7 +99,7 @@ pub struct PlatformViewLayer {
 impl PlatformViewLayer {
     /// Composites the native view `view_id` at `rect`.
     #[inline]
-    pub fn new(view_id: PlatformViewId, rect: Rect<Pixels>) -> Self {
+    pub fn new(view_id: PlatformViewId, rect: Rect<f64>) -> Self {
         Self {
             view_id,
             rect,
@@ -123,7 +123,7 @@ impl PlatformViewLayer {
 
     /// The rectangle the view occupies.
     #[inline]
-    pub fn bounds(&self) -> Rect<Pixels> {
+    pub fn bounds(&self) -> Rect<f64> {
         self.rect
     }
 
@@ -136,7 +136,6 @@ impl PlatformViewLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -149,7 +148,7 @@ mod tests {
     #[test]
     fn test_platform_view_layer_new() {
         let id = PlatformViewId::new(1);
-        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
         let layer = PlatformViewLayer::new(id, rect);
 
         assert_eq!(layer.view_id(), id);
@@ -163,7 +162,7 @@ mod tests {
     #[test]
     fn test_platform_view_layer_with_hit_test() {
         let id = PlatformViewId::new(1);
-        let rect = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let layer = PlatformViewLayer::new(id, rect)
             .with_hit_test_behavior(PlatformViewHitTestBehavior::Defer);
 
@@ -176,7 +175,7 @@ mod tests {
     #[test]
     fn test_platform_view_layer_bounds() {
         let id = PlatformViewId::new(1);
-        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
         let layer = PlatformViewLayer::new(id, rect);
 
         assert_eq!(layer.bounds(), rect);

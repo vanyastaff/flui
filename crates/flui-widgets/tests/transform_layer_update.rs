@@ -20,7 +20,7 @@
 //! (`a_transform_change_updates_the_layer_without_repainting_the_subtree` in
 //! `crates/flui-rendering/tests/retained_boundary_layers.rs`).
 
-use flui_geometry::Matrix4;
+use flui_foundation::geometry::Matrix4;
 use flui_widgets::testing::{lay_out, tight};
 use flui_widgets::{SizedBox, Transform};
 

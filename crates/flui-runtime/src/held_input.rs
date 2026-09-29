@@ -991,13 +991,13 @@ mod tests {
     use std::cell::RefCell;
 
     use flui_foundation::PresentationId;
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::pointer::{PointerButtons, PointerType};
     use flui_interaction::events::{
         PointerEventExt as _, make_cancel_event_for_id, make_down_event_for_id,
         make_move_event_for_id, make_up_event_for_id,
     };
     use flui_interaction::{PointerEvent, PointerId};
-    use flui_types::geometry::{Offset, Pixels};
 
     use super::{HELD_POINTER_CAPACITY, HeldPointerQueue, HeldPointerReplay};
 
@@ -1005,19 +1005,19 @@ mod tests {
         PointerId::new(raw).expect("test pointer ids are nonzero")
     }
 
-    fn position(x: f32) -> Offset<Pixels> {
-        Offset::new(Pixels(x), Pixels(0.0))
+    fn position(x: f64) -> Offset<f64> {
+        Offset::new(x, 0.0)
     }
 
     fn down(pointer_id: PointerId) -> PointerEvent {
         make_down_event_for_id(pointer_id, position(0.0), PointerType::Touch)
     }
 
-    fn contact_move(pointer_id: PointerId, x: f32) -> PointerEvent {
+    fn contact_move(pointer_id: PointerId, x: f64) -> PointerEvent {
         make_move_event_for_id(pointer_id, position(x), PointerType::Touch)
     }
 
-    fn hover(pointer_id: PointerId, x: f32) -> PointerEvent {
+    fn hover(pointer_id: PointerId, x: f64) -> PointerEvent {
         let mut event = make_move_event_for_id(pointer_id, position(x), PointerType::Mouse);
         let PointerEvent::Move(update) = &mut event else {
             unreachable!("the move helper always constructs PointerEvent::Move")
@@ -1041,11 +1041,8 @@ mod tests {
         PointerEvent::Enter(info)
     }
 
-    fn positions(events: &[PointerEvent]) -> Vec<f32> {
-        events
-            .iter()
-            .map(|event| event.position().dx.get())
-            .collect()
+    fn positions(events: &[PointerEvent]) -> Vec<f64> {
+        events.iter().map(|event| event.position().dx).collect()
     }
 
     fn drain(queue: &RefCell<HeldPointerQueue>) -> Vec<PointerEvent> {
@@ -1175,7 +1172,7 @@ mod tests {
         let events = drain(&queue);
         assert_eq!(events.len(), 2);
         assert!(matches!(events[0], PointerEvent::Down(_)));
-        assert_eq!(events[1].position().dx.get(), 2.0);
+        assert_eq!(events[1].position().dx, 2.0);
     }
 
     #[test]

@@ -38,8 +38,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::Size;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_types::Size;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
 
@@ -190,7 +190,7 @@ fn the_offstage_routes_committed_geometry_is_real_not_zero() {
 
     let size = observed.lock().expect("the offstage page was laid out");
     assert!(
-        size.width.0 > 0.0 && size.height.0 > 0.0,
+        size.width > 0.0 && size.height > 0.0,
         "an offstage route must be laid out at real geometry, got {size:?}"
     );
 }

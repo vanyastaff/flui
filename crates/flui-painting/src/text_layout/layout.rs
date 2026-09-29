@@ -10,16 +10,16 @@
 
 use std::sync::{Arc, OnceLock};
 
-use cosmic_text::fontdb::Family;
-use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, Style, SwashCache, Weight};
-use flui_types::{
-    geometry::{Offset, Pixels, Rect},
+use crate::{
     styling::Color,
     typography::{
         FontStyle, LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition, TextRange,
         TextStyle,
     },
 };
+use cosmic_text::fontdb::Family;
+use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, Style, SwashCache, Weight};
+use flui_foundation::geometry::{Offset, Rect};
 use parking_lot::Mutex;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -305,13 +305,14 @@ pub(super) fn metrics_from_shaped_buffer(
         first_descent_edge = line_height;
     }
 
+    // Shaper metrics are f32; the layout result is logical (f64).
     TextLayoutResult {
-        width: max_line_width,
-        height: total_height,
+        width: f64::from(max_line_width),
+        height: f64::from(total_height),
         line_count,
-        max_line_width,
-        alphabetic_baseline: first_baseline,
-        ideographic_baseline: first_descent_edge,
+        max_line_width: f64::from(max_line_width),
+        alphabetic_baseline: f64::from(first_baseline),
+        ideographic_baseline: f64::from(first_descent_edge),
         truncated,
     }
 }
@@ -552,7 +553,7 @@ fn style_to_attrs<'a>(
 
 /// The colour a style paints its glyphs with: `foreground` wins over
 /// `color`, as in Flutter's `TextStyle`.
-pub(crate) fn paint_color(style: &TextStyle) -> Option<flui_types::Color> {
+pub(crate) fn paint_color(style: &TextStyle) -> Option<crate::styling::Color> {
     style.foreground.or(style.color)
 }
 
@@ -568,9 +569,9 @@ impl TextLayout {
     pub fn new(
         text: &str,
         style: Option<&TextStyle>,
-        font_size: f32,
-        max_width: Option<f32>,
-        line_height: Option<f32>,
+        font_size: f64,
+        max_width: Option<f64>,
+        line_height: Option<f64>,
         direction: TextDirection,
     ) -> Self {
         Self::with_overflow(
@@ -604,9 +605,9 @@ impl TextLayout {
     pub fn with_overflow(
         text: &str,
         style: Option<&TextStyle>,
-        font_size: f32,
-        max_width: Option<f32>,
-        line_height: Option<f32>,
+        font_size: f64,
+        max_width: Option<f64>,
+        line_height: Option<f64>,
         direction: TextDirection,
         max_lines: Option<usize>,
         ellipsis: Option<&str>,
@@ -640,9 +641,9 @@ impl TextLayout {
     pub fn from_spans(
         spans: Vec<(String, Option<TextStyle>)>,
         default_style: Option<&TextStyle>,
-        font_size: f32,
-        max_width: Option<f32>,
-        line_height: Option<f32>,
+        font_size: f64,
+        max_width: Option<f64>,
+        line_height: Option<f64>,
         direction: TextDirection,
         max_lines: Option<usize>,
         ellipsis: Option<&str>,
@@ -651,6 +652,10 @@ impl TextLayout {
             font_size > 0.0 && font_size.is_finite(),
             "TextLayout font_size must be positive and finite, got {font_size}"
         );
+        // The shaper works in f32; logical inputs narrow once, here.
+        let font_size = font_size as f32;
+        let max_width = max_width.map(|w| w as f32);
+        let line_height = line_height.map(|h| h as f32);
 
         let line_height = line_height.unwrap_or(font_size * 1.2);
 
@@ -941,7 +946,7 @@ impl TextLayout {
 
     /// Returns the screen offset for a caret at the given text
     /// position.
-    pub fn get_offset_for_caret(&self, position: TextPosition) -> Offset<Pixels> {
+    pub fn get_offset_for_caret(&self, position: TextPosition) -> Offset<f64> {
         // Walk the laid-out runs for the glyph whose cluster contains the
         // offset; the first match wins, so a caret on a wrap boundary sits at
         // the end of the earlier line. Past every glyph, the caret trails the
@@ -956,25 +961,28 @@ impl TextLayout {
                     } else {
                         0.0
                     };
-                    return Offset::new(Pixels(glyph.x + glyph.w * progress), Pixels(run.line_top));
+                    return Offset::new(
+                        f64::from(glyph.x + glyph.w * progress),
+                        f64::from(run.line_top),
+                    );
                 }
                 x = glyph.x + glyph.w;
             }
-            trailing = Offset::new(Pixels(x), Pixels(run.line_top));
+            trailing = Offset::new(f64::from(x), f64::from(run.line_top));
         }
         trailing
     }
 
     /// Returns the text position for a screen offset.
-    pub fn get_position_for_offset(&self, offset: Offset<Pixels>) -> TextPosition {
-        let x = offset.dx.0;
-        let y = offset.dy.0;
+    pub fn get_position_for_offset(&self, offset: Offset<f64>) -> TextPosition {
+        let x = offset.dx;
+        let y = offset.dy;
 
         let mut target_line: Option<usize> = None;
         let mut line_top = 0.0f32;
 
         for run in self.buffer.layout_runs() {
-            if y >= run.line_top && y < run.line_top + run.line_height {
+            if y >= f64::from(run.line_top) && y < f64::from(run.line_top + run.line_height) {
                 target_line = Some(run.line_i);
                 line_top = run.line_top;
                 break;
@@ -988,7 +996,7 @@ impl TextLayout {
             for run in self.buffer.layout_runs() {
                 last_line = run.line_i;
             }
-            if y >= line_top {
+            if y >= f64::from(line_top) {
                 last_line
             } else {
                 return TextPosition::upstream(0);
@@ -1002,7 +1010,7 @@ impl TextLayout {
                 for glyph in run.glyphs {
                     let glyph_center = glyph.x + glyph.w / 2.0;
 
-                    if x < glyph_center {
+                    if x < f64::from(glyph_center) {
                         return TextPosition::new(glyph.start, TextAffinity::Downstream);
                     }
 
@@ -1100,10 +1108,10 @@ impl TextLayout {
 
             if let Some(start_x) = line_start_x {
                 let rect = Rect::from_ltrb(
-                    Pixels(start_x),
-                    Pixels(run.line_top),
-                    Pixels(line_end_x),
-                    Pixels(run.line_top + run.line_height),
+                    f64::from(start_x),
+                    f64::from(run.line_top),
+                    f64::from(line_end_x),
+                    f64::from(run.line_top + run.line_height),
                 );
                 boxes.push(TextBox::new(rect, self.direction));
             }

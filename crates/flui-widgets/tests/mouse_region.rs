@@ -63,7 +63,7 @@ mod event_cx {
     fn an_enter_writes_a_signal_and_rebuilds_its_reader() {
         let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
             MouseRegion::new()
-                .on_enter(move |cx, _device, position| count.set(cx, position.dx.get() as u32))
+                .on_enter(move |cx, _device, position| count.set(cx, position.dx as u32))
                 .child(SizedBox::new(60.0, 30.0))
         });
         let mut app = lay_out(probe.view(), tight(60.0, 30.0));

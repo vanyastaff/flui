@@ -12,8 +12,8 @@
 //!   implement so Box and Sliver are inspected identically regardless of
 //!   how far the pipeline was driven.
 
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_foundation::{DiagnosticsNode, RenderId};
-use flui_types::{Matrix4, Offset, Pixels, Size, geometry::px};
 
 use crate::{
     constraints::SliverGeometry,
@@ -62,11 +62,11 @@ pub fn sliver_geometry<P: PipelinePhase>(
 /// leaf-first path of hit `RenderId`s.
 pub fn hit_path<P: PipelinePhase + Sync>(
     owner: &PipelineOwner<P>,
-    x: f32,
-    y: f32,
+    x: f64,
+    y: f64,
 ) -> Vec<RenderId> {
     let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(px(x), px(y)), &mut result);
+    owner.hit_test(Offset::new(x, y), &mut result);
     result.path().iter().map(|entry| entry.target).collect()
 }
 
@@ -87,11 +87,11 @@ pub fn hit_path<P: PipelinePhase + Sync>(
 /// [`hit_test_child_at_layout_offset`]: crate::context::BoxHitTestContext::hit_test_child_at_layout_offset
 pub fn hit_path_with_transforms<P: PipelinePhase + Sync>(
     owner: &PipelineOwner<P>,
-    x: f32,
-    y: f32,
+    x: f64,
+    y: f64,
 ) -> Vec<(RenderId, Option<Matrix4>)> {
     let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(px(x), px(y)), &mut result);
+    owner.hit_test(Offset::new(x, y), &mut result);
     result
         .path()
         .iter()
@@ -112,10 +112,10 @@ pub fn hit_path_with_transforms<P: PipelinePhase + Sync>(
 /// guaranteed whenever a degenerate ancestor transform (e.g. a zero-scale
 /// `Transform`) contributed an exactly-zero determinant somewhere in the
 /// composed chain. For a merely near-singular ancestor (`0 < |det| <
-/// f32::EPSILON`, which `Matrix4::is_invertible` also rejects) the composed
+/// f64::EPSILON`, which `Matrix4::is_invertible` also rejects) the composed
 /// `transform` is not guaranteed to stay singular -- determinants compose
 /// multiplicatively, so a large-determinant ancestor elsewhere in the chain
-/// can lift the product back above `f32::EPSILON`. In that case this
+/// can lift the product back above `f64::EPSILON`. In that case this
 /// function returns `Some` with a meaningless local point instead of
 /// `None`, so a `Some` result is not proof the whole chain was
 /// well-conditioned.
@@ -128,13 +128,13 @@ pub fn hit_path_with_transforms<P: PipelinePhase + Sync>(
 /// let transform = transform.expect("child entry must carry a recorded transform");
 /// let local = localize_hit_point(transform, 50.0, 50.0)
 ///     .expect("transform must be invertible");
-/// assert_eq!(local, Offset::new(px(20.0), px(20.0)));
+/// assert_eq!(local, Offset::new(20.0, 20.0));
 /// ```
-pub fn localize_hit_point(transform: Matrix4, global_x: f32, global_y: f32) -> Option<Offset> {
+pub fn localize_hit_point(transform: Matrix4, global_x: f64, global_y: f64) -> Option<Offset> {
     if !transform.is_invertible() {
         return None;
     }
-    let (local_x, local_y) = transform.transform_point(Pixels(global_x), Pixels(global_y));
+    let (local_x, local_y) = transform.transform_point(global_x, global_y);
     Some(Offset::new(local_x, local_y))
 }
 
@@ -262,12 +262,12 @@ pub trait Probe {
 
     /// Hit-tests at root-local `(x, y)` (logical pixels), returning the
     /// leaf-first path of hit `RenderId`s.
-    fn hit(&self, x: f32, y: f32) -> Vec<RenderId> {
+    fn hit(&self, x: f64, y: f64) -> Vec<RenderId> {
         hit_path(self.pipeline(), x, y)
     }
 
     /// The first hit `RenderId` at `(x, y)`, if anything was hit.
-    fn hit_first(&self, x: f32, y: f32) -> Option<RenderId> {
+    fn hit_first(&self, x: f64, y: f64) -> Option<RenderId> {
         self.hit(x, y).first().copied()
     }
 
@@ -283,7 +283,7 @@ pub trait Probe {
     /// the global hit position to the expected child-local coordinate.
     ///
     /// [`hit_test_child_at_layout_offset`]: crate::context::BoxHitTestContext::hit_test_child_at_layout_offset
-    fn hit_with_transforms(&self, x: f32, y: f32) -> Vec<(RenderId, Option<Matrix4>)> {
+    fn hit_with_transforms(&self, x: f64, y: f64) -> Vec<(RenderId, Option<Matrix4>)> {
         hit_path_with_transforms(self.pipeline(), x, y)
     }
 }

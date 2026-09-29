@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use flui_foundation::RenderId;
 use flui_foundation::Variable;
+use flui_foundation::geometry::{Offset, Size};
 use flui_objects::{MainAxisAlignment, MainAxisSize, RenderFlex};
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -34,7 +35,6 @@ use flui_rendering::{
         BoxLayoutCtx, BoxProtocol, ChildState, RenderObject, box_protocol::BoxLayoutCtxErased,
     },
 };
-use flui_types::{Offset, Size, geometry::px};
 
 type Observed = Arc<Mutex<Vec<(RenderId, BoxConstraints)>>>;
 
@@ -92,19 +92,19 @@ fn overflow_does_not_shift_children_by_negative_space() {
     // Two 100-wide children into a 150-wide row: 50px overflow.
     let (size, children, _) = lay_out(
         &mut flex,
-        BoxConstraints::new(px(0.0), px(150.0), px(0.0), px(50.0)),
+        BoxConstraints::new(0.0, 150.0, 0.0, 50.0),
         vec![inflexible(), inflexible()],
-        Size::new(px(100.0), px(40.0)),
+        Size::new(100.0, 40.0),
     );
 
-    assert_eq!(size.width, px(150.0), "row clamps to its max width");
+    assert_eq!(size.width, 150.0, "row clamps to its max width");
     assert_eq!(
         children[0].offset,
-        Offset::new(px(0.0), px(0.0)),
+        Offset::new(0.0, 0.0),
         "End alignment under overflow must clamp free space to zero — \
          a negative shift would drag the first child off-screen left",
     );
-    assert_eq!(children[1].offset, Offset::new(px(100.0), px(0.0)));
+    assert_eq!(children[1].offset, Offset::new(100.0, 0.0));
 }
 
 // ============================================================================
@@ -117,21 +117,20 @@ fn stretch_tightens_child_cross_constraints() {
         RenderFlex::row().with_cross_axis_alignment(flui_objects::CrossAxisAlignment::Stretch);
     let (_, children, observed) = lay_out(
         &mut flex,
-        BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(80.0)),
+        BoxConstraints::new(0.0, 200.0, 0.0, 80.0),
         vec![inflexible()],
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
     );
 
     let (_, child_constraints) = observed.lock().unwrap()[0];
     assert_eq!(
         (child_constraints.min_height, child_constraints.max_height),
-        (px(80.0), px(80.0)),
+        (80.0, 80.0),
         "Stretch must TIGHTEN the cross constraints, not merely move \
          the child's cross offset",
     );
     assert_eq!(
-        children[0].size.height,
-        px(80.0),
+        children[0].size.height, 80.0,
         "the child actually stretches to the row's cross extent",
     );
 }
@@ -147,20 +146,19 @@ fn unbounded_main_demotes_flex_children() {
     // child lays out as inflexible at its preferred size.
     let (size, children, _) = lay_out(
         &mut flex,
-        BoxConstraints::new(px(0.0), px(f32::INFINITY), px(0.0), px(50.0)),
+        BoxConstraints::new(0.0, f64::INFINITY, 0.0, 50.0),
         vec![FlexParentData::flexible(1)],
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
     );
 
     assert_eq!(
         children[0].size,
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
         "a flex child under an unbounded main axis must be demoted to \
          inflexible — pre-fix the Tight fit collapsed it to 0×0",
     );
     assert_eq!(
-        size.width,
-        px(40.0),
+        size.width, 40.0,
         "the row shrink-wraps the demoted child (no bounded extent to fill)",
     );
 }
@@ -176,14 +174,13 @@ fn main_axis_size_max_gives_alignment_its_free_space() {
     // has 120px of free space around two 40px children.
     let (size, children, _) = lay_out(
         &mut flex,
-        BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(50.0)),
+        BoxConstraints::new(0.0, 200.0, 0.0, 50.0),
         vec![inflexible(), inflexible()],
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
     );
-    assert_eq!(size.width, px(200.0), "Max claims the bounded extent");
+    assert_eq!(size.width, 200.0, "Max claims the bounded extent");
     assert_eq!(
-        children[0].offset.dx,
-        px(60.0),
+        children[0].offset.dx, 60.0,
         "Center finally has free space to distribute — pre-fix the row \
          shrink-wrapped and alignment was a no-op under loose constraints",
     );
@@ -193,12 +190,12 @@ fn main_axis_size_max_gives_alignment_its_free_space() {
         .with_main_axis_size(MainAxisSize::Min);
     let (size_min, children_min, _) = lay_out(
         &mut flex_min,
-        BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(50.0)),
+        BoxConstraints::new(0.0, 200.0, 0.0, 50.0),
         vec![inflexible(), inflexible()],
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
     );
-    assert_eq!(size_min.width, px(80.0), "Min shrink-wraps");
-    assert_eq!(children_min[0].offset.dx, px(0.0));
+    assert_eq!(size_min.width, 80.0, "Min shrink-wraps");
+    assert_eq!(children_min[0].offset.dx, 0.0);
 }
 
 // ============================================================================
@@ -212,17 +209,16 @@ fn non_stretch_children_get_loose_cross_under_tight_parent() {
     // LOOSE 0..80 cross, not forced to 80.
     let (_, children, observed) = lay_out(
         &mut flex,
-        BoxConstraints::new(px(0.0), px(200.0), px(80.0), px(80.0)),
+        BoxConstraints::new(0.0, 200.0, 80.0, 80.0),
         vec![inflexible()],
-        Size::new(px(40.0), px(40.0)),
+        Size::new(40.0, 40.0),
     );
 
     let (_, child_constraints) = observed.lock().unwrap()[0];
     assert_eq!(
-        child_constraints.min_height,
-        px(0.0),
+        child_constraints.min_height, 0.0,
         "an incoming tight cross must be LOOSENED for non-stretch \
          children (Flutter parity)",
     );
-    assert_eq!(children[0].size.height, px(40.0));
+    assert_eq!(children[0].size.height, 40.0);
 }

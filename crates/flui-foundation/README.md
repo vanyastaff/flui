@@ -17,7 +17,7 @@ FLUI Foundation provides fundamental building blocks used throughout the FLUI UI
 - **Diagnostics**: Rich debugging and introspection utilities
 - **Error Handling**: Standardized `FoundationError` with context chaining
 - **Callbacks**: Type-safe callback aliases (`VoidCallback`, `ValueChanged`, etc.)
-- **Platform Detection**: re-exported from `flui-types` — see `flui_types::platform::TargetPlatform`
+- **Geometry**: `geometry` module — `Point`, `Offset`, `Size`, `Rect`, `RRect`, `EdgeInsets`, `Matrix4`, device-grid types and snapping (ADR-0098)
 - **WASM Support**: `WasmNotSendSync` trait for web compatibility
 - **Thread Safety**: All types designed for multi-threaded contexts
 
@@ -182,13 +182,29 @@ fn use_in_thread<T: WasmNotSendSync>(value: T) {
 }
 ```
 
-### Platform Detection
+### Geometry
 
-Platform detection lives in the lower-layer `flui-types` crate. Import it
-from there:
+`flui_foundation::geometry` holds the geometry values every layer shares. A
+logical length is a plain `f64` (`10.0` is ten logical pixels); `Point<i32>`,
+`Size<i32>` and `Rect<i32>` are the device-pixel grid (`DevicePoint`,
+`DeviceSize`, `DeviceRect`), and `snap`, `snap_edges`, `cover` and
+`device_rect_covering` round logical values to that grid. See
+[ADR-0098](../../docs/adr/ADR-0098-owned-f64-geometry-values.md).
 
 ```rust
-use flui_types::platform::TargetPlatform;
+use flui_foundation::geometry::{Point, Rect, Size};
+
+let rect = Rect::from_ltwh(10.0, 20.0, 100.0, 50.0);
+assert!(rect.contains(Point::new(15.0, 25.0)));
+assert_eq!(rect.size(), Size::new(100.0, 50.0));
+```
+
+### Platform Detection
+
+`TargetPlatform` lives in `flui-platform-api`:
+
+```rust
+use flui_platform_api::TargetPlatform;
 
 let platform = TargetPlatform::current();
 
@@ -291,9 +307,7 @@ Foundation sits at the base of the FLUI architecture:
 ├─────────────────┤
 │   flui-view     │  ← View/Element trees (GlobalKey, ObjectKey here)
 ├─────────────────┤
-│ flui-foundation │  ← Foundation types (this crate)
-├─────────────────┤
-│  flui_types     │  ← Basic geometry and math
+│ flui-foundation │  ← Foundation types and geometry (this crate)
 └─────────────────┘
 ```
 
@@ -352,7 +366,8 @@ at your option.
 
 ## Related Crates
 
-- [`flui-types`](../flui-types): Basic geometry and mathematical types
+- [`flui-painting`](../flui-painting): Paint, colour, border and text-style values
+- [`flui-platform-api`](../flui-platform-api): Platform contracts, `TargetPlatform`
 - [`flui-view`](../flui-view): View/Element trees, GlobalKey, ObjectKey
 - [`flui_rendering`](../flui-rendering): Render tree and layout
 - [`flui_app`](../flui-app): Application framework

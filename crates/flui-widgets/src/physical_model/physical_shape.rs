@@ -3,11 +3,11 @@
 
 use std::rc::Rc;
 
+use flui_foundation::geometry::Size;
 use flui_objects::{ClipSourceToken, RenderPhysicalShape};
+use flui_painting::paint::{Clip, Path};
+use flui_painting::styling::Color;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Color;
-use flui_types::Size;
-use flui_types::painting::{Clip, Path};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// The user-supplied clip-shape function: maps the laid-out box size to the
@@ -39,7 +39,7 @@ pub struct PhysicalShape {
     clipper: PathClipper,
     clip_source_token: ClipSourceToken,
     clip_behavior: Clip,
-    elevation: f32,
+    elevation: f64,
     color: Color,
     shadow_color: Color,
     child: Child,
@@ -72,7 +72,7 @@ impl PhysicalShape {
     /// Sets the elevation. Must be non-negative — the underlying render
     /// object debug-asserts this (oracle: `assert(elevation >= 0.0)`).
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = elevation;
         self
     }
@@ -205,8 +205,8 @@ mod tests {
     fn whole_box_clipper() -> impl Fn(Size) -> Path + 'static {
         |size: Size| {
             let mut path = Path::new();
-            path.add_rect(flui_types::Rect::from_origin_size(
-                flui_types::Point::ZERO,
+            path.add_rect(flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
                 size,
             ));
             path

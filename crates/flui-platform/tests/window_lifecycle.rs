@@ -4,8 +4,8 @@
 //!
 //! Run with: cargo test -p flui-platform --test window_lifecycle
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
 
 /// T011: Test window creation with WindowOptions
 #[test]
@@ -26,12 +26,12 @@ fn test_window_creation_with_options() {
     // Create window with custom options
     let options = WindowOptions {
         title: "Test Window - T011".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         resizable: true,
         visible: false, // Don't show window during tests
         decorated: true,
-        min_size: Some(Size::new(px(320.0), px(240.0))),
-        max_size: Some(Size::new(px(1920.0), px(1080.0))),
+        min_size: Some(Size::new(320.0, 240.0)),
+        max_size: Some(Size::new(1920.0, 1080.0)),
         ..Default::default()
     };
 
@@ -47,20 +47,20 @@ fn test_window_creation_with_options() {
             let logical_size = window.logical_size();
             tracing::info!(
                 "Window logical size: {}x{}",
-                logical_size.width.0,
-                logical_size.height.0
+                logical_size.width,
+                logical_size.height
             );
 
             // Size should be approximately what we requested (±1px tolerance for rounding)
             assert!(
-                (logical_size.width.0 - 640.0).abs() < 1.0,
+                (logical_size.width - 640.0).abs() < 1.0,
                 "Window width should be ~640px, got {}",
-                logical_size.width.0
+                logical_size.width
             );
             assert!(
-                (logical_size.height.0 - 480.0).abs() < 1.0,
+                (logical_size.height - 480.0).abs() < 1.0,
                 "Window height should be ~480px, got {}",
-                logical_size.height.0
+                logical_size.height
             );
 
             // Window should not be visible (per options)
@@ -94,7 +94,7 @@ fn test_window_close_event() {
 
     let options = WindowOptions {
         title: "Test Window - T012".to_string(),
-        size: Size::new(px(400.0), px(300.0)),
+        size: Size::new(400.0, 300.0),
         visible: false,
         ..Default::default()
     };
@@ -112,7 +112,7 @@ fn test_window_close_event() {
 
             // For now, just verify window exists
             assert!(
-                window.logical_size().width.0 > 0.0,
+                window.logical_size().width > 0.0,
                 "Window should have valid size"
             );
 
@@ -140,9 +140,9 @@ fn test_multiple_concurrent_windows() {
 
     // Create 3 windows with different sizes
     let window_configs = vec![
-        ("Window 1", px(400.0), px(300.0)),
-        ("Window 2", px(600.0), px(450.0)),
-        ("Window 3", px(800.0), px(600.0)),
+        ("Window 1", 400.0, 300.0),
+        ("Window 2", 600.0, 450.0),
+        ("Window 3", 800.0, 600.0),
     ];
 
     let mut windows = Vec::new();
@@ -181,10 +181,10 @@ fn test_multiple_concurrent_windows() {
 
     for (idx, window) in windows.iter().enumerate() {
         let size = window.logical_size();
-        tracing::info!("Window {}: {}x{}", idx + 1, size.width.0, size.height.0);
+        tracing::info!("Window {}: {}x{}", idx + 1, size.width, size.height);
 
         // Each window should have different size
-        assert!(size.width.0 > 0.0 && size.height.0 > 0.0);
+        assert!(size.width > 0.0 && size.height > 0.0);
     }
 
     tracing::info!("✓ T015 PASS: Multiple concurrent windows validated");
@@ -205,7 +205,7 @@ fn test_request_redraw() {
 
     let options = WindowOptions {
         title: "Test Window - T021".to_string(),
-        size: Size::new(px(400.0), px(300.0)),
+        size: Size::new(400.0, 300.0),
         visible: false,
         ..Default::default()
     };
@@ -249,7 +249,7 @@ fn test_window_resize_event() {
 
     let options = WindowOptions {
         title: "Test Window - T022".to_string(),
-        size: Size::new(px(400.0), px(300.0)),
+        size: Size::new(400.0, 300.0),
         visible: false,
         resizable: true,
         ..Default::default()
@@ -262,8 +262,8 @@ fn test_window_resize_event() {
             let initial_size = window.logical_size();
             tracing::info!(
                 "Initial size: {}x{}",
-                initial_size.width.0,
-                initial_size.height.0
+                initial_size.width,
+                initial_size.height
             );
 
             // TODO: Once window.set_size() is implemented, test:

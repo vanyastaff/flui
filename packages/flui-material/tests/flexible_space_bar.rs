@@ -27,14 +27,14 @@ fn trailing_content() -> BoxedView {
         .boxed()
 }
 
-fn bar_at(offset: f32) -> Theme {
+fn bar_at(offset: f64) -> Theme {
     let bar = SliverAppBar::new()
         .title(Text::new("FLUI"))
         .expanded_height(200.0)
         .pinned(true)
         .flexible_space(
             FlexibleSpaceBar::new()
-                .background(ColoredBox::new(flui_sdk::types::Color::rgb(10, 20, 30))),
+                .background(ColoredBox::new(flui_sdk::painting::Color::rgb(10, 20, 30))),
         );
     Theme::new(
         ThemeData::light(),
@@ -60,7 +60,7 @@ fn expanded_background_is_opaque_and_unshifted() {
         "expanded, the background must be fully opaque"
     );
     assert_eq!(
-        laid.offset(opacity).dy.get(),
+        laid.offset(opacity).dy,
         0.0,
         "no parallax while fully expanded"
     );
@@ -83,7 +83,7 @@ fn collapsed_background_fades_out_and_parallaxes_up() {
         "fully collapsed, the background must have faded to 0"
     );
     assert_eq!(
-        laid.offset(opacity).dy.get(),
+        laid.offset(opacity).dy,
         -36.0,
         "CollapseMode::parallax drifts the background up by delta/4 \
          (144/4 = 36) at t = 1"

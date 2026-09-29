@@ -1,7 +1,9 @@
 //! `RenderSliverFixedExtentList` — direct Box children with a fixed main-axis extent.
 
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_objects::RenderSliverFixedExtentList;
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::SliverConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -10,7 +12,6 @@ use flui_rendering::{
     testing::inspect,
     traits::RenderBox,
 };
-use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
 
 use crate::common::{
     BoxedRenderObject, BoxedSliverObject, horizontal_constraints,
@@ -33,8 +34,8 @@ fn render_offset(
 
 fn hits(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    x: f32,
-    y: f32,
+    x: f64,
+    y: f64,
 ) -> Vec<flui_foundation::RenderId> {
     inspect::hit_path(owner, x, y)
 }
@@ -45,9 +46,9 @@ struct FixedHitBox {
 }
 
 impl FixedHitBox {
-    fn new(width: f32, height: f32) -> Self {
+    fn new(width: f64, height: f64) -> Self {
         Self {
-            desired: Size::new(px(width), px(height)),
+            desired: Size::new(width, height),
         }
     }
 }
@@ -64,7 +65,7 @@ impl RenderBox for FixedHitBox {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         ctx.is_within_bounds(Rect::from_origin_size(
-            flui_types::Point::ZERO,
+            flui_foundation::geometry::Point::ZERO,
             ctx.own_size(),
         ))
     }
@@ -101,7 +102,7 @@ impl RenderBox for SliverHost {
 
 fn fixed_extent_tree(
     constraints: SliverConstraints,
-    item_extent: f32,
+    item_extent: f64,
     child_count: usize,
 ) -> (
     PipelineOwner<flui_rendering::pipeline::phase::Layout>,
@@ -170,24 +171,12 @@ fn sliver_fixed_extent_list_sizes_children_to_item_extent() {
     );
 
     for &child_id in &child_ids {
-        assert_eq!(box_size(&owner, child_id), Size::new(px(300.0), px(30.0)));
+        assert_eq!(box_size(&owner, child_id), Size::new(300.0, 30.0));
     }
-    assert_eq!(
-        render_offset(&owner, child_ids[0]),
-        Offset::new(px(0.0), px(-25.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[1]),
-        Offset::new(px(0.0), px(5.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[2]),
-        Offset::new(px(0.0), px(35.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[3]),
-        Offset::new(px(0.0), px(65.0)),
-    );
+    assert_eq!(render_offset(&owner, child_ids[0]), Offset::new(0.0, -25.0),);
+    assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(0.0, 5.0),);
+    assert_eq!(render_offset(&owner, child_ids[2]), Offset::new(0.0, 35.0),);
+    assert_eq!(render_offset(&owner, child_ids[3]), Offset::new(0.0, 65.0),);
 }
 
 #[test]
@@ -217,16 +206,10 @@ fn sliver_fixed_extent_list_supports_horizontal_axis() {
         fixed_extent_tree(horizontal_constraints(30.0), 80.0, 2);
 
     for &child_id in &child_ids {
-        assert_eq!(box_size(&owner, child_id), Size::new(px(80.0), px(100.0)));
+        assert_eq!(box_size(&owner, child_id), Size::new(80.0, 100.0));
     }
-    assert_eq!(
-        render_offset(&owner, child_ids[0]),
-        Offset::new(px(-30.0), px(0.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[1]),
-        Offset::new(px(50.0), px(0.0)),
-    );
+    assert_eq!(render_offset(&owner, child_ids[0]), Offset::new(-30.0, 0.0),);
+    assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(50.0, 0.0),);
 }
 
 #[test]
@@ -235,20 +218,8 @@ fn sliver_fixed_extent_list_reverse_axis_uses_right_way_up_offsets() {
     constraints.axis_direction = AxisDirection::BottomToTop;
     let (owner, _root_id, _sliver_id, child_ids) = fixed_extent_tree(constraints, 30.0, 4);
 
-    assert_eq!(
-        render_offset(&owner, child_ids[0]),
-        Offset::new(px(0.0), px(90.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[1]),
-        Offset::new(px(0.0), px(60.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[2]),
-        Offset::new(px(0.0), px(30.0)),
-    );
-    assert_eq!(
-        render_offset(&owner, child_ids[3]),
-        Offset::new(px(0.0), px(0.0)),
-    );
+    assert_eq!(render_offset(&owner, child_ids[0]), Offset::new(0.0, 90.0),);
+    assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(0.0, 60.0),);
+    assert_eq!(render_offset(&owner, child_ids[2]), Offset::new(0.0, 30.0),);
+    assert_eq!(render_offset(&owner, child_ids[3]), Offset::new(0.0, 0.0),);
 }

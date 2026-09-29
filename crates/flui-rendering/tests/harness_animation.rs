@@ -6,13 +6,13 @@
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
+use flui_foundation::geometry::{EdgeInsets, Offset, Rect};
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
     testing::{Probe, RenderTester, box_node},
 };
 use flui_scheduler::UpdateScheduler;
-use flui_types::{EdgeInsets, Offset, Rect, geometry::px};
 
 fn controller() -> AnimationController {
     AnimationController::new(Duration::from_secs(1), &UpdateScheduler::new())
@@ -24,7 +24,7 @@ fn harness_advance_layout_follows_animation_controller() {
         box_node(RenderPadding::all(5.0))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(300.0), px(0.0), px(300.0)))
+    .with_constraints(BoxConstraints::new(0.0, 300.0, 0.0, 300.0))
     .run_frame();
 
     let ctrl = controller();
@@ -42,13 +42,13 @@ fn harness_advance_layout_follows_animation_controller() {
             } else {
                 flui_rendering::RenderUpdateImpact::LAYOUT
             };
-            assert_eq!(p.set_padding(EdgeInsets::all(px(padding))), expected_impact,);
+            assert_eq!(p.set_padding(EdgeInsets::all(padding)), expected_impact,);
         });
         assert!(report.painted, "animation frame {i} must paint");
 
         assert_eq!(
             run.offset(child),
-            Offset::new(px(padding), px(padding)),
+            Offset::new(padding, padding),
             "frame {i}: committed offset must equal animated padding",
         );
         let bounds = run
@@ -56,18 +56,13 @@ fn harness_advance_layout_follows_animation_controller() {
             .expect("animated frame must paint a picture");
         assert_eq!(
             bounds,
-            Rect::from_ltrb(
-                px(padding),
-                px(padding),
-                px(padding + 40.0),
-                px(padding + 40.0),
-            ),
+            Rect::from_ltrb(padding, padding, padding + 40.0, padding + 40.0,),
             "frame {i}: picture bounds must track the animated origin",
         );
     }
 
     assert!(
-        ctrl.value() >= 1.0 - f32::EPSILON,
+        ctrl.value() >= 1.0 - f64::EPSILON,
         "controller reached its upper bound",
     );
 

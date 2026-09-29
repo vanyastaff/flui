@@ -34,7 +34,7 @@
 //! ```text
 //! Platform (winit, Win32, etc.)
 //!     ↓
-//! PointerEvent/KeyEvent (flui_types)
+//! PointerEvent/KeyEvent
 //!     ↓
 //! EventRouter (event routing)
 //!     ├─ Hit Testing (spatial)
@@ -188,10 +188,13 @@ pub mod events;
 
 pub mod binding;
 pub mod clipboard;
+pub mod details;
+pub mod device_kind;
 pub mod observability;
 pub mod pan_zoom;
 pub mod settings;
 pub mod text_input;
+pub mod velocity;
 
 // ============================================================================
 // Re-exports: IDs
@@ -209,6 +212,11 @@ pub use arena::{
 // ============================================================================
 pub use binding::{GestureBinding, InvalidSamplingWindow, ResamplingModeChangeError};
 pub use clipboard::ClipboardHandle;
+pub use details::{
+    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
+    TapUpDetails,
+};
+pub use device_kind::PointerDeviceKind;
 // The monotonic clock primitive now lives in `flui-foundation`; re-exported here
 // because the gesture arena's public API takes a `MonotonicClock` (and tests /
 // the headless binding construct `ManualClock`/`SystemClock` against the arena).
@@ -224,13 +232,13 @@ pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event
 // Trackpad pan/zoom module — canonical public entry point for the
 // Flutter-aligned `PointerPanZoomEvent` type and its W3C conversion helpers
 // (`from_w3c_event`, `convert_gesture`). Re-exported at the crate root so
-// `use flui_interaction::PointerPanZoomEvent` is the single import path.
+// `use crate::PointerPanZoomEvent` is the single import path.
 pub use pan_zoom::{PointerPanZoomEvent, convert_gesture, from_w3c_event};
 // ============================================================================
-// Re-exports: Geometry from flui_types
+// Re-exports: geometry from flui_foundation
 // ============================================================================
-pub use flui_types::ImeEvent;
-pub use flui_types::geometry::{Offset, Rect};
+pub use flui_foundation::geometry::{Offset, Rect};
+pub use flui_platform_api::ImeEvent;
 pub use ids::{FocusNodeId, HandlerId, PointerId};
 // ============================================================================
 // Re-exports: Input Processing
@@ -308,8 +316,8 @@ pub use traits::{
 /// ```
 pub mod prelude {
     // IDs
-    // Geometry from flui_types
-    pub use flui_types::geometry::{Offset, Rect};
+    // Geometry from flui_foundation
+    pub use flui_foundation::geometry::{Offset, Rect};
 
     // Gesture recognition
     pub use crate::arena::*;

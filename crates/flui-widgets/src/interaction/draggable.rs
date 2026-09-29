@@ -136,15 +136,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Matrix4, Offset};
 use flui_interaction::{
     DragUpdateDetails, GestureRecognizer, HitTestEntry, HitTestHandle, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
     MultiDragUpdateDetails, PointerEventExt as _, PointerId, Velocity,
-};
-use flui_types::{
-    Offset,
-    geometry::{Matrix4, PixelDelta, Pixels},
-    layout::Axis,
 };
 use flui_view::RebuildHandle;
 use flui_view::element::ElementKind;
@@ -167,7 +164,7 @@ type DragUpdateCallback = Arc<dyn Fn(DragUpdateDetails) + Send + Sync>;
 /// Called once when a drag ends, accepted or not.
 type DragEndCallback = Arc<dyn Fn(DraggableDetails) + Send + Sync>;
 /// Called when a drag ends without being accepted by a target.
-type DraggableCanceledCallback = Arc<dyn Fn(Velocity, Offset<Pixels>) + Send + Sync>;
+type DraggableCanceledCallback = Arc<dyn Fn(Velocity, Offset<f64>) + Send + Sync>;
 
 /// Details for [`Draggable::on_drag_end`] — the velocity and position at
 /// release, and whether a [`DragTarget`](crate::DragTarget) accepted the drop.
@@ -186,7 +183,7 @@ pub struct DraggableDetails {
     /// divergence note #4: the oracle's `_lastOffset` adds the draggable's
     /// global origin on top of this sum; this port does not (a named,
     /// pinned divergence, not a raw position either way).
-    pub offset: Offset<Pixels>,
+    pub offset: Offset<f64>,
 }
 
 /// A widget that can be dragged, carrying `data` for a
@@ -202,7 +199,7 @@ pub struct Draggable<T: Clone + Send + Sync + 'static> {
     feedback: Option<Rc<dyn Fn() -> BoxedView>>,
     data: Option<T>,
     axis: Option<Axis>,
-    feedback_offset: Offset<Pixels>,
+    feedback_offset: Offset<f64>,
     max_simultaneous_drags: Option<usize>,
     on_drag_started: Option<StartedCallback>,
     on_drag_update: Option<DragUpdateCallback>,
@@ -276,7 +273,7 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
     /// Offset from the drag anchor to where `feedback` is painted, added to
     /// the tracked displacement (see the module divergence notes).
     #[must_use]
-    pub fn feedback_offset(mut self, offset: Offset<Pixels>) -> Self {
+    pub fn feedback_offset(mut self, offset: Offset<f64>) -> Self {
         self.feedback_offset = offset;
         self
     }
@@ -316,7 +313,7 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
     #[must_use]
     pub fn on_draggable_canceled(
         mut self,
-        callback: impl Fn(Velocity, Offset<Pixels>) + Send + Sync + 'static,
+        callback: impl Fn(Velocity, Offset<f64>) + Send + Sync + 'static,
     ) -> Self {
         self.on_draggable_canceled = Some(Arc::new(callback));
         self
@@ -495,7 +492,7 @@ impl DragConfig {
 /// ever reads this.
 struct FeedbackConfig {
     feedback: Option<Rc<dyn Fn() -> BoxedView>>,
-    feedback_offset: Offset<Pixels>,
+    feedback_offset: Offset<f64>,
 }
 
 impl FeedbackConfig {
@@ -517,7 +514,7 @@ struct FeedbackSignal {
     /// The displacement `feedback` is painted at (`feedback_offset` plus
     /// this). Written by [`DragSession::update`], read by
     /// [`FeedbackAnchorState::build`].
-    offset: Arc<Mutex<Offset<Pixels>>>,
+    offset: Arc<Mutex<Offset<f64>>>,
     /// The mounted [`FeedbackAnchor`] element's own rebuild capability,
     /// published by [`FeedbackAnchorState::init_state`] (never from `build`)
     /// so [`DragSession::update`] can reposition it
@@ -540,11 +537,11 @@ impl FeedbackSignal {
         Arc::ptr_eq(&self.offset, &other.offset)
     }
 
-    fn offset(&self) -> Offset<Pixels> {
+    fn offset(&self) -> Offset<f64> {
         *self.offset.lock()
     }
 
-    fn set_offset(&self, offset: Offset<Pixels>) {
+    fn set_offset(&self, offset: Offset<f64>) {
         *self.offset.lock() = offset;
     }
 
@@ -582,7 +579,7 @@ impl FeedbackSignal {
 #[derive(Clone)]
 struct FeedbackAnchor {
     feedback: Rc<dyn Fn() -> BoxedView>,
-    feedback_offset: Offset<Pixels>,
+    feedback_offset: Offset<f64>,
     signal: FeedbackSignal,
 }
 
@@ -623,8 +620,8 @@ impl ViewState<FeedbackAnchor> for FeedbackAnchorState {
             // for the same reason; making it configurable (and its
             // `ignoringFeedbackSemantics` sibling) stays a named deferral.
             Positioned::new(IgnorePointer::new().child((view.feedback)()))
-                .left((view.feedback_offset.dx + displacement.dx).0)
-                .top((view.feedback_offset.dy + displacement.dy).0)
+                .left(view.feedback_offset.dx + displacement.dx)
+                .top(view.feedback_offset.dy + displacement.dy)
                 .into_view()
                 .boxed(),
         ])
@@ -657,7 +654,7 @@ fn evict_and_mount_feedback(
     feedback_entry_slot: &Rc<RefCell<Option<OverlayEntry>>>,
     overlay_handle: Option<OverlayHandle>,
     feedback_builder: Option<Rc<dyn Fn() -> BoxedView>>,
-    feedback_offset: Offset<Pixels>,
+    feedback_offset: Offset<f64>,
 ) -> Option<FeedbackSignal> {
     let stale = feedback_entry_slot.borrow_mut().take();
     if let Some(stale) = stale {
@@ -685,7 +682,7 @@ fn evict_and_mount_feedback(
 /// [`DragSession`] that will reposition it.
 fn feedback_entry(
     feedback: Rc<dyn Fn() -> BoxedView>,
-    feedback_offset: Offset<Pixels>,
+    feedback_offset: Offset<f64>,
     signal: FeedbackSignal,
 ) -> OverlayEntry {
     OverlayEntry::new(move |_ctx| {
@@ -700,19 +697,19 @@ fn feedback_entry(
 }
 
 /// Restricts `offset` to `axis`'s component (`_DragAvatar._restrictAxis`).
-fn restrict_axis(offset: Offset<Pixels>, axis: Option<Axis>) -> Offset<Pixels> {
+fn restrict_axis(offset: Offset<f64>, axis: Option<Axis>) -> Offset<f64> {
     match axis {
-        Some(Axis::Horizontal) => Offset::new(offset.dx, Pixels(0.0)),
-        Some(Axis::Vertical) => Offset::new(Pixels(0.0), offset.dy),
+        Some(Axis::Horizontal) => Offset::new(offset.dx, 0.0),
+        Some(Axis::Vertical) => Offset::new(0.0, offset.dy),
         None => offset,
     }
 }
 
 /// [`restrict_axis`], for the per-update delta's `PixelDelta` unit.
-fn restrict_axis_delta(delta: Offset<PixelDelta>, axis: Option<Axis>) -> Offset<PixelDelta> {
+fn restrict_axis_delta(delta: Offset<f64>, axis: Option<Axis>) -> Offset<f64> {
     match axis {
-        Some(Axis::Horizontal) => Offset::new(delta.dx, PixelDelta(0.0)),
-        Some(Axis::Vertical) => Offset::new(PixelDelta(0.0), delta.dy),
+        Some(Axis::Horizontal) => Offset::new(delta.dx, 0.0),
+        Some(Axis::Vertical) => Offset::new(0.0, delta.dy),
         None => delta,
     }
 }
@@ -789,7 +786,7 @@ struct EnteredTarget {
 /// folds each level's own inverse as it descends — so this applies it
 /// directly rather than inverting again. An entry with no transform is
 /// already in the root's space.
-fn localize(global: Offset<Pixels>, transform: Option<&Matrix4>) -> Offset<Pixels> {
+fn localize(global: Offset<f64>, transform: Option<&Matrix4>) -> Offset<f64> {
     let Some(transform) = transform else {
         return global;
     };
@@ -806,7 +803,7 @@ fn localize(global: Offset<Pixels>, transform: Option<&Matrix4>) -> Offset<Pixel
 fn drag_targets_on(
     path: &[HitTestEntry],
     data: &ErasedDragData,
-    global: Offset<Pixels>,
+    global: Offset<f64>,
 ) -> Vec<EnteredTarget> {
     path.iter()
         .filter_map(|entry| {
@@ -846,7 +843,7 @@ struct DragStart {
     /// Displacement from the pointer to the feedback layer, and therefore from
     /// the pointer to the point the drag hit-tests
     /// (`_DragAvatar.updateDrag`'s `globalPosition + feedbackOffset`).
-    feedback_offset: Offset<Pixels>,
+    feedback_offset: Offset<f64>,
 }
 
 /// The `_DragAvatar` analogue: one instance per active drag, held by the
@@ -888,7 +885,7 @@ struct DragSession {
     /// Distinct from [`offset`](Self::offset), which is the same sum without
     /// the starting point — see that field, and the module's divergence
     /// note #4 on why `DraggableDetails.offset` keeps that narrower meaning.
-    position: Mutex<Offset<Pixels>>,
+    position: Mutex<Offset<f64>>,
     /// Every target this drag is currently inside, outermost-last, and the
     /// drag position each one last saw (`_DragAvatar._enteredTargets`).
     entered: RefCell<Vec<EnteredTarget>>,
@@ -902,7 +899,7 @@ struct DragSession {
     /// `_lastOffset`: that adds the draggable's global origin on top of this
     /// same sum (see the module's divergence note #4 — a named, pinned
     /// divergence, not attempted here). Reported as `DraggableDetails.offset`.
-    offset: Mutex<Offset<Pixels>>,
+    offset: Mutex<Offset<f64>>,
     /// Signal to this session's feedback layer, if one is showing — `None`
     /// when there is no ancestor `Overlay`
     /// (`Overlay::maybe_of` found nothing) or no `feedback` builder is
@@ -930,11 +927,15 @@ impl DragSession {
     /// the tree, or when the composed transform is singular (a zero-scale
     /// ancestor). Every one of those is a reason to leave the drag's target
     /// standing untouched, never to guess a position.
-    fn to_global(&self, local: Offset<Pixels>) -> Option<Offset<Pixels>> {
+    fn to_global(&self, local: Offset<f64>) -> Option<Offset<f64>> {
         let node = self.listener_node.get()?;
         let pipeline = self.pipeline.borrow().clone()?;
         let global = pipeline.try_with(|owner| {
-            owner.local_to_global(node, flui_types::Point::new(local.dx, local.dy), None)
+            owner.local_to_global(
+                node,
+                flui_foundation::geometry::Point::new(local.dx, local.dy),
+                None,
+            )
         })??;
         Some(Offset::new(global.x, global.y))
     }
@@ -950,7 +951,7 @@ impl DragSession {
     /// the correct response is to change nothing at all. Collapsing the two
     /// would fire a spurious leave on every target each time a frame happened
     /// to hold the tree.
-    fn discover(&self, global: Offset<Pixels>) -> Option<(ErasedDragData, Vec<EnteredTarget>)> {
+    fn discover(&self, global: Offset<f64>) -> Option<(ErasedDragData, Vec<EnteredTarget>)> {
         let handle = self.hit_test.borrow().clone()?;
         // Both from the start-time snapshot, never re-read from the widget:
         // see `DragStart`. Carried onwards so the payload that decided which
@@ -981,7 +982,7 @@ impl DragSession {
     /// accepted (deeper targets below the active one are correctly ignored) or
     /// the lists are the same length (nothing has accepted, so `_enteredTargets`
     /// holds every hit target and a longer list means a new one appeared).
-    fn update_drag(&self, local: Offset<Pixels>) {
+    fn update_drag(&self, local: Offset<f64>) {
         let Some(global) = self.to_global(local) else {
             return;
         };
@@ -997,7 +998,7 @@ impl DragSession {
     /// through a mounted harness (making a real tree report itself busy means
     /// holding it checked out, which the harness's own dispatch path cannot do
     /// while delivering a pointer event).
-    fn update_drag_at(&self, global: Offset<Pixels>) {
+    fn update_drag_at(&self, global: Offset<f64>) {
         let Some((data, targets)) = self.discover(global) else {
             return;
         };
@@ -1089,9 +1090,9 @@ impl MultiDragHandle for DragSession {
     fn update(&self, details: MultiDragUpdateDetails) {
         let axis = self.config.lock().axis;
         let restricted = restrict_axis_delta(details.delta, axis);
-        let moved = restricted.dx.0 != 0.0 || restricted.dy.0 != 0.0;
+        let moved = restricted.dx != 0.0 || restricted.dy != 0.0;
         if moved {
-            let step = Offset::new(Pixels(restricted.dx.0), Pixels(restricted.dy.0));
+            let step = Offset::new(restricted.dx, restricted.dy);
             *self.offset.lock() += step;
             *self.position.lock() += step;
             if let Some(feedback) = &self.feedback {
@@ -1116,8 +1117,8 @@ impl MultiDragHandle for DragSession {
         let on_drag_update = self.config.lock().on_drag_update.clone();
         if let Some(callback) = on_drag_update {
             let primary_delta = match axis {
-                Some(Axis::Horizontal) => details.delta.dx.0,
-                Some(Axis::Vertical) => details.delta.dy.0,
+                Some(Axis::Horizontal) => details.delta.dx,
+                Some(Axis::Vertical) => details.delta.dy,
                 None => 0.0,
             };
             callback(DragUpdateDetails {
@@ -1540,12 +1541,12 @@ mod tests {
         PointerId::new(n).expect("contact ids start at 1")
     }
 
-    fn update_details(dx: f32, dy: f32) -> MultiDragUpdateDetails {
+    fn update_details(dx: f64, dy: f64) -> MultiDragUpdateDetails {
         MultiDragUpdateDetails {
             pointer_id: pointer(1),
-            global_position: Offset::new(Pixels(dx), Pixels(dy)),
-            local_position: Offset::new(Pixels(dx), Pixels(dy)),
-            delta: Offset::new(PixelDelta(dx), PixelDelta(dy)),
+            global_position: Offset::new(dx, dy),
+            local_position: Offset::new(dx, dy),
+            delta: Offset::new(dx, dy),
             kind: PointerType::Mouse,
             timestamp: Instant::now(),
         }
@@ -1682,12 +1683,12 @@ mod tests {
 
         assert_eq!(
             signal_2.offset(),
-            Offset::new(Pixels(0.0), Pixels(25.0)),
+            Offset::new(0.0, 25.0),
             "the surviving signal must reflect only the surviving session's own moves"
         );
         assert_eq!(
             signal_1.offset(),
-            Offset::new(Pixels(10.0), Pixels(0.0)),
+            Offset::new(10.0, 0.0),
             "the evicted session's own signal still tracks its own displacement locally"
         );
         assert_ne!(
@@ -1740,7 +1741,7 @@ mod tests {
     impl flui_interaction::HitTestProbe for ScriptedProbe {
         fn probe(
             &self,
-            _position: Offset<Pixels>,
+            _position: Offset<f64>,
             result: &mut flui_interaction::HitTestResult,
         ) -> Result<(), flui_interaction::InteractionDispatchError> {
             match self.answer.borrow().clone() {

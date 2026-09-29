@@ -1,7 +1,7 @@
 //! `PictureLayer` — sealed drawing commands, the leaf the paint walk emits.
 
+use flui_foundation::geometry::Rect;
 use flui_painting::DisplayList;
-use flui_types::geometry::{Pixels, Rect};
 use std::sync::Arc;
 
 /// Picture layer - a leaf layer that contains an immutable recorded picture
@@ -20,11 +20,12 @@ use std::sync::Arc;
 /// ```rust
 /// use flui_layer::PictureLayer;
 /// use flui_painting::{Canvas, Paint};
-/// use flui_types::{geometry::{Rect, px}, styling::Color};
+/// use flui_foundation::geometry::Rect;
+/// use flui_painting::styling::Color;
 ///
 /// let mut canvas = Canvas::new();
 /// canvas.draw_rect(
-///     Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+///     Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
 ///     &Paint::fill(Color::RED),
 /// );
 /// let layer = PictureLayer::new(canvas.finish());
@@ -74,7 +75,7 @@ impl PictureLayer {
 
     /// The union of the commands that contribute bounds, or `None` when
     /// none does (a list of only clips or `DrawPaint`s has no extent).
-    pub fn bounds(&self) -> Option<Rect<Pixels>> {
+    pub fn bounds(&self) -> Option<Rect<f64>> {
         self.picture.bounds()
     }
 
@@ -95,8 +96,9 @@ impl Default for PictureLayer {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::geometry::{Point, Rect};
     use flui_painting::Canvas;
-    use flui_types::{Color, Point, Rect, geometry::px, painting::Paint};
+    use flui_painting::{paint::Paint, styling::Color};
 
     use super::*;
 
@@ -104,7 +106,7 @@ mod tests {
     fn test_picture_layer_creation() {
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
+            Rect::from_ltrb(0.0, 0.0, 100.0, 100.0),
             &Paint::fill(Color::RED),
         );
         let picture = canvas.finish();
@@ -117,7 +119,7 @@ mod tests {
     fn test_picture_layer_bounds() {
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_ltrb(px(10.0), px(20.0), px(100.0), px(200.0)),
+            Rect::from_ltrb(10.0, 20.0, 100.0, 200.0),
             &Paint::fill(Color::BLUE),
         );
         let picture = canvas.finish();
@@ -126,8 +128,8 @@ mod tests {
         let bounds = layer.bounds().expect("a drawn rect has bounds");
 
         // Bounds should encompass the drawn rectangle
-        assert!(bounds.contains(Point::new(px(10.0), px(20.0))));
-        assert!(bounds.contains(Point::new(px(100.0), px(200.0))));
+        assert!(bounds.contains(Point::new(10.0, 20.0)));
+        assert!(bounds.contains(Point::new(100.0, 200.0)));
     }
 
     #[test]

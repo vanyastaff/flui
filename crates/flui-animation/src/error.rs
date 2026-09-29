@@ -41,9 +41,9 @@ pub enum AnimationError {
     /// [`with_detached_ticker_bounds`](crate::AnimationController::with_detached_ticker_bounds)
     /// and [`AnimationControllerBuilder::bounds`](crate::builder::AnimationControllerBuilder::bounds)
     /// unless both bounds are finite, `lower_bound < upper_bound`, AND
-    /// `upper_bound - lower_bound` itself fits in `f32` — two finite
+    /// `upper_bound - lower_bound` itself fits in `f64` — two finite
     /// endpoints do not by themselves make a finite range
-    /// (`(-f32::MAX, f32::MAX)` has a span of `f32::INFINITY`).
+    /// (`(-f64::MAX, f64::MAX)` has a span of `f64::INFINITY`).
     ///
     /// Also returned by [`repeat_with`](crate::AnimationController::repeat_with)
     /// for a range-SHAPE error: a caller-supplied `min`/`max` that is `NaN`,

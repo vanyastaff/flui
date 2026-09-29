@@ -9,7 +9,7 @@
 //! non-advanced mode (Porter-Duff or Modulate) to `mode_to_u32` is a caller
 //! contract violation; the function panics with an invariant message.
 
-use flui_types::painting::BlendMode;
+use flui_painting::paint::BlendMode;
 
 use super::generated::advanced_blend;
 use crate::shader_composer::{ComposableSource, compose_wgsl_shader};
@@ -246,7 +246,7 @@ impl AdvancedBlendPipeline {
 mod cpu_tests {
     use std::collections::HashSet;
 
-    use flui_types::painting::BlendMode;
+    use flui_painting::paint::BlendMode;
 
     use super::{advanced_blend, mode_to_u32};
 

@@ -1,7 +1,7 @@
 //! What a platform reads and edits inside a lock: the session traits and
 //! the values they speak.
 
-use flui_types::geometry::{Bounds, Pixels, Point};
+use flui_foundation::geometry::{Bounds, Point};
 
 use super::lock::TextStoreError;
 use super::utf16::{Utf16Offset, Utf16Range};
@@ -75,7 +75,7 @@ pub struct TextChange {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RangeRect {
     /// The union of the range's boxes; for an empty range, the caret.
-    pub bounds: Bounds<Pixels>,
+    pub bounds: Bounds<f64>,
     /// Whether part of the range lies outside the field's visible area.
     pub clipped: bool,
 }
@@ -153,7 +153,7 @@ pub trait TextStoreRead {
     /// # Errors
     ///
     /// [`TextStoreError::NoLayout`] when the field is not laid out.
-    fn document_bounds(&self) -> Result<Bounds<Pixels>, TextStoreError>;
+    fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError>;
 
     /// The offset at `point` (window-root logical pixels). The answer is
     /// always a scalar boundary: it never splits a surrogate pair.
@@ -164,7 +164,7 @@ pub trait TextStoreRead {
     /// point misses the text, or [`TextStoreError::NoLayout`].
     fn index_at_point(
         &self,
-        point: Point<Pixels>,
+        point: Point<f64>,
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError>;
 }

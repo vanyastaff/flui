@@ -88,7 +88,7 @@ enum PendingScrollCommand {
     /// `target_pixels` (already clamped to `[min_scroll_extent,
     /// max_scroll_extent]` by [`ScrollController::animate_to`]).
     AnimateTo {
-        target_pixels: f32,
+        target_pixels: f64,
         duration: Duration,
         curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     },
@@ -201,7 +201,7 @@ impl ScrollController {
     /// [`position`](Self::position) mode commits during layout brings it into
     /// `[min_scroll_extent, max_scroll_extent]`.
     #[must_use]
-    pub fn with_initial_scroll_offset(initial_scroll_offset: f32) -> Self {
+    pub fn with_initial_scroll_offset(initial_scroll_offset: f64) -> Self {
         let controller = Self::new();
         controller.set_pixels(initial_scroll_offset);
         controller
@@ -211,19 +211,19 @@ impl ScrollController {
 
     /// Current scroll offset in logical pixels.
     #[must_use]
-    pub fn pixels(&self) -> f32 {
+    pub fn pixels(&self) -> f64 {
         self.position.pixels()
     }
 
     /// The minimum allowed pixel value (typically 0.0).
     #[must_use]
-    pub fn min_scroll_extent(&self) -> f32 {
+    pub fn min_scroll_extent(&self) -> f64 {
         self.position.min_scroll_extent()
     }
 
     /// The maximum allowed pixel value (content length − viewport length).
     #[must_use]
-    pub fn max_scroll_extent(&self) -> f32 {
+    pub fn max_scroll_extent(&self) -> f64 {
         self.position.max_scroll_extent()
     }
 
@@ -231,13 +231,13 @@ impl ScrollController {
     /// `0.0` until [`update_dimensions`](Self::update_dimensions) is called
     /// (or, in `position` mode, until the first layout commits it).
     #[must_use]
-    pub fn viewport_dimension_pixels(&self) -> f32 {
+    pub fn viewport_dimension_pixels(&self) -> f64 {
         self.position.viewport_dimension()
     }
 
     /// Total scrollable range = `max_scroll_extent - min_scroll_extent`.
     #[must_use]
-    pub fn scroll_extent(&self) -> f32 {
+    pub fn scroll_extent(&self) -> f64 {
         self.max_scroll_extent() - self.min_scroll_extent()
     }
 
@@ -251,7 +251,7 @@ impl ScrollController {
     /// interactive behaviour is desired. This keeps the controller
     /// physics-agnostic (it is equally useful for programmatic jumps, physics
     /// updates, and animation-driven ticks).
-    pub fn set_pixels(&self, pixels: f32) {
+    pub fn set_pixels(&self, pixels: f64) {
         self.position.set_pixels(pixels);
     }
 
@@ -271,7 +271,7 @@ impl ScrollController {
     /// (not merely queued — see that field's doc for why a frame's delay is
     /// observable), and any not-yet-serviced `animate_to` request is dropped
     /// in favor of this jump.
-    pub fn jump_to(&self, pixels: f32) {
+    pub fn jump_to(&self, pixels: f64) {
         let clamped = pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
         // Clone the hook `Arc` out and drop the lock BEFORE calling it — do
         // NOT invoke it while still holding the guard. `hook()` synchronously
@@ -334,7 +334,7 @@ impl ScrollController {
     /// returns `Future<void>`.
     pub fn animate_to(
         &self,
-        target_pixels: f32,
+        target_pixels: f64,
         duration: Duration,
         curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     ) {
@@ -386,9 +386,9 @@ impl ScrollController {
     ///   viewport and scrolling is a no-op).
     pub fn update_dimensions(
         &self,
-        viewport_dimension_pixels: f32,
-        min_scroll_extent: f32,
-        max_scroll_extent: f32,
+        viewport_dimension_pixels: f64,
+        min_scroll_extent: f64,
+        max_scroll_extent: f64,
     ) {
         let mut position = self.position.clone();
         // Both write straight into the shared state (and clamp `pixels` to
@@ -500,7 +500,7 @@ impl ScrollController {
                 //
                 // #1183: raise the activity only after the run start
                 // returned `Ok`, and only if it's still actually running.
-                // `target_pixels` reaching here NaN (`f32::clamp` passes NaN
+                // `target_pixels` reaching here NaN (`f64::clamp` passes NaN
                 // through unchanged, since every NaN comparison is `false`
                 // -- `ScrollController::animate_to`'s own pre-clamp does not
                 // filter it) must not park the scrollable in "scrolling"
@@ -546,7 +546,7 @@ impl ScrollController {
     /// scroll (content fits in the viewport), and `0.0` when the viewport
     /// dimension is unknown (before the first layout).
     #[must_use]
-    pub fn thumb_fraction(&self) -> f32 {
+    pub fn thumb_fraction(&self) -> f64 {
         let viewport = self.viewport_dimension_pixels();
         let content_length = viewport + self.scroll_extent();
         if content_length <= 0.0 {
@@ -575,7 +575,7 @@ impl ScrollController {
     /// silently double-applying the factor and stopping short of the
     /// track's end).
     #[must_use]
-    pub fn thumb_offset_fraction(&self) -> f32 {
+    pub fn thumb_offset_fraction(&self) -> f64 {
         let scroll_extent = self.scroll_extent();
         if scroll_extent <= 0.0 {
             return 0.0;
@@ -944,7 +944,7 @@ mod tests {
     /// #1183: `service_pending_command`'s `is_scrolling` flag must follow
     /// whether the run start actually succeeded and is still running, not
     /// fire unconditionally before the call -- a refused start (a NaN
-    /// target, which `f32::clamp` passes through unchanged since every NaN
+    /// target, which `f64::clamp` passes through unchanged since every NaN
     /// comparison is `false`) must not park the scrollable in "scrolling"
     /// forever.
     #[test]
@@ -954,7 +954,7 @@ mod tests {
         let fling = fling_stub();
 
         controller.animate_to(
-            f32::NAN,
+            f64::NAN,
             Duration::from_millis(100),
             Arc::new(flui_animation::Curves::Linear),
         );

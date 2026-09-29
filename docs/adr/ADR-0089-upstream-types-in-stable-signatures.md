@@ -77,7 +77,7 @@ reports it. Evolving and internal crates are not bound by this rule; they are bo
 facts of [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) instead.
 
 The promise follows the item, not its crate. A Stable signature already names types from
-internal crates (`flui-platform-api`'s window contract takes `Size<Pixels>` and `EdgeInsets`
+internal crates (`flui-platform-api`'s window contract takes `Size` and `EdgeInsets`
 from `flui-geometry`/`flui-types`, `PlatformWindow::resize` and `safe_area_insets` in
 `crates/flui-platform-api/src/platform_window.rs`), and the
 facade re-exports whole internal crates (`pub use flui_types as types`, `src/lib.rs:150`). Every

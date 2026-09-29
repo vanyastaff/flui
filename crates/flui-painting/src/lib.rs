@@ -8,13 +8,14 @@
 //!
 //! ```rust
 //! use flui_painting::{Canvas, Paint};
-//! use flui_types::{Rect, geometry::px, styling::Color};
+//! use flui_foundation::geometry::Rect;
+//! use flui_painting::styling::Color;
 //!
 //! let mut canvas = Canvas::new();
 //! canvas.save();
 //! canvas.translate(10.0, 10.0);
 //! canvas.draw_rect(
-//!     Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
+//!     Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
 //!     &Paint::fill(Color::RED),
 //! );
 //! canvas.restore();
@@ -49,8 +50,8 @@
 //! `&mut`, over the app's [`FontCollection`].
 //!
 //! The paint vocabulary (`Paint`, `Shader`, `BlendMode`, …) is defined in
-//! `flui_types::painting` and re-exported here; a type error names the
-//! `flui_types` path.
+//! [`paint`] and re-exported here; the style values live in [`styling`] and
+//! [`typography`].
 
 #![deny(missing_docs)]
 #![warn(rustdoc::broken_intra_doc_links)]
@@ -63,12 +64,18 @@
 #![expect(clippy::uninlined_format_args)]
 #![expect(clippy::match_same_arms)]
 
+pub mod alignment;
+pub mod box_fit;
 pub mod canvas;
 pub mod decoration;
 pub mod display_list;
 pub mod error;
 #[cfg(feature = "bundled-fonts")]
 pub mod fonts;
+mod lerp_impls;
+pub mod paint;
+pub mod styling;
+pub mod typography;
 
 pub mod table_border;
 pub mod text_layout;
@@ -85,6 +92,8 @@ pub mod parley_text;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
+pub use alignment::{Alignment, AlignmentDirectional, AlignmentGeometry};
+pub use box_fit::{BoxFit, BoxShape, FittedSizes};
 pub use canvas::Canvas;
 pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 pub use display_list::{DisplayList, DrawCommand, DrawOp};
@@ -101,7 +110,7 @@ pub use text_layout::{
 };
 pub use text_painter::{Invalidation, TextBaseline, TextPainter};
 
-// The paint vocabulary, defined in `flui_types::painting`.
-pub use flui_types::painting::{
+// The paint vocabulary, defined in `crate::paint`.
+pub use crate::paint::{
     BlendMode, Paint, PaintBuilder, PaintStyle, PointMode, Shader, StrokeCap, StrokeJoin,
 };

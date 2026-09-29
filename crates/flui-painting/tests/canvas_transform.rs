@@ -1,15 +1,13 @@
 //! Canvas Transform API Tests
 //!
 //! Tests for the `Canvas::transform()` method integration with the high-level
-//! Transform API from `flui_types::geometry`.
+//! Transform API from `flui_foundation::geometry`.
 
-use std::f32::consts::PI;
+use std::f64::consts::PI;
 
+use flui_foundation::geometry::{Matrix4, Rect, Transform};
+use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
-use flui_types::{
-    geometry::{Matrix4, Rect, Transform, px},
-    styling::Color,
-};
 
 #[test]
 fn test_transform_with_transform_enum() {
@@ -19,7 +17,7 @@ fn test_transform_with_transform_enum() {
     let transform = Transform::rotate(PI / 4.0);
     canvas.transform(transform);
 
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -35,7 +33,7 @@ fn test_transform_with_matrix4() {
     let matrix = Matrix4::rotation_z(PI / 4.0);
     canvas.transform(matrix);
 
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -54,7 +52,7 @@ fn test_transform_composition() {
 
     canvas.transform(composed);
 
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -70,7 +68,7 @@ fn test_transform_skew() {
     let italic = Transform::skew(0.2, 0.0);
     canvas.transform(italic);
 
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -89,7 +87,7 @@ fn test_transform_rotate_around() {
 
     canvas.transform(rotate_around);
 
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -105,13 +103,13 @@ fn test_transform_with_save_restore() {
     canvas.save();
     canvas.transform(Transform::rotate(PI / 4.0));
 
-    let rect1 = Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0));
+    let rect1 = Rect::from_ltrb(0.0, 0.0, 50.0, 50.0);
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect1, &paint);
 
     canvas.restore();
 
-    let rect2 = Rect::from_ltrb(px(50.0), px(50.0), px(100.0), px(100.0));
+    let rect2 = Rect::from_ltrb(50.0, 50.0, 100.0, 100.0);
     canvas.draw_rect(rect2, &paint);
 
     let display_list = canvas.finish();
@@ -129,7 +127,7 @@ fn test_transform_multiple_calls() {
     canvas.transform(Transform::rotate(PI / 4.0));
     canvas.transform(Transform::scale(2.0));
 
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -144,7 +142,7 @@ fn test_transform_identity_optimization() {
 
     canvas.transform(Transform::Identity);
 
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -166,7 +164,7 @@ fn test_transform_mixed_with_legacy_methods() {
     // New scale API
     canvas.scale(2.0, 2.0);
 
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -185,7 +183,7 @@ fn test_transform_scale_around() {
 
     canvas.transform(scale_around);
 
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
     canvas.draw_rect(rect, &paint);
 
@@ -228,10 +226,10 @@ fn test_transform_animation_pattern() {
     canvas.transform(rotation);
 
     let rect = Rect::from_ltrb(
-        px(button_center_x - 25.0),
-        px(button_center_y - 25.0),
-        px(button_center_x + 25.0),
-        px(button_center_y + 25.0),
+        button_center_x - 25.0,
+        button_center_y - 25.0,
+        button_center_x + 25.0,
+        button_center_y + 25.0,
     );
     let paint = Paint::fill(Color::BLUE);
     canvas.draw_rect(rect, &paint);
@@ -251,7 +249,7 @@ fn test_transform_card_flip_pattern() {
 
     canvas.transform(card_flip);
 
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(200.0), px(300.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 200.0, 300.0);
     let paint = Paint::fill(Color::WHITE);
     canvas.draw_rect(rect, &paint);
 

@@ -2,11 +2,9 @@
 //! `crates/flui-painting/src/text_layout/mod.rs` during the text-layout
 //! module split.
 
+use flui_foundation::geometry::Offset;
 use flui_painting::TextLayout;
-use flui_types::{
-    geometry::{Offset, px},
-    typography::{TextDirection, TextPosition, TextRange},
-};
+use flui_painting::typography::{TextDirection, TextPosition, TextRange};
 
 #[test]
 fn test_text_layout_creation() {
@@ -23,7 +21,7 @@ fn test_text_layout_caret_position() {
     let layout = TextLayout::new("Hello", None, 14.0, None, None, TextDirection::Ltr);
 
     let start_offset = layout.get_offset_for_caret(TextPosition::upstream(0));
-    assert!(start_offset.dx >= px(0.0));
+    assert!(start_offset.dx >= 0.0);
 
     let mid_offset = layout.get_offset_for_caret(TextPosition::upstream(2));
     assert!(mid_offset.dx > start_offset.dx);
@@ -36,10 +34,10 @@ fn test_text_layout_caret_position() {
 fn test_text_layout_hit_test() {
     let layout = TextLayout::new("Hello", None, 14.0, None, None, TextDirection::Ltr);
 
-    let pos = layout.get_position_for_offset(Offset::new(px(0.0), px(5.0)));
+    let pos = layout.get_position_for_offset(Offset::new(0.0, 5.0));
     assert_eq!(pos.offset, 0);
 
-    let pos = layout.get_position_for_offset(Offset::new(px(1000.0), px(5.0)));
+    let pos = layout.get_position_for_offset(Offset::new(1000.0, 5.0));
     assert!(pos.offset <= 5);
 }
 
@@ -64,8 +62,8 @@ fn test_text_layout_selection_boxes() {
     assert!(!boxes.is_empty());
 
     let first_box = &boxes[0];
-    assert!(first_box.rect.width() > px(0.0));
-    assert!(first_box.rect.height() > px(0.0));
+    assert!(first_box.rect.width() > 0.0);
+    assert!(first_box.rect.height() > 0.0);
 }
 
 #[test]
@@ -89,7 +87,7 @@ fn test_text_layout_word_boundary() {
 #[test]
 fn get_word_boundary_returns_word_not_whole_line() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     let layout = TextLayout::new(
         "the quick brown fox",
@@ -114,7 +112,7 @@ fn get_word_boundary_returns_word_not_whole_line() {
 #[test]
 fn get_word_boundary_handles_non_ascii() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     // "café" — 'é' is 2 bytes (0xC3 0xA9). Total len = 5 bytes.
     let layout = TextLayout::new("café world", None, 14.0, None, None, TextDirection::Ltr);
@@ -134,7 +132,7 @@ fn get_word_boundary_handles_non_ascii() {
 #[test]
 fn get_word_boundary_selects_a_whole_whitespace_run() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     let layout = TextLayout::new("foo   bar", None, 14.0, None, None, TextDirection::Ltr);
     let _ = layout.metrics();
@@ -155,7 +153,7 @@ fn get_word_boundary_selects_a_whole_whitespace_run() {
 #[test]
 fn get_word_boundary_does_not_split_on_an_apostrophe() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     let layout = TextLayout::new("don't stop", None, 14.0, None, None, TextDirection::Ltr);
     let _ = layout.metrics();
@@ -186,7 +184,7 @@ fn get_word_boundary_does_not_split_on_an_apostrophe() {
 #[test]
 fn get_word_boundary_splits_cjk_per_character_not_per_word() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     let text = "日本語のテスト"; // "Japanese test" -- no ASCII whitespace anywhere.
     let layout = TextLayout::new(text, None, 14.0, None, None, TextDirection::Ltr);
@@ -208,7 +206,7 @@ fn get_word_boundary_splits_cjk_per_character_not_per_word() {
 #[test]
 fn get_word_boundary_prefers_the_word_side_of_a_boundary_over_the_whitespace_side() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     let layout = TextLayout::new("foo bar", None, 14.0, None, None, TextDirection::Ltr);
     let _ = layout.metrics();
@@ -244,7 +242,7 @@ fn get_word_boundary_prefers_the_word_side_of_a_boundary_over_the_whitespace_sid
 #[test]
 fn get_word_boundary_prefers_the_following_segment_between_two_word_segments() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     let word_at = |layout: &TextLayout, offset: usize| {
         layout.get_word_boundary(TextPosition::new(offset, TextAffinity::Downstream))
@@ -276,7 +274,7 @@ fn get_word_boundary_prefers_the_following_segment_between_two_word_segments() {
 #[test]
 fn get_word_boundary_word_vs_punctuation_boundary() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     let layout = TextLayout::new("foo, bar", None, 14.0, None, None, TextDirection::Ltr);
     let _ = layout.metrics();
@@ -306,7 +304,7 @@ fn get_word_boundary_word_vs_punctuation_boundary() {
 #[test]
 fn get_word_boundary_two_space_run_boundary_matrix() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     let layout = TextLayout::new("foo  bar", None, 14.0, None, None, TextDirection::Ltr);
     let _ = layout.metrics();
@@ -333,7 +331,7 @@ fn get_word_boundary_two_space_run_boundary_matrix() {
 #[test]
 fn get_word_boundary_at_the_buffers_own_leading_and_trailing_whitespace() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     let leading = TextLayout::new("  foo", None, 14.0, None, None, TextDirection::Ltr);
     let _ = leading.metrics();
@@ -363,7 +361,7 @@ fn get_word_boundary_at_the_buffers_own_leading_and_trailing_whitespace() {
 #[test]
 fn get_word_boundary_never_splits_inside_a_zwj_emoji_cluster() {
     use flui_painting::TextLayout;
-    use flui_types::typography::{TextAffinity, TextDirection, TextPosition};
+    use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 
     let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}"; // family emoji, one grapheme
     let text = format!("hi {family} bye");

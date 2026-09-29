@@ -20,7 +20,7 @@
 //! (`a_border_radius_change_updates_the_clip_layer_without_repainting_the_subtree`
 //! in `crates/flui-rendering/tests/retained_boundary_layers.rs`).
 
-use flui_types::geometry::{Radius, px};
+use flui_foundation::geometry::Radius;
 use flui_widgets::testing::{lay_out, tight};
 use flui_widgets::{ClipRRect, SizedBox};
 
@@ -35,7 +35,7 @@ fn rebuilding_a_clip_rrect_widget_updates_its_layer() {
             .clip_rrect_layers()
             .first()
             .map(|rrect| rrect.top_left),
-        Some(Radius::circular(px(8.0))),
+        Some(Radius::circular(8.0)),
         "precondition: the first frame composites the initial radius",
     );
 
@@ -46,7 +46,7 @@ fn rebuilding_a_clip_rrect_widget_updates_its_layer() {
             .clip_rrect_layers()
             .first()
             .map(|rrect| rrect.top_left),
-        Some(Radius::circular(px(2.0))),
+        Some(Radius::circular(2.0)),
         "a rebuild with a new radius must reach the composited layer through \
          the widget's own update path, not only through a direct setter call",
     );

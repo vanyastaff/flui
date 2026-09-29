@@ -5,9 +5,9 @@ expression: "snapshot_of(material_demo::MaterialDemoApp, 30)"
 Offset dx=0.00 dy=0.00
   Picture bounds=(0.00,0.00 900.00x760.00)
     Save
-    DrawPath bounds=(0.00,0.00 900.00x760.00) pts=1 fill #FEF7FFFF
+    DrawPath bounds=(0.00,0.00 900.00x760.00) pts=5 fill #FEF7FFFF
     Restore
-  ClipPath bounds=(0.00,0.00 900.00x760.00) pts=1 clip=none
+  ClipPath bounds=(0.00,0.00 900.00x760.00) pts=5 clip=none
     Picture bounds=(404.24,64.00 91.53x16.80)
       Save
       Paragraph offset=(0.00,0.00) "Selected: none" #000000FF lines=1 runs=[len=14 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,404.24,64.00,0.00,1.00]
@@ -17,9 +17,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 39.43x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 0" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -28,9 +28,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 39.43x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 1" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -39,9 +39,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 39.43x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 2" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -50,9 +50,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 39.43x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 3" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -61,9 +61,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 39.43x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 4" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -72,9 +72,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 39.43x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 5" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -83,9 +83,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 39.43x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 6" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -94,9 +94,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 39.43x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 7" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -105,9 +105,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 39.43x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 8" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -116,9 +116,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 39.43x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 9" #000000FF lines=1 runs=[len=6 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -127,9 +127,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 47.30x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 10" #000000FF lines=1 runs=[len=7 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -138,9 +138,9 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 47.30x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 11" #000000FF lines=1 runs=[len=7 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
@@ -149,44 +149,44 @@ Offset dx=0.00 dy=0.00
         Picture bounds=(3.00,3.00 894.00x66.00)
           Save
           DrawShadow path_bounds=(0.00,0.00 892.00x64.00) color=#000000FF elev=1.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
-          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=10 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
+          DrawPath bounds=(0.00,0.00 892.00x64.00) pts=15 fill #F7F2FAFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,4.00,4.00,0.00,1.00]
           Restore
-        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=10 clip=none
+        ClipPath bounds=(4.00,4.00 892.00x64.00) pts=15 clip=none
           Picture bounds=(16.00,16.00 47.30x16.80)
             Save
             Paragraph offset=(0.00,0.00) "Item 12" #000000FF lines=1 runs=[len=7 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,16.00,16.00,0.00,1.00]
             Restore
     Picture bounds=(0.00,0.00 900.00x56.00)
       Save
-      DrawPath bounds=(0.00,0.00 900.00x56.00) pts=1 fill #FEF7FFFF
+      DrawPath bounds=(0.00,0.00 900.00x56.00) pts=5 fill #FEF7FFFF
       Restore
-    ClipPath bounds=(0.00,0.00 900.00x56.00) pts=1 clip=none
+    ClipPath bounds=(0.00,0.00 900.00x56.00) pts=5 clip=none
       Picture bounds=(0.00,8.00 820.00x40.00)
         Save
         Paragraph offset=(0.00,0.00) "Material Demo" #1D1B20FF lines=1 runs=[len=13 family=Name("Roboto") weight=400 style=Normal size=22.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,14.03,0.00,1.00]
         Restore
         Save
-        DrawPath bounds=(0.00,0.00 40.00x40.00) pts=10 fill #00000000 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,780.00,8.00,0.00,1.00]
+        DrawPath bounds=(0.00,0.00 40.00x40.00) pts=15 fill #00000000 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,780.00,8.00,0.00,1.00]
         Restore
-      ClipPath bounds=(780.00,8.00 40.00x40.00) pts=10 clip=none
+      ClipPath bounds=(780.00,8.00 40.00x40.00) pts=15 clip=none
         Picture bounds=(788.00,16.00 24.00x24.00)
           Save
           Paragraph offset=(0.00,0.00) "\u{e8d2}" #49454FFF lines=1 runs=[len=3 family=Name("Material Icons") weight=400 style=Normal size=24.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,788.00,16.00,0.00,1.00]
           Restore
       Picture bounds=(820.00,8.00 40.00x40.00)
         Save
-        DrawPath bounds=(0.00,0.00 40.00x40.00) pts=10 fill #00000000 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,820.00,8.00,0.00,1.00]
+        DrawPath bounds=(0.00,0.00 40.00x40.00) pts=15 fill #00000000 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,820.00,8.00,0.00,1.00]
         Restore
-      ClipPath bounds=(820.00,8.00 40.00x40.00) pts=10 clip=none
+      ClipPath bounds=(820.00,8.00 40.00x40.00) pts=15 clip=none
         Picture bounds=(828.00,16.00 24.00x24.00)
           Save
           Paragraph offset=(0.00,0.00) "\u{e8b8}" #49454FFF lines=1 runs=[len=3 family=Name("Material Icons") weight=400 style=Normal size=24.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,828.00,16.00,0.00,1.00]
           Restore
       Picture bounds=(860.00,8.00 40.00x40.00)
         Save
-        DrawPath bounds=(0.00,0.00 40.00x40.00) pts=10 fill #00000000 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,860.00,8.00,0.00,1.00]
+        DrawPath bounds=(0.00,0.00 40.00x40.00) pts=15 fill #00000000 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,860.00,8.00,0.00,1.00]
         Restore
-      ClipPath bounds=(860.00,8.00 40.00x40.00) pts=10 clip=none
+      ClipPath bounds=(860.00,8.00 40.00x40.00) pts=15 clip=none
         Picture bounds=(868.00,16.00 24.00x24.00)
           Save
           Paragraph offset=(0.00,0.00) "\u{e8a5}" #49454FFF lines=1 runs=[len=3 family=Name("Material Icons") weight=400 style=Normal size=24.00] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,868.00,16.00,0.00,1.00]
@@ -194,9 +194,9 @@ Offset dx=0.00 dy=0.00
     Picture bounds=(822.00,682.00 68.00x68.00)
       Save
       DrawShadow path_bounds=(0.00,0.00 56.00x56.00) color=#000000FF elev=6.00 xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,828.00,688.00,0.00,1.00]
-      DrawPath bounds=(0.00,0.00 56.00x56.00) pts=10 fill #EADDFFFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,828.00,688.00,0.00,1.00]
+      DrawPath bounds=(0.00,0.00 56.00x56.00) pts=15 fill #EADDFFFF xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,828.00,688.00,0.00,1.00]
       Restore
-    ClipPath bounds=(828.00,688.00 56.00x56.00) pts=10 clip=none
+    ClipPath bounds=(828.00,688.00 56.00x56.00) pts=15 clip=none
       Picture bounds=(852.03,707.60 7.94x16.80)
         Save
         Paragraph offset=(0.00,0.00) "+" #000000FF lines=1 runs=[len=1 family=SansSerif weight=400 style=Normal] xf=[1.00,0.00,0.00,0.00,0.00,1.00,0.00,0.00,0.00,0.00,1.00,0.00,852.03,707.60,0.00,1.00]

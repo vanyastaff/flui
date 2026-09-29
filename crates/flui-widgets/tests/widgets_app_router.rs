@@ -19,9 +19,9 @@ use std::time::Duration;
 
 use flui_animation::Vsync;
 use flui_interaction::routing::FocusScopeNode;
-use flui_types::Color;
-use flui_types::platform::Locale;
-use flui_types::typography::TextDirection;
+use flui_painting::styling::Color;
+use flui_painting::typography::TextDirection;
+use flui_platform_api::Locale;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     AppForm, ColoredBox, Directionality, FocusScope, Localizations, NavigatorHandle,
@@ -158,7 +158,7 @@ fn settle(laid: &mut LaidOut) {
 
 fn laid_out_text(laid: &LaidOut, label: &str) -> bool {
     laid.find_text(label)
-        .is_some_and(|id| laid.try_size(id).is_some_and(|size| size.width.get() > 0.0))
+        .is_some_and(|id| laid.try_size(id).is_some_and(|size| size.width > 0.0))
 }
 
 fn tap(laid: &mut LaidOut) {

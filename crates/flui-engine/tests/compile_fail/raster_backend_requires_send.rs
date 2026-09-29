@@ -30,7 +30,7 @@ impl flui_engine::RasterBackend for BadBackend {
         false
     }
 
-    fn mark_dirty(&mut self, _rect: flui_types::geometry::Rect<flui_types::geometry::Pixels>) {}
+    fn mark_dirty(&mut self, _rect: flui_foundation::geometry::Rect<f64>) {}
 
     fn mark_full_repaint(&mut self) {}
 

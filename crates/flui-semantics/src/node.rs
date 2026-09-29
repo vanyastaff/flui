@@ -4,11 +4,8 @@
 //! one or more render objects. Non-boundary render objects merge their
 //! semantics into the nearest boundary ancestor.
 
+use flui_foundation::geometry::{Matrix4, Rect};
 use flui_foundation::{ElementId, RenderId, SemanticsId};
-use flui_types::{
-    Matrix4,
-    geometry::{Pixels, Rect},
-};
 
 // Use our optimized types from flui-semantics
 use crate::{
@@ -74,11 +71,11 @@ pub struct SemanticsNode {
 
     // ========== Geometry ==========
     /// Bounding rectangle in global coordinates.
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
 
     /// Transform matrix.
     ///
-    /// Stored as the workspace-canonical [`Matrix4`] from `flui_types`
+    /// Stored as the workspace-canonical [`Matrix4`] from `flui_foundation::geometry`
     /// — the same representation `to_node_data()` exports. Previously
     /// stored as `Option<[f32; 16]>` and round-tripped through
     /// `Matrix4::from` at export time; unifying the representation
@@ -230,12 +227,12 @@ impl SemanticsNode {
 
     /// Returns the bounding rectangle.
     #[inline]
-    pub fn rect(&self) -> Rect<Pixels> {
+    pub fn rect(&self) -> Rect<f64> {
         self.rect
     }
 
     /// Sets the bounding rectangle.
-    pub fn set_rect(&mut self, rect: Rect<Pixels>) {
+    pub fn set_rect(&mut self, rect: Rect<f64>) {
         self.rect = rect;
         self.dirty = true;
     }
@@ -344,8 +341,6 @@ impl SemanticsNode {
 mod tests {
     use std::sync::Arc;
 
-    use flui_types::geometry::px;
-
     use super::*;
     use crate::{action::SemanticsAction, flags::SemanticsFlag};
 
@@ -425,7 +420,7 @@ mod tests {
     fn test_semantics_node_geometry() {
         let mut node = SemanticsNode::new();
 
-        let rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
+        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
         node.set_rect(rect);
         assert_eq!(node.rect(), rect);
 
@@ -456,21 +451,18 @@ mod tests {
         let mut node1 = SemanticsNode::new();
         node1.config_mut().set_label("First");
         node1.config_mut().set_button(true);
-        node1.set_rect(Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)));
+        node1.set_rect(Rect::from_xywh(0.0, 0.0, 50.0, 50.0));
 
         let mut node2 = SemanticsNode::new();
         node2.config_mut().set_label("Second");
         node2.config_mut().set_enabled(Some(true));
-        node2.set_rect(Rect::from_xywh(px(50.0), px(0.0), px(50.0), px(50.0)));
+        node2.set_rect(Rect::from_xywh(50.0, 0.0, 50.0, 50.0));
 
         node1.absorb(&node2);
 
         assert!(node1.config().is_button());
         assert_eq!(node1.config().is_enabled(), Some(true));
-        assert_eq!(
-            node1.rect(),
-            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
-        );
+        assert_eq!(node1.rect(), Rect::from_xywh(0.0, 0.0, 50.0, 50.0),);
     }
 
     #[test]
@@ -498,7 +490,7 @@ mod tests {
             Arc::new(|_, _| {}),
         );
         node.config_mut().set_blocks_user_actions(true);
-        node.set_rect(Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0)));
+        node.set_rect(Rect::from_xywh(10.0, 20.0, 100.0, 50.0));
 
         let data = node.to_node_data();
 

@@ -266,10 +266,10 @@ pub fn derive_diagnosticable(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Emit `impl TwoWayConverter` for a struct of `f32` fields,
+/// Emit `impl TwoWayConverter` for a struct of `f64` fields,
 /// so the type can be spring-animated by `flui_animation::AnimatedValue`.
 ///
-/// Every field must be `f32`; a non-`f32` field is a compile error. The type
+/// Every field must be `f64`; a non-`f64` field is a compile error. The type
 /// must also be `Clone` (the trait's supertrait).
 ///
 /// # Example
@@ -279,9 +279,9 @@ pub fn derive_diagnosticable(input: TokenStream) -> TokenStream {
 ///
 /// #[derive(Clone, Animatable)]
 /// struct Translation {
-///     x: f32,
-///     y: f32,
-///     z: f32,
+///     x: f64,
+///     y: f64,
+///     z: f64,
 /// }
 /// ```
 #[proc_macro_derive(Animatable)]

@@ -40,12 +40,12 @@
 //! its pipeline. It moved by exactly one bit, for a reason that constant names
 //! and measures.
 
+use flui_foundation::geometry::{Offset, RRect, Rect};
 use flui_layer::SceneBuilder;
 use flui_painting::{BlendMode, Canvas, Paint};
-use flui_types::{
-    Color, Offset, Rect,
-    geometry::{Pixels, RRect, px},
-    painting::{Clip, ClipOp, Shader, TileMode},
+use flui_painting::{
+    paint::{Clip, ClipOp, Shader, TileMode},
+    styling::Color,
 };
 
 use crate::{
@@ -129,18 +129,18 @@ const GRADIENT_KINDS: [GradientKind; 3] = [
 fn gradient(kind: GradientKind, from: Color, to: Color) -> Shader {
     let colors = vec![from, to];
     let stops = Some(vec![0.0, 1.0]);
-    let centre = Offset::new(px(SIDE as f32 / 2.0), px(SIDE as f32 / 2.0));
+    let centre = Offset::new(f64::from(SIDE) / 2.0, f64::from(SIDE) / 2.0);
     match kind {
         GradientKind::Linear => Shader::LinearGradient {
-            from: Offset::new(px(0.0), px(0.0)),
-            to: Offset::new(px(SIDE as f32), px(0.0)),
+            from: Offset::new(0.0, 0.0),
+            to: Offset::new(f64::from(SIDE), 0.0),
             colors,
             stops,
             tile_mode: TileMode::Clamp,
         },
         GradientKind::Radial => Shader::RadialGradient {
             center: centre,
-            radius: SIDE as f32,
+            radius: f64::from(SIDE),
             colors,
             stops,
             tile_mode: TileMode::Clamp,
@@ -153,7 +153,7 @@ fn gradient(kind: GradientKind, from: Color, to: Color) -> Shader {
             stops,
             tile_mode: TileMode::Clamp,
             start_angle: 0.0,
-            end_angle: std::f32::consts::TAU,
+            end_angle: f64::from(std::f32::consts::TAU),
         },
     }
 }
@@ -165,8 +165,8 @@ fn constant_gradient(kind: GradientKind, color: Color) -> Shader {
 }
 
 /// The whole surface, in device pixels.
-fn full_surface() -> Rect<Pixels> {
-    Rect::from_xywh(px(0.0), px(0.0), px(SIDE as f32), px(SIDE as f32))
+fn full_surface() -> Rect<f64> {
+    Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE))
 }
 
 /// A `Fill` paint carrying `shader` and `mode` over [`UNSHADED_BASE`].
@@ -241,8 +241,13 @@ fn gradient_through_an_anti_aliased_clip(
         canvas.save();
         canvas.clip_rrect_ext(
             RRect::from_rect_circular(
-                Rect::from_xywh(px(CLIP_LEFT), px(CLIP_TOP), px(CLIP_WIDTH), px(CLIP_HEIGHT)),
-                px(CLIP_RADIUS),
+                Rect::from_xywh(
+                    f64::from(CLIP_LEFT),
+                    f64::from(CLIP_TOP),
+                    f64::from(CLIP_WIDTH),
+                    f64::from(CLIP_HEIGHT),
+                ),
+                f64::from(CLIP_RADIUS),
             ),
             ClipOp::Intersect,
             Clip::AntiAlias,
@@ -737,10 +742,10 @@ fn gradient_rrect_keeps_per_corner_radii() {
     let side = SIDE as f32;
     let rrect = RRect::from_rect_and_corners(
         full_surface(),
-        flui_types::geometry::Radius::ZERO,
-        flui_types::geometry::Radius::ZERO,
-        flui_types::geometry::Radius::circular(px(side / 3.0)),
-        flui_types::geometry::Radius::ZERO,
+        flui_foundation::geometry::Radius::ZERO,
+        flui_foundation::geometry::Radius::ZERO,
+        flui_foundation::geometry::Radius::circular(f64::from(side / 3.0)),
+        flui_foundation::geometry::Radius::ZERO,
     );
     let tree = {
         let mut builder = SceneBuilder::new();

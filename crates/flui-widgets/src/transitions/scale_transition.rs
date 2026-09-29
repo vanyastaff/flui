@@ -1,4 +1,4 @@
-//! [`ScaleTransition`] — animates its child's scale from an [`Animation<f32>`].
+//! [`ScaleTransition`] — animates its child's scale from an [`Animation<f64>`].
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use flui_view::{
 
 use crate::Transform;
 
-/// Scales its child about its center as an [`Animation<f32>`] (the scale factor)
+/// Scales its child about its center as an [`Animation<f64>`] (the scale factor)
 /// changes.
 ///
 /// Flutter parity: `widgets/transitions.dart` `ScaleTransition` — an
@@ -20,13 +20,13 @@ use crate::Transform;
 /// the child is laid out as if untransformed.
 #[derive(Clone)]
 pub struct ScaleTransition {
-    scale: Arc<dyn Animation<f32>>,
+    scale: Arc<dyn Animation<f64>>,
     child: BoxedView,
 }
 
 impl ScaleTransition {
     /// A scale driven by `scale`, transforming `child`.
-    pub fn new(scale: Arc<dyn Animation<f32>>, child: impl IntoView) -> Self {
+    pub fn new(scale: Arc<dyn Animation<f64>>, child: impl IntoView) -> Self {
         Self {
             scale,
             child: child.into_view().boxed(),

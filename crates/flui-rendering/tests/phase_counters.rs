@@ -4,6 +4,7 @@
 //! a frame and asserts on the difference, which is how a frame driver uses
 //! them.
 
+use flui_foundation::geometry::Size;
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
 };
@@ -12,12 +13,11 @@ use flui_rendering::{
     pipeline::{Idle, PipelineCounters, PipelineOwner},
     testing::{RenderLabelRegistry, TreeNode, box_node, tree, update_render_object},
 };
-use flui_types::{Size, geometry::px};
 
 fn root(owner: &mut PipelineOwner<Idle>, spec: TreeNode) -> RenderLabelRegistry {
     let (root_id, registry) = tree::mount(owner, spec);
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     registry
 }
 

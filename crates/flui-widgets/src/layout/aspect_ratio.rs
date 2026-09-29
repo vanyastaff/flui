@@ -11,13 +11,13 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// The ratio must be finite and `> 0` (debug-asserted in the render object).
 #[derive(Clone, Debug)]
 pub struct AspectRatio {
-    aspect_ratio: f32,
+    aspect_ratio: f64,
     child: Child,
 }
 
 impl AspectRatio {
     /// Create an `AspectRatio` enforcing `aspect_ratio` (= width / height).
-    pub fn new(aspect_ratio: f32) -> Self {
+    pub fn new(aspect_ratio: f64) -> Self {
         Self {
             aspect_ratio,
             child: Child::empty(),

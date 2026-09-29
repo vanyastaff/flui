@@ -43,7 +43,7 @@ use std::{
 
 use web_time::Instant;
 
-use flui_types::geometry::{Offset, PixelDelta, Pixels, px};
+use flui_foundation::geometry::Offset;
 
 use crate::{
     events::{PointerEvent, PointerType},
@@ -67,7 +67,7 @@ pub enum RawPointerEvent {
         /// Pointer identifier.
         pointer: PointerId,
         /// Position in logical pixels.
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         /// Device type.
         device_kind: PointerType,
         /// Event timestamp.
@@ -79,9 +79,9 @@ pub enum RawPointerEvent {
         /// Pointer identifier.
         pointer: PointerId,
         /// Current position.
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         /// Delta from previous position.
-        delta: Offset<PixelDelta>,
+        delta: Offset<f64>,
         /// Device type.
         device_kind: PointerType,
         /// Event timestamp.
@@ -93,9 +93,9 @@ pub enum RawPointerEvent {
         /// Pointer identifier.
         pointer: PointerId,
         /// Final position.
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         /// Delta from previous position.
-        delta: Offset<PixelDelta>,
+        delta: Offset<f64>,
         /// Device type.
         device_kind: PointerType,
         /// Event timestamp.
@@ -107,7 +107,7 @@ pub enum RawPointerEvent {
         /// Pointer identifier.
         pointer: PointerId,
         /// Last known position.
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         /// Device type.
         device_kind: PointerType,
         /// Event timestamp.
@@ -119,9 +119,9 @@ pub enum RawPointerEvent {
         /// Pointer identifier.
         pointer: PointerId,
         /// Current position.
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         /// Delta from previous position.
-        delta: Offset<PixelDelta>,
+        delta: Offset<f64>,
         /// Device type.
         device_kind: PointerType,
         /// Event timestamp.
@@ -142,7 +142,7 @@ impl RawPointerEvent {
     }
 
     /// Get the position.
-    pub fn position(&self) -> Offset<Pixels> {
+    pub fn position(&self) -> Offset<f64> {
         match self {
             Self::Down { position, .. }
             | Self::Move { position, .. }
@@ -153,11 +153,9 @@ impl RawPointerEvent {
     }
 
     /// Get the delta (zero for Down events).
-    pub fn delta(&self) -> Offset<PixelDelta> {
+    pub fn delta(&self) -> Offset<f64> {
         match self {
-            Self::Down { .. } | Self::Cancel { .. } => {
-                Offset::new(PixelDelta::ZERO, PixelDelta::ZERO)
-            }
+            Self::Down { .. } | Self::Cancel { .. } => Offset::new(0.0, 0.0),
             Self::Move { delta, .. } | Self::Up { delta, .. } | Self::Hover { delta, .. } => *delta,
         }
     }
@@ -209,7 +207,7 @@ pub type RawInputCallback = Rc<dyn Fn(RawPointerEvent)>;
 #[derive(Debug, Clone)]
 struct PointerTrackingState {
     /// Last known position.
-    last_position: Offset<Pixels>,
+    last_position: Offset<f64>,
     /// Is pointer currently down?
     is_down: bool,
     /// Device kind (stored for potential future use).
@@ -323,7 +321,7 @@ impl RawInputHandler {
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(px(pos.x as f32), px(pos.y as f32));
+                let position = Offset::new(pos.x, pos.y);
                 let device_kind = data.pointer.pointer_type;
 
                 // Start tracking
@@ -346,7 +344,7 @@ impl RawInputHandler {
 
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(px(pos.x as f32), px(pos.y as f32));
+                let position = Offset::new(pos.x, pos.y);
                 let device_kind = data.pointer.pointer_type;
 
                 let delta = {
@@ -380,7 +378,7 @@ impl RawInputHandler {
 
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(px(pos.x as f32), px(pos.y as f32));
+                let position = Offset::new(pos.x, pos.y);
                 let device_kind = data.pointer.pointer_type;
 
                 let delta = {
@@ -448,7 +446,7 @@ impl RawInputHandler {
     }
 
     /// Get the last known position of a pointer.
-    pub fn pointer_position(&self, pointer: PointerId) -> Option<Offset<Pixels>> {
+    pub fn pointer_position(&self, pointer: PointerId) -> Option<Offset<f64>> {
         self.tracking
             .borrow()
             .get(&pointer)
@@ -526,14 +524,11 @@ mod tests {
     fn test_raw_handler_down_event() {
         let handler = RawInputHandler::new();
 
-        let event = make_down_event(
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            PointerType::Touch,
-        );
+        let event = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
         let raw = handler.handle_event(&event).unwrap();
 
         assert!(raw.is_down());
-        assert_eq!(raw.position(), Offset::new(Pixels(100.0), Pixels(100.0)));
+        assert_eq!(raw.position(), Offset::new(100.0, 100.0));
         assert_eq!(handler.active_pointer_count(), 1);
     }
 
@@ -542,39 +537,27 @@ mod tests {
         let handler = RawInputHandler::new();
 
         // Down at (100, 100)
-        let down = make_down_event(
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            PointerType::Touch,
-        );
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
         handler.handle_event(&down);
 
         // Move to (120, 110) - delta should be (20, 10)
-        let mv = make_move_event(
-            Offset::new(Pixels(120.0), Pixels(110.0)),
-            PointerType::Touch,
-        );
+        let mv = make_move_event(Offset::new(120.0, 110.0), PointerType::Touch);
         let raw = handler.handle_event(&mv).unwrap();
 
         assert!(raw.is_move());
-        assert_eq!(raw.position(), Offset::new(Pixels(120.0), Pixels(110.0)));
-        assert_eq!(raw.delta(), Offset::new(PixelDelta(20.0), PixelDelta(10.0)));
+        assert_eq!(raw.position(), Offset::new(120.0, 110.0));
+        assert_eq!(raw.delta(), Offset::new(20.0, 10.0));
     }
 
     #[test]
     fn test_raw_handler_up_clears_tracking() {
         let handler = RawInputHandler::new();
 
-        let down = make_down_event(
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            PointerType::Touch,
-        );
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
         handler.handle_event(&down);
         assert_eq!(handler.active_pointer_count(), 1);
 
-        let up = make_up_event(
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            PointerType::Touch,
-        );
+        let up = make_up_event(Offset::new(100.0, 100.0), PointerType::Touch);
         handler.handle_event(&up);
         assert_eq!(handler.tracked_pointer_count(), 0);
     }
@@ -589,10 +572,7 @@ mod tests {
             called_clone.set(true);
         });
 
-        let down = make_down_event(
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            PointerType::Touch,
-        );
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
         handler.handle_event(&down);
 
         assert!(called.get());
@@ -608,10 +588,7 @@ mod tests {
             captured.set(captured.get() + 1);
         });
 
-        let down = make_down_event(
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            PointerType::Touch,
-        );
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
         handler.handle_event(&down);
 
         assert_eq!(total.get(), 1);
@@ -622,10 +599,7 @@ mod tests {
         let handler = RawInputHandler::new();
         handler.set_enabled(false);
 
-        let down = make_down_event(
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            PointerType::Touch,
-        );
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
         let result = handler.handle_event(&down);
 
         assert!(result.is_none());
@@ -648,21 +622,18 @@ mod tests {
     fn test_raw_event_helpers() {
         let handler = RawInputHandler::new();
 
-        let down = make_down_event(Offset::new(Pixels(50.0), Pixels(50.0)), PointerType::Touch);
+        let down = make_down_event(Offset::new(50.0, 50.0), PointerType::Touch);
         let raw_down = handler.handle_event(&down).unwrap();
         assert!(raw_down.is_down());
         assert!(!raw_down.is_move());
         assert!(!raw_down.is_up());
-        assert_eq!(
-            raw_down.delta(),
-            Offset::new(PixelDelta::ZERO, PixelDelta::ZERO)
-        ); // Down has no delta
+        assert_eq!(raw_down.delta(), Offset::new(0.0, 0.0)); // Down has no delta
 
-        let mv = make_move_event(Offset::new(Pixels(60.0), Pixels(60.0)), PointerType::Touch);
+        let mv = make_move_event(Offset::new(60.0, 60.0), PointerType::Touch);
         let raw_mv = handler.handle_event(&mv).unwrap();
         assert!(raw_mv.is_move());
 
-        let up = make_up_event(Offset::new(Pixels(70.0), Pixels(70.0)), PointerType::Touch);
+        let up = make_up_event(Offset::new(70.0, 70.0), PointerType::Touch);
         let raw_up = handler.handle_event(&up).unwrap();
         assert!(raw_up.is_up());
     }
@@ -673,24 +644,18 @@ mod tests {
 
         assert!(handler.pointer_position(PointerId::PRIMARY).is_none());
 
-        let down = make_down_event(
-            Offset::new(Pixels(100.0), Pixels(200.0)),
-            PointerType::Touch,
-        );
+        let down = make_down_event(Offset::new(100.0, 200.0), PointerType::Touch);
         handler.handle_event(&down);
 
         let pos = handler.pointer_position(PointerId::PRIMARY).unwrap();
-        assert_eq!(pos, Offset::new(Pixels(100.0), Pixels(200.0)));
+        assert_eq!(pos, Offset::new(100.0, 200.0));
     }
 
     #[test]
     fn test_reset() {
         let handler = RawInputHandler::new();
 
-        let down = make_down_event(
-            Offset::new(Pixels(100.0), Pixels(100.0)),
-            PointerType::Touch,
-        );
+        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
         handler.handle_event(&down);
         assert_eq!(handler.tracked_pointer_count(), 1);
 

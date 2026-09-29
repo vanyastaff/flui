@@ -447,7 +447,7 @@ impl Platform for AndroidPlatform {
                             tracing::info!("Android: Window resized");
                             if let Some(ref w) = *platform.window.lock() {
                                 let size = w.logical_size();
-                                let scale = w.scale_factor() as f32;
+                                let scale = w.scale_factor();
                                 w.callbacks().dispatch_resize(size, scale);
                                 w.request_redraw();
                             }
@@ -715,12 +715,9 @@ impl PlatformDisplay for AndroidDisplay {
         "Android Display".to_string()
     }
 
-    fn bounds(&self) -> flui_types::geometry::Bounds<flui_types::geometry::DevicePixels> {
-        use flui_types::geometry::{Bounds, Point, Size, device_px};
-        Bounds::new(
-            Point::new(device_px(0), device_px(0)),
-            Size::new(device_px(1080), device_px(2340)),
-        )
+    fn bounds(&self) -> flui_foundation::geometry::Bounds<i32> {
+        use flui_foundation::geometry::{Bounds, Point, Size};
+        Bounds::new(Point::new(0, 0), Size::new(1080, 2340))
     }
 
     fn scale_factor(&self) -> f64 {

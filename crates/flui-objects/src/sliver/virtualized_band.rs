@@ -22,8 +22,7 @@ use std::collections::BTreeMap;
 use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
 
 use flui_foundation::Variable;
-use flui_types::geometry::px;
-use flui_types::layout::AxisDirection;
+use flui_rendering::constraints::AxisDirection;
 
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry, child_paint_offset},
@@ -38,7 +37,7 @@ use flui_rendering::{
 /// estimate, with a 1 px floor. Re-hinting moves every unmeasured offset (and
 /// therefore the scrollbar's total), so it is done for a material change,
 /// not on every remeasure of a heterogeneous list.
-const ADAPTIVE_ESTIMATE_RELATIVE_TOLERANCE: f32 = 0.05;
+const ADAPTIVE_ESTIMATE_RELATIVE_TOLERANCE: f64 = 0.05;
 
 // ============================================================================
 // HELPER FREE FUNCTIONS  (pub(super) — used by sliver_list)
@@ -105,10 +104,13 @@ fn bounded_unbounded_window(
 
 /// Returns the main-axis extent of `size` for `axis_direction`.
 #[inline]
-pub(super) fn main_axis_extent(size: flui_types::Size, axis_direction: AxisDirection) -> f32 {
+pub(super) fn main_axis_extent(
+    size: flui_foundation::geometry::Size,
+    axis_direction: AxisDirection,
+) -> f64 {
     match axis_direction {
-        AxisDirection::TopToBottom | AxisDirection::BottomToTop => size.height.get(),
-        AxisDirection::LeftToRight | AxisDirection::RightToLeft => size.width.get(),
+        AxisDirection::TopToBottom | AxisDirection::BottomToTop => size.height,
+        AxisDirection::LeftToRight | AxisDirection::RightToLeft => size.width,
     }
 }
 
@@ -119,7 +121,7 @@ pub(super) fn main_axis_extent(size: flui_types::Size, axis_direction: AxisDirec
 ///
 /// Complexity: `O(log n)` — two tree prefix-sum queries.
 #[inline]
-pub(super) fn item_extent_from_virtualizer(v: &Virtualizer, logical_i: usize) -> f32 {
+pub(super) fn item_extent_from_virtualizer(v: &Virtualizer, logical_i: usize) -> f64 {
     if logical_i < v.len() {
         v.offset_of(logical_i + 1) - v.offset_of(logical_i)
     } else {
@@ -131,7 +133,7 @@ pub(super) fn item_extent_from_virtualizer(v: &Virtualizer, logical_i: usize) ->
 /// accumulator.
 #[inline]
 pub(super) fn accumulate_anchor_correction(
-    pending_correction: &mut f32,
+    pending_correction: &mut f64,
     correction: Option<AnchorCorrection>,
 ) {
     if let Some(c) = correction {
@@ -155,7 +157,7 @@ pub(super) fn accumulate_anchor_correction(
 /// `Some(delta)` to emit as `SliverGeometry::scroll_offset_correction`;
 /// `None` when nothing is pending.
 #[inline]
-pub(super) fn take_anchor_correction(pending_correction: &mut f32) -> Option<f32> {
+pub(super) fn take_anchor_correction(pending_correction: &mut f64) -> Option<f64> {
     if *pending_correction == 0.0 {
         None
     } else {
@@ -169,7 +171,7 @@ pub(super) fn take_anchor_correction(pending_correction: &mut f32) -> Option<f32
 // `calculate_cache_offset`.  Identical formulae, but free functions avoid
 // requiring `&self` in the shared walk.
 #[inline]
-fn calc_paint_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
+fn calc_paint_offset(c: &SliverConstraints, from: f64, to: f64) -> f64 {
     debug_assert!(from <= to);
     let a = c.scroll_offset;
     let b = c.scroll_offset + c.remaining_paint_extent;
@@ -177,7 +179,7 @@ fn calc_paint_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
 }
 
 #[inline]
-fn calc_cache_offset(c: &SliverConstraints, from: f32, to: f32) -> f32 {
+fn calc_cache_offset(c: &SliverConstraints, from: f64, to: f64) -> f64 {
     debug_assert!(from <= to);
     let a = c.scroll_offset + c.cache_origin;
     let b = c.scroll_offset + c.remaining_cache_extent;
@@ -227,7 +229,7 @@ pub(super) fn walk_virtualizer_band<'ctx, G>(
     virtualizer: &mut Virtualizer,
     logical_to_slot: &mut BTreeMap<usize, usize>,
     item_count: &mut usize,
-    pending_correction: &mut f32,
+    pending_correction: &mut f64,
     attached_child_count: &mut usize,
     // Latches the count already warned about, so an unbounded window that
     // re-lays out every frame warns once rather than once per frame — the same
@@ -297,11 +299,11 @@ where
 
     // ── 4. Lay out in-band children + dispatch the absent strategy ─────────
     // Box constraints: cross axis tight, main axis unbounded (child sizes itself).
-    let box_constraints = constraints.as_box_constraints(0.0, f32::INFINITY, None);
+    let box_constraints = constraints.as_box_constraints(0.0, f64::INFINITY, None);
     // Anchor = first visible item this pass.  Feeds `set_measured` so that
     // re-measuring an item above the viewport emits an `AnchorCorrection`
     // that keeps the viewport pixel-stationary.
-    let anchor = (range.first, 0.0_f32);
+    let anchor = (range.first, 0.0_f64);
 
     for logical_i in cache_first..cache_last {
         if logical_i >= *item_count {
@@ -504,8 +506,7 @@ where
         }
         let layout_offset = virtualizer.offset_of(logical_i);
         let item_extent = item_extent_from_virtualizer(virtualizer, logical_i);
-        let paint_offset =
-            child_paint_offset(constraints, &geometry, px(layout_offset), px(item_extent));
+        let paint_offset = child_paint_offset(constraints, &geometry, layout_offset, item_extent);
         ctx.position_child(slot, paint_offset);
     }
 
@@ -532,17 +533,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_rendering::constraints::AxisDirection;
     use flui_rendering::{
         constraints::{GrowthDirection, SliverConstraints},
         view::ScrollDirection,
     };
-    use flui_types::layout::AxisDirection;
 
     fn vertical(
-        scroll_offset: f32,
-        remaining_paint_extent: f32,
-        remaining_cache_extent: f32,
-        cache_origin: f32,
+        scroll_offset: f64,
+        remaining_paint_extent: f64,
+        remaining_cache_extent: f64,
+        cache_origin: f64,
     ) -> SliverConstraints {
         SliverConstraints {
             axis_direction: AxisDirection::TopToBottom,
@@ -594,13 +595,13 @@ mod tests {
     // ── take_anchor_correction ────────────────────────────────────────────
     #[test]
     fn correction_emits_whatever_is_pending_and_resets() {
-        let mut correction = 10.0_f32;
+        let mut correction = 10.0_f64;
         assert_eq!(take_anchor_correction(&mut correction), Some(10.0));
         assert_eq!(correction, 0.0);
     }
     #[test]
     fn correction_zero_pending_emits_none() {
-        let mut correction = 0.0_f32;
+        let mut correction = 0.0_f64;
         assert_eq!(take_anchor_correction(&mut correction), None);
     }
     #[test]
@@ -608,7 +609,7 @@ mod tests {
         // The old state machine withheld a pending correction on a backward
         // scroll; the accumulator is now drained on every pass, so the
         // caller's scroll direction is not even an input.
-        let mut correction = -8.0_f32;
+        let mut correction = -8.0_f64;
         assert_eq!(take_anchor_correction(&mut correction), Some(-8.0));
         assert_eq!(correction, 0.0);
         assert_eq!(take_anchor_correction(&mut correction), None);
@@ -617,7 +618,7 @@ mod tests {
 
     #[test]
     fn accumulate_adds_delta_when_some() {
-        let mut pending = 0.0_f32;
+        let mut pending = 0.0_f64;
         accumulate_anchor_correction(&mut pending, Some(AnchorCorrection { delta: 3.0 }));
         accumulate_anchor_correction(&mut pending, Some(AnchorCorrection { delta: 7.0 }));
         assert_eq!(pending, 10.0);
@@ -625,7 +626,7 @@ mod tests {
 
     #[test]
     fn accumulate_noop_on_none() {
-        let mut pending = 5.0_f32;
+        let mut pending = 5.0_f64;
         accumulate_anchor_correction(&mut pending, None);
         assert_eq!(pending, 5.0);
     }

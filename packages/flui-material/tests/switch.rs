@@ -33,8 +33,8 @@ use common::{lay_out, size, tight};
 use flui_material::{Switch, Theme, ThemeData};
 
 /// The switch's full tap target (track + M3 default horizontal padding).
-const TAP_TARGET_WIDTH: f32 = 60.0;
-const TAP_TARGET_HEIGHT: f32 = 48.0;
+const TAP_TARGET_WIDTH: f64 = 60.0;
+const TAP_TARGET_HEIGHT: f64 = 48.0;
 
 fn constraints() -> flui_sdk::rendering::BoxConstraints {
     tight(TAP_TARGET_WIDTH, TAP_TARGET_HEIGHT)

@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use flui_types::platform::Locale;
+use flui_platform_api::Locale;
 
 /// Composite lookup keys, built once per `supported_locales` entry so the
 /// resolution loop below is a hash lookup per preferred locale rather than a
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn resolution_matches_across_deprecated_locale_aliases() {
-        // `iw` canonicalizes to `he` at construction (flui-types), so a
+        // `iw` canonicalizes to `he` at construction (flui-platform-api), so a
         // preferred `Locale::new("iw", ...)` must resolve exactly like the
         // canonical `he` spelling would.
         let supported = vec![l("en", Some("US")), l("he", Some("IL"))];

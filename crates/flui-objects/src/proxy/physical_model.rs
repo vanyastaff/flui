@@ -48,13 +48,12 @@
 use std::fmt;
 
 use flui_foundation::Single;
+use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
+use flui_painting::BoxShape;
 use flui_painting::{Canvas, Paint};
-use flui_types::{
-    Color, Offset, Pixels, Point, Rect, Size,
-    geometry::RRect,
-    layout::BoxShape,
-    painting::{Clip, Path},
-    styling::{BorderRadius, BorderRadiusExt},
+use flui_painting::{
+    paint::{Clip, Path},
+    styling::{BorderRadius, BorderRadiusExt, Color},
 };
 
 use flui_foundation::DiagnosticsBuilder;
@@ -80,7 +79,7 @@ use super::clip::ClipSourceToken;
 /// shadow/fill vocabulary `ClipGeometry` has no need for).
 pub trait PhysicalClipShape: Clone + fmt::Debug + Send + Sync + 'static {
     /// Returns `true` if the local-space `position` falls inside the shape.
-    fn contains(&self, position: Point<Pixels>) -> bool;
+    fn contains(&self, position: Point<f64>) -> bool;
 
     /// The path [`Canvas::draw_shadow`] casts against.
     fn shadow_path(&self) -> Path;
@@ -100,7 +99,7 @@ pub trait PhysicalClipShape: Clone + fmt::Debug + Send + Sync + 'static {
 }
 
 impl PhysicalClipShape for RRect {
-    fn contains(&self, position: Point<Pixels>) -> bool {
+    fn contains(&self, position: Point<f64>) -> bool {
         RRect::contains(self, position)
     }
 
@@ -123,7 +122,7 @@ impl PhysicalClipShape for RRect {
 }
 
 impl PhysicalClipShape for Path {
-    fn contains(&self, position: Point<Pixels>) -> bool {
+    fn contains(&self, position: Point<f64>) -> bool {
         // Resolves to the inherent `Path::contains` (fill-type-aware
         // ray-casting/winding test), not infinite recursion — inherent
         // methods take priority over trait methods in method resolution.
@@ -309,7 +308,7 @@ pub struct RenderPhysicalModelBase<C: PhysicalClipSource> {
     /// The per-variant clip-shape source.
     clip_source: C,
     /// Shadow elevation. `0.0` means no shadow is cast.
-    elevation: f32,
+    elevation: f64,
     /// The fill color painted behind (or, under `AntiAliasWithSaveLayer`,
     /// inside) the clip.
     color: Color,
@@ -347,14 +346,14 @@ impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
 
     /// The current elevation. Zero means no shadow is cast.
     #[inline]
-    pub fn elevation(&self) -> f32 {
+    pub fn elevation(&self) -> f64 {
         self.elevation
     }
 
     /// Builder: sets the elevation (debug-asserts non-negative, matching
     /// the oracle's own triple-asserted invariant).
     #[must_use]
-    pub fn with_elevation(mut self, elevation: f32) -> Self {
+    pub fn with_elevation(mut self, elevation: f64) -> Self {
         debug_assert!(
             elevation >= 0.0,
             "RenderPhysicalModelBase: elevation must be non-negative, got {elevation}"
@@ -364,7 +363,7 @@ impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
     }
 
     /// Replaces the elevation and reports paint when it changed.
-    pub fn set_elevation(&mut self, elevation: f32) -> RenderUpdateImpact {
+    pub fn set_elevation(&mut self, elevation: f64) -> RenderUpdateImpact {
         debug_assert!(
             elevation >= 0.0,
             "RenderPhysicalModelBase: elevation must be non-negative, got {elevation}"
@@ -701,8 +700,8 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
 #[cfg(test)]
 mod tests {
     use flui_foundation::Diagnosticable;
+    use flui_foundation::geometry::Radius;
     use flui_interaction::InteractionLane;
-    use flui_types::geometry::{Radius, px};
 
     use super::*;
 
@@ -714,28 +713,28 @@ mod tests {
             shape: BoxShape::Rectangle,
             border_radius: None,
         };
-        let rrect = source.compute_clip(Size::new(px(100.0), px(50.0)));
-        assert_eq!(rrect.top_left.x, px(0.0));
-        assert_eq!(rrect.bottom_right.y, px(0.0));
+        let rrect = source.compute_clip(Size::new(100.0, 50.0));
+        assert_eq!(rrect.top_left.x, 0.0);
+        assert_eq!(rrect.bottom_right.y, 0.0);
     }
 
     #[test]
     fn rectangle_clip_border_radius_maps_corners_field_for_field() {
         let br = BorderRadius::only(
-            Radius::circular(px(10.0)),
-            Radius::circular(px(20.0)),
-            Radius::circular(px(30.0)),
-            Radius::circular(px(40.0)),
+            Radius::circular(10.0),
+            Radius::circular(20.0),
+            Radius::circular(30.0),
+            Radius::circular(40.0),
         );
         let source = RectangleClip {
             shape: BoxShape::Rectangle,
             border_radius: Some(br),
         };
-        let rrect = source.compute_clip(Size::new(px(200.0), px(200.0)));
-        assert_eq!(rrect.top_left.x, px(10.0));
-        assert_eq!(rrect.top_right.x, px(20.0));
-        assert_eq!(rrect.bottom_right.x, px(30.0));
-        assert_eq!(rrect.bottom_left.x, px(40.0));
+        let rrect = source.compute_clip(Size::new(200.0, 200.0));
+        assert_eq!(rrect.top_left.x, 10.0);
+        assert_eq!(rrect.top_right.x, 20.0);
+        assert_eq!(rrect.bottom_right.x, 30.0);
+        assert_eq!(rrect.bottom_left.x, 40.0);
     }
 
     // Trap §4.4 regression: `BoxShape::Circle` must be an ELLIPSE (two
@@ -747,14 +746,14 @@ mod tests {
             shape: BoxShape::Circle,
             border_radius: None,
         };
-        let rrect = source.compute_clip(Size::new(px(100.0), px(40.0)));
+        let rrect = source.compute_clip(Size::new(100.0, 40.0));
         assert_ne!(
             rrect.top_left.x, rrect.top_left.y,
             "a true-circle mis-port would give equal x/y radii; the oracle \
              formula gives independent width/2, height/2 radii"
         );
-        assert_eq!(rrect.top_left.x, px(50.0));
-        assert_eq!(rrect.top_left.y, px(20.0));
+        assert_eq!(rrect.top_left.x, 50.0);
+        assert_eq!(rrect.top_left.y, 20.0);
     }
 
     // ---------- PathClip::compute_clip -------------------------------------
@@ -766,9 +765,9 @@ mod tests {
             source_token: None,
             configuration: None,
         };
-        let path = source.compute_clip(Size::new(px(60.0), px(30.0)));
-        assert!(path.contains(Point::new(px(30.0), px(15.0))));
-        assert!(!path.contains(Point::new(px(200.0), px(200.0))));
+        let path = source.compute_clip(Size::new(60.0, 30.0));
+        assert!(path.contains(Point::new(30.0, 15.0)));
+        assert!(!path.contains(Point::new(200.0, 200.0)));
     }
 
     #[test]
@@ -780,8 +779,8 @@ mod tests {
                 .register_path_clipper(|size: Size| {
                     let mut p = Path::new();
                     p.add_rect(Rect::from_origin_size(
-                        Point::new(px(10.0), px(10.0)),
-                        Size::new(size.width - px(20.0), size.height - px(20.0)),
+                        Point::new(10.0, 10.0),
+                        Size::new(size.width - 20.0, size.height - 20.0),
                     ));
                     p
                 })
@@ -791,10 +790,10 @@ mod tests {
                 source_token: None,
                 configuration: None,
             };
-            let path = source.compute_clip(Size::new(px(100.0), px(100.0)));
+            let path = source.compute_clip(Size::new(100.0, 100.0));
             // Inset by 10px on each side: (5, 5) is outside, (50, 50) is inside.
-            assert!(!path.contains(Point::new(px(5.0), px(5.0))));
-            assert!(path.contains(Point::new(px(50.0), px(50.0))));
+            assert!(!path.contains(Point::new(5.0, 5.0)));
+            assert!(path.contains(Point::new(50.0, 50.0)));
         });
     }
 
@@ -802,16 +801,10 @@ mod tests {
 
     #[test]
     fn rrect_contains_excludes_rounded_corner_cutout() {
-        let rect = Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(100.0)));
-        let rrect = RRect::from_rect_circular(rect, px(20.0));
-        assert!(!PhysicalClipShape::contains(
-            &rrect,
-            Point::new(px(0.0), px(0.0))
-        ));
-        assert!(PhysicalClipShape::contains(
-            &rrect,
-            Point::new(px(50.0), px(50.0))
-        ));
+        let rect = Rect::from_origin_size(Point::ZERO, Size::new(100.0, 100.0));
+        let rrect = RRect::from_rect_circular(rect, 20.0);
+        assert!(!PhysicalClipShape::contains(&rrect, Point::new(0.0, 0.0)));
+        assert!(PhysicalClipShape::contains(&rrect, Point::new(50.0, 50.0)));
     }
 
     // ---------- RenderPhysicalModel / RenderPhysicalShape construction -----
@@ -902,11 +895,11 @@ mod tests {
         assert_eq!(node.set_shape(BoxShape::Circle), clip_geometry_impact);
         assert_eq!(node.set_shape(BoxShape::Circle), RenderUpdateImpact::NONE);
         assert_eq!(
-            node.set_border_radius(Some(BorderRadius::circular(px(4.0)))),
+            node.set_border_radius(Some(BorderRadius::circular(4.0))),
             clip_geometry_impact,
         );
         assert_eq!(
-            node.set_border_radius(Some(BorderRadius::circular(px(4.0)))),
+            node.set_border_radius(Some(BorderRadius::circular(4.0))),
             RenderUpdateImpact::NONE,
         );
     }

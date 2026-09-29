@@ -1,6 +1,6 @@
 //! `RenderSliverAnimatedOpacity` — applies a continuously-animated
 //! transparency to a single sliver child, driven by an injected,
-//! hot-swappable [`ProxyAnimation<f32>`].
+//! hot-swappable [`ProxyAnimation<f64>`].
 //!
 //! # Flutter equivalence
 //!
@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use flui_foundation::Single;
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::{Listenable, ListenerId};
@@ -53,9 +53,9 @@ pub struct RenderSliverAnimatedOpacity {
     /// The composed animation driving alpha. Constructor-injected only —
     /// see [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s field
     /// doc for why no post-construction swap setter exists (a
-    /// [`ProxyAnimation<f32>`] absorbs retargeting on the widget side
+    /// [`ProxyAnimation<f64>`] absorbs retargeting on the widget side
     /// instead).
-    animation: ProxyAnimation<f32>,
+    animation: ProxyAnimation<f64>,
     /// Alpha cache (`0..=255`), shared with the tick listener closure.
     /// See [`RenderAnimatedOpacity`](crate::RenderAnimatedOpacity)'s
     /// field doc for why this is an `AtomicU8`, not a `Cell`/`Mutex`, and
@@ -71,10 +71,10 @@ pub struct RenderSliverAnimatedOpacity {
 
 impl RenderSliverAnimatedOpacity {
     /// Creates a render object driven by `animation`, an already-composed
-    /// [`ProxyAnimation<f32>`] (never constructs one itself — see
+    /// [`ProxyAnimation<f64>`] (never constructs one itself — see
     /// [`RenderAnimatedOpacity::new`](crate::RenderAnimatedOpacity::new)).
     #[must_use]
-    pub fn new(animation: ProxyAnimation<f32>, always_include_semantics: bool) -> Self {
+    pub fn new(animation: ProxyAnimation<f64>, always_include_semantics: bool) -> Self {
         let alpha = Arc::new(AtomicU8::new(Self::opacity_to_alpha(animation.value())));
         Self {
             animation,
@@ -91,13 +91,13 @@ impl RenderSliverAnimatedOpacity {
         self.alpha.load(Ordering::Relaxed)
     }
 
-    /// The composed animation's raw `f32` value, bypassing the `u8` alpha
+    /// The composed animation's raw `f64` value, bypassing the `u8` alpha
     /// cache's `1/255` quantization. See
     /// [`RenderAnimatedOpacity::opacity_value`](crate::RenderAnimatedOpacity::opacity_value)
     /// for why this exists.
     #[inline]
     #[must_use]
-    pub fn opacity_value(&self) -> f32 {
+    pub fn opacity_value(&self) -> f64 {
         self.animation.value()
     }
 
@@ -110,7 +110,7 @@ impl RenderSliverAnimatedOpacity {
 
     /// Converts opacity (`0.0..=1.0`) to alpha (`0..=255`).
     #[inline]
-    fn opacity_to_alpha(opacity: f32) -> u8 {
+    fn opacity_to_alpha(opacity: f64) -> u8 {
         (opacity.clamp(0.0, 1.0) * 255.0).round() as u8
     }
 
@@ -129,7 +129,7 @@ impl RenderSliverAnimatedOpacity {
     /// succeeds. Returns `true` iff alpha changed AND every required mark
     /// was sent successfully.
     fn recompute_alpha(
-        animation: &ProxyAnimation<f32>,
+        animation: &ProxyAnimation<f64>,
         alpha: &AtomicU8,
         handle: &RenderInvalidationHandle,
     ) -> bool {
@@ -212,7 +212,7 @@ impl std::fmt::Debug for RenderSliverAnimatedOpacity {
 
 impl flui_foundation::Diagnosticable for RenderSliverAnimatedOpacity {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        builder.add_default_double("opacity", f32::from(self.alpha()) / 255.0, 1.0, None);
+        builder.add_default_double("opacity", f64::from(self.alpha()) / 255.0, 1.0, None);
         builder.add_flag(
             "always_include_semantics",
             self.always_include_semantics,
@@ -306,14 +306,14 @@ mod tests {
         AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
     }
 
-    fn render_at(opacity: f32) -> RenderSliverAnimatedOpacity {
+    fn render_at(opacity: f64) -> RenderSliverAnimatedOpacity {
         RenderSliverAnimatedOpacity::new(proxy_at(opacity), false)
     }
 
-    fn proxy_at(opacity: f32) -> ProxyAnimation<f32> {
+    fn proxy_at(opacity: f64) -> ProxyAnimation<f64> {
         let c = controller(100);
         c.set_value(opacity);
-        let parent: Arc<dyn Animation<f32>> = Arc::new(c);
+        let parent: Arc<dyn Animation<f64>> = Arc::new(c);
         ProxyAnimation::new(parent)
     }
 

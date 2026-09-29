@@ -9,7 +9,7 @@
 
 use flui_painting::text_layout::TextLayout;
 use flui_painting::text_painter::TextPainter;
-use flui_types::typography::{TextDirection, TextSpan};
+use flui_painting::typography::{TextDirection, TextSpan};
 
 #[test]
 fn baselines_come_from_the_shaper() {
@@ -21,7 +21,7 @@ fn baselines_come_from_the_shaper() {
     // alphabetic baseline are the SAME shaped quantity.
     let first_line = &lines[0];
     assert!(
-        (first_line.baseline - f64::from(metrics.alphabetic_baseline)).abs() < 1e-3,
+        (first_line.baseline - metrics.alphabetic_baseline).abs() < 1e-3,
         "line metrics and layout metrics must agree on the baseline"
     );
     // Ascent + descent tile the line box exactly (they are line-box
@@ -36,15 +36,15 @@ fn baselines_come_from_the_shaper() {
     // Sanity: the baseline sits strictly inside the line box, and the
     // ideographic baseline is at or below the alphabetic one.
     assert!(metrics.alphabetic_baseline > 0.0);
-    assert!(f64::from(metrics.alphabetic_baseline) < first_line.height + 1e-3);
+    assert!(metrics.alphabetic_baseline < first_line.height + 1e-3);
     assert!(metrics.ideographic_baseline >= metrics.alphabetic_baseline);
 }
 
 #[test]
 fn color_change_keeps_the_shaped_layout() {
     use flui_painting::Invalidation;
-    use flui_types::Color;
-    use flui_types::typography::TextStyle;
+    use flui_painting::styling::Color;
+    use flui_painting::typography::TextStyle;
 
     let mut painter = TextPainter::new()
         .with_text(
@@ -72,7 +72,7 @@ fn color_change_keeps_the_shaped_layout() {
         (painter.compute_distance_to_actual_baseline(flui_painting::TextBaseline::Alphabetic)
             - baseline_before)
             .abs()
-            < f32::EPSILON
+            < f64::EPSILON
     );
 
     // Identical span → no invalidation at all.
@@ -86,7 +86,7 @@ fn color_change_keeps_the_shaped_layout() {
 
 #[test]
 fn named_font_family_reaches_the_shaper() {
-    use flui_types::typography::TextStyle;
+    use flui_painting::typography::TextStyle;
 
     // Pre-fix every non-generic family name collapsed to SansSerif, so
     // "monospace-by-name" shaped identically to the default face. A
@@ -110,7 +110,7 @@ fn named_font_family_reaches_the_shaper() {
 
 #[test]
 fn rich_child_span_styles_reach_the_shaper() {
-    use flui_types::typography::TextStyle;
+    use flui_painting::typography::TextStyle;
 
     // Root at 14px with a 28px child span: the rich path must measure
     // the child at 28px. The flattened pre-fix path shaped EVERYTHING
@@ -127,7 +127,7 @@ fn rich_child_span_styles_reach_the_shaper() {
     let mut rich_painter = TextPainter::new()
         .with_text(rich)
         .with_text_direction(TextDirection::Ltr);
-    rich_painter.layout(0.0, f32::INFINITY);
+    rich_painter.layout(0.0, f64::INFINITY);
 
     let mut flat_painter = TextPainter::new()
         .with_text({
@@ -136,7 +136,7 @@ fn rich_child_span_styles_reach_the_shaper() {
             root
         })
         .with_text_direction(TextDirection::Ltr);
-    flat_painter.layout(0.0, f32::INFINITY);
+    flat_painter.layout(0.0, f64::INFINITY);
 
     assert!(
         rich_painter.width() > flat_painter.width() + 1.0,
@@ -153,7 +153,7 @@ fn rich_child_span_styles_reach_the_shaper() {
 
 #[test]
 fn rich_inheritance_merges_parent_style_into_children() {
-    use flui_types::typography::TextStyle;
+    use flui_painting::typography::TextStyle;
 
     // A child WITHOUT its own size inherits the parent's 28px — the
     // tree must measure exactly like the flat 28px equivalent.
@@ -168,11 +168,11 @@ fn rich_inheritance_merges_parent_style_into_children() {
     let mut a = TextPainter::new()
         .with_text(inherited)
         .with_text_direction(TextDirection::Ltr);
-    a.layout(0.0, f32::INFINITY);
+    a.layout(0.0, f64::INFINITY);
     let mut b = TextPainter::new()
         .with_text(flat)
         .with_text_direction(TextDirection::Ltr);
-    b.layout(0.0, f32::INFINITY);
+    b.layout(0.0, f64::INFINITY);
 
     assert!(
         (a.width() - b.width()).abs() < 0.5,
@@ -185,7 +185,7 @@ fn rich_inheritance_merges_parent_style_into_children() {
 
 #[test]
 fn rich_truncation_keeps_span_styling() {
-    use flui_types::typography::TextStyle;
+    use flui_painting::typography::TextStyle;
 
     // Two spans wrapped to one allowed line with an ellipsis: the rich
     // truncation slices the SPANS and the result still fits the width.
@@ -324,8 +324,9 @@ fn ellipsis_fits_within_the_width_constraint() {
 /// measured, ellipsis included.
 #[test]
 fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
+    use flui_foundation::geometry::Offset;
+    use flui_painting::styling::Color;
     use flui_painting::{Canvas, DrawOp};
-    use flui_types::{Color, geometry::Offset};
 
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new(
@@ -376,8 +377,9 @@ fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
 /// shapes again, once.
 #[test]
 fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
+    use flui_foundation::geometry::Offset;
     use flui_painting::{Canvas, DrawOp, Invalidation};
-    use flui_types::{Color, geometry::Offset, typography::TextStyle};
+    use flui_painting::{styling::Color, typography::TextStyle};
 
     fn styled(root: Color, child: Color) -> TextSpan {
         TextSpan::new("Hello, ")
@@ -399,7 +401,7 @@ fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
     let mut painter = TextPainter::new()
         .with_text(styled(red, blue))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, f32::INFINITY);
+    painter.layout(0.0, f64::INFINITY);
     let (first, first_color) = recorded(&painter);
     assert_eq!(first_color, red);
 
@@ -421,7 +423,7 @@ fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
         painter.set_text(Some(styled(green, red).into())),
         Invalidation::Layout
     );
-    painter.layout(0.0, f32::INFINITY);
+    painter.layout(0.0, f64::INFINITY);
     let (third, _) = recorded(&painter);
     assert!(
         !std::sync::Arc::ptr_eq(&second, &third),

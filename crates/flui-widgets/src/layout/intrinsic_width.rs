@@ -17,10 +17,10 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 pub struct IntrinsicWidth {
     /// Optional column-width quantum; intrinsic width is rounded up to the
     /// nearest multiple.
-    step_width: Option<f32>,
+    step_width: Option<f64>,
     /// Optional row-height quantum; the height passed to the intrinsic-width
     /// query is rounded up to the nearest multiple before querying.
-    step_height: Option<f32>,
+    step_height: Option<f64>,
     child: Child,
 }
 
@@ -36,14 +36,14 @@ impl IntrinsicWidth {
 
     /// Sets the column-width quantum (rounds intrinsic width up to a multiple).
     #[must_use]
-    pub fn with_step_width(mut self, step_width: f32) -> Self {
+    pub fn with_step_width(mut self, step_width: f64) -> Self {
         self.step_width = Some(step_width);
         self
     }
 
     /// Sets the row-height quantum (rounds height-for-width-query up to a multiple).
     #[must_use]
-    pub fn with_step_height(mut self, step_height: f32) -> Self {
+    pub fn with_step_height(mut self, step_height: f64) -> Self {
         self.step_height = Some(step_height);
         self
     }

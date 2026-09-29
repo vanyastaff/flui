@@ -279,11 +279,11 @@ where
             return Err(anyhow::anyhow!(e).context("GPU init failed"));
         }
     };
-    renderer.resize(phys_size.width.0 as u32, phys_size.height.0 as u32);
+    renderer.resize(phys_size.width as u32, phys_size.height as u32);
 
     // 3. Mount the root widget at the LOGICAL size; the paint root's DPR
     // transform maps to physical.
-    let scale_factor = window.scale_factor() as f32;
+    let scale_factor = window.scale_factor();
     let wake = runtime_wake_callback();
     let ui_realm = match crate::app::ui_realm::UiRealm::new(
         Arc::clone(&wake),
@@ -304,9 +304,8 @@ where
     ui_realm.set_frame_failure_detail(config.frame_failure_detail);
 
     let logical = window.logical_size();
-    let attach = ui_realm.enter(|realm| {
-        realm.attach_root_widget_with_size(&root, logical.width.0, logical.height.0)
-    });
+    let attach = ui_realm
+        .enter(|realm| realm.attach_root_widget_with_size(&root, logical.width, logical.height));
     if let Err(e) = attach {
         tracing::error!("Root widget attach failed: {:?}", e);
         return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
@@ -330,8 +329,8 @@ where
     let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
         renderer,
         realm_dispatch.address,
-        phys_size.width.0 as u32,
-        phys_size.height.0 as u32,
+        phys_size.width as u32,
+        phys_size.height as u32,
     )));
 
     {
@@ -339,8 +338,8 @@ where
         install_surface_applier(
             realm_dispatch.address.realm_id,
             move |size, scale_factor| {
-                let w = (size.width.0 * scale_factor) as u32;
-                let h = (size.height.0 * scale_factor) as u32;
+                let w = (size.width * scale_factor) as u32;
+                let h = (size.height * scale_factor) as u32;
                 resize_hook.apply(w, h);
             },
         );

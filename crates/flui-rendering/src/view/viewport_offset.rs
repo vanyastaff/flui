@@ -61,7 +61,7 @@ pub trait ViewportOffset: Debug + Send + Sync {
     /// For example, if the axis direction is down, then the pixel value
     /// represents the number of logical pixels to move the children _up_ the
     /// screen.
-    fn pixels(&self) -> f32;
+    fn pixels(&self) -> f64;
 
     /// Whether the `pixels` property is available.
     fn has_pixels(&self) -> bool;
@@ -73,7 +73,7 @@ pub trait ViewportOffset: Debug + Send + Sync {
     ///
     /// If applying the viewport dimension changes the scroll offset, return
     /// `false`. Otherwise, return `true`.
-    fn apply_viewport_dimension(&mut self, viewport_dimension: f32) -> bool;
+    fn apply_viewport_dimension(&mut self, viewport_dimension: f64) -> bool;
 
     /// Called when the viewport's content extents are established.
     ///
@@ -81,25 +81,25 @@ pub trait ViewportOffset: Debug + Send + Sync {
     ///
     /// If applying the content dimensions changes the scroll offset, return
     /// `false`. Otherwise, return `true`.
-    fn apply_content_dimensions(&mut self, min_scroll_extent: f32, max_scroll_extent: f32) -> bool;
+    fn apply_content_dimensions(&mut self, min_scroll_extent: f64, max_scroll_extent: f64) -> bool;
 
     /// Apply a layout-time correction to the scroll offset.
     ///
     /// This method should change the `pixels` value by `correction`, but
     /// without calling the notification callbacks.
-    fn correct_by(&mut self, correction: f32);
+    fn correct_by(&mut self, correction: f64);
 
     /// Jumps `pixels` from its current value to the given value,
     /// without animation.
-    fn jump_to(&mut self, pixels: f32);
+    fn jump_to(&mut self, pixels: f64);
 
     /// Animates `pixels` from its current value to the given value.
     ///
     /// For synchronous implementations, this can just call `jump_to`.
-    fn animate_to(&mut self, to: f32, duration_ms: u64);
+    fn animate_to(&mut self, to: f64, duration_ms: u64);
 
     /// Calls `jump_to` if duration is zero, otherwise `animate_to`.
-    fn move_to(&mut self, to: f32, duration_ms: Option<u64>) {
+    fn move_to(&mut self, to: f64, duration_ms: Option<u64>) {
         match duration_ms {
             Some(0) | None => self.jump_to(to),
             Some(ms) => self.animate_to(to, ms),
@@ -128,7 +128,7 @@ pub trait ViewportOffset: Debug + Send + Sync {
 ///
 /// Corresponds to Flutter's `_FixedViewportOffset` class.
 pub struct FixedViewportOffset {
-    pixels: f32,
+    pixels: f64,
 }
 
 impl Debug for FixedViewportOffset {
@@ -141,7 +141,7 @@ impl Debug for FixedViewportOffset {
 
 impl FixedViewportOffset {
     /// Creates a fixed viewport offset with the given pixels value.
-    pub fn new(pixels: f32) -> Self {
+    pub fn new(pixels: f64) -> Self {
         Self { pixels }
     }
 
@@ -169,7 +169,7 @@ impl Default for FixedViewportOffset {
 }
 
 impl ViewportOffset for FixedViewportOffset {
-    fn pixels(&self) -> f32 {
+    fn pixels(&self) -> f64 {
         self.pixels
     }
 
@@ -177,27 +177,27 @@ impl ViewportOffset for FixedViewportOffset {
         true
     }
 
-    fn apply_viewport_dimension(&mut self, _viewport_dimension: f32) -> bool {
+    fn apply_viewport_dimension(&mut self, _viewport_dimension: f64) -> bool {
         true
     }
 
     fn apply_content_dimensions(
         &mut self,
-        _min_scroll_extent: f32,
-        _max_scroll_extent: f32,
+        _min_scroll_extent: f64,
+        _max_scroll_extent: f64,
     ) -> bool {
         true
     }
 
-    fn correct_by(&mut self, correction: f32) {
+    fn correct_by(&mut self, correction: f64) {
         self.pixels += correction;
     }
 
-    fn jump_to(&mut self, _pixels: f32) {
+    fn jump_to(&mut self, _pixels: f64) {
         // Fixed viewport offset doesn't change
     }
 
-    fn animate_to(&mut self, _to: f32, _duration_ms: u64) {
+    fn animate_to(&mut self, _to: f64, _duration_ms: u64) {
         // Fixed viewport offset doesn't animate
     }
 
@@ -230,19 +230,19 @@ impl ViewportOffset for FixedViewportOffset {
 /// Similar to Flutter's `ScrollPosition` but simplified.
 pub struct ScrollableViewportOffset {
     /// Current scroll position in pixels.
-    pixels: f32,
+    pixels: f64,
 
     /// Whether pixels has been set.
     has_pixels: bool,
 
     /// Minimum scroll extent.
-    min_scroll_extent: f32,
+    min_scroll_extent: f64,
 
     /// Maximum scroll extent.
-    max_scroll_extent: f32,
+    max_scroll_extent: f64,
 
     /// The viewport dimension.
-    viewport_dimension: f32,
+    viewport_dimension: f64,
 
     /// Current scroll direction.
     user_scroll_direction: ScrollDirection,
@@ -280,7 +280,7 @@ impl Debug for ScrollableViewportOffset {
 
 impl ScrollableViewportOffset {
     /// Creates a new scrollable viewport offset.
-    pub fn new(initial_pixels: f32) -> Self {
+    pub fn new(initial_pixels: f64) -> Self {
         Self {
             pixels: initial_pixels,
             has_pixels: true,
@@ -300,17 +300,17 @@ impl ScrollableViewportOffset {
     }
 
     /// Returns the minimum scroll extent.
-    pub fn min_scroll_extent(&self) -> f32 {
+    pub fn min_scroll_extent(&self) -> f64 {
         self.min_scroll_extent
     }
 
     /// Returns the maximum scroll extent.
-    pub fn max_scroll_extent(&self) -> f32 {
+    pub fn max_scroll_extent(&self) -> f64 {
         self.max_scroll_extent
     }
 
     /// Returns the viewport dimension.
-    pub fn viewport_dimension(&self) -> f32 {
+    pub fn viewport_dimension(&self) -> f64 {
         self.viewport_dimension
     }
 
@@ -330,7 +330,7 @@ impl ScrollableViewportOffset {
     }
 
     /// Returns the current scroll position as a ratio (0.0 to 1.0).
-    pub fn scroll_ratio(&self) -> f32 {
+    pub fn scroll_ratio(&self) -> f64 {
         let range = self.max_scroll_extent - self.min_scroll_extent;
         if range <= 0.0 {
             0.0
@@ -340,8 +340,8 @@ impl ScrollableViewportOffset {
     }
 
     /// Sets the pixels value and notifies listeners.
-    pub fn set_pixels(&mut self, value: f32) {
-        if (self.pixels - value).abs() > f32::EPSILON {
+    pub fn set_pixels(&mut self, value: f64) {
+        if (self.pixels - value).abs() > f64::EPSILON {
             self.pixels = value;
             self.notify_listeners();
         }
@@ -400,7 +400,7 @@ impl Default for ScrollableViewportOffset {
 }
 
 impl ViewportOffset for ScrollableViewportOffset {
-    fn pixels(&self) -> f32 {
+    fn pixels(&self) -> f64 {
         self.pixels
     }
 
@@ -408,17 +408,17 @@ impl ViewportOffset for ScrollableViewportOffset {
         self.has_pixels
     }
 
-    fn apply_viewport_dimension(&mut self, viewport_dimension: f32) -> bool {
-        if (self.viewport_dimension - viewport_dimension).abs() < f32::EPSILON {
+    fn apply_viewport_dimension(&mut self, viewport_dimension: f64) -> bool {
+        if (self.viewport_dimension - viewport_dimension).abs() < f64::EPSILON {
             return true;
         }
         self.viewport_dimension = viewport_dimension;
         true
     }
 
-    fn apply_content_dimensions(&mut self, min_scroll_extent: f32, max_scroll_extent: f32) -> bool {
-        if (self.min_scroll_extent - min_scroll_extent).abs() < f32::EPSILON
-            && (self.max_scroll_extent - max_scroll_extent).abs() < f32::EPSILON
+    fn apply_content_dimensions(&mut self, min_scroll_extent: f64, max_scroll_extent: f64) -> bool {
+        if (self.min_scroll_extent - min_scroll_extent).abs() < f64::EPSILON
+            && (self.max_scroll_extent - max_scroll_extent).abs() < f64::EPSILON
         {
             return true;
         }
@@ -428,7 +428,7 @@ impl ViewportOffset for ScrollableViewportOffset {
 
         // Clamp pixels to valid range
         let clamped = self.pixels.clamp(min_scroll_extent, max_scroll_extent);
-        if (self.pixels - clamped).abs() > f32::EPSILON {
+        if (self.pixels - clamped).abs() > f64::EPSILON {
             self.pixels = clamped;
             return false; // Need relayout
         }
@@ -436,18 +436,18 @@ impl ViewportOffset for ScrollableViewportOffset {
         true
     }
 
-    fn correct_by(&mut self, correction: f32) {
+    fn correct_by(&mut self, correction: f64) {
         self.pixels += correction;
     }
 
-    fn jump_to(&mut self, pixels: f32) {
-        if (self.pixels - pixels).abs() > f32::EPSILON {
+    fn jump_to(&mut self, pixels: f64) {
+        if (self.pixels - pixels).abs() > f64::EPSILON {
             self.pixels = pixels;
             self.notify_listeners();
         }
     }
 
-    fn animate_to(&mut self, to: f32, _duration_ms: u64) {
+    fn animate_to(&mut self, to: f64, _duration_ms: u64) {
         // For now, just jump (no animation support yet)
         self.jump_to(to);
     }
@@ -576,7 +576,7 @@ mod tests {
         let mut offset = ScrollableViewportOffset::new(50.0);
         offset.apply_content_dimensions(0.0, 100.0);
 
-        assert!((offset.scroll_ratio() - 0.5).abs() < f32::EPSILON);
+        assert!((offset.scroll_ratio() - 0.5).abs() < f64::EPSILON);
     }
 
     #[test]

@@ -34,10 +34,7 @@
 //! ```
 
 use flui_foundation::Arity;
-use flui_types::{
-    Pixels, Size,
-    geometry::{Matrix4, Offset, Rect},
-};
+use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 
 use crate::{
     parent_data::ParentData,
@@ -301,12 +298,12 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Gets the X coordinate of the hit position.
-    pub fn x(&self) -> Pixels {
+    pub fn x(&self) -> f64 {
         self.inner.position().dx
     }
 
     /// Gets the Y coordinate of the hit position.
-    pub fn y(&self) -> Pixels {
+    pub fn y(&self) -> f64 {
         self.inner.position().dy
     }
 
@@ -325,9 +322,9 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Checks if position is within a rectangle at origin with given size.
-    pub fn is_within_size(&self, width: Pixels, height: Pixels) -> bool {
+    pub fn is_within_size(&self, width: f64, height: f64) -> bool {
         let pos = self.inner.position();
-        pos.dx >= Pixels::ZERO && pos.dx < width && pos.dy >= Pixels::ZERO && pos.dy < height
+        pos.dx >= 0.0 && pos.dx < width && pos.dy >= 0.0 && pos.dy < height
     }
 
     /// The node's laid-out size, resolved by the driver from
@@ -397,12 +394,12 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Gets the main axis position.
-    pub fn main_axis(&self) -> f32 {
+    pub fn main_axis(&self) -> f64 {
         self.inner.position().main_axis
     }
 
     /// Gets the cross axis position.
-    pub fn cross_axis(&self) -> f32 {
+    pub fn cross_axis(&self) -> f64 {
         self.inner.position().cross_axis
     }
 
@@ -416,19 +413,19 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Checks if main axis position is within range.
-    pub fn is_within_main_axis_range(&self, start: f32, end: f32) -> bool {
+    pub fn is_within_main_axis_range(&self, start: f64, end: f64) -> bool {
         let pos = self.main_axis();
         pos >= start && pos < end
     }
 
     /// Checks if cross axis position is within range.
-    pub fn is_within_cross_axis_range(&self, start: f32, end: f32) -> bool {
+    pub fn is_within_cross_axis_range(&self, start: f64, end: f64) -> bool {
         let pos = self.cross_axis();
         pos >= start && pos < end
     }
 
     /// Translates position along main axis.
-    pub fn position_minus_main_axis(&self, offset: f32) -> MainAxisPosition {
+    pub fn position_minus_main_axis(&self, offset: f64) -> MainAxisPosition {
         MainAxisPosition::new(self.main_axis() - offset, self.cross_axis())
     }
 }

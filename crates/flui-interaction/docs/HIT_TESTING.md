@@ -64,20 +64,20 @@ scope helpers, which invert and pop for you:
 
 ```rust
 use flui_interaction::prelude::*;
-use flui_types::geometry::{Matrix4, Offset};
+use flui_foundation::geometry::{Matrix4, Offset};
 
 let mut result = HitTestResult::new();
 
 // `with_paint_offset` takes the forward paint offset and pushes its
 // inverse (negated) internally.
-result.with_paint_offset(Offset::new(10.0.into(), 20.0.into()), |result| {
+result.with_paint_offset(Offset::new(10.0, 20.0), |result| {
     child.hit_test(position, result);
 });
 
 // `with_paint_transform` takes the forward paint matrix and pushes its
 // inverse internally (falling back to the singular forward matrix if the
 // transform is not invertible — see its doc).
-let rotation = Matrix4::rotation_z(std::f32::consts::PI / 4.0);
+let rotation = Matrix4::rotation_z(std::f64::consts::FRAC_PI_4);
 result.with_paint_transform(rotation, |result| {
     child.hit_test(position, result);
 });

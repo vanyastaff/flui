@@ -10,10 +10,12 @@
 //! properties worth pinning are that reuse HAPPENS and that it produces the
 //! same tree painting would have.
 
+use flui_foundation::geometry::{Matrix4, Size};
 use flui_objects::{
     RenderClipRRect, RenderClipRect, RenderColoredBox, RenderFlex, RenderFlow, RenderOpacity,
     RenderPadding, RenderRepaintBoundary, RenderRotatedBox, RenderTransform,
 };
+use flui_painting::styling::{BorderRadius, BorderRadiusExt};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
@@ -25,11 +27,6 @@ use flui_rendering::{
         },
         tree, update_render_object,
     },
-};
-use flui_types::{
-    Matrix4, Size,
-    geometry::px,
-    styling::{BorderRadius, BorderRadiusExt},
 };
 
 /// Root flex row → N boundaries, each wrapping a coloured leaf.
@@ -60,7 +57,7 @@ fn mount(n: usize) -> (PipelineOwner<flui_rendering::pipeline::Idle>, TreeIds) {
     let mut owner = PipelineOwner::new();
     let (root_id, registry) = tree::mount(&mut owner, spec(n));
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let first = registry.get("first").expect("first boundary is labelled");
     (owner, TreeIds { first })
 }
@@ -173,7 +170,7 @@ fn the_content_of_a_clean_boundary_is_not_repainted() {
         type ParentData = BoxParentData;
 
         fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            ctx.constrain(Size::new(px(10.0), px(10.0)))
+            ctx.constrain(Size::new(10.0, 10.0))
         }
 
         fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {
@@ -203,7 +200,7 @@ fn the_content_of_a_clean_boundary_is_not_repainted() {
             ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let dirty_id = registry.get("dirty").expect("dirty boundary is labelled");
 
     let (mut owner, result) = owner.run_frame();
@@ -297,7 +294,7 @@ fn a_dirty_boundary_nested_in_a_clean_one_still_repaints() {
         type ParentData = BoxParentData;
 
         fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            ctx.constrain(Size::new(px(10.0), px(10.0)))
+            ctx.constrain(Size::new(10.0, 10.0))
         }
 
         fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {
@@ -327,7 +324,7 @@ fn a_dirty_boundary_nested_in_a_clean_one_still_repaints() {
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let inner_id = registry.get("inner").expect("inner boundary is labelled");
 
     let (mut owner, result) = owner.run_frame();
@@ -425,7 +422,7 @@ fn a_root_that_is_itself_a_boundary_carries_a_stamp() {
         box_node(RenderRepaintBoundary::new()).child(spec(N)),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
 
     let (owner, result) = owner.run_frame();
     let tree = result
@@ -565,7 +562,7 @@ fn a_boundary_nested_inside_a_reused_one_keeps_its_stamp() {
     let mut owner = PipelineOwner::new();
     let (root_id, registry) = tree::mount(&mut owner, root);
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let first = registry.get("first").expect("first boundary is labelled");
 
     let (mut owner, result) = owner.run_frame();
@@ -639,7 +636,7 @@ fn mount_opacity(
     let mut owner = PipelineOwner::new();
     let (root_id, registry) = tree::mount(&mut owner, opacity_spec(subtree));
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let opacity_leaf = registry.get("opacity-leaf").expect("labelled");
     let sibling = registry.get("sibling-leaf").expect("labelled");
     (owner, opacity_leaf, sibling)
@@ -739,7 +736,7 @@ impl flui_rendering::traits::RenderBox for PaintCounter {
             flui_rendering::parent_data::BoxParentData,
         >,
     ) -> Size {
-        ctx.constrain(Size::new(px(10.0), px(10.0)))
+        ctx.constrain(Size::new(10.0, 10.0))
     }
 
     fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
@@ -769,7 +766,7 @@ impl flui_rendering::traits::RenderBox for PaintCounter {
 /// touching the first, which is the only way to observe what the STORED
 /// capture holds.
 fn mount_opacity_under_boundary(
-    opacity: f32,
+    opacity: f64,
 ) -> (
     PipelineOwner<flui_rendering::pipeline::Idle>,
     flui_foundation::RenderId,
@@ -795,7 +792,7 @@ fn mount_opacity_under_boundary(
             ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let opacity_id = registry.get("opacity").expect("opacity is labelled");
     let sibling = registry.get("sibling").expect("sibling is labelled");
     (owner, opacity_id, sibling, painted)
@@ -806,7 +803,7 @@ fn mount_opacity_under_boundary(
 fn set_opacity(
     owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
     id: flui_foundation::RenderId,
-    value: f32,
+    value: f64,
 ) {
     update_render_object::<RenderOpacity, _>(owner, id, |o| o.set_opacity(value));
 }
@@ -1106,7 +1103,7 @@ fn leaving_fully_transparent_restores_the_subtree_to_the_frame() {
 /// visible subtree from a hidden one. Content that draws is what makes the
 /// assertion mean anything.
 fn mount_drawing_opacity(
-    opacity: f32,
+    opacity: f64,
 ) -> (
     PipelineOwner<flui_rendering::pipeline::Idle>,
     flui_foundation::RenderId,
@@ -1123,7 +1120,7 @@ fn mount_drawing_opacity(
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let opacity_id = registry.get("opacity").expect("opacity is labelled");
     (owner, opacity_id)
 }
@@ -1172,7 +1169,7 @@ fn an_update_under_nested_boundaries_does_not_leave_the_inner_capture_stale() {
             ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let outer = registry.get("outer").expect("outer is labelled");
     let opacity_id = registry.get("opacity").expect("opacity is labelled");
 
@@ -1257,7 +1254,7 @@ fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
-            ctx.constrain(Size::new(px(10.0), px(10.0)))
+            ctx.constrain(Size::new(10.0, 10.0))
         }
 
         fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
@@ -1295,7 +1292,7 @@ fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
             .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let opacity_id = registry.get("opacity").expect("opacity is labelled");
     let content = registry.get("content").expect("content is labelled");
 
@@ -1361,7 +1358,7 @@ fn poisoned_frame_keeps_the_update(repaint_arm: bool) {
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
-            ctx.constrain(Size::new(px(10.0), px(10.0)))
+            ctx.constrain(Size::new(10.0, 10.0))
         }
 
         fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
@@ -1400,7 +1397,7 @@ fn poisoned_frame_keeps_the_update(repaint_arm: bool) {
             .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let opacity_id = registry.get("opacity").expect("opacity is labelled");
 
     let (mut owner, result) = owner.run_frame();
@@ -1499,8 +1496,9 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
 
         fn paint_effects(&self, _size: Size) -> flui_rendering::traits::PaintEffects {
             if self.enabled {
-                flui_rendering::traits::PaintEffects::NONE
-                    .with_transform(flui_types::Matrix4::translation(3.0, 5.0, 0.0))
+                flui_rendering::traits::PaintEffects::NONE.with_transform(
+                    flui_foundation::geometry::Matrix4::translation(3.0, 5.0, 0.0),
+                )
             } else {
                 flui_rendering::traits::PaintEffects::NONE
             }
@@ -1519,7 +1517,7 @@ fn an_effect_layer_that_appears_falls_back_to_a_repaint() {
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let fx = registry.get("fx").expect("fx is labelled");
 
     let (owner, result) = owner.run_frame();
@@ -1641,12 +1639,17 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
             }
             if self.clip {
                 effects = effects.with_clip(flui_rendering::traits::PaintClip::Rect {
-                    rect: flui_types::Rect::from_origin_size(flui_types::Point::ZERO, size),
-                    behavior: flui_types::painting::Clip::HardEdge,
+                    rect: flui_foundation::geometry::Rect::from_origin_size(
+                        flui_foundation::geometry::Point::ZERO,
+                        size,
+                    ),
+                    behavior: flui_painting::paint::Clip::HardEdge,
                 });
             }
             if self.transform {
-                effects = effects.with_transform(flui_types::Matrix4::translation(3.0, 5.0, 0.0));
+                effects = effects.with_transform(flui_foundation::geometry::Matrix4::translation(
+                    3.0, 5.0, 0.0,
+                ));
             }
             effects
         }
@@ -1706,7 +1709,7 @@ fn an_effect_layer_shape_change_falls_back_to_a_repaint() {
             ),
         );
         owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
         let fx = registry.get("fx").expect("fx is labelled");
 
         let (mut owner, result) = owner.run_frame();
@@ -1771,7 +1774,7 @@ fn a_repaint_queued_before_an_update_keeps_its_precedence_across_a_failure() {
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
-            ctx.constrain(Size::new(px(10.0), px(10.0)))
+            ctx.constrain(Size::new(10.0, 10.0))
         }
 
         fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
@@ -1814,7 +1817,7 @@ fn a_repaint_queued_before_an_update_keeps_its_precedence_across_a_failure() {
             .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let opacity_id = registry.get("opacity").expect("opacity is labelled");
     let content = registry.get("content").expect("content is labelled");
 
@@ -1917,8 +1920,9 @@ fn unreached_update_boundary_loses_its_capture(nested: bool) {
 
         fn paint_effects(&self, _size: Size) -> flui_rendering::traits::PaintEffects {
             if self.enabled {
-                flui_rendering::traits::PaintEffects::NONE
-                    .with_transform(flui_types::Matrix4::translation(3.0, 5.0, 0.0))
+                flui_rendering::traits::PaintEffects::NONE.with_transform(
+                    flui_foundation::geometry::Matrix4::translation(3.0, 5.0, 0.0),
+                )
             } else {
                 flui_rendering::traits::PaintEffects::NONE
             }
@@ -1947,7 +1951,7 @@ fn unreached_update_boundary_loses_its_capture(nested: bool) {
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let gate = registry.get("gate").expect("gate is labelled");
     let fx = registry.get("fx").expect("fx is labelled");
 
@@ -2003,7 +2007,7 @@ fn an_animated_opacity_crossing_zero_adds_and_removes_its_content() {
 
     let controller = AnimationController::new(Duration::from_millis(100), &UpdateScheduler::new());
     controller.set_value(1.0);
-    let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
     let proxy = ProxyAnimation::new(parent);
 
     let mut owner = PipelineOwner::new();
@@ -2017,7 +2021,7 @@ fn an_animated_opacity_crossing_zero_adds_and_removes_its_content() {
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
 
     let (mut owner, result) = owner.run_frame();
     let opaque = result
@@ -2076,7 +2080,7 @@ fn an_animated_opacity_crossing_zero_adds_and_removes_its_content() {
 fn a_patched_transform_uses_the_origin_it_was_captured_at() {
     #[derive(Debug)]
     struct Shifter {
-        dx: f32,
+        dx: f64,
     }
 
     impl flui_foundation::Diagnosticable for Shifter {}
@@ -2120,13 +2124,14 @@ fn a_patched_transform_uses_the_origin_it_was_captured_at() {
             // a translating fixture cancels the origin entirely and cannot
             // tell a right answer from a wrong one. A scale does not commute,
             // which is what makes the captured origin observable.
-            flui_rendering::traits::PaintEffects::NONE
-                .with_transform(flui_types::Matrix4::scaling(self.dx, self.dx, 1.0))
+            flui_rendering::traits::PaintEffects::NONE.with_transform(
+                flui_foundation::geometry::Matrix4::scaling(self.dx, self.dx, 1.0),
+            )
         }
     }
 
     fn mount_shifter(
-        dx: f32,
+        dx: f64,
     ) -> (
         PipelineOwner<flui_rendering::pipeline::Idle>,
         flui_foundation::RenderId,
@@ -2146,7 +2151,7 @@ fn a_patched_transform_uses_the_origin_it_was_captured_at() {
             ),
         );
         owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
         let fx = registry.get("fx").expect("fx is labelled");
         (owner, fx)
     }
@@ -2206,7 +2211,7 @@ fn two_opacities_under_one_boundary_both_update_without_repainting() {
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let outer = registry.get("outer").expect("outer is labelled");
     let inner = registry.get("inner").expect("inner is labelled");
 
@@ -2249,8 +2254,8 @@ fn two_opacities_under_one_boundary_both_update_without_repainting() {
     assert_eq!(
         alphas,
         vec![
-            (0.125_f32 * 255.0).round() as u8,
-            (0.75_f32 * 255.0).round() as u8
+            (0.125_f64 * 255.0).round() as u8,
+            (0.75_f64 * 255.0).round() as u8
         ],
         "both opacity layers must carry their new alpha",
     );
@@ -2290,7 +2295,7 @@ fn a_mark_arriving_after_a_failed_pass_does_not_downgrade_the_repaint() {
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
-            ctx.constrain(Size::new(px(10.0), px(10.0)))
+            ctx.constrain(Size::new(10.0, 10.0))
         }
 
         fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
@@ -2332,7 +2337,7 @@ fn a_mark_arriving_after_a_failed_pass_does_not_downgrade_the_repaint() {
             .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let opacity_id = registry.get("opacity").expect("opacity is labelled");
     let content = registry.get("content").expect("content is labelled");
 
@@ -2477,7 +2482,7 @@ fn a_grandchild_boundary_is_still_named_after_its_parent_was_grafted() {
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let direct = registry.get("direct").expect("direct is labelled");
     let target = registry.get("target").expect("target is labelled");
 
@@ -2551,7 +2556,7 @@ fn mount_transform_under_boundary(
             ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let transform_id = registry.get("transform").expect("transform is labelled");
     let child_id = registry.get("child").expect("child is labelled");
     let sibling = registry.get("sibling").expect("sibling is labelled");
@@ -2789,7 +2794,7 @@ fn a_same_frame_child_removal_and_transform_setter_still_repaints_correctly() {
 fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
     #[derive(Debug)]
     struct Grower {
-        width: f32,
+        width: f64,
     }
 
     impl flui_foundation::Diagnosticable for Grower {}
@@ -2806,7 +2811,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
-            ctx.constrain(Size::new(px(self.width), px(20.0)))
+            ctx.constrain(Size::new(self.width, 20.0))
         }
 
         fn hit_test(
@@ -2822,7 +2827,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
     }
 
     fn mount(
-        width: f32,
+        width: f64,
         matrix: Matrix4,
     ) -> (
         PipelineOwner<flui_rendering::pipeline::Idle>,
@@ -2847,7 +2852,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
             ),
         );
         owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
         let grower = registry.get("grower").expect("grower is labelled");
         let transform = registry.get("transform").expect("transform is labelled");
         (owner, grower, transform)
@@ -2914,7 +2919,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on() {
 fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
     #[derive(Debug)]
     struct Grower {
-        width: f32,
+        width: f64,
     }
 
     impl flui_foundation::Diagnosticable for Grower {}
@@ -2931,7 +2936,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
                 flui_rendering::parent_data::BoxParentData,
             >,
         ) -> Size {
-            ctx.constrain(Size::new(px(self.width), px(20.0)))
+            ctx.constrain(Size::new(self.width, 20.0))
         }
 
         fn hit_test(
@@ -2947,8 +2952,8 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
     }
 
     fn mount(
-        width: f32,
-        rect: flui_types::Rect<flui_types::Pixels>,
+        width: f64,
+        rect: flui_foundation::geometry::Rect<f64>,
     ) -> (
         PipelineOwner<flui_rendering::pipeline::Idle>,
         flui_foundation::RenderId,
@@ -2972,7 +2977,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
             ),
         );
         owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
         let grower = registry.get("grower").expect("grower is labelled");
         let clip = registry.get("clip").expect("clip is labelled");
         (owner, grower, clip)
@@ -2983,12 +2988,12 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
     fn set_clip_shape(
         owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
         id: flui_foundation::RenderId,
-        rect: flui_types::Rect<flui_types::Pixels>,
+        rect: flui_foundation::geometry::Rect<f64>,
     ) {
         update_render_object::<RenderClipRect, _>(owner, id, |c| c.set_clip_shape(Some(rect)));
     }
 
-    let rect1 = flui_types::Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0));
+    let rect1 = flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
     let (owner, grower_id, clip_id) = mount(20.0, rect1);
     let (mut owner, result) = owner.run_frame();
     let first = result
@@ -3006,7 +3011,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
     // neither a transposition nor a stale size can pass this by accident.
     edit_render_object::<Grower, _, _>(&mut owner, grower_id, |object| object.width = 90.0);
     owner.mark_needs_layout(grower_id);
-    let rect2 = flui_types::Rect::from_xywh(px(0.0), px(0.0), px(15.0), px(5.0));
+    let rect2 = flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 15.0, 5.0);
     set_clip_shape(&mut owner, clip_id, rect2);
 
     let (owner, result) = owner.run_frame();
@@ -3046,7 +3051,7 @@ fn a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on() {
     let moved_origin = clip_rects(&moved)[0].min;
     assert_eq!(
         moved_origin.x - first_origin.x,
-        px(70.0),
+        70.0,
         "the grower's width delta (20 -> 90) must shift the clip rect's \
          origin by the same 70px in x; first frame origin {first_origin:?}, \
          second frame origin {moved_origin:?}",
@@ -3098,9 +3103,14 @@ impl flui_rendering::traits::RenderBox for DrawingPaintCounter {
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
         self.count.fetch_add(1, Ordering::Relaxed);
-        let rect = flui_types::Rect::from_origin_size(flui_types::Point::ZERO, ctx.size());
-        ctx.canvas()
-            .draw_rect(rect, &flui_painting::Paint::fill(flui_types::Color::RED));
+        let rect = flui_foundation::geometry::Rect::from_origin_size(
+            flui_foundation::geometry::Point::ZERO,
+            ctx.size(),
+        );
+        ctx.canvas().draw_rect(
+            rect,
+            &flui_painting::Paint::fill(flui_painting::styling::Color::RED),
+        );
     }
 
     fn hit_test(
@@ -3144,7 +3154,7 @@ fn mount_rotated_box_under_boundary(
                         box_node(RenderRotatedBox::new(quarter_turns))
                             .label("rotated")
                             .child(box_node(DrawingPaintCounter {
-                                size: Size::new(px(30.0), px(50.0)),
+                                size: Size::new(30.0, 50.0),
                                 count: Arc::clone(&painted),
                             })),
                     ),
@@ -3157,7 +3167,7 @@ fn mount_rotated_box_under_boundary(
             ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let rotated_id = registry.get("rotated").expect("rotated is labelled");
     let sibling = registry.get("sibling").expect("sibling is labelled");
     (owner, rotated_id, sibling, painted)
@@ -3350,7 +3360,7 @@ fn mount_childless_rotated_box_under_boundary(
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let rotated_id = registry.get("rotated").expect("rotated is labelled");
     (owner, rotated_id)
 }
@@ -3480,7 +3490,7 @@ fn a_childless_rotated_box_layer_update_falls_back_to_a_repaint_and_clears_the_f
 /// unnoticed. The leaf is a non-square `DrawingPaintCounter` so the fixture
 /// also has teeth against a transposed size.
 fn mount_clip_rrect_under_boundary(
-    radius: f32,
+    radius: f64,
 ) -> (
     PipelineOwner<flui_rendering::pipeline::Idle>,
     flui_foundation::RenderId,
@@ -3497,11 +3507,11 @@ fn mount_clip_rrect_under_boundary(
                     box_node(RenderPadding::all(12.0)).child(
                         box_node(
                             RenderClipRRect::anti_alias()
-                                .with_border_radius(BorderRadius::circular(px(radius))),
+                                .with_border_radius(BorderRadius::circular(radius)),
                         )
                         .label("clip")
                         .child(box_node(DrawingPaintCounter {
-                            size: Size::new(px(30.0), px(20.0)),
+                            size: Size::new(30.0, 20.0),
                             count: Arc::clone(&painted),
                         })),
                     ),
@@ -3514,7 +3524,7 @@ fn mount_clip_rrect_under_boundary(
             ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let clip_id = registry.get("clip").expect("clip is labelled");
     let sibling = registry.get("sibling").expect("sibling is labelled");
     (owner, clip_id, sibling, painted)
@@ -3525,10 +3535,10 @@ fn mount_clip_rrect_under_boundary(
 fn set_border_radius(
     owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
     id: flui_foundation::RenderId,
-    radius: f32,
+    radius: f64,
 ) {
     update_render_object::<RenderClipRRect, _>(owner, id, |c| {
-        c.set_border_radius(Some(BorderRadius::circular(px(radius))))
+        c.set_border_radius(Some(BorderRadius::circular(radius)))
     });
 }
 
@@ -3668,7 +3678,7 @@ fn a_clip_layer_update_is_written_back_into_the_retained_capture() {
 /// boundary — write-back through an unrelated repaint is already pinned for
 /// the border-radius branch above and does not need re-proving per shape.
 fn mount_clip_rect_under_boundary(
-    rect: flui_types::Rect<flui_types::Pixels>,
+    rect: flui_foundation::geometry::Rect<f64>,
 ) -> (
     PipelineOwner<flui_rendering::pipeline::Idle>,
     flui_foundation::RenderId,
@@ -3684,7 +3694,7 @@ fn mount_clip_rect_under_boundary(
                     box_node(RenderClipRect::hard_edge().with_clip_shape(rect))
                         .label("clip")
                         .child(box_node(DrawingPaintCounter {
-                            size: Size::new(px(30.0), px(20.0)),
+                            size: Size::new(30.0, 20.0),
                             count: Arc::clone(&painted),
                         })),
                 ),
@@ -3692,7 +3702,7 @@ fn mount_clip_rect_under_boundary(
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let clip_id = registry.get("clip").expect("clip is labelled");
     (owner, clip_id, painted)
 }
@@ -3708,8 +3718,8 @@ fn mount_clip_rect_under_boundary(
 /// are real evidence, not merely restated preconditions.
 #[test]
 fn a_clip_shape_change_updates_the_clip_layer_without_repainting_the_subtree() {
-    let rect1 = flui_types::Rect::from_xywh(px(0.0), px(0.0), px(20.0), px(10.0));
-    let rect2 = flui_types::Rect::from_xywh(px(0.0), px(0.0), px(15.0), px(5.0));
+    let rect1 = flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 20.0, 10.0);
+    let rect2 = flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 15.0, 5.0);
 
     let (owner, clip_id, painted) = mount_clip_rect_under_boundary(rect1);
     let (mut owner, result) = owner.run_frame();
@@ -3791,7 +3801,7 @@ fn mount_clip_oval_under_boundary(
                     box_node(flui_objects::RenderClipOval::hard_edge().with_clip_shape(oval))
                         .label("clip")
                         .child(box_node(DrawingPaintCounter {
-                            size: Size::new(px(30.0), px(20.0)),
+                            size: Size::new(30.0, 20.0),
                             count: Arc::clone(&painted),
                         })),
                 ),
@@ -3799,7 +3809,7 @@ fn mount_clip_oval_under_boundary(
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let clip_id = registry.get("clip").expect("clip is labelled");
     (owner, clip_id, painted)
 }
@@ -3810,8 +3820,8 @@ fn mount_clip_oval_under_boundary(
 /// (elliptical), so this asserts against `clip_rrects` instead of `clip_rects`.
 #[test]
 fn an_oval_clip_shape_change_updates_the_clip_layer_without_repainting_the_subtree() {
-    let oval1 = flui_objects::Oval::from_size(Size::new(px(20.0), px(10.0)));
-    let oval2 = flui_objects::Oval::from_size(Size::new(px(15.0), px(5.0)));
+    let oval1 = flui_objects::Oval::from_size(Size::new(20.0, 10.0));
+    let oval2 = flui_objects::Oval::from_size(Size::new(15.0, 5.0));
 
     let (owner, clip_id, painted) = mount_clip_oval_under_boundary(oval1);
     let (mut owner, result) = owner.run_frame();
@@ -3940,7 +3950,7 @@ fn a_flow_clip_behavior_change_is_structural_and_refused() {
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let flow_id = registry.get("flow").expect("flow is labelled");
 
     let (mut owner, result) = owner.run_frame();
@@ -3956,7 +3966,7 @@ fn a_flow_clip_behavior_change_is_structural_and_refused() {
 
     // The setter's own classification, pinned directly rather than assumed.
     let impact = edit_render_object::<RenderFlow, _, _>(&mut owner, flow_id, |flow| {
-        flow.set_clip_behavior(flui_types::painting::Clip::None)
+        flow.set_clip_behavior(flui_painting::paint::Clip::None)
     });
     assert_eq!(
         impact,
@@ -4029,9 +4039,9 @@ fn two_path_clips_under_one_boundary_resolve_in_paint_order() {
         handle
             .register_path_clipper(move |size: Size| {
                 sequence.borrow_mut().push(tag);
-                let mut path = flui_types::painting::Path::new();
-                path.add_rect(flui_types::Rect::from_origin_size(
-                    flui_types::Point::ZERO,
+                let mut path = flui_painting::paint::Path::new();
+                path.add_rect(flui_foundation::geometry::Rect::from_origin_size(
+                    flui_foundation::geometry::Point::ZERO,
                     size,
                 ));
                 path
@@ -4079,7 +4089,7 @@ fn two_path_clips_under_one_boundary_resolve_in_paint_order() {
             ),
         );
         owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
         let clip_a_id = registry.get("clip_a").expect("clip_a is labelled");
         let clip_b_id = registry.get("clip_b").expect("clip_b is labelled");
         (owner, clip_a_id, clip_b_id, painted_a, painted_b)
@@ -4191,9 +4201,9 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
     fn register_whole_box(handle: &flui_interaction::InteractionDispatchHandle) -> PathClipTarget {
         handle
             .register_path_clipper(|size: Size| {
-                let mut path = flui_types::painting::Path::new();
-                path.add_rect(flui_types::Rect::from_origin_size(
-                    flui_types::Point::ZERO,
+                let mut path = flui_painting::paint::Path::new();
+                path.add_rect(flui_foundation::geometry::Rect::from_origin_size(
+                    flui_foundation::geometry::Point::ZERO,
                     size,
                 ));
                 path
@@ -4207,12 +4217,9 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
     fn register_left_half(handle: &flui_interaction::InteractionDispatchHandle) -> PathClipTarget {
         handle
             .register_path_clipper(|_size: Size| {
-                let mut path = flui_types::painting::Path::new();
-                path.add_rect(flui_types::Rect::from_xywh(
-                    px(0.0),
-                    px(0.0),
-                    px(15.0),
-                    px(20.0),
+                let mut path = flui_painting::paint::Path::new();
+                path.add_rect(flui_foundation::geometry::Rect::from_xywh(
+                    0.0, 0.0, 15.0, 20.0,
                 ));
                 path
             })
@@ -4242,7 +4249,7 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
                             box_node(clip)
                                 .label("clip")
                                 .child(box_node(DrawingPaintCounter {
-                                    size: Size::new(px(30.0), px(20.0)),
+                                    size: Size::new(30.0, 20.0),
                                     count: Arc::clone(&painted),
                                 })),
                         ),
@@ -4255,7 +4262,7 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
                 ),
         );
         owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
         let clip_id = registry.get("clip").expect("clip is labelled");
         (owner, clip_id, painted)
     }
@@ -4310,8 +4317,8 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
 
         // Probe points in LAYER space: the clip sits at the padding's
         // (12, 12) accumulated paint origin.
-        let inside_both = flui_types::Point::new(px(17.0), px(17.0));
-        let inside_a_only = flui_types::Point::new(px(37.0), px(17.0));
+        let inside_both = flui_foundation::geometry::Point::new(17.0, 17.0);
+        let inside_a_only = flui_foundation::geometry::Point::new(37.0, 17.0);
 
         assert!(
             paths[0].contains(inside_both),
@@ -4401,8 +4408,8 @@ fn a_path_target_change_updates_the_clip_layer_without_repainting_the_subtree() 
 // override point the pipeline reads.
 
 use flui_objects::{RenderSliverOpacity, RenderViewport};
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::testing::sliver_node;
-use flui_types::layout::AxisDirection;
 
 /// The Sliver-protocol counterpart of `RenderRepaintBoundary`: declares
 /// itself a repaint boundary and passes its single child through untouched.
@@ -4473,14 +4480,17 @@ impl flui_rendering::traits::RenderSliver for SliverPaintCounter {
             flui_rendering::parent_data::SliverParentData,
         >,
     ) -> flui_rendering::constraints::SliverGeometry {
-        let extent = 10.0_f32.min(ctx.constraints().remaining_paint_extent);
+        let extent = 10.0_f64.min(ctx.constraints().remaining_paint_extent);
         flui_rendering::constraints::SliverGeometry::new(extent, extent, 0.0)
     }
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
         self.0.fetch_add(1, Ordering::Relaxed);
-        let rect = flui_types::Rect::from_origin_size(flui_types::Point::ZERO, ctx.size());
-        let color = flui_types::Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0]);
+        let rect = flui_foundation::geometry::Rect::from_origin_size(
+            flui_foundation::geometry::Point::ZERO,
+            ctx.size(),
+        );
+        let color = flui_painting::styling::Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0]);
         ctx.canvas()
             .draw_rect(rect, &flui_painting::Paint::fill(color));
     }
@@ -4506,7 +4516,7 @@ impl flui_rendering::traits::RenderSliver for SliverPaintCounter {
 /// to paint without touching the first — the only way to observe what the
 /// STORED capture holds.
 fn mount_sliver_opacity_under_boundary(
-    opacity: f32,
+    opacity: f64,
 ) -> (
     PipelineOwner<flui_rendering::pipeline::Idle>,
     flui_foundation::RenderId,
@@ -4534,7 +4544,7 @@ fn mount_sliver_opacity_under_boundary(
             ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let opacity_id = registry
         .get("sliver-opacity")
         .expect("sliver-opacity is labelled");
@@ -4549,7 +4559,7 @@ fn mount_sliver_opacity_under_boundary(
 fn set_sliver_opacity(
     owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
     id: flui_foundation::RenderId,
-    value: f32,
+    value: f64,
 ) {
     update_render_object::<RenderSliverOpacity, _>(owner, id, |o| o.set_opacity(value));
 }
@@ -4706,7 +4716,7 @@ fn a_patched_transform_subtree_matches_a_full_repaint_at_any_size() {
                 ),
         );
         owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
         let transform_id = registry.get("transform").expect("transform is labelled");
         (owner, transform_id)
     }

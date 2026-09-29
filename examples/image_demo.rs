@@ -11,7 +11,7 @@
 
 use flui_app::run_app;
 use flui_objects::{ImageAlignment, ImageFit, RenderImage};
-use flui_types::painting::Image as FluiImage;
+use flui_painting::paint::Image as FluiImage;
 use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 /// Decoded image data shared across UI rebuilds.

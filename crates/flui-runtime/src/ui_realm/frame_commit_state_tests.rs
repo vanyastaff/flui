@@ -7,6 +7,7 @@ use std::sync::{
 use std::time::Duration;
 
 use flui_animation::AnimationController;
+use flui_foundation::geometry::{Offset, Size};
 use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerButtons, PointerType, make_down_event, make_down_event_for_id, make_move_event,
@@ -14,10 +15,6 @@ use flui_interaction::events::{
 };
 use flui_platform_api::PlatformInput;
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, Leaf, PaintCx, RenderBox};
-use flui_types::{
-    Size,
-    geometry::{Offset, px},
-};
 use flui_view::{BuildContext, IntoView, StatelessView};
 use flui_widgets::SizedBox;
 
@@ -89,7 +86,7 @@ impl RenderBox for HitCountingBox {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        Size::new(px(100.0), px(100.0))
+        Size::new(100.0, 100.0)
     }
 
     fn paint(&self, _ctx: &mut PaintCx<'_, Leaf>) {}
@@ -145,11 +142,10 @@ pub(super) fn mount_hit_counting_root() -> (UiRealm, Arc<AtomicU32>) {
             hits: Arc::clone(&hits),
         })
         .expect("hit-counting root attaches");
-    realm.gestures().mouse_tracker().add_device(
-        0,
-        PointerType::Mouse,
-        Offset::new(px(10.0), px(10.0)),
-    );
+    realm
+        .gestures()
+        .mouse_tracker()
+        .add_device(0, PointerType::Mouse, Offset::new(10.0, 10.0));
     (realm, hits)
 }
 
@@ -455,7 +451,7 @@ fn pointer_input_is_held_while_the_target_presentation_is_uncommitted() {
     ));
 
     let primary = realm.presentations.primary();
-    let down = make_down_event(Offset::new(px(10.0), px(10.0)), PointerType::Mouse);
+    let down = make_down_event(Offset::new(10.0, 10.0), PointerType::Mouse);
     realm.handle_input_addressed(primary.id(), PlatformInput::Pointer(down));
 
     assert_eq!(
@@ -482,7 +478,7 @@ fn held_terminal_event_for_an_already_active_pointer_releases_the_cached_route_a
         primary.id(),
         PlatformInput::Pointer(make_down_event_for_id(
             pointer,
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(10.0, 10.0),
             PointerType::Touch,
         )),
     );
@@ -505,7 +501,7 @@ fn held_terminal_event_for_an_already_active_pointer_releases_the_cached_route_a
         primary.id(),
         PlatformInput::Pointer(make_up_event_for_id(
             pointer,
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(10.0, 10.0),
             PointerType::Touch,
         )),
     );
@@ -547,13 +543,10 @@ fn a_nonempty_held_queue_keeps_later_pointer_input_held_after_commit() {
     primary
         .held_pointer_input()
         .borrow_mut()
-        .append(make_down_event(
-            Offset::new(px(10.0), px(10.0)),
-            PointerType::Mouse,
-        ));
+        .append(make_down_event(Offset::new(10.0, 10.0), PointerType::Mouse));
     assert_eq!(primary.frame_commit_state(), FrameCommitState::Committed);
 
-    let move_event = make_move_event(Offset::new(px(11.0), px(11.0)), PointerType::Mouse);
+    let move_event = make_move_event(Offset::new(11.0, 11.0), PointerType::Mouse);
     realm.handle_input_addressed(primary.id(), PlatformInput::Pointer(move_event));
 
     assert_eq!(
@@ -575,11 +568,8 @@ fn window_leave_drops_held_hovers_but_retains_held_contact_sequences() {
     primary
         .held_pointer_input()
         .borrow_mut()
-        .append(make_down_event(
-            Offset::new(px(10.0), px(10.0)),
-            PointerType::Mouse,
-        ));
-    let mut hover = make_move_event(Offset::new(px(11.0), px(11.0)), PointerType::Mouse);
+        .append(make_down_event(Offset::new(10.0, 10.0), PointerType::Mouse));
+    let mut hover = make_move_event(Offset::new(11.0, 11.0), PointerType::Mouse);
     let flui_interaction::PointerEvent::Move(update) = &mut hover else {
         unreachable!("the move helper always constructs PointerEvent::Move")
     };
@@ -609,7 +599,7 @@ fn closing_a_presentation_drops_held_pointer_input_without_synthesizing_cancel()
         .borrow_mut()
         .append(make_down_event_for_id(
             pointer,
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(10.0, 10.0),
             PointerType::Touch,
         ));
     let routed_events = Rc::new(Cell::new(0));
@@ -641,7 +631,7 @@ fn presented_commit_replays_held_pointer_input_after_current_frame_telemetry() {
         .borrow_mut()
         .append(make_down_event_for_id(
             pointer,
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(10.0, 10.0),
             PointerType::Touch,
         ));
 
@@ -675,7 +665,7 @@ fn replayed_move_enters_pending_moves_and_flushes_on_the_next_pump() {
         .borrow_mut()
         .append(make_down_event_for_id(
             pointer,
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(10.0, 10.0),
             PointerType::Touch,
         ));
     primary
@@ -683,7 +673,7 @@ fn replayed_move_enters_pending_moves_and_flushes_on_the_next_pump() {
         .borrow_mut()
         .append(make_move_event_for_id(
             pointer,
-            Offset::new(px(11.0), px(11.0)),
+            Offset::new(11.0, 11.0),
             PointerType::Touch,
         ));
 
@@ -940,7 +930,7 @@ fn no_present_commit_also_replays_held_pointer_input() {
         .borrow_mut()
         .append(make_down_event_for_id(
             pointer,
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(10.0, 10.0),
             PointerType::Touch,
         ));
     primary
@@ -948,7 +938,7 @@ fn no_present_commit_also_replays_held_pointer_input() {
         .borrow_mut()
         .append(make_move_event_for_id(
             pointer,
-            Offset::new(px(11.0), px(11.0)),
+            Offset::new(11.0, 11.0),
             PointerType::Touch,
         ));
 
@@ -1012,10 +1002,9 @@ fn failed_update_frame_holds_pointer_sequence_until_new_tree_commits() {
 
     let primary = realm.presentations.primary();
     let pointer = PointerId::new(99).expect("test pointer id is nonzero");
-    let down = make_down_event_for_id(pointer, Offset::new(px(10.0), px(10.0)), PointerType::Touch);
-    let move_event =
-        make_move_event_for_id(pointer, Offset::new(px(12.0), px(10.0)), PointerType::Touch);
-    let up = make_up_event_for_id(pointer, Offset::new(px(12.0), px(10.0)), PointerType::Touch);
+    let down = make_down_event_for_id(pointer, Offset::new(10.0, 10.0), PointerType::Touch);
+    let move_event = make_move_event_for_id(pointer, Offset::new(12.0, 10.0), PointerType::Touch);
+    let up = make_up_event_for_id(pointer, Offset::new(12.0, 10.0), PointerType::Touch);
     realm.handle_input_addressed(primary.id(), PlatformInput::Pointer(down));
     realm.handle_input_addressed(primary.id(), PlatformInput::Pointer(move_event));
     realm.handle_input_addressed(primary.id(), PlatformInput::Pointer(up));
@@ -1074,7 +1063,7 @@ fn production_addressed_input_collapses_a_thousand_held_moves() {
         primary.id(),
         PlatformInput::Pointer(make_down_event_for_id(
             pointer,
-            Offset::new(px(10.0), px(10.0)),
+            Offset::new(10.0, 10.0),
             PointerType::Touch,
         )),
     );
@@ -1083,7 +1072,7 @@ fn production_addressed_input_collapses_a_thousand_held_moves() {
             primary.id(),
             PlatformInput::Pointer(make_move_event_for_id(
                 pointer,
-                Offset::new(px(11.0 + step as f32), px(10.0)),
+                Offset::new(11.0 + step as f64, 10.0),
                 PointerType::Touch,
             )),
         );

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::common::{lay_out, tight};
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_view::{BuildOwner, ElementTree, View};
 use flui_widgets::{ColoredBox, Draggable, GestureDetector};
 

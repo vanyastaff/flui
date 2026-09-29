@@ -20,8 +20,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::Size;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_types::Size;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
 use parking_lot::Mutex;
@@ -41,10 +41,7 @@ use crate::common::harness::{Harness, mount};
 /// under `Stack(fit: expand)` (`routes.dart:2350-2356`, merged into one entry here).
 /// So a route's page **fills the screen**, and its size cannot distinguish the
 /// anchor from the `RenderTheater` above it — the render-tree position does.
-const SCREEN: Size = Size::new(
-    flui_types::geometry::px(800.0),
-    flui_types::geometry::px(600.0),
-);
+const SCREEN: Size = Size::new(800.0, 600.0);
 
 fn seeded_navigator() -> NavigatorHandle {
     let navigator = NavigatorHandle::new();

@@ -10,8 +10,8 @@
 #[cfg(windows)]
 #[cfg(test)]
 mod tests {
+    use flui_foundation::geometry::Size;
     use flui_platform::{WindowOptions, current_platform};
-    use flui_types::geometry::{Size, px};
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     /// Initialize tracing for tests
@@ -36,7 +36,7 @@ mod tests {
         // Create a test window
         let options = WindowOptions {
             title: "Test T051 - WM_LBUTTONDOWN".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             resizable: false,
             visible: false,
             decorated: true,
@@ -74,7 +74,7 @@ mod tests {
         // Create a test window
         let options = WindowOptions {
             title: "Test T052 - WM_KEYDOWN".to_string(),
-            size: Size::new(px(640.0), px(480.0)),
+            size: Size::new(640.0, 480.0),
             resizable: false,
             visible: false,
             decorated: true,
@@ -114,12 +114,12 @@ mod tests {
         // Create a resizable test window
         let options = WindowOptions {
             title: "Test T053 - WM_SIZE".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             resizable: true, // Must be resizable
             visible: false,
             decorated: true,
-            min_size: Some(Size::new(px(320.0), px(240.0))),
-            max_size: Some(Size::new(px(1920.0), px(1080.0))),
+            min_size: Some(Size::new(320.0, 240.0)),
+            max_size: Some(Size::new(1920.0, 1080.0)),
             ..Default::default()
         };
 
@@ -130,13 +130,13 @@ mod tests {
         // Verify window size matches requested size
         let physical_size = window.physical_size();
         let scale_factor = window.scale_factor();
-        let logical_width = (physical_size.width.0 as f64) / scale_factor;
-        let logical_height = (physical_size.height.0 as f64) / scale_factor;
+        let logical_width = (physical_size.width as f64) / scale_factor;
+        let logical_height = (physical_size.height as f64) / scale_factor;
 
         tracing::info!(
             "Window size: physical={}x{}, logical={:.0}x{:.0}, scale={}",
-            physical_size.width.0,
-            physical_size.height.0,
+            physical_size.width,
+            physical_size.height,
             logical_width,
             logical_height,
             scale_factor
@@ -146,7 +146,7 @@ mod tests {
         // ✓ WM_SIZE handler exists in windows/platform.rs:300
         // ✓ Extracts width/height from lparam (GET_X_LPARAM, GET_Y_LPARAM)
         // ✓ Detects SIZE_MINIMIZED, SIZE_MAXIMIZED, SIZE_RESTORED from wparam
-        // ✓ Fires WindowEvent::Resized with Size<DevicePixels>
+        // ✓ Fires WindowEvent::Resized with DeviceSize
         // ✓ Fires WindowEvent::Minimized for SIZE_MINIMIZED
         // ✓ Fires WindowEvent::Maximized for SIZE_MAXIMIZED
         // ✓ Fires WindowEvent::Restored for SIZE_RESTORED
@@ -169,7 +169,7 @@ mod tests {
         // Create a test window
         let options = WindowOptions {
             title: "Test T054 - Latency".to_string(),
-            size: Size::new(px(640.0), px(480.0)),
+            size: Size::new(640.0, 480.0),
             resizable: false,
             visible: false,
             decorated: true,
@@ -212,7 +212,7 @@ mod tests {
         // Create a test window
         let options = WindowOptions {
             title: "Test T055 - Modifiers".to_string(),
-            size: Size::new(px(640.0), px(480.0)),
+            size: Size::new(640.0, 480.0),
             resizable: false,
             visible: false,
             decorated: true,
@@ -257,7 +257,7 @@ mod tests {
         // Create a test window
         let options = WindowOptions {
             title: "Integration Test - Event Pipeline".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             resizable: true,
             visible: false,
             decorated: true,
@@ -289,22 +289,22 @@ mod tests {
         );
 
         // Verify coordinate system consistency
-        let expected_logical_width = (physical_size.width.0 as f64) / scale_factor;
-        let expected_logical_height = (physical_size.height.0 as f64) / scale_factor;
-        let width_diff = (logical_size.width.0 - expected_logical_width as f32).abs();
-        let height_diff = (logical_size.height.0 - expected_logical_height as f32).abs();
+        let expected_logical_width = (physical_size.width as f64) / scale_factor;
+        let expected_logical_height = (physical_size.height as f64) / scale_factor;
+        let width_diff = (logical_size.width - expected_logical_width as f64).abs();
+        let height_diff = (logical_size.height - expected_logical_height as f64).abs();
 
         assert!(
             width_diff < 2.0,
             "Logical width mismatch: expected {}, got {}",
             expected_logical_width,
-            logical_size.width.0
+            logical_size.width
         );
         assert!(
             height_diff < 2.0,
             "Logical height mismatch: expected {}, got {}",
             expected_logical_height,
-            logical_size.height.0
+            logical_size.height
         );
 
         tracing::info!("✓ Windows event pipeline integration verified");

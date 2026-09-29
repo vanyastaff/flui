@@ -90,8 +90,8 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_types::platform::Locale;
-use flui_types::typography::TextStyle;
+use flui_painting::typography::TextStyle;
+use flui_platform_api::Locale;
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 

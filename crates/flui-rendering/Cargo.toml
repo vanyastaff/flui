@@ -39,7 +39,7 @@ name = "compile_fail"
 path = "tests/compile_fail.rs"
 
 [dependencies]
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+serde = { workspace = true, optional = true }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
@@ -121,7 +121,7 @@ static_assertions.workspace = true
 # Property-based tests for the virtualization B+-tree: random
 # insert/delete/set_measured/set_count sequences checked against a naive
 # Vec oracle + structural invariants. Test-only; no production dependency.
-# Version matches flui-types / flui-interaction (already resolved in the lockfile).
+# Version matches flui-painting / flui-interaction (already resolved in the lockfile).
 proptest = "1.5"
 # Animation -> render-pipeline integration scenarios (tests only; no
 # production dependency between the layers). flui-scheduler moved to
@@ -146,9 +146,9 @@ flui-objects = { path = "../flui-objects", features = ["testing"] }
 
 [features]
 default = []
-# serde: no direct serde derives in this crate; forwards to flui-types/serde
-# so downstream consumers enabling this feature get geometry/type serde impls.
-serde = ["flui-types/serde"]
+# serde: `AxisDirection` and `TableCellVerticalAlignment` derive it, and the
+# feature forwards to flui-painting's so the values they carry serialize too.
+serde = ["dep:serde", "flui-painting/serde"]
 
 # testing: opt-in render-object test harness (`crate::testing`). Builds a
 # real `PipelineOwner` tree from a declarative spec, drives the production

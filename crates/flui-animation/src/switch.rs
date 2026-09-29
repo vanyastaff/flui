@@ -52,8 +52,8 @@ enum SwitchMode {
 /// controller2.set_value(0.3);
 ///
 /// let switch = AnimationSwitch::new(
-///     controller1.clone() as Arc<dyn Animation<f32>>,
-///     Some(controller2.clone() as Arc<dyn Animation<f32>>),
+///     controller1.clone() as Arc<dyn Animation<f64>>,
+///     Some(controller2.clone() as Arc<dyn Animation<f64>>),
 /// );
 ///
 /// // Initially uses controller1's value
@@ -69,16 +69,16 @@ pub struct AnimationSwitch {
 
 struct AnimationSwitchInner {
     /// The currently active animation.
-    current: Arc<dyn Animation<f32>>,
+    current: Arc<dyn Animation<f64>>,
     /// The next animation to potentially switch to.
-    next: Option<Arc<dyn Animation<f32>>>,
+    next: Option<Arc<dyn Animation<f64>>>,
     /// The mode for determining when to switch.
     mode: Option<SwitchMode>,
     /// Callback when switched.
     on_switched: Option<Arc<dyn Fn() + Send + Sync>>,
     /// Last reported value (for change detection).
     #[expect(dead_code)]
-    last_value: Option<f32>,
+    last_value: Option<f64>,
     /// Last reported status.
     last_status: Option<AnimationStatus>,
     /// Listener IDs for cleanup.
@@ -108,7 +108,7 @@ impl AnimationSwitch {
     /// * `current` - The initial animation to proxy
     /// * `next` - The animation to switch to when values cross (optional)
     #[must_use]
-    pub fn new(current: Arc<dyn Animation<f32>>, next: Option<Arc<dyn Animation<f32>>>) -> Self {
+    pub fn new(current: Arc<dyn Animation<f64>>, next: Option<Arc<dyn Animation<f64>>>) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
 
         let mode = if let Some(ref next_anim) = next {
@@ -183,7 +183,7 @@ impl AnimationSwitch {
 
     /// Returns the currently active animation.
     #[must_use]
-    pub fn current(&self) -> Arc<dyn Animation<f32>> {
+    pub fn current(&self) -> Arc<dyn Animation<f64>> {
         self.inner.lock().current.clone()
     }
 
@@ -324,9 +324,9 @@ impl Clone for AnimationSwitch {
     }
 }
 
-impl Animation<f32> for AnimationSwitch {
+impl Animation<f64> for AnimationSwitch {
     #[inline]
-    fn value(&self) -> f32 {
+    fn value(&self) -> f64 {
         self.inner.lock().current.value()
     }
 
@@ -388,7 +388,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
-    fn create_controller(scheduler: &UpdateScheduler, value: f32) -> Arc<AnimationController> {
+    fn create_controller(scheduler: &UpdateScheduler, value: f64) -> Arc<AnimationController> {
         let controller = Arc::new(AnimationController::new(
             Duration::from_millis(100),
             scheduler,
@@ -402,7 +402,7 @@ mod tests {
         let scheduler = UpdateScheduler::new();
         let controller = create_controller(&scheduler, 0.5);
 
-        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f32>>, None);
+        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f64>>, None);
 
         assert_eq!(switch.value(), 0.5);
 
@@ -416,8 +416,8 @@ mod tests {
         let controller2 = create_controller(&scheduler, 0.3);
 
         let switch = AnimationSwitch::new(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            Some(controller2.clone() as Arc<dyn Animation<f64>>),
         );
 
         // Initially uses controller1
@@ -439,8 +439,8 @@ mod tests {
         let before2 = controller2.debug_value_listener_count();
 
         let switch = AnimationSwitch::new(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            Some(controller2.clone() as Arc<dyn Animation<f64>>),
         );
         assert_eq!(controller1.debug_value_listener_count(), before1 + 1);
         assert_eq!(controller2.debug_value_listener_count(), before2 + 1);
@@ -498,8 +498,8 @@ mod tests {
         let controller2 = create_controller(&scheduler, 0.3);
 
         let switch = AnimationSwitch::new(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            Some(controller2.clone() as Arc<dyn Animation<f64>>),
         );
 
         let hits = Arc::new(AtomicUsize::new(0));
@@ -543,8 +543,8 @@ mod tests {
         let controller2 = create_controller(&scheduler, 0.5);
 
         let switch = AnimationSwitch::new(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            Some(controller2.clone() as Arc<dyn Animation<f64>>),
         );
 
         // Should immediately switch to controller2 since values are equal
@@ -565,8 +565,8 @@ mod tests {
         let switched_clone = Arc::clone(&switched);
 
         let _switch = AnimationSwitch::new(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            Some(controller2.clone() as Arc<dyn Animation<f64>>),
         )
         .on_switched(move || {
             switched_clone.store(true, Ordering::SeqCst);
@@ -597,8 +597,8 @@ mod tests {
         let hops = Arc::new(AtomicUsize::new(0));
         let hops_clone = Arc::clone(&hops);
         let switch = AnimationSwitch::new(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            Some(controller2.clone() as Arc<dyn Animation<f64>>),
         )
         .on_switched(move || {
             hops_clone.fetch_add(1, Ordering::SeqCst);
@@ -611,7 +611,7 @@ mod tests {
         assert_eq!(hops.load(Ordering::SeqCst), 1, "the hop fired");
         assert!(Arc::ptr_eq(
             &switch.current(),
-            &(controller2.clone() as Arc<dyn Animation<f32>>)
+            &(controller2.clone() as Arc<dyn Animation<f64>>)
         ));
 
         // Keep both trains moving, in both directions, past each other again.
@@ -653,8 +653,8 @@ mod tests {
         let status1 = controller1.debug_status_listener_count();
 
         let switch = AnimationSwitch::new(
-            controller1.clone() as Arc<dyn Animation<f32>>,
-            Some(controller2.clone() as Arc<dyn Animation<f32>>),
+            controller1.clone() as Arc<dyn Animation<f64>>,
+            Some(controller2.clone() as Arc<dyn Animation<f64>>),
         );
         assert_eq!(controller1.debug_value_listener_count(), value1 + 1);
         assert_eq!(controller2.debug_value_listener_count(), value2 + 1);
@@ -683,7 +683,7 @@ mod tests {
         assert!(
             Arc::ptr_eq(
                 &switch.current(),
-                &(controller1.clone() as Arc<dyn Animation<f32>>)
+                &(controller1.clone() as Arc<dyn Animation<f64>>)
             ),
             "a disposed switch must not hop"
         );
@@ -699,7 +699,7 @@ mod tests {
         // set_value now reports Forward per Flutter's _internalSetValue.
         let controller = create_controller(&scheduler, 0.0);
 
-        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f32>>, None);
+        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f64>>, None);
 
         assert_eq!(switch.status(), AnimationStatus::Dismissed);
 
@@ -714,7 +714,7 @@ mod tests {
         let scheduler = UpdateScheduler::new();
         let controller = create_controller(&scheduler, 0.5);
 
-        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f32>>, None);
+        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f64>>, None);
 
         let current = switch.current();
         assert_eq!(current.value(), 0.5);
@@ -727,7 +727,7 @@ mod tests {
         let scheduler = UpdateScheduler::new();
         let controller = create_controller(&scheduler, 0.5);
 
-        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f32>>, None);
+        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f64>>, None);
 
         let debug_str = format!("{switch:?}");
         assert!(debug_str.contains("AnimationSwitch"));

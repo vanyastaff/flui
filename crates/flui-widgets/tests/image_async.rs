@@ -24,8 +24,8 @@ use std::time::{Duration, Instant};
 
 use common::{lay_out, loose, size};
 use flui_assets::AssetRegistry;
-use flui_types::Size;
-use flui_types::painting::Image as PixelImage;
+use flui_foundation::geometry::Size;
+use flui_painting::paint::Image as PixelImage;
 use flui_widgets::{AssetImage, Image, ImageProvider, ImageProviderError};
 use flui_widgets::{Padding, SizedBox};
 
@@ -44,8 +44,8 @@ fn fixture(name: &str) -> String {
 /// new provider is showing" passes just as well when the old one never left,
 /// or when the new one never arrived — which is exactly how a provider-swap
 /// race went unnoticed until it failed on CI.
-const OLD: (f32, f32) = (5.0, 3.0);
-const NEW: (f32, f32) = (7.0, 2.0);
+const OLD: (f64, f64) = (5.0, 3.0);
+const NEW: (f64, f64) = (7.0, 2.0);
 
 fn old_size() -> Size {
     size(OLD.0, OLD.1)
@@ -57,7 +57,7 @@ fn new_size() -> Size {
 
 /// `inner` grown by `Padding::all(2.0)` on every side.
 fn padded(inner: Size) -> Size {
-    size(inner.width.0 + 4.0, inner.height.0 + 4.0)
+    size(inner.width + 4.0, inner.height + 4.0)
 }
 
 fn registry() -> Arc<AssetRegistry> {

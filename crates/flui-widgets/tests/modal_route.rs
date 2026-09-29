@@ -27,7 +27,7 @@ use std::time::Duration;
 use flui_animation::{Animation, AnimationStatus};
 use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_interaction::routing::FocusNode;
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_view::prelude::*;
 
 use flui_widgets::__test_access::{

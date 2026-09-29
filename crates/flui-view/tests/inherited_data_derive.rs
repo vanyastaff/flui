@@ -11,7 +11,7 @@ use flui_view::prelude::*;
 #[derive(Clone, PartialEq, InheritedData)]
 struct Data {
     size: u32,
-    scale: f32,
+    scale: f64,
     // A raw identifier: the constant is `FIELD_TYPE`, not `FIELD_R#TYPE`.
     r#type: u8,
 }

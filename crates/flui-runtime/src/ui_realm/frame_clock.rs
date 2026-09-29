@@ -4,8 +4,8 @@ use super::UiRealm;
 use crate::presentation::PresentationState;
 use crate::renderer_binding::RenderingFlutterBinding;
 use flui_animation::Vsync;
+use flui_platform_api::HapticFeedback;
 use flui_rendering::binding::RendererBinding as _;
-use flui_types::HapticFeedback;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -485,7 +485,7 @@ impl UiRealm {
 
     /// Apply a new device pixel ratio to this realm's render pipeline (the
     /// resize path; construction applies the initial ratio directly).
-    pub fn set_device_pixel_ratio(&self, device_pixel_ratio: f32) {
+    pub fn set_device_pixel_ratio(&self, device_pixel_ratio: f64) {
         self.presentations
             .primary()
             .renderer()

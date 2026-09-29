@@ -16,7 +16,7 @@ use objc2::{ClassType, class, sel};
 use objc2_app_kit::{NSBackingStoreType, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 use parking_lot::Mutex;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -172,7 +172,7 @@ unsafe impl Sync for MacOSWindow {}
 /// Mutable window state
 struct MacOSWindowState {
     /// Current window bounds (logical pixels)
-    bounds: Bounds<Pixels>,
+    bounds: Bounds<f64>,
 
     /// Scale factor (1.0 for non-Retina, 2.0 for Retina)
     scale_factor: f64,
@@ -335,7 +335,7 @@ impl MacOSWindow {
             // Convert logical size to NSRect
             let frame = NSRect::new(
                 NSPoint::new(0.0, 0.0),
-                NSSize::new(options.size.width.0 as f64, options.size.height.0 as f64),
+                NSSize::new(options.size.width, options.size.height),
             );
 
             // Build window style mask
@@ -405,11 +405,11 @@ impl MacOSWindow {
 
             // Apply size constraints
             if let Some(min) = options.min_size {
-                let ns_size = NSSize::new(min.width.0 as f64, min.height.0 as f64);
+                let ns_size = NSSize::new(min.width, min.height);
                 let _: () = msg_send![ns_window, setMinSize: ns_size];
             }
             if let Some(max) = options.max_size {
-                let ns_size = NSSize::new(max.width.0 as f64, max.height.0 as f64);
+                let ns_size = NSSize::new(max.width, max.height);
                 let _: () = msg_send![ns_window, setMaxSize: ns_size];
             }
 
@@ -460,10 +460,7 @@ impl MacOSWindow {
                 ns_window,
                 state: Arc::new(Mutex::new(MacOSWindowState {
                     bounds: Bounds {
-                        origin: Point::new(
-                            flui_types::geometry::px(frame.origin.x as f32),
-                            flui_types::geometry::px(frame.origin.y as f32),
-                        ),
+                        origin: Point::new(frame.origin.x, frame.origin.y),
                         size: options.size,
                     },
                     scale_factor: scale,
@@ -525,8 +522,8 @@ impl MacOSWindow {
             tracing::info!(
                 "Created NSWindow {:p} with size {}x{} (scale: {})",
                 ns_window,
-                options.size.width.0,
-                options.size.height.0,
+                options.size.width,
+                options.size.height,
                 scale
             );
 
@@ -955,17 +952,17 @@ impl PlatformWindow for MacOSWindow {
         Some(Arc::clone(text_input) as Arc<dyn crate::traits::PlatformTextInput>)
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
+    fn physical_size(&self) -> Size<i32> {
         let state = self.state.lock();
         let logical = state.bounds.size;
-        let scale = state.scale_factor as f32;
+        let scale = state.scale_factor;
         Size::new(
-            flui_types::geometry::device_px((logical.width.0 * scale).round() as i32),
-            flui_types::geometry::device_px((logical.height.0 * scale).round() as i32),
+            (logical.width * scale).round() as i32,
+            (logical.height * scale).round() as i32,
         )
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
+    fn logical_size(&self) -> Size<f64> {
         let state = self.state.lock();
         state.bounds.size
     }
@@ -1055,7 +1052,7 @@ impl PlatformWindow for MacOSWindow {
         })
     }
 
-    fn bounds(&self) -> Bounds<Pixels> {
+    fn bounds(&self) -> Bounds<f64> {
         self.state.lock().bounds
     }
 
@@ -1221,7 +1218,7 @@ impl PlatformWindow for MacOSWindow {
         });
     }
 
-    fn resize(&self, size: Size<Pixels>) {
+    fn resize(&self, size: Size<f64>) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         route_on_owner(owner, owner_is_main, || unsafe {
@@ -1233,7 +1230,7 @@ impl PlatformWindow for MacOSWindow {
             // using `contentRectForFrameRect:`), so resize the content, not
             // the frame — on decorated windows a frame-sized `setFrame:`
             // would shrink the content by the titlebar height.
-            let ns_size = NSSize::new(size.width.0 as f64, size.height.0 as f64);
+            let ns_size = NSSize::new(size.width, size.height);
             let _: () = msg_send![self.ns_window, setContentSize: ns_size];
 
             // Update state
@@ -1560,12 +1557,12 @@ impl WindowTrait for MacOSWindow {
         PlatformWindow::set_title(self, title);
     }
 
-    fn position(&self) -> Point<Pixels> {
+    fn position(&self) -> Point<f64> {
         let state = self.state.lock();
         state.bounds.origin
     }
 
-    fn set_position(&mut self, position: Point<Pixels>) {
+    fn set_position(&mut self, position: Point<f64>) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         let this = &*self;
@@ -1578,10 +1575,7 @@ impl WindowTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             let frame: NSRect = msg_send![this.ns_window, frame];
-            let new_frame = NSRect::new(
-                NSPoint::new(position.x.0 as f64, position.y.0 as f64),
-                frame.size,
-            );
+            let new_frame = NSRect::new(NSPoint::new(position.x, position.y), frame.size);
             let _: () = msg_send![this.ns_window, setFrame: new_frame display: YES];
 
             // Update state
@@ -1590,12 +1584,12 @@ impl WindowTrait for MacOSWindow {
         });
     }
 
-    fn size(&self) -> Size<Pixels> {
+    fn size(&self) -> Size<f64> {
         let state = self.state.lock();
         state.bounds.size
     }
 
-    fn set_size(&mut self, size: Size<Pixels>) {
+    fn set_size(&mut self, size: Size<f64>) {
         PlatformWindow::resize(self, size);
     }
 
@@ -1833,7 +1827,7 @@ impl WindowTrait for MacOSWindow {
         PlatformWindow::request_redraw(self);
     }
 
-    fn set_min_size(&mut self, size: Option<Size<Pixels>>) {
+    fn set_min_size(&mut self, size: Option<Size<f64>>) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         let this = &*self;
@@ -1846,7 +1840,7 @@ impl WindowTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             if let Some(size) = size {
-                let ns_size = NSSize::new(size.width.0 as f64, size.height.0 as f64);
+                let ns_size = NSSize::new(size.width, size.height);
                 let _: () = msg_send![this.ns_window, setMinSize: ns_size];
             } else {
                 // Set to zero to remove constraint
@@ -1856,7 +1850,7 @@ impl WindowTrait for MacOSWindow {
         });
     }
 
-    fn set_max_size(&mut self, size: Option<Size<Pixels>>) {
+    fn set_max_size(&mut self, size: Option<Size<f64>>) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         let this = &*self;
@@ -1869,7 +1863,7 @@ impl WindowTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             if let Some(size) = size {
-                let ns_size = NSSize::new(size.width.0 as f64, size.height.0 as f64);
+                let ns_size = NSSize::new(size.width, size.height);
                 let _: () = msg_send![this.ns_window, setMaxSize: ns_size];
             } else {
                 // Set to max to remove constraint
@@ -1879,9 +1873,9 @@ impl WindowTrait for MacOSWindow {
         });
     }
 
-    fn scale_factor(&self) -> f32 {
+    fn scale_factor(&self) -> f64 {
         let state = self.state.lock();
-        state.scale_factor as f32
+        state.scale_factor
     }
 
     fn raw_window_handle(&self) -> CrossRawWindowHandle {
@@ -2184,7 +2178,7 @@ impl MacOSWindowExtTrait for MacOSWindow {
         });
     }
 
-    fn set_alpha(&mut self, alpha: f32) {
+    fn set_alpha(&mut self, alpha: f64) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
         let this = &*self;
@@ -2197,24 +2191,24 @@ impl MacOSWindowExtTrait for MacOSWindow {
             // rather than the raw-pointer field is what keeps the closure
             // `Send`: `&MacOSWindow: Send` via the `unsafe impl Sync`.
             let clamped_alpha = alpha.clamp(0.0, 1.0);
-            let _: () = msg_send![this.ns_window, setAlphaValue: clamped_alpha as f64];
+            let _: () = msg_send![this.ns_window, setAlphaValue: clamped_alpha];
             tracing::debug!("Set window alpha: {}", clamped_alpha);
         });
     }
 
-    fn backing_scale_factor(&self) -> f32 {
+    fn backing_scale_factor(&self) -> f64 {
         let state = self.state.lock();
-        state.scale_factor as f32
+        state.scale_factor
     }
 
-    fn convert_point_from_backing(&self, point: Point<Pixels>) -> Point<Pixels> {
+    fn convert_point_from_backing(&self, point: Point<f64>) -> Point<f64> {
         let scale = self.backing_scale_factor();
-        Point::new(Pixels(point.x.0 / scale), Pixels(point.y.0 / scale))
+        Point::new(point.x / scale, point.y / scale)
     }
 
-    fn convert_point_to_backing(&self, point: Point<Pixels>) -> Point<Pixels> {
+    fn convert_point_to_backing(&self, point: Point<f64>) -> Point<f64> {
         let scale = self.backing_scale_factor();
-        Point::new(Pixels(point.x.0 * scale), Pixels(point.y.0 * scale))
+        Point::new(point.x * scale, point.y * scale)
     }
 }
 
@@ -2493,8 +2487,8 @@ impl MacOSWindow {
             let content_rect: NSRect = msg_send![self.ns_window, contentRectForFrameRect: frame];
 
             let new_size = Size::new(
-                flui_types::geometry::px(content_rect.size.width as f32),
-                flui_types::geometry::px(content_rect.size.height as f32),
+                content_rect.size.width as f64,
+                content_rect.size.height as f64,
             );
 
             // Update state
@@ -2505,13 +2499,9 @@ impl MacOSWindow {
             };
 
             // Notify per-window callbacks
-            self.callbacks.dispatch_resize(new_size, scale as f32);
+            self.callbacks.dispatch_resize(new_size, scale as f64);
 
-            tracing::debug!(
-                "Window resized to {}x{}",
-                new_size.width.0,
-                new_size.height.0
-            );
+            tracing::debug!("Window resized to {}x{}", new_size.width, new_size.height);
         }
     }
 
@@ -2521,10 +2511,7 @@ impl MacOSWindow {
         unsafe {
             let frame: NSRect = msg_send![self.ns_window, frame];
 
-            let new_origin = Point::new(
-                flui_types::geometry::px(frame.origin.x as f32),
-                flui_types::geometry::px(frame.origin.y as f32),
-            );
+            let new_origin = Point::new(frame.origin.x as f64, frame.origin.y as f64);
 
             // Update state
             {
@@ -2534,7 +2521,7 @@ impl MacOSWindow {
 
             self.callbacks.dispatch_moved();
 
-            tracing::debug!("Window moved to ({}, {})", new_origin.x.0, new_origin.y.0);
+            tracing::debug!("Window moved to ({}, {})", new_origin.x, new_origin.y);
         }
     }
 
@@ -2702,7 +2689,7 @@ impl MacOSWindow {
 
             // A scale change invalidates layout: notify as a resize
             if changed {
-                self.callbacks.dispatch_resize(size, new_scale as f32);
+                self.callbacks.dispatch_resize(size, new_scale);
             }
         }
     }
@@ -2890,20 +2877,14 @@ mod tests {
             <MacOSWindow as PlatformWindow>::maximize(&window);
             <MacOSWindow as PlatformWindow>::restore(&window);
             <MacOSWindow as PlatformWindow>::toggle_fullscreen(&window);
-            <MacOSWindow as PlatformWindow>::resize(
-                &window,
-                Size::new(Pixels(800.0), Pixels(600.0)),
-            );
+            <MacOSWindow as PlatformWindow>::resize(&window, Size::new(800.0, 600.0));
             <MacOSWindow as PlatformWindow>::set_cursor(&window, CursorIcon::Default)
                 .expect("set_cursor must not fail on a real window");
             <MacOSWindow as PlatformWindow>::request_redraw(&window);
             <MacOSWindow as PlatformWindow>::close(&window);
 
             // ---- WindowTrait surface (12 bodies) ----
-            <MacOSWindow as WindowTrait>::set_position(
-                &mut window,
-                Point::new(Pixels(0.0), Pixels(0.0)),
-            );
+            <MacOSWindow as WindowTrait>::set_position(&mut window, Point::new(0.0, 0.0));
             let _ = <MacOSWindow as WindowTrait>::state(&window);
             <MacOSWindow as WindowTrait>::set_state(&mut window, WindowState::Normal);
             <MacOSWindow as WindowTrait>::set_visible(&mut window, true);
@@ -2913,13 +2894,10 @@ mod tests {
             <MacOSWindow as WindowTrait>::set_minimizable(&mut window, true);
             let _ = <MacOSWindow as WindowTrait>::is_closable(&window);
             <MacOSWindow as WindowTrait>::set_closable(&mut window, true);
-            <MacOSWindow as WindowTrait>::set_min_size(
-                &mut window,
-                Some(Size::new(Pixels(100.0), Pixels(100.0))),
-            );
+            <MacOSWindow as WindowTrait>::set_min_size(&mut window, Some(Size::new(100.0, 100.0)));
             <MacOSWindow as WindowTrait>::set_max_size(
                 &mut window,
-                Some(Size::new(Pixels(1000.0), Pixels(1000.0))),
+                Some(Size::new(1000.0, 1000.0)),
             );
 
             // ---- MacOSWindowExtTrait surface (11 bodies) ----

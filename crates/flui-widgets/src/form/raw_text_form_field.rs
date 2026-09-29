@@ -5,8 +5,8 @@
 use std::rc::Rc;
 
 use flui_interaction::FocusNode;
-use flui_types::Color;
-use flui_types::typography::TextStyle;
+use flui_painting::styling::Color;
+use flui_painting::typography::TextStyle;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 

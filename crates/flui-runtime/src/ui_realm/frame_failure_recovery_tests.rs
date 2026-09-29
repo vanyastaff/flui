@@ -4,8 +4,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use flui_foundation::geometry::Size;
 use flui_foundation::{ElementId, PresentationAddress};
-use flui_types::Size;
 use flui_view::{IntoView, StatelessView, View, element::ElementKind};
 use flui_widgets::{Column, ListView, SizedBox};
 

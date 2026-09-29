@@ -14,7 +14,7 @@ use flui_animation::ext::AnimatableExt;
 use flui_animation::{Animation, AnimationController, Tween};
 use flui_interaction::events::PointerEventExt as _;
 use flui_objects::TranslationFraction;
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector, Listener, SizedBox, SlideTransition};
 
 fn position_animation(
@@ -22,7 +22,7 @@ fn position_animation(
     end: TranslationFraction,
 ) -> (AnimationController, Arc<dyn Animation<TranslationFraction>>) {
     let controller = AnimationController::without_ticker(Duration::from_millis(300));
-    let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
     let animation: Arc<dyn Animation<TranslationFraction>> =
         Arc::new(Tween::new(begin, end).animate(parent));
     (controller, animation)
@@ -151,7 +151,7 @@ fn build_wires_transform_hit_tests_false_into_fractional_translation() {
 /// just a hit/miss bit.
 #[test]
 fn build_delivers_the_animation_localized_position_to_the_child_mid_animation() {
-    let recorded: Rc<Cell<Option<(f32, f32)>>> = Rc::new(Cell::new(None));
+    let recorded: Rc<Cell<Option<(f64, f64)>>> = Rc::new(Cell::new(None));
     let probe = Rc::clone(&recorded);
 
     let (controller, position) = position_animation(
@@ -167,7 +167,7 @@ fn build_delivers_the_animation_localized_position_to_the_child_mid_animation() 
             Listener::new()
                 .on_pointer_down(move |_cx, dispatch| {
                     let local = dispatch.local.position();
-                    probe.set(Some((local.dx.get(), local.dy.get())));
+                    probe.set(Some((local.dx, local.dy)));
                 })
                 .child(SizedBox::new(100.0, 100.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),
         ),
@@ -183,7 +183,7 @@ fn build_delivers_the_animation_localized_position_to_the_child_mid_animation() 
     // tolerance rather than exactly — the same 1e-3 the other delivered-
     // position tests use. The defect this pins was a 50px miss; any epsilon
     // far below that still fails on it.
-    const TOLERANCE: f32 = 1e-3;
+    const TOLERANCE: f64 = 1e-3;
     assert!(
         (local.0 - 25.0).abs() < TOLERANCE && (local.1 - 60.0).abs() < TOLERANCE,
         "the delivered position must be local to the child (global (75, 60) minus the \

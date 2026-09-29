@@ -51,12 +51,12 @@
 
 use std::time::Duration;
 
+use flui::geometry::Offset;
 use flui::prelude::*;
 use flui::testing::a11y::A11yQueryError;
 use flui::testing::rendering::render_diagnostics;
 use flui::testing::replay::PointerScript;
 use flui::testing::{HeadlessBinding, MountOptions, MountOwners};
-use flui::types::geometry::Offset;
 use flui::widgets::column;
 
 /// The tree `flui create`'s counter template builds: `Center` → `Column` →
@@ -194,10 +194,7 @@ fn agent_can_mount_inspect_drive_and_assert_the_counter() {
     // --- 4. Drive: tap the center of those bounds through the public
     // pointer-replay path (`HeadlessBinding::replay`), not a widget-testing
     // shortcut like `dispatch_pointer_down`/`find_text`.
-    let center = Offset::new(
-        flui::types::geometry::px(bounds.x0.midpoint(bounds.x1) as f32),
-        flui::types::geometry::px(bounds.y0.midpoint(bounds.y1) as f32),
-    );
+    let center = Offset::new(bounds.x0.midpoint(bounds.x1), bounds.y0.midpoint(bounds.y1));
     binding.replay(&PointerScript::tap(center));
     // The replay's own doc is explicit that the frame after the last
     // scripted event is the caller's to run: the tap's up-event schedules a

@@ -16,11 +16,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::settings::GestureSettings;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, ManualClock, PointerId};
-use flui_types::Offset;
-use flui_types::geometry::px;
 
 #[test]
 fn long_press_fires_on_pumped_virtual_frames_without_sleeping() {
@@ -37,11 +36,7 @@ fn long_press_fires_on_pumped_virtual_frames_without_sleeping() {
 
     // Pointer down captures `down_time` from the VIRTUAL clock (now = base + 0).
     let pointer = PointerId::new(2).expect("nonzero pointer id");
-    recognizer.add_pointer(
-        pointer,
-        Offset::new(px(10.0), px(10.0)),
-        Offset::new(px(10.0), px(10.0)),
-    );
+    recognizer.add_pointer(pointer, Offset::new(10.0, 10.0), Offset::new(10.0, 10.0));
 
     // Hold still; pump virtual frames totalling < 500ms — must NOT fire.
     for _ in 0..3 {

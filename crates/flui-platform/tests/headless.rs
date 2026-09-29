@@ -13,8 +13,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform, headless_platform};
-use flui_types::geometry::{Size, px};
 
 #[test]
 fn test_t064_flui_headless_environment_variable() {
@@ -49,7 +49,7 @@ fn test_t065_headless_window_creation() {
 
     let options = WindowOptions {
         title: "Test Window".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         visible: true,
         ..Default::default()
     };
@@ -132,7 +132,7 @@ fn test_t068_parallel_test_execution() {
             // Create window
             let options = WindowOptions {
                 title: "Parallel Test".to_string(),
-                size: Size::new(px(800.0), px(600.0)),
+                size: Size::new(800.0, 600.0),
                 visible: true,
                 ..Default::default()
             };
@@ -220,14 +220,14 @@ fn test_headless_multiple_windows() {
 
     let options1 = WindowOptions {
         title: "Window 1".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         visible: true,
         ..Default::default()
     };
 
     let options2 = WindowOptions {
         title: "Window 2".to_string(),
-        size: Size::new(px(1024.0), px(768.0)),
+        size: Size::new(1024.0, 768.0),
         visible: true,
         ..Default::default()
     };

@@ -23,7 +23,7 @@ use flui_view::{BuildContext, IntoView};
 /// `RenderSliverFixedExtentList`. Lives inside a [`Viewport`](crate::Viewport).
 #[derive(Clone, StatelessView)]
 pub struct SliverFixedExtentList {
-    item_extent: f32,
+    item_extent: f64,
     source: Source,
     /// How this sliver's children number themselves for a screen reader.
     /// `None` leaves the adaptor's default — every child a member, at its own
@@ -51,7 +51,7 @@ impl SliverFixedExtentList {
     /// # Panics
     ///
     /// Panics if `item_extent` is not finite or not greater than zero.
-    pub fn new(item_extent: f32, children: impl ViewSeq) -> Self {
+    pub fn new(item_extent: f64, children: impl ViewSeq) -> Self {
         assert!(
             item_extent.is_finite() && item_extent > 0.0,
             "item_extent must be finite and positive, got {item_extent}",
@@ -71,7 +71,7 @@ impl SliverFixedExtentList {
     ///
     /// Panics if `item_extent` is not finite or not greater than zero.
     #[must_use]
-    pub fn over(item_extent: f32, children: Rc<StaticChildren>) -> Self {
+    pub fn over(item_extent: f64, children: Rc<StaticChildren>) -> Self {
         assert!(
             item_extent.is_finite() && item_extent > 0.0,
             "item_extent must be finite and positive, got {item_extent}",
@@ -91,7 +91,7 @@ impl SliverFixedExtentList {
     /// # Panics
     ///
     /// Panics if `item_extent` is not finite or not greater than zero.
-    pub fn builder<F>(item_extent: f32, item_count: usize, builder: F) -> Self
+    pub fn builder<F>(item_extent: f64, item_count: usize, builder: F) -> Self
     where
         F: Fn(usize) -> Option<flui_view::BoxedView> + 'static,
     {
@@ -130,7 +130,7 @@ impl SliverFixedExtentList {
 
     /// The per-child main-axis extent.
     #[must_use]
-    pub const fn item_extent(&self) -> f32 {
+    pub const fn item_extent(&self) -> f64 {
         self.item_extent
     }
 }

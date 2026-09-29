@@ -1,7 +1,7 @@
 //! Drop-shadow parameters and their GPU instance payload.
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::styling::Color;
+use flui_painting::styling::Color;
 use glam::Vec2;
 
 // =============================================================================

@@ -5,8 +5,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use flui_types::Alignment;
-use flui_types::typography::TextDirection;
+use flui_painting::Alignment;
+use flui_painting::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;
 use flui_widgets::localization::{Directionality, resolve_alignment};
@@ -22,7 +22,7 @@ use crate::common::harness::mount;
 /// reads one" (`tests/parity/align_test.rs`). This is that path.
 #[test]
 fn a_directional_alignment_resolves_against_a_mounted_directionality() {
-    use flui_types::layout::AlignmentDirectional;
+    use flui_painting::AlignmentDirectional;
 
     #[derive(Clone, StatelessView)]
     struct Probe {
@@ -49,7 +49,7 @@ fn a_directional_alignment_resolves_against_a_mounted_directionality() {
         ));
         let resolved = seen.get().expect("the probe must have built");
         assert!(
-            (resolved.x - expected_x).abs() < f32::EPSILON,
+            (resolved.x - expected_x).abs() < f64::EPSILON,
             "start is the {direction:?} reading edge, so x must be \
              {expected_x}, got {}",
             resolved.x

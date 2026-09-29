@@ -388,7 +388,7 @@ mod tests {
     };
 
     use flui_foundation::ClaimOutcome;
-    use flui_types::geometry::{Size, px};
+    use flui_foundation::geometry::Size;
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::{CONTROL_CAPACITY, ControlCommand, ControlSendError, control_lane};
@@ -400,7 +400,7 @@ mod tests {
     fn options(title: impl Into<String>) -> WindowOptions {
         WindowOptions {
             title: title.into(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             ..WindowOptions::default()
         }
     }
@@ -416,11 +416,11 @@ mod tests {
             crate::traits::WindowId(1)
         }
 
-        fn physical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::DevicePixels> {
-            flui_types::geometry::Size::default()
+        fn physical_size(&self) -> flui_foundation::geometry::Size<i32> {
+            flui_foundation::geometry::Size::default()
         }
-        fn logical_size(&self) -> flui_types::geometry::Size<flui_types::geometry::Pixels> {
-            flui_types::geometry::Size::default()
+        fn logical_size(&self) -> flui_foundation::geometry::Size<f64> {
+            flui_foundation::geometry::Size::default()
         }
         fn scale_factor(&self) -> f64 {
             1.0
@@ -482,7 +482,7 @@ mod tests {
             .expect("window opens");
         assert_eq!(
             window.physical_size(),
-            flui_types::geometry::Size::default()
+            flui_foundation::geometry::Size::default()
         );
     }
 

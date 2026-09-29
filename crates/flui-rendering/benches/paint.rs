@@ -18,17 +18,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::RenderId;
+use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_interaction::InteractionLane;
 use flui_objects::{
     RenderClipPath, RenderClipRRect, RenderOpacity, RenderRotatedBox, RenderTransform,
 };
+use flui_painting::paint::Path;
+use flui_painting::styling::{BorderRadius, BorderRadiusExt};
 use flui_rendering::hit_testing::PathClipTarget;
 use flui_rendering::pipeline::{PaintPhase, PipelineOwner};
 use flui_rendering::testing::update_render_object;
-use flui_types::geometry::px;
-use flui_types::painting::Path;
-use flui_types::styling::{BorderRadius, BorderRadiusExt};
-use flui_types::{Matrix4, Point, Rect, Size};
 
 // ============================================================================
 // run_compositing — flat tree, N nodes
@@ -339,12 +338,12 @@ fn bench_clip_rrect_radius_change(c: &mut Criterion) {
             helpers::build_effect_tree(
                 layered,
                 subtree,
-                RenderClipRRect::anti_alias().with_border_radius(BorderRadius::circular(px(8.0))),
+                RenderClipRRect::anti_alias().with_border_radius(BorderRadius::circular(8.0)),
             )
         },
         |owner, id| {
             update_render_object::<RenderClipRRect, _>(owner, id, |r| {
-                r.set_border_radius(Some(BorderRadius::circular(px(2.0))))
+                r.set_border_radius(Some(BorderRadius::circular(2.0)))
             });
         },
     );

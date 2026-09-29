@@ -3,7 +3,7 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, DevicePixels, EdgeInsets, Pixels, Point, Size, device_px, px};
+use flui_foundation::geometry::{Bounds, EdgeInsets, Point, Size};
 use parking_lot::Mutex;
 use raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
@@ -128,10 +128,10 @@ unsafe impl Sync for WindowsWindow {}
 /// Mutable window state
 struct WindowState {
     /// Current window bounds (logical pixels)
-    bounds: Bounds<Pixels>,
+    bounds: Bounds<f64>,
 
     /// Current scale factor (DPI / 96)
-    scale_factor: f32,
+    scale_factor: f64,
 
     /// Is window visible?
     visible: bool,
@@ -190,11 +190,11 @@ impl WindowsWindow {
 
             // Get DPI for initial size calculation
             let dpi = GetDpiForSystem();
-            let scale_factor = dpi as f32 / USER_DEFAULT_SCREEN_DPI as f32;
+            let scale_factor = dpi as f64 / USER_DEFAULT_SCREEN_DPI as f64;
 
             // Convert logical size to device pixels
-            let width = logical_to_device(options.size.width.0, scale_factor);
-            let height = logical_to_device(options.size.height.0, scale_factor);
+            let width = logical_to_device(options.size.width, scale_factor);
+            let height = logical_to_device(options.size.height, scale_factor);
 
             // Default position (center on screen)
             let x = CW_USEDEFAULT;
@@ -257,7 +257,7 @@ impl WindowsWindow {
 
             let state = Arc::new(Mutex::new(WindowState {
                 bounds: Bounds {
-                    origin: Point::new(px(0.0), px(0.0)),
+                    origin: Point::new(0.0, 0.0),
                     size: options.size,
                 },
                 scale_factor,
@@ -269,14 +269,14 @@ impl WindowsWindow {
             // Create and install the WindowContext for event dispatch
             // BEFORE building the wrapper: the wrapper keeps the pointer as
             // its teardown identity token (see the `context` field doc).
-            use flui_types::geometry::{DevicePixels, Size};
+            use flui_foundation::geometry::Size;
 
             use super::platform::WindowContext;
 
             let window_id = WindowId(hwnd.0 as u64);
-            let device_width = logical_to_device(width as f32, scale_factor);
-            let device_height = logical_to_device(height as f32, scale_factor);
-            let initial_size = Size::new(DevicePixels(device_width), DevicePixels(device_height));
+            let device_width = logical_to_device(width as f64, scale_factor);
+            let device_height = logical_to_device(height as f64, scale_factor);
+            let initial_size = Size::new(device_width, device_height);
             // Seed the visibility edge filter from the window's ACTUAL
             // style, not a default: an undecorated window is created
             // `WS_POPUP | WS_VISIBLE` (already visible before this context
@@ -450,7 +450,7 @@ impl WindowsWindow {
     }
 
     /// Get current window bounds
-    pub fn bounds(&self) -> Bounds<Pixels> {
+    pub fn bounds(&self) -> Bounds<f64> {
         let state = self.state.lock();
         Bounds {
             origin: state.bounds.origin,
@@ -459,7 +459,7 @@ impl WindowsWindow {
     }
 
     /// Get current scale factor
-    pub fn scale_factor(&self) -> f32 {
+    pub fn scale_factor(&self) -> f64 {
         self.state.lock().scale_factor
     }
 
@@ -544,10 +544,10 @@ impl WindowsWindow {
                     if let Err(error) = SetWindowPos(
                         hwnd,
                         None,
-                        restore_bounds.origin.x.0,
-                        restore_bounds.origin.y.0,
-                        restore_bounds.size.width.0,
-                        restore_bounds.size.height.0,
+                        restore_bounds.origin.x,
+                        restore_bounds.origin.y,
+                        restore_bounds.size.width,
+                        restore_bounds.size.height,
                         SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE,
                     ) {
                         tracing::warn!(
@@ -585,11 +585,8 @@ impl WindowsWindow {
 
                     // Save current bounds
                     let restore_bounds = Bounds {
-                        origin: Point::new(DevicePixels(rect.left), DevicePixels(rect.top)),
-                        size: Size::new(
-                            DevicePixels(rect.right - rect.left),
-                            DevicePixels(rect.bottom - rect.top),
-                        ),
+                        origin: Point::new(rect.left, rect.top),
+                        size: Size::new(rect.right - rect.left, rect.bottom - rect.top),
                     };
 
                     // Validate transition
@@ -640,8 +637,8 @@ impl WindowsWindow {
 
                     // Dispatch Fullscreen event
                     let size = Size::new(
-                        flui_types::geometry::DevicePixels(monitor_rect.right - monitor_rect.left),
-                        flui_types::geometry::DevicePixels(monitor_rect.bottom - monitor_rect.top),
+                        monitor_rect.right - monitor_rect.left,
+                        monitor_rect.bottom - monitor_rect.top,
                     );
                     ctx.dispatch_event(crate::traits::WindowEvent::Fullscreen {
                         window_id: ctx.window_id,
@@ -755,22 +752,22 @@ impl PlatformWindow for WindowsWindow {
         WindowId(self.hwnd.0 as u64)
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
+    fn physical_size(&self) -> Size<i32> {
         let state = self.state.lock();
         let logical = state.bounds.size;
         let scale = state.scale_factor;
         Size::new(
-            device_px(logical_to_device(logical.width.0, scale)),
-            device_px(logical_to_device(logical.height.0, scale)),
+            logical_to_device(logical.width, scale),
+            logical_to_device(logical.height, scale),
         )
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
+    fn logical_size(&self) -> Size<f64> {
         self.state.lock().bounds.size
     }
 
     fn scale_factor(&self) -> f64 {
-        self.state.lock().scale_factor as f64
+        self.state.lock().scale_factor
     }
 
     fn request_redraw(&self) {
@@ -810,11 +807,11 @@ impl PlatformWindow for WindowsWindow {
 
     // ==================== Query Methods (US2) ====================
 
-    fn bounds(&self) -> Bounds<Pixels> {
+    fn bounds(&self) -> Bounds<f64> {
         self.state.lock().bounds
     }
 
-    fn content_size(&self) -> Size<Pixels> {
+    fn content_size(&self) -> Size<f64> {
         // SAFETY: `rect` is a stack-local `RECT` and `&raw mut rect` gives
         // `GetClientRect` a valid, correctly-sized out-parameter; the `Err`
         // path (stale/destroyed `hwnd`) is handled by falling back to the
@@ -824,8 +821,8 @@ impl PlatformWindow for WindowsWindow {
             if GetClientRect(self.hwnd, &raw mut rect).is_ok() {
                 let scale = self.state.lock().scale_factor;
                 Size::new(
-                    px((rect.right - rect.left) as f32 / scale),
-                    px((rect.bottom - rect.top) as f32 / scale),
+                    (rect.right - rect.left) as f64 / scale,
+                    (rect.bottom - rect.top) as f64 / scale,
                 )
             } else {
                 self.state.lock().bounds.size
@@ -872,7 +869,7 @@ impl PlatformWindow for WindowsWindow {
             .unwrap_or(false)
     }
 
-    fn mouse_position(&self) -> Point<Pixels> {
+    fn mouse_position(&self) -> Point<f64> {
         // SAFETY: `cursor_pos` is a stack-local `POINT`; `&raw mut
         // cursor_pos` gives both `GetCursorPos` and `ScreenToClient` a
         // valid, correctly-sized out-parameter. The `is_ok()`/`as_bool()`
@@ -884,10 +881,7 @@ impl PlatformWindow for WindowsWindow {
                 && ScreenToClient(self.hwnd, &raw mut cursor_pos).as_bool()
             {
                 let scale = self.state.lock().scale_factor;
-                Point::new(
-                    px(cursor_pos.x as f32 / scale),
-                    px(cursor_pos.y as f32 / scale),
-                )
+                Point::new(cursor_pos.x as f64 / scale, cursor_pos.y as f64 / scale)
             } else {
                 Point::default()
             }
@@ -1074,14 +1068,14 @@ impl PlatformWindow for WindowsWindow {
         WindowsWindow::toggle_fullscreen(self);
     }
 
-    fn resize(&self, size: Size<Pixels>) {
+    fn resize(&self, size: Size<f64>) {
         // SAFETY: `SetWindowPos` takes `self.hwnd` and plain integer/flag
         // arguments; `None` for the z-order handle is a documented no-op
         // value, not a null pointer.
         unsafe {
             let scale = self.state.lock().scale_factor;
-            let width = logical_to_device(size.width.0, scale);
-            let height = logical_to_device(size.height.0, scale);
+            let width = logical_to_device(size.width, scale);
+            let height = logical_to_device(size.height, scale);
 
             if let Err(error) = SetWindowPos(
                 self.hwnd,
@@ -1201,7 +1195,7 @@ impl PlatformWindow for WindowsWindow {
         });
     }
 
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
         self.register("on_resize", move |callbacks| {
             let previous = callbacks.on_resize.lock().replace(callback);
             drop(previous);
@@ -1478,18 +1472,18 @@ impl WindowTrait for WindowsWindow {
         }
     }
 
-    fn position(&self) -> Point<Pixels> {
+    fn position(&self) -> Point<f64> {
         self.state.lock().bounds.origin
     }
 
-    fn set_position(&mut self, position: Point<Pixels>) {
+    fn set_position(&mut self, position: Point<f64>) {
         // SAFETY: `SetWindowPos` takes `self.hwnd` and plain integer/flag
         // arguments; `None` for the z-order handle is a documented no-op
         // value, not a null pointer.
         unsafe {
             let scale = self.state.lock().scale_factor;
-            let x = logical_to_device(position.x.0, scale);
-            let y = logical_to_device(position.y.0, scale);
+            let x = logical_to_device(position.x, scale);
+            let y = logical_to_device(position.y, scale);
 
             if let Err(error) = SetWindowPos(
                 self.hwnd,
@@ -1507,16 +1501,16 @@ impl WindowTrait for WindowsWindow {
         }
     }
 
-    fn size(&self) -> Size<Pixels> {
+    fn size(&self) -> Size<f64> {
         self.state.lock().bounds.size
     }
 
-    fn set_size(&mut self, size: Size<Pixels>) {
+    fn set_size(&mut self, size: Size<f64>) {
         // SAFETY: see `set_position` above — same call shape.
         unsafe {
             let scale = self.state.lock().scale_factor;
-            let width = logical_to_device(size.width.0, scale);
-            let height = logical_to_device(size.height.0, scale);
+            let width = logical_to_device(size.width, scale);
+            let height = logical_to_device(size.height, scale);
 
             if let Err(error) = SetWindowPos(
                 self.hwnd,
@@ -1727,21 +1721,21 @@ impl WindowTrait for WindowsWindow {
         PlatformWindow::request_redraw(self);
     }
 
-    fn set_min_size(&mut self, size: Option<Size<Pixels>>) {
+    fn set_min_size(&mut self, size: Option<Size<f64>>) {
         // Windows doesn't have a direct API for min/max size
         // This would need to be handled in WM_GETMINMAXINFO message
         // For now, store in WindowState for future use
         tracing::debug!("set_min_size: {:?} (not yet implemented)", size);
     }
 
-    fn set_max_size(&mut self, size: Option<Size<Pixels>>) {
+    fn set_max_size(&mut self, size: Option<Size<f64>>) {
         // Windows doesn't have a direct API for min/max size
         // This would need to be handled in WM_GETMINMAXINFO message
         // For now, store in WindowState for future use
         tracing::debug!("set_max_size: {:?} (not yet implemented)", size);
     }
 
-    fn scale_factor(&self) -> f32 {
+    fn scale_factor(&self) -> f64 {
         self.state.lock().scale_factor
     }
 
@@ -2121,16 +2115,16 @@ impl WindowsWindowExtTrait for WindowsWindow {
         unsafe { GetDpiForWindow(self.hwnd) }
     }
 
-    fn convert_point_from_device(&self, point: Point<DevicePixels>) -> Point<Pixels> {
+    fn convert_point_from_device(&self, point: Point<i32>) -> Point<f64> {
         let scale = self.scale_factor();
-        Point::new(px(point.x.0 as f32 / scale), px(point.y.0 as f32 / scale))
+        Point::new(point.x as f64 / scale, point.y as f64 / scale)
     }
 
-    fn convert_point_to_device(&self, point: Point<Pixels>) -> Point<DevicePixels> {
+    fn convert_point_to_device(&self, point: Point<f64>) -> Point<i32> {
         let scale = self.scale_factor();
         Point::new(
-            device_px((point.x.0 * scale).round() as i32),
-            device_px((point.y.0 * scale).round() as i32),
+            (point.x * scale).round() as i32,
+            (point.y * scale).round() as i32,
         )
     }
 }
@@ -2214,7 +2208,7 @@ mod tests {
     fn test_window_creation() {
         let options = WindowOptions {
             title: "Test Window".to_string(),
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             resizable: true,
             visible: false,
             decorated: true,
@@ -2236,7 +2230,7 @@ mod tests {
 
         let window = result.unwrap();
         assert!(!window.hwnd().is_invalid());
-        assert_eq!(window.logical_size().width.0, 800.0);
+        assert_eq!(window.logical_size().width, 800.0);
     }
 }
 

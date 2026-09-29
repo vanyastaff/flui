@@ -7,11 +7,8 @@
 //! `pop` back out.
 
 use flui_foundation::LayerId;
-use flui_types::{
-    Matrix4,
-    geometry::{Offset, Pixels, RRect, RSuperellipse, Rect},
-    painting::{Clip, ColorFilter, ImageFilter, Path},
-};
+use flui_foundation::geometry::{Matrix4, Offset, RRect, RSuperellipse, Rect};
+use flui_painting::paint::{Clip, ColorFilter, ImageFilter, Path};
 
 use crate::{
     layer::{
@@ -31,7 +28,7 @@ use crate::{
 ///
 /// ```rust
 /// use flui_layer::{PictureLayer, SceneBuilder};
-/// use flui_types::Offset;
+/// use flui_foundation::geometry::Offset;
 ///
 /// let mut builder = SceneBuilder::new();
 /// let offset = builder.push_offset(Offset::ZERO);
@@ -119,7 +116,7 @@ impl SceneBuilder {
     // through `push(SomeLayer::new(..))`.
 
     /// Pushes an [`OffsetLayer`].
-    pub fn push_offset(&mut self, offset: Offset<Pixels>) -> LayerId {
+    pub fn push_offset(&mut self, offset: Offset<f64>) -> LayerId {
         self.push(OffsetLayer::new(offset))
     }
 
@@ -129,12 +126,12 @@ impl SceneBuilder {
     }
 
     /// Pushes an [`OpacityLayer`] (`alpha` in `0.0..=1.0`).
-    pub fn push_opacity(&mut self, alpha: f32) -> LayerId {
+    pub fn push_opacity(&mut self, alpha: f64) -> LayerId {
         self.push(OpacityLayer::new(alpha))
     }
 
     /// Pushes a [`ClipRectLayer`].
-    pub fn push_clip_rect(&mut self, rect: Rect<Pixels>, clip: Clip) -> LayerId {
+    pub fn push_clip_rect(&mut self, rect: Rect<f64>, clip: Clip) -> LayerId {
         self.push(ClipRectLayer::new(rect, clip))
     }
 
@@ -176,10 +173,8 @@ impl SceneBuilder {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{
-        geometry::{Size, px},
-        painting::Clip,
-    };
+    use flui_foundation::geometry::Size;
+    use flui_painting::paint::Clip;
 
     use super::*;
 
@@ -187,10 +182,7 @@ mod tests {
     fn pushed_layers_nest_and_pop_unwinds_them() {
         let mut builder = SceneBuilder::new();
         let offset = builder.push_offset(Offset::ZERO);
-        let clip = builder.push_clip_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
-            Clip::HardEdge,
-        );
+        let clip = builder.push_clip_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), Clip::HardEdge);
         let leaf = builder.add_canvas(CanvasLayer::new());
         assert_eq!(builder.depth(), 2);
         assert_eq!(builder.current(), clip);

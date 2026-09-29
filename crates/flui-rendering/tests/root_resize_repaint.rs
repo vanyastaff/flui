@@ -11,6 +11,7 @@
 //! Failure mode being prevented: stretch the window and the newly
 //! exposed area stays unpainted forever.
 
+use flui_foundation::geometry::Size;
 use flui_layer::Layer;
 use flui_objects::RenderColoredBox;
 use flui_rendering::{
@@ -18,7 +19,6 @@ use flui_rendering::{
     pipeline::PipelineOwner,
     view::{RenderView, RenderViewAdapter, ViewConfiguration},
 };
-use flui_types::{Size, geometry::px};
 
 fn run_frame_sizes(
     owner: flui_rendering::pipeline::PipelineOwner<flui_rendering::pipeline::phase::Idle>,
@@ -64,10 +64,7 @@ fn resize_relays_out_and_repaints_at_the_new_size() {
     // Real production root: RenderViewAdapter bootstrapped the way
     // RootRenderElement::mount does it.
     let mut render_view = RenderView::new();
-    render_view.set_configuration(ViewConfiguration::from_size(
-        Size::new(px(100.0), px(100.0)),
-        1.0,
-    ));
+    render_view.set_configuration(ViewConfiguration::from_size(Size::new(100.0, 100.0), 1.0));
     render_view.prepare_initial_frame_without_owner();
     let root_id = owner.insert(Box::new(RenderViewAdapter::new(render_view))
         as Box<
@@ -79,31 +76,31 @@ fn resize_relays_out_and_repaints_at_the_new_size() {
     owner.set_root_id(Some(root_id));
 
     // Frame 1 at 100×100.
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
     let (geometry, painted, mut owner) = run_frame_sizes(owner);
     assert_eq!(
         geometry,
-        Size::new(px(100.0), px(100.0)),
+        Size::new(100.0, 100.0),
         "frame 1: root sizes from the incoming constraints",
     );
     assert_eq!(
         painted,
-        Size::new(px(100.0), px(100.0)),
+        Size::new(100.0, 100.0),
         "frame 1: the child fills the tight root constraints",
     );
 
     // Resize to 300×200 — set_root_constraints marks the root dirty.
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(300.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(300.0, 200.0))));
     let (geometry, painted, _owner) = run_frame_sizes(owner);
     assert_eq!(
         geometry,
-        Size::new(px(300.0), px(200.0)),
+        Size::new(300.0, 200.0),
         "resize: root_constraints are authoritative — a stale \
          cached-constraints hit must not relayout at the old size",
     );
     assert_eq!(
         painted,
-        Size::new(px(300.0), px(200.0)),
+        Size::new(300.0, 200.0),
         "resize: the repaint covers the NEW size (the mount-time \
          ViewConfiguration snapshot must not cap the painted area)",
     );
@@ -118,10 +115,7 @@ fn unbounded_root_constraints_surface_a_typed_error() {
     let mut owner = PipelineOwner::new();
 
     let mut render_view = RenderView::new();
-    render_view.set_configuration(ViewConfiguration::from_size(
-        Size::new(px(100.0), px(100.0)),
-        1.0,
-    ));
+    render_view.set_configuration(ViewConfiguration::from_size(Size::new(100.0, 100.0), 1.0));
     render_view.prepare_initial_frame_without_owner();
     let root_id = owner.insert(Box::new(RenderViewAdapter::new(render_view))
         as Box<
@@ -133,10 +127,10 @@ fn unbounded_root_constraints_surface_a_typed_error() {
     owner.set_root_id(Some(root_id));
 
     owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(f32::INFINITY),
-        px(0.0),
-        px(f32::INFINITY),
+        0.0,
+        f64::INFINITY,
+        0.0,
+        f64::INFINITY,
     )));
 
     let mut owner = owner.into_layout();

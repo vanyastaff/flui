@@ -587,7 +587,6 @@ mod tests {
     use flui_rendering::constraints::BoxConstraints;
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
-    use flui_types::geometry::px;
 
     use crate::{RebuildReason, View};
 
@@ -630,8 +629,8 @@ mod tests {
         PipelineCell::new(PipelineOwner::new())
     }
 
-    fn constraints(side: f32) -> BoxConstraints {
-        BoxConstraints::tight_for(Some(px(side)), Some(px(side)))
+    fn constraints(side: f64) -> BoxConstraints {
+        BoxConstraints::tight_for(Some(side), Some(side))
     }
 
     /// Whether `render_id` is queued for the next layout pass.

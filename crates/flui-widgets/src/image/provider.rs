@@ -37,7 +37,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use flui_types::painting::Image as PixelImage;
+use flui_painting::paint::Image as PixelImage;
 
 use super::cache_key::ImageCacheKey;
 
@@ -495,7 +495,7 @@ mod decode_tests {
             .expect("a valid PNG decodes to a PixelImage");
         let size = decoded.size();
         assert_eq!(
-            (size.width.get(), size.height.get()),
+            (size.width, size.height),
             (3.0, 2.0),
             "the decoded image keeps its 3×2 source dimensions",
         );

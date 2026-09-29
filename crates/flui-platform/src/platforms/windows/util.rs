@@ -1,7 +1,7 @@
 //! Windows utility functions and helpers
 #![expect(dead_code)]
 
-use flui_types::geometry::{DevicePixels, Pixels, Point, Size, device_px, px};
+use flui_foundation::geometry::{Point, Size};
 use windows::{
     Win32::{Foundation::LPARAM, UI::Input::KeyboardAndMouse::GetAsyncKeyState},
     core::{PCWSTR, w},
@@ -39,29 +39,29 @@ pub fn loword(value: u32) -> u16 {
 
 /// Convert logical pixels to device pixels
 #[inline]
-pub fn logical_to_device(logical: f32, scale_factor: f32) -> i32 {
+pub fn logical_to_device(logical: f64, scale_factor: f64) -> i32 {
     (logical * scale_factor).round() as i32
 }
 
 /// Convert device pixels to logical pixels
 #[inline]
-pub fn device_to_logical(device: i32, scale_factor: f32) -> f32 {
-    device as f32 / scale_factor
+pub fn device_to_logical(device: i32, scale_factor: f64) -> f64 {
+    device as f64 / scale_factor
 }
 
 /// Create a Point in logical pixels from device coordinates
 #[inline]
-pub fn logical_point(x: f32, y: f32, scale_factor: f32) -> Point<Pixels> {
+pub fn logical_point(x: f64, y: f64, scale_factor: f64) -> Point<f64> {
     Point::new(
-        px(device_to_logical(x as i32, scale_factor)),
-        px(device_to_logical(y as i32, scale_factor)),
+        device_to_logical(x as i32, scale_factor),
+        device_to_logical(y as i32, scale_factor),
     )
 }
 
 /// Create a Size in device pixels
 #[inline]
-pub fn device_size(width: i32, height: i32) -> Size<DevicePixels> {
-    Size::new(device_px(width), device_px(height))
+pub fn device_size(width: i32, height: i32) -> Size<i32> {
+    Size::new(width, height)
 }
 
 /// Convert UTF-16 wide string to String

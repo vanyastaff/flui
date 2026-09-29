@@ -7,7 +7,7 @@
 use std::{fmt::Debug, hash::Hash};
 
 use flui_foundation::Arity;
-use flui_types::geometry::Offset;
+use flui_foundation::geometry::Offset;
 
 use crate::parent_data::ParentData;
 
@@ -188,7 +188,7 @@ pub trait HitTestContextApi<'ctx, H: HitTestCapability + ?Sized, A: Arity, P: Pa
     fn position(&self) -> &H::Position;
 
     /// Checks if position is inside the given bounds.
-    fn is_hit(&self, bounds: flui_types::Rect) -> bool;
+    fn is_hit(&self, bounds: flui_foundation::geometry::Rect) -> bool;
 
     /// Tests a child for hits with position transformation.
     fn hit_test_child(&mut self, index: usize, position: H::Position) -> bool;
@@ -203,17 +203,15 @@ pub trait HitTestContextApi<'ctx, H: HitTestCapability + ?Sized, A: Arity, P: Pa
     }
 
     /// Adds a transform to the hit test path.
-    fn push_transform(&mut self, transform: flui_types::Matrix4);
+    fn push_transform(&mut self, transform: flui_foundation::geometry::Matrix4);
 
     /// Removes the most recent transform.
     fn pop_transform(&mut self);
 
     /// Adds an offset transform (convenience method).
     fn push_offset(&mut self, offset: Offset) {
-        self.push_transform(flui_types::Matrix4::translation(
-            offset.dx.get(),
-            offset.dy.get(),
-            0.0,
+        self.push_transform(flui_foundation::geometry::Matrix4::translation(
+            offset.dx, offset.dy, 0.0,
         ));
     }
 }

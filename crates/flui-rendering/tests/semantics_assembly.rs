@@ -13,6 +13,7 @@
 use std::sync::Arc;
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_foundation::{Leaf, Variable};
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -26,10 +27,6 @@ use flui_rendering::{
     testing::{FrameRun, Probe, RenderTester, box_node},
     traits::RenderBox,
 };
-use flui_types::{
-    Offset, Point, Rect, Size,
-    geometry::{Pixels, px},
-};
 
 /// A fixed-size leaf that reports a configurable `SemanticsConfiguration`.
 ///
@@ -37,7 +34,7 @@ use flui_types::{
 /// `RenderSemanticsAnnotations` is not built yet.
 #[derive(Debug, Default)]
 struct SemanticsLeaf {
-    side: f32,
+    side: f64,
     configuration: Option<SemanticsConfiguration>,
     label: Option<&'static str>,
     button: bool,
@@ -49,7 +46,7 @@ struct SemanticsLeaf {
 }
 
 impl SemanticsLeaf {
-    fn new(side: f32) -> Self {
+    fn new(side: f64) -> Self {
         Self {
             side,
             ..Default::default()
@@ -107,8 +104,7 @@ impl RenderBox for SemanticsLeaf {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        ctx.constraints()
-            .constrain(Size::new(px(self.side), px(self.side)))
+        ctx.constraints().constrain(Size::new(self.side, self.side))
     }
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
@@ -155,10 +151,10 @@ struct SemanticsContainer {
     merging_descendants: bool,
     excludes_subtree: bool,
     block_user_actions: bool,
-    side: Option<f32>,
+    side: Option<f64>,
     child_offset: Option<Offset>,
-    semantics_clip: Option<Rect<Pixels>>,
-    paint_clip: Option<Rect<Pixels>>,
+    semantics_clip: Option<Rect<f64>>,
+    paint_clip: Option<Rect<f64>>,
 }
 
 impl SemanticsContainer {
@@ -187,25 +183,25 @@ impl SemanticsContainer {
         self
     }
 
-    fn with_side(mut self, side: f32) -> Self {
+    fn with_side(mut self, side: f64) -> Self {
         self.side = Some(side);
         self
     }
 
-    fn with_child_offset(mut self, dx: f32, dy: f32) -> Self {
-        self.child_offset = Some(Offset::new(px(dx), px(dy)));
+    fn with_child_offset(mut self, dx: f64, dy: f64) -> Self {
+        self.child_offset = Some(Offset::new(dx, dy));
         self
     }
 
     /// Reported from `describe_semantics_clip`, in this node's coordinates.
-    fn with_semantics_clip(mut self, top: f32, bottom: f32) -> Self {
-        self.semantics_clip = Some(Rect::from_ltrb(px(0.0), px(top), px(200.0), px(bottom)));
+    fn with_semantics_clip(mut self, top: f64, bottom: f64) -> Self {
+        self.semantics_clip = Some(Rect::from_ltrb(0.0, top, 200.0, bottom));
         self
     }
 
     /// Reported from `describe_approximate_paint_clip`.
-    fn with_paint_clip(mut self, top: f32, bottom: f32) -> Self {
-        self.paint_clip = Some(Rect::from_ltrb(px(0.0), px(top), px(200.0), px(bottom)));
+    fn with_paint_clip(mut self, top: f64, bottom: f64) -> Self {
+        self.paint_clip = Some(Rect::from_ltrb(0.0, top, 200.0, bottom));
         self
     }
 
@@ -238,7 +234,7 @@ impl RenderBox for SemanticsContainer {
         }
         self.side.map_or_else(
             || constraints.biggest(),
-            |side| constraints.constrain(Size::new(px(side), px(side))),
+            |side| constraints.constrain(Size::new(side, side)),
         )
     }
 
@@ -264,7 +260,7 @@ impl RenderBox for SemanticsContainer {
         self.excludes_subtree
     }
 
-    fn describe_semantics_clip(&self, _child_slot: usize, _size: Size) -> Option<Rect<Pixels>> {
+    fn describe_semantics_clip(&self, _child_slot: usize, _size: Size) -> Option<Rect<f64>> {
         self.semantics_clip
     }
 
@@ -272,13 +268,13 @@ impl RenderBox for SemanticsContainer {
         &self,
         _child_slot: usize,
         _size: Size,
-    ) -> Option<Rect<Pixels>> {
+    ) -> Option<Rect<f64>> {
         self.paint_clip
     }
 }
 
 fn constraints() -> BoxConstraints {
-    BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0))
+    BoxConstraints::new(0.0, 200.0, 0.0, 200.0)
 }
 
 fn snapshot(run: &FrameRun) -> SemanticsSnapshot {
@@ -293,8 +289,8 @@ fn accessibility_id(render_id: RenderId) -> AccessibilityNodeId {
     render_id.into()
 }
 
-fn semantics_rect(x: f32, y: f32, width: f32, height: f32) -> Rect<Pixels> {
-    Rect::from_origin_size(Point::new(px(x), px(y)), Size::new(px(width), px(height)))
+fn semantics_rect(x: f64, y: f64, width: f64, height: f64) -> Rect<f64> {
+    Rect::from_origin_size(Point::new(x, y), Size::new(width, height))
 }
 
 fn assert_snapshot_preorder(snapshot: &SemanticsSnapshot, expected: &[AccessibilityNodeId]) {
@@ -333,7 +329,7 @@ fn assert_snapshot_node(
     role: SemanticsRole,
     flags: u64,
     actions: u64,
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
 ) {
     let node = snapshot
         .node(id)
@@ -1501,8 +1497,8 @@ fn full_snapshot_uses_render_identity_and_keeps_it_across_configuration_updates(
     assert_eq!(initial_child.role(), SemanticsRole::ListItem);
     assert_ne!(initial_child.flags() & SemanticsFlag::IsButton.value(), 0,);
     assert_ne!(initial_child.actions() & SemanticsAction::Tap.value(), 0,);
-    assert_eq!(initial_child.rect().width(), px(20.0));
-    assert_eq!(initial_child.rect().height(), px(20.0));
+    assert_eq!(initial_child.rect().width(), 20.0);
+    assert_eq!(initial_child.rect().height(), 20.0);
 
     run.update::<SemanticsLeaf>(child_render_id, |leaf| leaf.label = Some("After"));
     run.owner_mut().mark_needs_semantics(child_render_id);
@@ -1987,7 +1983,7 @@ fn a_semantics_clip_narrows_a_child_that_straddles_its_edge() {
     let rect = owner.get(child_id).expect("child resolves").rect();
 
     assert_eq!(
-        (rect.min.y.get(), rect.max.y.get()),
+        (rect.min.y, rect.max.y),
         (80.0, 100.0),
         "the child laid out at 80..130 is reported as the 80..100 that is inside the clip",
     );
@@ -2029,7 +2025,7 @@ fn a_paint_clip_keeps_the_child_and_flags_it_hidden() {
         "a child the paint clip excludes must be announced as hidden",
     );
     assert_eq!(
-        (child.rect().min.y.get(), child.rect().max.y.get()),
+        (child.rect().min.y, child.rect().max.y),
         (100.0, 140.0),
         "its rect is the semantics one, not the empty paint intersection — a \
          scroll-to action needs somewhere to aim",

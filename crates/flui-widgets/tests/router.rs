@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out, lay_out_animated, tight};
 use flui_animation::Vsync;
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, GestureDetector, NamedRouteError, NavigatorHandle, PageRoute, PopupRoute,
@@ -209,7 +209,7 @@ fn two_screen_app() -> (LaidOut, Probe) {
 
 fn laid_out_text(laid: &LaidOut, label: &str) -> bool {
     laid.find_text(label)
-        .is_some_and(|id| laid.try_size(id).is_some_and(|size| size.width.get() > 0.0))
+        .is_some_and(|id| laid.try_size(id).is_some_and(|size| size.width > 0.0))
 }
 
 // ============================================================================
@@ -571,7 +571,7 @@ fn router_handle_without_a_router_is_no_router() {
 #[test]
 fn router_pages_run_their_page_transition() {
     let home = Probe::default();
-    let seen: Rc<RefCell<Vec<f32>>> = Rc::default();
+    let seen: Rc<RefCell<Vec<f64>>> = Rc::default();
     let router = {
         let seen = Rc::clone(&seen);
         Router::new(AppRoute::Home, pages(&home)).transitions(

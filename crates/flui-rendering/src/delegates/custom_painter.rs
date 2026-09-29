@@ -7,8 +7,8 @@
 use std::{any::Any, fmt::Debug, sync::Arc, sync::Once};
 
 use flui_foundation::Listenable;
+use flui_foundation::geometry::{Offset, Size};
 use flui_painting::Canvas;
-use flui_types::{Offset, Size};
 
 /// Builder for semantics information.
 ///
@@ -79,11 +79,11 @@ impl Default for SemanticsBuilder {
 /// ```ignore
 /// use flui_rendering::delegates::CustomPainter;
 /// use flui_rendering::pipeline::Canvas;
-/// use flui_types::Size;
+/// use flui_foundation::geometry::Size;
 ///
 /// #[derive(Debug)]
 /// struct CheckerboardPainter {
-///     cell_size: f32,
+///     cell_size: f64,
 /// }
 ///
 /// impl CustomPainter for CheckerboardPainter {

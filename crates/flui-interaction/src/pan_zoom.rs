@@ -7,8 +7,8 @@
 //! cumulative rotation in radians.
 //!
 //! Upstream `ui_events::PointerEvent::Gesture` is too coarse: its
-//! [`ui_events::pointer::PointerGesture`] enum holds only `Pinch(f32)` and
-//! `Rotate(f32)`, dropping the pan delta entirely and folding `Pinch` into
+//! [`ui_events::pointer::PointerGesture`] enum holds only `Pinch(f64)` and
+//! `Rotate(f64)`, dropping the pan delta entirely and folding `Pinch` into
 //! `scale` semantics. That collapser makes it impossible for
 //! `PanGestureRecognizer` (which needs the pan delta) and a trackpad-aware
 //! `ScaleGestureRecognizer` (which needs both pan and scale) to coexist
@@ -33,9 +33,9 @@
 //!
 //! let event = PointerPanZoomEvent::Update {
 //!     pointer_id: 1,
-//!     position: Offset::new(px(50.0), px(60.0)),
-//!     pan: Offset::new(px(10.0), px(0.0)),
-//!     pan_delta: Offset::new(px(2.0), px(0.0)),
+//!     position: Offset::new(50.0, 60.0),
+//!     pan: Offset::new(10.0, 0.0),
+//!     pan_delta: Offset::new(2.0, 0.0),
 //!     scale: 1.0,
 //!     rotation: 0.0,
 //!     timestamp_nanos: 1_000,
@@ -50,27 +50,27 @@
 //! Flutter reference:
 //! <https://api.flutter.dev/flutter/gestures/PointerPanZoomEvent-class.html>
 
-use flui_types::geometry::{Offset, Pixels};
-use flui_types::gestures::PointerDeviceKind;
+use crate::PointerDeviceKind;
+use flui_foundation::geometry::Offset;
 use ui_events::pointer::PointerEvent;
 
 use crate::ids::PointerId;
 
-/// Truncate a `f64` to `f32`.
+/// Truncate a `f64` to `f64`.
 ///
-/// Lossless for any screen-pixel coordinate: a `f32` mantissa rounds at
+/// Lossless for any screen-pixel coordinate: a `f64` mantissa rounds at
 /// ~7 decimal digits and physical pointer positions are reported in
-/// device pixels (≤ 2^23 ≈ 8M), so `f64 → f32` is exact in that range.
+/// device pixels (≤ 2^23 ≈ 8M), so `f64 → f64` is exact in that range.
 /// Used at the W3C→flui boundary where upstream carries `f64` physical
-/// pixels and our `Offset<Pixels>` stores `f32`. Truncation can only
+/// pixels and our `Offset` stores `f64`. Truncation can only
 /// occur for synthetic values (test fixtures, NaN propagation handled
-/// by [`f32::is_finite`] checks upstream).
+/// by [`f64::is_finite`] checks upstream).
 #[inline]
-fn px_f32(v: f64) -> Pixels {
-    // f64 → f32 is intentionally lossy at extreme values; for pointer
-    // coordinates the dynamic range fits in `f32` exactly. This is the
+fn px_f32(v: f64) -> f64 {
+    // f64 → f64 is intentionally lossy at extreme values; for pointer
+    // coordinates the dynamic range fits in `f64` exactly. This is the
     // single canonical W3C→flui downcast site for pointer positions.
-    Pixels(v as f32)
+    v
 }
 
 // ============================================================================
@@ -96,7 +96,7 @@ pub enum PointerPanZoomEvent {
         /// gesture).
         pointer_id: PointerId,
         /// Current pointer position in global coordinates.
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         /// Wall-clock timestamp in nanoseconds. Monotonic relative to
         /// `PointerState::time` (u64 ns).
         timestamp_nanos: u64,
@@ -115,11 +115,11 @@ pub enum PointerPanZoomEvent {
         /// Stable pointer id.
         pointer_id: PointerId,
         /// Current pointer position in global coordinates.
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         /// Cumulative pan offset since the `Start`.
-        pan: Offset<Pixels>,
+        pan: Offset<f64>,
         /// Pan offset change since the previous `Update` event.
-        pan_delta: Offset<Pixels>,
+        pan_delta: Offset<f64>,
         /// Cumulative scale factor since the `Start`. `1.0` = no zoom,
         /// `> 1.0` = zoomed in, `< 1.0` = zoomed out.
         scale: f64,
@@ -140,7 +140,7 @@ pub enum PointerPanZoomEvent {
         /// Stable pointer id.
         pointer_id: PointerId,
         /// Final pointer position in global coordinates.
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         /// Wall-clock timestamp in nanoseconds.
         timestamp_nanos: u64,
         /// Always `PointerDeviceKind::Trackpad`.
@@ -163,7 +163,7 @@ impl PointerPanZoomEvent {
     /// Returns the current pointer position for any variant.
     #[inline]
     #[must_use]
-    pub const fn position(&self) -> Offset<Pixels> {
+    pub const fn position(&self) -> Offset<f64> {
         match *self {
             Self::Start { position, .. }
             | Self::Update { position, .. }
@@ -230,7 +230,7 @@ impl PointerPanZoomEvent {
 /// # Conversion rules
 ///
 /// The upstream `ui_events::pointer::PointerGesture` carries only
-/// `Pinch(f32)` and `Rotate(f32)` deltas. The pan delta is dropped at the
+/// `Pinch(f64)` and `Rotate(f64)` deltas. The pan delta is dropped at the
 /// transport layer (no upstream field exists). To preserve recognizer
 /// fidelity we synthesize a zero pan/pan_delta on the output — recognizers
 /// that need a real pan delta should consume the upstream
@@ -375,7 +375,7 @@ mod tests {
         // Rotate = π/4 → rotation = π/4
         let gesture = make_gesture(
             1,
-            PointerGesture::Rotate(core::f32::consts::FRAC_PI_4),
+            PointerGesture::Rotate((core::f64::consts::FRAC_PI_4) as f32),
             0.0,
             0.0,
         );
@@ -410,8 +410,8 @@ mod tests {
         let gesture = make_gesture(1, PointerGesture::Pinch(0.0), 12.5, 34.5);
         let ev = convert_gesture(&gesture);
         let pos = ev.position();
-        assert_eq!(pos.dx, Pixels(12.5));
-        assert_eq!(pos.dy, Pixels(34.5));
+        assert_eq!(pos.dx, 12.5);
+        assert_eq!(pos.dy, 34.5);
     }
 
     #[test]

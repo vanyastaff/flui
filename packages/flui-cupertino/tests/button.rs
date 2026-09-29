@@ -11,7 +11,7 @@ use std::time::Duration;
 use common::{lay_out, lay_out_animated, loose, tight};
 use flui_cupertino::{CupertinoButton, CupertinoButtonSize, CupertinoColors};
 use flui_sdk::animation::Vsync;
-use flui_sdk::types::platform::Brightness;
+use flui_sdk::platform::Brightness;
 use flui_sdk::view::SignalWriteExt;
 use flui_sdk::widgets::SizedBox;
 use flui_sdk::widgets::Text;
@@ -150,7 +150,7 @@ fn press_opacity_fades_out_then_back_in_over_the_oracle_durations() {
         .try_find_by_render_type("RenderAnimatedOpacity")
         .expect("CupertinoButton should mount a FadeTransition render node");
 
-    let read_opacity = |laid: &common::LaidOut| -> f32 {
+    let read_opacity = |laid: &common::LaidOut| -> f64 {
         laid.render_property(opacity_id, "opacity")
             .expect("RenderAnimatedOpacity should report its opacity diagnostic")
             .parse()

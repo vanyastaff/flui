@@ -44,7 +44,7 @@ impl AnimationDirection {
 ///
 /// # Type Parameter
 ///
-/// * `T` - The type of value this animation produces (e.g., `f32`, `Color`, `Size`)
+/// * `T` - The type of value this animation produces (e.g., `f64`, `Color`, `Size`)
 ///
 /// # Thread Safety
 ///

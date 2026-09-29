@@ -19,9 +19,10 @@ use std::sync::Arc;
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::styling::Color;
+use flui_painting::typography::{TextDirection, TextStyle};
 use flui_painting::{Paint, TextLayout};
-use flui_types::typography::{TextDirection, TextStyle};
-use flui_types::{Color, Offset, Point, Rect, Size, geometry::px};
 
 use flui_rendering::{
     constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,
@@ -29,7 +30,7 @@ use flui_rendering::{
 };
 
 /// The extent the box takes on an axis its constraints leave unbounded.
-pub const ERROR_BOX_FALLBACK_EXTENT: f32 = 48.0;
+pub const ERROR_BOX_FALLBACK_EXTENT: f64 = 48.0;
 
 /// Debug background — Flutter's `RenderErrorBox.backgroundColor` in debug.
 const DEBUG_BACKGROUND: Color = Color::from_argb(0xF090_0000);
@@ -37,7 +38,7 @@ const DEBUG_BACKGROUND: Color = Color::from_argb(0xF090_0000);
 const RELEASE_BACKGROUND: Color = Color::from_argb(0xF0C0_C0C0);
 /// Debug text colour — Flutter's `RenderErrorBox.textStyle`.
 const DEBUG_TEXT: Color = Color::from_argb(0xFFFF_FF66);
-const DEBUG_FONT_SIZE: f32 = 14.0;
+const DEBUG_FONT_SIZE: f64 = 14.0;
 
 /// A filled box standing in for a subtree whose build panicked.
 #[derive(Debug, Clone)]
@@ -85,7 +86,7 @@ impl RenderErrorBox {
     }
 
     fn size_for(constraints: &BoxConstraints) -> Size {
-        let axis = |max: f32| {
+        let axis = |max: f64| {
             if max.is_finite() {
                 max
             } else {
@@ -93,8 +94,8 @@ impl RenderErrorBox {
             }
         };
         constraints.constrain(Size::new(
-            px(axis(constraints.max_width.get())),
-            px(axis(constraints.max_height.get())),
+            axis(constraints.max_width),
+            axis(constraints.max_height),
         ))
     }
 }
@@ -116,33 +117,33 @@ impl RenderBox for RenderErrorBox {
 
     fn compute_min_intrinsic_width(
         &self,
-        _height: f32,
+        _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         0.0
     }
 
     fn compute_max_intrinsic_width(
         &self,
-        _height: f32,
+        _height: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         ERROR_BOX_FALLBACK_EXTENT
     }
 
     fn compute_min_intrinsic_height(
         &self,
-        _width: f32,
+        _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         0.0
     }
 
     fn compute_max_intrinsic_height(
         &self,
-        _width: f32,
+        _width: f64,
         _ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         ERROR_BOX_FALLBACK_EXTENT
     }
 
@@ -169,13 +170,13 @@ impl RenderBox for RenderErrorBox {
             // the text from release `ErrorWidget`s.
             let style = TextStyle::new()
                 .with_color(DEBUG_TEXT)
-                .with_font_size(f64::from(DEBUG_FONT_SIZE))
+                .with_font_size(DEBUG_FONT_SIZE)
                 .with_font_family("monospace");
             let layout = TextLayout::new(
                 &self.message,
                 Some(&style),
                 DEBUG_FONT_SIZE,
-                Some(size.width.0),
+                Some(size.width),
                 None,
                 TextDirection::Ltr,
             );
@@ -189,21 +190,18 @@ impl RenderBox for RenderErrorBox {
 mod tests {
     use super::*;
 
-    fn tight(w: f32, h: f32) -> BoxConstraints {
-        BoxConstraints::tight(Size::new(px(w), px(h)))
+    fn tight(w: f64, h: f64) -> BoxConstraints {
+        BoxConstraints::tight(Size::new(w, h))
     }
 
     #[test]
     fn fills_a_bounded_axis_and_falls_back_on_an_unbounded_one() {
         let bounded = tight(120.0, 30.0);
-        assert_eq!(
-            RenderErrorBox::size_for(&bounded),
-            Size::new(px(120.0), px(30.0))
-        );
-        let unbounded_height = BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(f32::INFINITY));
+        assert_eq!(RenderErrorBox::size_for(&bounded), Size::new(120.0, 30.0));
+        let unbounded_height = BoxConstraints::new(0.0, 200.0, 0.0, f64::INFINITY);
         assert_eq!(
             RenderErrorBox::size_for(&unbounded_height),
-            Size::new(px(200.0), px(ERROR_BOX_FALLBACK_EXTENT))
+            Size::new(200.0, ERROR_BOX_FALLBACK_EXTENT)
         );
     }
 

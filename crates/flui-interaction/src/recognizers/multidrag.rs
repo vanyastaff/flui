@@ -37,7 +37,7 @@
 //! use flui_interaction::recognizers::multidrag::{
 //!     MultiDragGestureRecognizer, MultiDragAxis,
 //! };
-//! use flui_types::geometry::{Offset, Pixels};
+//! use flui_foundation::geometry::Offset;
 //!
 //! let arena = GestureArena::new();
 //! let recognizer = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free)
@@ -60,10 +60,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
 use web_time::Instant;
 
-use flui_types::{
-    Offset,
-    geometry::{PixelDelta, Pixels},
-};
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 
 use super::recognizer::{GestureRecognizer, RecognizerBase};
@@ -123,7 +120,7 @@ pub enum MultiDragAxis {
 /// interactive region). When `Some(handle)` is returned, the recogniser calls
 /// `update`/`end`/`cancel` on that handle.
 pub type MultiDragStartCallback =
-    Rc<dyn Fn(PointerId, Offset<Pixels>) -> Option<Box<dyn MultiDragHandle>>>; // per-pointer handle trait; ≤3 workspace sites, marker preferred over allowlist promotion.
+    Rc<dyn Fn(PointerId, Offset<f64>) -> Option<Box<dyn MultiDragHandle>>>; // per-pointer handle trait; ≤3 workspace sites, marker preferred over allowlist promotion.
 
 /// Per-pointer state. Mirrors Flutter's `MultiDragPointerState`.
 ///
@@ -132,21 +129,21 @@ pub type MultiDragStartCallback =
 /// returns; pending movement is retained until then.
 struct MultiDragPointerState {
     /// Global position where this contact began.
-    initial_position: Offset<Pixels>,
+    initial_position: Offset<f64>,
     /// The same contact as `initial_position`, in the root's space — stored
     /// because dispatch localises the event before this recognizer sees it
     /// (issue #908).
-    initial_global_position: Offset<Pixels>,
+    initial_global_position: Offset<f64>,
     /// The most recent contact position in the root's space.
-    last_global_position: Offset<Pixels>,
+    last_global_position: Offset<f64>,
     /// Last reported position (for delta computation).
-    last_position: Offset<Pixels>,
+    last_position: Offset<f64>,
     /// Pointer device kind (slop, velocity-tracker flavour).
     kind: PointerType,
     /// Slop threshold for this pointer kind.
-    slop: f32,
+    slop: f64,
     /// Accumulated delta while `pending` (pre-acceptance).
-    pending_delta: Offset<PixelDelta>,
+    pending_delta: Offset<f64>,
     /// `true` once the arena has accepted this pointer.
     accepted: bool,
     /// User's handle, populated after `accepted`.
@@ -163,10 +160,10 @@ struct MultiDragPointerState {
 
 impl MultiDragPointerState {
     fn new(
-        initial_position: Offset<Pixels>,
-        initial_global_position: Offset<Pixels>,
+        initial_position: Offset<f64>,
+        initial_global_position: Offset<f64>,
         kind: PointerType,
-        slop: f32,
+        slop: f64,
     ) -> Self {
         Self {
             initial_position,
@@ -175,7 +172,7 @@ impl MultiDragPointerState {
             last_position: initial_position,
             kind,
             slop,
-            pending_delta: Offset::new(PixelDelta::ZERO, PixelDelta::ZERO),
+            pending_delta: Offset::new(0.0, 0.0),
             accepted: false,
             client: None,
             velocity_tracker: VelocityTracker::new(),
@@ -187,9 +184,9 @@ impl MultiDragPointerState {
     /// Per-axis primary slop test — accepts when |delta.{axis}| exceeds slop.
     fn check_for_resolution_after_move(&mut self, axis: MultiDragAxis) -> bool {
         let magnitude = match axis {
-            MultiDragAxis::Free => self.pending_delta.distance().0,
-            MultiDragAxis::Horizontal => self.pending_delta.dx.0.abs(),
-            MultiDragAxis::Vertical => self.pending_delta.dy.0.abs(),
+            MultiDragAxis::Free => self.pending_delta.distance(),
+            MultiDragAxis::Horizontal => self.pending_delta.dx.abs(),
+            MultiDragAxis::Vertical => self.pending_delta.dy.abs(),
         };
         magnitude > self.slop
     }
@@ -201,13 +198,13 @@ pub struct MultiDragUpdateDetails {
     /// Pointer this drag is associated with.
     pub pointer_id: PointerId,
     /// Pointer's current global position.
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Pointer's current local position (same as `global_position` for the
     /// multi-pointer recogniser; user code can transform).
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Delta since the last `update` (or, for the first update, the
     /// accumulated pending delta).
-    pub delta: Offset<PixelDelta>,
+    pub delta: Offset<f64>,
     /// Pointer device kind.
     pub kind: PointerType,
     /// Wall-clock instant of the underlying event.
@@ -220,7 +217,7 @@ pub struct MultiDragEndDetails {
     /// Pointer this drag was associated with.
     pub pointer_id: PointerId,
     /// Pointer's final position.
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Velocity at the moment of release.
     pub velocity: crate::processing::Velocity,
     /// Pointer device kind.
@@ -317,7 +314,7 @@ impl MultiDragGestureRecognizer {
     /// ([`android_defaults`](GestureSettings::android_defaults) is 8 vs 16,
     /// [`ios_defaults`](GestureSettings::ios_defaults) 10 vs 20) even though
     /// they coincide at 18 under [`touch_defaults`](GestureSettings::touch_defaults).
-    fn slop_for(&self, kind: PointerType) -> f32 {
+    fn slop_for(&self, kind: PointerType) -> f64 {
         self.settings.lock().hit_slop(kind)
     }
 
@@ -340,8 +337,8 @@ impl MultiDragGestureRecognizer {
     fn add_pointer_impl(
         self: &Arc<Self>,
         pointer: PointerId,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
         kind: PointerType,
     ) {
         let slop = self.slop_for(kind);
@@ -381,8 +378,8 @@ impl MultiDragGestureRecognizer {
     fn handle_move(
         &self,
         pointer: PointerId,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
         kind: PointerType,
         timestamp: Instant,
     ) {
@@ -514,7 +511,7 @@ impl MultiDragGestureRecognizer {
                 kind: state.kind,
                 timestamp: state.last_pending_timestamp.unwrap_or_else(Instant::now),
             };
-            state.pending_delta = Offset::new(PixelDelta::ZERO, PixelDelta::ZERO);
+            state.pending_delta = Offset::new(0.0, 0.0);
             state.last_pending_timestamp = None;
             state.client = Some(Rc::clone(&client));
             update
@@ -529,8 +526,8 @@ impl MultiDragGestureRecognizer {
     fn handle_up(
         &self,
         pointer: PointerId,
-        _position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        _position: Offset<f64>,
+        global_position: Offset<f64>,
         _kind: PointerType,
     ) {
         let Some(mut state) = self.remove_pointer(pointer) else {
@@ -591,8 +588,8 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: PointerId,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
     ) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
@@ -632,8 +629,8 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             PointerEvent::Up(e) => (e.state.position, e.pointer.pointer_type),
             _ => return,
         };
-        // Position is `PhysicalPosition<f64>`; convert to Offset<Pixels>.
-        let position = Offset::new(Pixels(position.x as f32), Pixels(position.y as f32));
+        // Position is `PhysicalPosition<f64>`; convert to Offset.
+        let position = Offset::new(position.x, position.y);
         // The only point at which the untransformed position exists at all.
         let global_position = dispatch.global.position();
         match event {
@@ -746,7 +743,7 @@ mod tests {
     /// Test handle that records the *first* update (to assert the pending
     /// delta flush carries the accumulated distance).
     struct FirstDeltaRecorder {
-        first: Arc<Mutex<Option<Offset<PixelDelta>>>>,
+        first: Arc<Mutex<Option<Offset<f64>>>>,
     }
     impl MultiDragHandle for FirstDeltaRecorder {
         fn update(&self, details: MultiDragUpdateDetails) {
@@ -840,16 +837,12 @@ mod tests {
             }));
 
         let p = PointerId::PRIMARY;
-        rec.add_pointer(
-            p,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(p, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         arena.close(p);
         // Cross slop so a client handle exists, then cancel.
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             p,
-            Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(100.0, 100.0),
             PointerType::Touch,
         )));
         rec.handle_event(PointerDispatch::at_root(&make_cancel_event(
@@ -879,11 +872,7 @@ mod tests {
             }));
 
         let p = pointer_id(9);
-        rec.add_pointer(
-            p,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(p, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
 
         // A competitor joins the same arena entry.
         let rejected = Arc::new(Mutex::new(false));
@@ -898,7 +887,7 @@ mod tests {
         // Cross slop -> multi-drag wins -> competitor rejected.
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             p,
-            Offset::new(Pixels(100.0), Pixels(100.0)),
+            Offset::new(100.0, 100.0),
             PointerType::Touch,
         )));
 
@@ -925,11 +914,7 @@ mod tests {
                 }));
 
             let p = pointer_id(11);
-            rec.add_pointer(
-                p,
-                Offset::new(Pixels(0.0), Pixels(0.0)),
-                Offset::new(Pixels(0.0), Pixels(0.0)),
-            );
+            rec.add_pointer(p, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
 
             let rejected = Arc::new(Mutex::new(false));
             arena.add(
@@ -944,7 +929,7 @@ mod tests {
             // touch slop (18.0px).
             rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
                 p,
-                Offset::new(Pixels(10.0), Pixels(0.0)),
+                Offset::new(10.0, 0.0),
                 kind,
             )));
 
@@ -976,11 +961,7 @@ mod tests {
         }));
 
         let p = pointer_id(12);
-        rec.add_pointer(
-            p,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(p, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
 
         let rejected = Arc::new(Mutex::new(false));
         arena.add(
@@ -993,7 +974,7 @@ mod tests {
 
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             p,
-            Offset::new(Pixels(12.0), Pixels(0.0)),
+            Offset::new(12.0, 0.0),
             PointerType::Touch,
         )));
 
@@ -1016,16 +997,8 @@ mod tests {
     fn add_pointer_increments_tracked_count() {
         let arena = crate::arena::GestureArena::new();
         let rec = MultiDragGestureRecognizer::new(arena, MultiDragAxis::Free);
-        rec.add_pointer(
-            pointer_id(1),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
-        rec.add_pointer(
-            pointer_id(2),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer_id(1), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
+        rec.add_pointer(pointer_id(2), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         assert_eq!(rec.tracked_pointer_count(), 2);
     }
 
@@ -1041,11 +1014,7 @@ mod tests {
             }));
         let pointer = pointer_id(2);
 
-        rec.add_pointer(
-            pointer,
-            Offset::new(Pixels(4.0), Pixels(8.0)),
-            Offset::new(Pixels(4.0), Pixels(8.0)),
-        );
+        rec.add_pointer(pointer, Offset::new(4.0, 8.0), Offset::new(4.0, 8.0));
         arena.close(pointer);
         arena.drain_deferred_resolutions();
 
@@ -1072,15 +1041,11 @@ mod tests {
                 }))
             }));
 
-        rec.add_pointer(
-            pointer_id(1),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer_id(1), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         arena.close(pointer_id(1));
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(1),
-            Offset::new(Pixels(25.0), Pixels(0.0)),
+            Offset::new(25.0, 0.0),
             PointerType::Touch,
         )));
 
@@ -1115,13 +1080,13 @@ mod tests {
 
         rec.add_pointer(
             PointerId::PRIMARY,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(0.0, 0.0),
+            Offset::new(0.0, 0.0),
         );
         arena.close(PointerId::PRIMARY);
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             PointerId::PRIMARY,
-            Offset::new(Pixels(25.0), Pixels(0.0)),
+            Offset::new(25.0, 0.0),
             PointerType::Touch,
         )));
 
@@ -1158,18 +1123,13 @@ mod tests {
             }
         }));
         // `with_on_start` returns a new Arc; use that one for events.
-        let rec2 = rec2;
 
         // Add two pointers.
-        rec2.add_pointer(
-            pointer_id(1),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec2.add_pointer(pointer_id(1), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         rec2.add_pointer(
             pointer_id(2),
-            Offset::new(Pixels(50.0), Pixels(50.0)),
-            Offset::new(Pixels(50.0), Pixels(50.0)),
+            Offset::new(50.0, 50.0),
+            Offset::new(50.0, 50.0),
         );
         arena.close(pointer_id(1));
         arena.close(pointer_id(2));
@@ -1179,18 +1139,18 @@ mod tests {
         // is post-acceptance and fires a second update.
         rec2.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(1),
-            Offset::new(Pixels(25.0), Pixels(0.0)),
+            Offset::new(25.0, 0.0),
             PointerType::Touch,
         )));
         rec2.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(1),
-            Offset::new(Pixels(30.0), Pixels(0.0)),
+            Offset::new(30.0, 0.0),
             PointerType::Touch,
         )));
         // Pointer 2 also moves and accepts.
         rec2.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(2),
-            Offset::new(Pixels(70.0), Pixels(50.0)),
+            Offset::new(70.0, 50.0),
             PointerType::Touch,
         )));
 
@@ -1214,21 +1174,17 @@ mod tests {
                 }))
             }));
 
-        rec.add_pointer(
-            pointer_id(7),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer_id(7), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         arena.close(pointer_id(7));
         // Two small moves that together exceed 18px slop.
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(7),
-            Offset::new(Pixels(10.0), Pixels(0.0)),
+            Offset::new(10.0, 0.0),
             PointerType::Touch,
         )));
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(7),
-            Offset::new(Pixels(20.0), Pixels(0.0)),
+            Offset::new(20.0, 0.0),
             PointerType::Touch,
         )));
 
@@ -1236,7 +1192,7 @@ mod tests {
         let recorded = *first.lock();
         let recorded = recorded.expect("first update fired");
         assert!(
-            recorded.dx.0.abs() > 18.0,
+            recorded.dx.abs() > 18.0,
             "expected first update to carry ≥slop delta, got {recorded:?}"
         );
     }
@@ -1255,20 +1211,16 @@ mod tests {
                 }))
             }));
 
-        rec.add_pointer(
-            pointer_id(3),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer_id(3), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         arena.close(pointer_id(3));
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(3),
-            Offset::new(Pixels(20.0), Pixels(0.0)),
+            Offset::new(20.0, 0.0),
             PointerType::Touch,
         )));
         rec.handle_event(PointerDispatch::at_root(&make_up_event_for_id(
             pointer_id(3),
-            Offset::new(Pixels(20.0), Pixels(0.0)),
+            Offset::new(20.0, 0.0),
             PointerType::Touch,
         )));
         assert_eq!(ends.load(Ordering::SeqCst), 1);
@@ -1290,11 +1242,7 @@ mod tests {
                 }))
             }));
 
-        rec.add_pointer(
-            pointer_id(4),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer_id(4), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         arena.add(
             pointer_id(4),
             Arc::new(RejectableMember {
@@ -1304,12 +1252,12 @@ mod tests {
         arena.close(pointer_id(4));
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(4),
-            Offset::new(Pixels(5.0), Pixels(0.0)),
+            Offset::new(5.0, 0.0),
             PointerType::Touch,
         )));
         rec.handle_event(PointerDispatch::at_root(&make_up_event_for_id(
             pointer_id(4),
-            Offset::new(Pixels(5.0), Pixels(0.0)),
+            Offset::new(5.0, 0.0),
             PointerType::Touch,
         )));
         assert_eq!(ends.load(Ordering::SeqCst), 0);
@@ -1331,11 +1279,7 @@ mod tests {
                 }))
             }));
 
-        rec.add_pointer(
-            pointer_id(5),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer_id(5), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         arena.add(
             pointer_id(5),
             Arc::new(RejectableMember {
@@ -1346,14 +1290,14 @@ mod tests {
         // 50px vertical, 0px horizontal — must not resolve.
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(5),
-            Offset::new(Pixels(0.0), Pixels(50.0)),
+            Offset::new(0.0, 50.0),
             PointerType::Touch,
         )));
         assert_eq!(updates.load(Ordering::SeqCst), 0);
         // 30px horizontal — now resolves.
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(5),
-            Offset::new(Pixels(30.0), Pixels(50.0)),
+            Offset::new(30.0, 50.0),
             PointerType::Touch,
         )));
         assert_eq!(updates.load(Ordering::SeqCst), 1);
@@ -1384,26 +1328,18 @@ mod tests {
                 }
             }));
 
-        rec.add_pointer(
-            pointer_id(7),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
-        rec.add_pointer(
-            pointer_id(8),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer_id(7), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
+        rec.add_pointer(pointer_id(8), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         arena.close(pointer_id(7));
         arena.close(pointer_id(8));
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(7),
-            Offset::new(Pixels(20.0), Pixels(0.0)),
+            Offset::new(20.0, 0.0),
             PointerType::Touch,
         )));
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(8),
-            Offset::new(Pixels(20.0), Pixels(0.0)),
+            Offset::new(20.0, 0.0),
             PointerType::Touch,
         )));
         // Reject pointer 7 — should cancel only p7's drag.
@@ -1428,15 +1364,11 @@ mod tests {
                 }))
             }));
 
-        rec.add_pointer(
-            pointer_id(9),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer_id(9), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         arena.close(pointer_id(9));
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(9),
-            Offset::new(Pixels(20.0), Pixels(0.0)),
+            Offset::new(20.0, 0.0),
             PointerType::Touch,
         )));
         rec.dispose();
@@ -1452,11 +1384,7 @@ mod tests {
         let competitor = Arc::new(AcceptingMember::default());
         let pointer = pointer_id(10);
 
-        rec.add_pointer(
-            pointer,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         arena.add(pointer, competitor.clone());
         arena.close(pointer);
 
@@ -1491,15 +1419,11 @@ mod tests {
             }));
 
         for pointer in [first_pointer, second_pointer] {
-            rec.add_pointer(
-                pointer,
-                Offset::new(Pixels(0.0), Pixels(0.0)),
-                Offset::new(Pixels(0.0), Pixels(0.0)),
-            );
+            rec.add_pointer(pointer, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
             arena.close(pointer);
             rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
                 pointer,
-                Offset::new(Pixels(25.0), Pixels(0.0)),
+                Offset::new(25.0, 0.0),
                 PointerType::Touch,
             )));
         }
@@ -1523,15 +1447,11 @@ mod tests {
         let arena = crate::arena::GestureArena::new();
         let rec = MultiDragGestureRecognizer::new(arena.clone(), MultiDragAxis::Free)
             .with_on_start(Rc::new(|_pointer, _pos| None));
-        rec.add_pointer(
-            pointer_id(11),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-            Offset::new(Pixels(0.0), Pixels(0.0)),
-        );
+        rec.add_pointer(pointer_id(11), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
         arena.close(pointer_id(11));
         rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
             pointer_id(11),
-            Offset::new(Pixels(20.0), Pixels(0.0)),
+            Offset::new(20.0, 0.0),
             PointerType::Touch,
         )));
         // After rejection, the pointer state is removed.

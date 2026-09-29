@@ -6,14 +6,14 @@ fn insta_tooling_smoke() {
     insta::assert_snapshot!("smoke", "line one\nline two");
 }
 
+use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
 use flui_rendering::testing::{DrawKind, RenderTester, box_node};
-use flui_types::{Size, geometry::px};
 
 #[test]
 fn frame_snapshot_and_predicate() {
     let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(px(40.0), px(40.0)))
+        .with_size(Size::new(40.0, 40.0))
         .run_frame();
     insta::assert_snapshot!("colored_box", run.snapshot());
     run.assert_paints_any(|c| c.kind == DrawKind::Rect);
@@ -23,7 +23,7 @@ fn frame_snapshot_and_predicate() {
 #[should_panic(expected = "no painted command matched")]
 fn assert_paints_any_fails_on_absent_op() {
     let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(px(40.0), px(40.0)))
+        .with_size(Size::new(40.0, 40.0))
         .run_frame();
     run.assert_paints_any(|c| c.kind == DrawKind::Shadow);
 }
@@ -31,7 +31,7 @@ fn assert_paints_any_fails_on_absent_op() {
 #[test]
 fn run_to_paint_exposes_layer_tree() {
     let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(px(40.0), px(40.0)))
+        .with_size(Size::new(40.0, 40.0))
         .run_to_paint();
     assert!(
         run.layer_tree().is_some(),
@@ -44,7 +44,7 @@ fn run_to_paint_exposes_layer_tree() {
 fn run_to_compositing_is_probed_before_paint() {
     use flui_rendering::testing::Probe;
     let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(px(40.0), px(40.0)))
+        .with_size(Size::new(40.0, 40.0))
         .run_to_compositing();
     // CompositingRun has no layer tree; geometry is committed.
     let _ = run.pipeline();
@@ -54,7 +54,7 @@ fn run_to_compositing_is_probed_before_paint() {
 fn run_to_semantics_is_probed_after_paint() {
     use flui_rendering::testing::Probe;
     let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(px(40.0), px(40.0)))
+        .with_size(Size::new(40.0, 40.0))
         .run_to_semantics();
     let _ = run.pipeline();
 }
@@ -64,13 +64,14 @@ fn run_to_semantics_is_probed_after_paint() {
 // ============================================================================
 
 use flui_objects::{RenderFittedBox, RenderStack, RenderViewport};
+use flui_painting::paint::Clip;
+use flui_painting::{Alignment, BoxFit};
 use flui_rendering::{
     context::FragmentRecorder,
     error::RenderError,
     protocol::{BoxProtocol, Protocol, ProtocolGeometry, ProtocolPosition, RenderObject},
     testing::Probe,
 };
-use flui_types::{Alignment, layout::BoxFit, painting::Clip};
 
 /// Returns `true` when the render object at `node` reports visual overflow.
 ///
@@ -128,7 +129,7 @@ impl RenderObject<BoxProtocol> for PanicPaintBox {
         &self,
         _recorder: &mut FragmentRecorder,
         _child_count: usize,
-        _size: flui_types::Size,
+        _size: flui_foundation::geometry::Size,
     ) {
         panic!("PanicPaintBox::paint_raw — intentional test panic");
     }
@@ -137,11 +138,11 @@ impl RenderObject<BoxProtocol> for PanicPaintBox {
         &self,
         _position: ProtocolPosition<BoxProtocol>,
         _child_count: usize,
-        _size: flui_types::Size,
+        _size: flui_foundation::geometry::Size,
         _hit_child: &mut dyn FnMut(
             usize,
             Option<ProtocolPosition<BoxProtocol>>,
-            Option<flui_types::Matrix4>,
+            Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> flui_rendering::traits::HitTestOutcome {
         flui_rendering::traits::HitTestOutcome::miss()
@@ -153,7 +154,7 @@ impl RenderObject<BoxProtocol> for PanicPaintBox {
 #[test]
 fn try_run_frame_captures_poisoned_paint() {
     let err = RenderTester::mount(box_node(PanicPaintBox::new()))
-        .with_size(Size::new(px(10.0), px(10.0)))
+        .with_size(Size::new(10.0, 10.0))
         .try_run_frame()
         .expect_err("a tree whose paint panics must produce Err");
 
@@ -182,7 +183,7 @@ fn has_overflow_reflects_fitted_box_overflow_flag() {
         .label("fitted")
         .child(box_node(RenderColoredBox::red(100.0, 100.0))),
     )
-    .with_size(Size::new(px(50.0), px(50.0)))
+    .with_size(Size::new(50.0, 50.0))
     .run_layout();
 
     assert!(
@@ -200,7 +201,7 @@ fn has_overflow_reflects_fitted_box_overflow_flag() {
         .label("fitted")
         .child(box_node(RenderColoredBox::red(80.0, 80.0))),
     )
-    .with_size(Size::new(px(80.0), px(80.0)))
+    .with_size(Size::new(80.0, 80.0))
     .run_layout();
 
     assert!(
@@ -233,29 +234,28 @@ fn has_overflow_reflects_fitted_box_overflow_flag() {
 /// border) is invisible to `structure()` and `picture_bounds()`.
 #[test]
 fn snapshot_decorated_box() {
+    use flui_foundation::geometry::Offset;
     use flui_objects::RenderDecoratedBox;
-    use flui_types::{
-        Offset, Pixels,
-        geometry::px,
-        styling::{Border, BorderSide, BorderStyle, BoxDecoration, BoxShadow, Color},
+    use flui_painting::styling::{
+        Border, BorderSide, BorderStyle, BoxDecoration, BoxShadow, Color,
     };
 
-    let decoration = BoxDecoration::<Pixels>::new()
+    let decoration = BoxDecoration::<f64>::new()
         .set_color(Some(Color::WHITE))
         .set_border(Some(Border::all(BorderSide::new(
             Color::BLACK,
-            px(2.0),
+            2.0,
             BorderStyle::Solid,
         ))))
         .set_box_shadow(Some(vec![BoxShadow::new(
             Color::rgba(0, 0, 0, 128),
-            Offset::new(px(2.0), px(4.0)),
-            px(6.0),
-            px(0.0),
+            Offset::new(2.0, 4.0),
+            6.0,
+            0.0,
         )]));
 
     let run = RenderTester::mount(box_node(RenderDecoratedBox::new(decoration)))
-        .with_size(Size::new(px(80.0), px(60.0)))
+        .with_size(Size::new(80.0, 60.0))
         .run_frame();
 
     insta::assert_snapshot!("decorated_box", run.snapshot());
@@ -273,13 +273,13 @@ fn snapshot_decorated_box() {
 #[test]
 fn snapshot_clip_layer() {
     use flui_objects::RenderClipRect;
-    use flui_types::{geometry::px, painting::Clip};
+    use flui_painting::paint::Clip;
 
     let run = RenderTester::mount(
         box_node(RenderClipRect::new(Clip::AntiAlias))
             .child(box_node(RenderColoredBox::blue(40.0, 40.0))),
     )
-    .with_size(Size::new(px(40.0), px(40.0)))
+    .with_size(Size::new(40.0, 40.0))
     .run_frame();
 
     insta::assert_snapshot!("clip_layer", run.snapshot());
@@ -296,12 +296,11 @@ fn snapshot_clip_layer() {
 #[test]
 fn snapshot_opacity_layer() {
     use flui_objects::RenderOpacity;
-    use flui_types::geometry::px;
 
     let run = RenderTester::mount(
         box_node(RenderOpacity::new(0.5)).child(box_node(RenderColoredBox::red(50.0, 50.0))),
     )
-    .with_size(Size::new(px(50.0), px(50.0)))
+    .with_size(Size::new(50.0, 50.0))
     .run_frame();
 
     insta::assert_snapshot!("opacity_layer", run.snapshot());
@@ -344,16 +343,16 @@ fn snapshot_opacity_layer() {
 #[test]
 fn scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded() {
     use flui_objects::RenderSliverList;
+    use flui_rendering::constraints::AxisDirection;
     use flui_rendering::{testing::sliver_node, view::ScrollableViewportOffset};
-    use flui_types::layout::AxisDirection;
 
     let n_items = 1_000usize;
-    let item_height = 50.0_f32;
-    let viewport_height = 200.0_f32;
+    let item_height = 50.0_f64;
+    let viewport_height = 200.0_f64;
     // Default cache_extent ≈ 250 px each side → band ≈ (200+500)/50 ≈ 14;
     // +5 covers rounding at the window edges.
     let band_limit = ((viewport_height + 500.0) / item_height).ceil() as usize + 5;
-    let max_scroll = n_items as f32 * item_height - viewport_height;
+    let max_scroll = n_items as f64 * item_height - viewport_height;
     let mid_scroll = 500.0 * item_height;
 
     let mut run = RenderTester::mount(
@@ -362,7 +361,7 @@ fn scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded()
         ))
         .child(sliver_node(RenderSliverList::new(n_items, item_height)).label("list")),
     )
-    .with_size(Size::new(px(300.0), px(viewport_height)))
+    .with_size(Size::new(300.0, viewport_height))
     .run_layout();
 
     let vp_id = run.root();
@@ -378,7 +377,7 @@ fn scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded()
         indices
     };
 
-    let scroll_to = |run: &mut flui_rendering::testing::LayoutRun, pixels: f32| {
+    let scroll_to = |run: &mut flui_rendering::testing::LayoutRun, pixels: f64| {
         run.update::<flui_objects::RenderViewport<ScrollableViewportOffset>>(vp_id, |vp| {
             vp.offset_mut().set_pixels(pixels);
         });

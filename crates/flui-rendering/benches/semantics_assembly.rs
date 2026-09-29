@@ -28,7 +28,6 @@ use flui_rendering::pipeline::phase::Idle;
 use flui_rendering::prelude::{
     BoxLayoutContext, BoxParentData, Leaf, PipelineOwner, RenderBox, SemanticsConfiguration, Size,
 };
-use flui_types::geometry::px;
 
 /// A minimal semantics-carrying leaf, built on the public `RenderBox`
 /// surface (the in-crate test fixtures are `cfg(test)` and invisible here).
@@ -45,7 +44,7 @@ impl RenderBox for Labeled {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        ctx.constraints().constrain(Size::new(px(10.0), px(10.0)))
+        ctx.constraints().constrain(Size::new(10.0, 10.0))
     }
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {

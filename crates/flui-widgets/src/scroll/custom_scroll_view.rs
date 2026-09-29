@@ -3,9 +3,9 @@
 
 use std::fmt;
 
+use flui_foundation::geometry::Axis;
+use flui_painting::paint::Clip;
 use flui_rendering::view::SliverPaintOrder;
-use flui_types::layout::Axis;
-use flui_types::painting::Clip;
 use flui_view::prelude::StatelessView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
@@ -49,10 +49,10 @@ use crate::scroll::{ShrinkWrappingViewport, Viewport};
 #[derive(Clone, StatelessView)]
 pub struct CustomScrollView {
     scroll_direction: Axis,
-    offset: f32,
+    offset: f64,
     shrink_wrap: bool,
     center: Option<usize>,
-    anchor: f32,
+    anchor: f64,
     paint_order: SliverPaintOrder,
     clip_behavior: Clip,
     slivers: Vec<BoxedView>,
@@ -82,7 +82,7 @@ impl CustomScrollView {
 
     /// Set the programmatic scroll offset in logical pixels.
     #[must_use]
-    pub fn offset(mut self, offset: f32) -> Self {
+    pub fn offset(mut self, offset: f64) -> Self {
         self.offset = offset;
         self
     }
@@ -115,7 +115,7 @@ impl CustomScrollView {
     /// Flutter's `ShrinkWrappingViewport` has no `anchor` either. See
     /// [`Viewport::anchor`] for the formulas this drives.
     #[must_use]
-    pub fn anchor(mut self, anchor: f32) -> Self {
+    pub fn anchor(mut self, anchor: f64) -> Self {
         self.anchor = anchor;
         self
     }

@@ -12,7 +12,7 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 
 - **Benchmark / floor — released Flutter.** `.flutter/flutter-master/packages/flutter/lib/src/` is a shipped, mature product (~480k LOC of framework logic across 12 packages) with a test corpus to match. It defines the *minimum* observable behavior and the cheapest oracle for it; it does not define the ceiling, the architecture, or the idiom. FLUI is measured as *at least* this, and expected to be more.
 - **Target — the complete FLUI.** Flutter's behavior as the floor, Rust-native structure, and **better than Flutter wherever a better solution is known** — in functionality, architecture, and code style — with every improvement recorded (ADR / `## Mapping decisions`) and its oracle replaced by a FLUI test.
-- **Current code — a flawed head start.** The existing 21 crates are an inventory, not an anchor. Where the current code matches the target it is kept (a genuine head start — the render *machine* is gold-standard); where it does not, that is an unbuilt or wrong delta of **low narrative weight**, closed as normal construction reaches it. The current code does not anchor the target architecture — the target does. Where current-code defect *patterns* inform the standing quality discipline of Part VI, that is deliberate and forward-looking: a rule that refuses an observed mistake protects the finished product.
+- **Current code — a flawed head start.** The existing crates are an inventory, not an anchor. Where the current code matches the target it is kept (a genuine head start — the render *machine* is gold-standard); where it does not, that is an unbuilt or wrong delta of **low narrative weight**, closed as normal construction reaches it. The current code does not anchor the target architecture — the target does. Where current-code defect *patterns* inform the standing quality discipline of Part VI, that is deliberate and forward-looking: a rule that refuses an observed mistake protects the finished product.
 - **The three architectural rules**: *behavior as floor, everything else designed for Rust* (observable contracts from `.flutter/` are the minimum, improved wherever a better solution is known and the improvement is recorded and tested), *compile-time over runtime*, *sync hot path, async at the edges*. What "better" may never cost is an edge case lost by accident: a Flutter behavior is dropped only by decision, with its test replaced.
 
 **Backing research** (read for the per-decision depth this document synthesizes):
@@ -133,7 +133,7 @@ Concrete types are preserved from `View::build()`'s return value down to the `Sl
 
 ## Part IV — The target crate decomposition
 
-The workspace is healthier than its crate count suggests: most crates are deep modules (substantial complexity behind a small interface — Ousterhout's keep criterion). Several earlier structural do-nows have already landed: `flui-geometry` is split from `flui-types`, `flui-objects` and `flui-widgets` exist, and `flui-animation` is active again. `flui-log` returned as a *composition-only* backend — not the shallow, universally depended-on wrapper that was deleted, but the one crate allowed to install a subscriber, restricted by `allowed_dependents` to `flui-app`, `flui-cli`, and the facade. The remaining decomposition work is targeted, not churn.
+The workspace is healthier than its crate count suggests: most crates are deep modules (substantial complexity behind a small interface — Ousterhout's keep criterion). Several earlier structural do-nows have already landed: there is no catch-all value-types crate — each value type lives with its owner, geometry as plain `f64` values in `flui_foundation::geometry` ([ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md)) — `flui-objects` and `flui-widgets` exist, and `flui-animation` is active again. `flui-log` returned as a *composition-only* backend — not the shallow, universally depended-on wrapper that was deleted, but the one crate allowed to install a subscriber, restricted by `allowed_dependents` to `flui-app`, `flui-cli`, and the facade. The remaining decomposition work is targeted, not churn.
 
 **Changes still ahead from the current workspace:**
 
@@ -141,7 +141,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 - **Create the design-system crates.** `flui-material` and `flui-cupertino` are terminal catalog crates built on top of `flui-widgets`.
 - **No global-localizations crate.** `flui-localizations` was deleted by [ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md): it held no translated strings, only the RTL table and its delegate, which now live in `flui_widgets::localization` beside the contract they implement. Translated catalogs, when they arrive, belong to the catalog that defines each contract.
 
-**No `flui-physics`** — Flutter's `physics` package is already ported into `flui-types/src/physics/`; this overrides the port-phasing research's proposal of a separate crate (~1k LOC of simulation math folded into `flui-types` is the correct shape — a standalone crate would be shallow). **No `flui-services`** — Flutter's `services` is deliberately dissolved; its residue (IME/text-input, system chrome, haptics) becomes capability traits on `flui-platform-api` (`PlatformTextInput`, `PlatformHaptics`, and `PlatformSystemChrome` once it exists), implemented by the backends in `flui-platform` ([ADR-0082](adr/ADR-0082-platform-api-contract-crate.md)).
+**No `flui-physics`** — Flutter's `physics` package is already ported into `flui-animation`'s simulations, beside the controllers that drive them ([ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md) §8); this overrides the port-phasing research's proposal of a separate crate (a standalone crate of simulation math would be shallow). **No `flui-services`** — Flutter's `services` is deliberately dissolved; its residue (IME/text-input, system chrome, haptics) becomes capability traits on `flui-platform-api` (`PlatformTextInput`, `PlatformHaptics`, and `PlatformSystemChrome` once it exists), implemented by the backends in `flui-platform` ([ADR-0082](adr/ADR-0082-platform-api-contract-crate.md)).
 
 **Target — current libraries plus the remaining catalog/l10n crates and the `flui` facade**:
 
@@ -149,7 +149,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 
 | Layer | Crates |
 |---|---|
-| L0 — Foundation | `flui-geometry`, `flui-types` |
+| L0 — Foundation | — (value types live with their owners, ADR-0098) |
 | L1 — Framework primitives | `flui-foundation`, `flui-macros`, `flui-platform-api` |
 | L2 — Substrate | `flui-platform`, `flui-scheduler`, `flui-painting`, `flui-interaction`, `flui-assets` |
 | L3 — Compositing / a11y / animation | `flui-semantics`, `flui-layer`, `flui-animation` |
@@ -163,9 +163,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 
 ```mermaid
 graph TD
-    geometry[flui-geometry]
-    types[flui-types]
-    foundation[flui-foundation]
+    foundation[flui-foundation +geometry]
     macros[flui-macros]
     platformapi[flui-platform-api +services-caps]
     platform[flui-platform backends]
@@ -190,16 +188,13 @@ graph TD
     app[flui-app]
     facade[flui FACADE]
 
-    types --> geometry
-    foundation -.-> types
-    platformapi --> types
     platformapi --> foundation
     platform --> platformapi
     scheduler --> foundation
     painting --> foundation
     interaction --> foundation
     interaction --> platformapi
-    assets --> types
+    assets --> painting
     layer --> painting
     animation --> scheduler
     engine --> layer
@@ -239,7 +234,7 @@ graph TD
     facade --> widgets
 ```
 
-Dashed edges are **not present in `Cargo.toml` today**. `foundation -.-> types` is a responsibility placement, not a Cargo edge — `flui-foundation`'s manifest is deliberately leaf-like and takes `flui-types` as a dev-dependency only. The graph is the architectural spine, not the full 134-edge set — the complete, checked edge list is whatever `cargo metadata` reports, validated against the manifests' layers.
+`flui-foundation`'s manifest is deliberately leaf-like: no internal-crate runtime dependency. The graph is the architectural spine, not the full edge set — the complete, checked edge list is whatever `cargo metadata` reports, validated against the manifests' layers.
 
 `rendering --> scheduler` (added 2026-07-14): `flui-rendering::view::ScrollPosition` names `flui_scheduler::PostFrameHandle` for its coalesced content-dimension-flush notify (a post-frame callback that fires a scroll listener after `RenderViewport::perform_layout` commits extents, instead of notifying mid-layout). `flui-scheduler` is L2 (Substrate) and depends only on `flui-foundation`, so this is a same-direction extension of the existing `animation --> scheduler` (L3) edge, not a new direction — `flui-rendering` (L4) gains a second, lower-layer dependency, no cycle.
 
@@ -259,7 +254,7 @@ The guarantee: every crate declares its layer in its own manifest (`[package.met
 
 **`flui-runtime` is extracted in steps.** ADR-0041 gated a runtime crate on two entry points driving one proven core. [ADR-0083](adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) supersedes that gate: the product runners and the headless test driver must run the same frame transaction, so `flui-runtime` (tier K, internal, above `flui-widgets`) holds it, and `flui-app` keeps the runners, platform wiring and raster lane. Its normal graph reaches no platform backend, windowing, GPU or engine crate. The per-presentation lanes moved first, then the realm core, once `PlatformWindow` had left `flui-platform` for `flui-platform-api`; the realm renders through a `FrameSink` the host implements (ADR-0083 `## Migration`). The composition-only `flui-log` (issue [#568](https://github.com/vanyastaff/flui/issues/568)) is the one crate this milestone *does* add, and only because it removes process-global subscriber installation from `flui-foundation`; it sits at layer 2, and the `allowed-dependents` list in its manifest is what stops it becoming universal again.
 
-The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects the pre-PR-C-2 layering snapshot (geometry was in `flui-types`; since [PR #138](https://github.com/vanyastaff/flui/pull/138) it lives in the dedicated `flui-geometry` crate and is re-exported via `flui_types::geometry::*` for compatibility — edition 2024 / Rust 1.96, accurate workspace member list otherwise); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
+The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects an older layering snapshot (it predates [ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md), which gave each value type to its owner and put geometry in `flui_foundation::geometry`); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
 
 ---
 

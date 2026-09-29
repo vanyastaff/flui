@@ -1,10 +1,8 @@
 //! `TextPainter` painting and cursor queries, all over the layout that
 //! [`super::measure`]'s `layout()` cached.
 
-use flui_types::{
-    geometry::{Offset, Pixels},
-    typography::{LineMetrics, TextBox, TextPosition, TextRange},
-};
+use crate::typography::{LineMetrics, TextBox, TextPosition, TextRange};
+use flui_foundation::geometry::Offset;
 
 use super::TextPainter;
 use crate::Canvas;
@@ -21,7 +19,7 @@ impl TextPainter {
     /// called.
     #[must_use]
     #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
-    pub fn get_offset_for_caret(&self, position: TextPosition) -> Offset<Pixels> {
+    pub fn get_offset_for_caret(&self, position: TextPosition) -> Offset<f64> {
         let cache = self
             .layout_cache
             .as_ref()
@@ -40,7 +38,7 @@ impl TextPainter {
     /// called.
     #[must_use]
     #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first
-    pub fn get_position_for_offset(&self, offset: Offset<Pixels>) -> TextPosition {
+    pub fn get_position_for_offset(&self, offset: Offset<f64>) -> TextPosition {
         let cache = self
             .layout_cache
             .as_ref()
@@ -116,7 +114,7 @@ impl TextPainter {
     /// Panics if [`layout`](super::TextPainter::layout) has not been
     /// called.
     #[expect(clippy::expect_used)] // Documented precondition: layout() must be called first, text must be set
-    pub fn paint(&self, canvas: &mut Canvas, offset: Offset<Pixels>) {
+    pub fn paint(&self, canvas: &mut Canvas, offset: Offset<f64>) {
         // Check `text` first: it is the *root-cause* precondition.
         // If both `text` and `layout_cache` are unset, "text must be
         // set" is the actionable message — the cache only exists
@@ -135,7 +133,7 @@ impl TextPainter {
         let color = text
             .style()
             .and_then(crate::text_layout::paint_color)
-            .unwrap_or(flui_types::Color::BLACK);
+            .unwrap_or(crate::styling::Color::BLACK);
         // The very layout this painter measured: what the engine rasterises
         // is, by identity, what was laid out.
         canvas.draw_paragraph(&cache.layout, paint_offset, color);

@@ -209,7 +209,7 @@ fn set_value_nan_is_canonicalized() {
     let _serial = serial();
     let c = controller(100);
     c.set_value(0.5);
-    c.set_value(f32::NAN);
+    c.set_value(f64::NAN);
     assert_eq!(
         c.value(),
         0.0,
@@ -286,8 +286,8 @@ fn without_ticker_bounds_rejects_wide_open_ones() {
 
     let wide_open = AnimationController::without_ticker_bounds(
         Duration::from_millis(1),
-        f32::NEG_INFINITY,
-        f32::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
     );
     assert!(
         matches!(wide_open, Err(AnimationError::InvalidBounds(_))),
@@ -351,8 +351,8 @@ fn with_detached_ticker_bounds_rejects_wide_open_ones() {
 
     let wide_open = AnimationController::with_detached_ticker_bounds(
         Duration::from_millis(1),
-        f32::NEG_INFINITY,
-        f32::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
     );
     assert!(
         matches!(wide_open, Err(AnimationError::InvalidBounds(_))),
@@ -387,14 +387,14 @@ fn disposed_controller_rejects_forward() {
 fn bounds_constructors_reject_non_finite_bounds() {
     let _serial = serial();
     let scheduler = UpdateScheduler::new();
-    let cases: &[(f32, f32)] = &[
-        (f32::NAN, 1.0),
-        (0.0, f32::NAN),
-        (f32::NEG_INFINITY, f32::INFINITY),
-        (f32::NEG_INFINITY, 5.0),
-        (5.0, f32::INFINITY),
-        (f32::NEG_INFINITY, f32::NEG_INFINITY),
-        (-f32::MAX, f32::MAX),
+    let cases: &[(f64, f64)] = &[
+        (f64::NAN, 1.0),
+        (0.0, f64::NAN),
+        (f64::NEG_INFINITY, f64::INFINITY),
+        (f64::NEG_INFINITY, 5.0),
+        (5.0, f64::INFINITY),
+        (f64::NEG_INFINITY, f64::NEG_INFINITY),
+        (-f64::MAX, f64::MAX),
     ];
     for &(lower, upper) in cases {
         assert!(
@@ -498,7 +498,7 @@ fn set_value_non_finite_is_a_full_no_op_on_unbounded_but_canonicalizes_on_bounde
     // Bounded: pin -- `+inf` clamps to the upper bound (mirrors the
     // existing `set_value_nan_is_canonicalized` pin for `NaN`).
     let c = controller(100);
-    c.set_value(f32::INFINITY);
+    c.set_value(f64::INFINITY);
     assert_eq!(
         c.value(),
         1.0,
@@ -513,7 +513,7 @@ fn set_value_non_finite_is_a_full_no_op_on_unbounded_but_canonicalizes_on_bounde
     assert!(c.is_animating(), "precondition: a live run is installed");
     let generation_before = c.run_generation();
 
-    c.set_value(f32::NAN);
+    c.set_value(f64::NAN);
     assert_eq!(
         c.value(),
         0.0,
@@ -525,13 +525,13 @@ fn set_value_non_finite_is_a_full_no_op_on_unbounded_but_canonicalizes_on_bounde
     );
     assert_eq!(c.run_generation(), generation_before);
 
-    c.set_value(f32::INFINITY);
+    c.set_value(f64::INFINITY);
     assert_eq!(
         c.value(),
         0.0,
         "set_value(+inf) on an unbounded controller must not move value"
     );
-    c.set_value(f32::NEG_INFINITY);
+    c.set_value(f64::NEG_INFINITY);
     assert_eq!(
         c.value(),
         0.0,
@@ -559,14 +559,14 @@ fn non_finite_warn_latch_sets_once_across_three_calls() {
         "a fresh controller has never seen a non-finite value"
     );
 
-    c.set_value(f32::NAN);
+    c.set_value(f64::NAN);
     assert!(
         c.debug_non_finite_warned(),
         "the latch must be set after the first non-finite set_value"
     );
 
-    c.set_value(f32::INFINITY);
-    c.set_value(f32::NEG_INFINITY);
+    c.set_value(f64::INFINITY);
+    c.set_value(f64::NEG_INFINITY);
     assert!(
         c.debug_non_finite_warned(),
         "the latch must stay set (not toggle) across two further non-finite calls"
@@ -605,15 +605,15 @@ fn unbounded_refusals_leave_the_controller_completely_untouched() {
         ("reverse()", Box::new(AnimationController::reverse)),
         (
             "animate_to(NaN)",
-            Box::new(|c: &AnimationController| c.animate_to(f32::NAN, None)),
+            Box::new(|c: &AnimationController| c.animate_to(f64::NAN, None)),
         ),
         (
             "animate_to(inf)",
-            Box::new(|c: &AnimationController| c.animate_to(f32::INFINITY, None)),
+            Box::new(|c: &AnimationController| c.animate_to(f64::INFINITY, None)),
         ),
         (
             "animate_back(NaN)",
-            Box::new(|c: &AnimationController| c.animate_back(f32::NAN, None)),
+            Box::new(|c: &AnimationController| c.animate_back(f64::NAN, None)),
         ),
         (
             "fling(1.0)",
@@ -739,7 +739,7 @@ fn bounded_controller_refuses_non_finite_target_and_from() {
 
     let c = controller(100);
     assert!(matches!(
-        c.animate_to(f32::NAN, None),
+        c.animate_to(f64::NAN, None),
         Err(AnimationError::NonFiniteTarget(_))
     ));
     assert_eq!(
@@ -750,7 +750,7 @@ fn bounded_controller_refuses_non_finite_target_and_from() {
 
     let c = controller(100);
     assert!(matches!(
-        c.forward_from(Some(f32::NAN)),
+        c.forward_from(Some(f64::NAN)),
         Err(AnimationError::NonFiniteTarget(_))
     ));
     assert_eq!(c.value(), 0.0);
@@ -758,7 +758,7 @@ fn bounded_controller_refuses_non_finite_target_and_from() {
     let c = controller(100);
     c.set_value(0.5);
     assert!(matches!(
-        c.reverse_from(Some(f32::NAN)),
+        c.reverse_from(Some(f64::NAN)),
         Err(AnimationError::NonFiniteTarget(_))
     ));
     assert_eq!(
@@ -779,7 +779,7 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
     // instant settle: `value` still starts at the entry value and
     // reaches `1.0` only once the run completes).
     let c = controller(100);
-    c.animate_to(f32::INFINITY, None).unwrap();
+    c.animate_to(f64::INFINITY, None).unwrap();
     c.tick_at(0.1);
     assert_eq!(
         c.value(),
@@ -792,7 +792,7 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
     // target (also `upper_bound`) already reached -- this settles
     // SYNCHRONOUSLY (zero distance), unlike the `animate_to` case above.
     let c = controller(100);
-    c.forward_from(Some(f32::INFINITY)).unwrap();
+    c.forward_from(Some(f64::INFINITY)).unwrap();
     assert_eq!(
         c.value(),
         1.0,
@@ -804,7 +804,7 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
     // which is also `reverse`'s own target -- settles SYNCHRONOUSLY at
     // the lower bound, the reverse-direction twin of the case above.
     let c = controller(100);
-    c.reverse_from(Some(f32::NEG_INFINITY)).unwrap();
+    c.reverse_from(Some(f64::NEG_INFINITY)).unwrap();
     assert_eq!(
         c.value(),
         0.0,
@@ -859,7 +859,7 @@ fn unbounded_controller_refuses_an_infinite_animate_to_target_too() {
 
     let c = AnimationController::unbounded_without_ticker(Duration::from_millis(100));
     assert!(matches!(
-        c.animate_to(f32::INFINITY, None),
+        c.animate_to(f64::INFINITY, None),
         Err(AnimationError::NonFiniteTarget(_))
     ));
     assert_eq!(c.value(), 0.0, "a refused animate_to must not move value");
@@ -918,12 +918,12 @@ fn unbounded_first_stop_on_a_fresh_controller_reports_completed() {
 /// error. The OLD `lo >= hi` check did not catch NaN (`NaN >= hi` is
 /// `false`), so `repeat_with(Some(NaN), ..)` reached
 /// `inner.value.clamp(lo, hi)` with `lo` itself NaN, which panicked
-/// inside `f32::clamp`'s own `assert!(min <= max)`.
+/// inside `f64::clamp`'s own `assert!(min <= max)`.
 #[test]
 fn repeat_with_rejects_a_nan_endpoint_on_a_bounded_controller() {
     let _serial = serial();
     let c = controller(100);
-    let r = c.repeat_with(Some(f32::NAN), Some(1.0), false, None, None);
+    let r = c.repeat_with(Some(f64::NAN), Some(1.0), false, None, None);
     assert!(matches!(r, Err(AnimationError::InvalidBounds(_))));
     assert_eq!(c.value(), 0.0, "a refused repeat_with must not move value");
 }
@@ -944,20 +944,20 @@ fn repeat_with_refuses_a_non_finite_effective_range_on_unbounded() {
 
 // ---- #1183: span overflow -----------------------------------------------
 
-/// A `target - value` span overflowing `f32` is refused at the call
+/// A `target - value` span overflowing `f64` is refused at the call
 /// rather than let `tick_time_based` interpolate an infinite range:
-/// unguarded, `set_value(-f32::MAX)` then `animate_to(f32::MAX)`
+/// unguarded, `set_value(-f64::MAX)` then `animate_to(f64::MAX)`
 /// installs a run whose `range` is `+inf`.
 #[test]
 fn animate_to_refuses_a_span_that_overflows_f32() {
     let _serial = serial();
     let c = AnimationController::unbounded_without_ticker(Duration::from_millis(100));
-    c.set_value(-f32::MAX);
-    let r = c.animate_to(f32::MAX, None);
+    c.set_value(-f64::MAX);
+    let r = c.animate_to(f64::MAX, None);
     assert!(matches!(r, Err(AnimationError::NonFiniteTarget(_))));
     assert_eq!(
         c.value(),
-        -f32::MAX,
+        -f64::MAX,
         "a refused animate_to must not move value"
     );
     c.dispose();
@@ -973,7 +973,7 @@ fn animate_to_refuses_a_span_that_overflows_f32() {
 fn fling_refuses_a_non_finite_velocity() {
     let _serial = serial();
     let c = controller(100);
-    let r = c.fling(f32::NAN);
+    let r = c.fling(f64::NAN);
     assert!(matches!(r, Err(AnimationError::NonFiniteTarget(_))));
     assert!(!c.is_animating());
 }
@@ -1008,17 +1008,17 @@ fn fling_with_refused_for_invalid_spring_leaves_direction_untouched() {
 /// A scratch [`Simulation`] whose `x()` is finite at `t = 0` (so
 /// `drive_simulation` accepts it) but returns NaN once mid-run.
 struct GoesNanMidRun {
-    nan_at: f32,
+    nan_at: f64,
 }
 
 impl Simulation for GoesNanMidRun {
-    fn x(&self, time: f32) -> f32 {
-        if time >= self.nan_at { f32::NAN } else { time }
+    fn x(&self, time: f64) -> f64 {
+        if time >= self.nan_at { f64::NAN } else { time }
     }
-    fn dx(&self, _time: f32) -> f32 {
+    fn dx(&self, _time: f64) -> f64 {
         1.0
     }
-    fn is_done(&self, _time: f32) -> bool {
+    fn is_done(&self, _time: f64) -> bool {
         false
     }
     fn tolerance(&self) -> Tolerance {
@@ -1115,7 +1115,7 @@ fn tick_time_based_reads_start_value_exactly_at_t_zero() {
 struct NotIdentityAtEndpoints;
 
 impl Curve for NotIdentityAtEndpoints {
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         0.1 + t * 0.8
     }
 }
@@ -2820,17 +2820,17 @@ fn forward_then_reverse_with_no_tick_delivers_the_intermediate_status() {
 /// from the first tick, so `tick_simulation`'s completion branch runs
 /// immediately without needing a real spring to settle.
 struct InstantSimulation {
-    value: f32,
+    value: f64,
 }
 
 impl Simulation for InstantSimulation {
-    fn x(&self, _time: f32) -> f32 {
+    fn x(&self, _time: f64) -> f64 {
         self.value
     }
-    fn dx(&self, _time: f32) -> f32 {
+    fn dx(&self, _time: f64) -> f64 {
         0.0
     }
-    fn is_done(&self, _time: f32) -> bool {
+    fn is_done(&self, _time: f64) -> bool {
         true
     }
     fn tolerance(&self) -> Tolerance {

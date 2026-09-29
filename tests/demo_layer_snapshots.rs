@@ -98,8 +98,8 @@ use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 /// The mounted size every demo is snapshotted at. Wide and tall enough that
 /// each demo's list overflows, so a scrollable's clip and its off-screen
 /// children are part of what the snapshot pins.
-const SHOT_WIDTH: f32 = 900.0;
-const SHOT_HEIGHT: f32 = 760.0;
+const SHOT_WIDTH: f64 = 900.0;
+const SHOT_HEIGHT: f64 = 760.0;
 
 /// Pins the shared font database to the faces this repository ships.
 ///

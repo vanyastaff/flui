@@ -31,7 +31,6 @@ accesskit = { workspace = true }
 # (ADR-0082 §2).
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # The contracts the backends implement (capability traits, window/input and
 # data-transfer vocabulary), re-exported here at their old paths (ADR-0082).
 flui-platform-api = { workspace = true }
@@ -341,6 +340,8 @@ x11 = []
 workspace = true
 
 [dev-dependencies]
+# Paint values for the tests and examples that draw.
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # Application-side error handling in tests/examples only — never a normal
 # dependency again: no `anyhow` token may appear in this crate's public API.
 anyhow = { workspace = true }

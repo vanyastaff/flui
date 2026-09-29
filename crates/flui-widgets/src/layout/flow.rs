@@ -5,9 +5,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use flui_objects::RenderFlow;
+use flui_painting::paint::Clip;
 use flui_rendering::delegates::FlowDelegate;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::painting::Clip;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
@@ -95,8 +95,8 @@ generic_render_view_element!(Flow);
 mod tests {
     use std::any::Any;
 
+    use flui_foundation::geometry::Size;
     use flui_rendering::constraints::BoxConstraints;
-    use flui_types::Size;
     use flui_view::RenderView;
     use flui_view::ViewExt;
 

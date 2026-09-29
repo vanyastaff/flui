@@ -28,11 +28,9 @@
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::{RRect, Rect};
+    use flui_painting::styling::Color;
     use flui_painting::{BlendMode, Paint, PaintStyle};
-    use flui_types::{
-        Color, Rect,
-        geometry::{Pixels, RRect},
-    };
 
     use crate::{painter::WgpuPainter, render_target::RenderTarget};
 
@@ -120,12 +118,12 @@ mod gpu_tests {
     }
 
     /// Full-surface bounds for the test viewport.
-    fn full_surface_bounds() -> Rect<Pixels> {
+    fn full_surface_bounds() -> Rect<f64> {
         Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(SURFACE_WIDTH as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         )
     }
 
@@ -253,12 +251,12 @@ mod gpu_tests {
         let inset = 8.0_f32;
         let rrect = RRect::from_rect_circular(
             Rect::from_ltrb(
-                Pixels(inset),
-                Pixels(inset),
-                Pixels(SURFACE_WIDTH as f32 - inset),
-                Pixels(SURFACE_HEIGHT as f32 - inset),
+                f64::from(inset),
+                f64::from(inset),
+                f64::from(SURFACE_WIDTH as f32 - inset),
+                f64::from(SURFACE_HEIGHT as f32 - inset),
             ),
-            Pixels(4.0),
+            4.0,
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -341,10 +339,10 @@ mod gpu_tests {
         let full_bounds = full_surface_bounds();
         // Small center rect for the "after" SrcOver draw.
         let center_rect = Rect::from_xywh(
-            Pixels(SURFACE_WIDTH as f32 / 4.0),
-            Pixels(SURFACE_HEIGHT as f32 / 4.0),
-            Pixels(SURFACE_WIDTH as f32 / 2.0),
-            Pixels(SURFACE_HEIGHT as f32 / 2.0),
+            f64::from(SURFACE_WIDTH as f32 / 4.0),
+            f64::from(SURFACE_HEIGHT as f32 / 4.0),
+            f64::from(SURFACE_WIDTH as f32 / 2.0),
+            f64::from(SURFACE_HEIGHT as f32 / 2.0),
         );
 
         let before_color = Color::rgba(220, 80, 30, 200); // translucent orange — before
@@ -451,9 +449,9 @@ mod gpu_tests {
 
         // 1. A red circle covering the middle of the surface.
         painter.draw_circle(
-            flui_types::Point::new(
-                Pixels(SURFACE_WIDTH as f32 / 2.0),
-                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+            flui_foundation::geometry::Point::new(
+                f64::from(SURFACE_WIDTH as f32 / 2.0),
+                f64::from(SURFACE_HEIGHT as f32 / 2.0),
             ),
             20.0,
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
@@ -462,10 +460,10 @@ mod gpu_tests {
         // 2. An opaque blue rect recorded AFTER it, covering the same area.
         painter.draw_rect(
             Rect::from_xywh(
-                Pixels(SURFACE_WIDTH as f32 / 4.0),
-                Pixels(SURFACE_HEIGHT as f32 / 4.0),
-                Pixels(SURFACE_WIDTH as f32 / 2.0),
-                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+                f64::from(SURFACE_WIDTH as f32 / 4.0),
+                f64::from(SURFACE_HEIGHT as f32 / 4.0),
+                f64::from(SURFACE_WIDTH as f32 / 2.0),
+                f64::from(SURFACE_HEIGHT as f32 / 2.0),
             ),
             &Paint::fill(Color::rgba(0, 0, 255, 255)),
         );
@@ -530,7 +528,7 @@ mod gpu_tests {
             },
         );
 
-        let solid = |rect: Rect<Pixels>, color: Color| {
+        let solid = |rect: Rect<f64>, color: Color| {
             crate::test_support::linear_gradient_fill(
                 rect,
                 glam::Vec2::new(0.0, 0.0),
@@ -543,7 +541,7 @@ mod gpu_tests {
 
         // 1. A green gradient in the top-left quadrant — fills the first
         //    segment's stop table so the second gradient's offset is non-zero.
-        let top_left = Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(24.0), Pixels(24.0));
+        let top_left = Rect::from_xywh(0.0, 0.0, 24.0, 24.0);
         painter.draw_rect(top_left, &solid(top_left, Color::rgba(0, 255, 0, 255)));
 
         // 2. A circle then a rect. Circle -> Rect is a genuine BACKWARD kind
@@ -554,17 +552,17 @@ mod gpu_tests {
         //    of this test with just a rect between the gradients never reaches
         //    a backward transition and passes either way.
         painter.draw_circle(
-            flui_types::Point::new(Pixels(6.0), Pixels(52.0)),
+            flui_foundation::geometry::Point::new(6.0, 52.0),
             4.0,
             &Paint::fill(Color::rgba(0, 0, 0, 255)),
         );
         painter.draw_rect(
-            Rect::from_xywh(Pixels(0.0), Pixels(40.0), Pixels(8.0), Pixels(8.0)),
+            Rect::from_xywh(0.0, 40.0, 8.0, 8.0),
             &Paint::fill(Color::rgba(0, 0, 0, 255)),
         );
 
         // 3. A blue gradient recorded into the post-seal segment.
-        let bottom_right = Rect::from_xywh(Pixels(36.0), Pixels(36.0), Pixels(24.0), Pixels(24.0));
+        let bottom_right = Rect::from_xywh(36.0, 36.0, 24.0, 24.0);
         painter.draw_rect(
             bottom_right,
             &solid(bottom_right, Color::rgba(0, 0, 255, 255)),
@@ -626,17 +624,17 @@ mod gpu_tests {
 
         painter.draw_rect(
             Rect::from_xywh(
-                Pixels(SURFACE_WIDTH as f32 / 4.0),
-                Pixels(SURFACE_HEIGHT as f32 / 4.0),
-                Pixels(SURFACE_WIDTH as f32 / 2.0),
-                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+                f64::from(SURFACE_WIDTH as f32 / 4.0),
+                f64::from(SURFACE_HEIGHT as f32 / 4.0),
+                f64::from(SURFACE_WIDTH as f32 / 2.0),
+                f64::from(SURFACE_HEIGHT as f32 / 2.0),
             ),
             &Paint::fill(Color::rgba(0, 0, 255, 255)),
         );
         painter.draw_circle(
-            flui_types::Point::new(
-                Pixels(SURFACE_WIDTH as f32 / 2.0),
-                Pixels(SURFACE_HEIGHT as f32 / 2.0),
+            flui_foundation::geometry::Point::new(
+                f64::from(SURFACE_WIDTH as f32 / 2.0),
+                f64::from(SURFACE_HEIGHT as f32 / 2.0),
             ),
             20.0,
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
@@ -715,17 +713,17 @@ mod gpu_tests {
         let half_width = SURFACE_WIDTH as f32 / 2.0;
 
         let clip = Rect::from_ltrb(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(half_width),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(half_width),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
         // Apply scissor; the tessellation will only emit foreground geometry for
         // the left half.  The advanced-blend pass reads the backdrop and composites
         // the trimmed foreground.
-        painter.clip_rect(clip, flui_types::painting::Clip::HardEdge);
+        painter.clip_rect(clip, flui_painting::paint::Clip::HardEdge);
         painter.draw_rect(
             full_bounds,
             &Paint {
@@ -903,10 +901,10 @@ mod gpu_tests {
         // Damage is the left half (0..32, 0..64) — the shape straddles the right edge.
         let half_width = SURFACE_WIDTH as f32 / 2.0;
         let damage = Rect::from_ltrb(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(half_width),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(half_width),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -939,18 +937,18 @@ mod gpu_tests {
         // Shape in the LEFT QUARTER (0..16, 0..64) — fully inside the left-half damage.
         let quarter_width = SURFACE_WIDTH as f32 / 4.0;
         let shape_bounds = Rect::from_ltrb(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(quarter_width),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(quarter_width),
+            f64::from(SURFACE_HEIGHT as f32),
         );
         // Damage is the left half (0..32, 0..64) — fully contains the shape.
         let half_width = SURFACE_WIDTH as f32 / 2.0;
         let damage = Rect::from_ltrb(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(half_width),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(half_width),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -983,10 +981,10 @@ mod gpu_tests {
         let full_bounds = full_surface_bounds();
         let half_width = SURFACE_WIDTH as f32 / 2.0;
         let damage = Rect::from_ltrb(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(half_width),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(half_width),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1020,10 +1018,10 @@ mod gpu_tests {
         let half_width = SURFACE_WIDTH as f32 / 2.0;
         // Damage is the left half (0..32, 0..64) — the layer straddles the right edge.
         let damage = Rect::from_ltrb(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(half_width),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(half_width),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1061,18 +1059,18 @@ mod gpu_tests {
         // Layer is the LEFT QUARTER (0..16, 0..64) — fully inside the left-half damage.
         let quarter_width = SURFACE_WIDTH as f32 / 4.0;
         let layer_bounds = Rect::from_ltrb(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(quarter_width),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(quarter_width),
+            f64::from(SURFACE_HEIGHT as f32),
         );
         // Damage is the left half (0..32, 0..64) — fully contains the layer.
         let half_width = SURFACE_WIDTH as f32 / 2.0;
         let damage = Rect::from_ltrb(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(half_width),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(half_width),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
@@ -1110,10 +1108,10 @@ mod gpu_tests {
         let full_bounds = full_surface_bounds();
         let half_width = SURFACE_WIDTH as f32 / 2.0;
         let damage = Rect::from_ltrb(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(half_width),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(half_width),
+            f64::from(SURFACE_HEIGHT as f32),
         );
 
         let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));

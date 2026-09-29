@@ -60,7 +60,7 @@ use wgpu::{
 pub(crate) const IMAGE_TEXTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
 /// Cache key for a texture: what a caller asks for, not an external texture
-/// identity (that is `flui_types::painting::TextureId`).
+/// identity (that is `flui_painting::paint::TextureId`).
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub(crate) enum TextureKey {
     /// Data-based texture with hash
@@ -88,7 +88,7 @@ impl TextureKey {
 
     /// Create from an `Arc` data pointer address (O(1) identity).
     ///
-    /// Use with [`flui_types::painting::Image::data_ptr()`] so that images
+    /// Use with [`flui_painting::paint::Image::data_ptr()`] so that images
     /// sharing the same underlying allocation are deduplicated without
     /// hashing the full pixel buffer.
     pub(crate) fn from_ptr(ptr: usize) -> Self {

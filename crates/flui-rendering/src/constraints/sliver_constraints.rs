@@ -8,10 +8,9 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use flui_types::{
-    geometry::px,
-    layout::{Axis, AxisDirection},
-};
+use crate::constraints::AxisDirection;
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::canonical_bits_f64;
 
 use super::{BoxConstraints, Constraints, GrowthDirection};
 use crate::view::ScrollDirection;
@@ -55,32 +54,32 @@ pub struct SliverConstraints {
     pub user_scroll_direction: ScrollDirection,
 
     /// Current scroll offset in the viewport.
-    pub scroll_offset: f32,
+    pub scroll_offset: f64,
 
     /// Scroll extent already occupied by preceding slivers.
-    pub preceding_scroll_extent: f32,
+    pub preceding_scroll_extent: f64,
 
     /// Overlap with the previous sliver (for effects like pinned headers).
-    pub overlap: f32,
+    pub overlap: f64,
 
     /// Remaining extent available for painting in the viewport.
-    pub remaining_paint_extent: f32,
+    pub remaining_paint_extent: f64,
 
     /// Extent available in the cross axis.
-    pub cross_axis_extent: f32,
+    pub cross_axis_extent: f64,
 
     /// Direction along the cross axis.
     pub cross_axis_direction: AxisDirection,
 
     /// Total extent of the viewport along the main axis.
-    pub viewport_main_axis_extent: f32,
+    pub viewport_main_axis_extent: f64,
 
     /// Remaining extent available for caching (typically larger than paint
     /// extent).
-    pub remaining_cache_extent: f32,
+    pub remaining_cache_extent: f64,
 
     /// Offset from scroll position where caching starts (typically negative).
-    pub cache_origin: f32,
+    pub cache_origin: f64,
 }
 
 // ============================================================================
@@ -95,15 +94,16 @@ impl Hash for SliverConstraints {
         self.user_scroll_direction.hash(state);
         self.cross_axis_direction.hash(state);
 
-        // Hash floats as bit patterns (NaN-safe)
-        self.scroll_offset.to_bits().hash(state);
-        self.preceding_scroll_extent.to_bits().hash(state);
-        self.overlap.to_bits().hash(state);
-        self.remaining_paint_extent.to_bits().hash(state);
-        self.cross_axis_extent.to_bits().hash(state);
-        self.viewport_main_axis_extent.to_bits().hash(state);
-        self.remaining_cache_extent.to_bits().hash(state);
-        self.cache_origin.to_bits().hash(state);
+        // Canonical bits, so constraints equal under `PartialEq` (`0.0` and
+        // `-0.0`) hash equal.
+        canonical_bits_f64(self.scroll_offset).hash(state);
+        canonical_bits_f64(self.preceding_scroll_extent).hash(state);
+        canonical_bits_f64(self.overlap).hash(state);
+        canonical_bits_f64(self.remaining_paint_extent).hash(state);
+        canonical_bits_f64(self.cross_axis_extent).hash(state);
+        canonical_bits_f64(self.viewport_main_axis_extent).hash(state);
+        canonical_bits_f64(self.remaining_cache_extent).hash(state);
+        canonical_bits_f64(self.cache_origin).hash(state);
     }
 }
 
@@ -122,15 +122,15 @@ impl SliverConstraints {
         axis_direction: AxisDirection,
         growth_direction: GrowthDirection,
         user_scroll_direction: ScrollDirection,
-        scroll_offset: f32,
-        preceding_scroll_extent: f32,
-        overlap: f32,
-        remaining_paint_extent: f32,
-        cross_axis_extent: f32,
+        scroll_offset: f64,
+        preceding_scroll_extent: f64,
+        overlap: f64,
+        remaining_paint_extent: f64,
+        cross_axis_extent: f64,
         cross_axis_direction: AxisDirection,
-        viewport_main_axis_extent: f32,
-        remaining_cache_extent: f32,
-        cache_origin: f32,
+        viewport_main_axis_extent: f64,
+        remaining_cache_extent: f64,
+        cache_origin: f64,
     ) -> Self {
         Self {
             axis_direction,
@@ -217,24 +217,18 @@ impl SliverConstraints {
     #[must_use]
     pub fn as_box_constraints(
         &self,
-        min_extent: f32,
-        max_extent: f32,
-        cross_axis_extent: Option<f32>,
+        min_extent: f64,
+        max_extent: f64,
+        cross_axis_extent: Option<f64>,
     ) -> BoxConstraints {
         let cross_axis_extent = cross_axis_extent.unwrap_or(self.cross_axis_extent);
         match self.axis() {
-            Axis::Horizontal => BoxConstraints::new(
-                px(min_extent),
-                px(max_extent),
-                px(cross_axis_extent),
-                px(cross_axis_extent),
-            ),
-            Axis::Vertical => BoxConstraints::new(
-                px(cross_axis_extent),
-                px(cross_axis_extent),
-                px(min_extent),
-                px(max_extent),
-            ),
+            Axis::Horizontal => {
+                BoxConstraints::new(min_extent, max_extent, cross_axis_extent, cross_axis_extent)
+            }
+            Axis::Vertical => {
+                BoxConstraints::new(cross_axis_extent, cross_axis_extent, min_extent, max_extent)
+            }
         }
     }
 
@@ -245,7 +239,7 @@ impl SliverConstraints {
     #[inline]
     #[must_use]
     pub fn unbounded_main_axis_box_constraints(&self) -> BoxConstraints {
-        self.as_box_constraints(0.0, f32::INFINITY, None)
+        self.as_box_constraints(0.0, f64::INFINITY, None)
     }
 
     /// Returns whether content is at or before the viewport start.
@@ -290,7 +284,7 @@ impl SliverConstraints {
     /// Creates a copy with modified scroll offset.
     #[inline]
     #[must_use]
-    pub const fn with_scroll_offset(mut self, scroll_offset: f32) -> Self {
+    pub const fn with_scroll_offset(mut self, scroll_offset: f64) -> Self {
         self.scroll_offset = scroll_offset;
         self
     }
@@ -298,7 +292,7 @@ impl SliverConstraints {
     /// Creates a copy with modified remaining paint extent.
     #[inline]
     #[must_use]
-    pub const fn with_remaining_paint_extent(mut self, extent: f32) -> Self {
+    pub const fn with_remaining_paint_extent(mut self, extent: f64) -> Self {
         self.remaining_paint_extent = extent;
         self
     }
@@ -306,7 +300,7 @@ impl SliverConstraints {
     /// Creates a copy with modified cross axis extent.
     #[inline]
     #[must_use]
-    pub const fn with_cross_axis_extent(mut self, extent: f32) -> Self {
+    pub const fn with_cross_axis_extent(mut self, extent: f64) -> Self {
         self.cross_axis_extent = extent;
         self
     }
@@ -314,7 +308,7 @@ impl SliverConstraints {
     /// Creates a copy with modified overlap.
     #[inline]
     #[must_use]
-    pub const fn with_overlap(mut self, overlap: f32) -> Self {
+    pub const fn with_overlap(mut self, overlap: f64) -> Self {
         self.overlap = overlap;
         self
     }
@@ -328,7 +322,7 @@ impl SliverConstraints {
 ///
 /// Preserves infinity and NaN unchanged.
 #[inline]
-fn round_to_hundredths_runtime(value: f32) -> f32 {
+fn round_to_hundredths_runtime(value: f64) -> f64 {
     if value.is_finite() {
         (value * 100.0).round() / 100.0
     } else {
@@ -338,7 +332,7 @@ fn round_to_hundredths_runtime(value: f32) -> f32 {
 
 /// Checks if value is already normalized to hundredths precision.
 #[inline]
-fn is_normalized(value: f32) -> bool {
+fn is_normalized(value: f64) -> bool {
     if value.is_finite() {
         value == round_to_hundredths_runtime(value)
     } else {

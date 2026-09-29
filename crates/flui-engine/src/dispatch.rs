@@ -50,7 +50,7 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
             radius,
             paint,
         } => {
-            renderer.render_circle(*center, radius.0, paint, transform);
+            renderer.render_circle(*center, *radius as f32, paint, transform);
         }
         DrawOp::Line { p1, p2, paint } => {
             renderer.render_line(*p1, *p2, paint, transform);
@@ -83,7 +83,7 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
                 *dst,
                 *src,
                 *filter_quality,
-                *opacity,
+                *opacity as f32,
                 transform,
             );
         }
@@ -92,7 +92,7 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
             color,
             elevation,
         } => {
-            renderer.render_shadow(path, *color, *elevation, transform);
+            renderer.render_shadow(path, *color, *elevation as f32, transform);
         }
         DrawOp::Arc {
             rect,
@@ -103,8 +103,8 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
         } => {
             renderer.render_arc(
                 *rect,
-                *start_angle,
-                *sweep_angle,
+                *start_angle as f32,
+                *sweep_angle as f32,
                 *use_center,
                 paint,
                 transform,
@@ -270,11 +270,9 @@ mod tests {
     //! introduced by the deref shape.
     //!
     //! No GPU is required; this runs on every CI worker.
+    use flui_foundation::geometry::Rect;
+    use flui_painting::styling::Color;
     use flui_painting::{Canvas, Paint};
-    use flui_types::{
-        geometry::{Rect, px},
-        styling::Color,
-    };
 
     use super::dispatch_commands;
     use crate::debug::DebugBackend;
@@ -283,14 +281,8 @@ mod tests {
     fn dispatch_handles_interned_paint() {
         let mut canvas = Canvas::new();
         let paint = Paint::fill(Color::RED);
-        canvas.draw_rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0)),
-            &paint,
-        );
-        canvas.draw_rect(
-            Rect::from_ltrb(px(20.0), px(20.0), px(30.0), px(30.0)),
-            &paint,
-        );
+        canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 10.0, 10.0), &paint);
+        canvas.draw_rect(Rect::from_ltrb(20.0, 20.0, 30.0, 30.0), &paint);
         let dl = canvas.finish();
 
         let mut backend = DebugBackend::new();

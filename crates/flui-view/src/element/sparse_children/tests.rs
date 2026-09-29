@@ -9,7 +9,6 @@ use flui_objects::RenderSizedBox;
 use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, RenderBox, Size};
-use flui_types::geometry::px;
 
 use super::SparseChildren;
 use crate::GlobalKey;
@@ -21,7 +20,7 @@ use crate::{BuildOwner, ElementTree};
 /// tests — mirrors the `SizedBoxView` in `view/render.rs` tests.
 #[derive(Clone)]
 struct LeafBox {
-    side: f32,
+    side: f64,
 }
 
 impl RenderView for LeafBox {
@@ -29,7 +28,7 @@ impl RenderView for LeafBox {
     type RenderObject = RenderSizedBox;
 
     fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderSizedBox::new(Some(px(self.side)), Some(px(self.side)))
+        RenderSizedBox::new(Some(self.side), Some(self.side))
     }
 
     fn update_render_object(
@@ -37,7 +36,7 @@ impl RenderView for LeafBox {
         _ctx: &crate::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.set_size(Some(px(self.side)), Some(px(self.side)))
+        render_object.set_size(Some(self.side), Some(self.side))
     }
 }
 
@@ -52,14 +51,14 @@ impl View for LeafBox {
 /// Used to test the globally-keyed eviction → `finalize_tree` → slab-free path.
 #[derive(Clone)]
 struct GlobalKeyedLeafBox {
-    side: f32,
+    side: f64,
     key: GlobalKey<Self>,
     detach_count: Arc<AtomicUsize>,
 }
 
 #[derive(Debug)]
 struct DetachCountingBox {
-    side: f32,
+    side: f64,
     detach_count: Arc<AtomicUsize>,
 }
 
@@ -70,7 +69,7 @@ impl RenderBox for DetachCountingBox {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        Size::new(px(self.side), px(self.side))
+        Size::new(self.side, self.side)
     }
 
     fn detach(&mut self) {
@@ -459,7 +458,7 @@ impl RenderView for GlobalKeyedPanicsOnUpdate {
     type Protocol = flui_rendering::protocol::BoxProtocol;
     type RenderObject = RenderSizedBox;
     fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderSizedBox::new(Some(px(4.0)), Some(px(4.0)))
+        RenderSizedBox::new(Some(4.0), Some(4.0))
     }
     fn update_render_object(
         &self,

@@ -160,10 +160,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use flui_sdk::foundation::ElementId;
+use flui_sdk::geometry::{EdgeInsets, Offset, Size};
+use flui_sdk::painting::Color;
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::geometry::px;
-use flui_sdk::types::styling::Color;
-use flui_sdk::types::{EdgeInsets, Offset, Pixels, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::{
@@ -199,7 +198,7 @@ const SLOT_END_DRAWER: &str = "end_drawer";
 ///
 /// Flutter parity: `floating_action_button_location.dart`'s
 /// `kFloatingActionButtonMargin` (oracle tag `3.44.0`).
-const FLOATING_ACTION_BUTTON_MARGIN: f32 = 16.0;
+const FLOATING_ACTION_BUTTON_MARGIN: f64 = 16.0;
 
 /// The top-level Material page structure: an app bar, a body, and a floating
 /// action button.
@@ -221,7 +220,7 @@ const FLOATING_ACTION_BUTTON_MARGIN: f32 = 16.0;
 pub struct Scaffold {
     body: Option<BoxedView>,
     app_bar: Option<BoxedView>,
-    app_bar_preferred_height: f32,
+    app_bar_preferred_height: f64,
     floating_action_button: Option<BoxedView>,
     bottom_navigation_bar: Option<BoxedView>,
     resize_to_avoid_bottom_inset: bool,
@@ -231,7 +230,7 @@ pub struct Scaffold {
     on_drawer_changed: Option<crate::event_callback::ValueCallback<bool>>,
     on_end_drawer_changed: Option<crate::event_callback::ValueCallback<bool>>,
     drawer_scrim_color: Option<Color>,
-    drawer_edge_drag_width: Option<f32>,
+    drawer_edge_drag_width: Option<f64>,
     enable_open_drag_gesture: bool,
 }
 
@@ -276,7 +275,7 @@ impl Scaffold {
     /// size at construction rather than re-consulting it later.
     #[must_use]
     pub fn app_bar(mut self, app_bar: impl PreferredSizeView) -> Self {
-        self.app_bar_preferred_height = app_bar.preferred_size().height.get();
+        self.app_bar_preferred_height = app_bar.preferred_size().height;
         self.app_bar = Some(app_bar.boxed());
         self
     }
@@ -363,7 +362,7 @@ impl Scaffold {
 
     /// Overrides both drawers' closed-state edge-drag detection width.
     #[must_use]
-    pub fn drawer_edge_drag_width(mut self, width: f32) -> Self {
+    pub fn drawer_edge_drag_width(mut self, width: f64) -> Self {
         self.drawer_edge_drag_width = Some(width);
         self
     }
@@ -553,7 +552,7 @@ impl ViewState<Scaffold> for ScaffoldState {
         if let Some(body) = &view.body {
             let mut reduced_media_query = media_query.clone();
             if view.app_bar.is_some() {
-                reduced_media_query.padding.top = px(0.0);
+                reduced_media_query.padding.top = 0.0;
             }
             if view.bottom_navigation_bar.is_some() {
                 // Oracle: `removeBottomPadding: widget.bottomNavigationBar !=
@@ -561,10 +560,10 @@ impl ViewState<Scaffold> for ScaffoldState {
                 // consumes `padding.bottom` internally (see the module docs'
                 // "`bottom_navigation_bar` slot" section), so the body must
                 // not also see it.
-                reduced_media_query.padding.bottom = px(0.0);
+                reduced_media_query.padding.bottom = 0.0;
             }
             if view.resize_to_avoid_bottom_inset {
-                reduced_media_query.view_insets.bottom = px(0.0);
+                reduced_media_query.view_insets.bottom = 0.0;
             }
             children.push(LayoutId::new(
                 SLOT_BODY,
@@ -573,7 +572,7 @@ impl ViewState<Scaffold> for ScaffoldState {
         }
 
         if let Some(app_bar) = &view.app_bar {
-            let max_height = px(view.app_bar_preferred_height) + media_query.padding.top;
+            let max_height = view.app_bar_preferred_height + media_query.padding.top;
             let cap = BoxConstraints {
                 max_height,
                 ..BoxConstraints::UNCONSTRAINED
@@ -599,7 +598,7 @@ impl ViewState<Scaffold> for ScaffoldState {
             // consume it (that's the whole point of this slot padding
             // itself).
             let mut reduced_media_query = media_query.clone();
-            reduced_media_query.padding.top = px(0.0);
+            reduced_media_query.padding.top = 0.0;
             children.push(LayoutId::new(
                 SLOT_BOTTOM_NAV,
                 MediaQuery::new(reduced_media_query, bottom_navigation_bar.clone()),
@@ -666,7 +665,7 @@ impl ViewState<Scaffold> for ScaffoldState {
             if view.resize_to_avoid_bottom_inset {
                 media_query.view_insets.bottom
             } else {
-                px(0.0)
+                0.0
             },
             media_query.padding.left,
         );
@@ -680,8 +679,8 @@ impl ViewState<Scaffold> for ScaffoldState {
         // `padding` (both name the same "safe area from the OS" concept
         // here), so `padding.bottom` is this substrate's `viewPadding.bottom`.
         let min_view_padding_bottom =
-            if view.resize_to_avoid_bottom_inset && media_query.view_insets.bottom != px(0.0) {
-                px(0.0)
+            if view.resize_to_avoid_bottom_inset && media_query.view_insets.bottom != 0.0 {
+                0.0
             } else {
                 media_query.padding.bottom
             };
@@ -798,7 +797,7 @@ struct ScaffoldLayoutDelegate {
     /// (e.g. the home-indicator area), zeroed while the keyboard is up and
     /// being resized around. See `Scaffold::build`'s citation of
     /// `_ScaffoldState.build`'s `minViewPadding`.
-    min_view_padding_bottom: Pixels,
+    min_view_padding_bottom: f64,
 }
 
 impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
@@ -807,10 +806,9 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
         // its own preferred height within that loose band. Oracle:
         // `fullWidthConstraints = looseConstraints.tighten(width: size.width)`
         // (`:1035`).
-        let full_width_loose_height =
-            BoxConstraints::new(size.width, size.width, px(0.0), size.height);
+        let full_width_loose_height = BoxConstraints::new(size.width, size.width, 0.0, size.height);
 
-        let mut content_top = px(0.0);
+        let mut content_top = 0.0;
         if ctx.has_child(SLOT_APP_BAR) {
             let app_bar_size = ctx.layout_child(SLOT_APP_BAR, full_width_loose_height);
             // `content_top` is the app bar's MEASURED height — already
@@ -827,12 +825,12 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
         // - bottomWidgetsHeight)` (`scaffold.dart:1048-1055`) — measured and
         // bottom-pinned before `content_bottom` is computed, since
         // `content_bottom` itself depends on this height (below).
-        let mut bottom_widgets_height = px(0.0);
+        let mut bottom_widgets_height = 0.0;
         if ctx.has_child(SLOT_BOTTOM_NAV) {
             let bottom_nav_size = ctx.layout_child(SLOT_BOTTOM_NAV, full_width_loose_height);
             bottom_widgets_height += bottom_nav_size.height;
-            let bottom_nav_top = (size.height - bottom_widgets_height).max(px(0.0));
-            ctx.position_child(SLOT_BOTTOM_NAV, Offset::new(px(0.0), bottom_nav_top));
+            let bottom_nav_top = (size.height - bottom_widgets_height).max(0.0);
+            ctx.position_child(SLOT_BOTTOM_NAV, Offset::new(0.0, bottom_nav_top));
         }
 
         // Oracle: `contentBottom = max(0, bottom - max(minInsets.bottom,
@@ -841,15 +839,14 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
         // bottom navigation bar — no persistent-footer slot in this
         // substrate) wins.
         let content_bottom =
-            (size.height - self.min_insets.bottom.max(bottom_widgets_height)).max(px(0.0));
+            (size.height - self.min_insets.bottom.max(bottom_widgets_height)).max(0.0);
 
         if ctx.has_child(SLOT_BODY) {
             // Loose constraints, not tight-width — see the module docs.
-            let body_max_height = (content_bottom - content_top).max(px(0.0));
-            let body_constraints =
-                BoxConstraints::new(px(0.0), size.width, px(0.0), body_max_height);
+            let body_max_height = (content_bottom - content_top).max(0.0);
+            let body_constraints = BoxConstraints::new(0.0, size.width, 0.0, body_max_height);
             ctx.layout_child(SLOT_BODY, body_constraints);
-            ctx.position_child(SLOT_BODY, Offset::new(px(0.0), content_top));
+            ctx.position_child(SLOT_BODY, Offset::new(0.0, content_top));
         }
 
         // Oracle: "Set the size of the SnackBar early if the behavior is
@@ -866,7 +863,7 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             snack_bar_size = ctx.layout_child(SLOT_SNACK_BAR, full_width_loose_height);
             ctx.position_child(
                 SLOT_SNACK_BAR,
-                Offset::new(px(0.0), content_bottom - snack_bar_size.height),
+                Offset::new(0.0, content_bottom - snack_bar_size.height),
             );
         }
 
@@ -880,10 +877,8 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             // `FloatingActionButtonLocation.endFloat` (`FabEndOffsetX` +
             // `FabFloatOffsetY`, `floating_action_button_location.dart:517-528,
             // 554-581`).
-            let fab_x = size.width
-                - px(FLOATING_ACTION_BUTTON_MARGIN)
-                - self.min_insets.right
-                - fab_size.width;
+            let fab_x =
+                size.width - FLOATING_ACTION_BUTTON_MARGIN - self.min_insets.right - fab_size.width;
 
             // `FabFloatOffsetY`: `safeMargin = max(margin,
             // minViewPadding.bottom - bottomContentHeight + margin)`, where
@@ -898,8 +893,8 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             // `min_view_padding_bottom`, see `Scaffold::build`) is up.
             let bottom_content_height = size.height - content_bottom;
             let safe_margin = (self.min_view_padding_bottom - bottom_content_height
-                + px(FLOATING_ACTION_BUTTON_MARGIN))
-            .max(px(FLOATING_ACTION_BUTTON_MARGIN));
+                + FLOATING_ACTION_BUTTON_MARGIN)
+                .max(FLOATING_ACTION_BUTTON_MARGIN);
             let mut fab_y = content_bottom - fab_size.height - safe_margin;
 
             // `FabFloatOffsetY`'s snack-bar branch (`:571-576`): a visible
@@ -908,12 +903,12 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
             // comment above) pulls the FAB up to sit `kFloatingActionButtonMargin`
             // above it, whenever that's tighter than the plain safe-margin
             // position.
-            if snack_bar_size.height > px(0.0) {
+            if snack_bar_size.height > 0.0 {
                 fab_y = fab_y.min(
                     content_bottom
                         - snack_bar_size.height
                         - fab_size.height
-                        - px(FLOATING_ACTION_BUTTON_MARGIN),
+                        - FLOATING_ACTION_BUTTON_MARGIN,
                 );
             }
             ctx.position_child(SLOT_FLOATING_ACTION_BUTTON, Offset::new(fab_x, fab_y));
@@ -987,8 +982,8 @@ mod tests {
 
     fn zero_insets_delegate() -> ScaffoldLayoutDelegate {
         ScaffoldLayoutDelegate {
-            min_insets: EdgeInsets::new(px(0.0), px(0.0), px(0.0), px(0.0)),
-            min_view_padding_bottom: px(0.0),
+            min_insets: EdgeInsets::new(0.0, 0.0, 0.0, 0.0),
+            min_view_padding_bottom: 0.0,
         }
     }
 
@@ -1003,7 +998,7 @@ mod tests {
     fn should_relayout_is_true_when_bottom_min_inset_changes() {
         let a = zero_insets_delegate();
         let b = ScaffoldLayoutDelegate {
-            min_insets: EdgeInsets::new(px(0.0), px(0.0), px(300.0), px(0.0)),
+            min_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
             ..zero_insets_delegate()
         };
         assert!(MultiChildLayoutDelegate::should_relayout(&a, &b));
@@ -1013,7 +1008,7 @@ mod tests {
     fn should_relayout_is_true_when_min_view_padding_bottom_changes() {
         let a = zero_insets_delegate();
         let b = ScaffoldLayoutDelegate {
-            min_view_padding_bottom: px(34.0),
+            min_view_padding_bottom: 34.0,
             ..zero_insets_delegate()
         };
         assert!(
@@ -1033,7 +1028,7 @@ mod tests {
     fn fab_y_grows_the_safe_margin_for_a_nonzero_min_view_padding_bottom() {
         use std::collections::HashMap;
 
-        use flui_sdk::types::Offset;
+        use flui_sdk::geometry::Offset;
 
         // Mirrors `flui-rendering`'s `delegates::multi_child_layout_delegate`'s
         // own in-crate `MockContext` test pattern.
@@ -1054,18 +1049,18 @@ mod tests {
         }
 
         let delegate = ScaffoldLayoutDelegate {
-            min_insets: EdgeInsets::new(px(0.0), px(0.0), px(0.0), px(0.0)),
-            min_view_padding_bottom: px(34.0),
+            min_insets: EdgeInsets::new(0.0, 0.0, 0.0, 0.0),
+            min_view_padding_bottom: 34.0,
         };
         let mut ctx = MockContext {
             children: HashMap::from([(
                 SLOT_FLOATING_ACTION_BUTTON.to_string(),
-                Size::new(px(56.0), px(56.0)),
+                Size::new(56.0, 56.0),
             )]),
             positions: HashMap::new(),
         };
 
-        delegate.perform_layout(&mut ctx, Size::new(px(400.0), px(800.0)));
+        delegate.perform_layout(&mut ctx, Size::new(400.0, 800.0));
 
         // bottom_content_height = 800 - content_bottom = 800 - 800 = 0
         // (no bottom min_insets, no bottom widgets).
@@ -1073,7 +1068,7 @@ mod tests {
         // fab_y = 800 - 56 - 50 = 694.
         assert_eq!(
             ctx.positions[SLOT_FLOATING_ACTION_BUTTON],
-            Offset::new(px(400.0 - 16.0 - 56.0), px(694.0)),
+            Offset::new(400.0 - 16.0 - 56.0, 694.0),
             "a nonzero min_view_padding_bottom (e.g. the 34px home-indicator area) with no \
              keyboard must lift the FAB safe_margin above the flat kFloatingActionButtonMargin, \
              not park it at content_bottom - fab_height - 16",

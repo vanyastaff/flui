@@ -16,9 +16,8 @@
 //! `fixed_size` either (the oracle's own "No default fixedSize" / "No
 //! default side" comments), so neither field is populated here.
 
-use flui_sdk::types::Color;
-use flui_sdk::types::geometry::px;
-use flui_sdk::types::{EdgeInsets, Size};
+use flui_sdk::geometry::{EdgeInsets, Size};
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 
@@ -153,10 +152,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
             })
         })),
         padding: Some(WidgetStateProperty::all(Some(scaled_padding_1x()))),
-        minimum_size: Some(WidgetStateProperty::all(Some(Size::new(
-            px(64.0),
-            px(40.0),
-        )))),
+        minimum_size: Some(WidgetStateProperty::all(Some(Size::new(64.0, 40.0)))),
         fixed_size: None,
         maximum_size: Some(WidgetStateProperty::all(Some(Size::INFINITY))),
         side: None,
@@ -171,7 +167,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
 /// every V1 button below), so only the 1x tier is ported; the 2x/3x lerp
 /// tiers arrive alongside that consumer.
 pub(crate) fn scaled_padding_1x() -> EdgeInsets {
-    EdgeInsets::symmetric(px(0.0), px(24.0))
+    EdgeInsets::symmetric(0.0, 24.0)
 }
 
 /// The pressed(10%)/hovered(8%)/focused(10%) overlay ramp every V1 button's

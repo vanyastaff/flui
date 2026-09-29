@@ -14,19 +14,16 @@
 //! the renderer would pull the whole GPU stack into that crate's test build.
 
 use flui_engine::HeadlessRenderer;
+use flui_foundation::geometry::{Matrix4, Size};
 use flui_objects::{
     RenderClipRRect, RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding,
     RenderRepaintBoundary, RenderTransform,
 };
+use flui_painting::styling::{BorderRadius, BorderRadiusExt};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
     testing::{box_node, tree},
-};
-use flui_types::{
-    Matrix4, Size,
-    geometry::px,
-    styling::{BorderRadius, BorderRadiusExt},
 };
 
 const SURFACE: (u32, u32) = (200, 200);
@@ -37,7 +34,7 @@ const SURFACE: (u32, u32) = (200, 200);
 /// one: that is the shape the update path is built around, and the leaves are
 /// coloured so a wrong alpha is a visible difference rather than a structural
 /// one.
-fn mount(opacity: f32) -> (PipelineOwner, flui_foundation::RenderId) {
+fn mount(opacity: f64) -> (PipelineOwner, flui_foundation::RenderId) {
     let content = box_node(RenderFlex::row())
         .children((0..4).map(|_| box_node(RenderColoredBox::red(40.0, 40.0))));
 
@@ -59,18 +56,14 @@ fn mount(opacity: f32) -> (PipelineOwner, flui_foundation::RenderId) {
     );
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
-        px(f32::from(
-            u16::try_from(SURFACE.0).expect("surface fits u16"),
-        )),
-        px(f32::from(
-            u16::try_from(SURFACE.1).expect("surface fits u16"),
-        )),
+        f64::from(u16::try_from(SURFACE.0).expect("surface fits u16")),
+        f64::from(u16::try_from(SURFACE.1).expect("surface fits u16")),
     ))));
     let opacity_id = registry.get("opacity").expect("opacity is labelled");
     (owner, opacity_id)
 }
 
-fn set_opacity(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f32) {
+fn set_opacity(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f64) {
     let impact = owner
         .render_tree_mut()
         .get_mut(id)
@@ -92,7 +85,7 @@ fn set_opacity(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: 
 /// old path.
 fn frame_after_alpha_change(
     renderer: &HeadlessRenderer,
-    value: f32,
+    value: f64,
     force_repaint: bool,
 ) -> Vec<u8> {
     let (owner, opacity_id) = mount(0.5);
@@ -207,12 +200,8 @@ fn mount_transform(seed: Matrix4) -> (PipelineOwner, flui_foundation::RenderId) 
     );
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
-        px(f32::from(
-            u16::try_from(SURFACE.0).expect("surface fits u16"),
-        )),
-        px(f32::from(
-            u16::try_from(SURFACE.1).expect("surface fits u16"),
-        )),
+        f64::from(u16::try_from(SURFACE.0).expect("surface fits u16")),
+        f64::from(u16::try_from(SURFACE.1).expect("surface fits u16")),
     ))));
     let transform_id = registry.get("transform").expect("transform is labelled");
     (owner, transform_id)
@@ -337,7 +326,7 @@ fn a_different_matrix_produces_different_pixels() {
 /// `AntiAlias`) is deliberate: see `a_different_radius_produces_different_pixels`'s
 /// doc for why the sample point never actually needed it, and why hard-edge
 /// is still the safer fixture choice.
-fn mount_clip_rrect(radius: f32) -> (PipelineOwner, flui_foundation::RenderId) {
+fn mount_clip_rrect(radius: f64) -> (PipelineOwner, flui_foundation::RenderId) {
     let mut owner = PipelineOwner::new();
     let (root_id, registry) = tree::mount(
         &mut owner,
@@ -347,7 +336,7 @@ fn mount_clip_rrect(radius: f32) -> (PipelineOwner, flui_foundation::RenderId) {
                     box_node(RenderPadding::all(20.0)).child(
                         box_node(
                             RenderClipRRect::hard_edge()
-                                .with_border_radius(BorderRadius::circular(px(radius))),
+                                .with_border_radius(BorderRadius::circular(radius)),
                         )
                         .label("clip")
                         .child(box_node(RenderColoredBox::red(40.0, 40.0))),
@@ -361,18 +350,14 @@ fn mount_clip_rrect(radius: f32) -> (PipelineOwner, flui_foundation::RenderId) {
     );
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
-        px(f32::from(
-            u16::try_from(SURFACE.0).expect("surface fits u16"),
-        )),
-        px(f32::from(
-            u16::try_from(SURFACE.1).expect("surface fits u16"),
-        )),
+        f64::from(u16::try_from(SURFACE.0).expect("surface fits u16")),
+        f64::from(u16::try_from(SURFACE.1).expect("surface fits u16")),
     ))));
     let clip_id = registry.get("clip").expect("clip is labelled");
     (owner, clip_id)
 }
 
-fn set_border_radius(owner: &mut PipelineOwner, id: flui_foundation::RenderId, radius: f32) {
+fn set_border_radius(owner: &mut PipelineOwner, id: flui_foundation::RenderId, radius: f64) {
     let impact = owner
         .render_tree_mut()
         .get_mut(id)
@@ -383,7 +368,7 @@ fn set_border_radius(owner: &mut PipelineOwner, id: flui_foundation::RenderId, r
         .as_any_mut()
         .downcast_mut::<RenderClipRRect>()
         .expect("RenderClipRRect")
-        .set_border_radius(Some(BorderRadius::circular(px(radius))));
+        .set_border_radius(Some(BorderRadius::circular(radius)));
     owner.apply_render_update_impact(id, impact);
 }
 
@@ -399,7 +384,7 @@ fn set_border_radius(owner: &mut PipelineOwner, id: flui_foundation::RenderId, r
 /// composited-layer-update this file exists to prove pixel-correct.
 fn frame_after_radius_change(
     renderer: &HeadlessRenderer,
-    radius: f32,
+    radius: f64,
     force_repaint: bool,
 ) -> Vec<u8> {
     let (owner, clip_id) = mount_clip_rrect(5.0);
@@ -535,26 +520,27 @@ impl flui_rendering::traits::RenderBox for RunLocalClipParent {
         &mut self,
         ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
     ) -> Size {
-        let _ = ctx.layout_child(0, BoxConstraints::tight(Size::new(px(20.0), px(20.0))));
-        ctx.position_child(0, flui_types::Offset::new(px(40.0), px(0.0)));
+        let _ = ctx.layout_child(0, BoxConstraints::tight(Size::new(20.0, 20.0)));
+        ctx.position_child(0, flui_foundation::geometry::Offset::new(40.0, 0.0));
         ctx.constraints().biggest()
     }
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Self::Arity>) {
+        use flui_foundation::geometry::Rect;
         use flui_painting::Paint;
-        use flui_types::{Color, Rect};
+        use flui_painting::styling::Color;
 
         let canvas = ctx.canvas();
         assert_eq!(canvas.save_count(), 1);
         canvas.restore();
-        canvas.clip_rect(Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(20.0)));
+        canvas.clip_rect(Rect::from_xywh(0.0, 0.0, 10.0, 20.0));
         canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(20.0), px(20.0)),
+            Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
             &Paint::fill(Color::RED),
         );
         ctx.paint_child();
         ctx.canvas().draw_rect(
-            Rect::from_xywh(px(60.0), px(0.0), px(20.0), px(20.0)),
+            Rect::from_xywh(60.0, 0.0, 20.0, 20.0),
             &Paint::fill(Color::GREEN),
         );
     }
@@ -575,7 +561,7 @@ fn canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture() {
         box_node(RunLocalClipParent).child(box_node(RenderColoredBox::blue(20.0, 20.0))),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(80.0), px(40.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(80.0, 40.0))));
     let (_owner, frame) = owner.run_frame();
     let layer_tree = frame.expect("paint frame").expect("layer tree");
     let renderer = pollster::block_on(HeadlessRenderer::new()).expect("GPU adapter for readback");

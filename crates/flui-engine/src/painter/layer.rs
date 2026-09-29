@@ -5,11 +5,8 @@
 
 use smallvec::smallvec;
 
+use flui_foundation::geometry::Rect;
 use flui_painting::Paint;
-use flui_types::{
-    Rect,
-    geometry::{Pixels, px},
-};
 
 use super::WgpuPainter;
 use crate::command_ir::{
@@ -28,12 +25,12 @@ impl WgpuPainter {
     /// [`Self::resize`].  Used as the fallback composite rect when a
     /// `save_layer` carries no explicit bounds.
     #[must_use]
-    pub fn viewport_bounds(&self) -> Rect<Pixels> {
+    pub fn viewport_bounds(&self) -> Rect<f64> {
         Rect::from_ltrb(
-            px(0.0),
-            px(0.0),
-            px(self.size.0 as f32),
-            px(self.size.1 as f32),
+            0.0,
+            0.0,
+            f64::from(self.size.0 as f32),
+            f64::from(self.size.1 as f32),
         )
     }
 
@@ -67,17 +64,17 @@ impl WgpuPainter {
     /// `(fb_origin, fb_dim)` where both components are `(u32, u32)` integer pixel
     /// coordinates.  `fb_dim` is clamped to `[1, viewport]` per axis so the pool
     /// acquire is always valid.
-    fn filter_fb_rect(&self, grown_bounds: Rect<Pixels>) -> ((u32, u32), (u32, u32)) {
+    fn filter_fb_rect(&self, grown_bounds: Rect<f64>) -> ((u32, u32), (u32, u32)) {
         let (vp_w, vp_h) = self.size;
 
         // Integer-grid origin: floor the fractional grown-bounds top-left.
-        let origin_x = grown_bounds.left().0.floor() as u32;
-        let origin_y = grown_bounds.top().0.floor() as u32;
+        let origin_x = grown_bounds.left().floor() as u32;
+        let origin_y = grown_bounds.top().floor() as u32;
 
         // Integer-grid far corner: ceil the fractional grown-bounds bottom-right,
         // then clamp to the viewport so we never allocate past the surface edge.
-        let far_x = (grown_bounds.right().0.ceil() as u32).min(vp_w);
-        let far_y = (grown_bounds.bottom().0.ceil() as u32).min(vp_h);
+        let far_x = (grown_bounds.right().ceil() as u32).min(vp_w);
+        let far_y = (grown_bounds.bottom().ceil() as u32).min(vp_h);
 
         // Dimension: must be at least 1×1 (pool acquire contract).
         let dim_x = far_x.saturating_sub(origin_x).max(1);
@@ -126,7 +123,7 @@ impl WgpuPainter {
     /// | `RectInstance` baked (identity M, zero t) | `bounds [x,y,w,h]` in device px |
     /// | `RectInstance` affine | 4 corners transformed by M+t, convex hull |
     /// | `CircleInstance` / `ArcInstance` | center ± (‖col_x‖₁ + ‖col_y‖₁) (conservative) |
-    fn content_aabb(segment: &DrawSegment) -> Option<Rect<Pixels>> {
+    fn content_aabb(segment: &DrawSegment) -> Option<Rect<f64>> {
         // ── Fallback gate (P0 regression fix) ────────────────────────────────
         //
         // Shadows, gradients, and images cannot be repositioned by
@@ -292,7 +289,12 @@ impl WgpuPainter {
             return None;
         }
 
-        Some(Rect::from_ltrb(px(min_x), px(min_y), px(max_x), px(max_y)))
+        Some(Rect::from_ltrb(
+            f64::from(min_x),
+            f64::from(min_y),
+            f64::from(max_x),
+            f64::from(max_y),
+        ))
     }
 
     // ===== Layer Operations (Opacity) =====
@@ -310,7 +312,7 @@ impl WgpuPainter {
     ///
     /// `bounds` hints the maximum bounds of the offscreen; `None` defaults to
     /// the full viewport.  This is a hint only — the compositor may expand it.
-    pub fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint) {
+    pub fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint) {
         let paint_alpha = f32::from(paint.color.a) / 255.0;
         let layer_opacity = self.compositor.effective_layer_opacity(paint_alpha);
 
@@ -375,14 +377,14 @@ impl WgpuPainter {
     pub(crate) fn save_layer_clipped(
         &mut self,
         clip: crate::state_stack::ResolvedClip,
-        bounds: Rect<Pixels>,
+        bounds: Rect<f64>,
     ) {
         let layer_opacity = self.compositor.effective_layer_opacity(1.0);
         self.save_layer_impl(
             Some(bounds),
             layer_opacity,
             [1.0, 1.0, 1.0],
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
             LayerFilterChain::new(),
             Some(clip),
         );
@@ -409,7 +411,7 @@ impl WgpuPainter {
     /// `push_image_filter` in `backend.rs`.
     pub(crate) fn save_layer_with_filter(
         &mut self,
-        bounds: Option<Rect<Pixels>>,
+        bounds: Option<Rect<f64>>,
         filter: LayerFilter,
     ) {
         // Filter layers composite with white tint and SrcOver.  `effective_layer_opacity(1.0)`
@@ -421,7 +423,7 @@ impl WgpuPainter {
             bounds,
             layer_opacity,
             [1.0, 1.0, 1.0],
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
             smallvec![filter],
             None, // no clip layer opened this one
         );
@@ -451,7 +453,7 @@ impl WgpuPainter {
             None, // bounds determined at restore time from content AABB + radius
             layer_opacity,
             [1.0, 1.0, 1.0],
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
             LayerFilterChain::new(), // no color-filter chain (image filter is separate)
             None,                    // no clip layer opened this one
         );
@@ -474,15 +476,15 @@ impl WgpuPainter {
     /// composite clip.
     fn save_layer_impl(
         &mut self,
-        bounds: Option<Rect<Pixels>>,
+        bounds: Option<Rect<f64>>,
         layer_opacity: f32,
         layer_tint_rgb: [f32; 3],
-        layer_blend: flui_types::painting::BlendMode,
+        layer_blend: flui_painting::paint::BlendMode,
         filters: LayerFilterChain,
         composite_clip: Option<crate::state_stack::ResolvedClip>,
     ) {
         // Convert bounds to [x, y, w, h] if provided.
-        let bounds_array = bounds.map(|r| [r.left().0, r.top().0, r.width().0, r.height().0]);
+        let bounds_array = bounds.map(|r| [r.left(), r.top(), r.width(), r.height()]);
 
         // Hand the current draw-record accumulators to the compositor; it wraps
         // them in a SavedLayer and resets current_opacity to 1.0 for the subtree.
@@ -503,7 +505,7 @@ impl WgpuPainter {
             layer_opacity,
             layer_tint_rgb,
             layer_blend,
-            bounds_array,
+            (bounds_array).map(|a| a.map(|v| v as f32)),
             filters, // moved here after the trace
             composite_clip,
         );
@@ -572,7 +574,14 @@ impl WgpuPainter {
         // We peek the bounds from the top of the layer_stack before delegating.
         let composite_bounds = self.compositor.peek_layer_bounds().map_or_else(
             || self.viewport_bounds(),
-            |b| Rect::from_ltrb(px(b[0]), px(b[1]), px(b[0] + b[2]), px(b[1] + b[3])),
+            |b| {
+                Rect::from_ltrb(
+                    f64::from(b[0]),
+                    f64::from(b[1]),
+                    f64::from(b[0] + b[2]),
+                    f64::from(b[1] + b[3]),
+                )
+            },
         );
 
         let outcome =
@@ -660,8 +669,8 @@ impl WgpuPainter {
                         // Growth via the shared helper (one source of truth for Morph).
                         let single_pass = ImageFilterPass::Morph { radius, op };
                         let growth_px =
-                            px(super::cumulative_growth(std::slice::from_ref(&single_pass)));
-                        let grown = composite_bounds.expand(growth_px);
+                            super::cumulative_growth(std::slice::from_ref(&single_pass));
+                        let grown = composite_bounds.expand(f64::from(growth_px));
                         let viewport_rect = self.viewport_bounds();
                         let grown_bounds =
                             grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
@@ -708,9 +717,8 @@ impl WgpuPainter {
                         };
 
                         let single_pass = ImageFilterPass::Blur { sigma_x, sigma_y };
-                        let halo_px =
-                            px(super::cumulative_growth(std::slice::from_ref(&single_pass)));
-                        let grown = composite_bounds.expand(halo_px);
+                        let halo_px = super::cumulative_growth(std::slice::from_ref(&single_pass));
+                        let grown = composite_bounds.expand(f64::from(halo_px));
                         let viewport_rect = self.viewport_bounds();
                         let grown_bounds =
                             grown.intersect(&viewport_rect).unwrap_or(composite_bounds);
@@ -753,8 +761,8 @@ impl WgpuPainter {
                         };
 
                         // Cumulative growth = Σ per-pass radii (ColorMatrix/Identity = 0).
-                        let growth_px = px(super::cumulative_growth(&passes));
-                        let grown = composite_bounds.expand(growth_px);
+                        let growth_px = super::cumulative_growth(&passes);
+                        let grown = composite_bounds.expand(f64::from(growth_px));
                         let viewport_rect = self.viewport_bounds();
                         let grown_bounds =
                             grown.intersect(&viewport_rect).unwrap_or(composite_bounds);

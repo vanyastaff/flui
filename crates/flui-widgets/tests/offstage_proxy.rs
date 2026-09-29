@@ -39,9 +39,9 @@ const TRANSITION: Duration = Duration::from_millis(300);
 /// What one build of the page saw of its two animations.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Seen {
-    primary_value: f32,
+    primary_value: f64,
     primary_status: AnimationStatus,
-    secondary_value: f32,
+    secondary_value: f64,
     secondary_status: AnimationStatus,
 }
 
@@ -95,7 +95,7 @@ fn mounted(navigator: &NavigatorHandle) -> Harness {
 /// to its own wall-clock ticker and `Harness::tick_by` cannot drive it (see
 /// `binding.rs::RouteVsync`). Every transition-route test in this crate drives
 /// the controller by hand for the same reason.
-fn park_mid_transition(transition: &TransitionHandle, value: f32) {
+fn park_mid_transition(transition: &TransitionHandle, value: f64) {
     let controller = transition
         .controller()
         .expect("install() created the controller");

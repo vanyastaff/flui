@@ -54,7 +54,7 @@
 //! # Invariants preserved
 //!
 //! - `cached_images` entries are `(TextureKey, TextureInstance, ScissorRect)`.
-//! - `external_images` entries are `(flui_types::painting::TextureId, TextureInstance,
+//! - `external_images` entries are `(flui_painting::paint::TextureId, TextureInstance,
 //!   ScissorRect)` — no `wgpu::TextureView` in the IR; resolution to a view
 //!   happens in `flush_segment_external_images` at replay time.
 //! - The SrcOver `draw_image_repeat`/`draw_image_nine_slice` → `draw_image`
@@ -67,13 +67,9 @@
 //! - `texture_batch` is **not touched** by any method here; replay owns that
 //!   scratch batch.
 
+use flui_foundation::geometry::{Offset, Point, Rect};
 use flui_painting::BlendMode;
-use flui_types::{
-    Offset, Point, Rect,
-    geometry::{Pixels, px},
-    painting::Image,
-    styling::Color,
-};
+use flui_painting::{paint::Image, styling::Color};
 
 use super::{
     super::{
@@ -112,7 +108,7 @@ impl DrawBatcher {
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
-        dst_rect: Rect<Pixels>,
+        dst_rect: Rect<f64>,
         blend_mode: BlendMode,
     ) {
         let texture_id = crate::texture_cache::TextureKey::from_ptr(image.data_ptr());
@@ -149,7 +145,7 @@ impl DrawBatcher {
         texture_cache: &mut TextureCache,
         texture_id: crate::texture_cache::TextureKey,
         image: &Image,
-        dst_rect: Rect<Pixels>,
+        dst_rect: Rect<f64>,
         blend_mode: BlendMode,
     ) {
         let top_left = state.apply_transform(Point::new(dst_rect.left(), dst_rect.top()));
@@ -168,12 +164,12 @@ impl DrawBatcher {
                     state.apply_active_clip(crate::instancing::TextureInstance::with_uv(
                         transformed_rect,
                         uv_rect,
-                        flui_types::styling::Color::WHITE,
+                        flui_painting::styling::Color::WHITE,
                     ))
                 } else {
                     state.apply_active_clip(crate::instancing::TextureInstance::new(
                         transformed_rect,
-                        flui_types::styling::Color::WHITE,
+                        flui_painting::styling::Color::WHITE,
                     ))
                 };
 
@@ -243,7 +239,7 @@ impl DrawBatcher {
         width: u32,
         height: u32,
         pixels: Vec<u8>,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         blend_mode: BlendMode,
     ) {
         let texture_id = crate::texture_cache::TextureKey::from_data(&pixels);
@@ -281,11 +277,11 @@ impl DrawBatcher {
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
-        dst: Rect<Pixels>,
-        repeat: flui_types::painting::image::ImageRepeat,
+        dst: Rect<f64>,
+        repeat: flui_painting::paint::image::ImageRepeat,
         blend_mode: BlendMode,
     ) {
-        use flui_types::painting::image::ImageRepeat;
+        use flui_painting::paint::image::ImageRepeat;
 
         let img_w = image.width() as f32;
         let img_h = image.height() as f32;
@@ -300,7 +296,7 @@ impl DrawBatcher {
             Self::finish_current_segment(segment, draw_order);
 
             let mut shape_segment = DrawSegment::new();
-            let mut overall_bounds: Option<Rect<Pixels>> = None;
+            let mut overall_bounds: Option<Rect<f64>> = None;
 
             // Helper: load the image into the texture cache and push one tile
             // entry into shape_segment.
@@ -315,8 +311,8 @@ impl DrawBatcher {
                 Ok(cached_texture) => {
                     // Build a closure capturing shape_segment by &mut.
                     let add_tile = |shape_seg: &mut DrawSegment,
-                                    bounds: &mut Option<Rect<Pixels>>,
-                                    tile_dst: Rect<Pixels>| {
+                                    bounds: &mut Option<Rect<f64>>,
+                                    tile_dst: Rect<f64>| {
                         let top_left =
                             state.apply_transform(Point::new(tile_dst.left(), tile_dst.top()));
                         let bottom_right =
@@ -359,46 +355,46 @@ impl DrawBatcher {
                             add_tile(&mut shape_segment, &mut overall_bounds, dst);
                         }
                         ImageRepeat::Repeat => {
-                            let mut y = dst.top().0;
-                            while y < dst.bottom().0 {
-                                let mut x = dst.left().0;
-                                while x < dst.right().0 {
-                                    let tw = img_w.min(dst.right().0 - x);
-                                    let th = img_h.min(dst.bottom().0 - y);
+                            let mut y = dst.top();
+                            while y < dst.bottom() {
+                                let mut x = dst.left();
+                                while x < dst.right() {
+                                    let tw = img_w.min((dst.right() - x) as f32);
+                                    let th = img_h.min((dst.bottom() - y) as f32);
                                     add_tile(
                                         &mut shape_segment,
                                         &mut overall_bounds,
-                                        Rect::from_xywh(px(x), px(y), px(tw), px(th)),
+                                        Rect::from_xywh(x, y, f64::from(tw), f64::from(th)),
                                     );
-                                    x += img_w;
+                                    x += f64::from(img_w);
                                 }
-                                y += img_h;
+                                y += f64::from(img_h);
                             }
                         }
                         ImageRepeat::RepeatX => {
-                            let th = img_h.min(dst.height().0);
-                            let mut x = dst.left().0;
-                            while x < dst.right().0 {
-                                let tw = img_w.min(dst.right().0 - x);
+                            let th = img_h.min(dst.height() as f32);
+                            let mut x = dst.left();
+                            while x < dst.right() {
+                                let tw = img_w.min((dst.right() - x) as f32);
                                 add_tile(
                                     &mut shape_segment,
                                     &mut overall_bounds,
-                                    Rect::from_xywh(px(x), dst.top(), px(tw), px(th)),
+                                    Rect::from_xywh(x, dst.top(), f64::from(tw), f64::from(th)),
                                 );
-                                x += img_w;
+                                x += f64::from(img_w);
                             }
                         }
                         ImageRepeat::RepeatY => {
-                            let tw = img_w.min(dst.width().0);
-                            let mut y = dst.top().0;
-                            while y < dst.bottom().0 {
-                                let th = img_h.min(dst.bottom().0 - y);
+                            let tw = img_w.min(dst.width() as f32);
+                            let mut y = dst.top();
+                            while y < dst.bottom() {
+                                let th = img_h.min((dst.bottom() - y) as f32);
                                 add_tile(
                                     &mut shape_segment,
                                     &mut overall_bounds,
-                                    Rect::from_xywh(dst.left(), px(y), px(tw), px(th)),
+                                    Rect::from_xywh(dst.left(), y, f64::from(tw), f64::from(th)),
                                 );
-                                y += img_h;
+                                y += f64::from(img_h);
                             }
                         }
                     }
@@ -441,13 +437,13 @@ impl DrawBatcher {
             }
             ImageRepeat::Repeat => {
                 // Tile in both directions.
-                let mut y = dst.top().0;
-                while y < dst.bottom().0 {
-                    let mut x = dst.left().0;
-                    while x < dst.right().0 {
-                        let tile_w = img_w.min(dst.right().0 - x);
-                        let tile_h = img_h.min(dst.bottom().0 - y);
-                        let tile_dst = Rect::from_xywh(px(x), px(y), px(tile_w), px(tile_h));
+                let mut y = dst.top();
+                while y < dst.bottom() {
+                    let mut x = dst.left();
+                    while x < dst.right() {
+                        let tile_w = img_w.min((dst.right() - x) as f32);
+                        let tile_h = img_h.min((dst.bottom() - y) as f32);
+                        let tile_dst = Rect::from_xywh(x, y, f64::from(tile_w), f64::from(tile_h));
                         Self::draw_image(
                             segment,
                             draw_order,
@@ -457,18 +453,19 @@ impl DrawBatcher {
                             tile_dst,
                             blend_mode,
                         );
-                        x += img_w;
+                        x += f64::from(img_w);
                     }
-                    y += img_h;
+                    y += f64::from(img_h);
                 }
             }
             ImageRepeat::RepeatX => {
                 // Tile only horizontally.
-                let tile_h = img_h.min(dst.height().0);
-                let mut x = dst.left().0;
-                while x < dst.right().0 {
-                    let tile_w = img_w.min(dst.right().0 - x);
-                    let tile_dst = Rect::from_xywh(px(x), dst.top(), px(tile_w), px(tile_h));
+                let tile_h = img_h.min(dst.height() as f32);
+                let mut x = dst.left();
+                while x < dst.right() {
+                    let tile_w = img_w.min((dst.right() - x) as f32);
+                    let tile_dst =
+                        Rect::from_xywh(x, dst.top(), f64::from(tile_w), f64::from(tile_h));
                     Self::draw_image(
                         segment,
                         draw_order,
@@ -478,16 +475,17 @@ impl DrawBatcher {
                         tile_dst,
                         blend_mode,
                     );
-                    x += img_w;
+                    x += f64::from(img_w);
                 }
             }
             ImageRepeat::RepeatY => {
                 // Tile only vertically.
-                let tile_w = img_w.min(dst.width().0);
-                let mut y = dst.top().0;
-                while y < dst.bottom().0 {
-                    let tile_h = img_h.min(dst.bottom().0 - y);
-                    let tile_dst = Rect::from_xywh(dst.left(), px(y), px(tile_w), px(tile_h));
+                let tile_w = img_w.min(dst.width() as f32);
+                let mut y = dst.top();
+                while y < dst.bottom() {
+                    let tile_h = img_h.min((dst.bottom() - y) as f32);
+                    let tile_dst =
+                        Rect::from_xywh(dst.left(), y, f64::from(tile_w), f64::from(tile_h));
                     Self::draw_image(
                         segment,
                         draw_order,
@@ -497,7 +495,7 @@ impl DrawBatcher {
                         tile_dst,
                         blend_mode,
                     );
-                    y += img_h;
+                    y += f64::from(img_h);
                 }
             }
         }
@@ -529,27 +527,28 @@ impl DrawBatcher {
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
-        center_slice: Rect<Pixels>,
-        dst: Rect<Pixels>,
+        center_slice: Rect<f64>,
+        dst: Rect<f64>,
         blend_mode: BlendMode,
     ) {
-        let img_w = image.width() as f32;
-        let img_h = image.height() as f32;
+        let img_w = f64::from(image.width());
+        let img_h = f64::from(image.height());
         if img_w <= 0.0 || img_h <= 0.0 {
             return;
         }
 
         // Slice boundaries in image space.
-        let sl = center_slice.left().0;
-        let st = center_slice.top().0;
-        let sr = center_slice.right().0;
-        let sb = center_slice.bottom().0;
+        let sl = center_slice.left();
+        let st = center_slice.top();
+        let sr = center_slice.right();
+        let sb = center_slice.bottom();
 
-        // Destination boundaries.
-        let dl = dst.left().0;
-        let dt = dst.top().0;
-        let dr = dst.right().0;
-        let db = dst.bottom().0;
+        // Destination boundaries, kept in f64 until the transform has rebased them
+        // to device space; narrowing here would round a far-offset slice edge.
+        let dl = dst.left();
+        let dt = dst.top();
+        let dr = dst.right();
+        let db = dst.bottom();
 
         // Inner destination boundaries (corners keep their pixel size).
         let d_inner_left = dl + sl;
@@ -571,7 +570,7 @@ impl DrawBatcher {
         //
         // For correct 9-slice, we create sub-images from the pixel data.
         // Extract a sub-region of the image as a new Image.
-        let extract = |sx: f32, sy: f32, sw: f32, sh: f32| -> Option<Image> {
+        let extract = |sx: f64, sy: f64, sw: f64, sh: f64| -> Option<Image> {
             extract_rgba8_region(
                 image,
                 sx.max(0.0) as u32,
@@ -582,7 +581,7 @@ impl DrawBatcher {
         };
 
         // 9 slices: (src_x, src_y, src_w, src_h) -> dst rect.
-        let slices: [(f32, f32, f32, f32, f32, f32, f32, f32); 9] = [
+        let slices: [(f64, f64, f64, f64, f64, f64, f64, f64); 9] = [
             // Top-left corner
             (
                 0.0,
@@ -689,14 +688,14 @@ impl DrawBatcher {
             Self::finish_current_segment(segment, draw_order);
 
             let mut shape_segment = DrawSegment::new();
-            let mut overall_bounds: Option<Rect<Pixels>> = None;
+            let mut overall_bounds: Option<Rect<f64>> = None;
 
             for (sx, sy, sw, sh, dx, dy, dw, dh) in slices {
                 if dw <= 0.0 || dh <= 0.0 || sw <= 0.0 || sh <= 0.0 {
                     continue;
                 }
                 if let Some(sub_image) = extract(sx, sy, sw, sh) {
-                    let tile_dst = Rect::from_xywh(px(dx), px(dy), px(dw), px(dh));
+                    let tile_dst = Rect::from_xywh(dx, dy, dw, dh);
 
                     let top_left =
                         state.apply_transform(Point::new(tile_dst.left(), tile_dst.top()));
@@ -772,7 +771,7 @@ impl DrawBatcher {
                 continue;
             }
             if let Some(sub_image) = extract(sx, sy, sw, sh) {
-                let tile_dst = Rect::from_xywh(px(dx), px(dy), px(dw), px(dh));
+                let tile_dst = Rect::from_xywh(dx, dy, dw, dh);
                 Self::draw_image(
                     segment,
                     draw_order,
@@ -826,14 +825,14 @@ impl DrawBatcher {
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
-        dst: Rect<Pixels>,
-        filter: flui_types::painting::image::ColorFilter,
+        dst: Rect<f64>,
+        filter: flui_painting::paint::image::ColorFilter,
         // `paint_blend_mode` is the GPU-level composite mode (Paint.blend_mode).
         // It is independent of the filter's own blend_mode (CPU per-pixel
         // operation). See the method doc for the boundary explanation.
         paint_blend_mode: BlendMode,
     ) {
-        use flui_types::painting::image::ColorFilter;
+        use flui_painting::paint::image::ColorFilter;
 
         match filter {
             ColorFilter::Mode {
@@ -901,12 +900,30 @@ impl DrawBatcher {
                     let b = f32::from(pixel[2]) / 255.0;
                     let a = f32::from(pixel[3]) / 255.0;
 
-                    let nr = (m[0] * r + m[1] * g + m[2] * b + m[3] * a + m[4]).clamp(0.0, 1.0);
-                    let ng = (m[5] * r + m[6] * g + m[7] * b + m[8] * a + m[9]).clamp(0.0, 1.0);
-                    let nb =
-                        (m[10] * r + m[11] * g + m[12] * b + m[13] * a + m[14]).clamp(0.0, 1.0);
-                    let na =
-                        (m[15] * r + m[16] * g + m[17] * b + m[18] * a + m[19]).clamp(0.0, 1.0);
+                    let nr = (m[0] * ((f64::from(r)) as f32)
+                        + m[1] * ((f64::from(g)) as f32)
+                        + m[2] * ((f64::from(b)) as f32)
+                        + m[3] * ((f64::from(a)) as f32)
+                        + m[4])
+                        .clamp(0.0, 1.0);
+                    let ng = (m[5] * ((f64::from(r)) as f32)
+                        + m[6] * ((f64::from(g)) as f32)
+                        + m[7] * ((f64::from(b)) as f32)
+                        + m[8] * ((f64::from(a)) as f32)
+                        + m[9])
+                        .clamp(0.0, 1.0);
+                    let nb = (m[10] * ((f64::from(r)) as f32)
+                        + m[11] * ((f64::from(g)) as f32)
+                        + m[12] * ((f64::from(b)) as f32)
+                        + m[13] * ((f64::from(a)) as f32)
+                        + m[14])
+                        .clamp(0.0, 1.0);
+                    let na = (m[15] * ((f64::from(r)) as f32)
+                        + m[16] * ((f64::from(g)) as f32)
+                        + m[17] * ((f64::from(b)) as f32)
+                        + m[18] * ((f64::from(a)) as f32)
+                        + m[19])
+                        .clamp(0.0, 1.0);
 
                     new_data.push((nr * 255.0) as u8);
                     new_data.push((ng * 255.0) as u8);
@@ -1049,9 +1066,9 @@ impl DrawBatcher {
         state: &GpuStateStack,
         texture_cache: &mut TextureCache,
         image: &Image,
-        sprites: &[Rect<Pixels>],
-        sprite_origins: &[Offset<Pixels>],
-        colors: Option<&[flui_types::styling::Color]>,
+        sprites: &[Rect<f64>],
+        sprite_origins: &[Offset<f64>],
+        colors: Option<&[flui_painting::styling::Color]>,
         blend_mode: BlendMode,
     ) {
         #[cfg(debug_assertions)]
@@ -1137,7 +1154,7 @@ impl DrawBatcher {
                     Self::finish_current_segment(segment, draw_order);
 
                     let mut shape_segment = DrawSegment::new();
-                    let mut overall_bounds: Option<Rect<Pixels>> = None;
+                    let mut overall_bounds: Option<Rect<f64>> = None;
 
                     for (i, (sprite_rect, origin)) in
                         sprites.iter().zip(sprite_origins.iter()).enumerate()
@@ -1145,17 +1162,17 @@ impl DrawBatcher {
                         let tint = colors
                             .and_then(|c| c.get(i))
                             .copied()
-                            .unwrap_or(flui_types::styling::Color::WHITE);
+                            .unwrap_or(flui_painting::styling::Color::WHITE);
 
                         // Sprite UV relative to the atlas image [0,1]×[0,1].
                         let sprite_uv = [
-                            (sprite_rect.left() / image_width).0,
-                            (sprite_rect.top() / image_height).0,
-                            (sprite_rect.right() / image_width).0,
-                            (sprite_rect.bottom() / image_height).0,
+                            (sprite_rect.left() / f64::from(image_width)),
+                            (sprite_rect.top() / f64::from(image_height)),
+                            (sprite_rect.right() / f64::from(image_width)),
+                            (sprite_rect.bottom() / f64::from(image_height)),
                         ];
                         // Remap through atlas UV if packed into the shared atlas.
-                        let src_uv = remap_sprite_uv(sprite_uv);
+                        let src_uv = remap_sprite_uv((sprite_uv).map(|v| v as f32));
 
                         let dst_rect = Rect::from_xywh(
                             origin.dx,
@@ -1225,17 +1242,17 @@ impl DrawBatcher {
                     let tint = colors
                         .and_then(|c| c.get(i))
                         .copied()
-                        .unwrap_or(flui_types::styling::Color::WHITE);
+                        .unwrap_or(flui_painting::styling::Color::WHITE);
 
                     // Calculate UV coordinates from sprite rect, then remap
                     // through the atlas UV if the image is atlas-packed.
                     let sprite_uv = [
-                        (sprite_rect.left() / image_width).0,
-                        (sprite_rect.top() / image_height).0,
-                        (sprite_rect.right() / image_width).0,
-                        (sprite_rect.bottom() / image_height).0,
+                        (sprite_rect.left() / f64::from(image_width)),
+                        (sprite_rect.top() / f64::from(image_height)),
+                        (sprite_rect.right() / f64::from(image_width)),
+                        (sprite_rect.bottom() / f64::from(image_height)),
                     ];
-                    let src_uv = remap_sprite_uv(sprite_uv);
+                    let src_uv = remap_sprite_uv((sprite_uv).map(|v| v as f32));
 
                     let dst_rect = Rect::from_xywh(
                         origin.dx,
@@ -1295,10 +1312,10 @@ impl DrawBatcher {
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         src_uv_registry: Option<(u32, u32)>,
-        texture_id: flui_types::painting::TextureId,
-        dst: Rect<Pixels>,
-        src: Option<Rect<Pixels>>,
-        _filter_quality: flui_types::painting::FilterQuality,
+        texture_id: flui_painting::paint::TextureId,
+        dst: Rect<f64>,
+        src: Option<Rect<f64>>,
+        _filter_quality: flui_painting::paint::FilterQuality,
         opacity: f32,
     ) {
         #[cfg(debug_assertions)]
@@ -1323,10 +1340,10 @@ impl DrawBatcher {
                 let w = tex_width as f32;
                 let h = tex_height as f32;
                 [
-                    (src_rect.left() / w).0,
-                    (src_rect.top() / h).0,
-                    (src_rect.right() / w).0,
-                    (src_rect.bottom() / h).0,
+                    (src_rect.left() / f64::from(w)),
+                    (src_rect.top() / f64::from(h)),
+                    (src_rect.right() / f64::from(w)),
+                    (src_rect.bottom() / f64::from(h)),
                 ]
             }
             // src=None or dimensions unavailable: full UV.
@@ -1334,7 +1351,7 @@ impl DrawBatcher {
         };
 
         // Apply opacity via tint color alpha.
-        let tint = flui_types::styling::Color::rgba(255, 255, 255, (opacity * 255.0) as u8);
+        let tint = flui_painting::styling::Color::rgba(255, 255, 255, (opacity * 255.0) as u8);
 
         // Apply the current transform to dst corners (translation + scale; rotation
         // collapses to AABB — same accepted limitation as `texture()` and `draw_image`).
@@ -1345,7 +1362,7 @@ impl DrawBatcher {
 
         let instance = state.apply_active_clip(crate::instancing::TextureInstance::with_uv(
             transformed_dst,
-            src_uv,
+            (src_uv).map(|v| v as f32),
             tint,
         ));
 

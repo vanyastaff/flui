@@ -64,7 +64,7 @@ use common::{lay_out, lay_out_animated, tight};
 use flui_material::{Drawer, DrawerHandle, Scaffold, ScaffoldScope, Theme, ThemeData};
 use flui_sdk::animation::Vsync;
 use flui_sdk::foundation::RenderId;
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, GestureDetector, MediaQuery, MediaQueryData, SizedBox, VsyncScope,
@@ -132,10 +132,10 @@ const _: () = assert!(
 /// from the scrim's `SizedBox::expand` (which also lowers to
 /// `RenderConstrainedBox`, but reports the Stack's full width, not the
 /// configured drawer width) by matching on `configured_width`.
-fn find_panel(laid: &common::LaidOut, configured_width: f32) -> RenderId {
+fn find_panel(laid: &common::LaidOut, configured_width: f64) -> RenderId {
     laid.find_all_by_render_type("RenderConstrainedBox")
         .into_iter()
-        .find(|&id| (laid.size(id).width.get() - configured_width).abs() < 1.0)
+        .find(|&id| (laid.size(id).width - configured_width).abs() < 1.0)
         .expect("the drawer's width-forcing ConstrainedBox must be mounted")
 }
 
@@ -277,7 +277,7 @@ fn mid_drag_panel_offset_follows_the_value_minus_one_times_width_formula() {
     laid.tick();
 
     let panel = find_panel(&laid, width);
-    let dx = laid.absolute_offset(panel).dx.get();
+    let dx = laid.absolute_offset(panel).dx;
 
     // value ~= 0.6 => offset = (0.6 - 1) * width.
     let expected = (value - 1.0) * width;
@@ -495,7 +495,7 @@ fn mounts_immediately_on_the_first_forward_tick_with_no_flash() {
         "leaving Dismissed must mount the drawer's content on the very same tick"
     );
     let panel = find_panel(&laid, width);
-    let dx_at_mount = laid.absolute_offset(panel).dx.get();
+    let dx_at_mount = laid.absolute_offset(panel).dx;
     assert!(
         (dx_at_mount - (-width)).abs() < 10.0,
         "no flash: the panel must mount close to fully off-screen (value near 0), \
@@ -751,7 +751,7 @@ fn subtree(laid: &common::LaidOut, root: RenderId, out: &mut Vec<RenderId>) {
 /// bounds (`0..200` for the start drawer, `200..400` for the end drawer —
 /// disjoint, so the drag can only ever hit the strip it started on). See the
 /// module docs' "harness limitation" note.
-const ORDERING_EDGE_DRAG_WIDTH: f32 = 200.0;
+const ORDERING_EDGE_DRAG_WIDTH: f64 = 200.0;
 
 /// Shared by both arms of the dynamic-order pin below: mounts a `Scaffold`
 /// with both `drawer` and `end_drawer` configured, opens whichever side
@@ -794,7 +794,7 @@ const ORDERING_EDGE_DRAG_WIDTH: f32 = 200.0;
 /// too), but `with_start_drawer_open_its_slot_is_the_last_scaffold_child`
 /// fails (it needs `[end_drawer, drawer]`, which the mutant never produces).
 fn assert_opened_drawer_slot_is_last(open_is_end: bool) {
-    let laid_width = 400.0_f32;
+    let laid_width = 400.0_f64;
     let mut laid = lay_out(
         themed(
             Scaffold::new()

@@ -25,7 +25,7 @@ use flui_animation::{
     Vsync, VsyncRegistration,
 };
 use flui_foundation::Listenable;
-use flui_types::geometry::Lerp;
+use flui_foundation::geometry::Lerp;
 
 /// The default implicit-animation duration when a widget does not override it.
 ///
@@ -74,7 +74,7 @@ impl ImplicitController {
         // No ticker: `VsyncScope` drives this controller deterministically
         // via `tick_at` instead.
         let controller = AnimationController::without_ticker(duration);
-        let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+        let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
         let curved = CurvedAnimation::new(parent, curve.clone());
         Self {
             controller,
@@ -94,7 +94,7 @@ impl ImplicitController {
     }
 
     /// The curved progress (`0`→`1`, possibly overshooting) the tweens map.
-    pub(crate) fn value(&self) -> f32 {
+    pub(crate) fn value(&self) -> f64 {
         self.curved.value()
     }
 
@@ -138,7 +138,7 @@ impl ImplicitController {
         if self.curve == curve {
             return false;
         }
-        let parent: Arc<dyn Animation<f32>> = Arc::new(self.controller.clone());
+        let parent: Arc<dyn Animation<f64>> = Arc::new(self.controller.clone());
         self.curved = CurvedAnimation::new(parent, curve.clone());
         self.curve = curve;
         true
@@ -289,14 +289,14 @@ impl<T: Lerp + Clone + PartialEq> OptTween<T> {
     }
 
     /// The current value at curved progress `t`, or `None` when unset.
-    pub(crate) fn current(&self, t: f32) -> Option<T> {
+    pub(crate) fn current(&self, t: f64) -> Option<T> {
         self.tween.as_ref().map(|tween| tween.transform(t))
     }
 
     /// Re-anchor toward `new_target`, evaluating the current value at `t` for a
     /// Some→Some change. Returns `true` when a continuous (animatable) change
     /// occurred — the owner restarts the shared controller if any property does.
-    pub(crate) fn retarget(&mut self, new_target: Option<T>, t: f32) -> bool {
+    pub(crate) fn retarget(&mut self, new_target: Option<T>, t: f64) -> bool {
         match (new_target, self.tween.as_ref()) {
             (Some(target), Some(existing)) if existing.end != target => {
                 let from = existing.transform(t);

@@ -68,7 +68,7 @@
 //! ```rust,ignore
 //! use flui::hot_reload::{Scene, scene_plugin};
 //!
-//! fn my_scene(_width: f32, _height: f32) -> Scene {
+//! fn my_scene(_width: f64, _height: f64) -> Scene {
 //!     Scene::default()
 //! }
 //!

@@ -95,7 +95,7 @@ mod probe {
     struct Witness {
         frames: AtomicU64,
         /// `(max_width, max_height)` in logical pixels.
-        constraints: Mutex<Option<(f32, f32)>>,
+        constraints: Mutex<Option<(f64, f64)>>,
     }
 
     /// What a frame-counting phase must satisfy.
@@ -189,7 +189,7 @@ mod probe {
                 ThemeData::light(),
                 Scaffold::new().body(LayoutBuilder::new(move |_ctx, constraints| {
                     *witness.constraints.lock() =
-                        Some((constraints.max_width.0, constraints.max_height.0));
+                        Some((constraints.max_width, constraints.max_height));
                     // A bar that sweeps with the controller: the frame has
                     // something to draw differently each tick.
                     let width = 40.0 + 200.0 * value;
@@ -354,7 +354,6 @@ mod probe {
         while std::time::Instant::now() < deadline {
             let constraints = *witness.constraints.lock();
             if let Some((w, h)) = constraints {
-                let (w, h) = (f64::from(w), f64::from(h));
                 seen = Some((w, h));
                 if (w - expected.0).abs() <= 1.0 && (h - expected.1).abs() <= 1.0 {
                     matched = true;

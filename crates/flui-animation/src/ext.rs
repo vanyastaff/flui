@@ -47,7 +47,7 @@ use std::sync::Arc;
 ///     Duration::from_millis(300),
 ///     &scheduler,
 /// ));
-/// let animation = tween.animate(controller as Arc<dyn Animation<f32>>);
+/// let animation = tween.animate(controller as Arc<dyn Animation<f64>>);
 /// assert_eq!(animation.value(), 0.0);
 /// ```
 pub trait AnimatableExt<T>: Animatable<T> + Sized {
@@ -77,9 +77,9 @@ pub trait AnimatableExt<T>: Animatable<T> + Sized {
     /// ));
     ///
     /// let animation = FloatTween::new(0.0, 100.0)
-    ///     .animate(controller as Arc<dyn Animation<f32>>);
+    ///     .animate(controller as Arc<dyn Animation<f64>>);
     /// ```
-    fn animate(self, parent: Arc<dyn Animation<f32>>) -> TweenAnimation<T, Self>
+    fn animate(self, parent: Arc<dyn Animation<f64>>) -> TweenAnimation<T, Self>
     where
         Self: fmt::Debug + Clone + Send + Sync + 'static,
         T: Clone + Send + Sync + fmt::Debug + 'static,
@@ -100,13 +100,13 @@ pub trait AnimatableExt<T>: Animatable<T> + Sized {
     /// Chains this animatable with another.
     ///
     /// The output of `self` is passed as input to `other`.
-    /// This is useful when `self` outputs `f32` (like a curve) and `other`
+    /// This is useful when `self` outputs `f64` (like a curve) and `other`
     /// transforms that to the final type.
     #[inline]
     #[must_use]
     fn chain<B>(self, other: B) -> ChainedTween<Self, B>
     where
-        Self: Animatable<f32>,
+        Self: Animatable<f64>,
     {
         ChainedTween::new(self, other)
     }
@@ -148,7 +148,7 @@ impl<T, A: Animatable<T>> AnimatableExt<T> for A {}
 /// // Apply a curve using the fluent API
 /// let curved = controller.curved(Curves::EaseInOut);
 /// ```
-pub trait AnimationExt: Animation<f32> + Sized + 'static {
+pub trait AnimationExt: Animation<f64> + Sized + 'static {
     /// Apply a curve to this animation.
     ///
     /// Creates a [`CurvedAnimation`] that transforms the linear 0.0..1.0 progression
@@ -180,7 +180,7 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     where
         C: Curve + Clone + Send + Sync + fmt::Debug + 'static,
     {
-        CurvedAnimation::new(self as Arc<dyn Animation<f32>>, curve)
+        CurvedAnimation::new(self as Arc<dyn Animation<f64>>, curve)
     }
 
     /// Reverse this animation.
@@ -209,7 +209,7 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// assert_eq!(reversed.value(), 0.75);
     /// ```
     fn reversed(self: Arc<Self>) -> ReverseAnimation {
-        ReverseAnimation::new(self as Arc<dyn Animation<f32>>)
+        ReverseAnimation::new(self as Arc<dyn Animation<f64>>)
     }
 
     /// Combine with another animation using an operator.
@@ -245,17 +245,17 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// controller2.set_value(0.3);
     ///
     /// let combined = controller1.combine(
-    ///     controller2 as Arc<dyn Animation<f32>>,
+    ///     controller2 as Arc<dyn Animation<f64>>,
     ///     AnimationOperator::Add,
     /// );
     /// assert_eq!(combined.value(), 0.8);
     /// ```
     fn combine(
         self: Arc<Self>,
-        other: Arc<dyn Animation<f32>>,
+        other: Arc<dyn Animation<f64>>,
         op: AnimationOperator,
     ) -> CompoundAnimation {
-        CompoundAnimation::new(self as Arc<dyn Animation<f32>>, other, op)
+        CompoundAnimation::new(self as Arc<dyn Animation<f64>>, other, op)
     }
 
     /// Add another animation to this one.
@@ -278,11 +278,11 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// c1.set_value(0.5);
     /// c2.set_value(0.3);
     ///
-    /// let sum = c1.add(c2 as Arc<dyn Animation<f32>>);
+    /// let sum = c1.add(c2 as Arc<dyn Animation<f64>>);
     /// assert_eq!(sum.value(), 0.8);
     /// ```
-    fn add(self: Arc<Self>, other: Arc<dyn Animation<f32>>) -> CompoundAnimation {
-        CompoundAnimation::add(self as Arc<dyn Animation<f32>>, other)
+    fn add(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
+        CompoundAnimation::add(self as Arc<dyn Animation<f64>>, other)
     }
 
     /// Multiply with another animation.
@@ -305,11 +305,11 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// c1.set_value(0.5);
     /// c2.set_value(0.4);
     ///
-    /// let product = c1.multiply(c2 as Arc<dyn Animation<f32>>);
+    /// let product = c1.multiply(c2 as Arc<dyn Animation<f64>>);
     /// assert!((product.value() - 0.2).abs() < 1e-6);
     /// ```
-    fn multiply(self: Arc<Self>, other: Arc<dyn Animation<f32>>) -> CompoundAnimation {
-        CompoundAnimation::multiply(self as Arc<dyn Animation<f32>>, other)
+    fn multiply(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
+        CompoundAnimation::multiply(self as Arc<dyn Animation<f64>>, other)
     }
 
     /// Subtract another animation from this one.
@@ -332,11 +332,11 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// c1.set_value(0.8);
     /// c2.set_value(0.3);
     ///
-    /// let diff = c1.subtract(c2 as Arc<dyn Animation<f32>>);
+    /// let diff = c1.subtract(c2 as Arc<dyn Animation<f64>>);
     /// assert!((diff.value() - 0.5).abs() < 1e-6);
     /// ```
-    fn subtract(self: Arc<Self>, other: Arc<dyn Animation<f32>>) -> CompoundAnimation {
-        CompoundAnimation::subtract(self as Arc<dyn Animation<f32>>, other)
+    fn subtract(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
+        CompoundAnimation::subtract(self as Arc<dyn Animation<f64>>, other)
     }
 
     /// Divide this animation by another.
@@ -361,30 +361,30 @@ pub trait AnimationExt: Animation<f32> + Sized + 'static {
     /// c1.set_value(0.8);
     /// c2.set_value(0.4);
     ///
-    /// let quotient = c1.divide(c2 as Arc<dyn Animation<f32>>);
+    /// let quotient = c1.divide(c2 as Arc<dyn Animation<f64>>);
     /// assert!((quotient.value() - 2.0).abs() < 1e-6);
     /// ```
-    fn divide(self: Arc<Self>, other: Arc<dyn Animation<f32>>) -> CompoundAnimation {
-        CompoundAnimation::divide(self as Arc<dyn Animation<f32>>, other)
+    fn divide(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
+        CompoundAnimation::divide(self as Arc<dyn Animation<f64>>, other)
     }
 
     /// Return the minimum of this animation and another.
     ///
     /// This is a convenience method equivalent to `combine(other, AnimationOperator::Min)`.
-    fn min(self: Arc<Self>, other: Arc<dyn Animation<f32>>) -> CompoundAnimation {
-        CompoundAnimation::min(self as Arc<dyn Animation<f32>>, other)
+    fn min(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
+        CompoundAnimation::min(self as Arc<dyn Animation<f64>>, other)
     }
 
     /// Return the maximum of this animation and another.
     ///
     /// This is a convenience method equivalent to `combine(other, AnimationOperator::Max)`.
-    fn max(self: Arc<Self>, other: Arc<dyn Animation<f32>>) -> CompoundAnimation {
-        CompoundAnimation::max(self as Arc<dyn Animation<f32>>, other)
+    fn max(self: Arc<Self>, other: Arc<dyn Animation<f64>>) -> CompoundAnimation {
+        CompoundAnimation::max(self as Arc<dyn Animation<f64>>, other)
     }
 }
 
-// Blanket implementation for all types that implement Animation<f32>
-impl<A: Animation<f32> + 'static> AnimationExt for A {}
+// Blanket implementation for all types that implement Animation<f64>
+impl<A: Animation<f64> + 'static> AnimationExt for A {}
 
 #[cfg(test)]
 mod tests {
@@ -404,7 +404,7 @@ mod tests {
         ));
 
         let tween = FloatTween::new(0.0, 100.0);
-        let animation = tween.animate(controller.clone() as Arc<dyn Animation<f32>>);
+        let animation = tween.animate(controller.clone() as Arc<dyn Animation<f64>>);
 
         controller.set_value(0.5);
         assert_eq!(animation.value(), 50.0);
@@ -459,7 +459,7 @@ mod tests {
         c1.set_value(0.5);
         c2.set_value(0.3);
 
-        let sum = c1.clone().add(c2.clone() as Arc<dyn Animation<f32>>);
+        let sum = c1.clone().add(c2.clone() as Arc<dyn Animation<f64>>);
         assert_eq!(sum.value(), 0.8);
 
         c1.dispose();
@@ -481,7 +481,7 @@ mod tests {
         c1.set_value(0.5);
         c2.set_value(0.4);
 
-        let product = c1.clone().multiply(c2.clone() as Arc<dyn Animation<f32>>);
+        let product = c1.clone().multiply(c2.clone() as Arc<dyn Animation<f64>>);
         assert!((product.value() - 0.2).abs() < 1e-6);
 
         c1.dispose();
@@ -503,7 +503,7 @@ mod tests {
         c1.set_value(0.8);
         c2.set_value(0.3);
 
-        let diff = c1.clone().subtract(c2.clone() as Arc<dyn Animation<f32>>);
+        let diff = c1.clone().subtract(c2.clone() as Arc<dyn Animation<f64>>);
         assert!((diff.value() - 0.5).abs() < 1e-6);
 
         c1.dispose();
@@ -525,7 +525,7 @@ mod tests {
         c1.set_value(0.8);
         c2.set_value(0.4);
 
-        let quotient = c1.clone().divide(c2.clone() as Arc<dyn Animation<f32>>);
+        let quotient = c1.clone().divide(c2.clone() as Arc<dyn Animation<f64>>);
         assert!((quotient.value() - 2.0).abs() < 1e-6);
 
         c1.dispose();

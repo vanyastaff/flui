@@ -704,7 +704,7 @@ the composition (ADR-0069) and `unmarkText` emits
 `ImeEvent::Preedit { text: String::new(), cursor: None }` rather than nothing, so
 the second divergence is a *third* answer to the same situation rather than the
 inverse of Flutter's. It is grounded in the client-side bug class
-`flui-types/src/ime.rs` records — a client left holding composition state it was
+`flui-platform-api/src/ime.rs` records — a client left holding composition state it was
 never told ended suppresses `Key::Character` for the rest of the focus session
 and keeps the cancelled slice in its buffer — and in winit's own macOS
 implementation, which drops the marked text on `set_ime_allowed(false)`, so

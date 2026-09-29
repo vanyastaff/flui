@@ -42,8 +42,8 @@
 //!   read point relative to the compositor stack.
 //! - **No new per-draw heap allocations** vs. the pre-extraction baseline.
 
+use flui_foundation::geometry::Rect;
 use flui_painting::BlendMode;
-use flui_types::{Rect, geometry::Pixels};
 
 use crate::{
     command_ir::{AdvancedShapeOp, DrawItem, DrawSegment, Phase, SsaaPathOp, TessellatedBatch},
@@ -396,15 +396,15 @@ impl DrawBatcher {
     ///
     /// Called by `DrawBatcher::dispatch_shader_rect` which lives in the same module.
     pub(super) fn shader_to_gradient_stops(
-        shader: &flui_types::painting::Shader,
+        shader: &flui_painting::paint::Shader,
     ) -> Vec<crate::effects::GradientStop> {
         let (colors, stops) = match shader {
-            flui_types::painting::Shader::LinearGradient { colors, stops, .. }
-            | flui_types::painting::Shader::RadialGradient { colors, stops, .. }
-            | flui_types::painting::Shader::SweepGradient { colors, stops, .. } => {
+            flui_painting::paint::Shader::LinearGradient { colors, stops, .. }
+            | flui_painting::paint::Shader::RadialGradient { colors, stops, .. }
+            | flui_painting::paint::Shader::SweepGradient { colors, stops, .. } => {
                 (colors.as_slice(), stops.as_deref())
             }
-            flui_types::painting::Shader::Solid { color } => {
+            flui_painting::paint::Shader::Solid { color } => {
                 return vec![
                     crate::effects::GradientStop::new(*color, 0.0),
                     crate::effects::GradientStop::new(*color, 1.0),
@@ -416,13 +416,11 @@ impl DrawBatcher {
         let count = colors.len().min(8);
         (0..count)
             .map(|i| {
-                let position = if let Some(s) = stops {
-                    s.get(i)
-                        .copied()
-                        .unwrap_or(i as f32 / (count - 1).max(1) as f32)
-                } else {
-                    i as f32 / (count - 1).max(1) as f32
-                };
+                let even = i as f32 / (count - 1).max(1) as f32;
+                // Stop positions are logical f64; the GPU stop is f32.
+                let position = stops
+                    .and_then(|s| s.get(i).copied())
+                    .map_or(even, |p| p as f32);
                 crate::effects::GradientStop::new(colors[i], position)
             })
             .collect()
@@ -440,9 +438,9 @@ impl DrawBatcher {
 ///
 /// The AABB is used by `flush_advanced_layer` to determine `device_bounds` for
 /// the backdrop-copy region and the `src_uv` remap.
-fn vertices_aabb(vertices: &[Vertex]) -> Rect<Pixels> {
+fn vertices_aabb(vertices: &[Vertex]) -> Rect<f64> {
     if vertices.is_empty() {
-        return Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(0.0), Pixels(0.0));
+        return Rect::from_xywh(0.0, 0.0, 0.0, 0.0);
     }
 
     let mut min_x = f32::MAX;
@@ -467,7 +465,12 @@ fn vertices_aabb(vertices: &[Vertex]) -> Rect<Pixels> {
         }
     }
 
-    Rect::from_ltrb(Pixels(min_x), Pixels(min_y), Pixels(max_x), Pixels(max_y))
+    Rect::from_ltrb(
+        f64::from(min_x),
+        f64::from(min_y),
+        f64::from(max_x),
+        f64::from(max_y),
+    )
 }
 
 // ─── Unit tests ───────────────────────────────────────────────────────────────
@@ -479,8 +482,8 @@ fn vertices_aabb(vertices: &[Vertex]) -> Rect<Pixels> {
 
 #[cfg(test)]
 mod unit_tests {
+    use flui_foundation::geometry::Rect;
     use flui_painting::BlendMode;
-    use flui_types::Rect;
 
     use super::{DrawBatcher, PipelineKey, Vertex, vertices_aabb};
     use crate::{
@@ -616,7 +619,6 @@ mod unit_tests {
     fn a_kind_seal_never_splits_gradient_bearing_content() {
         use crate::command_ir::Phase;
         use crate::effects::GradientStop;
-        use flui_types::geometry::Pixels;
 
         let state = GpuStateStack::new();
         let mut segment = DrawSegment::new();
@@ -629,7 +631,7 @@ mod unit_tests {
         DrawBatcher::draw_gradient_rect(
             &mut segment,
             &state,
-            Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(10.0), Pixels(10.0)),
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             glam::Vec2::new(0.0, 0.0),
             glam::Vec2::new(10.0, 0.0),
             &stops,
@@ -844,24 +846,24 @@ mod unit_tests {
         };
 
         assert!(
-            (op.device_bounds.left().0 - left).abs() < 0.01,
+            (op.device_bounds.left() - f64::from(left)).abs() < 0.01,
             "device_bounds.left must match vertex left {left}; got {}",
-            op.device_bounds.left().0
+            op.device_bounds.left()
         );
         assert!(
-            (op.device_bounds.top().0 - top).abs() < 0.01,
+            (op.device_bounds.top() - f64::from(top)).abs() < 0.01,
             "device_bounds.top must match vertex top {top}; got {}",
-            op.device_bounds.top().0
+            op.device_bounds.top()
         );
         assert!(
-            (op.device_bounds.right().0 - right).abs() < 0.01,
+            (op.device_bounds.right() - f64::from(right)).abs() < 0.01,
             "device_bounds.right must match vertex right {right}; got {}",
-            op.device_bounds.right().0
+            op.device_bounds.right()
         );
         assert!(
-            (op.device_bounds.bottom().0 - bottom).abs() < 0.01,
+            (op.device_bounds.bottom() - f64::from(bottom)).abs() < 0.01,
             "device_bounds.bottom must match vertex bottom {bottom}; got {}",
-            op.device_bounds.bottom().0
+            op.device_bounds.bottom()
         );
     }
 
@@ -1002,24 +1004,24 @@ mod unit_tests {
         let vertices = rect_vertices(15.0, 25.0, 70.0, 85.0);
         let aabb = vertices_aabb(&vertices);
         assert!(
-            (aabb.left().0 - 15.0).abs() < 0.01,
+            (aabb.left() - 15.0).abs() < 0.01,
             "aabb.left: expected 15.0, got {}",
-            aabb.left().0
+            aabb.left()
         );
         assert!(
-            (aabb.top().0 - 25.0).abs() < 0.01,
+            (aabb.top() - 25.0).abs() < 0.01,
             "aabb.top: expected 25.0, got {}",
-            aabb.top().0
+            aabb.top()
         );
         assert!(
-            (aabb.right().0 - 70.0).abs() < 0.01,
+            (aabb.right() - 70.0).abs() < 0.01,
             "aabb.right: expected 70.0, got {}",
-            aabb.right().0
+            aabb.right()
         );
         assert!(
-            (aabb.bottom().0 - 85.0).abs() < 0.01,
+            (aabb.bottom() - 85.0).abs() < 0.01,
             "aabb.bottom: expected 85.0, got {}",
-            aabb.bottom().0
+            aabb.bottom()
         );
     }
 
@@ -1030,14 +1032,14 @@ mod unit_tests {
     fn vertices_aabb_empty_returns_zero_rect() {
         let aabb = vertices_aabb(&[]);
         assert!(
-            aabb.left().0.abs() < f32::EPSILON,
+            aabb.left().abs() < f64::from(f32::EPSILON),
             "empty vertices_aabb: left must be 0.0, got {}",
-            aabb.left().0
+            aabb.left()
         );
         assert!(
-            aabb.top().0.abs() < f32::EPSILON,
+            aabb.top().abs() < f64::from(f32::EPSILON),
             "empty vertices_aabb: top must be 0.0, got {}",
-            aabb.top().0
+            aabb.top()
         );
     }
 
@@ -1052,26 +1054,24 @@ mod unit_tests {
     /// goes into `AdvancedShapeOp::segment`, not the main segment's batch.
     #[test]
     fn linear_gradient_advanced_mode_diverts_to_advanced_shape() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::{Offset, px},
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         for mode in ALL_ADVANCED_MODES {
             let mut segment = DrawSegment::new();
             let mut draw_order: Vec<DrawItem> = Vec::new();
             let state = GpuStateStack::new_for_test();
 
-            let bounds = Rect::from_xywh(px(10.0), px(10.0), px(50.0), px(50.0));
+            let bounds = Rect::from_xywh(10.0, 10.0, 50.0, 50.0);
             let paint = Paint {
                 blend_mode: mode,
                 shader: Some(Shader::LinearGradient {
-                    from: Offset::new(px(10.0), px(10.0)),
-                    to: Offset::new(px(60.0), px(10.0)),
+                    from: Offset::new(10.0, 10.0),
+                    to: Offset::new(60.0, 10.0),
                     colors: vec![
-                        flui_types::Color::rgba(255, 0, 0, 255),
-                        flui_types::Color::rgba(0, 0, 255, 255),
+                        flui_painting::styling::Color::rgba(255, 0, 0, 255),
+                        flui_painting::styling::Color::rgba(0, 0, 255, 255),
                     ],
                     stops: None,
                     tile_mode: TileMode::Clamp,
@@ -1120,26 +1120,24 @@ mod unit_tests {
     /// case for the radial path.
     #[test]
     fn radial_gradient_advanced_mode_diverts_to_advanced_shape() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::{Offset, px},
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         for mode in ALL_ADVANCED_MODES {
             let mut segment = DrawSegment::new();
             let mut draw_order: Vec<DrawItem> = Vec::new();
             let state = GpuStateStack::new_for_test();
 
-            let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+            let bounds = Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
             let paint = Paint {
                 blend_mode: mode,
                 shader: Some(Shader::RadialGradient {
-                    center: Offset::new(px(32.0), px(32.0)),
+                    center: Offset::new(32.0, 32.0),
                     radius: 32.0,
                     colors: vec![
-                        flui_types::Color::rgba(255, 255, 0, 255),
-                        flui_types::Color::rgba(0, 255, 0, 255),
+                        flui_painting::styling::Color::rgba(255, 255, 0, 255),
+                        flui_painting::styling::Color::rgba(0, 255, 0, 255),
                     ],
                     stops: None,
                     tile_mode: TileMode::Clamp,
@@ -1183,27 +1181,25 @@ mod unit_tests {
     /// cases for sweep.
     #[test]
     fn sweep_gradient_advanced_mode_diverts_to_advanced_shape() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::{Offset, px},
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         for mode in ALL_ADVANCED_MODES {
             let mut segment = DrawSegment::new();
             let mut draw_order: Vec<DrawItem> = Vec::new();
             let state = GpuStateStack::new_for_test();
 
-            let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+            let bounds = Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
             let paint = Paint {
                 blend_mode: mode,
                 shader: Some(Shader::SweepGradient {
-                    center: Offset::new(px(32.0), px(32.0)),
+                    center: Offset::new(32.0, 32.0),
                     start_angle: 0.0,
-                    end_angle: std::f32::consts::TAU,
+                    end_angle: f64::from(std::f32::consts::TAU),
                     colors: vec![
-                        flui_types::Color::rgba(200, 100, 50, 255),
-                        flui_types::Color::rgba(50, 100, 200, 255),
+                        flui_painting::styling::Color::rgba(200, 100, 50, 255),
+                        flui_painting::styling::Color::rgba(50, 100, 200, 255),
                     ],
                     stops: None,
                     tile_mode: TileMode::Clamp,
@@ -1248,25 +1244,23 @@ mod unit_tests {
     /// SrcOver, leaving the gradient in the main segment's gradient batch.
     #[test]
     fn srcover_gradient_stays_in_main_segment() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::{Offset, px},
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         let mut segment = DrawSegment::new();
         let mut draw_order: Vec<DrawItem> = Vec::new();
         let state = GpuStateStack::new_for_test();
 
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
         let paint = Paint {
             blend_mode: BlendMode::SrcOver,
             shader: Some(Shader::LinearGradient {
-                from: Offset::new(px(0.0), px(0.0)),
-                to: Offset::new(px(64.0), px(0.0)),
+                from: Offset::new(0.0, 0.0),
+                to: Offset::new(64.0, 0.0),
                 colors: vec![
-                    flui_types::Color::rgba(255, 0, 0, 255),
-                    flui_types::Color::rgba(0, 0, 255, 255),
+                    flui_painting::styling::Color::rgba(255, 0, 0, 255),
+                    flui_painting::styling::Color::rgba(0, 0, 255, 255),
                 ],
                 stops: None,
                 tile_mode: TileMode::Clamp,
@@ -1311,11 +1305,9 @@ mod unit_tests {
     /// out-of-range stops in the isolated buffer and produce corrupt GPU output.
     #[test]
     fn advanced_gradient_isolated_segment_stop_offset_is_zero() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::{Offset, px},
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         let mut segment = DrawSegment::new();
         let mut draw_order: Vec<DrawItem> = Vec::new();
@@ -1323,21 +1315,23 @@ mod unit_tests {
 
         // Pre-populate the main segment with stops so that a bug using the main
         // segment's stop count would produce stop_offset = 2 (wrong).
-        let placeholder_stop =
-            crate::effects::GradientStop::new(flui_types::Color::rgba(128, 128, 128, 255), 0.5);
+        let placeholder_stop = crate::effects::GradientStop::new(
+            flui_painting::styling::Color::rgba(128, 128, 128, 255),
+            0.5,
+        );
         segment.current_gradient_stops.push(placeholder_stop);
         segment.current_gradient_stops.push(placeholder_stop);
         // main segment now has 2 stops.
 
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
         let paint = Paint {
             blend_mode: BlendMode::Multiply,
             shader: Some(Shader::LinearGradient {
-                from: Offset::new(px(0.0), px(0.0)),
-                to: Offset::new(px(64.0), px(0.0)),
+                from: Offset::new(0.0, 0.0),
+                to: Offset::new(64.0, 0.0),
                 colors: vec![
-                    flui_types::Color::rgba(255, 0, 0, 255),
-                    flui_types::Color::rgba(0, 0, 255, 255),
+                    flui_painting::styling::Color::rgba(255, 0, 0, 255),
+                    flui_painting::styling::Color::rgba(0, 0, 255, 255),
                 ],
                 stops: None,
                 tile_mode: TileMode::Clamp,
@@ -1386,11 +1380,9 @@ mod unit_tests {
     /// fires at the top of the advanced branch in `dispatch_shader_rect`.
     #[test]
     fn prior_content_sealed_before_gradient_advanced_shape() {
+        use flui_foundation::geometry::Offset;
         use flui_painting::Paint;
-        use flui_types::{
-            geometry::{Offset, px},
-            painting::{Shader, TileMode},
-        };
+        use flui_painting::paint::{Shader, TileMode};
 
         let mut segment = DrawSegment::new();
         let mut draw_order: Vec<DrawItem> = Vec::new();
@@ -1412,15 +1404,15 @@ mod unit_tests {
 
         // Dispatch a gradient with an advanced blend mode — this must seal the
         // prior SrcOver content before pushing the AdvancedShape.
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
         let paint = Paint {
             blend_mode: BlendMode::Multiply,
             shader: Some(Shader::LinearGradient {
-                from: Offset::new(px(0.0), px(0.0)),
-                to: Offset::new(px(64.0), px(0.0)),
+                from: Offset::new(0.0, 0.0),
+                to: Offset::new(64.0, 0.0),
                 colors: vec![
-                    flui_types::Color::rgba(200, 100, 50, 255),
-                    flui_types::Color::rgba(50, 100, 200, 255),
+                    flui_painting::styling::Color::rgba(200, 100, 50, 255),
+                    flui_painting::styling::Color::rgba(50, 100, 200, 255),
                 ],
                 stops: None,
                 tile_mode: TileMode::Clamp,

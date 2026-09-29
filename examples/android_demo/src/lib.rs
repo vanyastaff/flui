@@ -23,9 +23,9 @@ use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use flui_engine::Renderer;
 use flui_hot_reload::HotReloadDriver;
 use flui_layer::{CanvasLayer, Layer, LayerTree, Scene};
-use flui_types::geometry::{Rect, px};
-use flui_types::painting::Paint;
-use flui_types::styling::Color;
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::Paint;
+use flui_painting::styling::Color;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -70,13 +70,13 @@ impl raw_window_handle::HasDisplayHandle for AndroidWindowHandle {
 }
 
 /// Build a fallback scene with colored rectangles (used when no plugin is loaded).
-fn build_test_scene(width: f32, height: f32) -> Scene {
+fn build_test_scene(width: f64, height: f64) -> Scene {
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 
     // Background — bright orange
     canvas.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
+        Rect::from_ltrb(0.0, 0.0, width, height),
         &Paint::fill(Color::rgb(255, 140, 0)),
     );
 
@@ -86,10 +86,10 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
     // Large red rectangle (top-left area)
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(50.0 * scale_x),
-            px(50.0 * scale_y),
-            px(350.0 * scale_x),
-            px(250.0 * scale_y),
+            50.0 * scale_x,
+            50.0 * scale_y,
+            350.0 * scale_x,
+            250.0 * scale_y,
         ),
         &Paint::fill(Color::RED),
     );
@@ -97,10 +97,10 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
     // Green rectangle (center area)
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(150.0 * scale_x),
-            px(150.0 * scale_y),
-            px(500.0 * scale_x),
-            px(350.0 * scale_y),
+            150.0 * scale_x,
+            150.0 * scale_y,
+            500.0 * scale_x,
+            350.0 * scale_y,
         ),
         &Paint::fill(Color::GREEN),
     );
@@ -108,10 +108,10 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
     // Blue rectangle (bottom-right area)
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(400.0 * scale_x),
-            px(250.0 * scale_y),
-            px(700.0 * scale_x),
-            px(450.0 * scale_y),
+            400.0 * scale_x,
+            250.0 * scale_y,
+            700.0 * scale_x,
+            450.0 * scale_y,
         ),
         &Paint::fill(Color::BLUE),
     );
@@ -119,10 +119,10 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
     // White rectangle (small, center)
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(300.0 * scale_x),
-            px(200.0 * scale_y),
-            px(450.0 * scale_x),
-            px(300.0 * scale_y),
+            300.0 * scale_x,
+            200.0 * scale_y,
+            450.0 * scale_x,
+            300.0 * scale_y,
         ),
         &Paint::fill(Color::WHITE),
     );
@@ -130,10 +130,10 @@ fn build_test_scene(width: f32, height: f32) -> Scene {
     // Yellow rectangle (bottom area)
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(100.0 * scale_x),
-            px(400.0 * scale_y),
-            px(600.0 * scale_x),
-            px(500.0 * scale_y),
+            100.0 * scale_x,
+            400.0 * scale_y,
+            600.0 * scale_x,
+            500.0 * scale_y,
         ),
         &Paint::fill(Color::rgb(255, 200, 0)),
     );
@@ -284,8 +284,8 @@ fn android_main(app: AndroidApp) {
         // Poll for plugin hot-reload (handles mtime check + unload/reload)
         if resumed {
             if let Some(native_window) = app.native_window() {
-                let w = native_window.width() as f32;
-                let h = native_window.height() as f32;
+                let w = native_window.width() as f64;
+                let h = native_window.height() as f64;
                 if hot_reload.poll(w, h).is_some() {
                     needs_render = true;
                 }
@@ -296,8 +296,8 @@ fn android_main(app: AndroidApp) {
         if needs_render {
             if let Some(ref renderer_mutex) = renderer {
                 if let Some(native_window) = app.native_window() {
-                    let w = native_window.width() as f32;
-                    let h = native_window.height() as f32;
+                    let w = native_window.width() as f64;
+                    let h = native_window.height() as f64;
 
                     let scene = hot_reload.build_scene_or(w, h, build_test_scene);
 

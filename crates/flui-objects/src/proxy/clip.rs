@@ -32,7 +32,7 @@
 //!  trait ClipGeometry        (sealed; impls for Rect, RRect, Oval, Path)
 //!  struct RenderClip<S: ClipGeometry>      ← single, generic, monomorphised
 //!  ──────────────────────────────────────
-//!  type RenderClipRect   = RenderClip<Rect<Pixels>>;
+//!  type RenderClipRect   = RenderClip<Rect>;
 //!  type RenderClipRRect  = RenderClip<RRect>;
 //!  type RenderClipOval   = RenderClip<Oval>;
 //!  type RenderClipPath   = RenderClip<Path>;
@@ -53,10 +53,9 @@
 use std::{borrow::Borrow, fmt, marker::PhantomData, sync::Arc};
 
 use flui_foundation::Single;
-use flui_types::{
-    Offset, Pixels, Point, Rect, Size,
-    geometry::RRect,
-    painting::{Clip, Path},
+use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
+use flui_painting::{
+    paint::{Clip, Path},
     styling::BorderRadius,
 };
 
@@ -158,14 +157,14 @@ impl ClipSourceToken {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Oval {
     /// The bounding rectangle of the ellipse.
-    pub bounds: Rect<Pixels>,
+    pub bounds: Rect<f64>,
 }
 
 impl Oval {
     /// Creates an oval inscribed in the given rectangle.
     #[inline]
     #[must_use]
-    pub const fn from_rect(bounds: Rect<Pixels>) -> Self {
+    pub const fn from_rect(bounds: Rect<f64>) -> Self {
         Self { bounds }
     }
 
@@ -180,17 +179,17 @@ impl Oval {
     /// Uses the standard ellipse equation:
     /// `((x − cx)/rx)² + ((y − cy)/ry)² ≤ 1`.
     #[must_use]
-    pub fn contains(&self, point: Point<Pixels>) -> bool {
+    pub fn contains(&self, point: Point<f64>) -> bool {
         let r = self.bounds;
-        let rx = r.width().get() * 0.5;
-        let ry = r.height().get() * 0.5;
+        let rx = r.width() * 0.5;
+        let ry = r.height() * 0.5;
         if rx <= 0.0 || ry <= 0.0 {
             return false;
         }
-        let cx = r.left().get() + rx;
-        let cy = r.top().get() + ry;
-        let dx = (point.x.get() - cx) / rx;
-        let dy = (point.y.get() - cy) / ry;
+        let cx = r.left() + rx;
+        let cy = r.top() + ry;
+        let dx = (point.x - cx) / rx;
+        let dy = (point.y - cy) / ry;
         dx * dx + dy * dy <= 1.0
     }
 }
@@ -201,7 +200,7 @@ impl Oval {
 
 mod sealed {
     pub trait Sealed {}
-    impl Sealed for super::Rect<super::Pixels> {}
+    impl Sealed for super::Rect<f64> {}
     impl Sealed for super::RRect {}
     impl Sealed for super::Oval {}
     impl Sealed for super::Path {}
@@ -220,7 +219,7 @@ pub trait ClipGeometry:
     /// Flutter-parity diagnostics label (`RenderClipRect`, `RenderClipRRect`, …).
     ///
     /// Generic `RenderClip<S>` would otherwise surface as
-    /// `RenderClip<Rect<Pixels>>` via `type_name`, which breaks structured
+    /// `RenderClip<Rect>` via `type_name`, which breaks structured
     /// tree queries in the render harness.
     const DIAGNOSTIC_NAME: &'static str;
 
@@ -231,7 +230,7 @@ pub trait ClipGeometry:
     /// Returns `true` if the local-space `position` falls inside the
     /// clip region. Used for hit testing: anything outside the clip
     /// shape is unreachable.
-    fn contains(&self, position: Point<Pixels>) -> bool;
+    fn contains(&self, position: Point<f64>) -> bool;
 
     /// An axis-aligned rect that CONTAINS this clip, in local coordinates.
     ///
@@ -241,7 +240,7 @@ pub trait ClipGeometry:
     /// SMALLER than the true clip would drop content from the accessibility
     /// tree that is really on screen, which is the one direction that is a
     /// defect rather than a missed optimisation.
-    fn approximate_bounds(&self, size: Size) -> Rect<Pixels>;
+    fn approximate_bounds(&self, size: Size) -> Rect<f64>;
 
     /// Resolves an owner-local path clip target for this geometry, when the
     /// shape supports it.
@@ -304,12 +303,12 @@ pub trait ClipGeometry:
 
 // ---- Rect ------------------------------------------------------------------
 
-impl ClipGeometry for Rect<Pixels> {
+impl ClipGeometry for Rect<f64> {
     type Stored = Self;
 
     const DIAGNOSTIC_NAME: &'static str = "RenderClipRect";
 
-    fn approximate_bounds(&self, _size: Size) -> Rect<Pixels> {
+    fn approximate_bounds(&self, _size: Size) -> Rect<f64> {
         *self
     }
 
@@ -317,7 +316,7 @@ impl ClipGeometry for Rect<Pixels> {
         Rect::from_origin_size(Point::ZERO, size)
     }
 
-    fn contains(&self, position: Point<Pixels>) -> bool {
+    fn contains(&self, position: Point<f64>) -> bool {
         Rect::contains(self, position)
     }
 
@@ -336,7 +335,7 @@ impl ClipGeometry for RRect {
 
     const DIAGNOSTIC_NAME: &'static str = "RenderClipRRect";
 
-    fn approximate_bounds(&self, _size: Size) -> Rect<Pixels> {
+    fn approximate_bounds(&self, _size: Size) -> Rect<f64> {
         // The corners round INWARD, so the bounding rect is a superset — the
         // allowed direction.
         self.bounding_rect()
@@ -346,7 +345,7 @@ impl ClipGeometry for RRect {
         RRect::from_rect(Rect::from_origin_size(Point::ZERO, size))
     }
 
-    fn contains(&self, position: Point<Pixels>) -> bool {
+    fn contains(&self, position: Point<f64>) -> bool {
         RRect::contains(self, position)
     }
 
@@ -376,7 +375,7 @@ impl ClipGeometry for Oval {
 
     const DIAGNOSTIC_NAME: &'static str = "RenderClipOval";
 
-    fn approximate_bounds(&self, _size: Size) -> Rect<Pixels> {
+    fn approximate_bounds(&self, _size: Size) -> Rect<f64> {
         // The inscribed ellipse is contained by its own bounding rect.
         self.bounds
     }
@@ -385,7 +384,7 @@ impl ClipGeometry for Oval {
         Oval::from_size(size)
     }
 
-    fn contains(&self, position: Point<Pixels>) -> bool {
+    fn contains(&self, position: Point<f64>) -> bool {
         Oval::contains(self, position)
     }
 
@@ -410,7 +409,7 @@ impl ClipGeometry for Path {
 
     const DIAGNOSTIC_NAME: &'static str = "RenderClipPath";
 
-    fn approximate_bounds(&self, size: Size) -> Rect<Pixels> {
+    fn approximate_bounds(&self, size: Size) -> Rect<f64> {
         // The whole box, not the path's own bounds. `Path::bounds` takes
         // `&mut self` because it memoizes, and this hook has `&self` — so the
         // honest options were a conservative superset or a lock. A superset is
@@ -428,8 +427,8 @@ impl ClipGeometry for Path {
         p
     }
 
-    fn contains(&self, position: Point<Pixels>) -> bool {
-        // Delegate to the fill-type-aware algorithm in flui_types::Path:
+    fn contains(&self, position: Point<f64>) -> bool {
+        // Delegate to the fill-type-aware algorithm in flui_painting::paint::Path:
         // even-odd (ray-casting) or non-zero (winding number), selected
         // by the path's PathFillType. This matches Flutter's hit-test
         // semantics for RenderClipPath.
@@ -470,7 +469,7 @@ impl ClipGeometry for Path {
 
 /// A render object that clips its child to the geometry produced by `S`.
 ///
-/// The shape parameter `S` is one of [`Rect<Pixels>`], [`RRect`], [`Oval`],
+/// The shape parameter `S` is one of [`Rect`], [`RRect`], [`Oval`],
 /// or [`Path`] via the sealed [`ClipGeometry`] trait. Pick the right type
 /// alias for ergonomic construction:
 ///
@@ -867,11 +866,7 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
     /// No `describe_semantics_clip` counterpart: a clip keeps no cache area
     /// the way a viewport does, so it has nothing wider than its paint clip to
     /// grant. Content it clips away is gone, not merely off-screen.
-    fn describe_approximate_paint_clip(
-        &self,
-        _child_slot: usize,
-        size: Size,
-    ) -> Option<Rect<Pixels>> {
+    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect<f64>> {
         if self.clip_behavior == Clip::None {
             return None;
         }
@@ -906,7 +901,7 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
 // =============================================================================
 
 /// Rectangular clip — Flutter's `RenderClipRect`.
-pub type RenderClipRect = RenderClip<Rect<Pixels>>;
+pub type RenderClipRect = RenderClip<Rect<f64>>;
 
 /// Rounded-rectangle clip — Flutter's `RenderClipRRect`.
 pub type RenderClipRRect = RenderClip<RRect>;
@@ -923,8 +918,8 @@ pub type RenderClipPath = RenderClip<Path>;
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
-    use flui_types::styling::BorderRadiusExt;
+
+    use flui_painting::styling::BorderRadiusExt;
 
     use super::*;
 
@@ -932,19 +927,19 @@ mod tests {
 
     #[test]
     fn oval_contains_inside_and_outside() {
-        let oval = Oval::from_size(Size::new(px(100.0), px(50.0)));
+        let oval = Oval::from_size(Size::new(100.0, 50.0));
         // Center (50, 25) is inside.
-        assert!(oval.contains(Point::new(px(50.0), px(25.0))));
+        assert!(oval.contains(Point::new(50.0, 25.0)));
         // Top-left bounding-rect corner (0, 0) is outside the ellipse.
-        assert!(!oval.contains(Point::new(px(0.0), px(0.0))));
+        assert!(!oval.contains(Point::new(0.0, 0.0)));
         // Right-mid edge (100, 25) is right at the ellipse boundary.
-        assert!(oval.contains(Point::new(px(100.0), px(25.0))));
+        assert!(oval.contains(Point::new(100.0, 25.0)));
     }
 
     #[test]
     fn oval_zero_size_contains_nothing() {
         let oval = Oval::from_size(Size::ZERO);
-        assert!(!oval.contains(Point::new(px(0.0), px(0.0))));
+        assert!(!oval.contains(Point::new(0.0, 0.0)));
     }
 
     // 1.4 guard tests (characterization — NOT red→green; these pass today).
@@ -952,18 +947,18 @@ mod tests {
     // future regressions.
     #[test]
     fn oval_clip_geometry_center_is_inside() {
-        let oval = <Oval as ClipGeometry>::default_for_size(Size::new(px(100.0), px(60.0)));
+        let oval = <Oval as ClipGeometry>::default_for_size(Size::new(100.0, 60.0));
         assert!(
-            <Oval as ClipGeometry>::contains(&oval, Point::new(px(50.0), px(30.0))),
+            <Oval as ClipGeometry>::contains(&oval, Point::new(50.0, 30.0)),
             "center of oval must be inside (guard: existing correct behavior)"
         );
     }
 
     #[test]
     fn oval_clip_geometry_bbox_corner_is_outside_ellipse() {
-        let oval = <Oval as ClipGeometry>::default_for_size(Size::new(px(100.0), px(60.0)));
+        let oval = <Oval as ClipGeometry>::default_for_size(Size::new(100.0, 60.0));
         assert!(
-            !<Oval as ClipGeometry>::contains(&oval, Point::new(px(1.0), px(1.0))),
+            !<Oval as ClipGeometry>::contains(&oval, Point::new(1.0, 1.0)),
             "bbox corner (near 0,0) must be outside the inscribed ellipse \
              (guard: existing correct behavior)"
         );
@@ -971,9 +966,9 @@ mod tests {
 
     #[test]
     fn oval_clip_geometry_outside_bbox_is_outside() {
-        let oval = <Oval as ClipGeometry>::default_for_size(Size::new(px(100.0), px(60.0)));
+        let oval = <Oval as ClipGeometry>::default_for_size(Size::new(100.0, 60.0));
         assert!(
-            !<Oval as ClipGeometry>::contains(&oval, Point::new(px(200.0), px(200.0))),
+            !<Oval as ClipGeometry>::contains(&oval, Point::new(200.0, 200.0)),
             "point outside bounding box must not be inside oval \
              (guard: existing correct behavior)"
         );
@@ -993,23 +988,23 @@ mod tests {
 
     #[test]
     fn rect_default_for_size_starts_at_origin() {
-        let rect = <Rect<Pixels> as ClipGeometry>::default_for_size(Size::new(px(80.0), px(40.0)));
-        assert_eq!(rect.left(), px(0.0));
-        assert_eq!(rect.top(), px(0.0));
-        assert_eq!(rect.width(), px(80.0));
-        assert_eq!(rect.height(), px(40.0));
+        let rect = <Rect<f64> as ClipGeometry>::default_for_size(Size::new(80.0, 40.0));
+        assert_eq!(rect.left(), 0.0);
+        assert_eq!(rect.top(), 0.0);
+        assert_eq!(rect.width(), 80.0);
+        assert_eq!(rect.height(), 40.0);
     }
 
     #[test]
     fn rect_contains_via_clip_geometry() {
-        let rect = <Rect<Pixels> as ClipGeometry>::default_for_size(Size::new(px(50.0), px(50.0)));
-        assert!(<Rect<Pixels> as ClipGeometry>::contains(
+        let rect = <Rect<f64> as ClipGeometry>::default_for_size(Size::new(50.0, 50.0));
+        assert!(<Rect<f64> as ClipGeometry>::contains(
             &rect,
-            Point::new(px(25.0), px(25.0))
+            Point::new(25.0, 25.0)
         ));
-        assert!(!<Rect<Pixels> as ClipGeometry>::contains(
+        assert!(!<Rect<f64> as ClipGeometry>::contains(
             &rect,
-            Point::new(px(60.0), px(25.0))
+            Point::new(60.0, 25.0)
         ));
     }
 
@@ -1017,60 +1012,60 @@ mod tests {
 
     #[test]
     fn rrect_contains_center_and_excludes_outside_bounds() {
-        let rrect = <RRect as ClipGeometry>::default_for_size(Size::new(px(100.0), px(50.0)));
+        let rrect = <RRect as ClipGeometry>::default_for_size(Size::new(100.0, 50.0));
         // Default RRect with from_rect has zero radius — degenerates to rect.
         assert!(<RRect as ClipGeometry>::contains(
             &rrect,
-            Point::new(px(50.0), px(25.0))
+            Point::new(50.0, 25.0)
         ));
         assert!(!<RRect as ClipGeometry>::contains(
             &rrect,
-            Point::new(px(200.0), px(25.0))
+            Point::new(200.0, 25.0)
         ));
     }
 
     #[test]
     fn rrect_corner_excludes_point_inside_bbox_outside_ellipse() {
-        let rect = Rect::from_origin_size(Point::ZERO, Size::new(px(100.0), px(100.0)));
-        let rrect = RRect::from_rect_circular(rect, px(20.0));
+        let rect = Rect::from_origin_size(Point::ZERO, Size::new(100.0, 100.0));
+        let rrect = RRect::from_rect_circular(rect, 20.0);
         // Bounding-rect corner (0,0) — inside square TL sub-region, outside
         // the inscribed circle (distance √(400) ≈ 20 from corner-radius
         // origin (20,20), so on the boundary; pick (0,0) which is outside
         // the circle of radius 20 centered at (20,20)).
         assert!(!<RRect as ClipGeometry>::contains(
             &rrect,
-            Point::new(px(0.0), px(0.0))
+            Point::new(0.0, 0.0)
         ));
         // A point clearly inside the rrect.
         assert!(<RRect as ClipGeometry>::contains(
             &rrect,
-            Point::new(px(50.0), px(50.0))
+            Point::new(50.0, 50.0)
         ));
         // A point in the TL square region but inside the ellipse.
         assert!(<RRect as ClipGeometry>::contains(
             &rrect,
-            Point::new(px(15.0), px(15.0))
+            Point::new(15.0, 15.0)
         ));
     }
 
     // ---------- ClipGeometry impls (Path) --------------------------------
 
     // 1.4 RED test (behavior fix): Path::contains must delegate to the
-    // fill-type-aware algorithm in flui_types::Path::contains, not return
+    // fill-type-aware algorithm in flui_painting::paint::Path::contains, not return
     // a conservative true for all points.
     #[test]
     fn path_contains_delegates_to_fill_type_algorithm() {
         // Build a triangle: (0,0) → (100,0) → (50,100) → close.
         let mut triangle = Path::new();
-        triangle.move_to(Point::new(px(0.0), px(0.0)));
-        triangle.line_to(Point::new(px(100.0), px(0.0)));
-        triangle.line_to(Point::new(px(50.0), px(100.0)));
+        triangle.move_to(Point::new(0.0, 0.0));
+        triangle.line_to(Point::new(100.0, 0.0));
+        triangle.line_to(Point::new(50.0, 100.0));
         triangle.close();
 
         // Centroid of the triangle — must be inside.
-        let inside = Point::new(px(50.0), px(33.0));
+        let inside = Point::new(50.0, 33.0);
         // Clearly outside (to the right and below).
-        let outside = Point::new(px(200.0), px(200.0));
+        let outside = Point::new(200.0, 200.0);
 
         assert!(
             <Path as ClipGeometry>::contains(&triangle, inside),
@@ -1115,9 +1110,9 @@ mod tests {
             );
             assert!(node.has_custom_clipper());
 
-            let path = node.resolve_clip(Size::new(px(20.0), px(30.0)));
+            let path = node.resolve_clip(Size::new(20.0, 30.0));
 
-            assert!(path.contains(Point::new(px(10.0), px(10.0))));
+            assert!(path.contains(Point::new(10.0, 10.0)));
         });
 
         assert_eq!(calls.get(), 1);
@@ -1127,12 +1122,12 @@ mod tests {
 
     #[test]
     fn clip_descriptor_rect_default_matches_default_for_size() {
-        let size = Size::new(px(80.0), px(40.0));
+        let size = Size::new(80.0, 40.0);
         let node = RenderClipRect::hard_edge();
 
         match node.clip_descriptor(size) {
             PaintClip::Rect { rect, behavior } => {
-                assert_eq!(rect, <Rect<Pixels> as ClipGeometry>::default_for_size(size));
+                assert_eq!(rect, <Rect<f64> as ClipGeometry>::default_for_size(size));
                 assert_eq!(behavior, Clip::HardEdge);
             }
             other => panic!("expected PaintClip::Rect, got {other:?}"),
@@ -1141,7 +1136,7 @@ mod tests {
 
     #[test]
     fn clip_descriptor_oval_is_an_elliptical_rrect() {
-        let size = Size::new(px(100.0), px(60.0));
+        let size = Size::new(100.0, 60.0);
         let node = RenderClipOval::anti_alias();
         let default_oval = <Oval as ClipGeometry>::default_for_size(size);
 
@@ -1168,7 +1163,7 @@ mod tests {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
         let calls = Rc::new(Cell::new(0));
-        let size = Size::new(px(20.0), px(30.0));
+        let size = Size::new(20.0, 30.0);
         lane.enter(|| {
             let calls_for_clipper = Rc::clone(&calls);
             let target = handle
@@ -1200,14 +1195,11 @@ mod tests {
     #[test]
     fn clip_descriptor_fixed_path_shares_the_arc_without_copying() {
         let mut path = Path::new();
-        path.add_rect(Rect::from_origin_size(
-            Point::ZERO,
-            Size::new(px(10.0), px(10.0)),
-        ));
+        path.add_rect(Rect::from_origin_size(Point::ZERO, Size::new(10.0, 10.0)));
         let node = RenderClipPath::anti_alias().with_clip_shape(path);
         let stored = node.clip_shape().expect("clip_shape set above");
 
-        match node.clip_descriptor(Size::new(px(20.0), px(20.0))) {
+        match node.clip_descriptor(Size::new(20.0, 20.0)) {
             PaintClip::Path {
                 path: descriptor_path,
                 ..
@@ -1250,7 +1242,7 @@ mod tests {
     #[test]
     fn set_clip_shape_returns_exact_impact() {
         let mut node = RenderClipRect::anti_alias();
-        let shape = Rect::from_origin_size(Point::ZERO, Size::new(px(10.0), px(10.0)));
+        let shape = Rect::from_origin_size(Point::ZERO, Size::new(10.0, 10.0));
         assert_eq!(
             node.set_clip_shape(Some(shape)),
             flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
@@ -1289,19 +1281,19 @@ mod tests {
 
     #[test]
     fn rrect_border_radius_installs_data_only_clip_source() {
-        let radius = BorderRadius::circular(px(12.0));
+        let radius = BorderRadius::circular(12.0);
         let node: RenderClipRRect = RenderClip::anti_alias().with_border_radius(radius);
         assert!(node.has_custom_clipper());
         assert_eq!(node.border_radius(), Some(radius));
 
-        let resolved = node.resolve_clip(Size::new(px(100.0), px(50.0)));
-        assert_eq!(resolved.top_left.x, px(12.0));
-        assert_eq!(resolved.top_right.x, px(12.0));
+        let resolved = node.resolve_clip(Size::new(100.0, 50.0));
+        assert_eq!(resolved.top_left.x, 12.0);
+        assert_eq!(resolved.top_right.x, 12.0);
     }
 
     #[test]
     fn rrect_border_radius_returns_exact_impact_for_change_and_identity() {
-        let radius = BorderRadius::circular(px(12.0));
+        let radius = BorderRadius::circular(12.0);
         let mut node: RenderClipRRect = RenderClip::anti_alias();
         assert_eq!(
             node.set_border_radius(Some(radius)),
@@ -1325,7 +1317,7 @@ mod tests {
     #[test]
     fn clone_is_supported_even_with_data_clip_source() {
         let node: RenderClipRRect =
-            RenderClip::anti_alias().with_border_radius(BorderRadius::circular(px(8.0)));
+            RenderClip::anti_alias().with_border_radius(BorderRadius::circular(8.0));
         let cloned = node.clone();
         assert!(cloned.has_custom_clipper());
         assert_eq!(cloned.clip_behavior(), node.clip_behavior());

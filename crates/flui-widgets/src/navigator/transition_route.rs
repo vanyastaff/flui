@@ -89,14 +89,14 @@ use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 ///
 /// Flutter's `kAlwaysDismissedAnimation` (`routes.dart:198`, `:491`;
 /// `animation/animations.dart:56-86` — `value == 0.0`, `status == dismissed`).
-pub(crate) fn always_dismissed() -> Arc<dyn Animation<f32>> {
+pub(crate) fn always_dismissed() -> Arc<dyn Animation<f64>> {
     Arc::new(ConstantAnimation::dismissed(ALWAYS_DISMISSED.value()))
 }
 
 /// Flutter's `kAlwaysCompleteAnimation` (`animation/animations.dart:26-54` —
 /// `value == 1.0`, `status == completed`). What an **offstage** `ModalRoute`'s
 /// primary animation points at (`routes.dart:1958`).
-pub(crate) fn always_complete() -> Arc<dyn Animation<f32>> {
+pub(crate) fn always_complete() -> Arc<dyn Animation<f64>> {
     Arc::new(ConstantAnimation::completed(ALWAYS_COMPLETE.value()))
 }
 
@@ -116,7 +116,7 @@ enum SecondaryParent {
 impl SecondaryParent {
     /// The animation currently *driving* the proxy — Flutter's `currentTrain`
     /// (`routes.dart:434-436`), which unwraps a hopper.
-    fn current_train(&self, proxy: &ProxyAnimation<f32>) -> Option<Arc<dyn Animation<f32>>> {
+    fn current_train(&self, proxy: &ProxyAnimation<f64>) -> Option<Arc<dyn Animation<f64>>> {
         match self {
             Self::Dismissed => None,
             Self::Direct(_) => Some(proxy.parent()),
@@ -143,7 +143,7 @@ struct TransitionInner {
     /// The proxy handed to the route *below* this one is **this** route's
     /// secondary; the primary is the controller, unproxied. Flutter is the same:
     /// "only `secondaryAnimation` is a `ProxyAnimation`" (`routes.dart:197-198`).
-    secondary: Arc<ProxyAnimation<f32>>,
+    secondary: Arc<ProxyAnimation<f64>>,
     secondary_parent: Mutex<SecondaryParent>,
 
     /// Flutter's `isActive` is `navigator.contains(this) && entry.isPresent`
@@ -419,7 +419,7 @@ impl<T> TransitionRoute<T> {
         let jump = match &current_train {
             None => true,
             Some(train) => {
-                (train.value() - next_animation.value()).abs() < f32::EPSILON || !is_moving
+                (train.value() - next_animation.value()).abs() < f64::EPSILON || !is_moving
             }
         };
 
@@ -438,7 +438,7 @@ impl<T> TransitionRoute<T> {
                 .on_switched(move || proxy.set_parent(Arc::clone(&target_for_hop)));
             self.inner
                 .secondary
-                .set_parent(Arc::new(switch.clone()) as Arc<dyn Animation<f32>>);
+                .set_parent(Arc::new(switch.clone()) as Arc<dyn Animation<f64>>);
             *parent = SecondaryParent::Hopping {
                 target: next_id,
                 switch,
@@ -481,7 +481,7 @@ impl<T> TransitionRoute<T> {
         }));
     }
 
-    fn set_secondary(&self, kind: SecondaryParent, animation: Arc<dyn Animation<f32>>) {
+    fn set_secondary(&self, kind: SecondaryParent, animation: Arc<dyn Animation<f64>>) {
         let previous = std::mem::replace(&mut *self.inner.secondary_parent.lock(), kind);
         self.inner.secondary.set_parent(animation);
         if let SecondaryParent::Hopping { switch, .. } = previous {
@@ -513,9 +513,9 @@ impl TransitionHandle {
     /// Flutter's `animation` (`routes.dart:190-195`): the controller, erased.
     /// `kAlwaysDismissedAnimation` before `install()` — a route that is not yet
     /// pushed has no controller, and Flutter's getter is likewise nullable.
-    pub(crate) fn primary_animation(&self) -> Arc<dyn Animation<f32>> {
+    pub(crate) fn primary_animation(&self) -> Arc<dyn Animation<f64>> {
         match self.controller() {
-            Some(controller) => Arc::new(controller) as Arc<dyn Animation<f32>>,
+            Some(controller) => Arc::new(controller) as Arc<dyn Animation<f64>>,
             None => always_dismissed(),
         }
     }
@@ -537,7 +537,7 @@ impl TransitionHandle {
     /// Flutter's `secondaryAnimation` (`routes.dart:197`). A `ProxyAnimation`
     /// resting at `kAlwaysDismissedAnimation`.
     #[must_use]
-    pub fn secondary_animation(&self) -> Arc<ProxyAnimation<f32>> {
+    pub fn secondary_animation(&self) -> Arc<ProxyAnimation<f64>> {
         Arc::clone(&self.inner.secondary)
     }
 
@@ -664,7 +664,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         // Publish the primary animation so the route below can coordinate.
         if let Some(binding) = self.inner.binding.get() {
             binding.publish_peer(TransitionPeer {
-                animation: Arc::new(controller.clone()) as Arc<dyn Animation<f32>>,
+                animation: Arc::new(controller.clone()) as Arc<dyn Animation<f64>>,
                 can_transition_from: self.can_transition_from,
                 group: self.group,
                 completed: Arc::clone(&self.inner.completed),

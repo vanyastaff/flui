@@ -2,10 +2,8 @@
 
 use std::sync::Arc;
 
-use flui_types::{
-    geometry::{Pixels, Rect},
-    painting::{Clip, Path},
-};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::{Clip, Path};
 
 /// Layer that clips children to an arbitrary path.
 ///
@@ -30,18 +28,15 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_layer::ClipPathLayer;
-/// use flui_types::{
-///     geometry::Point,
-///     painting::{Clip, Path},
-/// };
+/// use flui_foundation::geometry::Point;
+/// use flui_painting::paint::{Clip, Path};
 ///
 /// // Create a triangular clip path
 /// let path = Path::polygon(&[
-///     Point::new(px(50.0), px(0.0)),
-///     Point::new(px(100.0), px(100.0)),
-///     Point::new(px(0.0), px(100.0)),
+///     Point::new(50.0, 0.0),
+///     Point::new(100.0, 100.0),
+///     Point::new(0.0, 100.0),
 /// ]);
 /// let layer = ClipPathLayer::new(path, Clip::AntiAlias);
 /// ```
@@ -91,7 +86,7 @@ impl ClipPathLayer {
 
     /// The clip shape's bounding box.
     #[inline]
-    pub fn bounds(&self) -> Rect<Pixels> {
+    pub fn bounds(&self) -> Rect<f64> {
         self.clip_path.compute_bounds()
     }
 
@@ -110,13 +105,13 @@ impl ClipPathLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::{Point, px};
+    use flui_foundation::geometry::Point;
 
     use super::*;
 
     #[test]
     fn test_clip_path_layer_new() {
-        let path = Path::rectangle(Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)));
+        let path = Path::rectangle(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
         let layer = ClipPathLayer::new(path.clone(), Clip::AntiAlias);
 
         assert_eq!(layer.clip_path(), &path);
@@ -125,7 +120,7 @@ mod tests {
 
     #[test]
     fn test_clip_path_layer_anti_alias() {
-        let path = Path::circle(Point::new(px(50.0), px(50.0)), 25.0);
+        let path = Path::circle(Point::new(50.0, 50.0), 25.0);
         let layer = ClipPathLayer::anti_alias(path);
 
         assert_eq!(layer.clip_behavior(), Clip::AntiAlias);
@@ -134,7 +129,7 @@ mod tests {
 
     #[test]
     fn test_clip_path_layer_hard_edge() {
-        let path = Path::circle(Point::new(px(50.0), px(50.0)), 25.0);
+        let path = Path::circle(Point::new(50.0, 50.0), 25.0);
         let layer = ClipPathLayer::hard_edge(path);
 
         assert_eq!(layer.clip_behavior(), Clip::HardEdge);
@@ -144,9 +139,9 @@ mod tests {
     #[test]
     fn test_clip_path_layer_polygon() {
         let path = Path::polygon(&[
-            Point::new(px(50.0), px(0.0)),
-            Point::new(px(100.0), px(100.0)),
-            Point::new(px(0.0), px(100.0)),
+            Point::new(50.0, 0.0),
+            Point::new(100.0, 100.0),
+            Point::new(0.0, 100.0),
         ]);
         let layer = ClipPathLayer::new(path, Clip::AntiAlias);
 

@@ -1,9 +1,7 @@
 //! `ClipRRectLayer` — clips its subtree to a rounded rectangle.
 
-use flui_types::{
-    geometry::{Pixels, RRect, Rect},
-    painting::Clip,
-};
+use flui_foundation::geometry::{RRect, Rect};
+use flui_painting::paint::Clip;
 
 /// Layer that clips children to a rounded rectangle.
 ///
@@ -23,21 +21,18 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_layer::ClipRRectLayer;
-/// use flui_types::{
-///     geometry::{RRect, Rect},
-///     painting::Clip,
-/// };
+/// use flui_foundation::geometry::{RRect, Rect};
+/// use flui_painting::paint::Clip;
 ///
 /// // Create rounded rectangle with 10px corner radius
 /// let rrect = RRect::from_rect_circular(
-///     Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-///     px(10.0),
+///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+///     10.0,
 /// );
 /// let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
 ///
-/// assert_eq!(layer.clip_rrect().width(), px(100.0));
+/// assert_eq!(layer.clip_rrect().width(), 100.0);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClipRRectLayer {
@@ -84,7 +79,7 @@ impl ClipRRectLayer {
 
     /// The clip shape's bounding box.
     #[inline]
-    pub fn bounds(&self) -> Rect<Pixels> {
+    pub fn bounds(&self) -> Rect<f64> {
         self.clip_rrect.bounding_rect()
     }
 
@@ -97,16 +92,12 @@ impl ClipRRectLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
     #[test]
     fn test_clip_rrect_layer_new() {
-        let rrect = RRect::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-            px(10.0),
-        );
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 10.0);
         let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
 
         assert_eq!(layer.clip_rrect(), &rrect);
@@ -115,10 +106,7 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_anti_alias() {
-        let rrect = RRect::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
-            px(5.0),
-        );
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), 5.0);
         let layer = ClipRRectLayer::anti_alias(rrect);
 
         assert_eq!(layer.clip_behavior(), Clip::AntiAlias);
@@ -127,10 +115,7 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_hard_edge() {
-        let rrect = RRect::from_rect_circular(
-            Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0)),
-            px(5.0),
-        );
+        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), 5.0);
         let layer = ClipRRectLayer::hard_edge(rrect);
 
         assert_eq!(layer.clip_behavior(), Clip::HardEdge);
@@ -139,12 +124,12 @@ mod tests {
 
     #[test]
     fn test_clip_rrect_layer_bounds() {
-        let bounds_rect = Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0));
-        let rrect = RRect::from_rect_circular(bounds_rect, px(10.0));
+        let bounds_rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
+        let rrect = RRect::from_rect_circular(bounds_rect, 10.0);
         let layer = ClipRRectLayer::new(rrect, Clip::AntiAlias);
 
         assert_eq!(layer.bounds(), bounds_rect);
-        assert_eq!(layer.bounds().width(), px(100.0));
-        assert_eq!(layer.bounds().height(), px(50.0));
+        assert_eq!(layer.bounds().width(), 100.0);
+        assert_eq!(layer.bounds().height(), 50.0);
     }
 }

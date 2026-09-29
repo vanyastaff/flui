@@ -97,8 +97,8 @@ fn press(app: &mut LaidOut) {
     let label = app.find_text("Press").expect("the button's label");
     let offset = app.absolute_offset(label);
     let size = app.size(label);
-    let x = offset.dx.get() + size.width.get() / 2.0;
-    let y = offset.dy.get() + size.height.get() / 2.0;
+    let x = offset.dx + size.width / 2.0;
+    let y = offset.dy + size.height / 2.0;
     app.dispatch_pointer_down(x, y);
     app.dispatch_pointer_up(x, y);
     app.tick();

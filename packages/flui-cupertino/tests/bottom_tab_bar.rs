@@ -5,9 +5,8 @@ use crate::common;
 
 use common::{lay_out, tight};
 use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem, CupertinoTheme, CupertinoThemeData};
-use flui_sdk::types::Size;
-use flui_sdk::types::geometry::px;
-use flui_sdk::types::platform::Brightness;
+use flui_sdk::geometry::Size;
+use flui_sdk::platform::Brightness;
 use flui_sdk::widgets::{Icon, IconData, MediaQuery, MediaQueryData, PreferredSizeView};
 
 fn two_items() -> Vec<CupertinoTabBarItem> {
@@ -21,7 +20,7 @@ fn two_items() -> Vec<CupertinoTabBarItem> {
 #[test]
 fn preferred_size_is_the_50pt_default_height() {
     let preferred = CupertinoTabBar::new(two_items()).preferred_size();
-    assert_eq!(preferred, Size::new(px(f32::INFINITY), px(50.0)));
+    assert_eq!(preferred, Size::new(f64::INFINITY, 50.0));
 }
 
 /// `_kDefaultTabBarBorderColor`'s light variant (`bottom_tab_bar.dart`,

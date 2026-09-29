@@ -1,7 +1,8 @@
 //! RenderSliver trait for scrollable content layout.
 
+use crate::constraints::AxisDirection;
 use flui_foundation::Arity;
-use flui_types::{Size, geometry::px, prelude::AxisDirection};
+use flui_foundation::geometry::Size;
 
 use crate::{
     constraints::{SliverConstraints, SliverGeometry},
@@ -111,7 +112,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.calculatePaintOffset` in Flutter.
-    fn calculate_paint_offset(&self, constraints: &SliverConstraints, from: f32, to: f32) -> f32 {
+    fn calculate_paint_offset(&self, constraints: &SliverConstraints, from: f64, to: f64) -> f64 {
         debug_assert!(from <= to);
         let remaining_painted_extent = constraints.remaining_paint_extent;
         let scroll_offset = constraints.scroll_offset;
@@ -134,7 +135,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.calculateCacheOffset` in Flutter.
-    fn calculate_cache_offset(&self, constraints: &SliverConstraints, from: f32, to: f32) -> f32 {
+    fn calculate_cache_offset(&self, constraints: &SliverConstraints, from: f64, to: f64) -> f64 {
         debug_assert!(from <= to);
         let remaining_cache_extent = constraints.remaining_cache_extent;
         let cache_origin = constraints.cache_origin;
@@ -167,7 +168,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
         &self,
         constraints: &SliverConstraints,
         child: &dyn RenderObject<SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         let _ = (constraints, child);
         0.0
     }
@@ -186,7 +187,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
         &self,
         constraints: &SliverConstraints,
         child: &dyn RenderObject<SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         let _ = (constraints, child);
         0.0
     }
@@ -208,7 +209,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
         &self,
         constraints: &SliverConstraints,
         child: &dyn RenderObject<SliverProtocol>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         let _ = (constraints, child);
         None
     }
@@ -229,15 +230,15 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// # Flutter Equivalence
     ///
     /// Corresponds to `RenderSliver.getAbsoluteSize` in Flutter.
-    fn get_absolute_size(&self, constraints: &SliverConstraints, paint_extent: f32) -> Size {
+    fn get_absolute_size(&self, constraints: &SliverConstraints, paint_extent: f64) -> Size {
         let cross_axis_extent = constraints.cross_axis_extent;
 
         match constraints.axis_direction {
             AxisDirection::TopToBottom | AxisDirection::BottomToTop => {
-                Size::new(px(cross_axis_extent), px(paint_extent))
+                Size::new(cross_axis_extent, paint_extent)
             }
             AxisDirection::LeftToRight | AxisDirection::RightToLeft => {
-                Size::new(px(paint_extent), px(cross_axis_extent))
+                Size::new(paint_extent, cross_axis_extent)
             }
         }
     }
@@ -259,24 +260,16 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     fn get_absolute_size_relative_to_origin(
         &self,
         constraints: &SliverConstraints,
-        paint_extent: f32,
+        paint_extent: f64,
     ) -> Size {
         match constraints
             .growth_direction
             .apply_to_axis_direction(constraints.axis_direction)
         {
-            AxisDirection::TopToBottom => {
-                Size::new(px(constraints.cross_axis_extent), px(paint_extent))
-            }
-            AxisDirection::BottomToTop => {
-                Size::new(px(constraints.cross_axis_extent), px(-paint_extent))
-            }
-            AxisDirection::LeftToRight => {
-                Size::new(px(paint_extent), px(constraints.cross_axis_extent))
-            }
-            AxisDirection::RightToLeft => {
-                Size::new(px(-paint_extent), px(constraints.cross_axis_extent))
-            }
+            AxisDirection::TopToBottom => Size::new(constraints.cross_axis_extent, paint_extent),
+            AxisDirection::BottomToTop => Size::new(constraints.cross_axis_extent, -paint_extent),
+            AxisDirection::LeftToRight => Size::new(paint_extent, constraints.cross_axis_extent),
+            AxisDirection::RightToLeft => Size::new(-paint_extent, constraints.cross_axis_extent),
         }
     }
 
@@ -329,7 +322,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     }
 
     /// Hit tests just this sliver (not children).
-    fn hit_test_self(&self, _main: f32, _cross: f32) -> bool {
+    fn hit_test_self(&self, _main: f64, _cross: f64) -> bool {
         false
     }
 
@@ -366,7 +359,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     ///
     /// Default: [`PaintEffects::NONE`]. See [`RenderObject::paint_effects`]
     /// for the full contract (pure in `(self, size)`, no user code).
-    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
+    fn paint_effects(&self, size: flui_foundation::geometry::Size) -> PaintEffects {
         let _ = size;
         PaintEffects::NONE
     }
@@ -375,7 +368,10 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     ///
     /// Default: `None`. See
     /// [`RenderObject::hit_test_transform`].
-    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+    fn hit_test_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
         let _ = size;
         None
     }
@@ -467,8 +463,8 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     fn describe_approximate_paint_clip(
         &self,
         _child_slot: usize,
-        _size: flui_types::Size,
-    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        _size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         None
     }
 
@@ -479,8 +475,8 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     fn describe_semantics_clip(
         &self,
         _child_slot: usize,
-        _size: flui_types::Size,
-    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        _size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         None
     }
 
@@ -570,7 +566,7 @@ where
         &self,
         recorder: &mut crate::context::FragmentRecorder,
         child_count: usize,
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
     ) {
         // Same paint bridge shape as the BoxProtocol blanket: wrap the
         // recorder in the typed PaintCx<T::Arity> and call the user's
@@ -585,11 +581,11 @@ where
         &self,
         position: crate::protocol::ProtocolPosition<SliverProtocol>,
         _child_count: usize,
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
             Option<crate::protocol::ProtocolPosition<SliverProtocol>>,
-            Option<flui_types::Matrix4>,
+            Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome {
         // The sliver hit gate is driver-owned (geometry / cross-axis
@@ -618,11 +614,14 @@ where
         <T as RenderSliver>::skip_paint(self)
     }
 
-    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
+    fn paint_effects(&self, size: flui_foundation::geometry::Size) -> PaintEffects {
         <T as RenderSliver>::paint_effects(self, size)
     }
 
-    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+    fn hit_test_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
         <T as RenderSliver>::hit_test_transform(self, size)
     }
 
@@ -644,16 +643,16 @@ where
     fn describe_approximate_paint_clip(
         &self,
         child_slot: usize,
-        size: flui_types::Size,
-    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         <T as RenderSliver>::describe_approximate_paint_clip(self, child_slot, size)
     }
 
     fn describe_semantics_clip(
         &self,
         child_slot: usize,
-        size: flui_types::Size,
-    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         <T as RenderSliver>::describe_semantics_clip(self, child_slot, size)
     }
 
@@ -714,8 +713,8 @@ pub trait RenderProxySliver<C: RenderSliver>: RenderSliver {
 
 #[cfg(test)]
 mod tests {
+    use crate::constraints::{AxisDirection, AxisDirection::*};
     use flui_foundation::{Leaf, Single};
-    use flui_types::layout::{AxisDirection, AxisDirection::*};
 
     use super::*;
     use crate::{
@@ -731,7 +730,7 @@ mod tests {
     // ────────────────────────────────────────────────────────────────────────
 
     /// Minimal vertical-scroll constraints focused on scroll/paint extents.
-    fn vertical_constraints(scroll_offset: f32, remaining_paint_extent: f32) -> SliverConstraints {
+    fn vertical_constraints(scroll_offset: f64, remaining_paint_extent: f64) -> SliverConstraints {
         SliverConstraints::new(
             AxisDirection::TopToBottom,
             GrowthDirection::Forward,
@@ -749,9 +748,9 @@ mod tests {
     }
 
     fn vertical_cache_constraints(
-        scroll_offset: f32,
-        remaining_cache_extent: f32,
-        cache_origin: f32,
+        scroll_offset: f64,
+        remaining_cache_extent: f64,
+        cache_origin: f64,
     ) -> SliverConstraints {
         let mut constraints = vertical_constraints(scroll_offset, 50.0);
         constraints.remaining_cache_extent = remaining_cache_extent;
@@ -792,7 +791,7 @@ mod tests {
     // ────────────────────────────────────────────────────────────────────────
 
     struct FixedHeightSliver {
-        item_height: f32,
+        item_height: f64,
     }
 
     impl std::fmt::Debug for FixedHeightSliver {
@@ -804,7 +803,7 @@ mod tests {
     }
 
     impl FixedHeightSliver {
-        fn new(item_height: f32) -> Self {
+        fn new(item_height: f64) -> Self {
             Self { item_height }
         }
     }
@@ -944,14 +943,14 @@ mod tests {
         use GrowthDirection::{Forward, Reverse};
 
         let cases = [
-            (TopToBottom, Forward, Size::new(px(40.0), px(25.0))),
-            (BottomToTop, Forward, Size::new(px(40.0), px(-25.0))),
-            (TopToBottom, Reverse, Size::new(px(40.0), px(-25.0))),
-            (BottomToTop, Reverse, Size::new(px(40.0), px(25.0))),
-            (LeftToRight, Forward, Size::new(px(25.0), px(40.0))),
-            (RightToLeft, Forward, Size::new(px(-25.0), px(40.0))),
-            (LeftToRight, Reverse, Size::new(px(-25.0), px(40.0))),
-            (RightToLeft, Reverse, Size::new(px(25.0), px(40.0))),
+            (TopToBottom, Forward, Size::new(40.0, 25.0)),
+            (BottomToTop, Forward, Size::new(40.0, -25.0)),
+            (TopToBottom, Reverse, Size::new(40.0, -25.0)),
+            (BottomToTop, Reverse, Size::new(40.0, 25.0)),
+            (LeftToRight, Forward, Size::new(25.0, 40.0)),
+            (RightToLeft, Forward, Size::new(-25.0, 40.0)),
+            (LeftToRight, Reverse, Size::new(-25.0, 40.0)),
+            (RightToLeft, Reverse, Size::new(25.0, 40.0)),
         ];
 
         for (axis_direction, growth_direction, expected) in cases {

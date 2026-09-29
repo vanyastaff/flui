@@ -17,6 +17,7 @@ use flui_interaction::{
     FocusManager, GestureBinding, InteractionDispatchHandle, TextInputHandle, TextInputOwner,
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer};
+use flui_platform_api::HapticFeedback;
 #[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::{Clipboard, CursorError, CursorIcon, PlatformWindow};
@@ -33,7 +34,6 @@ use flui_semantics::{
     AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_args_for,
     semantics_action_for,
 };
-use flui_types::HapticFeedback;
 use flui_view::{GlobalKeyScope, WidgetsBinding, binding::FramePhaseMarker};
 use web_time::{Duration, Instant};
 
@@ -1693,11 +1693,11 @@ mod tests {
     #[test]
     fn mouse_tracker_applies_cursor_to_the_exact_owned_window() {
         use flui_foundation::RenderId;
+        use flui_foundation::geometry::Offset;
         use flui_interaction::{
             events::{PointerType, make_move_event},
             routing::{HitTestEntry, HitTestResult, PointerMotionKind},
         };
-        use flui_types::geometry::{Offset, Pixels};
 
         let window = Arc::new(crate::testing::TestWindow::new().focused(true));
         let platform_window: Arc<dyn PlatformWindow> = window.clone();
@@ -1706,7 +1706,7 @@ mod tests {
             PipelineCell::new(PipelineOwner::new()),
             platform_window,
         );
-        let position = Offset::new(Pixels(12.0), Pixels(8.0));
+        let position = Offset::new(12.0, 8.0);
         let event = make_move_event(position, PointerType::Mouse);
         let mut hit_test = HitTestResult::new();
         hit_test.add(HitTestEntry::new(RenderId::new(1)).cursor(CursorIcon::Pointer));

@@ -8,8 +8,8 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use flui_types::styling::Color;
-use flui_types::typography::{FontStyle, TextDirection, TextStyle};
+use crate::styling::Color;
+use crate::typography::{FontStyle, TextDirection, TextStyle};
 use parley::style::{
     FontFamily, FontFamilyName, FontStyle as ParleyFontStyle, FontWeight, GenericFamily,
     LineHeight, StyleProperty,
@@ -64,23 +64,23 @@ impl ParagraphLayout {
         let Some(first) = first else {
             return TextLayoutResult {
                 width: 0.0,
-                height: self.line_height,
+                height: f64::from(self.line_height),
                 line_count: 1,
                 max_line_width: 0.0,
-                alphabetic_baseline: self.line_height * 0.8,
-                ideographic_baseline: self.line_height,
+                alphabetic_baseline: f64::from(self.line_height * 0.8),
+                ideographic_baseline: f64::from(self.line_height),
                 truncated: false,
             };
         };
         let line = first.metrics();
         let width = self.layout.width();
         TextLayoutResult {
-            width,
-            height: self.layout.height(),
+            width: f64::from(width),
+            height: f64::from(self.layout.height()),
             line_count: self.layout.len().max(1),
-            max_line_width: width,
-            alphabetic_baseline: line.baseline,
-            ideographic_baseline: line.block_max_coord,
+            max_line_width: f64::from(width),
+            alphabetic_baseline: f64::from(line.baseline),
+            ideographic_baseline: f64::from(line.block_max_coord),
             truncated: false,
         }
     }
@@ -203,7 +203,7 @@ fn properties(style: &TextStyle) -> Vec<StyleProperty<'static, SpanBrush>> {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::typography::{TextDirection, TextStyle};
+    use crate::typography::{TextDirection, TextStyle};
 
     use super::{ParagraphLayout, ParagraphSpec};
     use crate::text_layout::{FontCollection, TextContext};

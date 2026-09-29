@@ -99,7 +99,7 @@ impl ViewState<Counter> for CounterState {
 
 #[derive(Clone, StatelessView)]
 struct PaddedHolder<C: View + Clone> {
-    inset: f32,
+    inset: f64,
     child: C,
 }
 

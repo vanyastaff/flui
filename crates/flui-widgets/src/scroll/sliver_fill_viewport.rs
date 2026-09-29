@@ -32,7 +32,7 @@ use crate::__private::generic_render_view_element;
 /// Generic over `C: ViewSeq` of box child views.
 #[derive(Clone)]
 pub struct SliverFillViewport<C = Vec<BoxedView>> {
-    viewport_fraction: f32,
+    viewport_fraction: f64,
     children: C,
 }
 
@@ -43,7 +43,7 @@ impl<C> SliverFillViewport<C> {
     /// # Panics
     ///
     /// Panics when `viewport_fraction <= 0.0`.
-    pub fn new(viewport_fraction: f32, children: C) -> Self {
+    pub fn new(viewport_fraction: f64, children: C) -> Self {
         assert!(
             viewport_fraction > 0.0,
             "viewport_fraction must be greater than zero (got {viewport_fraction})"

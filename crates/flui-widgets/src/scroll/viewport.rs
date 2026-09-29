@@ -3,11 +3,12 @@
 
 use std::fmt;
 
+use flui_foundation::geometry::Axis;
 use flui_objects::{RenderShrinkWrappingViewport, RenderViewport};
+use flui_painting::paint::Clip;
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::view::{CacheExtentStyle, ScrollPosition, SliverPaintOrder};
-use flui_types::layout::{Axis, AxisDirection};
-use flui_types::painting::Clip;
 use flui_view::BoxedView;
 use flui_view::seq::ViewSeq;
 
@@ -19,7 +20,7 @@ use crate::__private::generic_render_view_element;
 /// different `RenderObject`s (`RenderViewport` vs
 /// `RenderShrinkWrappingViewport`) underneath.
 ///
-/// - `Pixels`: the widget owns a private `ScrollPosition` and pushes this
+/// - `Fixed`: the widget owns a private `ScrollPosition` and pushes this
 ///   value into it on every rebuild — today's programmatic-offset behavior,
 ///   with no external subscriber.
 /// - `Position`: an external `ScrollPosition` (typically a
@@ -29,7 +30,7 @@ use crate::__private::generic_render_view_element;
 ///   content-dimension feedback loop.
 #[derive(Clone, Debug)]
 enum OffsetSource {
-    Pixels(f32),
+    Fixed(f64),
     Position(ScrollPosition),
 }
 
@@ -62,9 +63,9 @@ fn default_cross_axis_direction(axis_direction: AxisDirection) -> AxisDirection 
 pub struct Viewport<C = Vec<BoxedView>> {
     axis_direction: AxisDirection,
     offset_source: OffsetSource,
-    cache_extent: Option<(f32, CacheExtentStyle)>,
+    cache_extent: Option<(f64, CacheExtentStyle)>,
     paint_order: SliverPaintOrder,
-    anchor: f32,
+    anchor: f64,
     center: Option<usize>,
     clip_behavior: Clip,
     children: C,
@@ -75,7 +76,7 @@ impl<C> Viewport<C> {
     pub fn new(children: C) -> Self {
         Self {
             axis_direction: AxisDirection::TopToBottom,
-            offset_source: OffsetSource::Pixels(0.0),
+            offset_source: OffsetSource::Fixed(0.0),
             cache_extent: None,
             paint_order: SliverPaintOrder::FirstIsTop,
             anchor: 0.0,
@@ -94,12 +95,12 @@ impl<C> Viewport<C> {
 
     /// Set the programmatic scroll offset in logical pixels.
     ///
-    /// Pixels mode: the render object's offset is a private `ScrollPosition`
+    /// Fixed mode: the render object's offset is a private `ScrollPosition`
     /// this widget owns and pushes `offset` into on every rebuild. Mutually
     /// exclusive with [`Viewport::position`] — whichever is called last wins.
     #[must_use]
-    pub fn offset(mut self, offset: f32) -> Self {
-        self.offset_source = OffsetSource::Pixels(offset);
+    pub fn offset(mut self, offset: f64) -> Self {
+        self.offset_source = OffsetSource::Fixed(offset);
         self
     }
 
@@ -122,7 +123,7 @@ impl<C> Viewport<C> {
     /// render object has always supported this; this widget just lacked the
     /// builder). `None` (the default) keeps the render object's own default.
     #[must_use]
-    pub fn cache_extent(mut self, cache_extent: f32, style: CacheExtentStyle) -> Self {
+    pub fn cache_extent(mut self, cache_extent: f64, style: CacheExtentStyle) -> Self {
         self.cache_extent = Some((cache_extent, style));
         self
     }
@@ -142,7 +143,7 @@ impl<C> Viewport<C> {
     /// [`RenderViewport::set_anchor`](flui_objects::RenderViewport::set_anchor)
     /// for the formulas this drives.
     #[must_use]
-    pub fn anchor(mut self, anchor: f32) -> Self {
+    pub fn anchor(mut self, anchor: f64) -> Self {
         self.anchor = anchor;
         self
     }
@@ -170,7 +171,7 @@ impl<C> Viewport<C> {
     fn build_render_object(&self) -> RenderViewport<ScrollPosition> {
         let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
         let position = match &self.offset_source {
-            OffsetSource::Pixels(pixels) => ScrollPosition::new(*pixels),
+            OffsetSource::Fixed(pixels) => ScrollPosition::new(*pixels),
             OffsetSource::Position(position) => position.clone(),
         };
         let mut render_object =
@@ -241,7 +242,7 @@ where
         impact |= render_object.set_center(self.center);
         impact |= render_object.set_clip_behavior(self.clip_behavior);
         match &self.offset_source {
-            OffsetSource::Pixels(pixels) => {
+            OffsetSource::Fixed(pixels) => {
                 // Compat with today's behavior: push the new value into the
                 // widget-owned position every rebuild — UNLESS the position
                 // currently installed is a foreign one left over from a
@@ -292,7 +293,7 @@ generic_render_view_element!(Viewport);
 /// main-axis size from the accumulated sliver content, constrained by its
 /// parent.
 ///
-/// Mirrors [`Viewport`]'s `Pixels`-vs-`Position` `offset_source` mechanics —
+/// Mirrors [`Viewport`]'s `Fixed`-vs-`Position` `offset_source` mechanics —
 /// see [`ShrinkWrappingViewport::position`] for the injection contract.
 #[derive(Clone)]
 pub struct ShrinkWrappingViewport<C = Vec<BoxedView>> {
@@ -308,7 +309,7 @@ impl<C> ShrinkWrappingViewport<C> {
     pub fn new(children: C) -> Self {
         Self {
             axis_direction: AxisDirection::TopToBottom,
-            offset_source: OffsetSource::Pixels(0.0),
+            offset_source: OffsetSource::Fixed(0.0),
             paint_order: SliverPaintOrder::FirstIsTop,
             clip_behavior: Clip::HardEdge,
             children,
@@ -324,13 +325,13 @@ impl<C> ShrinkWrappingViewport<C> {
 
     /// Set the programmatic scroll offset in logical pixels.
     ///
-    /// Pixels mode: the render object's offset is a private `ScrollPosition`
+    /// Fixed mode: the render object's offset is a private `ScrollPosition`
     /// this widget owns and pushes `offset` into on every rebuild. Mutually
     /// exclusive with [`ShrinkWrappingViewport::position`] — whichever is
     /// called last wins.
     #[must_use]
-    pub fn offset(mut self, offset: f32) -> Self {
-        self.offset_source = OffsetSource::Pixels(offset);
+    pub fn offset(mut self, offset: f64) -> Self {
+        self.offset_source = OffsetSource::Fixed(offset);
         self
     }
 
@@ -368,7 +369,7 @@ impl<C> ShrinkWrappingViewport<C> {
     fn build_render_object(&self) -> RenderShrinkWrappingViewport<ScrollPosition> {
         let cross_axis_direction = default_cross_axis_direction(self.axis_direction);
         let position = match &self.offset_source {
-            OffsetSource::Pixels(pixels) => ScrollPosition::new(*pixels),
+            OffsetSource::Fixed(pixels) => ScrollPosition::new(*pixels),
             OffsetSource::Position(position) => position.clone(),
         };
         let mut render_object = RenderShrinkWrappingViewport::with_offset(
@@ -425,7 +426,7 @@ where
         impact |= render_object.set_paint_order(self.paint_order);
         impact |= render_object.set_clip_behavior(self.clip_behavior);
         match &self.offset_source {
-            OffsetSource::Pixels(pixels) => {
+            OffsetSource::Fixed(pixels) => {
                 // See `Viewport::update_render_object`'s matching arm for the
                 // full rationale: only push into the installed offset when it
                 // is still privately (uniquely) held, otherwise a mode switch

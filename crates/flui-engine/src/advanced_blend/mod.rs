@@ -20,10 +20,8 @@
 //! constitutes the authoritative correctness gate for the WGSL math.
 
 use bytemuck::cast_slice;
-use flui_types::{
-    geometry::{Pixels, Rect},
-    painting::BlendMode,
-};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::BlendMode;
 
 pub(crate) use pipeline::AdvancedBlendPipeline;
 pub(crate) use pipeline::mode_to_u32;
@@ -49,7 +47,7 @@ pub(crate) struct AdvancedBlendOp {
     /// The advanced blend mode to apply.
     pub(crate) mode: BlendMode,
     /// Device-space bounds of the foreground layer (origin + size in pixels).
-    pub(crate) device_bounds: Rect<Pixels>,
+    pub(crate) device_bounds: Rect<f64>,
     /// Group opacity in [0.0, 1.0].
     pub(crate) opacity: f32,
     /// Per-channel RGB tint in [0.0, 1.0] per component.
@@ -101,7 +99,7 @@ pub(crate) struct BackdropSample {
 ///   non-zero extent).
 pub(crate) fn copy_backdrop_region(
     surface_texture: &wgpu::Texture,
-    device_rect: Rect<Pixels>,
+    device_rect: Rect<f64>,
     surface_format: wgpu::TextureFormat,
     resources: &mut GpuResources,
     encoder: &mut wgpu::CommandEncoder,
@@ -110,19 +108,21 @@ pub(crate) fn copy_backdrop_region(
     let surface_w = surface_size.width;
     let surface_h = surface_size.height;
 
-    // Round before truncate (mirrors renderer.rs policy).
-    let x = device_rect.left().0.clamp(0.0, surface_w as f32).round() as u32;
-    let y = device_rect.top().0.clamp(0.0, surface_h as f32).round() as u32;
-    let right = device_rect.right().0.clamp(0.0, surface_w as f32).round() as u32;
-    let bottom = device_rect.bottom().0.clamp(0.0, surface_h as f32).round() as u32;
+    // The copy region covers every pixel the device rect touches, clamped to
+    // the surface (ADR-0098 §6; the rule the backdrop filter uses too).
+    let covered = flui_foundation::geometry::cover(device_rect);
+    let x = covered.left().clamp(0.0, f64::from(surface_w)) as u32;
+    let y = covered.top().clamp(0.0, f64::from(surface_h)) as u32;
+    let right = covered.right().clamp(0.0, f64::from(surface_w)) as u32;
+    let bottom = covered.bottom().clamp(0.0, f64::from(surface_h)) as u32;
 
     // Entirely off-screen after clamping → no copy possible.
     if right <= x || bottom <= y {
         tracing::warn!(
-            bounds_l = device_rect.left().0,
-            bounds_t = device_rect.top().0,
-            bounds_r = device_rect.right().0,
-            bounds_b = device_rect.bottom().0,
+            bounds_l = device_rect.left(),
+            bounds_t = device_rect.top(),
+            bounds_r = device_rect.right(),
+            bounds_b = device_rect.bottom(),
             surface_w,
             surface_h,
             "Advanced blend: clamped device region is empty (entirely off-screen); \
@@ -214,10 +214,10 @@ pub(crate) fn flush_advanced_layer(
     // (`_pad0`); fields are passed in WGSL declaration order minus the pad.
     let uniforms = advanced_blend::BlendUniforms::new(
         [
-            op.device_bounds.left().0,
-            op.device_bounds.top().0,
-            op.device_bounds.width().0,
-            op.device_bounds.height().0,
+            (op.device_bounds.left() as f32),
+            (op.device_bounds.top() as f32),
+            (op.device_bounds.width() as f32),
+            (op.device_bounds.height() as f32),
         ],
         [vp_w as f32, vp_h as f32],
         [copy_origin_x as f32, copy_origin_y as f32],
@@ -304,11 +304,8 @@ pub(crate) fn flush_advanced_layer(
 mod synthetic_op_tests {
     use std::sync::Arc;
 
-    use flui_types::{
-        Color,
-        geometry::{Pixels, Rect},
-        painting::BlendMode,
-    };
+    use flui_foundation::geometry::Rect;
+    use flui_painting::{paint::BlendMode, styling::Color};
     use wgpu::util::DeviceExt as _;
 
     use super::{AdvancedBlendOp, AdvancedBlendPipeline, flush_advanced_layer};
@@ -618,10 +615,10 @@ mod synthetic_op_tests {
                 foreground: fg_this_mode,
                 mode,
                 device_bounds: Rect::from_xywh(
-                    Pixels(0.0),
-                    Pixels(0.0),
-                    Pixels(TARGET_W as f32),
-                    Pixels(TARGET_H as f32),
+                    0.0,
+                    0.0,
+                    f64::from(TARGET_W as f32),
+                    f64::from(TARGET_H as f32),
                 ),
                 opacity: 1.0,
                 tint: [1.0, 1.0, 1.0],
@@ -766,7 +763,7 @@ mod synthetic_op_tests {
             let op = AdvancedBlendOp {
                 foreground: fg_pooled,
                 mode,
-                device_bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(1.0), Pixels(1.0)),
+                device_bounds: Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
                 opacity: 1.0,
                 tint: [1.0, 1.0, 1.0],
                 src_uv_min: [0.0, 0.0],
@@ -865,7 +862,7 @@ mod synthetic_op_tests {
         let op = AdvancedBlendOp {
             foreground: fg_transparent,
             mode: BlendMode::Multiply, // any mode — out_a=0 must short-circuit
-            device_bounds: Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(4.0), Pixels(2.0)),
+            device_bounds: Rect::from_xywh(0.0, 0.0, 4.0, 2.0),
             opacity: 1.0,
             tint: [1.0, 1.0, 1.0],
             src_uv_min: [0.0, 0.0],
@@ -1002,12 +999,7 @@ mod synthetic_op_tests {
         let op = AdvancedBlendOp {
             foreground: fg_pooled,
             mode: BlendMode::Multiply,
-            device_bounds: Rect::from_xywh(
-                Pixels(1.0),
-                Pixels(0.0),
-                Pixels(4.0),
-                Pixels(SURF_H as f32),
-            ),
+            device_bounds: Rect::from_xywh(1.0, 0.0, 4.0, f64::from(SURF_H as f32)),
             opacity: 1.0,
             tint: [1.0, 1.0, 1.0],
             // Foreground is 4×SURF_H, not full-viewport (SURF_W=6) — identity
@@ -1152,10 +1144,10 @@ mod synthetic_op_tests {
             foreground: fg_pooled,
             mode: BlendMode::Screen,
             device_bounds: Rect::from_xywh(
-                Pixels(0.0),
-                Pixels(0.0),
-                Pixels(TARGET_W as f32),
-                Pixels(TARGET_H as f32),
+                0.0,
+                0.0,
+                f64::from(TARGET_W as f32),
+                f64::from(TARGET_H as f32),
             ),
             opacity: 1.0,
             tint: [1.0, 1.0, 1.0],

@@ -16,6 +16,7 @@
 //!   * docs/research/2026-06-10-rendering-design-amendments.md §D9.1
 
 use flui_foundation::Variable;
+use flui_foundation::geometry::{EdgeInsets, Offset, Size};
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -24,11 +25,10 @@ use flui_rendering::{
     testing::{Probe, RenderTester, box_node},
     traits::RenderBox,
 };
-use flui_types::{EdgeInsets, Offset, Size, geometry::px};
 
 /// Loose `0..=200 x 0..=200` root constraints shared by every scenario.
 fn constraints() -> BoxConstraints {
-    BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0))
+    BoxConstraints::new(0.0, 200.0, 0.0, 200.0)
 }
 
 // ============================================================================
@@ -46,7 +46,7 @@ fn run_layout_commits_positioned_offsets_to_render_state() {
 
     assert_eq!(
         run.offset(run.id("child")),
-        Offset::new(px(5.0), px(5.0)),
+        Offset::new(5.0, 5.0),
         "Padding(5) positions its child at (5,5) via position_child; the \
          layout walk must commit that offset into RenderState.offset, not \
          drop it with the transient ChildState vec",
@@ -70,12 +70,12 @@ fn relayout_overwrites_committed_offset() {
     let pad = run.root();
     let child = run.id("child");
 
-    assert_eq!(run.offset(child), Offset::new(px(5.0), px(5.0)));
+    assert_eq!(run.offset(child), Offset::new(5.0, 5.0));
 
     // Change padding → re-position on the next layout pass.
     run.update::<RenderPadding>(pad, |padding| {
         assert_eq!(
-            padding.set_padding(EdgeInsets::all(px(9.0))),
+            padding.set_padding(EdgeInsets::all(9.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT,
         );
     });
@@ -83,7 +83,7 @@ fn relayout_overwrites_committed_offset() {
 
     assert_eq!(
         run.offset(child),
-        Offset::new(px(9.0), px(9.0)),
+        Offset::new(9.0, 9.0),
         "re-position must overwrite the previously committed offset",
     );
 }
@@ -118,9 +118,9 @@ impl RenderBox for PositionFirstChildOnly {
             let _ = ctx.layout_child(i, constraints);
         }
         if child_count > 0 {
-            ctx.position_child(0, Offset::new(px(7.0), px(3.0)));
+            ctx.position_child(0, Offset::new(7.0, 3.0));
         }
-        constraints.constrain(Size::new(px(100.0), px(100.0)))
+        constraints.constrain(Size::new(100.0, 100.0))
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
@@ -141,7 +141,7 @@ fn unpositioned_child_keeps_prior_offset_across_relayout() {
     let positioned = run.id("positioned");
     let unpositioned = run.id("unpositioned");
 
-    assert_eq!(run.offset(positioned), Offset::new(px(7.0), px(3.0)));
+    assert_eq!(run.offset(positioned), Offset::new(7.0, 3.0));
     assert_eq!(
         run.offset(unpositioned),
         Offset::ZERO,
@@ -158,18 +158,18 @@ fn unpositioned_child_keeps_prior_offset_across_relayout() {
         .as_box()
         .expect("box entry")
         .state()
-        .set_offset(Offset::new(px(11.0), px(13.0)));
+        .set_offset(Offset::new(11.0, 13.0));
     run.owner_mut().mark_needs_layout(parent);
     run.relayout();
 
     assert_eq!(
         run.offset(positioned),
-        Offset::new(px(7.0), px(3.0)),
+        Offset::new(7.0, 3.0),
         "positioned child is re-positioned every layout",
     );
     assert_eq!(
         run.offset(unpositioned),
-        Offset::new(px(11.0), px(13.0)),
+        Offset::new(11.0, 13.0),
         "unpositioned child must keep its prior RenderState.offset: the \
          per-walk ChildState is seeded from state, so skipping \
          position_child must not reset the offset to zero",

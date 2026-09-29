@@ -120,7 +120,7 @@ pub(crate) enum RouteCommand {
 #[derive(Clone)]
 pub struct TransitionPeer {
     /// The route's **primary** animation, controller-backed.
-    pub animation: Arc<dyn Animation<f32>>,
+    pub animation: Arc<dyn Animation<f64>>,
     /// `nextRoute.canTransitionFrom(this)` (`routes.dart:561`), asked of the
     /// route *above*.
     pub can_transition_from: bool,

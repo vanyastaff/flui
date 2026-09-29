@@ -1,8 +1,8 @@
 //! RenderTransform - applies a transformation matrix to a single child.
 
 use flui_foundation::Single;
-use flui_types::geometry::px;
-use flui_types::{Alignment, Matrix4, Offset, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Size};
+use flui_painting::Alignment;
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -28,7 +28,7 @@ use flui_rendering::{
 /// let transform = RenderTransform::scale(0.5, 0.5);
 ///
 /// // Rotate 45 degrees around center
-/// let transform = RenderTransform::rotation(std::f32::consts::PI / 4.0);
+/// let transform = RenderTransform::rotation(std::f64::consts::PI / 4.0);
 ///
 /// // Custom matrix
 /// let transform = RenderTransform::new(Matrix4::IDENTITY);
@@ -113,7 +113,7 @@ impl RenderTransform {
     /// No alignment, matching `Transform.translate`, which takes none: a
     /// translation is pivot-invariant, so an alignment term would cancel out
     /// anyway.
-    pub fn translate(x: f32, y: f32) -> Self {
+    pub fn translate(x: f64, y: f64) -> Self {
         Self::new(Matrix4::translation(x, y, 0.0))
     }
 
@@ -122,12 +122,12 @@ impl RenderTransform {
     /// Centre, not the bare constructor's absent alignment — `Transform.scale`
     /// passes `Alignment.center` explicitly, and a scale about the top-left
     /// corner is almost never what a caller means.
-    pub fn scale(sx: f32, sy: f32) -> Self {
+    pub fn scale(sx: f64, sy: f64) -> Self {
         Self::new(Matrix4::scaling(sx, sy, 1.0)).with_alignment(Alignment::CENTER)
     }
 
     /// Creates a uniform scale transform.
-    pub fn uniform_scale(scale: f32) -> Self {
+    pub fn uniform_scale(scale: f64) -> Self {
         Self::scale(scale, scale)
     }
 
@@ -136,14 +136,14 @@ impl RenderTransform {
     /// # Arguments
     ///
     /// * `radians` - Rotation angle in radians.
-    pub fn rotation(radians: f32) -> Self {
+    pub fn rotation(radians: f64) -> Self {
         // `Transform.rotate` passes `Alignment.center` explicitly, for the
         // same reason `scale` does.
         Self::new(Matrix4::rotation_z(radians)).with_alignment(Alignment::CENTER)
     }
 
     /// Creates a rotation transform from degrees.
-    pub fn rotation_degrees(degrees: f32) -> Self {
+    pub fn rotation_degrees(degrees: f64) -> Self {
         Self::rotation(degrees.to_radians())
     }
 
@@ -174,7 +174,7 @@ impl RenderTransform {
     /// entries. Neither branch can disagree.
     ///
     /// The agreement also fails outright on non-finite matrices:
-    /// `Matrix4::translation(f32::INFINITY, 0.0, 0.0)` is `Some` before
+    /// `Matrix4::translation(f64::INFINITY, 0.0, 0.0)` is `Some` before
     /// conjugation and `None` after, because the products contaminate every
     /// entry. Such a matrix has a non-finite determinant, so the
     /// `!skip_paint(self)` clause rejects it first — that clause is
@@ -316,8 +316,8 @@ impl RenderTransform {
             // (`_effectiveTransform`'s `resolvedAlignment == null` branch).
             return origin;
         };
-        let align_x = size.width * f32::midpoint(alignment.x, 1.0);
-        let align_y = size.height * f32::midpoint(alignment.y, 1.0);
+        let align_x = size.width * f64::midpoint(alignment.x, 1.0);
+        let align_y = size.height * f64::midpoint(alignment.y, 1.0);
         Offset::new(align_x + origin.dx, align_y + origin.dy)
     }
 
@@ -327,8 +327,8 @@ impl RenderTransform {
         let origin = self.compute_origin(size);
 
         // Translate to origin, apply transform, translate back
-        let to_origin = Matrix4::translation((-origin.dx).into(), (-origin.dy).into(), 0.0);
-        let from_origin = Matrix4::translation(origin.dx.into(), origin.dy.into(), 0.0);
+        let to_origin = Matrix4::translation(-origin.dx, -origin.dy, 0.0);
+        let from_origin = Matrix4::translation(origin.dx, origin.dy, 0.0);
 
         from_origin * self.transform * to_origin
     }
@@ -431,7 +431,7 @@ impl RenderBox for RenderTransform {
         // no laid-out size.
         //
         // Spelled out rather than `!self.transform.is_invertible()`: that
-        // helper gates on `det.abs() >= f32::EPSILON`, which answers *true*
+        // helper gates on `det.abs() >= f64::EPSILON`, which answers *true*
         // for an infinite determinant and would paint exactly the non-finite
         // cases this must suppress.
         let determinant = self.transform.determinant();
@@ -465,7 +465,7 @@ impl RenderBox for RenderTransform {
 
         let transform = self.effective_transform(ctx.size());
         if let Some((dx, dy)) = transform.as_translation() {
-            ctx.paint_child_at(Offset::new(px(dx), px(dy)));
+            ctx.paint_child_at(Offset::new(dx, dy));
         } else {
             // The pipeline already pushed this matrix's TransformLayer (see
             // `paint_effects` below) before replaying this fragment, so a
@@ -516,7 +516,7 @@ impl RenderBox for RenderTransform {
         transform: &mut Matrix4,
     ) {
         *transform *= self.effective_transform(size);
-        *transform *= Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
+        *transform *= Matrix4::translation(child_offset.dx, child_offset.dy, 0.0);
     }
 
     fn hit_test_transform(&self, size: Size) -> Option<Matrix4> {
@@ -552,7 +552,7 @@ mod tests {
     /// short-circuit in `RenderTransform.paint`.
     ///
     /// The non-finite half is the reason this cannot delegate to
-    /// [`Matrix4::is_invertible`]: that gates on `det.abs() >= f32::EPSILON`,
+    /// [`Matrix4::is_invertible`]: that gates on `det.abs() >= f64::EPSILON`,
     /// which an infinite determinant satisfies. The `INFINITY` assertions
     /// below fail against that shortcut and pass against the explicit test.
     #[test]
@@ -561,9 +561,9 @@ mod tests {
         assert!(RenderTransform::scale(0.0, 1.0).skip_paint());
         assert!(RenderTransform::scale(1.0, 0.0).skip_paint());
 
-        assert!(RenderTransform::scale(f32::NAN, 1.0).skip_paint());
-        assert!(RenderTransform::scale(f32::INFINITY, 1.0).skip_paint());
-        assert!(RenderTransform::scale(f32::NEG_INFINITY, 1.0).skip_paint());
+        assert!(RenderTransform::scale(f64::NAN, 1.0).skip_paint());
+        assert!(RenderTransform::scale(f64::INFINITY, 1.0).skip_paint());
+        assert!(RenderTransform::scale(f64::NEG_INFINITY, 1.0).skip_paint());
 
         // Small but visible, and the identity: both must still paint. Without
         // these an unconditional `true` would satisfy every case above.
@@ -622,12 +622,9 @@ mod tests {
             .effective_transform(size)
             .try_inverse()
             .expect("scale(2,2) is invertible");
-        let (tx, ty) = inverse.transform_point(
-            flui_types::geometry::px(80.0),
-            flui_types::geometry::px(60.0),
-        );
-        assert!((tx.get() - 40.0).abs() < 1e-4, "tx = {tx:?}");
-        assert!((ty.get() - 30.0).abs() < 1e-4, "ty = {ty:?}");
+        let (tx, ty) = inverse.transform_point(80.0, 60.0);
+        assert!((tx - 40.0).abs() < 1e-4, "tx = {tx:?}");
+        assert!((ty - 30.0).abs() < 1e-4, "ty = {ty:?}");
 
         // The other half of "exactly one", read off `paint`'s real fragment:
         // a non-translation node must splice its child and push NOTHING, since
@@ -698,7 +695,7 @@ mod tests {
     /// in exactly the one place (`skip_paint`) that already owns it.
     #[test]
     fn paint_effects_reports_a_transform_only_for_a_non_translation_matrix_with_a_child() {
-        let size = Size::new(px(40.0), px(40.0));
+        let size = Size::new(40.0, 40.0);
 
         let mut no_child = RenderTransform::scale(2.0, 2.0);
         no_child.has_child = false;
@@ -816,7 +813,7 @@ mod tests {
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
         );
         assert_eq!(
-            layered.set_origin(Some(Offset::new(px(3.0), px(4.0)))),
+            layered.set_origin(Some(Offset::new(3.0, 4.0))),
             flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
         );
@@ -832,7 +829,7 @@ mod tests {
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
         );
         assert_eq!(
-            translating.set_origin(Some(Offset::new(px(1.0), px(1.0)))),
+            translating.set_origin(Some(Offset::new(1.0, 1.0))),
             flui_rendering::RenderUpdateImpact::PAINT
                 | flui_rendering::RenderUpdateImpact::SEMANTICS,
         );
@@ -847,16 +844,14 @@ mod tests {
         // dropped → (10,0).
         let node = RenderTransform::scale(2.0, 2.0)
             .with_alignment(Alignment::CENTER)
-            .with_origin(Offset::new(px(10.0), px(0.0)));
+            .with_origin(Offset::new(10.0, 0.0));
         assert_eq!(
-            node.compute_origin(Size::new(px(100.0), px(100.0))),
-            Offset::new(px(60.0), px(50.0)),
+            node.compute_origin(Size::new(100.0, 100.0)),
+            Offset::new(60.0, 50.0),
         );
     }
 
-    use std::f32::consts::PI;
-
-    use flui_types::geometry::px;
+    use std::f64::consts::PI;
 
     use super::*;
 
@@ -909,7 +904,7 @@ mod tests {
 
     #[test]
     fn test_transform_with_origin() {
-        let origin = Offset::new(px(50.0), px(50.0));
+        let origin = Offset::new(50.0, 50.0);
         let transform = RenderTransform::scale(2.0, 2.0).with_origin(origin);
         assert_eq!(transform.origin(), Some(origin));
     }
@@ -941,7 +936,7 @@ mod tests {
         transform.has_child = true;
         let impact = transform.set_transform(Matrix4::scaling(2.0, 2.0, 1.0))
             | transform.set_alignment(Some(Alignment::BOTTOM_RIGHT))
-            | transform.set_origin(Some(Offset::new(px(2.0), px(3.0))));
+            | transform.set_origin(Some(Offset::new(2.0, 3.0)));
         assert_eq!(
             impact,
             flui_rendering::RenderUpdateImpact::PAINT
@@ -955,7 +950,7 @@ mod tests {
         let mut reordered = RenderTransform::identity();
         reordered.has_child = true;
         let swapped = reordered.set_alignment(Some(Alignment::BOTTOM_RIGHT))
-            | reordered.set_origin(Some(Offset::new(px(2.0), px(3.0))))
+            | reordered.set_origin(Some(Offset::new(2.0, 3.0)))
             | reordered.set_transform(Matrix4::scaling(2.0, 2.0, 1.0));
         assert!(
             swapped.needs_paint() && swapped.needs_semantics_update(),

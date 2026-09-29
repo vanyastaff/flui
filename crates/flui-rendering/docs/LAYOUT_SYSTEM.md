@@ -65,12 +65,12 @@ pub trait LayoutCapability: Send + Sync + 'static {
 Defines min/max width and height bounds:
 
 ```rust
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct BoxConstraints {
-    pub min_width: Pixels,
-    pub max_width: Pixels,
-    pub min_height: Pixels,
-    pub max_height: Pixels,
+    pub min_width: f64,
+    pub max_width: f64,
+    pub min_height: f64,
+    pub max_height: f64,
 }
 
 impl BoxConstraints {
@@ -87,9 +87,9 @@ impl BoxConstraints {
     /// Loose constraints - size up to max
     pub fn loose(size: Size) -> Self {
         Self {
-            min_width: Pixels::ZERO,
+            min_width: 0.0,
             max_width: size.width,
-            min_height: Pixels::ZERO,
+            min_height: 0.0,
             max_height: size.height,
         }
     }
@@ -98,9 +98,9 @@ impl BoxConstraints {
     pub fn unbounded() -> Self {
         Self {
             min_width: 0.0,
-            max_width: f32::INFINITY,
+            max_width: f64::INFINITY,
             min_height: 0.0,
-            max_height: f32::INFINITY,
+            max_height: f64::INFINITY,
         }
     }
     
@@ -246,8 +246,8 @@ impl SliverConstraints {
     /// Get main axis extent from box size
     pub fn main_axis_extent(&self, size: Size) -> f64 {
         match self.axis_direction {
-            AxisDirection::Down | AxisDirection::Up => size.height as f64,
-            AxisDirection::Left | AxisDirection::Right => size.width as f64,
+            AxisDirection::Down | AxisDirection::Up => size.height,
+            AxisDirection::Left | AxisDirection::Right => size.width,
         }
     }
     
@@ -255,16 +255,16 @@ impl SliverConstraints {
     pub fn as_box_constraints(&self, min_extent: f64, max_extent: f64) -> BoxConstraints {
         match self.axis_direction {
             AxisDirection::Down | AxisDirection::Up => BoxConstraints {
-                min_width: self.cross_axis_extent as f32,
-                max_width: self.cross_axis_extent as f32,
-                min_height: min_extent as f32,
-                max_height: max_extent as f32,
+                min_width: self.cross_axis_extent,
+                max_width: self.cross_axis_extent,
+                min_height: min_extent,
+                max_height: max_extent,
             },
             AxisDirection::Left | AxisDirection::Right => BoxConstraints {
-                min_width: min_extent as f32,
-                max_width: max_extent as f32,
-                min_height: self.cross_axis_extent as f32,
-                max_height: self.cross_axis_extent as f32,
+                min_width: min_extent,
+                max_width: max_extent,
+                min_height: self.cross_axis_extent,
+                max_height: self.cross_axis_extent,
             },
         }
     }
@@ -515,16 +515,16 @@ For widgets that need to know child sizes before layout:
 ```rust
 pub trait IntrinsicDimensions {
     /// Minimum width given a height constraint
-    fn min_intrinsic_width(&self, height: f32) -> f32;
+    fn min_intrinsic_width(&self, height: f64) -> f64;
     
     /// Maximum width given a height constraint
-    fn max_intrinsic_width(&self, height: f32) -> f32;
+    fn max_intrinsic_width(&self, height: f64) -> f64;
     
     /// Minimum height given a width constraint
-    fn min_intrinsic_height(&self, width: f32) -> f32;
+    fn min_intrinsic_height(&self, width: f64) -> f64;
     
     /// Maximum height given a width constraint
-    fn max_intrinsic_height(&self, width: f32) -> f32;
+    fn max_intrinsic_height(&self, width: f64) -> f64;
 }
 ```
 

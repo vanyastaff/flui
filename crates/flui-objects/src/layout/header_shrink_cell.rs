@@ -33,7 +33,7 @@ use super::BuildDuringLayoutCell;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HeaderShrink {
     /// How far the header has scrolled away, clamped to its max extent.
-    pub shrink_offset: f32,
+    pub shrink_offset: f64,
     /// Whether content is currently scrolling beneath this header.
     pub overlaps_content: bool,
 }
@@ -121,7 +121,7 @@ impl BuildDuringLayoutCell for HeaderShrinkCell {
 mod tests {
     use super::*;
 
-    fn shrink(offset: f32, overlaps: bool) -> HeaderShrink {
+    fn shrink(offset: f64, overlaps: bool) -> HeaderShrink {
         HeaderShrink {
             shrink_offset: offset,
             overlaps_content: overlaps,

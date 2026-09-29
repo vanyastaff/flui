@@ -5,11 +5,8 @@
 //! `RestoreLayer`). `restore()` on an empty save stack is a silent no-op,
 //! as `dart:ui`'s `Canvas.restore()` is in release builds.
 
-use flui_types::{
-    geometry::{Matrix4, Pixels, Rect},
-    painting::BlendMode,
-    styling::Color,
-};
+use crate::{paint::BlendMode, styling::Color};
+use flui_foundation::geometry::{Matrix4, Rect};
 
 use super::Canvas;
 use crate::display_list::{DrawOp, Paint};
@@ -114,7 +111,7 @@ impl Canvas {
         blend_mode = ?paint.blend_mode,
         layer_depth = self.save_stack.len(),
     ))]
-    pub fn save_layer(&mut self, bounds: Option<Rect<Pixels>>, paint: &Paint) {
+    pub fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint) {
         self.save_stack.push(CanvasState {
             transform: self.transform,
             is_layer: true,
@@ -130,8 +127,8 @@ impl Canvas {
     /// transparency.
     ///
     /// Equivalent to `save_layer` with a paint whose opacity is `alpha / 255`.
-    pub fn save_layer_alpha(&mut self, bounds: Option<Rect<Pixels>>, alpha: u8) {
-        let opacity = alpha as f32 / 255.0;
+    pub fn save_layer_alpha(&mut self, bounds: Option<Rect<f64>>, alpha: u8) {
+        let opacity = alpha as f64 / 255.0;
         self.save_layer(
             bounds,
             &Paint::fill(Color::TRANSPARENT).with_opacity(opacity),
@@ -139,7 +136,7 @@ impl Canvas {
     }
 
     /// Saves the canvas state with a layer that applies float opacity.
-    pub fn save_layer_opacity(&mut self, bounds: Option<Rect<Pixels>>, opacity: f32) {
+    pub fn save_layer_opacity(&mut self, bounds: Option<Rect<f64>>, opacity: f64) {
         self.save_layer(
             bounds,
             &Paint::fill(Color::TRANSPARENT).with_opacity(opacity.clamp(0.0, 1.0)),
@@ -152,7 +149,7 @@ impl Canvas {
     /// (alpha = 1.0).  The engine derives layer opacity from `paint.color.a`, so
     /// this method sets alpha = 255 — not the zero produced by `Color::TRANSPARENT`.
     /// RGB channels are ignored for saveLayer compositing; only alpha matters.
-    pub fn save_layer_blend(&mut self, bounds: Option<Rect<Pixels>>, blend_mode: BlendMode) {
+    pub fn save_layer_blend(&mut self, bounds: Option<Rect<f64>>, blend_mode: BlendMode) {
         // Alpha=255 (opaque) — blend-only layer.  `Color::TRANSPARENT` has alpha=0,
         // which would make the engine treat the layer as invisible (a no-op).
         let opaque_blend_paint = Paint::fill(Color::TRANSPARENT)
@@ -164,7 +161,7 @@ impl Canvas {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::painting::BlendMode;
+    use crate::paint::BlendMode;
 
     use super::{Canvas, DrawOp};
 

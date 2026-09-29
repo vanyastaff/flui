@@ -11,12 +11,12 @@ use std::{
     sync::Arc,
 };
 
+use flui_foundation::geometry::Size;
 use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_objects::{RenderFlex, RenderSizedBox};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::{Size, geometry::px};
 use flui_view::{
     BoxedView, BuildContext, BuildOwner, ElementTree, ErrorView, GlobalKey, IntoView,
     LifecycleHook, RebuildReason, RecoveredAt, RenderView, StatefulView, View, ViewExt, ViewState,
@@ -73,7 +73,7 @@ pub(super) struct DenseHealthyLeaf {
 
 impl DenseHealthyLeaf {
     fn size(&self) -> Size {
-        Size::new(px(8.0 + self.marker as f32), px(12.0))
+        Size::new(8.0 + self.marker as f64, 12.0)
     }
 }
 
@@ -330,7 +330,7 @@ pub(super) fn run_real_pipeline_frame(
             "the sole parentless render node must be the expected dense parent frontier"
         );
         owner.set_root_id(Some(render_root));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(320.0), px(80.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(320.0, 80.0))));
         let (idle, result) = std::mem::take(owner).run_frame();
         *owner = idle;
         result.expect("the dense containment topology must complete a real pipeline frame");

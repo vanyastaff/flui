@@ -69,7 +69,7 @@ impl PluginPipeline {
     /// This mirrors the `mount_root()` logic in `flui-app`'s runner,
     /// but uses a standalone `WidgetsBinding` instead of the host realm's
     /// widget machinery.
-    pub fn mount<V>(root: V, width: f32, height: f32) -> Self
+    pub fn mount<V>(root: V, width: f64, height: f64) -> Self
     where
         V: View + StatelessView + Clone + Send + Sync + 'static,
     {
@@ -82,8 +82,8 @@ impl PluginPipeline {
 
     fn mount_with_boundary<V>(
         root: &V,
-        width: f32,
-        height: f32,
+        width: f64,
+        height: f64,
         mount_boundary: impl FnOnce(&WidgetsBinding),
     ) -> Self
     where

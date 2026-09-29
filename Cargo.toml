@@ -6,8 +6,6 @@
 resolver = "3"
 members = [
     # === Phase 1: Foundation Layer ===
-    "crates/flui-geometry",     # Geometry primitives (split from flui-types)
-    "crates/flui-types",        # Base types with Unit system (ACTIVE)
     "crates/flui-foundation",   # Foundation types and utilities (ACTIVE)
     "crates/flui-macros",       # Proc-macros (view, diagnostics, and animation derives)
     "crates/flui-log",          # Composition-only cross-platform tracing backend (ACTIVE)
@@ -369,10 +367,13 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 
 # === Engine/geometry shared math dependencies ===
 # glam: SIMD GPU math used by flui-engine (serde+bytemuck features) and
-# flui-geometry (bytemuck+mint features). The workspace entry carries the common
+# flui-foundation (geometry: `Matrix4` over `DMat4`). The workspace entry carries the common
 # base features; each crate adds its own extras via per-crate `features = [...]`.
 glam = { version = "0.33", features = ["bytemuck"] }
-# bytemuck: zero-copy Pod/Zeroable derives shared by flui-engine and flui-geometry.
+# kurbo: the curve model behind flui-painting's `Path` (ADR-0098 §7): arcs and ovals as
+# curves, exact winding and tight bounds. Crate-internal; no kurbo type is public.
+kurbo = "0.13"
+# bytemuck: zero-copy Pod/Zeroable derives used by flui-engine.
 bytemuck = { version = "1.24", features = ["derive"] }
 
 # === Engine build-script dependencies ===
@@ -435,7 +436,7 @@ parley = { version = "0.11.1", default-features = false, features = ["std"] }
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 static_assertions = "1.1"
-# Compile-fail suites (flui-types, flui-view, flui-engine, flui-rendering):
+# Compile-fail suites (flui-painting, flui-view, flui-engine, flui-rendering):
 # each drives `tests/<dir>/*.rs` fixtures and pins the diagnostic text a
 # wrong program receives, not merely that it fails.
 trybuild = "1.0"
@@ -651,8 +652,7 @@ workspace = true
 # (ADR-0028, `cargo xtask workspace`).
 [dependencies]
 flui-macros = { path = "crates/flui-macros", version = "=0.2.0-dev" }
-flui-types = { path = "crates/flui-types", version = "=0.2.0-dev" }
-flui-geometry = { path = "crates/flui-geometry", version = "=0.2.0-dev" }
+flui-platform-api = { workspace = true }
 flui-foundation = { path = "crates/flui-foundation", version = "=0.2.0-dev" }
 flui-view = { path = "crates/flui-view", version = "=0.2.0-dev" }
 flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev" }
@@ -697,6 +697,9 @@ flui-testing = { workspace = true }
 flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev", features = ["testing"] }
 # Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
 insta = { workspace = true }
+# tests/facade_serde.rs round-trips a value from each crate `flui/serde` reaches.
+serde = { workspace = true }
+serde_json = { workspace = true }
 parking_lot.workspace = true
 
 # NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
@@ -771,9 +774,18 @@ hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-app/hot
 a11y = ["flui-app/a11y"]
 
 # === Core Features ===
-# Serialization support (flui-types only today; other crates' serde features
-# are opted into per-crate, not through the facade)
-serde = ["flui-types/serde"]
+# Serialization of the value types, in every crate that owns some: geometry
+# (foundation, through painting), paint and style (painting), locale and
+# brightness (platform-api), velocity and gesture details (interaction), the
+# layout enums (rendering, and objects through widgets) and curves (animation).
+serde = [
+    "flui-painting/serde",
+    "flui-platform-api/serde",
+    "flui-interaction/serde",
+    "flui-rendering/serde",
+    "flui-animation/serde",
+    "flui-widgets/serde",
+]
 
 # The facade declares no other features. Earlier revisions carried commented
 # blocks for parallel / profiling / tracy / devtools / memory-profiler /
@@ -881,6 +893,11 @@ required-features = ["material"]
 name = "cupertino_demo"
 path = "tests/cupertino_demo.rs"
 required-features = ["cupertino"]
+
+[[test]]
+name = "facade_serde"
+path = "tests/facade_serde.rs"
+required-features = ["serde"]
 
 # Structural snapshots of the demo trees' painted layer trees. Needs both
 # catalogs because it snapshots the Material and Cupertino demos; both are

@@ -2,7 +2,7 @@
 //!
 //! Provides two macros:
 //!
-//! - `scene_plugin!` — wraps a raw `fn(f32, f32) -> Scene` function
+//! - `scene_plugin!` — wraps a raw `fn(f64, f64) -> Scene` function
 //!   (low-level)
 //! - `app_plugin!` — wraps a `View + StatelessView` widget in a
 //!   self-contained pipeline that runs Build → Layout → Paint → Scene
@@ -10,7 +10,7 @@
 
 /// Generates the `extern "C"` FFI wrappers for a scene-building function.
 ///
-/// The function must have the signature `fn(f32, f32) -> Scene` where the
+/// The function must have the signature `fn(f64, f64) -> Scene` where the
 /// two arguments are width and height in physical pixels.
 ///
 /// Expand this macro once per plugin image, with no competing `flui_scene_*`
@@ -37,7 +37,7 @@
 /// ```rust,ignore
 /// use flui::hot_reload::{Scene, scene_plugin};
 ///
-/// fn my_scene(_width: f32, _height: f32) -> Scene {
+/// fn my_scene(_width: f64, _height: f64) -> Scene {
 ///     Scene::default()
 /// }
 ///
@@ -57,7 +57,7 @@ macro_rules! scene_plugin {
         /// Never deallocate the allocation in the host.
         // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
-        pub extern "C" fn flui_scene_build(width: f32, height: f32) -> *mut ::std::ffi::c_void {
+        pub extern "C" fn flui_scene_build(width: f64, height: f64) -> *mut ::std::ffi::c_void {
             let scene: $crate::Scene = $build_fn(width, height);
             let boxed = ::std::boxed::Box::new(scene);
             ::std::boxed::Box::into_raw(boxed) as *mut ::std::ffi::c_void
@@ -383,7 +383,7 @@ macro_rules! app_plugin {
         /// both teardown functions accept it as a no-op.
         // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
-        pub extern "C" fn flui_app_build(width: f32, height: f32) -> *mut ::std::ffi::c_void {
+        pub extern "C" fn flui_app_build(width: f64, height: f64) -> *mut ::std::ffi::c_void {
             __FLUI_APP_STATE.with(|state| {
                 let caller = match state.token.get() {
                     0 => {

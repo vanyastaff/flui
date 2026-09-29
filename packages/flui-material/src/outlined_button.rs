@@ -19,9 +19,8 @@
 //! not yet draw a visible outline. A pre-existing deferral (`shape.rs`), not
 //! one introduced here.
 
-use flui_sdk::types::geometry::px;
-use flui_sdk::types::styling::{BorderSide, BorderStyle};
-use flui_sdk::types::{EdgeInsets, Size};
+use flui_sdk::geometry::{EdgeInsets, Size};
+use flui_sdk::painting::{BorderSide, BorderStyle};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 
@@ -121,7 +120,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
             theme.text_theme.label_large.clone(),
         )),
         background_color: Some(WidgetStateProperty::all(Some(
-            flui_sdk::types::Color::TRANSPARENT,
+            flui_sdk::painting::Color::TRANSPARENT,
         ))),
         foreground_color: Some(WidgetStateProperty::resolve_with(move |states| {
             Some(if states.contains_state(WidgetState::Disabled) {
@@ -135,10 +134,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
         })),
         elevation: Some(WidgetStateProperty::all(Some(0.0))),
         padding: Some(WidgetStateProperty::all(Some(scaled_padding_1x()))),
-        minimum_size: Some(WidgetStateProperty::all(Some(Size::new(
-            px(64.0),
-            px(40.0),
-        )))),
+        minimum_size: Some(WidgetStateProperty::all(Some(Size::new(64.0, 40.0)))),
         fixed_size: None,
         maximum_size: Some(WidgetStateProperty::all(Some(Size::INFINITY))),
         side: Some(WidgetStateProperty::resolve_with(move |states| {
@@ -149,7 +145,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
             } else {
                 colors.outline
             };
-            Some(BorderSide::new(color, px(1.0), BorderStyle::Solid))
+            Some(BorderSide::new(color, 1.0, BorderStyle::Solid))
         })),
         shape: Some(WidgetStateProperty::all(Some(MaterialShape::Stadium))),
     }
@@ -159,7 +155,7 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
 /// [`crate::elevated_button`]. See that module's docs for the `MediaQuery`
 /// text-scaler deferral this narrows to the 1x tier.
 fn scaled_padding_1x() -> EdgeInsets {
-    EdgeInsets::symmetric(px(0.0), px(24.0))
+    EdgeInsets::symmetric(0.0, 24.0)
 }
 
 #[cfg(test)]
@@ -190,7 +186,7 @@ mod tests {
 
         assert_eq!(
             resolve(style.background_color.as_ref(), &none),
-            Some(flui_sdk::types::Color::TRANSPARENT)
+            Some(flui_sdk::painting::Color::TRANSPARENT)
         );
         assert_eq!(
             resolve(style.foreground_color.as_ref(), &none),
@@ -227,7 +223,7 @@ mod tests {
 
         let default_side = resolve(style.side.as_ref(), &none).expect("default side is set");
         assert_eq!(default_side.color, colors.outline);
-        assert_eq!(default_side.width, px(1.0));
+        assert_eq!(default_side.width, 1.0);
 
         let focused_side = resolve(style.side.as_ref(), &focused).expect("focused side is set");
         assert_eq!(focused_side.color, colors.primary);

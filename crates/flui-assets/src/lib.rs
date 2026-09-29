@@ -214,5 +214,5 @@ pub use crate::loaders::{BytesFileLoader, FileLoader, MemoryLoader, NetworkLoade
 pub use crate::assets::font::FontAsset;
 pub use crate::assets::image::ImageAsset;
 
-// Re-export Image from flui_types
-pub use flui_types::painting::Image;
+// Re-export Image from flui_painting
+pub use flui_painting::paint::Image;

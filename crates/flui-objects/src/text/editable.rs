@@ -40,10 +40,10 @@ use std::ops::Range;
 
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_painting::{Invalidation, Paint, TextBaseline as PainterBaseline, TextPainter};
-use flui_types::{
-    Color, Offset, Point, Rect, Size,
-    geometry::px,
+use flui_painting::{
+    styling::Color,
     typography::{InlineSpan, TextAffinity, TextAlign, TextDirection, TextPosition},
 };
 
@@ -57,22 +57,22 @@ use flui_rendering::{
     traits::{RenderBox, TextBaseline},
 };
 
-const DEFAULT_CARET_WIDTH: f32 = 1.0;
-const DEFAULT_CARET_HEIGHT: f32 = 18.0;
-const CARET_GAP: f32 = 1.0;
+const DEFAULT_CARET_WIDTH: f64 = 1.0;
+const DEFAULT_CARET_HEIGHT: f64 = 18.0;
+const CARET_GAP: f64 = 1.0;
 
 /// Thickness of the composing-region underline, in logical pixels.
 ///
 /// Declared divergence (ADR-0030): a flat 1px bar, not a font's actual
 /// underline metrics — `TextStyle` has no `decoration` field to source real
 /// metrics from.
-const COMPOSING_UNDERLINE_THICKNESS: f32 = 1.0;
+const COMPOSING_UNDERLINE_THICKNESS: f64 = 1.0;
 
 /// Gap between the alphabetic baseline and the top of the composing-region
 /// underline, in logical pixels. Same value as [`CARET_GAP`] by coincidence,
 /// not by any shared meaning — kept as a separate constant so the two can
 /// diverge later without one silently dragging the other along.
-const COMPOSING_UNDERLINE_GAP: f32 = 1.0;
+const COMPOSING_UNDERLINE_GAP: f64 = 1.0;
 
 /// Render object that lays out editable text and paints a collapsed caret.
 #[derive(Debug)]
@@ -81,8 +81,8 @@ pub struct RenderEditable {
     plain_text: String,
     caret_byte_offset: usize,
     show_caret: bool,
-    caret_width: f32,
-    caret_height: f32,
+    caret_width: f64,
+    caret_height: f64,
     caret_color: Color,
     force_line: bool,
     caret_offset: Offset,
@@ -148,7 +148,7 @@ impl RenderEditable {
 
     /// Sets the accessibility text scale factor (builder form).
     #[must_use]
-    pub fn with_text_scale_factor(mut self, factor: f32) -> Self {
+    pub fn with_text_scale_factor(mut self, factor: f64) -> Self {
         self.painter.set_text_scale_factor(factor);
         self
     }
@@ -169,14 +169,14 @@ impl RenderEditable {
 
     /// Sets the caret width in logical pixels (builder form).
     #[must_use]
-    pub fn with_caret_width(mut self, width: f32) -> Self {
+    pub fn with_caret_width(mut self, width: f64) -> Self {
         self.caret_width = non_negative_finite(width, DEFAULT_CARET_WIDTH);
         self
     }
 
     /// Sets the caret height in logical pixels (builder form).
     #[must_use]
-    pub fn with_caret_height(mut self, height: f32) -> Self {
+    pub fn with_caret_height(mut self, height: f64) -> Self {
         self.caret_height = non_negative_finite(height, DEFAULT_CARET_HEIGHT);
         self
     }
@@ -321,8 +321,8 @@ impl RenderEditable {
     /// Updates caret dimensions.
     pub fn set_caret_size(
         &mut self,
-        width: f32,
-        height: f32,
+        width: f64,
+        height: f64,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.caret_width == width && self.caret_height == height {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -382,7 +382,7 @@ impl RenderEditable {
                 .get_offset_for_caret(TextPosition::new(range.start, TextAffinity::Downstream));
             return Some(Rect::from_origin_size(
                 Point::new(caret.dx, caret.dy),
-                Size::new(px(self.caret_width), px(self.caret_height)),
+                Size::new(self.caret_width, self.caret_height),
             ));
         }
         self.painter
@@ -442,7 +442,7 @@ impl RenderEditable {
     pub fn caret_local_rect(&self) -> Rect {
         Rect::from_origin_size(
             Point::new(self.caret_offset.dx, self.caret_offset.dy),
-            Size::new(px(self.caret_width), px(self.caret_height)),
+            Size::new(self.caret_width, self.caret_height),
         )
     }
 
@@ -498,16 +498,16 @@ impl RenderEditable {
         &self.painter
     }
 
-    fn caret_margin(&self) -> f32 {
+    fn caret_margin(&self) -> f64 {
         CARET_GAP + self.caret_width
     }
 
-    fn text_width_constraints(&self, constraints: &BoxConstraints) -> (f32, f32) {
-        let available_max_width = (constraints.max_width.get() - self.caret_margin()).max(0.0);
+    fn text_width_constraints(&self, constraints: &BoxConstraints) -> (f64, f64) {
+        let available_max_width = (constraints.max_width - self.caret_margin()).max(0.0);
         let available_min_width = if available_max_width.is_finite() {
-            constraints.min_width.get().min(available_max_width)
+            constraints.min_width.min(available_max_width)
         } else {
-            constraints.min_width.get()
+            constraints.min_width
         };
 
         let min_width = if self.force_line && available_max_width.is_finite() {
@@ -519,21 +519,21 @@ impl RenderEditable {
         // This first slice is single-line: matching Flutter's non-multiline
         // `_adjustConstraints`, the text itself lays out with unbounded max
         // width and may overflow the box until scrolling lands.
-        (min_width, f32::INFINITY)
+        (min_width, f64::INFINITY)
     }
 
     fn size_for_text(&self, constraints: &BoxConstraints, text_size: Size) -> Size {
-        let natural_width = text_size.width.get() + self.caret_margin();
+        let natural_width = text_size.width + self.caret_margin();
         let width = if self.force_line && constraints.max_width.is_finite() {
             constraints.max_width
         } else {
-            px(natural_width)
+            natural_width
         };
-        let height = px(text_size.height.get().max(self.caret_height));
+        let height = text_size.height.max(self.caret_height);
         constraints.constrain(Size::new(width, height))
     }
 
-    fn intrinsic_text_width(&self, width: f32) -> f32 {
+    fn intrinsic_text_width(&self, width: f64) -> f64 {
         if width.is_finite() {
             (width - self.caret_margin()).max(0.0)
         } else {
@@ -596,15 +596,15 @@ impl RenderEditable {
     fn underline_rect_for_box(&self, box_rect: Rect) -> Rect {
         let baseline = self
             .compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
-            .unwrap_or_else(|| box_rect.height().get());
-        let top = box_rect.top().get();
-        let max_top = (box_rect.bottom().get() - COMPOSING_UNDERLINE_THICKNESS).max(top);
+            .unwrap_or_else(|| box_rect.height());
+        let top = box_rect.top();
+        let max_top = (box_rect.bottom() - COMPOSING_UNDERLINE_THICKNESS).max(top);
         let y = (baseline + COMPOSING_UNDERLINE_GAP).clamp(top, max_top);
         Rect::from_ltrb(
             box_rect.left(),
-            px(y),
+            y,
             box_rect.right(),
-            px(y + COMPOSING_UNDERLINE_THICKNESS),
+            y + COMPOSING_UNDERLINE_THICKNESS,
         )
     }
 }
@@ -671,7 +671,7 @@ impl RenderBox for RenderEditable {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         _ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         let (min_width, max_width) = self.text_width_constraints(&constraints);
         let painter_baseline = match baseline {
             TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
@@ -681,27 +681,27 @@ impl RenderBox for RenderEditable {
             .dry_baseline(min_width, max_width, painter_baseline)
     }
 
-    fn compute_min_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter.min_intrinsic_width() + self.caret_margin()
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter.max_intrinsic_width() + self.caret_margin()
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter
             .intrinsic_height(self.intrinsic_text_width(width))
             .max(self.caret_height)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter
             .intrinsic_height(self.intrinsic_text_width(width))
             .max(self.caret_height)
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         let painter_baseline = match baseline {
             TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
             TextBaseline::Ideographic => PainterBaseline::Ideographic,
@@ -808,7 +808,7 @@ impl RenderEditable {
     }
 }
 
-fn non_negative_finite(value: f32, fallback: f32) -> f32 {
+fn non_negative_finite(value: f64, fallback: f64) -> f64 {
     if value.is_finite() && value >= 0.0 {
         value
     } else {
@@ -819,17 +819,17 @@ fn non_negative_finite(value: f32, fallback: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flui_painting::typography::TextSpan;
     use flui_rendering::context::intrinsics_test_support::leaf_dry_layout;
-    use flui_types::typography::TextSpan;
 
     #[test]
     fn dry_layout_force_line_uses_finite_max_width() {
         let editable = RenderEditable::new(TextSpan::new("abc"), TextDirection::Ltr);
-        let constraints = BoxConstraints::loose(Size::new(px(120.0), px(80.0)));
+        let constraints = BoxConstraints::loose(Size::new(120.0, 80.0));
         let size = leaf_dry_layout(|ctx| editable.compute_dry_layout(constraints, ctx));
 
-        assert_eq!(size.width, px(120.0));
-        assert!(size.height.get() >= DEFAULT_CARET_HEIGHT);
+        assert_eq!(size.width, 120.0);
+        assert!(size.height >= DEFAULT_CARET_HEIGHT);
     }
 
     #[test]

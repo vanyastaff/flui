@@ -60,7 +60,7 @@ impl LiquidGlassMaterial {
     /// Get the default blur radius for this material type
     ///
     /// These values are calibrated to match Apple's design guidelines.
-    pub fn default_blur_radius(self) -> f32 {
+    pub fn default_blur_radius(self) -> f64 {
         match self {
             LiquidGlassMaterial::Standard | LiquidGlassMaterial::Popover => 30.0,
             LiquidGlassMaterial::Prominent => 20.0,
@@ -73,7 +73,7 @@ impl LiquidGlassMaterial {
     /// Get the default tint color for this material (RGBA)
     ///
     /// Returns (r, g, b, a) where each component is 0.0-1.0
-    pub fn default_tint(self) -> (f32, f32, f32, f32) {
+    pub fn default_tint(self) -> (f64, f64, f64, f64) {
         match self {
             LiquidGlassMaterial::Standard => (1.0, 1.0, 1.0, 0.3),
             LiquidGlassMaterial::Prominent => (1.0, 1.0, 1.0, 0.5),
@@ -131,16 +131,16 @@ pub struct LiquidGlassConfig {
     pub material: LiquidGlassMaterial,
 
     /// Blur radius (default: material-specific)
-    pub blur_radius: Option<f32>,
+    pub blur_radius: Option<f64>,
 
     /// Tint color override (RGBA 0.0-1.0)
-    pub tint: Option<(f32, f32, f32, f32)>,
+    pub tint: Option<(f64, f64, f64, f64)>,
 
     /// Blending mode
     pub blending_mode: BlendingMode,
 
     /// Vibrancy strength (0.0-1.0, default: 1.0)
-    pub vibrancy: f32,
+    pub vibrancy: f64,
 
     /// Extend the material under a transparent titlebar
     /// (`NSFullSizeContentViewWindowMask` + `titlebarAppearsTransparent`)
@@ -169,14 +169,14 @@ impl LiquidGlassConfig {
 
     /// Set custom blur radius
     #[must_use]
-    pub fn with_blur_radius(mut self, radius: f32) -> Self {
+    pub fn with_blur_radius(mut self, radius: f64) -> Self {
         self.blur_radius = Some(radius);
         self
     }
 
     /// Set custom tint color
     #[must_use]
-    pub fn with_tint(mut self, r: f32, g: f32, b: f32, a: f32) -> Self {
+    pub fn with_tint(mut self, r: f64, g: f64, b: f64, a: f64) -> Self {
         self.tint = Some((r, g, b, a));
         self
     }
@@ -190,7 +190,7 @@ impl LiquidGlassConfig {
 
     /// Set vibrancy strength
     #[must_use]
-    pub fn with_vibrancy(mut self, vibrancy: f32) -> Self {
+    pub fn with_vibrancy(mut self, vibrancy: f64) -> Self {
         self.vibrancy = vibrancy.clamp(0.0, 1.0);
         self
     }
@@ -203,13 +203,13 @@ impl LiquidGlassConfig {
     }
 
     /// Get the effective blur radius (custom or default)
-    pub fn effective_blur_radius(&self) -> f32 {
+    pub fn effective_blur_radius(&self) -> f64 {
         self.blur_radius
             .unwrap_or_else(|| self.material.default_blur_radius())
     }
 
     /// Get the effective tint color (custom or default)
-    pub fn effective_tint(&self) -> (f32, f32, f32, f32) {
+    pub fn effective_tint(&self) -> (f64, f64, f64, f64) {
         self.tint.unwrap_or_else(|| self.material.default_tint())
     }
 }

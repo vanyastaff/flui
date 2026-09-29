@@ -8,7 +8,7 @@
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Size};
+use flui_foundation::geometry::{Bounds, Size};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
 
@@ -62,12 +62,12 @@ impl PlatformTextInput for WinitTextInput {
         self.window.set_ime_allowed(allowed);
     }
 
-    fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+    fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         use winit::dpi::{LogicalPosition, LogicalSize};
 
         self.window.set_ime_cursor_area(
-            LogicalPosition::new(f64::from(area.origin.x.0), f64::from(area.origin.y.0)),
-            LogicalSize::new(f64::from(area.size.width.0), f64::from(area.size.height.0)),
+            LogicalPosition::new(area.origin.x, area.origin.y),
+            LogicalSize::new(area.size.width, area.size.height),
         );
     }
 }
@@ -153,22 +153,15 @@ impl PlatformWindow for WinitWindow {
         self.id
     }
 
-    fn physical_size(&self) -> Size<DevicePixels> {
-        use flui_types::geometry::device_px;
-
+    fn physical_size(&self) -> Size<i32> {
         let size = self.window.inner_size();
-        Size::new(device_px(size.width as i32), device_px(size.height as i32))
+        Size::new(size.width as i32, size.height as i32)
     }
 
-    fn logical_size(&self) -> Size<Pixels> {
-        use flui_types::geometry::px;
-
+    fn logical_size(&self) -> Size<f64> {
         let size = self.window.inner_size();
-        let scale = self.window.scale_factor() as f32;
-        Size::new(
-            px(size.width as f32 / scale),
-            px(size.height as f32 / scale),
-        )
+        let scale = self.window.scale_factor();
+        Size::new(size.width as f64 / scale, size.height as f64 / scale)
     }
 
     fn appearance(&self) -> WindowAppearance {

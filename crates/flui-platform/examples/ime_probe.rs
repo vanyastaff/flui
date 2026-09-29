@@ -24,7 +24,7 @@
 //!   a `Commit`.
 //! * **B — protocol conformance.** `setMarkedText:selectedRange:
 //!   replacementRange:` must dispatch one `Preedit` whose `cursor` is a *byte*
-//!   range — AppKit speaks UTF-16 and [`flui_types::ImeEvent`] speaks bytes, and
+//!   range — AppKit speaks UTF-16 and [`flui_platform_api::ImeEvent`] speaks bytes, and
 //!   the composition below is multi-byte, so a UTF-16 offset reaching the wire
 //!   unchanged would be visible here. `hasMarkedText` and `markedRange` must
 //!   answer while it composes, and `insertText:replacementRange:` must dispatch
@@ -104,12 +104,12 @@ mod appkit_ime_probe {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
+    use flui_foundation::geometry::{Bounds, Point, Size};
     use flui_platform::traits::{Key, PlatformInput};
     use flui_platform::{
         DispatchEventResult, Platform, PlatformTextInput, PlatformWindow, WindowOptions,
     };
-    use flui_types::ImeEvent;
-    use flui_types::geometry::{Bounds, Point, Size, px};
+    use flui_platform_api::ImeEvent;
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2::{ClassType, msg_send};
     use objc2_app_kit::NSApplication;
@@ -231,7 +231,7 @@ mod appkit_ime_probe {
         // front never becomes one.
         let window: Arc<dyn PlatformWindow> = match owner.open_window(WindowOptions {
             title: TITLE.to_string(),
-            size: Size::new(px(480.0), px(320.0)),
+            size: Size::new(480.0, 320.0),
             resizable: false,
             visible: true,
             decorated: true,
@@ -986,7 +986,7 @@ mod appkit_ime_probe {
         );
 
         // ---- C: the cursor area reaches the candidate-window query ----------
-        let area = Bounds::new(Point::new(px(10.0), px(20.0)), Size::new(px(2.0), px(18.0)));
+        let area = Bounds::new(Point::new(10.0, 20.0), Size::new(2.0, 18.0));
         text_input.set_ime_cursor_area(area);
         // `actualRange:` is answered, not left null: the SDK requires it to hold
         // "the character range corresponding to the returned area", so a query

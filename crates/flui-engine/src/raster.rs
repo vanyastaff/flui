@@ -13,8 +13,8 @@
 //!   window-specific and async, so it stays on the concrete type.
 //! - The trait is dyn-compatible (no generics, no `async` in methods).
 
+use flui_foundation::geometry::Rect;
 use flui_layer::Scene;
-use flui_types::geometry::{Pixels, Rect};
 
 use crate::error::EngineError;
 
@@ -123,7 +123,7 @@ pub trait RasterBackend: Send {
     fn is_device_lost(&self) -> bool;
 
     /// Mark a screen region as dirty (needs repaint on the next frame).
-    fn mark_dirty(&mut self, rect: Rect<Pixels>);
+    fn mark_dirty(&mut self, rect: Rect<f64>);
 
     /// Mark the entire screen as needing repaint.
     fn mark_full_repaint(&mut self);
@@ -189,7 +189,7 @@ impl RasterBackend for crate::Renderer {
         self.is_device_lost()
     }
 
-    fn mark_dirty(&mut self, rect: Rect<Pixels>) {
+    fn mark_dirty(&mut self, rect: Rect<f64>) {
         self.mark_dirty(rect);
     }
 
@@ -238,7 +238,7 @@ mod tests {
             false
         }
 
-        fn mark_dirty(&mut self, _rect: Rect<Pixels>) {
+        fn mark_dirty(&mut self, _rect: Rect<f64>) {
             self.damage = true;
         }
 

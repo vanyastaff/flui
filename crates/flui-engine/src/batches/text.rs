@@ -8,11 +8,9 @@
 //! the SDF clip, so a rounded clip rounds text exactly as it rounds the
 //! rect behind it.
 
+use flui_foundation::geometry::Point;
 use flui_painting::TextLayout;
-use flui_types::{
-    geometry::{Pixels, Point},
-    styling::Color,
-};
+use flui_painting::styling::Color;
 
 use super::DrawBatcher;
 use crate::{
@@ -53,7 +51,7 @@ impl DrawBatcher {
         atlas: &mut GlyphAtlas,
         opacity: f32,
         layout: &TextLayout,
-        position: Point<Pixels>,
+        position: Point<f64>,
         color: Color,
     ) {
         let scale = state.max_scale();
@@ -67,16 +65,22 @@ impl DrawBatcher {
             None => Placement::Uniform,
             Some(linear) => Placement::Affine {
                 linear,
-                origin: [origin.x.0, origin.y.0],
+                origin: [(origin.x as f32), (origin.y as f32)],
             },
         };
         let raster_origin = match placement {
-            Placement::Uniform => (origin.x.0, origin.y.0),
+            Placement::Uniform => (origin.x, origin.y),
             Placement::Affine { .. } => (0.0, 0.0),
         };
         let mut began = false;
 
-        for glyph in layout.placed_glyphs(raster_origin, scale) {
+        for glyph in layout.placed_glyphs(
+            {
+                let (a, b) = raster_origin;
+                (a as f32, b as f32)
+            },
+            scale,
+        ) {
             let Some(slot) = atlas.slot(glyph.key) else {
                 continue;
             };

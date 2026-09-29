@@ -123,9 +123,9 @@
 //! This engine layer uses `glam` (`Vec2`/`Mat4`/`vec4`, with `bytemuck` Pod)
 //! **directly** for GPU and paint hot-path math. That is intentional and
 //! sanctioned: `glam` is FLUI's chosen linear-algebra backend (it also backs
-//! `flui_geometry::Matrix4` underneath), and the SIMD/Pod-friendly types belong
-//! at the GPU boundary. Typed `flui_geometry` values are converted to `glam`
-//! *here, at the engine edge* (`offset.dx.0`, `point.x.0`, …) — the typed unit
+//! `flui_foundation::geometry::Matrix4` underneath), and the SIMD/Pod-friendly types belong
+//! at the GPU boundary. Typed `flui_foundation::geometry` values are converted to `glam`
+//! *here, at the engine edge* (`offset.dx`, `point.x`, …) — the typed unit
 //! barrier lives in the layout/widget layers above, not in pixel-pushing code.
 //! New direct `glam` use in this crate is expected, not a smell.
 //!

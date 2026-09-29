@@ -412,7 +412,7 @@ impl flui_rendering::traits::RenderBox for PanicOnLayoutForReportBox {
     fn perform_layout(
         &mut self,
         _ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-    ) -> flui_types::Size {
+    ) -> flui_foundation::geometry::Size {
         panic!("PanicOnLayoutForReportBox::perform_layout -- intentional test panic");
     }
 }

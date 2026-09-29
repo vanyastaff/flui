@@ -8,7 +8,9 @@
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::Diagnosticable;
+use flui_foundation::geometry::Size;
 use flui_foundation::{Leaf, Variable};
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
     context::{BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
@@ -18,7 +20,6 @@ use flui_rendering::{
     traits::{RenderBox, RenderSliver},
     view::ScrollDirection,
 };
-use flui_types::{Size, geometry::px, layout::AxisDirection};
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject};
 
@@ -229,10 +230,7 @@ fn sliver_descendant_invalid_geometry_returns_zero_and_poisons() {
         .expect("tree accepts sliver child");
 
     pipeline
-        .layout_dirty_root(
-            parent_id,
-            BoxConstraints::new(px(0.0), px(800.0), px(0.0), px(600.0)),
-        )
+        .layout_dirty_root(parent_id, BoxConstraints::new(0.0, 800.0, 0.0, 600.0))
         .expect("parent layout still completes; descendant error is isolated");
 
     assert_eq!(

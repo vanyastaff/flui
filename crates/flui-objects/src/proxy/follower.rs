@@ -56,8 +56,9 @@
 //! gate both on `child != null`.
 
 use flui_foundation::Single;
+use flui_foundation::geometry::Offset;
+use flui_painting::paint::Alignment;
 use flui_rendering::layer::LayerLink;
-use flui_types::{Offset, painting::Alignment};
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintCx},
@@ -315,18 +316,12 @@ mod tests {
     fn builders_override_defaults() {
         let node = RenderFollowerLayer::new(LayerLink::new())
             .with_show_when_unlinked(false)
-            .with_offset(Offset::new(
-                flui_types::geometry::px(4.0),
-                flui_types::geometry::px(6.0),
-            ))
+            .with_offset(Offset::new(4.0, 6.0))
             .with_leader_anchor(Alignment::BOTTOM_CENTER)
             .with_follower_anchor(Alignment::TOP_CENTER);
 
         assert!(!node.show_when_unlinked());
-        assert_eq!(
-            node.offset(),
-            Offset::new(flui_types::geometry::px(4.0), flui_types::geometry::px(6.0))
-        );
+        assert_eq!(node.offset(), Offset::new(4.0, 6.0));
         assert_eq!(node.leader_anchor(), Alignment::BOTTOM_CENTER);
         assert_eq!(node.follower_anchor(), Alignment::TOP_CENTER);
     }
@@ -355,7 +350,7 @@ mod tests {
             flui_rendering::RenderUpdateImpact::NONE
         );
 
-        let offset = Offset::new(flui_types::geometry::px(1.0), flui_types::geometry::px(2.0));
+        let offset = Offset::new(1.0, 2.0);
         assert_eq!(
             node.set_offset(offset),
             flui_rendering::RenderUpdateImpact::PAINT

@@ -198,9 +198,9 @@ mod tests {
     #[test]
     fn pointer_event_kind_maps_variants() {
         use crate::events::{make_cancel_event, make_down_event, make_move_event, make_up_event};
-        use flui_types::geometry::{Offset, Pixels};
+        use flui_foundation::geometry::Offset;
 
-        let pos = Offset::new(Pixels(0.0), Pixels(0.0));
+        let pos = Offset::new(0.0, 0.0);
         let pt = crate::events::PointerType::Touch;
 
         assert_eq!(pointer_event_kind(&make_down_event(pos, pt)), "down");
@@ -222,7 +222,7 @@ mod tests {
     fn recognizer_base_accept_emits_span_with_subscriber() {
         use crate::arena::GestureArena;
         use crate::recognizers::recognizer::RecognizerBase;
-        use flui_types::{Offset, geometry::Pixels};
+        use flui_foundation::geometry::Offset;
         use std::sync::Arc;
 
         let subscriber = tracing_subscriber::fmt()
@@ -234,7 +234,7 @@ mod tests {
         let arena = GestureArena::new();
         let base = RecognizerBase::new(arena);
         let pointer = crate::ids::PointerId::PRIMARY;
-        let position = Offset::new(Pixels(0.0), Pixels(0.0));
+        let position = Offset::new(0.0, 0.0);
 
         // Minimal stand-in recogniser that implements `GestureArenaMember`
         // (satisfies the trait bound on `accept<T>`).

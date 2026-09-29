@@ -7,7 +7,7 @@
 //! memoizes every level in the per-node layout cache; an object never
 //! sees the cache.
 
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 use crate::constraints::BoxConstraints;
 use crate::parent_data::{FlexParentData, ParentData};
@@ -30,7 +30,7 @@ pub enum DryBaselineChildRequest {
     /// Dry layout size under `constraints`.
     DryLayout(BoxConstraints),
     /// Intrinsic dimension value: `(dimension, extent)`.
-    Intrinsic(IntrinsicDimension, f32),
+    Intrinsic(IntrinsicDimension, f64),
 }
 
 /// Answers to [`DryBaselineChildRequest`].
@@ -40,11 +40,11 @@ pub enum DryBaselineChildRequest {
 #[derive(Debug, Clone, Copy)]
 pub enum DryBaselineChildResponse {
     /// Child dry-baseline result.
-    Baseline(Option<f32>),
+    Baseline(Option<f64>),
     /// Child dry-layout size.
     DryLayout(Size),
     /// Child intrinsic value for a given dimension + extent.
-    Intrinsic(f32),
+    Intrinsic(f64),
 }
 
 // ============================================================================
@@ -65,7 +65,7 @@ pub enum DryLayoutChildRequest {
     /// Dry layout size under `constraints`.
     DryLayout(BoxConstraints),
     /// Intrinsic dimension value: `(dimension, extent)`.
-    Intrinsic(IntrinsicDimension, f32),
+    Intrinsic(IntrinsicDimension, f64),
     /// Dry baseline distance under `constraints`, for a baseline kind.
     ///
     /// A container whose *size* depends on where its children's baselines
@@ -84,9 +84,9 @@ pub enum DryLayoutChildResponse {
     /// Child dry-layout size.
     DryLayout(Size),
     /// Child intrinsic value for a given dimension + extent.
-    Intrinsic(f32),
+    Intrinsic(f64),
     /// Child dry baseline distance, or `None` when it reports no baseline.
-    Baseline(Option<f32>),
+    Baseline(Option<f64>),
 }
 
 // ============================================================================
@@ -160,7 +160,7 @@ impl<'a> BoxDryBaselineCtx<'a> {
         index: usize,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         match (self.query)(
             index,
             DryBaselineChildRequest::Baseline(constraints, baseline),
@@ -188,8 +188,8 @@ impl<'a> BoxDryBaselineCtx<'a> {
         &mut self,
         index: usize,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         match (self.query)(index, DryBaselineChildRequest::Intrinsic(dimension, extent)) {
             DryBaselineChildResponse::Intrinsic(v) => v,
             DryBaselineChildResponse::Baseline(_) | DryBaselineChildResponse::DryLayout(_) => 0.0,
@@ -197,22 +197,22 @@ impl<'a> BoxDryBaselineCtx<'a> {
     }
 
     /// The child's maximum intrinsic width for the given height.
-    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 
     /// The child's minimum intrinsic width for the given height.
-    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
     }
 
     /// The child's maximum intrinsic height for the given width.
-    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
     }
 
     /// The child's minimum intrinsic height for the given width.
-    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
     }
 }
@@ -233,7 +233,7 @@ pub struct BoxIntrinsicsCtx<'a> {
     child_count: usize,
     /// Erased per-child parent data; same semantics as [`BoxDryLayoutCtx::child_parent_data`].
     child_parent_data: &'a [Option<&'a dyn ParentData>],
-    query: &'a mut dyn FnMut(usize, IntrinsicDimension, f32) -> f32,
+    query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
 }
 
 impl std::fmt::Debug for BoxIntrinsicsCtx<'_> {
@@ -250,7 +250,7 @@ impl<'a> BoxIntrinsicsCtx<'a> {
     pub(crate) fn new(
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
-        query: &'a mut dyn FnMut(usize, IntrinsicDimension, f32) -> f32,
+        query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
     ) -> Self {
         Self {
             child_count,
@@ -282,28 +282,28 @@ impl<'a> BoxIntrinsicsCtx<'a> {
         &mut self,
         index: usize,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         (self.query)(index, dimension, extent)
     }
 
     /// The child's minimum intrinsic width for the given height.
-    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
     }
 
     /// The child's maximum intrinsic width for the given height.
-    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 
     /// The child's minimum intrinsic height for the given width.
-    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
     }
 
     /// The child's maximum intrinsic height for the given width.
-    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
     }
 
@@ -416,7 +416,7 @@ impl<'a> BoxDryLayoutCtx<'a> {
         index: usize,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         match (self.query)(
             index,
             DryLayoutChildRequest::Baseline(constraints, baseline),
@@ -435,8 +435,8 @@ impl<'a> BoxDryLayoutCtx<'a> {
         &mut self,
         index: usize,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         match (self.query)(index, DryLayoutChildRequest::Intrinsic(dimension, extent)) {
             DryLayoutChildResponse::Intrinsic(v) => v,
             DryLayoutChildResponse::DryLayout(_) | DryLayoutChildResponse::Baseline(_) => 0.0,
@@ -444,22 +444,22 @@ impl<'a> BoxDryLayoutCtx<'a> {
     }
 
     /// The child's maximum intrinsic width for the given height.
-    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 
     /// The child's minimum intrinsic width for the given height.
-    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
     }
 
     /// The child's maximum intrinsic height for the given width.
-    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
     }
 
     /// The child's minimum intrinsic height for the given width.
-    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
     }
 }
@@ -484,7 +484,7 @@ pub mod test_support {
     /// childless objects: any child query is a contract violation and
     /// panics with the probe's coordinates.
     pub fn leaf_intrinsics<R>(f: impl FnOnce(&mut BoxIntrinsicsCtx<'_>) -> R) -> R {
-        let mut deny_query = |index: usize, dim: IntrinsicDimension, extent: f32| -> f32 {
+        let mut deny_query = |index: usize, dim: IntrinsicDimension, extent: f64| -> f64 {
             panic!(
                 "leaf object queried child {index} ({dim:?} @ {extent}) — \
                  a childless compute_* must not consult children"
@@ -545,7 +545,7 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{Offset, geometry::px};
+    use flui_foundation::geometry::Offset;
 
     use super::*;
     use crate::parent_data::{BoxParentData, FlexFit, FlexParentData};
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn box_intrinsics_ctx_dispatches_and_reports_child_count() {
-        let mut query = |index: usize, dim: IntrinsicDimension, extent: f32| -> f32 {
+        let mut query = |index: usize, dim: IntrinsicDimension, extent: f64| -> f64 {
             assert_eq!(index, 2);
             assert_eq!(dim, IntrinsicDimension::MaxHeight);
             assert_eq!(extent, 42.0);
@@ -573,7 +573,7 @@ mod tests {
 
     #[test]
     fn box_intrinsics_ctx_named_convenience_methods_pass_the_correct_dimension() {
-        let mut query = |_index: usize, dim: IntrinsicDimension, extent: f32| -> f32 {
+        let mut query = |_index: usize, dim: IntrinsicDimension, extent: f64| -> f64 {
             // Encode which dimension fired into the return value so each
             // convenience wrapper's assertion can tell them apart.
             match dim {
@@ -595,7 +595,7 @@ mod tests {
     fn box_intrinsics_ctx_parent_data_accessors_downcast_and_report_out_of_range() {
         let flex_data = FlexParentData::flexible(3);
         let slots: [Option<&dyn ParentData>; 2] = [Some(&flex_data), None];
-        let mut query = |_i: usize, _d: IntrinsicDimension, _e: f32| -> f32 { 0.0 };
+        let mut query = |_i: usize, _d: IntrinsicDimension, _e: f64| -> f64 { 0.0 };
         let ctx = BoxIntrinsicsCtx::new(2, &slots, &mut query);
 
         assert!(ctx.child_parent_data(0).is_some());
@@ -630,7 +630,7 @@ mod tests {
             Some(&inflexible),
             Some(&wrong_type),
         ];
-        let mut query = |_i: usize, _d: IntrinsicDimension, _e: f32| -> f32 { 0.0 };
+        let mut query = |_i: usize, _d: IntrinsicDimension, _e: f64| -> f64 { 0.0 };
         let ctx = BoxIntrinsicsCtx::new(4, &slots, &mut query);
 
         assert_eq!(ctx.child_flex(0), 5);
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn box_dry_layout_ctx_dispatches_dry_layout_and_intrinsic_requests() {
-        let expected_size = Size::new(px(30.0), px(40.0));
+        let expected_size = Size::new(30.0, 40.0);
         let mut query = |_index: usize, request: DryLayoutChildRequest| -> DryLayoutChildResponse {
             match request {
                 DryLayoutChildRequest::DryLayout(_) => {
@@ -698,7 +698,7 @@ mod tests {
                 match request {
                     DryLayoutChildRequest::DryLayout(_) => DryLayoutChildResponse::Intrinsic(1.0),
                     DryLayoutChildRequest::Intrinsic(..) => {
-                        DryLayoutChildResponse::DryLayout(Size::new(px(1.0), px(1.0)))
+                        DryLayoutChildResponse::DryLayout(Size::new(1.0, 1.0))
                     }
                     DryLayoutChildRequest::Baseline(..) => DryLayoutChildResponse::Intrinsic(2.0),
                 }
@@ -747,7 +747,7 @@ mod tests {
 
     #[test]
     fn box_dry_baseline_ctx_dispatches_baseline_layout_and_intrinsic_requests() {
-        let expected_size = Size::new(px(11.0), px(22.0));
+        let expected_size = Size::new(11.0, 22.0);
         let mut query =
             |_index: usize, request: DryBaselineChildRequest| -> DryBaselineChildResponse {
                 match request {

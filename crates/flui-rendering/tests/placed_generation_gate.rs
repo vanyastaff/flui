@@ -23,6 +23,7 @@
 //! passes with the gate removed. (It did — that version was written first.)
 
 use flui_foundation::Variable;
+use flui_foundation::geometry::{Offset, Size};
 use flui_objects::RenderColoredBox;
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -31,7 +32,6 @@ use flui_rendering::{
     testing::{Probe, RenderTester, box_node},
     traits::RenderBox,
 };
-use flui_types::{Offset, Size, geometry::px};
 
 /// Lays out and positions children `0..laid_out`, stacked vertically, and
 /// leaves the rest untouched — the shape of any virtualising parent.
@@ -51,9 +51,9 @@ impl RenderBox for LaysOutFirstN {
         let count = ctx.child_count().min(self.laid_out);
         for i in 0..count {
             let size = ctx.layout_child(i, constraints);
-            ctx.position_child(i, Offset::new(px(0.0), px(i as f32 * size.height.get())));
+            ctx.position_child(i, Offset::new(0.0, i as f64 * size.height));
         }
-        constraints.constrain(Size::new(px(100.0), px(100.0)))
+        constraints.constrain(Size::new(100.0, 100.0))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {
@@ -81,8 +81,8 @@ fn a_child_dropped_from_a_later_layout_pass_stops_painting() {
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("kept"))
             .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("dropped")),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
-    .with_size(Size::new(px(200.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
+    .with_size(Size::new(200.0, 200.0))
     .run_frame();
 
     let root = run.root();
@@ -131,7 +131,7 @@ fn a_child_dropped_from_a_later_layout_pass_stops_being_hit() {
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("kept"))
             .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("dropped")),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
     .run_layout();
 
     let root = run.root();
@@ -185,8 +185,8 @@ fn a_skipped_boundary_repaints_rather_than_grafting_a_stale_capture() {
                     .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("dropped")),
             ),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
-    .with_size(Size::new(px(200.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
+    .with_size(Size::new(200.0, 200.0))
     .run_frame();
 
     let root = run.root();
@@ -245,7 +245,7 @@ fn a_stamp_from_one_parent_is_not_accepted_by_another() {
         box_node(LaysOutFirstN { laid_out: 1 })
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
     .run_layout();
 
     let parent = run.root();
@@ -298,8 +298,8 @@ fn evicting_a_skipped_capture_also_evicts_the_ones_embedding_it() {
                 ),
             ),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
-    .with_size(Size::new(px(200.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
+    .with_size(Size::new(200.0, 200.0))
     .run_frame();
 
     let root = run.root();
@@ -368,8 +368,8 @@ fn a_layer_update_on_a_skipped_boundary_is_not_lost() {
                 ),
             ),
     )
-    .with_constraints(BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0)))
-    .with_size(Size::new(px(200.0), px(200.0)))
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
+    .with_size(Size::new(200.0, 200.0))
     .run_frame();
 
     let root = run.root();
@@ -461,7 +461,7 @@ fn the_residue_scan_evicts_after_a_failed_pass_cleared_the_flag() {
             &mut self,
             ctx: &mut BoxLayoutContext<'_, flui_foundation::Leaf, BoxParentData>,
         ) -> Size {
-            ctx.constrain(Size::new(px(10.0), px(10.0)))
+            ctx.constrain(Size::new(10.0, 10.0))
         }
         fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
             self.0.fetch_add(1, Ordering::Relaxed);
@@ -484,7 +484,7 @@ fn the_residue_scan_evicts_after_a_failed_pass_cleared_the_flag() {
             &mut self,
             ctx: &mut BoxLayoutContext<'_, flui_foundation::Leaf, BoxParentData>,
         ) -> Size {
-            ctx.constrain(Size::new(px(10.0), px(10.0)))
+            ctx.constrain(Size::new(10.0, 10.0))
         }
         fn paint(&self, _ctx: &mut flui_rendering::context::PaintCx<'_, flui_foundation::Leaf>) {
             assert!(
@@ -521,7 +521,7 @@ fn the_residue_scan_evicts_after_a_failed_pass_cleared_the_flag() {
             .child(box_node(PoisonOnDemand(Arc::clone(&armed)))),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
     let gate = registry.get("gate").expect("gate is labelled");
     let target = registry.get("target").expect("target is labelled");
 

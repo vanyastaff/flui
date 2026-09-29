@@ -25,7 +25,7 @@
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use flui_types::{Offset, geometry::Pixels};
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 use ui_events::pointer::PointerButton;
 
@@ -94,9 +94,9 @@ pub type TapCallback = Rc<dyn Fn(TapDetails)>;
 #[derive(Debug, Clone, PartialEq)]
 pub struct TapDetails {
     /// Global position where tap occurred
-    pub global_position: Offset<Pixels>,
+    pub global_position: Offset<f64>,
     /// Local position (relative to widget)
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Pointer device kind
     pub kind: PointerType,
 }
@@ -312,7 +312,7 @@ impl TapGestureRecognizer {
     }
 
     /// Check if distance exceeds touch slop from settings
-    fn exceeds_touch_slop(&self, distance: Pixels) -> bool {
+    fn exceeds_touch_slop(&self, distance: f64) -> bool {
         self.settings.lock().exceeds_touch_slop(distance)
     }
 
@@ -442,8 +442,8 @@ impl TapGestureRecognizer {
     /// mismatch), matching Flutter's `_route` rejection path.
     fn handle_tap_down(
         &self,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
         kind: PointerType,
         button: TapButton,
     ) {
@@ -520,8 +520,8 @@ impl TapGestureRecognizer {
     /// initiated the down.
     fn handle_tap_up(
         &self,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
         kind: PointerType,
         button: TapButton,
     ) {
@@ -575,8 +575,8 @@ impl TapGestureRecognizer {
     /// Handle tap cancel event.
     fn handle_tap_cancel(
         &self,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
         kind: PointerType,
     ) {
         let current_state = *self.gesture_state.lock();
@@ -608,8 +608,8 @@ impl TapGestureRecognizer {
     /// Handle tap move event (pointer moved within slop tolerance)
     fn handle_tap_move(
         &self,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
         kind: PointerType,
     ) {
         let current_state = *self.gesture_state.lock();
@@ -630,7 +630,7 @@ impl TapGestureRecognizer {
     }
 
     /// Check if pointer moved too far (beyond slop tolerance)
-    fn check_slop(&self, current_position: Offset<Pixels>) -> bool {
+    fn check_slop(&self, current_position: Offset<f64>) -> bool {
         if let Some(initial_pos) = self.state.initial_position() {
             let delta = current_position - initial_pos;
             let distance = delta.distance();
@@ -669,8 +669,8 @@ impl GestureRecognizer for TapGestureRecognizer {
     fn add_pointer(
         self: &Arc<Self>,
         pointer: PointerId,
-        position: Offset<Pixels>,
-        global_position: Offset<Pixels>,
+        position: Offset<f64>,
+        global_position: Offset<f64>,
     ) {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
@@ -743,13 +743,13 @@ impl GestureRecognizer for TapGestureRecognizer {
         match event {
             PointerEvent::Down(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
+                let position = Offset::new(pos.x, pos.y);
                 let button = Self::down_button(event);
                 self.handle_tap_down(position, global_position, data.pointer.pointer_type, button);
             }
             PointerEvent::Move(data) => {
                 let pos = data.current.position;
-                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
+                let position = Offset::new(pos.x, pos.y);
                 let pointer_type = data.pointer.pointer_type;
                 // Check if moved too far (slop detection)
                 if self.check_slop(position) {
@@ -761,7 +761,7 @@ impl GestureRecognizer for TapGestureRecognizer {
             }
             PointerEvent::Up(data) => {
                 let pos = data.state.position;
-                let position = Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32));
+                let position = Offset::new(pos.x, pos.y);
                 let button = Self::up_button(event);
                 self.handle_tap_up(position, global_position, data.pointer.pointer_type, button);
             }
@@ -852,7 +852,7 @@ impl crate::recognizers::OneSequenceGestureRecognizer for TapGestureRecognizer {
 }
 
 impl crate::recognizers::PrimaryPointerGestureRecognizer for TapGestureRecognizer {
-    fn initial_position(&self) -> Option<Offset<Pixels>> {
+    fn initial_position(&self) -> Option<Offset<f64>> {
         self.state.initial_position()
     }
 
@@ -917,17 +917,17 @@ mod tests {
     use std::cell::Cell;
     use ui_events::pointer::PointerButton;
 
-    fn pos(x: f32, y: f32) -> Offset<Pixels> {
-        Offset::new(Pixels(x), Pixels(y))
+    fn pos(x: f64, y: f64) -> Offset<f64> {
+        Offset::new(x, y)
     }
 
-    fn primary_down(p: Offset<Pixels>) -> PointerEvent {
+    fn primary_down(p: Offset<f64>) -> PointerEvent {
         crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Primary)
     }
-    fn secondary_down(p: Offset<Pixels>) -> PointerEvent {
+    fn secondary_down(p: Offset<f64>) -> PointerEvent {
         crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Secondary)
     }
-    fn tertiary_down(p: Offset<Pixels>) -> PointerEvent {
+    fn tertiary_down(p: Offset<f64>) -> PointerEvent {
         crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Auxiliary)
     }
 
@@ -950,13 +950,13 @@ mod tests {
         assert_eq!(recognizer.primary_pointer(), None);
         assert!(arena.is_empty());
     }
-    fn primary_up(p: Offset<Pixels>) -> PointerEvent {
+    fn primary_up(p: Offset<f64>) -> PointerEvent {
         crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Primary)
     }
-    fn secondary_up(p: Offset<Pixels>) -> PointerEvent {
+    fn secondary_up(p: Offset<f64>) -> PointerEvent {
         crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Secondary)
     }
-    fn tertiary_up(p: Offset<Pixels>) -> PointerEvent {
+    fn tertiary_up(p: Offset<f64>) -> PointerEvent {
         crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Auxiliary)
     }
 
@@ -1143,8 +1143,8 @@ mod tests {
         let recognizer = TapGestureRecognizer::new(arena)
             .with_on_tap_cancel(move |details| sink.lock().push(details));
 
-        let offset = Offset::new(Pixels(150.0), Pixels(150.0));
-        let down_local = Offset::new(Pixels(10.0), Pixels(10.0));
+        let offset = Offset::new(150.0, 150.0);
+        let down_local = Offset::new(10.0, 10.0);
         let down_global = down_local + offset;
         let pointer = PointerId::PRIMARY;
         recognizer.add_pointer(pointer, down_local, down_global);
@@ -1280,10 +1280,10 @@ mod tests {
         assert!(!*primary_cancelled.lock());
     }
 
-    fn down_for(id: PointerId, p: Offset<Pixels>) -> PointerEvent {
+    fn down_for(id: PointerId, p: Offset<f64>) -> PointerEvent {
         crate::events::make_down_event_for_id(id, p, PointerType::Touch)
     }
-    fn up_for(id: PointerId, p: Offset<Pixels>) -> PointerEvent {
+    fn up_for(id: PointerId, p: Offset<f64>) -> PointerEvent {
         crate::events::make_up_event_for_id(id, p, PointerType::Touch)
     }
 

@@ -92,9 +92,10 @@ fn main() {
 //!
 //! | Module | Crate | Feature | Layer |
 //! |---|---|---|---|
-//! | [`types`] | `flui-types` | — | foundation types + unit system |
-//! | [`geometry`] | `flui-geometry` | — | geometry primitives |
+//! | [`geometry`] | `flui-foundation` | — | geometry values (`f64` logical pixels) |
 //! | [`foundation`] | `flui-foundation` | — | keys, listenables, diagnostics |
+//! | [`painting`] | `flui-painting` | — | custom painting; paint, style and text values |
+//! | [`platform`] | `flui-platform-api` | — | platform contracts and values (brightness, locale, IME) |
 //! | [`view`] | `flui-view` | — | View/Element tree |
 //! | [`widgets`] | `flui-widgets` | — | user-facing widget catalog |
 //! | [`animation`] | `flui-animation` | — | curves, tweens, tickers |
@@ -130,7 +131,7 @@ pub use flui_cupertino as cupertino;
 pub use flui_foundation as foundation;
 /// Structured diagnostic properties for application-defined types.
 pub use flui_foundation::Diagnosticable;
-pub use flui_geometry as geometry;
+pub use flui_foundation::geometry;
 /// Development hot-reload support. Requires the `hot-reload` feature.
 #[cfg(feature = "hot-reload")]
 pub use flui_hot_reload as hot_reload;
@@ -140,7 +141,7 @@ pub use flui_macros::Diagnosticable;
 /// feature, which is on by default.
 #[cfg(feature = "material")]
 pub use flui_material as material;
-pub use flui_types as types;
+pub use flui_platform_api as platform;
 pub use flui_view as view;
 pub use flui_widgets as widgets;
 

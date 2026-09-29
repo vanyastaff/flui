@@ -8,7 +8,7 @@
 //! pattern is wrong for a widget whose render object must persist across
 //! ticks. `build()` instead returns a private [`RenderView`] wrapper around
 //! the persistent [`RenderAnimatedOpacity`],
-//! injected with a [`ProxyAnimation<f32>`] the state owns; a tick updates
+//! injected with a [`ProxyAnimation<f64>`] the state owns; a tick updates
 //! alpha and repaints without ever re-entering the widget tree, and a
 //! retarget (`did_update_view`) swaps the proxy's parent instead of
 //! replacing the render object.
@@ -42,7 +42,7 @@ use crate::animated::vsync_scope::VsyncScope;
 /// scheduler ticker on a real display.
 #[derive(Clone, StatefulView)]
 pub struct AnimatedOpacity {
-    opacity: f32,
+    opacity: f64,
     duration: Duration,
     curve: ArcCurve,
     child: BoxedView,
@@ -51,7 +51,7 @@ pub struct AnimatedOpacity {
 impl AnimatedOpacity {
     /// Animate `child` toward `opacity` (`0.0` transparent … `1.0` opaque),
     /// with the 200 ms default duration and an ease-in-out curve.
-    pub fn new(opacity: f32, child: impl IntoView) -> Self {
+    pub fn new(opacity: f64, child: impl IntoView) -> Self {
         Self {
             opacity,
             duration: DEFAULT_DURATION,
@@ -90,21 +90,21 @@ impl std::fmt::Debug for AnimatedOpacity {
 /// [`RenderAnimatedOpacity`] actually observes. Rebuilt from `animation`'s
 /// current tween/curve on every call (cheap: `Tween`/`CurvedAnimation` clones
 /// are `Arc`-backed); the caller wraps the result in the state's
-/// [`ProxyAnimation<f32>`] at construction, then swaps it in as the proxy's
+/// [`ProxyAnimation<f64>`] at construction, then swaps it in as the proxy's
 /// new parent on every retarget (`ProxyAnimation::set_parent`) — the render
 /// object never sees the swap, only the proxy's re-fired notification. See
 /// `RenderAnimatedOpacity`'s module docs' *Retargeting* section.
-fn compose_animation(animation: &ImplicitAnimation<f32>) -> Arc<dyn Animation<f32>> {
-    let curved: Arc<dyn Animation<f32>> = Arc::new(animation.curved());
+fn compose_animation(animation: &ImplicitAnimation<f64>) -> Arc<dyn Animation<f64>> {
+    let curved: Arc<dyn Animation<f64>> = Arc::new(animation.curved());
     Arc::new(animation.tween().animate(curved))
 }
 
 /// State for [`AnimatedOpacity`] — owns the persistent opacity animation and
-/// the [`ProxyAnimation<f32>`] injected into the persistent render object.
+/// the [`ProxyAnimation<f64>`] injected into the persistent render object.
 #[derive(Debug)]
 pub struct AnimatedOpacityState {
-    animation: ImplicitAnimation<f32>,
-    proxy: ProxyAnimation<f32>,
+    animation: ImplicitAnimation<f64>,
+    proxy: ProxyAnimation<f64>,
     child: BoxedView,
 }
 
@@ -166,7 +166,7 @@ impl ViewState<AnimatedOpacity> for AnimatedOpacityState {
 ///
 /// Mirrors `AnimatedSizeRenderView`'s shape
 /// (`crates/flui-widgets/src/animated/animated_size.rs`):
-/// `create_render_object` injects the state's [`ProxyAnimation<f32>`] once.
+/// `create_render_object` injects the state's [`ProxyAnimation<f64>`] once.
 /// Unlike that sibling, `update_render_object` has no targeted setters to
 /// call — the proxy instance is the SAME `Arc`-backed object across every
 /// rebuild, and retargeting flows entirely through `proxy.set_parent` on the
@@ -174,7 +174,7 @@ impl ViewState<AnimatedOpacity> for AnimatedOpacityState {
 /// into the render object from here.
 #[derive(Clone)]
 struct AnimatedOpacityRenderView {
-    proxy: ProxyAnimation<f32>,
+    proxy: ProxyAnimation<f64>,
     child: BoxedView,
 }
 
@@ -219,7 +219,7 @@ mod tests {
     use super::*;
     use crate::SizedBox;
 
-    fn probe(opacity: f32) -> AnimatedOpacity {
+    fn probe(opacity: f64) -> AnimatedOpacity {
         AnimatedOpacity::new(opacity, SizedBox::shrink())
     }
 

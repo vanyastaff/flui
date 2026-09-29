@@ -159,7 +159,7 @@ mod tests {
 
     fn offset() -> flui_layer::Layer {
         flui_layer::Layer::Offset(flui_layer::OffsetLayer::new(
-            flui_types::geometry::Offset::ZERO,
+            flui_foundation::geometry::Offset::ZERO,
         ))
     }
 

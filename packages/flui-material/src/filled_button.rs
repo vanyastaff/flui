@@ -13,8 +13,7 @@
 //! default fixedSize"/"No default side" comments), so neither field is
 //! populated here.
 
-use flui_sdk::types::geometry::px;
-use flui_sdk::types::{EdgeInsets, Size};
+use flui_sdk::geometry::{EdgeInsets, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 
@@ -192,10 +191,7 @@ fn default_style(theme: &ThemeData, variant: FilledButtonVariant) -> ButtonStyle
             Some(0.0)
         })),
         padding: Some(WidgetStateProperty::all(Some(scaled_padding_1x()))),
-        minimum_size: Some(WidgetStateProperty::all(Some(Size::new(
-            px(64.0),
-            px(40.0),
-        )))),
+        minimum_size: Some(WidgetStateProperty::all(Some(Size::new(64.0, 40.0)))),
         fixed_size: None,
         maximum_size: Some(WidgetStateProperty::all(Some(Size::INFINITY))),
         side: None,
@@ -208,7 +204,7 @@ fn default_style(theme: &ThemeData, variant: FilledButtonVariant) -> ButtonStyle
 /// `_scaledPadding` shape with `padding1x = 24.0`). See that module's docs
 /// for the `MediaQuery` text-scaler deferral this narrows to the 1x tier.
 fn scaled_padding_1x() -> EdgeInsets {
-    EdgeInsets::symmetric(px(0.0), px(24.0))
+    EdgeInsets::symmetric(0.0, 24.0)
 }
 
 #[cfg(test)]

@@ -129,8 +129,8 @@ impl UiRealm {
     pub fn attach_root_widget_with_size<V>(
         &self,
         view: &V,
-        width: f32,
-        height: f32,
+        width: f64,
+        height: f64,
     ) -> Result<(), flui_view::AttachError>
     where
         V: flui_view::View + Clone + 'static,
@@ -141,8 +141,8 @@ impl UiRealm {
     fn attach_root_widget_with_size_entered<V>(
         &self,
         view: &V,
-        width: f32,
-        height: f32,
+        width: f64,
+        height: f64,
     ) -> Result<(), flui_view::AttachError>
     where
         V: flui_view::View + Clone + 'static,

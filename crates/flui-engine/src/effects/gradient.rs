@@ -1,7 +1,7 @@
 //! Linear / radial / sweep gradient descriptors and their shared color stop.
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::styling::Color;
+use flui_painting::styling::Color;
 use glam::Vec2;
 
 // =============================================================================

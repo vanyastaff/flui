@@ -6,9 +6,10 @@ use std::time::Duration;
 
 use crate::common::{lay_out, lay_out_animated, loose, offset, size};
 use flui_animation::Vsync;
-use flui_geometry::{EdgeInsets, Matrix4};
-use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color};
+use flui_foundation::geometry::{EdgeInsets, Matrix4};
+use flui_painting::Alignment;
+use flui_painting::styling::BoxDecoration;
+use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
 use flui_widgets::{
@@ -21,7 +22,7 @@ fn container_padding_shrink_wraps_child() {
     // Padding(10) around a 50×50 child, no forced size → 70×70.
     let laid = lay_out(
         Container::new()
-            .padding(EdgeInsets::all(flui_geometry::px(10.0)))
+            .padding(EdgeInsets::all(10.0))
             .child(SizedBox::square(50.0)),
         loose(1000.0),
     );
@@ -180,23 +181,23 @@ fn container_optional_padding_margin_decoration_transform_preserve_unkeyed_child
 
     laid.pump_widget(
         Container::new()
-            .padding(EdgeInsets::all(flui_geometry::px(4.0)))
+            .padding(EdgeInsets::all(4.0))
             .child(child.clone()),
     );
     assert_child_state_preserved(&creates, &disposes, "padding");
 
     laid.pump_widget(
         Container::new()
-            .padding(EdgeInsets::all(flui_geometry::px(4.0)))
-            .margin(EdgeInsets::all(flui_geometry::px(2.0)))
+            .padding(EdgeInsets::all(4.0))
+            .margin(EdgeInsets::all(2.0))
             .child(child.clone()),
     );
     assert_child_state_preserved(&creates, &disposes, "margin");
 
     laid.pump_widget(
         Container::new()
-            .padding(EdgeInsets::all(flui_geometry::px(4.0)))
-            .margin(EdgeInsets::all(flui_geometry::px(2.0)))
+            .padding(EdgeInsets::all(4.0))
+            .margin(EdgeInsets::all(2.0))
             .decoration(BoxDecoration::with_color(Color::rgb(9, 8, 7)))
             .child(child.clone()),
     );
@@ -204,8 +205,8 @@ fn container_optional_padding_margin_decoration_transform_preserve_unkeyed_child
 
     laid.pump_widget(
         Container::new()
-            .padding(EdgeInsets::all(flui_geometry::px(4.0)))
-            .margin(EdgeInsets::all(flui_geometry::px(2.0)))
+            .padding(EdgeInsets::all(4.0))
+            .margin(EdgeInsets::all(2.0))
             .decoration(BoxDecoration::with_color(Color::rgb(9, 8, 7)))
             .transform(Matrix4::identity())
             .child(child.clone()),
@@ -304,7 +305,7 @@ fn container_tight_width_does_not_query_layout_builder_intrinsics() {
             loose(200.0),
         )
     });
-    assert_eq!(laid.size(laid.root()).width.get(), 100.0);
+    assert_eq!(laid.size(laid.root()).width, 100.0);
     assert_eq!(
         log.count_containing(NEEDLE),
         0,
@@ -328,7 +329,7 @@ fn container_tight_height_does_not_query_layout_builder_intrinsics() {
             loose(200.0),
         )
     });
-    assert_eq!(laid.size(laid.root()).height.get(), 50.0);
+    assert_eq!(laid.size(laid.root()).height, 50.0);
     assert_eq!(
         log.count_containing(NEEDLE),
         0,

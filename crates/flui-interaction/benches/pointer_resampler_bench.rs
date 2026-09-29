@@ -31,10 +31,10 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use flui_foundation::geometry::Offset;
 use flui_interaction::events::{PointerType, make_move_event};
 use flui_interaction::ids::PointerId;
 use flui_interaction::processing::PointerEventResampler;
-use flui_types::geometry::{Offset, Pixels};
 
 /// Build `count` move events. Position is varied by 1 px per event so
 /// the resampler's dedup logic does not collapse the queue to a
@@ -47,12 +47,7 @@ fn make_move_events(
     _duration_ms: u64,
 ) -> Vec<flui_interaction::events::PointerEvent> {
     (0..count)
-        .map(|i| {
-            make_move_event(
-                Offset::new(Pixels(100.0 + i as f32), Pixels(100.0)),
-                PointerType::Touch,
-            )
-        })
+        .map(|i| make_move_event(Offset::new(100.0 + i as f64, 100.0), PointerType::Touch))
         .collect()
 }
 
@@ -133,7 +128,7 @@ fn bench_push_at_capacity(c: &mut Criterion) {
         resampler.add_event(event);
     }
     let event = black_box(make_move_event(
-        Offset::new(Pixels(200.0), Pixels(100.0)),
+        Offset::new(200.0, 100.0),
         PointerType::Touch,
     ));
     c.bench_function(

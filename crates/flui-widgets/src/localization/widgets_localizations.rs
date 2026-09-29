@@ -7,7 +7,7 @@
 use std::any::Any;
 use std::fmt;
 
-use flui_types::typography::TextDirection;
+use flui_painting::typography::TextDirection;
 
 /// Interface for localized resource values consumed by the lowest levels of
 /// the widget catalog (reorderable-list semantics labels, text-editing menu
@@ -15,7 +15,7 @@ use flui_types::typography::TextDirection;
 ///
 /// A `WidgetsLocalizations` implementation is what a [`LocalizationsDelegate`]
 /// (see the sibling `localizations` module) produces for a given
-/// [`Locale`](flui_types::platform::Locale); [`Localizations::of`] retrieves
+/// [`Locale`](flui_platform_api::Locale); [`Localizations::of`] retrieves
 /// it by (trait-object) type from the ambient scope.
 ///
 /// [`LocalizationsDelegate`]: crate::LocalizationsDelegate

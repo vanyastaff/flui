@@ -5,25 +5,24 @@
 //! All assertions are sans-IO over the recorded display list — the
 //! same contract the fragment paint model relies on.
 
+use flui_foundation::geometry::{Offset, Point, RRect, Radius, Rect};
+use flui_painting::BoxShape;
 use flui_painting::{
     Canvas, DecorationPaintOptions, DrawOp, box_decoration_hit_test, paint_box_decoration,
 };
-use flui_types::{
-    Offset, Pixels, Point,
-    geometry::{RRect, Radius, Rect, px},
-    layout::BoxShape,
-    painting::{Image, PaintStyle, PathCommand, Shader},
+use flui_painting::{
+    paint::{Image, PaintStyle, Shader},
     styling::{
         Border, BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, BoxShadow,
         Color, DecorationImage, Gradient, LinearGradient,
     },
 };
 
-fn rect100() -> Rect<Pixels> {
-    Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0))
+fn rect100() -> Rect<f64> {
+    Rect::from_ltrb(0.0, 0.0, 100.0, 50.0)
 }
 
-fn commands(decoration: &BoxDecoration<Pixels>) -> Vec<DrawOp> {
+fn commands(decoration: &BoxDecoration<f64>) -> Vec<DrawOp> {
     commands_in(rect100(), decoration)
 }
 
@@ -31,7 +30,24 @@ fn commands(decoration: &BoxDecoration<Pixels>) -> Vec<DrawOp> {
 /// fixed 100x50 `rect100()` — needed for the `BoxShape::Circle` cases,
 /// which care about the rect's aspect ratio (the inscribed circle) and
 /// about non-degenerate vs. degenerate sizes.
-fn commands_in(rect: Rect<Pixels>, decoration: &BoxDecoration<Pixels>) -> Vec<DrawOp> {
+/// `path` is the oval inscribed in `expected`: the same bounds (to the curve
+/// construction tolerance), its centre inside, the box's corner outside.
+fn assert_oval(path: &flui_painting::paint::Path, expected: Rect) {
+    let bounds = path.compute_bounds();
+    for (actual, edge) in [
+        (bounds.left(), expected.left()),
+        (bounds.top(), expected.top()),
+        (bounds.right(), expected.right()),
+        (bounds.bottom(), expected.bottom()),
+    ] {
+        assert!((actual - edge).abs() < 1e-2, "{bounds:?} vs {expected:?}");
+    }
+    let centre = expected.center();
+    assert!(path.contains(Point::new(centre.x, centre.y)));
+    assert!(!path.contains(Point::new(expected.left() + 1.0, expected.top() + 1.0)));
+}
+
+fn commands_in(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Vec<DrawOp> {
     let mut canvas = Canvas::new();
     paint_box_decoration(
         &mut canvas,
@@ -51,8 +67,8 @@ fn color_only_paints_a_rect() {
 
 #[test]
 fn radius_switches_to_rounded_primitives() {
-    let decoration = BoxDecoration::with_color(Color::RED)
-        .set_border_radius(Some(BorderRadius::circular(px(8.0))));
+    let decoration =
+        BoxDecoration::with_color(Color::RED).set_border_radius(Some(BorderRadius::circular(8.0)));
     let cmds = commands(&decoration);
     assert_eq!(cmds.len(), 1);
     assert!(matches!(cmds[0], DrawOp::RRect { .. }));
@@ -63,14 +79,14 @@ fn flutter_paint_order_shadow_background_border() {
     let decoration = BoxDecoration::with_color(Color::WHITE)
         .set_border(Some(Border::all(BorderSide::new(
             Color::BLACK,
-            px(2.0),
+            2.0,
             BorderStyle::Solid,
         ))))
         .set_box_shadow(Some(vec![BoxShadow {
             color: Color::BLACK,
-            offset: Offset::new(px(0.0), px(2.0)),
-            blur_radius: px(4.0),
-            spread_radius: px(1.0),
+            offset: Offset::new(0.0, 2.0),
+            blur_radius: 4.0,
+            spread_radius: 1.0,
             inset: false,
         }]));
     let cmds = commands(&decoration);
@@ -89,11 +105,11 @@ fn flutter_paint_order_shadow_background_border() {
 #[test]
 fn gradient_wins_over_color_and_resolves_alignment() {
     let gradient = Gradient::Linear(LinearGradient::new(
-        flui_types::Alignment::CENTER_LEFT,
-        flui_types::Alignment::CENTER_RIGHT,
+        flui_painting::Alignment::CENTER_LEFT,
+        flui_painting::Alignment::CENTER_RIGHT,
         vec![Color::RED, Color::BLUE],
         None,
-        flui_types::painting::TileMode::Clamp,
+        flui_painting::paint::TileMode::Clamp,
     ));
     let decoration = BoxDecoration::with_color(Color::WHITE).set_gradient(Some(gradient.clone()));
     let cmds = commands(&decoration);
@@ -116,8 +132,8 @@ fn gradient_wins_over_color_and_resolves_alignment() {
     let Some(Shader::LinearGradient { from, to, .. }) = &paint.shader else {
         panic!("a linear gradient must record a linear shader; got {paint:?}");
     };
-    assert_eq!(*from, Offset::new(px(0.0), px(25.0)));
-    assert_eq!(*to, Offset::new(px(100.0), px(25.0)));
+    assert_eq!(*from, Offset::new(0.0, 25.0));
+    assert_eq!(*to, Offset::new(100.0, 25.0));
 }
 
 /// A gradient on a rounded decoration is the same `RRect` op a flat colour
@@ -127,20 +143,20 @@ fn gradient_wins_over_color_and_resolves_alignment() {
 #[test]
 fn box_decoration_gradient_records_a_shader_paint_rrect() {
     let gradient = Gradient::Linear(LinearGradient::new(
-        flui_types::Alignment::CENTER_LEFT,
-        flui_types::Alignment::CENTER_RIGHT,
+        flui_painting::Alignment::CENTER_LEFT,
+        flui_painting::Alignment::CENTER_RIGHT,
         vec![Color::RED, Color::BLUE],
         None,
-        flui_types::painting::TileMode::Clamp,
+        flui_painting::paint::TileMode::Clamp,
     ));
     let corners = [
-        Radius::circular(px(2.0)),
-        Radius::circular(px(4.0)),
-        Radius::circular(px(6.0)),
-        Radius::circular(px(8.0)),
+        Radius::circular(2.0),
+        Radius::circular(4.0),
+        Radius::circular(6.0),
+        Radius::circular(8.0),
     ];
     let radius = BorderRadius::only(corners[0], corners[1], corners[2], corners[3]);
-    let decoration = BoxDecoration::<Pixels>::new()
+    let decoration = BoxDecoration::<f64>::new()
         .set_gradient(Some(gradient))
         .set_border_radius(Some(radius));
     let cmds = commands(&decoration);
@@ -165,10 +181,10 @@ fn box_decoration_gradient_records_a_shader_paint_rrect() {
 
 #[test]
 fn non_uniform_border_paints_per_side_rects() {
-    let decoration = BoxDecoration::<Pixels>::new().set_border(Some(Border {
-        top: Some(BorderSide::new(Color::RED, px(2.0), BorderStyle::Solid)),
+    let decoration = BoxDecoration::<f64>::new().set_border(Some(Border {
+        top: Some(BorderSide::new(Color::RED, 2.0, BorderStyle::Solid)),
         right: None,
-        bottom: Some(BorderSide::new(Color::BLUE, px(4.0), BorderStyle::Solid)),
+        bottom: Some(BorderSide::new(Color::BLUE, 4.0, BorderStyle::Solid)),
         left: None,
     }));
     let cmds = commands(&decoration);
@@ -178,34 +194,34 @@ fn non_uniform_border_paints_per_side_rects() {
 
 #[test]
 fn hit_test_respects_rounded_corners() {
-    let decoration = BoxDecoration::with_color(Color::RED)
-        .set_border_radius(Some(BorderRadius::circular(px(20.0))));
+    let decoration =
+        BoxDecoration::with_color(Color::RED).set_border_radius(Some(BorderRadius::circular(20.0)));
     let rect = rect100();
 
     // Center: inside.
     assert!(box_decoration_hit_test(
         rect,
         &decoration,
-        Offset::new(px(50.0), px(25.0))
+        Offset::new(50.0, 25.0)
     ));
     // The exact corner of the BOUNDING rect lies outside the rounded
     // shape (radius 20 cuts it off).
     assert!(!box_decoration_hit_test(
         rect,
         &decoration,
-        Offset::new(px(1.0), px(1.0))
+        Offset::new(1.0, 1.0)
     ));
     // Just inside the corner arc.
     assert!(box_decoration_hit_test(
         rect,
         &decoration,
-        Offset::new(px(20.0), px(20.0))
+        Offset::new(20.0, 20.0)
     ));
     // Outside the rect entirely.
     assert!(!box_decoration_hit_test(
         rect,
         &decoration,
-        Offset::new(px(150.0), px(25.0))
+        Offset::new(150.0, 25.0)
     ));
 }
 
@@ -215,8 +231,8 @@ fn hit_test_respects_rounded_corners() {
 
 /// A square rect (100x100) so the inscribed circle has a clean radius
 /// (50) and center (50, 50).
-fn square_rect() -> Rect<Pixels> {
-    Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0))
+fn square_rect() -> Rect<f64> {
+    Rect::from_ltrb(0.0, 0.0, 100.0, 100.0)
 }
 
 #[test]
@@ -228,7 +244,7 @@ fn circle_hit_test_center_inside_boundary_and_outside() {
     assert!(box_decoration_hit_test(
         rect,
         &decoration,
-        Offset::new(px(50.0), px(50.0))
+        Offset::new(50.0, 50.0)
     ));
 
     // center + (30, 40): a 30-40-50 Pythagorean triple, so this point sits
@@ -237,7 +253,7 @@ fn circle_hit_test_center_inside_boundary_and_outside() {
     assert!(box_decoration_hit_test(
         rect,
         &decoration,
-        Offset::new(px(80.0), px(90.0))
+        Offset::new(80.0, 90.0)
     ));
 
     // center + (29, 40): distance = sqrt(29^2 + 40^2) ~= 49.4 < 50 -- just
@@ -245,7 +261,7 @@ fn circle_hit_test_center_inside_boundary_and_outside() {
     assert!(box_decoration_hit_test(
         rect,
         &decoration,
-        Offset::new(px(79.0), px(90.0))
+        Offset::new(79.0, 90.0)
     ));
 
     // center + (31, 40): distance = sqrt(31^2 + 40^2) ~= 50.6 > 50 -- just
@@ -255,7 +271,7 @@ fn circle_hit_test_center_inside_boundary_and_outside() {
     assert!(!box_decoration_hit_test(
         rect,
         &decoration,
-        Offset::new(px(81.0), px(90.0))
+        Offset::new(81.0, 90.0)
     ));
 }
 
@@ -263,15 +279,15 @@ fn circle_hit_test_center_inside_boundary_and_outside() {
 fn circle_inscribes_in_the_shorter_side_and_centers() {
     // 200x100: shortest side is the height (100), so r=50, centered at
     // (100, 50) -- NOT an ellipse fit to both dimensions.
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(200.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 200.0, 100.0);
     let decoration = BoxDecoration::with_color(Color::RED).set_shape(BoxShape::Circle);
     let cmds = commands_in(rect, &decoration);
 
     assert_eq!(cmds.len(), 1);
     match &cmds[0] {
         DrawOp::Circle { center, radius, .. } => {
-            assert_eq!(*center, Point::new(px(100.0), px(50.0)));
-            assert_eq!(*radius, px(50.0));
+            assert_eq!(*center, Point::new(100.0, 50.0));
+            assert_eq!(*radius, 50.0);
         }
         other => panic!("expected DrawCircle, got {other:?}"),
     }
@@ -293,11 +309,11 @@ fn circle_color_paints_a_circle_command_not_rect_or_rrect() {
 #[test]
 fn circle_gradient_paints_a_circle_carrying_the_shader_and_stops() {
     let gradient = Gradient::Linear(LinearGradient::new(
-        flui_types::Alignment::CENTER_LEFT,
-        flui_types::Alignment::CENTER_RIGHT,
+        flui_painting::Alignment::CENTER_LEFT,
+        flui_painting::Alignment::CENTER_RIGHT,
         vec![Color::RED, Color::BLUE],
         Some(vec![0.0, 1.0]),
-        flui_types::painting::TileMode::Clamp,
+        flui_painting::paint::TileMode::Clamp,
     ));
     // `color` is set too, to prove the gradient (not the color) wins, same
     // as the rect-path `gradient_wins_over_color_and_resolves_alignment`.
@@ -317,8 +333,8 @@ fn circle_gradient_paints_a_circle_carrying_the_shader_and_stops() {
             // rect100() is 100x50: shortest side 50, so r=25 centered at
             // (50, 25) -- catches a shape regression the shader match below
             // cannot.
-            assert_eq!(*center, Point::new(px(50.0), px(25.0)));
-            assert_eq!(*radius, px(25.0));
+            assert_eq!(*center, Point::new(50.0, 25.0));
+            assert_eq!(*radius, 25.0);
             // The wgpu shader dispatch (`dispatch_shader_rect`) is only
             // called when `paint.style == Fill`; a stroke paint carrying
             // the same shader would silently never reach it, so this must
@@ -349,11 +365,11 @@ fn circle_gradient_without_stops_falls_back_to_transparent_like_the_rect_path() 
     // same path, so their fallback colour must agree: `Color::TRANSPARENT`
     // paints nothing, where `Color::BLACK` would paint a solid black disc.
     let gradient = Gradient::Linear(LinearGradient::new(
-        flui_types::Alignment::CENTER_LEFT,
-        flui_types::Alignment::CENTER_RIGHT,
+        flui_painting::Alignment::CENTER_LEFT,
+        flui_painting::Alignment::CENTER_RIGHT,
         vec![],
         None,
-        flui_types::painting::TileMode::Clamp,
+        flui_painting::paint::TileMode::Clamp,
     ));
     let decoration = BoxDecoration::with_color(Color::RED) // must not show through either
         .set_gradient(Some(gradient))
@@ -376,7 +392,7 @@ fn circle_uniform_border_is_a_stroked_circle_not_a_drrect() {
         .set_shape(BoxShape::Circle)
         .set_border(Some(Border::all(BorderSide::new(
             Color::BLACK,
-            px(4.0),
+            4.0,
             BorderStyle::Solid,
         ))));
     let cmds = commands_in(rect, &decoration);
@@ -395,12 +411,12 @@ fn circle_uniform_border_is_a_stroked_circle_not_a_drrect() {
             paint,
             ..
         } => {
-            assert_eq!(*center, Point::new(px(50.0), px(50.0)));
+            assert_eq!(*center, Point::new(50.0, 50.0));
             // Inside-stroke convention (matching the rect/rrect
             // draw_drrect(outer, outer.inflate(-width)) path): the
             // stroke's OUTER edge lands on the fill radius (50), so the
             // stroke is centered at 50 - 4/2 = 48.
-            assert_eq!(*radius, px(48.0));
+            assert_eq!(*radius, 48.0);
             assert_eq!(paint.style, PaintStyle::Stroke);
             assert_eq!(paint.stroke_width, 4.0);
             assert_eq!(paint.color, Color::BLACK);
@@ -423,7 +439,7 @@ fn circle_border_exactly_at_the_diameter_still_paints_a_full_disc() {
         .set_shape(BoxShape::Circle)
         .set_border(Some(Border::all(BorderSide::new(
             Color::BLACK,
-            px(100.0),
+            100.0,
             BorderStyle::Solid,
         ))));
     let cmds = commands_in(rect, &decoration);
@@ -442,8 +458,8 @@ fn circle_border_exactly_at_the_diameter_still_paints_a_full_disc() {
     else {
         panic!("border must be a stroked circle, got {:?}", cmds[1]);
     };
-    assert_eq!(*center, Point::new(px(50.0), px(50.0)));
-    assert_eq!(radius.get(), 0.0, "stroke centers at radius - width / 2");
+    assert_eq!(*center, Point::new(50.0, 50.0));
+    assert_eq!(*radius, 0.0, "stroke centers at radius - width / 2");
     assert_eq!(paint.stroke_width, 100.0, "full width is retained");
     assert_eq!(paint.color, Color::BLACK);
 }
@@ -460,7 +476,7 @@ fn circle_border_past_the_diameter_skips_instead_of_bulging_past_the_fill() {
         .set_shape(BoxShape::Circle)
         .set_border(Some(Border::all(BorderSide::new(
             Color::BLACK,
-            px(200.0),
+            200.0,
             BorderStyle::Solid,
         ))));
     let cmds = commands_in(rect, &decoration);
@@ -479,9 +495,9 @@ fn circle_non_uniform_border_paints_nothing_not_a_square_frame() {
     let decoration = BoxDecoration::with_color(Color::WHITE)
         .set_shape(BoxShape::Circle)
         .set_border(Some(Border {
-            top: Some(BorderSide::new(Color::RED, px(2.0), BorderStyle::Solid)),
+            top: Some(BorderSide::new(Color::RED, 2.0, BorderStyle::Solid)),
             right: None,
-            bottom: Some(BorderSide::new(Color::BLUE, px(4.0), BorderStyle::Solid)),
+            bottom: Some(BorderSide::new(Color::BLUE, 4.0, BorderStyle::Solid)),
             left: None,
         }));
     let cmds = commands_in(rect, &decoration);
@@ -539,12 +555,11 @@ fn a_circular_decoration_image_is_clipped_to_the_circle_and_the_clip_is_closed()
     };
     assert_eq!(
         rrect.rect.width(),
-        px(100.0),
+        100.0,
         "the clip spans the inscribed circle's diameter; commands: {cmds:?}",
     );
     assert_eq!(
-        rrect.top_left.x,
-        px(50.0),
+        rrect.top_left.x, 50.0,
         "radii of half the shorter side make the rrect SDF an exact circle; \
          commands: {cmds:?}",
     );
@@ -561,9 +576,9 @@ fn circle_shadow_spread_inflates_the_radius_translates_the_center_and_clamps_at_
         .set_shape(BoxShape::Circle)
         .set_box_shadow(Some(vec![BoxShadow {
             color: Color::BLACK,
-            offset: Offset::new(px(5.0), px(-3.0)),
-            blur_radius: px(4.0),
-            spread_radius: px(10.0),
+            offset: Offset::new(5.0, -3.0),
+            blur_radius: 4.0,
+            spread_radius: 10.0,
             inset: false,
         }]));
     let cmds = commands_in(rect, &decoration);
@@ -578,18 +593,10 @@ fn circle_shadow_spread_inflates_the_radius_translates_the_center_and_clamps_at_
         *elevation, 4.0,
         "blur_radius must ride as the shadow's elevation input"
     );
-    match path.commands() {
-        [PathCommand::AddOval(oval)] => {
-            // r + spread = 50 + 10 = 60 -> bounding square side 120,
-            // centered at (50 + 5, 50 - 3) = (55, 47) after the offset
-            // translate.
-            assert_eq!(
-                *oval,
-                Rect::from_ltrb(px(-5.0), px(-13.0), px(115.0), px(107.0))
-            );
-        }
-        other => panic!("expected a single AddOval command, got {other:?}"),
-    }
+    // r + spread = 50 + 10 = 60 -> a circle of radius 60 centred at
+    // (50 + 5, 50 - 3) = (55, 47) after the offset translate: its bounds are
+    // that square, its centre is inside and the square's corner is not.
+    assert_oval(path, Rect::from_ltrb(-5.0, -13.0, 115.0, 107.0));
 
     // A spread radius that would drive the radius negative clamps to 0
     // (`Circle::inflate`'s clamp) instead of panicking in
@@ -598,24 +605,22 @@ fn circle_shadow_spread_inflates_the_radius_translates_the_center_and_clamps_at_
         .set_shape(BoxShape::Circle)
         .set_box_shadow(Some(vec![BoxShadow {
             color: Color::BLACK,
-            offset: Offset::new(px(0.0), px(0.0)),
-            blur_radius: px(4.0),
-            spread_radius: px(-1000.0),
+            offset: Offset::new(0.0, 0.0),
+            blur_radius: 4.0,
+            spread_radius: -1000.0,
             inset: false,
         }]));
     let cmds = commands_in(rect, &inverting); // must not panic
     let DrawOp::Shadow { path, .. } = &cmds[0] else {
         panic!("expected DrawShadow first; commands: {cmds:?}");
     };
-    match path.commands() {
-        [PathCommand::AddOval(oval)] => {
-            assert_eq!(
-                *oval,
-                Rect::from_ltrb(px(50.0), px(50.0), px(50.0), px(50.0)),
-                "radius clamped to 0: a zero-size oval centered on the circle's own center"
-            );
-        }
-        other => panic!("expected a single AddOval command, got {other:?}"),
+    // Radius clamped to 0: a zero-size oval centred on the circle's own centre.
+    let bounds = path.compute_bounds();
+    for edge in [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()] {
+        assert!(
+            (edge - 50.0).abs() < 1e-9,
+            "a zero-size oval at (50, 50): {bounds:?}"
+        );
     }
 }
 
@@ -624,7 +629,7 @@ fn circle_ignores_border_radius_and_still_paints_the_circle() {
     let rect = square_rect();
     let decoration = BoxDecoration::with_color(Color::RED)
         .set_shape(BoxShape::Circle)
-        .set_border_radius(Some(BorderRadius::circular(px(20.0))));
+        .set_border_radius(Some(BorderRadius::circular(20.0)));
     let cmds = commands_in(rect, &decoration);
 
     assert_eq!(cmds.len(), 1);
@@ -633,8 +638,8 @@ fn circle_ignores_border_radius_and_still_paints_the_circle() {
             // The plain inscribed circle (r=50, centered) -- completely
             // unaffected by the ignored `border_radius: 20`. A variant-only
             // check would also pass if the radius silently changed.
-            assert_eq!(*center, Point::new(px(50.0), px(50.0)));
-            assert_eq!(*radius, px(50.0));
+            assert_eq!(*center, Point::new(50.0, 50.0));
+            assert_eq!(*radius, 50.0);
         }
         other => panic!("expected DrawCircle, got {other:?}"),
     }
@@ -655,15 +660,15 @@ fn circle_zero_size_and_negative_area_rects_do_not_panic() {
         // The three zero-extent shapes cover no area, so the background is
         // not recorded — Flutter's `size > Size.zero` guard, applied to the
         // fill rather than to a caller.
-        (Rect::from_ltrb(px(0.0), px(0.0), px(0.0), px(0.0)), None),
+        (Rect::from_ltrb(0.0, 0.0, 0.0, 0.0), None),
         (
             // Zero height, 100 wide.
-            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(0.0)),
+            Rect::from_ltrb(0.0, 0.0, 100.0, 0.0),
             None,
         ),
         (
             // Zero width, 100 tall: symmetric to the above.
-            Rect::from_ltrb(px(0.0), px(0.0), px(0.0), px(100.0)),
+            Rect::from_ltrb(0.0, 0.0, 0.0, 100.0),
             None,
         ),
         (
@@ -672,8 +677,8 @@ fn circle_zero_size_and_negative_area_rects_do_not_panic() {
             // that exercises `shortest_side`'s `.abs()` branch -- without
             // it this would resolve to a negative radius instead of the
             // r=50 an upright 100x100 rect produces.
-            Rect::from_ltrb(px(100.0), px(100.0), px(0.0), px(0.0)),
-            Some((Point::new(px(50.0), px(50.0)), px(50.0))),
+            Rect::from_ltrb(100.0, 100.0, 0.0, 0.0),
+            Some((Point::new(50.0, 50.0), 50.0)),
         ),
     ];
 
@@ -688,6 +693,6 @@ fn circle_zero_size_and_negative_area_rects_do_not_panic() {
             (other, expected) => panic!("rect {rect:?}: expected {expected:?}, got {other:?}"),
         }
         // Must not panic on the hit-test path either.
-        let _ = box_decoration_hit_test(rect, &decoration, Offset::new(px(0.0), px(0.0)));
+        let _ = box_decoration_hit_test(rect, &decoration, Offset::new(0.0, 0.0));
     }
 }

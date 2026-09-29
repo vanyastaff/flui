@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use crate::common::{lay_out_animated, loose};
 use flui_animation::Vsync;
-use flui_types::Alignment;
+use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{EventCx, IntoView, ViewState};
 use flui_widgets::{AnimatedSize, SizedBox, VsyncScope};
@@ -33,14 +33,14 @@ type EndCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 #[derive(Clone, StatefulView)]
 struct SizeProbe {
     vsync: Vsync,
-    side: Arc<Mutex<f32>>,
+    side: Arc<Mutex<f64>>,
     alignment: Arc<Mutex<Alignment>>,
     on_end: Option<EndCallback>,
 }
 
 struct SizeProbeState {
     vsync: Vsync,
-    side: Arc<Mutex<f32>>,
+    side: Arc<Mutex<f64>>,
     alignment: Arc<Mutex<Alignment>>,
     on_end: Option<EndCallback>,
 }
@@ -72,8 +72,8 @@ impl ViewState<SizeProbe> for SizeProbeState {
     }
 }
 
-fn width(laid: &crate::common::LaidOut) -> f32 {
-    laid.size(laid.current_root()).width.get()
+fn width(laid: &crate::common::LaidOut) -> f64 {
+    laid.size(laid.current_root()).width
 }
 
 #[test]
@@ -199,7 +199,7 @@ fn animated_size_unrelated_rebuild_does_not_reset_in_flight_animation() {
     let child_offset = laid.offset(child);
     let expected_dx = after_unrelated_rebuild - 100.0;
     assert!(
-        (child_offset.dx.get() - expected_dx).abs() < 1.0,
+        (child_offset.dx - expected_dx).abs() < 1.0,
         "BOTTOM_RIGHT must reach the persistent render object via the \
          targeted setter — child offset {child_offset:?}, expected dx≈{expected_dx}",
     );
@@ -258,7 +258,7 @@ fn animated_size_completion_writes_a_signal_after_build() {
     type Observation = Rc<RefCell<Option<(Signal<u32>, flui_view::Reactive)>>>;
     #[derive(Clone, StatefulView)]
     struct CompletionProbe {
-        side: Arc<Mutex<f32>>,
+        side: Arc<Mutex<f64>>,
         observation: Observation,
         vsync: Vsync,
     }

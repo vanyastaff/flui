@@ -2,13 +2,13 @@
 
 use std::rc::Rc;
 
+use flui_foundation::geometry::Offset;
 use flui_objects::RenderMouseRegion;
 use flui_rendering::hit_testing::{
     CursorIcon, DeviceId, HitTestBehavior, MouseEnterCallback, MouseExitCallback,
     MouseHoverCallback, MouseRegionCallbacks,
 };
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Offset;
 use flui_view::{
     Child, EventCx, EventOutcome, IntoView, RenderView, WriterSource, impl_render_view,
 };

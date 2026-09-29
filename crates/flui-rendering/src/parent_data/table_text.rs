@@ -3,16 +3,51 @@
 use std::hash::{Hash, Hasher};
 
 use flui_foundation::RenderId;
-use flui_types::Offset;
-pub use flui_types::layout::TableCellVerticalAlignment;
-// `TextRange` used to be declared here as well; flui-types owns the concept and
-// its copy is a strict superset. Imported privately, not re-exported: every
+use flui_foundation::geometry::{Offset, canonical_bits_f64};
+
+// `TextRange` used to be declared here as well; flui-painting's typography owns
+// the concept and its copy is a strict superset. Imported privately, not re-exported: every
 // other consumer in the workspace already reaches for
-// `flui_types::typography::TextRange` directly, so a `pub use` here would be
+// `flui_painting::typography::TextRange` directly, so a `pub use` here would be
 // public surface with no consumer.
-use flui_types::typography::TextRange;
+use flui_painting::typography::TextRange;
 
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
+
+/// Where a `Table`/`RenderTable` cell should be placed vertically within its
+/// row's resolved height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum TableCellVerticalAlignment {
+    /// Align to the top of the row.
+    #[default]
+    Top,
+
+    /// Center content vertically within the row.
+    Middle,
+
+    /// Align content to the bottom of the row.
+    Bottom,
+
+    /// Stretch content to fill the entire row height.
+    Fill,
+
+    /// Align content based on text baseline.
+    ///
+    /// Useful when mixing text of different sizes in a row.
+    Baseline,
+
+    /// Size the cell to the row's tallest cell.
+    ///
+    /// The difference from [`Fill`](Self::Fill) is which pass the cell takes
+    /// part in. An `IntrinsicHeight` cell is measured first, so its own
+    /// content contributes to how tall the row becomes, and is then stretched
+    /// to that height. A `Fill` cell is not measured at all — it only
+    /// stretches — so a row whose cells are all `Fill` has zero height, while
+    /// a row whose cells are all `IntrinsicHeight` is as tall as its tallest
+    /// cell and every cell in it ends up that tall.
+    IntrinsicHeight,
+}
 
 // ============================================================================
 // TABLE CELL PARENT DATA
@@ -104,8 +139,8 @@ impl ParentData for TableCellParentData {}
 
 impl Hash for TableCellParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        canonical_bits_f64(self.offset.dx).hash(state);
+        canonical_bits_f64(self.offset.dy).hash(state);
         self.x.hash(state);
         self.y.hash(state);
         self.vertical_alignment.hash(state);
@@ -189,8 +224,8 @@ impl ParentData for TextParentData {}
 
 impl Hash for TextParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        canonical_bits_f64(self.offset.dx).hash(state);
+        canonical_bits_f64(self.offset.dy).hash(state);
         self.container.hash(state);
         self.span.hash(state);
     }

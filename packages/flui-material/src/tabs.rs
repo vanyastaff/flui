@@ -125,9 +125,9 @@
 use std::cell::RefCell;
 
 use flui_sdk::foundation::ListenerId;
-use flui_sdk::types::styling::Color;
-use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{EdgeInsets, Size, geometry::px};
+use flui_sdk::geometry::{EdgeInsets, Size};
+use flui_sdk::painting::Color;
+use flui_sdk::painting::TextStyle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::{
@@ -143,17 +143,17 @@ use crate::theme_data::ThemeData;
 
 /// A `Tab` with no icon's height. Flutter parity: `_kTabHeight`
 /// (`tabs.dart`, oracle tag `3.44.0`).
-pub const TAB_HEIGHT: f32 = 46.0;
+pub const TAB_HEIGHT: f64 = 46.0;
 
 /// A `Tab` with both an icon and text/child's height. Flutter parity:
 /// `_kTextAndIconTabHeight`.
-pub const TEXT_AND_ICON_TAB_HEIGHT: f32 = 72.0;
+pub const TEXT_AND_ICON_TAB_HEIGHT: f64 = 72.0;
 
 /// The horizontal padding every tab label gets, both sides. Flutter parity:
 /// `kTabLabelPadding` (`constants.dart`, `EdgeInsets.symmetric(horizontal:
 /// 16.0)`) — see the module docs for why this crate has no override surface
 /// for it yet.
-pub const TAB_LABEL_HORIZONTAL_PADDING: f32 = 16.0;
+pub const TAB_LABEL_HORIZONTAL_PADDING: f64 = 16.0;
 
 /// One [`TabBar`] tab's label content: some combination of `text`/`child`
 /// and `icon`. Flutter parity: `Tab` (`tabs.dart`, oracle tag `3.44.0`).
@@ -169,7 +169,7 @@ pub struct Tab {
     text: Option<String>,
     child: Option<BoxedView>,
     icon: Option<BoxedView>,
-    height: Option<f32>,
+    height: Option<f64>,
 }
 
 impl Tab {
@@ -210,7 +210,7 @@ impl Tab {
     /// Overrides the computed height (`46.0`, or `72.0` when both an icon
     /// and text/child are present). Flutter parity: `Tab.height`.
     #[must_use]
-    pub fn height(mut self, height: f32) -> Self {
+    pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }
@@ -229,7 +229,7 @@ impl Tab {
 /// `Tab.preferredSize`/`Tab.build`'s `calculatedHeight` (`tabs.dart`, oracle
 /// tag `3.44.0`) — the two oracle computations agree, so one function here
 /// serves both [`Tab::preferred_size`] and [`TabBar`]'s own height math.
-fn tab_content_height(tab: &Tab) -> f32 {
+fn tab_content_height(tab: &Tab) -> f64 {
     if let Some(height) = tab.height {
         return height;
     }
@@ -296,7 +296,7 @@ fn label_content(tab: &Tab) -> BoxedView {
 
 impl PreferredSizeView for Tab {
     fn preferred_size(&self) -> Size {
-        Size::new(px(0.0), px(tab_content_height(self)))
+        Size::new(0.0, tab_content_height(self))
     }
 }
 
@@ -322,7 +322,7 @@ impl PreferredSizeView for Tab {
 pub struct TabBar {
     tabs: Vec<Tab>,
     controller: Option<TabController>,
-    indicator_weight: f32,
+    indicator_weight: f64,
     on_tap: Option<crate::event_callback::ValueCallback<usize>>,
 }
 
@@ -371,10 +371,7 @@ impl std::fmt::Debug for TabBar {
 
 impl PreferredSizeView for TabBar {
     fn preferred_size(&self) -> Size {
-        Size::new(
-            px(f32::INFINITY),
-            px(bar_height(&self.tabs, self.indicator_weight)),
-        )
+        Size::new(f64::INFINITY, bar_height(&self.tabs, self.indicator_weight))
     }
 }
 
@@ -384,11 +381,11 @@ impl PreferredSizeView for TabBar {
 /// special case (`_kTabHeight + indicatorWeight`, `_TabBarState.build`'s
 /// early return) — no separate branch is needed here because folding over
 /// an empty `tabs` slice already returns the `TAB_HEIGHT` seed.
-fn bar_height(tabs: &[Tab], indicator_weight: f32) -> f32 {
+fn bar_height(tabs: &[Tab], indicator_weight: f64) -> f64 {
     let max_content_height = tabs
         .iter()
         .map(tab_content_height)
-        .fold(TAB_HEIGHT, f32::max);
+        .fold(TAB_HEIGHT, f64::max);
     max_content_height + indicator_weight
 }
 
@@ -411,7 +408,7 @@ struct ResolvedTabBarStyle {
     label_style: TextStyle,
     unselected_label_style: TextStyle,
     divider_color: Color,
-    divider_height: f32,
+    divider_height: f64,
     overlay_color: WidgetStateProperty<Option<Color>>,
 }
 
@@ -497,7 +494,7 @@ fn label_padding(tab: &Tab, bar_has_mixed_tabs: bool) -> EdgeInsets {
     } else {
         0.0
     };
-    EdgeInsets::symmetric(px(vertical), px(TAB_LABEL_HORIZONTAL_PADDING))
+    EdgeInsets::symmetric(vertical, TAB_LABEL_HORIZONTAL_PADDING)
 }
 
 /// Persistent state behind [`TabBar`]: the currently-subscribed
@@ -710,7 +707,7 @@ fn build_tab_cell(
     selected: bool,
     bar_has_mixed_tabs: bool,
     resolved: &ResolvedTabBarStyle,
-    indicator_weight: f32,
+    indicator_weight: f64,
     controller: &TabController,
     on_tap: Option<&crate::event_callback::ValueCallback<usize>>,
 ) -> BoxedView {
@@ -753,7 +750,7 @@ fn build_tab_cell(
 
 #[cfg(test)]
 mod tests {
-    use flui_sdk::types::Rect;
+    use flui_sdk::geometry::Rect;
 
     use super::*;
     use crate::theme_data::TabBarThemeData;
@@ -768,20 +765,20 @@ mod tests {
     /// (this crate's only supported combination) and this crate's fixed
     /// equal-share tab widths.
     fn indicator_rect(
-        bar_width: f32,
-        bar_height: f32,
+        bar_width: f64,
+        bar_height: f64,
         tab_count: usize,
-        indicator_weight: f32,
+        indicator_weight: f64,
         index: usize,
     ) -> Rect {
         assert!(tab_count > 0, "indicator_rect requires at least one tab");
         assert!(index < tab_count, "index out of range for tab_count");
-        let tab_width = bar_width / tab_count as f32;
+        let tab_width = bar_width / tab_count as f64;
         Rect::from_ltwh(
-            px(tab_width * index as f32),
-            px(bar_height - indicator_weight),
-            px(tab_width),
-            px(indicator_weight),
+            tab_width * index as f64,
+            bar_height - indicator_weight,
+            tab_width,
+            indicator_weight,
         )
     }
 
@@ -817,7 +814,7 @@ mod tests {
     #[test]
     fn tab_preferred_size_matches_content_height() {
         let tab = Tab::new().text("Home");
-        assert_eq!(tab.preferred_size().height, px(TAB_HEIGHT));
+        assert_eq!(tab.preferred_size().height, (TAB_HEIGHT));
     }
 
     #[test]
@@ -849,13 +846,13 @@ mod tests {
     fn tab_bar_preferred_size_matches_bar_height() {
         let tabs = vec![Tab::new().text("A"), Tab::new().text("B")];
         let bar = TabBar::secondary(tabs);
-        assert_eq!(bar.preferred_size().height, px(48.0));
+        assert_eq!(bar.preferred_size().height, 48.0);
     }
 
     #[test]
     fn tab_bar_preferred_size_for_zero_tabs_is_48() {
         let bar = TabBar::secondary(vec![]);
-        assert_eq!(bar.preferred_size().height, px(48.0));
+        assert_eq!(bar.preferred_size().height, 48.0);
     }
 
     #[test]
@@ -879,14 +876,14 @@ mod tests {
     fn label_padding_has_no_vertical_adjustment_in_a_uniform_bar() {
         let tab = Tab::new().text("A");
         let padding = label_padding(&tab, false);
-        assert_eq!(padding, EdgeInsets::symmetric(px(0.0), px(16.0)));
+        assert_eq!(padding, EdgeInsets::symmetric(0.0, 16.0));
     }
 
     #[test]
     fn label_padding_adds_13dp_vertical_for_a_plain_tab_in_a_mixed_bar() {
         let tab = Tab::new().text("A");
         let padding = label_padding(&tab, true);
-        assert_eq!(padding, EdgeInsets::symmetric(px(13.0), px(16.0)));
+        assert_eq!(padding, EdgeInsets::symmetric(13.0, 16.0));
     }
 
     /// Red-check: if the mixed-bar check ignored `Tab::height` overrides and
@@ -899,23 +896,20 @@ mod tests {
         let overridden = Tab::new().text("A").height(TEXT_AND_ICON_TAB_HEIGHT);
         assert_eq!(
             label_padding(&overridden, true),
-            EdgeInsets::symmetric(px(0.0), px(16.0))
+            EdgeInsets::symmetric(0.0, 16.0)
         );
     }
 
     #[test]
     fn indicator_rect_spans_the_first_of_two_equal_tabs() {
         let rect = indicator_rect(200.0, 48.0, 2, 2.0, 0);
-        assert_eq!(rect, Rect::from_ltwh(px(0.0), px(46.0), px(100.0), px(2.0)));
+        assert_eq!(rect, Rect::from_ltwh(0.0, 46.0, 100.0, 2.0));
     }
 
     #[test]
     fn indicator_rect_spans_the_second_of_two_equal_tabs() {
         let rect = indicator_rect(200.0, 48.0, 2, 2.0, 1);
-        assert_eq!(
-            rect,
-            Rect::from_ltwh(px(100.0), px(46.0), px(100.0), px(2.0))
-        );
+        assert_eq!(rect, Rect::from_ltwh(100.0, 46.0, 100.0, 2.0));
     }
 
     /// Red-check: if `indicator_rect` divided by `index` instead of
@@ -925,12 +919,12 @@ mod tests {
         let first = indicator_rect(300.0, 48.0, 3, 2.0, 0);
         let second = indicator_rect(300.0, 48.0, 3, 2.0, 1);
         let third = indicator_rect(300.0, 48.0, 3, 2.0, 2);
-        assert_eq!(first.width(), px(100.0));
-        assert_eq!(second.width(), px(100.0));
-        assert_eq!(third.width(), px(100.0));
-        assert_eq!(first.left(), px(0.0));
-        assert_eq!(second.left(), px(100.0));
-        assert_eq!(third.left(), px(200.0));
+        assert_eq!(first.width(), 100.0);
+        assert_eq!(second.width(), 100.0);
+        assert_eq!(third.width(), 100.0);
+        assert_eq!(first.left(), 0.0);
+        assert_eq!(second.left(), 100.0);
+        assert_eq!(third.left(), 200.0);
     }
 
     #[test]

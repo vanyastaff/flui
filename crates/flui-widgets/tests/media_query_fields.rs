@@ -10,7 +10,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::common::{lay_out, loose};
-use flui_geometry::{EdgeInsets, px};
+use flui_foundation::geometry::EdgeInsets;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ProxyView, View};
@@ -31,7 +31,7 @@ impl StatelessView for SizeReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.set(self.builds.get() + 1);
         let size = MediaQuery::size_of(ctx).expect("MediaQuery ancestor");
-        SizedBox::new(size.width.0 / 100.0, 1.0)
+        SizedBox::new(size.width / 100.0, 1.0)
     }
 }
 
@@ -85,11 +85,7 @@ impl StatelessView for SwitchingReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.set(self.builds.get() + 1);
         let side = if self.read_size.get() {
-            MediaQuery::size_of(ctx)
-                .expect("MediaQuery ancestor")
-                .width
-                .0
-                / 100.0
+            MediaQuery::size_of(ctx).expect("MediaQuery ancestor").width / 100.0
         } else {
             MediaQuery::text_scale_factor_of(ctx).expect("MediaQuery ancestor")
         };
@@ -109,7 +105,7 @@ impl StatelessView for FailingSizeReader {
         self.builds.set(self.builds.get() + 1);
         assert!(!self.fail.get(), "test-induced build failure");
         let size = MediaQuery::size_of(ctx).expect("MediaQuery ancestor");
-        SizedBox::new(size.width.0 / 100.0, 1.0)
+        SizedBox::new(size.width / 100.0, 1.0)
     }
 }
 
@@ -125,7 +121,7 @@ impl StatelessView for DroppingReader {
         self.builds.set(self.builds.get() + 1);
         if self.reads.get() {
             let size = MediaQuery::size_of(ctx).expect("MediaQuery ancestor");
-            SizedBox::new(size.width.0 / 100.0, 1.0)
+            SizedBox::new(size.width / 100.0, 1.0)
         } else {
             SizedBox::new(1.0, 1.0)
         }
@@ -142,7 +138,7 @@ struct LifecycleReader {
 
 struct LifecycleReaderState {
     view: LifecycleReader,
-    width: f32,
+    width: f64,
 }
 
 impl StatefulView for LifecycleReader {
@@ -157,19 +153,13 @@ impl StatefulView for LifecycleReader {
 
 impl ViewState<LifecycleReader> for LifecycleReaderState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.width = MediaQuery::size_of(ctx)
-            .expect("MediaQuery ancestor")
-            .width
-            .0;
+        self.width = MediaQuery::size_of(ctx).expect("MediaQuery ancestor").width;
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let dc = &self.view.dependency_changes;
         dc.set(dc.get() + 1);
-        self.width = MediaQuery::size_of(ctx)
-            .expect("MediaQuery ancestor")
-            .width
-            .0;
+        self.width = MediaQuery::size_of(ctx).expect("MediaQuery ancestor").width;
     }
 
     fn build(&self, _view: &LifecycleReader, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -187,9 +177,8 @@ struct EmptyMaskReader {
 impl StatelessView for EmptyMaskReader {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.set(self.builds.get() + 1);
-        let width =
-            MediaQuery::depend_on_fields(ctx, flui_view::FieldMask::NONE, |d| d.size.width.0)
-                .expect("MediaQuery ancestor");
+        let width = MediaQuery::depend_on_fields(ctx, flui_view::FieldMask::NONE, |d| d.size.width)
+            .expect("MediaQuery ancestor");
         SizedBox::new(width / 100.0, 1.0)
     }
 }
@@ -248,9 +237,9 @@ fn subtree(c: &Counters) -> StaticChild {
     }
 }
 
-fn data(width: f32, scale: f32) -> MediaQueryData {
+fn data(width: f64, scale: f64) -> MediaQueryData {
     MediaQueryData {
-        size: flui_types::Size::new(px(width), px(600.0)),
+        size: flui_foundation::geometry::Size::new(width, 600.0),
         text_scale_factor: scale,
         ..MediaQueryData::default()
     }
@@ -341,7 +330,7 @@ fn a_field_reader_still_rebuilds_when_its_own_field_changes_after_an_unrelated_o
     let column = laid.current_root();
     assert_eq!(
         laid.size(laid.child(column, 0)).width,
-        px(9.0),
+        9.0,
         "the size reader rendered the new width (900 / 100)"
     );
 }
@@ -367,11 +356,11 @@ fn an_unchanged_provider_swap_rebuilds_nobody() {
 #[test]
 fn padding_and_insets_masks_are_distinct_fields() {
     let a = MediaQueryData {
-        padding: EdgeInsets::all(px(8.0)),
+        padding: EdgeInsets::all(8.0),
         ..MediaQueryData::default()
     };
     let b = MediaQueryData {
-        view_insets: EdgeInsets::all(px(16.0)),
+        view_insets: EdgeInsets::all(16.0),
         ..a.clone()
     };
     let changed = flui_view::InheritedData::field_mask_diff(&a, &b);
@@ -423,7 +412,7 @@ fn a_rebuild_re_derives_the_field_set_so_a_dropped_read_stops_depending() {
     assert_eq!(builds.get(), 3, "a scale change rebuilds the reader");
     assert_eq!(
         laid.size(laid.current_root()).width,
-        px(1.5),
+        1.5,
         "the reader rendered the new scale"
     );
 }
@@ -467,7 +456,7 @@ fn a_build_that_panics_before_reading_keeps_its_dependency() {
     );
     assert_eq!(
         laid.size(laid.current_root()).width,
-        px(10.0),
+        10.0,
         "the reader rendered the new width after recovering"
     );
 }
@@ -550,7 +539,7 @@ fn a_dependency_acquired_in_a_lifecycle_hook_survives_a_rebuild_that_does_not_re
     );
     assert_eq!(
         laid.size(laid.current_root()).width,
-        px(9.0),
+        9.0,
         "the reader rendered the width it re-read"
     );
 }
@@ -584,7 +573,7 @@ fn an_empty_mask_read_is_promoted_to_a_whole_provider_dependency() {
     );
     assert_eq!(
         laid.size(laid.current_root()).width,
-        px(9.0),
+        9.0,
         "and it rendered the fresh value"
     );
 }

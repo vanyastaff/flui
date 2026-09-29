@@ -13,13 +13,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
 use flui_material::{Card, CardThemeData, MaterialShape, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::types::Color;
-use flui_sdk::types::geometry::{Radius, px};
-use flui_sdk::types::styling::BorderRadius;
+use flui_sdk::geometry::Radius;
+use flui_sdk::painting::BorderRadius;
+use flui_sdk::painting::Color;
 use flui_sdk::widgets::{ColoredBox, GestureDetector};
 
 /// `_CardDefaultsM3`'s formatted `Debug` string for a resolved
-/// [`Color`](flui_sdk::types::Color) — what `RenderPhysicalShape`'s
+/// [`Color`](flui_sdk::painting::Color) — what `RenderPhysicalShape`'s
 /// `Diagnosticable::debug_fill_properties` writes into its `"color"`
 /// property, mirroring `tests/elevated_button.rs`'s identical helper.
 fn color_property(color: Color) -> String {
@@ -52,7 +52,7 @@ fn default_material_matches_card_defaults_m3() {
         .render_property(material, "elevation")
         .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
     assert_eq!(
-        elevation.parse::<f32>(),
+        elevation.parse::<f64>(),
         Ok(1.0),
         "_CardDefaultsM3 constructs with elevation: 1.0"
     );
@@ -99,7 +99,7 @@ fn card_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let elevation = laid
         .render_property(material, "elevation")
         .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
-    assert_eq!(elevation.parse::<f32>(), Ok(15.0));
+    assert_eq!(elevation.parse::<f64>(), Ok(15.0));
 }
 
 /// `_CardDefaultsM3`'s 12dp corner radius (`card.dart`, oracle tag `3.44.0`),
@@ -139,8 +139,8 @@ fn default_corner_radius_reaches_the_mounted_material() {
         .expect("Card must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
-    laid.dispatch_pointer_down(origin.dx.get() + 10.0, origin.dy.get() + 10.0);
-    laid.dispatch_pointer_up(origin.dx.get() + 10.0, origin.dy.get() + 10.0);
+    laid.dispatch_pointer_down(origin.dx + 10.0, origin.dy + 10.0);
+    laid.dispatch_pointer_up(origin.dx + 10.0, origin.dy + 10.0);
 
     assert_eq!(
         taps.load(Ordering::SeqCst),
@@ -170,7 +170,7 @@ fn an_overridden_99dp_corner_radius_excludes_the_same_probe_point() {
                     .child(ColoredBox::new(Color::rgb(5, 5, 5))),
             )
             .shape(MaterialShape::RoundedRect(BorderRadius::all(
-                Radius::circular(px(99.0)),
+                Radius::circular(99.0),
             ))),
         ),
         tight(400.0, 400.0),
@@ -181,8 +181,8 @@ fn an_overridden_99dp_corner_radius_excludes_the_same_probe_point() {
         .expect("Card must compose a Material surface");
     let origin = laid.absolute_offset(material);
 
-    laid.dispatch_pointer_down(origin.dx.get() + 10.0, origin.dy.get() + 10.0);
-    laid.dispatch_pointer_up(origin.dx.get() + 10.0, origin.dy.get() + 10.0);
+    laid.dispatch_pointer_down(origin.dx + 10.0, origin.dy + 10.0);
+    laid.dispatch_pointer_up(origin.dx + 10.0, origin.dy + 10.0);
 
     assert_eq!(
         taps.load(Ordering::SeqCst),
@@ -222,9 +222,8 @@ fn margin_override_replaces_the_default_inset() {
     let laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            Card::new(ColoredBox::new(Color::rgb(1, 2, 3))).margin(
-                flui_sdk::types::EdgeInsets::all(flui_sdk::types::geometry::px(10.0)),
-            ),
+            Card::new(ColoredBox::new(Color::rgb(1, 2, 3)))
+                .margin(flui_sdk::geometry::EdgeInsets::all(10.0)),
         ),
         tight(200.0, 200.0),
     );

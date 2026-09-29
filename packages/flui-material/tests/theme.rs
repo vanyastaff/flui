@@ -25,8 +25,8 @@ use crate::common;
 
 use common::{lay_out, loose};
 use flui_material::{ColorSchemeOverrides, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::types::platform::Brightness;
-use flui_sdk::types::styling::Color;
+use flui_sdk::painting::Color;
+use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::SizedBox;
 

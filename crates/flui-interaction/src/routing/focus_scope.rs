@@ -14,7 +14,7 @@ use std::{
 };
 
 use flui_foundation::ListenerId;
-use flui_types::geometry::{Pixels, Rect};
+use flui_foundation::geometry::Rect;
 use thiserror::Error;
 
 use crate::{FocusManager, events::KeyEvent};
@@ -31,7 +31,7 @@ fn allocate_focus_node_id() -> FocusNodeId {
 pub type KeyEventHandler = Rc<dyn Fn(&KeyEvent) -> KeyEventResult>;
 
 /// Computes a node's bounding rectangle on demand, in root coordinates.
-pub type RectProvider = Rc<dyn Fn() -> Option<Rect<Pixels>>>;
+pub type RectProvider = Rc<dyn Fn() -> Option<Rect<f64>>>;
 
 /// What the widget layer records about where a node sits in its tree — the
 /// counterpart of Flutter's `FocusNode.context`, which this crate cannot hold
@@ -392,7 +392,7 @@ pub struct FocusNode {
     on_key_event: RefCell<Option<KeyEventHandler>>,
     listeners: RefCell<Vec<(ListenerId, FocusNodeChangeCallback)>>,
     next_listener_id: Cell<usize>,
-    rect: Cell<Rect<Pixels>>,
+    rect: Cell<Rect<f64>>,
     rect_provider: RefCell<Option<RectProvider>>,
     rect_provider_generation: Cell<u64>,
     context: RefCell<Option<NodeContext>>,
@@ -552,7 +552,7 @@ impl FocusNode {
     }
 
     /// Current traversal geometry.
-    pub fn rect(&self) -> Rect<Pixels> {
+    pub fn rect(&self) -> Rect<f64> {
         let provider = self.rect_provider.borrow().clone();
         if let Some(provider) = provider
             && let Some(rect) = provider()
@@ -563,7 +563,7 @@ impl FocusNode {
     }
 
     /// Store fallback traversal geometry.
-    pub fn set_rect(&self, rect: Rect<Pixels>) {
+    pub fn set_rect(&self, rect: Rect<f64>) {
         self.rect.set(rect);
     }
 
@@ -1741,11 +1741,11 @@ impl ReadingOrderPolicy {
         indices.sort_by(|&left, &right| {
             let left_rect = nodes[left].rect();
             let right_rect = nodes[right].rect();
-            let y = left_rect.top().0.total_cmp(&right_rect.top().0);
+            let y = left_rect.top().total_cmp(&right_rect.top());
             if y != Ordering::Equal {
                 return y;
             }
-            left_rect.left().0.total_cmp(&right_rect.left().0)
+            left_rect.left().total_cmp(&right_rect.left())
         });
         indices
     }

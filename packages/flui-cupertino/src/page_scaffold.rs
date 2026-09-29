@@ -55,8 +55,8 @@
 //!   `TextScaler`/no-scaling variant to apply yet — `text_scale_factor`
 //!   passes through unchanged.
 
-use flui_sdk::types::geometry::{EdgeInsets, px};
-use flui_sdk::types::styling::BoxDecoration;
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::painting::BoxDecoration;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{DecoratedBox, MediaQuery, Padding, Positioned, PreferredSizeView, Stack};
@@ -79,7 +79,7 @@ use crate::theme::CupertinoTheme;
 #[derive(Clone, StatelessView)]
 pub struct CupertinoPageScaffold {
     navigation_bar: Option<BoxedView>,
-    navigation_bar_preferred_height: f32,
+    navigation_bar_preferred_height: f64,
     background_color: Option<CupertinoColor>,
     resize_to_avoid_bottom_inset: bool,
     child: BoxedView,
@@ -106,7 +106,7 @@ impl CupertinoPageScaffold {
     /// `CupertinoPageScaffold.navigationBar`.
     #[must_use]
     pub fn navigation_bar(mut self, navigation_bar: impl PreferredSizeView) -> Self {
-        self.navigation_bar_preferred_height = navigation_bar.preferred_size().height.get();
+        self.navigation_bar_preferred_height = navigation_bar.preferred_size().height;
         self.navigation_bar = Some(navigation_bar.boxed());
         self
     }
@@ -155,31 +155,26 @@ impl StatelessView for CupertinoPageScaffold {
             // existingMediaQuery.padding.top` (`page_scaffold.dart`, oracle
             // tag `3.44.0`) — always the "fully obstructing" branch, see the
             // module docs' deferred list.
-            let top_padding = px(self.navigation_bar_preferred_height) + media.padding.top;
+            let top_padding = self.navigation_bar_preferred_height + media.padding.top;
             let bottom_padding = if self.resize_to_avoid_bottom_inset {
                 media.view_insets.bottom
             } else {
-                px(0.0)
+                0.0
             };
             let mut reduced = media.clone();
-            reduced.padding.top = px(0.0);
+            reduced.padding.top = 0.0;
             if self.resize_to_avoid_bottom_inset {
-                reduced.view_insets.bottom = px(0.0);
+                reduced.view_insets.bottom = 0.0;
             }
             MediaQuery::new(
                 reduced,
-                Padding::new(EdgeInsets::new(
-                    top_padding,
-                    px(0.0),
-                    bottom_padding,
-                    px(0.0),
-                ))
-                .child(self.child.clone()),
+                Padding::new(EdgeInsets::new(top_padding, 0.0, bottom_padding, 0.0))
+                    .child(self.child.clone()),
             )
             .boxed()
         } else if self.resize_to_avoid_bottom_inset {
             let mut reduced = media.clone();
-            reduced.view_insets.bottom = px(0.0);
+            reduced.view_insets.bottom = 0.0;
             MediaQuery::new(
                 reduced,
                 Padding::new(EdgeInsets::only_bottom(media.view_insets.bottom))

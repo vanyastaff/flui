@@ -5,11 +5,11 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use flui_foundation::geometry::Size;
 use flui_platform::{
     WindowCallbacks,
     traits::{DispatchEventResult, Key, PlatformInput},
 };
-use flui_types::{Size, geometry::px};
 
 fn keyboard_event(repeat: bool) -> PlatformInput {
     PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {
@@ -115,7 +115,7 @@ fn nested_cross_kind_events_keep_one_window_causal_order() {
     *callbacks.on_input.lock() = Some(Box::new(move |_| {
         input_order.lock().expect("order lock").push("input:start");
         let callbacks = weak_for_input.upgrade().expect("callbacks alive");
-        callbacks.dispatch_resize(Size::new(px(200.0), px(80.0)), 2.0);
+        callbacks.dispatch_resize(Size::new(200.0, 80.0), 2.0);
         callbacks.dispatch_request_frame();
         input_order.lock().expect("order lock").push("input:end");
         DispatchEventResult::default()
@@ -149,20 +149,17 @@ fn nested_resize_is_drained_after_outer_callback_returns() {
     let widths = Arc::new(Mutex::new(Vec::new()));
     let callback_widths = Arc::clone(&widths);
     *callbacks.on_resize.lock() = Some(Box::new(move |size, scale| {
-        callback_widths
-            .lock()
-            .expect("width lock")
-            .push(size.width.0);
-        if size.width.0 == 100.0 {
+        callback_widths.lock().expect("width lock").push(size.width);
+        if size.width == 100.0 {
             weak_callbacks
                 .upgrade()
                 .expect("callbacks alive")
-                .dispatch_resize(Size::new(px(200.0), px(80.0)), scale);
+                .dispatch_resize(Size::new(200.0, 80.0), scale);
             callback_widths.lock().expect("width lock").push(150.0);
         }
     }));
 
-    callbacks.dispatch_resize(Size::new(px(100.0), px(80.0)), 2.0);
+    callbacks.dispatch_resize(Size::new(100.0, 80.0), 2.0);
     assert_eq!(
         *widths.lock().expect("width lock"),
         vec![100.0, 150.0, 200.0]

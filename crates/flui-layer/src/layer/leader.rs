@@ -1,7 +1,7 @@
 //! `LeaderLayer` — the anchor a [`FollowerLayer`](super::FollowerLayer)
 //! positions itself against (tooltips, dropdowns, connected overlays).
 
-use flui_types::geometry::{Offset, Pixels, Rect, Size};
+use flui_foundation::geometry::{Offset, Rect, Size};
 
 use crate::LayerLink;
 
@@ -15,20 +15,20 @@ use crate::LayerLink;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LeaderLayer {
     link: LayerLink,
-    size: Size<Pixels>,
-    offset: Offset<Pixels>,
+    size: Size<f64>,
+    offset: Offset<f64>,
 }
 
 impl LeaderLayer {
     /// A leader at the paint origin.
     #[inline]
-    pub fn new(link: LayerLink, size: Size<Pixels>) -> Self {
+    pub fn new(link: LayerLink, size: Size<f64>) -> Self {
         Self::with_offset(link, size, Offset::ZERO)
     }
 
     /// A leader translated by `offset` within its parent.
     #[inline]
-    pub fn with_offset(link: LayerLink, size: Size<Pixels>, offset: Offset<Pixels>) -> Self {
+    pub fn with_offset(link: LayerLink, size: Size<f64>, offset: Offset<f64>) -> Self {
         Self { link, size, offset }
     }
 
@@ -40,19 +40,19 @@ impl LeaderLayer {
 
     /// The extent a follower's leader anchor aligns within.
     #[inline]
-    pub fn size(&self) -> Size<Pixels> {
+    pub fn size(&self) -> Size<f64> {
         self.size
     }
 
     /// The translation this leader applies to its children.
     #[inline]
-    pub fn offset(&self) -> Offset<Pixels> {
+    pub fn offset(&self) -> Offset<f64> {
         self.offset
     }
 
     /// The leader's rectangle in its parent's coordinates.
     #[inline]
-    pub fn bounds(&self) -> Rect<Pixels> {
+    pub fn bounds(&self) -> Rect<f64> {
         Rect::from_xywh(
             self.offset.dx,
             self.offset.dy,
@@ -64,7 +64,6 @@ impl LeaderLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -72,13 +71,10 @@ mod tests {
     fn bounds_are_offset_by_size() {
         let layer = LeaderLayer::with_offset(
             LayerLink::new(),
-            Size::new(px(100.0), px(50.0)),
-            Offset::new(px(10.0), px(20.0)),
+            Size::new(100.0, 50.0),
+            Offset::new(10.0, 20.0),
         );
-        assert_eq!(
-            layer.bounds(),
-            Rect::from_xywh(px(10.0), px(20.0), px(100.0), px(50.0))
-        );
+        assert_eq!(layer.bounds(), Rect::from_xywh(10.0, 20.0, 100.0, 50.0));
         assert_eq!(
             LeaderLayer::new(LayerLink::new(), Size::ZERO).offset(),
             Offset::ZERO

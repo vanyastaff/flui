@@ -1,9 +1,10 @@
 //! [`Transform`] — applies a 2D/3D matrix transform to its child when painting.
 
-use flui_geometry::Matrix4;
+use flui_foundation::geometry::Matrix4;
+use flui_foundation::geometry::Offset;
 use flui_objects::RenderTransform;
+use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::{Alignment, Offset};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Applies a [`Matrix4`] transform to its child before painting.
@@ -44,17 +45,17 @@ impl Transform {
     }
 
     /// Translate the child by `(x, y)` device pixels.
-    pub fn translate(x: f32, y: f32) -> Self {
+    pub fn translate(x: f64, y: f64) -> Self {
         Self::new(*RenderTransform::translate(x, y).transform())
     }
 
     /// Scale the child by `(sx, sy)`, about its centre.
-    pub fn scale(sx: f32, sy: f32) -> Self {
+    pub fn scale(sx: f64, sy: f64) -> Self {
         Self::new(*RenderTransform::scale(sx, sy).transform()).alignment(Alignment::CENTER)
     }
 
     /// Rotate the child by `radians` about the Z axis, about its centre.
-    pub fn rotation(radians: f32) -> Self {
+    pub fn rotation(radians: f64) -> Self {
         Self::new(*RenderTransform::rotation(radians).transform()).alignment(Alignment::CENTER)
     }
 
@@ -142,7 +143,7 @@ impl_render_view!(Transform);
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
+
     use flui_view::RenderView;
 
     use super::*;
@@ -172,7 +173,7 @@ mod tests {
 
         let changed = Transform::scale(2.0, 2.0)
             .alignment(Alignment::BOTTOM_RIGHT)
-            .origin(Offset::new(px(4.0), px(5.0)));
+            .origin(Offset::new(4.0, 5.0));
         assert_eq!(
             changed.update_render_object(
                 &flui_view::RenderObjectContext::detached(),

@@ -14,8 +14,8 @@
 //! cargo run --example window_features
 //! ```
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
 
 fn main() -> anyhow::Result<()> {
     // Initialize logging
@@ -50,11 +50,11 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("Creating window...");
         let window_options = WindowOptions {
             title: "Window Features Demo".to_string(),
-            size: Size::new(px(1000.0), px(700.0)),
+            size: Size::new(1000.0, 700.0),
             resizable: true,
             visible: true,
             decorated: true,
-            min_size: Some(Size::new(px(600.0), px(400.0))),
+            min_size: Some(Size::new(600.0, 400.0)),
             max_size: None,
             ..Default::default()
         };

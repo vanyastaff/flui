@@ -85,9 +85,8 @@
 //! shifts or clips `middle` if `leading`/`trailing` grow wide enough to
 //! visually collide with it.
 
-use flui_sdk::types::Size;
-use flui_sdk::types::geometry::px;
-use flui_sdk::types::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::geometry::Size;
+use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
@@ -100,14 +99,14 @@ use crate::theme::CupertinoTheme;
 
 /// `_kNavBarPersistentHeight` (`nav_bar.dart`, oracle tag `3.44.0`) —
 /// `kMinInteractiveDimensionCupertino`, `44.0`.
-pub const NAV_BAR_PERSISTENT_HEIGHT: f32 = 44.0;
+pub const NAV_BAR_PERSISTENT_HEIGHT: f64 = 44.0;
 
 /// `_kNavBarEdgePadding` (`nav_bar.dart`, oracle tag `3.44.0`) — the
 /// horizontal inset `leading`/`trailing` sit at from the bar's edges (the
 /// oracle's "if leading is an automatically-inserted back button, padding is
 /// 0" branch is unreachable here — see the module docs' deferred
 /// `automaticallyImplyLeading`).
-const NAV_BAR_EDGE_PADDING: f32 = 16.0;
+const NAV_BAR_EDGE_PADDING: f64 = 16.0;
 
 /// `_kDefaultNavBarBorderColor` (`nav_bar.dart`, oracle tag `3.44.0`).
 const DEFAULT_NAV_BAR_BORDER_COLOR: Color = Color::from_argb(0x4D00_0000);
@@ -115,17 +114,17 @@ const DEFAULT_NAV_BAR_BORDER_COLOR: Color = Color::from_argb(0x4D00_0000);
 /// The stroke width this port paints the hairline border at — see the
 /// module docs' "hairline" divergence note. One logical pixel, not the
 /// oracle's true device-pixel width.
-pub const HAIRLINE_BORDER_WIDTH: f32 = 1.0;
+pub const HAIRLINE_BORDER_WIDTH: f64 = 1.0;
 
 /// `_kDefaultNavBarBorder` (`nav_bar.dart`, oracle tag `3.44.0`): a
 /// bottom-only hairline, approximated per [`HAIRLINE_BORDER_WIDTH`]'s doc.
-fn default_border() -> Border<flui_sdk::types::geometry::Pixels> {
+fn default_border() -> Border<f64> {
     Border::new(
         None,
         None,
         Some(BorderSide::new(
             DEFAULT_NAV_BAR_BORDER_COLOR,
-            px(HAIRLINE_BORDER_WIDTH),
+            HAIRLINE_BORDER_WIDTH,
             BorderStyle::Solid,
         )),
         None,
@@ -150,7 +149,7 @@ pub struct CupertinoNavigationBar {
     middle: Option<BoxedView>,
     trailing: Option<BoxedView>,
     background_color: Option<CupertinoColor>,
-    border: Option<Border<flui_sdk::types::geometry::Pixels>>,
+    border: Option<Border<f64>>,
 }
 
 impl CupertinoNavigationBar {
@@ -202,7 +201,7 @@ impl CupertinoNavigationBar {
     /// the hairline border — see the module docs' divergence note. Flutter
     /// parity: `CupertinoNavigationBar.border`.
     #[must_use]
-    pub fn border(mut self, border: Option<Border<flui_sdk::types::geometry::Pixels>>) -> Self {
+    pub fn border(mut self, border: Option<Border<f64>>) -> Self {
         self.border = border;
         self
     }
@@ -232,7 +231,7 @@ impl StatelessView for CupertinoNavigationBar {
             .background_color
             .unwrap_or_else(|| theme.bar_background_color())
             .resolve(ctx);
-        let top_inset = MediaQuery::maybe_of(ctx).map_or(px(0.0), |data| data.padding.top);
+        let top_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding.top);
 
         let mut layers: Vec<BoxedView> = Vec::new();
         if let Some(middle) = &self.middle {
@@ -274,7 +273,7 @@ impl StatelessView for CupertinoNavigationBar {
             DecoratedBox::new(BoxDecoration::with_color(background).set_border(self.border))
                 .child(SafeArea::new().bottom(false).child(toolbar));
 
-        SizedBox::height(NAV_BAR_PERSISTENT_HEIGHT + top_inset.get()).child(decorated)
+        SizedBox::height(NAV_BAR_PERSISTENT_HEIGHT + top_inset).child(decorated)
     }
 }
 
@@ -283,6 +282,6 @@ impl PreferredSizeView for CupertinoNavigationBar {
         // `CupertinoNavigationBar.preferredSize` (`nav_bar.dart`, oracle tag
         // `3.44.0`), minus the `bottom`/`largeTitle` height contributions
         // (both deferred — see the module docs).
-        Size::new(px(f32::INFINITY), px(NAV_BAR_PERSISTENT_HEIGHT))
+        Size::new(f64::INFINITY, NAV_BAR_PERSISTENT_HEIGHT)
     }
 }

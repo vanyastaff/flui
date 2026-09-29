@@ -1,10 +1,12 @@
 //! Harness tests for the `RenderSliverFillRemaining` family.
 
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_foundation::{Leaf, Single};
 use flui_objects::{
     RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
     RenderSliverFillRemainingWithScrollable,
 };
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry},
     context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, SliverLayoutContext},
@@ -14,17 +16,16 @@ use flui_rendering::{
     testing::{inspect, sliver as sliver_presets},
     traits::{RenderBox, RenderSliver},
 };
-use flui_types::{Offset, Rect, Size, geometry::px, layout::AxisDirection};
 
 use crate::common::{
     BoxedRenderObject, BoxedSliverObject, laid_out_tight_300x100 as laid_out, sliver_geometry,
 };
 
 fn vertical_constraints(
-    scroll_offset: f32,
-    preceding_scroll_extent: f32,
-    remaining_paint_extent: f32,
-    overlap: f32,
+    scroll_offset: f64,
+    preceding_scroll_extent: f64,
+    remaining_paint_extent: f64,
+    overlap: f64,
 ) -> SliverConstraints {
     sliver_presets::vertical()
         .scroll_offset(scroll_offset)
@@ -54,8 +55,8 @@ fn render_offset(
 
 fn hits(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    cross: f32,
-    main: f32,
+    cross: f64,
+    main: f64,
 ) -> Vec<flui_foundation::RenderId> {
     inspect::hit_path(owner, cross, main)
 }
@@ -66,9 +67,9 @@ struct FixedHitBox {
 }
 
 impl FixedHitBox {
-    fn new(width: f32, height: f32) -> Self {
+    fn new(width: f64, height: f64) -> Self {
         Self {
-            desired: Size::new(px(width), px(height)),
+            desired: Size::new(width, height),
         }
     }
 }
@@ -85,17 +86,17 @@ impl RenderBox for FixedHitBox {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         ctx.is_within_bounds(Rect::from_origin_size(
-            flui_types::Point::ZERO,
+            flui_foundation::geometry::Point::ZERO,
             ctx.own_size(),
         ))
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        self.desired.width.get()
+    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.desired.width
     }
 
-    fn compute_max_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        self.desired.height.get()
+    fn compute_max_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.desired.height
     }
 }
 
@@ -105,9 +106,9 @@ struct ExpandingHitBox {
 }
 
 impl ExpandingHitBox {
-    fn new(width: f32, height: f32) -> Self {
+    fn new(width: f64, height: f64) -> Self {
         Self {
-            intrinsic: Size::new(px(width), px(height)),
+            intrinsic: Size::new(width, height),
         }
     }
 }
@@ -124,17 +125,17 @@ impl RenderBox for ExpandingHitBox {
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
         ctx.is_within_bounds(Rect::from_origin_size(
-            flui_types::Point::ZERO,
+            flui_foundation::geometry::Point::ZERO,
             ctx.own_size(),
         ))
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        self.intrinsic.width.get()
+    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.intrinsic.width
     }
 
-    fn compute_max_intrinsic_height(&self, _width: f32, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
-        self.intrinsic.height.get()
+    fn compute_max_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.intrinsic.height
     }
 }
 
@@ -230,7 +231,7 @@ fn sliver_fill_remaining_with_scrollable_sizes_child_to_remaining_paint_extent()
     let owner = laid_out(owner, root_id);
     let geometry = sliver_geometry(&owner, sliver_id);
 
-    assert_eq!(box_size(&owner, child_id), Size::new(px(300.0), px(70.0)));
+    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 70.0));
     assert_eq!(geometry.scroll_extent, 100.0);
     assert_eq!(geometry.paint_extent, 70.0);
     assert_eq!(geometry.max_paint_extent, 70.0);
@@ -264,7 +265,7 @@ fn sliver_fill_remaining_with_scrollable_includes_negative_overlap_in_child_exte
     let owner = laid_out(owner, root_id);
     let geometry = sliver_geometry(&owner, sliver_id);
 
-    assert_eq!(box_size(&owner, child_id), Size::new(px(300.0), px(100.0)));
+    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 100.0));
     assert_eq!(geometry.scroll_extent, 100.0);
     assert_eq!(geometry.paint_extent, 80.0);
     assert_eq!(geometry.max_paint_extent, 80.0);
@@ -301,7 +302,7 @@ fn sliver_fill_remaining_with_scrollable_keeps_zero_extent_child_in_cache_window
 
     assert_eq!(
         box_size(&owner, child_id),
-        Size::new(px(300.0), px(10.0)),
+        Size::new(300.0, 10.0),
         "when visible extent is zero but cache extent is non-zero, Flutter uses cache extent as maxExtent",
     );
     assert_eq!(geometry.scroll_extent, 100.0);
@@ -337,7 +338,7 @@ fn sliver_layout_context_queries_box_child_intrinsics() {
     let owner = laid_out(owner, root_id);
     let geometry = sliver_geometry(&owner, sliver_id);
 
-    assert_eq!(box_size(&owner, child_id), Size::new(px(300.0), px(140.0)));
+    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 140.0));
     assert_eq!(geometry.scroll_extent, 140.0);
     assert_eq!(geometry.paint_extent, 100.0);
 }
@@ -366,7 +367,7 @@ fn sliver_fill_remaining_uses_child_intrinsic_when_larger_than_remaining_viewpor
     let owner = laid_out(owner, root_id);
     let geometry = sliver_geometry(&owner, sliver_id);
 
-    assert_eq!(box_size(&owner, child_id), Size::new(px(300.0), px(120.0)));
+    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 120.0));
     assert_eq!(geometry.scroll_extent, 120.0);
     assert_eq!(geometry.paint_extent, 70.0);
     assert_eq!(geometry.max_paint_extent, 70.0);
@@ -398,7 +399,7 @@ fn sliver_fill_remaining_uses_viewport_remainder_when_child_is_smaller() {
     let owner = laid_out(owner, root_id);
     let geometry = sliver_geometry(&owner, sliver_id);
 
-    assert_eq!(box_size(&owner, child_id), Size::new(px(300.0), px(70.0)));
+    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 70.0));
     assert_eq!(geometry.scroll_extent, 70.0);
     assert_eq!(geometry.paint_extent, 70.0);
     assert_eq!(geometry.max_paint_extent, 70.0);
@@ -429,7 +430,7 @@ fn sliver_fill_remaining_overscroll_expands_max_paint_extent() {
     let owner = laid_out(owner, root_id);
     let geometry = sliver_geometry(&owner, sliver_id);
 
-    assert_eq!(box_size(&owner, child_id), Size::new(px(300.0), px(80.0)));
+    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 80.0));
     assert_eq!(geometry.scroll_extent, 80.0);
     assert_eq!(geometry.paint_extent, 90.0);
     assert_eq!(geometry.max_paint_extent, 120.0);
@@ -465,14 +466,11 @@ fn sliver_fill_remaining_overscroll_reverse_axis_positions_by_scroll_extent() {
     let owner = laid_out(owner, root_id);
     let geometry = sliver_geometry(&owner, sliver_id);
 
-    assert_eq!(box_size(&owner, child_id), Size::new(px(300.0), px(120.0)));
+    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 120.0));
     assert_eq!(geometry.scroll_extent, 80.0);
     assert_eq!(geometry.paint_extent, 90.0);
     assert_eq!(geometry.max_paint_extent, 120.0);
     // paint_extent + scroll_offset - scroll_extent = 90 + 0 - 80 = 10
     // (was -30, i.e. paint_extent minus the measured child extent 120).
-    assert_eq!(
-        render_offset(&owner, child_id),
-        Offset::new(px(0.0), px(10.0))
-    );
+    assert_eq!(render_offset(&owner, child_id), Offset::new(0.0, 10.0));
 }

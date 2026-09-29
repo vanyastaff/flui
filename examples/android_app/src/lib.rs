@@ -12,8 +12,7 @@
 use flui_hot_reload::app_plugin;
 use flui_objects::RenderColoredBox;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Size;
-use flui_types::geometry::px;
+use flui_foundation::geometry::Size;
 use flui_view::impl_render_view;
 use flui_view::prelude::*;
 
@@ -26,13 +25,13 @@ use flui_view::prelude::*;
 /// Wraps [`RenderColoredBox`] from the rendering layer.
 #[derive(Clone)]
 struct ColoredBoxView {
-    color: [f32; 4],
-    width: f32,
-    height: f32,
+    color: [f64; 4],
+    width: f64,
+    height: f64,
 }
 
 impl ColoredBoxView {
-    fn new(color: [f32; 4], width: f32, height: f32) -> Self {
+    fn new(color: [f64; 4], width: f64, height: f64) -> Self {
         Self {
             color,
             width,
@@ -46,7 +45,7 @@ impl RenderView for ColoredBoxView {
     type RenderObject = RenderColoredBox;
 
     fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        RenderColoredBox::new(self.color, Size::new(px(self.width), px(self.height)))
+        RenderColoredBox::new(self.color, Size::new(self.width, self.height))
     }
 
     fn update_render_object(
@@ -56,7 +55,7 @@ impl RenderView for ColoredBoxView {
     ) -> flui_rendering::RenderUpdateImpact {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_color(self.color);
-        let preferred_size = Size::new(px(self.width), px(self.height));
+        let preferred_size = Size::new(self.width, self.height);
         impact |= render_object.set_preferred_size(preferred_size);
         impact
     }

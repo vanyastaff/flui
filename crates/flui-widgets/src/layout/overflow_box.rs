@@ -1,8 +1,8 @@
 //! [`OverflowBox`] — lays child out under modified constraints.
 
 use flui_objects::{OverflowBoxFit, RenderConstrainedOverflowBox};
+use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::{Alignment, Pixels};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Lays its child out as if it lived in a box with different constraints,
@@ -18,10 +18,10 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 #[derive(Clone, Debug)]
 pub struct OverflowBox {
     alignment: Alignment,
-    min_width: Option<Pixels>,
-    max_width: Option<Pixels>,
-    min_height: Option<Pixels>,
-    max_height: Option<Pixels>,
+    min_width: Option<f64>,
+    max_width: Option<f64>,
+    min_height: Option<f64>,
+    max_height: Option<f64>,
     fit: OverflowBoxFit,
     child: Child,
 }
@@ -50,28 +50,28 @@ impl OverflowBox {
 
     /// Overrides the minimum width constraint passed to the child.
     #[must_use]
-    pub fn with_min_width(mut self, min_width: Pixels) -> Self {
+    pub fn with_min_width(mut self, min_width: f64) -> Self {
         self.min_width = Some(min_width);
         self
     }
 
     /// Overrides the maximum width constraint passed to the child.
     #[must_use]
-    pub fn with_max_width(mut self, max_width: Pixels) -> Self {
+    pub fn with_max_width(mut self, max_width: f64) -> Self {
         self.max_width = Some(max_width);
         self
     }
 
     /// Overrides the minimum height constraint passed to the child.
     #[must_use]
-    pub fn with_min_height(mut self, min_height: Pixels) -> Self {
+    pub fn with_min_height(mut self, min_height: f64) -> Self {
         self.min_height = Some(min_height);
         self
     }
 
     /// Overrides the maximum height constraint passed to the child.
     #[must_use]
-    pub fn with_max_height(mut self, max_height: Pixels) -> Self {
+    pub fn with_max_height(mut self, max_height: f64) -> Self {
         self.max_height = Some(max_height);
         self
     }

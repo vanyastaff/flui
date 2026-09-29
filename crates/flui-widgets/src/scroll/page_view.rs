@@ -43,11 +43,11 @@ use std::time::Duration;
 
 use flui_animation::Curve;
 use flui_animation::simulation::{ScrollSpringSimulation, Simulation, SpringDescription};
+use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::view::{
     CacheExtentStyle, DimensionChangePolicy, ScrollPosition, ViewportOffset,
 };
-use flui_types::layout::Axis;
 use flui_view::prelude::StatefulView;
 use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, LifecycleContext, ViewExt, ViewState};
@@ -85,7 +85,7 @@ pub struct PageScrollPhysics {
     /// (which knows its own `viewportFraction`); FLUI's `ScrollMetrics`
     /// snapshot carries no such field, so this physics must be told
     /// separately.
-    pub viewport_fraction: f32,
+    pub viewport_fraction: f64,
     /// Boundary-clamping and out-of-range ballistic physics this delegates
     /// to. Defaults to [`ClampingScrollPhysics`] (Flutter's platform default
     /// on most targets).
@@ -104,7 +104,7 @@ pub struct PageScrollPhysics {
     /// device-pixel-ratio field (documented divergence, consistent with the
     /// fixed velocity thresholds `ClampingScrollPhysics`/
     /// `BouncingScrollPhysics` already use).
-    pub velocity_tolerance_px_per_sec: f32,
+    pub velocity_tolerance_px_per_sec: f64,
 }
 
 impl PageScrollPhysics {
@@ -115,7 +115,7 @@ impl PageScrollPhysics {
     ///
     /// Panics when `viewport_fraction <= 0.0`.
     #[must_use]
-    pub fn new(viewport_fraction: f32) -> Self {
+    pub fn new(viewport_fraction: f64) -> Self {
         assert!(
             viewport_fraction > 0.0,
             "PageScrollPhysics viewport_fraction must be > 0.0 (got {viewport_fraction})"
@@ -130,7 +130,7 @@ impl PageScrollPhysics {
 }
 
 impl ScrollPhysics for PageScrollPhysics {
-    fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f32) -> f32 {
+    fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
         self.boundary
             .apply_boundary_conditions(metrics, proposed_pixels)
     }
@@ -138,7 +138,7 @@ impl ScrollPhysics for PageScrollPhysics {
     fn create_ballistic_simulation(
         &self,
         metrics: &ScrollMetrics,
-        velocity_px_per_sec: f32,
+        velocity_px_per_sec: f64,
     ) -> Option<Box<dyn Simulation>> {
         // Out of range and not heading back in: defer entirely to the
         // boundary physics, mirroring `super.createBallisticSimulation`
@@ -159,7 +159,7 @@ impl ScrollPhysics for PageScrollPhysics {
         }
         let target = metrics.pixels_from_page(self.viewport_fraction, page.round());
 
-        if (target - metrics.pixels).abs() > f32::EPSILON {
+        if (target - metrics.pixels).abs() > f64::EPSILON {
             Some(Box::new(ScrollSpringSimulation::new(
                 self.spring,
                 metrics.pixels,
@@ -190,7 +190,7 @@ impl ScrollPhysics for PageScrollPhysics {
 pub struct PageController {
     scroll: ScrollController,
     initial_page: usize,
-    viewport_fraction: f32,
+    viewport_fraction: f64,
 }
 
 impl Default for PageController {
@@ -215,7 +215,7 @@ impl PageController {
     /// Panics when `viewport_fraction <= 0.0` (Flutter asserts the same at
     /// `PageController` construction).
     #[must_use]
-    pub fn with_params(initial_page: usize, viewport_fraction: f32) -> Self {
+    pub fn with_params(initial_page: usize, viewport_fraction: f64) -> Self {
         assert!(
             viewport_fraction > 0.0,
             "PageController viewport_fraction must be > 0.0 (got {viewport_fraction})"
@@ -225,7 +225,7 @@ impl PageController {
             .position()
             .set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
                 viewport_fraction,
-                initial_page: Some(initial_page as f32),
+                initial_page: Some(initial_page as f64),
             });
         Self {
             scroll,
@@ -242,7 +242,7 @@ impl PageController {
 
     /// The fraction of the viewport each page occupies.
     #[must_use]
-    pub fn viewport_fraction(&self) -> f32 {
+    pub fn viewport_fraction(&self) -> f64 {
         self.viewport_fraction
     }
 
@@ -262,7 +262,7 @@ impl PageController {
     /// [`ScrollPosition::has_applied_viewport_dimension`] is the substitute
     /// "not yet answerable" signal instead.
     #[must_use]
-    pub fn page(&self) -> Option<f32> {
+    pub fn page(&self) -> Option<f64> {
         let position = self.scroll.position();
         if !position.has_applied_viewport_dimension() {
             return None;
@@ -291,7 +291,7 @@ impl PageController {
     ///   matching `jumpTo`'s "without checking if the new value is in range"
     ///   contract.
     pub fn jump_to_page(&self, page: usize) {
-        let page_f = page as f32;
+        let page_f = page as f64;
         let mut position = self.scroll.position();
         if position.set_cached_page_while_collapsed(page_f) {
             return;
@@ -336,7 +336,7 @@ impl PageController {
         duration: Duration,
         curve: Arc<dyn Curve + Send + Sync>, // see PopPacing's doc (navigator/binding.rs) — same erased easing-curve boundary
     ) {
-        let page_f = page as f32;
+        let page_f = page as f64;
         let position = self.scroll.position();
         if position.set_cached_page_while_collapsed(page_f) {
             return;
@@ -450,7 +450,7 @@ pub struct PageView {
     controller: Option<PageController>,
     scroll_direction: Axis,
     on_page_changed: Option<OnPageChanged>,
-    cache_extent: Option<(f32, CacheExtentStyle)>,
+    cache_extent: Option<(f64, CacheExtentStyle)>,
     children: Vec<BoxedView>,
 }
 
@@ -516,7 +516,7 @@ impl PageView {
     /// `PageView`) would otherwise silently keep neighboring pages laid out
     /// and painted where the oracle keeps none.
     #[must_use]
-    pub fn cache_extent(mut self, cache_extent: f32, style: CacheExtentStyle) -> Self {
+    pub fn cache_extent(mut self, cache_extent: f64, style: CacheExtentStyle) -> Self {
         self.cache_extent = Some((cache_extent, style));
         self
     }
@@ -778,7 +778,7 @@ mod tests {
     /// A 300px-per-page metrics snapshot (`viewport_fraction: 1.0`) at
     /// `pixels`, with `min_scroll_extent: 0.0` and a generous
     /// `max_scroll_extent` so boundary short-circuiting never triggers.
-    fn metrics_at(pixels: f32) -> ScrollMetrics {
+    fn metrics_at(pixels: f64) -> ScrollMetrics {
         ScrollMetrics::new(pixels, 0.0, 3000.0, 300.0)
     }
 
@@ -790,7 +790,7 @@ mod tests {
     /// (`tests/parity/scrollable_test.rs`) uses via repeated `pump_for` — here
     /// evaluated directly against the `Simulation`, with no gesture-harness
     /// timing noise to isolate.
-    fn settled_x(sim: &dyn Simulation) -> f32 {
+    fn settled_x(sim: &dyn Simulation) -> f64 {
         sim.x(2.0)
     }
 

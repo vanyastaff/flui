@@ -2,9 +2,9 @@
 
 use std::fmt::Debug;
 
+use flui_foundation::geometry::{Matrix4, Rect, Size};
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 use flui_layer::TransformLayer;
-use flui_types::{Matrix4, Pixels, Rect, Size};
 
 use super::ViewConfiguration;
 use crate::constraints::BoxConstraints;
@@ -295,23 +295,13 @@ impl RenderView {
     pub fn physical_paint_bounds(&self) -> Rect {
         let config = self.configuration();
         let dpr = config.device_pixel_ratio();
-        Rect::from_ltwh(
-            Pixels::ZERO,
-            Pixels::ZERO,
-            self.size.width * dpr,
-            self.size.height * dpr,
-        )
+        Rect::from_ltwh(0.0, 0.0, self.size.width * dpr, self.size.height * dpr)
     }
 
     /// Returns the semantic bounds for this render view.
     pub fn semantic_bounds(&self) -> Rect {
         if let Some(transform) = &self.root_transform {
-            let bounds = Rect::from_ltwh(
-                Pixels::ZERO,
-                Pixels::ZERO,
-                self.size.width,
-                self.size.height,
-            );
+            let bounds = Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height);
             let scale_x = transform[0];
             let scale_y = transform[5];
             Rect::from_ltwh(
@@ -321,12 +311,7 @@ impl RenderView {
                 bounds.height() * scale_y,
             )
         } else {
-            Rect::from_ltwh(
-                Pixels::ZERO,
-                Pixels::ZERO,
-                self.size.width,
-                self.size.height,
-            )
+            Rect::from_ltwh(0.0, 0.0, self.size.width, self.size.height)
         }
     }
 
@@ -440,7 +425,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         let child_constraints = crate::constraints::BoxConstraints::tight(size);
         for i in 0..layout_ctx.child_count() {
             let _ = layout_ctx.layout_child(i, child_constraints);
-            layout_ctx.position_child(i, flui_types::Offset::ZERO);
+            layout_ctx.position_child(i, flui_foundation::geometry::Offset::ZERO);
         }
 
         Ok(size)
@@ -450,7 +435,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         &self,
         recorder: &mut crate::context::FragmentRecorder,
         child_count: usize,
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
     ) {
         // Root pass-through: the view draws nothing itself and splices
         // every child subtree in order — `size` is only forwarded to
@@ -464,11 +449,11 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         &self,
         _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
         child_count: usize,
-        _size: flui_types::Size,
+        _size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
             Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
-            Option<flui_types::Matrix4>,
+            Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> crate::traits::HitTestOutcome {
         // Root pass-through: test children topmost-first (later
@@ -512,7 +497,7 @@ pub struct CompositeResult {
     /// The logical size of the frame (in logical pixels).
     pub logical_size: Size,
     /// The device pixel ratio.
-    pub device_pixel_ratio: f32,
+    pub device_pixel_ratio: f64,
 }
 
 // ============================================================================
@@ -531,7 +516,7 @@ impl Diagnosticable for RenderView {
 // `impl HitTestTarget for RenderView` used to live here, but was deleted.
 // Its body was a no-op (`let _ = (event, entry);`) -- the view only
 // implemented the trait to satisfy the trait-dispatch shape that the
-// old rendering-side `flui_rendering::hit_testing::HitTestResult` type
+// old rendering-side `crate::hit_testing::HitTestResult` type
 // required. Hit testing now produces the data-typed
 // `flui_interaction::routing::HitTestResult`, whose entries carry handler
 // closures directly, so no trait impl is needed on RenderView. The
@@ -540,7 +525,6 @@ impl Diagnosticable for RenderView {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -553,7 +537,7 @@ mod tests {
 
     #[test]
     fn test_render_view_with_configuration() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let view = RenderView::with_configuration(config.clone());
         assert!(view.has_configuration());
         assert_eq!(view.configuration(), &config);
@@ -561,13 +545,10 @@ mod tests {
 
     #[test]
     fn test_render_view_constraints() {
-        let config = ViewConfiguration::from_size(Size::new(px(1920.0), px(1080.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(1920.0, 1080.0), 2.0);
         let view = RenderView::with_configuration(config);
         let constraints = view.constraints();
-        assert_eq!(
-            constraints,
-            BoxConstraints::tight(Size::new(px(960.0), px(540.0)))
-        );
+        assert_eq!(constraints, BoxConstraints::tight(Size::new(960.0, 540.0)));
     }
 
     // Tests for the `is_repaint_boundary` and `depth` fields were removed
@@ -592,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_apply_paint_transform() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let mut view = RenderView::with_configuration(config);
         view.prepare_initial_frame_internal();
 
@@ -605,7 +586,7 @@ mod tests {
 
     #[test]
     fn layer_accessors_are_none_before_and_some_after_initial_frame() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 1.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 1.0);
         let mut view = RenderView::with_configuration(config);
 
         assert!(view.layer().is_none());
@@ -619,7 +600,7 @@ mod tests {
 
     #[test]
     fn set_configuration_is_noop_when_identical() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let mut view = RenderView::with_configuration(config.clone());
         view.prepare_initial_frame_internal();
 
@@ -633,11 +614,11 @@ mod tests {
 
     #[test]
     fn set_configuration_replaces_root_layer_when_device_pixel_ratio_changes() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let mut view = RenderView::with_configuration(config);
         view.prepare_initial_frame_internal();
 
-        let new_config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 3.0);
+        let new_config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 3.0);
         view.set_configuration(new_config.clone());
 
         assert_eq!(view.configuration(), &new_config);
@@ -652,7 +633,7 @@ mod tests {
 
     #[test]
     fn prepare_initial_frame_without_owner_is_idempotent() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let mut view = RenderView::with_configuration(config);
 
         view.prepare_initial_frame_without_owner();
@@ -670,7 +651,7 @@ mod tests {
 
     #[test]
     fn perform_layout_sizes_to_the_smallest_logical_constraint() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let mut view = RenderView::with_configuration(config.clone());
         view.prepare_initial_frame_internal();
 
@@ -681,7 +662,7 @@ mod tests {
 
     #[test]
     fn physical_paint_bounds_scales_logical_size_by_device_pixel_ratio() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let mut view = RenderView::with_configuration(config);
         view.prepare_initial_frame_internal();
         view.perform_layout();
@@ -693,32 +674,32 @@ mod tests {
 
     #[test]
     fn semantic_bounds_is_unscaled_before_root_transform_is_established() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let mut view = RenderView::with_configuration(config);
         // `size` is crate-visible; set it directly to probe the pre-bootstrap
         // (no root transform yet) branch of `semantic_bounds` in isolation.
-        view.size = Size::new(px(100.0), px(50.0));
+        view.size = Size::new(100.0, 50.0);
 
         let bounds = view.semantic_bounds();
-        assert_eq!(bounds.width(), px(100.0));
-        assert_eq!(bounds.height(), px(50.0));
+        assert_eq!(bounds.width(), 100.0);
+        assert_eq!(bounds.height(), 50.0);
     }
 
     #[test]
     fn semantic_bounds_scales_by_root_transform_once_established() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let mut view = RenderView::with_configuration(config);
-        view.size = Size::new(px(100.0), px(50.0));
+        view.size = Size::new(100.0, 50.0);
         view.prepare_initial_frame_internal();
 
         let bounds = view.semantic_bounds();
-        assert_eq!(bounds.width(), px(200.0));
-        assert_eq!(bounds.height(), px(100.0));
+        assert_eq!(bounds.width(), 200.0);
+        assert_eq!(bounds.height(), 100.0);
     }
 
     #[test]
     fn composite_frame_reports_physical_and_logical_size() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let mut view = RenderView::with_configuration(config);
         view.prepare_initial_frame_internal();
         view.perform_layout();
@@ -736,7 +717,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "self.root_transform.is_some()")]
     fn composite_frame_panics_before_initial_frame_is_prepared() {
-        let config = ViewConfiguration::from_size(Size::new(px(800.0), px(600.0)), 2.0);
+        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let view = RenderView::with_configuration(config);
         let _ = view.composite_frame();
     }

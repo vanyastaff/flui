@@ -326,8 +326,8 @@ mod enabled {
         pub(crate) fn try_render_frame(
             &self,
             renderer: &mut flui_engine::Renderer,
-            width: f32,
-            height: f32,
+            width: f64,
+            height: f64,
         ) -> bool {
             let mut driver = self.driver.lock();
 
@@ -478,8 +478,8 @@ mod disabled {
         pub(crate) fn try_render_frame(
             &self,
             _renderer: &mut flui_engine::Renderer,
-            _width: f32,
-            _height: f32,
+            _width: f64,
+            _height: f64,
         ) -> bool {
             false
         }

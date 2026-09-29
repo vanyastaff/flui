@@ -630,7 +630,7 @@ impl crate::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
                 return crate::layer_walk::Step::SkipSubtree;
             };
 
-            if resolved != flui_types::geometry::Offset::ZERO {
+            if resolved != flui_foundation::geometry::Offset::ZERO {
                 use crate::layer_state_stack::LayerStateStack;
                 self.backend.push_offset(resolved);
                 self.pushed_follower_offsets.push(id);
@@ -1657,7 +1657,7 @@ impl Renderer {
     }
 
     /// Mark a screen region as dirty (needs repaint).
-    pub fn mark_dirty(&mut self, rect: flui_types::geometry::Rect<flui_types::geometry::Pixels>) {
+    pub fn mark_dirty(&mut self, rect: flui_foundation::geometry::Rect<f64>) {
         self.damage_tracker.mark_dirty(rect);
     }
 
@@ -2312,20 +2312,17 @@ impl Renderer {
         let partial_damage = self
             .damage_tracker
             .damage_rect()
-            .filter(|r| r.width().0 > 0.0 && r.height().0 > 0.0);
+            .filter(|r| r.width() > 0.0 && r.height() > 0.0);
         if let Some(damage) = partial_damage {
-            // Hard: this is the damage-rect scissor, an internal repaint
-            // optimisation with pixel-aligned bounds, not a user clip whose
-            // edge anyone can see. Feathering it would blend the boundary of a
-            // region that is supposed to be an exact repaint window.
-            backend
-                .painter_mut()
-                .clip_rect(damage, flui_types::painting::Clip::HardEdge);
+            // Covering, not hard-edged: the damage region is a repaint window,
+            // and a pixel it only partly touches has changed too. Dropping it
+            // would leave that pixel stale.
+            backend.painter_mut().clip_rect_enclosing(damage);
             tracing::trace!(
-                left = damage.left().0,
-                top = damage.top().0,
-                width = damage.width().0,
-                height = damage.height().0,
+                left = damage.left(),
+                top = damage.top(),
+                width = damage.width(),
+                height = damage.height(),
                 "Damage scissor applied"
             );
         }
@@ -2360,10 +2357,10 @@ impl Renderer {
         {
             self.force_full_repaint_next_frame = true;
             tracing::debug!(
-                left = damage.left().0,
-                top = damage.top().0,
-                width = damage.width().0,
-                height = damage.height().0,
+                left = damage.left(),
+                top = damage.top(),
+                width = damage.width(),
+                height = damage.height(),
                 "Advanced shape straddles partial damage; \
                  scheduling full repaint next frame"
             );
@@ -2491,14 +2488,14 @@ impl Renderer {
         surface_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
     ) -> crate::layer_walk::Step {
-        use flui_types::painting::ImageFilter;
+        use flui_painting::paint::ImageFilter;
 
         let bounds = bf_layer.bounds();
 
         // Extract sigma from blur filter; other filter types fall back to
         // normal child rendering (no GPU blur support yet).
         let sigma = if let ImageFilter::Blur { sigma_x, sigma_y } = bf_layer.filter() {
-            f32::midpoint(*sigma_x, *sigma_y)
+            f32::midpoint(*sigma_x as f32, *sigma_y as f32)
         } else {
             // No blur to apply, so this node is a passthrough: hand its
             // children back to the walk (`Descend`) rather than walking them
@@ -2591,7 +2588,7 @@ impl Renderer {
         ctx: &RenderContext,
     ) {
         use crate::layer_state_stack::LayerStateStack;
-        use flui_types::geometry::{Pixels, Size};
+        use flui_foundation::geometry::Size;
 
         let bounds = sm_layer.bounds();
         let shader = sm_layer.shader();
@@ -2604,8 +2601,8 @@ impl Renderer {
         let dpr_scale = backend.painter().current_max_scale().max(1.0);
 
         // Device-resolution offscreen dimensions: logical extent x DPR.
-        let dev_width = (bounds.width().0 * dpr_scale).round().max(1.0) as u32;
-        let dev_height = (bounds.height().0 * dpr_scale).round().max(1.0) as u32;
+        let dev_width = (bounds.width() * f64::from(dpr_scale)).round().max(1.0) as u32;
+        let dev_height = (bounds.height() * f64::from(dpr_scale)).round().max(1.0) as u32;
 
         // Composite rect in device space — the layer-tree equivalent of
         // `LayerDispatcher::render_shader_mask`'s `device_bounds`.
@@ -2634,7 +2631,7 @@ impl Renderer {
             let mut temp_backend = crate::layer_dispatcher::LayerDispatcher::new(offscreen_painter);
 
             let mut seed_transform = ambient_ctm;
-            seed_transform.translate(-device_bounds.left().0, -device_bounds.top().0, 0.0);
+            seed_transform.translate(-device_bounds.left(), -device_bounds.top(), 0.0);
             temp_backend.push_transform(&seed_transform);
 
             for &child_id in node.children() {
@@ -2686,7 +2683,7 @@ impl Renderer {
         // Apply the shader as a GPU mask against the captured child content,
         // then queue the masked result for compositing on the main target at
         // the device-space rect.
-        let result_size = Size::new(Pixels(dev_width as f32), Pixels(dev_height as f32));
+        let result_size = Size::new(f64::from(dev_width), f64::from(dev_height));
         let masked_texture = offscreen
             .render_masked(bounds, result_size, shader, child_tex.texture())
             .into_texture();
@@ -2785,8 +2782,9 @@ mod tests {
     #[test]
     fn sdr_surface_selection_painter_readback_preserves_swatches_and_blending() {
         use crate::painter::WgpuPainter;
+        use flui_foundation::geometry::Rect;
         use flui_painting::Paint;
-        use flui_types::{Color, Rect, geometry::px};
+        use flui_painting::styling::Color;
         use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
 
         let (device, queue) = crate::test_support::test_device_and_queue("SDR transfer regression");
@@ -2823,7 +2821,7 @@ mod tests {
             ];
             for (index, color) in colors.iter().enumerate() {
                 painter.draw_rect(
-                    Rect::from_xywh(px(index as f32 * 10.0), px(0.0), px(10.0), px(64.0)),
+                    Rect::from_xywh(f64::from(index as f32 * 10.0), 0.0, 10.0, 64.0),
                     &Paint::fill(*color),
                 );
             }
@@ -2911,11 +2909,9 @@ mod tests {
         use crate::layer_dispatcher::LayerDispatcher;
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
+        use flui_foundation::geometry::Rect;
         use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
-        use flui_types::{
-            geometry::{Rect, px},
-            painting::ImageFilter,
-        };
+        use flui_painting::paint::ImageFilter;
 
         let Some((device, queue)) = test_device_and_queue() else {
             // No GPU in this environment; skip gracefully (matches the other
@@ -2963,10 +2959,10 @@ mod tests {
         backend.painter_mut().scale(2.0, 2.0);
 
         // Build a one-node layer tree: a leaf BackdropFilter with no children.
-        let logical_bounds = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(200.0));
+        let logical_bounds = Rect::from_xywh(100.0, 100.0, 200.0, 200.0);
         let bf = BackdropFilterLayer::new(
             ImageFilter::blur(5.0),
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
             logical_bounds,
         );
         let tree = LayerTree::new(Layer::BackdropFilter(bf));
@@ -2990,10 +2986,10 @@ mod tests {
         );
         let (composite_rect, _tw, _th) = results[0];
         assert!(
-            (composite_rect.left().0 - 200.0).abs() < 0.5
-                && (composite_rect.top().0 - 200.0).abs() < 0.5
-                && (composite_rect.width().0 - 400.0).abs() < 0.5
-                && (composite_rect.height().0 - 400.0).abs() < 0.5,
+            (composite_rect.left() - 200.0).abs() < 0.5
+                && (composite_rect.top() - 200.0).abs() < 0.5
+                && (composite_rect.width() - 400.0).abs() < 0.5
+                && (composite_rect.height() - 400.0).abs() < 0.5,
             "backdrop composite rect must be the device rect (x=200,y=200,w=400,h=400) \
              under DPR=2; got {composite_rect:?} (logical (x=100,y=100,w=200,h=200) means \
              the DPR transform was dropped)"
@@ -3019,11 +3015,9 @@ mod tests {
         use crate::layer_dispatcher::LayerDispatcher;
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
+        use flui_foundation::geometry::{Offset, Rect};
         use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
-        use flui_types::{
-            geometry::{Offset, Rect, px},
-            painting::ImageFilter,
-        };
+        use flui_painting::paint::ImageFilter;
 
         let Some((device, queue)) = test_device_and_queue() else {
             return;
@@ -3064,14 +3058,12 @@ mod tests {
         // CTM: scale(2) then translate(+10,+10).
         // Maps (x,y) → (2x+20, 2y+20).
         backend.painter_mut().scale(2.0, 2.0);
-        backend
-            .painter_mut()
-            .translate(Offset::new(px(10.0), px(10.0)));
+        backend.painter_mut().translate(Offset::new(10.0, 10.0));
 
-        let logical_bounds = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(200.0));
+        let logical_bounds = Rect::from_xywh(100.0, 100.0, 200.0, 200.0);
         let bf = BackdropFilterLayer::new(
             ImageFilter::blur(5.0),
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
             logical_bounds,
         );
         let tree = LayerTree::new(Layer::BackdropFilter(bf));
@@ -3094,25 +3086,25 @@ mod tests {
         // Expected device rect corners: (220,220)→(620,620); w=h=400.
         // A translation-drop regression gives (200,200) position (not 220).
         assert!(
-            (composite_rect.left().0 - 220.0).abs() < 0.5,
+            (composite_rect.left() - 220.0).abs() < 0.5,
             "composite rect left must be ~220.0 (2*100+20); got {:.2} \
              (translation was likely dropped from CTM)",
-            composite_rect.left().0
+            composite_rect.left()
         );
         assert!(
-            (composite_rect.top().0 - 220.0).abs() < 0.5,
+            (composite_rect.top() - 220.0).abs() < 0.5,
             "composite rect top must be ~220.0 (2*100+20); got {:.2}",
-            composite_rect.top().0
+            composite_rect.top()
         );
         assert!(
-            (composite_rect.width().0 - 400.0).abs() < 0.5,
+            (composite_rect.width() - 400.0).abs() < 0.5,
             "composite rect width must be ~400.0; got {:.2}",
-            composite_rect.width().0
+            composite_rect.width()
         );
         assert!(
-            (composite_rect.height().0 - 400.0).abs() < 0.5,
+            (composite_rect.height() - 400.0).abs() < 0.5,
             "composite rect height must be ~400.0; got {:.2}",
-            composite_rect.height().0
+            composite_rect.height()
         );
     }
 
@@ -3138,11 +3130,9 @@ mod tests {
         use crate::layer_dispatcher::LayerDispatcher;
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
+        use flui_foundation::geometry::Rect;
         use flui_layer::{BackdropFilterLayer, Layer, LayerTree};
-        use flui_types::{
-            geometry::{Rect, px},
-            painting::ImageFilter,
-        };
+        use flui_painting::paint::ImageFilter;
 
         let Some((device, queue)) = test_device_and_queue() else {
             return;
@@ -3186,10 +3176,10 @@ mod tests {
         // Backdrop at (350,350,200,200) — corners (350,350)→(550,550).
         // Clamped to 400×400 surface: x=350,y=350,right=400,bottom=400 →
         // w=50, h=50.
-        let logical_bounds = Rect::from_xywh(px(350.0), px(350.0), px(200.0), px(200.0));
+        let logical_bounds = Rect::from_xywh(350.0, 350.0, 200.0, 200.0);
         let bf = BackdropFilterLayer::new(
             ImageFilter::blur(5.0),
-            flui_types::painting::BlendMode::SrcOver,
+            flui_painting::paint::BlendMode::SrcOver,
             logical_bounds,
         );
         let tree = LayerTree::new(Layer::BackdropFilter(bf));
@@ -3222,26 +3212,26 @@ mod tests {
         // Before the fix, width/height would be 200 (device_rect was passed
         // to queue_offscreen_result instead of clamped_composite_rect).
         assert!(
-            (composite_rect.left().0 - 350.0).abs() < 0.5,
+            (composite_rect.left() - 350.0).abs() < 0.5,
             "composite rect left must be ~350.0 (clamped origin); got {:.2}",
-            composite_rect.left().0
+            composite_rect.left()
         );
         assert!(
-            (composite_rect.top().0 - 350.0).abs() < 0.5,
+            (composite_rect.top() - 350.0).abs() < 0.5,
             "composite rect top must be ~350.0 (clamped origin); got {:.2}",
-            composite_rect.top().0
+            composite_rect.top()
         );
         assert!(
-            (composite_rect.width().0 - 50.0).abs() < 0.5,
+            (composite_rect.width() - 50.0).abs() < 0.5,
             "composite rect width must be ~50.0 (clamped extent); got {:.2} — \
              200.0 indicates the unclamped device_rect was passed to \
              queue_offscreen_result (blurred texture would be stretched)",
-            composite_rect.width().0
+            composite_rect.width()
         );
         assert!(
-            (composite_rect.height().0 - 50.0).abs() < 0.5,
+            (composite_rect.height() - 50.0).abs() < 0.5,
             "composite rect height must be ~50.0 (clamped extent); got {:.2}",
-            composite_rect.height().0
+            composite_rect.height()
         );
     }
 
@@ -3647,8 +3637,9 @@ mod tests {
     /// - Pixel matches neither → advanced blend formula or blit pipeline broken.
     #[test]
     fn intermediate_path_advanced_blend_matches_oracle() {
+        use flui_foundation::geometry::Rect;
         use flui_painting::Paint;
-        use flui_types::{Color, Rect, geometry::Pixels, painting::BlendMode};
+        use flui_painting::{paint::BlendMode, styling::Color};
 
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
@@ -3719,8 +3710,7 @@ mod tests {
         // Source: opaque orange inside a Multiply saveLayer.
         let source_orange = Color::rgba(200, 120, 40, 255);
         let backdrop_color = Color::rgba(40, 60, 220, 255);
-        let layer_bounds =
-            Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(W as f32), Pixels(H as f32));
+        let layer_bounds = Rect::from_xywh(0.0, 0.0, f64::from(W as f32), f64::from(H as f32));
 
         let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&device),
@@ -3861,12 +3851,10 @@ mod tests {
         use crate::layer_dispatcher::LayerDispatcher;
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
+        use flui_foundation::geometry::Rect;
         use flui_layer::{CanvasLayer, ImageFilterLayer, Layer, LayerTree, OpacityLayer};
+        use flui_painting::styling::Color;
         use flui_painting::{Canvas, Paint};
-        use flui_types::{
-            Color,
-            geometry::{Rect, px},
-        };
 
         let Some((device, queue)) = test_device_and_queue() else {
             return;
@@ -3921,7 +3909,7 @@ mod tests {
         // be registered as opaque by the (now-removed) bug.
         let mut bg_canvas = Canvas::new();
         bg_canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(800.0), px(600.0)),
+            Rect::from_xywh(0.0, 0.0, 800.0, 600.0),
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
         );
         let _bg_layer_id = tree.push_child(
@@ -3937,7 +3925,7 @@ mod tests {
         // BUG: this layer was culled by the back-to-front occlusion cull.
         let mut fg_canvas = Canvas::new();
         fg_canvas.draw_rect(
-            Rect::from_xywh(px(400.0), px(0.0), px(400.0), px(600.0)),
+            Rect::from_xywh(400.0, 0.0, 400.0, 600.0),
             &Paint::fill(Color::rgba(0, 0, 255, 255)),
         );
         let _fg_layer_id = tree.push_child(
@@ -4030,11 +4018,12 @@ mod tests {
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
         use crate::render_target::RenderTarget;
+        use flui_foundation::geometry::{Offset, Rect, Size};
         use flui_layer::{
             CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer,
         };
+        use flui_painting::styling::Color;
         use flui_painting::{Canvas, Paint};
-        use flui_types::{Color, Offset, Size, geometry::Rect, geometry::px};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4052,14 +4041,14 @@ mod tests {
         // Leader lives under `branch_a`, offset (60,0) from root.
         let branch_a = tree.push_child(
             root_id,
-            Layer::Offset(OffsetLayer::new(Offset::new(px(60.0), px(0.0)))),
+            Layer::Offset(OffsetLayer::new(Offset::new(60.0, 0.0))),
         );
         let _leader_id = tree.push_child(
             branch_a,
             Layer::Leader(LeaderLayer::with_offset(
                 link,
-                Size::new(px(20.0), px(20.0)),
-                Offset::new(px(5.0), px(5.0)),
+                Size::new(20.0, 20.0),
+                Offset::new(5.0, 5.0),
             )),
         );
 
@@ -4067,17 +4056,17 @@ mod tests {
         // (0,90) from root.
         let branch_b = tree.push_child(
             root_id,
-            Layer::Offset(OffsetLayer::new(Offset::new(px(0.0), px(90.0)))),
+            Layer::Offset(OffsetLayer::new(Offset::new(0.0, 90.0))),
         );
         let follower_id = tree.push_child(
             branch_b,
-            Layer::Follower(FollowerLayer::new(link).with_size(Size::new(px(10.0), px(10.0)))),
+            Layer::Follower(FollowerLayer::new(link).with_size(Size::new(10.0, 10.0))),
         );
 
         // The follower's child: a 10×10 opaque red rect at its own local origin.
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
         );
         let _child_id = tree.push_child(
@@ -4170,9 +4159,10 @@ mod tests {
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
         use crate::render_target::RenderTarget;
+        use flui_foundation::geometry::{Offset, Rect, Size};
         use flui_layer::{CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, OffsetLayer};
+        use flui_painting::styling::Color;
         use flui_painting::{Canvas, Paint};
-        use flui_types::{Color, Offset, Size, geometry::Rect, geometry::px};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4194,13 +4184,13 @@ mod tests {
         // below, not accidentally satisfy them via overlap.
         let follower = FollowerLayer::new(link)
             .with_show_when_unlinked(true)
-            .with_target_offset(Offset::new(px(30.0), px(30.0)))
-            .with_size(Size::new(px(10.0), px(10.0)));
+            .with_target_offset(Offset::new(30.0, 30.0))
+            .with_size(Size::new(10.0, 10.0));
         let follower_id = tree.push_child(root_id, Layer::Follower(follower));
 
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
         );
         let _child_id = tree.push_child(
@@ -4292,9 +4282,10 @@ mod tests {
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
         use crate::render_target::RenderTarget;
+        use flui_foundation::geometry::{Offset, Rect, Size};
         use flui_layer::{CanvasLayer, FollowerLayer, Layer, LayerLink, LayerTree, OffsetLayer};
+        use flui_painting::styling::Color;
         use flui_painting::{Canvas, Paint};
-        use flui_types::{Color, Offset, Size, geometry::Rect, geometry::px};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4311,13 +4302,13 @@ mod tests {
 
         let follower = FollowerLayer::new(link)
             .with_show_when_unlinked(false)
-            .with_target_offset(Offset::new(px(5.0), px(5.0)))
-            .with_size(Size::new(px(10.0), px(10.0)));
+            .with_target_offset(Offset::new(5.0, 5.0))
+            .with_size(Size::new(10.0, 10.0));
         let follower_id = tree.push_child(root_id, Layer::Follower(follower));
 
         let mut canvas = Canvas::new();
         canvas.draw_rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
             &Paint::fill(Color::rgba(255, 0, 0, 255)),
         );
         let _child_id = tree.push_child(
@@ -4495,16 +4486,11 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(STACK)
             .spawn(move || {
-                let bounds = flui_types::geometry::Rect::from_xywh(
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(64.0),
-                    flui_types::geometry::px(64.0),
-                );
+                let bounds = flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
                 let mask = || {
                     Layer::ShaderMask(ShaderMaskLayer::new(
-                        Shader::solid(flui_types::Color::rgba(10, 20, 30, 128)),
-                        flui_types::painting::BlendMode::SrcOver,
+                        Shader::solid(flui_painting::styling::Color::rgba(10, 20, 30, 128)),
+                        flui_painting::paint::BlendMode::SrcOver,
                         bounds,
                     ))
                 };
@@ -4548,13 +4534,10 @@ mod tests {
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
         use crate::render_target::RenderTarget;
+        use flui_foundation::geometry::Rect;
         use flui_layer::{CanvasLayer, Layer, LayerTree, ShaderMaskLayer};
         use flui_painting::{Canvas, Paint, Shader};
-        use flui_types::{
-            Color,
-            geometry::{Rect, px},
-            painting::BlendMode,
-        };
+        use flui_painting::{paint::BlendMode, styling::Color};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4564,7 +4547,7 @@ mod tests {
         let width = 64u32;
         let height = 64u32;
 
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
         let shader = Shader::solid(Color::rgba(10, 20, 30, 128));
         let mut tree = LayerTree::new(Layer::ShaderMask(ShaderMaskLayer::new(
             shader,
@@ -4654,19 +4637,16 @@ mod tests {
         use crate::layer_dispatcher::LayerDispatcher;
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
+        use flui_foundation::geometry::Rect;
         use flui_layer::{CanvasLayer, Layer, LayerTree, ShaderMaskLayer};
         use flui_painting::{Canvas, Paint, Shader};
-        use flui_types::{
-            Color,
-            geometry::{Rect, px},
-            painting::BlendMode,
-        };
+        use flui_painting::{paint::BlendMode, styling::Color};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return;
         };
         let format = wgpu::TextureFormat::Bgra8Unorm;
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let mut tree = LayerTree::new(Layer::ShaderMask(ShaderMaskLayer::new(
             Shader::solid(Color::WHITE),
             BlendMode::SrcOver,
@@ -4732,10 +4712,10 @@ mod tests {
             "offscreen must be device-sized under DPR=2"
         );
         assert!(
-            composite_rect.left().0.abs() < 0.5
-                && composite_rect.top().0.abs() < 0.5
-                && (composite_rect.right().0 - 200.0).abs() < 0.5
-                && (composite_rect.bottom().0 - 200.0).abs() < 0.5,
+            composite_rect.left().abs() < 0.5
+                && composite_rect.top().abs() < 0.5
+                && (composite_rect.right() - 200.0).abs() < 0.5
+                && (composite_rect.bottom() - 200.0).abs() < 0.5,
             "composite rect must span device (0,0,200,200) under DPR=2; got {composite_rect:?}"
         );
     }
@@ -4769,13 +4749,10 @@ mod tests {
         use crate::offscreen::OffscreenRenderer;
         use crate::painter::WgpuPainter;
         use crate::render_target::RenderTarget;
+        use flui_foundation::geometry::{Offset, Rect};
         use flui_layer::{CanvasLayer, Layer, LayerTree, OffsetLayer, ShaderMaskLayer};
         use flui_painting::{Canvas, Paint, Shader};
-        use flui_types::{
-            Color, Offset,
-            geometry::{Rect, px},
-            painting::BlendMode,
-        };
+        use flui_painting::{paint::BlendMode, styling::Color};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4785,14 +4762,11 @@ mod tests {
         let width = 200u32;
         let height = 200u32;
 
-        let mut tree = LayerTree::new(Layer::Offset(OffsetLayer::new(Offset::new(
-            px(60.0),
-            px(40.0),
-        ))));
+        let mut tree = LayerTree::new(Layer::Offset(OffsetLayer::new(Offset::new(60.0, 40.0))));
 
         let offset_id = tree.root();
 
-        let bounds = Rect::from_xywh(px(30.0), px(20.0), px(60.0), px(60.0));
+        let bounds = Rect::from_xywh(30.0, 20.0, 60.0, 60.0);
         let shader = Shader::solid(Color::rgba(10, 20, 30, 128));
         let mask_id = tree.push_child(
             offset_id,
@@ -4909,13 +4883,10 @@ mod tests {
         use crate::layer_dispatcher::LayerDispatcher;
         use crate::painter::WgpuPainter;
         use crate::render_target::RenderTarget;
+        use flui_foundation::geometry::Rect;
         use flui_layer::{CanvasLayer, Layer, LayerTree, ShaderMaskLayer};
         use flui_painting::{Canvas, Paint, Shader};
-        use flui_types::{
-            Color,
-            geometry::{Rect, px},
-            painting::BlendMode,
-        };
+        use flui_painting::{paint::BlendMode, styling::Color};
 
         let Some((device, queue)) = test_device_and_queue() else {
             return; // No GPU — skip gracefully.
@@ -4925,7 +4896,7 @@ mod tests {
         let width = 64u32;
         let height = 64u32;
 
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(64.0), px(64.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 64.0, 64.0);
         let shader = Shader::solid(Color::rgba(10, 20, 30, 128));
         let mut tree = LayerTree::new(Layer::ShaderMask(ShaderMaskLayer::new(
             shader,

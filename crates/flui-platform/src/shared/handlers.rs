@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use flui_types::geometry::{Pixels, Size};
+use flui_foundation::geometry::Size;
 use parking_lot::Mutex;
 
 use crate::traits::{DispatchEventResult, PlatformInput, WindowEvent, WindowExecutionState};
@@ -229,7 +229,7 @@ pub struct WindowCallbacks {
 
     /// Called when the window is resized. Parameters: new size (logical), scale
     /// factor.
-    pub on_resize: Mutex<Option<Box<dyn FnMut(Size<Pixels>, f32) + Send>>>,
+    pub on_resize: Mutex<Option<Box<dyn FnMut(Size<f64>, f64) + Send>>>,
 
     /// Called when the window is moved.
     pub on_moved: Mutex<Option<Box<dyn FnMut() + Send>>>,
@@ -283,8 +283,9 @@ pub struct WindowCallbacks {
     /// `false` is not.
     pub on_surface_status_change: Mutex<Option<Box<dyn FnMut(bool) + Send>>>,
 
-    safe_area_dispatch: Mutex<DispatchState<flui_types::geometry::EdgeInsets>>,
-    on_safe_area_change: Mutex<Option<Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>>>,
+    safe_area_dispatch: Mutex<DispatchState<flui_foundation::geometry::EdgeInsets>>,
+    on_safe_area_change:
+        Mutex<Option<Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>>>,
     on_execution_state_change: Mutex<Option<Box<dyn FnMut(WindowExecutionState) + Send>>>,
     event_dispatch: Mutex<DispatchState<WindowCallbackEvent>>,
     should_close_dispatching: Mutex<bool>,
@@ -308,7 +309,7 @@ pub struct WindowCallbacks {
 enum WindowCallbackEvent {
     Input(PlatformInput),
     RequestFrame,
-    Resize(Size<Pixels>, f32),
+    Resize(Size<f64>, f64),
     Moved,
     Close,
     Active(bool),
@@ -733,7 +734,7 @@ impl WindowCallbacks {
     }
 
     /// Dispatch a resize event with new logical size and scale factor.
-    pub fn dispatch_resize(&self, size: Size<Pixels>, scale_factor: f32) {
+    pub fn dispatch_resize(&self, size: Size<f64>, scale_factor: f64) {
         let Some(drain) = DispatchDrain::begin(
             &self.event_dispatch,
             WindowCallbackEvent::Resize(size, scale_factor),
@@ -839,7 +840,7 @@ impl WindowCallbacks {
     /// Replace a safe-area observer without holding storage through capture Drop.
     pub fn set_safe_area_callback(
         &self,
-        callback: Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>,
+        callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
     ) {
         let old = {
             let mut slot = self.on_safe_area_change.lock();
@@ -854,7 +855,7 @@ impl WindowCallbacks {
     }
 
     /// Immediate metrics delivery, independently leased from the input FIFO.
-    pub fn dispatch_safe_area_change(&self, insets: flui_types::geometry::EdgeInsets) {
+    pub fn dispatch_safe_area_change(&self, insets: flui_foundation::geometry::EdgeInsets) {
         if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
         }
@@ -867,7 +868,7 @@ impl WindowCallbacks {
     }
 
     #[cfg(target_os = "ios")]
-    pub(crate) fn dispatch_metrics_resize(&self, size: Size<Pixels>, scale: f32) {
+    pub(crate) fn dispatch_metrics_resize(&self, size: Size<f64>, scale: f64) {
         if self.lifecycle_closed.load(Ordering::SeqCst) {
             return;
         }
@@ -994,9 +995,7 @@ macro_rules! impl_window_callback_setters {
 
         fn on_resize(
             &self,
-            callback: Box<
-                dyn FnMut(::flui_types::geometry::Size<::flui_types::geometry::Pixels>, f32) + Send,
-            >,
+            callback: Box<dyn FnMut(::flui_foundation::geometry::Size<f64>, f64) + Send>,
         ) {
             *self.$callbacks_field.on_resize.lock() = Some(callback);
         }
@@ -1015,7 +1014,7 @@ macro_rules! impl_window_callback_setters {
 
         fn on_safe_area_change(
             &self,
-            callback: Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>,
+            callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
         ) {
             self.$callbacks_field.set_safe_area_callback(callback);
         }
@@ -1220,7 +1219,7 @@ mod tests {
     /// while the slot precondition still holds.
     #[test]
     fn safe_area_report_inside_a_closing_drain_is_dropped_by_the_latch() {
-        use flui_types::geometry::{EdgeInsets, px};
+        use flui_foundation::geometry::EdgeInsets;
 
         let callbacks = Arc::new(WindowCallbacks::new());
         let seen = Arc::new(AtomicU32::new(0));
@@ -1228,7 +1227,7 @@ mod tests {
         callbacks.set_safe_area_callback(Box::new(move |_| {
             seen_in_observer.fetch_add(1, Ordering::SeqCst);
         }));
-        callbacks.dispatch_safe_area_change(EdgeInsets::new(px(44.0), px(0.0), px(34.0), px(0.0)));
+        callbacks.dispatch_safe_area_change(EdgeInsets::new(44.0, 0.0, 34.0, 0.0));
         assert_eq!(
             seen.load(Ordering::SeqCst),
             1,
@@ -1243,7 +1242,7 @@ mod tests {
             if inner.on_safe_area_change.lock().is_some() {
                 filled_in_input.store(1, Ordering::SeqCst);
             }
-            inner.dispatch_safe_area_change(EdgeInsets::new(px(1.0), px(1.0), px(1.0), px(1.0)));
+            inner.dispatch_safe_area_change(EdgeInsets::new(1.0, 1.0, 1.0, 1.0));
             DispatchEventResult::default()
         }));
         let _ = callbacks.dispatch_input(keyboard_event());

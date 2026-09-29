@@ -10,7 +10,7 @@ use common::{lay_out, loose};
 use flui_material::{
     Divider, DividerThemeData, Theme, ThemeData, ThemeDataOverrides, VerticalDivider,
 };
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 
 /// `_DividerDefaultsM3`'s full geometry table reaches the mounted tree: the
 /// filled line is `1.0` thick and inset by `indent`/`end_indent` on the
@@ -30,12 +30,12 @@ fn default_geometry_matches_the_m3_token_table() {
         .try_find_by_render_type("RenderContainer")
         .expect("Divider must compose a decorated (filled) line");
     assert_eq!(
-        laid.container_inner_size(decorated).height.get(),
+        laid.container_inner_size(decorated).height,
         1.0,
         "_DividerDefaultsM3.thickness (1.0) must set the filled line's height"
     );
 
-    let width = laid.container_inner_size(decorated).width.get();
+    let width = laid.container_inner_size(decorated).width;
     assert_eq!(
         width,
         400.0 - 8.0 - 12.0,
@@ -67,13 +67,13 @@ fn vertical_divider_default_geometry_matches_the_m3_token_table_on_the_transpose
         .try_find_by_render_type("RenderContainer")
         .expect("VerticalDivider must compose a decorated (filled) line");
     assert_eq!(
-        laid.container_inner_size(decorated).width.get(),
+        laid.container_inner_size(decorated).width,
         1.0,
         "_DividerDefaultsM3.thickness (1.0) must set the filled line's WIDTH for \
          VerticalDivider"
     );
 
-    let height = laid.container_inner_size(decorated).height.get();
+    let height = laid.container_inner_size(decorated).height;
     assert_eq!(
         height,
         400.0 - 8.0 - 12.0,

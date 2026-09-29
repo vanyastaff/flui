@@ -2,11 +2,11 @@
 //! around a single child.
 
 use flui_objects::RenderPhysicalModel;
+use flui_painting::BoxShape;
+use flui_painting::paint::Clip;
+use flui_painting::styling::BorderRadius;
+use flui_painting::styling::Color;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Color;
-use flui_types::layout::BoxShape;
-use flui_types::painting::Clip;
-use flui_types::styling::BorderRadius;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A physical layer that clips its child to a [`BoxShape`] (optionally
@@ -31,7 +31,7 @@ pub struct PhysicalModel {
     shape: BoxShape,
     clip_behavior: Clip,
     border_radius: Option<BorderRadius>,
-    elevation: f32,
+    elevation: f64,
     color: Color,
     shadow_color: Color,
     child: Child,
@@ -82,7 +82,7 @@ impl PhysicalModel {
     /// Sets the elevation. Must be non-negative — the underlying render
     /// object debug-asserts this (oracle: `assert(elevation >= 0.0)`).
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = elevation;
         self
     }
@@ -151,7 +151,7 @@ impl_render_view!(PhysicalModel);
 
 #[cfg(test)]
 mod tests {
-    use flui_types::styling::BorderRadiusExt;
+    use flui_painting::styling::BorderRadiusExt;
     use flui_view::RenderView;
 
     use super::*;
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn create_render_object_applies_every_configured_field() {
-        let br = BorderRadius::circular(flui_types::geometry::px(4.0));
+        let br = BorderRadius::circular(4.0);
         let render_object = PhysicalModel::new(Color::RED)
             .shape(BoxShape::Circle)
             .clip_behavior(Clip::AntiAlias)
@@ -196,7 +196,7 @@ mod tests {
     fn update_render_object_pushes_every_field() {
         let mut render_object = PhysicalModel::new(Color::RED).create_render_object(&detached());
 
-        let br = BorderRadius::circular(flui_types::geometry::px(8.0));
+        let br = BorderRadius::circular(8.0);
         let impact = PhysicalModel::new(Color::BLUE)
             .shape(BoxShape::Circle)
             .clip_behavior(Clip::HardEdge)
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn update_render_object_clears_a_previously_set_border_radius() {
-        let br = BorderRadius::circular(flui_types::geometry::px(8.0));
+        let br = BorderRadius::circular(8.0);
         let mut render_object = PhysicalModel::new(Color::RED)
             .border_radius(br)
             .create_render_object(&detached());

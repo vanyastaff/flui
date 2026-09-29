@@ -343,13 +343,13 @@ fn get_pointer_id(event: &PointerEvent) -> PointerId {
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use flui_types::geometry::{Offset, Pixels};
+    use flui_foundation::geometry::Offset;
     use std::cell::RefCell;
 
     use super::*;
     use crate::events::{PointerType, make_move_event};
 
-    fn make_event(device: i32, position: Offset<Pixels>) -> PointerEvent {
+    fn make_event(device: i32, position: Offset<f64>) -> PointerEvent {
         // For testing, use make_move_event with the position
         // The device ID will be PRIMARY (0) by default
         let _ = device; // device ID is not directly settable in ui-events
@@ -419,7 +419,7 @@ mod tests {
 
         router.add_route(pointer, handler);
 
-        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event = make_event(0, Offset::new(50.0, 50.0));
         router.route(&event);
 
         assert_eq!(call_count.get(), 1);
@@ -445,7 +445,7 @@ mod tests {
         router.add_route(pointer, handler1);
         router.add_route(pointer, handler2);
 
-        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event = make_event(0, Offset::new(50.0, 50.0));
         router.route(&event);
 
         // Both handlers should be called
@@ -466,7 +466,7 @@ mod tests {
         router.add_global_handler(handler);
 
         // Route event for any pointer
-        let event = make_event(42, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event = make_event(42, Offset::new(50.0, 50.0));
         router.route(&event);
 
         assert_eq!(call_count.get(), 1);
@@ -495,7 +495,7 @@ mod tests {
         router.add_global_handler(global_handler);
         router.add_route(pointer, pointer_handler);
 
-        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event = make_event(0, Offset::new(50.0, 50.0));
         router.route(&event);
 
         let calls = order.borrow();
@@ -553,7 +553,7 @@ mod tests {
         router.add_route(pointer1, handler);
 
         // Route event for pointer 0 (PRIMARY - default from make_event)
-        let event = make_event(2, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event = make_event(2, Offset::new(50.0, 50.0));
         router.route(&event);
 
         // Handler should NOT be called (registered for pointer1, event is for pointer0)
@@ -582,7 +582,7 @@ mod tests {
 
         router.add_route(pointer, handler);
 
-        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event = make_event(0, Offset::new(50.0, 50.0));
         router.route(&event); // Should not deadlock
 
         assert_eq!(call_count.get(), 1);
@@ -610,7 +610,7 @@ mod tests {
 
         router.add_route(pointer, handler1);
 
-        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event = make_event(0, Offset::new(50.0, 50.0));
         router.route(&event); // Should not deadlock
 
         // The new handler should NOT be called during this dispatch
@@ -646,7 +646,7 @@ mod tests {
         router.add_route(pointer, handler1);
         router.add_route(pointer, handler2);
 
-        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event = make_event(0, Offset::new(50.0, 50.0));
         router.route(&event); // Should not deadlock
 
         // Flutter snapshots additions, but consults the live registration map
@@ -655,7 +655,7 @@ mod tests {
         assert_eq!(handler2_called.get(), 0);
 
         // Second dispatch sees post-removal snapshot — handler2 not called.
-        let event2 = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event2 = make_event(0, Offset::new(50.0, 50.0));
         router.route(&event2);
         assert_eq!(handler2_called.get(), 0);
     }
@@ -677,7 +677,7 @@ mod tests {
         router.add_global_handler(first);
         router.add_global_handler(later);
 
-        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event = make_event(0, Offset::new(50.0, 50.0));
         router.route(&event);
 
         assert_eq!(later_called.get(), 0);
@@ -695,7 +695,7 @@ mod tests {
             Rc::new(move |_: &PointerEvent| captured.set(captured.get() + 1)),
         );
 
-        let event = make_event(0, Offset::new(Pixels(50.0), Pixels(50.0)));
+        let event = make_event(0, Offset::new(50.0, 50.0));
         router.route(&event);
 
         assert_eq!(total.get(), 1);

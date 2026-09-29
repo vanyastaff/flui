@@ -24,9 +24,9 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::{Animatable, Vsync};
-use flui_geometry::Rect;
+use flui_foundation::geometry::Rect;
+use flui_foundation::geometry::Size;
 use flui_rendering::pipeline::PipelineCell;
-use flui_types::Size;
 use flui_widgets::prelude::*;
 use flui_widgets::{FlightDirection, HeroController, HeroControllerScope, PopupRoute, VsyncScope};
 use parking_lot::Mutex;
@@ -354,7 +354,7 @@ struct CountingRectTween {
 }
 
 impl Animatable<Rect> for CountingRectTween {
-    fn transform(&self, t: f32) -> Rect {
+    fn transform(&self, t: f64) -> Rect {
         self.transforms.fetch_add(1, Ordering::SeqCst);
         flui_animation::RectTween::new(self.begin, self.end).transform(t)
     }
@@ -495,7 +495,7 @@ fn custom_placeholder_preserves_hero_child_state_through_push_and_pop() {
     }
 
     fn hold_space(size: Size) -> impl IntoView {
-        SizedBox::new(size.width.0, size.height.0).child(ColoredBox::new(Color::GREEN))
+        SizedBox::new(size.width, size.height).child(ColoredBox::new(Color::GREEN))
     }
 
     let creations = Arc::new(AtomicUsize::new(0));
@@ -696,7 +696,7 @@ fn a_custom_placeholder_is_shown_during_the_flight() {
                     .child(
                         Hero::new(ValueKey::new("shared"), SizedBox::new(30.0, 20.0)).placeholder(
                             |size| {
-                                SizedBox::new(size.width.0, size.height.0)
+                                SizedBox::new(size.width, size.height)
                                     .child(ColoredBox::new(Color::GREEN))
                             },
                         ),

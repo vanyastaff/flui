@@ -12,12 +12,11 @@
 #[test]
 fn a_non_finite_rect_is_never_flown() {
     use super::hero_controller::is_valid_flight;
-    use flui_geometry::Rect;
-    use flui_types::geometry::px;
+    use flui_foundation::geometry::Rect;
 
-    let finite = Rect::from_ltwh(px(0.0), px(0.0), px(10.0), px(10.0));
-    let infinite = Rect::from_ltwh(px(0.0), px(0.0), px(f32::INFINITY), px(10.0));
-    let nan = Rect::from_ltwh(px(f32::NAN), px(0.0), px(10.0), px(10.0));
+    let finite = Rect::from_ltwh(0.0, 0.0, 10.0, 10.0);
+    let infinite = Rect::from_ltwh(0.0, 0.0, f64::INFINITY, 10.0);
+    let nan = Rect::from_ltwh(f64::NAN, 0.0, 10.0, 10.0);
 
     assert!(is_valid_flight(finite, finite));
     assert!(!is_valid_flight(infinite, finite), "an infinite source");

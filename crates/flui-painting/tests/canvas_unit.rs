@@ -6,11 +6,9 @@
 //! does not carry inline `#[cfg(test)] mod tests` blocks for surface
 //! that is already exercised through the public API.
 
+use flui_foundation::geometry::{Point, Rect};
+use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
-use flui_types::{
-    geometry::{Point, Rect, px},
-    styling::Color,
-};
 
 #[test]
 fn test_canvas_creation() {
@@ -22,7 +20,7 @@ fn test_canvas_creation() {
 #[test]
 fn test_canvas_draw_rect() {
     let mut canvas = Canvas::new();
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
 
     canvas.draw_rect(rect, &paint);
@@ -66,7 +64,7 @@ fn test_canvas_transform() {
 #[test]
 fn test_canvas_clip() {
     let mut canvas = Canvas::new();
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
 
     canvas.clip_rect(rect);
 
@@ -77,11 +75,11 @@ fn test_canvas_clip() {
 #[test]
 fn test_canvas_multiple_commands() {
     let mut canvas = Canvas::new();
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
     let paint = Paint::fill(Color::RED);
 
     canvas.draw_rect(rect, &paint);
-    canvas.draw_circle(Point::new(px(50.0), px(50.0)), px(25.0), &paint);
+    canvas.draw_circle(Point::new(50.0, 50.0), 25.0, &paint);
 
     let display_list = canvas.finish();
     assert_eq!(display_list.len(), 2);
@@ -94,10 +92,7 @@ fn test_canvas_restore_without_save() {
     canvas.restore();
 
     let paint = Paint::fill(Color::RED);
-    canvas.draw_rect(
-        Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
-        &paint,
-    );
+    canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), &paint);
     assert_eq!(canvas.len(), 1);
 }
 
@@ -139,7 +134,7 @@ fn test_canvas_finish_clean_after_balanced_save_restore() {
 #[test]
 fn test_canvas_reset_returns_to_fresh_state() {
     let mut canvas = Canvas::new();
-    let rect = Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0));
+    let rect = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
     canvas.draw_rect(rect, &Paint::fill(Color::RED));
     canvas.save();
     canvas.translate(50.0, 50.0);

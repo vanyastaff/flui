@@ -1,0 +1,19 @@
+error[E0277]: cannot add `Point<{float}>` to `Point<{float}>`
+ --> tests/compile_fail/point_plus_point.rs:7:37
+  |
+7 |     let _sum = Point::new(1.0, 2.0) + Point::new(3.0, 4.0);
+  |                                     ^ no implementation for `Point<{float}> + Point<{float}>`
+  |
+  = help: the trait `Add<Point<{float}>>` is not implemented for `Point<{float}>`
+help: `Point<T>` implements trait `Add<Rhs>`
+ --> $WORKSPACE/crates/flui-foundation/src/geometry/point.rs
+  |
+  | / impl<T> Add<Vec2<T>> for Point<T>
+  | | where
+  | |     T: NumericUnit,
+  | |___________________^ `Add<Vec2<T>>`
+...
+  | / impl<T> Add<Offset<T>> for Point<T>
+  | | where
+  | |     T: NumericUnit,
+  | |___________________^ `Add<flui_foundation::geometry::Offset<T>>`

@@ -2,7 +2,7 @@
 //! `AnimationController` — the third transition over the shared spine, proving
 //! the value reaches a `Transform` rotation matrix each tick.
 
-use std::f32::consts::FRAC_PI_2;
+use std::f64::consts::FRAC_PI_2;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use flui_widgets::{RotationTransition, SizedBox};
 fn rotation_transition_reads_animation_turns_on_each_tick() {
     let controller = AnimationController::without_ticker(Duration::from_millis(300));
     // turns are in [0, 1] (one full revolution) — the default bounds fit.
-    let turns: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let turns: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
 
     let mut laid = lay_out(
         RotationTransition::new(turns, SizedBox::new(100.0, 100.0)),
@@ -43,7 +43,7 @@ fn rotation_transition_reads_animation_turns_on_each_tick() {
 fn rotation_transition_lays_its_child_out_as_a_passthrough() {
     let controller = AnimationController::without_ticker(Duration::from_millis(300));
     controller.set_value(0.5);
-    let turns: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+    let turns: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
 
     let laid = lay_out(
         RotationTransition::new(turns, SizedBox::new(80.0, 60.0)),

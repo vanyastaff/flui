@@ -1,6 +1,6 @@
 //! Transform parts for hit test coordinate transformation.
 
-use flui_types::{Matrix4, Offset, Pixels, geometry::px};
+use flui_foundation::geometry::{Matrix4, Offset};
 
 /// A part of a transform that can be applied to or inverted for positions.
 ///
@@ -21,8 +21,8 @@ pub enum MatrixTransformPart {
 
 impl MatrixTransformPart {
     /// Creates an offset transform part.
-    pub fn offset(dx: f32, dy: f32) -> Self {
-        Self::Offset(Offset::new(px(dx), px(dy)))
+    pub fn offset(dx: f64, dy: f64) -> Self {
+        Self::Offset(Offset::new(dx, dy))
     }
 
     /// Creates a matrix transform part.
@@ -58,7 +58,7 @@ impl MatrixTransformPart {
     /// Returns the equivalent matrix for this transform part.
     pub fn to_matrix(&self) -> Matrix4 {
         match self {
-            Self::Offset(offset) => Matrix4::translation(offset.dx.into(), offset.dy.into(), 0.0),
+            Self::Offset(offset) => Matrix4::translation(offset.dx, offset.dy, 0.0),
             Self::Matrix(m) => *m,
         }
     }
@@ -66,7 +66,7 @@ impl MatrixTransformPart {
     /// Returns true if this is an identity transform.
     pub fn is_identity(&self) -> bool {
         match self {
-            Self::Offset(offset) => offset.dx == Pixels::ZERO && offset.dy == Pixels::ZERO,
+            Self::Offset(offset) => offset.dx == 0.0 && offset.dy == 0.0,
             Self::Matrix(m) => *m == Matrix4::IDENTITY,
         }
     }
@@ -97,45 +97,45 @@ mod tests {
     #[test]
     fn test_offset_local_to_global() {
         let transform = MatrixTransformPart::offset(10.0, 20.0);
-        let local = Offset::new(px(5.0), px(5.0));
+        let local = Offset::new(5.0, 5.0);
         let global = transform.local_to_global(local);
-        assert_eq!(global.dx, px(15.0));
-        assert_eq!(global.dy, px(25.0));
+        assert_eq!(global.dx, 15.0);
+        assert_eq!(global.dy, 25.0);
     }
 
     #[test]
     fn test_offset_global_to_local() {
         let transform = MatrixTransformPart::offset(10.0, 20.0);
-        let global = Offset::new(px(15.0), px(25.0));
+        let global = Offset::new(15.0, 25.0);
         let local = transform.global_to_local(global).unwrap();
-        assert_eq!(local.dx, px(5.0));
-        assert_eq!(local.dy, px(5.0));
+        assert_eq!(local.dx, 5.0);
+        assert_eq!(local.dy, 5.0);
     }
 
     #[test]
     fn test_matrix_translation() {
         let m = Matrix4::translation(10.0, 20.0, 0.0);
         let transform = MatrixTransformPart::Matrix(m);
-        let local = Offset::new(px(5.0), px(5.0));
+        let local = Offset::new(5.0, 5.0);
         let global = transform.local_to_global(local);
 
-        assert!((global.dx.get() - 15.0).abs() < 0.001);
-        assert!((global.dy.get() - 25.0).abs() < 0.001);
+        assert!((global.dx - 15.0).abs() < 0.001);
+        assert!((global.dy - 25.0).abs() < 0.001);
     }
 
     #[test]
     fn test_matrix_scale() {
         let m = Matrix4::scaling(2.0, 2.0, 1.0);
         let transform = MatrixTransformPart::Matrix(m);
-        let local = Offset::new(px(5.0), px(10.0));
+        let local = Offset::new(5.0, 10.0);
         let global = transform.local_to_global(local);
 
-        assert!((global.dx.get() - 10.0).abs() < 0.001);
-        assert!((global.dy.get() - 20.0).abs() < 0.001);
+        assert!((global.dx - 10.0).abs() < 0.001);
+        assert!((global.dy - 20.0).abs() < 0.001);
 
         let back = transform.global_to_local(global).unwrap();
-        assert!((back.dx.get() - 5.0).abs() < 0.001);
-        assert!((back.dy.get() - 10.0).abs() < 0.001);
+        assert!((back.dx - 5.0).abs() < 0.001);
+        assert!((back.dy - 10.0).abs() < 0.001);
     }
 
     #[test]
@@ -150,19 +150,19 @@ mod tests {
         let transform = MatrixTransformPart::offset(10.0, 20.0);
         let matrix = transform.to_matrix();
 
-        let (x, y) = matrix.transform_point(px(5.0), px(5.0));
-        assert!((x.get() - 15.0).abs() < 0.001);
-        assert!((y.get() - 25.0).abs() < 0.001);
+        let (x, y) = matrix.transform_point(5.0, 5.0);
+        assert!((x - 15.0).abs() < 0.001);
+        assert!((y - 25.0).abs() < 0.001);
     }
 
     #[test]
     fn test_from_offset() {
-        let offset = Offset::new(px(10.0), px(20.0));
+        let offset = Offset::new(10.0, 20.0);
         let transform: MatrixTransformPart = offset.into();
 
         if let MatrixTransformPart::Offset(o) = transform {
-            assert_eq!(o.dx, px(10.0));
-            assert_eq!(o.dy, px(20.0));
+            assert_eq!(o.dx, 10.0);
+            assert_eq!(o.dy, 20.0);
         } else {
             panic!("Expected Offset variant");
         }

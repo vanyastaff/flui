@@ -43,7 +43,7 @@ fn rebuilding_an_opacity_widget_updates_its_layer() {
     );
     assert_eq!(
         opacity_alpha_u8(&harness),
-        Some((0.5_f32 * 255.0).round() as u8),
+        Some((0.5_f64 * 255.0).round() as u8),
         "precondition: the first frame composites the initial alpha",
     );
 
@@ -51,7 +51,7 @@ fn rebuilding_an_opacity_widget_updates_its_layer() {
 
     assert_eq!(
         opacity_alpha_u8(&harness),
-        Some((0.25_f32 * 255.0).round() as u8),
+        Some((0.25_f64 * 255.0).round() as u8),
         "a rebuild with a new opacity must reach the composited layer through \
          the widget's own update path, not only through a direct setter call",
     );

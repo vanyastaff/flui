@@ -2,7 +2,7 @@
 //!
 //! Provides information about physical displays (monitors, screens).
 
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Size};
+use flui_foundation::geometry::{Bounds, Size};
 
 /// Display identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,17 +36,17 @@ pub trait PlatformDisplay: Send + Sync {
     /// For the primary display, this usually starts at (0, 0).
     /// Secondary displays are positioned relative to the primary.
     ///
-    /// Uses `Bounds<DevicePixels>` to represent physical pixel coordinates,
+    /// Uses `Bounds<i32>` to represent physical pixel coordinates,
     /// following GPUI's type-safe approach.
-    fn bounds(&self) -> Bounds<DevicePixels>;
+    fn bounds(&self) -> Bounds<i32>;
 
     /// Get the display's usable bounds (excluding taskbars, menu bars, etc.)
     ///
     /// This is the area where windows can be placed without being obscured
     /// by system UI elements.
     ///
-    /// Uses `Bounds<DevicePixels>` for physical pixel coordinates.
-    fn usable_bounds(&self) -> Bounds<DevicePixels> {
+    /// Uses `Bounds<i32>` for physical pixel coordinates.
+    fn usable_bounds(&self) -> Bounds<i32> {
         self.bounds() // Default: same as full bounds
     }
 
@@ -68,19 +68,14 @@ pub trait PlatformDisplay: Send + Sync {
     ///
     /// Converts device pixels to logical pixels by dividing by the scale
     /// factor.
-    fn logical_size(&self) -> Size<Pixels> {
-        use flui_types::geometry::px;
-
+    fn logical_size(&self) -> Size<f64> {
         let bounds = self.bounds();
-        let scale = self.scale_factor() as f32;
+        let scale = self.scale_factor();
 
-        // Convert DevicePixels to Pixels by dividing by scale factor
-        let device_width: i32 = bounds.size.width.into();
-        let device_height: i32 = bounds.size.height.into();
+        // Device pixels to logical pixels: divide by the scale factor
+        let device_width: i32 = bounds.size.width;
+        let device_height: i32 = bounds.size.height;
 
-        Size::new(
-            px(device_width as f32 / scale),
-            px(device_height as f32 / scale),
-        )
+        Size::new(device_width as f64 / scale, device_height as f64 / scale)
     }
 }

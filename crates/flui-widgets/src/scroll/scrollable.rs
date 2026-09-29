@@ -62,10 +62,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationStatus, Vsync, VsyncRegistration};
+use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::view::{ScrollDirection, ScrollPosition};
-use flui_types::layout::{Axis, AxisDirection};
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BoxedView, BuildContext, BuildContextExt, Child, IntoView, LifecycleContext, ViewExt, ViewState,
@@ -269,7 +270,7 @@ impl Scrollable {
 ///
 /// Owns the ballistic fling [`AnimationController`] and its vsync
 /// registration. The fling controller has effectively unbounded value range
-/// (`f32::NEG_INFINITY` → `f32::INFINITY`) so pixel-space simulation values
+/// (`f64::NEG_INFINITY` → `f64::INFINITY`) so pixel-space simulation values
 /// are never clamped. A value listener on the controller pushes the live pixel
 /// position into the [`ScrollController`] each tick.
 pub struct ScrollableState {
@@ -611,8 +612,8 @@ impl ViewState<Scrollable> for ScrollableState {
                     // `apply_boundary_conditions` enforces the physics limits
                     // (hard clamp or spring resistance) before committing.
                     let raw_delta = match scroll_direction {
-                        Axis::Vertical => details.delta.dy.get(),
-                        Axis::Horizontal => details.delta.dx.get(),
+                        Axis::Vertical => details.delta.dy,
+                        Axis::Horizontal => details.delta.dx,
                     };
                     let signed_delta = if axis_direction.is_reversed() {
                         -raw_delta
@@ -642,8 +643,8 @@ impl ViewState<Scrollable> for ScrollableState {
                     // -details.primaryVelocity!; if (_reversed) { velocity =
                     // -velocity; }` (`widgets/scroll_activity.dart`).
                     let raw_velocity = match scroll_direction {
-                        Axis::Vertical => details.velocity.pixels_per_second.dy.get(),
-                        Axis::Horizontal => details.velocity.pixels_per_second.dx.get(),
+                        Axis::Vertical => details.velocity.pixels_per_second.dy,
+                        Axis::Horizontal => details.velocity.pixels_per_second.dx,
                     };
                     let fling_velocity_px_per_sec = if axis_direction.is_reversed() {
                         raw_velocity
@@ -654,7 +655,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     // velocity tracker can produce astronomically large velocities
                     // when pointer samples arrive with sub-millisecond timestamps
                     // (headless test timing); an unbounded velocity drives
-                    // `UnderdampedSolution` to `f32::INFINITY` for any t > 0.
+                    // `UnderdampedSolution` to `f64::INFINITY` for any t > 0.
                     let fling_velocity_px_per_sec =
                         fling_velocity_px_per_sec.clamp(-8_000.0, 8_000.0);
                     // `clamp` propagates NaN (IEEE 754); NaN can arrive when all
@@ -717,8 +718,8 @@ impl ViewState<Scrollable> for ScrollableState {
                     // the scrollable, and the leaf-first claim walk asks it
                     // first.
                     let axis_delta = match scroll_direction {
-                        Axis::Vertical => data.delta.dy.get(),
-                        Axis::Horizontal => data.delta.dx.get(),
+                        Axis::Vertical => data.delta.dy,
+                        Axis::Horizontal => data.delta.dx,
                     };
                     // Platform deltas arrive already normalized to the
                     // oracle's `scrollDelta` convention — positive = content

@@ -1,20 +1,20 @@
 //! Codegen for `#[derive(Animatable)]`.
 //!
 //! Generates a `TwoWayConverter` implementation that decomposes a struct of
-//! `f32` fields into a `[f32; N]` vector and rebuilds it, so the type can be
+//! `f64` fields into a `[f64; N]` vector and rebuilds it, so the type can be
 //! spring-animated by `flui_animation::AnimatedValue`. The authoring shape is:
 //!
 //! ```rust,ignore
 //! #[derive(Clone, Animatable)]
 //! struct Translation {
-//!     x: f32,
-//!     y: f32,
-//!     z: f32,
+//!     x: f64,
+//!     y: f64,
+//!     z: f64,
 //! }
 //! ```
 //!
-//! No hand-written `impl TwoWayConverter`. Every field must be `f32` (the scalar
-//! component type the spring core operates on); a non-`f32` field is a compile
+//! No hand-written `impl TwoWayConverter`. Every field must be `f64` (the scalar
+//! component type the spring core operates on); a non-`f64` field is a compile
 //! error pointing at the offending field.
 //!
 //! ## Generated-code path strategy
@@ -40,13 +40,13 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
         Data::Enum(_) | Data::Union(_) => {
             return syn::Error::new(
                 input.ident.span(),
-                "#[derive(Animatable)] supports only structs of `f32` fields",
+                "#[derive(Animatable)] supports only structs of `f64` fields",
             )
             .to_compile_error();
         }
     };
 
-    // Reject any non-`f32` field with a span-located error.
+    // Reject any non-`f64` field with a span-located error.
     if let Some(err) = first_non_f32_field(fields) {
         return err.to_compile_error();
     }
@@ -83,7 +83,7 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
 
     quote! {
         impl #impl_generics #runtime::TwoWayConverter for #name #ty_generics #where_clause {
-            type Vector = [f32; #count];
+            type Vector = [f64; #count];
 
             #[inline]
             fn to_vector(&self) -> Self::Vector {
@@ -98,7 +98,7 @@ pub fn expand(input: &DeriveInput) -> TokenStream {
     }
 }
 
-/// Returns an error located at the first field whose type is not `f32`.
+/// Returns an error located at the first field whose type is not `f64`.
 fn first_non_f32_field(fields: &Fields) -> Option<syn::Error> {
     fields.iter().find_map(|field| {
         if is_f32(&field.ty) {
@@ -106,15 +106,15 @@ fn first_non_f32_field(fields: &Fields) -> Option<syn::Error> {
         } else {
             Some(syn::Error::new(
                 field.ty.span(),
-                "#[derive(Animatable)] requires every field to be `f32` \
+                "#[derive(Animatable)] requires every field to be `f64` \
                  (the scalar component type the spring core animates)",
             ))
         }
     })
 }
 
-/// Whether `ty` is exactly `f32` (by the final path segment).
+/// Whether `ty` is exactly `f64` (by the final path segment).
 fn is_f32(ty: &Type) -> bool {
     matches!(ty, Type::Path(p) if p.qself.is_none()
-        && p.path.segments.last().is_some_and(|seg| seg.ident == "f32"))
+        && p.path.segments.last().is_some_and(|seg| seg.ident == "f64"))
 }

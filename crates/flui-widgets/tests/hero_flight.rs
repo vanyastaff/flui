@@ -13,10 +13,10 @@ use std::time::Duration;
 
 use flui_animation::{Animatable, Animation, AnimationStatus, Curve, Curves, RectTween, Threshold};
 use flui_foundation::ValueKey;
-use flui_geometry::Rect;
+use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::Rect;
+use flui_painting::styling::Color;
 use flui_rendering::pipeline::PipelineOwner;
-use flui_types::Color;
-use flui_types::Offset;
 use flui_view::ViewExt;
 use flui_view::prelude::*;
 use parking_lot::Mutex;
@@ -83,7 +83,7 @@ fn install(navigator: &NavigatorHandle) -> Arc<HeroController> {
 /// swallow a pointer whether or not it is wrapped in an `IgnorePointer`. Giving it a
 /// `ColoredBox` (a `RenderDecoratedBox`, which is) is what makes the `IgnorePointer`
 /// the thing under test.
-fn hittable_hero_page(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> {
+fn hittable_hero_page(tag_name: &'static str, w: f64, h: f64) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
         Center::new()
             .child(Hero::new(
@@ -97,7 +97,7 @@ fn hittable_hero_page(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> 
 }
 
 /// A `PageRoute` whose page is one `Hero`, centred so it does not fill the screen.
-fn hero_page(tag_name: &'static str, w: f32, h: f32) -> PageRoute<i32> {
+fn hero_page(tag_name: &'static str, w: f64, h: f64) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
         Center::new()
             .child(Hero::new(ValueKey::new(tag_name), SizedBox::new(w, h)))
@@ -258,7 +258,7 @@ fn the_from_hero_is_hidden_for_the_whole_flight() {
     assert_eq!(
         from_hero
             .placeholder_size()
-            .map(|size| (size.width.0, size.height.0)),
+            .map(|size| (size.width, size.height)),
         Some((30.0, 20.0)),
         "frozen at its committed size"
     );
@@ -297,7 +297,7 @@ fn the_to_hero_placeholder_drops_its_child_during_the_flight() {
     assert_eq!(
         to_hero
             .placeholder_size()
-            .map(|size| (size.width.0, size.height.0)),
+            .map(|size| (size.width, size.height)),
         Some((60.0, 45.0))
     );
     assert!(
@@ -528,7 +528,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
     let target_before = flight.target_rect();
     let begin_before = flight.begin_rect();
     assert_eq!(
-        (target_before.width().0, target_before.height().0),
+        (target_before.width(), target_before.height()),
         (60.0, 45.0)
     );
 
@@ -543,7 +543,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
 
     let target_after = flight.target_rect();
     assert_eq!(
-        (target_after.min_y() - target_before.min_y()).0,
+        (target_after.min_y() - target_before.min_y()),
         50.0,
         "a 100px spacer above a centred column moves its second child down by 50px, \
          and the tween followed it"
@@ -554,7 +554,7 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
         "nothing moved it horizontally"
     );
     assert_eq!(
-        (target_after.width().0, target_after.height().0),
+        (target_after.width(), target_after.height()),
         (60.0, 45.0),
         "the end size is untouched (though the frozen placeholder makes that \
          unobservable today — see the docs above)"
@@ -567,8 +567,8 @@ fn destination_hero_move_mid_flight_updates_the_target_rect() {
     );
 }
 
-fn rect_origin(rect: Rect) -> (f32, f32) {
-    (rect.min_x().0, rect.min_y().0)
+fn rect_origin(rect: Rect) -> (f64, f64) {
+    (rect.min_x(), rect.min_y())
 }
 
 // ============================================================================
@@ -627,18 +627,18 @@ fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
     // destination *origin* after the swap, so compare on size, which it preserves.
     assert_eq!(
         (
-            pop_flight.begin_rect().width().0,
-            pop_flight.begin_rect().height().0
+            pop_flight.begin_rect().width(),
+            pop_flight.begin_rect().height()
         ),
-        (push_end.width().0, push_end.height().0),
+        (push_end.width(), push_end.height()),
         "the tween now begins where the push was heading"
     );
     assert_eq!(
         (
-            pop_flight.target_rect().width().0,
-            pop_flight.target_rect().height().0
+            pop_flight.target_rect().width(),
+            pop_flight.target_rect().height()
         ),
-        (push_begin.width().0, push_begin.height().0),
+        (push_begin.width(), push_begin.height()),
         "and ends where the push began"
     );
 }
@@ -940,7 +940,7 @@ fn many_flights_landing_in_one_frame_schedule_one_drain() {
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
 
-    let two_heroes = |a: &'static str, b: &'static str, wa: f32, wb: f32| {
+    let two_heroes = |a: &'static str, b: &'static str, wa: f64, wb: f64| {
         PageRoute::<i32>::new(move |_ctx, _p, _s| {
             Column::new(vec![
                 Hero::new(ValueKey::new(a), SizedBox::new(wa, 20.0))
@@ -1078,7 +1078,7 @@ fn a_same_direction_divert_transfers_the_placeholders() {
     let c_hero = hero_of(&navigator, 3, "shared");
 
     assert_eq!(
-        b_hero.placeholder_size().map(|s| (s.width.0, s.height.0)),
+        b_hero.placeholder_size().map(|s| (s.width, s.height)),
         Some((60.0, 45.0)),
         "B is now the flight's source, frozen at its size"
     );
@@ -1087,7 +1087,7 @@ fn a_same_direction_divert_transfers_the_placeholders() {
         "and keeps its child offstage — it is the *from* hero of a push"
     );
     assert_eq!(
-        c_hero.placeholder_size().map(|s| (s.width.0, s.height.0)),
+        c_hero.placeholder_size().map(|s| (s.width, s.height)),
         Some((90.0, 70.0)),
         "C is the new destination, a bare hole"
     );
@@ -1312,8 +1312,8 @@ fn a_faded_out_flight_still_removes_its_entry_when_the_animation_settles() {
 /// A `hero_page` whose `Hero` is customized by `configure` — a flight curve, say.
 fn hero_page_with(
     tag_name: &'static str,
-    w: f32,
-    h: f32,
+    w: f64,
+    h: f64,
     configure: impl Fn(Hero) -> Hero + 'static,
 ) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
@@ -1331,10 +1331,10 @@ fn hero_page_with(
 /// All four extents of `actual` match `expected` to within a thousandth of a pixel.
 fn assert_rect_close(actual: Rect, expected: Rect, what: &str) {
     for (got, want, edge) in [
-        (actual.min_x().0, expected.min_x().0, "left"),
-        (actual.min_y().0, expected.min_y().0, "top"),
-        (actual.width().0, expected.width().0, "width"),
-        (actual.height().0, expected.height().0, "height"),
+        (actual.min_x(), expected.min_x(), "left"),
+        (actual.min_y(), expected.min_y(), "top"),
+        (actual.width(), expected.width(), "width"),
+        (actual.height(), expected.height(), "height"),
     ] {
         assert!(
             (got - want).abs() < 1e-3,
@@ -1549,8 +1549,8 @@ fn a_diverted_flight_drops_the_reverse_curve() {
 /// A `hero_page` under a chain of `HeroMode` scopes, outermost first.
 fn hero_mode_page(
     tag_name: &'static str,
-    w: f32,
-    h: f32,
+    w: f64,
+    h: f64,
     modes: &'static [bool],
 ) -> PageRoute<i32> {
     PageRoute::<i32>::new(move |_ctx, _primary, _secondary| {
@@ -1671,7 +1671,7 @@ fn a_bare_hero_mode_changes_nothing() {
 #[test]
 fn a_pop_push_divert_resumes_from_the_old_manifest_animation_value() {
     let linear_page =
-        |w: f32, h: f32| hero_page_with("shared", w, h, |hero| hero.curve(flui_animation::Linear));
+        |w: f64, h: f64| hero_page_with("shared", w, h, |hero| hero.curve(flui_animation::Linear));
 
     let navigator = seeded_navigator();
     let controller = install(&navigator);

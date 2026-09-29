@@ -11,12 +11,11 @@
 //!
 //! Flutter stores `maxWidth` / `maxHeight` as `double` with `double.infinity`
 //! as the "no limit" sentinel. The Rust port models them as
-//! `Option<Pixels>` — `None` means "do not impose a cap" — and the typed
-//! `Pixels` boundary prevents the rest of the codebase from accidentally
-//! treating an infinite cap as a meaningful upper bound.
+//! `Option<f64>` — `None` means "do not impose a cap" — so no caller can
+//! mistake an infinite cap for a meaningful upper bound.
 
 use flui_foundation::Single;
-use flui_types::{Offset, Pixels, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,
@@ -43,33 +42,32 @@ use flui_rendering::{
 ///
 /// ```ignore
 /// use flui_objects::RenderLimitedBox;
-/// use flui_types::geometry::px;
 ///
 /// // Cap width at 240, leave height alone.
-/// let _node = RenderLimitedBox::new(Some(px(240.0)), None);
+/// let _node = RenderLimitedBox::new(Some(240.0), None);
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderLimitedBox {
     /// Max width to impose when the parent constraint is unbounded.
-    max_width: Option<Pixels>,
+    max_width: Option<f64>,
     /// Max height to impose when the parent constraint is unbounded.
-    max_height: Option<Pixels>,
+    max_height: Option<f64>,
     /// Whether we have a child (tracked for hit testing).
     has_child: bool,
 }
 
 impl RenderLimitedBox {
     /// Default maximum width (matches Flutter's `double.infinity`).
-    pub const DEFAULT_MAX_WIDTH: Option<Pixels> = None;
+    pub const DEFAULT_MAX_WIDTH: Option<f64> = None;
     /// Default maximum height (matches Flutter's `double.infinity`).
-    pub const DEFAULT_MAX_HEIGHT: Option<Pixels> = None;
+    pub const DEFAULT_MAX_HEIGHT: Option<f64> = None;
 
     /// Creates a limited box with optional caps for each dimension.
     ///
     /// Passing `None` for a dimension means "no cap" — the incoming
     /// constraint is used as-is for that axis. Passing `Some(px)` only takes
     /// effect when the incoming constraint is unbounded for that axis.
-    pub const fn new(max_width: Option<Pixels>, max_height: Option<Pixels>) -> Self {
+    pub const fn new(max_width: Option<f64>, max_height: Option<f64>) -> Self {
         Self {
             max_width,
             max_height,
@@ -78,37 +76,34 @@ impl RenderLimitedBox {
     }
 
     /// Creates a limited box that caps width only.
-    pub const fn width(max_width: Pixels) -> Self {
+    pub const fn width(max_width: f64) -> Self {
         Self::new(Some(max_width), None)
     }
 
     /// Creates a limited box that caps height only.
-    pub const fn height(max_height: Pixels) -> Self {
+    pub const fn height(max_height: f64) -> Self {
         Self::new(None, Some(max_height))
     }
 
     /// Creates a limited box that caps both dimensions.
-    pub const fn both(max_width: Pixels, max_height: Pixels) -> Self {
+    pub const fn both(max_width: f64, max_height: f64) -> Self {
         Self::new(Some(max_width), Some(max_height))
     }
 
     /// Returns the configured maximum width.
     #[inline]
-    pub fn max_width(&self) -> Option<Pixels> {
+    pub fn max_width(&self) -> Option<f64> {
         self.max_width
     }
 
     /// Returns the configured maximum height.
     #[inline]
-    pub fn max_height(&self) -> Option<Pixels> {
+    pub fn max_height(&self) -> Option<f64> {
         self.max_height
     }
 
     /// Sets the maximum width and reports layout when changed.
-    pub fn set_max_width(
-        &mut self,
-        max_width: Option<Pixels>,
-    ) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_max_width(&mut self, max_width: Option<f64>) -> flui_rendering::RenderUpdateImpact {
         if self.max_width == max_width {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
@@ -119,7 +114,7 @@ impl RenderLimitedBox {
     /// Sets the maximum height and reports layout when changed.
     pub fn set_max_height(
         &mut self,
-        max_height: Option<Pixels>,
+        max_height: Option<f64>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.max_height == max_height {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -137,12 +132,12 @@ impl RenderLimitedBox {
         let max_w = if incoming.has_bounded_width() {
             incoming.max_width
         } else {
-            self.max_width.unwrap_or(Pixels::INFINITY)
+            self.max_width.unwrap_or(f64::INFINITY)
         };
         let max_h = if incoming.has_bounded_height() {
             incoming.max_height
         } else {
-            self.max_height.unwrap_or(Pixels::INFINITY)
+            self.max_height.unwrap_or(f64::INFINITY)
         };
         BoxConstraints::new(
             incoming.min_width,
@@ -164,12 +159,12 @@ impl flui_foundation::Diagnosticable for RenderLimitedBox {
         builder.add(
             "max_width",
             self.max_width
-                .map_or_else(|| "unset".to_string(), |v| format!("{}", v.get())),
+                .map_or_else(|| "unset".to_string(), |v| format!("{v}")),
         );
         builder.add(
             "max_height",
             self.max_height
-                .map_or_else(|| "unset".to_string(), |v| format!("{}", v.get())),
+                .map_or_else(|| "unset".to_string(), |v| format!("{v}")),
         );
     }
 }
@@ -222,7 +217,7 @@ impl RenderBox for RenderLimitedBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         flui_rendering::context::proxy_queries::forward_dry_baseline(constraints, baseline, ctx)
     }
 }
@@ -233,12 +228,11 @@ impl RenderBox for RenderLimitedBox {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
-    fn bc(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
-        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
+        BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
     // ---------- API surface -----------------------------------------------
@@ -252,28 +246,28 @@ mod tests {
 
     #[test]
     fn const_constructors() {
-        let w = RenderLimitedBox::width(px(120.0));
-        assert_eq!(w.max_width(), Some(px(120.0)));
+        let w = RenderLimitedBox::width(120.0);
+        assert_eq!(w.max_width(), Some(120.0));
         assert_eq!(w.max_height(), None);
 
-        let h = RenderLimitedBox::height(px(80.0));
+        let h = RenderLimitedBox::height(80.0);
         assert_eq!(h.max_width(), None);
-        assert_eq!(h.max_height(), Some(px(80.0)));
+        assert_eq!(h.max_height(), Some(80.0));
 
-        let b = RenderLimitedBox::both(px(120.0), px(80.0));
-        assert_eq!(b.max_width(), Some(px(120.0)));
-        assert_eq!(b.max_height(), Some(px(80.0)));
+        let b = RenderLimitedBox::both(120.0, 80.0);
+        assert_eq!(b.max_width(), Some(120.0));
+        assert_eq!(b.max_height(), Some(80.0));
     }
 
     #[test]
     fn setters_return_exact_impact() {
         let mut node = RenderLimitedBox::default();
         assert_eq!(
-            node.set_max_width(Some(px(100.0))),
+            node.set_max_width(Some(100.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
         assert_eq!(
-            node.set_max_width(Some(px(100.0))),
+            node.set_max_width(Some(100.0)),
             flui_rendering::RenderUpdateImpact::NONE
         );
         assert_eq!(
@@ -281,7 +275,7 @@ mod tests {
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
         assert_eq!(
-            node.set_max_height(Some(px(50.0))),
+            node.set_max_height(Some(50.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT
         );
     }
@@ -290,58 +284,58 @@ mod tests {
 
     #[test]
     fn unbounded_width_gets_capped() {
-        let node = RenderLimitedBox::width(px(200.0));
-        let incoming = bc(0.0, f32::INFINITY, 0.0, 100.0);
+        let node = RenderLimitedBox::width(200.0);
+        let incoming = bc(0.0, f64::INFINITY, 0.0, 100.0);
         let limited = node.limit_constraints(incoming);
-        assert_eq!(limited.max_width, px(200.0));
-        assert_eq!(limited.max_height, px(100.0));
+        assert_eq!(limited.max_width, 200.0);
+        assert_eq!(limited.max_height, 100.0);
     }
 
     #[test]
     fn bounded_width_is_untouched() {
-        let node = RenderLimitedBox::width(px(200.0));
-        let incoming = bc(0.0, 80.0, 0.0, f32::INFINITY);
+        let node = RenderLimitedBox::width(200.0);
+        let incoming = bc(0.0, 80.0, 0.0, f64::INFINITY);
         let limited = node.limit_constraints(incoming);
         // Width is already bounded — cap is ignored.
-        assert_eq!(limited.max_width, px(80.0));
+        assert_eq!(limited.max_width, 80.0);
     }
 
     #[test]
     fn unbounded_with_no_cap_stays_infinite() {
         let node = RenderLimitedBox::default();
-        let incoming = bc(0.0, f32::INFINITY, 0.0, f32::INFINITY);
+        let incoming = bc(0.0, f64::INFINITY, 0.0, f64::INFINITY);
         let limited = node.limit_constraints(incoming);
-        assert!(limited.max_width.get().is_infinite());
-        assert!(limited.max_height.get().is_infinite());
+        assert!(limited.max_width.is_infinite());
+        assert!(limited.max_height.is_infinite());
     }
 
     #[test]
     fn cap_below_min_is_clamped_up_to_min() {
         // Cap of 10 with min of 50 → effective max becomes 50.
-        let node = RenderLimitedBox::width(px(10.0));
-        let incoming = bc(50.0, f32::INFINITY, 0.0, 100.0);
+        let node = RenderLimitedBox::width(10.0);
+        let incoming = bc(50.0, f64::INFINITY, 0.0, 100.0);
         let limited = node.limit_constraints(incoming);
-        assert_eq!(limited.max_width, px(50.0));
-        assert_eq!(limited.min_width, px(50.0));
+        assert_eq!(limited.max_width, 50.0);
+        assert_eq!(limited.min_width, 50.0);
     }
 
     // ---------- dry layout ------------------------------------------------
 
     #[test]
     fn dry_layout_without_child_is_smallest() {
-        let node = RenderLimitedBox::both(px(120.0), px(60.0));
+        let node = RenderLimitedBox::both(120.0, 60.0);
         let dry = flui_rendering::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
-            node.compute_dry_layout(bc(0.0, f32::INFINITY, 0.0, f32::INFINITY), ctx)
+            node.compute_dry_layout(bc(0.0, f64::INFINITY, 0.0, f64::INFINITY), ctx)
         });
         assert_eq!(dry, Size::ZERO);
     }
 
     #[test]
     fn dry_layout_honours_min_constraints() {
-        let node = RenderLimitedBox::both(px(120.0), px(60.0));
+        let node = RenderLimitedBox::both(120.0, 60.0);
         let dry = flui_rendering::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
-            node.compute_dry_layout(bc(40.0, f32::INFINITY, 30.0, f32::INFINITY), ctx)
+            node.compute_dry_layout(bc(40.0, f64::INFINITY, 30.0, f64::INFINITY), ctx)
         });
-        assert_eq!(dry, Size::new(px(40.0), px(30.0)));
+        assert_eq!(dry, Size::new(40.0, 30.0));
     }
 }

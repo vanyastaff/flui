@@ -9,11 +9,12 @@
 //! train, and its surface may change on any train without a `flui` major.
 //!
 //! - **Whole modules** at the facade's paths: [`animation`], [`foundation`],
-//!   [`types`], [`view`] and [`widgets`] are the internal crates themselves,
-//!   so `flui_sdk::widgets::Text` and `flui::widgets::Text` are one type.
-//! - **Curated modules** at the facade's paths: [`interaction`], [`painting`]
-//!   and [`rendering`] hold the subset of the facade's module that packages
-//!   use, as the same items, not wrappers.
+//!   [`geometry`], [`view`] and [`widgets`] are the internal crates (or, for
+//!   `geometry`, foundation's module) themselves, so `flui_sdk::widgets::Text`
+//!   and `flui::widgets::Text` are one type.
+//! - **Curated modules** at the facade's paths: [`interaction`], [`painting`],
+//!   [`platform`] and [`rendering`] hold the subset of the facade's module that
+//!   packages use, as the same items, not wrappers.
 //! - **Evolving modules** [`pipeline`] and [`hooks`]: render-object internals
 //!   and development hooks the facade does not expose. A package's exposure to
 //!   them is `grep -E 'flui_sdk::(pipeline|hooks)::'`.
@@ -24,9 +25,15 @@
 
 pub use flui_animation as animation;
 pub use flui_foundation as foundation;
-pub use flui_types as types;
+pub use flui_foundation::geometry;
 pub use flui_view as view;
 pub use flui_widgets as widgets;
+
+/// Platform values: brightness and locale.
+pub mod platform {
+    pub use flui_platform_api::Brightness;
+    pub use flui_platform_api::Locale;
+}
 
 /// Gesture details and focus, at the paths `flui::interaction` uses.
 pub mod interaction {
@@ -34,13 +41,27 @@ pub mod interaction {
     pub use flui_interaction::routing::FocusNode;
 }
 
-/// Custom painting, at the paths `flui::painting` uses.
+/// Custom painting and the paint, style and text values, at the paths `flui::painting` uses.
 ///
 /// `DrawOp` is here for packages' paint tests, which read back the recorded
 /// operations; no package names it outside its tests.
 pub mod painting {
+    pub use flui_painting::Alignment;
     pub use flui_painting::Canvas;
     pub use flui_painting::DrawOp;
+    pub use flui_painting::paint::Clip;
+    pub use flui_painting::paint::Paint;
+    pub use flui_painting::paint::Path;
+    pub use flui_painting::styling::Border;
+    pub use flui_painting::styling::BorderRadius;
+    pub use flui_painting::styling::BorderRadiusExt;
+    pub use flui_painting::styling::BorderSide;
+    pub use flui_painting::styling::BorderStyle;
+    pub use flui_painting::styling::BoxDecoration;
+    pub use flui_painting::styling::Color;
+    pub use flui_painting::typography::FontWeight;
+    pub use flui_painting::typography::TextDirection;
+    pub use flui_painting::typography::TextStyle;
 }
 
 /// Render-object authoring, at the paths `flui::rendering` uses.

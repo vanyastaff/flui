@@ -28,13 +28,13 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use flui_foundation::geometry::Offset;
 use flui_interaction::GestureRecognizer;
 use flui_interaction::PointerDispatch;
 use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
 use flui_interaction::ids::PointerId;
 use flui_interaction::recognizers::TapGestureRecognizer;
-use flui_types::geometry::{Offset, Pixels};
 
 /// Build a recogniser with the given callback wiring. The arc clone
 /// is a one-time setup cost; the bench loop only measures
@@ -56,28 +56,19 @@ fn make_recognizer(with_callbacks: bool) -> Arc<TapGestureRecognizer> {
 
 /// Pointer-down event at the origin (within slop of the down position).
 fn down_event() -> flui_interaction::events::PointerEvent {
-    make_down_event(
-        Offset::new(Pixels(100.0), Pixels(100.0)),
-        PointerType::Touch,
-    )
+    make_down_event(Offset::new(100.0, 100.0), PointerType::Touch)
 }
 
 /// Pointer-move event within the default touch slop (18 px) of the
 /// down position — must NOT cancel the in-flight tap.
 fn move_within_slop_event() -> flui_interaction::events::PointerEvent {
-    make_move_event(
-        Offset::new(Pixels(105.0), Pixels(102.0)),
-        PointerType::Touch,
-    )
+    make_move_event(Offset::new(105.0, 102.0), PointerType::Touch)
 }
 
 /// Pointer-up event at the same position as the down — completes a
 /// valid tap.
 fn up_event() -> flui_interaction::events::PointerEvent {
-    make_up_event(
-        Offset::new(Pixels(100.0), Pixels(100.0)),
-        PointerType::Touch,
-    )
+    make_up_event(Offset::new(100.0, 100.0), PointerType::Touch)
 }
 
 /// Benchmark the full Down → Move → Up sequence with no callbacks
@@ -93,8 +84,8 @@ fn bench_tap_no_callbacks(c: &mut Criterion) {
         b.iter(|| {
             recognizer.add_pointer(
                 pointer,
-                Offset::new(Pixels(100.0), Pixels(100.0)),
-                Offset::new(Pixels(100.0), Pixels(100.0)),
+                Offset::new(100.0, 100.0),
+                Offset::new(100.0, 100.0),
             );
             recognizer.handle_event(PointerDispatch::at_root(black_box(&down)));
             recognizer.handle_event(PointerDispatch::at_root(black_box(&mv)));
@@ -124,8 +115,8 @@ fn bench_tap_with_callbacks(c: &mut Criterion) {
             b.iter(|| {
                 recognizer.add_pointer(
                     pointer,
-                    Offset::new(Pixels(100.0), Pixels(100.0)),
-                    Offset::new(Pixels(100.0), Pixels(100.0)),
+                    Offset::new(100.0, 100.0),
+                    Offset::new(100.0, 100.0),
                 );
                 recognizer.handle_event(PointerDispatch::at_root(black_box(&down)));
                 recognizer.handle_event(PointerDispatch::at_root(black_box(&mv)));
@@ -143,7 +134,7 @@ fn bench_add_pointer(c: &mut Criterion) {
     let arena = GestureArena::new();
     let recognizer = black_box(TapGestureRecognizer::new(arena));
     let pointer = PointerId::PRIMARY;
-    let position = Offset::new(Pixels(100.0), Pixels(100.0));
+    let position = Offset::new(100.0, 100.0);
     c.bench_function("TapGestureRecognizer::add_pointer", |b| {
         b.iter(|| {
             recognizer.add_pointer(black_box(pointer), black_box(position), black_box(position));
@@ -175,8 +166,8 @@ fn bench_secondary_button(c: &mut Criterion) {
             b.iter(|| {
                 recognizer.add_pointer(
                     pointer,
-                    Offset::new(Pixels(100.0), Pixels(100.0)),
-                    Offset::new(Pixels(100.0), Pixels(100.0)),
+                    Offset::new(100.0, 100.0),
+                    Offset::new(100.0, 100.0),
                 );
                 recognizer.handle_event(PointerDispatch::at_root(black_box(&down)));
                 recognizer.dispose();

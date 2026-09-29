@@ -1844,7 +1844,6 @@ dependencies = [
  "flui-cupertino",
  "flui-engine",
  "flui-foundation",
- "flui-geometry",
  "flui-hot-reload",
  "flui-interaction",
  "flui-layer",
@@ -1853,9 +1852,9 @@ dependencies = [
  "flui-objects",
  "flui-painting",
  "flui-platform",
+ "flui-platform-api",
  "flui-rendering",
  "flui-testing",
- "flui-types",
  "flui-view",
  "flui-widgets",
  "image",
@@ -1865,6 +1864,8 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "pollster",
+ "serde",
+ "serde_json",
  "tempfile",
  "toml",
  "tracing",
@@ -1879,8 +1880,8 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-macros",
+ "flui-painting",
  "flui-scheduler",
- "flui-types",
  "parking_lot",
  "serde",
  "smallvec",
@@ -1905,12 +1906,12 @@ dependencies = [
  "flui-objects",
  "flui-painting",
  "flui-platform",
+ "flui-platform-api",
  "flui-rendering",
  "flui-runtime",
  "flui-scheduler",
  "flui-semantics",
  "flui-testing",
- "flui-types",
  "flui-view",
  "flui-widgets",
  "parking_lot",
@@ -1928,7 +1929,7 @@ dependencies = [
 name = "flui-assets"
 version = "0.2.0-dev"
 dependencies = [
- "flui-types",
+ "flui-painting",
  "image",
  "lasso",
  "moka",
@@ -2003,9 +2004,10 @@ dependencies = [
 name = "flui-desktop-scene"
 version = "0.2.0-dev"
 dependencies = [
+ "flui-foundation",
  "flui-hot-reload",
  "flui-layer",
- "flui-types",
+ "flui-painting",
 ]
 
 [[package]]
@@ -2038,7 +2040,6 @@ dependencies = [
  "flui-foundation",
  "flui-layer",
  "flui-painting",
- "flui-types",
  "glam",
  "image",
  "lyon",
@@ -2064,27 +2065,18 @@ dependencies = [
 name = "flui-foundation"
 version = "0.2.0-dev"
 dependencies = [
+ "criterion",
  "flui-macros",
- "flui-types",
+ "glam",
  "parking_lot",
  "serde",
  "serde_json",
  "smallvec",
+ "thiserror 2.0.20",
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen-test",
  "web-time",
-]
-
-[[package]]
-name = "flui-geometry"
-version = "0.2.0-dev"
-dependencies = [
- "bytemuck",
- "glam",
- "kurbo",
- "serde",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2121,11 +2113,12 @@ dependencies = [
  "dpi",
  "flui-foundation",
  "flui-interaction",
+ "flui-painting",
  "flui-platform-api",
  "flui-testing",
- "flui-types",
  "parking_lot",
  "proptest",
+ "serde",
  "smallvec",
  "static_assertions",
  "thiserror 2.0.20",
@@ -2142,7 +2135,6 @@ dependencies = [
  "bitflags 2.13.2",
  "flui-foundation",
  "flui-painting",
- "flui-types",
  "static_assertions",
  "tracing",
 ]
@@ -2202,9 +2194,9 @@ dependencies = [
  "flui-objects",
  "flui-painting",
  "flui-rendering",
- "flui-types",
  "insta",
  "parking_lot",
+ "serde",
  "tracing",
 ]
 
@@ -2216,12 +2208,17 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-painting",
- "flui-types",
+ "kurbo",
  "parking_lot",
  "parley",
+ "proptest",
+ "rstest",
+ "serde",
+ "serde_json",
  "swash",
  "thiserror 2.0.20",
  "tracing",
+ "trybuild",
  "unicode-script",
  "unicode-segmentation",
 ]
@@ -2232,7 +2229,8 @@ version = "0.2.0-dev"
 dependencies = [
  "console_error_panic_hook",
  "flui-engine",
- "flui-types",
+ "flui-foundation",
+ "flui-painting",
  "raw-window-handle",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -2261,9 +2259,9 @@ dependencies = [
  "dispatch2",
  "dpi",
  "flui-foundation",
+ "flui-painting",
  "flui-platform-api",
  "flui-semantics",
- "flui-types",
  "keyboard-types",
  "libc",
  "objc2 0.6.4",
@@ -2293,9 +2291,11 @@ version = "0.2.0-dev"
 dependencies = [
  "cursor-icon",
  "flui-foundation",
- "flui-types",
  "parking_lot",
+ "proptest",
  "raw-window-handle",
+ "serde",
+ "serde_json",
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",
@@ -2329,10 +2329,10 @@ dependencies = [
  "flui-rendering",
  "flui-scheduler",
  "flui-semantics",
- "flui-types",
  "parking_lot",
  "proptest",
  "rustc-hash 2.1.3",
+ "serde",
  "slab",
  "smallvec",
  "stacker",
@@ -2353,13 +2353,13 @@ dependencies = [
  "flui-interaction",
  "flui-layer",
  "flui-objects",
+ "flui-painting",
  "flui-platform",
  "flui-platform-api",
  "flui-rendering",
  "flui-scheduler",
  "flui-semantics",
  "flui-testing",
- "flui-types",
  "flui-view",
  "flui-widgets",
  "parking_lot",
@@ -2402,9 +2402,9 @@ dependencies = [
  "flui-interaction",
  "flui-objects",
  "flui-painting",
+ "flui-platform-api",
  "flui-rendering",
  "flui-scheduler",
- "flui-types",
  "flui-view",
  "flui-widgets",
 ]
@@ -2418,7 +2418,6 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-protocol",
- "flui-types",
  "parking_lot",
  "rustc-hash 2.1.3",
  "slab",
@@ -2442,26 +2441,11 @@ dependencies = [
  "flui-rendering",
  "flui-scheduler",
  "flui-semantics",
- "flui-types",
  "flui-view",
  "parking_lot",
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",
-]
-
-[[package]]
-name = "flui-types"
-version = "0.2.0-dev"
-dependencies = [
- "criterion",
- "flui-geometry",
- "proptest",
- "rstest",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "trybuild",
 ]
 
 [[package]]
@@ -2477,11 +2461,11 @@ dependencies = [
  "flui-interaction",
  "flui-macros",
  "flui-objects",
+ "flui-painting",
  "flui-platform-api",
  "flui-rendering",
  "flui-scheduler",
  "flui-testing",
- "flui-types",
  "futures-core",
  "parking_lot",
  "serial_test",
@@ -2508,8 +2492,8 @@ name = "flui-web-demo"
 version = "0.2.0-dev"
 dependencies = [
  "console_error_panic_hook",
+ "flui-foundation",
  "flui-platform",
- "flui-types",
  "ui-events",
  "wasm-bindgen",
  "web-sys",
@@ -2537,7 +2521,6 @@ dependencies = [
  "flui-animation",
  "flui-assets",
  "flui-foundation",
- "flui-geometry",
  "flui-interaction",
  "flui-macros",
  "flui-objects",
@@ -2546,7 +2529,6 @@ dependencies = [
  "flui-rendering",
  "flui-scheduler",
  "flui-testing",
- "flui-types",
  "flui-view",
  "flui-widgets",
  "futures-core",
@@ -2908,7 +2890,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e762b9b188634fc508d4ec54b62ea3d352c43fd431d18d05d46f559f217f4725"
 dependencies = [
  "bytemuck",
- "mint",
  "serde_core",
 ]
 
@@ -3055,7 +3036,7 @@ name = "hot-reload-counter-logic"
 version = "0.2.0-dev"
 dependencies = [
  "flui-hot-reload",
- "flui-types",
+ "flui-painting",
  "flui-view",
  "flui-widgets",
  "hot-reload-counter-types",
@@ -3932,12 +3913,6 @@ dependencies = [
  "adler2",
  "simd-adler32",
 ]
-
-[[package]]
-name = "mint"
-version = "0.5.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 
 [[package]]
 name = "mio"

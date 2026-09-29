@@ -1,5 +1,5 @@
 //! Scroll-path parity tests:
-#![expect(clippy::float_cmp)] // physics clamp + controller pixel reads return exact f32 literals
+#![expect(clippy::float_cmp)] // physics clamp + controller pixel reads return exact f64 literals
 //!
 //! 1. `SingleChildScrollView` viewport geometry (cross-protocol Box→Sliver path).
 //! 2. `ScrollController` thumb geometry helpers.
@@ -17,10 +17,9 @@ use crate::common::{LaidOut, lay_out, offset, size, tight};
 use flui_animation::{Curves, Vsync};
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt as _;
+use flui_painting::styling::Color;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::view::ScrollDirection;
-use flui_types::Color;
-use flui_types::geometry::px;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView, ViewExt};
 use flui_widgets::{
@@ -108,7 +107,7 @@ fn list_view_shrink_wrap_sizes_to_static_fixed_extent_content() {
     let rows: Vec<_> = (0..4).map(|_| SizedBox::shrink().boxed()).collect();
     let laid = lay_out(
         ListView::new(50.0, rows).shrink_wrap(true),
-        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(500.0)),
+        BoxConstraints::new(200.0, 200.0, 0.0, 500.0),
     );
 
     let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
@@ -131,7 +130,7 @@ fn list_view_builder_shrink_wrap_sizes_to_settled_lazy_content() {
             (index < 3).then(|| SizedBox::new(200.0, 50.0).boxed())
         })
         .shrink_wrap(true),
-        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(500.0)),
+        BoxConstraints::new(200.0, 200.0, 0.0, 500.0),
     );
 
     laid.tick();
@@ -174,7 +173,7 @@ fn custom_scroll_view_shrink_wrap_sizes_to_sliver_content() {
             vec![SizedBox::shrink().boxed(), SizedBox::shrink().boxed()],
         ),))
         .shrink_wrap(true),
-        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(500.0)),
+        BoxConstraints::new(200.0, 200.0, 0.0, 500.0),
     );
 
     let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
@@ -191,7 +190,7 @@ fn grid_view_shrink_wrap_sizes_to_grid_rows() {
     let tiles: Vec<_> = (0..4).map(|_| SizedBox::shrink().boxed()).collect();
     let laid = lay_out(
         GridView::count(2, tiles).shrink_wrap(true),
-        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(500.0)),
+        BoxConstraints::new(200.0, 200.0, 0.0, 500.0),
     );
 
     let viewport = laid.find_by_render_type("RenderShrinkWrappingViewport");
@@ -223,11 +222,11 @@ fn sliver_padding_insets_its_sliver_child() {
 }
 
 // ============================================================================
-// Viewport — Position/Pixels mode switching
+// Viewport — Position/Fixed mode switching
 // ============================================================================
 
 /// Regression: a `Viewport` reused across a Position-mode build (offset
-/// injected from a `ScrollController`) followed by a Pixels-mode rebuild
+/// injected from a `ScrollController`) followed by a Fixed-mode rebuild
 /// (`.offset(constant)`) must not keep pushing that constant into the
 /// PRIOR build's shared, controller-owned `ScrollPosition` — `update_render_object`
 /// only ever sees the new build's config, not the old one's, so the render
@@ -235,7 +234,7 @@ fn sliver_padding_insets_its_sliver_child() {
 /// (`ScrollPosition::is_uniquely_held` is false — the controller also holds
 /// a clone) and swap in a fresh, privately-owned position before pushing.
 ///
-/// Without the fix, the Pixels arm called `set_pixels` on whatever offset
+/// Without the fix, the Fixed arm called `set_pixels` on whatever offset
 /// was already installed — after a prior Position-mode build that is the
 /// controller's shared position, so this test's `controller.pixels()`
 /// assertion catches the stomp, and the widget's own geometry check catches
@@ -266,21 +265,21 @@ fn viewport_position_to_pixels_mode_switch_does_not_stomp_the_shared_controller_
 
     // Second build, same tree position — the element/render object is
     // REUSED (not remounted), so this exercises the mode-switch path:
-    // Pixels mode at a constant (42.0) distinct from the controller's 200.
+    // Fixed mode at a constant (42.0) distinct from the controller's 200.
     let pixels_widget = Viewport::new((SliverFixedExtentList::new(50.0, rows()),)).offset(42.0);
     laid.pump_widget(pixels_widget);
 
     assert_eq!(
         controller.pixels(),
         200.0,
-        "a Position-to-Pixels mode switch must not push into the controller's shared \
+        "a Position-to-f64 mode switch must not push into the controller's shared \
          ScrollPosition; got {:.1}",
         controller.pixels()
     );
 
     // And the widget must genuinely be scrolled to its OWN 42px constant
     // (not stuck at 200, and not silently reset to 0): compare its item
-    // geometry against a widget built fresh, directly in Pixels mode, at
+    // geometry against a widget built fresh, directly in Fixed mode, at
     // the same 42.0 constant — a correct mode switch makes these identical.
     let switched_sliver = laid.only_child(laid.root());
     let switched_item_offset = laid.absolute_offset(laid.child(switched_sliver, 0));
@@ -293,7 +292,7 @@ fn viewport_position_to_pixels_mode_switch_does_not_stomp_the_shared_controller_
     assert_eq!(
         switched_item_offset, fresh_item_offset,
         "after the mode switch the widget must be scrolled to its own 42px constant, matching \
-         a viewport built fresh directly in Pixels mode at the same offset"
+         a viewport built fresh directly in f64 mode at the same offset"
     );
 }
 
@@ -442,7 +441,7 @@ fn grid_view_position_passthrough_feeds_the_content_dimension_feedback_loop() {
 /// Same pin as `list_view_position_passthrough_feeds_the_content_dimension_feedback_loop`,
 /// under [`ListView::shrink_wrap`] — the Business.1 remainder this closes.
 /// Before the fix, the shrink_wrap arm snapshotted `position.pixels()` once
-/// per rebuild into a private `ShrinkWrappingViewport::offset(f32)`, so
+/// per rebuild into a private `ShrinkWrappingViewport::offset(f64)`, so
 /// `RenderShrinkWrappingViewport`'s committed content extents never flushed
 /// back into `controller` (`max_scroll_extent()` stayed `0.0`) and a
 /// subsequent `set_pixels` never moved committed paint until the next
@@ -460,10 +459,7 @@ fn list_view_shrink_wrap_position_passthrough_feeds_the_content_dimension_feedba
         .shrink_wrap(true)
         .position(controller.position());
 
-    let mut laid = lay_out(
-        widget,
-        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(120.0)),
-    );
+    let mut laid = lay_out(widget, BoxConstraints::new(200.0, 200.0, 0.0, 120.0));
     laid.pump();
 
     assert!(
@@ -502,10 +498,7 @@ fn grid_view_shrink_wrap_position_passthrough_feeds_the_content_dimension_feedba
         .shrink_wrap(true)
         .position(controller.position());
 
-    let mut laid = lay_out(
-        widget,
-        BoxConstraints::new(px(200.0), px(200.0), px(0.0), px(200.0)),
-    );
+    let mut laid = lay_out(widget, BoxConstraints::new(200.0, 200.0, 0.0, 200.0));
     laid.pump();
 
     assert!(
@@ -591,7 +584,7 @@ fn scroll_controller_thumb_offset_fraction_at_scroll_midpoint() {
 /// Minimal metrics fixture for these boundary-clamp tests: only
 /// `min_scroll_extent`/`max_scroll_extent` matter to `ClampingScrollPhysics`;
 /// `pixels`/`viewport_dimension` are passed explicitly as `0.0` (unused here).
-fn metrics_with_extents(min_scroll_extent: f32, max_scroll_extent: f32) -> ScrollMetrics {
+fn metrics_with_extents(min_scroll_extent: f64, max_scroll_extent: f64) -> ScrollMetrics {
     ScrollMetrics::new(0.0, min_scroll_extent, max_scroll_extent, 0.0)
 }
 
@@ -1109,7 +1102,7 @@ fn scrollable_fling_survives_irregular_real_dispatch_timing() {
 #[test]
 fn clamping_physics_fling_stays_within_max_extent() {
     let controller = ScrollController::new();
-    let max_extent = 500.0_f32;
+    let max_extent = 500.0_f64;
     controller.update_dimensions(300.0, 0.0, max_extent);
 
     let physics: SharedScrollPhysics = Arc::new(ClampingScrollPhysics::new());
@@ -1149,7 +1142,7 @@ fn clamping_physics_fling_stays_within_max_extent() {
 #[test]
 fn bouncing_physics_fling_springs_back_after_overscroll() {
     let controller = ScrollController::new();
-    let max_extent = 500.0_f32;
+    let max_extent = 500.0_f64;
     controller.update_dimensions(300.0, 0.0, max_extent);
 
     let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
@@ -2213,7 +2206,7 @@ const ROW_COLOR: Color = Color::rgb(200, 30, 30);
 
 /// The `dx`/`dy` local position a `Listener`'s `on_pointer_down` callback
 /// records, readable back by the test.
-type RecordedPosition = Rc<Cell<Option<(f32, f32)>>>;
+type RecordedPosition = Rc<Cell<Option<(f64, f64)>>>;
 
 /// A `Listener` that records the local position its `on_pointer_down`
 /// callback receives into a fresh, independently readable cell.
@@ -2222,7 +2215,7 @@ fn recording_listener() -> (RecordedPosition, Listener) {
     let probe = Rc::clone(&recorded);
     let listener = Listener::new().on_pointer_down(move |_cx, dispatch: PointerDispatch<'_>| {
         let position = dispatch.local.position();
-        probe.set(Some((position.dx.get(), position.dy.get())));
+        probe.set(Some((position.dx, position.dy)));
     });
     (recorded, listener)
 }
@@ -2231,7 +2224,7 @@ fn recording_listener() -> (RecordedPosition, Listener) {
 /// `SizedBox` so it actually hit-tests true -- a bare `SizedBox` does not.
 /// See `crates/flui-widgets/tests/parity/pointer_local_position_test.rs::target`
 /// for the same convention.
-fn hit_testable_leaf(width: f32, height: f32) -> ColoredBox {
+fn hit_testable_leaf(width: f64, height: f64) -> ColoredBox {
     ColoredBox::new(ROW_COLOR).child(SizedBox::new(width, height))
 }
 
@@ -2239,8 +2232,8 @@ fn hit_testable_leaf(width: f32, height: f32) -> ColoredBox {
 /// hit-testable leaf, alongside a `RecordedPosition` per row (same index).
 fn recording_rows(
     count: usize,
-    width: f32,
-    height: f32,
+    width: f64,
+    height: f64,
 ) -> (Vec<RecordedPosition>, Vec<flui_view::BoxedView>) {
     let mut recorders = Vec::with_capacity(count);
     let rows = (0..count)
@@ -2254,8 +2247,8 @@ fn recording_rows(
 }
 
 /// Asserts `actual` is within floating-point tolerance of `expected`.
-fn assert_local_position(actual: (f32, f32), expected: (f32, f32), what: &str) {
-    const TOLERANCE: f32 = 1e-3;
+fn assert_local_position(actual: (f64, f64), expected: (f64, f64), what: &str) {
+    const TOLERANCE: f64 = 1e-3;
     assert!(
         (actual.0 - expected.0).abs() < TOLERANCE && (actual.1 - expected.1).abs() < TOLERANCE,
         "{what}: expected ({:.4}, {:.4}), got ({:.4}, {:.4})",
@@ -2399,7 +2392,7 @@ fn scrolled_nested_sliver_listener_receives_a_locally_transformed_position() {
     let padding = laid.only_child(laid.root());
     let adapter = laid.only_child(padding);
     let listener = laid.only_child(adapter);
-    let local_point = (10.0_f32, 10.0_f32);
+    let local_point = (10.0_f64, 10.0_f64);
 
     // Anchors the geometry independently of `absolute_offset`: a 20px
     // uniform `SliverPadding` places its sliver child at (20, 20)
@@ -2413,12 +2406,12 @@ fn scrolled_nested_sliver_listener_receives_a_locally_transformed_position() {
     );
     let listener_offset = laid.absolute_offset(listener);
     laid.dispatch_pointer_down(
-        listener_offset.dx.get() + local_point.0,
-        listener_offset.dy.get() + local_point.1,
+        listener_offset.dx + local_point.0,
+        listener_offset.dy + local_point.1,
     );
     laid.dispatch_pointer_up(
-        listener_offset.dx.get() + local_point.0,
-        listener_offset.dy.get() + local_point.1,
+        listener_offset.dx + local_point.0,
+        listener_offset.dy + local_point.1,
     );
     assert_local_position(
         recorded
@@ -2434,12 +2427,12 @@ fn scrolled_nested_sliver_listener_receives_a_locally_transformed_position() {
 
     let listener_offset = laid.absolute_offset(listener);
     laid.dispatch_pointer_down(
-        listener_offset.dx.get() + local_point.0,
-        listener_offset.dy.get() + local_point.1,
+        listener_offset.dx + local_point.0,
+        listener_offset.dy + local_point.1,
     );
     laid.dispatch_pointer_up(
-        listener_offset.dx.get() + local_point.0,
-        listener_offset.dy.get() + local_point.1,
+        listener_offset.dx + local_point.0,
+        listener_offset.dy + local_point.1,
     );
     assert_local_position(
         recorded
@@ -2463,7 +2456,7 @@ fn scrolled_nested_sliver_listener_receives_a_locally_transformed_position() {
 /// hand-derived reversed-axis arithmetic is load-bearing here.
 #[test]
 fn scrolled_reversed_list_row_listener_receives_a_locally_transformed_position() {
-    use flui_types::layout::AxisDirection;
+    use flui_rendering::constraints::AxisDirection;
     use flui_widgets::Viewport;
 
     let (recorders, rows) = recording_rows(10, 200.0, 50.0);
@@ -2476,7 +2469,7 @@ fn scrolled_reversed_list_row_listener_receives_a_locally_transformed_position()
 
     let list = laid.only_child(laid.root());
     let row0 = laid.child(list, 0);
-    let local_point = (20.0_f32, 15.0_f32);
+    let local_point = (20.0_f64, 15.0_f64);
 
     // Anchors the geometry independently of `absolute_offset`: with a
     // 120px viewport and 50px rows, `BottomToTop` places row 0's top-left
@@ -2490,12 +2483,12 @@ fn scrolled_reversed_list_row_listener_receives_a_locally_transformed_position()
         "reversed-axis (BottomToTop) row 0 must sit at physical dy = 70 unscrolled"
     );
     laid.dispatch_pointer_down(
-        row0_offset.dx.get() + local_point.0,
-        row0_offset.dy.get() + local_point.1,
+        row0_offset.dx + local_point.0,
+        row0_offset.dy + local_point.1,
     );
     laid.dispatch_pointer_up(
-        row0_offset.dx.get() + local_point.0,
-        row0_offset.dy.get() + local_point.1,
+        row0_offset.dx + local_point.0,
+        row0_offset.dy + local_point.1,
     );
     assert_local_position(
         recorders[0]
@@ -2518,12 +2511,12 @@ fn scrolled_reversed_list_row_listener_receives_a_locally_transformed_position()
         "reversed-axis (BottomToTop) row 0 must sit at physical dy = 90 after scrolling by 20px"
     );
     laid.dispatch_pointer_down(
-        row0_offset.dx.get() + local_point.0,
-        row0_offset.dy.get() + local_point.1,
+        row0_offset.dx + local_point.0,
+        row0_offset.dy + local_point.1,
     );
     laid.dispatch_pointer_up(
-        row0_offset.dx.get() + local_point.0,
-        row0_offset.dy.get() + local_point.1,
+        row0_offset.dx + local_point.0,
+        row0_offset.dy + local_point.1,
     );
     assert_local_position(
         recorders[0]
@@ -2565,7 +2558,7 @@ fn hit_through_a_visible_sliver_offstage_reaches_its_child_at_the_correct_positi
     let offstage = laid.only_child(laid.root());
     let adapter = laid.only_child(offstage);
     let target = laid.only_child(adapter);
-    let local_point = (10.0_f32, 10.0_f32);
+    let local_point = (10.0_f64, 10.0_f64);
 
     // A visible `SliverOffstage` is a transparent passthrough -- it never
     // calls `position_child`, so this is the ACTUAL invariant the
@@ -2578,12 +2571,12 @@ fn hit_through_a_visible_sliver_offstage_reaches_its_child_at_the_correct_positi
 
     let target_offset = laid.absolute_offset(target);
     laid.dispatch_pointer_down(
-        target_offset.dx.get() + local_point.0,
-        target_offset.dy.get() + local_point.1,
+        target_offset.dx + local_point.0,
+        target_offset.dy + local_point.1,
     );
     laid.dispatch_pointer_up(
-        target_offset.dx.get() + local_point.0,
-        target_offset.dy.get() + local_point.1,
+        target_offset.dx + local_point.0,
+        target_offset.dy + local_point.1,
     );
     assert_local_position(
         recorded
@@ -3004,7 +2997,7 @@ fn a_claimed_wheel_tick_is_still_observed_by_the_whole_path() {
 /// exact scrollable-plus-custom-widget conflict as its reason to exist).
 #[test]
 fn a_wheel_tick_over_an_interactive_viewer_zooms_without_scrolling_the_outer() {
-    use flui_types::Matrix4;
+    use flui_foundation::geometry::Matrix4;
     use flui_widgets::{InteractiveViewer, TransformationController};
 
     let outer = ScrollController::new();
@@ -3017,7 +3010,7 @@ fn a_wheel_tick_over_an_interactive_viewer_zooms_without_scrolling_the_outer() {
     // — the second half of this test pins that fall-through.
     let viewer = InteractiveViewer::new()
         .controller(transformation.clone())
-        .boundary_margin(flui_types::EdgeInsets::all(px(f32::INFINITY)))
+        .boundary_margin(flui_foundation::geometry::EdgeInsets::all(f64::INFINITY))
         .child(SizedBox::new(300.0, 200.0));
     let widget = Scrollable::new()
         .controller(outer.clone())
@@ -3062,7 +3055,7 @@ fn a_wheel_tick_over_an_interactive_viewer_zooms_without_scrolling_the_outer() {
 /// unarbitrated and no-ops, while the scrollable wins the resolver).
 #[test]
 fn a_no_op_zoom_falls_through_to_the_outer_scrollable() {
-    use flui_types::Matrix4;
+    use flui_foundation::geometry::Matrix4;
     use flui_widgets::{InteractiveViewer, TransformationController};
 
     let outer = ScrollController::new();
@@ -3167,8 +3160,8 @@ fn a_wheel_tick_mid_drag_is_observed_under_the_cursor_not_the_captured_route() {
 /// inner claimed everything and the two gestures could not coexist.
 #[test]
 fn plain_wheel_scrolls_and_ctrl_wheel_zooms_under_the_ctrl_gate() {
+    use flui_foundation::geometry::Matrix4;
     use flui_interaction::events::Modifiers;
-    use flui_types::Matrix4;
     use flui_widgets::{InteractiveViewer, TransformationController, WheelScaleGate};
 
     let outer = ScrollController::new();
@@ -3178,7 +3171,7 @@ fn plain_wheel_scrolls_and_ctrl_wheel_zooms_under_the_ctrl_gate() {
     let viewer = InteractiveViewer::new()
         .controller(transformation.clone())
         .wheel_scale_gate(WheelScaleGate::CtrlWheel)
-        .boundary_margin(flui_types::EdgeInsets::all(px(f32::INFINITY)))
+        .boundary_margin(flui_foundation::geometry::EdgeInsets::all(f64::INFINITY))
         .child(SizedBox::new(300.0, 200.0));
     let widget = Scrollable::new()
         .controller(outer.clone())
@@ -3247,7 +3240,7 @@ fn plain_wheel_scrolls_and_ctrl_wheel_zooms_under_the_ctrl_gate() {
 /// layer at all — a sliver may then paint outside the viewport's bounds.
 #[test]
 fn viewport_clip_behavior_controls_the_clip_layer() {
-    use flui_types::painting::Clip;
+    use flui_painting::paint::Clip;
     use flui_view::BoxedView;
     use flui_widgets::SliverFixedExtentList;
 

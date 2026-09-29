@@ -260,7 +260,7 @@ impl Default for PointerSignalResolver {
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use flui_types::geometry::{Offset, px};
+    use flui_foundation::geometry::Offset;
 
     use super::*;
     use crate::ids::PointerId;
@@ -302,7 +302,7 @@ mod tests {
             called_clone.set(true);
         });
 
-        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
+        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
 
         resolver.resolve(PointerId::PRIMARY, event);
 
@@ -326,7 +326,7 @@ mod tests {
             high_clone.set(true);
         });
 
-        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
+        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
 
         resolver.resolve(PointerId::PRIMARY, event);
 
@@ -351,7 +351,7 @@ mod tests {
             second_clone.set(second_clone.get() + 1);
         });
 
-        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
+        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
 
         resolver.resolve(PointerId::PRIMARY, event);
 
@@ -404,7 +404,7 @@ mod tests {
             called_clone.set(true);
         });
 
-        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
+        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
 
         let accepted = resolver.resolve_and_accept(PointerId::PRIMARY, event);
 
@@ -422,7 +422,7 @@ mod tests {
             captured.set(captured.get() + 1);
         });
 
-        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(px(0.0), px(10.0)));
+        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
         resolver.resolve(PointerId::PRIMARY, event);
 
         assert_eq!(total.get(), 1);

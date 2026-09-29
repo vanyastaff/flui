@@ -55,21 +55,21 @@ impl PerformanceStats {
     /// Average frame time over the window, in milliseconds; `0.0` before the
     /// second frame.
     #[must_use]
-    pub fn avg_frame_time_ms(&self) -> f32 {
+    pub fn avg_frame_time_ms(&self) -> f64 {
         if self.frame_times.is_empty() {
             return 0.0;
         }
         let total: Duration = self.frame_times.iter().sum();
         // The window is at most `max_samples` (120 by default) entries, far
-        // inside an `f32`'s exact-integer range.
+        // inside an `f64`'s exact-integer range.
         #[expect(clippy::cast_precision_loss)]
-        let samples = self.frame_times.len() as f32;
-        total.as_secs_f32() * 1000.0 / samples
+        let samples = self.frame_times.len() as f64;
+        total.as_secs_f64() * 1000.0 / samples
     }
 
     /// Frames per second over the window; `0.0` before the second frame.
     #[must_use]
-    pub fn fps(&self) -> f32 {
+    pub fn fps(&self) -> f64 {
         let avg_ms = self.avg_frame_time_ms();
         if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 }
     }

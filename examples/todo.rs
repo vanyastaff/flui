@@ -25,7 +25,7 @@ use flui::widgets::{SafeArea, column, row};
 
 /// The height of one row. `ListView::new` requires a fixed item extent up
 /// front (see its doc comment).
-const ITEM_EXTENT: f32 = 56.0;
+const ITEM_EXTENT: f64 = 56.0;
 
 #[derive(Clone)]
 struct Item {

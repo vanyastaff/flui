@@ -7,13 +7,13 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use crate::common::{lay_out, size, tight};
+use flui_foundation::geometry::Offset;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::pointer::{
     PointerButtons, PointerGesture, PointerGestureEvent, PointerInfo, PointerState, PointerType,
     PointerUpdate,
 };
-use flui_types::Color;
-use flui_types::{Offset, geometry::px};
+use flui_painting::styling::Color;
 use flui_view::EventCx;
 use flui_widgets::prelude::HitTestBehavior;
 use flui_widgets::{ColoredBox, Listener, PointerPanZoomEvent, SizedBox};
@@ -201,9 +201,8 @@ fn listener_routes_scroll_to_pointer_signal_callback() {
         tight(80.0, 80.0),
     );
 
-    let position = Offset::new(px(40.0), px(40.0));
-    let event =
-        flui_interaction::events::make_scroll_event(position, Offset::new(px(0.0), px(12.0)));
+    let position = Offset::new(40.0, 40.0);
+    let event = flui_interaction::events::make_scroll_event(position, Offset::new(0.0, 12.0));
 
     laid.dispatch_pointer_event(&event);
 
@@ -258,7 +257,7 @@ mod event_cx {
     use std::rc::Rc;
 
     use crate::common::{ProbeSignals, SignalProbe, lay_out, tight};
-    use flui_types::Color;
+    use flui_painting::styling::Color;
     use flui_view::SignalWriteExt;
     use flui_widgets::{ColoredBox, Listener};
 

@@ -13,7 +13,7 @@
 //! the parent even across a relayout boundary — the boundary only
 //! isolates constraint-driven layout, not intrinsic queries.
 
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 use rustc_hash::FxHashMap;
 
 use crate::constraints::BoxConstraints;
@@ -35,33 +35,33 @@ pub enum IntrinsicDimension {
     MaxHeight,
 }
 
-/// `f32` map key by exact bit pattern.
+/// `f64` map key by exact bit pattern.
 ///
-/// Cache keys need `Eq + Hash`, which `f32` lacks. Bit-exact keying is
+/// Cache keys need `Eq + Hash`, which `f64` lacks. Bit-exact keying is
 /// the right equivalence for memoization: two extents that differ in
 /// any bit (including `0.0` vs `-0.0`, or NaN payloads) at worst
 /// recompute — they can never alias to a wrong cached value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct F32Key(u32);
+struct F64Key(u64);
 
-impl From<f32> for F32Key {
-    fn from(value: f32) -> Self {
+impl From<f64> for F64Key {
+    fn from(value: f64) -> Self {
         Self(value.to_bits())
     }
 }
 
 /// Constraint key for the dry-layout/baseline maps: the four bounds,
-/// bit-exact (same equivalence argument as [`F32Key`]).
+/// bit-exact (same equivalence argument as [`F64Key`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct ConstraintsKey([u32; 4]);
+struct ConstraintsKey([u64; 4]);
 
 impl From<BoxConstraints> for ConstraintsKey {
     fn from(c: BoxConstraints) -> Self {
         Self([
-            c.min_width.get().to_bits(),
-            c.max_width.get().to_bits(),
-            c.min_height.get().to_bits(),
-            c.max_height.get().to_bits(),
+            c.min_width.to_bits(),
+            c.max_width.to_bits(),
+            c.min_height.to_bits(),
+            c.max_height.to_bits(),
         ])
     }
 }
@@ -83,13 +83,13 @@ pub struct BoxLayoutCache {
 #[derive(Debug, Default)]
 struct CacheMaps {
     /// `(dimension, extent) → intrinsic size`.
-    intrinsic_dimensions: FxHashMap<(IntrinsicDimension, F32Key), f32>,
+    intrinsic_dimensions: FxHashMap<(IntrinsicDimension, F64Key), f64>,
     /// `constraints → dry-layout size`.
     dry_layout_sizes: FxHashMap<ConstraintsKey, Size>,
     /// `constraints → dry alphabetic baseline` (`None` = computed, no baseline).
-    alphabetic_baselines: FxHashMap<ConstraintsKey, Option<f32>>,
+    alphabetic_baselines: FxHashMap<ConstraintsKey, Option<f64>>,
     /// `constraints → dry ideographic baseline`.
-    ideographic_baselines: FxHashMap<ConstraintsKey, Option<f32>>,
+    ideographic_baselines: FxHashMap<ConstraintsKey, Option<f64>>,
 }
 
 impl BoxLayoutCache {
@@ -100,7 +100,7 @@ impl BoxLayoutCache {
     /// temporarily moved OUT of the borrow map — the cache cannot stay
     /// mutably borrowed across that recursion.
     #[must_use]
-    pub fn peek_intrinsic(&self, dimension: IntrinsicDimension, extent: f32) -> Option<f32> {
+    pub fn peek_intrinsic(&self, dimension: IntrinsicDimension, extent: f64) -> Option<f64> {
         self.maps
             .as_ref()?
             .intrinsic_dimensions
@@ -109,7 +109,7 @@ impl BoxLayoutCache {
     }
 
     /// Stores a computed intrinsic value.
-    pub fn insert_intrinsic(&mut self, dimension: IntrinsicDimension, extent: f32, value: f32) {
+    pub fn insert_intrinsic(&mut self, dimension: IntrinsicDimension, extent: f64, value: f64) {
         self.maps
             .get_or_insert_default()
             .intrinsic_dimensions
@@ -143,7 +143,7 @@ impl BoxLayoutCache {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-    ) -> Option<Option<f32>> {
+    ) -> Option<Option<f64>> {
         let maps = self.maps.as_ref()?;
         let map = match baseline {
             TextBaseline::Alphabetic => &maps.alphabetic_baselines,
@@ -157,7 +157,7 @@ impl BoxLayoutCache {
         &mut self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        value: Option<f32>,
+        value: Option<f64>,
     ) {
         let maps = self.maps.get_or_insert_default();
         let map = match baseline {
@@ -212,7 +212,6 @@ impl ProtocolLayoutCache for () {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -240,7 +239,7 @@ mod tests {
     #[test]
     fn dry_baseline_caches_computed_none() {
         let mut cache = BoxLayoutCache::default();
-        let constraints = BoxConstraints::tight(Size::new(px(10.0), px(10.0)));
+        let constraints = BoxConstraints::tight(Size::new(10.0, 10.0));
 
         assert_eq!(
             cache.peek_dry_baseline(constraints, TextBaseline::Alphabetic),

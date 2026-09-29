@@ -30,7 +30,7 @@ fn trailing_content() -> BoxedView {
 /// `SafeArea`) `MediaQuery::of`, both of which panic with no ancestor —
 /// same provisioning as `tests/app_bar.rs`, with a zero-inset media query
 /// so the extent numbers stay the bare formulas.
-fn scroll_view_at(offset: f32, bar: SliverAppBar) -> Theme {
+fn scroll_view_at(offset: f64, bar: SliverAppBar) -> Theme {
     Theme::new(
         ThemeData::light(),
         MediaQuery::new(
@@ -42,11 +42,11 @@ fn scroll_view_at(offset: f32, bar: SliverAppBar) -> Theme {
 
 /// The header's current main-axis box, read from the delegate-built child
 /// (the child is laid out to the header's layout extent every pass).
-fn header_child_height(laid: &common::LaidOut, render_type: &str) -> f32 {
+fn header_child_height(laid: &common::LaidOut, render_type: &str) -> f64 {
     let header = laid
         .try_find_by_render_type(render_type)
         .unwrap_or_else(|| panic!("a {render_type} must be in the tree"));
-    laid.size(laid.only_child(header)).height.get()
+    laid.size(laid.only_child(header)).height
 }
 
 /// Fully scrolled to the top, an expanded bar's box is its max extent — and
@@ -123,7 +123,7 @@ fn flexible_space_fills_the_expanded_box_inside_the_material_surface() {
         .expanded_height(180.0)
         .pinned(true)
         .flexible_space(flui_sdk::widgets::ColoredBox::new(
-            flui_sdk::types::Color::rgb(10, 20, 30),
+            flui_sdk::painting::Color::rgb(10, 20, 30),
         ));
 
     let laid = lay_out(scroll_view_at(0.0, bar), tight(400.0, 600.0));
@@ -132,7 +132,7 @@ fn flexible_space_fills_the_expanded_box_inside_the_material_surface() {
         .try_find_by_render_type("RenderDecoratedBox")
         .expect("the flexible space's render object is in the tree");
     assert_eq!(
-        laid.size(fill).height.get(),
+        laid.size(fill).height,
         180.0,
         "the flexible space must fill the bar's current extent"
     );
@@ -141,7 +141,7 @@ fn flexible_space_fills_the_expanded_box_inside_the_material_surface() {
         .try_find_by_render_type("RenderPhysicalShape")
         .expect("the bar's Material surface is in the tree");
     assert_eq!(
-        laid.size(material).height.get(),
+        laid.size(material).height,
         180.0,
         "the Material surface must cover the whole expanded box, not just          the toolbar strip"
     );

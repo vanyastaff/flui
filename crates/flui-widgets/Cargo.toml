@@ -27,7 +27,7 @@ flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 # executor, no combinators, no proc macros.
 futures-core = { workspace = true }
 # Concrete RenderBox catalog every render-object widget wraps (also re-exports
-# the flex/stack config enums it owns from flui-types).
+# the flex/stack config enums it owns).
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 # Protocol + RenderObject traits + BoxConstraints referenced by `RenderView`.
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
@@ -57,9 +57,8 @@ flui-macros = { workspace = true }
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 # Styling + typography + layout value types (Alignment, Color, BoxDecoration,
 # TextStyle, …).
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # Geometry primitives (EdgeInsets, Matrix4, Pixels, px).
-flui-geometry = { path = "../flui-geometry", version = "=0.2.0-dev" }
 # `Overlay`'s entry list and its published `RebuildHandle` live behind private
 # `Mutex`es: the list is mutated from outside the tree, and
 # `ViewState::build` takes `&self`.
@@ -113,7 +112,6 @@ flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features 
 # drive the deferral path with ordinary content.
 flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-utils"] }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev", features = ["testing"] }
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 # A paint oracle: a widget test walks the composited layer tree's display
 # lists to assert what a frame did and did not draw.
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
@@ -195,7 +193,14 @@ asset-images = ["dep:flui-assets", "flui-assets/images", "images", "dep:futures-
 # `flui-assets`' `NetworkLoader` (reqwest). Implies `asset-images` — both
 # share the same decode cache, coalescing engine, and background runtime.
 network-images = ["asset-images", "flui-assets/network"]
-serde = ["flui-types/serde"]
+# Serialization of the value types the widgets take, in each crate that owns some.
+serde = [
+    "flui-painting/serde",
+    "flui-objects/serde",
+    "flui-rendering/serde",
+    "flui-interaction/serde",
+    "flui-animation/serde",
+]
 # The canonical headless test harness (`flui_widgets::testing`): mounts a
 # widget tree through the real pipeline inside a `HeadlessBinding` and exposes
 # geometry probes + synthetic pointer dispatch. Downstream test suites

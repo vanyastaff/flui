@@ -16,7 +16,7 @@
 //! enough.
 
 use flui_painting::BlendMode;
-use flui_types::Color;
+use flui_painting::styling::Color;
 
 use crate::pipeline_cache::blend_state_for;
 

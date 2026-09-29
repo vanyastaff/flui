@@ -103,7 +103,7 @@ use winit::{
     window::{WindowAttributes, WindowId as WinitWindowId},
 };
 
-use flui_types::geometry::{Pixels, Point, px};
+use flui_foundation::geometry::Point;
 
 use super::window::WinitWindow;
 use super::{
@@ -134,11 +134,8 @@ use crate::{
 fn logical_cursor_point(
     position: winit::dpi::PhysicalPosition<f64>,
     scale_factor: f64,
-) -> Point<Pixels> {
-    Point::new(
-        px((position.x / scale_factor) as f32),
-        px((position.y / scale_factor) as f32),
-    )
+) -> Point<f64> {
+    Point::new(position.x / scale_factor, position.y / scale_factor)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -578,20 +575,20 @@ impl WinitPlatform {
         let mut attributes = WindowAttributes::default()
             .with_title(options.title)
             .with_inner_size(winit::dpi::LogicalSize::new(
-                options.size.width.0,
-                options.size.height.0,
+                options.size.width,
+                options.size.height,
             ))
             .with_resizable(options.resizable)
             .with_decorations(options.decorated)
             .with_visible(options.visible);
 
         if let Some(min) = options.min_size {
-            attributes = attributes
-                .with_min_inner_size(winit::dpi::LogicalSize::new(min.width.0, min.height.0));
+            attributes =
+                attributes.with_min_inner_size(winit::dpi::LogicalSize::new(min.width, min.height));
         }
         if let Some(max) = options.max_size {
-            attributes = attributes
-                .with_max_inner_size(winit::dpi::LogicalSize::new(max.width.0, max.height.0));
+            attributes =
+                attributes.with_max_inner_size(winit::dpi::LogicalSize::new(max.width, max.height));
         }
 
         let raw_window = Arc::new(event_loop.create_window(attributes).map_err(|error| {
@@ -1093,21 +1090,18 @@ impl ApplicationHandler for WinitApp {
                 self.complete_window_close(event_loop, platform_id, window.as_ref());
             }
             WinitWindowEvent::Resized(physical_size) => {
-                use flui_types::geometry::{Size, device_px, px};
+                use flui_foundation::geometry::Size;
 
-                let size = Size::new(
-                    device_px(physical_size.width as i32),
-                    device_px(physical_size.height as i32),
-                );
+                let size = Size::new(physical_size.width as i32, physical_size.height as i32);
 
                 tracing::debug!(?platform_id, ?size, "Window resized");
 
                 // Dispatch per-window resize callback
                 if let Some(ref win) = window {
-                    let scale = win.scale_factor() as f32;
+                    let scale = win.scale_factor();
                     let logical = Size::new(
-                        px(physical_size.width as f32 / scale),
-                        px(physical_size.height as f32 / scale),
+                        physical_size.width as f64 / scale,
+                        physical_size.height as f64 / scale,
                     );
                     win.callbacks().dispatch_resize(logical, scale);
                 }

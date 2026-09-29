@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::common::{lay_out_animated, tight};
 use flui_animation::Vsync;
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, GestureDetector, NavigatorHandle, PageRoute, PopupRoute, RouteAnimation,
@@ -38,10 +38,10 @@ const FRAME: Duration = Duration::from_millis(50);
 
 /// Records every `(animation, secondary_animation)` pair a page builder sees.
 #[derive(Clone, Default)]
-struct Seen(Rc<RefCell<Vec<(f32, f32)>>>);
+struct Seen(Rc<RefCell<Vec<(f64, f64)>>>);
 
 impl Seen {
-    fn last(&self) -> Option<(f32, f32)> {
+    fn last(&self) -> Option<(f64, f64)> {
         self.0.borrow().last().copied()
     }
     fn builds(&self) -> usize {

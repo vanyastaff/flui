@@ -16,8 +16,8 @@
 
 use flui_app::run_app;
 use flui_objects::RenderParagraph;
-use flui_types::{
-    Color,
+use flui_painting::{
+    styling::Color,
     typography::{FontWeight, TextDirection, TextSpan, TextStyle},
 };
 use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};

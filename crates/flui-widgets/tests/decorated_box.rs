@@ -3,11 +3,11 @@
 //! convention for the other paint-effect proxy widgets.
 
 use crate::common::{lay_out, loose, size};
-use flui_types::Color;
-use flui_types::styling::BoxDecoration;
+use flui_painting::styling::BoxDecoration;
+use flui_painting::styling::Color;
 use flui_widgets::{DecoratedBox, SizedBox};
 
-fn decoration() -> BoxDecoration<flui_types::Pixels> {
+fn decoration() -> BoxDecoration<f64> {
     BoxDecoration::new().set_color(Some(Color::rgb(200, 0, 0)))
 }
 

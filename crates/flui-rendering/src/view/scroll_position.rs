@@ -13,7 +13,7 @@
 //! listeners from inside layout can re-enter `build` while a frame is still
 //! running. The flush is installed by [`ScrollPosition::set_flush_handle`]
 //! (typically from `ViewState::init_state`, per ADR-0021); a position with no
-//! flush handle installed (the bare, non-interactive `.offset(f32)` builder
+//! flush handle installed (the bare, non-interactive `.offset(f64)` builder
 //! path, and most unit tests) simply accumulates a dirty flag that is never
 //! read — those positions have no external subscriber to notify.
 //!
@@ -33,10 +33,10 @@ use super::viewport_offset::{ScrollDirection, ViewportOffset};
 /// The `ViewportOffset` fields today's `ScrollableViewportOffset` tracks —
 /// pixel position plus the viewport/content extents layout reports.
 struct State {
-    pixels: f32,
-    min_scroll_extent: f32,
-    max_scroll_extent: f32,
-    viewport_dimension: f32,
+    pixels: f64,
+    min_scroll_extent: f64,
+    max_scroll_extent: f64,
+    viewport_dimension: f64,
     /// How `apply_viewport_dimension` reconciles `pixels` across a dimension
     /// change. Lives inside `State` (not a separate field/mutex) so the
     /// policy read and the recompute it drives happen under the one lock
@@ -59,7 +59,7 @@ struct State {
     /// against), so the page must live in a separate field — one a
     /// concurrent `apply_content_dimensions` clamp on `pixels` cannot
     /// corrupt — until the viewport resizes back to a real dimension.
-    cached_page: Option<f32>,
+    cached_page: Option<f64>,
 }
 
 impl State {
@@ -86,17 +86,17 @@ impl State {
 /// `pixels / (dimension * fraction)` division should exactly reconstruct an
 /// integral page when the pixels were originally seeded from `page *
 /// dimension * fraction`, but float rounding leaves residue. Flutter's
-/// `precisionErrorTolerance` is `1e-10`, sized for `f64`; `f32` carries far
+/// `precisionErrorTolerance` is `1e-10`, sized for `f64`; `f64` carries far
 /// fewer significant digits, so that fixed tolerance doesn't transfer
 /// numerically — same reasoning `EXCESS_EPSILON` documents in
 /// `interaction/interactive_viewer.rs`. Chosen against the scale of a page
 /// count (small integers, typically single digits to low hundreds) rather
 /// than absolute machine epsilon.
-const PAGE_ROUND_EPSILON: f32 = 1e-4;
+const PAGE_ROUND_EPSILON: f64 = 1e-4;
 
 /// Snaps `page` to the nearest whole page when within [`PAGE_ROUND_EPSILON`]
 /// of one; otherwise returns it unchanged.
-fn round_snap_page(page: f32) -> f32 {
+fn round_snap_page(page: f64) -> f64 {
     let rounded = page.round();
     if (page - rounded).abs() < PAGE_ROUND_EPSILON {
         rounded
@@ -117,13 +117,13 @@ fn round_snap_page(page: f32) -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollPositionSnapshot {
     /// Current scroll offset in logical pixels.
-    pub pixels: f32,
+    pub pixels: f64,
     /// The smallest in-range value for `pixels`.
-    pub min_scroll_extent: f32,
+    pub min_scroll_extent: f64,
     /// The largest in-range value for `pixels`.
-    pub max_scroll_extent: f32,
+    pub max_scroll_extent: f64,
     /// The viewport's length along the scroll axis.
-    pub viewport_dimension: f32,
+    pub viewport_dimension: f64,
 }
 
 /// Controls how [`ScrollPosition::apply_viewport_dimension`] reconciles the
@@ -197,14 +197,14 @@ pub enum DimensionChangePolicy {
     KeepFractionalPage {
         /// Fraction of the viewport one logical page occupies. Must be
         /// `> 0.0`.
-        viewport_fraction: f32,
+        viewport_fraction: f64,
         /// The page to seed `pixels` from on the very first
         /// `apply_viewport_dimension` call. Mirrors `_pageToUseOnStartup`
         /// (`_PagePosition`'s `oldPixels == null` branch,
         /// `widgets/page_view.dart`, tag `3.44.0`). `None` leaves `pixels`
         /// untouched on that one call instead (a caller with no
         /// controller-driven startup page) — see the enum-level docs.
-        initial_page: Option<f32>,
+        initial_page: Option<f64>,
     },
 }
 
@@ -298,7 +298,7 @@ impl Inner {
         }
         let Some(handle) = flush.flush_handle.clone() else {
             // No handle installed: the flag sits harmlessly. Bare
-            // `.offset(f32)`-mode positions and most unit tests have no
+            // `.offset(f64)`-mode positions and most unit tests have no
             // external subscriber to notify, so there is nothing to flush.
             return;
         };
@@ -386,7 +386,7 @@ impl ScrollPosition {
     /// Creates a new scroll position at pixel offset `initial_pixels`, with
     /// no known extents and no flush handle installed.
     #[must_use]
-    pub fn new(initial_pixels: f32) -> Self {
+    pub fn new(initial_pixels: f64) -> Self {
         Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(State {
@@ -410,20 +410,20 @@ impl ScrollPosition {
 
     /// The smallest pixel value reachable without overscroll.
     #[must_use]
-    pub fn min_scroll_extent(&self) -> f32 {
+    pub fn min_scroll_extent(&self) -> f64 {
         self.inner.state.lock().min_scroll_extent
     }
 
     /// The largest pixel value reachable without overscroll.
     #[must_use]
-    pub fn max_scroll_extent(&self) -> f32 {
+    pub fn max_scroll_extent(&self) -> f64 {
         self.inner.state.lock().max_scroll_extent
     }
 
     /// The viewport's length along the scroll axis, as last committed by
     /// `apply_viewport_dimension`.
     #[must_use]
-    pub fn viewport_dimension(&self) -> f32 {
+    pub fn viewport_dimension(&self) -> f64 {
         self.inner.state.lock().viewport_dimension
     }
 
@@ -454,7 +454,7 @@ impl ScrollPosition {
     /// `apply_viewport_dimension` that establishes a real (non-zero)
     /// dimension clears it in the same lock acquisition.
     #[must_use]
-    pub fn cached_page(&self) -> Option<f32> {
+    pub fn cached_page(&self) -> Option<f64> {
         self.inner.state.lock().cached_page
     }
 
@@ -511,7 +511,7 @@ impl ScrollPosition {
     /// (`flui-widgets`) calls this specifically for that already-collapsed
     /// case.
     #[must_use]
-    pub fn set_cached_page_while_collapsed(&self, page: f32) -> bool {
+    pub fn set_cached_page_while_collapsed(&self, page: f64) -> bool {
         let mut state = self.inner.state.lock();
         if !matches!(
             state.dimension_policy,
@@ -539,10 +539,10 @@ impl ScrollPosition {
     /// does not re-notify). This is the gesture/programmatic write path;
     /// `ScrollController::jump_to` clamps to the current extents before
     /// calling this.
-    pub fn set_pixels(&self, value: f32) {
+    pub fn set_pixels(&self, value: f64) {
         let changed = {
             let mut state = self.inner.state.lock();
-            if (state.pixels - value).abs() > f32::EPSILON {
+            if (state.pixels - value).abs() > f64::EPSILON {
                 state.pixels = value;
                 true
             } else {
@@ -726,7 +726,7 @@ impl ScrollPosition {
     /// hands out a clone) can use this to detect that the position currently
     /// installed somewhere is instead a *foreign* one — e.g. `Viewport`
     /// switching from an injected, externally-shared position (Position
-    /// mode) back to its own private one (Pixels mode) uses this to decide
+    /// mode) back to its own private one (Fixed mode) uses this to decide
     /// whether it's safe to keep writing into the installed position or
     /// must swap in a fresh, privately-owned one first.
     #[must_use]
@@ -736,7 +736,7 @@ impl ScrollPosition {
 }
 
 impl ViewportOffset for ScrollPosition {
-    fn pixels(&self) -> f32 {
+    fn pixels(&self) -> f64 {
         self.inner.state.lock().pixels
     }
 
@@ -744,7 +744,7 @@ impl ViewportOffset for ScrollPosition {
         true
     }
 
-    fn apply_viewport_dimension(&mut self, viewport_dimension: f32) -> bool {
+    fn apply_viewport_dimension(&mut self, viewport_dimension: f64) -> bool {
         let changed = {
             let mut state = self.inner.state.lock();
             // The equality short-circuit only applies once a REAL prior
@@ -755,7 +755,7 @@ impl ViewportOffset for ScrollPosition {
             // compares against `null` for a never-established position, so a
             // first-ever call is NEVER treated as a no-op there — even when
             // it happens to carry `0.0` (a `PageView` mounted inside a
-            // currently-zero-size ancestor). Comparing raw `f32` values alone
+            // currently-zero-size ancestor). Comparing raw `f64` values alone
             // conflates "never established" with "established at literal
             // `0.0`": a first call of exactly `0.0` would match
             // `State::zero()`'s own default and silently short-circuit, so
@@ -763,7 +763,7 @@ impl ViewportOffset for ScrollPosition {
             // `KeepFractionalPage`'s first-establishment branch would never
             // run for that call.
             if state.has_applied_viewport_dimension
-                && (state.viewport_dimension - viewport_dimension).abs() < f32::EPSILON
+                && (state.viewport_dimension - viewport_dimension).abs() < f64::EPSILON
             {
                 false
             } else {
@@ -852,18 +852,18 @@ impl ViewportOffset for ScrollPosition {
         true
     }
 
-    fn apply_content_dimensions(&mut self, min_scroll_extent: f32, max_scroll_extent: f32) -> bool {
+    fn apply_content_dimensions(&mut self, min_scroll_extent: f64, max_scroll_extent: f64) -> bool {
         let (changed, accepted) = {
             let mut state = self.inner.state.lock();
-            if (state.min_scroll_extent - min_scroll_extent).abs() < f32::EPSILON
-                && (state.max_scroll_extent - max_scroll_extent).abs() < f32::EPSILON
+            if (state.min_scroll_extent - min_scroll_extent).abs() < f64::EPSILON
+                && (state.max_scroll_extent - max_scroll_extent).abs() < f64::EPSILON
             {
                 (false, true)
             } else {
                 state.min_scroll_extent = min_scroll_extent;
                 state.max_scroll_extent = max_scroll_extent;
                 let clamped = state.pixels.clamp(min_scroll_extent, max_scroll_extent);
-                if (state.pixels - clamped).abs() > f32::EPSILON {
+                if (state.pixels - clamped).abs() > f64::EPSILON {
                     state.pixels = clamped;
                     (true, false)
                 } else {
@@ -877,19 +877,19 @@ impl ViewportOffset for ScrollPosition {
         accepted
     }
 
-    fn correct_by(&mut self, correction: f32) {
+    fn correct_by(&mut self, correction: f64) {
         // No notification: a layout-time correction must not fire
         // listeners (same contract as `ScrollableViewportOffset`).
         self.inner.state.lock().pixels += correction;
     }
 
-    fn jump_to(&mut self, pixels: f32) {
+    fn jump_to(&mut self, pixels: f64) {
         // Unclamped + epsilon-guarded — identical body to `set_pixels`, kept
         // as one call so there is a single source of truth for the guard.
         self.set_pixels(pixels);
     }
 
-    fn animate_to(&mut self, to: f32, _duration_ms: u64) {
+    fn animate_to(&mut self, to: f64, _duration_ms: u64) {
         // No animation support yet (v1 restriction, `ScrollController` docs);
         // synchronous jump is the documented fallback.
         self.jump_to(to);
@@ -1086,7 +1086,7 @@ mod tests {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
 
-        // No flush handle installed: this is the bare `.offset(f32)`/unit-test
+        // No flush handle installed: this is the bare `.offset(f64)`/unit-test
         // path from the module docs — extents commit, nothing ever notifies.
         assert!(position.apply_viewport_dimension(300.0));
         assert!(position.apply_content_dimensions(0.0, 500.0));

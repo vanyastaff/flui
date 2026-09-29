@@ -3,7 +3,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex as StdMutex};
 
+use flui_foundation::geometry::{Offset, Size};
 use flui_layer::LayerLink;
+use flui_painting::paint::Alignment;
 use flui_rendering::{
     context::{BoxLayoutContext, PaintCx},
     error::RenderError,
@@ -12,7 +14,6 @@ use flui_rendering::{
     protocol::BoxProtocol,
     traits::{RenderBox, RenderObject},
 };
-use flui_types::{Offset, Size, geometry::px, painting::Alignment};
 use flui_widgets::SizedBox;
 
 use super::{FrameFailureHandler, FrameFailureKind, SegmentPhase, UiRealm};
@@ -68,7 +69,7 @@ impl RenderBox for LinkedPaintBox {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        ctx.constraints().constrain(Size::new(px(20.0), px(20.0)))
+        ctx.constraints().constrain(Size::new(20.0, 20.0))
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {

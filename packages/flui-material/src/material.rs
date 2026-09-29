@@ -80,10 +80,10 @@
 //! `flui-widgets::animated`'s existing `ImplicitController` machinery)
 //! without changing this type's shape.
 
+use flui_sdk::painting::Clip;
+use flui_sdk::painting::Color;
 use flui_sdk::pipeline::{PathClipConfiguration, RenderPhysicalShape};
 use flui_sdk::rendering::BoxProtocol;
-use flui_sdk::types::Color;
-use flui_sdk::types::painting::Clip;
 use flui_sdk::view::{Child, IntoView, RenderView, impl_render_view};
 
 use crate::shape::MaterialShape;
@@ -96,7 +96,7 @@ use crate::shape::MaterialShape;
 #[derive(Clone, Debug)]
 pub struct Material {
     color: Color,
-    elevation: f32,
+    elevation: f64,
     shape: MaterialShape,
     clip_behavior: Clip,
     child: Child,
@@ -133,7 +133,7 @@ impl Material {
     /// underlying render object debug-asserts this (oracle:
     /// `assert(elevation >= 0.0)`).
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = elevation;
         self
     }
@@ -378,14 +378,8 @@ mod tests {
     /// through the actual registered `PathClipTarget`.
     #[test]
     fn configured_shape_field_is_shape_sensitive_at_the_paint_size() {
-        let painted_size = flui_sdk::types::Size::new(
-            flui_sdk::types::geometry::px(120.0),
-            flui_sdk::types::geometry::px(40.0),
-        );
-        let corner_probe = flui_sdk::types::Point::new(
-            flui_sdk::types::geometry::px(2.0),
-            flui_sdk::types::geometry::px(2.0),
-        );
+        let painted_size = flui_sdk::geometry::Size::new(120.0, 40.0);
+        let corner_probe = flui_sdk::geometry::Point::new(2.0, 2.0);
 
         let stadium = Material::new(Color::WHITE).shape(MaterialShape::Stadium);
         let stadium_path = stadium.shape.to_path(painted_size);

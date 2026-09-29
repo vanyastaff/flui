@@ -25,8 +25,8 @@
 //! it. The thumb width defaults to 6 px (mobile), matching Flutter's
 //! `ScrollbarThemeData.thickness`.
 
+use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_types::Color;
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, Child, IntoView, ViewExt};
 
@@ -35,10 +35,10 @@ use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
 
 /// Minimum thumb extent in logical pixels — matches Flutter's
 /// `ScrollbarPainter.minLength` default.
-const MIN_THUMB_PX: f32 = 18.0;
+const MIN_THUMB_PX: f64 = 18.0;
 
 /// Default thumb width in logical pixels.
-const DEFAULT_THUMB_WIDTH_PX: f32 = 6.0;
+const DEFAULT_THUMB_WIDTH_PX: f64 = 6.0;
 
 /// Overlays a proportional scrollbar thumb on the trailing edge of its child.
 ///
@@ -67,7 +67,7 @@ pub struct Scrollbar {
     /// The colour of the thumb rectangle.
     thumb_color: Color,
     /// The width of the thumb in logical pixels.
-    thumb_width: f32,
+    thumb_width: f64,
     /// The content to overlay the scrollbar onto.
     child: Child,
 }
@@ -117,7 +117,7 @@ impl Scrollbar {
 
     /// Override the thumb width in logical pixels (default: 6.0 px).
     #[must_use]
-    pub fn thumb_width(mut self, width: f32) -> Self {
+    pub fn thumb_width(mut self, width: f64) -> Self {
         self.thumb_width = width;
         self
     }
@@ -178,7 +178,7 @@ impl StatelessView for Scrollbar {
                 let thumb_gesture = GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
                     .on_pan_update(move |_cx, details| {
-                        let delta_track_px = details.delta.dy.get();
+                        let delta_track_px = details.delta.dy;
                         if available_track > 0.0 {
                             let content_delta =
                                 (delta_track_px / available_track) * ctrl_drag.scroll_extent();

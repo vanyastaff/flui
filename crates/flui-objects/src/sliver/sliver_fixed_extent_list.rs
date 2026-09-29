@@ -30,12 +30,10 @@
 //!   element tree, which clamps the item count, and the next pass reports the
 //!   real extent and the viewport clamps its pixels. A non-monotone builder
 //!   therefore truncates at its first `None` where Flutter would teleport.
-//! - **The precision tolerance is `f32`-scaled.** Flutter compares layout
-//!   offsets in doubles against `precisionErrorTolerance = 1e-10`; FLUI's
-//!   pixels are `f32`, whose spacing at a few thousand pixels is already
-//!   `~1e-4`, so `PRECISION_ERROR_TOLERANCE` is `1e-3` px — far below any
-//!   layout-relevant distance, wide enough to absorb the rounding the
-//!   reference's own regression tests exist for.
+//! - **The precision tolerance is Flutter's.** Offsets are `f64`, as Flutter's
+//!   doubles are, so `PRECISION_ERROR_TOLERANCE` is `precisionErrorTolerance`
+//!   (`1e-10` px, ADR-0098): wide enough for the division's rounding, narrow
+//!   enough that an edge `1e-4` px past a boundary reaches the next child.
 //! - **An unbounded window is bounded here.** With an infinite
 //!   `remainingCacheExtent` Flutter lays out to the end of the data; so does
 //!   this sliver for a real count (shrink-wrap materialises everything, as
@@ -59,7 +57,6 @@ use std::collections::BTreeMap;
 
 use flui_foundation::Variable;
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-use flui_types::geometry::px;
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
@@ -72,9 +69,8 @@ use flui_rendering::{
 use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
 
 /// How far a layout offset may miss an exact multiple of the item extent and
-/// still count as that multiple, in pixels. Flutter's `precisionErrorTolerance`
-/// scaled from doubles to `f32` (see the module's mapping decisions).
-pub const PRECISION_ERROR_TOLERANCE: f32 = 1e-3;
+/// still count as that multiple, in pixels: Flutter's `precisionErrorTolerance`.
+pub const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
 
 /// A sliver that places lazily built Box children one after another along the
 /// scroll axis, each with the same main-axis extent.
@@ -85,7 +81,7 @@ pub const PRECISION_ERROR_TOLERANCE: f32 = 1e-3;
 /// axis; its position is `index × item_extent`.
 #[derive(Debug, Clone)]
 pub struct RenderSliverFixedExtentList {
-    item_extent: f32,
+    item_extent: f64,
     item_count: usize,
     /// Logical index → dense slot of every attached child, rebuilt each pass
     /// from the children's parent data.
@@ -106,7 +102,7 @@ impl RenderSliverFixedExtentList {
     /// Panics if `item_extent` is not finite or not greater than zero.
     #[inline]
     #[must_use]
-    pub fn new(item_extent: f32, item_count: usize) -> Self {
+    pub fn new(item_extent: f64, item_count: usize) -> Self {
         assert!(
             item_extent.is_finite() && item_extent > 0.0,
             "item_extent must be finite and greater than zero"
@@ -123,7 +119,7 @@ impl RenderSliverFixedExtentList {
     /// The main-axis extent every child is laid out to.
     #[inline]
     #[must_use]
-    pub const fn item_extent(&self) -> f32 {
+    pub const fn item_extent(&self) -> f64 {
         self.item_extent
     }
 
@@ -133,7 +129,7 @@ impl RenderSliverFixedExtentList {
     ///
     /// Panics if `item_extent` is not finite or not greater than zero.
     #[inline]
-    pub fn set_item_extent(&mut self, item_extent: f32) -> flui_rendering::RenderUpdateImpact {
+    pub fn set_item_extent(&mut self, item_extent: f64) -> flui_rendering::RenderUpdateImpact {
         assert!(
             item_extent.is_finite() && item_extent > 0.0,
             "item_extent must be finite and greater than zero"
@@ -173,12 +169,12 @@ impl RenderSliverFixedExtentList {
     /// # Non-finite offsets
     ///
     /// `NaN` and `+∞` are rejected: the helper returns `0` and emits a
-    /// `tracing::error!`. Rust's `f32 as usize` would otherwise saturate `+∞`
+    /// `tracing::error!`. Rust's `f64 as usize` would otherwise saturate `+∞`
     /// to [`usize::MAX`], which must never become a retain-band or
     /// build-request edge. `−∞` is treated like any negative offset and
     /// selects index `0` without an error.
     #[must_use]
-    pub fn min_child_index_for_scroll_offset(&self, scroll_offset: f32) -> usize {
+    pub fn min_child_index_for_scroll_offset(&self, scroll_offset: f64) -> usize {
         if is_poison_scroll_offset(scroll_offset) {
             tracing::error!(
                 scroll_offset,
@@ -211,7 +207,7 @@ impl RenderSliverFixedExtentList {
     /// Same contract as [`Self::min_child_index_for_scroll_offset`]: `NaN` /
     /// `+∞` return `0` with a `tracing::error!`; `−∞` selects index `0`.
     #[must_use]
-    pub fn max_child_index_for_scroll_offset(&self, scroll_offset: f32) -> usize {
+    pub fn max_child_index_for_scroll_offset(&self, scroll_offset: f64) -> usize {
         if is_poison_scroll_offset(scroll_offset) {
             tracing::error!(
                 scroll_offset,
@@ -238,16 +234,16 @@ impl RenderSliverFixedExtentList {
     /// The layout offset of child `index` (Flutter's `indexToLayoutOffset`).
     #[inline]
     #[must_use]
-    pub fn index_to_layout_offset(&self, index: usize) -> f32 {
-        self.item_extent * index as f32
+    pub fn index_to_layout_offset(&self, index: usize) -> f64 {
+        self.item_extent * index as f64
     }
 
     /// The scroll extent of `item_count` children
     /// (Flutter's `computeMaxScrollOffset`).
     #[inline]
     #[must_use]
-    pub fn compute_max_scroll_offset(&self, item_count: usize) -> f32 {
-        self.item_extent * item_count as f32
+    pub fn compute_max_scroll_offset(&self, item_count: usize) -> f64 {
+        self.item_extent * item_count as f64
     }
 
     /// The window `[first, last]` of logical indices the constraints ask for,
@@ -319,7 +315,7 @@ impl RenderSliverFixedExtentList {
 /// Non-finite values are a defensive second line: the public helpers and
 /// [`RenderSliverFixedExtentList::window`] reject `NaN`/`+∞` first, but
 /// `+∞ as usize` would otherwise silently become [`usize::MAX`].
-fn float_to_index(index: f32) -> usize {
+fn float_to_index(index: f64) -> usize {
     if !index.is_finite() || index <= 0.0 {
         0
     } else {
@@ -332,7 +328,7 @@ fn float_to_index(index: f32) -> usize {
 /// `−∞` is intentionally excluded: like any negative offset it clamps to the
 /// origin via `.max(0.0)` / [`float_to_index`].
 #[inline]
-fn is_poison_scroll_offset(value: f32) -> bool {
+fn is_poison_scroll_offset(value: f64) -> bool {
     value.is_nan() || (value.is_infinite() && value.is_sign_positive())
 }
 
@@ -342,9 +338,9 @@ fn is_poison_scroll_offset(value: f32) -> bool {
 /// `−∞` and negative finites clamp to `0.0` — the pre-guard `.max(0.0)`
 /// behaviour — so a pathological negative-infinite leading edge still lays
 /// out from the origin instead of evicting the window. `NaN` is rejected
-/// before `.max(0.0)` because Rust's `f32::max` would otherwise return `0.0`
+/// before `.max(0.0)` because Rust's `f64::max` would otherwise return `0.0`
 /// and hide the contract violation.
-fn finite_leading_cache_edge(constraints: &SliverConstraints) -> Option<f32> {
+fn finite_leading_cache_edge(constraints: &SliverConstraints) -> Option<f64> {
     let leading = constraints.scroll_offset + constraints.cache_origin;
     if is_poison_scroll_offset(leading) {
         return None;
@@ -493,8 +489,8 @@ impl RenderSliver for RenderSliverFixedExtentList {
                 let paint_offset = child_paint_offset(
                     &constraints,
                     &geometry,
-                    px(self.index_to_layout_offset(logical_index)),
-                    px(self.item_extent),
+                    self.index_to_layout_offset(logical_index),
+                    self.item_extent,
                 );
                 ctx.position_child(slot, paint_offset);
             }
@@ -540,17 +536,17 @@ mod tests {
     //! The index math, against Flutter's `rendering/sliver_fixed_extent_layout_test.dart`
     //! (`group('getMaxChildIndexForScrollOffset')` and the two
     //! `'… correctly references itemExtent …'` cases). The reference nudges
-    //! offsets by `1e-10` / `1e-11` doubles around `precisionErrorTolerance`;
-    //! here the nudges are `1e-2` / `1e-4` px around the `f32`-scaled
-    //! `PRECISION_ERROR_TOLERANCE` — the same side of the tolerance each time.
+    //! offsets by `1e-10` / `1e-11` around `precisionErrorTolerance`; here the
+    //! nudge outside is `1e-9`, clear of the division's rounding, and the nudge
+    //! inside is the reference's `1e-11`.
 
     use super::*;
 
-    const GENERIC_ITEM_EXTENT: f32 = 600.0;
-    const OUTSIDE_TOLERANCE: f32 = 1e-2;
-    const INSIDE_TOLERANCE: f32 = 1e-4;
+    const GENERIC_ITEM_EXTENT: f64 = 600.0;
+    const OUTSIDE_TOLERANCE: f64 = 1e-9;
+    const INSIDE_TOLERANCE: f64 = 1e-11;
 
-    fn list(item_extent: f32) -> RenderSliverFixedExtentList {
+    fn list(item_extent: f64) -> RenderSliverFixedExtentList {
         RenderSliverFixedExtentList::new(item_extent, 100)
     }
 
@@ -597,7 +593,7 @@ mod tests {
 
     #[test]
     fn max_index_is_five_when_offset_is_six_item_extents() {
-        const ANOTHER_GENERIC_ITEM_EXTENT: f32 = 414.0;
+        const ANOTHER_GENERIC_ITEM_EXTENT: f64 = 414.0;
         assert_eq!(
             list(ANOTHER_GENERIC_ITEM_EXTENT)
                 .max_child_index_for_scroll_offset(ANOTHER_GENERIC_ITEM_EXTENT * 6.0),
@@ -607,7 +603,7 @@ mod tests {
 
     #[test]
     fn max_index_is_five_for_a_problematic_screen_extent_with_rounding_noise() {
-        const PROBLEMATIC_ITEM_EXTENT: f32 = 411.428_57;
+        const PROBLEMATIC_ITEM_EXTENT: f64 = 411.428_57;
         assert_eq!(
             list(PROBLEMATIC_ITEM_EXTENT).max_child_index_for_scroll_offset(
                 PROBLEMATIC_ITEM_EXTENT * 6.0 + INSIDE_TOLERANCE
@@ -621,6 +617,22 @@ mod tests {
         assert_eq!(
             list(GENERIC_ITEM_EXTENT)
                 .max_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT + INSIDE_TOLERANCE),
+            0
+        );
+    }
+
+    /// A window edge `1e-4` px past a boundary is a real overlap, not rounding
+    /// noise: the child beyond the boundary is requested, and the child before
+    /// it is kept while the leading edge is `1e-4` px short of its end.
+    #[test]
+    fn a_ten_thousandth_of_a_pixel_is_not_rounding_noise() {
+        let list = list(GENERIC_ITEM_EXTENT);
+        assert_eq!(
+            list.max_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT + 1e-4),
+            1
+        );
+        assert_eq!(
+            list.min_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT - 1e-4),
             0
         );
     }
@@ -687,11 +699,11 @@ mod tests {
     }
 
     /// `NaN` / `+∞` offsets must never become `usize::MAX` via saturating
-    /// `f32 as usize`. `−∞` is treated like a negative offset → index `0`.
+    /// `f64 as usize`. `−∞` is treated like a negative offset → index `0`.
     #[test]
     fn index_helpers_reject_poison_offsets() {
         let list = list(GENERIC_ITEM_EXTENT);
-        for offset in [f32::NAN, f32::INFINITY] {
+        for offset in [f64::NAN, f64::INFINITY] {
             assert_eq!(
                 list.min_child_index_for_scroll_offset(offset),
                 0,
@@ -703,14 +715,14 @@ mod tests {
                 "max helper for {offset}"
             );
         }
-        assert_eq!(list.min_child_index_for_scroll_offset(f32::NEG_INFINITY), 0);
-        assert_eq!(list.max_child_index_for_scroll_offset(f32::NEG_INFINITY), 0);
+        assert_eq!(list.min_child_index_for_scroll_offset(f64::NEG_INFINITY), 0);
+        assert_eq!(list.max_child_index_for_scroll_offset(f64::NEG_INFINITY), 0);
     }
 
     fn vertical_window_constraints(
-        scroll_offset: f32,
-        cache_origin: f32,
-        remaining_cache_extent: f32,
+        scroll_offset: f64,
+        cache_origin: f64,
+        remaining_cache_extent: f64,
     ) -> SliverConstraints {
         SliverConstraints {
             scroll_offset,
@@ -729,10 +741,10 @@ mod tests {
     fn window_rejects_poison_leading_edge() {
         let mut list = RenderSliverFixedExtentList::new(25.0, 1000);
         for (scroll_offset, cache_origin) in [
-            (f32::INFINITY, 0.0),
-            (f32::NAN, 0.0),
-            (0.0, f32::NAN),
-            (f32::NEG_INFINITY, f32::INFINITY), // sum is NaN
+            (f64::INFINITY, 0.0),
+            (f64::NAN, 0.0),
+            (0.0, f64::NAN),
+            (f64::NEG_INFINITY, f64::INFINITY), // sum is NaN
         ] {
             let constraints = vertical_window_constraints(scroll_offset, cache_origin, 250.0);
             assert!(
@@ -753,7 +765,7 @@ mod tests {
     #[test]
     fn window_clamps_negative_infinite_leading_edge_to_origin() {
         let mut list = RenderSliverFixedExtentList::new(25.0, 10);
-        let constraints = vertical_window_constraints(f32::NEG_INFINITY, 0.0, 250.0);
+        let constraints = vertical_window_constraints(f64::NEG_INFINITY, 0.0, 250.0);
         assert_eq!(finite_leading_cache_edge(&constraints), Some(0.0));
         assert_eq!(list.window(&constraints), Some((0, 9, 10)));
     }
@@ -763,7 +775,7 @@ mod tests {
     #[test]
     fn window_rejects_nan_or_negative_infinite_trailing_edge() {
         let mut list = RenderSliverFixedExtentList::new(25.0, 10);
-        for remaining_cache_extent in [f32::NAN, f32::NEG_INFINITY] {
+        for remaining_cache_extent in [f64::NAN, f64::NEG_INFINITY] {
             let constraints = vertical_window_constraints(0.0, 0.0, remaining_cache_extent);
             assert!(
                 list.window(&constraints).is_none(),
@@ -777,7 +789,7 @@ mod tests {
     #[test]
     fn window_keeps_positive_infinite_trailing_edge_as_unbounded() {
         let mut list = RenderSliverFixedExtentList::new(25.0, 10);
-        let constraints = vertical_window_constraints(0.0, 0.0, f32::INFINITY);
+        let constraints = vertical_window_constraints(0.0, 0.0, f64::INFINITY);
         assert_eq!(list.window(&constraints), Some((0, 9, 10)));
     }
 
@@ -785,9 +797,9 @@ mod tests {
     /// of saturating at `usize::MAX`.
     #[test]
     fn float_to_index_never_saturates_non_finite_to_usize_max() {
-        assert_eq!(float_to_index(f32::INFINITY), 0);
-        assert_eq!(float_to_index(f32::NEG_INFINITY), 0);
-        assert_eq!(float_to_index(f32::NAN), 0);
+        assert_eq!(float_to_index(f64::INFINITY), 0);
+        assert_eq!(float_to_index(f64::NEG_INFINITY), 0);
+        assert_eq!(float_to_index(f64::NAN), 0);
         assert_eq!(float_to_index(-1.0), 0);
         assert_eq!(float_to_index(42.7), 42);
     }

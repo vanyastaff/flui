@@ -41,7 +41,7 @@
 //! # Agnostic
 //!
 //! Nothing here names a render, sliver, or protocol type. The tree is pure
-//! arithmetic over `usize` indices and `f32` extents.
+//! arithmetic over `usize` indices and `f64` extents.
 
 use super::ItemExtent;
 
@@ -66,7 +66,7 @@ struct Summary {
     /// Number of leaf items in the subtree.
     count: usize,
     /// Sum of every leaf item's extent in the subtree.
-    total_extent: f32,
+    total_extent: f64,
 }
 
 impl Summary {
@@ -95,15 +95,15 @@ impl Summary {
     }
 }
 
-/// Clamps a non-finite extent sum to `f32::MAX`.
+/// Clamps a non-finite extent sum to `f64::MAX`.
 ///
-/// An unbounded list's total leaves the range `f32` can name. Infinity there
+/// An unbounded list's total leaves the range `f64` can name. Infinity there
 /// propagates into `max_scroll_extent` and poisons every scroll clamp
 /// downstream, so it is pinned to the largest nameable extent instead — still
 /// far beyond any reachable scroll position, but arithmetically ordinary.
 #[inline]
-fn finite_or_max(value: f32) -> f32 {
-    if value.is_finite() { value } else { f32::MAX }
+fn finite_or_max(value: f64) -> f64 {
+    if value.is_finite() { value } else { f64::MAX }
 }
 
 /// A run of consecutive items sharing one extent — the leaf's unit of storage.
@@ -131,8 +131,8 @@ impl Run {
     /// computes a prefix from within the run it lands in and never adds a
     /// saturated total (see [`Node::offset_of`]).
     #[inline]
-    fn total(&self) -> f32 {
-        finite_or_max(self.count as f32 * self.extent.extent())
+    fn total(&self) -> f64 {
+        finite_or_max(self.count as f64 * self.extent.extent())
     }
 }
 
@@ -236,7 +236,7 @@ impl Node {
     /// Sum of extents of items in `[0, index)` within this subtree.
     ///
     /// `index` is subtree-local and must satisfy `index <= self.count()`.
-    fn offset_of(&self, index: usize) -> f32 {
+    fn offset_of(&self, index: usize) -> f64 {
         match self {
             Node::Leaf { runs } => {
                 // Whole runs before `index` contribute their total; the run
@@ -246,19 +246,19 @@ impl Node {
                 // precision — the saturated value is only ever added for runs
                 // entirely before `index`, which for an unbounded tail cannot
                 // happen (nothing follows it).
-                let mut acc = 0.0f32;
+                let mut acc = 0.0_f64;
                 let mut remaining = index;
                 for run in runs {
                     if remaining >= run.count {
                         // Saturating, exactly as `Summary::add` is: several
-                        // runs can each reach `f32::MAX`, and an unchecked sum
+                        // runs can each reach `f64::MAX`, and an unchecked sum
                         // would reach infinity while the cached total stays
                         // finite. A prefix that disagrees with the total leaks
                         // straight into item placement and scroll bounds.
                         acc = finite_or_max(acc + run.total());
                         remaining -= run.count;
                     } else {
-                        return finite_or_max(acc + remaining as f32 * run.extent.extent());
+                        return finite_or_max(acc + remaining as f64 * run.extent.extent());
                     }
                 }
                 acc
@@ -300,10 +300,10 @@ impl Node {
     /// Scalar reference for the batched [`seek_sorted`](Self::seek_sorted), kept
     /// test-only (the production windowing path uses `seek_sorted`).
     #[cfg(test)]
-    fn seek_offset(&self, offset: f32) -> (usize, f32) {
+    fn seek_offset(&self, offset: f64) -> (usize, f64) {
         match self {
             Node::Leaf { runs } => {
-                let mut acc = 0.0f32;
+                let mut acc = 0.0_f64;
                 let mut base = 0usize;
                 for run in runs {
                     let e = run.extent.extent();
@@ -318,7 +318,7 @@ impl Node {
                         // `e > 0.0` here: a zero-extent run has `run_total ==
                         // 0.0` and cannot satisfy the test above.
                         let local = ((into_run / e) as usize).min(run.count - 1);
-                        return (base + local, into_run - local as f32 * e);
+                        return (base + local, into_run - local as f64 * e);
                     }
                     acc = finite_or_max(acc + run_total);
                     base += run.count;
@@ -335,7 +335,7 @@ impl Node {
                 // Scan every child but the last, descending into the first whose
                 // running extent reaches past `offset`. The last child is the
                 // unconditional fallback: descending it when no earlier child
-                // matched is what absorbs f32 round-off at the final boundary, so
+                // matched is what absorbs f64 round-off at the final boundary, so
                 // the loop needs no per-iteration `is-last` test and the tail is
                 // a real descent, not an `unreachable!`. `take(len-1)` and
                 // `last()` keep both accesses bounds-check-free (slice indexing
@@ -378,10 +378,10 @@ impl Node {
     /// subtree. `seek_offset` (`ExtentTree::seek_offset`) docs.
     fn seek_sorted(
         &self,
-        offsets: &[f32],
+        offsets: &[f64],
         base_index: usize,
-        base_offset: f32,
-        out: &mut [(usize, f32)],
+        base_offset: f64,
+        out: &mut [(usize, f64)],
     ) {
         debug_assert_eq!(offsets.len(), out.len());
         if offsets.is_empty() {
@@ -414,7 +414,7 @@ impl Node {
                         // resolves to its first item, matching the scalar rule.
                         0
                     };
-                    *slot = (base + local, into_run - local as f32 * e);
+                    *slot = (base + local, into_run - local as f64 * e);
                 }
             }
             Node::Internal {
@@ -1262,7 +1262,7 @@ impl ExtentTree {
     /// `O(runs)`, which is `O(measured)` — the unmeasured items are exactly the
     /// ones that collapse. The per-item loop this replaces was `O(n log n)` and
     /// ran from inside the layout pass whenever the measured mean moved.
-    pub(super) fn rehint_unmeasured(&mut self, hint: f32) {
+    pub(super) fn rehint_unmeasured(&mut self, hint: f64) {
         let mut runs = Vec::new();
         Self::collect_runs(&self.root, &mut runs);
         let mut rebuilt = Vec::with_capacity(runs.len());
@@ -1291,7 +1291,7 @@ impl ExtentTree {
     /// feed discovered to be endless would insert `usize::MAX` items one at a
     /// time, and an endless feed that later reports a real end would remove
     /// them the same way.
-    pub(super) fn resize(&mut self, n: usize, hint: f32) -> (usize, f32) {
+    pub(super) fn resize(&mut self, n: usize, hint: f64) -> (usize, f64) {
         let len = self.len();
         if n == len {
             return (0, 0.0);
@@ -1300,7 +1300,7 @@ impl ExtentTree {
         Self::collect_runs(&self.root, &mut runs);
         let mut rebuilt = Vec::with_capacity(runs.len() + 1);
         let mut dropped_count = 0usize;
-        let mut dropped_total = 0.0f32;
+        let mut dropped_total = 0.0_f64;
 
         if n > len {
             for run in runs {
@@ -1320,7 +1320,7 @@ impl ExtentTree {
                 let discarded = run.count - kept;
                 if discarded > 0 && run.extent.is_measured() {
                     dropped_count = dropped_count.saturating_add(discarded);
-                    dropped_total += discarded as f32 * run.extent.extent();
+                    dropped_total += discarded as f64 * run.extent.extent();
                 }
                 push_coalesced(
                     &mut rebuilt,
@@ -1344,7 +1344,7 @@ impl ExtentTree {
     /// invalidated from item 0 costs one entry regardless of its length — and
     /// the dropped-measured tally comes out of the same walk, which is what
     /// keeps an unbounded list from being counted item by item.
-    pub(super) fn invalidate_from(&mut self, index: usize, hint: f32) -> (usize, f32) {
+    pub(super) fn invalidate_from(&mut self, index: usize, hint: f64) -> (usize, f64) {
         let len = self.len();
         if index >= len {
             return (0, 0.0);
@@ -1354,7 +1354,7 @@ impl ExtentTree {
         let mut rebuilt = Vec::with_capacity(runs.len() + 1);
         let mut before = 0usize;
         let mut dropped_count = 0usize;
-        let mut dropped_total = 0.0f32;
+        let mut dropped_total = 0.0_f64;
         for run in runs {
             // The part of this run at or past `index` is being discarded; tally
             // it when it was measured.
@@ -1362,7 +1362,7 @@ impl ExtentTree {
             let discarded = run.count - kept;
             if discarded > 0 && run.extent.is_measured() {
                 dropped_count = dropped_count.saturating_add(discarded);
-                dropped_total += discarded as f32 * run.extent.extent();
+                dropped_total += discarded as f64 * run.extent.extent();
             }
             push_coalesced(
                 &mut rebuilt,
@@ -1392,7 +1392,7 @@ impl ExtentTree {
 
     /// Total extent of all items.
     #[inline]
-    pub(super) fn total_extent(&self) -> f32 {
+    pub(super) fn total_extent(&self) -> f64 {
         self.root.summary().total_extent
     }
 
@@ -1412,7 +1412,7 @@ impl ExtentTree {
     /// # Panics
     /// Panics if `index > len()`.
     #[inline]
-    pub(super) fn offset_of(&self, index: usize) -> f32 {
+    pub(super) fn offset_of(&self, index: usize) -> f64 {
         debug_assert!(index <= self.len(), "offset_of index out of range");
         self.root.offset_of(index)
     }
@@ -1425,7 +1425,7 @@ impl ExtentTree {
     /// and this simple one-offset version is kept as the independent oracle the
     /// batched path is property-tested against — hence `#[cfg(test)]`.
     #[cfg(test)]
-    pub(super) fn seek_offset(&self, offset: f32) -> (usize, f32) {
+    pub(super) fn seek_offset(&self, offset: f64) -> (usize, f64) {
         let count = self.len();
         if count == 0 {
             return (0, 0.0);
@@ -1456,7 +1456,7 @@ impl ExtentTree {
     ///
     /// Complexity: `O(log n + k)` for `k` clustered offsets (the windowing case),
     /// degrading to `O(k · log n)` only if every offset lands in a distinct leaf.
-    pub(super) fn seek_sorted(&self, offsets: &[f32], out: &mut [(usize, f32)]) {
+    pub(super) fn seek_sorted(&self, offsets: &[f64], out: &mut [(usize, f64)]) {
         debug_assert_eq!(offsets.len(), out.len(), "offsets/out length mismatch");
         debug_assert!(
             offsets.windows(2).all(|w| w[0] <= w[1]),
@@ -1608,11 +1608,11 @@ impl ExtentTree {
 mod tests {
     use super::*;
 
-    fn measured(e: f32) -> ItemExtent {
+    fn measured(e: f64) -> ItemExtent {
         ItemExtent::Measured { extent: e }
     }
 
-    fn build(extents: &[f32]) -> ExtentTree {
+    fn build(extents: &[f64]) -> ExtentTree {
         ExtentTree::from_fn(extents.len(), |i| measured(extents[i]))
     }
 
@@ -1645,7 +1645,7 @@ mod tests {
         let t = build(&[10.0; 4]);
         assert_eq!(t.total_extent(), 40.0);
         for i in 0..=4 {
-            assert_eq!(t.offset_of(i), (i as f32) * 10.0);
+            assert_eq!(t.offset_of(i), (i as f64) * 10.0);
         }
         assert_eq!(t.seek_offset(0.0), (0, 0.0));
         assert_eq!(t.seek_offset(5.0), (0, 5.0));
@@ -1682,7 +1682,7 @@ mod tests {
         let mut t = ExtentTree::from_fn(0, |_| measured(0.0));
         let n = 500usize;
         for i in 0..n {
-            t.insert(i, measured((i % 5 + 1) as f32));
+            t.insert(i, measured((i % 5 + 1) as f64));
             t.check_invariants()
                 .unwrap_or_else(|e| panic!("invariant broke after insert {i}: {e}"));
         }
@@ -1690,7 +1690,7 @@ mod tests {
         // log_6(500) ≈ 3.5; a balanced tree must be shallow.
         assert!(t.depth() <= 5, "depth {} too deep for {n} items", t.depth());
         // Prefix sums must match a naive scan.
-        let expected: f32 = (0..n).map(|i| (i % 5 + 1) as f32).sum();
+        let expected: f64 = (0..n).map(|i| (i % 5 + 1) as f64).sum();
         assert!((t.total_extent() - expected).abs() < 1e-2);
     }
 
@@ -1708,7 +1708,7 @@ mod tests {
 
     #[test]
     fn mid_list_remove_preserves_order_and_rebalances() {
-        let mut t = ExtentTree::from_fn(200, |i| measured((i % 4 + 1) as f32));
+        let mut t = ExtentTree::from_fn(200, |i| measured((i % 4 + 1) as f64));
         // Remove from the middle repeatedly; invariants must hold each time.
         for _ in 0..150 {
             let mid = t.len() / 2;
@@ -1720,7 +1720,7 @@ mod tests {
 
     #[test]
     fn remove_down_to_empty() {
-        let mut t = ExtentTree::from_fn(40, |i| measured((i + 1) as f32));
+        let mut t = ExtentTree::from_fn(40, |i| measured((i + 1) as f64));
         while t.len() > 0 {
             t.remove(0);
             t.check_invariants().unwrap();
@@ -1752,7 +1752,7 @@ mod tests {
         assert_eq!(t.total_extent(), 0.0);
 
         let offsets = [0.0, 0.0, 500.0, 750.0];
-        let mut out = [(0usize, 0.0f32); 4];
+        let mut out = [(0usize, 0.0_f64); 4];
         t.seek_sorted(&offsets, &mut out);
 
         for (i, &o) in offsets.iter().enumerate() {
@@ -1771,11 +1771,11 @@ mod tests {
 mod runs {
     use super::*;
 
-    fn unmeasured(hint: f32) -> ItemExtent {
+    fn unmeasured(hint: f64) -> ItemExtent {
         ItemExtent::Unmeasured { hint }
     }
 
-    fn measured(extent: f32) -> ItemExtent {
+    fn measured(extent: f64) -> ItemExtent {
         ItemExtent::Measured { extent }
     }
 
@@ -1852,7 +1852,7 @@ mod runs {
         // Alternating extents, so the band genuinely fragments — a band of one
         // repeated extent would coalesce to a single run and prove nothing
         // about collapsing a fragmented suffix.
-        let mut expected_total = 0.0f32;
+        let mut expected_total = 0.0_f64;
         for index in 400..420 {
             let extent = if index % 2 == 0 { 25.0 } else { 35.0 };
             expected_total += extent;
@@ -1893,7 +1893,7 @@ mod runs {
     fn removals_rebalance_when_donated_runs_coalesce() {
         // Alternating pairs, so leaf boundaries frequently sit between equal
         // extents and donations merge rather than append.
-        let mut t = ExtentTree::from_fn(400, |i| measured(((i / 2) % 2 + 1) as f32));
+        let mut t = ExtentTree::from_fn(400, |i| measured(((i / 2) % 2 + 1) as f64));
         for _ in 0..300 {
             let mid = t.len() / 2;
             t.remove(mid);
@@ -1908,7 +1908,7 @@ mod runs {
 mod set_underflow {
     use super::*;
 
-    fn measured(extent: f32) -> ItemExtent {
+    fn measured(extent: f64) -> ItemExtent {
         ItemExtent::Measured { extent }
     }
 
@@ -1920,7 +1920,7 @@ mod set_underflow {
     fn remeasuring_into_neighbours_rebalances_the_leaf() {
         // Alternating extents: every item is its own run, so there are enough
         // leaves for a non-root one to exist.
-        let mut t = ExtentTree::from_fn(400, |i| measured((i % 2 + 1) as f32));
+        let mut t = ExtentTree::from_fn(400, |i| measured((i % 2 + 1) as f64));
         t.check_invariants().unwrap();
 
         // Rewrite every `2` to a `1`, front to back. Each write merges the
@@ -1946,7 +1946,7 @@ mod set_underflow {
 mod resize_across_the_sentinel {
     use super::*;
 
-    fn unmeasured(hint: f32) -> ItemExtent {
+    fn unmeasured(hint: f64) -> ItemExtent {
         ItemExtent::Unmeasured { hint }
     }
 
@@ -1995,14 +1995,14 @@ mod saturating_prefixes {
     /// With extents large enough that several runs each saturate,
     /// `offset_of` must not exceed what `total_extent` reports.
     ///
-    /// `Summary::add` clamps the cached total to `f32::MAX`; an unchecked
+    /// `Summary::add` clamps the cached total to `f64::MAX`; an unchecked
     /// prefix accumulation would reach infinity instead and disagree with it,
     /// then leak into item placement and scroll bounds.
     #[test]
     fn a_prefix_never_exceeds_the_saturated_total() {
-        let mut t = ExtentTree::uniform(5, ItemExtent::Unmeasured { hint: f32::MAX });
+        let mut t = ExtentTree::uniform(5, ItemExtent::Unmeasured { hint: f64::MAX });
         // Split the uniform run so several saturating runs coexist.
-        t.set(2, ItemExtent::Measured { extent: f32::MAX });
+        t.set(2, ItemExtent::Measured { extent: f64::MAX });
         t.check_invariants().unwrap();
 
         let total = t.total_extent();

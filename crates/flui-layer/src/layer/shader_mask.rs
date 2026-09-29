@@ -1,9 +1,7 @@
 //! `ShaderMaskLayer` — masks its subtree with a shader: gradient fades, vignettes.
 
-use flui_types::{
-    geometry::{Pixels, Rect},
-    painting::{BlendMode, Shader},
-};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::{BlendMode, Shader};
 
 /// Layer that applies a shader as a mask to its child
 ///
@@ -25,21 +23,18 @@ use flui_types::{
 ///
 /// ```rust
 /// use flui_layer::ShaderMaskLayer;
-/// use flui_types::{
-///     geometry::{Offset, Rect, px},
-///     painting::{BlendMode, Shader},
-///     styling::Color,
-/// };
+/// use flui_foundation::geometry::{Offset, Rect};
+/// use flui_painting::{paint::{BlendMode, Shader}, styling::Color};
 ///
 /// // Create gradient fade mask
 /// let mask_layer = ShaderMaskLayer::new(
 ///     Shader::simple_linear(
 ///         Offset::ZERO,
-///         Offset::new(px(100.0), px(0.0)),
+///         Offset::new(100.0, 0.0),
 ///         vec![Color::TRANSPARENT, Color::WHITE],
 ///     ),
 ///     BlendMode::SrcOver,
-///     Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+///     Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
 /// );
 /// ```
 #[derive(Debug, Clone)]
@@ -51,12 +46,12 @@ pub struct ShaderMaskLayer {
     blend_mode: BlendMode,
 
     /// Bounds for rendering (pre-computed for performance)
-    bounds: Rect<Pixels>,
+    bounds: Rect<f64>,
 }
 
 impl ShaderMaskLayer {
     /// Masks the subtree with `shader` inside `bounds`, compositing with `blend_mode`.
-    pub fn new(shader: Shader, blend_mode: BlendMode, bounds: Rect<Pixels>) -> Self {
+    pub fn new(shader: Shader, blend_mode: BlendMode, bounds: Rect<f64>) -> Self {
         Self {
             shader,
             blend_mode,
@@ -75,17 +70,15 @@ impl ShaderMaskLayer {
     }
 
     /// The rectangle the mask covers.
-    pub fn bounds(&self) -> Rect<Pixels> {
+    pub fn bounds(&self) -> Rect<f64> {
         self.bounds
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use flui_types::{
-        geometry::{Offset, px},
-        styling::Color,
-    };
+    use flui_foundation::geometry::Offset;
+    use flui_painting::styling::Color;
 
     use super::*;
 
@@ -93,7 +86,7 @@ mod tests {
     fn test_shader_mask_layer_new() {
         let shader = Shader::solid(Color::WHITE);
         let blend_mode = BlendMode::SrcOver;
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
 
         let layer = ShaderMaskLayer::new(shader, blend_mode, bounds);
 
@@ -104,24 +97,24 @@ mod tests {
     #[test]
     fn test_shader_mask_layer_bounds() {
         let shader = Shader::solid(Color::BLACK);
-        let bounds = Rect::from_xywh(px(10.0), px(20.0), px(200.0), px(150.0));
+        let bounds = Rect::from_xywh(10.0, 20.0, 200.0, 150.0);
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::SrcOver, bounds);
 
         let retrieved_bounds = layer.bounds();
         assert_eq!(retrieved_bounds, bounds);
-        assert_eq!(retrieved_bounds.width(), px(200.0));
-        assert_eq!(retrieved_bounds.height(), px(150.0));
+        assert_eq!(retrieved_bounds.width(), 200.0);
+        assert_eq!(retrieved_bounds.height(), 150.0);
     }
 
     #[test]
     fn test_shader_mask_layer_linear_gradient() {
         let shader = Shader::simple_linear(
             Offset::ZERO,
-            Offset::new(px(50.0), px(50.0)),
+            Offset::new(50.0, 50.0),
             vec![Color::RED, Color::BLUE],
         );
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::Multiply, bounds);
 
@@ -129,7 +122,7 @@ mod tests {
         match layer.shader() {
             Shader::LinearGradient { from, to, .. } => {
                 assert_eq!(*from, Offset::ZERO);
-                assert_eq!(*to, Offset::new(px(50.0), px(50.0)));
+                assert_eq!(*to, Offset::new(50.0, 50.0));
             }
             _ => panic!("Expected LinearGradient"),
         }
@@ -138,18 +131,18 @@ mod tests {
     #[test]
     fn test_shader_mask_layer_radial_gradient() {
         let shader = Shader::simple_radial(
-            Offset::new(px(50.0), px(50.0)),
+            Offset::new(50.0, 50.0),
             50.0,
             vec![Color::WHITE, Color::BLACK],
         );
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
 
         let layer = ShaderMaskLayer::new(shader, BlendMode::Screen, bounds);
 
         assert_eq!(layer.blend_mode(), BlendMode::Screen);
         match layer.shader() {
             Shader::RadialGradient { center, radius, .. } => {
-                assert_eq!(*center, Offset::new(px(50.0), px(50.0)));
+                assert_eq!(*center, Offset::new(50.0, 50.0));
                 assert_eq!(*radius, 50.0);
             }
             _ => panic!("Expected RadialGradient"),

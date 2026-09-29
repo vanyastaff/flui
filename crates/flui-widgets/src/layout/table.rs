@@ -6,12 +6,12 @@ use flui_foundation::ViewKey;
 use flui_objects::RenderTable;
 
 use crate::SizedBox;
+use flui_objects::TableColumnWidth;
+use flui_painting::styling::{BoxDecoration, TableBorder};
+use flui_painting::typography::TextBaseline;
 use flui_rendering::parent_data::TableCellParentData;
+use flui_rendering::parent_data::TableCellVerticalAlignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Pixels;
-use flui_types::layout::{TableCellVerticalAlignment, TableColumnWidth};
-use flui_types::styling::{BoxDecoration, TableBorder};
-use flui_types::typography::TextBaseline;
 use flui_view::{
     BoxedView, BuildContext, IntoView, ParentDataView, RenderView, StatelessView, View, ViewExt,
     impl_parent_data_view, impl_render_view,
@@ -25,7 +25,7 @@ use flui_view::{
 /// requires every `TableRow.children` to have the same length).
 #[derive(Clone)]
 pub struct TableRow {
-    decoration: Option<BoxDecoration<Pixels>>,
+    decoration: Option<BoxDecoration<f64>>,
     cells: Vec<BoxedView>,
     key: Option<Box<dyn ViewKey>>,
 }
@@ -74,7 +74,7 @@ impl TableRow {
 
     /// Builder: paint `decoration` behind this row's cells.
     #[must_use]
-    pub fn decoration(mut self, decoration: BoxDecoration<Pixels>) -> Self {
+    pub fn decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
         self.decoration = Some(decoration);
         self
     }
@@ -302,7 +302,7 @@ impl Table {
 
     /// One [`Option<BoxDecoration>`] per row, in row order — the shape
     /// `RenderTable::row_decorations` expects.
-    fn row_decorations(&self) -> Vec<Option<BoxDecoration<Pixels>>> {
+    fn row_decorations(&self) -> Vec<Option<BoxDecoration<f64>>> {
         self.rows.iter().map(|row| row.decoration.clone()).collect()
     }
 }
@@ -504,8 +504,8 @@ impl_parent_data_view!(TableCell);
 
 #[cfg(test)]
 mod tests {
-    use flui_types::Color;
-    use flui_types::typography::TextBaseline;
+    use flui_painting::styling::Color;
+    use flui_painting::typography::TextBaseline;
     use flui_view::RenderView;
 
     use super::*;
@@ -518,10 +518,7 @@ mod tests {
     #[test]
     fn table_cell_parent_data_reports_exact_impact_and_preserves_layout_fields() {
         let mut data = TableCellParentData::new(4, 6, TableCellVerticalAlignment::Top);
-        data.offset = flui_types::Offset::new(
-            flui_types::geometry::px(8.0),
-            flui_types::geometry::px(13.0),
-        );
+        data.offset = flui_foundation::geometry::Offset::new(8.0, 13.0);
         let unchanged = TableCell::new(TableCellVerticalAlignment::Top, SizedBox::shrink());
         assert_eq!(
             unchanged.apply_parent_data(&mut data),
@@ -536,10 +533,7 @@ mod tests {
         assert_eq!(data.y, 6);
         assert_eq!(
             data.offset,
-            flui_types::Offset::new(
-                flui_types::geometry::px(8.0),
-                flui_types::geometry::px(13.0)
-            )
+            flui_foundation::geometry::Offset::new(8.0, 13.0)
         );
     }
 
@@ -570,10 +564,10 @@ mod tests {
 
     #[test]
     fn create_render_object_installs_the_configured_border() {
-        let border = TableBorder::all(flui_types::styling::BorderSide::new(
+        let border = TableBorder::all(flui_painting::styling::BorderSide::new(
             Color::BLACK,
-            flui_types::geometry::px(1.0),
-            flui_types::styling::BorderStyle::Solid,
+            1.0,
+            flui_painting::styling::BorderStyle::Solid,
         ));
         let render_object = Table::new(vec![row(1)])
             .border(border)
@@ -587,10 +581,10 @@ mod tests {
             .create_render_object(&flui_view::RenderObjectContext::detached());
         assert_eq!(render_object.border(), None);
 
-        let border = TableBorder::all(flui_types::styling::BorderSide::new(
+        let border = TableBorder::all(flui_painting::styling::BorderSide::new(
             Color::BLACK,
-            flui_types::geometry::px(2.0),
-            flui_types::styling::BorderStyle::Solid,
+            2.0,
+            flui_painting::styling::BorderStyle::Solid,
         ));
         let impact = Table::new(vec![row(1)])
             .border(border)

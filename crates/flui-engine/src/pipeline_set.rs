@@ -63,7 +63,7 @@
 
 use std::collections::HashMap;
 
-use flui_types::painting::BlendMode;
+use flui_painting::paint::BlendMode;
 
 use crate::{
     advanced_blend::AdvancedBlendPipeline,
@@ -906,7 +906,7 @@ fn create_instanced_texture_premul_pipeline(
 ///
 /// `blend_state` must be appropriate for premultiplied source — callers should
 /// derive it from [`crate::pipeline_cache::blend_state_for`] using the desired
-/// [`flui_types::painting::BlendMode`].
+/// [`flui_painting::paint::BlendMode`].
 fn create_instanced_texture_with_blend_state(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,

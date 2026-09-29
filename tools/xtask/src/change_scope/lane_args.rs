@@ -774,7 +774,7 @@ mod tests {
         assert_eq!(a.wasm_args, "", "xtask sets `wasm = false`");
         let mixed = args(&[
             "tools/xtask/src/fonts.rs",
-            "crates/flui-geometry/src/lib.rs",
+            "crates/flui-foundation/src/lib.rs",
         ]);
         assert!(
             mixed.test_args.ends_with(" --lib --bins --tests"),

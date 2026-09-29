@@ -203,8 +203,9 @@ impl RenderState<BoxProtocol> {
     /// let size = state.size(); // Never panics, returns ZERO if not laid out
     /// ```
     #[inline]
-    pub fn size(&self) -> flui_types::Size {
-        self.geometry().unwrap_or(flui_types::Size::ZERO)
+    pub fn size(&self) -> flui_foundation::geometry::Size {
+        self.geometry()
+            .unwrap_or(flui_foundation::geometry::Size::ZERO)
     }
 
     /// Convenience method for setting size (box protocol).
@@ -218,7 +219,7 @@ impl RenderState<BoxProtocol> {
     /// state.set_size(Size::new(100.0, 50.0));
     /// ```
     #[inline]
-    pub fn set_size(&mut self, size: flui_types::Size) {
+    pub fn set_size(&mut self, size: flui_foundation::geometry::Size) {
         self.set_geometry(size);
     }
 
@@ -235,7 +236,7 @@ impl RenderState<BoxProtocol> {
     /// }
     /// ```
     #[inline]
-    pub fn has_size(&self, size: flui_types::Size) -> bool {
+    pub fn has_size(&self, size: flui_foundation::geometry::Size) -> bool {
         self.geometry().is_some_and(|s| s == size)
     }
 }
@@ -253,7 +254,7 @@ impl RenderState<SliverProtocol> {
     /// let total_scroll = state.scroll_extent();
     /// ```
     #[inline]
-    pub fn scroll_extent(&self) -> f32 {
+    pub fn scroll_extent(&self) -> f64 {
         self.geometry().map_or(0.0, |g| g.scroll_extent)
     }
 
@@ -268,19 +269,19 @@ impl RenderState<SliverProtocol> {
     /// }
     /// ```
     #[inline]
-    pub fn paint_extent(&self) -> f32 {
+    pub fn paint_extent(&self) -> f64 {
         self.geometry().map_or(0.0, |g| g.paint_extent)
     }
 
     /// Returns layout extent, or 0.0 if geometry is not set.
     #[inline]
-    pub fn layout_extent(&self) -> f32 {
+    pub fn layout_extent(&self) -> f64 {
         self.geometry().map_or(0.0, |g| g.layout_extent)
     }
 
     /// Returns max paint extent, or 0.0 if geometry is not set.
     #[inline]
-    pub fn max_paint_extent(&self) -> f32 {
+    pub fn max_paint_extent(&self) -> f64 {
         self.geometry().map_or(0.0, |g| g.max_paint_extent)
     }
 
@@ -316,21 +317,20 @@ impl RenderState<SliverProtocol> {
     /// a sliver reads `ctx.size()` instead of caching its own geometry
     /// (2B field dedup — `RenderState` is geometry's sole owner). O(1).
     #[inline]
-    pub fn absolute_paint_size(&self) -> flui_types::Size {
-        use flui_types::geometry::px;
-        use flui_types::prelude::AxisDirection;
+    pub fn absolute_paint_size(&self) -> flui_foundation::geometry::Size {
+        use crate::constraints::AxisDirection;
 
         let (Some(geometry), Some(constraints)) = (self.geometry(), self.constraints()) else {
-            return flui_types::Size::ZERO;
+            return flui_foundation::geometry::Size::ZERO;
         };
         let cross = constraints.cross_axis_extent;
         let main = geometry.paint_extent;
         match constraints.axis_direction {
             AxisDirection::TopToBottom | AxisDirection::BottomToTop => {
-                flui_types::Size::new(px(cross), px(main))
+                flui_foundation::geometry::Size::new(cross, main)
             }
             AxisDirection::LeftToRight | AxisDirection::RightToLeft => {
-                flui_types::Size::new(px(main), px(cross))
+                flui_foundation::geometry::Size::new(main, cross)
             }
         }
     }

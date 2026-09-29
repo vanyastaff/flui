@@ -9,7 +9,7 @@
 //!
 //! [`SharedFontSystem::rasterize`]: super::SharedFontSystem::rasterize
 
-use flui_types::styling::Color;
+use crate::styling::Color;
 
 /// Identifies one rasterised glyph bitmap.
 ///

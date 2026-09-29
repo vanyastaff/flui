@@ -52,7 +52,7 @@ where
 }
 
 fn table_constraints() -> BoxConstraints {
-    BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+    BoxConstraints::tight(flui_foundation::geometry::Size::new(800.0, 600.0))
 }
 
 /// A realm with a minimal root widget already attached -- this
@@ -888,8 +888,8 @@ fn gated_long_press_resolves_through_the_arenas_own_callback_with_zero_submits()
     let pointer = PointerId::new(2).expect("nonzero pointer id");
     recognizer.add_pointer(
         pointer,
-        flui_types::Offset::new(px(10.0), px(10.0)),
-        flui_types::Offset::new(px(10.0), px(10.0)),
+        flui_foundation::geometry::Offset::new(10.0, 10.0),
+        flui_foundation::geometry::Offset::new(10.0, 10.0),
     );
 
     // Real wall-clock wait past the deadline: the arena's own clock
@@ -969,8 +969,8 @@ fn next_wake_is_the_min_deadline_across_two_presentations_of_one_realm() {
     .with_on_long_press(|| {});
     recognizer_a.add_pointer(
         PointerId::new(2).expect("nonzero pointer id"),
-        flui_types::Offset::new(px(10.0), px(10.0)),
-        flui_types::Offset::new(px(10.0), px(10.0)),
+        flui_foundation::geometry::Offset::new(10.0, 10.0),
+        flui_foundation::geometry::Offset::new(10.0, 10.0),
     );
 
     let before_b = Instant::now();
@@ -988,8 +988,8 @@ fn next_wake_is_the_min_deadline_across_two_presentations_of_one_realm() {
     .with_on_long_press(|| {});
     recognizer_b.add_pointer(
         PointerId::new(3).expect("nonzero pointer id"),
-        flui_types::Offset::new(px(20.0), px(20.0)),
-        flui_types::Offset::new(px(20.0), px(20.0)),
+        flui_foundation::geometry::Offset::new(20.0, 20.0),
+        flui_foundation::geometry::Offset::new(20.0, 20.0),
     );
 
     let next_wake = realm
@@ -1037,15 +1037,15 @@ fn gesture_arena_next_deadline_is_the_min_across_two_recognizers_on_one_arena() 
     .with_on_long_press(|| {});
     long_press.add_pointer(
         PointerId::new(2).expect("nonzero pointer id"),
-        flui_types::Offset::new(px(10.0), px(10.0)),
-        flui_types::Offset::new(px(10.0), px(10.0)),
+        flui_foundation::geometry::Offset::new(10.0, 10.0),
+        flui_foundation::geometry::Offset::new(10.0, 10.0),
     );
 
     let before_double_tap = Instant::now();
     let double_tap =
         DoubleTapGestureRecognizer::new(arena.clone()).with_on_double_tap_cancel(|_| {});
     let pointer = PointerId::new(3).expect("nonzero pointer id");
-    let position = flui_types::Offset::new(px(20.0), px(20.0));
+    let position = flui_foundation::geometry::Offset::new(20.0, 20.0);
     double_tap.add_pointer(pointer, position, position);
     double_tap.handle_event(flui_interaction::PointerDispatch::at_root(
         &flui_interaction::events::make_up_event(
@@ -1084,8 +1084,8 @@ fn dispatched_input_is_attributed_end_to_end_in_the_exported_frame_record() {
     use std::thread;
     use std::time::Duration;
 
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
@@ -1100,7 +1100,7 @@ fn dispatched_input_is_attributed_end_to_end_in_the_exported_frame_record() {
         "precondition: nothing recorded before this test's own dispatch+produce"
     );
 
-    let down = make_down_event(Offset::new(Pixels(4.0), Pixels(6.0)), PointerType::Mouse);
+    let down = make_down_event(Offset::new(4.0, 6.0), PointerType::Mouse);
     let before_dispatch = std::time::Instant::now();
     realm.enter(|realm| {
         realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
@@ -1150,19 +1150,19 @@ fn two_dispatched_inputs_before_one_produce_both_attributed_older_larger() {
     use std::thread;
     use std::time::Duration;
 
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
 
-    let first = make_down_event(Offset::new(Pixels(1.0), Pixels(1.0)), PointerType::Mouse);
+    let first = make_down_event(Offset::new(1.0, 1.0), PointerType::Mouse);
     realm.enter(|realm| {
         realm.handle_input_addressed(primary_id, PlatformInput::Pointer(first));
     });
     thread::sleep(Duration::from_millis(8));
 
-    let second = make_down_event(Offset::new(Pixels(2.0), Pixels(2.0)), PointerType::Mouse);
+    let second = make_down_event(Offset::new(2.0, 2.0), PointerType::Mouse);
     realm.enter(|realm| {
         realm.handle_input_addressed(primary_id, PlatformInput::Pointer(second));
     });
@@ -1391,15 +1391,15 @@ fn more_than_max_coalesced_inputs_before_one_produce_keeps_the_newest_arrivals()
     use std::thread;
     use std::time::Duration;
 
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_move_event};
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
 
     let dispatched = flui_scheduler::MAX_COALESCED_INPUT_EPOCHS + 4;
     for i in 0..dispatched {
-        let position = Offset::new(Pixels(i as f32), Pixels(i as f32));
+        let position = Offset::new(i as f64, i as f64);
         let event = make_move_event(position, PointerType::Mouse);
         realm.enter(|realm| {
             realm.handle_input_addressed(primary_id, PlatformInput::Pointer(event));
@@ -1443,13 +1443,13 @@ fn more_than_max_coalesced_inputs_before_one_produce_keeps_the_newest_arrivals()
 /// before the call would report a latency that does NOT include it.
 #[test]
 fn submit_latency_includes_time_spent_inside_render_scene_not_just_before_it() {
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
 
-    let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Mouse);
+    let down = make_down_event(Offset::new(0.0, 0.0), PointerType::Mouse);
     realm.enter(|realm| {
         realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
     });
@@ -1495,13 +1495,13 @@ fn submit_latency_includes_time_spent_inside_render_scene_not_just_before_it() {
 /// the presented frame still carries the original epoch.
 #[test]
 fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
 
-    let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Mouse);
+    let down = make_down_event(Offset::new(0.0, 0.0), PointerType::Mouse);
     realm.enter(|realm| {
         realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
     });
@@ -1576,13 +1576,13 @@ fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame
 /// `DeviceLost` for `SurfaceLost`.
 #[test]
 fn device_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
 
-    let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Mouse);
+    let down = make_down_event(Offset::new(0.0, 0.0), PointerType::Mouse);
     realm.enter(|realm| {
         realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
     });
@@ -1653,13 +1653,13 @@ fn device_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame(
 /// `SurfaceValidation` for `DeviceLost`/`SurfaceLost`.
 #[test]
 fn surface_validation_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
 
-    let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Mouse);
+    let down = make_down_event(Offset::new(0.0, 0.0), PointerType::Mouse);
     realm.enter(|realm| {
         realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
     });
@@ -1910,8 +1910,8 @@ fn a_mid_frame_submit_failure_retry_repaints_the_actual_producer_not_the_primary
 /// survives to the produced frame.
 #[test]
 fn drag_drop_input_is_not_stamped_since_it_is_dropped_not_routed() {
+    use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_down_event};
-    use flui_types::geometry::{Offset, Pixels};
 
     let realm = mount_root_here();
     let primary_id = realm.presentations.primary().id();
@@ -1923,7 +1923,7 @@ fn drag_drop_input_is_not_stamped_since_it_is_dropped_not_routed() {
         realm.handle_input_addressed(primary_id, drag_drop);
     });
 
-    let down = make_down_event(Offset::new(Pixels(0.0), Pixels(0.0)), PointerType::Mouse);
+    let down = make_down_event(Offset::new(0.0, 0.0), PointerType::Mouse);
     realm.enter(|realm| {
         realm.handle_input_addressed(primary_id, PlatformInput::Pointer(down));
     });

@@ -187,8 +187,8 @@ impl Platform for WebPlatform {
         let window = WebWindow::new(
             WindowId(0), // Single window in browser
             &options.title,
-            options.size.width.0,
-            options.size.height.0,
+            options.size.width,
+            options.size.height,
         )?;
 
         // Register DOM event listeners on the canvas

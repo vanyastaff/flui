@@ -42,6 +42,8 @@ use crossbeam_channel::Receiver;
 #[cfg(test)]
 use flui_foundation::PresentationId;
 use flui_foundation::RealmId;
+#[cfg(test)]
+use flui_foundation::geometry::Size;
 use flui_interaction::InteractionLane;
 use flui_layer::Scene;
 #[cfg(test)]
@@ -55,8 +57,6 @@ use flui_rendering::pipeline::PipelineOwner;
 #[cfg(test)]
 use flui_scheduler::{AppLifecycleState, SchedulerPhase};
 use flui_scheduler::{LocalPostFrameLane, UpdateScheduler};
-#[cfg(test)]
-use flui_types::{Size, geometry::px};
 use flui_view::GlobalKeyScope;
 #[cfg(test)]
 use parking_lot::RwLock;

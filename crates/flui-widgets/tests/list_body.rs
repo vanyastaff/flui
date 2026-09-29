@@ -1,13 +1,13 @@
 //! `ListBody` widget parity over `RenderListBody`.
 
 use crate::common::{lay_out, offset, size};
+use flui_foundation::geometry::Axis;
 use flui_rendering::constraints::BoxConstraints;
-use flui_types::{geometry::px, layout::Axis};
 use flui_widgets::row;
 use flui_widgets::{ListBody, SizedBox};
 
-fn vertical_constraints(width: f32) -> BoxConstraints {
-    BoxConstraints::new(px(0.0), px(width), px(0.0), px(f32::INFINITY))
+fn vertical_constraints(width: f64) -> BoxConstraints {
+    BoxConstraints::new(0.0, width, 0.0, f64::INFINITY)
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn list_body_reverse_vertical_places_first_child_last() {
 
 #[test]
 fn list_body_horizontal_uses_unbounded_width_and_bounded_height() {
-    let constraints = BoxConstraints::new(px(0.0), px(f32::INFINITY), px(0.0), px(50.0));
+    let constraints = BoxConstraints::new(0.0, f64::INFINITY, 0.0, 50.0);
     let laid = lay_out(
         ListBody::new(row![SizedBox::new(20.0, 10.0), SizedBox::new(30.0, 20.0)])
             .main_axis(Axis::Horizontal),

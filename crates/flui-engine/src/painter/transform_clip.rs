@@ -3,11 +3,8 @@
 // Moved from `painter.rs` into `painter/transform_clip.rs` as part of the
 // C1 LOC-cap refactor.  Zero behaviour changes.
 
-use flui_types::{
-    Offset, Rect,
-    geometry::{Pixels, RRect},
-    painting::Path,
-};
+use flui_foundation::geometry::{Offset, RRect, Rect};
+use flui_painting::paint::Path;
 
 use super::WgpuPainter;
 
@@ -38,14 +35,14 @@ impl WgpuPainter {
     ///
     /// `offset` is in device pixels.  Equivalent to premultiplying the CTM by
     /// `T(offset.dx, offset.dy)`.
-    pub fn translate(&mut self, offset: Offset<Pixels>) {
+    pub fn translate(&mut self, offset: Offset<f64>) {
         self.state.translate(offset);
     }
 
     /// Concatenate an arbitrary matrix onto the current transform — the whole
     /// matrix, so a skew or perspective row is kept (the TRS primitives
     /// below cannot express one). Equivalent to `Canvas::transform`.
-    pub fn transform(&mut self, matrix: &flui_types::Matrix4) {
+    pub fn transform(&mut self, matrix: &flui_foundation::geometry::Matrix4) {
         self.state.concat(matrix);
     }
 
@@ -92,18 +89,25 @@ impl WgpuPainter {
     /// properly means giving the shader a clip *stack* — a different piece
     /// of work, tracked on #848.
     ///
-    /// The mode is taken as [`Clip`](flui_types::painting::Clip) even though
+    /// The mode is taken as [`Clip`](flui_painting::paint::Clip) even though
     /// `AntiAlias` and `HardEdge` currently take the same path here: the two
     /// differ on the rounded shapes, and a caller that switches shape should
     /// not have to switch parameter types. `Clip::None` is refused by the
     /// dispatcher before this call; reaching here with it would clip, so the
     /// guard stays on the caller's side.
-    pub fn clip_rect(&mut self, rect: Rect<Pixels>, clip: flui_types::painting::Clip) {
+    pub fn clip_rect(&mut self, rect: Rect<f64>, clip: flui_painting::paint::Clip) {
         debug_assert!(
-            !matches!(clip, flui_types::painting::Clip::None),
+            !matches!(clip, flui_painting::paint::Clip::None),
             "BUG: Clip::None must be refused by the dispatcher; this method always clips"
         );
         self.state.clip_rect(rect, self.size);
+    }
+
+    /// Intersect the current scissor with the pixels `rect` touches at all:
+    /// floor of the minimum, ceiling of the maximum (ADR-0098 §6). For bounds
+    /// that must never lose a partly covered pixel, such as a damage region.
+    pub(crate) fn clip_rect_enclosing(&mut self, rect: Rect<f64>) {
+        self.state.clip_rect_enclosing(rect, self.size);
     }
 
     /// Intersect the clip region with a rounded rectangle.
@@ -118,8 +122,8 @@ impl WgpuPainter {
     /// instead of feathering it. Both go through the SDF either way — unlike a
     /// rect, a rounded clip has no scissor equivalent that would keep the
     /// corners.
-    pub fn clip_rrect(&mut self, rrect: RRect, clip: flui_types::painting::Clip) {
-        let hard = matches!(clip, flui_types::painting::Clip::HardEdge);
+    pub fn clip_rrect(&mut self, rrect: RRect, clip: flui_painting::paint::Clip) {
+        let hard = matches!(clip, flui_painting::paint::Clip::HardEdge);
         self.state.clip_rrect(rrect, self.size, hard);
     }
 
@@ -130,22 +134,22 @@ impl WgpuPainter {
     /// layer: the scissor is the clip's device-space bounding box already
     /// intersected with every ancestor clip, and every draw inside the layer is
     /// subject to it, so nothing the offscreen holds can fall outside.
-    pub(crate) fn clip_bounds(&self) -> Rect<Pixels> {
+    pub(crate) fn clip_bounds(&self) -> Rect<f64> {
         self.state.current_scissor().map_or_else(
             || {
                 Rect::from_xywh(
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(0.0),
-                    flui_types::geometry::px(self.size.0 as f32),
-                    flui_types::geometry::px(self.size.1 as f32),
+                    0.0,
+                    0.0,
+                    f64::from(self.size.0 as f32),
+                    f64::from(self.size.1 as f32),
                 )
             },
             |(x, y, width, height)| {
                 Rect::from_xywh(
-                    flui_types::geometry::px(x as f32),
-                    flui_types::geometry::px(y as f32),
-                    flui_types::geometry::px(width as f32),
-                    flui_types::geometry::px(height as f32),
+                    f64::from(x as f32),
+                    f64::from(y as f32),
+                    f64::from(width as f32),
+                    f64::from(height as f32),
                 )
             },
         )
@@ -166,7 +170,7 @@ impl WgpuPainter {
     /// to apply once. See `GpuStateStack::clip_rsuperellipse_at_composite`.
     pub(crate) fn clip_rsuperellipse_at_composite(
         &mut self,
-        rse: flui_types::geometry::RSuperellipse,
+        rse: flui_foundation::geometry::RSuperellipse,
     ) -> crate::state_stack::ResolvedClip {
         self.state.clip_rsuperellipse_at_composite(rse, self.size)
     }
@@ -191,10 +195,10 @@ impl WgpuPainter {
     /// feathering.
     pub fn clip_rsuperellipse(
         &mut self,
-        rse: flui_types::geometry::RSuperellipse,
-        clip: flui_types::painting::Clip,
+        rse: flui_foundation::geometry::RSuperellipse,
+        clip: flui_painting::paint::Clip,
     ) {
-        let hard = matches!(clip, flui_types::painting::Clip::HardEdge);
+        let hard = matches!(clip, flui_painting::paint::Clip::HardEdge);
         self.state.clip_rsuperellipse(rse, self.size, hard);
     }
 

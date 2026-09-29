@@ -37,7 +37,7 @@
 //! arena.add(pointer_id, Arc::new(recognizer));
 //! ```
 
-use flui_types::geometry::{Offset, Pixels};
+use flui_foundation::geometry::Offset;
 
 use crate::ids::PointerId;
 
@@ -103,7 +103,7 @@ pub trait CustomGestureRecognizer {
 /// ```rust,ignore
 /// use flui_interaction::sealed::CustomHitTestable;
 /// use flui_interaction::hit_test::{HitTestResult, HitTestBehavior, HitTestEntry};
-/// use flui_types::geometry::Offset;
+/// use flui_foundation::geometry::Offset;
 ///
 /// struct CustomLayer {
 ///     bounds: Rect,
@@ -111,7 +111,7 @@ pub trait CustomGestureRecognizer {
 /// }
 ///
 /// impl CustomHitTestable for CustomLayer {
-///     fn perform_hit_test(&self, position: Offset<Pixels>, result: &mut HitTestResult) -> bool {
+///     fn perform_hit_test(&self, position: Offset, result: &mut HitTestResult) -> bool {
 ///         if !self.bounds.contains(position) {
 ///             return false;
 ///         }
@@ -144,7 +144,7 @@ pub trait CustomHitTestable: Send + Sync {
     /// * `result` - Accumulator for hit test results
     fn perform_hit_test(
         &self,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         result: &mut crate::routing::HitTestResult,
     ) -> bool;
 

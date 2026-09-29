@@ -81,10 +81,13 @@
 //!
 //! [`ButtonStyle::lerp`]: https://api.flutter.dev/flutter/material/ButtonStyle/lerp.html
 
-use flui_sdk::types::styling::BorderSide;
-use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Color, EdgeInsets, Pixels, Size};
+use flui_sdk::painting::BorderSide;
+use flui_sdk::painting::TextStyle;
 use flui_sdk::widgets::WidgetStateProperty;
+use flui_sdk::{
+    geometry::{EdgeInsets, Size},
+    painting::Color,
+};
 
 use crate::shape::MaterialShape;
 
@@ -98,7 +101,7 @@ use crate::shape::MaterialShape;
 /// ```rust
 /// use flui_material::ButtonStyle;
 /// use flui_sdk::widgets::WidgetStateProperty;
-/// use flui_sdk::types::Color;
+/// use flui_sdk::painting::Color;
 ///
 /// let style = ButtonStyle {
 ///     background_color: Some(WidgetStateProperty::all(Some(Color::rgb(0, 255, 0)))),
@@ -133,7 +136,7 @@ pub struct ButtonStyle {
 
     /// The elevation of the button's `Material`. Flutter parity:
     /// `ButtonStyle.elevation`.
-    pub elevation: Option<WidgetStateProperty<Option<f32>>>,
+    pub elevation: Option<WidgetStateProperty<Option<f64>>>,
 
     /// The padding between the button's boundary and its child. Flutter
     /// parity: `ButtonStyle.padding` (narrowed to `EdgeInsets`; the oracle's
@@ -163,7 +166,7 @@ pub struct ButtonStyle {
     /// (see `shape.rs`'s "Named deferral: `OutlinedBorder` sides"). An
     /// `OutlinedButton` in V1 resolves an outline color/width but does not
     /// yet draw a stroke.
-    pub side: Option<WidgetStateProperty<Option<BorderSide<Pixels>>>>,
+    pub side: Option<WidgetStateProperty<Option<BorderSide<f64>>>>,
 
     /// The shape of the button's underlying `Material`. Flutter parity:
     /// `ButtonStyle.shape` (narrowed to [`MaterialShape`]; the oracle's open

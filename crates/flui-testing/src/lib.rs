@@ -69,8 +69,7 @@
 //! use flui_testing::HeadlessBinding;
 //! use flui_interaction::settings::GestureSettings;
 //! use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
-//! use flui_types::Offset;
-//! use flui_types::geometry::px;
+//! use flui_foundation::geometry::Offset;
 //!
 //! let mut binding = HeadlessBinding::new();
 //!
@@ -82,7 +81,7 @@
 //! )
 //! .with_on_long_press_start(move |_details| in_callback.store(true, Ordering::SeqCst));
 //!
-//! recognizer.add_pointer(PointerId::new(1).unwrap(), Offset::new(px(10.0), px(10.0)), Offset::new(px(10.0), px(10.0)));
+//! recognizer.add_pointer(PointerId::new(1).unwrap(), Offset::new(10.0, 10.0), Offset::new(10.0, 10.0));
 //!
 //! // 300ms of virtual time — the 500ms deadline has not elapsed.
 //! binding.pump_frame(Duration::from_millis(300));
@@ -128,12 +127,12 @@ use flui_interaction::{
 };
 // `flui-rendering` re-exports `flui-layer` wholesale, so naming the composited
 // tree costs no extra dependency edge.
+use flui_foundation::geometry::Offset;
 use flui_rendering::layer::LayerTree;
 use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::{
     BoxedTask, ClockSource, DemandKind, FrameClock, LocalPostFrameLane, TaskToken, UpdateScheduler,
 };
-use flui_types::geometry::{Offset, Pixels};
 use flui_view::{BuildOwner, ElementId, ElementTree, View};
 
 fn preserve_first_pointer_panic(
@@ -804,7 +803,7 @@ impl HeadlessBinding {
     pub fn dispatch_pointer(
         &self,
         event: &PointerEvent,
-        hit_test: impl FnOnce(Offset<Pixels>) -> HitTestResult,
+        hit_test: impl FnOnce(Offset<f64>) -> HitTestResult,
     ) {
         self.interaction_lane.enter(|| {
             let route_panic = catch_unwind(AssertUnwindSafe(|| {

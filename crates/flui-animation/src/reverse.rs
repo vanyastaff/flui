@@ -33,14 +33,14 @@ use std::sync::Arc;
 ///     &scheduler,
 /// ));
 ///
-/// let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
+/// let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f64>>);
 ///
 /// controller.set_value(0.25);
 /// assert_eq!(reversed.value(), 0.75);  // 1.0 - 0.25
 /// ```
 #[derive(Clone)]
 pub struct ReverseAnimation {
-    parent: Arc<dyn Animation<f32>>,
+    parent: Arc<dyn Animation<f64>>,
     notifier: Arc<ChangeNotifier>,
     /// Re-emits parent value changes to our listeners; removed on last drop.
     _parent_sub: Arc<ParentSubscription>,
@@ -53,7 +53,7 @@ impl ReverseAnimation {
     ///
     /// * `parent` - The parent animation to reverse
     #[must_use]
-    pub fn new(parent: Arc<dyn Animation<f32>>) -> Self {
+    pub fn new(parent: Arc<dyn Animation<f64>>) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
         let parent_sub = link_parent(&parent, &notifier);
 
@@ -67,14 +67,14 @@ impl ReverseAnimation {
     /// Get the parent animation.
     #[inline]
     #[must_use]
-    pub fn parent(&self) -> &Arc<dyn Animation<f32>> {
+    pub fn parent(&self) -> &Arc<dyn Animation<f64>> {
         &self.parent
     }
 }
 
-impl Animation<f32> for ReverseAnimation {
+impl Animation<f64> for ReverseAnimation {
     #[inline]
-    fn value(&self) -> f32 {
+    fn value(&self) -> f64 {
         1.0 - self.parent.value()
     }
 
@@ -146,7 +146,7 @@ mod tests {
             &scheduler,
         ));
 
-        let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
+        let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f64>>);
 
         controller.set_value(0.0);
         assert_eq!(reversed.value(), 1.0);
@@ -174,7 +174,7 @@ mod tests {
             &scheduler,
         ));
 
-        let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
+        let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f64>>);
 
         // Dismissed → Completed
         assert_eq!(controller.status(), AnimationStatus::Dismissed);
@@ -206,7 +206,7 @@ mod tests {
             &scheduler,
         ));
 
-        let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f32>>);
+        let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f64>>);
 
         // At lower bound
         controller.set_value(0.0);

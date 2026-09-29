@@ -56,8 +56,9 @@ use std::time::{Duration, Instant};
 use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_app::run_app;
 use flui_foundation::Listenable;
+use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
-use flui_types::{Color, Size, geometry::px};
+use flui_painting::styling::Color;
 use flui_view::{
     AnimatedView, BuildContext, BuildContextExt, IntoView, LifecycleContext, RenderView,
     StatefulView, StatelessView, View, ViewExt, ViewState, impl_animated_view,
@@ -122,7 +123,7 @@ impl RenderView for AnimatedBox {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderColoredBox::new(self.color, Size::new(px(60.0), px(60.0)))
+        RenderColoredBox::new((self.color).map(|v| v), Size::new(60.0, 60.0))
     }
 
     fn update_render_object(
@@ -130,7 +131,7 @@ impl RenderView for AnimatedBox {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.set_color(self.color)
+        render_object.set_color((self.color).map(|v| v))
     }
 }
 

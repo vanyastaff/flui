@@ -30,13 +30,13 @@
 use std::sync::{Arc, Mutex};
 
 use flui_engine::Renderer;
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_layer::{CanvasLayer, Scene, SceneBuilder};
-use flui_platform::{WindowOptions, current_platform};
-use flui_types::{
-    Color, Offset,
-    geometry::{Rect, Size, px},
-    painting::{BlendMode, ColorFilter, Paint},
+use flui_painting::{
+    paint::{BlendMode, ColorFilter, Paint},
+    styling::Color,
 };
+use flui_platform::{WindowOptions, current_platform};
 
 // ── Color filter definitions ─────────────────────────────────────────────────
 
@@ -102,9 +102,9 @@ fn demo_columns() -> [FilterColumn; 5] {
 /// - For filtered columns: `push_color_filter(filter)` + `add_canvas(shapes_canvas)` + `pop()`
 /// - `pop()` — close root offset layer
 /// - `build()` — consume builder, returns root `LayerId`
-fn build_color_filter_scene(viewport_width: f32, viewport_height: f32) -> Scene {
+fn build_color_filter_scene(viewport_width: f64, viewport_height: f64) -> Scene {
     let columns = demo_columns();
-    let column_count = columns.len() as f32;
+    let column_count = columns.len() as f64;
     let column_width = viewport_width / column_count;
 
     let tree = {
@@ -116,14 +116,14 @@ fn build_color_filter_scene(viewport_width: f32, viewport_height: f32) -> Scene 
         // Background canvas: dark slate covering the entire viewport.
         let mut background_canvas = CanvasLayer::new();
         background_canvas.canvas_mut().draw_rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(viewport_width), px(viewport_height)),
+            Rect::from_ltrb(0.0, 0.0, viewport_width, viewport_height),
             &Paint::fill(Color::rgb(22, 28, 40)),
         );
         builder.add_canvas(background_canvas);
 
         // One column per filter.
         for (col_index, column_spec) in columns.iter().enumerate() {
-            let x_offset = col_index as f32 * column_width;
+            let x_offset = col_index as f64 * column_width;
 
             // Draw the content canvas for this column (shapes + divider).
             let shapes_canvas = build_column_canvas(x_offset, column_width, viewport_height);
@@ -167,7 +167,7 @@ fn build_color_filter_scene(viewport_width: f32, viewport_height: f32) -> Scene 
 /// Each column contains a coral rectangle, a teal rectangle, a white accent
 /// square, and a yellow strip — the same geometry as `filter_demo.rs` so the
 /// color-filter effect is visually comparable.
-fn build_column_canvas(x_offset: f32, column_width: f32, viewport_height: f32) -> CanvasLayer {
+fn build_column_canvas(x_offset: f64, column_width: f64, viewport_height: f64) -> CanvasLayer {
     let mut canvas_layer = CanvasLayer::new();
     let canvas = canvas_layer.canvas_mut();
 
@@ -179,32 +179,27 @@ fn build_column_canvas(x_offset: f32, column_width: f32, viewport_height: f32) -
     // Thin column divider on the right edge.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(x_offset + column_width - 1.0),
-            px(0.0),
-            px(x_offset + column_width),
-            px(viewport_height),
+            x_offset + column_width - 1.0,
+            0.0,
+            x_offset + column_width,
+            viewport_height,
         ),
         &Paint::fill(Color::rgb(60, 60, 60)),
     );
 
     // Large coral rectangle (primary subject).
     canvas.draw_rect(
-        Rect::from_ltrb(
-            px(left),
-            px(50.0),
-            px(right),
-            px(viewport_height / 2.0 - 20.0),
-        ),
+        Rect::from_ltrb(left, 50.0, right, viewport_height / 2.0 - 20.0),
         &Paint::fill(Color::rgb(220, 80, 60)),
     );
 
     // Overlapping teal rectangle.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(center_x - 50.0),
-            px(viewport_height / 2.0 - 50.0),
-            px(center_x + 50.0),
-            px(viewport_height - 60.0),
+            center_x - 50.0,
+            viewport_height / 2.0 - 50.0,
+            center_x + 50.0,
+            viewport_height - 60.0,
         ),
         &Paint::fill(Color::rgb(30, 180, 160)),
     );
@@ -212,22 +207,17 @@ fn build_column_canvas(x_offset: f32, column_width: f32, viewport_height: f32) -
     // Small white accent square.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(center_x - 20.0),
-            px(viewport_height / 2.0 - 20.0),
-            px(center_x + 20.0),
-            px(viewport_height / 2.0 + 20.0),
+            center_x - 20.0,
+            viewport_height / 2.0 - 20.0,
+            center_x + 20.0,
+            viewport_height / 2.0 + 20.0,
         ),
         &Paint::fill(Color::WHITE),
     );
 
     // Yellow strip at the bottom.
     canvas.draw_rect(
-        Rect::from_ltrb(
-            px(left),
-            px(viewport_height - 50.0),
-            px(right),
-            px(viewport_height - 30.0),
-        ),
+        Rect::from_ltrb(left, viewport_height - 50.0, right, viewport_height - 30.0),
         &Paint::fill(Color::rgb(255, 210, 0)),
     );
 
@@ -250,7 +240,7 @@ fn main() {
 
     let options = WindowOptions {
         title: "FLUI Color Filter Demo — Mode / Gamma / Matrix (SceneBuilder API)".to_string(),
-        size: Size::new(px(1100.0), px(600.0)),
+        size: Size::new(1100.0, 600.0),
         resizable: true,
         visible: true,
         decorated: true,
@@ -275,7 +265,7 @@ fn main() {
         .expect("failed to create GPU renderer");
 
     let physical = window.physical_size();
-    renderer.resize(physical.width.0 as u32, physical.height.0 as u32);
+    renderer.resize(physical.width as u32, physical.height as u32);
 
     tracing::info!(
         adapter = renderer.capabilities().adapter_name,
@@ -290,8 +280,8 @@ fn main() {
     let window_for_frame = window.clone();
     window.on_request_frame(Box::new(move || {
         let size = window_for_frame.physical_size();
-        let viewport_width = size.width.0 as f32;
-        let viewport_height = size.height.0 as f32;
+        let viewport_width = size.width as f64;
+        let viewport_height = size.height as f64;
 
         let scene = build_color_filter_scene(viewport_width, viewport_height);
 
@@ -304,8 +294,8 @@ fn main() {
     // Resize callback: update the renderer's surface dimensions.
     let renderer_for_resize = Arc::clone(&renderer);
     window.on_resize(Box::new(move |new_size, scale_factor| {
-        let surface_width = (new_size.width.0 * scale_factor) as u32;
-        let surface_height = (new_size.height.0 * scale_factor) as u32;
+        let surface_width = (new_size.width * scale_factor) as u32;
+        let surface_height = (new_size.height * scale_factor) as u32;
         renderer_for_resize
             .lock()
             .unwrap()

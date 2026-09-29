@@ -487,7 +487,7 @@ impl<'tree> SubtreeArena<'tree> {
         &self,
         id: RenderId,
         constraints: BoxConstraints,
-    ) -> crate::error::RenderResult<flui_types::Size> {
+    ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
         // SAFETY: `self` is alive for the entire duration of this call
         // and all recursive calls it triggers.  Each recursive level
         // reborrows a DISTINCT slab slot (parent ≠ child enforced by tree
@@ -526,8 +526,8 @@ impl<'tree> SubtreeArena<'tree> {
         &self,
         id: RenderId,
         dimension: crate::storage::IntrinsicDimension,
-        extent: f32,
-    ) -> crate::error::RenderResult<f32> {
+        extent: f64,
+    ) -> crate::error::RenderResult<f64> {
         // SAFETY: identical contract as `layout_child`.
         unsafe { box_intrinsic_query_borrowed(self, id, dimension, extent) }
     }
@@ -786,7 +786,7 @@ unsafe fn layout_subtree_borrowed(
     arena: &SubtreeArena<'_>,
     id: RenderId,
     constraints: BoxConstraints,
-) -> crate::error::RenderResult<flui_types::Size> {
+) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
     ensure_stack(|| {
         // SAFETY: identical contract, forwarded verbatim from this
         // wrapper's own `# Safety` section; the stack-growth wrapper
@@ -842,7 +842,7 @@ unsafe fn layout_subtree_borrowed_impl(
     arena: &SubtreeArena<'_>,
     id: RenderId,
     constraints: BoxConstraints,
-) -> crate::error::RenderResult<flui_types::Size> {
+) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
     // Cycle guard: set `id`'s in-flight flag FIRST — before any
     // NodePtr reborrow (shared or exclusive).  On a cyclic edge the
     // guard's `enter` returns Err(LayoutCycle) here, so the aliasing
@@ -896,7 +896,8 @@ unsafe fn layout_subtree_borrowed_impl(
             // SAFETY: the cycle guard is held, so no `&mut` of this slot is live on
             // an ancestor frame; this shared reborrow is the only live borrow.
             let node: &RenderNode = unsafe { &*node_ptr };
-            node.geometry_box().unwrap_or(flui_types::Size::ZERO)
+            node.geometry_box()
+                .unwrap_or(flui_foundation::geometry::Size::ZERO)
         };
         match arena.layout_poison.failed_attempt(id) {
             Some(FailedAttempt::Layout(attempt))
@@ -959,11 +960,12 @@ unsafe fn layout_subtree_borrowed_impl(
         // them apart.
         let constraints_match = entry.state().has_constraints(&constraints);
         let has_cached_constraints = entry.state().constraints().is_some();
-        let cached_geometry: Option<flui_types::Size> = if needs_layout_flag || !constraints_match {
-            None
-        } else {
-            entry.state().geometry()
-        };
+        let cached_geometry: Option<flui_foundation::geometry::Size> =
+            if needs_layout_flag || !constraints_match {
+                None
+            } else {
+                entry.state().geometry()
+            };
         let geometry_degraded = entry.state().geometry_degraded();
         let is_leaf = child_ids.is_empty();
         // Snapshotted here, in the block that already holds the shared borrow,
@@ -1172,7 +1174,7 @@ unsafe fn layout_subtree_borrowed_impl(
         let descendant_error_for_sliver_cb = std::sync::Arc::clone(&descendant_error_flag);
         let cb_owned = move |child_id: RenderId,
                              child_constraints: BoxConstraints|
-              -> flui_types::Size {
+              -> flui_foundation::geometry::Size {
             // SAFETY: `arena_for_cb` is alive (held by the outer
             // layout_dirty_root stack frame for the entire walk).  The
             // recursive reborrow happens on `child_id`'s slot — distinct
@@ -1201,7 +1203,7 @@ unsafe fn layout_subtree_borrowed_impl(
                          The failure is recorded against the child's retry \
                          budget (layout poison).",
                     );
-                    flui_types::Size::ZERO
+                    flui_foundation::geometry::Size::ZERO
                 }
             }
         };
@@ -1300,8 +1302,8 @@ unsafe fn layout_subtree_borrowed_impl(
         let descendant_error_for_intrinsics_cb = std::sync::Arc::clone(&descendant_error_flag);
         let box_intrinsic_cb_owned = move |child_id: RenderId,
                                            dimension: crate::storage::IntrinsicDimension,
-                                           extent: f32|
-              -> f32 {
+                                           extent: f64|
+              -> f64 {
             // SAFETY: `arena_for_cb` is alive (held by the outer
             // layout_dirty_root stack frame for the entire walk).  The
             // query targets `child_id`'s slot — distinct from the current
@@ -1514,8 +1516,8 @@ unsafe fn box_intrinsic_query_borrowed(
     arena: &SubtreeArena<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
-    extent: f32,
-) -> crate::error::RenderResult<f32> {
+    extent: f64,
+) -> crate::error::RenderResult<f64> {
     ensure_stack(|| {
         // SAFETY: forwarded from this wrapper; ensure_stack only changes stack
         // placement, not borrow lifetimes or aliasing.
@@ -1534,8 +1536,8 @@ unsafe fn box_intrinsic_query_borrowed_impl(
     arena: &SubtreeArena<'_>,
     id: RenderId,
     dimension: crate::storage::IntrinsicDimension,
-    extent: f32,
-) -> crate::error::RenderResult<f32> {
+    extent: f64,
+) -> crate::error::RenderResult<f64> {
     let _cycle_guard = LayoutCycleGuard::enter(arena, id)?;
 
     let Some(NodePtr(node_ptr)) = arena.get(id) else {
@@ -1625,7 +1627,7 @@ unsafe fn box_intrinsic_query_borrowed_impl(
     let value = {
         let child_err = &mut child_err;
         let mut child_query =
-            |index: usize, dim: crate::storage::IntrinsicDimension, ext: f32| -> f32 {
+            |index: usize, dim: crate::storage::IntrinsicDimension, ext: f64| -> f64 {
                 let Some(&child_id) = child_ids.get(index) else {
                     let err = crate::error::RenderError::contract_violation(
                         "sliver box child intrinsic query",
@@ -1951,7 +1953,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
 
         let box_cb_owned = move |child_id: RenderId,
                                  child_constraints: BoxConstraints|
-              -> flui_types::Size {
+              -> flui_foundation::geometry::Size {
             // SAFETY: same subtree-borrow contract as the sliver child
             // callback, but routed through the Box layout walk.
             match unsafe { layout_subtree_borrowed(arena_for_cb, child_id, child_constraints) } {
@@ -1976,7 +1978,7 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
                          The failure is recorded against the child's retry \
                          budget (layout poison).",
                     );
-                    flui_types::Size::ZERO
+                    flui_foundation::geometry::Size::ZERO
                 }
             }
         };
@@ -1985,8 +1987,8 @@ unsafe fn layout_sliver_subtree_borrowed_impl(
 
         let box_intrinsic_cb_owned = move |child_id: RenderId,
                                            dimension: crate::storage::IntrinsicDimension,
-                                           extent: f32|
-              -> f32 {
+                                           extent: f64|
+              -> f64 {
             // SAFETY: same subtree-borrow contract as the Sliver -> Box
             // layout callback, routed through the Box intrinsic bridge.
             match unsafe { box_intrinsic_query_borrowed(arena_for_cb, child_id, dimension, extent) }
@@ -2369,8 +2371,8 @@ mod tests {
     use std::sync::Arc;
 
     use flui_foundation::Diagnosticable;
+    use flui_foundation::geometry::Size;
     use flui_foundation::{Leaf, Single};
-    use flui_types::{Size, geometry::px};
 
     use crate::{
         context::{BoxHitTestContext, BoxLayoutContext},
@@ -2383,7 +2385,7 @@ mod tests {
     /// Probe cell the test widgets record their baseline query into:
     /// `None` = the query never ran; `Some(inner)` = it ran and returned
     /// `inner`.
-    type BaselineProbe = Arc<Mutex<Option<Option<f32>>>>;
+    type BaselineProbe = Arc<Mutex<Option<Option<f64>>>>;
 
     /// Leaf that reports a fixed size and a known baseline.
     #[derive(Debug)]
@@ -2396,10 +2398,10 @@ mod tests {
         type ParentData = BoxParentData;
 
         fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            Size::new(px(10.0), px(10.0))
+            Size::new(10.0, 10.0)
         }
 
-        fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
+        fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f64> {
             Some(7.5)
         }
 
@@ -2464,14 +2466,14 @@ mod tests {
             .insert_box_child(parent, Box::new(BaselineLeaf))
             .expect("leaf insert");
 
-        let constraints = BoxConstraints::loose(Size::new(px(100.0), px(100.0)));
+        let constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
         let size = pipeline
             .layout_dirty_root(parent, constraints)
             .expect("two-node walk over real NodePtrs must lay out");
 
         assert_eq!(
             size,
-            Size::new(px(10.0), px(10.0)),
+            Size::new(10.0, 10.0),
             "parent returns the child's laid-out size",
         );
         assert_eq!(
@@ -2480,7 +2482,7 @@ mod tests {
                 .get(leaf)
                 .expect("leaf in tree")
                 .geometry_box(),
-            Some(Size::new(px(10.0), px(10.0))),
+            Some(Size::new(10.0, 10.0)),
             "child geometry must be committed by the walk",
         );
         assert_eq!(
@@ -2543,7 +2545,7 @@ mod tests {
             .insert_box_child(inner_proxy, Box::new(BaselineLeaf))
             .expect("leaf insert");
 
-        let constraints = BoxConstraints::loose(Size::new(px(100.0), px(100.0)));
+        let constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
         pipeline
             .layout_dirty_root(parent, constraints)
             .expect("proxy chain must lay out");
@@ -2572,7 +2574,7 @@ mod tests {
             .insert_box_child(parent, Box::new(BaselineForwardingProxy))
             .expect("proxy insert");
 
-        let constraints = BoxConstraints::loose(Size::new(px(100.0), px(100.0)));
+        let constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
         let _ = pipeline.layout_dirty_root(parent, constraints);
 
         assert_eq!(*probe.lock(), Some(None));
@@ -2599,7 +2601,7 @@ mod tests {
         ) -> Size {
             *self.probe.lock() =
                 Some(ctx.child_distance_to_actual_baseline(0, TextBaseline::Alphabetic));
-            Size::new(px(5.0), px(5.0))
+            Size::new(5.0, 5.0)
         }
 
         fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
@@ -2642,7 +2644,7 @@ mod tests {
             .expect("p2 in tree")
             .add_child(p1);
 
-        let constraints = BoxConstraints::loose(Size::new(px(100.0), px(100.0)));
+        let constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
         let result = pipeline.layout_dirty_root(p1, constraints);
 
         assert!(
@@ -2678,7 +2680,7 @@ mod tests {
     // walk that queued a request against it, with no aliasing hazard
     // between the two.
 
-    use flui_types::layout::AxisDirection;
+    use crate::constraints::AxisDirection;
 
     use crate::{
         constraints::GrowthDirection,
@@ -2790,12 +2792,7 @@ mod tests {
             )
             .expect("sliver child insert");
         owner.set_root_id(Some(root));
-        owner.set_root_constraints(Some(BoxConstraints::new(
-            px(0.0),
-            px(800.0),
-            px(0.0),
-            px(600.0),
-        )));
+        owner.set_root_constraints(Some(BoxConstraints::new(0.0, 800.0, 0.0, 600.0)));
 
         let cell = PipelineCell::new(owner);
 

@@ -1241,7 +1241,7 @@ impl DiagnosticsBuilder {
     pub fn add_double(
         &mut self,
         name: impl Into<String>,
-        value: f32,
+        value: f64,
         unit: Option<&'static str>,
     ) -> &mut Self {
         self.properties.push(
@@ -1258,8 +1258,8 @@ impl DiagnosticsBuilder {
     pub fn add_default_double(
         &mut self,
         name: impl Into<String>,
-        value: f32,
-        default: f32,
+        value: f64,
+        default: f64,
         unit: Option<&'static str>,
     ) -> &mut Self {
         self.properties.push(
@@ -1347,7 +1347,7 @@ impl DiagnosticsBuilder {
 }
 
 #[inline]
-fn format_double(value: f32, unit: Option<&str>) -> String {
+fn format_double(value: f64, unit: Option<&str>) -> String {
     match unit {
         Some(u) => format!("{value}{u}"),
         None => format!("{value}"),

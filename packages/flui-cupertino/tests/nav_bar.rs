@@ -13,14 +13,13 @@ use crate::common;
 
 use common::{lay_out, loose, tight};
 use flui_cupertino::CupertinoNavigationBar;
-use flui_sdk::types::Size;
-use flui_sdk::types::geometry::px;
+use flui_sdk::geometry::Size;
 use flui_sdk::widgets::prelude::EdgeInsets;
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, PreferredSizeView, SizedBox, Text};
 
-fn media_with_top_padding(top: f32) -> MediaQueryData {
+fn media_with_top_padding(top: f64) -> MediaQueryData {
     MediaQueryData {
-        padding: EdgeInsets::new(px(top), px(0.0), px(0.0), px(0.0)),
+        padding: EdgeInsets::new(top, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     }
 }
@@ -33,7 +32,7 @@ fn media_with_top_padding(top: f32) -> MediaQueryData {
 #[test]
 fn preferred_size_is_the_44pt_persistent_height_with_no_top_inset_folded_in() {
     let preferred = CupertinoNavigationBar::new().preferred_size();
-    assert_eq!(preferred, Size::new(px(f32::INFINITY), px(44.0)));
+    assert_eq!(preferred, Size::new(f64::INFINITY, 44.0));
 }
 
 /// `_kDefaultNavBarBorderColor` (`nav_bar.dart`, oracle tag `3.44.0`) is
@@ -122,7 +121,7 @@ fn total_mounted_height_adds_the_top_media_query_inset() {
         .expect("the bar's own outer SizedBox mounts as a RenderConstrainedBox");
     let size = laid.size(bar_box);
     assert!(
-        (size.height.get() - 64.0).abs() < 0.01,
+        (size.height - 64.0).abs() < 0.01,
         "44.0 persistent height + 20.0 top inset must equal 64.0: {size:?}"
     );
 }
@@ -170,5 +169,5 @@ fn an_empty_bar_mounts_without_panicking() {
         MediaQuery::new(MediaQueryData::default(), CupertinoNavigationBar::new()),
         tight(400.0, 44.0),
     );
-    assert_eq!(laid.size(laid.root()).height.get(), 44.0);
+    assert_eq!(laid.size(laid.root()).height, 44.0);
 }

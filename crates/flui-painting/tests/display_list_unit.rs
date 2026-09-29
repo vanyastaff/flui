@@ -3,11 +3,9 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::{Matrix4, Rect};
+use flui_painting::styling::Color;
 use flui_painting::{Canvas, DisplayList, DrawCommand, DrawOp, Paint, Shader};
-use flui_types::{
-    geometry::{Matrix4, Rect, px},
-    styling::Color,
-};
 
 #[test]
 fn test_display_list_creation() {
@@ -19,7 +17,7 @@ fn test_display_list_creation() {
 
 #[test]
 fn isolated_append_preserves_bounds_and_scopes_the_run() {
-    let rect = Rect::from_xywh(px(100.0), px(200.0), px(30.0), px(40.0));
+    let rect = Rect::from_xywh(100.0, 200.0, 30.0, 40.0);
     let run = flui_painting::testing::record(|canvas| {
         canvas.clip_rect(rect);
         canvas.draw_rect(rect, &Paint::fill(Color::RED));
@@ -48,14 +46,8 @@ fn isolated_append_preserves_bounds_and_scopes_the_run() {
 fn test_display_list_command_iteration() {
     // Dogfoods the `testing::record` builder (no manual Canvas::new/finish).
     let dl = flui_painting::testing::record(|canvas| {
-        canvas.draw_rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0)),
-            &Paint::default(),
-        );
-        canvas.draw_rect(
-            Rect::from_ltrb(px(50.0), px(50.0), px(100.0), px(100.0)),
-            &Paint::default(),
-        );
+        canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 50.0, 50.0), &Paint::default());
+        canvas.draw_rect(Rect::from_ltrb(50.0, 50.0, 100.0, 100.0), &Paint::default());
     });
 
     let count = dl.commands().len();
@@ -93,14 +85,8 @@ fn interning_shares_arc_for_identical_paints() {
     let mut canvas = Canvas::new();
     let paint = Paint::fill(Color::RED);
 
-    canvas.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0)),
-        &paint,
-    );
-    canvas.draw_rect(
-        Rect::from_ltrb(px(20.0), px(20.0), px(30.0), px(30.0)),
-        &paint,
-    );
+    canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 10.0, 10.0), &paint);
+    canvas.draw_rect(Rect::from_ltrb(20.0, 20.0, 30.0, 30.0), &paint);
 
     let dl = canvas.finish();
     let cmds: Vec<&DrawCommand> = dl.commands().iter().collect();
@@ -123,11 +109,8 @@ fn interning_keeps_distinct_paints_separate() {
     let red = Paint::fill(Color::RED);
     let blue = Paint::fill(Color::BLUE);
 
-    canvas.draw_rect(Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0)), &red);
-    canvas.draw_rect(
-        Rect::from_ltrb(px(20.0), px(20.0), px(30.0), px(30.0)),
-        &blue,
-    );
+    canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 10.0, 10.0), &red);
+    canvas.draw_rect(Rect::from_ltrb(20.0, 20.0, 30.0, 30.0), &blue);
 
     let dl = canvas.finish();
     let cmds: Vec<&DrawCommand> = dl.commands().iter().collect();
@@ -155,11 +138,8 @@ fn interning_100_draws_share_single_arc() {
     let paint = Paint::fill(Color::GREEN);
 
     for i in 0..100 {
-        let f = i as f32;
-        canvas.draw_rect(
-            Rect::from_ltrb(px(f), px(f), px(f + 1.0), px(f + 1.0)),
-            &paint,
-        );
+        let f = i as f64;
+        canvas.draw_rect(Rect::from_ltrb(f, f, f + 1.0, f + 1.0), &paint);
     }
 
     let dl = canvas.finish();
@@ -192,14 +172,8 @@ fn interning_distinguishes_paints_with_different_shaders() {
         color: Color::BLACK,
     });
 
-    canvas.draw_rect(
-        Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0)),
-        &solid,
-    );
-    canvas.draw_rect(
-        Rect::from_ltrb(px(20.0), px(20.0), px(30.0), px(30.0)),
-        &with_shader,
-    );
+    canvas.draw_rect(Rect::from_ltrb(0.0, 0.0, 10.0, 10.0), &solid);
+    canvas.draw_rect(Rect::from_ltrb(20.0, 20.0, 30.0, 30.0), &with_shader);
 
     let dl = canvas.finish();
     let cmds: Vec<&DrawCommand> = dl.commands().iter().collect();
@@ -225,7 +199,7 @@ fn interning_distinguishes_paints_with_different_shaders() {
 /// (0, 0).
 #[test]
 fn bounds_less_leading_command_does_not_seed_the_origin() {
-    let far = Rect::from_ltrb(px(100.0), px(100.0), px(150.0), px(150.0));
+    let far = Rect::from_ltrb(100.0, 100.0, 150.0, 150.0);
 
     let mut canvas = Canvas::new();
     canvas.clip_rect(far);
@@ -240,7 +214,7 @@ fn bounds_less_leading_command_does_not_seed_the_origin() {
 /// and a nested translation inside the picture composes with it.
 #[test]
 fn draw_picture_restamps_by_the_current_transform() {
-    let rect = Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0));
+    let rect = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
     let picture = flui_painting::testing::record(|canvas| {
         canvas.draw_rect(rect, &Paint::fill(Color::RED));
         canvas.save();
@@ -266,7 +240,7 @@ fn draw_picture_restamps_by_the_current_transform() {
     }
     assert_eq!(
         replayed.bounds(),
-        Some(Rect::from_xywh(px(100.0), px(200.0), px(15.0), px(10.0))),
+        Some(Rect::from_xywh(100.0, 200.0, 15.0, 10.0)),
         "the replayed bounds are the picture's bounds under the ctm"
     );
     let ops: Vec<&DrawOp> = replayed.iter().map(|c| &c.op).collect();
@@ -287,7 +261,7 @@ fn draw_picture_restamps_by_the_current_transform() {
 /// recorded after the scope closes is stamped with the outer transform.
 #[test]
 fn save_and_restore_carry_no_state_but_the_clip_scope() {
-    let rect = Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0));
+    let rect = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
     let list = flui_painting::testing::record(|canvas| {
         canvas.translate(1.0, 0.0);
         canvas.save();

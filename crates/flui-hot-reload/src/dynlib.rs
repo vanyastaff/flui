@@ -11,7 +11,7 @@
 //! use std::path::Path;
 //!
 //! let lib = DynLib::open(Path::new("libplugin.so")).expect("failed to load");
-//! let build_fn: extern "C" fn(f32, f32) -> *mut std::ffi::c_void = unsafe {
+//! let build_fn: extern "C" fn(f64, f64) -> *mut std::ffi::c_void = unsafe {
 //!     let ptr = lib.symbol("flui_scene_build").expect("symbol not found");
 //!     std::mem::transmute(ptr)
 //! };
@@ -123,7 +123,7 @@ mod sys {
         unsafe {
             // RTLD_LOCAL prevents the plugin's symbols from polluting the global
             // symbol table. Without it, duplicate symbols between the host and
-            // plugin (e.g., from shared crate dependencies like flui-types) cause
+            // plugin (e.g., from shared crate dependencies like flui-foundation) cause
             // SIGBUS/SIGSEGV crashes during hot-reload when the old .so is
             // unloaded and a new one is loaded.
             let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);

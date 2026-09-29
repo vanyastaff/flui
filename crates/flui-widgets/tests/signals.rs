@@ -50,7 +50,7 @@ impl StatefulView for Reader {
 impl ViewState<Reader> for ReaderState {
     fn build(&self, _view: &Reader, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.fetch_add(1, Ordering::Relaxed);
-        SizedBox::square(self.sig.get(ctx) as f32)
+        SizedBox::square(self.sig.get(ctx) as f64)
     }
 }
 
@@ -81,7 +81,7 @@ impl ViewState<ConditionalReader> for ConditionalReaderState {
         } else {
             1
         };
-        SizedBox::square(side as f32)
+        SizedBox::square(side as f64)
     }
 }
 
@@ -116,7 +116,7 @@ impl ViewState<SignalOwner> for SignalOwnerState {
     }
 
     fn build(&self, _view: &SignalOwner, ctx: &dyn BuildContext) -> impl IntoView {
-        SizedBox::square(self.own.expect("init_state ran").get(ctx) as f32)
+        SizedBox::square(self.own.expect("init_state ran").get(ctx) as f64)
     }
 }
 
@@ -163,7 +163,7 @@ impl StatefulView for TolerantReader {
 impl ViewState<TolerantReader> for TolerantReaderState {
     fn build(&self, _view: &TolerantReader, ctx: &dyn BuildContext) -> impl IntoView {
         let outcome = self.view.sig.try_get(ctx);
-        let side = outcome.as_ref().map_or(1.0, |v| *v as f32);
+        let side = outcome.as_ref().map_or(1.0, |v| *v as f64);
         self.view.outcome.set(Some(outcome));
         SizedBox::square(side)
     }

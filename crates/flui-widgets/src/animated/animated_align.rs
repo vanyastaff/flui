@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use flui_animation::Animation;
 use flui_animation::curve::{ArcCurve, Curve};
-use flui_types::Alignment;
+use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, BuildContextExt, IntoView, ViewExt, ViewState};
 
@@ -24,8 +24,8 @@ use crate::{Align, AnimatedBuilder};
 #[derive(Clone, StatefulView)]
 pub struct AnimatedAlign {
     alignment: Alignment,
-    width_factor: Option<f32>,
-    height_factor: Option<f32>,
+    width_factor: Option<f64>,
+    height_factor: Option<f64>,
     duration: Duration,
     curve: ArcCurve,
     child: BoxedView,
@@ -41,7 +41,7 @@ impl AnimatedAlign {
     /// setting `1.0`: an unset factor makes the box fill its constraints on
     /// that axis, which is what `'AnimatedAlign null widthFactor'` pins.
     #[must_use]
-    pub fn width_factor(mut self, factor: f32) -> Self {
+    pub fn width_factor(mut self, factor: f64) -> Self {
         self.width_factor = Some(factor);
         self
     }
@@ -49,7 +49,7 @@ impl AnimatedAlign {
     /// Size the box to `factor` x the child's height, animating the factor when
     /// it changes. See [`width_factor`](Self::width_factor).
     #[must_use]
-    pub fn height_factor(mut self, factor: f32) -> Self {
+    pub fn height_factor(mut self, factor: f64) -> Self {
         self.height_factor = Some(factor);
         self
     }
@@ -97,8 +97,8 @@ impl std::fmt::Debug for AnimatedAlign {
 pub struct AnimatedAlignState {
     controller: ImplicitController,
     alignment: OptTween<Alignment>,
-    width_factor: OptTween<f32>,
-    height_factor: OptTween<f32>,
+    width_factor: OptTween<f64>,
+    height_factor: OptTween<f64>,
     child: BoxedView,
 }
 

@@ -18,7 +18,8 @@
 //! remain green without modification.
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Size};
+use flui_foundation::geometry::Size;
+use flui_painting::Alignment;
 
 use crate::layout::{
     align::{positioned_box_size, positioned_box_size_no_child},
@@ -48,9 +49,9 @@ use flui_rendering::{
 pub struct RenderCenter {
     inner: AligningShiftedBox,
     /// Width factor (`>= 0.0`); if set, width = `child.width * factor`.
-    width_factor: Option<f32>,
+    width_factor: Option<f64>,
     /// Height factor (`>= 0.0`); if set, height = `child.height * factor`.
-    height_factor: Option<f32>,
+    height_factor: Option<f64>,
 }
 
 impl Default for RenderCenter {
@@ -74,7 +75,7 @@ impl RenderCenter {
     /// The factor must be `>= 0.0`; values above 1.0 are valid (Flutter
     /// parity — previously this was incorrectly clamped to `[0, 1]`).
     #[must_use]
-    pub fn with_width_factor(mut self, factor: f32) -> Self {
+    pub fn with_width_factor(mut self, factor: f64) -> Self {
         debug_assert!(
             factor >= 0.0,
             "width_factor must be >= 0.0 (got {factor}); Flutter asserts the same"
@@ -88,7 +89,7 @@ impl RenderCenter {
     /// The factor must be `>= 0.0`; values above 1.0 are valid (Flutter
     /// parity — previously this was incorrectly clamped to `[0, 1]`).
     #[must_use]
-    pub fn with_height_factor(mut self, factor: f32) -> Self {
+    pub fn with_height_factor(mut self, factor: f64) -> Self {
         debug_assert!(
             factor >= 0.0,
             "height_factor must be >= 0.0 (got {factor}); Flutter asserts the same"
@@ -98,20 +99,20 @@ impl RenderCenter {
     }
 
     /// Returns the width factor.
-    pub fn width_factor(&self) -> Option<f32> {
+    pub fn width_factor(&self) -> Option<f64> {
         self.width_factor
     }
 
     /// Returns the height factor.
-    pub fn height_factor(&self) -> Option<f32> {
+    pub fn height_factor(&self) -> Option<f64> {
         self.height_factor
     }
 
     /// Updates widget-owned sizing factors while preserving layout caches.
     pub fn update_factors(
         &mut self,
-        width_factor: Option<f32>,
-        height_factor: Option<f32>,
+        width_factor: Option<f64>,
+        height_factor: Option<f64>,
     ) -> flui_rendering::RenderUpdateImpact {
         if self.width_factor == width_factor && self.height_factor == height_factor {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -175,28 +176,28 @@ impl RenderBox for RenderCenter {
         }
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_min_intrinsic_width(0, height) * self.width_factor.unwrap_or(1.0)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_max_intrinsic_width(0, height) * self.width_factor.unwrap_or(1.0)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_min_intrinsic_height(0, width) * self.height_factor.unwrap_or(1.0)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -229,7 +230,7 @@ impl RenderBox for RenderCenter {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -246,15 +247,11 @@ impl RenderBox for RenderCenter {
         //   resolvedAlignment.alongOffset(size − childSize).dy + childBaseline
         // For CENTER: along_size gives (size-child).dy * 0.5 = free_h * 0.5,
         // matching the prior inline `free_h * 0.5` implementation exactly.
-        let child_offset_dy = self
-            .inner
-            .dry_child_offset(parent_size, child_size)
-            .dy
-            .get();
+        let child_offset_dy = self.inner.dry_child_offset(parent_size, child_size).dy;
         Some(child_baseline + child_offset_dy)
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         self.inner.actual_baseline(baseline)
     }
 

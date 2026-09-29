@@ -9,7 +9,7 @@ error[E0277]: `Offset` cannot be attached to a child as parent data
 help: the trait `ParentData` is not implemented for `Offset`
   --> tests/compile_fail/not_parent_data.rs:6:1
    |
- 6 | struct Offset(f32);
+ 6 | struct Offset(f64);
    | ^^^^^^^^^^^^^
    = note: `impl ParentData for Offset {}` is enough (every method has a default) provided `Offset` is `Debug + Clone + 'static`
    = help: the following other types implement trait `ParentData`:

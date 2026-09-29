@@ -5,8 +5,8 @@
 //!
 //! Run with: cargo test -p flui-platform --test window_modes
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
 
 /// T016: Test window mode transitions (Normal, Maximized, Fullscreen)
 #[test]
@@ -23,7 +23,7 @@ fn test_window_modes() {
 
     let options = WindowOptions {
         title: "Test Window - T016".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         visible: false, // Don't show during tests
         ..Default::default()
     };
@@ -35,8 +35,8 @@ fn test_window_modes() {
             let initial_size = window.logical_size();
             tracing::info!(
                 "Initial size: {}x{}",
-                initial_size.width.0,
-                initial_size.height.0
+                initial_size.width,
+                initial_size.height
             );
 
             // TODO: Once window.set_mode() is implemented, test:
@@ -49,7 +49,7 @@ fn test_window_modes() {
 
             // For now, verify window exists and has valid size
             assert!(
-                initial_size.width.0 > 0.0 && initial_size.height.0 > 0.0,
+                initial_size.width > 0.0 && initial_size.height > 0.0,
                 "Window should have valid size"
             );
 
@@ -81,7 +81,7 @@ fn test_windows_mode_transitions() {
 
     let options = WindowOptions {
         title: "Windows Mode Test - T017".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         visible: false,
         ..Default::default()
     };
@@ -92,7 +92,7 @@ fn test_windows_mode_transitions() {
 
             // Windows-specific: Verify window is in Normal mode initially
             let size = window.logical_size();
-            assert!(size.width.0 > 0.0 && size.height.0 > 0.0);
+            assert!(size.width > 0.0 && size.height > 0.0);
 
             // TODO: Test Windows-specific mode transitions:
             // - WS_MAXIMIZE style for Maximized
@@ -130,7 +130,7 @@ fn test_macos_mode_transitions() {
 
     let options = WindowOptions {
         title: "macOS Mode Test - T018".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         visible: false,
         ..Default::default()
     };
@@ -141,7 +141,7 @@ fn test_macos_mode_transitions() {
 
             // macOS-specific: Verify window is in Normal mode initially
             let size = window.logical_size();
-            assert!(size.width.0 > 0.0 && size.height.0 > 0.0);
+            assert!(size.width > 0.0 && size.height > 0.0);
 
             // TODO: Test macOS-specific mode transitions:
             // - NSWindow zoom for Maximized
@@ -171,7 +171,7 @@ fn test_dpi_scaling_change() {
 
     let options = WindowOptions {
         title: "DPI Test - T019".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         visible: false,
         ..Default::default()
     };
@@ -259,7 +259,7 @@ fn test_per_monitor_dpi() {
     // Create window and verify it uses correct scale factor
     let options = WindowOptions {
         title: "Per-Monitor DPI Test - T020".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         visible: false,
         ..Default::default()
     };

@@ -44,7 +44,7 @@ use downcast_rs::{Downcast, impl_downcast};
 /// ```ignore
 /// #[derive(Debug, Clone, Default)]
 /// struct CustomParentData {
-///     custom_field: f32,
+///     custom_field: f64,
 /// }
 ///
 /// impl ParentData for CustomParentData {}

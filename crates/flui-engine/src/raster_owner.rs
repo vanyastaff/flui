@@ -1674,9 +1674,9 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use flui_foundation::geometry::Rect;
     use flui_foundation::{FrameStamp, PresentationId, RealmId};
     use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene};
-    use flui_types::geometry::{Pixels, Rect};
 
     use super::*;
 
@@ -1800,7 +1800,7 @@ mod tests {
             false
         }
 
-        fn mark_dirty(&mut self, _rect: Rect<Pixels>) {}
+        fn mark_dirty(&mut self, _rect: Rect<f64>) {}
 
         fn mark_full_repaint(&mut self) {
             self.full_repaint_calls += 1;

@@ -10,7 +10,7 @@
 //! # Rust-native improvements
 //!
 //! * The scaling math is delegated to the existing typed
-//!   [`BoxFit::apply`] (from `flui_types::layout`), which returns a
+//!   [`BoxFit::apply`] (from `flui_painting`), which returns a
 //!   structured [`FittedSizes`] with both `source` and `destination`
 //!   regions. Flutter's `RenderFittedBox` reimplements the same math
 //!   inline; the Rust port keeps the math in one place so the seven
@@ -28,7 +28,7 @@
 //!
 //! Porting Flutter's `'Child can cover'` (`fitted_box_test.dart`, 3.44.0)
 //! surfaced a real bug, but **not in this file** — it lived one layer down,
-//! in `flui_types::layout::BoxFit::apply`. Every branch there answered
+//! in `flui_painting::BoxFit::apply`. Every branch there answered
 //! `source: input_size` unconditionally, so `BoxFit::Cover`/`FitWidth`/
 //! `FitHeight` never actually cropped the source the way Flutter's
 //! `applyBoxFit` does (`box_fit.dart`, 3.44.0) — instead of a cropped
@@ -38,14 +38,14 @@
 //! the problem; it just had nothing to compute an offset from.
 //!
 //! Two things changed as a result:
-//! 1. `BoxFit::apply` (`flui-types`) now crops the source exactly as
+//! 1. `BoxFit::apply` (`flui-painting`) now crops the source exactly as
 //!    `applyBoxFit` does for `Cover`/`FitWidth`/`FitHeight`/`None`.
 //! 2. This render object gained a `source_offset` field — the cropped
 //!    source region's own top-left within the child, i.e. Flutter's
 //!    `sourceRect.left`/`top` (`RenderFittedBox._updatePaintData`,
 //!    `proxy_box.dart`) — folded into `RenderFittedBox::effective_transform` as a
 //!    third `translate(-source_offset)` term alongside the pre-existing
-//!    `translate(align_offset) * scale`. Before the `flui-types` fix, this
+//!    `translate(align_offset) * scale`. Before the `BoxFit::apply` fix, this
 //!    term would have been a permanent no-op (`source_offset` could never
 //!    be anything but zero); it is now live for any crop under a
 //!    non-degenerate alignment, including the default `CENTER`.
@@ -74,7 +74,7 @@
 //! `paint` puts them the right way round; `apply_paint_transform` then keeps
 //! coordinate mapping working without re-emitting the layer.
 //!
-//! Verified at both layers: `flui-types`' own unit tests pin every
+//! Verified at both layers: `flui-painting`'s own unit tests pin every
 //! `BoxFit::apply` variant against oracle-computed `(source, destination)`
 //! pairs; this crate's `tests/render_object_harness.rs` drives
 //! `perform_layout` through the real pipeline
@@ -83,12 +83,9 @@
 //! call path ever sets to a nonzero value.
 
 use flui_foundation::Single;
-use flui_types::{
-    Alignment, Matrix4, Offset, Point, Rect, Size,
-    geometry::px,
-    layout::{BoxFit, FittedSizes},
-    painting::Clip,
-};
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
+use flui_painting::paint::Clip;
+use flui_painting::{Alignment, BoxFit, FittedSizes};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -112,8 +109,8 @@ pub struct RenderFittedBox {
     /// [`Self::effective_transform`] — which `paint` pushes (or, for a
     /// pure translation, applies as the child offset), `hit_test` inverts,
     /// and `apply_paint_transform` composes into coordinate mapping.
-    scale_x: f32,
-    scale_y: f32,
+    scale_x: f64,
+    scale_y: f64,
     /// Cached child top-left offset inside `size`.
     align_offset: Offset,
     /// Cached top-left offset of the (possibly cropped) source region
@@ -180,7 +177,7 @@ impl RenderFittedBox {
 
     /// Returns the cached scale factors `(sx, sy)` from the last layout.
     #[inline]
-    pub fn scale_factors(&self) -> (f32, f32) {
+    pub fn scale_factors(&self) -> (f64, f64) {
         (self.scale_x, self.scale_y)
     }
 
@@ -223,13 +220,9 @@ impl RenderFittedBox {
     /// enforce (paint and hit-test can't disagree WITH EACH OTHER) still
     /// held; they simply agreed on the wrong point.
     pub fn effective_transform(&self) -> Matrix4 {
-        let t = Matrix4::translation(self.align_offset.dx.get(), self.align_offset.dy.get(), 0.0);
+        let t = Matrix4::translation(self.align_offset.dx, self.align_offset.dy, 0.0);
         let s = Matrix4::scaling(self.scale_x, self.scale_y, 1.0);
-        let pre = Matrix4::translation(
-            -self.source_offset.dx.get(),
-            -self.source_offset.dy.get(),
-            0.0,
-        );
+        let pre = Matrix4::translation(-self.source_offset.dx, -self.source_offset.dy, 0.0);
         t * s * pre
     }
 
@@ -294,7 +287,7 @@ impl RenderFittedBox {
 
     /// Maps an alignment scalar in [-1, 1] to a position in [0, free].
     #[inline]
-    fn align_axis(component: f32, free: f32) -> f32 {
+    fn align_axis(component: f64, free: f64) -> f64 {
         free * (component + 1.0) * 0.5
     }
 
@@ -319,35 +312,35 @@ impl RenderFittedBox {
             destination,
         } = self.fit.apply(child_size, size);
 
-        let source_width = source.width.get();
-        let source_height = source.height.get();
+        let source_width = source.width;
+        let source_height = source.height;
         self.scale_x = if source_width > 0.0 {
-            destination.width.get() / source_width
+            destination.width / source_width
         } else {
             1.0
         };
         self.scale_y = if source_height > 0.0 {
-            destination.height.get() / source_height
+            destination.height / source_height
         } else {
             1.0
         };
 
-        let free_width = size.width.get() - destination.width.get();
-        let free_height = size.height.get() - destination.height.get();
+        let free_width = size.width - destination.width;
+        let free_height = size.height - destination.height;
         self.align_offset = Offset::new(
-            px(Self::align_axis(self.alignment.x, free_width)),
-            px(Self::align_axis(self.alignment.y, free_height)),
+            Self::align_axis(self.alignment.x, free_width),
+            Self::align_axis(self.alignment.y, free_height),
         );
 
-        let source_free_width = child_size.width.get() - source_width;
-        let source_free_height = child_size.height.get() - source_height;
+        let source_free_width = child_size.width - source_width;
+        let source_free_height = child_size.height - source_height;
         self.source_offset = Offset::new(
-            px(Self::align_axis(self.alignment.x, source_free_width)),
-            px(Self::align_axis(self.alignment.y, source_free_height)),
+            Self::align_axis(self.alignment.x, source_free_width),
+            Self::align_axis(self.alignment.y, source_free_height),
         );
 
         self.has_visual_overflow =
-            source_width < child_size.width.get() || source_height < child_size.height.get();
+            source_width < child_size.width || source_height < child_size.height;
         self.last_layout_sizes = Some((size, child_size));
     }
 
@@ -415,7 +408,7 @@ impl RenderBox for RenderFittedBox {
         ctx.position_child(0, Offset::ZERO);
 
         // (3) Degenerate child → smallest size, identity transform.
-        if child_size.width <= px(0.0) || child_size.height <= px(0.0) {
+        if child_size.width <= 0.0 || child_size.height <= 0.0 {
             self.reset_transform_cache();
             self.child_is_empty = true;
             return incoming.smallest();
@@ -448,7 +441,7 @@ impl RenderBox for RenderFittedBox {
             return constraints.smallest();
         }
         let child_size = ctx.child_dry_layout(0, BoxConstraints::UNCONSTRAINED);
-        if child_size.width <= px(0.0) || child_size.height <= px(0.0) {
+        if child_size.width <= 0.0 || child_size.height <= 0.0 {
             return constraints.smallest();
         }
         self.fitted_size(constraints, child_size)
@@ -459,7 +452,7 @@ impl RenderBox for RenderFittedBox {
         _constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             None
         } else {
@@ -543,7 +536,7 @@ impl RenderBox for RenderFittedBox {
         // happily), and the fit transform onto or from a zero extent is
         // degenerate, so neither a collapsed box nor a collapsed child may
         // reach the child's paint.
-        if self.child_is_empty || size.width.get() <= 0.0 || size.height.get() <= 0.0 {
+        if self.child_is_empty || size.width <= 0.0 || size.height <= 0.0 {
             return;
         }
 
@@ -556,7 +549,7 @@ impl RenderBox for RenderFittedBox {
         // the case that reaches it.
         let paint_transformed_child = |ctx: &mut flui_rendering::context::PaintCx<'_, Single>| {
             if let Some((dx, dy)) = transform.as_translation() {
-                ctx.paint_child_at(Offset::new(px(dx), px(dy)));
+                ctx.paint_child_at(Offset::new(dx, dy));
             } else {
                 // Not a redundant closure: `paint_child` is inherent on PaintCx
                 // for both `Exact<1>` and `Variable`, so the bare path is
@@ -596,7 +589,7 @@ impl RenderBox for RenderFittedBox {
         if self.has_child {
             *transform *= self.effective_transform();
         }
-        *transform *= Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
+        *transform *= Matrix4::translation(child_offset.dx, child_offset.dy, 0.0);
     }
 }
 
@@ -606,7 +599,6 @@ impl RenderBox for RenderFittedBox {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -665,26 +657,17 @@ mod tests {
     #[test]
     fn paint_cache_handles_zero_source_axes_and_vertical_only_overflow() {
         let mut zero_width = RenderFittedBox::default();
-        zero_width.update_paint_data(
-            Size::new(px(100.0), px(100.0)),
-            Size::new(px(0.0), px(20.0)),
-        );
+        zero_width.update_paint_data(Size::new(100.0, 100.0), Size::new(0.0, 20.0));
         assert_eq!(zero_width.scale_x, 1.0);
         assert!(zero_width.scale_y.is_finite());
 
         let mut zero_height = RenderFittedBox::default();
-        zero_height.update_paint_data(
-            Size::new(px(100.0), px(100.0)),
-            Size::new(px(20.0), px(0.0)),
-        );
+        zero_height.update_paint_data(Size::new(100.0, 100.0), Size::new(20.0, 0.0));
         assert_eq!(zero_height.scale_y, 1.0);
         assert!(zero_height.scale_x.is_finite());
 
         let mut vertical_overflow = RenderFittedBox::default().with_fit(BoxFit::Cover);
-        vertical_overflow.update_paint_data(
-            Size::new(px(200.0), px(100.0)),
-            Size::new(px(100.0), px(200.0)),
-        );
+        vertical_overflow.update_paint_data(Size::new(200.0, 100.0), Size::new(100.0, 200.0));
         assert!(vertical_overflow.has_visual_overflow());
     }
 
@@ -721,7 +704,7 @@ mod tests {
             has_child: true,
             scale_x: 2.0,
             scale_y: 2.0,
-            align_offset: Offset::new(px(10.0), px(0.0)),
+            align_offset: Offset::new(10.0, 0.0),
             ..Default::default()
         };
 
@@ -745,9 +728,9 @@ mod tests {
             .expect("translate*scale(2,2) is invertible");
         // Visual (70, 40) under translate(10,0)*scale(2,2) came from
         // child-local ((70-10)/2, 40/2) = (30, 20).
-        let (tx, ty) = inverse.transform_point(px(70.0), px(40.0));
-        assert!((tx.get() - 30.0).abs() < 1e-4, "tx = {tx:?}");
-        assert!((ty.get() - 20.0).abs() < 1e-4, "ty = {ty:?}");
+        let (tx, ty) = inverse.transform_point(70.0, 40.0);
+        assert!((tx - 30.0).abs() < 1e-4, "tx = {tx:?}");
+        assert!((ty - 20.0).abs() < 1e-4, "ty = {ty:?}");
     }
 
     /// Pure composition-math check for `effective_transform`'s third term:
@@ -779,19 +762,15 @@ mod tests {
             scale_x: 4.0,
             scale_y: 4.0,
             align_offset: Offset::ZERO,
-            source_offset: Offset::new(px(25.0), px(0.0)),
+            source_offset: Offset::new(25.0, 0.0),
             ..Default::default()
         };
 
-        let (x, y) = node
-            .effective_transform()
-            .transform_point(px(50.0), px(25.0));
+        let (x, y) = node.effective_transform().transform_point(50.0, 25.0);
         assert!(
-            (x.get() - 100.0).abs() < 1e-4 && (y.get() - 100.0).abs() < 1e-4,
+            (x - 100.0).abs() < 1e-4 && (y - 100.0).abs() < 1e-4,
             "child-local (50, 25) (the crop window's center) must map to the \
-             box's own center (100, 100), got ({}, {})",
-            x.get(),
-            y.get(),
+             box's own center (100, 100), got ({x}, {y})",
         );
     }
 
@@ -820,13 +799,10 @@ mod tests {
     fn fit_contain_into_widescreen_does_not_overflow() {
         // 16:9 box, square child: BoxFit::Contain → child shrinks to fit
         // the height. No overflow.
-        let sizes = BoxFit::Contain.apply(
-            Size::new(px(100.0), px(100.0)),
-            Size::new(px(160.0), px(90.0)),
-        );
+        let sizes = BoxFit::Contain.apply(Size::new(100.0, 100.0), Size::new(160.0, 90.0));
         // destination should be 90x90 (square inscribed in 160x90 height).
-        assert_eq!(sizes.destination.height, px(90.0));
-        assert!(sizes.destination.width.get() <= 160.0);
+        assert_eq!(sizes.destination.height, 90.0);
+        assert!(sizes.destination.width <= 160.0);
     }
 
     /// Flutter parity: `applyBoxFit(BoxFit.cover, ...)` (`box_fit.dart`,
@@ -837,11 +813,8 @@ mod tests {
     /// exactly (`destination == output`, never overflowing it).
     #[test]
     fn fit_cover_into_widescreen_crops_the_source_height() {
-        let sizes = BoxFit::Cover.apply(
-            Size::new(px(100.0), px(100.0)),
-            Size::new(px(160.0), px(90.0)),
-        );
-        assert_eq!(sizes.destination, Size::new(px(160.0), px(90.0)));
-        assert_eq!(sizes.source, Size::new(px(100.0), px(56.25)));
+        let sizes = BoxFit::Cover.apply(Size::new(100.0, 100.0), Size::new(160.0, 90.0));
+        assert_eq!(sizes.destination, Size::new(160.0, 90.0));
+        assert_eq!(sizes.source, Size::new(100.0, 56.25));
     }
 }

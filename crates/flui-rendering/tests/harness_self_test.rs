@@ -14,10 +14,12 @@
 //! flui-rendering are distinct compiled artifacts). Integration tests do not
 //! have this problem — they link the already-built library.
 
+use flui_foundation::geometry::{EdgeInsets, Offset, Rect, Size};
 use flui_objects::{
     RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
     RenderSliverFixedExtentList, RenderStack, RenderViewport,
 };
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::testing::ParentDataSeed;
 use flui_rendering::{
@@ -25,12 +27,11 @@ use flui_rendering::{
     parent_data::{FlexParentData, StackParentData},
     testing::{BoxQueryRun, Probe, RenderTester, box_node, sliver_node},
 };
-use flui_types::{EdgeInsets, Offset, Rect, Size, geometry::px, layout::AxisDirection};
 
 /// Loose `0..=200 x 0..=200` constraints: children settle at their natural
 /// size rather than being forced to fill (the box-pipeline test default).
 fn loose_200() -> BoxConstraints {
-    BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(200.0))
+    BoxConstraints::new(0.0, 200.0, 0.0, 200.0)
 }
 
 // ============================================================================
@@ -50,12 +51,12 @@ fn box_run_frame_padding_offsets_and_single_picture() {
     assert!(run.is_clean(), "no dirty residue after a settled frame");
 
     let child = run.id("child");
-    assert_eq!(run.offset(child), Offset::new(px(5.0), px(5.0)));
-    assert_eq!(run.box_geometry(child), Size::new(px(40.0), px(40.0)));
+    assert_eq!(run.offset(child), Offset::new(5.0, 5.0));
+    assert_eq!(run.box_geometry(child), Size::new(40.0, 40.0));
     assert_eq!(run.structure(), vec!["Offset", "Picture"]);
     assert_eq!(
         run.picture_bounds(),
-        Some(Rect::from_ltrb(px(5.0), px(5.0), px(45.0), px(45.0))),
+        Some(Rect::from_ltrb(5.0, 5.0, 45.0, 45.0)),
     );
 }
 
@@ -67,12 +68,12 @@ fn box_run_frame_flex_row_lays_children_along_main_axis() {
             .child(box_node(RenderColoredBox::green(60.0, 40.0)).label("green"))
             .child(box_node(RenderColoredBox::blue(20.0, 40.0)).label("blue")),
     )
-    .with_size(Size::new(px(300.0), px(100.0)))
+    .with_size(Size::new(300.0, 100.0))
     .run_frame();
 
-    assert_eq!(run.offset(run.id("red")), Offset::new(px(0.0), px(0.0)));
-    assert_eq!(run.offset(run.id("green")), Offset::new(px(40.0), px(0.0)));
-    assert_eq!(run.offset(run.id("blue")), Offset::new(px(100.0), px(0.0)));
+    assert_eq!(run.offset(run.id("red")), Offset::new(0.0, 0.0));
+    assert_eq!(run.offset(run.id("green")), Offset::new(40.0, 0.0));
+    assert_eq!(run.offset(run.id("blue")), Offset::new(100.0, 0.0));
 }
 
 #[test]
@@ -86,13 +87,10 @@ fn box_run_layout_stack_positioned_child_respects_parent_data_seed() {
                     .label("positioned"),
             ),
     )
-    .with_size(Size::new(px(120.0), px(120.0)))
+    .with_size(Size::new(120.0, 120.0))
     .run_layout();
 
-    assert_eq!(
-        run.offset(run.id("positioned")),
-        Offset::new(px(18.0), px(12.0))
-    );
+    assert_eq!(run.offset(run.id("positioned")), Offset::new(18.0, 12.0));
     assert_eq!(run.hit_first(25.0, 20.0), Some(run.id("positioned")));
 }
 
@@ -107,11 +105,11 @@ fn box_run_layout_flex_child_honors_flex_parent_data_seed() {
                     .label("flex"),
             ),
     )
-    .with_size(Size::new(px(200.0), px(60.0)))
+    .with_size(Size::new(200.0, 60.0))
     .run_layout();
 
-    assert_eq!(run.box_geometry(run.id("flex")).width, px(160.0));
-    assert_eq!(run.offset(run.id("flex")), Offset::new(px(40.0), px(0.0)));
+    assert_eq!(run.box_geometry(run.id("flex")).width, 160.0);
+    assert_eq!(run.offset(run.id("flex")), Offset::new(40.0, 0.0));
 }
 
 #[test]
@@ -132,7 +130,7 @@ fn box_run_frame_repaint_boundary_splits_subtree() {
 #[test]
 fn box_run_frame_clean_frame_after_settle_produces_no_tree() {
     let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(px(100.0), px(100.0)))
+        .with_size(Size::new(100.0, 100.0))
         .run_frame();
 
     assert!(run.painted(), "frame 1 paints");
@@ -228,7 +226,7 @@ fn structured_diagnostics_queries() {
 #[test]
 fn pump_idle_frames_skips_settled_frames() {
     let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(px(100.0), px(100.0)))
+        .with_size(Size::new(100.0, 100.0))
         .run_frame();
 
     run.pump_idle_frames(3);
@@ -246,10 +244,10 @@ fn simulate_advances_layout_across_ticks() {
     let child = run.id("child");
     let pad = run.root();
     let reports = run.simulate([0.25, 0.5, 1.0], |t, run| {
-        let padding = 5.0 + 50.0 * t as f32;
+        let padding = 5.0 + 50.0 * t;
         run.update::<RenderPadding>(pad, |p| {
             assert_eq!(
-                p.set_padding(EdgeInsets::all(px(padding))),
+                p.set_padding(EdgeInsets::all(padding)),
                 flui_rendering::RenderUpdateImpact::LAYOUT,
             );
         });
@@ -257,17 +255,17 @@ fn simulate_advances_layout_across_ticks() {
 
     assert_eq!(reports.len(), 3);
     assert!(reports.iter().all(|r| r.painted));
-    assert_eq!(run.offset(child), Offset::new(px(55.0), px(55.0)));
+    assert_eq!(run.offset(child), Offset::new(55.0, 55.0));
     assert_eq!(
         run.picture_bounds(),
-        Some(Rect::from_ltrb(px(55.0), px(55.0), px(95.0), px(95.0))),
+        Some(Rect::from_ltrb(55.0, 55.0, 95.0, 95.0)),
     );
 }
 
 #[test]
 fn advance_paint_changes_color_without_layout() {
     let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)).label("leaf"))
-        .with_size(Size::new(px(100.0), px(100.0)))
+        .with_size(Size::new(100.0, 100.0))
         .run_frame();
 
     let leaf = run.id("leaf");
@@ -291,7 +289,7 @@ fn advance_paint_opacity_tracks_layer_alpha() {
         box_node(RenderOpacity::new(1.0))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
     )
-    .with_size(Size::new(px(100.0), px(100.0)))
+    .with_size(Size::new(100.0, 100.0))
     .run_frame();
 
     let fade = run.root();
@@ -325,17 +323,17 @@ fn update_then_pump_relayouts() {
     .run_frame();
 
     let child = run.id("child");
-    assert_eq!(run.offset(child), Offset::new(px(5.0), px(5.0)));
+    assert_eq!(run.offset(child), Offset::new(5.0, 5.0));
 
     run.update::<RenderPadding>(run.root(), |padding| {
         assert_eq!(
-            padding.set_padding(EdgeInsets::all(px(20.0))),
+            padding.set_padding(EdgeInsets::all(20.0)),
             flui_rendering::RenderUpdateImpact::LAYOUT,
         );
     });
     run.pump();
 
-    assert_eq!(run.offset(child), Offset::new(px(20.0), px(20.0)));
+    assert_eq!(run.offset(child), Offset::new(20.0, 20.0));
 }
 
 // ============================================================================
@@ -348,17 +346,14 @@ fn box_run_layout_commits_geometry_without_a_frame() {
         box_node(RenderPadding::all(8.0))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("inner")),
     )
-    .with_size(Size::new(px(200.0), px(200.0)))
+    .with_size(Size::new(200.0, 200.0))
     .run_layout();
 
-    assert_eq!(
-        run.box_geometry(run.root()),
-        Size::new(px(200.0), px(200.0))
-    );
+    assert_eq!(run.box_geometry(run.root()), Size::new(200.0, 200.0));
 
     let inner = run.id("inner");
-    assert_eq!(run.offset(inner), Offset::new(px(8.0), px(8.0)));
-    assert_eq!(run.box_geometry(inner), Size::new(px(184.0), px(184.0)));
+    assert_eq!(run.offset(inner), Offset::new(8.0, 8.0));
+    assert_eq!(run.box_geometry(inner), Size::new(184.0, 184.0));
 }
 
 // ============================================================================
@@ -394,17 +389,14 @@ fn sliver_run_layout_fixed_extent_list_geometry_and_child_sizes() {
                 ),
         ),
     )
-    .with_size(Size::new(px(300.0), px(100.0)))
+    .with_size(Size::new(300.0, 100.0))
     .run_layout();
 
     let geometry = run.sliver_geometry(run.id("list"));
     assert_eq!(geometry.scroll_extent, 90.0, "3 items x 30px main extent");
 
     // Each box child is sized to the cross extent x the item extent.
-    assert_eq!(
-        run.box_geometry(run.id("item0")),
-        Size::new(px(300.0), px(30.0))
-    );
+    assert_eq!(run.box_geometry(run.id("item0")), Size::new(300.0, 30.0));
 }
 
 // ============================================================================
@@ -432,7 +424,7 @@ fn sliver_run_frame_viewport_paints() {
                 ),
         ),
     )
-    .with_size(Size::new(px(300.0), px(100.0)))
+    .with_size(Size::new(300.0, 100.0))
     .run_frame();
 
     assert!(
@@ -449,7 +441,7 @@ fn sliver_run_frame_viewport_paints() {
 #[test]
 fn unknown_label_resolves_to_none() {
     let run = RenderTester::mount(box_node(RenderColoredBox::red(10.0, 10.0)))
-        .with_size(Size::new(px(50.0), px(50.0)))
+        .with_size(Size::new(50.0, 50.0))
         .run_layout();
     assert!(run.try_id("missing").is_none());
 }
@@ -471,7 +463,7 @@ fn layout_run_box_queries_match_pipeline() {
     assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 40.0);
     assert_eq!(
         run.dry_layout(run.root(), constraints),
-        Size::new(px(40.0), px(40.0))
+        Size::new(40.0, 40.0)
     );
 }
 

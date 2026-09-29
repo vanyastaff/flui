@@ -56,7 +56,7 @@
 
 // Public for exported macro expansion in downstream crates, not an authoring alias.
 #[doc(hidden)]
-pub use flui_types::Size as __MacroSize;
+pub use flui_foundation::geometry::Size as __MacroSize;
 
 pub mod binding;
 pub mod constraints;
@@ -115,8 +115,8 @@ pub mod prelude {
     // Re-export RenderId from flui_foundation
     pub use flui_foundation::{RenderId, SemanticsId};
     pub use flui_interaction::{HitTestBehavior, HitTestEntry, HitTestResult, HitTestTarget};
-    // Re-export commonly used types from flui_types
-    pub use flui_types::{Offset, Point, RRect, Rect, Size};
+    // Re-export commonly used value types
+    pub use flui_foundation::geometry::{Offset, Point, RRect, Rect, Size};
 
     // Per-child layout state (lives in box_protocol since it's a
     // BoxLayoutCtx implementation detail; re-exported here for

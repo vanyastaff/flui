@@ -3,10 +3,10 @@
 
 use std::rc::Rc;
 
+use flui_foundation::geometry::Size;
 use flui_objects::{ClipSourceToken, RenderClipPath};
+use flui_painting::paint::{Clip, Path};
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Size;
-use flui_types::painting::{Clip, Path};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// The user-supplied clip-shape function: maps the laid-out box size to the
@@ -286,8 +286,8 @@ mod tests {
         // A different closure allocation, the same declared identity.
         let rebuilt = ClipPath::with_source(source, |size| {
             let mut path = Path::new();
-            path.add_rect(flui_types::geometry::Rect::from_origin_size(
-                flui_types::Point::ZERO,
+            path.add_rect(flui_foundation::geometry::Rect::from_origin_size(
+                flui_foundation::geometry::Point::ZERO,
                 size,
             ));
             path

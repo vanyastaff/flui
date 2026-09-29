@@ -41,13 +41,13 @@ use std::{
     },
 };
 
+use flui_foundation::geometry::Offset;
 use flui_rendering::{
     binding::RendererBinding,
     hit_testing::HitTestResult,
     pipeline::{PipelineCell, PipelineOwner},
     view::{RenderView, ViewConfiguration},
 };
-use flui_types::Offset;
 use parking_lot::RwLock;
 
 use flui_scheduler::{UpdateScheduler, WeakUpdateScheduler};
@@ -765,9 +765,9 @@ mod tests {
     /// no other test's pipeline state can interfere.
     #[test]
     fn draw_frame_returns_layer_tree_and_defers_when_gated() {
+        use flui_foundation::geometry::Size;
         use flui_objects::RenderColoredBox;
         use flui_rendering::constraints::BoxConstraints;
-        use flui_types::{Size, geometry::px};
 
         let owner = PipelineCell::new(PipelineOwner::new());
         let root_id = owner.with_mut(|o| {
@@ -776,7 +776,7 @@ mod tests {
                     dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
                 >);
             o.set_root_id(Some(id));
-            o.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+            o.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
             id
         });
         // Bound to a local, not passed as a bare temporary: `new_with_pipeline`
@@ -820,9 +820,9 @@ mod tests {
     /// division mapped it back inside and produced phantom hits.
     #[test]
     fn hit_test_in_view_takes_logical_positions_without_rescaling() {
+        use flui_foundation::geometry::Offset;
         use flui_objects::RenderColoredBox;
         use flui_rendering::constraints::BoxConstraints;
-        use flui_types::{Offset, geometry::px};
 
         let owner = PipelineCell::new(PipelineOwner::new());
         owner.with_mut(|o| {
@@ -834,12 +834,7 @@ mod tests {
             o.set_root_id(Some(id));
             // LOOSE constraints so the box keeps its preferred 40×40
             // and points outside it exist inside the 100×100 window.
-            o.set_root_constraints(Some(BoxConstraints::new(
-                px(0.0),
-                px(100.0),
-                px(0.0),
-                px(100.0),
-            )));
+            o.set_root_constraints(Some(BoxConstraints::new(0.0, 100.0, 0.0, 100.0)));
         });
         // See the sibling `draw_frame_returns_layer_tree_and_defers_when_gated`
         // test's comment: bound to a local so it outlives this statement,
@@ -849,14 +844,14 @@ mod tests {
         let _ = binding.draw_frame();
 
         let mut inside = flui_interaction::routing::HitTestResult::new();
-        binding.hit_test_in_view(&mut inside, Offset::new(px(30.0), px(30.0)), 0);
+        binding.hit_test_in_view(&mut inside, Offset::new(30.0, 30.0), 0);
         assert!(
             !inside.is_empty(),
             "logical (30,30) lies inside the 40×40 box and must hit",
         );
 
         let mut outside = flui_interaction::routing::HitTestResult::new();
-        binding.hit_test_in_view(&mut outside, Offset::new(px(60.0), px(60.0)), 0);
+        binding.hit_test_in_view(&mut outside, Offset::new(60.0, 60.0), 0);
         assert!(
             outside.is_empty(),
             "logical (60,60) lies outside the 40×40 box and must miss; \

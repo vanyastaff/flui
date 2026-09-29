@@ -174,8 +174,8 @@ Two choices in it differ from CI on purpose:
   `cargo build --workspace --all-targets --locked` catch it.
 
 Measured against the previous two-slice scope (2026-09-22, M1/8 GB,
-`CARGO_BUILD_JOBS=6`, shared target, after an edit to `flui-types` so every
-crate above it rebuilds): `--no-run` 437.1 s + 107.7 s = 544.8 s before,
+`CARGO_BUILD_JOBS=6`, shared target, after an edit to the bottom value-types
+crate of that workspace so every crate above it rebuilds): `--no-run` 437.1 s + 107.7 s = 544.8 s before,
 326.1 s after; `debug/examples` 1.7 GB with 125 linked example binaries
 before, empty after. Test names: 9754 + 58 runs = 9769 distinct tests before
 (43 ran twice), 9769 after, none lost. This was measured on a target
@@ -186,9 +186,9 @@ set.
 ### Nested-cargo tests
 
 The group is the nested-cargo tests that dominate the suite's wall-clock:
-24 tests that run a `cargo` build of their own on a project they generate —
+tests that run a `cargo` build of their own on a project they generate —
 the trybuild `compile_fail` suites (`flui-engine`, `flui-rendering`,
-`flui-view`'s `trybuild_ui`, `flui-types`' `unit_mixing_compile_fail`), the
+`flui-painting`, `flui-view`'s `trybuild_ui`), the
 `flui-cli` template tests (`cli_create::generated_*`), and every
 `flui::facade_consumer` test. Locally, with their build caches cold, most take
 one to five minutes; the other ~9,700 tests are quick. Tests that spawn a
@@ -223,7 +223,7 @@ wall-clock including the build):
 | Nested-build caches | One invocation (before) | Two stages (`cargo xtask test`) |
 |---|---|---|
 | warm, nothing changed | 191.2 s | 101.6 + 13.7 = 115.3 s |
-| after an edit to `flui-types` (registry deps warm) | 576.9 s | 406.5 + 87.2 = 493.7 s |
+| after an edit to the bottom value-types crate (registry deps warm) | 576.9 s | 406.5 + 87.2 = 493.7 s |
 | cold (caches deleted) | 527.7 s | 101.6 + 563.1 = 664.7 s |
 
 Only the fully cold case is slower: the quick tests no longer hide behind the
@@ -287,7 +287,7 @@ A docs-only change never needs a workspace build: `cargo xtask checks`, which bu
 xtask, is the full local gate for it, which is what lets a docs worktree stay green without
 contending for the shared build. One concrete consequence of the shared
 `CARGO_TARGET_DIR`: the trybuild suites (`flui-engine::compile_fail`, `flui-rendering::compile_fail`,
-`unit_mixing_compile_fail::trybuild_ui`, `trybuild_ui::ui_tests` — see `.config/nextest.toml`) each drive a
+`flui-painting::compile_fail`, `trybuild_ui::ui_tests`) each drive a
 real `rustc` invocation per fixture into scratch output under `target/`, so two of them compiling
 concurrently from different worktrees against the same target dir can spuriously fail on artifact
 contention rather than on the fixture's actual `compile_fail` assertion — keep trybuild runs
@@ -307,8 +307,8 @@ cargo test --workspace --release                  # run tests against the releas
 ### Per crate
 
 ```bash
-cargo test -p flui-types
 cargo test -p flui-foundation
+cargo test -p flui-painting
 cargo test -p flui-platform
 ```
 
@@ -335,7 +335,7 @@ The constitution sets minimum coverage thresholds per crate category:
 
 | Category | Minimum | Examples |
 |----------|---------|----------|
-| Core | 80 % | `flui-types`, `flui-foundation`, `flui-rendering`, `flui-view` |
+| Core | 80 % | `flui-foundation`, `flui-painting`, `flui-rendering`, `flui-view` |
 | Platform | 70 % | `flui-platform` |
 | Widget | 85 % | (future widget crates) |
 
@@ -362,10 +362,10 @@ floor, and skipping the nested-cargo tests).
 
 ```bash
 cargo binstall cargo-gamma      # or: cargo install cargo-gamma --locked
-cargo gamma run -p flui-types --file crates/flui-types/src/styling/color.rs
-cargo gamma run -p flui-geometry # a whole crate
-# Also let another crate's tests judge the mutants (a re-exporting crate):
-cargo gamma run -p flui-geometry --test-package flui-types
+cargo gamma run -p flui-painting --file crates/flui-painting/src/styling/color.rs
+cargo gamma run -p flui-foundation # a whole crate
+# Also let another crate's tests judge the mutants (a crate that depends on it):
+cargo gamma run -p flui-foundation --test-package flui-painting
 ```
 
 The report is in `target/cargo-gamma/` (`gamma-report.html` to browse,

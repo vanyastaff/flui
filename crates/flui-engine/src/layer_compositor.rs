@@ -21,9 +21,8 @@
 //! No `Drop` impl: a `Drop`-based assertion would false-positive-panic during
 //! unwind and abort the process.
 
-use flui_types::Rect;
-use flui_types::geometry::Pixels;
-use flui_types::painting::BlendMode;
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::BlendMode;
 
 use crate::command_ir::{DrawItem, DrawSegment, ImageFilterSpec, LayerFilterChain, SavedLayer};
 
@@ -47,7 +46,7 @@ pub(super) enum RestoreOutcome {
         /// Per-channel RGB tint (`[1, 1, 1]` = no-op chroma).
         tint_rgb: [f32; 3],
         /// Compositing bounds (provided or viewport-derived, pre-resolved by the painter).
-        composite_bounds: Rect<Pixels>,
+        composite_bounds: Rect<f64>,
         /// Blend mode to apply when compositing this layer onto its parent.
         ///
         /// `SrcOver` for plain opacity layers; an advanced mode (e.g. Multiply)
@@ -310,7 +309,7 @@ impl LayerCompositor {
         &mut self,
         offscreen_final_segment: DrawSegment,
         offscreen_items: Vec<DrawItem>,
-        composite_bounds: Rect<Pixels>,
+        composite_bounds: Rect<f64>,
     ) -> RestoreOutcome {
         let Some(saved) = self.layer_stack.pop() else {
             tracing::warn!("LayerCompositor::pop_layer: layer_stack underflow");
@@ -411,20 +410,21 @@ impl LayerCompositor {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
-    use flui_types::{Color, Rect};
+
+    use flui_foundation::geometry::Rect;
+    use flui_painting::styling::Color;
 
     use super::*;
     use crate::instancing::RectInstance;
 
-    fn rect_bounds_100() -> Rect<Pixels> {
-        Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0))
+    fn rect_bounds_100() -> Rect<f64> {
+        Rect::from_ltrb(0.0, 0.0, 100.0, 100.0)
     }
 
     fn segment_with_one_rect() -> DrawSegment {
         let mut seg = DrawSegment::new();
         let instance = RectInstance::rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0)),
+            Rect::from_ltrb(0.0, 0.0, 10.0, 10.0),
             Color::rgba(255, 0, 0, 255),
         );
         let _ = seg.rect_batch.add(instance);
@@ -559,7 +559,7 @@ mod tests {
                 [0.0, 0.0, 8.0, 12.0],
                 [0, 0],
                 false,
-                flui_types::styling::Color::BLACK,
+                flui_painting::styling::Color::BLACK,
             ));
         assert!(!text_only.is_empty());
 

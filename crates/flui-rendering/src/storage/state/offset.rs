@@ -1,76 +1,58 @@
-//! Atomic offset storage and `RenderState<P>` offset accessors.
+//! Offset storage and the `RenderState<P>` offset accessors.
 //!
-//! This file contains the private `AtomicOffset` helper (lock-free f32 pair
-//! packed into an `AtomicU64`) and the `offset()` / `set_offset()` methods
-//! on `RenderState<P>`.
+//! This file contains the private `OffsetCell` helper and the `offset()` /
+//! `set_offset()` methods on `RenderState<P>`.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::cell::Cell;
 
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 
 use super::RenderState;
 use crate::protocol::Protocol;
 
 // ============================================================================
-// ATOMIC OFFSET
+// OFFSET CELL
 // ============================================================================
 
-/// Thread-safe offset storage using atomic operations.
+/// The offset a parent assigns during layout and paint and hit-test read.
 ///
-/// Stores two f32 values in a single AtomicU64 for lock-free updates.
-/// This is safe because we treat the bits as opaque data and use atomic
-/// operations to ensure consistency.
+/// A plain `Cell`: the render tree is `!Send + !Sync` and a pipeline pass
+/// touches it from one thread (see `RenderTree`), so the offset needs
+/// interior mutability, not atomicity. Two `f64` components do not fit the
+/// single `AtomicU64` the earlier `f32` pair was packed into.
 #[derive(Debug)]
-pub(super) struct AtomicOffset {
-    bits: AtomicU64,
+pub(super) struct OffsetCell {
+    value: Cell<Offset>,
 }
 
-impl AtomicOffset {
-    /// Creates a new atomic offset with the given initial value.
+impl OffsetCell {
+    /// Creates the cell with the given initial value.
     #[inline]
     pub(super) const fn new(offset: Offset) -> Self {
-        // Pack two f32s into a u64
-        // Use .0.to_bits() instead of .to_bits() because Pixels::to_bits()
-        // is not available in const context.
-        let dx_bits = offset.dx.0.to_bits() as u64;
-        let dy_bits = offset.dy.0.to_bits() as u64;
-        let packed = (dy_bits << 32) | dx_bits;
-
         Self {
-            bits: AtomicU64::new(packed),
+            value: Cell::new(offset),
         }
     }
 
-    /// Loads the current offset atomically.
+    /// Returns the current offset.
     #[inline]
     pub(super) fn load(&self) -> Offset {
-        let packed = self.bits.load(Ordering::Acquire);
-        let dx_bits = (packed & 0xFFFF_FFFF) as u32;
-        let dy_bits = (packed >> 32) as u32;
-
-        Offset {
-            dx: flui_types::Pixels(f32::from_bits(dx_bits)),
-            dy: flui_types::Pixels(f32::from_bits(dy_bits)),
-        }
+        self.value.get()
     }
 
-    /// Stores a new offset atomically.
+    /// Replaces the offset.
     #[inline]
     pub(super) fn store(&self, offset: Offset) {
-        let dx_bits = offset.dx.0.to_bits() as u64;
-        let dy_bits = offset.dy.0.to_bits() as u64;
-        let packed = (dy_bits << 32) | dx_bits;
-
-        self.bits.store(packed, Ordering::Release);
+        self.value.set(offset);
     }
 }
 
 // ============================================================================
-// OFFSET (ATOMIC, LOCK-FREE)
+// OFFSET
 // ============================================================================
 
 impl<P: Protocol> RenderState<P> {
-    /// Gets the offset relative to parent (atomic, lock-free).
+    /// Gets the offset relative to parent.
     ///
     /// This is set by the parent during layout and read during paint
     /// and hit testing.
@@ -78,7 +60,7 @@ impl<P: Protocol> RenderState<P> {
     /// # Performance
     ///
     /// - O(1) time
-    /// - Single atomic load
+    /// - Single load
     /// - No allocation
     ///
     /// # Example
@@ -91,15 +73,15 @@ impl<P: Protocol> RenderState<P> {
         self.offset.load()
     }
 
-    /// Sets the offset relative to parent (atomic, lock-free).
+    /// Sets the offset relative to parent.
     ///
     /// This is called by the parent during layout to position this
-    /// render object. Uses atomic operations for lock-free updates.
+    /// render object.
     ///
     /// # Performance
     ///
     /// - O(1) time
-    /// - Single atomic store
+    /// - Single store
     /// - No allocation
     ///
     /// # Example

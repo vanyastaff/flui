@@ -20,17 +20,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::ElementId;
+use flui_foundation::geometry::Bounds;
+use flui_foundation::geometry::Offset;
 use flui_interaction::PointerId;
 use flui_interaction::events::{
     PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
+use flui_painting::Alignment;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
-use flui_types::Alignment;
-use flui_types::Offset;
-use flui_types::geometry::{Bounds, Pixels, px};
 use flui_view::{ElementNode, RootRenderView, View};
 
 use super::{POINTER_SAMPLE_INTERVAL, PointerContacts};
@@ -44,7 +44,7 @@ pub struct Harness {
     /// Mounted `RootRenderView`, retained as the root-swap target.
     root_element: ElementId,
     /// Logical size seeded into the bootstrap `RootRenderView`.
-    root_view_size: (f32, f32),
+    root_view_size: (f64, f64),
     /// Concrete type of the caller's logical root below presentation
     /// infrastructure. Element-structure probes resolve this node lazily.
     logical_root_type: TypeId,
@@ -53,7 +53,7 @@ pub struct Harness {
     /// installed IME capability, in delivery order. `None` when the harness
     /// was mounted with [`TextInputCapability::Absent`] — there is nothing
     /// to record.
-    cursor_area_calls: Option<Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>>>,
+    cursor_area_calls: Option<Arc<parking_lot::Mutex<Vec<Bounds<f64>>>>>,
     /// Every platform IME enable/disable transition recorded by the harness.
     ime_allowed_calls: Option<Arc<parking_lot::Mutex<Vec<bool>>>>,
     /// Owner-local state backing the installed IME capability.
@@ -154,7 +154,7 @@ pub fn mount_with_capabilities(
     let (cursor_area_calls, ime_allowed_calls, text_input_owner) =
         if text_input == TextInputCapability::Installed {
             struct HarnessTextInput {
-                cursor_areas: Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>>,
+                cursor_areas: Arc<parking_lot::Mutex<Vec<Bounds<f64>>>>,
                 ime_allowed: Arc<parking_lot::Mutex<Vec<bool>>>,
             }
 
@@ -163,12 +163,12 @@ pub fn mount_with_capabilities(
                     self.ime_allowed.lock().push(allowed);
                 }
 
-                fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+                fn set_ime_cursor_area(&self, area: Bounds<f64>) {
                     self.cursor_areas.lock().push(area);
                 }
             }
 
-            let recorded: Arc<parking_lot::Mutex<Vec<Bounds<Pixels>>>> =
+            let recorded: Arc<parking_lot::Mutex<Vec<Bounds<f64>>>> =
                 Arc::new(parking_lot::Mutex::new(Vec::new()));
             let ime_allowed = Arc::new(parking_lot::Mutex::new(Vec::new()));
             let platform: Arc<dyn flui_platform_api::PlatformTextInput> = // headless harness supplies the same direct OS-capability boundary as a presentation.
@@ -275,7 +275,7 @@ impl Harness {
 
     fn hit_test_pointer(
         &self,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
     ) -> flui_rendering::hit_testing::HitTestResult {
         use flui_rendering::hit_testing::HitTestResult;
 
@@ -287,23 +287,20 @@ impl Harness {
 
     /// Begin a new mouse contact at logical `(x, y)`, hit-testing the mounted
     /// render tree.
-    pub fn dispatch_pointer_down(&self, x: f32, y: f32) {
-        let event = make_down_event_for_id(
-            self.begin_contact(),
-            Offset::new(px(x), px(y)),
-            PointerType::Mouse,
-        );
+    pub fn dispatch_pointer_down(&self, x: f64, y: f64) {
+        let event =
+            make_down_event_for_id(self.begin_contact(), Offset::new(x, y), PointerType::Mouse);
         self.binding
             .dispatch_pointer(&event, |position| self.hit_test_pointer(position));
     }
 
     /// Move the in-flight contact to logical `(x, y)`, one sample interval
     /// after the previous event.
-    pub fn dispatch_pointer_move(&self, x: f32, y: f32) {
+    pub fn dispatch_pointer_move(&self, x: f64, y: f64) {
         self.advance_pointer_clock();
         let event = make_move_event_for_id(
             self.current_contact(),
-            Offset::new(px(x), px(y)),
+            Offset::new(x, y),
             PointerType::Mouse,
         );
         self.binding
@@ -311,10 +308,10 @@ impl Harness {
     }
 
     /// Lift the in-flight contact at logical `(x, y)`.
-    pub fn dispatch_pointer_up(&self, x: f32, y: f32) {
+    pub fn dispatch_pointer_up(&self, x: f64, y: f64) {
         let event = make_up_event_for_id(
             self.current_contact(),
-            Offset::new(px(x), px(y)),
+            Offset::new(x, y),
             PointerType::Mouse,
         );
         self.binding
@@ -340,7 +337,7 @@ impl Harness {
     /// installs no `TextInputHandle` at all, so there is nothing to record,
     /// and a test reading this without IME installed is testing the wrong
     /// harness.
-    pub fn cursor_area_calls(&self) -> Vec<Bounds<Pixels>> {
+    pub fn cursor_area_calls(&self) -> Vec<Bounds<f64>> {
         self.cursor_area_calls
             .as_ref()
             .expect(
@@ -361,7 +358,7 @@ impl Harness {
     }
 
     /// Deliver an IME event to this harness's active text client.
-    pub fn dispatch_ime(&self, event: &flui_types::ImeEvent) {
+    pub fn dispatch_ime(&self, event: &flui_platform_api::ImeEvent) {
         self.text_input_owner
             .as_ref()
             .expect("dispatch_ime requires mount_with_ime")

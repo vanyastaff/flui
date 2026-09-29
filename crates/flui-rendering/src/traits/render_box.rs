@@ -1,7 +1,7 @@
 //! RenderBox trait for 2D box layout with Arity-based child management.
 
 use flui_foundation::Arity;
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 use crate::{
     constraints::BoxConstraints,
@@ -228,36 +228,36 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// answers via `ctx`).
     fn compute_min_intrinsic_width(
         &self,
-        _height: f32,
+        _height: f64,
         _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         0.0
     }
 
     /// Computes the maximum intrinsic width for a given height.
     fn compute_max_intrinsic_width(
         &self,
-        _height: f32,
+        _height: f64,
         _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         0.0
     }
 
     /// Computes the minimum intrinsic height for a given width.
     fn compute_min_intrinsic_height(
         &self,
-        _width: f32,
+        _width: f64,
         _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         0.0
     }
 
     /// Computes the maximum intrinsic height for a given width.
     fn compute_max_intrinsic_height(
         &self,
-        _width: f32,
+        _width: f64,
         _ctx: &mut crate::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         0.0
     }
 
@@ -282,12 +282,12 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     // ========================================================================
 
     /// Returns the distance from the top of the box to the first baseline.
-    fn get_distance_to_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn get_distance_to_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         self.compute_distance_to_actual_baseline(baseline)
     }
 
     /// Computes the distance from the top of the box to its first baseline.
-    fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f64> {
         None
     }
 
@@ -317,7 +317,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         _constraints: BoxConstraints,
         _baseline: TextBaseline,
         _ctx: &mut crate::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         None
     }
 
@@ -407,7 +407,7 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// for the full contract (pure in `(self, size)`, no user code, also
     /// read by the default [`Self::apply_paint_transform`] outside any paint
     /// walk).
-    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
+    fn paint_effects(&self, size: flui_foundation::geometry::Size) -> PaintEffects {
         let _ = size;
         PaintEffects::NONE
     }
@@ -422,22 +422,26 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     fn apply_paint_transform(
         &self,
         child: usize,
-        child_offset: flui_types::Offset,
-        size: flui_types::Size,
-        transform: &mut flui_types::Matrix4,
+        child_offset: flui_foundation::geometry::Offset,
+        size: flui_foundation::geometry::Size,
+        transform: &mut flui_foundation::geometry::Matrix4,
     ) {
         let _ = child;
         if let Some(matrix) = <Self as RenderBox>::paint_effects(self, size).transform {
             *transform *= matrix;
         }
-        *transform *= flui_types::Matrix4::translation(child_offset.dx.0, child_offset.dy.0, 0.0);
+        *transform *=
+            flui_foundation::geometry::Matrix4::translation(child_offset.dx, child_offset.dy, 0.0);
     }
 
     /// Returns the transform matrix for hit testing.
     ///
     /// Default: `None`. See
     /// [`RenderObject::hit_test_transform`].
-    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+    fn hit_test_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
         let _ = size;
         None
     }
@@ -551,8 +555,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     fn describe_approximate_paint_clip(
         &self,
         _child_slot: usize,
-        _size: flui_types::Size,
-    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        _size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         None
     }
 
@@ -563,8 +567,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     fn describe_semantics_clip(
         &self,
         _child_slot: usize,
-        _size: flui_types::Size,
-    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        _size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         None
     }
 
@@ -610,10 +614,8 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 
 /// Text baseline types for baseline alignment.
 ///
-/// Re-exported from [`flui_types`] — the single canonical definition for the
-/// workspace. The former parallel enum here was consolidated into `flui-types`
-/// (its lower, owning layer) in 2026-06.
-pub use flui_types::layout::TextBaseline;
+/// Re-exported from `flui-painting`, the single definition in the workspace.
+pub use flui_painting::TextBaseline;
 
 // ============================================================================
 // Blanket Implementation of RenderObject<BoxProtocol> for RenderBox
@@ -684,7 +686,7 @@ where
         &self,
         recorder: &mut crate::context::FragmentRecorder,
         child_count: usize,
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
     ) {
         // The paint bridge: wrap the recorder in the typed, arity-gated
         // PaintCx and call the user's RenderBox::paint. Unlike the
@@ -701,11 +703,11 @@ where
         &self,
         position: crate::protocol::ProtocolPosition<BoxProtocol>,
         _child_count: usize,
-        size: flui_types::Size,
+        size: flui_foundation::geometry::Size,
         hit_child: &mut dyn FnMut(
             usize,
             Option<crate::protocol::ProtocolPosition<BoxProtocol>>,
-            Option<flui_types::Matrix4>,
+            Option<flui_foundation::geometry::Matrix4>,
         ) -> bool,
     ) -> HitTestOutcome {
         // The hit-test bridge: wrap the driver's child recursion in
@@ -740,11 +742,11 @@ where
     fn intrinsic_raw(
         &self,
         dimension: crate::storage::IntrinsicDimension,
-        extent: f32,
+        extent: f64,
         child_count: usize,
         child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
-        child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f32) -> f32,
-    ) -> f32 {
+        child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f64) -> f64,
+    ) -> f64 {
         // The intrinsics bridge: wrap the driver's memoizing child
         // recursion in the typed ctx and dispatch the dimension to the
         // matching typed compute_* — same shape as the paint/hit
@@ -785,13 +787,13 @@ where
             usize,
             crate::context::DryBaselineChildRequest,
         ) -> crate::context::DryBaselineChildResponse,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         let mut ctx =
             crate::context::BoxDryBaselineCtx::new(child_count, child_parent_data, child_query);
         T::compute_dry_baseline(self, constraints, baseline, &mut ctx)
     }
 
-    fn actual_baseline_raw(&self, baseline: crate::traits::TextBaseline) -> Option<f32> {
+    fn actual_baseline_raw(&self, baseline: crate::traits::TextBaseline) -> Option<f64> {
         T::compute_distance_to_actual_baseline(self, baseline)
     }
 
@@ -814,21 +816,24 @@ where
         <T as RenderBox>::skip_paint(self)
     }
 
-    fn paint_effects(&self, size: flui_types::Size) -> PaintEffects {
+    fn paint_effects(&self, size: flui_foundation::geometry::Size) -> PaintEffects {
         <T as RenderBox>::paint_effects(self, size)
     }
 
     fn apply_paint_transform(
         &self,
         child: usize,
-        child_offset: flui_types::Offset,
-        size: flui_types::Size,
-        transform: &mut flui_types::Matrix4,
+        child_offset: flui_foundation::geometry::Offset,
+        size: flui_foundation::geometry::Size,
+        transform: &mut flui_foundation::geometry::Matrix4,
     ) {
         <T as RenderBox>::apply_paint_transform(self, child, child_offset, size, transform);
     }
 
-    fn hit_test_transform(&self, size: flui_types::Size) -> Option<flui_types::Matrix4> {
+    fn hit_test_transform(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Matrix4> {
         <T as RenderBox>::hit_test_transform(self, size)
     }
 
@@ -877,16 +882,16 @@ where
     fn describe_approximate_paint_clip(
         &self,
         child_slot: usize,
-        size: flui_types::Size,
-    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         <T as RenderBox>::describe_approximate_paint_clip(self, child_slot, size)
     }
 
     fn describe_semantics_clip(
         &self,
         child_slot: usize,
-        size: flui_types::Size,
-    ) -> Option<flui_types::Rect<flui_types::Pixels>> {
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect<f64>> {
         <T as RenderBox>::describe_semantics_clip(self, child_slot, size)
     }
 

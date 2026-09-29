@@ -6,6 +6,7 @@
 
 use std::{any::TypeId, cell::Cell, rc::Rc, time::Duration};
 
+use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::{ElementId, RenderId};
 use flui_objects::{RenderErrorBox, RenderFlex, RenderSizedBox};
 use flui_rendering::{
@@ -17,7 +18,6 @@ use flui_testing::{
     HeadlessBinding,
     bootstrap::{MountOptions, MountOwners},
 };
-use flui_types::{Offset, Size, geometry::px};
 use flui_view::{
     BoxedView, BuildContext, ErrorView, IntoView, LifecycleContext, LifecycleHook, RecoveredAt,
     RenderView, StatefulView, View, ViewExt, ViewState,
@@ -78,9 +78,9 @@ impl HealthyLeaf {
             // `RenderErrorBox` receives an unbounded horizontal constraint and
             // the row's 80px vertical bound, so this keeps every later sibling's
             // offset stable across the replacement as well as its own size.
-            Size::new(px(48.0), px(80.0))
+            Size::new(48.0, 80.0)
         } else {
-            Size::new(px(10.0 + self.slot as f32), px(20.0 + self.slot as f32))
+            Size::new(10.0 + self.slot as f64, 20.0 + self.slot as f64)
         }
     }
 }
@@ -332,7 +332,7 @@ fn assert_recovered_frame(
         TypeId::of::<ErrorView>()
     );
     let replacement_size = recovered.geometries[FAILING_SLOT].0;
-    assert!(replacement_size.width > px(0.0) && replacement_size.height > px(0.0));
+    assert!(replacement_size.width > 0.0 && replacement_size.height > 0.0);
     pipeline.with(|owner| {
         assert!(
             owner

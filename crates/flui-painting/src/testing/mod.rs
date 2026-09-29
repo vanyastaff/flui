@@ -3,11 +3,12 @@
 //!
 //! ```
 //! use flui_painting::{Paint, testing::record};
-//! use flui_types::{Rect, geometry::px, styling::Color};
+//! use flui_foundation::geometry::Rect;
+//! use flui_painting::styling::Color;
 //!
 //! let list = record(|canvas| {
 //!     canvas.draw_rect(
-//!         Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
+//!         Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
 //!         &Paint::fill(Color::RED),
 //!     );
 //! });
@@ -26,8 +27,9 @@ pub fn record(f: impl FnOnce(&mut Canvas)) -> DisplayList {
 
 #[cfg(test)]
 mod tests {
+    use crate::styling::Color;
     use flui_foundation::Diagnosticable;
-    use flui_types::{Rect, geometry::px, styling::Color};
+    use flui_foundation::geometry::Rect;
 
     use super::record;
     use crate::Paint;
@@ -36,22 +38,19 @@ mod tests {
     fn record_captures_commands_and_bounds() {
         let list = record(|canvas| {
             canvas.draw_rect(
-                Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
+                Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
                 &Paint::fill(Color::RED),
             );
         });
         assert_eq!(list.len(), 1);
-        assert_eq!(
-            list.bounds(),
-            Some(Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)))
-        );
+        assert_eq!(list.bounds(), Some(Rect::from_ltrb(0.0, 0.0, 40.0, 40.0)));
     }
 
     #[test]
     fn diagnostics_name_the_list_and_carry_its_properties() {
         let list = record(|canvas| {
             canvas.draw_rect(
-                Rect::from_ltrb(px(0.0), px(0.0), px(10.0), px(10.0)),
+                Rect::from_ltrb(0.0, 0.0, 10.0, 10.0),
                 &Paint::fill(Color::RED),
             );
         });

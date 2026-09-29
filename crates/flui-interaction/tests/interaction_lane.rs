@@ -1,12 +1,12 @@
 //! Public-contract tests for the inert ADR-0027 owner-local interaction lane.
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::routing::MouseRegionTarget;
 use flui_interaction::{
     HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult, InteractionDispatchError,
     InteractionDispatchHandle, InteractionLane, PointerTarget, RenderId, ResolvedRouteToken,
     RouteResolutionMiss,
 };
-use flui_types::{Offset, Pixels};
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -299,14 +299,14 @@ fn cached_route_reports_owner_gone_after_lane_drop_not_stale_route() {
 
 /// Records the positions it was asked about and answers with a fixed path.
 struct RecordingProbe {
-    asked: RefCell<Vec<Offset<Pixels>>>,
+    asked: RefCell<Vec<Offset<f64>>>,
     answer: Vec<RenderId>,
 }
 
 impl HitTestProbe for RecordingProbe {
     fn probe(
         &self,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         result: &mut HitTestResult,
     ) -> Result<(), InteractionDispatchError> {
         self.asked.borrow_mut().push(position);
@@ -317,8 +317,8 @@ impl HitTestProbe for RecordingProbe {
     }
 }
 
-fn at(x: f32, y: f32) -> Offset<Pixels> {
-    Offset::new(Pixels(x), Pixels(y))
+fn at(x: f64, y: f64) -> Offset<f64> {
+    Offset::new(x, y)
 }
 
 fn recording(answer: Vec<RenderId>) -> Rc<RecordingProbe> {
@@ -450,7 +450,7 @@ struct BusyProbe;
 impl HitTestProbe for BusyProbe {
     fn probe(
         &self,
-        _position: Offset<Pixels>,
+        _position: Offset<f64>,
         _result: &mut HitTestResult,
     ) -> Result<(), InteractionDispatchError> {
         Err(InteractionDispatchError::TreeBusy)

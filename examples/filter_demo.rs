@@ -22,13 +22,13 @@
 use std::sync::{Arc, Mutex};
 
 use flui_engine::Renderer;
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_layer::{CanvasLayer, Scene, SceneBuilder};
-use flui_platform::{WindowOptions, current_platform};
-use flui_types::{
-    Color, Offset,
-    geometry::{Rect, Size, px},
-    painting::{ImageFilter, Paint},
+use flui_painting::{
+    paint::{ImageFilter, Paint},
+    styling::Color,
 };
+use flui_platform::{WindowOptions, current_platform};
 
 // ── Scene construction ────────────────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ use flui_types::{
 /// - `pop()` — close the filter layer
 /// - `pop()` — close the offset layer (root)
 /// - `build()` — consume the builder, returns root `LayerId`
-fn build_filter_scene(width: f32, height: f32) -> Scene {
+fn build_filter_scene(width: f64, height: f64) -> Scene {
     let half_width = width / 2.0;
 
     // ── SceneBuilder: construct the layer hierarchy via push/pop ─────────────
@@ -68,18 +68,13 @@ fn build_filter_scene(width: f32, height: f32) -> Scene {
 
             // Full background (dark navy).
             canvas.draw_rect(
-                Rect::from_ltrb(px(0.0), px(0.0), px(width), px(height)),
+                Rect::from_ltrb(0.0, 0.0, width, height),
                 &Paint::fill(Color::rgb(18, 26, 42)),
             );
 
             // Divider between left (sharp) and right (blurred) halves.
             canvas.draw_rect(
-                Rect::from_ltrb(
-                    px(half_width - 1.0),
-                    px(0.0),
-                    px(half_width + 1.0),
-                    px(height),
-                ),
+                Rect::from_ltrb(half_width - 1.0, 0.0, half_width + 1.0, height),
                 &Paint::fill(Color::rgb(80, 80, 80)),
             );
 
@@ -111,8 +106,8 @@ fn build_filter_scene(width: f32, height: f32) -> Scene {
     };
 
     tracing::info!(
-        sigma_x = 8.0_f32,
-        sigma_y = 8.0_f32,
+        sigma_x = 8.0_f64,
+        sigma_y = 8.0_f64,
         "blurred shape via SceneBuilder::push_image_filter(Blur σ=8)"
     );
 
@@ -123,9 +118,9 @@ fn build_filter_scene(width: f32, height: f32) -> Scene {
 /// column of `column_width` × `height`.
 fn draw_demo_shapes(
     canvas: &mut flui_painting::Canvas,
-    x_offset: f32,
-    column_width: f32,
-    height: f32,
+    x_offset: f64,
+    column_width: f64,
+    height: f64,
 ) {
     let margin = 40.0;
     let left = x_offset + margin;
@@ -134,17 +129,17 @@ fn draw_demo_shapes(
 
     // Large coral rectangle.
     canvas.draw_rect(
-        Rect::from_ltrb(px(left), px(60.0), px(right), px(height / 2.0 - 20.0)),
+        Rect::from_ltrb(left, 60.0, right, height / 2.0 - 20.0),
         &Paint::fill(Color::rgb(220, 80, 60)),
     );
 
     // Overlapping teal rectangle.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(center_x - 80.0),
-            px(height / 2.0 - 60.0),
-            px(center_x + 80.0),
-            px(height - 60.0),
+            center_x - 80.0,
+            height / 2.0 - 60.0,
+            center_x + 80.0,
+            height - 60.0,
         ),
         &Paint::fill(Color::rgb(30, 180, 160)),
     );
@@ -152,17 +147,17 @@ fn draw_demo_shapes(
     // Small white accent square.
     canvas.draw_rect(
         Rect::from_ltrb(
-            px(center_x - 30.0),
-            px(height / 2.0 - 30.0),
-            px(center_x + 30.0),
-            px(height / 2.0 + 30.0),
+            center_x - 30.0,
+            height / 2.0 - 30.0,
+            center_x + 30.0,
+            height / 2.0 + 30.0,
         ),
         &Paint::fill(Color::WHITE),
     );
 
     // Yellow strip at the bottom.
     canvas.draw_rect(
-        Rect::from_ltrb(px(left), px(height - 55.0), px(right), px(height - 30.0)),
+        Rect::from_ltrb(left, height - 55.0, right, height - 30.0),
         &Paint::fill(Color::rgb(255, 210, 0)),
     );
 }
@@ -181,7 +176,7 @@ fn main() {
 
     let options = WindowOptions {
         title: "FLUI Filter Demo — Gaussian Blur (SceneBuilder API)".to_string(),
-        size: Size::new(px(900.0), px(600.0)),
+        size: Size::new(900.0, 600.0),
         resizable: true,
         visible: true,
         decorated: true,
@@ -206,7 +201,7 @@ fn main() {
         .expect("failed to create GPU renderer");
 
     let physical = window.physical_size();
-    renderer.resize(physical.width.0 as u32, physical.height.0 as u32);
+    renderer.resize(physical.width as u32, physical.height as u32);
 
     tracing::info!(
         adapter = renderer.capabilities().adapter_name,
@@ -221,8 +216,8 @@ fn main() {
     let window_for_frame = window.clone();
     window.on_request_frame(Box::new(move || {
         let size = window_for_frame.physical_size();
-        let scene_width = size.width.0 as f32;
-        let scene_height = size.height.0 as f32;
+        let scene_width = size.width as f64;
+        let scene_height = size.height as f64;
 
         let scene = build_filter_scene(scene_width, scene_height);
 
@@ -235,8 +230,8 @@ fn main() {
     // Resize callback: update the renderer's surface dimensions.
     let renderer_for_resize = Arc::clone(&renderer);
     window.on_resize(Box::new(move |new_size, scale_factor| {
-        let surface_width = (new_size.width.0 * scale_factor) as u32;
-        let surface_height = (new_size.height.0 * scale_factor) as u32;
+        let surface_width = (new_size.width * scale_factor) as u32;
+        let surface_height = (new_size.height * scale_factor) as u32;
         renderer_for_resize
             .lock()
             .unwrap()

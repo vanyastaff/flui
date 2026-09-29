@@ -16,10 +16,9 @@
 //! like the defect -- and applying the fix did not turn it green.
 
 use crate::common::{lay_out, tight};
+use flui_foundation::geometry::Axis;
+use flui_painting::typography::TextDirection;
 use flui_rendering::constraints::BoxConstraints;
-use flui_types::Axis;
-use flui_types::geometry::px;
-use flui_types::typography::TextDirection;
 use flui_widgets::{
     Column, CrossAxisAlignment, Directionality, DismissDirection, Dismissible, ListBody, SizedBox,
 };
@@ -68,8 +67,8 @@ fn list_body_dependents(axis: Axis) -> usize {
     // `RenderListBody` requires UNBOUNDED space along its own main axis, so
     // the constraints have to follow `axis` rather than be tight both ways.
     let constraints = match axis {
-        Axis::Vertical => BoxConstraints::new(px(0.0), px(200.0), px(0.0), px(f32::INFINITY)),
-        Axis::Horizontal => BoxConstraints::new(px(0.0), px(f32::INFINITY), px(0.0), px(200.0)),
+        Axis::Vertical => BoxConstraints::new(0.0, 200.0, 0.0, f64::INFINITY),
+        Axis::Horizontal => BoxConstraints::new(0.0, f64::INFINITY, 0.0, 200.0),
     };
     let mut laid = lay_out(
         Directionality::new(

@@ -3,6 +3,7 @@
 //! Flutter parity: `rendering/proxy_box.dart` `RenderMouseRegion`.
 
 use flui_foundation::Single;
+use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxDryLayoutCtx, BoxHitTestContext, BoxLayoutContext},
@@ -12,7 +13,6 @@ use flui_rendering::{
     parent_data::BoxParentData,
     traits::RenderBox,
 };
-use flui_types::{Offset, Size};
 
 /// A callback used by [`RenderMouseRegion`] widgets for enter, hover, and exit
 /// events.

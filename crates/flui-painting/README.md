@@ -5,13 +5,14 @@ Nothing is rasterised here — `flui-engine` replays the list on the GPU.
 
 ```rust
 use flui_painting::{Canvas, Paint};
-use flui_types::{Rect, geometry::px, styling::Color};
+use flui_foundation::geometry::Rect;
+use flui_painting::styling::Color;
 
 let mut canvas = Canvas::new();
 canvas.save();
 canvas.translate(10.0, 10.0);
 canvas.draw_rect(
-    Rect::from_ltrb(px(0.0), px(0.0), px(40.0), px(40.0)),
+    Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
     &Paint::fill(Color::RED),
 );
 canvas.restore();
@@ -30,8 +31,17 @@ let list = canvas.finish(); // Save, DrawRect, Restore
 - `paint_box_decoration`, `paint_table_border` — the Flutter-shaped
   decoration painters.
 
-The paint vocabulary (`Paint`, `Shader`, `BlendMode`, `Path`, geometry) is
-defined in `flui-types` and re-exported.
+The crate owns the paint, style and text values:
+
+- `paint` — `Paint`, `Path` (a kurbo `BezPath` inside, with exact winding and
+  tight bounds), `Shader`, `BlendMode`, `Clip`, images and effects;
+- `styling` — `Color` (`Color::lerp` interpolates premultiplied), borders,
+  `BorderRadius`, `BoxDecoration`, gradients and shadows;
+- `typography` — `TextStyle`, `FontWeight`, spans, alignment and metrics;
+- at the root, `Alignment`, `BoxFit`, `BoxShape` and `TextBaseline`.
+
+Geometry values (`Point`, `Offset`, `Size`, `Rect`, `RRect`, `Matrix4`) come
+from `flui_foundation::geometry`; lengths are `f64` logical pixels.
 
 ## Tests
 

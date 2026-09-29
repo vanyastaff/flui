@@ -69,19 +69,19 @@ use flui_widgets::{AnimatedContainer, column, row};
 /// animated box's collapsed/expanded constants below) so the acceptance test
 /// can distinguish the tree's several `RenderConstrainedBox` nodes by
 /// committed size instead of a duplicated magic number.
-pub const LIST_BOX_HEIGHT: f32 = 200.0;
+pub const LIST_BOX_HEIGHT: f64 = 200.0;
 /// Per-row height of the list.
-pub const LIST_ITEM_EXTENT: f32 = 32.0;
+pub const LIST_ITEM_EXTENT: f64 = 32.0;
 /// Row count: `LIST_ITEM_COUNT * LIST_ITEM_EXTENT` (768px) overflows
 /// `LIST_BOX_HEIGHT` (200px), so the list is genuinely scrollable.
 pub const LIST_ITEM_COUNT: usize = 24;
 
 /// The animated box's width/height at rest (`expanded == false`).
-pub const COLLAPSED_WIDTH: f32 = 96.0;
-pub const COLLAPSED_HEIGHT: f32 = 64.0;
+pub const COLLAPSED_WIDTH: f64 = 96.0;
+pub const COLLAPSED_HEIGHT: f64 = 64.0;
 /// The animated box's width/height target once expanded.
-pub const EXPANDED_WIDTH: f32 = 220.0;
-pub const EXPANDED_HEIGHT: f32 = 140.0;
+pub const EXPANDED_WIDTH: f64 = 220.0;
+pub const EXPANDED_HEIGHT: f64 = 140.0;
 /// How long the animated box takes to reach a new target.
 pub const ANIMATION_DURATION: Duration = Duration::from_millis(240);
 
@@ -126,7 +126,7 @@ pub struct DemoRoot {
     /// [`DemoHomeState::create_state`] writes into that controller before the
     /// first layout, so constructing a `DemoRoot` with a nonzero offset does
     /// not start the list at zero.
-    pub scroll_offset: StateCell<f32>,
+    pub scroll_offset: StateCell<f64>,
     /// How many times [`DemoHomeState::create_state`] has run — a discriminator,
     /// not app-visible data. `count`/`expanded`/`scroll_offset` are [`StateCell`]s
     /// shared with the seed closure below, so they read back correctly whether
@@ -216,7 +216,7 @@ impl ViewState<DemoRoot> for DemoRootState {
 struct DemoHome {
     count: StateCell<i32>,
     expanded: StateCell<bool>,
-    scroll_offset: StateCell<f32>,
+    scroll_offset: StateCell<f64>,
     navigator: NavigatorHandle,
     /// Incremented once per [`DemoHomeState::create_state`] call — see the
     /// field doc on [`DemoRoot::home_create_count`], which owns the storage
@@ -234,7 +234,7 @@ struct DemoHome {
 struct DemoHomeState {
     count: StateCell<i32>,
     expanded: StateCell<bool>,
-    scroll_offset: StateCell<f32>,
+    scroll_offset: StateCell<f64>,
     navigator: NavigatorHandle,
     /// The list's live scroll position — injected directly into the
     /// `ListView` (`ListView::position`), so `RenderViewport`'s own layout
@@ -309,7 +309,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                 .on_tap(move |_cx| count_for_tap.update(|n| n + 1))
                 .child(
                     Container::new()
-                        .padding(EdgeInsets::all(px(8.0)))
+                        .padding(EdgeInsets::all(8.0))
                         .color(PLUS_BUTTON_COLOR)
                         .child(Text::new("+")),
                 ),
@@ -325,7 +325,7 @@ impl ViewState<DemoHome> for DemoHomeState {
             })
             .child(
                 Container::new()
-                    .padding(EdgeInsets::all(px(8.0)))
+                    .padding(EdgeInsets::all(8.0))
                     .color(DETAILS_BUTTON_COLOR)
                     .child(Text::new(DETAILS_BUTTON_LABEL)),
             );
@@ -347,7 +347,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                 // own layout committed into this controller's shared
                 // `ScrollPosition` (the content-dimension feedback loop —
                 // see the module doc), not a manually fed value.
-                let proposed = scroll_controller_for_drag.pixels() - details.delta.dy.get();
+                let proposed = scroll_controller_for_drag.pixels() - details.delta.dy;
                 scroll_controller_for_drag.jump_to(proposed);
                 scroll_offset_for_drag.set(scroll_controller_for_drag.pixels());
             })
@@ -366,7 +366,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                         (0..LIST_ITEM_COUNT)
                             .map(|index| {
                                 Container::new()
-                                    .padding(EdgeInsets::all(px(4.0)))
+                                    .padding(EdgeInsets::all(4.0))
                                     .child(Text::new(format!("Item {index}")))
                                     .boxed()
                             })
@@ -406,7 +406,7 @@ impl ViewState<DemoHome> for DemoHomeState {
 
         Container::new()
             .color(BACKGROUND_COLOR)
-            .padding(EdgeInsets::all(px(16.0)))
+            .padding(EdgeInsets::all(16.0))
             .alignment(Alignment::TOP_LEFT)
             .child(Column::new(column![
                 counter_row,
@@ -429,7 +429,7 @@ fn details_route(navigator: NavigatorHandle) -> PageRoute<()> {
         let navigator_for_back = navigator.clone();
         Container::new()
             .color(DETAILS_BACKGROUND_COLOR)
-            .padding(EdgeInsets::all(px(16.0)))
+            .padding(EdgeInsets::all(16.0))
             .alignment(Alignment::TOP_LEFT)
             .child(Column::new(column![
                 Text::new(DETAILS_ROUTE_TEXT),
@@ -441,7 +441,7 @@ fn details_route(navigator: NavigatorHandle) -> PageRoute<()> {
                     })
                     .child(
                         Container::new()
-                            .padding(EdgeInsets::all(px(8.0)))
+                            .padding(EdgeInsets::all(8.0))
                             .color(BACK_BUTTON_COLOR)
                             .child(Text::new(BACK_BUTTON_LABEL)),
                     ),

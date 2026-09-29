@@ -1,9 +1,7 @@
 //! `BackdropFilterLayer` — filters what is already painted behind it: frosted glass.
 
-use flui_types::{
-    geometry::{Pixels, Rect},
-    painting::{BlendMode, ImageFilter},
-};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::{BlendMode, ImageFilter};
 
 /// Layer that applies an image filter to backdrop content
 ///
@@ -24,18 +22,15 @@ use flui_types::{
 /// # Example
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_layer::BackdropFilterLayer;
-/// use flui_types::{
-///     geometry::Rect,
-///     painting::{BlendMode, ImageFilter},
-/// };
+/// use flui_foundation::geometry::Rect;
+/// use flui_painting::paint::{BlendMode, ImageFilter};
 ///
 /// // Create frosted glass effect
 /// let frosted_glass = BackdropFilterLayer::new(
 ///     ImageFilter::blur(10.0), // 10px gaussian blur
 ///     BlendMode::SrcOver,
-///     Rect::from_xywh(px(0.0), px(0.0), px(400.0), px(300.0)),
+///     Rect::from_xywh(0.0, 0.0, 400.0, 300.0),
 /// );
 /// ```
 #[derive(Debug, Clone)]
@@ -47,12 +42,12 @@ pub struct BackdropFilterLayer {
     blend_mode: BlendMode,
 
     /// Bounds for backdrop capture (pre-computed for performance)
-    bounds: Rect<Pixels>,
+    bounds: Rect<f64>,
 }
 
 impl BackdropFilterLayer {
     /// Filters what is already painted behind `bounds` with `filter`, compositing with `blend_mode`.
-    pub fn new(filter: ImageFilter, blend_mode: BlendMode, bounds: Rect<Pixels>) -> Self {
+    pub fn new(filter: ImageFilter, blend_mode: BlendMode, bounds: Rect<f64>) -> Self {
         Self {
             filter,
             blend_mode,
@@ -71,14 +66,13 @@ impl BackdropFilterLayer {
     }
 
     /// The rectangle of backdrop captured and filtered.
-    pub fn bounds(&self) -> Rect<Pixels> {
+    pub fn bounds(&self) -> Rect<f64> {
         self.bounds
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -86,7 +80,7 @@ mod tests {
     fn test_backdrop_filter_layer_new() {
         let filter = ImageFilter::blur(5.0);
         let blend_mode = BlendMode::SrcOver;
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
 
         let layer = BackdropFilterLayer::new(filter, blend_mode, bounds);
 
@@ -97,14 +91,14 @@ mod tests {
     #[test]
     fn test_backdrop_filter_layer_bounds() {
         let filter = ImageFilter::blur(10.0);
-        let bounds = Rect::from_xywh(px(10.0), px(20.0), px(200.0), px(150.0));
+        let bounds = Rect::from_xywh(10.0, 20.0, 200.0, 150.0);
 
         let layer = BackdropFilterLayer::new(filter, BlendMode::SrcOver, bounds);
 
         let retrieved_bounds = layer.bounds();
         assert_eq!(retrieved_bounds, bounds);
-        assert_eq!(retrieved_bounds.width(), px(200.0));
-        assert_eq!(retrieved_bounds.height(), px(150.0));
+        assert_eq!(retrieved_bounds.width(), 200.0);
+        assert_eq!(retrieved_bounds.height(), 150.0);
     }
 
     #[test]
@@ -113,7 +107,7 @@ mod tests {
             sigma_x: 5.0,
             sigma_y: 5.0,
         };
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(50.0), px(50.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
 
         let layer = BackdropFilterLayer::new(filter, BlendMode::Multiply, bounds);
 
@@ -129,10 +123,10 @@ mod tests {
 
     #[test]
     fn test_backdrop_filter_layer_color_filter() {
-        use flui_types::painting::effects::ColorAdjustment;
+        use flui_painting::paint::effects::ColorAdjustment;
 
         let filter = ImageFilter::ColorAdjust(ColorAdjustment::Brightness(0.2));
-        let bounds = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
 
         let layer = BackdropFilterLayer::new(filter, BlendMode::Screen, bounds);
 

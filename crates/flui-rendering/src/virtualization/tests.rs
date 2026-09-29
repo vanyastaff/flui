@@ -9,9 +9,9 @@
 
 use super::*;
 
-const EPS: f32 = 1e-3;
+const EPS: f64 = 1e-3;
 
-fn approx(a: f32, b: f32) -> bool {
+fn approx(a: f64, b: f64) -> bool {
     (a - b).abs() <= EPS
 }
 
@@ -42,7 +42,7 @@ fn new_seeds_estimates() {
     assert_eq!(v.estimated_count(), 5);
     for i in 0..5 {
         assert!(!v.is_measured(i));
-        assert!(approx(v.offset_of(i), i as f32 * 10.0));
+        assert!(approx(v.offset_of(i), i as f64 * 10.0));
     }
     assert!(approx(v.offset_of(5), 50.0));
 }
@@ -372,7 +372,7 @@ fn seek_both_directions_on_10k_items() {
     let mut v = Virtualizer::new(10_000, 7.0);
     // Make extents non-uniform so the tree can't shortcut via uniformity.
     for i in 0..10_000 {
-        v.set_measured(i, (i % 13 + 1) as f32, (0, 0.0));
+        v.set_measured(i, (i % 13 + 1) as f64, (0, 0.0));
     }
     let total = v.total_extent().value();
 
@@ -441,23 +441,12 @@ fn single_item_virtualizer() {
 /// ~0.0012 px between neighbours. A coarse grid would quietly narrow these
 /// tests to whole-pixel cases, which is the opposite of what a geometry
 /// property suite is for.
-///
-/// The arithmetic runs in `f64` because `f64: From<u32>` is exact for every
-/// step index, where `f32: From<u32>` does not exist at all. Only the final
-/// narrowing is lossy, and that is the point — the value has to land in the
-/// target type.
-fn extent_in(lo: f32, hi: f32) -> impl proptest::strategy::Strategy<Value = f32> {
+fn extent_in(lo: f64, hi: f64) -> impl proptest::strategy::Strategy<Value = f64> {
     const STEPS: u32 = 1 << 24;
     use proptest::strategy::Strategy as _;
     (0u32..=STEPS).prop_map(move |n| {
         let t = f64::from(n) / f64::from(STEPS);
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "narrowing to the target type is the purpose; the \
-                      arithmetic above is exact in f64"
-        )]
-        let v = (f64::from(lo) + t * (f64::from(hi) - f64::from(lo))) as f32;
-        v
+        lo + t * (hi - lo)
     })
 }
 
@@ -467,10 +456,10 @@ mod prop {
 
     /// Compares two extent sums that were accumulated in different orders (the
     /// tree folds leaf→summary→total, the oracle folds left→right), tolerating
-    /// f32 round-off proportional to the magnitude. The invariant being checked
+    /// f64 round-off proportional to the magnitude. The invariant being checked
     /// is "same sum up to float accumulation", not bit-exact equality — exact
-    /// equality across two summation orders is not a real property of f32.
-    fn approx_sum(a: f32, b: f32) -> bool {
+    /// equality across two summation orders is not a real property of f64.
+    fn approx_sum(a: f64, b: f64) -> bool {
         let tol = 1e-3 + 1e-4 * a.abs().max(b.abs());
         (a - b).abs() <= tol
     }
@@ -480,11 +469,11 @@ mod prop {
     #[derive(Debug, Clone, Default)]
     struct Oracle {
         items: Vec<ItemExtent>,
-        default_estimate: f32,
+        default_estimate: f64,
     }
 
     impl Oracle {
-        fn new(count: usize, default_estimate: f32) -> Self {
+        fn new(count: usize, default_estimate: f64) -> Self {
             Self {
                 items: vec![
                     ItemExtent::Unmeasured {
@@ -501,7 +490,7 @@ mod prop {
             self.items.resize(n, ItemExtent::Unmeasured { hint: est });
         }
 
-        fn set_measured(&mut self, index: usize, extent: f32) {
+        fn set_measured(&mut self, index: usize, extent: f64) {
             if index < self.items.len() {
                 self.items[index] = ItemExtent::Measured {
                     extent: extent.max(0.0),
@@ -516,11 +505,11 @@ mod prop {
             }
         }
 
-        fn total(&self) -> f32 {
+        fn total(&self) -> f64 {
             self.items.iter().map(ItemExtent::extent).sum()
         }
 
-        fn offset_of(&self, index: usize) -> f32 {
+        fn offset_of(&self, index: usize) -> f64 {
             self.items.iter().take(index).map(ItemExtent::extent).sum()
         }
 
@@ -530,7 +519,7 @@ mod prop {
 
         /// First item whose span `[start, start+extent)` contains `offset`
         /// (clamped to `[0, total]`), matching the tree's seek contract.
-        fn seek(&self, offset: f32) -> usize {
+        fn seek(&self, offset: f64) -> usize {
             let n = self.items.len();
             if n == 0 {
                 return 0;
@@ -558,7 +547,7 @@ mod prop {
     #[derive(Debug, Clone)]
     enum Op {
         SetCount(usize),
-        SetMeasured { index: usize, extent: f32 },
+        SetMeasured { index: usize, extent: f64 },
         InvalidateFrom(usize),
     }
 
@@ -663,7 +652,7 @@ mod prop {
             let total = oracle.total();
             if !v.is_empty() && total > 0.0 {
                 for k in 0..=20u32 {
-                    let off = total * (k as f32) / 20.0;
+                    let off = total * (k as f64) / 20.0;
                     let r = v.query(&ScrollWindow::new(off, 1.0));
 
                     if off < total {
@@ -741,29 +730,29 @@ mod tree_edits {
     use super::*;
     use proptest::prelude::*;
 
-    fn measured(e: f32) -> ItemExtent {
+    fn measured(e: f64) -> ItemExtent {
         ItemExtent::Measured { extent: e }
     }
 
     #[derive(Clone, Default)]
-    struct Vecf(Vec<f32>);
+    struct Vecf(Vec<f64>);
     impl Vecf {
-        fn insert(&mut self, i: usize, e: f32) {
+        fn insert(&mut self, i: usize, e: f64) {
             self.0.insert(i, e);
         }
-        fn remove(&mut self, i: usize) -> f32 {
+        fn remove(&mut self, i: usize) -> f64 {
             self.0.remove(i)
         }
-        fn set(&mut self, i: usize, e: f32) {
+        fn set(&mut self, i: usize, e: f64) {
             self.0[i] = e;
         }
-        fn total(&self) -> f32 {
+        fn total(&self) -> f64 {
             self.0.iter().sum()
         }
-        fn offset_of(&self, i: usize) -> f32 {
+        fn offset_of(&self, i: usize) -> f64 {
             self.0.iter().take(i).sum()
         }
-        fn seek(&self, off: f32) -> (usize, f32) {
+        fn seek(&self, off: f64) -> (usize, f64) {
             let n = self.0.len();
             if n == 0 {
                 return (0, 0.0);
@@ -788,9 +777,9 @@ mod tree_edits {
 
     #[derive(Debug, Clone)]
     enum Op {
-        Insert { at: usize, e: f32 },
+        Insert { at: usize, e: f64 },
         Remove { at: usize },
-        Set { at: usize, e: f32 },
+        Set { at: usize, e: f64 },
     }
 
     fn op() -> impl Strategy<Value = Op> {
@@ -850,7 +839,7 @@ mod tree_edits {
             let total = o.total();
             if !o.0.is_empty() && total > 0.0 {
                 for k in 0..=40u32 {
-                    let off = total * (k as f32) / 40.0;
+                    let off = total * (k as f64) / 40.0;
                     let (ti, _tinto) = t.seek_offset(off);
                     let (oi, _ointo) = o.seek(off);
                     let agree = ti == oi
@@ -865,7 +854,7 @@ mod tree_edits {
         /// scalar `seek_offset` on each offset. The robust invariant is the
         /// **absolute position** `offset_of(index) + into`: both methods must
         /// resolve each offset to the same point. (Comparing `into` directly is
-        /// wrong — at an exact item boundary the two f32 summation orders may
+        /// wrong — at an exact item boundary the two f64 summation orders may
         /// attribute the point to adjacent items, one as `into≈0` of item `i+1`
         /// and the other as `into≈extent` of item `i`; same position, different
         /// reference item.) The index must still agree up to that ±1 boundary
@@ -878,11 +867,11 @@ mod tree_edits {
         ) {
             let t = ExtentTree::from_fn(init.len(), |i| measured(init[i]));
             let total = t.total_extent();
-            let mut offs: Vec<f32> =
+            let mut offs: Vec<f64> =
                 fracs.iter().map(|f| (f * 1.2 - 0.1) * total).collect();
             offs.sort_by(|a, b| a.partial_cmp(b).expect("finite test offsets sort"));
 
-            let mut out = vec![(0usize, 0.0f32); offs.len()];
+            let mut out = vec![(0usize, 0.0_f64); offs.len()];
             t.seek_sorted(&offs, &mut out);
 
             let tol = 1e-2 + 1e-4 * total;
@@ -906,7 +895,7 @@ mod tree_edits {
 
     /// 200k random point-updates must not let the tree's summarized total drift
     /// from a fresh sum: summaries recompute from children (not an incremental
-    /// `+= delta`), so error is bounded by f32 round-off, not by accumulation —
+    /// `+= delta`), so error is bounded by f64 round-off, not by accumulation —
     /// the result is history-independent. A growing drift here would mean
     /// someone reintroduced incremental-delta summary maintenance.
     #[test]
@@ -920,7 +909,7 @@ mod tree_edits {
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
             let idx = (state >> 33) as usize % tree.len();
-            let extent = ((state & 0xffff) as f32) / 6553.6;
+            let extent = ((state & 0xffff) as f64) / 6553.6;
             tree.set(idx, measured(extent));
             oracle.set(idx, extent);
         }
@@ -930,7 +919,7 @@ mod tree_edits {
 
     #[test]
     fn seek_exact_boundaries_roundtrip() {
-        let t = ExtentTree::from_fn(5, |i| measured((i as f32 + 1.0) * 10.0));
+        let t = ExtentTree::from_fn(5, |i| measured((i as f64 + 1.0) * 10.0));
         assert_eq!(t.seek_offset(0.0), (0, 0.0));
         assert_eq!(t.seek_offset(10.0), (1, 0.0));
         assert_eq!(t.seek_offset(30.0), (2, 0.0));

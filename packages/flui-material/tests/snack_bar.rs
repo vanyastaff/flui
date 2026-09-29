@@ -30,7 +30,7 @@ use flui_material::{
 };
 use flui_sdk::animation::Vsync;
 use flui_sdk::foundation::RenderId;
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{ColoredBox, MediaQuery, MediaQueryData, SizedBox, Text, VsyncScope};
 
@@ -149,7 +149,7 @@ fn find_snack_bar_material(laid: &common::LaidOut) -> Option<RenderId> {
         .into_iter()
         .find(|&id| {
             laid.render_property(id, "elevation")
-                .and_then(|value| value.parse::<f32>().ok())
+                .and_then(|value| value.parse::<f64>().ok())
                 == Some(6.0)
         })
 }
@@ -165,7 +165,7 @@ fn snack_bar_material_count(laid: &common::LaidOut) -> usize {
         .into_iter()
         .filter(|&id| {
             laid.render_property(id, "elevation")
-                .and_then(|value| value.parse::<f32>().ok())
+                .and_then(|value| value.parse::<f64>().ok())
                 == Some(6.0)
         })
         .count()
@@ -309,8 +309,8 @@ fn action_press_closes_the_snack_bar_and_is_single_fire() {
         find_snack_bar_material(&laid).expect("the snack bar's Material must be mounted");
     let bar_offset = laid.absolute_offset(snack_bar_material);
     let bar_size = laid.size(snack_bar_material);
-    let tap_x = bar_offset.dx.get() + bar_size.width.get() * 0.92;
-    let tap_y = bar_offset.dy.get() + bar_size.height.get() * 0.5;
+    let tap_x = bar_offset.dx + bar_size.width * 0.92;
+    let tap_y = bar_offset.dy + bar_size.height * 0.5;
 
     laid.dispatch_pointer_down(tap_x, tap_y);
     laid.dispatch_pointer_up(tap_x, tap_y);
@@ -403,12 +403,12 @@ fn floating_action_button_lifts_above_the_snack_bar_mid_animation_and_at_rest() 
             .into_iter()
             .find(|&id| {
                 let size = laid.size(id);
-                size.width.get() < 100.0 && size.height.get() < 100.0
+                size.width < 100.0 && size.height < 100.0
             })
             .expect("the FAB must be mounted")
     };
 
-    let fab_y_at_rest_before = laid.offset(fab_id(&laid)).dy.get();
+    let fab_y_at_rest_before = laid.offset(fab_id(&laid)).dy;
 
     handle.show_snack_bar(SnackBar::new(Text::new("lift me")));
 
@@ -417,14 +417,14 @@ fn floating_action_button_lifts_above_the_snack_bar_mid_animation_and_at_rest() 
     // already be lifted, strictly between its resting position and where it
     // ends up once the snack bar is fully grown.
     pump_ms(&mut laid, 60);
-    let fab_y_mid_entrance = laid.offset(fab_id(&laid)).dy.get();
+    let fab_y_mid_entrance = laid.offset(fab_id(&laid)).dy;
     assert!(
         fab_y_mid_entrance < fab_y_at_rest_before,
         "the FAB must already be lifted mid-entrance: before={fab_y_at_rest_before}, mid={fab_y_mid_entrance}"
     );
 
     pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    let fab_y_fully_shown = laid.offset(fab_id(&laid)).dy.get();
+    let fab_y_fully_shown = laid.offset(fab_id(&laid)).dy;
     assert!(
         fab_y_fully_shown < fab_y_mid_entrance,
         "the FAB must keep rising as the snack bar keeps growing: mid={fab_y_mid_entrance}, \
@@ -433,7 +433,7 @@ fn floating_action_button_lifts_above_the_snack_bar_mid_animation_and_at_rest() 
 
     handle.remove_current_snack_bar();
     pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    let fab_y_at_rest_after = laid.offset(fab_id(&laid)).dy.get();
+    let fab_y_at_rest_after = laid.offset(fab_id(&laid)).dy;
     assert!(
         (fab_y_at_rest_after - fab_y_at_rest_before).abs() < 1.0,
         "the FAB must return to its original resting position once the snack bar is gone: \
@@ -695,8 +695,8 @@ fn snack_bar_clips_to_its_animated_height_mid_entrance() {
     let material =
         find_snack_bar_material(&laid).expect("the snack bar's Material must be mounted");
 
-    let clip_height = laid.size(clip_rect).height.get();
-    let content_height = laid.size(material).height.get();
+    let clip_height = laid.size(clip_rect).height;
+    let content_height = laid.size(material).height;
     assert!(
         clip_height < content_height - 1.0,
         "mid-entrance, the ClipRect's own (animated, shrunk) reported box must be measurably \

@@ -43,10 +43,8 @@ use objc2::runtime::{AnyObject, Bool, ClassBuilder, Protocol, Sel};
 use objc2::{msg_send, sel};
 use objc2_foundation::{NSNotFound, NSPoint, NSRange, NSRect, NSSize, NSUInteger};
 
-use flui_types::{
-    ImeEvent,
-    geometry::{Bounds, Pixels},
-};
+use flui_foundation::geometry::Bounds;
+use flui_platform_api::ImeEvent;
 
 use super::view::{ViewContext, get_context as get_view_context};
 use super::window::route_on_owner;
@@ -89,7 +87,7 @@ pub(super) struct TextInputState {
     /// The candidate-window rectangle from
     /// [`PlatformTextInput::set_ime_cursor_area`], in the framework's logical
     /// window coordinates (top-left origin) as the trait specifies.
-    pub(super) cursor_area: Option<Bounds<Pixels>>,
+    pub(super) cursor_area: Option<Bounds<f64>>,
 
     /// The `NSResponder` `keyDown:` `NSEvent*` currently inside
     /// `interpretKeyEvents:`, as a `usize` (0 when none). Non-zero only for the
@@ -162,7 +160,7 @@ fn byte_offset_of_utf16_boundary(text: &str, units: usize) -> Option<usize> {
 /// encoding of the same text.
 ///
 /// AppKit speaks UTF-16 (`NSRange`, `NSTextInputClient`'s `selectedRange`),
-/// `flui_types::ImeEvent` speaks bytes, and the two diverge at the first
+/// `flui_platform_api::ImeEvent` speaks bytes, and the two diverge at the first
 /// non-BMP or multi-byte character. Returns `None` when the range runs past the
 /// end of `text` or either end falls inside a surrogate pair — a range no byte
 /// offset can express, and one the caller must not round to a nearby boundary
@@ -339,7 +337,7 @@ extern "C-unwind" fn set_marked_text(
 /// `unmarkText` — the composition was abandoned; nothing is committed.
 ///
 /// Announced as an empty `Preedit`, the vocabulary's own spelling of "the
-/// composition ended" (`flui_types::ImeEvent`'s type-level doc: a cancelled
+/// composition ended" (`flui_platform_api::ImeEvent`'s type-level doc: a cancelled
 /// composition arrives as `Preedit { text: "", cursor: None }` with no
 /// following `Commit`/`Disabled`). Emitting nothing here would be the
 /// previously-shipped bug class that doc records from the other side: a client
@@ -488,10 +486,10 @@ extern "C-unwind" fn first_rect_for_character_range(
             NSRange::new(state.marked_range.0, state.marked_range.1)
         };
         let view_bounds: NSRect = msg_send![this, bounds];
-        let flipped_y = view_bounds.size.height - (area.origin.y.0 + area.size.height.0) as f64;
+        let flipped_y = view_bounds.size.height - (area.origin.y + area.size.height);
         let window_rect = NSRect::new(
-            NSPoint::new(area.origin.x.0 as f64, flipped_y),
-            NSSize::new(area.size.width.0 as f64, area.size.height.0 as f64),
+            NSPoint::new(area.origin.x, flipped_y),
+            NSSize::new(area.size.width, area.size.height),
         );
         let window: *mut AnyObject = msg_send![this, window];
         if window.is_null() {
@@ -757,7 +755,7 @@ impl PlatformTextInput for MacOSTextInput {
         }
     }
 
-    fn set_ime_cursor_area(&self, area: Bounds<Pixels>) {
+    fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         let stored = self.with_content_view(|ctx| {
             ctx.text_input.borrow_mut().cursor_area = Some(area);
         });

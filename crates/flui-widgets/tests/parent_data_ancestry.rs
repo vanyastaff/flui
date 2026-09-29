@@ -122,5 +122,5 @@ fn expanded_around_identity_container_lays_out() {
         ]),
         tight(100.0, 20.0),
     );
-    assert_eq!(laid.size(laid.root()).width.get(), 100.0);
+    assert_eq!(laid.size(laid.root()).width, 100.0);
 }

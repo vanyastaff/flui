@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::Offset;
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
     BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, FollowerLayer, Layer,
@@ -9,7 +10,6 @@ use flui_layer::{
     TransformLayer,
 };
 use flui_painting::DisplayList;
-use flui_types::Offset;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
@@ -1082,7 +1082,7 @@ struct RetainedNode {
 fn own_effect_layers(effects: PaintEffects, origin: Offset) -> SmallVec<[Layer; 3]> {
     let mut layers = SmallVec::new();
     if let Some(opacity) = effects.opacity {
-        let alpha_f32 = f32::from(opacity.alpha) / 255.0;
+        let alpha_f32 = f64::from(opacity.alpha) / 255.0;
         layers.push(Layer::Opacity(OpacityLayer::with_offset(
             alpha_f32,
             Offset::ZERO,
@@ -1179,15 +1179,17 @@ impl FragmentComposer {
     /// loop, and the root has no parent. Without it the tree carries a
     /// boundary nothing can identify -- the worst shape for anything pairing
     /// boundaries across frames, which is what `render_id` exists for.
-    fn new(device_pixel_ratio: f32, root_boundary: Option<RenderId>) -> Self {
-        let root_layer = if (device_pixel_ratio - 1.0).abs() < f32::EPSILON {
+    fn new(device_pixel_ratio: f64, root_boundary: Option<RenderId>) -> Self {
+        let root_layer = if (device_pixel_ratio - 1.0).abs() < f64::EPSILON {
             Layer::Offset(OffsetLayer::zero())
         } else {
-            Layer::Transform(TransformLayer::new(flui_types::Matrix4::scaling(
-                device_pixel_ratio,
-                device_pixel_ratio,
-                1.0,
-            )))
+            Layer::Transform(TransformLayer::new(
+                flui_foundation::geometry::Matrix4::scaling(
+                    device_pixel_ratio,
+                    device_pixel_ratio,
+                    1.0,
+                ),
+            ))
         };
         let root_node = LayerNode::new(root_layer);
         let tree = LayerTree::new(match root_boundary {
@@ -1505,14 +1507,17 @@ impl FragmentComposer {
 /// and any other Variable-arity node giving each child its own paint-time
 /// transform). Flutter `PaintingContext.pushTransform`:
 /// `T(offset)·M·T(−offset)`.
-fn conjugate(matrix: flui_types::Matrix4, origin: Offset) -> flui_types::Matrix4 {
+fn conjugate(
+    matrix: flui_foundation::geometry::Matrix4,
+    origin: Offset,
+) -> flui_foundation::geometry::Matrix4 {
     if origin == Offset::ZERO {
         matrix
     } else {
-        let (dx, dy) = (origin.dx.get(), origin.dy.get());
-        flui_types::Matrix4::translation(dx, dy, 0.0)
+        let (dx, dy) = (origin.dx, origin.dy);
+        flui_foundation::geometry::Matrix4::translation(dx, dy, 0.0)
             * matrix
-            * flui_types::Matrix4::translation(-dx, -dy, 0.0)
+            * flui_foundation::geometry::Matrix4::translation(-dx, -dy, 0.0)
     }
 }
 
@@ -1645,14 +1650,11 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::geometry::{Point, Rect, Size};
     use flui_foundation::{Exact, Leaf};
     use flui_interaction::InteractionLane;
     use flui_layer::LayerLink;
-    use flui_types::{
-        Point, Rect, Size,
-        geometry::px,
-        painting::{Alignment, Clip, Path},
-    };
+    use flui_painting::paint::{Alignment, Clip, Path};
 
     use super::*;
     use crate::{
@@ -1773,11 +1775,11 @@ mod tests {
         let link = LayerLink::new();
         let root_id = owner.insert(Box::new(FollowerStub {
             link,
-            size: Size::new(px(20.0), px(20.0)),
+            size: Size::new(20.0, 20.0),
             show_when_unlinked: true,
         }) as Box<dyn RenderObject<BoxProtocol>>);
         owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(20.0), px(20.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(20.0, 20.0))));
 
         let mut owner = owner.into_layout();
         owner.run_layout().expect("layout should succeed");
@@ -1830,22 +1832,17 @@ mod tests {
         let link = LayerLink::new();
 
         let root_id = owner.insert(Box::new(TwoSlotStub {
-            offsets: [Offset::ZERO, Offset::new(px(0.0), px(90.0))],
+            offsets: [Offset::ZERO, Offset::new(0.0, 90.0)],
         }) as Box<dyn RenderObject<BoxProtocol>>);
         owner.set_root_id(Some(root_id));
-        owner.set_root_constraints(Some(BoxConstraints::new(
-            px(0.0),
-            px(300.0),
-            px(0.0),
-            px(300.0),
-        )));
+        owner.set_root_constraints(Some(BoxConstraints::new(0.0, 300.0, 0.0, 300.0)));
 
         owner
             .insert_child_render_object(
                 root_id,
                 Box::new(LeaderStub {
                     link,
-                    size: Size::new(px(20.0), px(20.0)),
+                    size: Size::new(20.0, 20.0),
                 }),
             )
             .expect("leader child insert");
@@ -1854,7 +1851,7 @@ mod tests {
                 root_id,
                 Box::new(FollowerStub {
                     link,
-                    size: Size::new(px(10.0), px(10.0)),
+                    size: Size::new(10.0, 10.0),
                     show_when_unlinked: true,
                 }),
             )
@@ -1879,7 +1876,7 @@ mod tests {
         // nothing further.
         assert_eq!(
             resolved,
-            Offset::new(px(0.0), px(-90.0)),
+            Offset::new(0.0, -90.0),
             "resolved offset must sum the ancestor chains across the two \
              DIFFERENT Layer::Offset boundaries, not assume a shared parent"
         );
@@ -1934,7 +1931,7 @@ mod tests {
             }
         }
 
-        let size = Size::new(px(10.0), px(10.0));
+        let size = Size::new(10.0, 10.0);
         let mut owner = PipelineOwner::new();
         // Mounts as a NON-boundary, exactly as a fade starting at an endpoint
         // would, so the flag bootstraps `false`.
@@ -1975,11 +1972,11 @@ mod tests {
         let link = LayerLink::new(); // No leader is ever registered under this link.
         let follower_id = owner.insert(Box::new(FollowerStub {
             link,
-            size: Size::new(px(10.0), px(10.0)),
+            size: Size::new(10.0, 10.0),
             show_when_unlinked: false,
         }) as Box<dyn RenderObject<BoxProtocol>>);
         owner.set_root_id(Some(follower_id));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(10.0), px(10.0)))));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(10.0, 10.0))));
 
         let mut owner = owner.into_layout();
         owner.run_layout().expect("layout should succeed");
@@ -2024,7 +2021,7 @@ mod tests {
                 .expect("register path clipper")
         });
 
-        let size = Size::new(px(20.0), px(30.0));
+        let size = Size::new(20.0, 30.0);
         let layer = clip_layer(
             PaintClip::PathTarget {
                 target,
@@ -2038,15 +2035,11 @@ mod tests {
             panic!("PathTarget must build a Layer::ClipPath");
         };
         assert!(
-            clip_path
-                .clip_path()
-                .contains(Point::new(px(10.0), px(10.0))),
+            clip_path.clip_path().contains(Point::new(10.0, 10.0)),
             "a point inside the whole box must be contained by the degrade"
         );
         assert!(
-            !clip_path
-                .clip_path()
-                .contains(Point::new(px(100.0), px(100.0))),
+            !clip_path.clip_path().contains(Point::new(100.0, 100.0)),
             "a point outside the whole box must not be contained"
         );
     }
@@ -2069,10 +2062,7 @@ mod tests {
                 .register_path_clipper(move |_size| {
                     calls_for_clipper.set(calls_for_clipper.get() + 1);
                     let mut path = Path::new();
-                    path.add_rect(Rect::from_origin_size(
-                        Point::ZERO,
-                        Size::new(px(5.0), px(5.0)),
-                    ));
+                    path.add_rect(Rect::from_origin_size(Point::ZERO, Size::new(5.0, 5.0)));
                     path
                 })
                 .expect("register path clipper");
@@ -2080,7 +2070,7 @@ mod tests {
             let layer = clip_layer(
                 PaintClip::PathTarget {
                     target,
-                    size: Size::new(px(20.0), px(30.0)),
+                    size: Size::new(20.0, 30.0),
                     behavior: Clip::AntiAlias,
                 },
                 Offset::ZERO,
@@ -2090,13 +2080,11 @@ mod tests {
                 panic!("PathTarget must build a Layer::ClipPath");
             };
             assert!(
-                clip_path.clip_path().contains(Point::new(px(2.0), px(2.0))),
+                clip_path.clip_path().contains(Point::new(2.0, 2.0)),
                 "a point inside the clipper's 5x5 rect must be contained"
             );
             assert!(
-                !clip_path
-                    .clip_path()
-                    .contains(Point::new(px(15.0), px(15.0))),
+                !clip_path.clip_path().contains(Point::new(15.0, 15.0)),
                 "a point inside the whole box but outside the clipper's \
                  rect must NOT be contained -- otherwise this would pass \
                  on the whole-box degrade instead of the resolved clip"
@@ -2121,10 +2109,7 @@ mod tests {
             let target = handle
                 .register_path_clipper(|_size| {
                     let mut path = Path::new();
-                    path.add_rect(Rect::from_origin_size(
-                        Point::ZERO,
-                        Size::new(px(5.0), px(5.0)),
-                    ));
+                    path.add_rect(Rect::from_origin_size(Point::ZERO, Size::new(5.0, 5.0)));
                     path
                 })
                 .expect("register path clipper");
@@ -2132,23 +2117,21 @@ mod tests {
             let layer = clip_layer(
                 PaintClip::PathTarget {
                     target,
-                    size: Size::new(px(20.0), px(30.0)),
+                    size: Size::new(20.0, 30.0),
                     behavior: Clip::AntiAlias,
                 },
-                Offset::new(px(10.0), px(10.0)),
+                Offset::new(10.0, 10.0),
             );
 
             let Layer::ClipPath(clip_path) = layer else {
                 panic!("PathTarget must build a Layer::ClipPath");
             };
             assert!(
-                clip_path
-                    .clip_path()
-                    .contains(Point::new(px(12.0), px(12.0))),
+                clip_path.clip_path().contains(Point::new(12.0, 12.0)),
                 "the translated 5x5 rect now spans (10,10)..(15,15)"
             );
             assert!(
-                !clip_path.clip_path().contains(Point::new(px(2.0), px(2.0))),
+                !clip_path.clip_path().contains(Point::new(2.0, 2.0)),
                 "the UNtranslated path would contain (2,2) -- this is the \
                  point that proves the translate ran"
             );

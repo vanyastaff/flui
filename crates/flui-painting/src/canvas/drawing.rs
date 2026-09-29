@@ -12,16 +12,16 @@
 //! amortised across the recording.
 //!
 //! `Path` clones are O(1): its command buffer is copy-on-write
-//! (`Arc<Vec<PathCommand>>`), so `draw_path`, `draw_shadow`, and `clip_path`
+//! (an `Arc`-shared geometry buffer), so `draw_path`, `draw_shadow`, and `clip_path`
 //! share the caller's buffer until either side mutates.
 
 use std::sync::Arc;
 
-use flui_types::{
-    geometry::{Matrix4, Offset, Pixels, Point, RRect, Rect},
-    painting::{Image, Path},
+use crate::{
+    paint::{Image, Path},
     styling::Color,
 };
+use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 
 use super::Canvas;
 use crate::display_list::{
@@ -34,13 +34,13 @@ impl Canvas {
     // ===== Drawing Primitives =====
 
     /// Draws a line.
-    pub fn draw_line(&mut self, p1: Point<Pixels>, p2: Point<Pixels>, paint: &Paint) {
+    pub fn draw_line(&mut self, p1: Point<f64>, p2: Point<f64>, paint: &Paint) {
         let paint = self.intern_paint(paint);
         self.record(DrawOp::Line { p1, p2, paint });
     }
 
     /// Draws a rectangle.
-    pub fn draw_rect(&mut self, rect: Rect<Pixels>, paint: &Paint) {
+    pub fn draw_rect(&mut self, rect: Rect<f64>, paint: &Paint) {
         let paint = self.intern_paint(paint);
         self.record(DrawOp::Rect { rect, paint });
     }
@@ -56,11 +56,11 @@ impl Canvas {
     /// # Panics
     ///
     /// In debug builds, panics if `radius` is negative or NaN.
-    pub fn draw_circle(&mut self, center: Point<Pixels>, radius: Pixels, paint: &Paint) {
+    pub fn draw_circle(&mut self, center: Point<f64>, radius: f64, paint: &Paint) {
         debug_assert!(
-            radius.0 >= 0.0 && !radius.0.is_nan(),
+            radius >= 0.0 && !radius.is_nan(),
             "Circle radius must be non-negative and not NaN, got: {}",
-            radius.0
+            radius
         );
 
         let paint = self.intern_paint(paint);
@@ -72,7 +72,7 @@ impl Canvas {
     }
 
     /// Draws an oval (ellipse) inscribed in the given rectangle.
-    pub fn draw_oval(&mut self, rect: Rect<Pixels>, paint: &Paint) {
+    pub fn draw_oval(&mut self, rect: Rect<f64>, paint: &Paint) {
         let paint = self.intern_paint(paint);
         self.record(DrawOp::Oval { rect, paint });
     }
@@ -92,12 +92,7 @@ impl Canvas {
     /// hands over its cache's `Arc`), so line breaks, truncation, and the
     /// ellipsis paint exactly as they were laid out. `color` paints every
     /// glyph without a span colour of its own.
-    pub fn draw_paragraph(
-        &mut self,
-        layout: &Arc<TextLayout>,
-        offset: Offset<Pixels>,
-        color: Color,
-    ) {
+    pub fn draw_paragraph(&mut self, layout: &Arc<TextLayout>, offset: Offset<f64>, color: Color) {
         self.record(DrawOp::Paragraph {
             layout: Arc::clone(layout),
             offset,
@@ -106,7 +101,7 @@ impl Canvas {
     }
 
     /// Draws an image.
-    pub fn draw_image(&mut self, image: Image, dst: Rect<Pixels>, paint: Option<&Paint>) {
+    pub fn draw_image(&mut self, image: Image, dst: Rect<f64>, paint: Option<&Paint>) {
         let paint = self.intern_optional_paint(paint);
         self.record(DrawOp::Image { image, dst, paint });
     }
@@ -115,7 +110,7 @@ impl Canvas {
     pub fn draw_image_repeat(
         &mut self,
         image: Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         repeat: ImageRepeat,
         paint: Option<&Paint>,
     ) {
@@ -132,8 +127,8 @@ impl Canvas {
     pub fn draw_image_nine_slice(
         &mut self,
         image: Image,
-        center_slice: Rect<Pixels>,
-        dst: Rect<Pixels>,
+        center_slice: Rect<f64>,
+        dst: Rect<f64>,
         paint: Option<&Paint>,
     ) {
         let paint = self.intern_optional_paint(paint);
@@ -149,7 +144,7 @@ impl Canvas {
     pub fn draw_image_filtered(
         &mut self,
         image: Image,
-        dst: Rect<Pixels>,
+        dst: Rect<f64>,
         filter: ColorFilter,
         paint: Option<&Paint>,
     ) {
@@ -166,10 +161,10 @@ impl Canvas {
     pub fn draw_texture(
         &mut self,
         texture_id: TextureId,
-        dst: Rect<Pixels>,
-        src: Option<Rect<Pixels>>,
+        dst: Rect<f64>,
+        src: Option<Rect<f64>>,
         filter_quality: FilterQuality,
-        opacity: f32,
+        opacity: f64,
     ) {
         self.record(DrawOp::Texture {
             texture_id,
@@ -185,7 +180,7 @@ impl Canvas {
     /// # Panics
     ///
     /// In debug builds, panics if `elevation` is negative or NaN.
-    pub fn draw_shadow(&mut self, path: &Path, color: Color, elevation: f32) {
+    pub fn draw_shadow(&mut self, path: &Path, color: Color, elevation: f64) {
         debug_assert!(
             elevation >= 0.0 && !elevation.is_nan(),
             "Shadow elevation must be non-negative and not NaN, got: {}",
@@ -202,9 +197,9 @@ impl Canvas {
     /// Draws an arc segment.
     pub fn draw_arc(
         &mut self,
-        rect: Rect<Pixels>,
-        start_angle: f32,
-        sweep_angle: f32,
+        rect: Rect<f64>,
+        start_angle: f64,
+        sweep_angle: f64,
         use_center: bool,
         paint: &Paint,
     ) {
@@ -232,7 +227,7 @@ impl Canvas {
     pub fn draw_points_with_mode(
         &mut self,
         mode: PointMode,
-        points: Vec<Point<Pixels>>,
+        points: Vec<Point<f64>>,
         paint: &Paint,
     ) {
         let paint = self.intern_paint(paint);
@@ -247,9 +242,9 @@ impl Canvas {
     /// coordinates.
     pub fn draw_vertices(
         &mut self,
-        vertices: Vec<Point<Pixels>>,
+        vertices: Vec<Point<f64>>,
         colors: Option<Vec<Color>>,
-        tex_coords: Option<Vec<Point<Pixels>>>,
+        tex_coords: Option<Vec<Point<f64>>>,
         indices: Vec<u16>,
         paint: &Paint,
     ) {
@@ -286,7 +281,7 @@ impl Canvas {
     pub fn draw_atlas(
         &mut self,
         image: Image,
-        sprites: Vec<Rect<Pixels>>,
+        sprites: Vec<Rect<f64>>,
         transforms: Vec<Matrix4>,
         colors: Option<Vec<Color>>,
         blend_mode: BlendMode,

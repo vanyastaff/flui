@@ -12,7 +12,7 @@
 //! Nothing in this module's public surface names a render, sliver, or protocol
 //! type. The only types crossing the boundary are [`ScrollWindow`],
 //! [`VisibleRange`], [`AnchorCorrection`], [`Extent`], [`ItemExtent`], the
-//! [`Virtualizer`] itself, and primitives (`usize`, `f32`). This is deliberate:
+//! [`Virtualizer`] itself, and primitives (`usize`, `f64`). This is deliberate:
 //! it keeps the core a general-purpose abstraction (equally the math behind a
 //! virtualized list, grid, data table, timeline, or text view) and keeps it
 //! cheaply extractable into a standalone crate later, without coupling it to the
@@ -76,19 +76,19 @@ use sumtree::ExtentTree;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollWindow {
     /// Scroll offset of the leading visible edge, in main-axis pixels.
-    pub offset: f32,
+    pub offset: f64,
     /// Size of the viewport along the main axis, in pixels.
-    pub main_extent: f32,
+    pub main_extent: f64,
     /// Extra main-axis pixels to keep built *ahead of* the leading edge.
-    pub cache_before: f32,
+    pub cache_before: f64,
     /// Extra main-axis pixels to keep built *past* the trailing edge.
-    pub cache_after: f32,
+    pub cache_after: f64,
 }
 
 impl ScrollWindow {
     /// Convenience constructor with no cache buffer on either side.
     #[must_use]
-    pub fn new(offset: f32, main_extent: f32) -> Self {
+    pub fn new(offset: f64, main_extent: f64) -> Self {
         Self {
             offset,
             main_extent,
@@ -100,21 +100,21 @@ impl ScrollWindow {
     /// Leading edge of the cache region (`offset - cache_before`, floored at 0).
     #[inline]
     #[must_use]
-    fn cache_start(&self) -> f32 {
+    fn cache_start(&self) -> f64 {
         (self.offset - self.cache_before).max(0.0)
     }
 
     /// Trailing edge of the cache region (`offset + main_extent + cache_after`).
     #[inline]
     #[must_use]
-    fn cache_end(&self) -> f32 {
+    fn cache_end(&self) -> f64 {
         self.offset + self.main_extent + self.cache_after
     }
 
     /// Trailing edge of the tight visible band (`offset + main_extent`).
     #[inline]
     #[must_use]
-    fn visible_end(&self) -> f32 {
+    fn visible_end(&self) -> f64 {
         self.offset + self.main_extent
     }
 }
@@ -140,7 +140,7 @@ pub struct VisibleRange {
     /// The first *visible* item's offset minus `window.offset`. Always `<= 0`
     /// (the item starts at or before the leading edge), so a consumer places the
     /// leading child at this relative offset. `0.0` for an empty range.
-    pub leading_offset: f32,
+    pub leading_offset: f64,
 }
 
 impl VisibleRange {
@@ -168,7 +168,7 @@ impl VisibleRange {
 pub struct AnchorCorrection {
     /// Signed pixel delta to add to the scroll offset to keep the anchored
     /// content stationary.
-    pub delta: f32,
+    pub delta: f64,
 }
 
 /// The total scroll extent of all items, distinguishing "fully known" from
@@ -183,16 +183,16 @@ pub struct AnchorCorrection {
 #[must_use]
 pub enum Extent {
     /// Every item is measured; this total is final.
-    Exact(f32),
+    Exact(f64),
     /// At least one item is still estimated; this total is provisional.
-    Estimated(f32),
+    Estimated(f64),
 }
 
 impl Extent {
     /// The pixel value, regardless of exact/estimated.
     #[inline]
     #[must_use]
-    pub fn value(self) -> f32 {
+    pub fn value(self) -> f64 {
         match self {
             Extent::Exact(v) | Extent::Estimated(v) => v,
         }
@@ -208,12 +208,12 @@ pub enum ItemExtent {
     /// measurement arrives.
     Unmeasured {
         /// Estimated main-axis extent in pixels.
-        hint: f32,
+        hint: f64,
     },
     /// Laid out; `extent` is the real measured main-axis extent in pixels.
     Measured {
         /// Measured main-axis extent in pixels.
-        extent: f32,
+        extent: f64,
     },
 }
 
@@ -226,7 +226,7 @@ impl ItemExtent {
     /// stored value is already non-negative and is returned as-is.
     #[inline]
     #[must_use]
-    pub fn extent(&self) -> f32 {
+    pub fn extent(&self) -> f64 {
         match *self {
             ItemExtent::Unmeasured { hint } => hint,
             ItemExtent::Measured { extent } => extent,
@@ -246,7 +246,7 @@ impl ItemExtent {
 ///
 /// Answers *visible-range* and *anchor* queries only — it is **build-agnostic**:
 /// it never builds, lays out, or names a child render object. It is pure
-/// arithmetic over `usize` indices and `f32` extents, backed by a focused
+/// arithmetic over `usize` indices and `f64` extents, backed by a focused
 /// augmented B+-tree so every operation below is `O(log n)` (worst case as well
 /// as average; the tree is balanced by construction).
 ///
@@ -263,7 +263,7 @@ pub struct Virtualizer {
     tree: ExtentTree,
     /// Default estimate seeded into newly-created [`ItemExtent::Unmeasured`]
     /// items (by `set_count` growth and `invalidate_from`).
-    default_estimate: f32,
+    default_estimate: f64,
     /// How many items are currently [`ItemExtent::Measured`]. Maintained
     /// incrementally so [`total_extent`](Self::total_extent) /
     /// [`measured_count`](Self::measured_count) are `O(1)`.
@@ -271,10 +271,10 @@ pub struct Virtualizer {
     /// Sum of every [`ItemExtent::Measured`] extent, kept in step with
     /// `measured` so [`measured_mean`](Self::measured_mean) — the adaptive
     /// hint for still-unmeasured items, read on every layout pass — is `O(1)`.
-    measured_total: f32,
+    measured_total: f64,
     /// The current scroll anchor `(index, sub_offset)`. Item-identity, not raw
     /// pixel — see the module docs.
-    anchor: (usize, f32),
+    anchor: (usize, f64),
 }
 
 impl Virtualizer {
@@ -285,7 +285,7 @@ impl Virtualizer {
     /// backing tree holds a single run — which is also what makes an unbounded
     /// list (ADR-0053's `usize::MAX` sentinel) constructible at all.
     #[must_use]
-    pub fn new(item_count: usize, default_estimate: f32) -> Self {
+    pub fn new(item_count: usize, default_estimate: f64) -> Self {
         let est = default_estimate.max(0.0);
         let tree = ExtentTree::uniform(item_count, ItemExtent::Unmeasured { hint: est });
         Self {
@@ -338,7 +338,7 @@ impl Virtualizer {
     /// The extent currently hinted for every unmeasured item.
     #[inline]
     #[must_use]
-    pub fn default_estimate(&self) -> f32 {
+    pub fn default_estimate(&self) -> f64 {
         self.default_estimate
     }
     /// The running mean of the measured extents, or `None` before the first
@@ -346,8 +346,8 @@ impl Virtualizer {
     /// once real sizes exist — the caller's seed estimate is only a guess for
     /// the very first pass.
     #[must_use]
-    pub fn measured_mean(&self) -> Option<f32> {
-        (self.measured > 0).then(|| self.measured_total / self.measured as f32)
+    pub fn measured_mean(&self) -> Option<f64> {
+        (self.measured > 0).then(|| self.measured_total / self.measured as f64)
     }
     /// The mean of the measured, non-zero extents among the items in `range`,
     /// or `None` when there is no such item.
@@ -362,9 +362,9 @@ impl Virtualizer {
     /// measured, and counting it would shrink every unmeasured hint (and the
     /// scrollable total with it) for a placeholder's sake. O(band) tree reads.
     #[must_use]
-    pub fn measured_mean_in(&self, range: std::ops::Range<usize>) -> Option<f32> {
+    pub fn measured_mean_in(&self, range: std::ops::Range<usize>) -> Option<f64> {
         let end = range.end.min(self.tree.len());
-        let mut total = 0.0f32;
+        let mut total = 0.0_f64;
         let mut count = 0usize;
         for index in range.start..end {
             if let ItemExtent::Measured { extent } = self.tree.get(index)
@@ -374,7 +374,7 @@ impl Virtualizer {
                 count += 1;
             }
         }
-        (count > 0).then(|| total / count as f32)
+        (count > 0).then(|| total / count as f64)
     }
     /// Re-hint every unmeasured item with `estimate` while keeping `anchor`'s
     /// content pixel-stationary.
@@ -389,8 +389,8 @@ impl Virtualizer {
     /// caller gates it on a material change.
     pub fn adapt_default_estimate(
         &mut self,
-        estimate: f32,
-        anchor: (usize, f32),
+        estimate: f64,
+        anchor: (usize, f64),
     ) -> Option<AnchorCorrection> {
         let anchor_in_range = anchor.0 < self.tree.len();
         let anchor_offset_before = anchor_in_range.then(|| self.offset_of(anchor.0));
@@ -407,7 +407,7 @@ impl Virtualizer {
     /// future growth, preserving already-measured extents.
     ///
     /// Returns whether the estimate changed.
-    pub fn set_default_estimate(&mut self, estimate: f32) -> bool {
+    pub fn set_default_estimate(&mut self, estimate: f64) -> bool {
         let estimate = estimate.max(0.0);
         if self.default_estimate == estimate {
             return false;
@@ -438,8 +438,8 @@ impl Virtualizer {
     pub fn set_measured(
         &mut self,
         index: usize,
-        extent: f32,
-        anchor: (usize, f32),
+        extent: f64,
+        anchor: (usize, f64),
     ) -> Option<AnchorCorrection> {
         debug_assert!(index < self.tree.len(), "set_measured index out of range");
         if index >= self.tree.len() {
@@ -516,7 +516,7 @@ impl Virtualizer {
         let s1 = visible_start.max(cache_start);
         let s2 = visible_end.max(s1);
         let s3 = cache_end.max(s2);
-        let mut seeks = [(0usize, 0.0f32); 4];
+        let mut seeks = [(0usize, 0.0_f64); 4];
         self.tree
             .seek_sorted(&[cache_start, s1, s2, s3], &mut seeks);
         // [0] = cache_start, [1] = visible_start, [2] = visible_end, [3] = cache_end.
@@ -553,10 +553,10 @@ impl Virtualizer {
     /// (`end <= band_start`) yields `first` — never an inverted range.
     fn exclusive_end(
         &self,
-        end: f32,
+        end: f64,
         first: usize,
-        band_start: f32,
-        end_seek: (usize, f32),
+        band_start: f64,
+        end_seek: (usize, f64),
     ) -> usize {
         let count = self.tree.len();
         if end >= self.tree.total_extent() {
@@ -582,7 +582,7 @@ impl Virtualizer {
     /// # Panics
     /// Panics if `index > len()`.
     #[must_use]
-    pub fn offset_of(&self, index: usize) -> f32 {
+    pub fn offset_of(&self, index: usize) -> f64 {
         assert!(index <= self.tree.len(), "offset_of index out of range");
         self.tree.offset_of(index)
     }
@@ -624,7 +624,7 @@ impl Virtualizer {
     ///
     /// Complexity: `O(1)`.
     #[must_use]
-    pub fn anchor_item(&self) -> (usize, f32) {
+    pub fn anchor_item(&self) -> (usize, f64) {
         self.anchor
     }
 
@@ -683,7 +683,7 @@ impl Virtualizer {
     /// # Panics
     /// Panics if `index >= len()` (there is no such item to scroll to).
     #[must_use]
-    pub fn scroll_to_item(&mut self, index: usize, alignment: f32, viewport_extent: f32) -> f32 {
+    pub fn scroll_to_item(&mut self, index: usize, alignment: f64, viewport_extent: f64) -> f64 {
         assert!(index < self.tree.len(), "scroll_to_item index out of range");
         let item_start = self.tree.offset_of(index);
         let item_extent = self.tree.get(index).extent();

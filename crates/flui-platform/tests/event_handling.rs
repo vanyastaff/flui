@@ -13,8 +13,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use flui_foundation::geometry::Size;
 use flui_platform::{Platform, WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize tracing for tests
@@ -52,7 +52,7 @@ fn test_mouse_click_pointer_event() {
     // Create a test window
     let options = WindowOptions {
         title: "Test Window - T046".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: false,
         visible: false,
         decorated: true,
@@ -69,8 +69,8 @@ fn test_mouse_click_pointer_event() {
     // (Full pointer event testing requires actual OS events or mocking)
     let logical_size = window.logical_size();
     tracing::info!("Window logical size: {:?}", logical_size);
-    assert!(logical_size.width.0 > 0.0);
-    assert!(logical_size.height.0 > 0.0);
+    assert!(logical_size.width > 0.0);
+    assert!(logical_size.height > 0.0);
 
     // Test: Verify logical coordinates are used (not physical pixels)
     let scale_factor = window.scale_factor();
@@ -104,7 +104,7 @@ fn test_keyboard_with_modifiers() {
     // Create a test window
     let options = WindowOptions {
         title: "Test Window - T047".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         resizable: false,
         visible: false,
         decorated: true,
@@ -174,12 +174,12 @@ fn test_window_resize_event() {
     // Create a resizable window
     let options = WindowOptions {
         title: "Test Window - T048".to_string(),
-        size: Size::new(px(640.0), px(480.0)),
+        size: Size::new(640.0, 480.0),
         resizable: true, // Must be resizable to test resize events
         visible: false,
         decorated: true,
-        min_size: Some(Size::new(px(320.0), px(240.0))),
-        max_size: Some(Size::new(px(1920.0), px(1080.0))),
+        min_size: Some(Size::new(320.0, 240.0)),
+        max_size: Some(Size::new(1920.0, 1080.0)),
         ..Default::default()
     };
 
@@ -195,21 +195,21 @@ fn test_window_resize_event() {
 
     // Contract: WindowEvent::Resized should contain:
     // - window_id: WindowId
-    // - size: Size<DevicePixels> (physical pixels)
+    // - size: DeviceSize (physical pixels)
     //
-    // Note: Size is in DevicePixels, not Pixels, because it represents
+    // Note: Size is in device pixels (i32), not logical pixels, because it represents
     // the actual framebuffer size for rendering. To get logical size,
     // divide by scale_factor.
 
     let scale_factor = window.scale_factor();
-    let logical_width = (initial_size.width.0 as f32) / (scale_factor as f32);
-    let logical_height = (initial_size.height.0 as f32) / (scale_factor as f32);
+    let logical_width = (initial_size.width as f64) / scale_factor;
+    let logical_height = (initial_size.height as f64) / scale_factor;
 
     tracing::info!("Logical size: {}x{}", logical_width, logical_height);
     tracing::info!(
         "Physical size: {}x{}",
-        initial_size.width.0,
-        initial_size.height.0
+        initial_size.width,
+        initial_size.height
     );
     tracing::info!("Scale factor: {}", scale_factor);
 
@@ -250,7 +250,7 @@ fn test_mouse_movement_pointer_event() {
     // Create a test window
     let options = WindowOptions {
         title: "Test Window - T049".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: false,
         visible: false,
         decorated: true,
@@ -270,7 +270,7 @@ fn test_mouse_movement_pointer_event() {
     use ui_events::pointer::{PointerButton, PointerType};
 
     // Contract: PointerEvent::Move should contain:
-    // - position: Offset<Pixels> (logical coordinates)
+    // - position: Offset (logical coordinates)
     // - pointer_id: PointerId (for multi-touch)
     // - pointer_type: PointerType (Mouse, Touch, Pen)
     // - buttons: PointerButtons (which buttons are pressed)
@@ -317,7 +317,7 @@ fn test_multi_touch_pointer_events() {
     // Create a test window
     let options = WindowOptions {
         title: "Test Window - T050".to_string(),
-        size: Size::new(px(1024.0), px(768.0)),
+        size: Size::new(1024.0, 768.0),
         resizable: false,
         visible: false,
         decorated: true,
@@ -408,7 +408,7 @@ fn test_event_coordinate_system() {
     // Create a test window
     let options = WindowOptions {
         title: "Test Window - Coordinates".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: false,
         visible: false,
         decorated: true,
@@ -424,20 +424,20 @@ fn test_event_coordinate_system() {
     let scale_factor = window.scale_factor();
     tracing::info!("Scale factor: {}", scale_factor);
 
-    // Contract: All input events use LOGICAL coordinates (Pixels)
-    // - PointerEvent.position: Offset<Pixels>
-    // - Window positions: Point<Pixels>
-    // - Mouse delta: Offset<PixelDelta>
+    // Contract: All input events use LOGICAL coordinates (f64)
+    // - PointerEvent.position: Offset
+    // - Window positions: Point
+    // - Mouse delta: Offset
     //
-    // Physical coordinates (DevicePixels) are only used for:
-    // - Window size: Size<DevicePixels> (framebuffer size)
-    // - Display bounds: Rect<DevicePixels>
+    // Physical coordinates (i32 device pixels) are only used for:
+    // - Window size: DeviceSize (framebuffer size)
+    // - Display bounds: DeviceRect
     //
     // Conversion: logical = physical / scale_factor
 
     // Verify coordinate conversion
     let physical_x = 1920;
-    let logical_x = (physical_x as f32) / (scale_factor as f32);
+    let logical_x = (physical_x as f64) / scale_factor;
     tracing::info!("Physical {} -> Logical {}", physical_x, logical_x);
 
     // With scale_factor = 2.0:
@@ -446,10 +446,10 @@ fn test_event_coordinate_system() {
 
     if (scale_factor - 1.0).abs() < 0.01 {
         // No scaling
-        assert_eq!(logical_x, physical_x as f32);
+        assert_eq!(logical_x, physical_x as f64);
     } else if (scale_factor - 2.0).abs() < 0.01 {
         // 2x scaling (e.g., Retina, 4K at 200%)
-        assert_eq!(logical_x, (physical_x as f32) / 2.0);
+        assert_eq!(logical_x, (physical_x as f64) / 2.0);
     }
 
     tracing::info!("✓ Event coordinate system contract verified");

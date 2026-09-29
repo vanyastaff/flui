@@ -1,9 +1,11 @@
 //! [`UnconstrainedBox`] — removes the constraints imposed on its child (on
 //! one axis or both), letting it render at its natural size.
 
+use flui_foundation::geometry::Axis;
 use flui_objects::RenderConstraintsTransformBox;
+use flui_painting::Alignment;
+use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::{Alignment, Axis, painting::Clip};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Removes the constraints imposed on `child` — on both axes, or, when

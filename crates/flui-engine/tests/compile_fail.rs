@@ -3,8 +3,8 @@
 //! `Send` as a supertrait) and issue #1043 (`Renderer::new` accepts only an
 //! owned, `'static` `WindowTarget` — a borrowed window no longer type-checks).
 //!
-//! Uses trybuild, the same harness `flui-types` uses for its unit-mixing
-//! compile-fail suite (`crates/flui-types/tests/unit_mixing_compile_fail.rs`).
+//! Uses trybuild, the same harness as `flui-painting`'s compile-fail suite
+//! (`crates/flui-painting/tests/compile_fail.rs`).
 
 #[test]
 fn trybuild_ui() {

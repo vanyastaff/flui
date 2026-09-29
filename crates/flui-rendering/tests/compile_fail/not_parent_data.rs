@@ -3,7 +3,7 @@
 use flui_rendering::ParentData;
 
 #[derive(Debug, Clone)]
-struct Offset(f32);
+struct Offset(f64);
 
 fn attach<P: ParentData>(_data: P) {}
 

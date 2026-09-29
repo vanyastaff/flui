@@ -128,8 +128,8 @@ fn pointer_state(touch: &UITouch, phase: TouchPhase, scale: f64) -> PointerState
 
     // `force` is pressure on hardware that reports it (0.0 otherwise). UIKit
     // does not report tangential pressure; 0.0 is the honest value.
-    // `PointerState` carries both as `f32`.
-    let pressure = touch.force() as f32;
+    // `PointerState` carries both as `f64`.
+    let pressure = touch.force();
 
     // UIKit reports no contact-area size; a 1x1 point contact is the neutral
     // value the framework expects when a backend cannot measure it.
@@ -143,7 +143,7 @@ fn pointer_state(touch: &UITouch, phase: TouchPhase, scale: f64) -> PointerState
     let orientation = if pointer_type(touch) == PointerType::Pen {
         PointerOrientation {
             altitude: 0.0,
-            azimuth: touch.azimuthAngleInView(None) as f32,
+            azimuth: (touch.azimuthAngleInView(None) as f32),
         }
     } else {
         PointerOrientation::default()
@@ -157,7 +157,7 @@ fn pointer_state(touch: &UITouch, phase: TouchPhase, scale: f64) -> PointerState
         count: u8::from(matches!(phase, TouchPhase::Down | TouchPhase::Up)),
         contact_geometry: contact,
         orientation,
-        pressure,
+        pressure: pressure as f32,
         tangential_pressure: 0.0,
         scale_factor: scale,
     }

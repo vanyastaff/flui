@@ -3,12 +3,13 @@
 //! Covers 4 axis directions × 2 growth directions × 3 concerns:
 //! effective axis, paint/sign sizing, and scroll-direction composition.
 
+use flui_foundation::geometry::Size;
+use flui_rendering::constraints::AxisDirection::*;
 use flui_rendering::{
     constraints::{GrowthDirection, apply_growth_direction_to_scroll_direction, right_way_up},
     traits::RenderSliver,
     view::ScrollDirection,
 };
-use flui_types::{Size, geometry::px, layout::AxisDirection::*};
 
 struct DirectionProbe {
     constraints: flui_rendering::constraints::SliverConstraints,
@@ -21,7 +22,10 @@ impl std::fmt::Debug for DirectionProbe {
 }
 
 impl DirectionProbe {
-    fn new(axis_direction: flui_types::layout::AxisDirection, growth: GrowthDirection) -> Self {
+    fn new(
+        axis_direction: flui_rendering::constraints::AxisDirection,
+        growth: GrowthDirection,
+    ) -> Self {
         use flui_rendering::constraints::SliverConstraints;
         use flui_rendering::view::ScrollDirection;
 
@@ -78,56 +82,56 @@ fn sliver_direction_matrix_eight_by_three() {
             TopToBottom,
             GrowthDirection::Forward,
             TopToBottom,
-            Size::new(px(40.0), px(25.0)),
+            Size::new(40.0, 25.0),
             true,
         ),
         (
             TopToBottom,
             GrowthDirection::Reverse,
             BottomToTop,
-            Size::new(px(40.0), px(-25.0)),
+            Size::new(40.0, -25.0),
             false,
         ),
         (
             BottomToTop,
             GrowthDirection::Forward,
             BottomToTop,
-            Size::new(px(40.0), px(-25.0)),
+            Size::new(40.0, -25.0),
             false,
         ),
         (
             BottomToTop,
             GrowthDirection::Reverse,
             TopToBottom,
-            Size::new(px(40.0), px(25.0)),
+            Size::new(40.0, 25.0),
             true,
         ),
         (
             LeftToRight,
             GrowthDirection::Forward,
             LeftToRight,
-            Size::new(px(25.0), px(40.0)),
+            Size::new(25.0, 40.0),
             true,
         ),
         (
             LeftToRight,
             GrowthDirection::Reverse,
             RightToLeft,
-            Size::new(px(-25.0), px(40.0)),
+            Size::new(-25.0, 40.0),
             false,
         ),
         (
             RightToLeft,
             GrowthDirection::Forward,
             RightToLeft,
-            Size::new(px(-25.0), px(40.0)),
+            Size::new(-25.0, 40.0),
             false,
         ),
         (
             RightToLeft,
             GrowthDirection::Reverse,
             LeftToRight,
-            Size::new(px(25.0), px(40.0)),
+            Size::new(25.0, 40.0),
             true,
         ),
     ];

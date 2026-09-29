@@ -135,7 +135,7 @@ protocol (feeds `addRetained`, which this architecture never calls); `LayerNode:
 way to say "translate" that no production tree ever set); the 57 generated `is_*/as_*/as_*_mut`
 accessors bar the four with callers (`as_leader`, `as_follower`, `as_performance_overlay`); the
 `f32` sugar constructors (`OffsetLayer::from_xy`, `FollowerLayer::below/above/..`,
-`Clip*Layer::circular/circle/oval`) that bypassed the `Pixels` unit barrier; the `testing`
+`Clip*Layer::circular/circle/oval`), second spellings of the geometry constructors; the `testing`
 feature's `LayerSpec`/`LayerTester` DSL (a third builder with no consumer); `prelude` and
 `VERSION` (no importer).
 

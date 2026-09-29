@@ -785,14 +785,8 @@ fn hot_reload_requires_its_additional_source_manifests() {
         tmp.path().join("Cargo.toml"),
     )
     .expect("root manifest");
-    for name in [
-        "flui-app",
-        "flui-view",
-        "flui-widgets",
-        "flui-hot-reload",
-        "flui-types",
-    ] {
-        if matches!(name, "flui-hot-reload" | "flui-types") {
+    for name in ["flui-app", "flui-view", "flui-widgets", "flui-hot-reload"] {
+        if name == "flui-hot-reload" {
             flui()
                 .current_dir(tmp.path())
                 .args([

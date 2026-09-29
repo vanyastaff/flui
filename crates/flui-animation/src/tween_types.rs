@@ -27,16 +27,16 @@
 //! ```
 
 use crate::curve::Curve;
-use flui_types::geometry::{Edges, Lerp, Matrix4, Offset, Pixels, Rect, Size};
-use flui_types::layout::Alignment;
-use flui_types::styling::{BorderRadius, Color};
+use flui_foundation::geometry::{Edges, Lerp, Matrix4, Offset, Rect, Size};
+use flui_painting::Alignment;
+use flui_painting::styling::{BorderRadius, Color};
 
 /// A value that can be animated.
 ///
 /// Similar to Flutter's `Animatable<T>`.
 pub trait Animatable<T> {
     /// Returns the value of this object at the given animation value.
-    fn transform(&self, t: f32) -> T;
+    fn transform(&self, t: f64) -> T;
 }
 
 /// A tween that linearly interpolates between a `begin` and `end` value of any
@@ -65,7 +65,7 @@ impl<V> Tween<V> {
 }
 
 impl<V: Lerp> Animatable<V> for Tween<V> {
-    fn transform(&self, t: f32) -> V {
+    fn transform(&self, t: f64) -> V {
         if t == 0.0 {
             return self.begin.clone();
         }
@@ -94,8 +94,8 @@ impl<V: Lerp> Animatable<V> for Tween<V> {
 /// assert_eq!(tween.transform(0.5), 50.0);
 /// assert_eq!(tween.transform(1.0), 100.0);
 /// ```
-/// Tween between two floats. Alias for `Tween<f32>`.
-pub type FloatTween = Tween<f32>;
+/// Tween between two floats. Alias for `Tween<f64>`.
+pub type FloatTween = Tween<f64>;
 
 /// A tween that linearly interpolates between two integers, rounding to the
 /// nearest integer.
@@ -119,10 +119,10 @@ impl IntTween {
 }
 
 impl Animatable<i32> for IntTween {
-    #[expect(clippy::cast_possible_truncation)] // rounded f32->i32, saturating cast
-    fn transform(&self, t: f32) -> i32 {
+    #[expect(clippy::cast_possible_truncation)] // rounded f64->i32, saturating cast
+    fn transform(&self, t: f64) -> i32 {
         let t = t.clamp(0.0, 1.0);
-        (self.begin as f32 + (self.end - self.begin) as f32 * t).round() as i32
+        (self.begin as f64 + (self.end - self.begin) as f64 * t).round() as i32
     }
 }
 
@@ -148,10 +148,10 @@ impl StepTween {
 }
 
 impl Animatable<i32> for StepTween {
-    #[expect(clippy::cast_possible_truncation)] // floored f32->i32, saturating cast
-    fn transform(&self, t: f32) -> i32 {
+    #[expect(clippy::cast_possible_truncation)] // floored f64->i32, saturating cast
+    fn transform(&self, t: f64) -> i32 {
         let t = t.clamp(0.0, 1.0);
-        (self.begin as f32 + (self.end - self.begin) as f32 * t).floor() as i32
+        (self.begin as f64 + (self.end - self.begin) as f64 * t).floor() as i32
     }
 }
 
@@ -174,7 +174,7 @@ impl<T: Clone> ConstantTween<T> {
 }
 
 impl<T: Clone> Animatable<T> for ConstantTween<T> {
-    fn transform(&self, _t: f32) -> T {
+    fn transform(&self, _t: f64) -> T {
         self.value.clone()
     }
 }
@@ -202,7 +202,7 @@ impl<T, A: Animatable<T>> ReverseTween<T, A> {
 }
 
 impl<T, A: Animatable<T>> Animatable<T> for ReverseTween<T, A> {
-    fn transform(&self, t: f32) -> T {
+    fn transform(&self, t: f64) -> T {
         self.tween.transform(1.0 - t)
     }
 }
@@ -234,7 +234,7 @@ pub type ColorTween = Tween<Color>;
 ///
 /// ```
 /// use flui_animation::{Animatable, OklabColorTween};
-/// use flui_types::Color;
+/// use flui_painting::styling::Color;
 ///
 /// let tween = OklabColorTween::new(Color::rgb(0, 0, 255), Color::rgb(255, 255, 0));
 /// let perceptual_mid = tween.transform(0.5);
@@ -260,7 +260,7 @@ impl OklabColorTween {
 }
 
 impl Animatable<Color> for OklabColorTween {
-    fn transform(&self, t: f32) -> Color {
+    fn transform(&self, t: f64) -> Color {
         if t == 0.0 {
             return self.begin;
         }
@@ -274,20 +274,20 @@ impl Animatable<Color> for OklabColorTween {
 /// A tween that linearly interpolates between two sizes.
 ///
 /// Similar to Flutter's `SizeTween`.
-/// Tween between two sizes. Alias for `Tween<Size<Pixels>>`.
-pub type SizeTween = Tween<Size<Pixels>>;
+/// Tween between two sizes. Alias for `Tween<Size>`.
+pub type SizeTween = Tween<Size<f64>>;
 
 /// A tween that linearly interpolates between two rectangles.
 ///
 /// Similar to Flutter's `RectTween`.
-/// Tween between two rectangles. Alias for `Tween<Rect<Pixels>>`.
-pub type RectTween = Tween<Rect<Pixels>>;
+/// Tween between two rectangles. Alias for `Tween<Rect>`.
+pub type RectTween = Tween<Rect<f64>>;
 
 /// A tween that linearly interpolates between two offsets.
 ///
 /// Similar to Flutter's `OffsetTween` (but `Offset::lerp` is used directly in Flutter).
-/// Tween between two offsets. Alias for `Tween<Offset<Pixels>>`.
-pub type OffsetTween = Tween<Offset<Pixels>>;
+/// Tween between two offsets. Alias for `Tween<Offset>`.
+pub type OffsetTween = Tween<Offset<f64>>;
 
 /// A tween that linearly interpolates between two alignments.
 ///
@@ -298,11 +298,11 @@ pub type AlignmentTween = Tween<Alignment>;
 /// A tween that linearly interpolates between two edge insets.
 ///
 /// Similar to Flutter's `EdgeInsetsTween`.
-/// Tween between two edge insets. Alias for `Tween<Edges<Pixels>>`.
-pub type EdgeInsetsTween = Tween<Edges<Pixels>>;
+/// Tween between two edge insets. Alias for `Tween<EdgeInsets>`.
+pub type EdgeInsetsTween = Tween<Edges<f64>>;
 
 /// Tween between two border radii. Alias for `Tween<BorderRadius>` (now that
-/// `Lerp for Corners<T>` lives in flui-geometry).
+/// `Lerp for Corners<T>` lives in `flui_foundation::geometry`).
 pub type BorderRadiusTween = Tween<BorderRadius>;
 
 /// Tween between two affine transforms. Alias for `Tween<Matrix4>`; interpolates
@@ -343,7 +343,7 @@ pub type Matrix4Tween = Tween<Matrix4>;
 ///
 /// ```
 /// use flui_animation::{TweenSequence, TweenSequenceItem, Animatable, ColorTween};
-/// use flui_types::styling::Color;
+/// use flui_painting::styling::Color;
 ///
 /// let items = vec![
 ///     TweenSequenceItem::new(ColorTween::new(Color::RED, Color::GREEN), 1.0),
@@ -364,7 +364,7 @@ pub struct TweenSequence<T, A: Animatable<T>> {
     /// The items in the sequence.
     items: Vec<TweenSequenceItem<T, A>>,
     /// Cached total weight for performance.
-    total_weight: f32,
+    total_weight: f64,
 }
 
 impl<T, A: Animatable<T>> TweenSequence<T, A> {
@@ -381,7 +381,7 @@ impl<T, A: Animatable<T>> TweenSequence<T, A> {
         );
 
         // Validate that weights sum to a positive number
-        let total_weight: f32 = items.iter().map(|item| item.weight).sum();
+        let total_weight: f64 = items.iter().map(|item| item.weight).sum();
         assert!(total_weight > 0.0, "Total weight must be positive");
 
         Self {
@@ -400,7 +400,7 @@ impl<T, A: Animatable<T>> TweenSequence<T, A> {
     /// Returns the total weight of all items.
     #[inline]
     #[must_use]
-    pub fn total_weight(&self) -> f32 {
+    pub fn total_weight(&self) -> f64 {
         self.total_weight
     }
 }
@@ -410,7 +410,7 @@ impl<T, A: Animatable<T>> Animatable<T> for TweenSequence<T, A> {
     /// overshoot (elastic/spring `t` outside the unit range) saturates at the
     /// first/last item's endpoint rather than extrapolating, because there is
     /// no meaningful item to attribute out-of-range progress to.
-    fn transform(&self, t: f32) -> T {
+    fn transform(&self, t: f64) -> T {
         let t = t.clamp(0.0, 1.0);
 
         // Find which item we're in
@@ -460,7 +460,7 @@ pub struct TweenSequenceItem<T, A: Animatable<T>> {
     /// The weight of this item in the sequence.
     ///
     /// The time spent in this item is proportional to its weight.
-    pub weight: f32,
+    pub weight: f64,
 
     _phantom: std::marker::PhantomData<T>,
 }
@@ -472,7 +472,7 @@ impl<T, A: Animatable<T>> TweenSequenceItem<T, A> {
     ///
     /// Panics if `weight` is not positive (must be > 0).
     #[must_use]
-    pub fn new(tween: A, weight: f32) -> Self {
+    pub fn new(tween: A, weight: f64) -> Self {
         assert!(weight > 0.0, "Weight must be positive");
         assert!(weight.is_finite(), "Weight must be finite");
         Self {
@@ -522,9 +522,9 @@ impl<C: Curve> CurveTween<C> {
     }
 }
 
-impl<C: Curve> Animatable<f32> for CurveTween<C> {
+impl<C: Curve> Animatable<f64> for CurveTween<C> {
     #[inline]
-    fn transform(&self, t: f32) -> f32 {
+    fn transform(&self, t: f64) -> f64 {
         self.curve.transform(t.clamp(0.0, 1.0))
     }
 }
@@ -574,11 +574,11 @@ impl<A, B> ChainedTween<A, B> {
 
 impl<T, A, B> Animatable<T> for ChainedTween<A, B>
 where
-    A: Animatable<f32>,
+    A: Animatable<f64>,
     B: Animatable<T>,
 {
     #[inline]
-    fn transform(&self, t: f32) -> T {
+    fn transform(&self, t: f64) -> T {
         let curved_t = self.first.transform(t);
         self.second.transform(curved_t)
     }
@@ -633,7 +633,7 @@ mod tests {
     // no longer needs the trait (Lerp handles interpolation), only the tests do.
     use crate::curve::Curves;
     use crate::ext::AnimatableExt;
-    use flui_types::styling::BorderRadiusExt;
+    use flui_painting::styling::BorderRadiusExt;
 
     #[test]
     fn test_float_tween() {
@@ -699,32 +699,29 @@ mod tests {
 
     #[test]
     fn test_size_tween() {
-        use flui_types::geometry::px;
-        let tween = SizeTween::new(Size::new(px(0.0), px(0.0)), Size::new(px(100.0), px(200.0)));
+        let tween = SizeTween::new(Size::new(0.0, 0.0), Size::new(100.0, 200.0));
         let mid = tween.transform(0.5);
-        assert_eq!(mid.width, px(50.0));
-        assert_eq!(mid.height, px(100.0));
+        assert_eq!(mid.width, 50.0);
+        assert_eq!(mid.height, 100.0);
     }
 
     #[test]
     fn test_rect_tween() {
-        use flui_types::geometry::px;
-        let begin = Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0));
-        let end = Rect::from_xywh(px(100.0), px(100.0), px(200.0), px(200.0));
+        let begin = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+        let end = Rect::from_xywh(100.0, 100.0, 200.0, 200.0);
         let tween = RectTween::new(begin, end);
 
         let mid = tween.transform(0.5);
-        assert_eq!(mid.left(), px(50.0));
-        assert_eq!(mid.top(), px(50.0));
+        assert_eq!(mid.left(), 50.0);
+        assert_eq!(mid.top(), 50.0);
     }
 
     #[test]
     fn test_offset_tween() {
-        use flui_types::geometry::px;
-        let tween = OffsetTween::new(Offset::ZERO, Offset::new(px(100.0), px(200.0)));
+        let tween = OffsetTween::new(Offset::ZERO, Offset::new(100.0, 200.0));
         let mid = tween.transform(0.5);
-        assert_eq!(mid.dx, px(50.0));
-        assert_eq!(mid.dy, px(100.0));
+        assert_eq!(mid.dx, 50.0);
+        assert_eq!(mid.dy, 100.0);
     }
 
     #[test]
@@ -737,25 +734,23 @@ mod tests {
 
     #[test]
     fn test_edge_insets_tween() {
-        use flui_types::geometry::px;
-        let begin = Edges::all(px(0.0));
-        let end = Edges::all(px(20.0));
+        let begin = Edges::all(0.0);
+        let end = Edges::all(20.0);
         let tween = EdgeInsetsTween::new(begin, end);
 
         let mid = tween.transform(0.5);
-        assert_eq!(mid.left, px(10.0));
-        assert_eq!(mid.top, px(10.0));
+        assert_eq!(mid.left, 10.0);
+        assert_eq!(mid.top, 10.0);
     }
 
     #[test]
     fn test_border_radius_tween() {
-        use flui_types::geometry::px;
-        let begin = BorderRadius::circular(px(0.0));
-        let end = BorderRadius::circular(px(20.0));
+        let begin = BorderRadius::circular(0.0);
+        let end = BorderRadius::circular(20.0);
         let tween = BorderRadiusTween::new(begin, end);
 
         let mid = tween.transform(0.5);
-        assert_eq!(mid.top_left.x, px(10.0));
+        assert_eq!(mid.top_left.x, 10.0);
     }
 
     #[test]
@@ -877,7 +872,7 @@ mod tests {
 
     #[test]
     fn test_tween_sequence_generic_with_color() {
-        use flui_types::styling::Color;
+        use flui_painting::styling::Color;
 
         let items = vec![
             TweenSequenceItem::new(ColorTween::new(Color::RED, Color::GREEN), 1.0),

@@ -162,7 +162,7 @@ impl UiRealm {
         let (_, presentation_id) = crate::realm_services::next_identity();
         let pipeline = PipelineCell::new(PipelineOwner::new());
         pipeline.with_mut(|owner| {
-            owner.set_device_pixel_ratio(window.window().scale_factor() as f32);
+            owner.set_device_pixel_ratio(window.window().scale_factor());
         });
         // The prototype is stamped for the PRIMARY presentation; this
         // presentation's accessibility actions must address ITSELF, or the

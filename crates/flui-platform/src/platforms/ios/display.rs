@@ -11,7 +11,7 @@ use objc2::MainThreadMarker;
 use objc2_foundation::NSRect;
 use objc2_ui_kit::UIScreen;
 
-use flui_types::geometry::{Bounds, DevicePixels, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 
 use crate::traits::{DisplayId, PlatformDisplay};
 
@@ -20,8 +20,8 @@ use crate::traits::{DisplayId, PlatformDisplay};
 pub struct IOSDisplay {
     id: DisplayId,
     name: String,
-    bounds: Bounds<DevicePixels>,
-    usable_bounds: Bounds<DevicePixels>,
+    bounds: Bounds<i32>,
+    usable_bounds: Bounds<i32>,
     scale_factor: f64,
     is_primary: bool,
 }
@@ -66,8 +66,8 @@ impl IOSDisplay {
 
 /// The `(points, scale)` → device-pixel conversion, free-standing so it can
 /// be tested without a display. `CGRect`/`CGSize` are plain C structs.
-pub(super) fn device_bounds_from_points(bounds: NSRect, scale: f64) -> Bounds<DevicePixels> {
-    let to_device = |points: f64| flui_types::geometry::device_px((points * scale).round() as i32);
+pub(super) fn device_bounds_from_points(bounds: NSRect, scale: f64) -> Bounds<i32> {
+    let to_device = |points: f64| (points * scale).round() as i32;
     Bounds {
         origin: Point::new(to_device(bounds.origin.x), to_device(bounds.origin.y)),
         size: Size::new(to_device(bounds.size.width), to_device(bounds.size.height)),
@@ -83,11 +83,11 @@ impl PlatformDisplay for IOSDisplay {
         self.name.clone()
     }
 
-    fn bounds(&self) -> Bounds<DevicePixels> {
+    fn bounds(&self) -> Bounds<i32> {
         self.bounds
     }
 
-    fn usable_bounds(&self) -> Bounds<DevicePixels> {
+    fn usable_bounds(&self) -> Bounds<i32> {
         self.usable_bounds
     }
 
@@ -119,8 +119,8 @@ mod tests {
     #[test]
     fn points_scale_to_device_pixels() {
         let b = device_bounds_from_points(rect(0.0, 0.0, 390.0, 844.0), 3.0);
-        assert_eq!(b.size.width.0, 1170);
-        assert_eq!(b.size.height.0, 2532);
+        assert_eq!(b.size.width, 1170);
+        assert_eq!(b.size.height, 2532);
     }
 
     /// A non-integer product must round rather than truncate, or a
@@ -128,14 +128,14 @@ mod tests {
     #[test]
     fn fractional_points_round_to_the_nearest_pixel() {
         let b = device_bounds_from_points(rect(0.0, 0.0, 10.5, 10.5), 1.5);
-        assert_eq!(b.size.width.0, 16);
-        assert_eq!(b.size.height.0, 16);
+        assert_eq!(b.size.width, 16);
+        assert_eq!(b.size.height, 16);
     }
 
     #[test]
     fn a_nonzero_origin_survives_the_conversion() {
         let b = device_bounds_from_points(rect(10.0, 20.0, 30.0, 40.0), 2.0);
-        assert_eq!(b.origin.x.0, 20);
-        assert_eq!(b.origin.y.0, 40);
+        assert_eq!(b.origin.x, 20);
+        assert_eq!(b.origin.y, 40);
     }
 }

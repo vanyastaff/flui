@@ -176,6 +176,8 @@ pub mod epoch;
 // the raster boundary — see the module doc for why it exists as its own
 // builder-constructed type instead of positional constructor arguments.
 pub mod frame_stamp;
+// Geometry values: points, offsets, sizes, rectangles, insets, radii, matrices (ADR-0098).
+pub mod geometry;
 pub mod id;
 pub mod key;
 // Panic-payload text extraction and the `BUG:` internal-invariant

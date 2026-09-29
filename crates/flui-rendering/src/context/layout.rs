@@ -21,7 +21,7 @@
 //!     let child_constraints = ctx.loosen();
 //!     for i in 0..ctx.child_count() {
 //!         let child_size = ctx.layout_child(i, child_constraints.clone());
-//!         ctx.position_child(i, Offset::new(px(0.0), y_offset));
+//!         ctx.position_child(i, Offset::new(0.0, y_offset));
 //!         y_offset += child_size.height;
 //!     }
 //!
@@ -31,7 +31,7 @@
 //! ```
 
 use flui_foundation::Arity;
-use flui_types::{Pixels, Size, geometry::Offset};
+use flui_foundation::geometry::{Offset, Size};
 
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
@@ -211,22 +211,22 @@ where
     // ════════════════════════════════════════════════════════════════════════
 
     /// Gets the minimum width constraint.
-    pub fn min_width(&self) -> Pixels {
+    pub fn min_width(&self) -> f64 {
         self.inner.constraints().min_width
     }
 
     /// Gets the maximum width constraint.
-    pub fn max_width(&self) -> Pixels {
+    pub fn max_width(&self) -> f64 {
         self.inner.constraints().max_width
     }
 
     /// Gets the minimum height constraint.
-    pub fn min_height(&self) -> Pixels {
+    pub fn min_height(&self) -> f64 {
         self.inner.constraints().min_height
     }
 
     /// Gets the maximum height constraint.
-    pub fn max_height(&self) -> Pixels {
+    pub fn max_height(&self) -> f64 {
         self.inner.constraints().max_height
     }
 
@@ -242,12 +242,12 @@ where
     }
 
     /// Returns constraints with only width tightened.
-    pub fn tighten_width(&self, width: Pixels) -> BoxConstraints {
+    pub fn tighten_width(&self, width: f64) -> BoxConstraints {
         self.inner.constraints().tighten(Some(width), None)
     }
 
     /// Returns constraints with only height tightened.
-    pub fn tighten_height(&self, height: Pixels) -> BoxConstraints {
+    pub fn tighten_height(&self, height: f64) -> BoxConstraints {
         self.inner.constraints().tighten(None, Some(height))
     }
 
@@ -282,12 +282,12 @@ where
     }
 
     /// Constrains only width.
-    pub fn constrain_width(&self, width: Pixels) -> Pixels {
+    pub fn constrain_width(&self, width: f64) -> f64 {
         self.inner.constraints().constrain_width(width)
     }
 
     /// Constrains only height.
-    pub fn constrain_height(&self, height: Pixels) -> Pixels {
+    pub fn constrain_height(&self, height: f64) -> f64 {
         self.inner.constraints().constrain_height(height)
     }
 
@@ -400,7 +400,7 @@ where
         &self,
         index: usize,
         baseline: crate::traits::TextBaseline,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         crate::protocol::box_protocol::BoxLayoutCtxErased::child_distance_to_actual_baseline(
             &self.inner,
             index,
@@ -422,8 +422,8 @@ where
         &mut self,
         index: usize,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         crate::protocol::box_protocol::BoxLayoutCtxErased::child_intrinsic(
             &mut self.inner,
             index,
@@ -434,25 +434,25 @@ where
 
     /// Convenience: maximum intrinsic width of child `index` for the given
     /// `height` extent.  Returns `0.0` when the intrinsics callback is not wired.
-    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+    pub fn child_max_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 
     /// Convenience: minimum intrinsic width of child `index` for the given
     /// `height` extent.  Returns `0.0` when the intrinsics callback is not wired.
-    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+    pub fn child_min_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MinWidth, height)
     }
 
     /// Convenience: maximum intrinsic height of child `index` for the given
     /// `width` extent.  Returns `0.0` when the intrinsics callback is not wired.
-    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+    pub fn child_max_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
     }
 
     /// Convenience: minimum intrinsic height of child `index` for the given
     /// `width` extent.  Returns `0.0` when the intrinsics callback is not wired.
-    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+    pub fn child_min_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
         self.child_intrinsic(index, IntrinsicDimension::MinHeight, width)
     }
 }
@@ -486,8 +486,8 @@ where
         &mut self,
         index: usize,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         crate::protocol::sliver_protocol::SliverLayoutCtxErased::box_child_intrinsic(
             &mut self.inner,
             index,
@@ -497,12 +497,12 @@ where
     }
 
     /// Convenience wrapper for the child's maximum intrinsic height.
-    pub fn box_child_max_intrinsic_height(&mut self, index: usize, width: f32) -> f32 {
+    pub fn box_child_max_intrinsic_height(&mut self, index: usize, width: f64) -> f64 {
         self.box_child_intrinsic(index, IntrinsicDimension::MaxHeight, width)
     }
 
     /// Convenience wrapper for the child's maximum intrinsic width.
-    pub fn box_child_max_intrinsic_width(&mut self, index: usize, height: f32) -> f32 {
+    pub fn box_child_max_intrinsic_width(&mut self, index: usize, height: f64) -> f64 {
         self.box_child_intrinsic(index, IntrinsicDimension::MaxWidth, height)
     }
 
@@ -562,7 +562,6 @@ where
 mod tests {
     use flui_foundation::Leaf;
     use flui_foundation::RenderId;
-    use flui_types::geometry::px;
 
     use super::*;
     use crate::parent_data::{BoxParentData, SliverParentData};
@@ -576,7 +575,7 @@ mod tests {
     }
 
     fn box_constraints() -> BoxConstraints {
-        BoxConstraints::new(px(10.0), px(200.0), px(20.0), px(100.0))
+        BoxConstraints::new(10.0, 200.0, 20.0, 100.0)
     }
 
     // ------------------------------------------------------------------
@@ -605,9 +604,9 @@ mod tests {
         ];
         let layout_child_callback = |id: RenderId, _c: BoxConstraints| -> Size {
             if id == child_a {
-                Size::new(px(11.0), px(22.0))
+                Size::new(11.0, 22.0)
             } else {
-                Size::new(px(33.0), px(44.0))
+                Size::new(33.0, 44.0)
             }
         };
 
@@ -623,19 +622,18 @@ mod tests {
         assert_eq!(ctx.child_count(), 2);
 
         let size = ctx.layout_child(0, box_constraints());
-        assert_eq!(size, Size::new(px(11.0), px(22.0)));
-        assert_eq!(ctx.child_geometry(0), Some(&Size::new(px(11.0), px(22.0))));
+        assert_eq!(size, Size::new(11.0, 22.0));
+        assert_eq!(ctx.child_geometry(0), Some(&Size::new(11.0, 22.0)));
 
-        ctx.position_child(0, Offset::new(px(1.0), px(2.0)));
+        ctx.position_child(0, Offset::new(1.0, 2.0));
 
-        let geom =
-            ctx.layout_and_position_child(1, box_constraints(), Offset::new(px(3.0), px(4.0)));
-        assert_eq!(geom, Size::new(px(33.0), px(44.0)));
+        let geom = ctx.layout_and_position_child(1, box_constraints(), Offset::new(3.0, 4.0));
+        assert_eq!(geom, Size::new(33.0, 44.0));
 
-        ctx.child_parent_data_mut(0).unwrap().offset = Offset::new(px(9.0), px(9.0));
+        ctx.child_parent_data_mut(0).unwrap().offset = Offset::new(9.0, 9.0);
         assert_eq!(
             ctx.child_parent_data(0).unwrap().offset,
-            Offset::new(px(9.0), px(9.0))
+            Offset::new(9.0, 9.0)
         );
 
         let all = ctx.layout_all_children(box_constraints());
@@ -646,8 +644,8 @@ mod tests {
 
         drop(ctx);
         // The write-through offset must have reached the backing storage.
-        assert_eq!(children[0].offset, Offset::new(px(1.0), px(2.0)));
-        assert_eq!(children[1].offset, Offset::new(px(3.0), px(4.0)));
+        assert_eq!(children[0].offset, Offset::new(1.0, 2.0));
+        assert_eq!(children[1].offset, Offset::new(3.0, 4.0));
     }
 
     // ------------------------------------------------------------------
@@ -659,16 +657,16 @@ mod tests {
         let ctx: LayoutContext<'_, BoxProtocol, Leaf, BoxParentData> =
             LayoutContext::new(BoxLayoutCtx::new(box_constraints()));
 
-        assert_eq!(ctx.min_width(), px(10.0));
-        assert_eq!(ctx.max_width(), px(200.0));
-        assert_eq!(ctx.min_height(), px(20.0));
-        assert_eq!(ctx.max_height(), px(100.0));
+        assert_eq!(ctx.min_width(), 10.0);
+        assert_eq!(ctx.max_width(), 200.0);
+        assert_eq!(ctx.min_height(), 20.0);
+        assert_eq!(ctx.max_height(), 100.0);
         assert!(!ctx.is_tight());
         assert!(!ctx.has_unbounded_width());
         assert!(!ctx.has_unbounded_height());
 
-        assert_eq!(ctx.smallest(), Size::new(px(10.0), px(20.0)));
-        assert_eq!(ctx.biggest(), Size::new(px(200.0), px(100.0)));
+        assert_eq!(ctx.smallest(), Size::new(10.0, 20.0));
+        assert_eq!(ctx.biggest(), Size::new(200.0, 100.0));
     }
 
     #[test]
@@ -677,24 +675,24 @@ mod tests {
             LayoutContext::new(BoxLayoutCtx::new(box_constraints()));
 
         let loosened = ctx.loosen();
-        assert_eq!(loosened.min_width, px(0.0));
-        assert_eq!(loosened.min_height, px(0.0));
-        assert_eq!(loosened.max_width, px(200.0));
+        assert_eq!(loosened.min_width, 0.0);
+        assert_eq!(loosened.min_height, 0.0);
+        assert_eq!(loosened.max_width, 200.0);
 
         let tightened = ctx.tighten();
         assert!(tightened.is_tight());
-        assert_eq!(tightened.min_width, px(200.0));
-        assert_eq!(tightened.min_height, px(100.0));
+        assert_eq!(tightened.min_width, 200.0);
+        assert_eq!(tightened.min_height, 100.0);
 
-        let width_tight = ctx.tighten_width(px(50.0));
-        assert_eq!(width_tight.min_width, px(50.0));
-        assert_eq!(width_tight.max_width, px(50.0));
-        assert_eq!(width_tight.min_height, px(20.0), "height untouched");
+        let width_tight = ctx.tighten_width(50.0);
+        assert_eq!(width_tight.min_width, 50.0);
+        assert_eq!(width_tight.max_width, 50.0);
+        assert_eq!(width_tight.min_height, 20.0, "height untouched");
 
-        let height_tight = ctx.tighten_height(px(60.0));
-        assert_eq!(height_tight.min_height, px(60.0));
-        assert_eq!(height_tight.max_height, px(60.0));
-        assert_eq!(height_tight.min_width, px(10.0), "width untouched");
+        let height_tight = ctx.tighten_height(60.0);
+        assert_eq!(height_tight.min_height, 60.0);
+        assert_eq!(height_tight.max_height, 60.0);
+        assert_eq!(height_tight.min_width, 10.0, "width untouched");
     }
 
     #[test]
@@ -703,12 +701,12 @@ mod tests {
             LayoutContext::new(BoxLayoutCtx::new(box_constraints()));
 
         assert_eq!(
-            ctx.constrain(Size::new(px(5.0), px(500.0))),
-            Size::new(px(10.0), px(100.0)),
+            ctx.constrain(Size::new(5.0, 500.0)),
+            Size::new(10.0, 100.0),
             "clamps below-min width up and above-max height down"
         );
-        assert_eq!(ctx.constrain_width(px(500.0)), px(200.0));
-        assert_eq!(ctx.constrain_height(px(1.0)), px(20.0));
+        assert_eq!(ctx.constrain_width(500.0), 200.0);
+        assert_eq!(ctx.constrain_height(1.0), 20.0);
     }
 
     // ------------------------------------------------------------------

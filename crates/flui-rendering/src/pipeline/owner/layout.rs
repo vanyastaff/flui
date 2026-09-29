@@ -1,7 +1,7 @@
 //! Layout phase implementation for `PipelineOwner<Layout>`.
 
 use flui_foundation::RenderId;
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 use crate::{
     constraints::BoxConstraints,

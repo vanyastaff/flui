@@ -23,9 +23,9 @@ repository.workspace = true
 autotests = false
 
 [dependencies]
+serde = { workspace = true, optional = true }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 tracing = { workspace = true }
@@ -36,13 +36,13 @@ default = []
 # Forward `testing` feature so flui-objects' test crate can drive the
 # real pipeline harness (RenderTester/Probe) without re-exporting it.
 testing = ["flui-rendering/testing"]
-serde = ["flui-types/serde"]
+serde = ["dep:serde", "flui-painting/serde"]
 
 [dev-dependencies]
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-objects = { path = ".", features = ["testing"] }
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 insta = { workspace = true }
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", features = ["testing"] }
 

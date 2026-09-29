@@ -4,10 +4,10 @@
 
 use std::{any::TypeId, cell::Cell, collections::HashSet, rc::Rc};
 
+use flui_foundation::geometry::Size;
 use flui_foundation::{ElementId, RebuildReason, RebuildReasons, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::{RenderUpdateImpact, protocol::BoxProtocol};
-use flui_types::{Size, geometry::px};
 use flui_view::{
     BoxedView, BuildContext, BuildOwner, ElementTree, ErrorView, GlobalKey, IntoView,
     LifecycleHook, RecoveredAt, RenderView, StatefulView, View, ViewExt, ViewState,
@@ -49,7 +49,7 @@ impl DenseRenderUpdateLeaf {
     }
 
     fn size(&self) -> Size {
-        Size::new(px(10.0 + self.marker as f32), px(14.0))
+        Size::new(10.0 + self.marker as f64, 14.0)
     }
 }
 

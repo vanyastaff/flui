@@ -15,8 +15,8 @@ mod helpers;
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
-use flui_types::{Size, geometry::px};
 
 // ============================================================================
 // Flat: 1 RenderFlex root + N leaves
@@ -96,7 +96,7 @@ fn bench_layout_dirty_root(c: &mut Criterion) {
     let mut group = c.benchmark_group("layout/dirty_root");
     for &n in &[10_usize, 100, 1_000] {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
-            let constraints = BoxConstraints::tight(Size::new(px(200.0), px(200.0)));
+            let constraints = BoxConstraints::tight(Size::new(200.0, 200.0));
             b.iter_batched(
                 || helpers::build_flat(n),
                 |mut owner| {

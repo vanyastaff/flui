@@ -128,7 +128,7 @@ mod tests {
         }
         fn build(&self, view: &Probe, _: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
             view.model.set(view.model.get() + 1);
-            flui_widgets::SizedBox::new(self.local.get() as f32, 20.0)
+            flui_widgets::SizedBox::new(self.local.get() as f64, 20.0)
         }
         fn dispose(&mut self) {
             self.disposed.set(self.disposed.get() + 1);
@@ -183,10 +183,7 @@ mod tests {
                     .enter(|realm| realm.attach_root_widget(&root))
                     .expect("root mounted");
                 let _ = realm.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
-                    flui_types::Size::new(
-                        flui_types::geometry::px(80.0),
-                        flui_types::geometry::px(80.0),
-                    ),
+                    flui_foundation::geometry::Size::new(80.0, 80.0),
                 ));
                 let window: Arc<dyn flui_platform::PlatformWindow> = window;
                 Ok(install_realm_alongside(realm, &window)?)

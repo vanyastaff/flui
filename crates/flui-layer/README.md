@@ -37,14 +37,15 @@ the engine's pushes and the follower resolver's chain sums both read it.
 
 ```rust
 use flui_layer::{ClipRectLayer, Layer, LayerTree, OffsetLayer, PictureLayer, Scene};
-use flui_types::{geometry::{Rect, px}, painting::Clip};
+use flui_foundation::geometry::Rect;
+use flui_painting::paint::Clip;
 
 let mut tree = LayerTree::new();
 let root = tree.insert_root(Layer::from(OffsetLayer::zero()));
 let clip = tree.push_child(
     root,
     Layer::from(ClipRectLayer::new(
-        Rect::from_xywh(px(0.0), px(0.0), px(100.0), px(100.0)),
+        Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
         Clip::AntiAlias,
     )),
 );
@@ -62,7 +63,7 @@ or a doubly-parented node cannot be expressed and no walker needs a guard.
 ```rust
 use flui_layer::{LayerTree, OpacityLayer, PictureLayer, SceneBuilder};
 use flui_painting::DisplayList;
-use flui_types::Offset;
+use flui_foundation::geometry::Offset;
 
 let mut tree = LayerTree::new();
 let mut builder = SceneBuilder::new(&mut tree);
@@ -81,7 +82,8 @@ For tooltips, dropdowns, and overlays that follow other content:
 
 ```rust
 use flui_layer::{FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, resolve_follower_offset};
-use flui_types::{geometry::{Offset, Size, px}, painting::Alignment};
+use flui_foundation::geometry::{Offset, Size};
+use flui_painting::Alignment;
 
 let link = LayerLink::new();
 let mut tree = LayerTree::new();
@@ -90,20 +92,20 @@ tree.push_child(
     root,
     Layer::from(LeaderLayer::with_offset(
         link,
-        Size::new(px(100.0), px(30.0)),
-        Offset::new(px(40.0), px(10.0)),
+        Size::new(100.0, 30.0),
+        Offset::new(40.0, 10.0),
     )),
 );
 // Hang 5 px below the leader's bottom-center.
 let follower = FollowerLayer::new(link)
     .with_leader_anchor(Alignment::BOTTOM_CENTER)
     .with_follower_anchor(Alignment::TOP_CENTER)
-    .with_target_offset(Offset::new(px(0.0), px(5.0)))
-    .with_size(Size::new(px(60.0), px(20.0)));
+    .with_target_offset(Offset::new(0.0, 5.0))
+    .with_size(Size::new(60.0, 20.0));
 let follower_id = tree.push_child(root, Layer::from(follower));
 
 let resolved = resolve_follower_offset(&tree, follower_id);
-assert_eq!(resolved, Some(Offset::new(px(60.0), px(45.0))));
+assert_eq!(resolved, Some(Offset::new(60.0, 45.0)));
 ```
 
 The tree indexes every leader by link as it is pushed; at render time

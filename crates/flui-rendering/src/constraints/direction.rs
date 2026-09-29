@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use flui_types::layout::AxisDirection;
+use crate::constraints::AxisDirection;
 
 /// Direction in which content grows within a scrollable area.
 ///
@@ -69,7 +69,7 @@ impl GrowthDirection {
     /// ```
     #[inline]
     #[must_use]
-    pub const fn apply_to(self, value: f32) -> f32 {
+    pub const fn apply_to(self, value: f64) -> f64 {
         match self {
             GrowthDirection::Forward => value,
             GrowthDirection::Reverse => -value,
@@ -104,7 +104,7 @@ impl GrowthDirection {
     /// Useful for calculations that need to scale by direction.
     #[inline]
     #[must_use]
-    pub const fn multiplier(self) -> f32 {
+    pub const fn multiplier(self) -> f64 {
         match self {
             GrowthDirection::Forward => 1.0,
             GrowthDirection::Reverse => -1.0,
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn test_apply_to_axis_direction_all_pairs() {
-        use flui_types::layout::AxisDirection::{
+        use crate::constraints::AxisDirection::{
             BottomToTop, LeftToRight, RightToLeft, TopToBottom,
         };
 
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_right_way_up_all_pairs() {
-        use flui_types::layout::AxisDirection::{
+        use crate::constraints::AxisDirection::{
             BottomToTop, LeftToRight, RightToLeft, TopToBottom,
         };
 

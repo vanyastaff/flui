@@ -1,10 +1,7 @@
 //! Primitive shape record methods: rect, rrect, circle, oval, drrect, arc.
 
+use flui_foundation::geometry::{Point, RRect, Rect};
 use flui_painting::{BlendMode, Paint, PaintStyle};
-use flui_types::{
-    Point, Rect,
-    geometry::{Pixels, RRect, px},
-};
 
 use super::{
     super::{
@@ -35,7 +32,7 @@ impl DrawBatcher {
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         opacity: f32,
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         paint: &Paint,
     ) {
         // Shader/gradient fill — dispatch before any opacity or color work.
@@ -53,7 +50,12 @@ impl DrawBatcher {
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+                flui_painting::styling::Color::rgba(
+                    paint.color.r,
+                    paint.color.g,
+                    paint.color.b,
+                    alpha,
+                )
             } else {
                 paint.color
             };
@@ -94,10 +96,9 @@ impl DrawBatcher {
                     let m = state.current_transform();
                     let linear_cols = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
                     let translation = [m.w_axis.x, m.w_axis.y];
-                    let local_bounds =
-                        [rect.left().0, rect.top().0, rect.width().0, rect.height().0];
+                    let local_bounds = [rect.left(), rect.top(), rect.width(), rect.height()];
                     let mut instance = crate::instancing::RectInstance::with_affine_transform(
-                        local_bounds,
+                        (local_bounds).map(|v| v as f32),
                         color,
                         [0.0; 4],
                         linear_cols,
@@ -132,30 +133,30 @@ impl DrawBatcher {
                 let rgba = color.to_rgba_f32_array();
                 let vertices = vec![
                     Vertex {
-                        position: [tl.x.0, tl.y.0],
+                        position: [(tl.x as f32), (tl.y as f32)],
                         color: rgba,
                         tex_coord: [0.0, 0.0],
                     },
                     Vertex {
-                        position: [tr.x.0, tr.y.0],
+                        position: [(tr.x as f32), (tr.y as f32)],
                         color: rgba,
                         tex_coord: [1.0, 0.0],
                     },
                     Vertex {
-                        position: [br.x.0, br.y.0],
+                        position: [(br.x as f32), (br.y as f32)],
                         color: rgba,
                         tex_coord: [1.0, 1.0],
                     },
                     Vertex {
-                        position: [bl.x.0, bl.y.0],
+                        position: [(bl.x as f32), (bl.y as f32)],
                         color: rgba,
                         tex_coord: [0.0, 1.0],
                     },
                 ];
                 let indices = [0u32, 1, 2, 0, 2, 3];
                 let mode = paint.blend_mode;
-                let device_area = rect.width().0 * rect.height().0 * state.area_scale();
-                if pipeline_cache::ssaa_eligible_for(mode, device_area) {
+                let device_area = rect.width() * rect.height() * f64::from(state.area_scale());
+                if pipeline_cache::ssaa_eligible_for(mode, device_area as f32) {
                     // Vertices are already in device-pixel space (apply_transform was
                     // called above). Pass them directly to divert_path_to_ssaa.
                     Self::divert_path_to_ssaa(
@@ -210,10 +211,10 @@ impl DrawBatcher {
         // Advanced blend modes are handled inside dispatch_shader_rect.
         if paint.style == PaintStyle::Fill && paint.has_shader() {
             let corner_radii = [
-                rrect.top_left.x.0.max(rrect.top_left.y.0),
-                rrect.top_right.x.0.max(rrect.top_right.y.0),
-                rrect.bottom_right.x.0.max(rrect.bottom_right.y.0),
-                rrect.bottom_left.x.0.max(rrect.bottom_left.y.0),
+                rrect.top_left.x.max(rrect.top_left.y),
+                rrect.top_right.x.max(rrect.top_right.y),
+                rrect.bottom_right.x.max(rrect.bottom_right.y),
+                rrect.bottom_left.x.max(rrect.bottom_left.y),
             ];
             if Self::dispatch_shader_rect(
                 segment,
@@ -221,7 +222,7 @@ impl DrawBatcher {
                 state,
                 rrect.bounding_rect(),
                 paint,
-                corner_radii,
+                (corner_radii).map(|v| v as f32),
             ) {
                 return;
             }
@@ -230,7 +231,12 @@ impl DrawBatcher {
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+                flui_painting::styling::Color::rgba(
+                    paint.color.r,
+                    paint.color.g,
+                    paint.color.b,
+                    alpha,
+                )
             } else {
                 paint.color
             };
@@ -246,10 +252,11 @@ impl DrawBatcher {
                 self.prime_tessellator_scale(state);
                 match self.tessellator.tessellate_rrect(rrect, &fill_paint) {
                     Ok((vertices, indices)) => {
-                        let device_area = rrect.bounding_rect().width().0
-                            * rrect.bounding_rect().height().0
-                            * state.area_scale();
-                        let ssaa_eligible = pipeline_cache::ssaa_eligible_for(mode, device_area);
+                        let device_area = rrect.bounding_rect().width()
+                            * rrect.bounding_rect().height()
+                            * f64::from(state.area_scale());
+                        let ssaa_eligible =
+                            pipeline_cache::ssaa_eligible_for(mode, device_area as f32);
                         if ssaa_eligible {
                             // Bake current transform into vertices before divert.
                             // `divert_path_to_ssaa` expects pre-transformed device-px coords.
@@ -281,10 +288,10 @@ impl DrawBatcher {
 
             // SrcOver rrect: split on axis-alignment.
             // Per-corner max radius (x and y components of each corner's radii).
-            let radius_top_left = rrect.top_left.x.0.max(rrect.top_left.y.0);
-            let radius_top_right = rrect.top_right.x.0.max(rrect.top_right.y.0);
-            let radius_bottom_right = rrect.bottom_right.x.0.max(rrect.bottom_right.y.0);
-            let radius_bottom_left = rrect.bottom_left.x.0.max(rrect.bottom_left.y.0);
+            let radius_top_left = rrect.top_left.x.max(rrect.top_left.y);
+            let radius_top_right = rrect.top_right.x.max(rrect.top_right.y);
+            let radius_bottom_right = rrect.bottom_right.x.max(rrect.bottom_right.y);
+            let radius_bottom_left = rrect.bottom_left.x.max(rrect.bottom_left.y);
 
             if state.is_axis_aligned() {
                 // Baked-AABB fast path: transform the two diagonal corners to get
@@ -302,10 +309,10 @@ impl DrawBatcher {
                     state.apply_active_clip(crate::instancing::RectInstance::rounded_rect_corners(
                         device_rect,
                         color,
-                        radius_top_left,
-                        radius_top_right,
-                        radius_bottom_right,
-                        radius_bottom_left,
+                        radius_top_left as f32,
+                        radius_top_right as f32,
+                        radius_bottom_right as f32,
+                        radius_bottom_left as f32,
                     ));
                 Self::begin_phase(segment, draw_order, Phase::Rect);
                 let _ = segment.rect_batch.add(instance);
@@ -325,20 +332,20 @@ impl DrawBatcher {
                 let linear_cols = [m.x_axis.x, m.x_axis.y, m.y_axis.x, m.y_axis.y];
                 let translation = [m.w_axis.x, m.w_axis.y];
                 let local_bounds = [
-                    rrect.rect.left().0,
-                    rrect.rect.top().0,
-                    rrect.rect.width().0,
-                    rrect.rect.height().0,
+                    rrect.rect.left(),
+                    rrect.rect.top(),
+                    rrect.rect.width(),
+                    rrect.rect.height(),
                 ];
                 let instance = state.apply_active_clip(
                     crate::instancing::RectInstance::with_affine_transform(
-                        local_bounds,
+                        (local_bounds).map(|v| v as f32),
                         color,
                         [
-                            radius_top_left,
-                            radius_top_right,
-                            radius_bottom_right,
-                            radius_bottom_left,
+                            (radius_top_left as f32),
+                            (radius_top_right as f32),
+                            (radius_bottom_right as f32),
+                            (radius_bottom_left as f32),
                         ],
                         linear_cols,
                         translation,
@@ -389,7 +396,7 @@ impl DrawBatcher {
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         opacity: f32,
-        center: Point<Pixels>,
+        center: Point<f64>,
         radius: f32,
         paint: &Paint,
     ) {
@@ -397,10 +404,10 @@ impl DrawBatcher {
         // Advanced blend modes are handled inside dispatch_shader_rect.
         if paint.style == PaintStyle::Fill && paint.has_shader() {
             let bounds = Rect::from_xywh(
-                center.x - px(radius),
-                center.y - px(radius),
-                px(radius * 2.0),
-                px(radius * 2.0),
+                center.x - f64::from(radius),
+                center.y - f64::from(radius),
+                f64::from(radius * 2.0),
+                f64::from(radius * 2.0),
             );
             if Self::dispatch_shader_rect(segment, draw_order, state, bounds, paint, [radius; 4]) {
                 return;
@@ -410,7 +417,12 @@ impl DrawBatcher {
         if paint.style == PaintStyle::Fill {
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+                flui_painting::styling::Color::rgba(
+                    paint.color.r,
+                    paint.color.g,
+                    paint.color.b,
+                    alpha,
+                )
             } else {
                 paint.color
             };
@@ -454,8 +466,12 @@ impl DrawBatcher {
                     ];
                     // Translation: M_world * center_local + t_world.
                     // center is already in local space (pre-transform coordinates).
-                    let tx = m.x_axis.x * center.x.0 + m.y_axis.x * center.y.0 + m.w_axis.x;
-                    let ty = m.x_axis.y * center.x.0 + m.y_axis.y * center.y.0 + m.w_axis.y;
+                    let tx = m.x_axis.x * (center.x as f32)
+                        + m.y_axis.x * (center.y as f32)
+                        + m.w_axis.x;
+                    let ty = m.x_axis.y * (center.x as f32)
+                        + m.y_axis.y * (center.y as f32)
+                        + m.w_axis.y;
                     let instance = state.apply_active_clip(
                         crate::instancing::CircleInstance::with_affine_transform(
                             linear_cols,
@@ -556,18 +572,18 @@ impl DrawBatcher {
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         opacity: f32,
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         paint: &Paint,
     ) {
         let center = rect.center();
-        let rx = (rect.width() / 2.0).0;
-        let ry = (rect.height() / 2.0).0;
+        let rx = rect.width() / 2.0;
+        let ry = rect.height() / 2.0;
 
         // Fold the compositor layer opacity into the color (the instanced pipeline
         // has no opacity uniform), mirroring `rect`/`rrect`/`circle`.
         let color = if opacity < 1.0 {
             let alpha = (f32::from(paint.color.a) * opacity) as u8;
-            flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+            flui_painting::styling::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
         } else {
             paint.color
         };
@@ -580,16 +596,16 @@ impl DrawBatcher {
             // Combined linear: M_w * diag(rx, ry).
             // x-col of M_w scaled by rx; y-col of M_w scaled by ry.
             let linear_cols = [
-                m.x_axis.x * rx,
-                m.x_axis.y * rx,
-                m.y_axis.x * ry,
-                m.y_axis.y * ry,
+                m.x_axis.x * (rx as f32),
+                m.x_axis.y * (rx as f32),
+                m.y_axis.x * (ry as f32),
+                m.y_axis.y * (ry as f32),
             ];
             // Translation: M_w * center_local + t_w.
-            let cx = center.x.0;
-            let cy = center.y.0;
-            let tx = m.x_axis.x * cx + m.y_axis.x * cy + m.w_axis.x;
-            let ty = m.x_axis.y * cx + m.y_axis.y * cy + m.w_axis.y;
+            let cx = center.x;
+            let cy = center.y;
+            let tx = m.x_axis.x * (cx as f32) + m.y_axis.x * (cy as f32) + m.w_axis.x;
+            let ty = m.x_axis.y * (cx as f32) + m.y_axis.y * (cy as f32) + m.w_axis.y;
 
             let instance =
                 state.apply_active_clip(crate::instancing::CircleInstance::with_affine_transform(
@@ -611,8 +627,8 @@ impl DrawBatcher {
                 self.tessellator
                     .tessellate_ellipse(center, radii, &fill_paint)
             {
-                let device_area = rect.width().0 * rect.height().0 * state.area_scale();
-                let ssaa_eligible = pipeline_cache::ssaa_eligible_for(mode, device_area);
+                let device_area = rect.width() * rect.height() * f64::from(state.area_scale());
+                let ssaa_eligible = pipeline_cache::ssaa_eligible_for(mode, device_area as f32);
                 if ssaa_eligible {
                     let transform = state.current_transform();
                     let mut baked = vertices;
@@ -674,9 +690,9 @@ impl DrawBatcher {
                 // `mode == BlendMode::SrcOver` prefix dropped: SrcOver is tile-safe by
                 // definition (`is_tile_safe_for_ssaa(SrcOver) == true`), so
                 // `ssaa_eligible_for` subsumes it.
-                let device_area = outer.width().0 * outer.height().0 * state.area_scale();
+                let device_area = outer.width() * outer.height() * f64::from(state.area_scale());
                 if paint.style == PaintStyle::Fill
-                    && pipeline_cache::ssaa_eligible_for(mode, device_area)
+                    && pipeline_cache::ssaa_eligible_for(mode, device_area as f32)
                 {
                     Self::submit_transformed_and_divert_to_ssaa(
                         segment, draw_order, state, vertices, &indices, mode,
@@ -729,22 +745,27 @@ impl DrawBatcher {
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
         opacity: f32,
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         start_angle: f32,
         sweep_angle: f32,
         use_center: bool,
         paint: &Paint,
     ) {
         let center = rect.center();
-        let rx = (rect.width() / 2.0).0;
-        let ry = (rect.height() / 2.0).0;
+        let rx = rect.width() / 2.0;
+        let ry = rect.height() / 2.0;
 
         if paint.style == PaintStyle::Fill {
             // Fold compositor layer opacity into the color alpha (the instanced
             // pipeline has no opacity uniform), mirroring `rect`/`circle`/`oval`.
             let color = if opacity < 1.0 {
                 let alpha = (f32::from(paint.color.a) * opacity) as u8;
-                flui_types::Color::rgba(paint.color.r, paint.color.g, paint.color.b, alpha)
+                flui_painting::styling::Color::rgba(
+                    paint.color.r,
+                    paint.color.g,
+                    paint.color.b,
+                    alpha,
+                )
             } else {
                 paint.color
             };
@@ -768,16 +789,16 @@ impl DrawBatcher {
                 // into transform_translate (never scaled by M). Angles parameterise
                 // the unit circle, so they map to Flutter's elliptical-arc angles.
                 let linear_cols = [
-                    m.x_axis.x * rx,
-                    m.x_axis.y * rx,
-                    m.y_axis.x * ry,
-                    m.y_axis.y * ry,
+                    m.x_axis.x * (rx as f32),
+                    m.x_axis.y * (rx as f32),
+                    m.y_axis.x * (ry as f32),
+                    m.y_axis.y * (ry as f32),
                 ];
                 // Translation: M_world * center_local + t_world.
-                let cx = center.x.0;
-                let cy = center.y.0;
-                let tx = m.x_axis.x * cx + m.y_axis.x * cy + m.w_axis.x;
-                let ty = m.x_axis.y * cx + m.y_axis.y * cy + m.w_axis.y;
+                let cx = center.x;
+                let cy = center.y;
+                let tx = m.x_axis.x * (cx as f32) + m.y_axis.x * (cy as f32) + m.w_axis.x;
+                let ty = m.x_axis.y * (cx as f32) + m.y_axis.y * (cy as f32) + m.w_axis.y;
                 let instance = crate::instancing::ArcInstance::with_affine_transform(
                     linear_cols,
                     start_angle,
@@ -816,13 +837,14 @@ impl DrawBatcher {
                 ) {
                     Ok((vertices, indices)) => {
                         // Arc bounding area ≈ rect area (conservative upper bound).
-                        let device_area = rect.width().0 * rect.height().0 * state.area_scale();
+                        let device_area =
+                            rect.width() * rect.height() * f64::from(state.area_scale());
                         // Only route to SSAA for non-SrcOver modes; SrcOver arcs that reach
                         // this reflection-fallback branch are already tessellated — routing
                         // them through SSAA again would be redundant. The `mode != SrcOver`
                         // guard is load-bearing and must NOT be folded into ssaa_eligible_for.
                         let ssaa_eligible = mode != BlendMode::SrcOver
-                            && pipeline_cache::ssaa_eligible_for(mode, device_area);
+                            && pipeline_cache::ssaa_eligible_for(mode, device_area as f32);
                         if ssaa_eligible {
                             let transform = state.current_transform();
                             let mut baked = vertices;

@@ -110,7 +110,7 @@ pub mod switch;
 pub mod tween;
 pub mod vsync;
 
-// Data types (moved from flui_types)
+// Data types
 pub mod curve;
 pub mod status;
 pub mod tween_types;
@@ -217,8 +217,8 @@ mod derive_owner_tests {
 
     #[derive(Clone, flui_macros::Animatable)]
     struct Point {
-        x: f32,
-        y: f32,
+        x: f64,
+        y: f64,
     }
 
     #[test]

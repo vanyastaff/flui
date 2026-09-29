@@ -120,10 +120,12 @@
 //!   `on_long_press`, `states_controller` (external) — no override surface
 //!   yet, matching every other V1 button in this crate.
 
-use flui_sdk::types::geometry::px;
-use flui_sdk::types::{Color, EdgeInsets, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{IconTheme, IconThemeData, WidgetState, WidgetStateProperty, WidgetStates};
+use flui_sdk::{
+    geometry::{EdgeInsets, Size},
+    painting::Color,
+};
 
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
@@ -134,7 +136,7 @@ use crate::theme::Theme;
 
 /// The standard variant's icon side length. Flutter parity:
 /// `_IconButtonDefaultsM3.iconSize`.
-pub const ICON_BUTTON_ICON_SIZE: f32 = 24.0;
+pub const ICON_BUTTON_ICON_SIZE: f64 = 24.0;
 
 /// A small M3 button wrapping a single icon child — Flutter's standard
 /// `IconButton`. Use for a single, low-emphasis action (an app bar action, a
@@ -280,11 +282,8 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
             pressed_hovered_focused_overlay(states, colors.on_surface_variant)
         })),
         elevation: Some(WidgetStateProperty::all(Some(0.0))),
-        padding: Some(WidgetStateProperty::all(Some(EdgeInsets::all(px(8.0))))),
-        minimum_size: Some(WidgetStateProperty::all(Some(Size::new(
-            px(40.0),
-            px(40.0),
-        )))),
+        padding: Some(WidgetStateProperty::all(Some(EdgeInsets::all(8.0)))),
+        minimum_size: Some(WidgetStateProperty::all(Some(Size::new(40.0, 40.0)))),
         fixed_size: None,
         maximum_size: Some(WidgetStateProperty::all(Some(Size::INFINITY))),
         side: None,
@@ -342,7 +341,7 @@ mod tests {
 
         assert_eq!(
             resolve(style.minimum_size.as_ref(), &none),
-            Some(Size::new(px(40.0), px(40.0))),
+            Some(Size::new(40.0, 40.0)),
         );
         assert_eq!(
             resolve(style.maximum_size.as_ref(), &none),
@@ -350,7 +349,7 @@ mod tests {
         );
         assert_eq!(
             resolve(style.padding.as_ref(), &none),
-            Some(EdgeInsets::all(px(8.0))),
+            Some(EdgeInsets::all(8.0)),
         );
         assert_eq!(
             resolve(style.shape.as_ref(), &none),

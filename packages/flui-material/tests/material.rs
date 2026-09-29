@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
 use flui_material::{Material, MaterialShape};
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::EventCx;
 use flui_sdk::widgets::{ColoredBox, GestureDetector};
 
@@ -31,7 +31,7 @@ use flui_sdk::widgets::{ColoredBox, GestureDetector};
 /// inscribed corner circle (radius = shortest_side/2 = 20, centered at
 /// (20, 20); distance from (2, 2) is ≈25.5 > 20) but inside the plain
 /// bounding rectangle a sharp-cornered shape would fill.
-const CORNER_PROBE: (f32, f32) = (2.0, 2.0);
+const CORNER_PROBE: (f64, f64) = (2.0, 2.0);
 
 fn tap_counter() -> (Arc<AtomicUsize>, impl Fn(&mut EventCx<'_>) + 'static) {
     let taps = Arc::new(AtomicUsize::new(0));

@@ -6,10 +6,10 @@
 //! occupied 200 PHYSICAL pixels (visually 125 logical) in the corner
 //! of the window, and pointer hits drifted by the scale factor.
 
+use flui_foundation::geometry::{Point, Rect, Size};
 use flui_layer::Layer;
 use flui_objects::RenderColoredBox;
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
-use flui_types::{Point, Rect, Size, geometry::px};
 
 use crate::common::BoxedRenderObject;
 
@@ -22,7 +22,7 @@ fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
     owner.set_root_id(Some(root));
     // LOGICAL constraints (a 100×100-logical window at DPR 2 has a
     // 200×200-physical surface).
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
 
     let mut owner = owner.into_layout();
     owner.run_layout().expect("layout");
@@ -48,7 +48,7 @@ fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
         (m[0], m[5])
     };
     assert!(
-        (sx - 2.0).abs() < f32::EPSILON && (sy - 2.0).abs() < f32::EPSILON,
+        (sx - 2.0).abs() < f64::EPSILON && (sy - 2.0).abs() < f64::EPSILON,
         "root transform must scale by the DPR (got sx={sx}, sy={sy})",
     );
 
@@ -60,10 +60,7 @@ fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
     };
     assert_eq!(
         picture.bounds(),
-        Some(Rect::from_origin_size(
-            Point::ZERO,
-            Size::new(px(100.0), px(100.0))
-        )),
+        Some(Rect::from_origin_size(Point::ZERO, Size::new(100.0, 100.0))),
         "draw commands must remain in logical pixels",
     );
 }
@@ -73,7 +70,7 @@ fn dpr_one_keeps_the_offset_root() {
     let mut owner = PipelineOwner::new();
     let root = owner.insert(Box::new(RenderColoredBox::red(40.0, 40.0)) as BoxedRenderObject);
     owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
 
     let mut owner = owner.into_layout();
     owner.run_layout().expect("layout");

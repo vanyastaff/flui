@@ -1,10 +1,10 @@
 //! [`ClipRRect`] — clips its child to a rounded rectangle.
 
+use flui_foundation::geometry::Radius;
 use flui_objects::RenderClipRRect;
+use flui_painting::paint::Clip;
+use flui_painting::styling::BorderRadius;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::geometry::Radius;
-use flui_types::painting::Clip;
-use flui_types::styling::BorderRadius;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Clips its child to a rounded rectangle whose corners follow `border_radius`.
@@ -45,12 +45,12 @@ impl ClipRRect {
     }
 
     /// A rounded-rect clip with the same circular `radius` on all four corners.
-    pub fn circular(radius: f32) -> Self {
+    pub fn circular(radius: f64) -> Self {
         Self::new().border_radius(BorderRadius {
-            top_left: Radius::circular(flui_types::geometry::px(radius)),
-            top_right: Radius::circular(flui_types::geometry::px(radius)),
-            bottom_right: Radius::circular(flui_types::geometry::px(radius)),
-            bottom_left: Radius::circular(flui_types::geometry::px(radius)),
+            top_left: Radius::circular(radius),
+            top_right: Radius::circular(radius),
+            bottom_right: Radius::circular(radius),
+            bottom_left: Radius::circular(radius),
         })
     }
 

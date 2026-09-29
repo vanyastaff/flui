@@ -41,7 +41,7 @@ type itself, where a future web or Android backend author has to bridge it.
 
 ### 2. `PlatformTextInput` is a fallible per-window capability
 
-`PlatformTextInput { set_ime_allowed(bool), set_ime_cursor_area(Bounds<Pixels>) }`
+`PlatformTextInput { set_ime_allowed(bool), set_ime_cursor_area(Bounds) }`
 is reached through `PlatformWindow::text_input() -> Option<Arc<dyn PlatformTextInput>>`,
 default `None` — the same discovery shape as `PlatformWindow::display()`. A
 backend that cannot do IME returns `None` instead of inheriting methods it
@@ -155,7 +155,7 @@ itself. It stops only when its attach ends:
   around the editable, so it starts at the editable structurally rather than
   relying on the intervening subtree applying no offset.
 
-**Coordinate space.** `Bounds<Pixels>` at every seam is window-root logical
+**Coordinate space.** `Bounds` at every seam is window-root logical
 pixels, matching `PlatformWindow::bounds`. DPI conversion is the backend's job.
 
 The loop's post-frame and text-input handles are lifecycle capabilities; where

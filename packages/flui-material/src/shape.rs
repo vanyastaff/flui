@@ -24,10 +24,9 @@
 //! component actually needs an outlined surface (M3's `OutlinedButton`,
 //! not yet built).
 
-use flui_sdk::types::{
-    Point, Rect, Size,
-    geometry::{RRect, Radius},
-    styling::BorderRadius,
+use flui_sdk::{
+    geometry::{Point, RRect, Radius, Rect, Size},
+    painting::BorderRadius,
 };
 
 /// The shape a [`crate::material::Material`] surface clips and paints to.
@@ -80,19 +79,19 @@ impl MaterialShape {
                 radius.bottom_left,
             ),
             Self::Stadium => {
-                let shortest_side = size.width.get().min(size.height.get());
-                let radius = Radius::circular(flui_sdk::types::geometry::px(shortest_side / 2.0));
+                let shortest_side = size.width.min(size.height);
+                let radius = Radius::circular(shortest_side / 2.0);
                 RRect::from_rect_and_radius(bounds, radius)
             }
         }
     }
 
-    /// [`to_rrect`](Self::to_rrect), converted to a [`flui_sdk::types::painting::Path`]
+    /// [`to_rrect`](Self::to_rrect), converted to a [`flui_sdk::painting::Path`]
     /// — what [`crate::material::Material`] registers as its owner-lane path
     /// clipper.
     #[must_use]
-    pub fn to_path(self, size: Size) -> flui_sdk::types::painting::Path {
-        flui_sdk::types::painting::Path::from_rrect(self.to_rrect(size))
+    pub fn to_path(self, size: Size) -> flui_sdk::painting::Path {
+        flui_sdk::painting::Path::from_rrect(self.to_rrect(size))
     }
 }
 
@@ -105,22 +104,22 @@ impl Default for MaterialShape {
 
 #[cfg(test)]
 mod tests {
-    use flui_sdk::types::geometry::px;
-    use flui_sdk::types::styling::BorderRadiusExt;
+
+    use flui_sdk::painting::BorderRadiusExt;
 
     use super::*;
 
-    fn size(width: f32, height: f32) -> Size {
-        Size::new(px(width), px(height))
+    fn size(width: f64, height: f64) -> Size {
+        Size::new(width, height)
     }
 
     #[test]
     fn rounded_rect_uses_the_configured_per_corner_radii() {
         let radius = BorderRadius::only(
-            Radius::circular(px(4.0)),
-            Radius::circular(px(8.0)),
-            Radius::circular(px(12.0)),
-            Radius::circular(px(16.0)),
+            Radius::circular(4.0),
+            Radius::circular(8.0),
+            Radius::circular(12.0),
+            Radius::circular(16.0),
         );
         let rrect = MaterialShape::RoundedRect(radius).to_rrect(size(100.0, 50.0));
 
@@ -138,23 +137,23 @@ mod tests {
     fn stadium_radius_is_half_the_shortest_side_when_wider_than_tall() {
         let rrect = MaterialShape::Stadium.to_rrect(size(120.0, 40.0));
         // shortest side is height (40); radius = 20.
-        assert_eq!(rrect.top_left, Radius::circular(px(20.0)));
-        assert_eq!(rrect.top_right, Radius::circular(px(20.0)));
-        assert_eq!(rrect.bottom_right, Radius::circular(px(20.0)));
-        assert_eq!(rrect.bottom_left, Radius::circular(px(20.0)));
+        assert_eq!(rrect.top_left, Radius::circular(20.0));
+        assert_eq!(rrect.top_right, Radius::circular(20.0));
+        assert_eq!(rrect.bottom_right, Radius::circular(20.0));
+        assert_eq!(rrect.bottom_left, Radius::circular(20.0));
     }
 
     #[test]
     fn stadium_radius_is_half_the_shortest_side_when_taller_than_wide() {
         let rrect = MaterialShape::Stadium.to_rrect(size(30.0, 90.0));
         // shortest side is width (30); radius = 15.
-        assert_eq!(rrect.top_left, Radius::circular(px(15.0)));
+        assert_eq!(rrect.top_left, Radius::circular(15.0));
     }
 
     #[test]
     fn stadium_radius_on_a_square_is_half_that_side() {
         let rrect = MaterialShape::Stadium.to_rrect(size(50.0, 50.0));
-        assert_eq!(rrect.top_left, Radius::circular(px(25.0)));
+        assert_eq!(rrect.top_left, Radius::circular(25.0));
     }
 
     #[test]
@@ -182,7 +181,7 @@ mod tests {
         // inscribed corner circle (distance ≈ 25.5 > 20) while still inside
         // the plain bounding rect a sharp-cornered `RoundedRect` would fill.
         let dimensions = size(80.0, 40.0);
-        let corner_probe = Point::new(px(2.0), px(2.0));
+        let corner_probe = Point::new(2.0, 2.0);
 
         let stadium_path = MaterialShape::Stadium.to_path(dimensions);
         assert!(

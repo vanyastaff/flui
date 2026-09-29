@@ -39,8 +39,9 @@
 mod gpu_tests {
     use std::sync::Arc;
 
+    use flui_foundation::geometry::Rect;
     use flui_painting::Paint;
-    use flui_types::{Color, Rect, geometry::Pixels};
+    use flui_painting::styling::Color;
     use smallvec::smallvec;
 
     use crate::{
@@ -93,12 +94,13 @@ mod gpu_tests {
         WgpuPainter::with_shared_device(device, queue, SURFACE_FORMAT, (SURFACE_W, SURFACE_H))
     }
 
-    fn px(v: f32) -> Pixels {
-        Pixels(v)
-    }
-
-    fn full_surface_rect() -> Rect<Pixels> {
-        Rect::from_xywh(px(0.0), px(0.0), px(SURFACE_W as f32), px(SURFACE_H as f32))
+    fn full_surface_rect() -> Rect<f64> {
+        Rect::from_xywh(
+            0.0,
+            0.0,
+            f64::from(SURFACE_W as f32),
+            f64::from(SURFACE_H as f32),
+        )
     }
 
     // ── CPU oracle helpers ────────────────────────────────────────────────────
@@ -223,10 +225,10 @@ mod gpu_tests {
         clear_surface(&device, &queue, &view_order_b, transparent_black);
 
         let content_rect = Rect::from_xywh(
-            px(CONTENT_MARGIN_PX),
-            px(CONTENT_MARGIN_PX),
-            px(SURFACE_W as f32 - 2.0 * CONTENT_MARGIN_PX),
-            px(SURFACE_H as f32 - 2.0 * CONTENT_MARGIN_PX),
+            f64::from(CONTENT_MARGIN_PX),
+            f64::from(CONTENT_MARGIN_PX),
+            f64::from(SURFACE_W as f32 - 2.0 * CONTENT_MARGIN_PX),
+            f64::from(SURFACE_H as f32 - 2.0 * CONTENT_MARGIN_PX),
         );
         let opaque_white = Color::rgba(255, 255, 255, 255);
 
@@ -353,8 +355,8 @@ mod gpu_tests {
     /// No `painter.render()` call — purely inspects in-memory IR.
     #[test]
     fn flatten_nested_compose_produces_correct_pass_sequence() {
-        use flui_types::painting::ColorMatrix;
-        use flui_types::painting::effects::ImageFilter;
+        use flui_painting::paint::ColorMatrix;
+        use flui_painting::paint::effects::ImageFilter;
 
         let (device, queue) = acquire_device_and_queue();
 
@@ -373,11 +375,11 @@ mod gpu_tests {
         let matrix_pass = ImageFilterPass::ColorMatrix(matrix_values);
 
         let blur_filter = ImageFilter::Blur {
-            sigma_x: sigma_blur,
-            sigma_y: sigma_blur,
+            sigma_x: f64::from(sigma_blur),
+            sigma_y: f64::from(sigma_blur),
         };
         let dilate_filter = ImageFilter::Dilate {
-            radius: dilate_radius,
+            radius: f64::from(dilate_radius),
         };
         let matrix_filter = ImageFilter::Matrix(ColorMatrix {
             values: matrix_values,
@@ -602,8 +604,8 @@ mod gpu_tests {
     /// No `painter.render()` call — purely inspects in-memory IR.
     #[test]
     fn empty_and_single_pass_compose_produce_correct_ir() {
-        use flui_types::painting::ColorMatrix;
-        use flui_types::painting::effects::ImageFilter;
+        use flui_painting::paint::ColorMatrix;
+        use flui_painting::paint::effects::ImageFilter;
 
         let (device, queue) = acquire_device_and_queue();
         let content_bounds = full_surface_rect();
@@ -674,7 +676,7 @@ mod gpu_tests {
 #[cfg(all(test, feature = "testing"))]
 mod painter_image_filter_bridge {
     use flui_painting::Paint;
-    use flui_types::Color;
+    use flui_painting::styling::Color;
     use smallvec::SmallVec;
 
     use crate::{
@@ -695,7 +697,7 @@ mod painter_image_filter_bridge {
         /// passes from a bare `WgpuPainter`.
         pub(crate) fn push_compose_for_test(
             &mut self,
-            filters: &[flui_types::painting::effects::ImageFilter],
+            filters: &[flui_painting::paint::effects::ImageFilter],
         ) {
             let mut passes: SmallVec<[ImageFilterPass; 4]> = SmallVec::new();
             crate::layer_dispatcher::flatten_compose(filters, &mut passes);

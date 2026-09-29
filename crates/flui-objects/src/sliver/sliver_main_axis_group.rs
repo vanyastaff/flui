@@ -27,8 +27,8 @@
 //!   `&dyn` reference, which the trait surface does not offer.
 
 use flui_foundation::Variable;
-use flui_types::layout::Axis;
-use flui_types::{Offset, geometry::px};
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::Offset;
 
 use flui_rendering::{
     constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
@@ -39,10 +39,10 @@ use flui_rendering::{
 
 /// Absolute values below this threshold collapse to zero — the oracle's
 /// `_fixPrecisionError`, guarding the running subtractions in the child
-/// constraint derivation against f32 drift.
-const PRECISION_ERROR_TOLERANCE: f32 = flui_foundation::EPSILON_F32;
+/// constraint derivation against f64 drift.
+const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
 
-fn fix_precision_error(value: f32) -> f32 {
+fn fix_precision_error(value: f64) -> f64 {
     if value.abs() < PRECISION_ERROR_TOLERANCE {
         0.0
     } else {
@@ -108,18 +108,18 @@ impl RenderSliver for RenderSliverMainAxisGroup {
             GrowthDirection::Reverse => (0..child_count).rev().collect(),
         };
 
-        let mut scroll_offset = 0.0_f32;
-        let mut layout_offset = 0.0_f32;
-        let mut max_paint_extent = 0.0_f32;
+        let mut scroll_offset = 0.0_f64;
+        let mut layout_offset = 0.0_f64;
+        let mut max_paint_extent = 0.0_f64;
         let mut paint_offset = constraints.overlap;
-        let mut max_scroll_obstruction_extent = 0.0_f32;
+        let mut max_scroll_obstruction_extent = 0.0_f64;
         let mut cache_origin = constraints.cache_origin;
         let mut remaining_cache_extent = constraints.remaining_cache_extent;
 
         // Per-child main-axis paint offsets, committed after the correction
         // passes below.
-        let mut child_paint_offsets = vec![0.0_f32; child_count];
-        let mut child_paint_extents = vec![0.0_f32; child_count];
+        let mut child_paint_offsets = vec![0.0_f64; child_count];
+        let mut child_paint_extents = vec![0.0_f64; child_count];
 
         for (walked, &index) in order.iter().enumerate() {
             let before_offset_paint_extent =
@@ -217,8 +217,8 @@ impl RenderSliver for RenderSliverMainAxisGroup {
                 child_paint_offsets[index]
             };
             let offset = match constraints.axis() {
-                Axis::Vertical => Offset::new(px(0.0), px(main)),
-                Axis::Horizontal => Offset::new(px(main), px(0.0)),
+                Axis::Vertical => Offset::new(0.0, main),
+                Axis::Horizontal => Offset::new(main, 0.0),
             };
             ctx.position_child(index, offset);
         }
@@ -274,7 +274,7 @@ impl RenderSliver for RenderSliverMainAxisGroup {
         &self,
         _constraints: &SliverConstraints,
         _child: &dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>,
-    ) -> f32 {
+    ) -> f64 {
         0.0
     }
 }

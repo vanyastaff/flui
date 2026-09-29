@@ -6,13 +6,12 @@ use crate::frame_failure::{FrameFailureKind, SegmentPhase};
 use crate::held_input::HeldPointerReplay;
 use crate::presentation::PresentationState;
 use flui_foundation::PresentationId;
+use flui_foundation::geometry::Size;
 use flui_layer::Scene;
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{DemandKind, FrameSnapshot, Instant, PresentOutcome};
-use flui_types::Size;
-use flui_types::geometry::px;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 impl UiRealm {
@@ -533,8 +532,7 @@ impl UiRealm {
             .renderer()
             .root_pipeline_owner()
             .with(PipelineOwner::device_pixel_ratio);
-        let constraints =
-            BoxConstraints::tight(Size::new(px(width as f32 / dpr), px(height as f32 / dpr)));
+        let constraints = BoxConstraints::tight(Size::new(width as f64 / dpr, height as f64 / dpr));
         let (producer_id, outcome, any_failed) = self.draw_frame_entered(constraints);
         // The presentation whose segment produced `outcome` above is never
         // inferred as `primary()`: test scaffolding can attach content to a

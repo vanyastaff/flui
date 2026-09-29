@@ -44,8 +44,8 @@
 // historical private `mod`) so the pipeline-seam traits
 // `BoxLayoutCtxErased` / `SliverLayoutCtxErased` are reachable to
 // downstream consumers via the fully-qualified path
-// `flui_rendering::protocol::box_protocol::BoxLayoutCtxErased` without
-// being pulled into scope by a glob `use flui_rendering::protocol::*`.
+// `crate::protocol::box_protocol::BoxLayoutCtxErased` without
+// being pulled into scope by a glob `use crate::protocol::*`.
 // A glob re-export of the erased trait collides with `LayoutContextApi`'s
 // method names (`constraints` / `layout_child` / `position_child` overlap
 // by design) and triggers ambiguous-method E0034 in widget
@@ -94,7 +94,7 @@ pub use box_protocol::{
 // overlap with `LayoutContextApi`'s method names by design (both view
 // the same operations from different angles); putting the trait into
 // `protocol::*` would force user widget code that does
-// `use flui_rendering::protocol::*;` into ambiguous-method E0034 on
+// `use crate::protocol::*;` into ambiguous-method E0034 on
 // `ctx.constraints()` etc. The trait stays declared `pub` at its own
 // module path so a future `pub mod box_protocol;` lift (when an
 // external Protocol impl outside the sealed set is allowed) is a

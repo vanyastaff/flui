@@ -16,7 +16,7 @@ use crate::pipeline::{PipelineOwner, PipelinePhase};
 use crate::storage::IntrinsicDimension;
 use crate::traits::TextBaseline;
 use flui_foundation::RenderId;
-use flui_types::Size;
+use flui_foundation::geometry::Size;
 
 use super::harness::{FrameRun, LayoutRun};
 
@@ -38,30 +38,30 @@ pub trait BoxQueryRun {
         &mut self,
         id: RenderId,
         dimension: IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         self.pipeline_mut()
             .box_intrinsic_dimension(id, dimension, extent)
             .unwrap_or_else(|e| panic!("intrinsic query failed for {id:?}: {e}"))
     }
 
     /// Minimum width the subtree would prefer at the given height extent.
-    fn min_intrinsic_width(&mut self, id: RenderId, height: f32) -> f32 {
+    fn min_intrinsic_width(&mut self, id: RenderId, height: f64) -> f64 {
         self.intrinsic_dimension(id, IntrinsicDimension::MinWidth, height)
     }
 
     /// Maximum width the subtree would prefer at the given height extent.
-    fn max_intrinsic_width(&mut self, id: RenderId, height: f32) -> f32 {
+    fn max_intrinsic_width(&mut self, id: RenderId, height: f64) -> f64 {
         self.intrinsic_dimension(id, IntrinsicDimension::MaxWidth, height)
     }
 
     /// Minimum height the subtree would prefer at the given width extent.
-    fn min_intrinsic_height(&mut self, id: RenderId, width: f32) -> f32 {
+    fn min_intrinsic_height(&mut self, id: RenderId, width: f64) -> f64 {
         self.intrinsic_dimension(id, IntrinsicDimension::MinHeight, width)
     }
 
     /// Maximum height the subtree would prefer at the given width extent.
-    fn max_intrinsic_height(&mut self, id: RenderId, width: f32) -> f32 {
+    fn max_intrinsic_height(&mut self, id: RenderId, width: f64) -> f64 {
         self.intrinsic_dimension(id, IntrinsicDimension::MaxHeight, width)
     }
 
@@ -81,7 +81,7 @@ pub trait BoxQueryRun {
         id: RenderId,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         self.pipeline_mut()
             .box_dry_baseline(id, constraints, baseline)
             .unwrap_or_else(|e| panic!("dry baseline query failed for {id:?}: {e}"))

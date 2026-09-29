@@ -153,17 +153,16 @@
 //! `AppBarTheme.leadingWidth` override exists yet (named V1 deferral), so
 //! `LEADING_WIDTH` is the only width this slot ever takes.
 
+use flui_sdk::painting::Color;
+use flui_sdk::painting::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::types::geometry::px;
-use flui_sdk::types::styling::Color;
-use flui_sdk::types::typography::TextStyle;
-use flui_sdk::types::{Alignment, Pixels, Size};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Center, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded,
     Flexible, IconTheme, IconThemeData, MainAxisAlignment, NavigatorHandle, Positioned,
     PreferredSizeView, Row, SafeArea, SizedBox, Stack,
 };
+use flui_sdk::{geometry::Size, painting::Alignment};
 
 use crate::back_button::BackButton;
 use crate::material::Material;
@@ -174,14 +173,14 @@ use crate::theme_data::ThemeData;
 ///
 /// Flutter parity: `material/constants.dart`'s `kToolbarHeight` (oracle tag
 /// `3.44.0`).
-pub const DEFAULT_TOOLBAR_HEIGHT: f32 = 56.0;
+pub const DEFAULT_TOOLBAR_HEIGHT: f64 = 56.0;
 
 /// The leading slot's fixed width — Flutter parity: `_AppBarState.build`'s
 /// `_kLeadingWidth` (`app_bar.dart:43`, `= kToolbarHeight`, "so the leading
 /// button is square"). No `widget.leadingWidth`/`AppBarTheme.leadingWidth`
 /// override exists yet in this V1 (see the module docs' deferred list), so
 /// this constant is the only width the slot ever takes.
-const LEADING_WIDTH: f32 = DEFAULT_TOOLBAR_HEIGHT;
+const LEADING_WIDTH: f64 = DEFAULT_TOOLBAR_HEIGHT;
 
 /// A Material app bar: a `leading` / `title` / `actions` toolbar painted on a
 /// [`Material`] surface, sized to [`toolbar_height`](Self::toolbar_height) and
@@ -204,10 +203,10 @@ pub struct AppBar {
     automatically_imply_leading: bool,
     title: Option<BoxedView>,
     actions: Vec<BoxedView>,
-    toolbar_height: f32,
+    toolbar_height: f64,
     background_color: Option<Color>,
     foreground_color: Option<Color>,
-    elevation: Option<f32>,
+    elevation: Option<f64>,
     bottom: Option<BoxedView>,
     /// A widget painted behind the toolbar and above this bar's own
     /// [`Material`] — Flutter's `AppBar.flexibleSpace` slot. Inert at the
@@ -219,7 +218,7 @@ pub struct AppBar {
     /// method's doc comment and [`PreferredSizeView`]'s own "Named
     /// divergence" note on why this substrate resolves it once rather than
     /// re-consulting it later.
-    bottom_preferred_height: f32,
+    bottom_preferred_height: f64,
 }
 
 impl AppBar {
@@ -279,7 +278,7 @@ impl AppBar {
 
     /// Sets the toolbar's height. Defaults to [`DEFAULT_TOOLBAR_HEIGHT`].
     #[must_use]
-    pub fn toolbar_height(mut self, toolbar_height: f32) -> Self {
+    pub fn toolbar_height(mut self, toolbar_height: f64) -> Self {
         self.toolbar_height = toolbar_height;
         self
     }
@@ -300,7 +299,7 @@ impl AppBar {
 
     /// Overrides the `Material` elevation. Defaults to `0.0`.
     #[must_use]
-    pub fn elevation(mut self, elevation: f32) -> Self {
+    pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = Some(elevation);
         self
     }
@@ -316,7 +315,7 @@ impl AppBar {
     /// contract, for the same reason (see that method's doc comment).
     #[must_use]
     pub fn bottom(mut self, bottom: impl PreferredSizeView) -> Self {
-        self.bottom_preferred_height = bottom.preferred_size().height.get();
+        self.bottom_preferred_height = bottom.preferred_size().height;
         self.bottom = Some(bottom.boxed());
         self
     }
@@ -362,7 +361,7 @@ impl std::fmt::Debug for AppBar {
 struct ResolvedAppBarStyle {
     background_color: Color,
     foreground_color: Color,
-    elevation: f32,
+    elevation: f64,
     /// The **toolbar-wide** ambient text style — Flutter parity:
     /// `defaults.toolbarTextStyle?.copyWith(color: foregroundColor)`
     /// (`app_bar.dart`, oracle tag `3.44.0`). Always the M3 default recolored
@@ -404,7 +403,7 @@ fn resolve_style(
     theme: &ThemeData,
     background_color: Option<Color>,
     foreground_color: Option<Color>,
-    elevation: Option<f32>,
+    elevation: Option<f64>,
 ) -> ResolvedAppBarStyle {
     let app_bar_theme = theme.app_bar_theme.as_ref();
 
@@ -516,12 +515,8 @@ impl StatelessView for AppBar {
             // regardless of the leading widget's own intrinsic size —
             // NOT the 40px `IconButton` minimum size a bare, unwrapped
             // leading would otherwise collapse to in this `Row`.
-            let leading_constraints = BoxConstraints::new(
-                px(LEADING_WIDTH),
-                px(LEADING_WIDTH),
-                px(0.0),
-                Pixels::INFINITY,
-            );
+            let leading_constraints =
+                BoxConstraints::new(LEADING_WIDTH, LEADING_WIDTH, 0.0, f64::INFINITY);
             toolbar_children.push(
                 ConstrainedBox::new(leading_constraints)
                     .child(Center::new().child(leading.clone()))
@@ -568,7 +563,7 @@ impl StatelessView for AppBar {
         let toolbar_and_bottom: BoxedView = if let Some(bottom) = &self.bottom {
             let flexible_toolbar = Flexible::new(
                 ConstrainedBox::new(BoxConstraints {
-                    max_height: px(self.toolbar_height),
+                    max_height: self.toolbar_height,
                     ..BoxConstraints::UNCONSTRAINED
                 })
                 .child(themed_toolbar),
@@ -611,8 +606,8 @@ impl PreferredSizeView for AppBar {
         // (`app_bar.dart:76-81`, oracle tag `3.44.0`) — `toolbar_height` plus
         // `bottom`'s own preferred height, `0.0` when there is no `bottom`.
         Size::new(
-            px(f32::INFINITY),
-            px(self.toolbar_height + self.bottom_preferred_height),
+            f64::INFINITY,
+            self.toolbar_height + self.bottom_preferred_height,
         )
     }
 }
@@ -629,20 +624,20 @@ mod tests {
     #[test]
     fn preferred_size_reports_the_toolbar_height() {
         let bar = AppBar::new().toolbar_height(64.0);
-        assert_eq!(bar.preferred_size().height, px(64.0));
+        assert_eq!(bar.preferred_size().height, 64.0);
     }
 
     #[test]
     fn preferred_size_defaults_to_the_default_toolbar_height() {
         let bar = AppBar::new();
-        assert_eq!(bar.preferred_size().height, px(DEFAULT_TOOLBAR_HEIGHT));
+        assert_eq!(bar.preferred_size().height, (DEFAULT_TOOLBAR_HEIGHT));
     }
 
     /// Flutter parity: `_PreferredAppBarSize(toolbarHeight, bottom?.preferredSize.height)`
     /// — with a `bottom` slot set, `preferred_size` reports `toolbar_height
     /// + bottom.preferred_size().height`, not `toolbar_height` alone.
     ///
-    /// Red-check: revert `preferred_size` to `px(self.toolbar_height)` alone
+    /// Red-check: revert `preferred_size` to `(self.toolbar_height)` alone
     /// — this assertion fails (`56.0` instead of `104.0`).
     #[test]
     fn preferred_size_adds_the_bottom_slots_height_when_set() {
@@ -650,13 +645,13 @@ mod tests {
 
         let bottom_height = 48.0;
         let bar = AppBar::new().bottom(PreferredSize::new(
-            Size::new(px(f32::INFINITY), px(bottom_height)),
+            Size::new(f64::INFINITY, bottom_height),
             SizedBox::shrink(),
         ));
 
         assert_eq!(
             bar.preferred_size().height,
-            px(DEFAULT_TOOLBAR_HEIGHT + bottom_height),
+            (DEFAULT_TOOLBAR_HEIGHT + bottom_height),
             "preferred_size must be toolbar_height + the bottom slot's own preferred height"
         );
     }
@@ -737,7 +732,7 @@ mod tests {
     fn resolve_style_theme_title_text_style_is_used_verbatim_not_recolored() {
         let mut theme = ThemeData::light();
         let themed_title_style =
-            flui_sdk::types::typography::TextStyle::new().with_color(Color::rgb(3, 3, 3));
+            flui_sdk::painting::TextStyle::new().with_color(Color::rgb(3, 3, 3));
         theme.app_bar_theme = Some(crate::theme_data::AppBarThemeData {
             title_text_style: Some(themed_title_style.clone()),
             ..Default::default()
@@ -780,7 +775,7 @@ mod tests {
             .foreground_color(Color::rgb(40, 50, 60))
             .elevation(4.0)
             .bottom(PreferredSize::new(
-                Size::new(px(f32::INFINITY), px(48.0)),
+                Size::new(f64::INFINITY, 48.0),
                 SizedBox::shrink(),
             ));
 

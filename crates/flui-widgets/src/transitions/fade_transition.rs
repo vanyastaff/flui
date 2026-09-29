@@ -11,7 +11,7 @@ use flui_view::{
     impl_render_view,
 };
 
-/// Fades its child in and out as an [`Animation<f32>`] (the opacity) changes.
+/// Fades its child in and out as an [`Animation<f64>`] (the opacity) changes.
 ///
 /// Flutter parity: `widgets/transitions.dart` `FadeTransition` backed by
 /// `RenderAnimatedOpacity`. The render object listens to `opacity` directly,
@@ -25,13 +25,13 @@ use flui_view::{
 /// ```
 #[derive(Clone, StatefulView)]
 pub struct FadeTransition {
-    opacity: Arc<dyn Animation<f32>>,
+    opacity: Arc<dyn Animation<f64>>,
     child: BoxedView,
 }
 
 impl FadeTransition {
     /// A fade driven by `opacity`, fading `child`.
-    pub fn new(opacity: Arc<dyn Animation<f32>>, child: impl IntoView) -> Self {
+    pub fn new(opacity: Arc<dyn Animation<f64>>, child: impl IntoView) -> Self {
         Self {
             opacity,
             child: child.into_view().boxed(),
@@ -50,8 +50,8 @@ impl std::fmt::Debug for FadeTransition {
 #[derive(Debug)]
 /// State that keeps the render object's animation proxy stable across view updates.
 pub struct FadeTransitionState {
-    proxy: ProxyAnimation<f32>,
-    opacity: Arc<dyn Animation<f32>>,
+    proxy: ProxyAnimation<f64>,
+    opacity: Arc<dyn Animation<f64>>,
     child: BoxedView,
 }
 
@@ -86,7 +86,7 @@ impl StatefulView for FadeTransition {
 
 #[derive(Clone)]
 struct FadeTransitionRenderView {
-    proxy: ProxyAnimation<f32>,
+    proxy: ProxyAnimation<f64>,
     child: BoxedView,
 }
 
@@ -136,7 +136,7 @@ mod tests {
     use super::*;
     use crate::SizedBox;
 
-    fn animation(controller: &AnimationController) -> Arc<dyn Animation<f32>> {
+    fn animation(controller: &AnimationController) -> Arc<dyn Animation<f64>> {
         Arc::new(controller.clone())
     }
 
@@ -177,7 +177,7 @@ mod tests {
 
         new_controller.set_value(0.7);
         assert!(notifications.load(Ordering::Relaxed) > after_swap);
-        assert!((state.proxy.value() - 0.7).abs() < f32::EPSILON);
+        assert!((state.proxy.value() - 0.7).abs() < f64::EPSILON);
         assert!(Arc::ptr_eq(&state.opacity, &new_animation));
     }
 }

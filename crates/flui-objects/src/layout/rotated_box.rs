@@ -28,10 +28,10 @@
 //!   change (odd ↔ even) forces layout. See `set_quarter_turns`'s own doc
 //!   for the exact split and the premise it rests on.
 
-use std::f32::consts::FRAC_PI_2;
+use std::f64::consts::FRAC_PI_2;
 
 use flui_foundation::Single;
-use flui_types::{Matrix4, Offset, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -173,17 +173,10 @@ impl RenderRotatedBox {
     /// coordinates.  The pipeline applies it during paint; `hit_test` inverts
     /// it to recover the child-local position from the incoming pointer.
     fn build_paint_matrix(parent_size: Size, child_size: Size, quarter_turns: i32) -> Matrix4 {
-        let angle = FRAC_PI_2 * (quarter_turns.rem_euclid(4) as f32);
-        Matrix4::translation(
-            parent_size.width.get() / 2.0,
-            parent_size.height.get() / 2.0,
-            0.0,
-        ) * Matrix4::rotation_z(angle)
-            * Matrix4::translation(
-                -child_size.width.get() / 2.0,
-                -child_size.height.get() / 2.0,
-                0.0,
-            )
+        let angle = FRAC_PI_2 * (quarter_turns.rem_euclid(4) as f64);
+        Matrix4::translation(parent_size.width / 2.0, parent_size.height / 2.0, 0.0)
+            * Matrix4::rotation_z(angle)
+            * Matrix4::translation(-child_size.width / 2.0, -child_size.height / 2.0, 0.0)
     }
 }
 
@@ -280,7 +273,7 @@ impl RenderBox for RenderRotatedBox {
     // Flutter parity: rotated_box.dart RenderRotatedBox.
     // Odd quarter_turns swap width↔height axes; even turns pass through.
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -291,7 +284,7 @@ impl RenderBox for RenderRotatedBox {
         }
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -302,7 +295,7 @@ impl RenderBox for RenderRotatedBox {
         }
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -313,7 +306,7 @@ impl RenderBox for RenderRotatedBox {
         }
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -382,7 +375,7 @@ impl RenderBox for RenderRotatedBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 || self.is_vertical() {
             return None;
         }
@@ -397,10 +390,9 @@ impl RenderBox for RenderRotatedBox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_types::geometry::px;
 
-    fn bc(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
-        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
+        BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
     #[test]
@@ -422,29 +414,29 @@ mod tests {
     #[test]
     fn paint_matrix_even_turns_is_identity_like() {
         // 0 turns: matrix should map (0,0) to (w/2-w/2, h/2-h/2) = (0,0)
-        let size = Size::new(px(100.0), px(50.0));
+        let size = Size::new(100.0, 50.0);
         let m = RenderRotatedBox::build_paint_matrix(size, size, 0);
-        let (ox, oy) = m.transform_point(px(0.0), px(0.0));
-        assert!((ox.get()).abs() < 1e-4, "ox = {ox:?}");
-        assert!((oy.get()).abs() < 1e-4, "oy = {oy:?}");
+        let (ox, oy) = m.transform_point(0.0, 0.0);
+        assert!((ox).abs() < 1e-4, "ox = {ox:?}");
+        assert!((oy).abs() < 1e-4, "oy = {oy:?}");
     }
 
     #[test]
     fn paint_matrix_90_degree_rotates_child_center_to_parent_center() {
         // Parent 60×100, child 100×60 (after 90° turn the axes are swapped).
-        let parent_size = Size::new(px(60.0), px(100.0));
-        let child_size = Size::new(px(100.0), px(60.0));
+        let parent_size = Size::new(60.0, 100.0);
+        let child_size = Size::new(100.0, 60.0);
         let m = RenderRotatedBox::build_paint_matrix(parent_size, child_size, 1);
         // Child center (50, 30) should map to parent center (30, 50).
-        let (px_out, py_out) = m.transform_point(px(50.0), px(30.0));
-        assert!((px_out.get() - 30.0).abs() < 1e-3, "px = {px_out:?}");
-        assert!((py_out.get() - 50.0).abs() < 1e-3, "py = {py_out:?}");
+        let (px_out, py_out) = m.transform_point(50.0, 30.0);
+        assert!((px_out - 30.0).abs() < 1e-3, "px = {px_out:?}");
+        assert!((py_out - 50.0).abs() < 1e-3, "py = {py_out:?}");
     }
 
     #[test]
     fn build_paint_matrix_is_invertible() {
-        let parent_size = Size::new(px(100.0), px(200.0));
-        let child_size = Size::new(px(200.0), px(100.0));
+        let parent_size = Size::new(100.0, 200.0);
+        let child_size = Size::new(200.0, 100.0);
         let m = RenderRotatedBox::build_paint_matrix(parent_size, child_size, 1);
         assert!(m.try_inverse().is_some(), "paint matrix must be invertible");
     }
@@ -572,8 +564,8 @@ mod tests {
     fn constraints_flipped_for_odd_turns() {
         // bc(0, 200, 0, 100).flipped() = bc(0, 100, 0, 200)
         let c = bc(0.0, 200.0, 0.0, 100.0).flipped();
-        assert_eq!(c.max_width, px(100.0));
-        assert_eq!(c.max_height, px(200.0));
+        assert_eq!(c.max_width, 100.0);
+        assert_eq!(c.max_height, 200.0);
     }
 
     #[test]

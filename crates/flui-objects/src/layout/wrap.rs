@@ -22,11 +22,11 @@
 //! right-to-left. Both default to unflipped (`Ltr`, `Down`), which is the
 //! behaviour every caller predating this had.
 
+use crate::VerticalDirection;
 use flui_foundation::Variable;
-use flui_types::{
-    Axis, Offset, Pixels, Point, Rect, Size, geometry::px, layout::VerticalDirection,
-    painting::Clip, typography::TextDirection,
-};
+use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::{paint::Clip, typography::TextDirection};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -35,16 +35,13 @@ use flui_rendering::{
     traits::RenderBox,
 };
 
-// Re-export the canonical alignment types so `layout::*` / `flui_objects::*`
-// exposes them without requiring callers to depend on `flui-types` directly.
+// Re-export the alignment types so `layout::*` / `crate::*` exposes them.
 // This `pub use` also serves as the module-level import for the code below.
-pub use flui_types::layout::{WrapAlignment, WrapCrossAlignment};
+pub use super::wrap_alignment::{WrapAlignment, WrapCrossAlignment};
 
-/// Precision tolerance for run-overflow detection.
-///
-/// Mirrors Flutter's `precisionErrorTolerance` (1e-10 in Dart `double`),
-/// adapted for f32.
-const PRECISION_TOLERANCE: f32 = 1e-6;
+/// Precision tolerance for run-overflow detection: Flutter's
+/// `precisionErrorTolerance`, at the same `f64` scale (ADR-0098).
+const PRECISION_TOLERANCE: f64 = flui_foundation::EPSILON;
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
 
@@ -65,11 +62,11 @@ const PRECISION_TOLERANCE: f32 = 1e-6;
 /// reference delegates to `Start` and therefore inherits the flip.
 fn distribute_space(
     alignment: WrapAlignment,
-    free_space: f32,
-    item_spacing: f32,
+    free_space: f64,
+    item_spacing: f64,
     item_count: usize,
     flipped: bool,
-) -> (f32, f32) {
+) -> (f64, f64) {
     match alignment {
         WrapAlignment::Start => (if flipped { free_space } else { 0.0 }, item_spacing),
         // `End` is `Start` with the flip inverted -- the reference's own
@@ -92,16 +89,16 @@ fn distribute_space(
                     flipped,
                 )
             } else {
-                let between = free_space / (item_count - 1) as f32 + item_spacing;
+                let between = free_space / (item_count - 1) as f64 + item_spacing;
                 (0.0, between)
             }
         }
         WrapAlignment::SpaceAround => {
-            let per_item = free_space / item_count as f32;
+            let per_item = free_space / item_count as f64;
             (per_item / 2.0, per_item + item_spacing)
         }
         WrapAlignment::SpaceEvenly => {
-            let per_gap = free_space / (item_count + 1) as f32;
+            let per_gap = free_space / (item_count + 1) as f64;
             (per_gap, per_gap + item_spacing)
         }
     }
@@ -109,7 +106,7 @@ fn distribute_space(
 
 /// Cross-axis pixel offset for a child of `child_cross` pixels in a run whose
 /// cross extent is `run_cross` pixels.
-fn cross_axis_child_offset(alignment: WrapCrossAlignment, run_cross: f32, child_cross: f32) -> f32 {
+fn cross_axis_child_offset(alignment: WrapCrossAlignment, run_cross: f64, child_cross: f64) -> f64 {
     match alignment {
         WrapCrossAlignment::Start => 0.0,
         WrapCrossAlignment::End => run_cross - child_cross,
@@ -129,9 +126,9 @@ struct RunMetrics {
     child_count: usize,
     /// Total main-axis extent of this run: sum of child main extents plus the
     /// spacing gaps between them.
-    main_axis_extent: f32,
+    main_axis_extent: f64,
     /// Maximum cross-axis extent among all children in this run.
-    cross_axis_extent: f32,
+    cross_axis_extent: f64,
 }
 
 /// Intermediate result of the wrap sizing pass (Phases 1-2), shared between
@@ -169,11 +166,11 @@ pub struct RenderWrap {
     /// Alignment of children within each run on the main axis.
     alignment: WrapAlignment,
     /// Minimum gap between adjacent children within a run.
-    spacing: f32,
+    spacing: f64,
     /// Alignment of runs along the cross axis.
     run_alignment: WrapAlignment,
     /// Minimum gap between adjacent runs.
-    run_spacing: f32,
+    run_spacing: f64,
     /// Alignment of each child within its run on the cross axis.
     cross_axis_alignment: WrapCrossAlignment,
     /// Reading direction, which decides whether the HORIZONTAL axis is
@@ -232,9 +229,9 @@ impl RenderWrap {
         &mut self,
         direction: Axis,
         alignment: WrapAlignment,
-        spacing: f32,
+        spacing: f64,
         run_alignment: WrapAlignment,
-        run_spacing: f32,
+        run_spacing: f64,
         cross_axis_alignment: WrapCrossAlignment,
     ) -> flui_rendering::RenderUpdateImpact {
         let changed = self.direction != direction
@@ -272,7 +269,7 @@ impl RenderWrap {
 
     /// Builder: sets the minimum gap between children within a run.
     #[must_use]
-    pub fn with_spacing(mut self, spacing: f32) -> Self {
+    pub fn with_spacing(mut self, spacing: f64) -> Self {
         self.spacing = spacing;
         self
     }
@@ -286,7 +283,7 @@ impl RenderWrap {
 
     /// Builder: sets the minimum gap between adjacent runs.
     #[must_use]
-    pub fn with_run_spacing(mut self, run_spacing: f32) -> Self {
+    pub fn with_run_spacing(mut self, run_spacing: f64) -> Self {
         self.run_spacing = run_spacing;
         self
     }
@@ -332,24 +329,24 @@ impl RenderWrap {
 
     // ── Axis helpers ─────────────────────────────────────────────────────────
 
-    fn main_extent(&self, size: Size) -> f32 {
+    fn main_extent(&self, size: Size) -> f64 {
         match self.direction {
-            Axis::Horizontal => size.width.get(),
-            Axis::Vertical => size.height.get(),
+            Axis::Horizontal => size.width,
+            Axis::Vertical => size.height,
         }
     }
 
-    fn cross_extent(&self, size: Size) -> f32 {
+    fn cross_extent(&self, size: Size) -> f64 {
         match self.direction {
-            Axis::Horizontal => size.height.get(),
-            Axis::Vertical => size.width.get(),
+            Axis::Horizontal => size.height,
+            Axis::Vertical => size.width,
         }
     }
 
-    fn make_offset(&self, main: f32, cross: f32) -> Offset {
+    fn make_offset(&self, main: f64, cross: f64) -> Offset {
         match self.direction {
-            Axis::Horizontal => Offset::new(px(main), px(cross)),
-            Axis::Vertical => Offset::new(px(cross), px(main)),
+            Axis::Horizontal => Offset::new(main, cross),
+            Axis::Vertical => Offset::new(cross, main),
         }
     }
 
@@ -382,10 +379,10 @@ impl RenderWrap {
     }
 
     /// Maximum main-axis extent allowed by the incoming constraints.
-    fn main_limit(&self, constraints: &BoxConstraints) -> f32 {
+    fn main_limit(&self, constraints: &BoxConstraints) -> f64 {
         match self.direction {
-            Axis::Horizontal => constraints.max_width.get(),
-            Axis::Vertical => constraints.max_height.get(),
+            Axis::Horizontal => constraints.max_width,
+            Axis::Vertical => constraints.max_height,
         }
     }
 
@@ -393,32 +390,22 @@ impl RenderWrap {
     /// max on the main axis. Mirrors Flutter's `_childConstraints`.
     fn child_constraints(&self, parent: &BoxConstraints) -> BoxConstraints {
         match self.direction {
-            Axis::Horizontal => BoxConstraints::new(
-                Pixels::ZERO,
-                parent.max_width,
-                Pixels::ZERO,
-                Pixels::INFINITY,
-            ),
-            Axis::Vertical => BoxConstraints::new(
-                Pixels::ZERO,
-                Pixels::INFINITY,
-                Pixels::ZERO,
-                parent.max_height,
-            ),
+            Axis::Horizontal => BoxConstraints::new(0.0, parent.max_width, 0.0, f64::INFINITY),
+            Axis::Vertical => BoxConstraints::new(0.0, f64::INFINITY, 0.0, parent.max_height),
         }
     }
 
     /// Constrain `(main, cross)` extents against `constraints` and return a
     /// [`Size`] (swapping axes for vertical direction).
-    fn constrain_size(&self, constraints: &BoxConstraints, main: f32, cross: f32) -> Size {
+    fn constrain_size(&self, constraints: &BoxConstraints, main: f64, cross: f64) -> Size {
         match self.direction {
             Axis::Horizontal => Size::new(
-                constraints.constrain_width(px(main)),
-                constraints.constrain_height(px(cross)),
+                constraints.constrain_width(main),
+                constraints.constrain_height(cross),
             ),
             Axis::Vertical => Size::new(
-                constraints.constrain_width(px(cross)),
-                constraints.constrain_height(px(main)),
+                constraints.constrain_width(cross),
+                constraints.constrain_height(main),
             ),
         }
     }
@@ -462,8 +449,8 @@ impl RenderWrap {
 
         let mut run_first_child = 0_usize;
         let mut run_child_count = 0_usize;
-        let mut run_main = 0.0_f32;
-        let mut run_cross = 0.0_f32;
+        let mut run_main = 0.0_f64;
+        let mut run_cross = 0.0_f64;
 
         for i in 0..child_count {
             let child_size = measure(i, child_constraints);
@@ -512,13 +499,13 @@ impl RenderWrap {
 
         // Phase 2 — compute container size.
         let num_runs = runs.len();
-        let total_run_cross_gap = self.run_spacing * num_runs.saturating_sub(1) as f32;
-        let total_cross: f32 =
-            runs.iter().map(|r| r.cross_axis_extent).sum::<f32>() + total_run_cross_gap;
-        let max_run_main: f32 = runs
+        let total_run_cross_gap = self.run_spacing * num_runs.saturating_sub(1) as f64;
+        let total_cross: f64 =
+            runs.iter().map(|r| r.cross_axis_extent).sum::<f64>() + total_run_cross_gap;
+        let max_run_main: f64 = runs
             .iter()
             .map(|r| r.main_axis_extent)
-            .fold(0.0_f32, f32::max);
+            .fold(0.0_f64, f64::max);
 
         let container = self.constrain_size(&constraints, max_run_main, total_cross);
 
@@ -538,27 +525,27 @@ impl RenderWrap {
     /// This is an approximation (Flutter would call `getDryLayout`), but it
     /// gives reasonable intrinsic values and is the standard approach for
     /// `RenderWrap`-style widgets.
-    fn simulate_wrap_cross(&self, max_main: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn simulate_wrap_cross(&self, max_main: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         let child_count = ctx.child_count();
         if child_count == 0 {
             return 0.0;
         }
 
-        let mut total_cross = 0.0_f32;
-        let mut run_main = 0.0_f32;
-        let mut run_cross = 0.0_f32;
+        let mut total_cross = 0.0_f64;
+        let mut run_main = 0.0_f64;
+        let mut run_cross = 0.0_f64;
         let mut run_child_count = 0_usize;
         let mut num_runs = 0_usize;
 
         for i in 0..child_count {
             let (child_main, child_cross) = match self.direction {
                 Axis::Horizontal => {
-                    let w = ctx.child_max_intrinsic_width(i, f32::INFINITY);
+                    let w = ctx.child_max_intrinsic_width(i, f64::INFINITY);
                     let h = ctx.child_min_intrinsic_height(i, w);
                     (w, h)
                 }
                 Axis::Vertical => {
-                    let h = ctx.child_max_intrinsic_height(i, f32::INFINITY);
+                    let h = ctx.child_max_intrinsic_height(i, f64::INFINITY);
                     let w = ctx.child_min_intrinsic_width(i, h);
                     (h, w)
                 }
@@ -657,12 +644,12 @@ impl RenderBox for RenderWrap {
         // the free extent is what the container has left after the children.
         // `compute_runs` already constrained `container`, so a negative free
         // extent is exactly the case where the constraint clamped the content.
-        let content_main: f32 = runs
+        let content_main: f64 = runs
             .iter()
             .map(|run| run.main_axis_extent)
-            .fold(0.0_f32, f32::max);
-        let content_cross: f32 = runs.iter().map(|run| run.cross_axis_extent).sum::<f32>()
-            + self.run_spacing * runs.len().saturating_sub(1) as f32;
+            .fold(0.0_f64, f64::max);
+        let content_cross: f64 = runs.iter().map(|run| run.cross_axis_extent).sum::<f64>()
+            + self.run_spacing * runs.len().saturating_sub(1) as f64;
         self.has_visual_overflow = content_main - container_main > PRECISION_TOLERANCE
             || content_cross - container_cross > PRECISION_TOLERANCE;
 
@@ -677,8 +664,8 @@ impl RenderBox for RenderWrap {
 
         let num_runs = runs.len();
         // Recompute total_cross from runs to drive free-cross distribution.
-        let total_cross: f32 = runs.iter().map(|r| r.cross_axis_extent).sum::<f32>()
-            + self.run_spacing * num_runs.saturating_sub(1) as f32;
+        let total_cross: f64 = runs.iter().map(|r| r.cross_axis_extent).sum::<f64>()
+            + self.run_spacing * num_runs.saturating_sub(1) as f64;
 
         let free_cross = (container_cross - total_cross).max(0.0);
         let (mut cross_cursor, run_gap) = distribute_space(
@@ -776,34 +763,34 @@ impl RenderBox for RenderWrap {
 
     // ── Intrinsic dimensions ──────────────────────────────────────────────────
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         match self.direction {
             // Worst case: every child on its own row → max of child min widths.
             Axis::Horizontal => {
                 let n = ctx.child_count();
                 (0..n)
-                    .map(|i| ctx.child_min_intrinsic_width(i, f32::INFINITY))
-                    .fold(0.0_f32, f32::max)
+                    .map(|i| ctx.child_min_intrinsic_width(i, f64::INFINITY))
+                    .fold(0.0_f64, f64::max)
             }
             // Vertical: simulate column wrapping at the given height.
             Axis::Vertical => self.simulate_wrap_cross(height, ctx),
         }
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         match self.direction {
             // Best case: all children on one row → SUM of child max widths.
             // Flutter wrap.dart computeMaxIntrinsicWidth sums the children with
             // NO inter-child `spacing` term; adding it diverged from the oracle.
             Axis::Horizontal => (0..ctx.child_count())
-                .map(|i| ctx.child_max_intrinsic_width(i, f32::INFINITY))
+                .map(|i| ctx.child_max_intrinsic_width(i, f64::INFINITY))
                 .sum(),
             // Vertical: simulate column wrapping at the given height.
             Axis::Vertical => self.simulate_wrap_cross(height, ctx),
         }
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         match self.direction {
             // Horizontal: simulate row wrapping at the given width.
             Axis::Horizontal => self.simulate_wrap_cross(width, ctx),
@@ -811,13 +798,13 @@ impl RenderBox for RenderWrap {
             Axis::Vertical => {
                 let n = ctx.child_count();
                 (0..n)
-                    .map(|i| ctx.child_min_intrinsic_height(i, f32::INFINITY))
-                    .fold(0.0_f32, f32::max)
+                    .map(|i| ctx.child_min_intrinsic_height(i, f64::INFINITY))
+                    .fold(0.0_f64, f64::max)
             }
         }
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         match self.direction {
             // Horizontal: simulate row wrapping at the given width.
             Axis::Horizontal => self.simulate_wrap_cross(width, ctx),
@@ -825,7 +812,7 @@ impl RenderBox for RenderWrap {
             // Flutter wrap.dart computeMaxIntrinsicHeight sums with NO `spacing`
             // term (matches the horizontal max-width path above).
             Axis::Vertical => (0..ctx.child_count())
-                .map(|i| ctx.child_max_intrinsic_height(i, f32::INFINITY))
+                .map(|i| ctx.child_max_intrinsic_height(i, f64::INFINITY))
                 .sum(),
         }
     }
@@ -895,6 +882,22 @@ mod tests {
         assert_eq!(wrap.alignment, WrapAlignment::Center);
         assert_eq!(wrap.run_alignment, WrapAlignment::SpaceBetween);
         assert_eq!(wrap.cross_axis_alignment, WrapCrossAlignment::End);
+    }
+
+    /// Run breaking uses Flutter's `f64` tolerance: children that overflow the
+    /// line by 5e-7 px start a new run, and only a rounding-sized excess stays.
+    #[test]
+    fn a_representable_overflow_starts_a_new_run() {
+        let wrap = RenderWrap::new();
+        let constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
+        let runs_for = |second: f64| {
+            let widths = [50.0, second];
+            wrap.compute_runs(constraints, 2, |i, _| Size::new(widths[i], 10.0))
+                .runs
+                .len()
+        };
+        assert_eq!(runs_for(50.000_000_5), 2);
+        assert_eq!(runs_for(50.0 + 1e-12), 1);
     }
 
     // ── distribute_space ──────────────────────────────────────────────────────

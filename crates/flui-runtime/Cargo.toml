@@ -43,7 +43,7 @@ flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 # presentation drives; no backend (ADR-0082).
 flui-platform-api = { workspace = true }
 # Window sizes and geometry.
-flui-types = { path = "../flui-types", version = "=0.2.0-dev" }
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # The realm core (ADR-0083 move 4): the widget tree a presentation hosts
 # (`WidgetsBinding`, `GlobalKeyScope`; `runtime-internals` is the seam a
 # realm drives it through), its render pipeline, the realm-owned scheduler,

@@ -17,7 +17,7 @@
 //! * `width_factor`/`height_factor` are `Option<FractionFactor>` —
 //!   matching Flutter's `null = inherit parent constraint` semantics
 //!   without overloading `0.0` as a magic sentinel.
-//! * Alignment uses [`flui_types::Alignment`] (`x`,`y` ∈ `[-1, 1]`) rather
+//! * Alignment uses [`flui_painting::Alignment`] (`x`,`y` ∈ `[-1, 1]`) rather
 //!   than the painting-side parallel definition, keeping the alignment
 //!   math consistent with `RenderTransform` / `RenderCenter`.
 //! * **Divergence (intentional):** on a factored axis whose incoming `max` is
@@ -27,7 +27,8 @@
 //!   infinite-`max` factor tests.
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Offset, Pixels, Size, geometry::px};
+use flui_foundation::geometry::{Offset, Size};
+use flui_painting::Alignment;
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -43,7 +44,7 @@ use flui_rendering::{
 /// because that's how `FractionallySizedBox` is used in practice with the
 /// overflow flag implicit to the parent layer.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FractionFactor(f32);
+pub struct FractionFactor(f64);
 
 impl FractionFactor {
     /// 0.0 — collapse.
@@ -57,7 +58,7 @@ impl FractionFactor {
     ///
     /// Returns `None` for negative, NaN, or infinite inputs.
     #[must_use]
-    pub fn new(value: f32) -> Option<Self> {
+    pub fn new(value: f64) -> Option<Self> {
         if value.is_finite() && value >= 0.0 {
             Some(Self(value))
         } else {
@@ -67,20 +68,20 @@ impl FractionFactor {
 
     /// Creates a fraction factor without validation (debug-asserted).
     #[must_use]
-    pub const fn new_unchecked(value: f32) -> Self {
+    pub const fn new_unchecked(value: f64) -> Self {
         debug_assert!(value.is_finite() && value >= 0.0, "invalid fraction factor");
         Self(value)
     }
 
-    /// Returns the underlying f32 value.
+    /// Returns the underlying f64 value.
     #[inline]
     #[must_use]
-    pub const fn value(self) -> f32 {
+    pub const fn value(self) -> f64 {
         self.0
     }
 }
 
-impl From<FractionFactor> for f32 {
+impl From<FractionFactor> for f64 {
     fn from(value: FractionFactor) -> Self {
         value.0
     }
@@ -106,7 +107,7 @@ impl From<FractionFactor> for f32 {
 ///
 /// ```ignore
 /// use flui_objects::{FractionFactor, RenderFractionallySizedBox};
-/// use flui_types::Alignment;
+/// use flui_painting::Alignment;
 ///
 /// // Child takes 50% width × 75% height of the parent, top-centered.
 /// let node = RenderFractionallySizedBox::new()
@@ -217,12 +218,12 @@ impl RenderFractionallySizedBox {
     /// incoming constraints.
     /// Width factor as a bare multiplier, `1.0` when unset (Flutter's
     /// `_widthFactor ?? 1.0` in the intrinsic formulas).
-    fn width_factor_or_one(&self) -> f32 {
+    fn width_factor_or_one(&self) -> f64 {
         self.width_factor.map_or(1.0, FractionFactor::value)
     }
 
     /// Height factor as a bare multiplier, `1.0` when unset.
-    fn height_factor_or_one(&self) -> f32 {
+    fn height_factor_or_one(&self) -> f64 {
         self.height_factor.map_or(1.0, FractionFactor::value)
     }
 
@@ -230,12 +231,12 @@ impl RenderFractionallySizedBox {
         // Width axis.
         let (min_w, max_w) = match self.width_factor {
             Some(factor) => {
-                let base = if incoming.max_width.get().is_finite() {
+                let base = if incoming.max_width.is_finite() {
                     incoming.max_width
                 } else {
                     incoming.min_width
                 };
-                let target = px(base.get() * factor.value());
+                let target = base * factor.value();
                 (target, target)
             }
             None => (incoming.min_width, incoming.max_width),
@@ -243,12 +244,12 @@ impl RenderFractionallySizedBox {
         // Height axis.
         let (min_h, max_h) = match self.height_factor {
             Some(factor) => {
-                let base = if incoming.max_height.get().is_finite() {
+                let base = if incoming.max_height.is_finite() {
                     incoming.max_height
                 } else {
                     incoming.min_height
                 };
-                let target = px(base.get() * factor.value());
+                let target = base * factor.value();
                 (target, target)
             }
             None => (incoming.min_height, incoming.max_height),
@@ -264,8 +265,8 @@ impl RenderFractionallySizedBox {
         //   offset = normalized × (box - child)
         let free_w = box_size.width - child_size.width;
         let free_h = box_size.height - child_size.height;
-        let dx = Pixels::new(free_w.get() * (self.alignment.x + 1.0) * 0.5);
-        let dy = Pixels::new(free_h.get() * (self.alignment.y + 1.0) * 0.5);
+        let dx = free_w * (self.alignment.x + 1.0) * 0.5;
+        let dy = free_h * (self.alignment.y + 1.0) * 0.5;
         Offset::new(dx, dy)
     }
 }
@@ -353,9 +354,9 @@ impl RenderBox for RenderFractionallySizedBox {
 
     fn compute_min_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         let result = if ctx.child_count() > 0 {
             ctx.child_min_intrinsic_width(0, height * self.height_factor_or_one())
         } else {
@@ -370,9 +371,9 @@ impl RenderBox for RenderFractionallySizedBox {
 
     fn compute_max_intrinsic_width(
         &self,
-        height: f32,
+        height: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         let result = if ctx.child_count() > 0 {
             ctx.child_max_intrinsic_width(0, height * self.height_factor_or_one())
         } else {
@@ -387,9 +388,9 @@ impl RenderBox for RenderFractionallySizedBox {
 
     fn compute_min_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         let result = if ctx.child_count() > 0 {
             ctx.child_min_intrinsic_height(0, width * self.width_factor_or_one())
         } else {
@@ -404,9 +405,9 @@ impl RenderBox for RenderFractionallySizedBox {
 
     fn compute_max_intrinsic_height(
         &self,
-        width: f32,
+        width: f64,
         ctx: &mut flui_rendering::context::BoxIntrinsicsCtx<'_>,
-    ) -> f32 {
+    ) -> f64 {
         let result = if ctx.child_count() > 0 {
             ctx.child_max_intrinsic_height(0, width * self.width_factor_or_one())
         } else {
@@ -424,7 +425,7 @@ impl RenderBox for RenderFractionallySizedBox {
         constraints: BoxConstraints,
         baseline: flui_rendering::traits::TextBaseline,
         ctx: &mut flui_rendering::context::BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -433,7 +434,7 @@ impl RenderBox for RenderFractionallySizedBox {
         let child_size = ctx.child_dry_layout(0, child_constraints);
         let size = constraints.constrain(child_size);
         let offset = self.align_child(size, child_size);
-        Some(child_baseline + offset.dy.get())
+        Some(child_baseline + offset.dy)
     }
 }
 
@@ -445,8 +446,8 @@ impl RenderBox for RenderFractionallySizedBox {
 mod tests {
     use super::*;
 
-    fn bc(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
-        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
+        BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
     // ---------- FractionFactor newtype ------------------------------------
@@ -454,8 +455,8 @@ mod tests {
     #[test]
     fn factor_rejects_negative_or_non_finite() {
         assert!(FractionFactor::new(-0.5).is_none());
-        assert!(FractionFactor::new(f32::NAN).is_none());
-        assert!(FractionFactor::new(f32::INFINITY).is_none());
+        assert!(FractionFactor::new(f64::NAN).is_none());
+        assert!(FractionFactor::new(f64::INFINITY).is_none());
     }
 
     #[test]
@@ -498,29 +499,29 @@ mod tests {
     fn no_factors_passes_constraints_through() {
         let node = RenderFractionallySizedBox::new();
         let cc = node.child_constraints(bc(10.0, 100.0, 5.0, 50.0));
-        assert_eq!(cc.min_width, px(10.0));
-        assert_eq!(cc.max_width, px(100.0));
-        assert_eq!(cc.min_height, px(5.0));
-        assert_eq!(cc.max_height, px(50.0));
+        assert_eq!(cc.min_width, 10.0);
+        assert_eq!(cc.max_width, 100.0);
+        assert_eq!(cc.min_height, 5.0);
+        assert_eq!(cc.max_height, 50.0);
     }
 
     #[test]
     fn width_factor_tightens_to_fraction_of_max() {
         let node = RenderFractionallySizedBox::new().with_width_factor(FractionFactor::HALF);
         let cc = node.child_constraints(bc(0.0, 200.0, 0.0, 100.0));
-        assert_eq!(cc.min_width, px(100.0));
-        assert_eq!(cc.max_width, px(100.0));
+        assert_eq!(cc.min_width, 100.0);
+        assert_eq!(cc.max_width, 100.0);
         // Height is untouched.
-        assert_eq!(cc.max_height, px(100.0));
+        assert_eq!(cc.max_height, 100.0);
     }
 
     #[test]
     fn factor_falls_back_to_min_when_max_unbounded() {
         let node = RenderFractionallySizedBox::new().with_height_factor(FractionFactor::FULL);
-        let cc = node.child_constraints(bc(0.0, 200.0, 30.0, f32::INFINITY));
+        let cc = node.child_constraints(bc(0.0, 200.0, 30.0, f64::INFINITY));
         // height_factor=1.0 with infinite max → tight at min_height.
-        assert_eq!(cc.min_height, px(30.0));
-        assert_eq!(cc.max_height, px(30.0));
+        assert_eq!(cc.min_height, 30.0);
+        assert_eq!(cc.max_height, 30.0);
     }
 
     // ---------- align_child -----------------------------------------------
@@ -528,31 +529,22 @@ mod tests {
     #[test]
     fn align_center_places_child_in_the_middle() {
         let node = RenderFractionallySizedBox::new(); // center default
-        let offset = node.align_child(
-            Size::new(px(100.0), px(80.0)),
-            Size::new(px(40.0), px(20.0)),
-        );
-        assert_eq!(offset, Offset::new(px(30.0), px(30.0)));
+        let offset = node.align_child(Size::new(100.0, 80.0), Size::new(40.0, 20.0));
+        assert_eq!(offset, Offset::new(30.0, 30.0));
     }
 
     #[test]
     fn align_top_left_places_child_at_origin() {
         let node = RenderFractionallySizedBox::new().with_alignment(Alignment::TOP_LEFT);
-        let offset = node.align_child(
-            Size::new(px(100.0), px(80.0)),
-            Size::new(px(40.0), px(20.0)),
-        );
+        let offset = node.align_child(Size::new(100.0, 80.0), Size::new(40.0, 20.0));
         assert_eq!(offset, Offset::ZERO);
     }
 
     #[test]
     fn align_bottom_right_places_child_at_full_offset() {
         let node = RenderFractionallySizedBox::new().with_alignment(Alignment::BOTTOM_RIGHT);
-        let offset = node.align_child(
-            Size::new(px(100.0), px(80.0)),
-            Size::new(px(40.0), px(20.0)),
-        );
-        assert_eq!(offset, Offset::new(px(60.0), px(60.0)));
+        let offset = node.align_child(Size::new(100.0, 80.0), Size::new(40.0, 20.0));
+        assert_eq!(offset, Offset::new(60.0, 60.0));
     }
 
     // ---------- dry layout ------------------------------------------------
@@ -565,7 +557,7 @@ mod tests {
         let size = flui_rendering::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
             node.compute_dry_layout(bc(0.0, 200.0, 0.0, 100.0), ctx)
         });
-        assert_eq!(size, Size::new(px(200.0), px(100.0)));
+        assert_eq!(size, Size::new(200.0, 100.0));
     }
 
     #[test]
@@ -574,7 +566,7 @@ mod tests {
         let size = flui_rendering::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
             node.compute_dry_layout(bc(0.0, 200.0, 0.0, 100.0), ctx)
         });
-        assert_eq!(size.width, px(0.0));
+        assert_eq!(size.width, 0.0);
     }
 
     // ---------- setters ---------------------------------------------------

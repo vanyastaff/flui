@@ -14,15 +14,15 @@ mod owner;
 pub mod phase;
 pub(super) mod scheduler;
 
-// Re-export Clip from flui_types
+// Re-export Clip from flui_painting
 // Re-export layer types from flui-layer
 pub use flui_layer::{Layer, LayerId, LayerTree, OffsetLayer, SceneBuilder};
-pub use flui_types::painting::Clip;
-// Re-export additional types from flui_types::painting for convenience
-pub use flui_types::painting::{BlendMode, ClipOp, FilterQuality, ImageFilter, PointMode, Shader};
-// Re-export canvas types from flui_types
+pub use flui_painting::paint::Clip;
+// Re-export additional types from flui_painting::paint for convenience
+pub use flui_painting::paint::{BlendMode, ClipOp, FilterQuality, ImageFilter, PointMode, Shader};
+// Re-export canvas types from flui_painting
 pub use dirty::{DirtyNode, DirtySets, PaintEntry, PaintKind, PaintQueue};
-pub use flui_types::painting::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
+pub use flui_painting::paint::{BlurStyle, StrokeCap, StrokeJoin, TileMode};
 pub use handle::{RenderInvalidationHandle, SendError as DirtySendError};
 pub use notifier::VisualUpdateNotifier;
 pub use owner::{

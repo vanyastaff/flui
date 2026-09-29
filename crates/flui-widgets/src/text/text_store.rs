@@ -40,6 +40,8 @@ use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 
+use flui_foundation::geometry::{Bounds, Point};
+use flui_foundation::geometry::{Matrix4, Offset, Rect};
 use flui_interaction::TextInputHandle;
 use flui_objects::{RenderEditable, SubtreeAnchor};
 use flui_platform_api::text_store::{
@@ -48,8 +50,6 @@ use flui_platform_api::text_store::{
     TextStoreRead, TextStoreStatus, Utf16Offset, Utf16Range, utf16,
 };
 use flui_rendering::pipeline::PipelineCell;
-use flui_types::geometry::{Bounds, Pixels, Point};
-use flui_types::{Matrix4, Offset, Rect};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::controller::{self, ComposingState, TextEditingController};
@@ -570,7 +570,7 @@ impl TextStoreRead for Session<'_> {
         })
     }
 
-    fn document_bounds(&self) -> Result<Bounds<Pixels>, TextStoreError> {
+    fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
         self.store.with_layout(&self.doc, |editable, to_root| {
             let len = editable.plain_text().len();
             let text = editable
@@ -587,7 +587,7 @@ impl TextStoreRead for Session<'_> {
 
     fn index_at_point(
         &self,
-        point: Point<Pixels>,
+        point: Point<f64>,
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
         let rendered = self.store.with_layout(&self.doc, |editable, to_root| {
@@ -607,18 +607,18 @@ impl TextStoreRead for Session<'_> {
 /// Always a scalar boundary of the rendered text.
 fn rendered_offset_at(
     editable: &RenderEditable,
-    point: Offset<Pixels>,
+    point: Offset<f64>,
     mode: PointMode,
 ) -> Result<usize, TextStoreError> {
     let text = editable.plain_text();
-    let boundaries: Vec<(usize, f32)> = text
+    let boundaries: Vec<(usize, f64)> = text
         .char_indices()
         .map(|(byte, _)| byte)
         .chain([text.len()])
         .map(|byte| {
             editable
                 .local_rect_for_range(byte..byte)
-                .map(|caret| (byte, caret.left().get()))
+                .map(|caret| (byte, caret.left()))
                 .ok_or(TextStoreError::NoLayout)
         })
         .collect::<Result<_, _>>()?;
@@ -627,10 +627,10 @@ fn rendered_offset_at(
         .local_rect_for_range(0..text.len())
         .or_else(|| editable.local_rect_for_range(0..0))
         .ok_or(TextStoreError::NoLayout)?;
-    let (x, y) = (point.dx.get(), point.dy.get());
+    let (x, y) = (point.dx, point.dy);
     match mode {
         PointMode::Exact => {
-            let inside_line = line.top().get() <= y && y < line.bottom().get();
+            let inside_line = line.top() <= y && y < line.bottom();
             boundaries
                 .windows(2)
                 .find(|pair| pair[0].1 <= x && x < pair[1].1)

@@ -23,7 +23,7 @@ use std::fmt::Debug;
 /// #[derive(Debug, Clone, PartialEq)]
 /// pub struct MyContainerParentData {
 ///     // Your fields
-///     pub my_field: f32,
+///     pub my_field: f64,
 ///     
 ///     // Container mixin
 ///     pub container: ContainerParentDataMixin<RenderId>,

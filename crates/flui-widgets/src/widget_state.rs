@@ -73,7 +73,7 @@
 //! — the Rust expression of the oracle's
 //! `widget_style?.prop.resolve(states) ?? theme ?? default` cascade. Callers
 //! whose `T` is not `Option`-shaped still get a total, panic-free `resolve`
-//! by relying on that type's own `Default` (e.g. a plain `f32` elevation
+//! by relying on that type's own `Default` (e.g. a plain `f64` elevation
 //! resolves to `0.0` with no matching entry) rather than the oracle's
 //! type-erased "throw or don't" split.
 //!

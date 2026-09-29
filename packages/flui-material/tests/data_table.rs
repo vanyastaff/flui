@@ -32,13 +32,10 @@ fn themed(theme: ThemeData, table: DataTable) -> Theme {
 /// The pixel center of a mounted render node, in root-relative coordinates —
 /// a reliable dispatch target regardless of how many proxy layers sit
 /// between the `RenderTable` cell and its interactive leaf.
-fn center_of(laid: &LaidOut, id: RenderId) -> (f32, f32) {
+fn center_of(laid: &LaidOut, id: RenderId) -> (f64, f64) {
     let origin = laid.absolute_offset(id);
     let size = laid.size(id);
-    (
-        origin.dx.get() + size.width.get() / 2.0,
-        origin.dy.get() + size.height.get() / 2.0,
-    )
+    (origin.dx + size.width / 2.0, origin.dy + size.height / 2.0)
 }
 
 /// The `RenderParagraph` among `paragraphs` whose absolute x-offset falls
@@ -46,12 +43,12 @@ fn center_of(laid: &LaidOut, id: RenderId) -> (f32, f32) {
 /// index into `find_all_by_render_type`'s traversal order, so a test does
 /// not silently pass because it picked the wrong glyph.
 fn paragraph_in(laid: &LaidOut, cell: RenderId, paragraphs: &[RenderId]) -> RenderId {
-    let cell_x0 = laid.absolute_offset(cell).dx.get();
-    let cell_x1 = cell_x0 + laid.size(cell).width.get();
+    let cell_x0 = laid.absolute_offset(cell).dx;
+    let cell_x1 = cell_x0 + laid.size(cell).width;
     *paragraphs
         .iter()
         .find(|&&p| {
-            let x = laid.absolute_offset(p).dx.get();
+            let x = laid.absolute_offset(p).dx;
             x >= cell_x0 - 0.01 && x <= cell_x1 + 0.01
         })
         .expect("a RenderParagraph should be mounted inside this cell's horizontal bounds")
@@ -95,12 +92,12 @@ fn default_row_heights_match_the_verified_m3_token_table() {
     let data_cell = laid.child(render_table, 1);
 
     assert_eq!(
-        laid.size(heading_cell).height.get(),
+        laid.size(heading_cell).height,
         56.0,
         "heading row height must default to 56.0"
     );
     assert_eq!(
-        laid.size(data_cell).height.get(),
+        laid.size(data_cell).height,
         48.0,
         "data row height must default to kMinInteractiveDimension (48.0), not 52.0"
     );
@@ -123,7 +120,7 @@ fn heading_row_height_theme_override_reaches_the_mounted_tree() {
     let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
     let heading_cell = laid.child(render_table, 0);
 
-    assert_eq!(laid.size(heading_cell).height.get(), 80.0);
+    assert_eq!(laid.size(heading_cell).height, 80.0);
 }
 
 /// A widget-level override beats the theme tier, which beats the M3 default
@@ -147,7 +144,7 @@ fn widget_override_beats_theme_beats_default_on_a_mounted_tree() {
     let heading_cell = laid.child(render_table, 0);
 
     assert_eq!(
-        laid.size(heading_cell).height.get(),
+        laid.size(heading_cell).height,
         96.0,
         "the widget-level override must win over both the theme and the M3 default"
     );
@@ -178,8 +175,8 @@ fn numeric_columns_right_align_their_cell_content() {
     let glyph_a = paragraph_in(&laid, data_a, &paragraphs);
     let glyph_n = paragraph_in(&laid, data_n, &paragraphs);
 
-    let local_x_a = laid.absolute_offset(glyph_a).dx.get() - laid.absolute_offset(data_a).dx.get();
-    let local_x_n = laid.absolute_offset(glyph_n).dx.get() - laid.absolute_offset(data_n).dx.get();
+    let local_x_a = laid.absolute_offset(glyph_a).dx - laid.absolute_offset(data_a).dx;
+    let local_x_n = laid.absolute_offset(glyph_n).dx - laid.absolute_offset(data_n).dx;
 
     assert!(
         local_x_a < local_x_n,

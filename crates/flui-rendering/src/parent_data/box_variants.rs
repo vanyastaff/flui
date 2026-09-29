@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 
 // Re-export RenderId for convenience
 use flui_foundation::RenderId;
-use flui_types::{Matrix4, Offset};
+use flui_foundation::geometry::{Matrix4, Offset, canonical_bits_f64};
 
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
@@ -67,8 +67,8 @@ impl ParentData for ContainerBoxParentData {}
 
 impl Hash for ContainerBoxParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        canonical_bits_f64(self.offset.dx).hash(state);
+        canonical_bits_f64(self.offset.dy).hash(state);
         self.container.hash(state);
     }
 }
@@ -166,8 +166,8 @@ impl ParentData for FlexParentData {}
 
 impl Hash for FlexParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        canonical_bits_f64(self.offset.dx).hash(state);
+        canonical_bits_f64(self.offset.dy).hash(state);
         self.container.hash(state);
         self.flex.hash(state);
         self.fit.hash(state);
@@ -195,22 +195,22 @@ pub struct StackParentData {
     pub container: ContainerParentDataMixin<RenderId>,
 
     /// Distance from parent's top edge.
-    pub top: Option<f32>,
+    pub top: Option<f64>,
 
     /// Distance from parent's right edge.
-    pub right: Option<f32>,
+    pub right: Option<f64>,
 
     /// Distance from parent's bottom edge.
-    pub bottom: Option<f32>,
+    pub bottom: Option<f64>,
 
     /// Distance from parent's left edge.
-    pub left: Option<f32>,
+    pub left: Option<f64>,
 
     /// Explicit width (overrides intrinsic size).
-    pub width: Option<f32>,
+    pub width: Option<f64>,
 
     /// Explicit height (overrides intrinsic size).
-    pub height: Option<f32>,
+    pub height: Option<f64>,
 }
 
 impl StackParentData {
@@ -229,37 +229,37 @@ impl StackParentData {
     }
 
     /// Builder: set top position.
-    pub const fn with_top(mut self, top: f32) -> Self {
+    pub const fn with_top(mut self, top: f64) -> Self {
         self.top = Some(top);
         self
     }
 
     /// Builder: set right position.
-    pub const fn with_right(mut self, right: f32) -> Self {
+    pub const fn with_right(mut self, right: f64) -> Self {
         self.right = Some(right);
         self
     }
 
     /// Builder: set bottom position.
-    pub const fn with_bottom(mut self, bottom: f32) -> Self {
+    pub const fn with_bottom(mut self, bottom: f64) -> Self {
         self.bottom = Some(bottom);
         self
     }
 
     /// Builder: set left position.
-    pub const fn with_left(mut self, left: f32) -> Self {
+    pub const fn with_left(mut self, left: f64) -> Self {
         self.left = Some(left);
         self
     }
 
     /// Builder: set width.
-    pub const fn with_width(mut self, width: f32) -> Self {
+    pub const fn with_width(mut self, width: f64) -> Self {
         self.width = Some(width);
         self
     }
 
     /// Builder: set height.
-    pub const fn with_height(mut self, height: f32) -> Self {
+    pub const fn with_height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }
@@ -291,15 +291,15 @@ impl ParentData for StackParentData {}
 
 impl Hash for StackParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        canonical_bits_f64(self.offset.dx).hash(state);
+        canonical_bits_f64(self.offset.dy).hash(state);
         self.container.hash(state);
 
-        // Hash Option<f32> values
-        let hash_opt_f32 = |value: Option<f32>, state: &mut H| match value {
+        // Hash Option<f64> values
+        let hash_opt_f32 = |value: Option<f64>, state: &mut H| match value {
             Some(v) => {
                 true.hash(state);
-                v.to_bits().hash(state);
+                canonical_bits_f64(v).hash(state);
             }
             None => false.hash(state),
         };
@@ -436,8 +436,8 @@ impl ParentData for ListWheelParentData {}
 
 impl Hash for ListWheelParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        canonical_bits_f64(self.offset.dx).hash(state);
+        canonical_bits_f64(self.offset.dy).hash(state);
         self.container.hash(state);
         self.index.hash(state);
     }
@@ -504,8 +504,8 @@ impl ParentData for MultiChildLayoutParentData {}
 
 impl Hash for MultiChildLayoutParentData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.offset.dx.to_bits().hash(state);
-        self.offset.dy.to_bits().hash(state);
+        canonical_bits_f64(self.offset.dx).hash(state);
+        canonical_bits_f64(self.offset.dy).hash(state);
         self.container.hash(state);
         self.id.hash(state);
     }
@@ -517,15 +517,14 @@ impl Hash for MultiChildLayoutParentData {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
     #[test]
     fn test_container_box_parent_data() {
-        let data = ContainerBoxParentData::zero().with_offset(Offset::new(px(10.0), px(20.0)));
+        let data = ContainerBoxParentData::zero().with_offset(Offset::new(10.0, 20.0));
 
-        assert_eq!(data.offset.dx, px(10.0));
+        assert_eq!(data.offset.dx, 10.0);
         assert!(!data.is_zero());
     }
 

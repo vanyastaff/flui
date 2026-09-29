@@ -2,8 +2,9 @@
 //!
 //! Flutter parity: `widgets/directionality.dart` `Directionality`.
 
-use flui_types::layout::{Axis, AxisDirection};
-use flui_types::typography::TextDirection;
+use flui_foundation::geometry::Axis;
+use flui_painting::typography::TextDirection;
+use flui_rendering::constraints::AxisDirection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 
@@ -91,7 +92,7 @@ impl InheritedView for Directionality {
 
 impl_inherited_view!(Directionality);
 
-/// Resolve an [`AlignmentGeometry`](flui_types::layout::AlignmentGeometry) against
+/// Resolve an [`AlignmentGeometry`](flui_painting::AlignmentGeometry) against
 /// the ambient [`Directionality`].
 ///
 /// The one seam at which a directional alignment becomes a physical one. Call
@@ -148,11 +149,11 @@ impl_inherited_view!(Directionality);
 #[must_use]
 pub fn resolve_alignment(
     ctx: &dyn BuildContext,
-    alignment: impl Into<flui_types::layout::AlignmentGeometry>,
-) -> flui_types::Alignment {
+    alignment: impl Into<flui_painting::AlignmentGeometry>,
+) -> flui_painting::Alignment {
     match alignment.into() {
-        flui_types::layout::AlignmentGeometry::Absolute(alignment) => alignment,
-        flui_types::layout::AlignmentGeometry::Directional(directional) => {
+        flui_painting::AlignmentGeometry::Absolute(alignment) => alignment,
+        flui_painting::AlignmentGeometry::Directional(directional) => {
             let text_direction = Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr);
             directional.resolve(text_direction.is_ltr())
         }
@@ -291,7 +292,7 @@ mod tests {
     /// oracle's `Axis.vertical` arm, which never touches `Directionality` at
     /// all. `axis_direction_from_axis_reverse_and_directionality`'s vertical
     /// branch delegates straight to `AxisDirection::from_axis`, already
-    /// covered at the unit level in `crates/flui-types/src/layout/axis.rs`;
+    /// covered at the unit level in `crates/flui-rendering/src/constraints/axis_direction.rs`;
     /// these two pin the specific `Axis::Vertical` outputs this module's
     /// callers rely on.
     #[test]

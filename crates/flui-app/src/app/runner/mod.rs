@@ -297,7 +297,6 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use flui_types::geometry::px;
     use flui_view::{BuildContext, IntoView, View, ViewExt};
 
     use super::host::APP_RUNTIME;
@@ -332,7 +331,7 @@ mod tests {
         )
         .expect("realm");
         let constraints = flui_rendering::constraints::BoxConstraints::tight(
-            flui_types::Size::new(px(100.0), px(100.0)),
+            flui_foundation::geometry::Size::new(100.0, 100.0),
         );
         realm
             .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
@@ -398,7 +397,7 @@ mod tests {
         let config = AppConfig::new().with_title("Test").with_size(800, 600);
 
         assert_eq!(config.title, "Test");
-        assert_eq!(config.size.width, px(800.0));
+        assert_eq!(config.size.width, 800.0);
     }
 
     /// Bootstrap ordering invariant shared by `bootstrap_desktop`, `run_android`,
@@ -450,7 +449,7 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let marker_size = flui_types::Size::new(px(4001.0), px(4002.0));
+        let marker_size = flui_foundation::geometry::Size::new(4001.0, 4002.0);
 
         let platform = flui_platform::headless_platform();
         let window = platform

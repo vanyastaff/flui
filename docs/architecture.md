@@ -34,19 +34,18 @@ Layer 2  ── flui-platform, flui-scheduler, flui-painting,
                 │  (flui-platform = OS backends; only flui-app depends on it)
 Layer 1  ── flui-foundation, flui-macros, flui-platform-api, flui-protocol
                 │   (flui-foundation = framework primitives:
-                │    ChangeNotifier, Id system, BindingBase, Key, diagnostics;
+                │    ChangeNotifier, Id system, Key, diagnostics, and the
+                │    plain-f64 geometry values in flui_foundation::geometry;
                 │    flui-platform-api = platform contracts, no OS code;
                 │    interaction → platform-api, platform → platform-api;
                 │    flui-protocol = semantics and agent-protocol vocabulary,
                 │    semantics → protocol)
-Layer 0  ── flui-geometry, flui-types
-                (geometry, styling, typography, layout, gestures, physics,
-                 platform value types; base units)
+Layer 0  ── (empty: each value type lives with its owner, ADR-0098)
 ```
 
 **This is not enforced by convention.** Each crate declares its layer in its manifest (`[package.metadata.flui] layer`, named in the root `[workspace.metadata.flui] layers`), and `cargo xtask workspace` (part of `cargo xtask checks` and the CI `checks` job) validates every **normal** and build Cargo edge against it: same layer or lower, never an example or tool, and every crate layered. Cargo rejects cycles itself. See [ADR-0041](adr/ADR-0041-workspace-topology-contract.md). Dev-dependencies may cross layers — a test fixture is not an architectural claim — except where the kind rule reads them ([ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) §3, [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md) §2): only applications name Material or Cupertino, in any dependency kind; any other crate that does lists the edge in its `edge-exceptions` (today only the facade), and the two design systems name each other in no kind ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md)).
 
-Note on `flui-foundation` placement: in the current workspace its Cargo deps are leaf (no internal-crate runtime deps), but its *responsibility* is framework primitives that operate on top of `flui-types`' value types — so it is placed above `flui-types` in the layered table. The target crate graph in [`FOUNDATIONS.md`](FOUNDATIONS.md) Part IV draws that placement as a dashed (not-yet-real) edge.
+Note on value types: there is no value-types crate. Geometry (`Point`, `Offset`, `Size`, `Rect`, `Matrix4`, the device-grid types, `DevicePixelRatio`) lives in `flui_foundation::geometry`, a leaf crate with no internal-crate runtime deps; paint, styling and typography values in `flui-painting`; constraints in `flui-rendering`; gesture details in `flui-interaction`; and platform values in `flui-platform-api`. Logical lengths are plain `f64`, with no unit wrapper ([ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md)).
 
 See [`crates.md`](crates.md) for the full inventory and current status of each crate.
 

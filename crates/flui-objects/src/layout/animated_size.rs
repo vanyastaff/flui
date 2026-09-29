@@ -38,7 +38,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Point, Rect, Size, painting::Clip};
+use flui_foundation::geometry::{Point, Rect, Size};
+use flui_painting::Alignment;
+use flui_painting::paint::Clip;
 
 use flui_animation::curve::ArcCurve;
 use flui_animation::{
@@ -109,7 +111,7 @@ impl RenderAnimatedSize {
         alignment: Alignment,
         clip_behavior: Clip,
     ) -> Self {
-        let parent: Arc<dyn Animation<f32>> = Arc::new(controller.clone());
+        let parent: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
         let animation = CurvedAnimation::new(parent, curve.clone());
         Self {
             inner: AligningShiftedBox::new(alignment),
@@ -165,7 +167,7 @@ impl RenderAnimatedSize {
         if self.curve == curve {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        let parent: Arc<dyn Animation<f32>> = Arc::new(self.controller.clone());
+        let parent: Arc<dyn Animation<f64>> = Arc::new(self.controller.clone());
         self.animation = CurvedAnimation::new(parent, curve.clone());
         self.curve = curve;
         flui_rendering::RenderUpdateImpact::LAYOUT
@@ -358,32 +360,32 @@ impl RenderBox for RenderAnimatedSize {
         size
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         self.inner.actual_baseline(baseline)
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_min_intrinsic_width(0, height)
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_max_intrinsic_width(0, height)
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
         ctx.child_min_intrinsic_height(0, width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         if ctx.child_count() == 0 {
             return 0.0;
         }
@@ -407,7 +409,7 @@ impl RenderBox for RenderAnimatedSize {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         if ctx.child_count() == 0 {
             return None;
         }
@@ -419,7 +421,7 @@ impl RenderBox for RenderAnimatedSize {
             self.dry_size_for(constraints, child_size)
         };
         let offset = self.inner.dry_child_offset(my_size, child_size);
-        Some(child_baseline + offset.dy.get())
+        Some(child_baseline + offset.dy)
     }
 
     // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path
@@ -474,7 +476,6 @@ mod tests {
     use super::*;
     use flui_animation::UpdateScheduler;
     use flui_rendering::context::intrinsics_test_support::leaf_dry_layout;
-    use flui_types::geometry::px;
 
     fn controller(ms: u64) -> AnimationController {
         AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
@@ -489,8 +490,8 @@ mod tests {
         )
     }
 
-    fn size(w: f32, h: f32) -> Size {
-        Size::new(px(w), px(h))
+    fn size(w: f64, h: f64) -> Size {
+        Size::new(w, h)
     }
 
     // ---- state machine: start -> stable ---------------------------------

@@ -1,6 +1,6 @@
 //! `OffsetLayer` — translates its subtree.
 
-use flui_types::{Offset, geometry::Pixels};
+use flui_foundation::geometry::Offset;
 
 /// Layer that applies a simple offset to its children.
 ///
@@ -28,25 +28,24 @@ use flui_types::{Offset, geometry::Pixels};
 /// # Example
 ///
 /// ```rust
-/// use flui_types::geometry::px;
 /// use flui_layer::OffsetLayer;
-/// use flui_types::Offset;
+/// use flui_foundation::geometry::Offset;
 ///
-/// let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
+/// let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
 ///
-/// assert_eq!(layer.offset().dx, px(10.0));
-/// assert_eq!(layer.offset().dy, px(20.0));
+/// assert_eq!(layer.offset().dx, 10.0);
+/// assert_eq!(layer.offset().dy, 20.0);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct OffsetLayer {
     /// The offset to apply to children
-    offset: Offset<Pixels>,
+    offset: Offset<f64>,
 }
 
 impl OffsetLayer {
     /// Translates the subtree by `offset`.
     #[inline]
-    pub const fn new(offset: Offset<Pixels>) -> Self {
+    pub const fn new(offset: Offset<f64>) -> Self {
         Self { offset }
     }
 
@@ -58,7 +57,7 @@ impl OffsetLayer {
 
     /// The translation applied to the subtree.
     #[inline]
-    pub const fn offset(&self) -> Offset<Pixels> {
+    pub const fn offset(&self) -> Offset<f64> {
         self.offset
     }
 
@@ -71,16 +70,15 @@ impl OffsetLayer {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
     #[test]
     fn test_offset_layer_new() {
-        let layer = OffsetLayer::new(Offset::new(px(10.0), px(20.0)));
+        let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
 
-        assert_eq!(layer.offset().dx, px(10.0));
-        assert_eq!(layer.offset().dy, px(20.0));
+        assert_eq!(layer.offset().dx, 10.0);
+        assert_eq!(layer.offset().dy, 20.0);
     }
 
     #[test]
@@ -88,8 +86,8 @@ mod tests {
         let layer = OffsetLayer::zero();
 
         assert!(layer.is_zero());
-        assert_eq!(layer.offset().dx, px(0.0));
-        assert_eq!(layer.offset().dy, px(0.0));
+        assert_eq!(layer.offset().dx, 0.0);
+        assert_eq!(layer.offset().dy, 0.0);
     }
 
     #[test]

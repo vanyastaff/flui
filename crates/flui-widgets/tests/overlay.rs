@@ -39,7 +39,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_foundation::ElementId;
 use flui_foundation::panic::payload_text;
-use flui_types::geometry::px;
 use flui_view::prelude::*;
 use flui_widgets::__test_access::{OverlayEntryProbe as _, OverlayProbe as _};
 use flui_widgets::{InsertPosition, Overlay, OverlayEntry, OverlayHandle, SizedBox};
@@ -1173,8 +1172,8 @@ fn overlay_rearrange_with_opaque_preserves_surviving_entry_state() {
 /// rewritten rather than the theater reverted.
 #[test]
 fn positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack() {
+    use flui_foundation::geometry::Point;
     use flui_rendering::pipeline::PipelineOwner;
-    use flui_types::Point;
     use flui_widgets::{Positioned, Stack, StackFit};
 
     /// The offset of the one `RenderConstrainedBox` (a `SizedBox`) in the tree,
@@ -1211,7 +1210,7 @@ fn positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack() {
 
     assert_eq!(
         positioned,
-        Point::new(px(40.0), px(25.0)),
+        Point::new(40.0, 25.0),
         "an inner Stack runs the positioned split, so the entry lands where it asked"
     );
 

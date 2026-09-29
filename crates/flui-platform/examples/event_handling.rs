@@ -8,8 +8,8 @@
 //!
 //! Run with: cargo run --example event_handling -p flui-platform
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() -> anyhow::Result<()> {
@@ -43,11 +43,11 @@ fn main() -> anyhow::Result<()> {
     // Create main window
     let window_options = WindowOptions {
         title: "Event Handling Demo - Click, type, resize!".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         resizable: true,
         visible: true,
         decorated: true,
-        min_size: Some(Size::new(px(400.0), px(300.0))),
+        min_size: Some(Size::new(400.0, 300.0)),
         max_size: None,
         ..Default::default()
     };
@@ -63,13 +63,13 @@ fn main() -> anyhow::Result<()> {
     tracing::info!("Window created:");
     tracing::info!(
         "  - Physical size: {}x{} px",
-        physical_size.width.0,
-        physical_size.height.0
+        physical_size.width,
+        physical_size.height
     );
     tracing::info!(
         "  - Logical size: {:.0}x{:.0} pt",
-        logical_size.width.0,
-        logical_size.height.0
+        logical_size.width,
+        logical_size.height
     );
     tracing::info!("  - Scale factor: {:.2}x", scale_factor);
 

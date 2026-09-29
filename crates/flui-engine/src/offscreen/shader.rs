@@ -1,6 +1,6 @@
 //! WGSL sources and mask-shader selection for offscreen effects.
 
-use flui_types::painting::Shader;
+use flui_painting::paint::Shader;
 
 /// Shader type identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,20 +70,20 @@ impl ShaderType {
 
 #[cfg(all(test, feature = "testing"))]
 mod tests {
-    use flui_types::styling::Color;
+    use flui_painting::styling::Color;
 
     use super::*;
 
     #[test]
     fn test_shader_type_from_shader() {
-        use flui_types::geometry::{Offset, px};
+        use flui_foundation::geometry::Offset;
 
         let solid = Shader::solid(Color::WHITE);
         assert_eq!(ShaderType::from_shader(&solid), ShaderType::SolidMask);
 
         let linear = Shader::simple_linear(
             Offset::ZERO,
-            Offset::new(px(1.0), px(1.0)),
+            Offset::new(1.0, 1.0),
             vec![Color::RED, Color::BLUE],
         );
         assert_eq!(
@@ -91,11 +91,8 @@ mod tests {
             ShaderType::LinearGradientMask
         );
 
-        let radial = Shader::simple_radial(
-            Offset::new(px(0.5), px(0.5)),
-            1.0,
-            vec![Color::WHITE, Color::BLACK],
-        );
+        let radial =
+            Shader::simple_radial(Offset::new(0.5, 0.5), 1.0, vec![Color::WHITE, Color::BLACK]);
         assert_eq!(
             ShaderType::from_shader(&radial),
             ShaderType::RadialGradientMask

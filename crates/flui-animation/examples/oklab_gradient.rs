@@ -8,7 +8,7 @@
 //! Run with: `cargo run -p flui-animation --example oklab_gradient`
 
 use flui_animation::{Animatable, ColorTween, OklabColorTween};
-use flui_types::Color;
+use flui_painting::styling::Color;
 
 fn brightness(c: Color) -> u16 {
     u16::from(c.r) + u16::from(c.g) + u16::from(c.b)
@@ -26,7 +26,7 @@ fn main() {
     println!("blue -> yellow, 11 steps:");
     println!("    t     sRGB (r,g,b)  sum    Oklab (r,g,b)  sum");
     for i in 0..=10 {
-        let t = i as f32 / 10.0;
+        let t = i as f64 / 10.0;
         let s = srgb.transform(t);
         let o = oklab.transform(t);
         println!(

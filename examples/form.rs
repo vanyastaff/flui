@@ -22,7 +22,7 @@ use flui::prelude::*;
 use flui::widgets::{AutovalidateMode, Form, FormHandle, SafeArea, column, row};
 
 /// The width every field is laid out at.
-const FIELD_WIDTH: f32 = 360.0;
+const FIELD_WIDTH: f64 = 360.0;
 
 #[derive(Clone, Default)]
 struct SignUp {

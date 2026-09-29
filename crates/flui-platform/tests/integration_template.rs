@@ -25,7 +25,7 @@
 //! // Import crates being integrated
 //! use flui_platform::{current_platform, WindowOptions};
 //! use flui_painting::Canvas; // Example dependent crate
-//! use flui_types::geometry::{px, Size};
+//! use flui_foundation::geometry::Size;
 //!
 //! #[test]
 //! fn test_platform_with_canvas() {
@@ -45,8 +45,8 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::Size;
 use flui_platform::{WindowOptions, current_platform};
-use flui_types::geometry::{Size, px};
 
 // ═══════════════════════════════════════════════════════════════
 // SECTION 1: Setup and Initialization
@@ -70,7 +70,7 @@ fn create_test_window() -> Result<Arc<dyn flui_platform::PlatformWindow>, anyhow
     let platform = get_test_platform();
     let options = WindowOptions {
         title: "Integration Test Window".to_string(),
-        size: Size::new(px(800.0), px(600.0)),
+        size: Size::new(800.0, 600.0),
         visible: false, // Hidden to avoid UI distraction
         ..Default::default()
     };
@@ -113,12 +113,12 @@ fn test_window_handle_compatibility() {
             let logical_size = window.logical_size();
             tracing::info!(
                 "Window size: {}x{}",
-                logical_size.width.0,
-                logical_size.height.0
+                logical_size.width,
+                logical_size.height
             );
 
             assert!(
-                logical_size.width.0 > 0.0 && logical_size.height.0 > 0.0,
+                logical_size.width > 0.0 && logical_size.height > 0.0,
                 "Window must have valid size"
             );
         }
@@ -179,7 +179,7 @@ fn test_canvas_integration() {
     // // Test basic canvas operations
     // canvas.clear(Color::WHITE);
     // canvas.draw_rect(
-    //     Rect::new(px(10.0), px(10.0), px(100.0), px(100.0)),
+    //     Rect::new(10.0, 10.0, 100.0, 100.0),
     //     Color::RED,
     // );
     // canvas.present();

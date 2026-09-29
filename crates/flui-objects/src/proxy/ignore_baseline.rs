@@ -21,7 +21,7 @@
 //! `RenderProxyBox`.
 
 use flui_foundation::Single;
-use flui_types::{Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -77,7 +77,7 @@ impl RenderBox for RenderIgnoreBaseline {
 
     /// Always `None` — this is the whole point of the type. The child's own
     /// baseline is deliberately not forwarded.
-    fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, _baseline: TextBaseline) -> Option<f64> {
         None
     }
 
@@ -89,7 +89,7 @@ impl RenderBox for RenderIgnoreBaseline {
         _constraints: BoxConstraints,
         _baseline: TextBaseline,
         _ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         None
     }
 

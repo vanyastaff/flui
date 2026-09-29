@@ -1,12 +1,8 @@
 //! Path, vertices, line, and shadow record methods: draw_path, draw_vertices, line, draw_shadow.
 
+use flui_foundation::geometry::{Offset, Point};
 use flui_painting::{BlendMode, Paint, PaintStyle};
-use flui_types::{
-    Offset, Point,
-    geometry::{Pixels, px},
-    painting::path::Path,
-    styling::Color,
-};
+use flui_painting::{paint::path::Path, styling::Color};
 
 use super::{
     super::{
@@ -31,8 +27,8 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
-        p1: Point<Pixels>,
-        p2: Point<Pixels>,
+        p1: Point<f64>,
+        p2: Point<f64>,
         paint: &Paint,
     ) {
         self.prime_tessellator_scale(state);
@@ -136,8 +132,8 @@ impl DrawBatcher {
             // CTM at call time — shape.wgsl has no model matrix).
             state.save();
             state.translate(Offset::new(
-                px(current_blur * 0.5),
-                px(offset_y + current_blur * 0.5),
+                f64::from(current_blur * 0.5),
+                f64::from(offset_y + current_blur * 0.5),
             ));
 
             match self
@@ -175,7 +171,7 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<crate::command_ir::DrawItem>,
         state: &GpuStateStack,
-        rrect: &flui_types::geometry::RRect,
+        rrect: &flui_foundation::geometry::RRect,
         color: Color,
         elevation: f32,
     ) {
@@ -187,12 +183,9 @@ impl DrawBatcher {
         let top_left = state.apply_transform(Point::new(rrect.rect.left(), rrect.rect.top()));
         let bottom_right =
             state.apply_transform(Point::new(rrect.rect.right(), rrect.rect.bottom()));
-        let rect_pos = [top_left.x.0, top_left.y.0];
-        let rect_size = [
-            bottom_right.x.0 - top_left.x.0,
-            bottom_right.y.0 - top_left.y.0,
-        ];
-        let corner_radius = rrect.top_left.x.0 * scale;
+        let rect_pos = [top_left.x, top_left.y];
+        let rect_size = [bottom_right.x - top_left.x, bottom_right.y - top_left.y];
+        let corner_radius = rrect.top_left.x * f64::from(scale);
 
         // Elevation → shadow shape, in the same device space as `rect_pos`.
         let blur_sigma = elevation * scale;
@@ -207,9 +200,9 @@ impl DrawBatcher {
         Self::draw_shadow_rect(
             segment,
             draw_order,
-            rect_pos,
-            rect_size,
-            corner_radius,
+            (rect_pos).map(|v| v as f32),
+            (rect_size).map(|v| v as f32),
+            corner_radius as f32,
             &params,
         );
     }
@@ -310,7 +303,7 @@ impl DrawBatcher {
         let path_hash = PathCache::compute_path_hash(
             path,
             paint.style,
-            paint.stroke_width,
+            paint.stroke_width as f32,
             paint.stroke_cap,
             paint.stroke_join,
             max_scale,
@@ -444,9 +437,9 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
-        vertices: &[Point<Pixels>],
+        vertices: &[Point<f64>],
         colors: Option<&[Color]>,
-        tex_coords: Option<&[Point<Pixels>]>,
+        tex_coords: Option<&[Point<f64>]>,
         indices: &[u16],
         paint: &Paint,
     ) {
@@ -487,12 +480,12 @@ impl DrawBatcher {
 
                 let uv = tex_coords
                     .and_then(|tc| tc.get(i))
-                    .map_or([0.0, 0.0], |p| [p.x.0, p.y.0]);
+                    .map_or([0.0, 0.0], |p| [p.x, p.y]);
 
                 Vertex {
-                    position: [pos.x.0, pos.y.0],
+                    position: [(pos.x as f32), (pos.y as f32)],
                     color: color.to_f32_array(),
-                    tex_coord: uv,
+                    tex_coord: (uv).map(|v| v as f32),
                 }
             })
             .collect();
@@ -527,8 +520,8 @@ impl DrawBatcher {
 /// Used exclusively by `draw_path` to decide SSAA eligibility.
 fn path_aabb_area_device_px_sq(path: &Path, state: &GpuStateStack) -> f32 {
     let local_bounds = path.compute_bounds();
-    let w = local_bounds.width().0.max(0.0);
-    let h = local_bounds.height().0.max(0.0);
+    let w = local_bounds.width().max(0.0) as f32;
+    let h = local_bounds.height().max(0.0) as f32;
     // area_scale() = |det(M_2d)| maps local area → device-pixel² area correctly
     // under rotation, shear, and anisotropic scale. max_scale² overestimates for
     // anisotropic scale (e.g. scale(0.5, 10) → max_scale²=100, area_scale=5).
@@ -539,8 +532,8 @@ fn path_aabb_area_device_px_sq(path: &Path, state: &GpuStateStack) -> f32 {
 
 #[cfg(test)]
 mod threshold_tests {
+    use flui_painting::paint::path::Path;
     use flui_painting::{BlendMode, Paint, PaintStyle};
-    use flui_types::{geometry::px, painting::path::Path};
 
     use super::DrawBatcher;
     use crate::{
@@ -554,8 +547,8 @@ mod threshold_tests {
     }
 
     fn rect_path(w: f32, h: f32) -> Path {
-        use flui_types::Rect;
-        Path::rectangle(Rect::from_xywh(px(0.0), px(0.0), px(w), px(h)))
+        use flui_foundation::geometry::Rect;
+        Path::rectangle(Rect::from_xywh(0.0, 0.0, f64::from(w), f64::from(h)))
     }
 
     // ── T1: path below threshold → batched tessellated (no SsaaPath) ─────────

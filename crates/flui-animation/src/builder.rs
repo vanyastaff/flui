@@ -41,10 +41,10 @@ use std::time::Duration;
 pub struct AnimationControllerBuilder {
     duration: Duration,
     scheduler: UpdateScheduler,
-    lower_bound: f32,
-    upper_bound: f32,
+    lower_bound: f64,
+    upper_bound: f64,
     reverse_duration: Option<Duration>,
-    initial_value: Option<f32>,
+    initial_value: Option<f64>,
 }
 
 impl std::fmt::Debug for AnimationControllerBuilder {
@@ -102,10 +102,10 @@ impl AnimationControllerBuilder {
     /// # Errors
     ///
     /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
-    /// finite, `lower < upper`, AND `upper - lower` itself fits in `f32` —
+    /// finite, `lower < upper`, AND `upper - lower` itself fits in `f64` —
     /// bounded means finite endpoints AND a finite span
-    /// (`(-f32::MAX, f32::MAX)` has finite endpoints but a span of
-    /// `f32::INFINITY`). An [`AnimationController::unbounded`] controller
+    /// (`(-f64::MAX, f64::MAX)` has finite endpoints but a span of
+    /// `f64::INFINITY`). An [`AnimationController::unbounded`] controller
     /// is not reachable through this builder (it has no bound to
     /// configure).
     ///
@@ -126,7 +126,7 @@ impl AnimationControllerBuilder {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn bounds(mut self, lower: f32, upper: f32) -> Result<Self, AnimationError> {
+    pub fn bounds(mut self, lower: f64, upper: f64) -> Result<Self, AnimationError> {
         // `lower >= upper` (not the negated `!(lower < upper)`, which
         // clippy's `neg_cmp_op_on_partial_ord` flags on a `PartialOrd`-only
         // type): NaN makes the two diverge, but NaN is caught by the
@@ -141,7 +141,7 @@ impl AnimationControllerBuilder {
             return Err(AnimationError::InvalidBounds(format!(
                 "lower_bound ({lower}) and upper_bound ({upper}) must both be finite, with \
                  lower_bound < upper_bound, and the range (upper_bound - lower_bound) must fit \
-                 in f32"
+                 in f64"
             )));
         }
         self.lower_bound = lower;
@@ -201,7 +201,7 @@ impl AnimationControllerBuilder {
     /// .initial_value(0.5);
     /// ```
     #[must_use]
-    pub fn initial_value(mut self, value: f32) -> Self {
+    pub fn initial_value(mut self, value: f64) -> Self {
         self.initial_value = Some(value);
         self
     }
@@ -344,14 +344,14 @@ mod tests {
         let scheduler = UpdateScheduler::new();
         // Same list `controller::tests::bounds_constructors_reject_non_finite_bounds`
         // uses, plus the finite-endpoints-infinite-range case.
-        let cases: &[(f32, f32)] = &[
-            (f32::NAN, 1.0),
-            (0.0, f32::NAN),
-            (f32::NEG_INFINITY, f32::INFINITY),
-            (f32::NEG_INFINITY, 5.0),
-            (5.0, f32::INFINITY),
-            (f32::NEG_INFINITY, f32::NEG_INFINITY),
-            (-f32::MAX, f32::MAX),
+        let cases: &[(f64, f64)] = &[
+            (f64::NAN, 1.0),
+            (0.0, f64::NAN),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (f64::NEG_INFINITY, 5.0),
+            (5.0, f64::INFINITY),
+            (f64::NEG_INFINITY, f64::NEG_INFINITY),
+            (-f64::MAX, f64::MAX),
         ];
         for &(lower, upper) in cases {
             let result = AnimationControllerBuilder::new(Duration::from_millis(100), &scheduler)

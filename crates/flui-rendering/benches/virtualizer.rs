@@ -45,6 +45,7 @@ use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::Diagnosticable;
+use flui_foundation::geometry::Size;
 use flui_foundation::{Leaf, Variable};
 use flui_objects::RenderSliverList;
 use flui_rendering::{
@@ -58,7 +59,6 @@ use flui_rendering::{
     traits::{RenderBox, RenderObject},
     virtualization::{ScrollWindow, Virtualizer},
 };
-use flui_types::{Size, geometry::px};
 
 /// Sizes spanning two orders of magnitude so the `log n` vs `n` gap is visible.
 const SIZES: &[usize] = &[1_000, 10_000, 100_000];
@@ -66,15 +66,15 @@ const SIZES: &[usize] = &[1_000, 10_000, 100_000];
 /// Deterministic non-uniform extent for item `i` (so neither structure can
 /// shortcut via uniform spacing).
 #[inline]
-fn extent_for(i: usize) -> f32 {
-    (i % 17 + 1) as f32
+fn extent_for(i: usize) -> f64 {
+    (i % 17 + 1) as f64
 }
 
 /// Naive flat-array baseline: a `Vec` of extents. Seeks scan linearly; a
 /// mid-list insert/remove shifts the tail. This is the `O(n)` structure the
 /// tree beats (and the shape a Fenwick/BIT shares for structural edits).
 struct NaiveExtents {
-    extents: Vec<f32>,
+    extents: Vec<f64>,
 }
 
 impl NaiveExtents {
@@ -85,12 +85,12 @@ impl NaiveExtents {
     }
 
     /// `O(n)` prefix sum.
-    fn offset_of(&self, index: usize) -> f32 {
+    fn offset_of(&self, index: usize) -> f64 {
         self.extents.iter().take(index).sum()
     }
 
     /// `O(n)` linear scan for the item containing `offset`.
-    fn seek(&self, offset: f32) -> usize {
+    fn seek(&self, offset: f64) -> usize {
         let mut acc = 0.0;
         for (i, &e) in self.extents.iter().enumerate() {
             if acc + e > offset {
@@ -101,7 +101,7 @@ impl NaiveExtents {
         self.extents.len().saturating_sub(1)
     }
 
-    fn total(&self) -> f32 {
+    fn total(&self) -> f64 {
         self.extents.iter().sum()
     }
 }
@@ -113,9 +113,9 @@ impl NaiveExtents {
 /// (not the `O(log n)` of a tree rebalance) is exactly why a Fenwick is the
 /// wrong tool for a *dynamic* list, and the cost this baseline isolates.
 struct FenwickRebuildBaseline {
-    extents: Vec<f32>,
+    extents: Vec<f64>,
     /// `cumulative[i] = sum(extents[0..=i])`; rebuilt `O(n)` after every edit.
-    cumulative: Vec<f32>,
+    cumulative: Vec<f64>,
 }
 
 impl FenwickRebuildBaseline {
@@ -129,7 +129,7 @@ impl FenwickRebuildBaseline {
     /// Insert one item, then rebuild the cumulative array — an `O(n)` arithmetic
     /// pass, the structural-edit cost a Fenwick/BIT pays (it has no `O(log n)`
     /// insert; index shift invalidates the whole prefix structure).
-    fn insert_and_rebuild(&mut self, index: usize, extent: f32) {
+    fn insert_and_rebuild(&mut self, index: usize, extent: f64) {
         self.extents.insert(index, extent);
         self.cumulative.clear();
         self.cumulative.reserve(self.extents.len());
@@ -140,7 +140,7 @@ impl FenwickRebuildBaseline {
         }
     }
 
-    fn total(&self) -> f32 {
+    fn total(&self) -> f64 {
         self.cumulative.last().copied().unwrap_or(0.0)
     }
 }
@@ -192,9 +192,9 @@ fn bench_seek_offset_to_index(c: &mut Criterion) {
 // shared-prefix descent. The naive baseline must linear-scan once per edge.
 
 /// Realistic viewport main-axis extent for the windowed-query bench.
-const VIEWPORT: f32 = 800.0;
+const VIEWPORT: f64 = 800.0;
 /// Realistic cache buffer kept on each side of the viewport.
-const CACHE_SIDE: f32 = 250.0;
+const CACHE_SIDE: f64 = 250.0;
 
 fn bench_query_window(c: &mut Criterion) {
     let mut group = c.benchmark_group("virtualizer/query_window");
@@ -325,7 +325,7 @@ fn bench_structural_growth(c: &mut Criterion) {
 /// Minimal Box leaf for bench scaffolding.
 #[derive(Debug, Clone)]
 struct BenchBox {
-    height: f32,
+    height: f64,
 }
 
 impl Diagnosticable for BenchBox {}
@@ -335,7 +335,7 @@ impl RenderBox for BenchBox {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
-        Size::new(ctx.constraints().max_width, px(self.height))
+        Size::new(ctx.constraints().max_width, self.height)
     }
 
     fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
@@ -370,8 +370,8 @@ impl RenderBox for BenchSliverHost {
     }
 }
 
-const BENCH_ITEM_HEIGHT: f32 = 50.0;
-const BENCH_VIEWPORT: f32 = 300.0;
+const BENCH_ITEM_HEIGHT: f64 = 50.0;
+const BENCH_VIEWPORT: f64 = 300.0;
 
 /// Resident count that covers the settled visible+cache band at
 /// [`BENCH_VIEWPORT`]/[`BENCH_ITEM_HEIGHT`] with headroom: window ≈
@@ -379,7 +379,7 @@ const BENCH_VIEWPORT: f32 = 300.0;
 /// rounded up with margin so the band is fully resident, never partial.
 const BENCH_RESIDENT_COUNT: usize = 12;
 
-fn bench_constraints(scroll_offset: f32) -> SliverConstraints {
+fn bench_constraints(scroll_offset: f64) -> SliverConstraints {
     sliver_presets::vertical()
         .scroll_offset(scroll_offset)
         .remaining_paint_extent(BENCH_VIEWPORT)
@@ -442,8 +442,8 @@ fn build_settled_list(
 
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(
-        px(300.0),
-        px(BENCH_VIEWPORT),
+        300.0,
+        BENCH_VIEWPORT,
     ))));
 
     let mut owner = owner.into_layout();

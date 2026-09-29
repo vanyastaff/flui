@@ -36,10 +36,10 @@
 //! contract promised.
 
 use flui_foundation::RenderId;
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_semantics::{
     AccessibilityNodeId, SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsTree,
 };
-use flui_types::{Offset, Point, Rect, Size, geometry::Pixels};
 use rustc_hash::FxHashSet;
 
 use crate::{
@@ -180,14 +180,14 @@ impl PipelineOwner<Semantics> {
 struct BuiltSemanticsNode {
     source_render_id: RenderId,
     config: SemanticsConfiguration,
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
     children: Vec<BuiltSemanticsNode>,
 }
 
 struct PendingSemanticsNode {
     source_render_id: RenderId,
     config: SemanticsConfiguration,
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
     children: Vec<BuiltSemanticsNode>,
 }
 
@@ -219,15 +219,15 @@ enum SemanticsFragment {
 #[derive(Debug, Clone, Copy, Default)]
 struct SemanticsClips {
     /// Outside this, a child is painted nowhere the user can see.
-    paint: Option<Rect<Pixels>>,
+    paint: Option<Rect<f64>>,
     /// Outside this, a child has no accessibility presence at all.
-    semantics: Option<Rect<Pixels>>,
+    semantics: Option<Rect<f64>>,
 }
 
 /// What [`SemanticsClips::apply`] decided about one node's rect.
 struct ClippedRect {
     /// The rect to publish, already narrowed to the surviving part.
-    rect: Rect<Pixels>,
+    rect: Rect<f64>,
     /// The node is off-screen but reachable: publish it, flagged hidden.
     hidden: bool,
     /// Nothing of the node survives the semantics clip: publish no node for
@@ -238,12 +238,12 @@ struct ClippedRect {
 
 impl SemanticsClips {
     /// Narrows `rect` to what these clips leave of it.
-    fn apply(self, rect: Rect<Pixels>) -> ClippedRect {
+    fn apply(self, rect: Rect<f64>) -> ClippedRect {
         let was_empty = rect.is_empty();
 
         // `Rect::intersect` reports a zero-area overlap as `Some(empty)`;
         // for a clip that is the same answer as no overlap at all.
-        let intersect = |clip: &Rect<Pixels>, rect: &Rect<Pixels>| {
+        let intersect = |clip: &Rect<f64>, rect: &Rect<f64>| {
             clip.intersect(rect).filter(|kept| !kept.is_empty())
         };
 
@@ -303,11 +303,7 @@ impl SemanticsClips {
     /// - a node that declares neither passes the inherited one through, and a
     ///   node with no inherited semantics clip stays unclipped whatever its
     ///   paint clip says.
-    fn descend(
-        self,
-        local_paint: Option<Rect<Pixels>>,
-        local_semantics: Option<Rect<Pixels>>,
-    ) -> Self {
+    fn descend(self, local_paint: Option<Rect<f64>>, local_semantics: Option<Rect<f64>>) -> Self {
         let paint = intersect_clips(self.paint, local_paint);
         let semantics = match local_semantics {
             Some(replacement) => Some(replacement),
@@ -327,7 +323,7 @@ impl SemanticsClips {
 }
 
 /// Intersection where `None` means "no clip", not "empty".
-fn intersect_clips(a: Option<Rect<Pixels>>, b: Option<Rect<Pixels>>) -> Option<Rect<Pixels>> {
+fn intersect_clips(a: Option<Rect<f64>>, b: Option<Rect<f64>>) -> Option<Rect<f64>> {
     match (a, b) {
         (Some(a), Some(b)) => a.intersect(&b).or(Some(Rect::ZERO)),
         (Some(only), None) | (None, Some(only)) => Some(only),
@@ -355,8 +351,8 @@ fn child_clips_of(
     node: &RenderNode,
     origin: Offset,
     child_slot: usize,
-) -> (Option<Rect<Pixels>>, Option<Rect<Pixels>>) {
-    let offset = flui_types::Offset::new(origin.dx, origin.dy);
+) -> (Option<Rect<f64>>, Option<Rect<f64>>) {
+    let offset = flui_foundation::geometry::Offset::new(origin.dx, origin.dy);
     // The node's own size is passed in rather than cached by each implementor.
     // A clip is always a function of the box it clips, so every implementor
     // would otherwise have to commit its own copy of a value the walk already
@@ -1048,7 +1044,7 @@ fn node_excludes_semantics_subtree(node: &RenderNode) -> bool {
     }
 }
 
-fn node_semantics_rect(node: &RenderNode, origin: Offset) -> Rect<Pixels> {
+fn node_semantics_rect(node: &RenderNode, origin: Offset) -> Rect<f64> {
     let size = match node {
         RenderNode::Box(entry) => entry.state().geometry().unwrap_or(Size::ZERO),
         RenderNode::Sliver(entry) => entry.state().absolute_paint_size(),
@@ -1068,8 +1064,8 @@ mod tests {
     /// has something to accumulate.
     #[derive(Debug)]
     struct ClippingBox {
-        semantics_clip: Option<Rect<Pixels>>,
-        paint_clip: Option<Rect<Pixels>>,
+        semantics_clip: Option<Rect<f64>>,
+        paint_clip: Option<Rect<f64>>,
     }
 
     impl ClippingBox {
@@ -1080,7 +1076,7 @@ mod tests {
             }
         }
 
-        fn clipping(semantics: Rect<Pixels>, paint: Rect<Pixels>) -> Self {
+        fn clipping(semantics: Rect<f64>, paint: Rect<f64>) -> Self {
             Self {
                 semantics_clip: Some(semantics),
                 paint_clip: Some(paint),
@@ -1105,7 +1101,7 @@ mod tests {
             ctx.constraints().smallest()
         }
 
-        fn describe_semantics_clip(&self, _child_slot: usize, _size: Size) -> Option<Rect<Pixels>> {
+        fn describe_semantics_clip(&self, _child_slot: usize, _size: Size) -> Option<Rect<f64>> {
             self.semantics_clip
         }
 
@@ -1113,18 +1109,13 @@ mod tests {
             &self,
             _child_slot: usize,
             _size: Size,
-        ) -> Option<Rect<Pixels>> {
+        ) -> Option<Rect<f64>> {
             self.paint_clip
         }
     }
 
-    fn rect(top: f32, bottom: f32) -> Rect<Pixels> {
-        Rect::from_ltrb(
-            flui_types::geometry::px(0.0),
-            flui_types::geometry::px(top),
-            flui_types::geometry::px(100.0),
-            flui_types::geometry::px(bottom),
-        )
+    fn rect(top: f64, bottom: f64) -> Rect<f64> {
+        Rect::from_ltrb(0.0, top, 100.0, bottom)
     }
 
     /// The graft re-derives a node's inherited clips by folding the ancestor

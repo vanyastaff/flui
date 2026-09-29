@@ -8,8 +8,8 @@
 //! Note: Full RenderSliver implementation requires additional setup.
 //! This example focuses on understanding the constraint/geometry system.
 
+use flui_rendering::constraints::AxisDirection;
 use flui_rendering::constraints::{SliverConstraints, SliverGeometry};
-use flui_types::prelude::AxisDirection;
 
 // ============================================================================
 // Sliver Simulation: SliverFixedExtentList
@@ -21,11 +21,11 @@ struct SliverFixedExtentList {
     /// Number of items.
     item_count: usize,
     /// Extent of each item (height for vertical, width for horizontal).
-    item_extent: f32,
+    item_extent: f64,
 }
 
 impl SliverFixedExtentList {
-    fn new(item_count: usize, item_extent: f32) -> Self {
+    fn new(item_count: usize, item_extent: f64) -> Self {
         Self {
             item_count,
             item_extent,
@@ -33,12 +33,12 @@ impl SliverFixedExtentList {
     }
 
     /// Total scroll extent (all items).
-    fn total_extent(&self) -> f32 {
-        self.item_count as f32 * self.item_extent
+    fn total_extent(&self) -> f64 {
+        self.item_count as f64 * self.item_extent
     }
 
     /// First visible item index based on scroll offset.
-    fn first_visible_index(&self, scroll_offset: f32) -> usize {
+    fn first_visible_index(&self, scroll_offset: f64) -> usize {
         if self.item_extent <= 0.0 {
             return 0;
         }
@@ -46,7 +46,7 @@ impl SliverFixedExtentList {
     }
 
     /// Number of visible items in viewport.
-    fn visible_count(&self, viewport_extent: f32) -> usize {
+    fn visible_count(&self, viewport_extent: f64) -> usize {
         if self.item_extent <= 0.0 {
             return 0;
         }

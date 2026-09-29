@@ -1,8 +1,8 @@
+use flui_foundation::geometry::Bounds;
+use flui_platform_api::ImeEvent;
 use flui_platform_api::text_store::{
     InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
 };
-use flui_types::ImeEvent;
-use flui_types::geometry::Bounds;
 
 use super::*;
 
@@ -18,7 +18,7 @@ fn headless_text_input() -> (
 }
 
 fn test_constraints() -> BoxConstraints {
-    BoxConstraints::tight(flui_types::Size::new(px(800.0), px(600.0)))
+    BoxConstraints::tight(flui_foundation::geometry::Size::new(800.0, 600.0))
 }
 
 /// A client over a fresh in-memory store, and the store.
@@ -313,8 +313,8 @@ fn set_ime_cursor_area_reaches_the_presentations_platform_capability() {
     let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
 
     let area = Bounds::new(
-        flui_types::Point::new(px(10.0), px(20.0)),
-        flui_types::Size::new(px(2.0), px(18.0)),
+        flui_foundation::geometry::Point::new(10.0, 20.0),
+        flui_foundation::geometry::Size::new(2.0, 18.0),
     );
     realm
         .text_input_handle()
@@ -335,8 +335,8 @@ fn set_ime_cursor_area_without_platform_support_is_typed() {
     let realm = UiRealm::for_test();
     assert_eq!(
         realm.text_input_handle().set_cursor_area(Bounds::new(
-            flui_types::Point::new(px(0.0), px(0.0)),
-            flui_types::Size::new(px(1.0), px(1.0)),
+            flui_foundation::geometry::Point::new(0.0, 0.0),
+            flui_foundation::geometry::Size::new(1.0, 1.0),
         )),
         Err(flui_interaction::TextInputError::Unsupported)
     );

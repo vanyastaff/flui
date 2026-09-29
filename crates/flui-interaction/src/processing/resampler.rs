@@ -48,7 +48,7 @@ use std::{collections::VecDeque, sync::Arc};
 
 use web_time::{Duration, Instant};
 
-use flui_types::geometry::{Offset, Pixels};
+use flui_foundation::geometry::Offset;
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 
@@ -110,7 +110,7 @@ struct ResamplerInner {
     /// Whether the pointer is being tracked
     is_tracked: bool,
     /// Last sampled position (for interpolation)
-    last_position: Option<Offset<Pixels>>,
+    last_position: Option<Offset<f64>>,
     /// Last sample time
     last_sample_time: Option<Instant>,
 }
@@ -269,8 +269,8 @@ impl PointerEventResampler {
                     let t = t.clamp(0.0, 1.0);
 
                     let interpolated_pos = Offset::new(
-                        last_pos.dx + (next_pos.dx - last_pos.dx) * t as f32,
-                        last_pos.dy + (next_pos.dy - last_pos.dy) * t as f32,
+                        last_pos.dx + (next_pos.dx - last_pos.dx) * t,
+                        last_pos.dy + (next_pos.dy - last_pos.dy) * t,
                     );
 
                     // Only emit if position actually changed
@@ -281,8 +281,8 @@ impl PointerEventResampler {
                         let mut interpolated = next_event.event.clone();
                         if let PointerEvent::Move(update) = &mut interpolated {
                             update.current.position = dpi::PhysicalPosition::new(
-                                f64::from(interpolated_pos.dx.get()),
-                                f64::from(interpolated_pos.dy.get()),
+                                interpolated_pos.dx,
+                                interpolated_pos.dy,
                             );
                         }
                         inner.last_position = Some(interpolated_pos);
@@ -384,10 +384,7 @@ mod tests {
     fn sample_releases_state_lock_before_invoking_callback() {
         let resampler = PointerEventResampler::new(PointerId::PRIMARY);
         resampler.start_tracking();
-        resampler.add_event(make_move_event(
-            Offset::new(Pixels(1.0), Pixels(1.0)),
-            PointerType::Touch,
-        ));
+        resampler.add_event(make_move_event(Offset::new(1.0, 1.0), PointerType::Touch));
 
         let callback_resampler = resampler.clone();
         let now = Instant::now();
@@ -403,10 +400,7 @@ mod tests {
     fn stop_releases_state_lock_before_invoking_callback() {
         let resampler = PointerEventResampler::new(PointerId::PRIMARY);
         resampler.start_tracking();
-        resampler.add_event(make_move_event(
-            Offset::new(Pixels(1.0), Pixels(1.0)),
-            PointerType::Touch,
-        ));
+        resampler.add_event(make_move_event(Offset::new(1.0, 1.0), PointerType::Touch));
 
         let callback_resampler = resampler.clone();
         resampler.stop(move |_| {
@@ -430,7 +424,7 @@ mod tests {
         // First move is in the past relative to the sample time.
         resampler.add_event(make_move_event_for_id(
             PointerId::PRIMARY,
-            Offset::new(Pixels(0.0), Pixels(0.0)),
+            Offset::new(0.0, 0.0),
             PointerType::Touch,
         ));
         std::thread::sleep(Duration::from_millis(3));
@@ -439,11 +433,11 @@ mod tests {
         // Second move arrives after the sample time -> stays pending.
         resampler.add_event(make_move_event_for_id(
             PointerId::PRIMARY,
-            Offset::new(Pixels(100.0), Pixels(0.0)),
+            Offset::new(100.0, 0.0),
             PointerType::Touch,
         ));
 
-        let mut emitted: Vec<Offset<Pixels>> = Vec::new();
+        let mut emitted: Vec<Offset<f64>> = Vec::new();
         resampler.sample(
             sample_time,
             sample_time + Duration::from_millis(100),
@@ -465,7 +459,7 @@ mod tests {
             "an interpolated Move must be emitted toward the pending event"
         );
         assert!(
-            (emitted[1].dx.get() - 100.0).abs() < 0.5,
+            (emitted[1].dx - 100.0).abs() < 0.5,
             "interpolated position must approach the pending event, got {:?}",
             emitted[1]
         );
@@ -479,7 +473,7 @@ mod tests {
     fn test_add_event() {
         let resampler = PointerEventResampler::new(PointerId::PRIMARY);
 
-        let event = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let event = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         resampler.add_event(event);
 
         assert!(resampler.is_tracked());
@@ -492,7 +486,7 @@ mod tests {
         let resampler = PointerEventResampler::new(PointerId::PRIMARY);
 
         // Add down event
-        let event = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let event = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         resampler.add_event(event);
 
         // Sample events
@@ -510,10 +504,10 @@ mod tests {
     fn test_stop_flushes_events() {
         let resampler = PointerEventResampler::new(PointerId::PRIMARY);
 
-        let down = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let down = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         resampler.add_event(down);
 
-        let mv = make_move_event(Offset::new(Pixels(20.0), Pixels(30.0)), PointerType::Mouse);
+        let mv = make_move_event(Offset::new(20.0, 30.0), PointerType::Mouse);
         resampler.add_event(mv);
 
         let mut flushed_events = Vec::new();
@@ -530,7 +524,7 @@ mod tests {
     fn test_clear() {
         let resampler = PointerEventResampler::new(PointerId::PRIMARY);
 
-        let event = make_down_event(Offset::new(Pixels(10.0), Pixels(20.0)), PointerType::Mouse);
+        let event = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
         resampler.add_event(event);
 
         assert!(resampler.has_pending_events());

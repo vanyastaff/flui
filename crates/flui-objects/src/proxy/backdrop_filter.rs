@@ -15,7 +15,7 @@
 //! (a layout-aware filter blueprint with bounded-blur/tile-mode/compose
 //! support) plus a `backdropKey: BackdropKey?` for `BackdropGroup`-shared
 //! backdrop sampling. Neither has any FLUI-side backing today —
-//! `flui_types::painting::ImageFilter` has no bounded/tile-mode blur
+//! `flui_painting::paint::ImageFilter` has no bounded/tile-mode blur
 //! variant, and `flui-layer`'s `BackdropFilterLayer` has no
 //! `backdrop_key` field at all. Adding either speculatively would be dead
 //! plumbing with zero consumers. This port targets the classic
@@ -42,10 +42,8 @@
 //! and `LayerTree` wiring is variant-agnostic and correct.
 
 use flui_foundation::Single;
-use flui_types::{
-    Offset,
-    painting::{BlendMode, ImageFilter},
-};
+use flui_foundation::geometry::Offset;
+use flui_painting::paint::{BlendMode, ImageFilter};
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintCx},

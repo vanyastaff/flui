@@ -42,8 +42,8 @@ use std::{
 
 use flui_animation::{Animation, AnimationController, Vsync, VsyncRegistration};
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_types::Color;
 use flui_view::prelude::StatefulView;
 use flui_view::{
     BuildContext, BuildContextExt, Child, EventCx, EventOutcome, IntoView, LifecycleContext,
@@ -61,11 +61,11 @@ use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
 
 /// Default pull distance (logical pixels) required to trigger a refresh.
 /// Matches Flutter's `kRefreshIndicatorTriggerDistance`.
-const DEFAULT_THRESHOLD_PX: f32 = 80.0;
+const DEFAULT_THRESHOLD_PX: f64 = 80.0;
 
 /// Height of the indicator overlay while refreshing (logical pixels).
 /// Matches Flutter's `kRefreshIndicatorExtent` (56 dp, a standard FAB height).
-const INDICATOR_HEIGHT_PX: f32 = 56.0;
+const INDICATOR_HEIGHT_PX: f64 = 56.0;
 
 /// Indicator background colour: Material Blue 500 at 80 % opacity.
 /// DEFERRED (v1): theming / custom indicator builders.
@@ -81,7 +81,7 @@ const INDICATOR_COLOR: Color = Color {
 // ---------------------------------------------------------------------------
 
 struct RefreshControllerInner {
-    pull_distance_px: Mutex<f32>,
+    pull_distance_px: Mutex<f64>,
     is_refreshing: Mutex<bool>,
     notifier: ChangeNotifier,
 }
@@ -163,7 +163,7 @@ impl RefreshController {
     /// Non-zero only while the user is actively overscrolling past the top.
     /// Resets to `0.0` when the pointer lifts or a refresh begins.
     #[must_use]
-    pub fn pull_distance_px(&self) -> f32 {
+    pub fn pull_distance_px(&self) -> f64 {
         *self
             .inner
             .pull_distance_px
@@ -197,7 +197,7 @@ impl RefreshController {
 
     // -- crate-internal mutation called from gesture callbacks ----------------
 
-    pub(super) fn set_pull_distance_px(&self, distance_px: f32) {
+    pub(super) fn set_pull_distance_px(&self, distance_px: f64) {
         *self
             .inner
             .pull_distance_px
@@ -264,7 +264,7 @@ pub struct RefreshIndicator {
     /// Fired when the user releases after an over-threshold pull.
     on_refresh: Rc<dyn Fn(&mut EventCx<'_>)>,
     /// Minimum overscroll distance (logical pixels) to trigger refresh.
-    threshold_px: f32,
+    threshold_px: f64,
     /// Scroll boundary / fling behaviour.
     physics: SharedScrollPhysics,
     /// Scroll position shared between gesture callbacks and the view tree.
@@ -345,7 +345,7 @@ impl RefreshIndicator {
 
     /// Override the pull threshold in logical pixels (default: `80.0`).
     #[must_use]
-    pub fn threshold_px(mut self, threshold: f32) -> Self {
+    pub fn threshold_px(mut self, threshold: f64) -> Self {
         self.threshold_px = threshold;
         self
     }
@@ -508,7 +508,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                         }
                         // Flutter convention: positive dy (finger moving DOWN) maps
                         // to a decrease in scroll offset (reveals content above).
-                        let raw_delta_y = details.delta.dy.get();
+                        let raw_delta_y = details.delta.dy;
                         let proposed = sc_update.pixels() - raw_delta_y;
 
                         if proposed < sc_update.min_scroll_extent() {
@@ -538,7 +538,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                             // Convert pointer velocity to scroll velocity (negate:
                             // finger DOWN = positive dy → offset increases with negative delta).
                             let fling_vel_px_per_sec = {
-                                let raw = -details.velocity.pixels_per_second.dy.get();
+                                let raw = -details.velocity.pixels_per_second.dy;
                                 let bounded = raw.clamp(-8_000.0, 8_000.0);
                                 // `clamp` propagates NaN (IEEE 754); treat NaN as 0
                                 // so spring-back still works without measurable velocity.

@@ -1,16 +1,16 @@
 //! Native same-UIView safe-area and committed render-geometry oracle.
 use flui::prelude::*;
-use flui::types::Size;
+use flui::geometry::Size;
 use flui::rendering::{BoxConstraints, BoxDryLayoutCtx, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintCx, RenderBox, RenderUpdateImpact};
 use flui::view::{RenderObjectContext, RenderView};
 use flui::widgets::{MediaQuery, SafeArea, Stack};
-use flui::types::layout::StackFit;
+use flui::widgets::StackFit;
 use objc2::MainThreadMarker;
 use objc2_ui_kit::{UIApplication, UIWindowScene};
 use std::{cell::RefCell, sync::{Mutex, atomic::{AtomicUsize, Ordering}}, time::Duration};
 static PAINTS: AtomicUsize = AtomicUsize::new(0);
-static AMBIENT: Mutex<[f32;4]> = Mutex::new([0.0;4]);
-type Geometry = Vec<(bool, f32, f32, f32, f32)>;
+static AMBIENT: Mutex<[f64;4]> = Mutex::new([0.0;4]);
+type Geometry = Vec<(bool, f64, f64, f64, f64)>;
 thread_local! { static SNAPSHOT: RefCell<Option<Box<dyn Fn()->Geometry>>> = const { RefCell::new(None) }; }
 #[derive(Debug, flui::Diagnosticable)]
 struct ProbeLeaf { protected: bool }
@@ -22,7 +22,7 @@ impl RenderBox for ProbeLeaf {
     fn paint(&self, ctx: &mut PaintCx<'_,Leaf>) {
         let size = ctx.size();
         let color = if self.protected { Color::rgb(60,100,180) } else { Color::rgb(180,40,40) };
-        ctx.canvas().draw_rect(flui::types::Rect::from_origin_size(flui::types::Point::ZERO,size), &flui::painting::Paint::fill(color));
+        ctx.canvas().draw_rect(flui::geometry::Rect::from_origin_size(flui::geometry::Point::ZERO,size), &flui::painting::Paint::fill(color));
         PAINTS.fetch_add(1, Ordering::SeqCst);
     }
 }
@@ -49,14 +49,14 @@ impl ViewState<Root> for State {
                 let size=node.size()?;
                 let (mut x,mut y)=(0.0,0.0);
                 let mut next=Some(id);
-                while let Some(id)=next { let offset=tree.get(id).expect("node").offset(); x+=offset.dx.get();y+=offset.dy.get();next=tree.parent(id); }
-                Some((leaf.protected,x,y,size.width.get(),size.height.get()))
+                while let Some(id)=next { let offset=tree.get(id).expect("node").offset(); x+=offset.dx;y+=offset.dy;next=tree.parent(id); }
+                Some((leaf.protected,x,y,size.width,size.height))
             }).collect()
         }))));
     }
     fn build(&self,_:&Root,ctx:&dyn BuildContext)->impl IntoView {
         let p=MediaQuery::of(ctx).padding;
-        *AMBIENT.lock().expect("ambient")=[p.top.get(),p.right.get(),p.bottom.get(),p.left.get()];
+        *AMBIENT.lock().expect("ambient")=[p.top,p.right,p.bottom,p.left];
         Stack::new((LeafView(false),SafeArea::new().child(LeafView(true)))).fit(StackFit::Expand)
     }
 }
@@ -78,17 +78,17 @@ fn main() {
             let view=native.rootViewController().expect("controller").view().expect("exact root UIView");
             view.layoutIfNeeded();
             let p=view.safeAreaInsets();let bounds=view.bounds().size;
-            let expected=[p.top as f32,p.right as f32,p.bottom as f32,p.left as f32];
+            let expected=[p.top as f64,p.right as f64,p.bottom as f64,p.left as f64];
             let ambient=*AMBIENT.lock().expect("ambient");
             let geometry=SNAPSHOT.with(|slot|slot.borrow().as_ref().expect("snapshot")());
             let protected=geometry.iter().find(|g|g.0).expect("protected geometry");
             let background=geometry.iter().find(|g|!g.0).expect("background geometry");
-            let near=|a:f32,b:f32|(a-b).abs()<0.1;
+            let near=|a:f64,b:f64|(a-b).abs()<0.1;
             let passed=expected[0]>0.0 && ambient.iter().zip(expected).all(|(a,b)|near(*a,b))
                 && near(protected.1,expected[3]) && near(protected.2,expected[0])
-                && near(protected.3,bounds.width as f32-expected[1]-expected[3])
-                && near(protected.4,bounds.height as f32-expected[0]-expected[2])
-                && near(background.1,0.0)&&near(background.2,0.0)&&near(background.3,bounds.width as f32)&&near(background.4,bounds.height as f32);
+                && near(protected.3,bounds.width as f64-expected[1]-expected[3])
+                && near(protected.4,bounds.height as f64-expected[0]-expected[2])
+                && near(background.1,0.0)&&near(background.2,0.0)&&near(background.3,bounds.width as f64)&&near(background.4,bounds.height as f64);
             report(format!("{} safe-area native={expected:?} ambient={ambient:?} protected={protected:?} background={background:?}",if passed {"PASS"}else{"FAIL"}));
         });
     });

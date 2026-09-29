@@ -172,7 +172,7 @@ where
 #[cfg(test)]
 mod tests {
     use flui_foundation::Leaf;
-    use flui_types::Size;
+    use flui_foundation::geometry::Size;
 
     use super::*;
     use crate::{

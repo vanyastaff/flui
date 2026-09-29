@@ -6,7 +6,7 @@
 //! frame count and hands them in through [`PerformanceOverlayLayer::update_stats`],
 //! so no clock and no history ring lives in the compositor vocabulary.
 
-use flui_types::geometry::{Pixels, Rect, px};
+use flui_foundation::geometry::Rect;
 
 bitflags::bitflags! {
     /// Which readouts the overlay shows.
@@ -30,10 +30,10 @@ bitflags::bitflags! {
 /// Frame statistics drawn at a fixed rectangle over the scene.
 #[derive(Debug, Clone)]
 pub struct PerformanceOverlayLayer {
-    bounds: Rect<Pixels>,
+    bounds: Rect<f64>,
     options: PerformanceOverlayOption,
-    fps: f32,
-    frame_time_ms: f32,
+    fps: f64,
+    frame_time_ms: f64,
     total_frames: u64,
     /// One extra line of runtime diagnostics (present/input percentiles,
     /// dropped-frame counts) the presentation formats each frame.
@@ -43,13 +43,13 @@ pub struct PerformanceOverlayLayer {
 impl PerformanceOverlayLayer {
     /// The top-left placement the presentation uses by default.
     #[must_use]
-    pub fn default_bounds() -> Rect<Pixels> {
-        Rect::from_ltwh(px(8.0), px(8.0), px(480.0), px(58.0))
+    pub fn default_bounds() -> Rect<f64> {
+        Rect::from_ltwh(8.0, 8.0, 480.0, 58.0)
     }
 
     /// An overlay showing `options` inside `bounds`, with no samples yet.
     #[inline]
-    pub fn new(bounds: Rect<Pixels>, options: PerformanceOverlayOption) -> Self {
+    pub fn new(bounds: Rect<f64>, options: PerformanceOverlayOption) -> Self {
         Self {
             bounds,
             options,
@@ -62,12 +62,12 @@ impl PerformanceOverlayLayer {
 
     /// An overlay with every readout enabled.
     #[inline]
-    pub fn all_stats(bounds: Rect<Pixels>) -> Self {
+    pub fn all_stats(bounds: Rect<f64>) -> Self {
         Self::new(bounds, PerformanceOverlayOption::all())
     }
 
     /// Replaces the sampled numbers the overlay draws.
-    pub fn update_stats(&mut self, fps: f32, frame_time_ms: f32, total_frames: u64) {
+    pub fn update_stats(&mut self, fps: f64, frame_time_ms: f64, total_frames: u64) {
         self.fps = fps;
         self.frame_time_ms = frame_time_ms;
         self.total_frames = total_frames;
@@ -75,13 +75,13 @@ impl PerformanceOverlayLayer {
 
     /// Frames per second, as last sampled.
     #[inline]
-    pub fn fps(&self) -> f32 {
+    pub fn fps(&self) -> f64 {
         self.fps
     }
 
     /// Average frame time in milliseconds, as last sampled.
     #[inline]
-    pub fn frame_time_ms(&self) -> f32 {
+    pub fn frame_time_ms(&self) -> f64 {
         self.frame_time_ms
     }
 
@@ -110,7 +110,7 @@ impl PerformanceOverlayLayer {
 
     /// Where the overlay is drawn.
     #[inline]
-    pub fn bounds(&self) -> Rect<Pixels> {
+    pub fn bounds(&self) -> Rect<f64> {
         self.bounds
     }
 }

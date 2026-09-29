@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use flui_foundation::geometry::Size;
 use flui_objects::RenderCustomPaint;
 use flui_rendering::delegates::CustomPainter;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::Size;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Provides a canvas for a background and/or foreground [`CustomPainter`] to
@@ -95,7 +95,7 @@ mod tests {
     use std::any::Any;
 
     use flui_rendering::pipeline::Canvas;
-    use flui_types::geometry::px;
+
     use flui_view::RenderView;
 
     use super::*;
@@ -137,15 +137,12 @@ mod tests {
         let render_object = CustomPaint::new()
             .painter(painter())
             .foreground_painter(painter())
-            .size(Size::new(px(30.0), px(20.0)))
+            .size(Size::new(30.0, 20.0))
             .create_render_object(&flui_view::RenderObjectContext::detached());
 
         assert!(render_object.painter().is_some());
         assert!(render_object.foreground_painter().is_some());
-        assert_eq!(
-            render_object.preferred_size(),
-            Size::new(px(30.0), px(20.0))
-        );
+        assert_eq!(render_object.preferred_size(), Size::new(30.0, 20.0));
     }
 
     #[test]
@@ -156,7 +153,7 @@ mod tests {
 
         let impact = CustomPaint::new()
             .painter(painter())
-            .size(Size::new(px(5.0), px(5.0)))
+            .size(Size::new(5.0, 5.0))
             .update_render_object(
                 &flui_view::RenderObjectContext::detached(),
                 &mut render_object,
@@ -169,7 +166,7 @@ mod tests {
 
         assert!(render_object.painter().is_some());
         assert!(render_object.foreground_painter().is_none());
-        assert_eq!(render_object.preferred_size(), Size::new(px(5.0), px(5.0)));
+        assert_eq!(render_object.preferred_size(), Size::new(5.0, 5.0));
     }
 
     #[test]

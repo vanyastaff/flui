@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{lay_out, tight};
-use flui_types::Color;
+use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector, SizedBox};
 
 #[test]
@@ -512,9 +512,9 @@ mod event_cx {
     };
     use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
     use flui_interaction::{DragEndDetails, DragUpdateDetails};
+    use flui_painting::styling::Color;
     use flui_rendering::pipeline::PipelineCell;
     use flui_testing::{A11yTree, Action, ActionRequest, TreeId, invoke_semantics_action};
-    use flui_types::Color;
     use flui_view::prelude::*;
     use flui_widgets::{ColoredBox, GestureDetector, Semantics, Text};
 
@@ -572,7 +572,7 @@ mod event_cx {
         let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
             GestureDetector::new()
                 .on_double_tap_down(move |cx, details| {
-                    count.set(cx, details.local_position.dx.get() as u32)
+                    count.set(cx, details.local_position.dx as u32)
                 })
                 .child(target())
         });
@@ -593,7 +593,7 @@ mod event_cx {
         let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
             GestureDetector::new()
                 .on_pan_update(move |cx, details: DragUpdateDetails| {
-                    count.update(cx, |n| *n += details.delta.dy.get() as u32)
+                    count.update(cx, |n| *n += details.delta.dy as u32)
                 })
                 .child(target())
         });

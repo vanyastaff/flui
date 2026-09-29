@@ -4,9 +4,9 @@
 //! mis-propagated constraints or mis-placed a child.
 
 use crate::common::{lay_out, loose, offset, size, tight};
-use flui_geometry::{EdgeInsets, px};
-use flui_types::Alignment;
-use flui_types::Color;
+use flui_foundation::geometry::EdgeInsets;
+use flui_painting::Alignment;
+use flui_painting::styling::Color;
 use flui_view::ViewExt;
 use flui_widgets::row;
 use flui_widgets::{
@@ -38,7 +38,7 @@ fn container_color_and_padding_compose_around_child() {
     let laid = lay_out(
         Container::new()
             .color(Color::rgb(10, 20, 30))
-            .padding(EdgeInsets::all(px(8.0)))
+            .padding(EdgeInsets::all(8.0))
             .child(SizedBox::square(50.0)),
         loose(1000.0),
     );
@@ -53,7 +53,7 @@ fn container_margin_adds_space_outside_the_forced_size() {
         Container::new()
             .width(100.0)
             .height(50.0)
-            .margin(EdgeInsets::all(px(10.0)))
+            .margin(EdgeInsets::all(10.0))
             .child(SizedBox::shrink()),
         loose(1000.0),
     );
@@ -90,9 +90,9 @@ fn row_space_between_pushes_children_to_the_edges() {
     );
     let root = laid.root();
     assert_eq!(laid.size(root), size(200.0, 50.0));
-    assert_eq!(laid.offset(laid.child(root, 0)).dx, px(0.0));
+    assert_eq!(laid.offset(laid.child(root, 0)).dx, 0.0);
     // last child at 200 - 60 = 140.
-    assert_eq!(laid.offset(laid.child(root, 1)).dx, px(140.0));
+    assert_eq!(laid.offset(laid.child(root, 1)).dx, 140.0);
 }
 
 #[test]

@@ -22,14 +22,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
+use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Size};
 use flui_layer::{Layer, LayerTree};
 use flui_objects::{RenderColoredBox, RenderOpacity, RenderPadding, RenderTransform};
+use flui_painting::Alignment;
 use flui_rendering::{
     RenderUpdateImpact, constraints::BoxConstraints, hit_testing::HitTestResult,
     pipeline::PipelineOwner, testing::inspect,
 };
 use flui_scheduler::UpdateScheduler;
-use flui_types::{Alignment, EdgeInsets, Matrix4, Offset, Size, geometry::px};
 
 use crate::common::BoxedRenderObject;
 
@@ -46,7 +47,7 @@ fn state_offset(owner: &PipelineOwner, id: flui_foundation::RenderId) -> Offset 
     inspect::render_offset(owner, id).expect("node state")
 }
 
-fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f32) {
+fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f64) {
     let impact = {
         let entry = owner
             .render_tree_mut()
@@ -59,7 +60,7 @@ fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: 
             .as_any_mut()
             .downcast_mut::<RenderPadding>()
             .expect("RenderPadding")
-            .set_padding(EdgeInsets::all(px(value)))
+            .set_padding(EdgeInsets::all(value))
     };
     owner.apply_render_update_impact(id, impact);
 }
@@ -76,12 +77,7 @@ fn animated_padding_tracks_controller_value_across_frames() {
         .insert_child_render_object(pad, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("child");
     owner.set_root_id(Some(pad));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(300.0),
-        px(0.0),
-        px(300.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 300.0, 0.0, 300.0)));
 
     let ctrl = controller();
     ctrl.forward().expect("forward");
@@ -100,25 +96,25 @@ fn animated_padding_tracks_controller_value_across_frames() {
 
         assert_eq!(
             state_offset(&owner, child),
-            Offset::new(px(padding), px(padding)),
+            Offset::new(padding, padding),
             "frame {i}: committed offset must equal the animated padding",
         );
         // The picture's bounds track the animated origin exactly.
         let bounds = inspect::first_picture_bounds(&tree).expect("picture");
         assert_eq!(
             bounds,
-            flui_types::Rect::from_ltrb(
-                px(padding),
-                px(padding),
-                px(padding + 40.0),
-                px(padding + 40.0),
+            flui_foundation::geometry::Rect::from_ltrb(
+                padding,
+                padding,
+                padding + 40.0,
+                padding + 40.0,
             ),
             "frame {i}: painted bounds must track the animated origin",
         );
     }
 
     assert!(
-        ctrl.value() >= 1.0 - f32::EPSILON,
+        ctrl.value() >= 1.0 - f64::EPSILON,
         "controller reached its upper bound",
     );
 }
@@ -135,13 +131,13 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
         .insert_child_render_object(fade, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("child");
     owner.set_root_id(Some(fade));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(100.0), px(100.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
 
     let ctrl = controller();
     ctrl.forward().expect("forward");
 
-    fn opacity_alpha(tree: &LayerTree) -> Option<f32> {
-        fn find(tree: &LayerTree, id: flui_foundation::LayerId) -> Option<f32> {
+    fn opacity_alpha(tree: &LayerTree) -> Option<f64> {
+        fn find(tree: &LayerTree, id: flui_foundation::LayerId) -> Option<f64> {
             let node = tree.get(id)?;
             if let Layer::Opacity(o) = node.layer() {
                 return Some(o.alpha());
@@ -264,19 +260,14 @@ fn animated_transform_hits_follow_current_frame_matrix() {
         .insert_child_render_object(scaler, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("child");
     owner.set_root_id(Some(scaler));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     let ctrl = controller();
     ctrl.forward().expect("forward");
 
-    let hit_first = |owner: &PipelineOwner, x: f32, y: f32| {
+    let hit_first = |owner: &PipelineOwner, x: f64, y: f64| {
         let mut result = HitTestResult::new();
-        owner.hit_test(Offset::new(px(x), px(y)), &mut result);
+        owner.hit_test(Offset::new(x, y), &mut result);
         result.path().first().map(|e| e.target)
     };
 
@@ -342,12 +333,7 @@ fn completed_animation_leaves_the_pipeline_idle() {
         .insert_child_render_object(pad, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("child");
     owner.set_root_id(Some(pad));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(200.0),
-        px(0.0),
-        px(200.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
     let ctrl = controller();
     ctrl.forward().expect("forward");
@@ -394,12 +380,7 @@ fn reverse_mid_flight_walks_offsets_back() {
         .insert_child_render_object(pad, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("child");
     owner.set_root_id(Some(pad));
-    owner.set_root_constraints(Some(BoxConstraints::new(
-        px(0.0),
-        px(300.0),
-        px(0.0),
-        px(300.0),
-    )));
+    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 300.0, 0.0, 300.0)));
 
     let ctrl = controller();
     ctrl.forward().expect("forward");
@@ -410,7 +391,7 @@ fn reverse_mid_flight_walks_offsets_back() {
     set_padding(&mut owner, pad, 5.0 + 50.0 * mid);
     let (next, _) = frame(owner);
     owner = next;
-    assert_eq!(state_offset(&owner, child).dx, px(35.0));
+    assert_eq!(state_offset(&owner, child).dx, 35.0);
 
     // Reverse from 0.6. reverse() restarts the ticker (elapsed re-zeroes)
     // and the leg's duration is scaled by the remaining fraction — 0.6 of
@@ -425,7 +406,7 @@ fn reverse_mid_flight_walks_offsets_back() {
     assert!(tree.is_some(), "reverse frame paints");
     assert_eq!(
         state_offset(&owner, child).dx,
-        px(5.0 + 50.0 * back),
+        (5.0 + 50.0 * back),
         "offsets follow the reversed value without artifacts",
     );
 }

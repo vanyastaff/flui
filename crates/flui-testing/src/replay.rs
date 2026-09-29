@@ -38,19 +38,19 @@
 //! // 600ms of virtual time elapse inside the replay, so the 500ms deadline
 //! // fires — the thing the old iterator-based player could not express.
 //! binding.replay(&PointerScript::long_press(
-//!     Offset::new(px(10.0), px(10.0)),
+//!     Offset::new(10.0, 10.0),
 //!     Duration::from_millis(600),
 //! ));
 //! ```
 
 use std::time::Duration;
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
     PointerType, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
 use flui_interaction::{HitTestResult, PointerEvent, PointerId};
-use flui_types::geometry::{Offset, Pixels, px};
 
 use crate::HeadlessBinding;
 
@@ -83,7 +83,7 @@ pub struct ScriptedPointer {
     /// The phase.
     pub phase: PointerPhase,
     /// Position in logical pixels.
-    pub position: Offset<Pixels>,
+    pub position: Offset<f64>,
     /// Device kind. Slop thresholds and velocity policy differ per kind, so a
     /// script that means "touch" must say so.
     pub device: PointerType,
@@ -96,7 +96,7 @@ impl ScriptedPointer {
         at: Duration,
         pointer: PointerId,
         phase: PointerPhase,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
     ) -> Self {
         Self {
             at,
@@ -234,7 +234,7 @@ impl PointerScript {
 
     /// Down then up at `position`, 50 ms apart — inside any tap window.
     #[must_use]
-    pub fn tap(position: Offset<Pixels>) -> Self {
+    pub fn tap(position: Offset<f64>) -> Self {
         Self::new("tap")
             .with(ScriptedPointer::new(
                 Duration::ZERO,
@@ -266,7 +266,7 @@ impl PointerScript {
     /// (`replay_spends_exactly_the_scripts_duration_of_virtual_time`, and the
     /// long-press pair, which flip on the clock alone).
     #[must_use]
-    pub fn double_tap(position: Offset<Pixels>, gap: Duration) -> Self {
+    pub fn double_tap(position: Offset<f64>, gap: Duration) -> Self {
         let second = Duration::from_millis(50) + gap;
         Self::new("double_tap")
             .with(ScriptedPointer::new(
@@ -302,7 +302,7 @@ impl PointerScript {
     /// `hold` is the whole point: whether the long-press deadline fires is
     /// decided by how much virtual time the replay spends here.
     #[must_use]
-    pub fn long_press(position: Offset<Pixels>, hold: Duration) -> Self {
+    pub fn long_press(position: Offset<f64>, hold: Duration) -> Self {
         Self::new("long_press")
             .with(ScriptedPointer::new(
                 Duration::ZERO,
@@ -336,12 +336,7 @@ impl PointerScript {
     /// If `steps` is zero — a drag with no move samples is a tap with a
     /// misleading name.
     #[must_use]
-    pub fn drag(
-        start: Offset<Pixels>,
-        end: Offset<Pixels>,
-        steps: usize,
-        sample: Duration,
-    ) -> Self {
+    pub fn drag(start: Offset<f64>, end: Offset<f64>, steps: usize, sample: Duration) -> Self {
         assert!(steps > 0, "a drag needs at least one move sample");
         let mut script = Self::new("drag").with(ScriptedPointer::new(
             Duration::ZERO,
@@ -350,7 +345,7 @@ impl PointerScript {
             start,
         ));
         for step in 1..=steps {
-            let t = step as f32 / steps as f32;
+            let t = step as f64 / steps as f64;
             let position = Offset::new(
                 start.dx + (end.dx - start.dx) * t,
                 start.dy + (end.dy - start.dy) * t,
@@ -374,7 +369,7 @@ impl PointerScript {
     /// A drag sampled at hardware cadence (8 ms), fast enough to build the
     /// velocity a fling recognizer needs.
     #[must_use]
-    pub fn fling(start: Offset<Pixels>, end: Offset<Pixels>) -> Self {
+    pub fn fling(start: Offset<f64>, end: Offset<f64>) -> Self {
         let mut script = Self::drag(start, end, 6, Duration::from_millis(8));
         script.name = "fling".to_string();
         script
@@ -383,7 +378,7 @@ impl PointerScript {
     /// Alias for [`fling`](Self::fling) under the name a UI test usually gives
     /// it.
     #[must_use]
-    pub fn swipe(start: Offset<Pixels>, end: Offset<Pixels>) -> Self {
+    pub fn swipe(start: Offset<f64>, end: Offset<f64>) -> Self {
         let mut script = Self::fling(start, end);
         script.name = "swipe".to_string();
         script
@@ -397,17 +392,17 @@ impl PointerScript {
     /// If `steps` is zero.
     #[must_use]
     pub fn pinch(
-        center: Offset<Pixels>,
-        start_distance: f32,
-        end_distance: f32,
+        center: Offset<f64>,
+        start_distance: f64,
+        end_distance: f64,
         steps: usize,
     ) -> Self {
         assert!(steps > 0, "a pinch needs at least one move sample");
         let sample = Duration::from_millis(8);
         let first = PointerId::PRIMARY;
         let second = secondary_pointer();
-        let pair = |distance: f32| {
-            let half = px(distance / 2.0);
+        let pair = |distance: f64| {
+            let half = distance / 2.0;
             (
                 Offset::new(center.dx - half, center.dy),
                 Offset::new(center.dx + half, center.dy),
@@ -432,7 +427,7 @@ impl PointerScript {
             ));
 
         for step in 1..=steps {
-            let t = step as f32 / steps as f32;
+            let t = step as f64 / steps as f64;
             let distance = start_distance + (end_distance - start_distance) * t;
             let (left, right) = pair(distance);
             let at = sample * (step + 1) as u32;
@@ -489,7 +484,7 @@ impl GestureRecorder {
         binding: &HeadlessBinding,
         pointer: PointerId,
         phase: PointerPhase,
-        position: Offset<Pixels>,
+        position: Offset<f64>,
         device: PointerType,
     ) {
         let now = binding.clock().elapsed();
@@ -574,7 +569,7 @@ impl HeadlessBinding {
     pub fn replay_with(
         &mut self,
         script: &PointerScript,
-        mut hit_test: impl FnMut(&Self, Offset<Pixels>) -> HitTestResult,
+        mut hit_test: impl FnMut(&Self, Offset<f64>) -> HitTestResult,
     ) {
         assert!(
             !self.gestures().is_resampling_enabled(),
@@ -609,7 +604,7 @@ impl HeadlessBinding {
     ///
     /// An empty result on a gesture-only binding: there is no tree to hit.
     #[must_use]
-    pub fn hit_test(&self, position: Offset<Pixels>) -> HitTestResult {
+    pub fn hit_test(&self, position: Offset<f64>) -> HitTestResult {
         let mut result = HitTestResult::new();
         if let Some(pipeline_owner) = self.pipeline_owner() {
             pipeline_owner.with(|owner| owner.hit_test(position, &mut result));

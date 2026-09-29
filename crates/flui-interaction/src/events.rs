@@ -82,7 +82,7 @@
 //!   [`ScrollEventData::delta_to_offset`].
 //! - **`PageDelta`** is unit-less pages, likewise converted only here.
 
-use flui_types::geometry::{Offset, PixelDelta, Pixels};
+use flui_foundation::geometry::Offset;
 
 // ============================================================================
 // Re-exports from ui-events (W3C UI Events specification)
@@ -141,7 +141,7 @@ pub use pointer::{
 /// Scroll delta types.
 pub use ui_events::ScrollDelta;
 // `PointerPanZoomEvent` and the `from_w3c_event` / `convert_gesture` helpers
-// are re-exported from the crate root (`flui_interaction::PointerPanZoomEvent`)
+// are re-exported from the crate root (`crate::PointerPanZoomEvent`)
 // so the events module stays a thin W3C re-export surface and recognizers
 // reach the Flutter-aligned trackpad type through the canonical path.
 
@@ -181,9 +181,9 @@ pub enum Event {
 #[derive(Debug, Clone)]
 pub struct PointerEventData {
     /// Position in global coordinates
-    pub position: Offset<Pixels>,
+    pub position: Offset<f64>,
     /// Position in local widget coordinates (set during hit testing)
-    pub local_position: Offset<Pixels>,
+    pub local_position: Offset<f64>,
     /// Device that generated the event
     pub device_kind: PointerType,
     /// Pointer device ID
@@ -191,7 +191,7 @@ pub struct PointerEventData {
     /// Buttons currently pressed
     pub buttons: PointerButtons,
     /// Pressure of the touch (0.0 to 1.0)
-    pub pressure: f32,
+    pub pressure: f64,
     /// Time stamp in nanoseconds
     pub time_stamp: u64,
 }
@@ -199,7 +199,7 @@ pub struct PointerEventData {
 #[cfg(any(test, feature = "testing"))]
 impl PointerEventData {
     /// Create new pointer event data
-    pub fn new(position: Offset<Pixels>, device_kind: PointerType) -> Self {
+    pub fn new(position: Offset<f64>, device_kind: PointerType) -> Self {
         Self {
             position,
             local_position: position,
@@ -218,7 +218,7 @@ impl PointerEventData {
     }
 
     /// Create with pressure
-    pub fn with_pressure(mut self, pressure: f32) -> Self {
+    pub fn with_pressure(mut self, pressure: f64) -> Self {
         self.pressure = pressure.clamp(0.0, 1.0);
         self
     }
@@ -236,7 +236,7 @@ impl PointerEventData {
     }
 
     /// Returns the normalized pressure (0.0 to 1.0)
-    pub fn normalized_pressure(&self) -> f32 {
+    pub fn normalized_pressure(&self) -> f64 {
         self.pressure
     }
 
@@ -253,7 +253,7 @@ impl PointerEventData {
     }
 
     /// Returns true if pressure exceeds the given threshold (0.0 to 1.0)
-    pub fn is_force_press_at(&self, threshold: f32) -> bool {
+    pub fn is_force_press_at(&self, threshold: f64) -> bool {
         self.normalized_pressure() >= threshold
     }
 
@@ -265,7 +265,7 @@ impl PointerEventData {
         let (position, time_stamp, buttons) = if let Some(s) = state {
             let pos = s.position;
             (
-                Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32)),
+                Offset::new(pos.x, pos.y),
                 s.time, // time is already u64 nanoseconds
                 s.buttons,
             )
@@ -292,7 +292,7 @@ impl PointerEventData {
             device_kind: info.pointer_type,
             device,
             buttons,
-            pressure: state.map_or(0.0, |s| s.pressure),
+            pressure: state.map_or(0.0, |s| f64::from(s.pressure)),
             time_stamp,
         })
     }
@@ -457,7 +457,7 @@ fn get_pointer_state(event: &PointerEvent) -> Option<&PointerState> {
 /// Extension trait for extracting position from pointer events.
 pub trait PointerEventExt {
     /// Returns the position of the pointer event.
-    fn position(&self) -> Offset<Pixels>;
+    fn position(&self) -> Offset<f64>;
 
     /// Returns the pointer type if available.
     fn pointer_type(&self) -> Option<PointerType>;
@@ -468,10 +468,10 @@ pub trait PointerEventExt {
 
 impl PointerEventExt for PointerEvent {
     #[inline]
-    fn position(&self) -> Offset<Pixels> {
+    fn position(&self) -> Offset<f64> {
         if let Some(state) = get_pointer_state(self) {
             let pos = state.position;
-            Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32))
+            Offset::new(pos.x, pos.y)
         } else {
             Offset::ZERO
         }
@@ -504,16 +504,16 @@ impl PointerEventExt for PointerEvent {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollEventData {
     /// Position where the scroll occurred.
-    pub position: Offset<Pixels>,
+    pub position: Offset<f64>,
     /// Scroll delta in pixels (converted from any scroll unit).
-    pub delta: Offset<PixelDelta>,
+    pub delta: Offset<f64>,
     /// Keyboard modifiers active during scroll.
     pub modifiers: Modifiers,
 }
 
 impl ScrollEventData {
     /// Creates new scroll event data.
-    pub fn new(position: Offset<Pixels>, delta: Offset<PixelDelta>, modifiers: Modifiers) -> Self {
+    pub fn new(position: Offset<f64>, delta: Offset<f64>, modifiers: Modifiers) -> Self {
         Self {
             position,
             delta,
@@ -527,22 +527,20 @@ impl ScrollEventData {
     /// in the scroll delta contract (see the module docs): backends deliver
     /// normalized signs and units, and only this function turns lines and
     /// pages into pixels.
-    pub fn delta_to_offset(delta: &ScrollDelta) -> Offset<PixelDelta> {
+    pub fn delta_to_offset(delta: &ScrollDelta) -> Offset<f64> {
         match delta {
-            ScrollDelta::PixelDelta(pos) => {
-                Offset::new(PixelDelta(pos.x as f32), PixelDelta(pos.y as f32))
-            }
+            ScrollDelta::PixelDelta(pos) => Offset::new(pos.x, pos.y),
             ScrollDelta::LineDelta(x, y) => {
                 // One wheel line = 53 logical pixels — the exact factor
                 // Flutter's Linux embedder applies to GTK scroll units
                 // (`kScrollOffsetMultiplier`, `fl_scrolling_manager.cc`), so
                 // wheel speed and `InteractiveViewer`'s scroll-to-scale
                 // math match Flutter-on-Linux tick for tick.
-                Offset::new(PixelDelta(*x * 53.0), PixelDelta(*y * 53.0))
+                Offset::new(f64::from(*x) * 53.0, f64::from(*y) * 53.0)
             }
             ScrollDelta::PageDelta(x, y) => {
                 // Approximate: 1 page ≈ 400 pixels
-                Offset::new(PixelDelta(*x * 400.0), PixelDelta(*y * 400.0))
+                Offset::new(f64::from(*x) * 400.0, f64::from(*y) * 400.0)
             }
         }
     }
@@ -552,7 +550,7 @@ impl From<&PointerScrollEvent> for ScrollEventData {
     fn from(event: &PointerScrollEvent) -> Self {
         let pos = event.state.position;
         Self {
-            position: Offset::new(Pixels(pos.x as f32), Pixels(pos.y as f32)),
+            position: Offset::new(pos.x, pos.y),
             delta: Self::delta_to_offset(&event.delta),
             modifiers: event.state.modifiers,
         }
@@ -570,7 +568,7 @@ impl From<&PointerScrollEvent> for ScrollEventData {
 
 /// Create a PointerEvent::Down for testing
 #[cfg(any(test, feature = "testing"))]
-pub fn make_down_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
+pub fn make_down_event(position: Offset<f64>, pointer_type: PointerType) -> PointerEvent {
     make_down_event_for_id(PointerId::PRIMARY, position, pointer_type)
 }
 
@@ -582,7 +580,7 @@ pub fn make_down_event(position: Offset<Pixels>, pointer_type: PointerType) -> P
 #[cfg(any(test, feature = "testing"))]
 pub fn make_down_event_for_id(
     pointer_id: PointerId,
-    position: Offset<Pixels>,
+    position: Offset<f64>,
     pointer_type: PointerType,
 ) -> PointerEvent {
     use ui_events::pointer::{
@@ -598,10 +596,7 @@ pub fn make_down_event_for_id(
         },
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(
-                position.dx.get() as f64,
-                position.dy.get() as f64,
-            ),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::from(PointerButton::Primary),
             modifiers: Modifiers::empty(),
             count: 1,
@@ -622,7 +617,7 @@ pub fn make_down_event_for_id(
 
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Up for testing
-pub fn make_up_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
+pub fn make_up_event(position: Offset<f64>, pointer_type: PointerType) -> PointerEvent {
     make_up_event_for_id(PointerId::PRIMARY, position, pointer_type)
 }
 
@@ -632,7 +627,7 @@ pub fn make_up_event(position: Offset<Pixels>, pointer_type: PointerType) -> Poi
 /// See [`make_down_event_for_id`] for rationale.
 pub fn make_up_event_for_id(
     pointer_id: PointerId,
-    position: Offset<Pixels>,
+    position: Offset<f64>,
     pointer_type: PointerType,
 ) -> PointerEvent {
     use ui_events::pointer::{
@@ -648,10 +643,7 @@ pub fn make_up_event_for_id(
         },
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(
-                position.dx.get() as f64,
-                position.dy.get() as f64,
-            ),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::new(),
             modifiers: Modifiers::empty(),
             count: 1,
@@ -669,7 +661,7 @@ pub fn make_up_event_for_id(
 
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Move for testing
-pub fn make_move_event(position: Offset<Pixels>, pointer_type: PointerType) -> PointerEvent {
+pub fn make_move_event(position: Offset<f64>, pointer_type: PointerType) -> PointerEvent {
     make_move_event_for_id(PointerId::PRIMARY, position, pointer_type)
 }
 
@@ -679,7 +671,7 @@ pub fn make_move_event(position: Offset<Pixels>, pointer_type: PointerType) -> P
 /// See [`make_down_event_for_id`] for rationale.
 pub fn make_move_event_for_id(
     pointer_id: PointerId,
-    position: Offset<Pixels>,
+    position: Offset<f64>,
     pointer_type: PointerType,
 ) -> PointerEvent {
     use ui_events::pointer::{ContactGeometry, PointerOrientation, PointerState, PointerUpdate};
@@ -692,10 +684,7 @@ pub fn make_move_event_for_id(
         },
         current: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(
-                position.dx.get() as f64,
-                position.dy.get() as f64,
-            ),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::from(PointerButton::Primary),
             modifiers: Modifiers::empty(),
             count: 0,
@@ -743,7 +732,7 @@ pub fn make_cancel_event_for_id(pointer_id: PointerId, pointer_type: PointerType
 /// right-click and [`PointerButton::Auxiliary`] for middle-click
 /// (Flutter "tertiary" convention).
 pub fn make_down_event_with_button(
-    position: Offset<Pixels>,
+    position: Offset<f64>,
     pointer_type: PointerType,
     button: PointerButton,
 ) -> PointerEvent {
@@ -755,7 +744,7 @@ pub fn make_down_event_with_button(
 /// button.
 pub fn make_down_event_for_id_with_button(
     pointer_id: PointerId,
-    position: Offset<Pixels>,
+    position: Offset<f64>,
     pointer_type: PointerType,
     button: PointerButton,
 ) -> PointerEvent {
@@ -772,10 +761,7 @@ pub fn make_down_event_for_id_with_button(
         },
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(
-                position.dx.get() as f64,
-                position.dy.get() as f64,
-            ),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::from(button),
             modifiers: Modifiers::empty(),
             count: 1,
@@ -797,7 +783,7 @@ pub fn make_down_event_for_id_with_button(
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Up for testing with an explicit button.
 pub fn make_up_event_with_button(
-    position: Offset<Pixels>,
+    position: Offset<f64>,
     pointer_type: PointerType,
     button: PointerButton,
 ) -> PointerEvent {
@@ -809,7 +795,7 @@ pub fn make_up_event_with_button(
 /// button.
 pub fn make_up_event_for_id_with_button(
     pointer_id: PointerId,
-    position: Offset<Pixels>,
+    position: Offset<f64>,
     pointer_type: PointerType,
     button: PointerButton,
 ) -> PointerEvent {
@@ -826,10 +812,7 @@ pub fn make_up_event_for_id_with_button(
         },
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(
-                position.dx.get() as f64,
-                position.dy.get() as f64,
-            ),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::new(),
             modifiers: Modifiers::empty(),
             count: 1,
@@ -848,7 +831,7 @@ pub fn make_up_event_for_id_with_button(
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Move for testing with an explicit button.
 pub fn make_move_event_with_button(
-    position: Offset<Pixels>,
+    position: Offset<f64>,
     pointer_type: PointerType,
     button: PointerButton,
 ) -> PointerEvent {
@@ -869,10 +852,7 @@ pub fn make_move_event_with_button(
         },
         current: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(
-                position.dx.get() as f64,
-                position.dy.get() as f64,
-            ),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::from(button),
             modifiers: Modifiers::empty(),
             count: 0,
@@ -897,7 +877,7 @@ pub fn make_move_event_with_button(
 /// Create a trackpad pinch `PointerEvent::Gesture` tick for testing — the
 /// shape the platform gesture producers emit (shared synthetic identity,
 /// touch-typed, per-tick magnification fraction).
-pub fn make_pinch_gesture_event(position: Offset<Pixels>, fraction: f32) -> PointerEvent {
+pub fn make_pinch_gesture_event(position: Offset<f64>, fraction: f64) -> PointerEvent {
     use ui_events::pointer::{
         ContactGeometry, PointerGesture, PointerGestureEvent, PointerOrientation, PointerState,
     };
@@ -908,13 +888,10 @@ pub fn make_pinch_gesture_event(position: Offset<Pixels>, fraction: f32) -> Poin
             pointer_type: PointerType::Touch,
             persistent_device_id: None,
         },
-        gesture: PointerGesture::Pinch(fraction),
+        gesture: PointerGesture::Pinch(fraction as f32),
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(
-                position.dx.get() as f64,
-                position.dy.get() as f64,
-            ),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::new(),
             modifiers: Modifiers::empty(),
             count: 0,
@@ -932,7 +909,7 @@ pub fn make_pinch_gesture_event(position: Offset<Pixels>, fraction: f32) -> Poin
 
 #[cfg(any(test, feature = "testing"))]
 /// Create a PointerEvent::Scroll for testing
-pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> PointerEvent {
+pub fn make_scroll_event(position: Offset<f64>, delta: Offset<f64>) -> PointerEvent {
     make_scroll_event_with_modifiers(position, delta, Modifiers::empty())
 }
 
@@ -940,8 +917,8 @@ pub fn make_scroll_event(position: Offset<Pixels>, delta: Offset<Pixels>) -> Poi
 /// As `make_scroll_event`, with an explicit modifier set — for asserting
 /// chord-gated scroll consumers (ctrl+wheel zoom vs plain-wheel scroll).
 pub fn make_scroll_event_with_modifiers(
-    position: Offset<Pixels>,
-    delta: Offset<Pixels>,
+    position: Offset<f64>,
+    delta: Offset<f64>,
     modifiers: Modifiers,
 ) -> PointerEvent {
     use ui_events::pointer::{
@@ -954,16 +931,10 @@ pub fn make_scroll_event_with_modifiers(
             pointer_type: PointerType::Mouse,
             persistent_device_id: None,
         },
-        delta: ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(
-            delta.dx.get() as f64,
-            delta.dy.get() as f64,
-        )),
+        delta: ScrollDelta::PixelDelta(dpi::PhysicalPosition::new(delta.dx, delta.dy)),
         state: PointerState {
             time: 0,
-            position: dpi::PhysicalPosition::new(
-                position.dx.get() as f64,
-                position.dy.get() as f64,
-            ),
+            position: dpi::PhysicalPosition::new(position.dx, position.dy),
             buttons: PointerButtons::new(),
             modifiers,
             count: 0,
@@ -1039,10 +1010,7 @@ pub fn make_pointer_event(kind: PointerEventKind, data: PointerEventData) -> Poi
 
     let state = PointerState {
         time: data.time_stamp,
-        position: dpi::PhysicalPosition::new(
-            data.position.dx.get() as f64,
-            data.position.dy.get() as f64,
-        ),
+        position: dpi::PhysicalPosition::new(data.position.dx, data.position.dy),
         buttons: data.buttons,
         modifiers: Modifiers::empty(),
         count: 1,
@@ -1051,7 +1019,7 @@ pub fn make_pointer_event(kind: PointerEventKind, data: PointerEventData) -> Poi
             height: 1.0,
         },
         orientation: PointerOrientation::default(),
-        pressure: data.pressure,
+        pressure: data.pressure as f32,
         tangential_pressure: 0.0,
         scale_factor: 1.0,
     };
@@ -1112,7 +1080,7 @@ mod tests {
     #[test]
     fn button_helpers_preserve_the_explicit_contact_id() {
         let pointer = PointerId::new(42).expect("nonzero contact id");
-        let position = Offset::new(Pixels(10.0), Pixels(20.0));
+        let position = Offset::new(10.0, 20.0);
         let down = make_down_event_for_id_with_button(
             pointer,
             position,
@@ -1159,6 +1127,6 @@ mod tests {
     fn test_scroll_delta_to_offset() {
         let delta = ScrollDelta::LineDelta(0.0, -3.0);
         let offset = ScrollEventData::delta_to_offset(&delta);
-        assert!(offset.dy < PixelDelta(0.0)); // Scrolling up
+        assert!(offset.dy < 0.0); // Scrolling up
     }
 }

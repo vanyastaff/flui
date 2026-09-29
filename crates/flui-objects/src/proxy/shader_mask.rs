@@ -34,10 +34,8 @@
 use std::fmt;
 
 use flui_foundation::Single;
-use flui_types::{
-    Offset, Pixels, Point, Rect,
-    painting::{BlendMode, Shader},
-};
+use flui_foundation::geometry::{Offset, Point, Rect};
+use flui_painting::paint::{BlendMode, Shader};
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintCx},
@@ -157,7 +155,7 @@ impl RenderShaderMask {
         flui_rendering::RenderUpdateImpact::PAINT
     }
 
-    fn resolve_shader(&self, bounds: Rect<Pixels>) -> Shader {
+    fn resolve_shader(&self, bounds: Rect<f64>) -> Shader {
         if let Some(target) = self.shader_target {
             match resolve_shader_mask_target(target, bounds) {
                 Ok(shader) => return shader,
@@ -269,7 +267,7 @@ impl RenderBox for RenderShaderMask {
 #[cfg(test)]
 mod tests {
     use flui_interaction::InteractionLane;
-    use flui_types::styling::Color;
+    use flui_painting::styling::Color;
 
     use super::*;
 

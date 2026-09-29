@@ -6,6 +6,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use flui_foundation::geometry::{Bounds, Point};
 use flui_platform_api::text_store::{
     CommitGate, Composition, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, PointMode,
     RangeRect, Selection, TextChange, TextStore, TextStoreEdit, TextStoreError, TextStoreObserver,
@@ -14,7 +15,6 @@ use flui_platform_api::text_store::{
 use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,
 };
-use flui_types::geometry::{Bounds, Pixels, Point};
 
 #[test]
 fn in_memory_store_conforms_to_kit_v1() {
@@ -128,7 +128,7 @@ fn faulty_len(session: &dyn TextStoreRead, fault: Fault) -> Utf16Offset {
 fn faulty_index(
     session: &dyn TextStoreRead,
     fault: Fault,
-    point: Point<Pixels>,
+    point: Point<f64>,
     mode: PointMode,
 ) -> Result<Utf16Offset, TextStoreError> {
     let found = session.index_at_point(point, mode)?;
@@ -141,8 +141,8 @@ fn faulty_index(
     };
     let supplementary = text.chars().count() == 1;
     let rect = session.rect_for_range(pair)?.bounds;
-    let middle = rect.origin.x.get() + rect.size.width.get() / 2.0;
-    if supplementary && point.x.get() > middle {
+    let middle = rect.origin.x + rect.size.width / 2.0;
+    if supplementary && point.x > middle {
         Ok(Utf16Offset::new(found.get() + 1))
     } else {
         Ok(found)
@@ -170,12 +170,12 @@ impl TextStoreRead for ReadFault<'_> {
     fn rect_for_range(&self, range: Utf16Range) -> Result<RangeRect, TextStoreError> {
         self.inner.rect_for_range(range)
     }
-    fn document_bounds(&self) -> Result<Bounds<Pixels>, TextStoreError> {
+    fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
         self.inner.document_bounds()
     }
     fn index_at_point(
         &self,
-        point: Point<Pixels>,
+        point: Point<f64>,
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
         faulty_index(self.inner, self.fault, point, mode)
@@ -229,12 +229,12 @@ impl TextStoreRead for EditFault<'_> {
     fn rect_for_range(&self, range: Utf16Range) -> Result<RangeRect, TextStoreError> {
         self.inner.rect_for_range(range)
     }
-    fn document_bounds(&self) -> Result<Bounds<Pixels>, TextStoreError> {
+    fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
         self.inner.document_bounds()
     }
     fn index_at_point(
         &self,
-        point: Point<Pixels>,
+        point: Point<f64>,
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
         faulty_index(&*self.inner, self.fault, point, mode)

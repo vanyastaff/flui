@@ -7,10 +7,8 @@
 
 use std::sync::Arc;
 
-use flui_types::{
-    geometry::{Offset, Pixels, Size},
-    typography::{InlineSpan, TextAlign, TextDirection},
-};
+use crate::typography::{InlineSpan, TextAlign, TextDirection};
+use flui_foundation::geometry::{Offset, Size};
 
 use crate::text_layout::TextLayout;
 
@@ -21,7 +19,7 @@ pub mod paint;
 pub use baseline::TextBaseline;
 
 /// Default font size when none is specified.
-pub(crate) const DEFAULT_FONT_SIZE: f32 = 14.0;
+pub(crate) const DEFAULT_FONT_SIZE: f64 = 14.0;
 
 /// What a property change invalidates — the shaped/paint split.
 ///
@@ -74,7 +72,7 @@ pub struct TextPainter {
     pub(super) text_direction: Option<TextDirection>,
 
     /// Text scaling factor for accessibility.
-    pub(super) text_scale_factor: f32,
+    pub(super) text_scale_factor: f64,
 
     /// Maximum number of lines before truncation.
     pub(super) max_lines: Option<u32>,
@@ -93,38 +91,38 @@ pub(super) struct TextLayoutCache {
     /// The font database generation the layout was shaped against; a face
     /// registered since makes the same text shape differently.
     pub(super) font_generation: u64,
-    pub(super) min_width: f32,
+    pub(super) min_width: f64,
     /// The max width constraint used for layout.
-    pub(super) max_width: f32,
+    pub(super) max_width: f64,
     /// Computed size after layout.
-    pub(super) size: Size<Pixels>,
+    pub(super) size: Size<f64>,
     /// Distance to alphabetic baseline.
-    pub(super) alphabetic_baseline: f32,
+    pub(super) alphabetic_baseline: f64,
     /// Distance to ideographic baseline.
-    pub(super) ideographic_baseline: f32,
+    pub(super) ideographic_baseline: f64,
     /// Whether layout did overflow.
     pub(super) did_exceed_max_lines: bool,
     /// Computed paint offset based on alignment.
-    pub(super) paint_offset: Offset<Pixels>,
+    pub(super) paint_offset: Offset<f64>,
     /// The underlying text layout for cursor/hit testing.
     pub(super) layout: Arc<TextLayout>,
 
     /// Precomputed min intrinsic width (narrowest unbreakable run).
     /// Computed once during `layout()` — O(1) access for intrinsics queries.
     /// Parley-inspired: shape-once, query-many.
-    pub(super) min_intrinsic_width: f32,
+    pub(super) min_intrinsic_width: f64,
     /// Precomputed max intrinsic width (single-line width).
     /// Computed once during `layout()` — O(1) access for intrinsics queries.
-    pub(super) max_intrinsic_width: f32,
+    pub(super) max_intrinsic_width: f64,
 }
 
 /// Intermediate layout metrics returned by `compute_layout_metrics`.
 pub(super) struct LayoutMetrics {
-    pub(super) size: Size<Pixels>,
-    pub(super) alphabetic_baseline: f32,
-    pub(super) ideographic_baseline: f32,
+    pub(super) size: Size<f64>,
+    pub(super) alphabetic_baseline: f64,
+    pub(super) ideographic_baseline: f64,
     pub(super) did_exceed_max_lines: bool,
-    pub(super) paint_offset: Offset<Pixels>,
+    pub(super) paint_offset: Offset<f64>,
 }
 
 impl Default for TextPainter {
@@ -173,7 +171,7 @@ impl TextPainter {
 
     /// Sets the text scale factor.
     #[must_use]
-    pub fn with_text_scale_factor(mut self, factor: f32) -> Self {
+    pub fn with_text_scale_factor(mut self, factor: f64) -> Self {
         self.set_text_scale_factor(factor);
         self
     }
@@ -227,7 +225,7 @@ impl TextPainter {
     /// Returns the text scale factor.
     #[inline]
     #[must_use]
-    pub fn text_scale_factor(&self) -> f32 {
+    pub fn text_scale_factor(&self) -> f64 {
         self.text_scale_factor
     }
 
@@ -297,7 +295,7 @@ impl TextPainter {
         let recomputed = self
             .layout_cache
             .as_ref()
-            .map(|cache| self.compute_paint_offset(cache.size.width.0, cache.max_width));
+            .map(|cache| self.compute_paint_offset(cache.size.width, cache.max_width));
         if let (Some(cache), Some(offset)) = (&mut self.layout_cache, recomputed) {
             cache.paint_offset = offset;
         }
@@ -313,8 +311,8 @@ impl TextPainter {
     }
 
     /// Sets the text scale factor.
-    pub fn set_text_scale_factor(&mut self, factor: f32) {
-        if (self.text_scale_factor - factor).abs() > f32::EPSILON {
+    pub fn set_text_scale_factor(&mut self, factor: f64) {
+        if (self.text_scale_factor - factor).abs() > f64::EPSILON {
             self.text_scale_factor = factor;
             self.mark_needs_layout();
         }

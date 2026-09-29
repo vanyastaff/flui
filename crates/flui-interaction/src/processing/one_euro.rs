@@ -28,13 +28,13 @@
 
 use web_time::Instant;
 
-use flui_types::geometry::{Offset, Pixels};
+use flui_foundation::geometry::Offset;
 
 /// Smoothing factor for a first-order low-pass at cutoff `fc` (Hz) and
 /// sampling period `te` (seconds).
 #[inline]
-fn smoothing_alpha(fc: f32, te: f32) -> f32 {
-    let r = 2.0 * core::f32::consts::PI * fc * te;
+fn smoothing_alpha(fc: f64, te: f64) -> f64 {
+    let r = 2.0 * core::f64::consts::PI * fc * te;
     r / (1.0 + r)
 }
 
@@ -45,15 +45,15 @@ fn smoothing_alpha(fc: f32, te: f32) -> f32 {
 #[derive(Debug, Clone, Copy)]
 pub struct OneEuroFilter {
     /// Minimum cutoff frequency (Hz). Lower = less jitter, more lag at rest.
-    pub min_cutoff: f32,
+    pub min_cutoff: f64,
     /// Speed coefficient. Higher = less lag during fast motion.
-    pub beta: f32,
+    pub beta: f64,
     /// Cutoff for the derivative low-pass (Hz). Rarely tuned; 1 Hz default.
-    pub d_cutoff: f32,
+    pub d_cutoff: f64,
     /// Last filtered value (`x̂`).
-    x_prev: Option<f32>,
+    x_prev: Option<f64>,
     /// Last filtered derivative (`dx̂`), units/second.
-    dx_prev: f32,
+    dx_prev: f64,
 }
 
 impl Default for OneEuroFilter {
@@ -65,7 +65,7 @@ impl Default for OneEuroFilter {
 impl OneEuroFilter {
     /// Create a filter with explicit parameters (see module docs for tuning).
     #[must_use]
-    pub fn new(min_cutoff: f32, beta: f32, d_cutoff: f32) -> Self {
+    pub fn new(min_cutoff: f64, beta: f64, d_cutoff: f64) -> Self {
         Self {
             min_cutoff,
             beta,
@@ -86,7 +86,7 @@ impl OneEuroFilter {
     /// The first sample initializes the filter and is returned unchanged.
     /// Non-positive `te` (duplicate timestamp) returns the previous filtered
     /// value without state corruption.
-    pub fn filter(&mut self, x: f32, te: f32) -> f32 {
+    pub fn filter(&mut self, x: f64, te: f64) -> f64 {
         let Some(x_prev) = self.x_prev else {
             self.x_prev = Some(x);
             self.dx_prev = 0.0;
@@ -123,15 +123,15 @@ impl OneEuroFilter {
 /// use std::time::{Duration, Instant};
 ///
 /// use flui_interaction::processing::OneEuroFilter2D;
-/// use flui_types::geometry::{Offset, Pixels};
+/// use flui_foundation::geometry::Offset;
 ///
 /// let mut filter = OneEuroFilter2D::default();
 /// let t0 = Instant::now();
-/// let p0 = filter.filter(t0, Offset::new(Pixels(10.0), Pixels(10.0)));
-/// assert_eq!(p0.dx.get(), 10.0); // first sample passes through
+/// let p0 = filter.filter(t0, Offset::new(10.0, 10.0));
+/// assert_eq!(p0.dx, 10.0); // first sample passes through
 /// let _p1 = filter.filter(
 ///     t0 + Duration::from_millis(8),
-///     Offset::new(Pixels(10.4), Pixels(9.8)), // sensor jitter
+///     Offset::new(10.4, 9.8), // sensor jitter
 /// );
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
@@ -144,7 +144,7 @@ pub struct OneEuroFilter2D {
 impl OneEuroFilter2D {
     /// Create with explicit parameters applied to both axes.
     #[must_use]
-    pub fn new(min_cutoff: f32, beta: f32, d_cutoff: f32) -> Self {
+    pub fn new(min_cutoff: f64, beta: f64, d_cutoff: f64) -> Self {
         Self {
             x: OneEuroFilter::new(min_cutoff, beta, d_cutoff),
             y: OneEuroFilter::new(min_cutoff, beta, d_cutoff),
@@ -160,14 +160,14 @@ impl OneEuroFilter2D {
     }
 
     /// Filter a timestamped position sample.
-    pub fn filter(&mut self, time: Instant, position: Offset<Pixels>) -> Offset<Pixels> {
+    pub fn filter(&mut self, time: Instant, position: Offset<f64>) -> Offset<f64> {
         let te = self.last_time.map_or(0.0, |last| {
-            time.saturating_duration_since(last).as_secs_f32()
+            time.saturating_duration_since(last).as_secs_f64()
         });
         self.last_time = Some(time);
         Offset::new(
-            Pixels(self.x.filter(position.dx.get(), te)),
-            Pixels(self.y.filter(position.dy.get(), te)),
+            self.x.filter(position.dx, te),
+            self.y.filter(position.dy, te),
         )
     }
 }
@@ -190,8 +190,8 @@ mod tests {
         let mut f = OneEuroFilter::default();
         let te = 1.0 / 120.0;
         let _ = f.filter(100.0, te);
-        let mut min = f32::MAX;
-        let mut max = f32::MIN;
+        let mut min = f64::MAX;
+        let mut max = f64::MIN;
         for i in 0..240 {
             let noise = if i % 2 == 0 { 1.0 } else { -1.0 };
             let out = f.filter(100.0 + noise, te);
@@ -213,8 +213,8 @@ mod tests {
         // lag small relative to motion per-frame.
         let mut f = OneEuroFilter::default();
         let te = 1.0 / 120.0;
-        let mut x = 0.0_f32;
-        let mut out = 0.0_f32;
+        let mut x = 0.0_f64;
+        let mut out = 0.0_f64;
         for _ in 0..120 {
             x += 2000.0 * te;
             out = f.filter(x, te);
@@ -238,8 +238,8 @@ mod tests {
     fn two_d_wrapper_filters_both_axes() {
         let mut f = OneEuroFilter2D::default();
         let t0 = Instant::now();
-        let p0 = f.filter(t0, Offset::new(Pixels(0.0), Pixels(0.0)));
-        assert_eq!(p0, Offset::new(Pixels(0.0), Pixels(0.0)));
+        let p0 = f.filter(t0, Offset::new(0.0, 0.0));
+        assert_eq!(p0, Offset::new(0.0, 0.0));
 
         // Jittery samples around (50, 50) settle near (50, 50).
         let mut last = p0;
@@ -247,10 +247,10 @@ mod tests {
             let jitter = if i % 2 == 0 { 0.8 } else { -0.8 };
             last = f.filter(
                 t0 + Duration::from_millis(8 * i),
-                Offset::new(Pixels(50.0 + jitter), Pixels(50.0 - jitter)),
+                Offset::new(50.0 + jitter, 50.0 - jitter),
             );
         }
-        assert!((last.dx.get() - 50.0).abs() < 1.0);
-        assert!((last.dy.get() - 50.0).abs() < 1.0);
+        assert!((last.dx - 50.0).abs() < 1.0);
+        assert!((last.dy - 50.0).abs() < 1.0);
     }
 }

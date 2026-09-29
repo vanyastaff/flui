@@ -55,11 +55,12 @@ mod gpu_tests {
     use std::sync::Arc;
 
     use flui_foundation::LayerId;
+    use flui_foundation::geometry::{Offset, Rect};
     use flui_layer::{CanvasLayer, LayerTree, SceneBuilder};
     use flui_painting::Paint;
-    use flui_types::{
-        Color, Offset, Pixels, Rect,
-        painting::{BlendMode, ColorFilter, ImageFilter},
+    use flui_painting::{
+        paint::{BlendMode, ColorFilter, ImageFilter},
+        styling::Color,
     };
 
     use crate::{
@@ -111,12 +112,12 @@ mod gpu_tests {
         )
     }
 
-    fn full_surface_rect() -> Rect<Pixels> {
+    fn full_surface_rect() -> Rect<f64> {
         Rect::from_xywh(
-            Pixels(0.0),
-            Pixels(0.0),
-            Pixels(SURFACE_WIDTH as f32),
-            Pixels(SURFACE_HEIGHT as f32),
+            0.0,
+            0.0,
+            f64::from(SURFACE_WIDTH as f32),
+            f64::from(SURFACE_HEIGHT as f32),
         )
     }
 

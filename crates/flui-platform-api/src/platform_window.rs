@@ -9,7 +9,7 @@
 use std::{any::Any, sync::Arc};
 
 use cursor_icon::CursorIcon;
-use flui_types::geometry::{Bounds, DevicePixels, Pixels, Point, Size};
+use flui_foundation::geometry::{Bounds, Point, Size};
 
 use crate::{
     CursorError, DispatchEventResult, Modifiers, PlatformDisplay, PlatformHaptics, PlatformInput,
@@ -71,7 +71,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// use std::any::Any;
 ///
 /// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId, WindowShowError};
-/// use flui_types::geometry::{DevicePixels, Pixels, Size};
+/// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
 ///
@@ -79,10 +79,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///     fn id(&self) -> WindowId {
 ///         WindowId(7)
 ///     }
-///     fn physical_size(&self) -> Size<DevicePixels> {
+///     fn physical_size(&self) -> DeviceSize {
 ///         Size::default()
 ///     }
-///     fn logical_size(&self) -> Size<Pixels> {
+///     fn logical_size(&self) -> Size {
 ///         Size::default()
 ///     }
 ///     fn scale_factor(&self) -> f64 {
@@ -115,7 +115,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 /// use std::any::Any;
 ///
 /// use flui_platform_api::{CursorError, CursorIcon, PlatformWindow, WindowId};
-/// use flui_types::geometry::{DevicePixels, Pixels, Size};
+/// use flui_foundation::geometry::{DeviceSize, Size};
 ///
 /// struct Offscreen;
 ///
@@ -123,10 +123,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 ///     fn id(&self) -> WindowId {
 ///         WindowId(7)
 ///     }
-///     fn physical_size(&self) -> Size<DevicePixels> {
+///     fn physical_size(&self) -> DeviceSize {
 ///         Size::default()
 ///     }
-///     fn logical_size(&self) -> Size<Pixels> {
+///     fn logical_size(&self) -> Size {
 ///         Size::default()
 ///     }
 ///     fn scale_factor(&self) -> f64 {
@@ -162,10 +162,10 @@ pub trait PlatformWindow: Send + Sync {
     fn id(&self) -> WindowId;
 
     /// Get the window size in physical pixels (device pixels)
-    fn physical_size(&self) -> Size<DevicePixels>;
+    fn physical_size(&self) -> Size<i32>;
 
     /// Get the window size in logical pixels
-    fn logical_size(&self) -> Size<Pixels>;
+    fn logical_size(&self) -> Size<f64>;
 
     /// Get the scale factor (DPI scaling)
     fn scale_factor(&self) -> f64;
@@ -245,12 +245,12 @@ pub trait PlatformWindow: Send + Sync {
     // ==================== Query Methods (US2) ====================
 
     /// Get the window bounds (position + size) in logical pixels
-    fn bounds(&self) -> Bounds<Pixels> {
+    fn bounds(&self) -> Bounds<f64> {
         Bounds::default()
     }
 
     /// Get the content (client area) size in logical pixels
-    fn content_size(&self) -> Size<Pixels> {
+    fn content_size(&self) -> Size<f64> {
         self.logical_size()
     }
 
@@ -280,7 +280,7 @@ pub trait PlatformWindow: Send + Sync {
     }
 
     /// Get the current mouse position in logical pixels (relative to window)
-    fn mouse_position(&self) -> Point<Pixels> {
+    fn mouse_position(&self) -> Point<f64> {
         Point::default()
     }
 
@@ -383,7 +383,7 @@ pub trait PlatformWindow: Send + Sync {
     fn toggle_fullscreen(&self) {}
 
     /// Resize the window to the given logical size
-    fn resize(&self, size: Size<Pixels>) {
+    fn resize(&self, size: Size<f64>) {
         let _ = size;
     }
 
@@ -467,7 +467,7 @@ pub trait PlatformWindow: Send + Sync {
     /// Register a callback for window resize events
     ///
     /// Called with the new logical size and current scale factor.
-    fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32) + Send>) {
+    fn on_resize(&self, callback: Box<dyn FnMut(Size<f64>, f64) + Send>) {
         let _ = callback;
     }
 
@@ -503,15 +503,15 @@ pub trait PlatformWindow: Send + Sync {
     /// Safe-area intrusions in logical pixels, relative to the content view.
     /// Backends without native inset reporting return zero. Detached windows
     /// retain their last accepted geometry; this is not keyboard occlusion.
-    fn safe_area_insets(&self) -> flui_types::geometry::EdgeInsets {
-        flui_types::geometry::EdgeInsets::ZERO
+    fn safe_area_insets(&self) -> flui_foundation::geometry::EdgeInsets {
+        flui_foundation::geometry::EdgeInsets::ZERO
     }
 
     /// Observe safe-area changes on the owner thread. Register, then resample
     /// `safe_area_insets` to cover changes before callback installation.
     fn on_safe_area_change(
         &self,
-        callback: Box<dyn FnMut(flui_types::geometry::EdgeInsets) + Send>,
+        callback: Box<dyn FnMut(flui_foundation::geometry::EdgeInsets) + Send>,
     ) {
         let _ = callback;
     }
@@ -768,7 +768,7 @@ mod tests {
 
     // Mock window for testing
     struct MockWindow {
-        size: Size<Pixels>,
+        size: Size<f64>,
         scale_factor: f64,
         focused: bool,
         visible: bool,
@@ -779,16 +779,14 @@ mod tests {
             WindowId(1)
         }
 
-        fn physical_size(&self) -> Size<DevicePixels> {
-            use flui_types::geometry::device_px;
-
+        fn physical_size(&self) -> Size<i32> {
             Size::new(
-                device_px((self.size.width.0 * self.scale_factor as f32) as i32),
-                device_px((self.size.height.0 * self.scale_factor as f32) as i32),
+                (self.size.width * self.scale_factor) as i32,
+                (self.size.height * self.scale_factor) as i32,
             )
         }
 
-        fn logical_size(&self) -> Size<Pixels> {
+        fn logical_size(&self) -> Size<f64> {
             self.size
         }
 
@@ -822,20 +820,15 @@ mod tests {
     /// refuses a handle it does not have.
     #[test]
     fn a_contract_only_window_answers_every_defaulted_query() {
-        use flui_types::geometry::{device_px, px};
-
         let window = MockWindow {
-            size: Size::new(px(800.0), px(600.0)),
+            size: Size::new(800.0, 600.0),
             scale_factor: 2.0,
             focused: true,
             visible: true,
         };
 
-        assert_eq!(
-            window.physical_size(),
-            Size::new(device_px(1600), device_px(1200))
-        );
-        assert_eq!(window.logical_size(), Size::new(px(800.0), px(600.0)));
+        assert_eq!(window.physical_size(), Size::new(1600, 1200));
+        assert_eq!(window.logical_size(), Size::new(800.0, 600.0));
         assert_eq!(window.scale_factor(), 2.0);
         assert!(window.is_focused());
         assert!(window.is_visible());

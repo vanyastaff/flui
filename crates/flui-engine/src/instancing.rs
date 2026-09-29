@@ -27,7 +27,8 @@
 //! ```
 
 use bytemuck::{Pod, Zeroable};
-use flui_types::{Point, Rect, geometry::Pixels, styling::Color};
+use flui_foundation::geometry::{Point, Rect};
+use flui_painting::styling::Color;
 
 /// Instance data for a rectangle
 ///
@@ -134,9 +135,14 @@ impl RectInstance {
     /// set to identity / zero so the vertex shader produces an identical result
     /// to the pre-affine path.
     #[must_use]
-    pub(crate) fn rect(rect: Rect<Pixels>, color: Color) -> Self {
+    pub(crate) fn rect(rect: Rect<f64>, color: Color) -> Self {
         Self {
-            bounds: [rect.left().0, rect.top().0, rect.width().0, rect.height().0],
+            bounds: [
+                (rect.left() as f32),
+                (rect.top() as f32),
+                (rect.width() as f32),
+                (rect.height() as f32),
+            ],
             color: color.to_f32_array(),
             corner_radii: [0.0; 4],
             // Identity 2×2: x-col=(1,0), y-col=(0,1).
@@ -182,7 +188,7 @@ impl RectInstance {
     /// zero — byte-identical to the pre-affine baked-AABB path.
     #[must_use]
     pub(crate) fn rounded_rect_corners(
-        rect: Rect<Pixels>,
+        rect: Rect<f64>,
         color: Color,
         top_left: f32,
         top_right: f32,
@@ -190,7 +196,12 @@ impl RectInstance {
         bottom_left: f32,
     ) -> Self {
         Self {
-            bounds: [rect.left().0, rect.top().0, rect.width().0, rect.height().0],
+            bounds: [
+                (rect.left() as f32),
+                (rect.top() as f32),
+                (rect.width() as f32),
+                (rect.height() as f32),
+            ],
             color: color.to_f32_array(),
             corner_radii: [top_left, top_right, bottom_right, bottom_left],
             // Identity 2×2: x-col=(1,0), y-col=(0,1).
@@ -383,12 +394,7 @@ impl CircleInstance {
     /// `scale_xy` is `[sx, sy]` extracted from the current transform matrix.
     /// Pass `[1.0, 1.0]` for identity / uniform scale.
     #[must_use]
-    pub(crate) fn new(
-        center: Point<Pixels>,
-        radius: f32,
-        color: Color,
-        scale_xy: [f32; 2],
-    ) -> Self {
+    pub(crate) fn new(center: Point<f64>, radius: f32, color: Color, scale_xy: [f32; 2]) -> Self {
         Self {
             // `center` is already in device pixels. It is carried in
             // `transform_translate` (added AFTER M in the shader) so the scale in
@@ -400,7 +406,7 @@ impl CircleInstance {
             // Baked scale: identity rotation, per-axis scale as diag(sx, sy).
             // x-col = (sx, 0), y-col = (0, sy).
             transform: [scale_xy[0], 0.0, 0.0, scale_xy[1]],
-            transform_translate: [center.x.0, center.y.0, 0.0, 0.0],
+            transform_translate: [(center.x as f32), (center.y as f32), 0.0, 0.0],
             // No clip until `ClippableInstance::with_clip_*` attaches one.
             clip_rrect: [0.0; 8],
             clip_kind: [0; 4],
@@ -675,16 +681,13 @@ impl TextureInstance {
     /// * `dst_rect` - Destination rectangle in screen coordinates
     /// * `tint` - Color tint (use Color::WHITE for no tint)
     #[must_use]
-    pub(crate) fn new(
-        dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
-        tint: Color,
-    ) -> Self {
+    pub(crate) fn new(dst_rect: flui_foundation::geometry::Rect<f64>, tint: Color) -> Self {
         Self {
             dst_rect: [
-                dst_rect.left().0,
-                dst_rect.top().0,
-                dst_rect.width().0,
-                dst_rect.height().0,
+                (dst_rect.left() as f32),
+                (dst_rect.top() as f32),
+                (dst_rect.width() as f32),
+                (dst_rect.height() as f32),
             ],
             src_uv: [0.0, 0.0, 1.0, 1.0], // Full texture
             tint: tint.to_f32_array(),
@@ -704,16 +707,16 @@ impl TextureInstance {
     /// * `tint` - Color tint
     #[must_use]
     pub(crate) fn with_uv(
-        dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
+        dst_rect: flui_foundation::geometry::Rect<f64>,
         src_uv: [f32; 4],
         tint: Color,
     ) -> Self {
         Self {
             dst_rect: [
-                dst_rect.left().0,
-                dst_rect.top().0,
-                dst_rect.width().0,
-                dst_rect.height().0,
+                (dst_rect.left() as f32),
+                (dst_rect.top() as f32),
+                (dst_rect.width() as f32),
+                (dst_rect.height() as f32),
             ],
             src_uv,
             tint: tint.to_f32_array(),
@@ -742,16 +745,16 @@ impl TextureInstance {
     /// this tint (`tex_color * in.tint`).
     #[must_use]
     pub(crate) fn with_uv_tint_f32(
-        dst_rect: flui_types::Rect<flui_types::geometry::Pixels>,
+        dst_rect: flui_foundation::geometry::Rect<f64>,
         src_uv: [f32; 4],
         tint: [f32; 4],
     ) -> Self {
         Self {
             dst_rect: [
-                dst_rect.left().0,
-                dst_rect.top().0,
-                dst_rect.width().0,
-                dst_rect.height().0,
+                (dst_rect.left() as f32),
+                (dst_rect.top() as f32),
+                (dst_rect.width() as f32),
+                (dst_rect.height() as f32),
             ],
             src_uv,
             tint,
@@ -1249,13 +1252,11 @@ impl<T> Default for InstanceBatch<T> {
 mod aliased_lane_tests {
     use super::*;
     use crate::state_stack::ResolvedClip;
-    use flui_types::{Color, Rect, geometry::px};
+    use flui_foundation::geometry::Rect;
+    use flui_painting::styling::Color;
 
     fn unit_rect() -> RectInstance {
-        RectInstance::rect(
-            Rect::from_xywh(px(0.0), px(0.0), px(10.0), px(10.0)),
-            Color::RED,
-        )
+        RectInstance::rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), Color::RED)
     }
 
     /// Applying a clip must not clear the paint's aliased flag.
@@ -1296,7 +1297,6 @@ mod aliased_lane_tests {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -1360,7 +1360,7 @@ mod tests {
 
         // Add first instance
         let should_flush = batch.add(RectInstance::rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0)),
+            Rect::from_ltrb(0.0, 0.0, 100.0, 50.0),
             Color::RED,
         ));
         assert!(!should_flush);
@@ -1368,7 +1368,7 @@ mod tests {
 
         // Add second instance (reaches max)
         let should_flush = batch.add(RectInstance::rect(
-            Rect::from_ltrb(px(10.0), px(10.0), px(110.0), px(60.0)),
+            Rect::from_ltrb(10.0, 10.0, 110.0, 60.0),
             Color::BLUE,
         ));
         assert!(should_flush);
@@ -1381,10 +1381,7 @@ mod tests {
 
     #[test]
     fn test_color_conversion() {
-        let instance = RectInstance::rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0)),
-            Color::RED,
-        );
+        let instance = RectInstance::rect(Rect::from_ltrb(0.0, 0.0, 100.0, 100.0), Color::RED);
 
         // RED should be [1.0, 0.0, 0.0, 1.0] in normalized form
         assert_eq!(instance.color[0], 1.0); // R
@@ -1396,10 +1393,7 @@ mod tests {
     #[test]
     fn test_rect_bounds_mapping() {
         // `rect` maps Rect fields to [left, top, width, height] — not ltrb.
-        let instance = RectInstance::rect(
-            Rect::from_ltrb(px(10.0), px(20.0), px(110.0), px(70.0)),
-            Color::RED,
-        );
+        let instance = RectInstance::rect(Rect::from_ltrb(10.0, 20.0, 110.0, 70.0), Color::RED);
         assert_eq!(instance.bounds[0], 10.0); // x = left
         assert_eq!(instance.bounds[1], 20.0); // y = top
         assert_eq!(instance.bounds[2], 100.0); // width = right − left
@@ -1411,10 +1405,7 @@ mod tests {
         // Plain rect: clip_rrect must be all-zeros and clip_kind must be 0
         // (no SDF clip active). The fragment shader reads clip_kind[0] == 0
         // as "skip clip test". The affine fields must be identity / zero.
-        let instance = RectInstance::rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(50.0), px(50.0)),
-            Color::RED,
-        );
+        let instance = RectInstance::rect(Rect::from_ltrb(0.0, 0.0, 50.0, 50.0), Color::RED);
         assert_eq!(instance.clip_rrect, [0.0; 8]);
         assert_eq!(instance.clip_kind, [0u32; 4]);
         // Identity 2×2 and zero translation — baked-AABB path.
@@ -1428,7 +1419,7 @@ mod tests {
     /// pre-affine path.
     #[test]
     fn baked_aabb_constructors_have_identity_affine() {
-        let r = Rect::from_ltrb(px(10.0), px(20.0), px(110.0), px(70.0));
+        let r = Rect::from_ltrb(10.0, 20.0, 110.0, 70.0);
         let plain = RectInstance::rect(r, Color::RED);
         assert_eq!(plain.transform, [1.0, 0.0, 0.0, 1.0], "identity 2×2");
         assert_eq!(plain.transform_translate, [0.0; 4], "zero translation");
@@ -1494,11 +1485,8 @@ mod tests {
             kind: [1, 0, 0, 0],
             device_to_local: [0.5, 0.0, 0.0, 2.0, -3.0, 7.0],
         };
-        let instance = RectInstance::rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0)),
-            Color::RED,
-        )
-        .with_clip(clip);
+        let instance =
+            RectInstance::rect(Rect::from_ltrb(0.0, 0.0, 100.0, 50.0), Color::RED).with_clip(clip);
 
         assert_eq!(instance.clip_rrect, clip.rrect);
         assert_eq!(instance.clip_kind, clip.kind);
@@ -1516,11 +1504,8 @@ mod tests {
 
     #[test]
     fn with_clip_none_leaves_the_slot_empty() {
-        let instance = RectInstance::rect(
-            Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(50.0)),
-            Color::RED,
-        )
-        .with_clip(crate::state_stack::ResolvedClip::NONE);
+        let instance = RectInstance::rect(Rect::from_ltrb(0.0, 0.0, 100.0, 50.0), Color::RED)
+            .with_clip(crate::state_stack::ResolvedClip::NONE);
         assert_eq!(instance.clip_kind, [0u32; 4]);
         assert_eq!(instance.clip_rrect, [0.0; 8]);
     }
@@ -1619,8 +1604,8 @@ mod tests {
 
     #[test]
     fn test_circle_instance_field_values() {
-        use flui_types::{Point, geometry::Pixels};
-        let center = Point::new(flui_types::geometry::Pixels(50.0), Pixels(75.0));
+        use flui_foundation::geometry::Point;
+        let center = Point::new(50.0, 75.0);
         let instance = CircleInstance::new(center, 20.0, Color::RED, [1.0, 1.0]);
         // The device center lives in `transform_translate` (added AFTER M in the
         // shader) so M = diag(sx,sy) never double-scales it. `center_radius.xy`
@@ -1640,8 +1625,8 @@ mod tests {
     /// scales it). A non-origin center proves the center → translate mapping.
     #[test]
     fn circle_instance_scale_propagates_to_transform() {
-        use flui_types::{Point, geometry::Pixels};
-        let center = Point::new(Pixels(12.0), Pixels(34.0));
+        use flui_foundation::geometry::Point;
+        let center = Point::new(12.0, 34.0);
         let identity = CircleInstance::new(center, 10.0, Color::RED, [1.0, 1.0]);
         // diag(1,1): x-col=(1,0), y-col=(0,1)
         assert_eq!(identity.transform, [1.0, 0.0, 0.0, 1.0], "identity diag");

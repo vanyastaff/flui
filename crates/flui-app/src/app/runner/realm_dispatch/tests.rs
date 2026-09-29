@@ -7,12 +7,12 @@ use std::{
     sync::Arc,
 };
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::{
     HitTestResult,
     events::{PointerType, make_down_event},
 };
 use flui_platform::traits::{PlatformInput, PlatformWindow};
-use flui_types::geometry::{Offset, Pixels};
 use flui_view::View;
 
 use super::super::host::{
@@ -28,9 +28,9 @@ use crate::app::{AppConfig, FrameFailureDetail};
 
 static_assertions::assert_impl_all!(PlatformToUi: Send);
 
-fn down_input(offset: f32) -> PlatformInput {
+fn down_input(offset: f64) -> PlatformInput {
     PlatformInput::Pointer(make_down_event(
-        Offset::new(Pixels(offset), Pixels(offset)),
+        Offset::new(offset, offset),
         PointerType::Mouse,
     ))
 }
@@ -1510,7 +1510,7 @@ fn detached_realm_event_cancels_an_interrupted_pointer_sequence() {
     dispatch_platform_realm(
         dispatcher,
         RealmTask::Frame(Box::new(|realm| {
-            let down = make_down_event(Offset::new(Pixels(4.0), Pixels(6.0)), PointerType::Touch);
+            let down = make_down_event(Offset::new(4.0, 6.0), PointerType::Touch);
             realm
                 .gestures()
                 .handle_pointer_event(&down, |_| HitTestResult::new());
@@ -1689,10 +1689,7 @@ fn queued_events_for_a_removed_presentation_never_deliver() {
         realm_slot.queue.push_back((
             stamp,
             RealmTask::Event(PlatformToUi::Resized {
-                size: flui_types::Size::new(
-                    flui_types::geometry::px(100.0),
-                    flui_types::geometry::px(100.0),
-                ),
+                size: flui_foundation::geometry::Size::new(100.0, 100.0),
                 scale_factor: 1.0,
             }),
         ));
@@ -1756,12 +1753,7 @@ fn admitted_close_fences_later_safe_area_for_that_presentation() {
             let late = dispatch_platform_realm(
                 dispatcher_b,
                 RealmTask::Event(PlatformToUi::SafeAreaChanged(
-                    flui_types::geometry::EdgeInsets::new(
-                        flui_types::geometry::px(47.0),
-                        flui_types::geometry::px(0.0),
-                        flui_types::geometry::px(34.0),
-                        flui_types::geometry::px(0.0),
-                    ),
+                    flui_foundation::geometry::EdgeInsets::new(47.0, 0.0, 34.0, 0.0),
                 )),
             );
             assert_eq!(late, Err(RealmDispatchError::PresentationClosing));
@@ -1874,10 +1866,7 @@ fn resized_with_no_applier_installed_skips_instead_of_panicking() {
     let result = dispatch_platform_realm(
         dispatcher,
         RealmTask::Event(PlatformToUi::Resized {
-            size: flui_types::Size::new(
-                flui_types::geometry::px(20.0),
-                flui_types::geometry::px(20.0),
-            ),
+            size: flui_foundation::geometry::Size::new(20.0, 20.0),
             scale_factor: 1.0,
         }),
     );
@@ -1936,12 +1925,9 @@ fn surface_applier_panic_is_caught_and_the_applier_still_applies_next_time() {
         );
     });
 
-    let resize_event = |side: f32| {
+    let resize_event = |side: f64| {
         RealmTask::Event(PlatformToUi::Resized {
-            size: flui_types::Size::new(
-                flui_types::geometry::px(side),
-                flui_types::geometry::px(side),
-            ),
+            size: flui_foundation::geometry::Size::new(side, side),
             scale_factor: 1.0,
         })
     };
@@ -1998,10 +1984,7 @@ fn nested_resize_and_window_focus_wait_until_frame_returns() {
             dispatch_platform_realm(
                 dispatcher,
                 RealmTask::Event(PlatformToUi::Resized {
-                    size: flui_types::Size::new(
-                        flui_types::geometry::px(640.0),
-                        flui_types::geometry::px(480.0),
-                    ),
+                    size: flui_foundation::geometry::Size::new(640.0, 480.0),
                     scale_factor: 2.0,
                 }),
             )
@@ -2183,10 +2166,7 @@ fn frames_reenable_redirties_root_when_dispatched_through_the_realm_queue() {
             _ctx: &flui_view::RenderObjectContext<'_>,
             render_object: &mut Self::RenderObject,
         ) -> flui_rendering::RenderUpdateImpact {
-            render_object.set_size(
-                Some(flui_types::Pixels::ZERO),
-                Some(flui_types::Pixels::ZERO),
-            )
+            render_object.set_size(Some(0.0), Some(0.0))
         }
     }
 
@@ -2423,14 +2403,8 @@ fn next_wake_is_the_min_deadline_across_every_installed_realm() {
             let pointer = PointerId::new(2).expect("nonzero pointer id");
             recognizer.add_pointer(
                 pointer,
-                flui_types::Offset::new(
-                    flui_types::geometry::px(10.0),
-                    flui_types::geometry::px(10.0),
-                ),
-                flui_types::Offset::new(
-                    flui_types::geometry::px(10.0),
-                    flui_types::geometry::px(10.0),
-                ),
+                flui_foundation::geometry::Offset::new(10.0, 10.0),
+                flui_foundation::geometry::Offset::new(10.0, 10.0),
             );
             recognizers_a.borrow_mut().push(recognizer);
         })),
@@ -2452,14 +2426,8 @@ fn next_wake_is_the_min_deadline_across_every_installed_realm() {
             let pointer = PointerId::new(3).expect("nonzero pointer id");
             recognizer.add_pointer(
                 pointer,
-                flui_types::Offset::new(
-                    flui_types::geometry::px(20.0),
-                    flui_types::geometry::px(20.0),
-                ),
-                flui_types::Offset::new(
-                    flui_types::geometry::px(20.0),
-                    flui_types::geometry::px(20.0),
-                ),
+                flui_foundation::geometry::Offset::new(20.0, 20.0),
+                flui_foundation::geometry::Offset::new(20.0, 20.0),
             );
             recognizers_b.borrow_mut().push(recognizer);
         })),
@@ -5018,10 +4986,7 @@ fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter() {
     // and `closing_presentation_a_leaves_sibling_layer_tree_identical`
     // both draw a frame between mounting and closing.
     let _ = realm.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
-        flui_types::Size::new(
-            flui_types::geometry::px(20.0),
-            flui_types::geometry::px(20.0),
-        ),
+        flui_foundation::geometry::Size::new(20.0, 20.0),
     ));
 
     let dispatcher = install_platform_realm(realm, &window_a);
@@ -5281,10 +5246,7 @@ fn dispose_time_reentrant_dispatch_with_the_dying_presentations_own_dispatcher_i
     // own comment for why a real frame must run before the probe's
     // `State`, and therefore its `dispose()`, actually exists.
     let _ = realm.draw_frame(flui_rendering::constraints::BoxConstraints::tight(
-        flui_types::Size::new(
-            flui_types::geometry::px(20.0),
-            flui_types::geometry::px(20.0),
-        ),
+        flui_foundation::geometry::Size::new(20.0, 20.0),
     ));
 
     let dispatcher = install_platform_realm(realm, &window_a);

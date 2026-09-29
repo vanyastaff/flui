@@ -39,9 +39,11 @@
 //!   flag makes the overflow signal observable for tests and
 //!   diagnostics without touching painting.
 
+pub use super::stack_fit::StackFit;
 use flui_foundation::Variable;
-pub use flui_types::layout::StackFit;
-use flui_types::{Alignment, Offset, Pixels, Point, Rect, Size, painting::Clip};
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::Alignment;
+use flui_painting::paint::Clip;
 
 use flui_rendering::{
     constraints::BoxConstraints,
@@ -62,21 +64,21 @@ use flui_rendering::{
 /// Constructed only by [`PositionedSpec::from_parent_data`], which
 /// returns `None` for non-positioned children — that's the discipline
 /// that lets the layout code branch on `Option<PositionedSpec>`
-/// instead of re-checking individual `Option<f32>` fields.
+/// instead of re-checking individual `Option<f64>` fields.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PositionedSpec {
     /// Distance from parent's top edge.
-    pub top: Option<Pixels>,
+    pub top: Option<f64>,
     /// Distance from parent's right edge.
-    pub right: Option<Pixels>,
+    pub right: Option<f64>,
     /// Distance from parent's bottom edge.
-    pub bottom: Option<Pixels>,
+    pub bottom: Option<f64>,
     /// Distance from parent's left edge.
-    pub left: Option<Pixels>,
+    pub left: Option<f64>,
     /// Explicit width.
-    pub width: Option<Pixels>,
+    pub width: Option<f64>,
     /// Explicit height.
-    pub height: Option<Pixels>,
+    pub height: Option<f64>,
 }
 
 impl PositionedSpec {
@@ -90,12 +92,12 @@ impl PositionedSpec {
             return None;
         }
         Some(Self {
-            top: pd.top.map(Pixels::new),
-            right: pd.right.map(Pixels::new),
-            bottom: pd.bottom.map(Pixels::new),
-            left: pd.left.map(Pixels::new),
-            width: pd.width.map(Pixels::new),
-            height: pd.height.map(Pixels::new),
+            top: pd.top,
+            right: pd.right,
+            bottom: pd.bottom,
+            left: pd.left,
+            width: pd.width,
+            height: pd.height,
         })
     }
 
@@ -110,14 +112,14 @@ impl PositionedSpec {
         let mut cc = BoxConstraints::UNCONSTRAINED;
 
         let tighten_w = if let (Some(l), Some(r)) = (self.left, self.right) {
-            Some((stack_size.width - l - r).max(Pixels::ZERO))
+            Some((stack_size.width - l - r).max(0.0))
         } else {
-            self.width.map(|w| w.max(Pixels::ZERO))
+            self.width.map(|w| w.max(0.0))
         };
         let tighten_h = if let (Some(t), Some(b)) = (self.top, self.bottom) {
-            Some((stack_size.height - t - b).max(Pixels::ZERO))
+            Some((stack_size.height - t - b).max(0.0))
         } else {
-            self.height.map(|h| h.max(Pixels::ZERO))
+            self.height.map(|h| h.max(0.0))
         };
 
         if let Some(w) = tighten_w {
@@ -163,8 +165,8 @@ impl PositionedSpec {
 
 /// Maps an alignment scalar in [-1, 1] to a position in [0, free].
 #[inline]
-fn alignment_along_axis(component: f32, free: Pixels) -> Pixels {
-    Pixels::new(free.get() * (component + 1.0) * 0.5)
+fn alignment_along_axis(component: f64, free: f64) -> f64 {
+    free * (component + 1.0) * 0.5
 }
 
 /// Maps a [`TextBaseline`] kind into compact per-kind storage.
@@ -330,10 +332,10 @@ impl RenderStack {
     /// Returns whether the offset+size lie inside `stack_size` (used
     /// to compute `has_visual_overflow`).
     fn child_overflows(stack_size: Size, offset: Offset, child_size: Size) -> bool {
-        offset.dx.get() < 0.0
-            || offset.dy.get() < 0.0
-            || (offset.dx + child_size.width).get() > stack_size.width.get()
-            || (offset.dy + child_size.height).get() > stack_size.height.get()
+        offset.dx < 0.0
+            || offset.dy < 0.0
+            || (offset.dx + child_size.width) > stack_size.width
+            || (offset.dy + child_size.height) > stack_size.height
     }
 
     /// Core of the stack sizing pass, shared between `perform_layout` and
@@ -400,14 +402,14 @@ impl RenderStack {
     /// Flutter stack.dart: each intrinsic dimension is the max of the children.
     fn max_child_intrinsic(
         ctx: &mut BoxIntrinsicsCtx<'_>,
-        extent: f32,
-        mut query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f32) -> f32,
-    ) -> f32 {
+        extent: f64,
+        mut query: impl FnMut(&mut BoxIntrinsicsCtx<'_>, usize, f64) -> f64,
+    ) -> f64 {
         let child_count = ctx.child_count();
         if child_count == 0 {
             return 0.0;
         }
-        let mut max = 0.0f32;
+        let mut max = 0.0_f64;
         for i in 0..child_count {
             max = max.max(query(ctx, i, extent));
         }
@@ -517,25 +519,25 @@ impl RenderBox for RenderStack {
             .size
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         Self::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         Self::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         Self::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         Self::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
         })
@@ -586,7 +588,7 @@ pub struct RenderIndexedStack {
     stack: RenderStack,
     index: Option<usize>,
     /// Baselines recorded during layout for the displayed child only.
-    reported_baselines: [Option<f32>; 2],
+    reported_baselines: [Option<f64>; 2],
 }
 
 impl RenderIndexedStack {
@@ -805,7 +807,7 @@ impl RenderBox for RenderIndexedStack {
                     let slot = baseline_kind_index(kind);
                     self.reported_baselines[slot] = ctx
                         .child_distance_to_actual_baseline(i, kind)
-                        .map(|baseline| baseline + offset.dy.get());
+                        .map(|baseline| baseline + offset.dy);
                 }
             }
         }
@@ -824,25 +826,25 @@ impl RenderBox for RenderIndexedStack {
             .size
     }
 
-    fn compute_min_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         RenderStack::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_width(&self, height: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         RenderStack::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_max_intrinsic_width(i, extent)
         })
     }
 
-    fn compute_min_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         RenderStack::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_min_intrinsic_height(i, extent)
         })
     }
 
-    fn compute_max_intrinsic_height(&self, width: f32, ctx: &mut BoxIntrinsicsCtx<'_>) -> f32 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         RenderStack::max_child_intrinsic(ctx, width, |ctx, i, extent| {
             ctx.child_max_intrinsic_height(i, extent)
         })
@@ -853,7 +855,7 @@ impl RenderBox for RenderIndexedStack {
         constraints: BoxConstraints,
         baseline: TextBaseline,
         ctx: &mut BoxDryBaselineCtx<'_>,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         let child_count = ctx.child_count();
         let displayed_index = self.displayed_index(child_count)?;
         let specs = Self::build_specs_from_dry_baseline_ctx(ctx);
@@ -875,10 +877,10 @@ impl RenderBox for RenderIndexedStack {
                 alignment_along_axis(self.stack.alignment.y, size.height - child_size.height),
             ),
         };
-        Some(child_baseline + offset.dy.get())
+        Some(child_baseline + offset.dy)
     }
 
-    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         self.reported_baselines[baseline_kind_index(baseline)]
     }
 
@@ -916,12 +918,11 @@ impl RenderBox for RenderIndexedStack {
 
 #[cfg(test)]
 mod tests {
-    use flui_types::geometry::px;
 
     use super::*;
 
-    fn bc(min_w: f32, max_w: f32, min_h: f32, max_h: f32) -> BoxConstraints {
-        BoxConstraints::new(px(min_w), px(max_w), px(min_h), px(max_h))
+    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
+        BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
     // ---------- PositionedSpec view ---------------------------------------
@@ -936,7 +937,7 @@ mod tests {
     fn positioned_spec_returns_some_when_any_field_set() {
         let pd = StackParentData::new().with_top(10.0);
         let spec = PositionedSpec::from_parent_data(&pd).expect("positioned");
-        assert_eq!(spec.top, Some(px(10.0)));
+        assert_eq!(spec.top, Some(10.0));
         assert!(spec.left.is_none());
     }
 
@@ -945,12 +946,12 @@ mod tests {
         // left + right pair → width = stack.width - left - right
         let pd = StackParentData::new().with_left(20.0).with_right(30.0);
         let spec = PositionedSpec::from_parent_data(&pd).unwrap();
-        let cc = spec.child_constraints(Size::new(px(200.0), px(100.0)));
-        assert_eq!(cc.min_width, px(150.0));
-        assert_eq!(cc.max_width, px(150.0));
+        let cc = spec.child_constraints(Size::new(200.0, 100.0));
+        assert_eq!(cc.min_width, 150.0);
+        assert_eq!(cc.max_width, 150.0);
         // Height untouched — fully loose.
-        assert_eq!(cc.min_height, px(0.0));
-        assert_eq!(cc.max_height, Pixels::INFINITY);
+        assert_eq!(cc.min_height, 0.0);
+        assert_eq!(cc.max_height, f64::INFINITY);
     }
 
     #[test]
@@ -960,9 +961,9 @@ mod tests {
         // makes a child positioned — see `positioned_spec_width_only_is_positioned`.
         let pd = StackParentData::new().with_left(0.0).with_width(80.0);
         let spec = PositionedSpec::from_parent_data(&pd).unwrap();
-        let cc = spec.child_constraints(Size::new(px(200.0), px(100.0)));
-        assert_eq!(cc.min_width, px(80.0));
-        assert_eq!(cc.max_width, px(80.0));
+        let cc = spec.child_constraints(Size::new(200.0, 100.0));
+        assert_eq!(cc.min_width, 80.0);
+        assert_eq!(cc.max_width, 80.0);
     }
 
     #[test]
@@ -976,20 +977,20 @@ mod tests {
         let spec = PositionedSpec::from_parent_data(&pd).expect("a width-only child is positioned");
 
         // Width tightens to 80; height stays loose (no top+bottom, no height).
-        let cc = spec.child_constraints(Size::new(px(200.0), px(100.0)));
-        assert_eq!(cc.min_width, px(80.0));
-        assert_eq!(cc.max_width, px(80.0));
-        assert_eq!(cc.min_height, px(0.0));
-        assert_eq!(cc.max_height, Pixels::INFINITY);
+        let cc = spec.child_constraints(Size::new(200.0, 100.0));
+        assert_eq!(cc.min_width, 80.0);
+        assert_eq!(cc.max_width, 80.0);
+        assert_eq!(cc.min_height, 0.0);
+        assert_eq!(cc.max_height, f64::INFINITY);
 
         // No horizontal anchor -> x from alignment (CENTER of the free width).
         let off = spec.child_offset(
-            Size::new(px(200.0), px(100.0)),
-            Size::new(px(80.0), px(40.0)),
+            Size::new(200.0, 100.0),
+            Size::new(80.0, 40.0),
             Alignment::CENTER,
         );
-        assert_eq!(off.dx, px(60.0)); // free_w = 200 - 80 = 120; CENTER -> 60
-        assert_eq!(off.dy, px(30.0)); // free_h = 100 - 40 = 60; CENTER -> 30
+        assert_eq!(off.dx, 60.0); // free_w = 200 - 80 = 120; CENTER -> 60
+        assert_eq!(off.dy, 30.0); // free_h = 100 - 40 = 60; CENTER -> 30
     }
 
     #[test]
@@ -997,11 +998,11 @@ mod tests {
         let pd = StackParentData::new().with_left(20.0).with_top(15.0);
         let spec = PositionedSpec::from_parent_data(&pd).unwrap();
         let off = spec.child_offset(
-            Size::new(px(200.0), px(100.0)),
-            Size::new(px(50.0), px(40.0)),
+            Size::new(200.0, 100.0),
+            Size::new(50.0, 40.0),
             Alignment::CENTER,
         );
-        assert_eq!(off, Offset::new(px(20.0), px(15.0)));
+        assert_eq!(off, Offset::new(20.0, 15.0));
     }
 
     #[test]
@@ -1009,12 +1010,12 @@ mod tests {
         let pd = StackParentData::new().with_right(20.0).with_bottom(10.0);
         let spec = PositionedSpec::from_parent_data(&pd).unwrap();
         let off = spec.child_offset(
-            Size::new(px(200.0), px(100.0)),
-            Size::new(px(50.0), px(40.0)),
+            Size::new(200.0, 100.0),
+            Size::new(50.0, 40.0),
             Alignment::CENTER,
         );
         // x = 200 - 20 - 50 = 130; y = 100 - 10 - 40 = 50
-        assert_eq!(off, Offset::new(px(130.0), px(50.0)));
+        assert_eq!(off, Offset::new(130.0, 50.0));
     }
 
     #[test]
@@ -1023,12 +1024,12 @@ mod tests {
         let pd = StackParentData::new().with_top(10.0);
         let spec = PositionedSpec::from_parent_data(&pd).unwrap();
         let off = spec.child_offset(
-            Size::new(px(200.0), px(100.0)),
-            Size::new(px(50.0), px(40.0)),
+            Size::new(200.0, 100.0),
+            Size::new(50.0, 40.0),
             Alignment::CENTER,
         );
         // x: free_w = 150, center alignment → 75; y = 10
-        assert_eq!(off, Offset::new(px(75.0), px(10.0)));
+        assert_eq!(off, Offset::new(75.0, 10.0));
     }
 
     // ---------- RenderStack defaults and builders -------------------------
@@ -1081,28 +1082,28 @@ mod tests {
     fn fit_loose_loosens_constraints() {
         let stack = RenderStack::new().with_fit(StackFit::Loose);
         let cc = stack.non_positioned_constraints(bc(50.0, 200.0, 30.0, 100.0));
-        assert_eq!(cc.min_width, px(0.0));
-        assert_eq!(cc.min_height, px(0.0));
-        assert_eq!(cc.max_width, px(200.0));
-        assert_eq!(cc.max_height, px(100.0));
+        assert_eq!(cc.min_width, 0.0);
+        assert_eq!(cc.min_height, 0.0);
+        assert_eq!(cc.max_width, 200.0);
+        assert_eq!(cc.max_height, 100.0);
     }
 
     #[test]
     fn fit_expand_tightens_to_biggest() {
         let stack = RenderStack::new().with_fit(StackFit::Expand);
         let cc = stack.non_positioned_constraints(bc(0.0, 200.0, 0.0, 100.0));
-        assert_eq!(cc.min_width, px(200.0));
-        assert_eq!(cc.max_width, px(200.0));
-        assert_eq!(cc.min_height, px(100.0));
-        assert_eq!(cc.max_height, px(100.0));
+        assert_eq!(cc.min_width, 200.0);
+        assert_eq!(cc.max_width, 200.0);
+        assert_eq!(cc.min_height, 100.0);
+        assert_eq!(cc.max_height, 100.0);
     }
 
     #[test]
     fn fit_passthrough_preserves_constraints() {
         let stack = RenderStack::new().with_fit(StackFit::Passthrough);
         let cc = stack.non_positioned_constraints(bc(50.0, 200.0, 30.0, 100.0));
-        assert_eq!(cc.min_width, px(50.0));
-        assert_eq!(cc.max_width, px(200.0));
+        assert_eq!(cc.min_width, 50.0);
+        assert_eq!(cc.max_width, 200.0);
     }
 
     // ---------- overflow detection ----------------------------------------
@@ -1110,27 +1111,27 @@ mod tests {
     #[test]
     fn overflow_detection_inside_bounds_is_false() {
         assert!(!RenderStack::child_overflows(
-            Size::new(px(100.0), px(100.0)),
-            Offset::new(px(10.0), px(10.0)),
-            Size::new(px(50.0), px(50.0)),
+            Size::new(100.0, 100.0),
+            Offset::new(10.0, 10.0),
+            Size::new(50.0, 50.0),
         ));
     }
 
     #[test]
     fn overflow_detection_offscreen_x_is_true() {
         assert!(RenderStack::child_overflows(
-            Size::new(px(100.0), px(100.0)),
-            Offset::new(px(60.0), px(0.0)),
-            Size::new(px(50.0), px(50.0)),
+            Size::new(100.0, 100.0),
+            Offset::new(60.0, 0.0),
+            Size::new(50.0, 50.0),
         ));
     }
 
     #[test]
     fn overflow_detection_negative_offset_is_true() {
         assert!(RenderStack::child_overflows(
-            Size::new(px(100.0), px(100.0)),
-            Offset::new(px(-1.0), px(0.0)),
-            Size::new(px(50.0), px(50.0)),
+            Size::new(100.0, 100.0),
+            Offset::new(-1.0, 0.0),
+            Size::new(50.0, 50.0),
         ));
     }
 
@@ -1138,17 +1139,17 @@ mod tests {
 
     #[test]
     fn alignment_along_axis_maps_minus_one_to_zero() {
-        assert_eq!(alignment_along_axis(-1.0, px(100.0)), px(0.0));
+        assert_eq!(alignment_along_axis(-1.0, 100.0), 0.0);
     }
 
     #[test]
     fn alignment_along_axis_maps_zero_to_half() {
-        assert_eq!(alignment_along_axis(0.0, px(100.0)), px(50.0));
+        assert_eq!(alignment_along_axis(0.0, 100.0), 50.0);
     }
 
     #[test]
     fn alignment_along_axis_maps_plus_one_to_full() {
-        assert_eq!(alignment_along_axis(1.0, px(100.0)), px(100.0));
+        assert_eq!(alignment_along_axis(1.0, 100.0), 100.0);
     }
 
     // ---------- Diagnostics -----------------------------------------------

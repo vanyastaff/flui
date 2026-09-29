@@ -18,17 +18,17 @@
 //! early on an already-dirty node, so a boundary nested INSIDE a relayout
 //! subtree is never reached from that subtree's root.
 
+use flui_foundation::geometry::{EdgeInsets, Size};
 use flui_objects::{RenderColoredBox, RenderPadding, RenderRepaintBoundary};
 use flui_rendering::{
     constraints::BoxConstraints,
     pipeline::PipelineOwner,
     testing::{box_node, tree},
 };
-use flui_types::{EdgeInsets, Size, geometry::px};
 
 /// Change a `RenderPadding`'s inset and report the impact, the same way an
 /// element update does.
-fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f32) {
+fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f64) {
     let impact = {
         let entry = owner
             .render_tree_mut()
@@ -41,7 +41,7 @@ fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: 
             .as_any_mut()
             .downcast_mut::<RenderPadding>()
             .expect("RenderPadding")
-            .set_padding(EdgeInsets::all(px(value)))
+            .set_padding(EdgeInsets::all(value))
     };
     owner.apply_render_update_impact(id, impact);
 }
@@ -77,7 +77,7 @@ fn a_boundary_nested_in_a_relayout_subtree_is_queued_for_paint() {
         ),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
 
     let padding_id = registry.get("padding").expect("padding is labelled");
     let inner_id = registry.get("inner").expect("inner boundary is labelled");
@@ -153,13 +153,13 @@ fn a_boundary_nested_in_a_relayout_subtree_is_queued_for_paint() {
 fn a_sliver_repaint_boundary_that_laid_out_is_queued_for_paint() {
     use flui_foundation::Leaf;
     use flui_objects::RenderViewport;
+    use flui_rendering::constraints::AxisDirection;
     use flui_rendering::{
         constraints::SliverGeometry,
         context::{SliverHitTestContext, SliverLayoutContext},
         testing::sliver_node,
         traits::RenderSliver,
     };
-    use flui_types::layout::AxisDirection;
 
     /// A sliver that declares itself a repaint boundary and produces a fixed
     /// extent, so the viewport lays it out for real.
@@ -176,7 +176,7 @@ fn a_sliver_repaint_boundary_that_laid_out_is_queued_for_paint() {
             &mut self,
             ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
         ) -> SliverGeometry {
-            let extent = 40.0_f32.min(ctx.constraints().remaining_paint_extent);
+            let extent = 40.0_f64.min(ctx.constraints().remaining_paint_extent);
             SliverGeometry::new(40.0, extent, 0.0)
         }
 
@@ -196,7 +196,7 @@ fn a_sliver_repaint_boundary_that_laid_out_is_queued_for_paint() {
             .child(sliver_node(BoundarySliver).label("sliver-boundary")),
     );
     owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(px(200.0), px(200.0)))));
+    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
 
     let sliver_id = registry
         .get("sliver-boundary")

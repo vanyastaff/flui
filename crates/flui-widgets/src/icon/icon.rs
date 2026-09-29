@@ -1,7 +1,7 @@
 //! [`Icon`] — draws a single glyph from an icon font.
 
-use flui_types::Color;
-use flui_types::typography::{FontVariation, TextDirection, TextSpan, TextStyle};
+use flui_painting::styling::Color;
+use flui_painting::typography::{FontVariation, TextDirection, TextSpan, TextStyle};
 use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView};
 
@@ -44,7 +44,7 @@ use crate::text::RichText;
 #[derive(Clone, Debug, Default, StatelessView)]
 pub struct Icon {
     data: Option<IconData>,
-    size: Option<f32>,
+    size: Option<f64>,
     color: Option<Color>,
     semantic_label: Option<String>,
 }
@@ -72,7 +72,7 @@ impl Icon {
     /// Override the icon's side length in logical pixels. Defaults to the
     /// ambient [`IconTheme`]'s size, or `24.0` with no ancestor theme.
     #[must_use]
-    pub fn size(mut self, size: f32) -> Self {
+    pub fn size(mut self, size: f64) -> Self {
         self.size = Some(size);
         self
     }
@@ -122,10 +122,10 @@ impl Icon {
     /// without a live [`BuildContext`].
     ///
     /// Oracle: `icon.dart:305-319`.
-    fn style_for(&self, icon: &IconData, size: f32, theme: &IconThemeData) -> TextStyle {
+    fn style_for(&self, icon: &IconData, size: f64, theme: &IconThemeData) -> TextStyle {
         TextStyle {
             color: self.color.or(theme.color),
-            font_size: Some(f64::from(size)),
+            font_size: Some(size),
             font_family: icon.font_family.clone(),
             font_family_fallback: icon.font_family_fallback.clone(),
             height: Some(1.0),

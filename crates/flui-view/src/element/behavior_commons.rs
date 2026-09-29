@@ -567,7 +567,6 @@ mod stamp_tests {
     use flui_objects::RenderSizedBox;
     use flui_rendering::parent_data::{SliverMultiBoxAdaptorParentData, SliverSlot};
     use flui_rendering::pipeline::PipelineOwner;
-    use flui_types::geometry::px;
 
     use super::stamp_sliver_slot;
 
@@ -576,10 +575,7 @@ mod stamp_tests {
         let mut owner = PipelineOwner::new();
         let id = owner
             .render_tree_mut()
-            .insert_box(Box::new(RenderSizedBox::new(
-                Some(px(10.0)),
-                Some(px(10.0)),
-            )));
+            .insert_box(Box::new(RenderSizedBox::new(Some(10.0), Some(10.0))));
         stamp_sliver_slot(&mut owner, id, SliverSlot::identity(7));
         let pd = owner
             .render_tree()
@@ -600,10 +596,7 @@ mod stamp_tests {
         let mut owner = PipelineOwner::new();
         let id = owner
             .render_tree_mut()
-            .insert_box(Box::new(RenderSizedBox::new(
-                Some(px(10.0)),
-                Some(px(10.0)),
-            )));
+            .insert_box(Box::new(RenderSizedBox::new(Some(10.0), Some(10.0))));
         let mut seeded = SliverMultiBoxAdaptorParentData::new(3);
         seeded.layout_offset = 42.0;
         owner
@@ -636,10 +629,7 @@ mod stamp_tests {
         let mut owner = PipelineOwner::new();
         let id = owner
             .render_tree_mut()
-            .insert_box(Box::new(RenderSizedBox::new(
-                Some(px(10.0)),
-                Some(px(10.0)),
-            )));
+            .insert_box(Box::new(RenderSizedBox::new(Some(10.0), Some(10.0))));
         owner
             .render_tree_mut()
             .get_mut(id)

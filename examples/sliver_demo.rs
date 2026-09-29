@@ -19,8 +19,8 @@ use flui::widgets::{
     ColoredBox, CustomScrollView, MediaQuery, MediaQueryData, Padding, ScrollController,
     Scrollable, SizedBox, SliverToBoxAdapter, Text, Viewport,
 };
-use flui_types::geometry::px;
-use flui_types::{Color, EdgeInsets};
+use flui_foundation::geometry::EdgeInsets;
+use flui_painting::styling::Color;
 use flui_view::view::ViewExt;
 use flui_view::{BoxedView, BuildContext, IntoView, StatelessView, View};
 
@@ -41,7 +41,7 @@ fn demo_slivers() -> Vec<BoxedView> {
         slivers.push(
             SliverToBoxAdapter::new()
                 .child(ColoredBox::new(Color::rgb(shade, shade, shade)).child(
-                    SizedBox::height(56.0).child(Padding::new(EdgeInsets::all(px(16.0))).child(
+                    SizedBox::height(56.0).child(Padding::new(EdgeInsets::all(16.0)).child(
                         Text::new(format!("Row {i} — scrolled under a pinned SliverAppBar")),
                     )),
                 ))
@@ -55,7 +55,7 @@ fn demo_slivers() -> Vec<BoxedView> {
 /// The screenshot tree: the demo slivers at a FIXED programmatic offset —
 /// `CustomScrollView`'s offset mode carries no gestures by design (see its
 /// module doc), which is exactly right for a deterministic capture.
-pub fn tree(offset: f32) -> impl IntoView {
+pub fn tree(offset: f64) -> impl IntoView {
     Theme::new(
         ThemeData::light(),
         MediaQuery::new(

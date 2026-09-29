@@ -1,8 +1,9 @@
 //! [`SizedOverflowBox`] — claims a fixed size while letting the child overflow.
 
+use flui_foundation::geometry::Size;
 use flui_objects::RenderSizedOverflowBox;
+use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::{Alignment, Size};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Claims a specific size for itself while laying its child out under the

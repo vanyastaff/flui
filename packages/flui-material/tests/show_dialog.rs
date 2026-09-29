@@ -14,7 +14,7 @@ use std::time::Duration;
 use common::{lay_out_animated, tight};
 use flui_material::{AlertDialog, Theme, ThemeData, show_dialog};
 use flui_sdk::animation::Vsync;
-use flui_sdk::types::Color;
+use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, GestureDetector, Navigator, NavigatorHandle, SimpleRoute, Text, VsyncScope,
@@ -141,7 +141,7 @@ fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_inta
         .try_find_by_render_type("RenderPhysicalShape")
         .expect("the pushed dialog must mount its Material surface over the page");
     assert!(
-        laid.size(material).width.get() > 0.0,
+        laid.size(material).width > 0.0,
         "the dialog surface must have real geometry, not a zero-sized stub"
     );
 

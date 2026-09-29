@@ -7,10 +7,7 @@
 
 use flui_foundation::Arity;
 use flui_foundation::RenderId;
-use flui_types::{
-    Size,
-    geometry::{Matrix4, Offset, Point, Rect},
-};
+use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
@@ -150,7 +147,7 @@ impl Protocol for BoxProtocol {
     /// violating size at the source.
     fn debug_assert_layout_output(constraints: &BoxConstraints, geometry: &Size) {
         debug_assert!(
-            geometry.width.get().is_finite() && geometry.height.get().is_finite(),
+            geometry.width.is_finite() && geometry.height.is_finite(),
             "layout produced a non-finite size {geometry:?} under {constraints:?}: a \
              render object returned inf/NaN — constrain the result before returning it",
         );
@@ -172,7 +169,7 @@ impl Protocol for BoxProtocol {
         constraints: &BoxConstraints,
         geometry: &Size,
     ) -> crate::error::RenderResult<()> {
-        if !geometry.width.get().is_finite() || !geometry.height.get().is_finite() {
+        if !geometry.width.is_finite() || !geometry.height.is_finite() {
             return Err(crate::error::RenderError::invalid_geometry(
                 render_object,
                 "non-finite width or height",
@@ -225,18 +222,19 @@ pub struct BoxLayout;
 
 /// Cache key for BoxConstraints.
 ///
-/// Uses integer representation of floats (bits) for reliable hashing.
-/// This handles -0.0/+0.0 and provides exact equality.
+/// Keys on the exact bit pattern of each bound, so `0.0` and `-0.0` give
+/// different keys: at worst a recomputation, never an alias to a wrong
+/// cached value. Equality and hashing are both over the bits, so they agree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-// The `_bits` postfix is load-bearing: each field is the `f32::to_bits` image
+// The `_bits` postfix is load-bearing: each field is the `f64::to_bits` image
 // of the same-named `BoxConstraints` field, and dropping it would suggest the
 // fields hold pixel values.
 #[expect(clippy::struct_field_names)]
 pub struct BoxConstraintsCacheKey {
-    min_width_bits: u32,
-    max_width_bits: u32,
-    min_height_bits: u32,
-    max_height_bits: u32,
+    min_width_bits: u64,
+    max_width_bits: u64,
+    min_height_bits: u64,
+    max_height_bits: u64,
 }
 
 impl BoxConstraintsCacheKey {
@@ -320,7 +318,7 @@ impl LayoutCapability for BoxLayout {
 /// use flui_foundation::RenderId;
 /// use flui_rendering::constraints::BoxConstraints;
 /// use flui_rendering::protocol::box_protocol::LayoutChildCallback;
-/// use flui_types::Size;
+/// use flui_foundation::geometry::Size;
 ///
 /// fn callback(_id: RenderId, _constraints: BoxConstraints) -> Size {
 ///     Size::ZERO
@@ -344,7 +342,7 @@ pub type LayoutChildCallback<'a> = &'a dyn Fn(flui_foundation::RenderId, BoxCons
 /// Called after `layout_child` when a parent needs the post-layout baseline
 /// position (e.g. `RenderBaseline`, flex baseline cross-axis alignment).
 pub type ActualBaselineChildCallback<'a> =
-    &'a dyn Fn(flui_foundation::RenderId, crate::traits::TextBaseline) -> Option<f32>;
+    &'a dyn Fn(flui_foundation::RenderId, crate::traits::TextBaseline) -> Option<f64>;
 
 /// Callback type for cross-protocol sliver child layout driven by a Box parent.
 ///
@@ -376,7 +374,7 @@ pub type SliverLayoutChildCallback<'a> =
 /// Returns `0.0` when the callback cannot route the query (out-of-bounds index,
 /// error in child layout, or no callback wired on the Direct-storage path).
 pub type BoxChildIntrinsicCallback<'a> =
-    &'a dyn Fn(flui_foundation::RenderId, crate::storage::IntrinsicDimension, f32) -> f32;
+    &'a dyn Fn(flui_foundation::RenderId, crate::storage::IntrinsicDimension, f64) -> f64;
 
 /// Per-child geometry storage owned by the typed wrapper when bridging
 /// from an erased context.
@@ -604,7 +602,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
         &self,
         index: usize,
         baseline: crate::traits::TextBaseline,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         match &self.storage {
             BoxLayoutCtxStorage::Direct { .. } => None,
             BoxLayoutCtxStorage::Proxy { erased, .. } => {
@@ -876,7 +874,7 @@ pub trait BoxLayoutCtxErased {
         &self,
         _index: usize,
         _baseline: crate::traits::TextBaseline,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         None
     }
 
@@ -955,8 +953,8 @@ pub trait BoxLayoutCtxErased {
         &mut self,
         _index: usize,
         _dimension: crate::storage::IntrinsicDimension,
-        _extent: f32,
-    ) -> f32 {
+        _extent: f64,
+    ) -> f64 {
         0.0
     }
 }
@@ -1048,7 +1046,7 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         &self,
         index: usize,
         baseline: crate::traits::TextBaseline,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         match &self.storage {
             BoxLayoutCtxStorage::Direct { .. } => None,
             BoxLayoutCtxStorage::Proxy { erased, .. } => {
@@ -1105,8 +1103,8 @@ impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, 
         &mut self,
         index: usize,
         dimension: crate::storage::IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         match &mut self.storage {
             // Direct-storage contexts have no intrinsics callback; return the
             // same conservative 0.0 that the default trait body produces.
@@ -1331,7 +1329,7 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         &self,
         index: usize,
         baseline: crate::traits::TextBaseline,
-    ) -> Option<f32> {
+    ) -> Option<f64> {
         let &child_id = self.child_ids.get(index)?;
         (self.actual_baseline_callback)(child_id, baseline)
     }
@@ -1418,8 +1416,8 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         &mut self,
         index: usize,
         dimension: crate::storage::IntrinsicDimension,
-        extent: f32,
-    ) -> f32 {
+        extent: f64,
+    ) -> f64 {
         let Some(callback) = self.intrinsics_child_callback else {
             return 0.0;
         };
@@ -1709,7 +1707,6 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
 #[cfg(test)]
 mod tests {
     use flui_foundation::Leaf;
-    use flui_types::geometry::px;
 
     use super::*;
 
@@ -1722,11 +1719,11 @@ mod tests {
     fn validate_layout_output_rejects_non_finite_and_oversized_geometry() {
         use crate::error::RenderError;
 
-        let constraints = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
-        let ok = Size::new(px(40.0), px(40.0));
+        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
+        let ok = Size::new(40.0, 40.0);
         BoxProtocol::validate_layout_output("TestBox", &constraints, &ok).expect("valid size");
 
-        let bad = Size::new(px(f32::INFINITY), px(40.0));
+        let bad = Size::new(f64::INFINITY, 40.0);
         match BoxProtocol::validate_layout_output("TestBox", &constraints, &bad) {
             Err(RenderError::InvalidGeometry { reason, .. }) => {
                 assert!(reason.contains("non-finite"));
@@ -1734,7 +1731,7 @@ mod tests {
             other => panic!("expected InvalidGeometry, got {other:?}"),
         }
 
-        let oversize = Size::new(px(200.0), px(40.0));
+        let oversize = Size::new(200.0, 40.0);
         match BoxProtocol::validate_layout_output("TestBox", &constraints, &oversize) {
             Err(RenderError::InvalidGeometry { reason, .. }) => {
                 assert!(reason.contains("does not satisfy"));
@@ -1762,12 +1759,12 @@ mod tests {
     #[test]
     fn test_box_hit_test_context() {
         let ctx: BoxHitTestCtx<'_, Leaf, BoxParentData> =
-            BoxHitTestCtx::new(Offset::new(px(50.0), px(50.0)));
+            BoxHitTestCtx::new(Offset::new(50.0, 50.0));
 
-        let bounds = Rect::from_ltrb(px(0.0), px(0.0), px(100.0), px(100.0));
+        let bounds = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
         assert!(ctx.is_hit(bounds));
 
-        let outside = Rect::from_ltrb(px(100.0), px(100.0), px(200.0), px(200.0));
+        let outside = Rect::from_ltrb(100.0, 100.0, 200.0, 200.0);
         assert!(!ctx.is_hit(outside));
     }
 
@@ -1778,12 +1775,12 @@ mod tests {
     #[test]
     fn test_box_hit_test_context_incremental_transform_matches_fold() {
         let mut ctx: BoxHitTestCtx<'_, Leaf, BoxParentData> =
-            BoxHitTestCtx::new(Offset::new(px(0.0), px(0.0)));
+            BoxHitTestCtx::new(Offset::new(0.0, 0.0));
 
         // Mat₁: translate (10, 0)
         let t1 = Matrix4::translation(10.0, 0.0, 0.0);
         // Mat₂: rotation 90° about Z
-        let t2 = Matrix4::rotation_z(std::f32::consts::FRAC_PI_2);
+        let t2 = Matrix4::rotation_z(std::f64::consts::FRAC_PI_2);
         // Mat₃: scale 2x
         let t3 = Matrix4::scaling(2.0, 2.0, 1.0);
 
@@ -1803,7 +1800,7 @@ mod tests {
     #[test]
     fn test_box_hit_test_context_pop_restores_composition() {
         let mut ctx: BoxHitTestCtx<'_, Leaf, BoxParentData> =
-            BoxHitTestCtx::new(Offset::new(px(0.0), px(0.0)));
+            BoxHitTestCtx::new(Offset::new(0.0, 0.0));
 
         let t1 = Matrix4::translation(5.0, 5.0, 0.0);
         let t2 = Matrix4::scaling(3.0, 3.0, 1.0);
@@ -1820,14 +1817,13 @@ mod tests {
     /// Empty stack returns identity.
     #[test]
     fn test_box_hit_test_context_empty_stack_is_identity() {
-        let ctx: BoxHitTestCtx<'_, Leaf, BoxParentData> =
-            BoxHitTestCtx::new(Offset::new(px(0.0), px(0.0)));
+        let ctx: BoxHitTestCtx<'_, Leaf, BoxParentData> = BoxHitTestCtx::new(Offset::new(0.0, 0.0));
         assert_eq!(ctx.current_transform(), Matrix4::IDENTITY);
     }
 
     #[test]
     fn test_box_layout_context() {
-        let constraints = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
+        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
         let ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
 
         // `BoxLayoutCtx` implements `LayoutContextApi` (user-facing API,
@@ -1842,15 +1838,15 @@ mod tests {
                 BoxParentData,
             >>::constraints(&ctx)
             .max_width,
-            px(100.0)
+            100.0
         );
     }
 
     #[test]
     fn test_box_constraints_cache_key_equality() {
-        let c1 = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
-        let c2 = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
-        let c3 = BoxConstraints::tight(Size::new(px(200.0), px(100.0)));
+        let c1 = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let c2 = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let c3 = BoxConstraints::tight(Size::new(200.0, 100.0));
 
         let key1 = BoxConstraintsCacheKey::from_constraints(&c1).unwrap();
         let key2 = BoxConstraintsCacheKey::from_constraints(&c2).unwrap();
@@ -1862,15 +1858,15 @@ mod tests {
 
     #[test]
     fn test_box_constraints_cache_key_nan() {
-        let c = BoxConstraints::new(px(f32::NAN), px(100.0), px(0.0), px(100.0));
+        let c = BoxConstraints::new(f64::NAN, 100.0, 0.0, 100.0);
         assert!(BoxConstraintsCacheKey::from_constraints(&c).is_none());
     }
 
     #[test]
     fn test_box_constraints_cache_key_negative_zero() {
         // -0.0 and +0.0 should produce different cache keys (bit-exact)
-        let c1 = BoxConstraints::new(px(0.0), px(100.0), px(0.0), px(100.0));
-        let c2 = BoxConstraints::new(px(-0.0), px(100.0), px(0.0), px(100.0));
+        let c1 = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
+        let c2 = BoxConstraints::new(-0.0, 100.0, 0.0, 100.0);
 
         let key1 = BoxConstraintsCacheKey::from_constraints(&c1).unwrap();
         let key2 = BoxConstraintsCacheKey::from_constraints(&c2).unwrap();
@@ -1883,9 +1879,9 @@ mod tests {
     fn test_box_constraints_cache_key_hash() {
         use std::collections::HashSet;
 
-        let c1 = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
-        let c2 = BoxConstraints::tight(Size::new(px(100.0), px(100.0)));
-        let c3 = BoxConstraints::tight(Size::new(px(200.0), px(100.0)));
+        let c1 = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let c2 = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let c3 = BoxConstraints::tight(Size::new(200.0, 100.0));
 
         let key1 = BoxConstraintsCacheKey::from_constraints(&c1).unwrap();
         let key2 = BoxConstraintsCacheKey::from_constraints(&c2).unwrap();

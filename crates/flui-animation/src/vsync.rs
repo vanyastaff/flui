@@ -42,6 +42,20 @@ use crate::AnimationController;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VsyncRegistration(u64);
 
+/// Seconds from `start` to `now`, both readings of a nanosecond clock, taken on
+/// that clock's integer grid.
+///
+/// Subtracting the two `f64` readings directly leaves the difference one ulp
+/// off the value a `Duration` of the same length converts to (`0.12 - 0.02` is
+/// `0.09999999999999999`), so a 100 ms run anchored at 20 ms would stop one ulp
+/// short of its end and never complete. Flutter avoids the same trap by
+/// measuring elapsed time in integer microseconds.
+fn elapsed_since(start: f64, now: f64) -> f64 {
+    const NANOS_PER_SEC: f64 = 1e9;
+    let nanos = (now * NANOS_PER_SEC).round() - (start * NANOS_PER_SEC).round();
+    nanos / NANOS_PER_SEC
+}
+
 /// One registered controller plus the registry's per-run anchor.
 ///
 /// `run_start_secs` is the virtual instant treated as the current run's
@@ -403,7 +417,7 @@ impl Vsync {
                         let run_start = registered.run_start_secs.unwrap_or(now_secs);
                         RegistryWalkStep::Running(
                             registered.controller.clone(),
-                            now_secs - run_start,
+                            elapsed_since(run_start, now_secs),
                         )
                     } else {
                         RegistryWalkStep::NotRunning
@@ -454,6 +468,29 @@ mod tests {
 
     fn controller(ms: u64) -> AnimationController {
         AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
+    }
+
+    /// A run anchored off zero completes on the frame its duration elapses.
+    ///
+    /// Red-check: replace `elapsed_since` with `now - start` — the run reads
+    /// `0.12 - 0.02 = 0.09999999999999999` s at the 100 ms frame, stops one
+    /// ulp short and stays `Forward`.
+    #[test]
+    fn a_run_anchored_off_zero_completes_when_its_duration_elapses() {
+        assert_eq!(
+            elapsed_since(0.02, 0.12),
+            Duration::from_millis(100).as_secs_f64()
+        );
+
+        let vsync = Vsync::new();
+        let run = controller(100);
+        vsync.register(run.clone());
+        vsync.tick_all(0.0);
+        let _ = run.forward();
+        for ms in [20_u64, 40, 60, 80, 100, 120] {
+            vsync.tick_all(Duration::from_millis(ms).as_secs_f64());
+        }
+        assert_eq!(run.status(), AnimationStatus::Completed);
     }
 
     /// A muted registry delivers no ticks — neither to its own controllers nor

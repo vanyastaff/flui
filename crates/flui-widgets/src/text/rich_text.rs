@@ -1,12 +1,12 @@
 //! [`RichText`] — displays a tree of styled inline spans in one paragraph.
 
 use flui_objects::RenderParagraph;
+use flui_painting::typography::{InlineSpan, TextAlign, TextDirection};
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::typography::{InlineSpan, TextAlign, TextDirection};
 use flui_view::{RenderView, impl_render_view};
 
 /// Displays a tree of styled [`InlineSpan`]s (most commonly a
-/// [`TextSpan`](flui_types::typography::TextSpan)) in a single paragraph.
+/// [`TextSpan`](flui_painting::typography::TextSpan)) in a single paragraph.
 ///
 /// Flutter parity: `widgets/basic.dart` `RichText` over `RenderParagraph` —
 /// the same render object [`Text`](crate::Text) uses. Unlike `Text`, which
@@ -18,7 +18,7 @@ use flui_view::{RenderView, impl_render_view};
 ///
 /// ```rust
 /// # use flui_widgets::prelude::*;
-/// # use flui_types::typography::{FontWeight, TextSpan, TextStyle};
+/// # use flui_painting::typography::{FontWeight, TextSpan, TextStyle};
 /// let _ = RichText::new(
 ///     TextSpan::new("Hello, ").with_child(TextSpan::new("world").with_style(TextStyle {
 ///         font_weight: Some(FontWeight::BOLD),
@@ -36,7 +36,7 @@ pub struct RichText {
 
 impl RichText {
     /// Display `text` (any type convertible into an [`InlineSpan`] — most
-    /// commonly a [`TextSpan`](flui_types::typography::TextSpan)) with start
+    /// commonly a [`TextSpan`](flui_painting::typography::TextSpan)) with start
     /// alignment and left-to-right direction.
     pub fn new(text: impl Into<InlineSpan>) -> Self {
         Self {
@@ -102,7 +102,7 @@ impl_render_view!(RichText);
 
 #[cfg(test)]
 mod tests {
-    use flui_types::typography::{FontWeight, TextSpan, TextStyle};
+    use flui_painting::typography::{FontWeight, TextSpan, TextStyle};
     use flui_view::RenderView;
 
     use super::*;

@@ -37,12 +37,12 @@ use std::thread;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_engine::{EngineError, RasterBackend, RasterOwner};
+use flui_foundation::geometry::Rect;
 use flui_foundation::{
     FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress, PresentationId, RealmId,
     SurfaceGeneration,
 };
 use flui_layer::{CanvasLayer, DamageRegion, Layer, Scene, SceneSnapshot};
-use flui_types::geometry::{Pixels, Rect};
 
 /// A minimal non-empty scene: one canvas layer under a root.
 fn scene_from_canvas() -> Scene {
@@ -68,7 +68,7 @@ impl RasterBackend for NoOpBackend {
         false
     }
 
-    fn mark_dirty(&mut self, _rect: Rect<Pixels>) {}
+    fn mark_dirty(&mut self, _rect: Rect<f64>) {}
 
     fn mark_full_repaint(&mut self) {}
 

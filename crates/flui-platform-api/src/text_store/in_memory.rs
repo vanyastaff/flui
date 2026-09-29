@@ -16,7 +16,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_types::geometry::{Bounds, Pixels, Point, Size, px};
+use flui_foundation::geometry::{Bounds, Point, Size};
 
 use super::lock::{CommitGate, LockArbiter, LockGrant, LockOutcome, LockTiming, TextStoreError};
 use super::session::{
@@ -63,9 +63,9 @@ impl std::fmt::Debug for InMemoryTextStore {
 
 impl InMemoryTextStore {
     /// The width of one scalar's cell, in logical pixels.
-    pub const ADVANCE: f32 = 10.0;
+    pub const ADVANCE: f64 = 10.0;
     /// The height of the one line, in logical pixels.
-    pub const LINE_HEIGHT: f32 = 20.0;
+    pub const LINE_HEIGHT: f64 = 20.0;
 
     /// A store holding `text`, caret at the end, no composition, behind an
     /// open gate of its own until [`TextStore::set_commit_gate`] installs
@@ -333,41 +333,41 @@ fn rect_for_range(doc: &Document, range: Utf16Range) -> Result<RangeRect, TextSt
     let last = doc.cell_of(range.end())?;
     #[expect(
         clippy::cast_precision_loss,
-        reason = "a test store's cell count is far below f32's exact-integer range"
+        reason = "a test store's cell count is far below f64's exact-integer range"
     )]
     let (left, width) = (
-        first as f32 * InMemoryTextStore::ADVANCE,
-        (last - first) as f32 * InMemoryTextStore::ADVANCE,
+        first as f64 * InMemoryTextStore::ADVANCE,
+        (last - first) as f64 * InMemoryTextStore::ADVANCE,
     );
     Ok(RangeRect {
         bounds: Bounds::new(
-            Point::new(px(left), px(0.0)),
-            Size::new(px(width), px(InMemoryTextStore::LINE_HEIGHT)),
+            Point::new(left, 0.0),
+            Size::new(width, InMemoryTextStore::LINE_HEIGHT),
         ),
         clipped: false,
     })
 }
 
-fn document_bounds(doc: &Document) -> Bounds<Pixels> {
+fn document_bounds(doc: &Document) -> Bounds<f64> {
     #[expect(
         clippy::cast_precision_loss,
-        reason = "a test store's cell count is far below f32's exact-integer range"
+        reason = "a test store's cell count is far below f64's exact-integer range"
     )]
-    let width = doc.cells() as f32 * InMemoryTextStore::ADVANCE;
+    let width = doc.cells() as f64 * InMemoryTextStore::ADVANCE;
     Bounds::new(
-        Point::new(px(0.0), px(0.0)),
-        Size::new(px(width), px(InMemoryTextStore::LINE_HEIGHT)),
+        Point::new(0.0, 0.0),
+        Size::new(width, InMemoryTextStore::LINE_HEIGHT),
     )
 }
 
 fn index_at_point(
     doc: &Document,
-    point: Point<Pixels>,
+    point: Point<f64>,
     mode: PointMode,
 ) -> Result<Utf16Offset, TextStoreError> {
     let cells = doc.cells();
-    let x = point.x.get() / InMemoryTextStore::ADVANCE;
-    let y = point.y.get();
+    let x = point.x / InMemoryTextStore::ADVANCE;
+    let y = point.y;
     #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
@@ -377,13 +377,13 @@ fn index_at_point(
     let cell = match mode {
         PointMode::Exact => {
             let inside = (0.0..InMemoryTextStore::LINE_HEIGHT).contains(&y)
-                && (0.0..cells as f32).contains(&x);
+                && (0.0..cells as f64).contains(&x);
             if !inside {
                 return Err(TextStoreError::PointOutside);
             }
             x.floor() as usize
         }
-        PointMode::Nearest => x.round().clamp(0.0, cells as f32) as usize,
+        PointMode::Nearest => x.round().clamp(0.0, cells as f64) as usize,
     };
     Ok(doc.offset_of_cell(cell))
 }
@@ -409,13 +409,13 @@ impl TextStoreRead for ReadSession<'_> {
         rect_for_range(self.doc, range)
     }
 
-    fn document_bounds(&self) -> Result<Bounds<Pixels>, TextStoreError> {
+    fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
         Ok(document_bounds(self.doc))
     }
 
     fn index_at_point(
         &self,
-        point: Point<Pixels>,
+        point: Point<f64>,
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
         index_at_point(self.doc, point, mode)
@@ -443,13 +443,13 @@ impl TextStoreRead for EditSession<'_> {
         rect_for_range(self.doc, range)
     }
 
-    fn document_bounds(&self) -> Result<Bounds<Pixels>, TextStoreError> {
+    fn document_bounds(&self) -> Result<Bounds<f64>, TextStoreError> {
         Ok(document_bounds(self.doc))
     }
 
     fn index_at_point(
         &self,
-        point: Point<Pixels>,
+        point: Point<f64>,
         mode: PointMode,
     ) -> Result<Utf16Offset, TextStoreError> {
         index_at_point(self.doc, point, mode)
@@ -541,7 +541,7 @@ mod tests {
             LockTiming::Sync,
         );
         let bounds = rect.get().expect("laid out").bounds;
-        assert_eq!(bounds.origin.x, px(InMemoryTextStore::ADVANCE));
-        assert_eq!(bounds.size.width, px(InMemoryTextStore::ADVANCE));
+        assert_eq!(bounds.origin.x, (InMemoryTextStore::ADVANCE));
+        assert_eq!(bounds.size.width, (InMemoryTextStore::ADVANCE));
     }
 }

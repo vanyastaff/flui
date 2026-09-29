@@ -1,13 +1,13 @@
 //! [`Container`] — the Flutter convenience widget that composes padding,
 //! alignment, sizing, decoration, margin, and a transform around a child.
 
-use flui_geometry::{EdgeInsets, Matrix4};
+use flui_foundation::geometry::{EdgeInsets, Matrix4};
 use flui_objects::RenderContainer;
+use flui_painting::Alignment;
+use flui_painting::styling::BoxDecoration;
+use flui_painting::styling::Color;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::protocol::BoxProtocol;
-use flui_types::geometry::px;
-use flui_types::styling::BoxDecoration;
-use flui_types::{Alignment, Color, Pixels};
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A convenience widget that composes common painting, positioning, and sizing
@@ -64,7 +64,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Decoration *painting* (color, gradient, border, radius, shadow) is
 /// faithful. One Flutter nuance is not yet modelled: a [`BoxDecoration`]
 /// border's thickness is not folded into the effective layout padding
-/// (`_paddingIncludingDecoration`), because `flui-types`' `BoxDecoration` does
+/// (`_paddingIncludingDecoration`), because `flui-painting`'s `BoxDecoration` does
 /// not expose border insets. Set `padding` explicitly if a bordered container
 /// must reserve the border's thickness.
 ///
@@ -72,16 +72,16 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///
 /// ```rust
 /// # use flui_widgets::prelude::*;
-/// let _ = Container::new().width(120.0).padding(EdgeInsets::all(px(8.0)));
+/// let _ = Container::new().width(120.0).padding(EdgeInsets::all(8.0));
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct Container {
     alignment: Option<Alignment>,
     padding: Option<EdgeInsets>,
     color: Option<Color>,
-    decoration: Option<BoxDecoration<Pixels>>,
-    width: Option<f32>,
-    height: Option<f32>,
+    decoration: Option<BoxDecoration<f64>>,
+    width: Option<f64>,
+    height: Option<f64>,
     constraints: Option<BoxConstraints>,
     margin: Option<EdgeInsets>,
     transform: Option<Matrix4>,
@@ -122,21 +122,21 @@ impl Container {
 
     /// Paint a [`BoxDecoration`] behind the child.
     #[must_use]
-    pub fn decoration(mut self, decoration: BoxDecoration<Pixels>) -> Self {
+    pub fn decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
         self.decoration = Some(decoration);
         self
     }
 
     /// Force the container's width (folded into its constraints).
     #[must_use]
-    pub fn width(mut self, width: f32) -> Self {
+    pub fn width(mut self, width: f64) -> Self {
         self.width = Some(width);
         self
     }
 
     /// Force the container's height (folded into its constraints).
     #[must_use]
-    pub fn height(mut self, height: f32) -> Self {
+    pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
         self
     }
@@ -175,8 +175,8 @@ impl Container {
     /// `tightFor`.
     fn effective_constraints(&self) -> Option<BoxConstraints> {
         if self.width.is_some() || self.height.is_some() {
-            let width = self.width.map(px);
-            let height = self.height.map(px);
+            let width = self.width;
+            let height = self.height;
             Some(match self.constraints {
                 Some(constraints) => constraints.tighten(width, height),
                 None => BoxConstraints::tight_for(width, height),

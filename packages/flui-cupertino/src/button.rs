@@ -55,11 +55,11 @@ use flui_sdk::animation::{
     Animation, AnimationController, Curves, FloatTween, TickerFuture, UpdateScheduler, Vsync,
     VsyncRegistration,
 };
-use flui_sdk::types::geometry::{EdgeInsets, Pixels, px};
-use flui_sdk::types::layout::Alignment;
-use flui_sdk::types::platform::Brightness;
-use flui_sdk::types::styling::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
-use flui_sdk::types::typography::TextStyle;
+use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::painting::Alignment;
+use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::{BorderRadius, BorderRadiusExt, BoxDecoration, Color};
+use flui_sdk::platform::Brightness;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, StatefulView, ViewState};
@@ -87,10 +87,10 @@ pub const K_FADE_IN_DURATION: Duration = Duration::from_millis(180);
 
 /// `kCupertinoButtonTintedOpacityLight` (`constants.dart`, oracle tag
 /// `3.44.0`).
-const K_TINTED_OPACITY_LIGHT: f32 = 0.12;
+const K_TINTED_OPACITY_LIGHT: f64 = 0.12;
 /// `kCupertinoButtonTintedOpacityDark` (`constants.dart`, oracle tag
 /// `3.44.0`).
-const K_TINTED_OPACITY_DARK: f32 = 0.26;
+const K_TINTED_OPACITY_DARK: f64 = 0.26;
 
 /// The size of a [`CupertinoButton`]. Flutter parity: `CupertinoButtonSize`
 /// (`button.dart`, oracle tag `3.44.0`).
@@ -109,9 +109,9 @@ pub enum CupertinoButtonSize {
 /// `3.44.0`).
 fn size_padding(size: CupertinoButtonSize) -> EdgeInsets {
     match size {
-        CupertinoButtonSize::Small => EdgeInsets::symmetric(px(6.0), px(12.0)),
-        CupertinoButtonSize::Medium => EdgeInsets::symmetric(px(10.0), px(15.0)),
-        CupertinoButtonSize::Large => EdgeInsets::symmetric(px(16.0), px(20.0)),
+        CupertinoButtonSize::Small => EdgeInsets::symmetric(6.0, 12.0),
+        CupertinoButtonSize::Medium => EdgeInsets::symmetric(10.0, 15.0),
+        CupertinoButtonSize::Large => EdgeInsets::symmetric(16.0, 20.0),
     }
 }
 
@@ -119,10 +119,8 @@ fn size_padding(size: CupertinoButtonSize) -> EdgeInsets {
 /// tag `3.44.0`).
 fn size_border_radius(size: CupertinoButtonSize) -> BorderRadius {
     match size {
-        CupertinoButtonSize::Small | CupertinoButtonSize::Medium => {
-            BorderRadius::circular(px(40.0))
-        }
-        CupertinoButtonSize::Large => BorderRadius::circular(px(12.0)),
+        CupertinoButtonSize::Small | CupertinoButtonSize::Medium => BorderRadius::circular(40.0),
+        CupertinoButtonSize::Large => BorderRadius::circular(12.0),
     }
 }
 
@@ -136,7 +134,7 @@ fn size_border_radius(size: CupertinoButtonSize) -> BorderRadius {
 /// rather than carry unused code — `minimum_size` passes an explicit value
 /// (including `0.0`, which genuinely removes the floor) straight through
 /// unmodified, exactly as `minimumSize?.width` does.
-fn size_min_dimension(size: CupertinoButtonSize) -> f32 {
+fn size_min_dimension(size: CupertinoButtonSize) -> f64 {
     match size {
         CupertinoButtonSize::Small => 28.0,
         CupertinoButtonSize::Medium => 32.0,
@@ -169,8 +167,8 @@ pub struct CupertinoButton {
     color: Option<CupertinoColor>,
     foreground_color: Option<CupertinoColor>,
     disabled_color: CupertinoColor,
-    minimum_size: Option<(f32, f32)>,
-    pressed_opacity: Option<f32>,
+    minimum_size: Option<(f64, f64)>,
+    pressed_opacity: Option<f64>,
     border_radius: Option<BorderRadius>,
     alignment: Alignment,
     on_pressed: Option<ButtonCallback>,
@@ -271,7 +269,7 @@ impl CupertinoButton {
     /// Overrides the minimum `(width, height)` of the button. Defaults to
     /// `size_min_dimension` on both axes for [`Self::size_style`].
     #[must_use]
-    pub fn minimum_size(mut self, width: f32, height: f32) -> Self {
+    pub fn minimum_size(mut self, width: f64, height: f64) -> Self {
         self.minimum_size = Some((width, height));
         self
     }
@@ -279,7 +277,7 @@ impl CupertinoButton {
     /// Sets the opacity the button fades to while pressed (default `0.4`).
     /// `None` disables the fade animation entirely.
     #[must_use]
-    pub fn pressed_opacity(mut self, pressed_opacity: Option<f32>) -> Self {
+    pub fn pressed_opacity(mut self, pressed_opacity: Option<f64>) -> Self {
         self.pressed_opacity = pressed_opacity;
         self
     }
@@ -447,7 +445,7 @@ fn resolve_foreground_color(
 /// incidental cost.
 fn start_press_fade(
     controller: &AnimationController,
-    pressed_opacity: Option<f32>,
+    pressed_opacity: Option<f64>,
     rebuild: Option<&RebuildHandle>,
 ) -> Option<TickerFuture> {
     pressed_opacity?;
@@ -573,7 +571,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             Some(_) if !enabled => Some(view.disabled_color.resolve(ctx)),
             other => other,
         };
-        let decoration = BoxDecoration::<Pixels>::new()
+        let decoration = BoxDecoration::<f64>::new()
             .set_color(fill_color)
             .set_border_radius(Some(
                 view.border_radius
@@ -590,8 +588,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
                 size_min_dimension(view.size_style),
             )
         });
-        let constraints =
-            BoxConstraints::new(px(min_width), Pixels::MAX, px(min_height), Pixels::MAX);
+        let constraints = BoxConstraints::new(min_width, f64::MAX, min_height, f64::MAX);
 
         let padding = view
             .padding
@@ -604,13 +601,13 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
 
         let decorated = DecoratedBox::new(decoration).child(Padding::new(padding).child(content));
 
-        let opacity: Arc<dyn Animation<f32>> = match &self.controller {
+        let opacity: Arc<dyn Animation<f64>> = match &self.controller {
             Some(controller) => {
                 let pressed_opacity = view.pressed_opacity.unwrap_or(1.0);
                 let curved = Arc::new(Arc::new(controller.clone()).curved(Curves::Decelerate));
                 Arc::new(
                     FloatTween::new(1.0, pressed_opacity)
-                        .animate(curved as Arc<dyn Animation<f32>>),
+                        .animate(curved as Arc<dyn Animation<f64>>),
                 )
             }
             None => Arc::new(flui_sdk::animation::ConstantAnimation::new(1.0)),
@@ -669,15 +666,15 @@ mod tests {
     fn size_padding_matches_the_oracle_table() {
         assert_eq!(
             size_padding(CupertinoButtonSize::Small),
-            EdgeInsets::symmetric(px(6.0), px(12.0))
+            EdgeInsets::symmetric(6.0, 12.0)
         );
         assert_eq!(
             size_padding(CupertinoButtonSize::Medium),
-            EdgeInsets::symmetric(px(10.0), px(15.0))
+            EdgeInsets::symmetric(10.0, 15.0)
         );
         assert_eq!(
             size_padding(CupertinoButtonSize::Large),
-            EdgeInsets::symmetric(px(16.0), px(20.0))
+            EdgeInsets::symmetric(16.0, 20.0)
         );
     }
 
@@ -685,15 +682,15 @@ mod tests {
     fn size_border_radius_matches_the_oracle_table() {
         assert_eq!(
             size_border_radius(CupertinoButtonSize::Small),
-            BorderRadius::circular(px(40.0))
+            BorderRadius::circular(40.0)
         );
         assert_eq!(
             size_border_radius(CupertinoButtonSize::Medium),
-            BorderRadius::circular(px(40.0))
+            BorderRadius::circular(40.0)
         );
         assert_eq!(
             size_border_radius(CupertinoButtonSize::Large),
-            BorderRadius::circular(px(12.0))
+            BorderRadius::circular(12.0)
         );
     }
 

@@ -21,15 +21,16 @@
 //!     self.inner.align_child(ctx, parent_size, child_size);
 //!     parent_size
 //! }
-//! fn compute_dry_baseline(...) -> Option<f32> {
+//! fn compute_dry_baseline(...) -> Option<f64> {
 //!     // ...
-//!     let dy = self.inner.dry_child_offset(parent_size, child_size).dy.get();
+//!     let dy = self.inner.dry_child_offset(parent_size, child_size).dy;
 //!     Some(child_baseline + dy)
 //! }
 //! ```
 
 use flui_foundation::Single;
-use flui_types::{Alignment, Offset, Size};
+use flui_foundation::geometry::{Offset, Size};
+use flui_painting::Alignment;
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -62,7 +63,7 @@ pub(crate) struct AligningShiftedBox {
     /// Child's live actual baseline per kind, cached during `record_child_baselines`.
     /// Index 0 = `TextBaseline::Alphabetic`, index 1 = `TextBaseline::Ideographic`.
     /// `None` when no child is present or the child reports no baseline for that kind.
-    child_baselines: [Option<f32>; 2],
+    child_baselines: [Option<f64>; 2],
 }
 
 impl AligningShiftedBox {
@@ -171,13 +172,12 @@ impl AligningShiftedBox {
     /// call; the result is valid only after layout.
     ///
     /// [`align_child`]: AligningShiftedBox::align_child
-    pub(crate) fn actual_baseline(&self, baseline: TextBaseline) -> Option<f32> {
+    pub(crate) fn actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
         let kind_index = match baseline {
             TextBaseline::Alphabetic => 0,
             TextBaseline::Ideographic => 1,
         };
-        self.child_baselines[kind_index]
-            .map(|raw_baseline| raw_baseline + self.child_offset.dy.get())
+        self.child_baselines[kind_index].map(|raw_baseline| raw_baseline + self.child_offset.dy)
     }
 
     /// Clears both cached baselines.  Call when the child is removed so that

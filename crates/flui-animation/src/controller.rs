@@ -16,15 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Absolute tolerance for "is the value at a bound" comparisons.
-const BOUND_EPSILON: f32 = 1e-6;
-
-/// Narrow an f64 time/progress value to the f32 the animation value space uses.
-/// Time is accumulated in f64 for frame-coherence, but values and simulations
-/// are f32; the sub-microsecond precision lost here is irrelevant to rendering.
-#[inline]
-fn narrow_f32(x: f64) -> f32 {
-    x as f32
-}
+const BOUND_EPSILON: f64 = 1e-6;
 
 /// Default spring for fling animations.
 fn default_fling_spring() -> SpringDescription {
@@ -34,7 +26,7 @@ fn default_fling_spring() -> SpringDescription {
 /// Default tolerance for fling animations.
 const FLING_TOLERANCE: Tolerance = Tolerance {
     distance: 0.01,
-    velocity: f32::INFINITY,
+    velocity: f64::INFINITY,
     time: 1e-3,
 };
 
@@ -112,9 +104,9 @@ struct RepeatRun {
     /// Bounce back and forth (`true`) instead of restarting each cycle.
     reverse: bool,
     /// Lower endpoint of the repeat range.
-    min: f32,
+    min: f64,
     /// Upper endpoint of the repeat range.
-    max: f32,
+    max: f64,
     /// Per-cycle duration, resolved ONCE at the call
     /// (`period.unwrap_or(duration)`) — never re-read from the live
     /// `duration`/`reverse_duration`, so `set_duration` mid-repeat and a
@@ -142,13 +134,13 @@ struct RepeatRun {
 /// `AnimationController::tick_repeat`'s running state.
 struct RepeatSample {
     /// The interpolated value at this instant.
-    value: f32,
+    value: f64,
     /// The leg's direction (`Forward` unless bouncing on an odd-indexed leg).
     direction: AnimationDirection,
     /// This leg's start endpoint (`min` or `max`, by direction).
-    start: f32,
+    start: f64,
     /// This leg's end endpoint (the opposite of `start`).
-    target: f32,
+    target: f64,
 }
 
 /// Controls an animation, driving it forward/backward.
@@ -157,7 +149,7 @@ struct RepeatSample {
 /// It must be disposed when no longer needed to prevent resource leaks.
 ///
 /// The controller generates values from `lower_bound` to `upper_bound` (typically 0.0 to 1.0)
-/// over the specified duration. It implements `Animation<f32>` and can be used directly,
+/// over the specified duration. It implements `Animation<f64>` and can be used directly,
 /// or transformed using `Tween` or `CurvedAnimation`.
 ///
 /// # Time model
@@ -211,7 +203,7 @@ pub struct AnimationController {
 
 struct AnimationControllerInner {
     /// Current value (typically 0.0 to 1.0).
-    value: f32,
+    value: f64,
 
     /// Animation status.
     status: AnimationStatus,
@@ -223,10 +215,10 @@ struct AnimationControllerInner {
     reverse_duration: Option<Duration>,
 
     /// Lower bound (default 0.0).
-    lower_bound: f32,
+    lower_bound: f64,
 
     /// Upper bound (default 1.0).
-    upper_bound: f32,
+    upper_bound: f64,
 
     /// Ticker for frame callbacks (auto-scheduling via the attached `UpdateScheduler`).
     ticker: Option<Ticker>,
@@ -238,10 +230,10 @@ struct AnimationControllerInner {
     direction: AnimationDirection,
 
     /// Value at the start of the current run (for partial animations).
-    start_value: f32,
+    start_value: f64,
 
     /// Target value for the current run.
-    target_value: f32,
+    target_value: f64,
 
     /// Most recent raw (pre-dilation) elapsed seconds seen by
     /// [`AnimationController::tick_at`], so `velocity()` can report the
@@ -356,7 +348,7 @@ impl AnimationController {
 
     /// [`Self::without_ticker`] with custom bounds — the shape a fling/
     /// ballistic-simulation controller needs (wide-open
-    /// `f32::NEG_INFINITY..f32::INFINITY` bounds so the simulation's own
+    /// `f64::NEG_INFINITY..f64::INFINITY` bounds so the simulation's own
     /// `is_done` terminates the run instead of the controller clamping it),
     /// while still needing no ticker: the driver is `tick_at`, called
     /// directly by the simulation stepper, never a scheduler.
@@ -365,13 +357,13 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
     /// finite, `lower_bound < upper_bound`, AND `upper_bound - lower_bound`
-    /// itself fits in `f32` — two finite endpoints do not by themselves
-    /// make a finite range (`(-f32::MAX, f32::MAX)` has a span of
-    /// `f32::INFINITY`).
+    /// itself fits in `f64` — two finite endpoints do not by themselves
+    /// make a finite range (`(-f64::MAX, f64::MAX)` has a span of
+    /// `f64::INFINITY`).
     pub fn without_ticker_bounds(
         duration: Duration,
-        lower_bound: f32,
-        upper_bound: f32,
+        lower_bound: f64,
+        upper_bound: f64,
     ) -> Result<Self, AnimationError> {
         Self::with_bounds_inner(duration, None, lower_bound, upper_bound)
     }
@@ -416,13 +408,13 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
     /// finite, `lower_bound < upper_bound`, AND `upper_bound - lower_bound`
-    /// itself fits in `f32` — two finite endpoints do not by themselves
-    /// make a finite range (`(-f32::MAX, f32::MAX)` has a span of
-    /// `f32::INFINITY`).
+    /// itself fits in `f64` — two finite endpoints do not by themselves
+    /// make a finite range (`(-f64::MAX, f64::MAX)` has a span of
+    /// `f64::INFINITY`).
     pub fn with_detached_ticker_bounds(
         duration: Duration,
-        lower_bound: f32,
-        upper_bound: f32,
+        lower_bound: f64,
+        upper_bound: f64,
     ) -> Result<Self, AnimationError> {
         Self::with_bounds_inner(duration, Some(Ticker::new()), lower_bound, upper_bound)
     }
@@ -440,9 +432,9 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
     /// finite, `lower_bound < upper_bound`, AND `upper_bound - lower_bound`
-    /// itself fits in `f32` — two finite endpoints do not by themselves
-    /// make a finite range (`(-f32::MAX, f32::MAX)` has a span of
-    /// `f32::INFINITY`).
+    /// itself fits in `f64` — two finite endpoints do not by themselves
+    /// make a finite range (`(-f64::MAX, f64::MAX)` has a span of
+    /// `f64::INFINITY`).
     ///
     /// # Examples
     ///
@@ -465,8 +457,8 @@ impl AnimationController {
     pub fn with_bounds(
         duration: Duration,
         scheduler: &UpdateScheduler,
-        lower_bound: f32,
-        upper_bound: f32,
+        lower_bound: f64,
+        upper_bound: f64,
     ) -> Result<Self, AnimationError> {
         let ticker = Ticker::new_with_scheduler(scheduler);
         Self::with_bounds_inner(duration, Some(ticker), lower_bound, upper_bound)
@@ -481,8 +473,8 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::InvalidBounds`] unless both bounds are
     /// finite, `lower_bound < upper_bound`, AND `upper_bound - lower_bound`
-    /// itself fits in `f32` — two finite endpoints do not make a finite
-    /// RANGE (`(-f32::MAX, f32::MAX)` has a span of `f32::INFINITY`).
+    /// itself fits in `f64` — two finite endpoints do not make a finite
+    /// RANGE (`(-f64::MAX, f64::MAX)` has a span of `f64::INFINITY`).
     /// Bounded means finite (endpoints AND span); unbounded is
     /// [`Self::unbounded_inner`], not a bound value — a half-open pair (one
     /// finite, one infinite) is rejected the same way, since nothing in
@@ -491,8 +483,8 @@ impl AnimationController {
     fn with_bounds_inner(
         duration: Duration,
         ticker: Option<Ticker>,
-        lower_bound: f32,
-        upper_bound: f32,
+        lower_bound: f64,
+        upper_bound: f64,
     ) -> Result<Self, AnimationError> {
         // `lower_bound >= upper_bound` (not the negated `!(lower < upper)`,
         // which clippy's `neg_cmp_op_on_partial_ord` flags on a
@@ -500,9 +492,9 @@ impl AnimationController {
         // caught by the `is_finite` clauses below regardless of which form
         // this takes. The span check closes every bounded run start's
         // `target - value`/`target - start` arithmetic at once — without
-        // it, `without_ticker_bounds(d, -f32::MAX, f32::MAX)` is accepted,
+        // it, `without_ticker_bounds(d, -f64::MAX, f64::MAX)` is accepted,
         // `forward()` returns `Ok`, and the first `tick_at` publishes
-        // `value = f32::INFINITY`. `drive_to`'s own span-overflow check
+        // `value = f64::INFINITY`. `drive_to`'s own span-overflow check
         // stays: it is still reachable from an UNBOUNDED controller, whose
         // bounds never pass through this function.
         if lower_bound >= upper_bound
@@ -513,7 +505,7 @@ impl AnimationController {
             return Err(AnimationError::InvalidBounds(format!(
                 "lower_bound ({lower_bound}) and upper_bound ({upper_bound}) must both be \
                  finite, with lower_bound < upper_bound, and the range \
-                 (upper_bound - lower_bound) must fit in f32"
+                 (upper_bound - lower_bound) must fit in f64"
             )));
         }
 
@@ -536,7 +528,7 @@ impl AnimationController {
     /// `AnimationController.unbounded`'s own doc (`animation_controller.dart`
     /// @ 3.44.0) fixes the initial value at `0.0`.
     fn unbounded_inner(duration: Duration, ticker: Option<Ticker>) -> Self {
-        Self::new_inner(duration, ticker, f32::NEG_INFINITY, f32::INFINITY, 0.0)
+        Self::new_inner(duration, ticker, f64::NEG_INFINITY, f64::INFINITY, 0.0)
     }
 
     /// The one place every constructor builds the inner state: `value`,
@@ -557,9 +549,9 @@ impl AnimationController {
     fn new_inner(
         duration: Duration,
         ticker: Option<Ticker>,
-        lower_bound: f32,
-        upper_bound: f32,
-        initial_value: f32,
+        lower_bound: f64,
+        upper_bound: f64,
+        initial_value: f64,
     ) -> Self {
         let notifier = Arc::new(ChangeNotifier::new());
 
@@ -614,7 +606,7 @@ impl AnimationController {
     /// [`Self::without_ticker`] for why "no ticker, driven by `tick_at`" is
     /// the production widget-layer shape).
     ///
-    /// Bounds are fixed at `f32::NEG_INFINITY..f32::INFINITY`: unboundedness
+    /// Bounds are fixed at `f64::NEG_INFINITY..f64::INFINITY`: unboundedness
     /// is this constructor, not a bound value — [`Self::with_bounds`] and
     /// its siblings reject a non-finite bound. Initial `value = 0.0`
     /// (Flutter parity: `AnimationController.unbounded`'s own doc), and
@@ -741,7 +733,7 @@ impl AnimationController {
     /// `from` is infinite toward a bound this controller does not have, or
     /// if this controller is [`unbounded`](Self::unbounded) (`forward`
     /// always targets `upper_bound`, which has no finite value to run to).
-    pub fn forward_from(&self, from: Option<f32>) -> Result<TickerFuture, AnimationError> {
+    pub fn forward_from(&self, from: Option<f64>) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
@@ -851,7 +843,7 @@ impl AnimationController {
     /// `from` is infinite toward a bound this controller does not have, or
     /// if this controller is [`unbounded`](Self::unbounded) (`reverse`
     /// always targets `lower_bound`, which has no finite value to run to).
-    pub fn reverse_from(&self, from: Option<f32>) -> Result<TickerFuture, AnimationError> {
+    pub fn reverse_from(&self, from: Option<f64>) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
         Self::check_disposed(&inner)?;
 
@@ -1020,7 +1012,7 @@ impl AnimationController {
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::NonFiniteTarget`] if `target` is `NaN`, if
     /// `target` is infinite toward a bound this controller does not have,
-    /// or if `target - value` overflows `f32`.
+    /// or if `target - value` overflows `f64`.
     ///
     /// # Examples
     ///
@@ -1037,7 +1029,7 @@ impl AnimationController {
     /// ```
     pub fn animate_to(
         &self,
-        target: f32,
+        target: f64,
         duration: Option<Duration>,
     ) -> Result<TickerFuture, AnimationError> {
         self.drive_to(target, duration, AnimationDirection::Forward, None)
@@ -1062,7 +1054,7 @@ impl AnimationController {
     /// as [`animate_to`](Self::animate_to).
     pub fn animate_back(
         &self,
-        target: f32,
+        target: f64,
         duration: Option<Duration>,
     ) -> Result<TickerFuture, AnimationError> {
         self.drive_to(target, duration, AnimationDirection::Reverse, None)
@@ -1080,7 +1072,7 @@ impl AnimationController {
     /// as [`animate_to`](Self::animate_to).
     pub fn animate_to_curved(
         &self,
-        target: f32,
+        target: f64,
         duration: Option<Duration>,
         curve: Arc<dyn Curve + Send + Sync>,
     ) -> Result<TickerFuture, AnimationError> {
@@ -1098,7 +1090,7 @@ impl AnimationController {
     /// as [`animate_to`](Self::animate_to).
     pub fn animate_back_curved(
         &self,
-        target: f32,
+        target: f64,
         duration: Option<Duration>,
         curve: Arc<dyn Curve + Send + Sync>,
     ) -> Result<TickerFuture, AnimationError> {
@@ -1123,7 +1115,7 @@ impl AnimationController {
     /// choice, not a travel comparison.
     fn drive_to(
         &self,
-        target: f32,
+        target: f64,
         duration: Option<Duration>,
         direction: AnimationDirection,
         curve: Option<Arc<dyn Curve + Send + Sync>>,
@@ -1148,8 +1140,8 @@ impl AnimationController {
             Ok(target) => target,
             Err(err) => return Err(Self::warn_non_finite_target(inner, err)),
         };
-        // `target - value` overflowing f32 (e.g. `set_value(-f32::MAX)` then
-        // `animate_to(f32::MAX)`) would make `tick_time_based`'s
+        // `target - value` overflowing f64 (e.g. `set_value(-f64::MAX)` then
+        // `animate_to(f64::MAX)`) would make `tick_time_based`'s
         // `start_value + range * eased_t` interior lerp compute `inf * t`,
         // finite but wrong, or — at an already-non-finite `start_value` —
         // `inf * 0.0 = NaN`. Refuse before any mutation rather than let a
@@ -1157,7 +1149,7 @@ impl AnimationController {
         let span = target - entry_value;
         if !span.is_finite() {
             let err = AnimationError::NonFiniteTarget(format!(
-                "{caller}: span ({target} - {entry_value}) overflows f32"
+                "{caller}: span ({target} - {entry_value}) overflows f64"
             ));
             return Err(Self::warn_non_finite_target(inner, err));
         }
@@ -1224,7 +1216,7 @@ impl AnimationController {
     /// notifyListeners(); }`, `:675-678`).
     fn settle_at_target(
         &self,
-        entry_value: f32,
+        entry_value: f64,
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
     ) -> TickerFuture {
         inner.value = inner.target_value;
@@ -1323,8 +1315,8 @@ impl AnimationController {
     /// repeat on an unbounded controller.
     pub fn repeat_with(
         &self,
-        min: Option<f32>,
-        max: Option<f32>,
+        min: Option<f64>,
+        max: Option<f64>,
         reverse: bool,
         period: Option<Duration>,
         count: Option<u32>,
@@ -1334,13 +1326,13 @@ impl AnimationController {
         let entry_value = inner.value;
 
         // A caller-supplied NaN endpoint is a range-shape error on ANY
-        // controller (unguarded, `repeat_with(Some(f32::NAN), ..)` reaches
+        // controller (unguarded, `repeat_with(Some(f64::NAN), ..)` reaches
         // `inner.value.clamp(lo, hi)` below with `lo` itself NaN, which
-        // panics inside `f32::clamp`'s own `assert!(min <= max)`) — checked
+        // panics inside `f64::clamp`'s own `assert!(min <= max)`) — checked
         // before defaulting/clamping so it can never be confused with the
         // *effective*-range non-finiteness an unbounded controller's own
         // defaulted bound produces below.
-        if min.is_some_and(f32::is_nan) || max.is_some_and(f32::is_nan) {
+        if min.is_some_and(f64::is_nan) || max.is_some_and(f64::is_nan) {
             return Err(AnimationError::InvalidBounds(format!(
                 "repeat range endpoints must not be NaN (min={min:?}, max={max:?})"
             )));
@@ -1392,7 +1384,7 @@ impl AnimationController {
         // that is `lo` (the phase wraps), exactly Flutter's
         // `_startSimulation` setting `_value = x(0.0)`; in bounce mode a
         // value starting at `max` reports the reverse leg. Widen to f64
-        // before subtracting — near `max` the f32 difference loses bits,
+        // before subtracting — near `max` the f64 difference loses bits,
         // ~60ns of quantization at a 1s period, harmless to the phase this
         // computes.
         let v = inner.value.clamp(lo, hi);
@@ -1440,7 +1432,7 @@ impl AnimationController {
         // Every degenerate case has returned: a `RepeatRun` is constructed
         // only here, so `period_ns > 0` holds by construction for every live
         // run and nothing downstream needs to guard it again.
-        let ratio = (f64::from(v) - f64::from(lo)) / (f64::from(hi) - f64::from(lo));
+        let ratio = (v - lo) / (hi - lo);
         let initial_ns = (ratio * period_ns as f64).round() as u128;
         let run = RepeatRun {
             reverse,
@@ -1501,7 +1493,7 @@ impl AnimationController {
     /// let controller = AnimationController::new(Duration::from_millis(300), &scheduler);
     /// controller.fling(1.0).unwrap(); // Fling forward
     /// ```
-    pub fn fling(&self, velocity: f32) -> Result<TickerFuture, AnimationError> {
+    pub fn fling(&self, velocity: f64) -> Result<TickerFuture, AnimationError> {
         self.fling_with(velocity, None)
     }
 
@@ -1515,7 +1507,7 @@ impl AnimationController {
     /// Returns [`AnimationError::InvalidSpring`] if the spring is underdamped.
     pub fn fling_with(
         &self,
-        velocity: f32,
+        velocity: f64,
         spring: Option<SpringDescription>,
     ) -> Result<TickerFuture, AnimationError> {
         let mut inner = self.inner.lock();
@@ -1678,7 +1670,7 @@ impl AnimationController {
 
     /// Get the current velocity of the animation (0.0 if not running).
     #[must_use]
-    pub fn velocity(&self) -> f32 {
+    pub fn velocity(&self) -> f64 {
         let inner = self.inner.lock();
         // `active_run.is_none()`, not `!status.is_running()`: `active_run`
         // is the actual "is a run installed" fact (see `walk_probe`'s doc
@@ -1693,7 +1685,7 @@ impl AnimationController {
 
         let cycle = inner.cycle_elapsed_secs();
         if let Some(sim) = &inner.simulation {
-            return sim.dx(narrow_f32(cycle));
+            return sim.dx(cycle);
         }
 
         let duration = inner.current_duration();
@@ -1701,7 +1693,7 @@ impl AnimationController {
             return 0.0;
         }
         let range = inner.target_value - inner.start_value;
-        range / duration.as_secs_f32()
+        range / duration.as_secs_f64()
     }
 
     /// A monotonically increasing run-generation counter, bumped once each time
@@ -1805,7 +1797,7 @@ impl AnimationController {
         if let Some(run) = inner.repeat {
             self.tick_repeat(inner, run, cycle);
         } else if inner.simulation.is_some() {
-            self.tick_simulation(inner, narrow_f32(cycle));
+            self.tick_simulation(inner, cycle);
         } else {
             self.tick_time_based(inner, cycle);
         }
@@ -1815,7 +1807,7 @@ impl AnimationController {
     fn tick_simulation(
         &self,
         mut inner: parking_lot::MutexGuard<'_, AnimationControllerInner>,
-        cycle: f32,
+        cycle: f64,
     ) {
         // `simulation.is_some()` was checked by the caller.
         let sim = inner
@@ -1890,7 +1882,7 @@ impl AnimationController {
         let t = if duration.is_zero() {
             1.0
         } else {
-            narrow_f32((cycle / duration.as_secs_f64()).clamp(0.0, 1.0))
+            (cycle / duration.as_secs_f64()).clamp(0.0, 1.0)
         };
         // Flutter parity: `_InterpolationSimulation.x` special-cases the
         // endpoints to the exact begin/end value and only runs the curve
@@ -2052,7 +2044,7 @@ impl AnimationController {
     /// scrollable to a bound it doesn't have. Either way the warning below
     /// is latched (`non_finite_warned`): it fires once per controller, not
     /// once per frame of a misbehaving caller.
-    pub fn set_value(&self, value: f32) {
+    pub fn set_value(&self, value: f64) {
         let mut inner = self.inner.lock();
 
         if !value.is_finite() {
@@ -2131,15 +2123,15 @@ impl AnimationController {
     /// evaluation for the rest of the run (`clamp` propagates `NaN`
     /// unchanged rather than rejecting it). `+-inf` clamps to whichever
     /// bound it points at when that bound is finite — Flutter's own "go to
-    /// the end" idiom, e.g. `animate_to(f32::INFINITY)` on a bounded
+    /// the end" idiom, e.g. `animate_to(f64::INFINITY)` on a bounded
     /// controller — and is refused when that bound is itself non-finite: an
     /// unbounded controller has no end in that direction to go to.
     fn canonicalize_value_target(
         caller: &str,
-        raw: f32,
-        lower_bound: f32,
-        upper_bound: f32,
-    ) -> Result<f32, AnimationError> {
+        raw: f64,
+        lower_bound: f64,
+        upper_bound: f64,
+    ) -> Result<f64, AnimationError> {
         if raw.is_nan() {
             return Err(AnimationError::NonFiniteTarget(format!(
                 "{caller} must be finite, got NaN"
@@ -2262,7 +2254,7 @@ impl AnimationController {
     /// (`!non_finite_warned`, taken before setting it) — this fires at most
     /// once per controller, not once per frame of a poisoned gesture drag
     /// or a misbehaving simulation.
-    fn warn_non_finite_value(should_warn: bool, raw: f32, outcome: NonFiniteOutcome) {
+    fn warn_non_finite_value(should_warn: bool, raw: f64, outcome: NonFiniteOutcome) {
         if should_warn {
             tracing::warn!(
                 value = raw,
@@ -2404,8 +2396,7 @@ impl AnimationControllerInner {
         if !range.is_finite() || range <= 0.0 {
             return base;
         }
-        let fraction =
-            f64::from(((self.target_value - self.start_value).abs() / range).clamp(0.0, 1.0));
+        let fraction = ((self.target_value - self.start_value).abs() / range).clamp(0.0, 1.0);
         if !fraction.is_finite() {
             return base;
         }
@@ -2515,7 +2506,7 @@ impl AnimationControllerInner {
     /// [`RepeatRun`] because `repeat_with`'s zero-period settle runs BEFORE
     /// any `RepeatRun` exists — a `RepeatRun` is never constructed with a
     /// zero period.
-    fn repeat_landing(reverse: bool, min: f32, max: f32, index: u128) -> (f32, AnimationDirection) {
+    fn repeat_landing(reverse: bool, min: f64, max: f64, index: u128) -> (f64, AnimationDirection) {
         let direction = Self::repeat_leg(reverse, index);
         let value = match direction {
             AnimationDirection::Reverse => min,
@@ -2540,7 +2531,7 @@ impl AnimationControllerInner {
             AnimationDirection::Forward => (run.min, run.max),
             AnimationDirection::Reverse => (run.max, run.min),
         };
-        let value = start + (target - start) * narrow_f32(phase);
+        let value = start + (target - start) * phase;
         RepeatSample {
             value,
             direction,
@@ -2580,9 +2571,9 @@ impl AnimationDirection {
     }
 }
 
-impl Animation<f32> for AnimationController {
+impl Animation<f64> for AnimationController {
     #[inline]
-    fn value(&self) -> f32 {
+    fn value(&self) -> f64 {
         self.inner.lock().value
     }
 

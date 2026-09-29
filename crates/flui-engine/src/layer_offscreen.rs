@@ -612,7 +612,7 @@ impl GpuReplay {
                     // re-multiplied by its own alpha.
                     let instance = crate::instancing::TextureInstance::new(
                         p.bounds,
-                        flui_types::styling::Color::WHITE,
+                        flui_painting::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
                     // R2: flush_texture_batch_premultiplied drains + clears
@@ -671,12 +671,12 @@ impl GpuReplay {
                             opacity: 1.0,
                             tint: [1.0, 1.0, 1.0],
                             src_uv_min: [
-                                op.device_bounds.left().0 / viewport_width_f32,
-                                op.device_bounds.top().0 / viewport_height_f32,
+                                (op.device_bounds.left() / f64::from(viewport_width_f32)) as f32,
+                                (op.device_bounds.top() / f64::from(viewport_height_f32)) as f32,
                             ],
                             src_uv_max: [
-                                op.device_bounds.right().0 / viewport_width_f32,
-                                op.device_bounds.bottom().0 / viewport_height_f32,
+                                (op.device_bounds.right() / f64::from(viewport_width_f32)) as f32,
+                                (op.device_bounds.bottom() / f64::from(viewport_height_f32)) as f32,
                             ],
                         };
                         flush_advanced_layer(
@@ -765,16 +765,16 @@ impl GpuReplay {
                     //    frac(grown_left) (the composite-grid shift).
                     let (fb_origin_x, fb_origin_y) = op.fb_origin;
                     let (fb_w, fb_h) = op.fb_dim;
-                    let dst_rect = flui_types::Rect::from_xywh(
-                        flui_types::geometry::px(fb_origin_x as f32),
-                        flui_types::geometry::px(fb_origin_y as f32),
-                        flui_types::geometry::px(fb_w as f32),
-                        flui_types::geometry::px(fb_h as f32),
+                    let dst_rect = flui_foundation::geometry::Rect::from_xywh(
+                        f64::from(fb_origin_x as f32),
+                        f64::from(fb_origin_y as f32),
+                        f64::from(fb_w as f32),
+                        f64::from(fb_h as f32),
                     );
                     let instance = crate::instancing::TextureInstance::with_uv(
                         dst_rect,
                         [0.0, 0.0, 1.0, 1.0],
-                        flui_types::styling::Color::WHITE,
+                        flui_painting::styling::Color::WHITE,
                     );
                     let _ = self.texture_batch.add(instance);
                     self.flush_texture_batch_premultiplied(
@@ -959,10 +959,10 @@ impl GpuReplay {
             if let Some(surface_texture) = main_target.texture {
                 let o = layer.opacity.clamp(0.0, 1.0);
                 // UV remap: layer.bounds → [0,1] in viewport space.
-                let uv_left = layer.bounds.left().0 / vp_w as f32;
-                let uv_top = layer.bounds.top().0 / vp_h as f32;
-                let uv_right = layer.bounds.right().0 / vp_w as f32;
-                let uv_bottom = layer.bounds.bottom().0 / vp_h as f32;
+                let uv_left = layer.bounds.left() / f64::from(vp_w as f32);
+                let uv_top = layer.bounds.top() / f64::from(vp_h as f32);
+                let uv_right = layer.bounds.right() / f64::from(vp_w as f32);
+                let uv_bottom = layer.bounds.bottom() / f64::from(vp_h as f32);
 
                 let op = AdvancedBlendOp {
                     foreground: offscreen,
@@ -970,8 +970,8 @@ impl GpuReplay {
                     device_bounds: layer.bounds,
                     opacity: o,
                     tint: layer.tint_rgb,
-                    src_uv_min: [uv_left, uv_top],
-                    src_uv_max: [uv_right, uv_bottom],
+                    src_uv_min: [(uv_left as f32), (uv_top as f32)],
+                    src_uv_max: [(uv_right as f32), (uv_bottom as f32)],
                 };
                 flush_advanced_layer(
                     op,
@@ -1029,14 +1029,19 @@ impl GpuReplay {
 
         // Use layer bounds as the destination rect; UV coordinates map the
         // bounds region from the full-viewport texture.
-        let uv_left = layer.bounds.left().0 / vp_w as f32;
-        let uv_top = layer.bounds.top().0 / vp_h as f32;
-        let uv_right = layer.bounds.right().0 / vp_w as f32;
-        let uv_bottom = layer.bounds.bottom().0 / vp_h as f32;
+        let uv_left = layer.bounds.left() / f64::from(vp_w as f32);
+        let uv_top = layer.bounds.top() / f64::from(vp_h as f32);
+        let uv_right = layer.bounds.right() / f64::from(vp_w as f32);
+        let uv_bottom = layer.bounds.bottom() / f64::from(vp_h as f32);
 
         let instance = crate::instancing::TextureInstance::with_uv_tint_f32(
             layer.bounds,
-            [uv_left, uv_top, uv_right, uv_bottom],
+            [
+                (uv_left as f32),
+                (uv_top as f32),
+                (uv_right as f32),
+                (uv_bottom as f32),
+            ],
             tint,
         );
         // A `Clip::AntiAliasWithSaveLayer` layer applies its clip HERE, to the
@@ -1200,7 +1205,7 @@ fn fold_layer_filter_chain(
 pub(crate) fn apply_image_filter_passes(
     passes: &[ImageFilterPass],
     input_tex: PooledTexture,
-    content_bounds: flui_types::Rect<flui_types::geometry::Pixels>,
+    content_bounds: flui_foundation::geometry::Rect<f64>,
     fb_origin: (u32, u32),
     fb_dim: (u32, u32),
     surface_format: wgpu::TextureFormat,
@@ -1288,7 +1293,8 @@ mod grown_offscreen_clip_tests {
     use crate::instancing::{CircleInstance, ClippableInstance, RectInstance};
     use crate::pipeline_cache::PipelineKey;
     use crate::state_stack::ResolvedClip;
-    use flui_types::{Color, Point, Rect, geometry::Pixels};
+    use flui_foundation::geometry::{Point, Rect};
+    use flui_painting::styling::Color;
 
     /// Every clip carrier is rebased into a shrunken intermediate the same way.
     ///
@@ -1318,18 +1324,11 @@ mod grown_offscreen_clip_tests {
             device_to_local: [0.7, 0.7, -0.7, 0.7, 12.0, -5.0],
         };
 
-        let rect = RectInstance::rect(
-            Rect::from_xywh(Pixels(0.0), Pixels(0.0), Pixels(10.0), Pixels(10.0)),
-            Color::rgb(255, 0, 0),
-        )
-        .with_clip(CLIP);
-        let circle = CircleInstance::new(
-            Point::new(Pixels(5.0), Pixels(5.0)),
-            5.0,
-            Color::rgb(255, 0, 0),
-            [1.0, 1.0],
-        )
-        .with_clip(CLIP);
+        let rect = RectInstance::rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), Color::rgb(255, 0, 0))
+            .with_clip(CLIP);
+        let circle =
+            CircleInstance::new(Point::new(5.0, 5.0), 5.0, Color::rgb(255, 0, 0), [1.0, 1.0])
+                .with_clip(CLIP);
 
         assert_eq!(
             rect.clip_device_to_local, circle.clip_device_to_local,

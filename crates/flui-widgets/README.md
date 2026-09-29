@@ -11,7 +11,7 @@ use flui_widgets::{column, row}; // the ViewSeq macros (shadow std's same-named)
 
 Container::new()
     .color(Color::rgb(18, 18, 24))
-    .padding(EdgeInsets::all(px(24.0)))
+    .padding(EdgeInsets::all(24.0))
     .child(Column::new(column![
         Text::new("Hello, FLUI"),
         SizedBox::height(12.0),
@@ -43,8 +43,8 @@ runnable demo (`cargo run -p flui --example widgets_gallery`).
 | **Text** | `Text` |
 
 Each is **behavior-loyal to Flutter** (same layout/paint algorithm) with a
-**Rust-native** surface: compile-time child-arity safety, `f32` at the call site
-(`Pixels` conversion is internal), and a chainable `#[must_use]` builder API.
+**Rust-native** surface: compile-time child-arity safety, plain `f64` logical pixels at the call site,
+and a chainable `#[must_use]` builder API.
 
 ## How it composes (the three shapes)
 
