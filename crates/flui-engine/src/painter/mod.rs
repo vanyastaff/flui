@@ -264,8 +264,7 @@ impl WgpuPainter {
     ///
     /// Called by `renderer.rs` after `render_layer_recursive` to decide whether
     /// to schedule a full repaint on the next frame (self-healing).  Not test-gated
-    /// because it is a production helper; it is also covered by the dedicated
-    /// detector tests in `shape_blend_tests.rs`.
+    /// because it is a production helper.
     pub(crate) fn has_advanced_shape_straddling(
         &self,
         damage: flui_foundation::geometry::Rect<f64>,

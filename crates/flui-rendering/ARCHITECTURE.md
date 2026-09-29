@@ -596,22 +596,10 @@ same ~140 ns to each side of the same division, which compresses the ratio
 toward 1x and cannot push it below 1x.
 
 **Replacement tests:**
-`a_border_radius_change_updates_the_clip_layer_without_repainting_the_subtree`,
-`a_clip_layer_update_is_written_back_into_the_retained_capture`,
-`a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on`,
-`a_flow_clip_behavior_change_is_structural_and_refused`, and
-`two_path_clips_under_one_boundary_resolve_in_paint_order`
+`a_border_radius_change_updates_the_clip_layer_without_repainting_the_subtree`
+and `two_path_clips_under_one_boundary_resolve_in_paint_order`
 (`tests/retained_boundary_layers.rs`; `cargo nextest run -p flui-rendering
---locked -E 'test(<name>)'`);
-`harness_transform_to_through_a_path_clip_runs_no_registered_clipper`
-(`tests/render_object_harness.rs`; `cargo nextest run -p flui-objects
---locked -E 'test(harness_transform_to_through_a_path_clip_runs_no_registered_clipper)'`);
-`rebuilding_a_clip_rrect_widget_updates_its_layer`
-(`tests/clip_rrect_layer_update.rs`; `cargo nextest run -p flui-widgets
---locked -E 'test(rebuilding_a_clip_rrect_widget_updates_its_layer)'`) —
-pins `ClipRRect::update_render_object` forwarding `set_border_radius` and
-its impact to the owner; it cannot see which paint arm served the frame,
-and says so, pointing at the render-level tests above for that; and the
+--locked -E 'test(<name>)'`), and the
 pixel oracle, `the_clip_update_path_and_a_repaint_produce_the_same_pixels`
 plus `a_different_radius_produces_different_pixels`
 (`tests/composited_layer_update_readback.rs`; `cargo nextest run -p flui
