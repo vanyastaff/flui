@@ -69,7 +69,7 @@ mod appkit_resize_jitter_probe {
 
     use flui_engine::PresentDisposition;
     use flui_engine::Renderer;
-    use flui_foundation::geometry::{Size, px};
+    use flui_foundation::geometry::Size;
     use flui_layer::{LayerTree, Scene};
     use flui_platform::Platform;
     use flui_platform::traits::PlatformWindow;
@@ -216,7 +216,7 @@ mod appkit_resize_jitter_probe {
         let window: Arc<dyn PlatformWindow> =
             match owner.open_window(flui_platform::WindowOptions {
                 title: "FLUI resize-jitter probe".to_string(),
-                size: Size::new((first_w as f64), (first_h as f64)),
+                size: Size::new(first_w as f64, first_h as f64),
                 // Resizable, unlike the other AppKit probes: this one exists to
                 // change the window's size, so a non-resizable window would make
                 // the platform refuse the very operation under test.
@@ -307,7 +307,7 @@ mod appkit_resize_jitter_probe {
                     state.size_index = index;
                 }
                 if let Some(window) = burst_window.upgrade() {
-                    window.resize(Size::new((w as f64), (h as f64)));
+                    window.resize(Size::new(w as f64, h as f64));
                 }
                 std::thread::sleep(RESIZE_INTERVAL);
             }
