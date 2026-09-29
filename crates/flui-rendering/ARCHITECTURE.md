@@ -1047,7 +1047,10 @@ intrinsic, dry-layout and dry-baseline query walks pass it to `intrinsic_raw`,
 `dry_layout_raw` and `dry_baseline_raw`. A render object sees only a `TextCx`, a scoped
 `&mut TextContext` taken from `&mut` context (`BoxLayoutContext::text`,
 `BoxIntrinsicsCtx::text`, `BoxDryLayoutCtx::text`, `BoxDryBaselineCtx::text`), so it cannot
-lay out a child or query one while it holds the loan. A pipeline that was never given a
+lay out a child or query one while it holds the loan. The raw methods and
+`BoxLayoutCtxErased::text_source` carry the cell as a `TextSource`, a `Copy` token whose cell
+only this crate can borrow, so a direct `RenderObject` implementation passes it on but cannot
+hold a loan across a child query. A pipeline that was never given a
 handle builds a private context on first use; a context built by hand (a test helper, a
 leaf-only layout) lends one of its own. Slivers get no text accessor: nothing that measures
 text is a sliver.

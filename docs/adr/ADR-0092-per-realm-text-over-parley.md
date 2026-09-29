@@ -337,9 +337,12 @@ that wires what it adds.
      `PipelineOwner` when the presentation is assembled (`RealmCapabilities::text`, a required
      field). Threading `&mut TextContext` down would change `run_frame`, `run_layout` and every
      binding and harness that drives them, while `pump` and `render_frame` take `&self`. The
-     realm and the pipeline owners are already `!Send`; a render object sees only the scoped
-     borrow, taken from `&mut` context, so it cannot hold two loans or lay out a child while it
-     holds one. A pipeline never given the handle measures on a private context.
+     realm and the pipeline owners are already `!Send`; a typed render object sees only the
+     scoped borrow, taken from `&mut` context, so it cannot hold two loans or lay out a child
+     while it holds one. The raw `RenderObject` methods and the erased layout context carry the
+     context as `TextSource`, an opaque token only flui-rendering can borrow, so a direct
+     `RenderObject` implementation cannot hold a loan across a child query either. A pipeline
+     never given the handle measures on a private context.
    - (3a) Parley measures behind `parley-layout`, not `parley`: the workspace test scope turns
      `parley` on for CI's `test` and `fast-lane` jobs, and if `parley` switched measurement, CI
      would measure every text-size test with Parley while the build that ships measures with
@@ -350,6 +353,10 @@ that wires what it adds.
    - (3b) Registering raises a font-collection-changed event on every realm, which marks text
      render objects for layout (ADR-0065's named gap); flui-app's `register_font` moves from
      `FONT_SYSTEM` to the collection.
+   - (3b) The hot-reload plugin pipeline (`flui-hot-reload`'s `pipeline.rs`) is built with
+     `PipelineOwner::new()` and never given the realm's handle, so its text measures on a
+     private collection that lacks the app's registered faces. It takes the realm's handle in
+     this step.
    - *Acceptance (3a):* two realms over two collections measure through their own contexts, and
      a frame on one lends nothing of the other's; every presentation's pipeline holds the
      realm's handle; a painter measures through the context it is given, and a registration on
@@ -366,6 +373,9 @@ that wires what it adds.
    - A per-frame table carries the blobs a frame names first, which is the door §5 leaves open.
      The engine's atlas becomes `GlyphAtlas<SwashRasterizer>`, the `parley` feature folds into
      the default build, and the atlas's default parameter goes.
+   - `TextPainter` measures on Parley in the default build and the `parley-layout` feature is
+     removed, so the runs painted come from the layout that measured. Folding `parley` alone
+     would leave measurement on cosmic-text while paint moves to Parley runs.
    - *Acceptance:* `draw_command_fits_its_budget` holds; the text readback suite passes
      unmodified; `the_engine_does_not_shape` is extended so the engine's manifest names no
      parley, fontique, skrifa, swash or cosmic-text. Glyph baselines round as today

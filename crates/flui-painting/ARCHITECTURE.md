@@ -561,10 +561,11 @@ closes the case a single ambient collection never had: one painter measured
 through two collections.
 
 **Accepted trade-off:** the default build still measures on the process font
-system, so the context is lent and counted but not shaped on until
-`parley-layout` becomes the default (ADR-0092 §10 step 4 folds `parley` into
-the default build). Locked by `measurement_follows_the_context_it_is_given`
-and `a_registration_on_the_collection_invalidates_the_painter_cache`
+system, so the context is lent and counted but not shaped on until ADR-0092
+§10 step 4 makes Parley measurement the default and removes `parley-layout`,
+together with folding `parley` into the default build. Locked by
+`measurement_follows_the_context_it_is_given` and
+`a_registration_on_the_collection_invalidates_the_painter_cache`
 (`tests/text_painter_unit.rs`, under `parley`).
 
 ### 15. Under `parley-layout`, measurement and paint use different shapers
@@ -596,7 +597,8 @@ face the two agree: `tests/parley_metrics_oracle.rs` pins equal width and
 height and the same device baseline for the bundled Roboto at 13–32 px,
 default and 1.5 line height, scales 1–2 (its cosmic side registers Roboto,
 because the cosmic-text path loads the bundled Roboto only on a host with no
-fonts). Two painting tests fail under `parley-layout` for these reasons:
+fonts). Two painting tests are ignored under `parley-layout`, each naming this
+decision in its `ignore` reason:
 `painted_span_contributes_its_laid_out_box_to_display_list_bounds` (paint
 bounds from cosmic-text, size from Parley) and
 `register_font_invalidates_a_laid_out_painter` (registration on the process
