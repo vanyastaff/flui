@@ -53,7 +53,11 @@ live plugin-backed values safe.
 
 `flui-app` has no edge to this crate (ADR-0094 §1). `hook.rs` implements
 `flui_sdk::view::dev_reload::DevReloadHook` twice, and the application installs
-one with `AppConfig::with_dev_reload`:
+one with `AppConfig::with_dev_reload`. Both sit behind the `host-hook` feature,
+the only one that brings in `flui-sdk` (and with it the widget catalog), so a
+scene plugin or worker `cdylib` on the default features builds none of it; the
+module is also compiled under `cfg(test)`, with `flui-sdk` as a dev-dependency,
+so its unit tests run without the feature:
 
 - `WorkerReloadHook` owns the `WorkerReloadDriver`. `attach` starts the
   artifact watcher thread and, with `app-plugin`, registers the

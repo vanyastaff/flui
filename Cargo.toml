@@ -768,7 +768,7 @@ gpu-readback-tests = []
 # its hook with `AppConfig::with_dev_reload` (ADR-0094 §1), and flui-app names
 # no reload crate. Without it the normal application graph excludes
 # flui-hot-reload.
-hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin"]
+hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-hot-reload/host-hook"]
 
 # Native accessibility: the per-OS AccessKit adapters that hand the semantics
 # tree to VoiceOver / Narrator / Orca. Off by default (the Linux adapter
