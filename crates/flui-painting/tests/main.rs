@@ -187,3 +187,28 @@ fn text_contract() {
         ],
     );
 }
+
+/// A painter measures through the context it is lent, and its cache answers
+/// only for the fonts that measured it (ADR-0092 §10 step 3a).
+#[cfg(feature = "parley")]
+#[test]
+fn text_context_contract() {
+    use text_painter_unit::parley_measurement as pm;
+    run_cases(
+        "text_context",
+        &[
+            (
+                "measurement_follows_the_context_it_is_given",
+                pm::measurement_follows_the_context_it_is_given,
+            ),
+            (
+                "intrinsic_widths_follow_the_context_they_are_asked_through",
+                pm::intrinsic_widths_follow_the_context_they_are_asked_through,
+            ),
+            (
+                "a_registration_on_the_collection_invalidates_the_painter_cache",
+                pm::a_registration_on_the_collection_invalidates_the_painter_cache,
+            ),
+        ],
+    );
+}

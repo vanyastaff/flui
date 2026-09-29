@@ -119,6 +119,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Unique identifier for this pipeline owner.
     id: u64,
 
+    /// The realm's text context, lent to every measurement in this
+    /// pipeline's layout, intrinsic and dry queries (ADR-0092 §10 step 3).
+    /// Installed by the runtime through [`Self::set_text_context`]; a
+    /// pipeline never given one builds a private context on first use.
+    text: Option<crate::pipeline::TextContextHandle>,
+
     /// Allocation identity binding linear relocation tokens to this owner.
     /// Pointer identity is sufficient; unlike a numeric id it cannot collide
     /// or require process-global token bookkeeping.
@@ -339,6 +345,7 @@ where
 {
     PipelineOwner {
         id: from.id,
+        text: from.text,
         relocation_owner_seal: from.relocation_owner_seal,
         render_tree: from.render_tree,
         root_id: from.root_id,
@@ -916,7 +923,8 @@ mod tests {
             RenderEntry::<crate::protocol::BoxProtocol>::new(Box::new(PanickingLayoutBox::new())
                 as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
 
-        let result = entry.layout_leaf_only(crate::constraints::BoxConstraints::tight(Size::ZERO));
+        let result =
+            entry.layout_leaf_only(crate::constraints::BoxConstraints::tight(Size::ZERO), None);
 
         std::panic::set_hook(prev);
 

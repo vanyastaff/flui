@@ -16,7 +16,8 @@
 //! without `parley` they hold nothing and shape nothing.
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 
 #[cfg(feature = "parley")]
 use crate::error::RegisterFontError;
@@ -32,6 +33,9 @@ use crate::parley_text::SpanBrush;
 pub struct FontCollection(Arc<FontCollectionInner>);
 
 struct FontCollectionInner {
+    /// Bumped once per registration that added a face; a measurement
+    /// cached against an older value is stale.
+    generation: AtomicU64,
     /// fontique's collection in shared mode, with no host scan.
     #[cfg(feature = "parley")]
     collection: parley::fontique::Collection,
@@ -57,6 +61,25 @@ impl FontCollection {
     #[must_use]
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
         Arc::ptr_eq(&a.0, &b.0)
+    }
+
+    /// How many registrations have added a face to this collection.
+    ///
+    /// Starts at zero and only grows. A measurement cached against an older
+    /// value may shape differently now, so it is re-measured; a registration
+    /// that found no face leaves the value alone.
+    #[must_use]
+    pub(crate) fn generation(&self) -> u64 {
+        self.0.generation.load(Ordering::Acquire)
+    }
+
+    /// What a measurement on this collection is taken against: the
+    /// collection and its current generation.
+    pub(crate) fn key(&self) -> FontsKey {
+        FontsKey {
+            collection: Arc::downgrade(&self.0),
+            generation: self.generation(),
+        }
     }
 
     /// How many handles hold this collection: every clone, including the one
@@ -93,14 +116,44 @@ impl FontCollection {
         if families.is_empty() {
             return Err(RegisterFontError);
         }
+        self.0.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
+    }
+}
+
+/// A collection and its generation, as a cached measurement records them.
+///
+/// Holds the collection weakly: the allocation outlives the key, so another
+/// collection can never take its address and match a stale key, and the key
+/// keeps no faces alive.
+#[derive(Clone)]
+pub(crate) struct FontsKey {
+    collection: Weak<FontCollectionInner>,
+    generation: u64,
+}
+
+impl FontsKey {
+    /// Whether both keys name the same collection at the same generation.
+    pub(crate) fn matches(&self, other: &Self) -> bool {
+        self.generation == other.generation && Weak::ptr_eq(&self.collection, &other.collection)
+    }
+}
+
+impl fmt::Debug for FontsKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FontsKey")
+            .field("collection", &self.collection.as_ptr())
+            .field("generation", &self.generation)
+            .finish()
     }
 }
 
 impl FontCollectionInner {
     #[cfg(not(feature = "parley"))]
     fn new() -> Self {
-        Self {}
+        Self {
+            generation: AtomicU64::new(0),
+        }
     }
 
     #[cfg(feature = "parley")]
@@ -118,6 +171,7 @@ impl FontCollectionInner {
         #[cfg(feature = "bundled-fonts")]
         bind_bundled_faces(&mut collection);
         Self {
+            generation: AtomicU64::new(0),
             collection,
             source_cache: SourceCache::new_shared(),
         }
@@ -171,6 +225,10 @@ impl fmt::Debug for FontCollection {
 /// shape at the same time without waiting on each other.
 pub struct TextContext {
     fonts: FontCollection,
+    /// How many measurements this context was lent for; read by tests
+    /// through `testing::text_context_lends`.
+    #[cfg(any(test, feature = "testing"))]
+    lent: u64,
     #[cfg(feature = "parley")]
     pub(crate) font_cx: parley::FontContext,
     #[cfg(feature = "parley")]
@@ -184,6 +242,8 @@ impl TextContext {
     pub fn new(fonts: &FontCollection) -> Self {
         Self {
             fonts: fonts.clone(),
+            #[cfg(any(test, feature = "testing"))]
+            lent: 0,
             #[cfg(feature = "parley")]
             font_cx: parley::FontContext {
                 collection: fonts.0.collection.clone(),
@@ -198,6 +258,26 @@ impl TextContext {
     #[must_use]
     pub fn fonts(&self) -> &FontCollection {
         &self.fonts
+    }
+
+    /// Records one measurement made through this context. Counted only in
+    /// test builds, where it shows which context a layout measured on.
+    #[inline]
+    #[cfg_attr(
+        not(any(test, feature = "testing")),
+        expect(clippy::unused_self, reason = "only test builds count the loans")
+    )]
+    pub(crate) fn note_lent(&mut self) {
+        #[cfg(any(test, feature = "testing"))]
+        {
+            self.lent += 1;
+        }
+    }
+
+    /// How many measurements this context was lent for.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn lends(&self) -> u64 {
+        self.lent
     }
 }
 

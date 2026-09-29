@@ -91,6 +91,9 @@ pub(crate) struct RealmCapabilities<'a> {
     /// The realm's platform clipboard, handed to widgets through
     /// `LifecycleContext::clipboard_handle`.
     pub(crate) clipboard: Arc<dyn Clipboard>,
+    /// The realm's text context, installed on the presentation's pipeline so
+    /// its layout measures text through the realm (ADR-0092 §10 step 3).
+    pub(crate) text: flui_rendering::TextContextHandle,
 }
 
 /// A fresh in-memory clipboard — the one the headless platform hands out —
@@ -562,6 +565,9 @@ impl PresentationState {
             window,
             accessibility,
         } = window.into();
+        // The one place a presentation's pipeline gets the realm's text
+        // context, before anything can lay it out.
+        pipeline.with_mut(|owner| owner.set_text_context(capabilities.text));
         let gestures = Self::build_gestures(id, &window);
         let alive = Rc::new(());
         let focus = FocusManager::new();

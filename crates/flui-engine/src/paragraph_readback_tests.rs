@@ -69,7 +69,11 @@ fn paragraph_scene(
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new(text).with_style(style))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, f64::from(SIDE as f32 * 4.0));
+    painter.layout(
+        &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
+        0.0,
+        f64::from(SIDE as f32 * 4.0),
+    );
     let mut canvas = Canvas::new();
     decorate(&mut canvas, &mut |canvas| {
         painter.paint(canvas, Offset::ZERO);

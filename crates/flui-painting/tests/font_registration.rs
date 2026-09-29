@@ -8,6 +8,11 @@
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{TextPainter, shared_font_system};
 
+/// A text context over a fresh collection, lent to each measurement.
+fn text_cx() -> flui_painting::TextContext {
+    flui_painting::TextContext::new(&flui_painting::FontCollection::new())
+}
+
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 
 /// The same text styled with the probe family: before the face is registered
@@ -26,20 +31,24 @@ fn probe_painter(text: &str) -> TextPainter {
 }
 
 #[test]
+#[cfg_attr(
+    feature = "parley-layout",
+    ignore = "painting mapping decision 15: registration reaches the process font system, not the collection Parley measures on"
+)]
 fn register_font_invalidates_a_laid_out_painter() {
     let fonts = shared_font_system();
     let mut painter = probe_painter("iiii wwww");
-    painter.layout(0.0, f64::INFINITY);
+    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
     let before = painter.size();
     // Same constraints: without a registration this is the cached early
     // return, and the size cannot change.
-    painter.layout(0.0, f64::INFINITY);
+    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
     assert_eq!(painter.size(), before);
 
     fonts
         .register_font(PROBE_MONO)
         .expect("the probe face loads");
-    painter.layout(0.0, f64::INFINITY);
+    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
     assert_ne!(
         painter.size(),
         before,

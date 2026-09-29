@@ -15,7 +15,7 @@
 //! assert_eq!(list.len(), 1);
 //! ```
 
-use crate::{Canvas, DisplayList, FontCollection};
+use crate::{Canvas, DisplayList, FontCollection, TextContext};
 
 /// Records drawing commands into a fresh [`DisplayList`]: runs `f` against
 /// a new [`Canvas`] and finishes it.
@@ -26,9 +26,26 @@ pub fn record(f: impl FnOnce(&mut Canvas)) -> DisplayList {
 }
 
 /// How many handles hold `fonts`: the caller's own clones plus one inside
-/// each [`TextContext`](crate::TextContext) built from it. A consumer's
-/// tests use it to pin who holds the collection and when they let go.
+/// each [`TextContext`] built from it. A consumer's tests use it to pin who
+/// holds the collection and when they let go.
 #[must_use]
 pub fn font_collection_holders(fonts: &FontCollection) -> usize {
     fonts.holders()
+}
+
+/// How many measurements `text` was lent for: one per layout, intrinsic or
+/// dry query a [`TextPainter`](crate::TextPainter) made through it. A
+/// consumer's tests use it to show which realm's context a layout measured
+/// on.
+#[must_use]
+pub fn text_context_lends(text: &TextContext) -> u64 {
+    text.lends()
+}
+
+/// Makes `painter` measure on Parley through the context it is given,
+/// whatever the build's default, so the Parley measurement runs under
+/// `parley` alone (flui-painting `ARCHITECTURE.md`, mapping decision 15).
+#[cfg(feature = "parley")]
+pub fn measure_with_parley(painter: &mut crate::TextPainter) {
+    painter.pin_parley_measurement();
 }

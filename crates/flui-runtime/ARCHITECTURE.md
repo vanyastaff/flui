@@ -149,9 +149,15 @@ host.
 - **A realm owns one text context over the app's font collection.**
   `UiRealm::new` takes the app's `FontCollection` (the host's shared engine
   services hold it), and `RealmServices::construct` builds the realm's one
-  `TextContext` over it (ADR-0092 §3). A presentation builds none, no static
-  holds one, and the context drops with the realm. Pinned by
-  `ui_realm::tests::text_context`.
+  `TextContext` over it (ADR-0092 §3), behind a `TextContextHandle`. A
+  presentation builds none: `PresentationState::new`, the one place a
+  presentation's pipeline gets its capabilities, installs the realm's handle on
+  it (`RealmCapabilities::text`, a required field), so every presentation's
+  layout, intrinsic and dry queries measure through the realm's one context
+  (ADR-0092 §10 step 3). No static holds one, and the context drops with the
+  realm and its presentations. Pinned by `ui_realm::tests::text_context`,
+  among them `two_realms_measure_text_through_their_own_contexts` and
+  `every_presentation_pipeline_holds_the_realms_text_context`.
 - **Test hooks stay behind `test-support`.** Items that exist for tests, or
   that have no production caller yet (`HeldPointerQueue::append`/`len`,
   `SemanticsHost::ensure_semantics`, `outstanding_handles`,

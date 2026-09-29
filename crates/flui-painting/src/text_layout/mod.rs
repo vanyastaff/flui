@@ -15,6 +15,7 @@ pub(crate) mod font_resolve;
 pub(crate) mod glyphs;
 pub(crate) mod layout;
 
+pub(crate) use context::FontsKey;
 pub use context::{FontCollection, TextContext};
 pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 pub(crate) use layout::paint_color;

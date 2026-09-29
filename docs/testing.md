@@ -151,7 +151,11 @@ One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
 --features flui/material,flui/cupertino,flui-painting/parley`, run as the two stages below.
 `flui-painting/parley` is on so the Parley raster path's oracle test runs until
-ADR-0092 §10 makes that path the default.
+ADR-0092 §10 makes that path the default. It compiles Parley measurement
+without choosing it; `flui-painting/parley-layout`, which makes `TextPainter`
+measure on Parley, stays out of the scope, so every text-size test measures the
+way the default build does. The Parley measurement tests pin a painter to
+Parley themselves (`flui_painting::testing::measure_with_parley`).
 Two choices in it differ from CI on purpose:
 
 - **One feature slice.** The facade turns no catalog on by default, so both
