@@ -26,7 +26,7 @@ The FLUI workspace contains 24 crates under `crates/`, the official packages und
 
 The `edge-exceptions` in force:
 
-- `flui-app → flui-hot-reload` and `flui → flui-hot-reload` until [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md); `flui → flui-material` and `flui → flui-cupertino` until [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md);
+- `flui → flui-hot-reload` until [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md); `flui → flui-material` and `flui → flui-cupertino` until [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md);
 - the kind rule's: the official package not yet on the SDK, `flui-hot-reload` → `flui-foundation`, `flui-layer`, `flui-rendering`, `flui-view` until ADR-0094.
 
 A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members]` while integration is in progress; the source tree still exists but is not built by default.
@@ -106,7 +106,7 @@ Empty since [ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) deleted 
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui-app` | ✅ ACTIVE (migration) | App runner, root widget, application lifecycle. The **composition root**: runners, platform wiring and the raster lane. The frame runtime is moving from it into `flui-runtime` ([ADR-0083](adr/ADR-0083-one-frame-transaction-in-flui-runtime.md), which supersedes ADR-0041's two-consumer gate): the realm core has moved; the realm dispatch layer and the loop-scoped `AppRuntime` are still here, and render the realm through the raster lane (`RealmRaster`). Owns **no design tokens** ([ADR-0042](adr/ADR-0042-theming-ownership.md)); hot reload is behind its optional `hot-reload` feature. |
+| `flui-app` | ✅ ACTIVE (migration) | App runner, root widget, application lifecycle. The **composition root**: runners, platform wiring and the raster lane. The frame runtime is moving from it into `flui-runtime` ([ADR-0083](adr/ADR-0083-one-frame-transaction-in-flui-runtime.md), which supersedes ADR-0041's two-consumer gate): the realm core has moved; the realm dispatch layer and the loop-scoped `AppRuntime` are still here, and render the realm through the raster lane (`RealmRaster`). Owns **no design tokens** ([ADR-0042](adr/ADR-0042-theming-ownership.md)); it names no reload tool, and reaches hot reload only through a `DevReloadHook` the application installs ([ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md) §1). |
 | `flui-cli` | ✅ ACTIVE | The `flui` CLI: `create`/`run` (hot reload with hot-keys)/`build`/`doctor`/`devices`/`emulators`, one output policy (`--json`, `--quiet`, `--non-interactive`) and a documented exit-code table. The per-target build pipeline (Android/iOS/desktop/web) lives in its own `src/build/` module; depends on `flui-hot-reload`; no edge to `flui-devtools`. |
 | `flui-devtools` | ✅ ACTIVE (partial) | Profiler, timeline, inspector counters. An official package under `packages/flui-devtools`: its only FLUI dependency is `flui-sdk` (`hooks::FrameSnapshot` for the timeline, `foundation::observe` for the inspector's ADR-0040 seam). It holds the seam's end-to-end test and the observer-overhead bench |
 

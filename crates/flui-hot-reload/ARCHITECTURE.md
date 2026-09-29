@@ -48,3 +48,26 @@ facade dependencies. `tests/scene_ownership.rs` executes both consumption paths
 with a counted destructor and checks null handling under Miri. These tests do
 not establish arbitrary cross-compiler layout compatibility or make unloading
 live plugin-backed values safe.
+
+### The host drives reload through a hook it does not name
+
+`flui-app` has no edge to this crate (ADR-0094 §1). `hook.rs` implements
+`flui_sdk::view::dev_reload::DevReloadHook` twice, and the application installs
+one with `AppConfig::with_dev_reload`:
+
+- `WorkerReloadHook` owns the `WorkerReloadDriver`. `attach` starts the
+  artifact watcher thread and, with `app-plugin`, registers the
+  `request_rebuild` hook, which sets a flag and wakes the host; `poll` runs the
+  driver on the owner thread and reports `Patched` for a reload or a pending
+  rebuild request; `detach` (and `Drop`) joins the watcher and drops the
+  registration. A degraded or failed reload is logged and keeps the last good
+  tree, as before.
+- `ScenePluginHook` owns the `HotReloadDriver`. `scene_frame` builds the frame's
+  scene and lends it to the host's renderer; the scene is dropped before the
+  call returns, while the driver still holds the library, which is the ordering
+  the `unsafe` `build_scene` requires.
+
+The host applies a `Patched` poll once to every realm, not to whichever realm
+polled first; before the hook, a worker's rebuild request reached only the most
+recently opened window. Pinned by `hook/tests.rs` here and by
+`app/hot_reload/tests.rs` in `flui-app`.

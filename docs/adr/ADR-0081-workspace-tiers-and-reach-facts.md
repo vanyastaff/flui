@@ -132,8 +132,9 @@ and the gate reports any other H → `pkg` edge.
 The tier assignment had six refused edges, each seeded as an `edge-exceptions` entry.
 `flui-interaction -> flui-platform` and `flui-widgets -> flui-platform` (the widget harness,
 optional under `testing`) exited with ADR-0082: both now name `flui-platform-api` (tier C), and
-their entries are gone. Four remain: `flui-app -> flui-hot-reload` and
-`flui -> flui-hot-reload` exit with ADR-0094; `flui -> flui-material` and
+their entries are gone. `flui-app -> flui-hot-reload` exited with ADR-0094's hook (2026-09-29:
+`flui-app` reaches a reload tool only through an installed `DevReloadHook`). Three remain:
+`flui -> flui-hot-reload` exits with ADR-0094; `flui -> flui-material` and
 `flui -> flui-cupertino` exit with ADR-0088. In K, `flui-widgets` names `flui-testing` as an
 optional normal dependency (`crates/flui-widgets/Cargo.toml:89`), so `flui-testing` has the
 smaller `order`; moving the harness above the runtime removes that edge first.
@@ -190,8 +191,8 @@ equivalent of `--target all`) and resolves each **root build** itself, as
 build edges kept, and every declared entry for one dependency counts, whatever its target.
 Cargo's own resolution in that output cannot be used: it unifies features across the whole
 workspace, so an example that depends on the facade with its defaults turns them on for every
-root, and `flui-app`'s `hot-reload` is on in every build. The `--all-features` graph still lists
-every edge any root can activate, and a test pins the resolver to `cargo tree -e normal,build
+root (as `flui-app`'s `hot-reload` feature was, while it existed). The `--all-features` graph
+still lists every edge any root can activate, and a test pins the resolver to `cargo tree -e normal,build
 --target all` for five roots.
 
 The roots are the facade under every combination `cargo xtask facade-combos` builds, the facade
@@ -230,9 +231,11 @@ finding, when E reaches no `to` in any root build, or when in no root build anyt
 (itself included) is forbidden to E or to a crate with a tier that reaches E. So the list only
 shrinks: once the change an `exit` names lands, its entry becomes stale and must go.
 
-`TREE_FACTS` moved into `reach` as ordinary facts over one root's build: `flui-hot-reload` is
-absent from `flui-app` at its defaults, present under `flui-app --features hot-reload`, and
-`hot-reload-counter-host`'s build enables `flui-app/hot-reload`. A fact that names an unknown
+`TREE_FACTS` moved into `reach` as ordinary facts over one root's build. Since ADR-0094's hook
+removed `flui-app`'s feature (2026-09-29) they read: `flui-hot-reload` is absent from `flui-app`
+at its defaults and with `--all-features`, present under
+`flui --no-default-features --features hot-reload`, and `hot-reload-counter-host`'s build enables
+`flui-hot-reload/app-plugin`. A fact that names an unknown
 root, package or feature is an error, not a pass. The facts now run in `cargo xtask checks`
 instead of only in the heavy feature-matrix job.
 
@@ -268,10 +271,11 @@ from the first day, with named, dated exceptions:
 
 - `flui-testing` dev -> `flui-devtools`: exited when the observation-seam test moved into
   `packages/flui-devtools` (ADR-0088 move 4);
-- `flui-app` optional -> `flui-hot-reload` (`crates/flui-app/Cargo.toml:65,108`), the facade's
-  optional edge and `hot-reload` feature (`Cargo.toml:553,664`) and the facade's dev-dependency
-  (`Cargo.toml:588`): exit in the change that moves `flui-hot-reload` into the official packages
-  (ADR-0094 §2);
+- `flui-app` optional -> `flui-hot-reload` (`crates/flui-app/Cargo.toml:65,108`): exited when
+  ADR-0094's `DevReloadHook` landed (2026-09-29);
+- the facade's optional edge and `hot-reload` feature (`Cargo.toml:553,664`) and the facade's
+  dev-dependency (`Cargo.toml:588`): exit in the change that moves `flui-hot-reload` into the
+  official packages (ADR-0094 §2);
 - the facade's optional `material`/`cupertino` edges, features and default
   (`Cargo.toml:559-560,632,639-640`): exit with ADR-0088 §6, which sequences the facade change
   after the packages build on `flui-sdk`.
