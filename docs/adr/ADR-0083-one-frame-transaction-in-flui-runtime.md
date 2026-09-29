@@ -205,11 +205,14 @@ transaction, not copying the production event-loop topology, is the test-driver 
 `flui-widgets` stops depending on `flui-testing` (`crates/flui-widgets/Cargo.toml:89` goes). That
 is prepared by its own change, which lands first: the tests in the 22 `src/` files that used
 `crate::testing` and reach the harness move to `crates/flui-widgets/tests/`, where the library
-links once; the tests there that do not reach the harness stay unit tests. The compiler keeps it
-that way: `flui-testing` depends on `flui-widgets`, so `flui-widgets` names it only on a dev edge,
-and a unit test under `src/` that drives the harness meets a second copy of the library whose
-types do not match its own; `reach-forbid = ["flui-testing"]` keeps the test driver out of the
-widgets' normal closure. A moved test that still reads a private item reaches it
+links once; the tests there that do not reach the harness stay unit tests. Review keeps it that
+way, not the compiler: `flui-testing` depends on `flui-widgets`, so `flui-widgets` names it only on
+a dev edge, and a unit test under `src/` that drives the harness links a second copy of the
+library. That still compiles, since the harness takes a `flui_view::View` and there is one
+`flui_view`, but the realm installs the other copy's inherited scopes, so the test's
+`crate::MediaQuery::maybe_of` and every other lookup of a `flui-widgets` type reads `None`. The
+planned "harness stays above the runtime" gate (`design/architecture.md`) turns this into a check.
+`reach-forbid = ["flui-testing"]` keeps the test driver out of the widgets' normal closure. A moved test that still reads a private item reaches it
 through `flui_widgets::__test_access`: doc-hidden, always compiled (no visibility feature, one type
 layout), for `crates/flui-widgets/tests` only, and **temporary**. It holds probe traits for
 methods on public types, re-exports of private types raised to `pub` inside private modules, and

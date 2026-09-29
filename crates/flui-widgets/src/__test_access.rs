@@ -4,7 +4,10 @@
 //!
 //! The tests that drive the headless harness (`flui_testing::widgets`) live
 //! in `tests/`, where the library links once; the harness depends on this
-//! crate, so a unit test under `src/` would meet a second copy of it. Some of
+//! crate, so a unit test under `src/` would link a second copy of it, and its
+//! lookups of this crate's inherited scopes (`MediaQuery`, `FocusRoot`) would
+//! silently miss the ones the realm installed from the other copy. Nothing
+//! but review keeps such a test out of `src/`. Some of
 //! them still assert on private state — the navigator's route stack
 //! (ADR-0019), the overlay's entry list (ADR-0076), the hero registry, the
 //! transition and modal routes. This module is the one place those items are
